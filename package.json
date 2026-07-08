@@ -2,28 +2,23 @@
   "name": "volli-code",
   "version": "0.0.1",
   "description": "Volli Code — kanban planning + terminal-agent execution (Electron rewrite)",
-  "main": "./out/main/index.js",
+  "private": true,
+  "type": "module",
+  "engines": { "node": "^24.13.0" },
+  "packageManager": "pnpm@11.10.0",
   "scripts": {
-    "postinstall": "node node_modules/electron/install.js",
-    "dev": "electron-vite dev",
-    "build": "electron-vite build",
-    "start": "electron-vite preview",
-    "preview": "electron-vite preview",
-    "typecheck": "tsc --noEmit -p tsconfig.node.json --composite false && tsc --noEmit -p tsconfig.web.json --composite false"
-  },
-  "dependencies": {
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
-    "zustand": "^5.0.14"
+    "dev": "vp run --filter @volli/desktop dev",
+    "build": "vp run --filter @volli/desktop build",
+    "start": "vp run --filter @volli/desktop start",
+    "ensure:electron": "vp run --filter @volli/desktop ensure:electron",
+    "typecheck": "vp run -r typecheck",
+    "test": "vp run -r test",
+    "lint": "vp lint",
+    "fmt": "vp fmt",
+    "check": "vp check"
   },
   "devDependencies": {
-    "@types/node": "^26.1.0",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^5.2.0",
-    "electron": "^43.0.0",
-    "electron-vite": "^5.0.0",
-    "typescript": "^6.0.3",
-    "vite": "^7.3.6"
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
   }
 }

@@ -1,0 +1,23 @@
+{
+  "name": "@volli/desktop",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "dist-electron/main.cjs",
+  "productName": "Volli Code",
+  "dependencies": {
+    "@volli/shared": "workspace:*",
+    "electron": "^43.0.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "^5.2.0",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

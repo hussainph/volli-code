@@ -4,3 +4,6 @@ out/
 .DS_Store
 *.log
 .env
+dist-electron/
+.vite-plus/
+*.tsbuildinfo
