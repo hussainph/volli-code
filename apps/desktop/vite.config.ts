@@ -48,9 +48,7 @@ export default defineConfig({
       deps: {
         alwaysBundle: bundleWorkspacePackages,
       },
-      ...(shouldLaunchElectronAfterPack
-        ? { onSuccess: "node scripts/dev-electron.mjs" }
-        : {}),
+      ...(shouldLaunchElectronAfterPack ? { onSuccess: "node scripts/dev-electron.mjs" } : {}),
     },
     {
       entry: { preload: "src/preload/index.ts" },
