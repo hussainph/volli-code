@@ -1,0 +1,163 @@
+# Volli Code — v1 Concept
+
+*Founding document, July 2026 — written for the native Swift original (`../volli-swift`) and ported to this repo when the project moved to Electron (July 2026). This is the product source of truth for v1. CLAUDE.md summarizes the parts agents need constantly; this file holds the full reasoning. Every product decision carries over unchanged; the two platform decisions (1–2) were superseded by decisions 22–25 below.*
+
+## The problem
+
+Terminal coding agents (Claude Code, Codex, Opencode) act as both the planning and execution layer of software work. They take on tasks autonomously for long stretches — and drift out of sync with planning done in a separate tracker (Linear). Meanwhile, terminal multiplexers built for agents (cmux) organize *sessions*, not *work*: workspaces aren't tied to tasks, so revisiting a project gives you no organized view of the body of work done on it, and no way to jump from "what happened" back into "keep going."
+
+The disconnect: **the tracker doesn't know what the agents are doing, and the terminal doesn't know what the plan is.**
+
+## The idea
+
+A desktop app (macOS-only v1) where the ticket *is* the terminal workspace:
+
+- Projects (each pointing at a codebase folder) live in a Slack-style workspace sidebar.
+- Each project has a kanban/list view of tickets.
+- A ticket's content — title, description, attachments — is simultaneously its *specification* and the *starting prompt* for a coding agent.
+- Dragging a ticket to **Doing** creates an isolated git worktree, composes the prompt, and boots the agent of your choice in a high-fidelity embedded terminal, live-accessible inside the ticket's expanded view.
+- Agent lifecycle events (via harness hooks calling a bundled CLI) move the ticket across the board — **the board reflects reality** — and fire native notifications when human attention is needed.
+- Every session run against a project is preserved and indexed: an auditable history of human + AI decision-making per codebase.
+
+### Goals
+
+1. Merge planning, organization, and execution in one place — track ticket progress and execution/branching/PRs together.
+2. Build an auditable per-project history of all agent sessions and decisions.
+3. Mirror the lifecycle of AI-engineered projects to CI/CD best practices (ticket → branch → PR).
+4. Expose coding agents to the planning layer without a bulky MCP.
+5. Massively increase parallel session throughput via neat organization (dozens of sessions across projects).
+6. Make the human a powerful orchestrator: plan and execute across multiple projects concurrently, solo or with agents.
+
+## Decision log
+
+Every decision below was made explicitly with the owner (July 2026), with alternatives considered. Decisions 1–2 are retained for the historical record but **superseded** by 22–24 (the Electron rewrite).
+
+| # | Decision | Alternatives rejected | Rationale |
+|---|----------|----------------------|-----------|
+| 1 | *(superseded by #22)* **Native Swift macOS app** (AppKit + SwiftUI) | Electron/Tauri + xterm.js; local web app + Node sidecar | Performance is a priority; owner wants to invest in Swift/macOS skills. Volli (Next.js/Convex) reuse sacrificed knowingly — different use case. cmux proves this exact stack at production scale. |
+| 2 | *(superseded by #23)* **GhosttyKit** ([Lakr233/libghostty-spm](https://github.com/Lakr233/libghostty-spm)) behind a `TerminalEngine` protocol | SwiftTerm (mis-renders agent TUIs); vendoring libghostty from source day 1 | Prebuilt XCFramework tracking stable Ghostty tags. The durable lesson: **agent TUIs need real terminal emulation**, and the engine belongs behind an interface so it can be swapped. |
+| 3 | **Local SQLite**, transcripts as indexed files | Convex (volli reuse, but transcripts in cloud + network required); hybrid | Local-first fits single-player v1 where projects are local folders and sessions are local processes. Multiplayer is a someday-problem; solve sync when it hurts. |
+| 4 | **Worktree per ticket, per-ticket opt-out** | Always worktree; always main checkout | Parallel tickets must not clobber each other; branch/PR maps 1:1 to ticket (goal 3). Opt-out covers quick/read-only tasks. |
+| 5 | **Agent-agnostic command templates + first-class adapters** for Claude Code, Codex, Opencode | Claude Code only; pure command templates with no adapters | A single-harness app defeats the purpose of a third-party app — just use the official apps. Bring-your-own-harness is the floor; the popular 95% get deep hook/resume/transcript integration. |
+| 6 | **Bundled `volli` CLI** as the agent↔planning interface | MCP server (explicit non-goal); ticket-as-files (mushy, racy); local HTTP API (clunky for agents) | One line in the agent's prompt teaches it; deterministic; harness hooks call the same binary; identical across harnesses. cmux validates the pattern (their Unix-socket CLI). |
+| 7 | **Primary session + cmux-style tabs/splits per ticket** | Single terminal; free-form panes with no primary | The primary session's lifecycle drives board automation unambiguously; splits keep the cmux ergonomics the owner loves (shell next to agent, logs, a second agent). |
+| 8 | **Full lifecycle automation** | Semi-auto (manual moves); opt-in per project | The magic *is* the loop: Doing → launch; hooks → Needs Review + notification; Done → push + PR offer. "Board reflects reality" is the core promise. |
+| 9 | **App-lifetime sessions + resume commands** (persist layout, cwd, resume command — relaunch via `claude --resume` etc.) | PTY-owning background daemon (right long-term, heavy now); no resume at all | cmux ships exactly this and users don't notice the difference for agent workloads. Daemon is a natural v2+ when the IPC surface exists anyway via the CLI socket. |
+| 10 | **Fixed semantic columns**: Backlog · Todo · Doing · Needs Review · Done | Linear-style custom columns with semantic type tags | Dramatically simpler to build and reason about; automation semantics stay predictable. Known trade-off: imposes "our" SDLC. If demand appears, evolve toward configurable layouts. Vibe Kanban validates the minimal semantic-status shape. |
+| 11 | **Standalone — replaces Linear** | One-time Linear import; two-way sync (a tarpit) | The whole point is integrating planning with execution; syncing to a planner that can't see execution recreates the original disconnect. |
+| 12 | **Name: Volli Code**, CLI `volli` | — | Leans into the volli lineage. |
+
+The following were resolved in a design review (July 2026), closing the questions originally parked below:
+
+| # | Decision | Alternatives rejected | Rationale |
+|---|----------|----------------------|-----------|
+| 13 | **Symmetric lifecycle moves.** Primary agent stops *or blocks* (turn finished / needs permission / asked a question) → Needs Review, with a reason badge on the card; any new primary-session activity → back to Doing. | Heuristics to detect "final" stops (fuzzy timers); explicit `volli ticket move` as the only trigger (depends on agent obedience) | Harness Stop hooks fire after *every* turn, not just task completion — so embrace it: the column is a live "whose turn is it" indicator, and Needs Review always means "blocked on you". Notifications are attention-aware (suppressed while the ticket's terminal is focused). |
+| 14 | **Agent commits; Done has a safety net.** The brief instructs the agent to commit its work; the app never commits behind your back. The Done flow detects a dirty worktree, shows the diff stat, and offers one-click "commit remaining changes" before push/PR. | Auto-checkpoint commits on every Stop (history noise, commits half-done states); no policy (PR step just fails) | Honest history, no surprise commits, and the failure mode (agent forgot to commit) is caught at the exact moment it matters. |
+| 15 | **Worktree prep = per-project setup command + copy-globs.** On worktree creation: run an optional setup command (e.g. `pnpm install`) and copy configured gitignored globs (e.g. `.env*`) from the main checkout. Setup runs visibly in the primary terminal before the agent command. | Symlinking `node_modules` (parallel builds corrupt each other — defeats isolation); nothing (agents burn minutes on environment archaeology) | Two simple knobs cover ~all stacks; visible execution keeps it auditable. |
+| 16 | **Retention: clean on PR merge + TTL; nothing is ever destroyed by automation.** Worktrees survive Done. On PR merge (watched via `gh`) — or a configurable TTL for PR-less tickets — the app prompts to archive + clean. Archived tickets leave the board into a per-project, searchable **Archive** that permanently retains the event log, transcripts, branch name, and PR link; deleting from the Archive is the only destructive act, always explicit. | Clean immediately on Done (kills resume exactly when review bounces); manual-only (disk chore) | Reopen-and-resume stays cheap while review is live; the audit trail (goal 2) is sacred. |
+| 17 | **Scratch sessions: per-project Sessions surface + promote.** One keystroke opens a ticket-less session (main checkout, no worktree, no board involvement) — still recorded in the same session history. "Promote to ticket" creates a ticket, links the transcript, and optionally moves work into a worktree/branch. | Auto-creating placeholder tickets (litters the board); deferring to v2 (recreates the original disconnect, loses transcripts) | Zero friction to start exploring, no audit hole, clean path from poking-around to tracked work. |
+| 18 | **Multi-agent: automation = primary only; explicit CLI = any pane.** Hook-driven lifecycle is wired only to the primary session, but any session in the ticket (secondary agents, shells) can run explicit `volli` commands: move, comment, notify. | Hard wall (secondary agents can't even notify); all agents drive lifecycle (two heartbeats → column races) | One unambiguous heartbeat for the board; deliberate acts count from anywhere. |
+| 19 | **Attachments: materialize files + list paths.** On launch, attachments are copied into a gitignored ticket-scoped dir in the worktree (`.volli/attachments/`); the brief lists each path with its label and instructs the agent to read them; URLs pass through as URLs. | Per-harness native embedding (divergent adapters for marginal gain); URLs/text only (screenshots are the most common spec artifact) | One mechanism, full fidelity, identical across every harness that can read files. |
+| 20 | **Backward moves interrupt, never kill.** Dragging a ticket out of the active columns sends the primary session an interrupt (Esc-equivalent — stop the current turn); terminals stay alive. If a terminal was closed by the user, a session-resume interface brings it back. Derived rule: **hook events arriving on the heels of a manual move are stale — the manual move wins** (else the interrupt's own Stop hook would bounce the ticket right back). | Killing the PTY (destroys live context); blocking the move (fights the human); label-only moves (Todo with running agents — the exact lie this app exists to kill) | Board stays truthful; nothing is lost. |
+| 21 | **Re-entering Doing resumes by default.** Live terminal → untouched, keep talking. Dead terminal with a resume command → relaunch it (`claude --resume`). Only a ticket with no prior session gets the fresh composed prompt; "Start fresh session" is always in the ticket menu. | Always-fresh (agent amnesia exactly when "address the review feedback" needs context); ask-every-time (modal for a 90%-obvious answer) | The most common bounce (Needs Review → Doing) keeps the agent's context. |
+
+The following were made when the project moved to this repo (July 2026):
+
+| # | Decision | Alternatives rejected | Rationale |
+|---|----------|----------------------|-----------|
+| 22 | **Electron + React + TypeScript** — this repo rewrites the native Swift app; still macOS-only v1 | Continuing native Swift/SwiftUI; Tauri | Agent-driven development in SwiftUI proved far slower than in TS — LLM throughput beats native polish for a product whose owner builds it *with* agents. Electron keeps cmux-class terminal embedding and desktop integration available. T3 Code (the closest TS sibling product) chose Electron over Tauri after evaluating every option, for the same product shape. The Swift original (`../volli-swift`) remains a working reference one milestone ahead. |
+| 23 | **Terminal: xterm.js in the renderer, node-pty in the main process**, behind a `TerminalEngine` interface over the preload/IPC bridge | Naive DOM/`<pre>` rendering; embedding a native terminal surface | Same lesson as #2: agent TUIs need real terminal emulation. xterm.js is VS Code's engine — proven daily against Claude Code's TUI. The interface seam keeps the swap-the-engine escape hatch open. |
+| 24 | *(build tooling superseded by #25)* **electron-vite** build/dev, **electron-builder** packaging, **Zustand** renderer state, **better-sqlite3** for SQLite | Electron Forge; hand-rolled vite+tsc (the broken initial scaffold); Redux/MobX | Fastest correct dev loop with HMR across main/preload/renderer; Zustand fits the model-resident/view-lazy state pattern inherited from the Swift app; better-sqlite3 is the mature synchronous binding suited to a main-process store. |
+| 25 | **Restructure into a pnpm + Vite+ (`vp`) monorepo before feature work.** The Electron desktop app becomes a single app inside the workspace; Electron main/preload bundling moves to hand-rolled Vite+ pack configs (T3 Code's approach), replacing electron-vite. electron-builder, Zustand, and better-sqlite3 from #24 stand. | Staying single-package on electron-vite until a second client forces a migration | A mobile client is a real option and the owner refuses to be locked out of it: converting a hello-world app into a monorepo is cheap now; retrofitting a monorepo under a grown app means tracking backwards. T3 Code ships this exact layout (pnpm workspace, Vite+ toolchain, thin Electron shell) at production scale. |
+
+## The core loop (v1 spec)
+
+### Board semantics
+
+| Column | Meaning | Automated behavior |
+|--------|---------|--------------------|
+| **Backlog** | Captured, not committed | none |
+| **Todo** | Committed, ready to run | none |
+| **Doing** | Agent (or human) actively working | First entry: create worktree + branch `volli/<ID>-<slug>` (unless opted out) → run project setup command + copy gitignored globs, visibly in the primary terminal → materialize attachments → compose prompt → launch primary session via the chosen harness adapter. Re-entry: resume by default (live terminal untouched; closed terminal relaunched via resume command); "Start fresh session" in the ticket menu. |
+| **Needs Review** | Blocked on a human — always | Entered when the primary agent finishes a turn, requests permission, or asks a question (card badge shows which). Any new primary-session activity moves it back to Doing. Fires a native notification + dock badge — suppressed while the ticket's terminal is focused. |
+| **Done** | Work accepted | On entry: dirty-worktree check (diff stat + one-click "commit remaining changes") → offer branch push + PR creation (`gh pr create`, PR body from ticket + session summary). Worktree survives Done; on PR merge or Done-TTL, prompt to archive + clean. |
+
+Moves are bidirectional and manual moves always allowed; automation never fights the human. Moving a ticket backward out of the active columns *interrupts* the primary session (Esc-equivalent) without killing its terminal; hook events that arrive on the heels of a manual move are treated as stale — the manual move wins.
+
+**Archive:** a per-project view, not a sixth column. Lifecycle automation never destroys data — archiving removes the worktree but permanently retains the ticket, event log, transcripts, branch name, and PR link. Deleting from the Archive is the only destructive act, always explicit.
+
+### Ticket anatomy
+
+- Identity: per-project prefix + number (e.g. `VC-12`), Linear-style.
+- Content: title, rich description (markdown), attachments (files, URLs), labels, priority.
+- Execution config: harness (Claude Code / Codex / Opencode / custom command template), worktree toggle, base branch.
+- Live state: worktree path, branch, primary session status, additional panes.
+- History: every status change, session start/stop, and comment in an append-only event log; full transcripts linked.
+
+### Prompt composition
+
+When a ticket enters Doing, the adapter renders the harness command from a template, e.g.:
+
+```
+claude "$(volli ticket brief VC-12)"
+```
+
+where `volli ticket brief` emits the ticket's title, description, attachment paths/URLs, and one paragraph teaching the agent the `volli` CLI (how to move the ticket, comment, ask for review). Custom harnesses get `{{brief}}`/`{{ticket_id}}` template variables.
+
+### The `volli` CLI
+
+Talks to the app over a Unix socket. Core surface (v1):
+
+```
+volli ticket brief <id>          # emit ticket context (used in prompt composition)
+volli ticket move <id> --to <column>
+volli ticket comment <id> -m "..."
+volli session done|blocked       # called by hooks; infers ticket from env
+volli notify -m "..."            # native notification (cmux-style)
+```
+
+Harness adapters generate hook configs on session launch — e.g. Claude Code `Stop` → `volli session done`, `Notification` → `volli notify` — scoped to the worktree so the user's global hook config is untouched.
+
+### Sessions & audit history
+
+- Each session records: harness, command, cwd, start/end, resume command, transcript file.
+- Ticket view shows the live terminal; project view shows a searchable session history ("what has been done here, by whom, when, and why").
+- On app relaunch: layout restored, each interrupted primary session offers one-click resume.
+- **Scratch sessions**: each project has a Sessions surface beside the board — one keystroke opens a ticket-less session (main checkout, no worktree, no board involvement), recorded in the same history. "Promote to ticket" links the transcript to a new ticket and optionally moves the work into a worktree/branch.
+
+## v1 milestones (Electron)
+
+- **M0 — Scaffold & terminal spike**: Electron + React + TS scaffold running (done, on electron-vite); restructure into the pnpm + Vite+ monorepo (decision 25); then xterm.js + node-pty rendering a live shell behind the `TerminalEngine` interface. *De-risks the biggest unknown first (terminal fidelity for agent TUIs — the reason the original went native).*
+- **M1 — Tracker**: SQLite (better-sqlite3), project sidebar, kanban CRUD with fixed columns, ticket detail view (no terminals yet).
+- **M2 — Ticket → session**: worktree creation, prompt composition, launch Claude Code as primary session inside the ticket view.
+- **M3 — The loop**: `volli` CLI + socket, hook generation, auto-moves, native notifications, resume-on-relaunch.
+- **M4 — Breadth**: splits/tabs per ticket, session history/audit view, Done → push + PR, Codex + Opencode adapters, custom command templates.
+
+## Non-goals (v1)
+
+- Multiplayer / sync / accounts (local-first now; **Convex is the leading candidate for a future sync layer** — the owner wants to revisit once local v1 works; it does not change decision #3 today)
+- MCP server (the CLI *is* the integration surface)
+- Linear import or sync
+- Custom board layouts (fixed semantic columns first)
+- PTY-owning daemon (resume commands instead; daemon is a v2 candidate)
+- Windows/Linux (macOS-only v1, reaffirmed for the Electron rewrite; Electron keeps the option cheap later)
+- Data compatibility with the Swift original (fresh start; the Swift schema is documented in `docs/SWIFT-REFERENCE.md` if a one-time import is ever wanted)
+
+## Open questions
+
+The original parked questions (worktree hygiene, multi-agent tickets, exploratory sessions, attachment fidelity, retention) were all resolved July 2026 — see decisions 13–21 in the log above. Remaining minor items, with defaults chosen (revisit only if they hurt):
+
+- **Base-branch drift**: no auto-rebase in v1; the card shows a "behind base by N commits" indicator and the human tells the agent to rebase when it matters.
+- **Hook-config merging**: adapters write hooks into worktree-scoped harness settings by *merging* into any copied project settings, never clobbering them.
+- **Return-to-Doing signal on custom harnesses**: adapters use native hooks where available (e.g. Claude Code `UserPromptSubmit`); the fallback heuristic is Enter-terminated input written to the primary PTY.
+- **Convex backend**: whether/when a Convex layer backs sync or multiplayer — parked until local v1 proves out.
+
+## Inspirations
+
+- **[T3 Code](https://github.com/pingdotgg/t3code)** — Theo Browne's open-source Electron GUI over coding-agent CLIs: worktree-per-thread, xterm.js + server-side node-pty, SQLite, provider adapters, hidden-git-ref checkpoints. The closest TS/Electron sibling; also a proof of the thin-shell-over-local-server architecture our parked daemon (decision 9) would become.
+- **[cmux](https://github.com/manaflow-ai/cmux)** — resume-command persistence, OSC/CLI notifications, socket scriptability, split-pane management.
+- **[Vibe Kanban](https://github.com/BloopAI/vibe-kanban)** — kanban-for-agents shape: worktree-per-task, board driven by actual agent state.
+- **Linear** — tracker UX gold standard.
+- **[Ghostty](https://ghostty.org)** / [libghostty](https://mitchellh.com/writing/libghostty-is-coming) — the terminal-fidelity bar to aim for with xterm.js.
+- **volli** (`../volli`) — kanban schema + agent-job state machine as design references.
+- **The Swift original** (`../volli-swift`) — this product's first implementation; working tracker UI + Ghostty terminal spike (see `docs/SWIFT-REFERENCE.md`).

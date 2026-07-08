@@ -1,31 +1,29 @@
 {
-  "name": "volli-electron",
+  "name": "volli-code",
   "version": "0.0.1",
-  "description": "Electron spike: kanban board + embedded terminal",
-  "type": "module",
-  "main": "dist/main.js",
+  "description": "Volli Code — kanban planning + terminal-agent execution (Electron rewrite)",
+  "main": "./out/main/index.js",
   "scripts": {
-    "dev": "concurrently \"npm run watch\" \"wait-on tcp:5173 && electron .\"",
-    "watch": "vite",
-    "build": "vite build && tsc src/main.ts --outDir dist",
-    "start": "electron ."
-  },
-  "devDependencies": {
-    "@types/node": "^22.0.0",
-    "@types/react": "^18.3.0",
-    "@types/react-dom": "^18.3.0",
-    "@vitejs/plugin-react": "^4.3.0",
-    "concurrently": "^9.1.0",
-    "electron": "^latest",
-    "typescript": "^5.4.0",
-    "vite": "^5.2.0",
-    "wait-on": "^7.2.0"
+    "postinstall": "node node_modules/electron/install.js",
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json --composite false && tsc --noEmit -p tsconfig.web.json --composite false"
   },
   "dependencies": {
-    "react": "^18.3.0",
-    "react-dom": "^18.3.0",
-    "xterm": "^5.5.0",
-    "xterm-addon-fit": "^0.10.0",
-    "node-pty": "^0.10.1"
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^43.0.0",
+    "electron-vite": "^5.0.0",
+    "typescript": "^6.0.3",
+    "vite": "^7.3.6"
   }
 }
