@@ -1,12 +1,11 @@
 {
   "name": "volli-code",
   "version": "0.0.1",
-  "description": "Volli Code — kanban planning + terminal-agent execution (Electron rewrite)",
   "private": true,
+  "description": "Volli Code — kanban planning + terminal-agent execution (Electron rewrite)",
   "type": "module",
-  "engines": { "node": "^24.13.0" },
-  "packageManager": "pnpm@11.10.0",
   "scripts": {
+    "prepare": "vp config --no-agent",
     "dev": "vp run --filter @volli/desktop dev",
     "build": "vp run --filter @volli/desktop build",
     "start": "vp run --filter @volli/desktop start",
@@ -20,5 +19,9 @@
   "devDependencies": {
     "typescript": "catalog:",
     "vite-plus": "catalog:"
-  }
+  },
+  "engines": {
+    "node": "^24.13.0"
+  },
+  "packageManager": "pnpm@11.10.0"
 }

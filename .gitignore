@@ -6,4 +6,5 @@ out/
 .env
 dist-electron/
 .vite-plus/
+.vite-hooks/
 *.tsbuildinfo
