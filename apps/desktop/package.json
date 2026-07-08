@@ -7,7 +7,9 @@
   "productName": "Volli Code",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.node.json --composite false && tsc --noEmit -p tsconfig.web.json --composite false",
-    "test": "vp test run --passWithNoTests"
+    "test": "vp test run --passWithNoTests",
+    "start": "node scripts/start-electron.mjs",
+    "ensure:electron": "node scripts/ensure-electron.mjs"
   },
   "dependencies": {
     "@volli/shared": "workspace:*",
@@ -22,6 +24,7 @@
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "^5.2.0",
     "typescript": "catalog:",
+    "vite": "catalog:",
     "vite-plus": "catalog:"
   }
 }

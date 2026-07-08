@@ -1,10 +1,14 @@
+import { ticketBranchName } from '@volli/shared'
+
 function App() {
   return (
     <div
       style={{
         display: 'flex',
+        flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
+        gap: '0.75rem',
         width: '100vw',
         height: '100vh',
         margin: 0,
@@ -15,6 +19,9 @@ function App() {
       }}
     >
       Volli Code
+      <span style={{ fontSize: '0.9rem', color: '#E8652A', fontFamily: 'monospace' }}>
+        {ticketBranchName('VC-0', 'monorepo migration')}
+      </span>
     </div>
   )
 }

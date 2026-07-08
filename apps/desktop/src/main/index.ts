@@ -1,5 +1,6 @@
 import { app, BrowserWindow } from 'electron'
 import { join } from 'path'
+import { ticketBranchName } from '@volli/shared'
 
 const isDev = !app.isPackaged
 
@@ -9,7 +10,7 @@ function createWindow(): void {
     height: 900,
     show: false,
     webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
+      preload: join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false
     }
@@ -19,17 +20,21 @@ function createWindow(): void {
     mainWindow.show()
   })
 
-  // HMR for renderer base on electron-vite cli.
-  // Load the remote URL for development or the local html file for production.
+  // In dev, scripts/dev.mjs injects ELECTRON_RENDERER_URL and runs the Vite dev
+  // server there for HMR. In production, load the built renderer from disk.
   if (isDev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
     mainWindow.webContents.openDevTools()
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    mainWindow.loadFile(join(__dirname, '../dist/index.html'))
   }
 }
 
 app.whenReady().then(() => {
+  // Proves vp pack bundled the workspace TS source (@volli/shared) into main.cjs
+  // via deps.alwaysBundle, rather than leaving an unresolved runtime require().
+  console.log('[volli] shared wiring OK:', ticketBranchName('VC-0', 'monorepo migration'))
+
   createWindow()
 
   app.on('activate', () => {
