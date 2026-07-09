@@ -3,8 +3,6 @@ import * as NodeNet from "node:net";
 import * as NodePath from "node:path";
 import * as NodeTimersPromises from "node:timers/promises";
 
-const defaultTcpHosts = ["127.0.0.1", "localhost", "::1"];
-
 async function fileExists(filePath) {
   try {
     await NodeFSP.access(filePath);
@@ -43,7 +41,7 @@ function tcpPortIsReady({ host, port, connectTimeoutMs = 500 }) {
   });
 }
 
-async function resolvePendingResources({ baseDir, files, tcpPort, tcpHosts, connectTimeoutMs }) {
+async function resolvePendingResources({ baseDir, files, tcpHost, tcpPort, connectTimeoutMs }) {
   const pendingFiles = [];
 
   for (const relativeFilePath of files) {
@@ -53,17 +51,11 @@ async function resolvePendingResources({ baseDir, files, tcpPort, tcpHosts, conn
     }
   }
 
-  let tcpReady = false;
-  for (const host of tcpHosts) {
-    tcpReady = await tcpPortIsReady({
-      host,
-      port: tcpPort,
-      connectTimeoutMs,
-    });
-    if (tcpReady) {
-      break;
-    }
-  }
+  const tcpReady = await tcpPortIsReady({
+    host: tcpHost,
+    port: tcpPort,
+    connectTimeoutMs,
+  });
 
   return {
     pendingFiles,
@@ -80,19 +72,21 @@ export async function waitForResources({
   tcpPort,
   connectTimeoutMs = 500,
 }) {
+  if (!tcpHost) {
+    throw new TypeError("waitForResources requires a tcpHost");
+  }
   if (!Number.isInteger(tcpPort) || tcpPort <= 0) {
     throw new TypeError("waitForResources requires a positive integer tcpPort");
   }
 
   const startedAt = Date.now();
-  const tcpHosts = tcpHost ? [tcpHost] : defaultTcpHosts;
 
   while (true) {
     const { pendingFiles, tcpReady } = await resolvePendingResources({
       baseDir,
       files,
+      tcpHost,
       tcpPort,
-      tcpHosts,
       connectTimeoutMs,
     });
 
@@ -103,7 +97,7 @@ export async function waitForResources({
     if (Date.now() - startedAt >= timeoutMs) {
       const pendingResources = [];
       if (!tcpReady) {
-        pendingResources.push(tcpHost ? `tcp:${tcpHost}:${tcpPort}` : `tcp:${tcpPort}`);
+        pendingResources.push(`tcp:${tcpHost}:${tcpPort}`);
       }
       for (const filePath of pendingFiles) {
         pendingResources.push(`file:${filePath}`);
