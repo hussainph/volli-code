@@ -57,7 +57,7 @@ App data lives under Electron's `userData` dir — a deliberate fresh start, NOT
 - Branch naming for ticket worktrees: `volli/<TICKET-ID>-<slug>` (e.g. `volli/VC-12-mcp-server`).
 - All changes from a session go through a branch + commit + PR flow — never commit directly to `main`.
 - Surface every failed mutation to the user (alert/toast); never silently swallow errors — the Swift app's top systemic defect.
-- Design tokens (spacing, radii, timing, palette) live in one shared module, not per-component. Accent: ember orange `#E8652A`; frosted/dark two-tier sidebar aesthetic.
+- Design tokens live in one canonical module: `apps/desktop/src/renderer/src/globals.css` (shadcn-style CSS variables; dark-only for now, `class="dark"` pinned in index.html). TS-consumable domain colors (project-tile palette) live in `@volli/shared`. Accent: ember orange `#E8652A`; frosted/dark two-tier sidebar aesthetic.
 - Live terminals must never be unmounted incidentally (e.g. by selecting a card) — keep session state model-resident, views lazy.
 - Strict TypeScript; no `any` at module boundaries.
 

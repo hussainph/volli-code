@@ -1,0 +1,110 @@
+/*
+ * The canonical design-token module (per CLAUDE.md: tokens live in one shared
+ * module, not per-component). Colors, radii, and fonts are CSS variables here;
+ * TS-side domain colors (the project-tile palette) live in @volli/shared.
+ * The main process duplicates --background as BrowserWindow backgroundColor
+ * (it cannot read renderer CSS) — keep the two in sync.
+ *
+ * Dark-only for now, by owner decision: values are authored once under
+ * `:root, .dark` and <html class="dark"> is pinned in index.html so shadcn
+ * `dark:` variants keep working and a light theme (or user theming UI) can be
+ * added later without restructuring.
+ */
+
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root,
+.dark {
+  --background: #111111;
+  --foreground: #f5f5f5;
+  --card: #161616;
+  --card-foreground: #f5f5f5;
+  --popover: #1a1a1a;
+  --popover-foreground: #f5f5f5;
+  /* Ember orange — the single brand accent (CLAUDE.md). */
+  --primary: #e8652a;
+  --primary-foreground: #ffffff;
+  --secondary: #1c1c1c;
+  --secondary-foreground: #f5f5f5;
+  --muted: #1c1c1c;
+  --muted-foreground: #9a9a9a;
+  --accent: #222222;
+  --accent-foreground: #f5f5f5;
+  --destructive: #e5484d;
+  --destructive-foreground: #ffffff;
+  --border: #262626;
+  --input: #262626;
+  --ring: #e8652a;
+  --radius: 0.625rem;
+  /* Two-tier sidebar depth: rail darkest, panel between rail and content. */
+  --rail: #0d0d0d;
+  --sidebar: #161616;
+  --sidebar-foreground: #d6d6d6;
+  --sidebar-primary: #e8652a;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #222222;
+  --sidebar-accent-foreground: #f5f5f5;
+  --sidebar-border: #232323;
+  --sidebar-ring: #e8652a;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-rail: var(--rail);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --font-sans: system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    color-scheme: dark;
+  }
+  body {
+    @apply bg-background text-foreground font-sans;
+  }
+}
+
+/* Electron hiddenInset chrome: window-drag regions. Interactive children of a
+ * drag region must opt out with .app-region-no-drag or they swallow clicks. */
+.app-region-drag {
+  -webkit-app-region: drag;
+}
+.app-region-no-drag {
+  -webkit-app-region: no-drag;
+}
