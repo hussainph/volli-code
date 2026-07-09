@@ -10,7 +10,7 @@
     "build": "vp run --filter @volli/desktop build",
     "start": "vp run --filter @volli/desktop start",
     "ensure:electron": "vp run --filter @volli/desktop ensure:electron",
-    "typecheck": "vp run -r typecheck",
+    "typecheck": "tsc --noEmit -p tsconfig.json && vp run -r typecheck",
     "test": "vp run -r test",
     "lint": "vp lint",
     "fmt": "vp fmt",

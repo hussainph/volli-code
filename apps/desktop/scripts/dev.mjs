@@ -133,3 +133,9 @@ process.once("SIGINT", () => {
 process.once("SIGTERM", () => {
   void shutdown();
 });
+// Closing the terminal sends SIGHUP here but not to the detached children —
+// without this handler the whole dev tree (Vite, pack watcher, Electron)
+// leaks, and the orphaned Vite server keeps port 5173 (strictPort) busy.
+process.once("SIGHUP", () => {
+  void shutdown();
+});

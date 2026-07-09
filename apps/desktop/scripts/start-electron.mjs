@@ -14,6 +14,9 @@ const electronBinary = require("electron");
 
 const childEnv = { ...process.env };
 delete childEnv.ELECTRON_RUN_AS_NODE;
+// A stray ELECTRON_RENDERER_URL would make the (unpackaged) built app load the
+// dev server instead of dist/index.html — `start` never wants the dev URL.
+delete childEnv.ELECTRON_RENDERER_URL;
 
 const child = NodeChildProcess.spawn(electronBinary, ["dist-electron/main.cjs"], {
   stdio: "inherit",

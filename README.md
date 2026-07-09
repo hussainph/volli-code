@@ -8,7 +8,8 @@ Kanban planning + terminal-agent execution in one desktop app: every ticket is b
 
 ## Prerequisites
 
-- **Node** `^24.13` and **pnpm 11** — run `corepack enable` to pick up the pinned versions (`engines` / `packageManager` in `package.json`).
+- **Node** `^24.13` (`engines` in `package.json`) — install/manage it yourself; corepack does not handle Node.
+- **pnpm 11** — run `corepack enable` to activate the pinned version (`packageManager` in `package.json`).
 - Optionally the global **Vite+ (`vp`)** CLI, which wraps pnpm plus the build and quality toolchain: `curl -fsSL https://vite.plus | bash`.
 
 ## Develop

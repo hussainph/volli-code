@@ -31,10 +31,12 @@ export default defineConfig({
       typeAware: false,
       typeCheck: false,
     },
+    // "error", not "warn": warnings never fail `vp lint`/`vp check`, so a
+    // warn-level gate can't actually block CI or the pre-commit hook.
     categories: {
-      correctness: "warn",
-      suspicious: "warn",
-      perf: "warn",
+      correctness: "error",
+      suspicious: "error",
+      perf: "error",
     },
     rules: {
       // React 17+ automatic JSX runtime — no `import React` needed in scope.

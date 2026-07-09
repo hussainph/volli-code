@@ -28,14 +28,11 @@ jobs:
           cache: true
           run-install: true
 
-      - name: Ensure Electron runtime is installed
-        run: vp run --filter @volli/desktop ensure:electron
-
       - name: Check
         run: vp check
 
       - name: Typecheck
-        run: vp run -r typecheck
+        run: pnpm run typecheck
 
       - name: Build desktop pipeline
         run: vp run --filter @volli/desktop build
@@ -60,9 +57,6 @@ jobs:
           node-version-file: package.json
           cache: true
           run-install: true
-
-      - name: Ensure Electron runtime is installed
-        run: vp run --filter @volli/desktop ensure:electron
 
       - name: Test
         run: vp run -r test
