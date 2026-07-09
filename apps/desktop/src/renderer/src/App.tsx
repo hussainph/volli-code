@@ -1,14 +1,7 @@
-import { ticketBranchName } from "@volli/shared";
+import { AppShell } from "@renderer/components/app-shell";
 
 function App() {
-  return (
-    <div className="flex h-screen w-screen flex-col items-center justify-center gap-3 text-3xl">
-      Volli Code
-      <span className="font-mono text-sm text-primary">
-        {ticketBranchName("VC-0", "monorepo migration")}
-      </span>
-    </div>
-  );
+  return <AppShell />;
 }
 
 export default App;
