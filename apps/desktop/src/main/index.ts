@@ -1,6 +1,7 @@
 import { app, BrowserWindow } from "electron";
 import { join } from "path";
 import { ticketBranchName } from "@volli/shared";
+import { registerIpcHandlers } from "./ipc";
 
 const isDev = !app.isPackaged;
 
@@ -47,6 +48,7 @@ app.whenReady().then(() => {
   // via deps.alwaysBundle, rather than leaving an unresolved runtime require().
   console.log("[volli] shared wiring OK:", ticketBranchName("VC-0", "monorepo migration"));
 
+  registerIpcHandlers();
   createWindow();
 
   app.on("activate", () => {
