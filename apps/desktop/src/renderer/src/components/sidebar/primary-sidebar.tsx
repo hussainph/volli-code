@@ -14,6 +14,7 @@ import {
   SidebarMenuItem,
 } from "@renderer/components/ui/sidebar";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
+import { cn } from "@renderer/lib/utils";
 import { errorMessage } from "@renderer/lib/errors";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
@@ -71,10 +72,15 @@ export function PrimarySidebar() {
               SidebarContent stays in flow so the footer keeps to the bottom. */}
           <SidebarContent>
             <div className="group-data-[collapsible=icon]:hidden">
-              {activeNav === "files" && <FileTree key={selected.id} project={selected} />}
-              {(activeNav === "board" || activeNav === "sessions") && (
+              {/* Render-hidden, not unmounted, across nav switches so the file
+                  tree keeps its lazily-fetched listings and expansion state
+                  (same keep-alive seam main-content.tsx documents for pages). */}
+              <div className={cn(activeNav !== "files" && "hidden")}>
+                <FileTree key={selected.id} project={selected} />
+              </div>
+              <div className={cn(activeNav !== "board" && activeNav !== "sessions" && "hidden")}>
                 <ActiveSessions project={selected} />
-              )}
+              </div>
             </div>
           </SidebarContent>
         </>

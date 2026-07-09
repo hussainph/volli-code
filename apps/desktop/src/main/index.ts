@@ -64,9 +64,12 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
-  // Proves vp pack bundled the workspace TS source (@volli/shared) into main.cjs
-  // via deps.alwaysBundle, rather than leaving an unresolved runtime require().
-  console.log("[volli] shared wiring OK:", ticketBranchName("VC-0", "monorepo migration"));
+  if (isDev) {
+    // Dev smoke-check that vp pack bundled the workspace TS source (@volli/shared)
+    // into main.cjs via deps.alwaysBundle rather than leaving an unresolved
+    // runtime require(). Gated to dev so it never prints on a production boot.
+    console.log("[volli] shared wiring OK:", ticketBranchName("VC-0", "monorepo migration"));
+  }
 
   registerIpcHandlers();
   createWindow();

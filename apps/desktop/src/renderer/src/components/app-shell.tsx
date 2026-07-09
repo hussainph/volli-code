@@ -18,7 +18,7 @@ import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
 
 /**
- * Window shell, sidebar-09 composition: a collapsible two-pane sidebar (68px
+ * Window shell, sidebar-09 composition: a collapsible two-pane sidebar (60px
  * project rail + resizable primary sidebar) beside the main content.
  * Collapsing (⌘B) keeps the rail plus a 48px icon strip of the primary nav
  * (sidebar-07 style), so navigation stays one click away.
@@ -66,13 +66,21 @@ export function AppShell() {
 
 /** Mirrors tracked project paths into the main process's fs-root allowlist. */
 function useProjectRootsSync() {
-  const projects = useProjectsStore((state) => state.projects);
+  // Key on the SET of paths, not the array identity: a rail reorder churns a
+  // fresh projects array on every pointer-cross (live shuffle) yet never
+  // changes the allowlist, so an order-independent digest keeps a single drag
+  // from firing a burst of redundant syncRoots IPC round-trips.
+  const rootsKey = useProjectsStore((state) =>
+    state.projects
+      .map((project) => project.path)
+      .toSorted()
+      .join("\n"),
+  );
 
   React.useEffect(() => {
-    window.api.projects
-      .syncRoots(projects.map((project) => project.path))
-      .catch((error: unknown) => {
-        toast.error(`Could not sync project roots: ${errorMessage(error)}`);
-      });
-  }, [projects]);
+    const paths = useProjectsStore.getState().projects.map((project) => project.path);
+    window.api.projects.syncRoots(paths).catch((error: unknown) => {
+      toast.error(`Could not sync project roots: ${errorMessage(error)}`);
+    });
+  }, [rootsKey]);
 }

@@ -1,6 +1,6 @@
 /**
  * UI state. `activeNav` is deliberately session-only; `sidebarWidth` — the
- * full two-tier sidebar width (68px rail + resizable panel) — persists to
+ * full two-tier sidebar width (60px rail + resizable panel) — persists to
  * localStorage so the grip position survives relaunch. Same interim-storage
  * caveat as the projects store: dev and packaged origins don't share data.
  */

@@ -10,14 +10,21 @@ export function useFullScreen() {
 
   React.useEffect(() => {
     let cancelled = false;
+    // If a push event lands before the async seed resolves (the user toggles
+    // fullscreen mid-round-trip), the seed carries the pre-transition value and
+    // must not clobber the newer event-set state.
+    let settledByEvent = false;
     window.api.window
       .isFullScreen()
       .then((value) => {
-        if (!cancelled) setFullScreen(value);
+        if (!cancelled && !settledByEvent) setFullScreen(value);
       })
       // State read, not a mutation: on failure keep the windowed-mode default.
       .catch(() => {});
-    const unsubscribe = window.api.window.onFullScreenChange(setFullScreen);
+    const unsubscribe = window.api.window.onFullScreenChange((value) => {
+      settledByEvent = true;
+      setFullScreen(value);
+    });
     return () => {
       cancelled = true;
       unsubscribe();

@@ -18,6 +18,7 @@ import {
   SidebarMenuSub,
 } from "@renderer/components/ui/sidebar";
 import { errorMessage } from "@renderer/lib/errors";
+import { useProjectsStore } from "@renderer/stores/projects";
 
 /** One directory level's listing state. `undefined` = not fetched yet. */
 type Listing = DirEntry[] | "loading" | { error: string } | undefined;
@@ -41,14 +42,27 @@ export function FileTree({ project }: FileTreeProps) {
     // run's result. A run-once ref alongside this cleanup deadlocks the tree
     // on its loading skeleton (the one fetch resolves already-cancelled).
     let cancelled = false;
-    window.api.fs
-      .listDirectory(project.path)
-      .then((result) => {
+    void (async () => {
+      // Register fs roots BEFORE the first listing. This effect runs in a
+      // descendant of AppShell, and React fires child effects before parent
+      // effects, so AppShell's root-sync would otherwise land AFTER this
+      // listDirectory — the main-process allowlist would still be stale and
+      // reject a freshly added project's path as "outside known projects".
+      // syncRoots is idempotent, so re-asserting the full current set is safe.
+      try {
+        await window.api.projects.syncRoots(
+          useProjectsStore.getState().projects.map((p) => p.path),
+        );
+      } catch {
+        // A failed sync just surfaces as the listing error below — nothing to do.
+      }
+      try {
+        const result = await window.api.fs.listDirectory(project.path);
         if (!cancelled) setRoot(result.ok ? result.entries : { error: result.error });
-      })
-      .catch((error: unknown) => {
+      } catch (error: unknown) {
         if (!cancelled) setRoot({ error: errorMessage(error) });
-      });
+      }
+    })();
 
     return () => {
       cancelled = true;
@@ -123,9 +137,11 @@ function DirectoryNode({ name, path }: { name: string; path: string }) {
   const [children, setChildren] = React.useState<Listing>(undefined);
 
   function handleOpenChange(open: boolean) {
-    // First expand fetches; later expands reuse the cached listing (or the
-    // cached error) instead of refetching.
-    if (!open || children !== undefined) return;
+    // First expand fetches; a loaded listing is reused. A cached ERROR is
+    // retried on the next expand instead — a transient failure (e.g. losing
+    // the root-sync race, or a momentary EACCES/EMFILE) shouldn't stick until
+    // the whole tree is remounted.
+    if (!open || children === "loading" || Array.isArray(children)) return;
 
     setChildren("loading");
     window.api.fs
