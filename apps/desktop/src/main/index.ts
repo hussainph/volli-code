@@ -14,15 +14,15 @@ function createWindow(): void {
     minWidth: 940,
     minHeight: 600,
     show: false,
-    // Slack-style chrome: no title bar, traffic lights floating over the
-    // renderer's project rail. The rail paints its own drag region
-    // (.app-region-drag in globals.css).
+    // Slack/Cursor-style chrome: no title bar. The renderer paints a
+    // full-width 40px chrome band (ChromeBar) that owns the drag region
+    // (.app-region-drag in globals.css) and the traffic-light whitespace —
+    // everything below that band is ordinary layout.
     titleBarStyle: "hiddenInset",
-    // The ~59px light group overhangs the 60px rail onto the sidebar header,
-    // which shares the rail's background (see PrimarySidebar) so the row reads
-    // as one continuous chrome band. y centers the lights on the header's
-    // title line (~y 22); the title is indented past the group's end (~67).
-    trafficLightPosition: { x: 8, y: 16 },
+    // Centers the 12px traffic-light group inside ChromeBar's 40px band
+    // ((40 - 12) / 2 = 14). Must stay in sync with ChromeBar's h-10 height
+    // (chrome-bar.tsx), the same way backgroundColor below tracks --background.
+    trafficLightPosition: { x: 10, y: 14 },
     // Must match --background in renderer globals.css (main cannot read
     // renderer CSS) — prevents the white flash before first paint.
     backgroundColor: "#111111",

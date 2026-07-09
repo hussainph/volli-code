@@ -13,14 +13,11 @@ import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable"
 
 import { AddProjectTile } from "@renderer/components/rail/add-project-tile";
 import { ProjectTile } from "@renderer/components/rail/project-tile";
-import { useFullScreen } from "@renderer/hooks/use-fullscreen";
-import { cn } from "@renderer/lib/utils";
 import { useProjectsStore } from "@renderer/stores/projects";
 
 export function ProjectRail() {
   const projects = useProjectsStore((state) => state.projects);
   const reorder = useProjectsStore((state) => state.reorder);
-  const fullScreen = useFullScreen();
   const [activeDragId, setActiveDragId] = React.useState<string | null>(null);
 
   // distance: 4 keeps plain clicks (select) and the press-scale animation
@@ -43,16 +40,6 @@ export function ProjectRail() {
 
   return (
     <div className="app-region-drag flex h-full min-h-0 flex-col">
-      {/* Clears the hiddenInset traffic lights; stays part of the drag region.
-          Fullscreen hides the lights, so the strip collapses and gives the
-          height back to the tiles. */}
-      <div
-        data-slot="rail-top-strip"
-        className={cn(
-          "shrink-0 transition-[height] duration-300 ease-swift",
-          fullScreen ? "h-0" : "h-[38px]",
-        )}
-      />
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}

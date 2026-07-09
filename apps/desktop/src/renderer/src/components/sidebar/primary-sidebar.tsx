@@ -35,12 +35,9 @@ export function PrimarySidebar() {
 
   return (
     <>
-      {/* bg-rail merges the header with the rail into one continuous chrome
-          band: the ~59px traffic-light group overhangs the 60px rail, so its
-          row must have no visible rail/panel boundary. pl-5 starts the title
-          clear of the lights (rail 60 + 20 = 80; lights end ≈ 67). */}
-      <SidebarHeader className="app-region-drag bg-rail py-3 pr-4 pl-5">
-        {/* Static text stays draggable — only interactive children opt out. */}
+      {/* ChromeBar above owns the traffic lights and the drag region — this
+          is now a plain panel header. */}
+      <SidebarHeader className="px-4 py-3">
         {selected ? (
           <div className="min-w-0 group-data-[collapsible=icon]:hidden">
             <div className="truncate text-sm font-semibold">{selected.name}</div>

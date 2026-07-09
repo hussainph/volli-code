@@ -1,16 +1,12 @@
 import * as React from "react";
 import { toast } from "sonner";
 
+import { ChromeBar } from "@renderer/components/chrome-bar";
 import { MainContent } from "@renderer/components/pages/main-content";
 import { ProjectRail } from "@renderer/components/rail/project-rail";
 import { PrimarySidebar } from "@renderer/components/sidebar/primary-sidebar";
 import { SidebarResizeHandle } from "@renderer/components/sidebar/sidebar-resize-handle";
-import {
-  Sidebar,
-  SidebarInset,
-  SidebarProvider,
-  SidebarTrigger,
-} from "@renderer/components/ui/sidebar";
+import { Sidebar, SidebarInset, SidebarProvider } from "@renderer/components/ui/sidebar";
 import { Toaster } from "@renderer/components/ui/sonner";
 import { useProjectShortcuts } from "@renderer/hooks/use-project-shortcuts";
 import { errorMessage } from "@volli/shared";
@@ -22,6 +18,10 @@ import { useUiStore } from "@renderer/stores/ui";
  * project rail + resizable primary sidebar) beside the main content.
  * Collapsing (⌘B) keeps the rail plus a 48px icon strip of the primary nav
  * (sidebar-07 style), so navigation stays one click away.
+ *
+ * ChromeBar owns the top 40px of window chrome and sits above the sidebar +
+ * content row, so SidebarProvider lays out as a column (h-svh, not the stock
+ * min-h-svh row) with ChromeBar first.
  */
 export function AppShell() {
   useProjectShortcuts();
@@ -31,6 +31,7 @@ export function AppShell() {
 
   return (
     <SidebarProvider
+      className="h-svh flex-col"
       data-resizing={resizing || undefined}
       style={
         {
@@ -43,22 +44,31 @@ export function AppShell() {
         } as React.CSSProperties
       }
     >
-      <Sidebar collapsible="icon" className="overflow-hidden *:data-[sidebar=sidebar]:flex-row">
-        <Sidebar collapsible="none" className="w-(--rail-width) shrink-0 bg-rail">
-          <ProjectRail />
+      <ChromeBar />
+      {/* ui/sidebar.tsx's fixed sidebar-container positions itself via
+          inset-y-0 relative to the nearest containing-block-establishing
+          ancestor. contain-layout makes THIS row that ancestor (instead of
+          the viewport), so the sidebar starts below ChromeBar and its height
+          tracks this row, not the window; h-full below (overriding the
+          Sidebar's own h-svh) makes that height resolve exactly, not just
+          get clipped at the window edge. */}
+      <div className="flex min-h-0 flex-1 contain-layout">
+        <Sidebar
+          collapsible="icon"
+          className="h-full overflow-hidden *:data-[sidebar=sidebar]:flex-row"
+        >
+          <Sidebar collapsible="none" className="w-(--rail-width) shrink-0 bg-rail">
+            <ProjectRail />
+          </Sidebar>
+          <Sidebar collapsible="none" className="min-w-0 flex-1">
+            <PrimarySidebar />
+          </Sidebar>
+          <SidebarResizeHandle onResizingChange={setResizing} />
         </Sidebar>
-        <Sidebar collapsible="none" className="min-w-0 flex-1">
-          <PrimarySidebar />
-        </Sidebar>
-        <SidebarResizeHandle onResizingChange={setResizing} />
-      </Sidebar>
-      <SidebarInset>
-        {/* hiddenInset chrome: the top strip doubles as the window titlebar. */}
-        <header className="app-region-drag flex h-[38px] shrink-0 items-center px-2">
-          <SidebarTrigger className="app-region-no-drag" />
-        </header>
-        <MainContent />
-      </SidebarInset>
+        <SidebarInset>
+          <MainContent />
+        </SidebarInset>
+      </div>
       <Toaster />
     </SidebarProvider>
   );
