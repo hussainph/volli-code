@@ -65,12 +65,12 @@ The following were made when the project moved to this repo (July 2026):
 
 | # | Decision | Alternatives rejected | Rationale |
 |---|----------|----------------------|-----------|
-| 22 | **Electron + React + TypeScript** — this repo rewrites the native Swift app; still macOS-only v1 | Continuing native Swift/SwiftUI; Tauri | Agent-driven development in SwiftUI proved far slower than in TS — LLM throughput beats native polish for a product whose owner builds it *with* agents. Electron keeps cmux-class terminal embedding and desktop integration available. T3 Code (the closest TS sibling product) chose Electron over Tauri after evaluating every option, for the same product shape. The Swift original (`../volli-swift`) remains a working reference one milestone ahead. |
+| 22 | **Electron + React + TypeScript** — this repo rewrites the native Swift app; still macOS-only v1 | Continuing native Swift/SwiftUI; Tauri | Agent-driven development in SwiftUI proved far slower than in TS — LLM throughput beats native polish for a product whose owner builds it *with* agents. Electron keeps cmux-class terminal embedding and desktop integration available. T3 Code (the closest TS sibling product) chose Electron over Tauri after evaluating every option, for the same product shape. The Swift original (`../volli-swift`) remains a working reference further along. |
 | 23 | **Terminal: xterm.js in the renderer, node-pty in the main process**, behind a `TerminalEngine` interface over the preload/IPC bridge | Naive DOM/`<pre>` rendering; embedding a native terminal surface | Same lesson as #2: agent TUIs need real terminal emulation. xterm.js is VS Code's engine — proven daily against Claude Code's TUI. The interface seam keeps the swap-the-engine escape hatch open. |
 | 24 | *(build tooling superseded by #25)* **electron-vite** build/dev, **electron-builder** packaging, **Zustand** renderer state, **better-sqlite3** for SQLite | Electron Forge; hand-rolled vite+tsc (the broken initial scaffold); Redux/MobX | Fastest correct dev loop with HMR across main/preload/renderer; Zustand fits the model-resident/view-lazy state pattern inherited from the Swift app; better-sqlite3 is the mature synchronous binding suited to a main-process store. |
 | 25 | **Restructure into a pnpm + Vite+ (`vp`) monorepo before feature work.** The Electron desktop app becomes a single app inside the workspace; Electron main/preload bundling moves to hand-rolled Vite+ pack configs (T3 Code's approach), replacing electron-vite. electron-builder, Zustand, and better-sqlite3 from #24 stand. | Staying single-package on electron-vite until a second client forces a migration | A mobile client is a real option and the owner refuses to be locked out of it: converting a hello-world app into a monorepo is cheap now; retrofitting a monorepo under a grown app means tracking backwards. T3 Code ships this exact layout (pnpm workspace, Vite+ toolchain, thin Electron shell) at production scale. |
 
-## The core loop (v1 spec)
+## The core loop
 
 ### Board semantics
 
@@ -125,13 +125,16 @@ Harness adapters generate hook configs on session launch — e.g. Claude Code `S
 - On app relaunch: layout restored, each interrupted primary session offers one-click resume.
 - **Scratch sessions**: each project has a Sessions surface beside the board — one keystroke opens a ticket-less session (main checkout, no worktree, no board involvement), recorded in the same history. "Promote to ticket" links the transcript to a new ticket and optionally moves the work into a worktree/branch.
 
-## v1 milestones (Electron)
+## Build state
 
-- **M0 — Scaffold & terminal spike**: Electron + React + TS scaffold running (done, on electron-vite); restructure into the pnpm + Vite+ monorepo (decision 25); then xterm.js + node-pty rendering a live shell behind the `TerminalEngine` interface. *De-risks the biggest unknown first (terminal fidelity for agent TUIs — the reason the original went native).*
-- **M1 — Tracker**: SQLite (better-sqlite3), project sidebar, kanban CRUD with fixed columns, ticket detail view (no terminals yet).
-- **M2 — Ticket → session**: worktree creation, prompt composition, launch Claude Code as primary session inside the ticket view.
-- **M3 — The loop**: `volli` CLI + socket, hook generation, auto-moves, native notifications, resume-on-relaunch.
-- **M4 — Breadth**: splits/tabs per ticket, session history/audit view, Done → push + PR, Codex + Opencode adapters, custom command templates.
+Working in a flow, not to a fixed schedule. What exists and what's ahead, in rough dependency order (not a timeline):
+
+- **Built**: the pnpm + Vite+ (`vp`) monorepo scaffold, a React + TS Electron window, and `@volli/shared` with the branch/slug rules (tested).
+- **Terminal spike**: xterm.js + node-pty rendering a live shell behind the `TerminalEngine` interface — de-risks the biggest unknown (terminal fidelity for agent TUIs, the reason the original went native).
+- **Tracker**: SQLite (better-sqlite3), project sidebar, kanban CRUD with fixed columns, ticket detail (no terminals yet).
+- **Ticket → session**: worktree creation, prompt composition, launch a primary session inside the ticket view.
+- **The loop**: `volli` CLI + socket, hook generation, auto-moves, native notifications, resume-on-relaunch.
+- **Breadth**: splits/tabs per ticket, session history/audit view, Done → push + PR, Codex + Opencode adapters, custom command templates.
 
 ## Non-goals (v1)
 
