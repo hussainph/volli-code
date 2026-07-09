@@ -24,7 +24,12 @@ export function NavList() {
       <SidebarMenu>
         {NAV_ITEMS.map(({ key, label, icon: Icon }) => (
           <SidebarMenuItem key={key}>
-            <SidebarMenuButton isActive={activeNav === key} onClick={() => setActiveNav(key)}>
+            {/* tooltip only shows in the collapsed icon strip (stock behavior). */}
+            <SidebarMenuButton
+              tooltip={label}
+              isActive={activeNav === key}
+              onClick={() => setActiveNav(key)}
+            >
               <Icon />
               <span>{label}</span>
             </SidebarMenuButton>

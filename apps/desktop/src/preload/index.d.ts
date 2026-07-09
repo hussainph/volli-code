@@ -18,6 +18,12 @@ export interface Api {
     /** Reveals the path in Finder. */
     revealInFinder: (absPath: string) => Promise<RevealResult>;
   };
+  window: {
+    /** Whether the window is currently in macOS fullscreen. */
+    isFullScreen: () => Promise<boolean>;
+    /** Subscribes to fullscreen enter/leave; returns the unsubscribe function. */
+    onFullScreenChange: (callback: (isFullScreen: boolean) => void) => () => void;
+  };
 }
 
 declare global {

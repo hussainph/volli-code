@@ -11,7 +11,11 @@ export type VolliIpcChannel =
   | "volli:pick-project-folder"
   | "volli:sync-project-roots"
   | "volli:list-directory"
-  | "volli:reveal-in-finder";
+  | "volli:reveal-in-finder"
+  | "volli:window-is-fullscreen";
+
+/** Channel names for main→renderer push events (`webContents.send`). */
+export type VolliIpcEvent = "volli:fullscreen-changed";
 
 /**
  * Result types below travel as typed discriminated unions rather than

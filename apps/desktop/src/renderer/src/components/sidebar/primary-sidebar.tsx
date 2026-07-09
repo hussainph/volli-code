@@ -23,6 +23,10 @@ import { useUiStore } from "@renderer/stores/ui";
  * content keyed to the active nav item, and a pinned Settings footer entry.
  * With no project selected, nav + contextual content are replaced by an
  * "add a project" prompt (header and footer stay put).
+ *
+ * When the sidebar collapses (⌘B) this pane narrows to a 48px icon strip:
+ * the nav buttons shrink to icons with hover tooltips (stock icon-collapse
+ * machinery), while the header text and contextual content hide.
  */
 export function PrimarySidebar() {
   const selected = useSelectedProject();
@@ -42,34 +46,46 @@ export function PrimarySidebar() {
 
   return (
     <>
-      <SidebarHeader className="app-region-drag px-4 py-3">
+      {/* bg-rail merges the header with the rail into one continuous chrome
+          band: the ~59px traffic-light group overhangs the 60px rail, so its
+          row must have no visible rail/panel boundary. pl-5 starts the title
+          clear of the lights (rail 60 + 20 = 80; lights end ≈ 67). */}
+      <SidebarHeader className="app-region-drag bg-rail py-3 pr-4 pl-5">
         {/* Static text stays draggable — only interactive children opt out. */}
         {selected ? (
-          <div className="min-w-0">
+          <div className="min-w-0 group-data-[collapsible=icon]:hidden">
             <div className="truncate text-sm font-semibold">{selected.name}</div>
             <div className="text-xs text-muted-foreground">{selected.ticketPrefix}</div>
           </div>
         ) : (
-          <div className="text-sm text-muted-foreground">No project selected</div>
+          <div className="text-sm text-muted-foreground group-data-[collapsible=icon]:hidden">
+            No project selected
+          </div>
         )}
       </SidebarHeader>
 
       {selected ? (
         <>
           <NavList />
+          {/* Contextual content hides in the collapsed icon strip; the (empty)
+              SidebarContent stays in flow so the footer keeps to the bottom. */}
           <SidebarContent>
-            {activeNav === "files" && <FileTree key={selected.id} project={selected} />}
-            {(activeNav === "board" || activeNav === "sessions") && (
-              <ActiveSessions project={selected} />
-            )}
+            <div className="group-data-[collapsible=icon]:hidden">
+              {activeNav === "files" && <FileTree key={selected.id} project={selected} />}
+              {(activeNav === "board" || activeNav === "sessions") && (
+                <ActiveSessions project={selected} />
+              )}
+            </div>
           </SidebarContent>
         </>
       ) : (
         <SidebarContent className="items-center justify-center gap-3 p-4 text-center">
-          <p className="text-sm text-muted-foreground">Add a project to get started</p>
-          <Button size="sm" className="app-region-no-drag" onClick={() => void pickAndAdd()}>
-            Add Project…
-          </Button>
+          <div className="contents group-data-[collapsible=icon]:hidden">
+            <p className="text-sm text-muted-foreground">Add a project to get started</p>
+            <Button size="sm" className="app-region-no-drag" onClick={() => void pickAndAdd()}>
+              Add Project…
+            </Button>
+          </div>
         </SidebarContent>
       )}
 
@@ -77,6 +93,7 @@ export function PrimarySidebar() {
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton
+              tooltip="Settings"
               isActive={activeNav === "settings"}
               onClick={() => setActiveNav("settings")}
             >

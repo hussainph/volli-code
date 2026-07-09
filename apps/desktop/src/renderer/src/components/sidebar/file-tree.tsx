@@ -152,7 +152,9 @@ function DirectoryNode({ name, path }: { name: string; path: string }) {
           </SidebarMenuButton>
         </CollapsibleTrigger>
         <CollapsibleContent>
-          <SidebarMenuSub>
+          {/* Tighter than stock (mx-3.5 px-2.5): real repos nest deep, and at
+              ~48px/level names vanish by depth four even in a wide sidebar. */}
+          <SidebarMenuSub className="mr-0 ml-3 pr-0 pl-1.5">
             <ListingRows listing={children} parentPath={path} />
           </SidebarMenuSub>
         </CollapsibleContent>

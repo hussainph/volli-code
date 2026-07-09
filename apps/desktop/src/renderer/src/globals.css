@@ -80,6 +80,9 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  /* macOS-feel motion: fast start, long gentle settle (the iOS sheet curve).
+   * Used for structural transitions like the sidebar collapse. */
+  --ease-swift: cubic-bezier(0.32, 0.72, 0, 1);
   --font-sans: system-ui, -apple-system, sans-serif;
   --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
   --radius-sm: calc(var(--radius) - 4px);

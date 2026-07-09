@@ -1,6 +1,7 @@
 import { app, BrowserWindow } from "electron";
 import { join } from "path";
 import { ticketBranchName } from "@volli/shared";
+import type { VolliIpcEvent } from "@volli/shared";
 import { registerIpcHandlers } from "./ipc";
 
 const isDev = !app.isPackaged;
@@ -9,8 +10,7 @@ function createWindow(): void {
   const mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
-    // Keeps the window above the sidebar's 768px mobile breakpoint so the
-    // shadcn sidebar never swaps into its Sheet (mobile drawer) mode.
+    // Usability floor: rail + max-width sidebar + a workable content column.
     minWidth: 940,
     minHeight: 600,
     show: false,
@@ -18,7 +18,11 @@ function createWindow(): void {
     // renderer's project rail. The rail paints its own drag region
     // (.app-region-drag in globals.css).
     titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 12, y: 12 },
+    // The ~59px light group overhangs the 60px rail onto the sidebar header,
+    // which shares the rail's background (see PrimarySidebar) so the row reads
+    // as one continuous chrome band. y centers the lights on the header's
+    // title line (~y 22); the title is indented past the group's end (~67).
+    trafficLightPosition: { x: 8, y: 16 },
     // Must match --background in renderer globals.css (main cannot read
     // renderer CSS) — prevents the white flash before first paint.
     backgroundColor: "#111111",
@@ -33,11 +37,27 @@ function createWindow(): void {
     mainWindow.show();
   });
 
+  // macOS fullscreen: mousing to the top slides the menu bar plus a native
+  // titlebar band OVER the content — system behavior for every hidden-titlebar
+  // app; the space can't be reserved. Blank the title there so the band shows
+  // only the traffic lights, and tell the renderer so it can reclaim its
+  // traffic-light strip (the lights are hidden in fullscreen).
+  let preFullScreenTitle = "";
+  mainWindow.on("enter-full-screen", () => {
+    preFullScreenTitle = mainWindow.getTitle();
+    mainWindow.setTitle("");
+    mainWindow.webContents.send("volli:fullscreen-changed" satisfies VolliIpcEvent, true);
+  });
+  mainWindow.on("leave-full-screen", () => {
+    mainWindow.setTitle(preFullScreenTitle);
+    mainWindow.webContents.send("volli:fullscreen-changed" satisfies VolliIpcEvent, false);
+  });
+
   // In dev, scripts/dev.mjs injects ELECTRON_RENDERER_URL and runs the Vite dev
   // server there for HMR. In production, load the built renderer from disk.
+  // DevTools is not auto-opened — toggle it with ⌥⌘I when needed.
   if (isDev && process.env["ELECTRON_RENDERER_URL"]) {
     mainWindow.loadURL(process.env["ELECTRON_RENDERER_URL"]);
-    mainWindow.webContents.openDevTools();
   } else {
     mainWindow.loadFile(join(__dirname, "../dist/index.html"));
   }

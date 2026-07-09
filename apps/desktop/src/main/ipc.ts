@@ -89,6 +89,10 @@ export function registerIpcHandlers(): void {
     },
   );
 
+  ipcMain.handle("volli:window-is-fullscreen" satisfies VolliIpcChannel, (event): boolean => {
+    return BrowserWindow.fromWebContents(event.sender)?.isFullScreen() ?? false;
+  });
+
   ipcMain.handle(
     "volli:reveal-in-finder" satisfies VolliIpcChannel,
     (_event, absPath: unknown): RevealResult => {

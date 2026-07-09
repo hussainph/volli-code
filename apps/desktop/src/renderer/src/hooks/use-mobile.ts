@@ -1,19 +1,10 @@
-import * as React from "react";
-
-const MOBILE_BREAKPOINT = 768;
-
+/**
+ * Always false: this is a desktop app — there is no mobile layout. shadcn's
+ * stock 768px matchMedia version swapped the sidebar into a hidden Sheet
+ * whenever the viewport narrowed (e.g. DevTools docked to the window's side),
+ * which read as the sidebar vanishing. Kept as a hook so the vendored shadcn
+ * components' imports stay untouched.
+ */
 export function useIsMobile() {
-  const [isMobile, setIsMobile] = React.useState<boolean | undefined>(undefined);
-
-  React.useEffect(() => {
-    const mql = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`);
-    const onChange = () => {
-      setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);
-    };
-    mql.addEventListener("change", onChange);
-    setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);
-    return () => mql.removeEventListener("change", onChange);
-  }, []);
-
-  return !!isMobile;
+  return false;
 }

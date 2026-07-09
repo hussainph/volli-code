@@ -32,8 +32,6 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
     id: project.id,
   });
 
-  const shortcutHint = index < 9 ? ` (⌘${index + 1})` : "";
-
   async function revealInFinder() {
     try {
       const result = await window.api.fs.revealInFinder(project.path);
@@ -63,20 +61,28 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
                   onClick={() => select(project.id)}
                   style={{ backgroundColor: projectColor(project.colorIndex) }}
                   className={cn(
-                    "group/tile relative flex size-10 items-center justify-center rounded-[11px] text-sm font-semibold text-white transition-transform duration-100 ease-out active:scale-[0.96]",
+                    "group/tile relative flex size-9 items-center justify-center rounded-[10px] text-sm font-semibold text-white transition-transform duration-100 ease-out active:scale-[0.96]",
                     isSelected && "ring-2 ring-foreground/90 ring-offset-[3px] ring-offset-rail",
                   )}
                 >
                   {monogram(project.name)}
                   <span
                     aria-hidden
-                    className="pointer-events-none absolute inset-0 rounded-[11px] bg-foreground/8 opacity-0 group-hover/tile:opacity-100"
+                    className="pointer-events-none absolute inset-0 rounded-[10px] bg-foreground/8 opacity-0 group-hover/tile:opacity-100"
                   />
                 </button>
               </TooltipTrigger>
             </ContextMenuTrigger>
-            <TooltipContent side="right">
-              {`${project.name} — ${project.path}${shortcutHint}`}
+            <TooltipContent side="right" className="max-w-80">
+              <div className="flex items-center gap-1.5">
+                <span className="font-bold">{project.name}</span>
+                {index < 9 && (
+                  <kbd className="rounded-sm bg-background/20 px-1 py-px font-sans text-[10px] font-bold tracking-wide">
+                    ⌘{index + 1}
+                  </kbd>
+                )}
+              </div>
+              <div className="text-background/70">{project.path}</div>
             </TooltipContent>
           </Tooltip>
           <ContextMenuContent>

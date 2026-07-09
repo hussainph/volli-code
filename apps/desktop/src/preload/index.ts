@@ -7,6 +7,7 @@ import type {
   PickFolderResult,
   RevealResult,
   VolliIpcChannel,
+  VolliIpcEvent,
 } from "@volli/shared";
 
 // Minimal typed API surface exposed to the renderer. No PTY/terminal API yet
@@ -28,6 +29,17 @@ const api = {
       ipcRenderer.invoke("volli:list-directory" satisfies VolliIpcChannel, absPath),
     revealInFinder: (absPath: string): Promise<RevealResult> =>
       ipcRenderer.invoke("volli:reveal-in-finder" satisfies VolliIpcChannel, absPath),
+  },
+  window: {
+    isFullScreen: (): Promise<boolean> =>
+      ipcRenderer.invoke("volli:window-is-fullscreen" satisfies VolliIpcChannel),
+    onFullScreenChange: (callback: (isFullScreen: boolean) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, isFullScreen: boolean) =>
+        callback(isFullScreen);
+      ipcRenderer.on("volli:fullscreen-changed" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:fullscreen-changed" satisfies VolliIpcEvent, listener);
+    },
   },
 };
 
