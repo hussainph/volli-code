@@ -34,14 +34,12 @@ interface FileTreeProps {
  */
 export function FileTree({ project }: FileTreeProps) {
   const [root, setRoot] = React.useState<Listing>("loading");
-  const fetchedRoot = React.useRef(false);
 
   React.useEffect(() => {
-    // Guards against React 19 StrictMode's dev double-invoke, which would
-    // otherwise fire this fetch twice on mount.
-    if (fetchedRoot.current) return;
-    fetchedRoot.current = true;
-
+    // No run-once guard here: StrictMode's dev-only mount→cleanup→mount cycle
+    // must re-fetch on the second run, because `cancelled` discards the first
+    // run's result. A run-once ref alongside this cleanup deadlocks the tree
+    // on its loading skeleton (the one fetch resolves already-cancelled).
     let cancelled = false;
     window.api.fs
       .listDirectory(project.path)
