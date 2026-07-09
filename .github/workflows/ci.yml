@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+# Cancel superseded runs for the same ref (a new push to a branch/PR aborts the
+# in-flight run rather than queueing behind it).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Check
+        run: vp check
+
+      # Two invocations: setup-vp puts `vp` on PATH but not `pnpm`, and
+      # `vp run -r` covers workspace packages only — the root vite.config.ts
+      # (quality-stack config) needs its own tsc pass.
+      - name: Typecheck
+        run: |
+          vp exec tsc --noEmit -p tsconfig.json
+          vp run -r typecheck
+
+      - name: Build desktop pipeline
+        run: vp run --filter @volli/desktop build
+
+      - name: Verify build artifacts
+        run: |
+          test -f apps/desktop/dist-electron/main.cjs
+          test -f apps/desktop/dist-electron/preload.cjs
+          test -f apps/desktop/dist/index.html
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Test
+        run: vp run -r test

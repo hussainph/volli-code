@@ -6,9 +6,24 @@ Kanban planning + terminal-agent execution in one desktop app: every ticket is b
 - What the Swift original had built (parity target): [`docs/SWIFT-REFERENCE.md`](docs/SWIFT-REFERENCE.md)
 - Agent operating manual: [`CLAUDE.md`](CLAUDE.md)
 
+## Prerequisites
+
+- **Node** `^24.13` (`engines` in `package.json`) — install/manage it yourself; corepack does not handle Node.
+- **pnpm 11** — run `corepack enable` to activate the pinned version (`packageManager` in `package.json`).
+- Optionally the global **Vite+ (`vp`)** CLI, which wraps pnpm plus the build and quality toolchain: `curl -fsSL https://vite.plus | bash`.
+
 ## Develop
 
 ```
-npm install
-npm run dev
+pnpm install   # or: vp install
+pnpm dev       # renderer HMR + Electron, auto-relaunch on main/preload changes
+```
+
+First run downloads the ~100MB Electron binary (Electron ≥43 no longer fetches it on install); it is cached afterward.
+
+## Build
+
+```
+pnpm run build   # renderer → apps/desktop/dist, main/preload → apps/desktop/dist-electron
+pnpm start       # run the built app
 ```
