@@ -43,15 +43,14 @@ export function PrimarySidebar() {
   return (
     <>
       <SidebarHeader className="app-region-drag px-4 py-3">
+        {/* Static text stays draggable — only interactive children opt out. */}
         {selected ? (
-          <div className="app-region-no-drag min-w-0">
+          <div className="min-w-0">
             <div className="truncate text-sm font-semibold">{selected.name}</div>
             <div className="text-xs text-muted-foreground">{selected.ticketPrefix}</div>
           </div>
         ) : (
-          <div className="app-region-no-drag text-sm text-muted-foreground">
-            No project selected
-          </div>
+          <div className="text-sm text-muted-foreground">No project selected</div>
         )}
       </SidebarHeader>
 
