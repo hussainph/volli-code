@@ -1,12 +1,17 @@
 import * as NodeChildProcess from "node:child_process";
-import * as NodeFS from "node:fs";
 import { createRequire } from "node:module";
-import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { ensureElectron } from "./ensure-electron.mjs";
 import { waitForResources } from "./wait-for-resources.mjs";
+
+// Runs as the pack config's onSuccess command: tsdown tree-kills the previous
+// run and re-runs this script after EVERY successful rebuild of main+preload,
+// so there is no restart machinery here — wait for the renderer dev server,
+// spawn Electron once, exit when it exits. A normal in-app quit just ends this
+// run; `vp pack --watch` stays alive and relaunches Electron on the next
+// rebuild.
 
 const scriptDir = NodePath.dirname(fileURLToPath(import.meta.url));
 const desktopDir = NodePath.resolve(scriptDir, "..");
@@ -23,214 +28,100 @@ if (!Number.isInteger(port) || port <= 0) {
   throw new Error(`ELECTRON_RENDERER_URL must include an explicit port: ${rendererUrl}`);
 }
 
-const requiredFiles = ["dist-electron/main.cjs", "dist-electron/preload.cjs"];
-const watchedDirectories = [
-  { directory: "dist-electron", files: new Set(["main.cjs", "preload.cjs"]) },
-];
-const forcedShutdownTimeoutMs = 1_500;
-const restartDebounceMs = 120;
-const childTreeGracePeriodMs = 1_200;
-const hostPlatform = NodeOS.platform();
+// Shorter than dev.mjs's 1.5s escalation so a stuck Electron is SIGKILLed by
+// this script before dev.mjs SIGKILLs this script (which would orphan it).
+const forcedShutdownTimeoutMs = 1_200;
+
+let app = null;
+let shuttingDown = false;
+
+function appIsAlive() {
+  return app !== null && app.exitCode === null && app.signalCode === null;
+}
+
+// Electron (and the helper processes it spawns) lives in its own process
+// group, so shutdown signals the whole tree with one kill(-pid) — the same
+// model dev.mjs uses for its children.
+function killAppGroup(signal) {
+  if (app === null || typeof app.pid !== "number") {
+    return;
+  }
+  try {
+    process.kill(-app.pid, signal);
+  } catch {
+    app.kill(signal);
+  }
+}
+
+function shutdown(exitCode) {
+  if (shuttingDown) {
+    return;
+  }
+  shuttingDown = true;
+
+  if (!appIsAlive()) {
+    process.exit(exitCode);
+  }
+
+  killAppGroup("SIGTERM");
+  const timer = setTimeout(() => {
+    killAppGroup("SIGKILL");
+  }, forcedShutdownTimeoutMs);
+  timer.unref();
+
+  app.once("exit", () => {
+    clearTimeout(timer);
+    process.exit(exitCode);
+  });
+}
+
+// Installed before the wait so tsdown's tree-kill (rebuild/Ctrl-C) can abort a
+// launch that is still waiting on the dev server.
+process.once("SIGINT", () => {
+  shutdown(130);
+});
+process.once("SIGTERM", () => {
+  shutdown(143);
+});
+process.once("SIGHUP", () => {
+  shutdown(129);
+});
 
 await waitForResources({
   baseDir: desktopDir,
-  files: requiredFiles,
+  files: ["dist-electron/main.cjs", "dist-electron/preload.cjs"],
   tcpHost: rendererServer.hostname,
   tcpPort: port,
 });
 
-// Ensure the Electron binary is present, then resolve it. The electron package's
-// module export IS the absolute binary path string.
-ensureElectron();
-const electronBinary = require("electron");
+if (!shuttingDown) {
+  // Ensure the Electron binary is present, then resolve it. The electron
+  // package's module export IS the absolute binary path string.
+  ensureElectron();
+  const electronBinary = require("electron");
 
-const childEnv = { ...process.env };
-delete childEnv.ELECTRON_RUN_AS_NODE;
+  const childEnv = { ...process.env };
+  delete childEnv.ELECTRON_RUN_AS_NODE;
 
-let shuttingDown = false;
-let restartTimer = null;
-let currentApp = null;
-let restartQueue = Promise.resolve();
-const expectedExits = new WeakSet();
-const watchers = [];
-
-function killChildTreeByPid(pid, signal) {
-  if (hostPlatform === "win32" || typeof pid !== "number") {
-    return;
-  }
-
-  NodeChildProcess.spawnSync("pkill", [`-${signal}`, "-P", String(pid)], { stdio: "ignore" });
-}
-
-function cleanupStaleDevApps() {
-  if (hostPlatform === "win32") {
-    return;
-  }
-
-  NodeChildProcess.spawnSync("pkill", ["-f", "--", `--volli-dev-root=${desktopDir}`], {
-    stdio: "ignore",
-  });
-}
-
-function startApp() {
-  if (shuttingDown || currentApp !== null) {
-    return;
-  }
-
-  const launchArgs = [`--volli-dev-root=${desktopDir}`, "dist-electron/main.cjs"];
-  const app = NodeChildProcess.spawn(electronBinary, launchArgs, {
+  app = NodeChildProcess.spawn(electronBinary, ["dist-electron/main.cjs"], {
     cwd: desktopDir,
     env: childEnv,
     stdio: "inherit",
+    detached: true,
   });
 
-  currentApp = app;
-
-  app.once("error", () => {
-    if (currentApp === app) {
-      currentApp = null;
-    }
-
+  app.once("error", (error) => {
+    console.error("[volli] failed to spawn Electron:", error);
     if (!shuttingDown) {
-      scheduleRestart();
+      shuttingDown = true;
+      process.exit(1);
     }
   });
 
   app.once("exit", (code, signal) => {
-    if (currentApp === app) {
-      currentApp = null;
-    }
-
-    const exitedAbnormally = signal !== null || code !== 0;
-    if (!shuttingDown && !expectedExits.has(app) && exitedAbnormally) {
-      scheduleRestart();
+    if (!shuttingDown) {
+      shuttingDown = true;
+      process.exit(signal ? 1 : (code ?? 0));
     }
   });
 }
-
-async function stopApp() {
-  const app = currentApp;
-  if (!app) {
-    return;
-  }
-
-  currentApp = null;
-  expectedExits.add(app);
-
-  await new Promise((resolve) => {
-    let settled = false;
-
-    const finish = () => {
-      if (settled) {
-        return;
-      }
-
-      settled = true;
-      resolve();
-    };
-
-    app.once("exit", finish);
-    app.kill("SIGTERM");
-    killChildTreeByPid(app.pid, "TERM");
-    cleanupStaleDevApps();
-
-    setTimeout(() => {
-      if (settled) {
-        return;
-      }
-
-      app.kill("SIGKILL");
-      killChildTreeByPid(app.pid, "KILL");
-      cleanupStaleDevApps();
-      finish();
-    }, forcedShutdownTimeoutMs).unref();
-  });
-}
-
-function scheduleRestart() {
-  if (shuttingDown) {
-    return;
-  }
-
-  if (restartTimer) {
-    clearTimeout(restartTimer);
-  }
-
-  restartTimer = setTimeout(() => {
-    restartTimer = null;
-    restartQueue = restartQueue
-      .catch(() => undefined)
-      .then(async () => {
-        await stopApp();
-        if (!shuttingDown) {
-          startApp();
-        }
-      });
-  }, restartDebounceMs);
-}
-
-function startWatchers() {
-  for (const { directory, files } of watchedDirectories) {
-    const watcher = NodeFS.watch(
-      NodePath.join(desktopDir, directory),
-      { persistent: true },
-      (_eventType, filename) => {
-        if (typeof filename !== "string" || !files.has(filename)) {
-          return;
-        }
-
-        scheduleRestart();
-      },
-    );
-
-    watchers.push(watcher);
-  }
-}
-
-function killChildTree(signal) {
-  if (hostPlatform === "win32") {
-    return;
-  }
-
-  // Kill direct children as a final fallback in case normal shutdown leaves stragglers.
-  NodeChildProcess.spawnSync("pkill", [`-${signal}`, "-P", String(process.pid)], {
-    stdio: "ignore",
-  });
-}
-
-async function shutdown(exitCode) {
-  if (shuttingDown) return;
-  shuttingDown = true;
-
-  if (restartTimer) {
-    clearTimeout(restartTimer);
-    restartTimer = null;
-  }
-
-  for (const watcher of watchers) {
-    watcher.close();
-  }
-
-  await stopApp();
-  killChildTree("TERM");
-  await new Promise((resolve) => {
-    setTimeout(resolve, childTreeGracePeriodMs);
-  });
-  killChildTree("KILL");
-
-  process.exit(exitCode);
-}
-
-startWatchers();
-cleanupStaleDevApps();
-startApp();
-
-process.once("SIGINT", () => {
-  void shutdown(130);
-});
-process.once("SIGTERM", () => {
-  void shutdown(143);
-});
-process.once("SIGHUP", () => {
-  void shutdown(129);
-});

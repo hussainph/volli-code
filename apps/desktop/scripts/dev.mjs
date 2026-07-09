@@ -3,14 +3,12 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { RENDERER_DEV_URL } from "./dev-constants.mjs";
 import { ensureElectron } from "./ensure-electron.mjs";
 
 const scriptDir = NodePath.dirname(fileURLToPath(import.meta.url));
 const desktopDir = NodePath.resolve(scriptDir, "..");
 
-// The renderer dev server. `vp pack --watch` rebuilds main/preload and, via the
-// config's env-gated onSuccess, launches Electron pointed at this URL.
-const rendererUrl = "http://localhost:5173";
 const forcedShutdownTimeoutMs = 1_500;
 
 // Fetch the Electron binary up front so neither watcher stalls on first launch.
@@ -122,9 +120,11 @@ async function shutdown() {
 }
 
 spawnChild(["dev"], {});
+// `vp pack --watch` rebuilds main/preload and, via the config's watch-gated
+// onSuccess, launches Electron pointed at the renderer dev server.
 spawnChild(["pack", "--watch"], {
   VOLLI_DESKTOP_DEV: "1",
-  ELECTRON_RENDERER_URL: rendererUrl,
+  ELECTRON_RENDERER_URL: RENDERER_DEV_URL,
 });
 
 process.once("SIGINT", () => {
