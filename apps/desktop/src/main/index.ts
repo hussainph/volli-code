@@ -8,7 +8,19 @@ function createWindow(): void {
   const mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
+    // Keeps the window above the sidebar's 768px mobile breakpoint so the
+    // shadcn sidebar never swaps into its Sheet (mobile drawer) mode.
+    minWidth: 940,
+    minHeight: 600,
     show: false,
+    // Slack-style chrome: no title bar, traffic lights floating over the
+    // renderer's project rail. The rail paints its own drag region
+    // (.app-region-drag in globals.css).
+    titleBarStyle: "hiddenInset",
+    trafficLightPosition: { x: 12, y: 12 },
+    // Must match --background in renderer globals.css (main cannot read
+    // renderer CSS) — prevents the white flash before first paint.
+    backgroundColor: "#111111",
     webPreferences: {
       preload: join(__dirname, "preload.cjs"),
       contextIsolation: true,
