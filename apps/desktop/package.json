@@ -8,7 +8,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json --composite false && tsc --noEmit -p tsconfig.web.json --composite false",
     "test": "vp test run --passWithNoTests",
     "start": "node scripts/start-electron.mjs",
-    "ensure:electron": "node scripts/ensure-electron.mjs"
+    "ensure:electron": "node -e \"console.log(require('electron'))\""
   },
   "dependencies": {
     "@volli/shared": "workspace:*",

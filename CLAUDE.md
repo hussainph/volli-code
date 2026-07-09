@@ -33,7 +33,7 @@ Decided deliberately with the owner — do not relitigate them casually (rationa
 - `apps/desktop/src/main/` — Electron main process: window management, PTY host (node-pty), SQLite, git/worktree execution, the `volli` CLI socket, notifications. The only place Node APIs run.
 - `apps/desktop/src/preload/` — the typed `contextBridge` API: the only door between renderer and main. Keep it thin and explicit.
 - `apps/desktop/src/renderer/` — React UI (project rail, board, ticket detail, terminal panes) and Zustand stores. No Node imports.
-- `apps/desktop/scripts/` — Node build/dev orchestration: the dev loop (`dev.mjs`) and the Electron-binary/lifecycle helpers (`ensure-electron.mjs`, `dev-electron.mjs`, `start-electron.mjs`, `wait-for-resources.mjs`). Not renderer or main code.
+- `apps/desktop/scripts/` — Node build/dev orchestration: the dev loop (`dev.mjs`) and the Electron lifecycle helpers (`dev-electron.mjs`, `start-electron.mjs`, `wait-for-resources.mjs`). Not renderer or main code.
 - `packages/shared/` (`@volli/shared`) — pure domain code: models, the ticket state machine, event-log types, branch/slug rules. No Electron, Node, or DOM imports; fully unit-tested. Everything that moves tickets automatically lives here. (Replaces the old planned `src/shared`.)
 - Root `vite.config.ts` owns the cross-cutting `vp` quality stack (test / fmt / lint / staged); `tsconfig.base.json` holds the shared strict-TS compiler options every package's tsconfig extends.
 
@@ -43,7 +43,7 @@ App data lives under Electron's `userData` dir — a deliberate fresh start, NOT
 
 ## Commands
 
-- `vp install` (or `pnpm install`) — install workspace deps. NOTE: Electron ≥43 ships **no** lifecycle install scripts (pre-43 it fetched its binary on install); instead `apps/desktop/scripts/ensure-electron.mjs` fetches the ~100MB Electron binary on demand — auto-run by `dev`, `start`, and CI, so the first run downloads it.
+- `vp install` (or `pnpm install`) — install workspace deps. NOTE: Electron ≥43 ships **no** lifecycle install scripts (pre-43 it fetched its binary on install); instead the binary is fetched lazily by the first `require("electron")` — `dev` and `start` trigger it, and `pnpm run ensure:electron` (`apps/desktop`) prefetches it explicitly.
 - `pnpm dev` — full dev loop: renderer dev server (HMR) + `vp pack --watch` (main/preload) + Electron auto-relaunch on every main/preload rebuild.
 - `pnpm run build` — production build: renderer → `apps/desktop/dist`, main/preload (CJS) → `apps/desktop/dist-electron`.
 - `pnpm start` — run the built app.

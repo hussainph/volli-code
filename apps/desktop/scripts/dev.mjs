@@ -1,18 +1,20 @@
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
+import { createRequire } from "node:module";
 import * as NodePath from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { RENDERER_DEV_URL } from "./dev-constants.mjs";
-import { ensureElectron } from "./ensure-electron.mjs";
 
 const scriptDir = NodePath.dirname(fileURLToPath(import.meta.url));
 const desktopDir = NodePath.resolve(scriptDir, "..");
 
 const forcedShutdownTimeoutMs = 1_500;
 
-// Fetch the Electron binary up front so neither watcher stalls on first launch.
-ensureElectron();
+// Fetch the Electron binary up front so neither watcher stalls on first
+// launch — the electron package's module export IS the absolute binary path
+// string, and require() fetches the ~100MB binary on first use if missing.
+createRequire(import.meta.url)("electron");
 
 function resolveVpBinary() {
   const local = NodePath.join(desktopDir, "node_modules", ".bin", "vp");
