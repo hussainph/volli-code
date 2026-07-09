@@ -1,4 +1,14 @@
 {
   "files": [],
-  "references": [{ "path": "./tsconfig.node.json" }, { "path": "./tsconfig.web.json" }]
+  "references": [{ "path": "./tsconfig.node.json" }, { "path": "./tsconfig.web.json" }],
+  // compilerOptions exist ONLY so the shadcn CLI can resolve the import alias
+  // (it reads this file, not the referenced configs). tsc ignores
+  // compilerOptions in a references-only solution file; tsconfig.web.json
+  // stays the real authority for @renderer/*.
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@renderer/*": ["./src/renderer/src/*"]
+    }
+  }
 }

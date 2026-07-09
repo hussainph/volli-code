@@ -20,6 +20,7 @@
     "clsx": "^2.1.1",
     "electron": "^43.0.0",
     "lucide-react": "^1.23.0",
+    "radix-ui": "^1.6.2",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "tailwind-merge": "^3.6.0",
