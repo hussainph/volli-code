@@ -47,6 +47,21 @@ export default defineConfig({
     },
   },
   staged: {
-    "*": "vp fmt",
+    // `vp fmt` (Oxfmt) aborts with "Expected at least one target file" when
+    // every path it's handed is unsupported (`.md`) or ignored (the patterns
+    // above) — so a commit touching only prose, docs, or the lockfile would
+    // fail the hook. Filter the staged set down to what Oxfmt actually formats
+    // and skip the command entirely when nothing's left. `vp check` in CI is
+    // the full-tree format gate, so nothing slips through unformatted.
+    "*": (files) => {
+      const targets = files.filter(
+        (f) =>
+          !f.toLowerCase().endsWith(".md") &&
+          !f.endsWith(".tsbuildinfo") &&
+          !f.endsWith("pnpm-lock.yaml") &&
+          !/(^|\/)(docs|dist|dist-electron|node_modules)\//.test(f),
+      );
+      return targets.length ? `vp fmt ${targets.map((f) => JSON.stringify(f)).join(" ")}` : [];
+    },
   },
 });
