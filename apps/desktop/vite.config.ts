@@ -1,3 +1,4 @@
+import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite-plus";
@@ -29,7 +30,7 @@ export default defineConfig({
   // CRITICAL: assets must be referenced relatively so the built index.html works
   // under file:// in the packaged app. Plain Vite defaults to "/" which 404s.
   base: "./",
-  plugins: [react()],
+  plugins: [tailwindcss(), react()],
   resolve: {
     alias: {
       "@renderer": fileURLToPath(new URL("./src/renderer/src", import.meta.url)),
