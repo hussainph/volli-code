@@ -3,7 +3,6 @@ import { createRequire } from "node:module";
 import * as NodePath from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { ensureElectron } from "./ensure-electron.mjs";
 import { waitForResources } from "./wait-for-resources.mjs";
 
 // Runs as the pack config's onSuccess command: tsdown tree-kills the previous
@@ -95,9 +94,8 @@ await waitForResources({
 });
 
 if (!shuttingDown) {
-  // Ensure the Electron binary is present, then resolve it. The electron
-  // package's module export IS the absolute binary path string.
-  ensureElectron();
+  // The electron package's module export IS the absolute binary path string —
+  // require() also fetches the ~100MB binary on first use if it is missing.
   const electronBinary = require("electron");
 
   const childEnv = { ...process.env };
