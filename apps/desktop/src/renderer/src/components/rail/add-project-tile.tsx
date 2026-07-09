@@ -1,22 +1,10 @@
 import { Plus } from "lucide-react";
-import { toast } from "sonner";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
-import { errorMessage } from "@renderer/lib/errors";
-import { useProjectsStore } from "@renderer/stores/projects";
+import { useAddProject } from "@renderer/hooks/use-add-project";
 
 export function AddProjectTile() {
-  const addProject = useProjectsStore((state) => state.addProject);
-
-  async function pickAndAdd() {
-    try {
-      const result = await window.api.projects.pickFolder();
-      // Duplicate paths are handled inside the store (it selects the existing project).
-      if (!result.canceled) addProject({ path: result.path, defaultName: result.defaultName });
-    } catch (error) {
-      toast.error(`Could not open folder picker: ${errorMessage(error)}`);
-    }
-  }
+  const pickAndAdd = useAddProject();
 
   return (
     <Tooltip>

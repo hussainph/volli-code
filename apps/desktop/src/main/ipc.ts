@@ -1,7 +1,7 @@
 import { BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { promises as fs } from "node:fs";
 import { basename, resolve, sep } from "node:path";
-import { compareDirEntries } from "@volli/shared";
+import { compareDirEntries, errorMessage } from "@volli/shared";
 import type {
   DirEntry,
   ListDirectoryResult,
@@ -22,10 +22,6 @@ function isWithinRoots(absPath: string): boolean {
     }
   }
   return false;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 // Failures travel back as typed result objects, never as rejections —

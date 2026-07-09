@@ -1,6 +1,6 @@
 import * as React from "react";
 import { ChevronRight, File, Folder } from "lucide-react";
-import type { DirEntry, Project } from "@volli/shared";
+import { errorMessage, type DirEntry, type Project } from "@volli/shared";
 
 import {
   Collapsible,
@@ -17,7 +17,6 @@ import {
   SidebarMenuSkeleton,
   SidebarMenuSub,
 } from "@renderer/components/ui/sidebar";
-import { errorMessage } from "@renderer/lib/errors";
 import { useProjectsStore } from "@renderer/stores/projects";
 
 /** One directory level's listing state. `undefined` = not fetched yet. */

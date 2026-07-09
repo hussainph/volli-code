@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { monogram, projectColor, type Project } from "@volli/shared";
+import { errorMessage, monogram, projectColor, type Project } from "@volli/shared";
 import { toast } from "sonner";
 
 import { RemoveProjectDialog } from "@renderer/components/rail/remove-project-dialog";
@@ -12,7 +12,6 @@ import {
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
-import { errorMessage } from "@renderer/lib/errors";
 import { cn } from "@renderer/lib/utils";
 import { useProjectsStore } from "@renderer/stores/projects";
 

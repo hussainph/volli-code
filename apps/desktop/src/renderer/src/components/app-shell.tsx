@@ -13,7 +13,7 @@ import {
 } from "@renderer/components/ui/sidebar";
 import { Toaster } from "@renderer/components/ui/sonner";
 import { useProjectShortcuts } from "@renderer/hooks/use-project-shortcuts";
-import { errorMessage } from "@renderer/lib/errors";
+import { errorMessage } from "@volli/shared";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
 

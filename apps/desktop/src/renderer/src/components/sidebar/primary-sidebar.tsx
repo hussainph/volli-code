@@ -1,5 +1,4 @@
 import { Settings } from "lucide-react";
-import { toast } from "sonner";
 
 import { ActiveSessions } from "@renderer/components/sidebar/active-sessions";
 import { FileTree } from "@renderer/components/sidebar/file-tree";
@@ -13,10 +12,9 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@renderer/components/ui/sidebar";
+import { useAddProject } from "@renderer/hooks/use-add-project";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { cn } from "@renderer/lib/utils";
-import { errorMessage } from "@renderer/lib/errors";
-import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
 
 /**
@@ -31,19 +29,9 @@ import { useUiStore } from "@renderer/stores/ui";
  */
 export function PrimarySidebar() {
   const selected = useSelectedProject();
-  const addProject = useProjectsStore((state) => state.addProject);
+  const pickAndAdd = useAddProject();
   const activeNav = useUiStore((state) => state.activeNav);
   const setActiveNav = useUiStore((state) => state.setActiveNav);
-
-  async function pickAndAdd() {
-    try {
-      const result = await window.api.projects.pickFolder();
-      // Duplicate paths are handled inside the store (it selects the existing project).
-      if (!result.canceled) addProject({ path: result.path, defaultName: result.defaultName });
-    } catch (error) {
-      toast.error(`Could not open folder picker: ${errorMessage(error)}`);
-    }
-  }
 
   return (
     <>
