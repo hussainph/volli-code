@@ -2,11 +2,11 @@
 
 *Snapshot of `../volli-swift` (native SwiftUI/AppKit) at the time this Electron rewrite started (July 2026). It is the near-term parity target and the record of its data formats and design lessons. The Swift repo still exists — when in doubt, read its source directly.*
 
-## Status when the rewrite started
+## What the Swift app had built when the rewrite started
 
-- **M0 (scaffold + terminal spike): done.** Live login shell per project via libghostty's `.exec` backend.
-- **M1 (tracker): mostly done.** Project rail, SQLite persistence (GRDB), kanban CRUD with drag-drop, card detail, add-ticket sheet.
-- **M2–M4: never built.** Worktrees, agent launching, the `volli` CLI socket, hook-driven auto-moves, notifications, session/audit history, PR flow, and Archive exist only as spec (`docs/CONCEPT.md`) and stubs (CLI subcommands throw "Not implemented yet — lands in M3"; `WorktreePlanner` is pure planning with no git execution).
+- **Terminal spike: done.** Live login shell per project via libghostty's `.exec` backend.
+- **Tracker: mostly done.** Project rail, SQLite persistence (GRDB), kanban CRUD with drag-drop, card detail, add-ticket sheet.
+- **Never built.** Worktrees, agent launching, the `volli` CLI socket, hook-driven auto-moves, notifications, session/audit history, PR flow, and Archive exist only as spec (`docs/CONCEPT.md`) and stubs (CLI subcommands throw "Not implemented yet"; `WorktreePlanner` is pure planning with no git execution).
 
 So the rewrite is re-implementing a tracker + terminal shell, then building the unbuilt product on top — not porting a finished app.
 
@@ -16,9 +16,9 @@ So the rewrite is re-implementing a tracker + terminal shell, then building the 
 
 **Project rail** — Slack-style vertical tiles (40×40 rounded monograms, 8-color palette, selection ring), drag-to-reorder with live shuffle persisted per hover, sticky "+" tile, per-tile context menu (Reveal in Finder / Remove from Volli with confirmation; folder on disk untouched). `⌘1–⌘9` switch projects by rail order.
 
-**Session panel** — project name + ticket prefix header; "Active Sessions" list was a placeholder (real sessions were M2 work).
+**Session panel** — project name + ticket prefix header; "Active Sessions" list was a placeholder (real sessions were later work).
 
-**Project content** — vertical split: kanban board above, live terminal below (min 240pt). The terminal is one login shell per project rooted at the project folder — the M0 spike, not per-ticket sessions.
+**Project content** — vertical split: kanban board above, live terminal below (min 240pt). The terminal is one login shell per project rooted at the project folder — the terminal spike, not per-ticket sessions.
 
 **Kanban board** — fixed 5 columns (Backlog · Todo · Doing · Needs Review · Done). Cards show title, priority dot (low=blue, medium=orange, high=red), ticket ID. Drag-drop between columns updates status; drop-target column gets an accent border; failures surface as alerts. "Add Card" menu (choose column) + per-column add button. An animation-settings popover offers 3 drag-animation styles (Linear / Vibe Kanban spring / Minimal), each respecting Reduce Motion, persisted in UserDefaults.
 
