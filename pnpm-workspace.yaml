@@ -3,6 +3,9 @@ packages:
   - packages/*
 
 # Successor to onlyBuiltDependencies (pnpm 11): true = allowed to run build scripts.
+# electron@43 ships no lifecycle scripts (its binary comes from a require-time
+# fetch), but pnpm 11 still hard-fails install (ERR_PNPM_IGNORED_BUILDS) without
+# this entry — do not remove it.
 allowBuilds:
   electron: true
 
