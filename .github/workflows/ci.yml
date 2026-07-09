@@ -31,8 +31,13 @@ jobs:
       - name: Check
         run: vp check
 
+      # Two invocations: setup-vp puts `vp` on PATH but not `pnpm`, and
+      # `vp run -r` covers workspace packages only — the root vite.config.ts
+      # (quality-stack config) needs its own tsc pass.
       - name: Typecheck
-        run: pnpm run typecheck
+        run: |
+          vp exec tsc --noEmit -p tsconfig.json
+          vp run -r typecheck
 
       - name: Build desktop pipeline
         run: vp run --filter @volli/desktop build
