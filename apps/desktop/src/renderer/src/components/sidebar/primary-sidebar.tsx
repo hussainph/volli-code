@@ -12,6 +12,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@renderer/components/ui/sidebar";
+import { useActiveNav } from "@renderer/hooks/use-active-nav";
 import { useAddProject } from "@renderer/hooks/use-add-project";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { cn } from "@renderer/lib/utils";
@@ -30,8 +31,9 @@ import { useUiStore } from "@renderer/stores/ui";
 export function PrimarySidebar() {
   const selected = useSelectedProject();
   const pickAndAdd = useAddProject();
-  const activeNav = useUiStore((state) => state.activeNav);
-  const setActiveNav = useUiStore((state) => state.setActiveNav);
+  const [activeNav] = useActiveNav();
+  const settingsOpen = useUiStore((state) => state.settingsOpen);
+  const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
 
   return (
     <>
@@ -60,10 +62,14 @@ export function PrimarySidebar() {
               {/* Render-hidden, not unmounted, across nav switches so the file
                   tree keeps its lazily-fetched listings and expansion state
                   (same keep-alive seam main-content.tsx documents for pages). */}
-              <div className={cn(activeNav !== "files" && "hidden")}>
+              <div className={cn((settingsOpen || activeNav !== "files") && "hidden")}>
                 <FileTree key={selected.id} project={selected} />
               </div>
-              <div className={cn(activeNav !== "board" && activeNav !== "sessions" && "hidden")}>
+              <div
+                className={cn(
+                  (settingsOpen || (activeNav !== "board" && activeNav !== "sessions")) && "hidden",
+                )}
+              >
                 <ActiveSessions project={selected} />
               </div>
             </div>
@@ -85,8 +91,8 @@ export function PrimarySidebar() {
           <SidebarMenuItem>
             <SidebarMenuButton
               tooltip="Settings"
-              isActive={activeNav === "settings"}
-              onClick={() => setActiveNav("settings")}
+              isActive={settingsOpen}
+              onClick={() => setSettingsOpen(true)}
             >
               <Settings />
               <span>Settings</span>

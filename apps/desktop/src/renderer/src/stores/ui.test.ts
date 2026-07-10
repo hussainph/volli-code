@@ -44,11 +44,24 @@ describe("setSidebarWidth", () => {
   });
 });
 
+describe("setSettingsOpen", () => {
+  it("toggles the app-wide Settings overlay", () => {
+    const store = createUiStore(createMemoryStorage());
+    expect(store.getState().settingsOpen).toBe(false);
+
+    store.getState().setSettingsOpen(true);
+    expect(store.getState().settingsOpen).toBe(true);
+
+    store.getState().setSettingsOpen(false);
+    expect(store.getState().settingsOpen).toBe(false);
+  });
+});
+
 describe("persistence", () => {
-  it("persists only sidebarWidth — activeNav resets each launch", () => {
+  it("persists only sidebarWidth — settingsOpen resets each launch", () => {
     const storage = createMemoryStorage();
     const store = createUiStore(storage);
-    store.getState().setActiveNav("files");
+    store.getState().setSettingsOpen(true);
     store.getState().setSidebarWidth(500);
 
     const persisted = JSON.parse(storage.getItem("volli:ui")!) as {
@@ -64,6 +77,5 @@ describe("persistence", () => {
     const reloaded = createUiStore(storage);
     await reloaded.persist.rehydrate();
     expect(reloaded.getState().sidebarWidth).toBe(444);
-    expect(reloaded.getState().activeNav).toBe("board");
   });
 });

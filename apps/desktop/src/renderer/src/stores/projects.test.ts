@@ -1,6 +1,7 @@
 import { derivePrefix, PROJECT_COLORS, type Project } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 import { createProjectsStore } from "./projects";
+import { useWorkspaceStore } from "./workspace";
 
 /** Simple in-memory `StateStorage` so each test gets its own isolated backing. */
 function createMemoryStorage() {
@@ -98,6 +99,17 @@ describe("removeProject", () => {
 
     expect(store.getState().projects).toEqual([]);
     expect(store.getState().selectedProjectId).toBeNull();
+  });
+
+  it("forgets the removed project's per-workspace UI record", () => {
+    const store = freshStore();
+    store.getState().addProject({ path: "/a", defaultName: "A" });
+    const only = store.getState().projects[0]!;
+    useWorkspaceStore.getState().setNav(only.id, "files");
+
+    store.getState().removeProject(only.id);
+
+    expect(useWorkspaceStore.getState().byProject[only.id]).toBeUndefined();
   });
 
   it("leaves the selection unchanged when removing a non-selected project", () => {

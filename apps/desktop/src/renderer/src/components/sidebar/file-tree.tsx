@@ -18,9 +18,19 @@ import {
   SidebarMenuSub,
 } from "@renderer/components/ui/sidebar";
 import { useProjectsStore } from "@renderer/stores/projects";
+import { useWorkspaceStore } from "@renderer/stores/workspace";
 
 /** One directory level's listing state. `undefined` = not fetched yet. */
 type Listing = DirEntry[] | "loading" | { error: string } | undefined;
+
+/**
+ * The one place that discriminates the error member. Every narrowing site
+ * routes through this so a future object-shaped `Listing` member can't
+ * silently fall into an error branch by structural elimination.
+ */
+function isListingError(listing: Listing): listing is { error: string } {
+  return typeof listing === "object" && !Array.isArray(listing);
+}
 
 interface FileTreeProps {
   project: Project;
@@ -29,8 +39,10 @@ interface FileTreeProps {
 /**
  * sidebar-11's recursive file tree, adapted to fetch each level lazily over
  * IPC instead of from a static literal. Render with `key={project.id}` from
- * the parent so switching projects remounts (and starts clean) instead of
- * carrying stale expansion/cache state over.
+ * the parent so switching projects remounts: listings refetch fresh (they are
+ * filesystem truth and go stale), while which directories you had open is
+ * restored from the workspace store — coming back to a project shouldn't
+ * hand you a collapsed tree.
  */
 export function FileTree({ project }: FileTreeProps) {
   const [root, setRoot] = React.useState<Listing>("loading");
@@ -73,7 +85,7 @@ export function FileTree({ project }: FileTreeProps) {
       <SidebarGroupLabel>Files</SidebarGroupLabel>
       <SidebarGroupContent>
         <SidebarMenu>
-          <ListingRows listing={root} parentPath={project.path} />
+          <ListingRows listing={root} parentPath={project.path} projectId={project.id} />
         </SidebarMenu>
       </SidebarGroupContent>
     </SidebarGroup>
@@ -81,7 +93,15 @@ export function FileTree({ project }: FileTreeProps) {
 }
 
 /** Loading/error/empty/entries states, shared by the root and every nested level. */
-function ListingRows({ listing, parentPath }: { listing: Listing; parentPath: string }) {
+function ListingRows({
+  listing,
+  parentPath,
+  projectId,
+}: {
+  listing: Listing;
+  parentPath: string;
+  projectId: string;
+}) {
   if (listing === "loading" || listing === undefined) {
     return (
       <>
@@ -91,7 +111,7 @@ function ListingRows({ listing, parentPath }: { listing: Listing; parentPath: st
     );
   }
 
-  if (!Array.isArray(listing)) {
+  if (isListingError(listing)) {
     return <div className="truncate px-2 py-1 text-xs text-destructive">{listing.error}</div>;
   }
 
@@ -107,6 +127,7 @@ function ListingRows({ listing, parentPath }: { listing: Listing; parentPath: st
           name={entry.name}
           kind={entry.kind}
           path={`${parentPath}/${entry.name}`}
+          projectId={projectId}
         />
       ))}
     </>
@@ -117,9 +138,10 @@ interface FileTreeNodeProps {
   name: string;
   kind: DirEntry["kind"];
   path: string;
+  projectId: string;
 }
 
-function FileTreeNode({ name, kind, path }: FileTreeNodeProps) {
+function FileTreeNode({ name, kind, path, projectId }: FileTreeNodeProps) {
   if (kind === "file") {
     return (
       <SidebarMenuButton className="data-[active=true]:bg-transparent">
@@ -129,19 +151,37 @@ function FileTreeNode({ name, kind, path }: FileTreeNodeProps) {
     );
   }
 
-  return <DirectoryNode name={name} path={path} />;
+  return <DirectoryNode name={name} path={path} projectId={projectId} />;
 }
 
-function DirectoryNode({ name, path }: { name: string; path: string }) {
+function DirectoryNode({
+  name,
+  path,
+  projectId,
+}: {
+  name: string;
+  path: string;
+  projectId: string;
+}) {
+  const expanded = useWorkspaceStore(
+    (state) => state.byProject[projectId]?.expandedDirs.includes(path) ?? false,
+  );
+  const setDirExpanded = useWorkspaceStore((state) => state.setDirExpanded);
   const [children, setChildren] = React.useState<Listing>(undefined);
 
-  function handleOpenChange(open: boolean) {
-    // First expand fetches; a loaded listing is reused. A cached ERROR is
-    // retried on the next expand instead — a transient failure (e.g. losing
-    // the root-sync race, or a momentary EACCES/EMFILE) shouldn't stick until
-    // the whole tree is remounted.
-    if (!open || children === "loading" || Array.isArray(children)) return;
-
+  // The single fetch path: runs when a level is expanded but not yet fetched —
+  // whether the user just opened it or it remounted already-expanded from the
+  // workspace store after a project switch. A loaded listing is reused across
+  // collapse/expand of THIS node; its descendants unmount with the collapsed
+  // content (stock Radix) and refetch fresh when it reopens, which is fine —
+  // listings are filesystem truth. No cancellation flag, deliberately:
+  // `shouldFetch` flips false as soon as the listing leaves `undefined`, so
+  // a cleanup-driven cancel would discard the very fetch it started (the
+  // StrictMode deadlock the root fetch's comment describes); a duplicate
+  // StrictMode fetch is idempotent and last-write-wins.
+  const shouldFetch = expanded && children === undefined;
+  React.useEffect(() => {
+    if (!shouldFetch) return;
     setChildren("loading");
     window.api.fs
       .listDirectory(path)
@@ -151,12 +191,24 @@ function DirectoryNode({ name, path }: { name: string; path: string }) {
       .catch((error: unknown) => {
         setChildren({ error: errorMessage(error) });
       });
+  }, [shouldFetch, path]);
+
+  function handleOpenChange(open: boolean) {
+    setDirExpanded(projectId, path, open);
+    // A cached ERROR is retried on the next expand — a transient failure
+    // (e.g. losing the root-sync race, or a momentary EACCES/EMFILE)
+    // shouldn't stick until the whole tree is remounted. Resetting to
+    // `undefined` re-arms the fetch effect.
+    if (open && isListingError(children)) {
+      setChildren(undefined);
+    }
   }
 
   return (
     <SidebarMenuItem>
       <Collapsible
         className="group/collapsible [&[data-state=open]>button>svg:first-child]:rotate-90"
+        open={expanded}
         onOpenChange={handleOpenChange}
       >
         <CollapsibleTrigger asChild>
@@ -170,7 +222,7 @@ function DirectoryNode({ name, path }: { name: string; path: string }) {
           {/* Tighter than stock (mx-3.5 px-2.5): real repos nest deep, and at
               ~48px/level names vanish by depth four even in a wide sidebar. */}
           <SidebarMenuSub className="mr-0 ml-3 pr-0 pl-1.5">
-            <ListingRows listing={children} parentPath={path} />
+            <ListingRows listing={children} parentPath={path} projectId={projectId} />
           </SidebarMenuSub>
         </CollapsibleContent>
       </Collapsible>
