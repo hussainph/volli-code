@@ -27,7 +27,7 @@ interface ActiveSessionsProps {
 export function ActiveSessions({ project }: ActiveSessionsProps) {
   return (
     <SidebarGroup>
-      <SidebarGroupLabel className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
+      <SidebarGroupLabel className="whitespace-nowrap text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
         Active Sessions
       </SidebarGroupLabel>
       <SidebarMenu>

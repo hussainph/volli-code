@@ -1,4 +1,7 @@
-import { FolderTree, SquareKanban, Terminal } from "lucide-react";
+import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
+import { FoldersIcon } from "@phosphor-icons/react/dist/csr/Folders";
+import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
+import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 
 import {
   SidebarGroup,
@@ -10,20 +13,26 @@ import { useActiveNav } from "@renderer/hooks/use-active-nav";
 import { useUiStore } from "@renderer/stores/ui";
 import type { NavKey } from "@renderer/stores/workspace";
 
-const NAV_ITEMS: ReadonlyArray<{ key: NavKey; label: string; icon: typeof SquareKanban }> = [
-  { key: "board", label: "Board", icon: SquareKanban },
-  { key: "sessions", label: "Sessions", icon: Terminal },
-  { key: "files", label: "Files", icon: FolderTree },
+const NAV_ITEMS: ReadonlyArray<{ key: NavKey; label: string; icon: PhosphorIcon }> = [
+  { key: "board", label: "Board", icon: KanbanIcon },
+  { key: "sessions", label: "Sessions", icon: TerminalWindowIcon },
+  { key: "files", label: "Files", icon: FoldersIcon },
 ];
 
+interface NavListProps {
+  /** The collapsed presentation is a separate fixed-width layer so its icons
+   * never respond to the outer sidebar's in-between animation widths. */
+  collapsed?: boolean;
+}
+
 /** Primary feature navigation: Board / Sessions / Files. Settings lives in the sidebar footer. */
-export function NavList() {
+export function NavList({ collapsed = false }: NavListProps) {
   const [activeNav, setActiveNav] = useActiveNav();
   const settingsOpen = useUiStore((state) => state.settingsOpen);
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
 
   return (
-    <SidebarGroup>
+    <SidebarGroup className={collapsed ? "p-2" : undefined}>
       <SidebarMenu>
         {NAV_ITEMS.map(({ key, label, icon: Icon }) => (
           <SidebarMenuItem key={key}>
@@ -31,15 +40,16 @@ export function NavList() {
                 The Settings overlay dims the nav highlight and any click closes
                 it — picking a page always lands you on that page. */}
             <SidebarMenuButton
-              tooltip={label}
+              aria-label={collapsed ? label : undefined}
+              tooltip={collapsed ? label : undefined}
               isActive={!settingsOpen && activeNav === key}
               onClick={() => {
                 setSettingsOpen(false);
                 setActiveNav(key);
               }}
             >
-              <Icon />
-              <span>{label}</span>
+              <Icon weight="fill" />
+              {!collapsed && <span>{label}</span>}
             </SidebarMenuButton>
           </SidebarMenuItem>
         ))}
