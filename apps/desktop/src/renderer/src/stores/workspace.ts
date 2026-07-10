@@ -17,15 +17,19 @@ export type NavKey = "board" | "sessions" | "files" | "settings";
 
 export interface WorkspaceUiState {
   nav: NavKey;
+  /** Absolute paths of expanded file-tree directories (collapsed = absent). */
+  expandedDirs: readonly string[];
 }
 
 export const DEFAULT_WORKSPACE_UI: WorkspaceUiState = {
   nav: "board",
+  expandedDirs: [],
 };
 
 interface WorkspaceState {
   byProject: Record<string, WorkspaceUiState>;
   setNav(projectId: string, nav: NavKey): void;
+  setDirExpanded(projectId: string, dirPath: string, expanded: boolean): void;
   /** Drop a removed project's record so re-adding it starts fresh. */
   forget(projectId: string): void;
 }
@@ -47,6 +51,18 @@ export function createWorkspaceStore() {
 
     setNav(projectId, nav) {
       set((state) => patchWorkspace(state, projectId, { nav }));
+    },
+
+    setDirExpanded(projectId, dirPath, expanded) {
+      set((state) => {
+        const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+        if (current.expandedDirs.includes(dirPath) === expanded) return state;
+        return patchWorkspace(state, projectId, {
+          expandedDirs: expanded
+            ? [...current.expandedDirs, dirPath]
+            : current.expandedDirs.filter((path) => path !== dirPath),
+        });
+      });
     },
 
     forget(projectId) {
