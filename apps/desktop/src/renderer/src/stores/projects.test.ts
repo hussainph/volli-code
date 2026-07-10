@@ -124,6 +124,16 @@ describe("removeProject", () => {
     expect(store.getState().projects.map((p) => p.id)).toEqual([a!.id]);
     expect(store.getState().selectedProjectId).toBe(a!.id);
   });
+
+  it("is a no-op for an unknown id", () => {
+    const store = freshStore();
+    store.getState().addProject({ path: "/a", defaultName: "A" });
+    const before = store.getState();
+
+    store.getState().removeProject("does-not-exist");
+
+    expect(store.getState()).toBe(before); // early return — set() never called
+  });
 });
 
 describe("reorder", () => {
