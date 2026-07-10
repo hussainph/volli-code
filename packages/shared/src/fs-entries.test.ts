@@ -46,4 +46,26 @@ describe("compareDirEntries", () => {
     entries.sort(compareDirEntries);
     expect(entries.map((e) => e.kind)).toEqual(["dir", "dir", "file", "file"]);
   });
+
+  // Direct comparator calls below (rather than through sort/toSorted) pin
+  // both branch directions explicitly — a sort's call pattern doesn't
+  // guarantee it evaluates a comparator with arguments in both orders.
+  it("compares same-kind lowercased names in both directions directly", () => {
+    expect(compareDirEntries(entry("alpha", "file"), entry("beta", "file"))).toBe(-1);
+    expect(compareDirEntries(entry("beta", "file"), entry("alpha", "file"))).toBe(1);
+  });
+
+  it("tie-breaks equal lowercased, differently-cased names in both directions directly", () => {
+    expect(compareDirEntries(entry("A", "file"), entry("a", "file"))).toBe(-1);
+    expect(compareDirEntries(entry("a", "file"), entry("A", "file"))).toBe(1);
+  });
+
+  it("returns 0 for identical entries", () => {
+    expect(compareDirEntries(entry("same", "file"), entry("same", "file"))).toBe(0);
+  });
+
+  it("compares a dir/file pair in both directions directly", () => {
+    expect(compareDirEntries(entry("z", "dir"), entry("a", "file"))).toBe(-1);
+    expect(compareDirEntries(entry("a", "file"), entry("z", "dir"))).toBe(1);
+  });
 });

@@ -63,5 +63,8 @@ jobs:
           cache: true
           run-install: true
 
+      # test:coverage runs the identical suite plus the coverage-threshold
+      # gate (configured per package in vite.config.ts); the plain `test`
+      # scripts stay for fast local iteration.
       - name: Test
-        run: vp run -r test
+        run: vp run -r test:coverage

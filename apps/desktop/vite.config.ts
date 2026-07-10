@@ -1,3 +1,4 @@
+import "vite-plus/test/config";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
@@ -39,6 +40,41 @@ export default defineConfig({
   server: {
     port: RENDERER_DEV_PORT,
     strictPort: true,
+  },
+  test: {
+    projects: [
+      // Inherits root src/renderer, plugins, @renderer alias — existing store
+      // tests keep working under the default include.
+      { extends: true, test: { name: "renderer" } },
+      // NOT extends: main tests need no plugins/alias; fresh entry avoids
+      // inheriting root src/renderer. @volli/shared resolves via workspace link.
+      {
+        root: fileURLToPath(new URL(".", import.meta.url)),
+        test: { name: "main", environment: "node", include: ["src/main/**/*.test.ts"] },
+      },
+    ],
+    coverage: {
+      // Coverage is global across both test projects; patterns resolve
+      // against the top-level root (src/renderer). Main-process sources sit
+      // OUTSIDE that root — hence allowExternal and the **/src glob (a
+      // literal ../main/ipc.ts pattern silently matches nothing).
+      allowExternal: true,
+      // The gate covers the logic layer only: stores and extracted pure
+      // modules, plus the security-adjacent IPC handlers. View glue (.tsx,
+      // hooks, ui/**) is deliberately outside the report — it's exercised by
+      // agent-driven UI runs, not unit tests. src/main/index.ts is Electron
+      // lifecycle bootstrap: excluded on purpose, never add ../main/**.
+      include: [
+        "src/stores/**",
+        "src/components/sidebar/listing.ts",
+        "src/lib/project-shortcut.ts",
+        "**/src/main/ipc.ts",
+      ],
+      // Global bar only — vitest applies global thresholds to every included
+      // file even when per-glob entries exist, so partial carve-outs can't
+      // rescue a global 100; keep everything genuinely at 100 instead.
+      thresholds: { statements: 100, branches: 100, functions: 100, lines: 100 },
+    },
   },
   build: {
     // Absolute — `outDir` otherwise resolves relative to `root` (src/renderer).

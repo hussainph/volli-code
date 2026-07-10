@@ -7,3 +7,4 @@ dist-electron/
 .vite-plus/
 .vite-hooks/
 *.tsbuildinfo
+coverage/

@@ -15,8 +15,8 @@ import type {
 // not a hard boundary — the registry itself is renderer-fed.
 const projectRoots = new Set<string>();
 
-function isWithinRoots(absPath: string): boolean {
-  for (const root of projectRoots) {
+export function isWithinRoots(roots: ReadonlySet<string>, absPath: string): boolean {
+  for (const root of roots) {
     if (absPath === root || absPath.startsWith(root + sep)) {
       return true;
     }
@@ -39,7 +39,10 @@ export function registerIpcHandlers(): void {
         ? await dialog.showOpenDialog(win, options)
         : await dialog.showOpenDialog(options);
       const path = result.filePaths[0];
-      if (result.canceled || path === undefined) {
+      if (result.canceled) {
+        return { canceled: true };
+      }
+      if (path === undefined) {
         return { canceled: true };
       }
       // basename computed here: the renderer never does path math.
@@ -65,7 +68,7 @@ export function registerIpcHandlers(): void {
         return { ok: false, error: "Invalid path" };
       }
       const resolved = resolve(absPath);
-      if (!isWithinRoots(resolved)) {
+      if (!isWithinRoots(projectRoots, resolved)) {
         return { ok: false, error: "Path is outside known projects" };
       }
       try {
@@ -96,7 +99,7 @@ export function registerIpcHandlers(): void {
         return { ok: false, error: "Invalid path" };
       }
       const resolved = resolve(absPath);
-      if (!isWithinRoots(resolved)) {
+      if (!isWithinRoots(projectRoots, resolved)) {
         return { ok: false, error: "Path is outside known projects" };
       }
       shell.showItemInFolder(resolved);

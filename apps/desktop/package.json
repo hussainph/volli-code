@@ -6,9 +6,10 @@
   "main": "dist-electron/main.cjs",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.node.json --composite false && tsc --noEmit -p tsconfig.web.json --composite false",
-    "test": "vp test run --passWithNoTests",
+    "test": "vp test run",
     "start": "node scripts/start-electron.mjs",
-    "ensure:electron": "node -e \"console.log(require('electron'))\""
+    "ensure:electron": "node -e \"console.log(require('electron'))\"",
+    "test:coverage": "vp test run --coverage"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

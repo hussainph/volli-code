@@ -1,6 +1,6 @@
 import * as React from "react";
 import { ChevronRight, File, Folder } from "lucide-react";
-import { errorMessage, type DirEntry, type Project } from "@volli/shared";
+import type { DirEntry, Project } from "@volli/shared";
 
 import {
   Collapsible,
@@ -20,17 +20,14 @@ import {
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
-/** One directory level's listing state. `undefined` = not fetched yet. */
-type Listing = DirEntry[] | "loading" | { error: string } | undefined;
-
-/**
- * The one place that discriminates the error member. Every narrowing site
- * routes through this so a future object-shaped `Listing` member can't
- * silently fall into an error branch by structural elimination.
- */
-function isListingError(listing: Listing): listing is { error: string } {
-  return typeof listing === "object" && !Array.isArray(listing);
-}
+import {
+  errorListing,
+  isListingError,
+  shouldFetchListing,
+  shouldRetryListing,
+  toListing,
+  type Listing,
+} from "./listing";
 
 interface FileTreeProps {
   project: Project;
@@ -69,9 +66,9 @@ export function FileTree({ project }: FileTreeProps) {
       }
       try {
         const result = await window.api.fs.listDirectory(project.path);
-        if (!cancelled) setRoot(result.ok ? result.entries : { error: result.error });
+        if (!cancelled) setRoot(toListing(result));
       } catch (error: unknown) {
-        if (!cancelled) setRoot({ error: errorMessage(error) });
+        if (!cancelled) setRoot(errorListing(error));
       }
     })();
 
@@ -179,27 +176,24 @@ function DirectoryNode({
   // a cleanup-driven cancel would discard the very fetch it started (the
   // StrictMode deadlock the root fetch's comment describes); a duplicate
   // StrictMode fetch is idempotent and last-write-wins.
-  const shouldFetch = expanded && children === undefined;
+  const shouldFetch = shouldFetchListing(expanded, children);
   React.useEffect(() => {
     if (!shouldFetch) return;
     setChildren("loading");
     window.api.fs
       .listDirectory(path)
       .then((result) => {
-        setChildren(result.ok ? result.entries : { error: result.error });
+        setChildren(toListing(result));
       })
       .catch((error: unknown) => {
-        setChildren({ error: errorMessage(error) });
+        setChildren(errorListing(error));
       });
   }, [shouldFetch, path]);
 
   function handleOpenChange(open: boolean) {
     setDirExpanded(projectId, path, open);
-    // A cached ERROR is retried on the next expand — a transient failure
-    // (e.g. losing the root-sync race, or a momentary EACCES/EMFILE)
-    // shouldn't stick until the whole tree is remounted. Resetting to
-    // `undefined` re-arms the fetch effect.
-    if (open && isListingError(children)) {
+    // Resetting to `undefined` re-arms the fetch effect.
+    if (shouldRetryListing(open, children)) {
       setChildren(undefined);
     }
   }
