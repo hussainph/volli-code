@@ -1,7 +1,7 @@
 import { BoardPage } from "@renderer/components/pages/board-page";
 import { FilesPage } from "@renderer/components/pages/files-page";
-import { SessionsPage } from "@renderer/components/pages/sessions-page";
 import { SettingsPage } from "@renderer/components/pages/settings-page";
+import { SessionsLayer } from "@renderer/components/sessions/sessions-layer";
 import { useActiveNav } from "@renderer/hooks/use-active-nav";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { useUiStore } from "@renderer/stores/ui";
@@ -12,31 +12,30 @@ export function MainContent() {
   const [activeNav] = useActiveNav();
   const settingsOpen = useUiStore((state) => state.settingsOpen);
 
-  // Settings is app-wide chrome, checked before the no-project state: it
-  // covers whichever workspace page is active and needs no project at all.
-  if (settingsOpen) {
-    return <SettingsPage />;
-  }
+  // Keep-alive seam (CLAUDE.md: never unmount a live terminal incidentally).
+  // The Sessions surface hosts live PTY terminals, so it is ALWAYS mounted and
+  // merely hidden via CSS — switching nav (Board/Files), switching projects, or
+  // opening Settings must not tear its terminals down. Board/Files/Settings are
+  // stateless, so they keep plain conditional rendering. `SessionsLayer` owns
+  // every terminal across all projects and toggles its own visibility.
+  const sessionsVisible = !settingsOpen && selected !== null && activeNav === "sessions";
 
-  if (!selected) {
-    return (
-      <div className="flex flex-1 items-center justify-center">
-        <p className="text-sm text-muted-foreground">Select a project</p>
-      </div>
-    );
-  }
-
-  // Keep-alive seam: today these pages are stateless placeholders, so a plain
-  // conditional render is fine. Any page that ever hosts a live terminal must
-  // NOT be unmounted on nav switches — convert it to render-hidden
-  // (display:none) at this seam instead (CLAUDE.md: never unmount a live
-  // terminal incidentally).
-  switch (activeNav) {
-    case "board":
-      return <BoardPage />;
-    case "sessions":
-      return <SessionsPage />;
-    case "files":
-      return <FilesPage />;
-  }
+  return (
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <SessionsLayer visible={sessionsVisible} />
+      {
+        settingsOpen ? (
+          <SettingsPage />
+        ) : selected === null ? (
+          <div className="flex flex-1 items-center justify-center">
+            <p className="text-sm text-muted-foreground">Select a project</p>
+          </div>
+        ) : activeNav === "board" ? (
+          <BoardPage />
+        ) : activeNav === "files" ? (
+          <FilesPage />
+        ) : null /* sessions: rendered by the always-mounted SessionsLayer above */
+      }
+    </div>
+  );
 }

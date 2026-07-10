@@ -68,6 +68,8 @@ export default defineConfig({
         "src/stores/**",
         "src/components/sidebar/listing.ts",
         "src/lib/project-shortcut.ts",
+        "src/terminal/data-router.ts",
+        "src/terminal/data-uri.ts",
         "**/src/main/ipc.ts",
         "**/src/main/project-roots.ts",
         "**/src/main/pty.ts",

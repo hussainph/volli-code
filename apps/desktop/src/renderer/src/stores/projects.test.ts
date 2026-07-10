@@ -1,6 +1,7 @@
 import { derivePrefix, PROJECT_COLORS, type Project } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 import { createProjectsStore } from "./projects";
+import { useSessionsStore } from "./sessions";
 import { useWorkspaceStore } from "./workspace";
 
 /** Simple in-memory `StateStorage` so each test gets its own isolated backing. */
@@ -110,6 +111,17 @@ describe("removeProject", () => {
     store.getState().removeProject(only.id);
 
     expect(useWorkspaceStore.getState().byProject[only.id]).toBeUndefined();
+  });
+
+  it("forgets the removed project's terminal sessions", () => {
+    const store = freshStore();
+    store.getState().addProject({ path: "/a", defaultName: "A" });
+    const only = store.getState().projects[0]!;
+    useSessionsStore.getState().addSession(only.id, "s1", "Session 1");
+
+    store.getState().removeProject(only.id);
+
+    expect(useSessionsStore.getState().byProject[only.id]).toBeUndefined();
   });
 
   it("leaves the selection unchanged when removing a non-selected project", () => {

@@ -5,9 +5,14 @@
     <meta charset="UTF-8" />
     <title>Volli Code</title>
     <!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP -->
+    <!-- 'wasm-unsafe-eval' lets the terminal renderer (restty) instantiate its
+         libghostty-vt WebAssembly module. The .wasm ships inlined as a base64
+         string in the JS bundle (no external fetch), so no network origins are
+         needed — this only re-permits WASM compilation, which Chromium's CSP
+         gates behind an explicit script-src token. -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
     />
   </head>
 
