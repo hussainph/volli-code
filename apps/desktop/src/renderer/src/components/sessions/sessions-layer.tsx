@@ -1,4 +1,5 @@
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
+import { errorMessage } from "@volli/shared";
 import * as React from "react";
 import { toast } from "sonner";
 
@@ -6,9 +7,11 @@ import { SessionTabs } from "@renderer/components/sessions/session-tabs";
 import { TerminalView } from "@renderer/components/sessions/terminal-view";
 import { Button } from "@renderer/components/ui/button";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
+import { useProjectsStore } from "@renderer/stores/projects";
 import { useSessionsStore } from "@renderer/stores/sessions";
 import { cn } from "@renderer/lib/utils";
-import { createTerminalDataRouter } from "@renderer/terminal/data-router";
+import { disposeEngine, getEngine, getOrCreateEngine } from "@renderer/terminal/registry";
+import { closeTerminalSession } from "@renderer/terminal/session-lifecycle";
 import type { Project } from "@volli/shared";
 
 /** Initial PTY grid; restty re-measures and resizes the shell within a frame. */
@@ -32,22 +35,28 @@ interface SessionsLayerProps {
 export function SessionsLayer({ visible }: SessionsLayerProps) {
   const byProject = useSessionsStore((state) => state.byProject);
   const addSession = useSessionsStore((state) => state.addSession);
-  const closeSession = useSessionsStore((state) => state.closeSession);
   const setActiveSession = useSessionsStore((state) => state.setActiveSession);
   const markExited = useSessionsStore((state) => state.markExited);
   const selected = useSelectedProject();
 
-  // One router for the single shared PTY-output stream, stable for the layer's
-  // lifetime (which is the app's lifetime).
-  const routerRef = React.useRef(createTerminalDataRouter());
   const creatingRef = React.useRef(new Set<string>());
+  // Projects that already got their one auto-opened session. Marked at attempt
+  // time and never cleared — a failure's retry surface is the empty state's
+  // "New session" button, and a user closing their last tab must be able to
+  // hold zero sessions without the effect respawning one.
+  const autoOpenedRef = React.useRef(new Set<string>());
   const [, forceRender] = React.useReducer((n: number) => n + 1, 0);
 
-  // The single subscription to the shared PTY streams: route output by
-  // sessionId, and record exits on whichever tab owns the session.
+  // The single subscription to the shared PTY streams: fan output out to the
+  // matching engine (lookup ONLY — creating here would leak engines for events
+  // racing a close), and record exits on whichever tab owns the session. Every
+  // chunk is acked regardless: main's flow-control bookkeeping must not starve
+  // when no engine exists.
   React.useEffect(() => {
-    const router = routerRef.current;
-    const offData = window.api.terminal.onData((event) => router.dispatch(event));
+    const offData = window.api.terminal.onData((event) => {
+      getEngine(event.sessionId)?.write(event.data);
+      window.api.terminal.ack(event.sessionId, event.data.length);
+    });
     const offExit = window.api.terminal.onExit((event) =>
       markExited(event.sessionId, event.exitCode),
     );
@@ -73,8 +82,29 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
           toast.error(`Could not start terminal: ${result.error}`);
           return;
         }
-        const count = useSessionsStore.getState().byProject[project.id]?.tabs.length ?? 0;
-        addSession(project.id, result.sessionId, `Terminal ${count + 1}`);
+        // Engine exists BEFORE the tab does, so output arriving between the
+        // create reply and the view's mount is buffered, not dropped.
+        getOrCreateEngine(result.sessionId);
+        // The project may have been removed while create was in flight; adding
+        // the tab would resurrect its session record with a PTY no UI can close.
+        const stillTracked = useProjectsStore
+          .getState()
+          .projects.some((candidate) => candidate.id === project.id);
+        if (!stillTracked) {
+          disposeEngine(result.sessionId);
+          window.api.terminal
+            .kill(result.sessionId)
+            .then((killResult) => {
+              if (!killResult.ok) toast.error(`Terminal close failed: ${killResult.error}`);
+            })
+            .catch((error: unknown) => {
+              toast.error(`Terminal close failed: ${errorMessage(error)}`);
+            });
+          return;
+        }
+        addSession(project.id, result.sessionId);
+      } catch (error) {
+        toast.error(`Could not start terminal: ${errorMessage(error)}`);
       } finally {
         creatingRef.current.delete(project.id);
         forceRender();
@@ -83,11 +113,18 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
     [addSession],
   );
 
-  // Zero-friction first visit: auto-open a session when Sessions is revealed for
-  // a project that has none.
+  // Zero-friction first visit: auto-open a session when Sessions is revealed
+  // for a project that has never had one — once per project, see autoOpenedRef.
   const selectedTabCount = selected ? (byProject[selected.id]?.tabs.length ?? 0) : 0;
   React.useEffect(() => {
-    if (visible && selected && selectedTabCount === 0 && !creatingRef.current.has(selected.id)) {
+    if (
+      visible &&
+      selected &&
+      selectedTabCount === 0 &&
+      !autoOpenedRef.current.has(selected.id) &&
+      !creatingRef.current.has(selected.id)
+    ) {
+      autoOpenedRef.current.add(selected.id);
       void createSession(selected);
     }
   }, [visible, selected, selectedTabCount, createSession]);
@@ -102,7 +139,7 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
           tabs={selectedSessions?.tabs ?? []}
           activeSessionId={selectedSessions?.activeSessionId ?? null}
           onSelect={(sessionId) => setActiveSession(selected.id, sessionId)}
-          onClose={(sessionId) => closeSession(selected.id, sessionId)}
+          onClose={(sessionId) => closeTerminalSession(selected.id, sessionId)}
           onNew={() => void createSession(selected)}
           creating={creatingSelected}
         />
@@ -118,7 +155,6 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
               key={tab.sessionId}
               projectId={projectId}
               sessionId={tab.sessionId}
-              router={routerRef.current}
               visible={
                 visible && projectId === selected?.id && tab.sessionId === sessions.activeSessionId
               }

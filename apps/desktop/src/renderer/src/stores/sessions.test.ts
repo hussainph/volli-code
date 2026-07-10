@@ -2,40 +2,57 @@ import { describe, expect, it } from "vite-plus/test";
 import { createSessionsStore } from "./sessions";
 
 describe("addSession", () => {
-  it("appends a tab and makes it active", () => {
+  it("appends a tab titled from the counter and makes it active", () => {
     const store = createSessionsStore();
-    store.getState().addSession("p", "s1", "Session 1");
+    store.getState().addSession("p", "s1");
 
     const project = store.getState().byProject["p"];
-    expect(project?.tabs).toEqual([{ sessionId: "s1", title: "Session 1", exitCode: null }]);
+    expect(project?.tabs).toEqual([{ sessionId: "s1", title: "Terminal 1", exitCode: null }]);
     expect(project?.activeSessionId).toBe("s1");
+    expect(project?.nextTabNumber).toBe(2);
   });
 
-  it("keeps insertion order and activates each newly added session", () => {
+  it("keeps insertion order, numbers titles monotonically, and activates each added session", () => {
     const store = createSessionsStore();
-    store.getState().addSession("p", "s1", "One");
-    store.getState().addSession("p", "s2", "Two");
-    store.getState().addSession("p", "s3", "Three");
+    store.getState().addSession("p", "s1");
+    store.getState().addSession("p", "s2");
+    store.getState().addSession("p", "s3");
 
     const project = store.getState().byProject["p"];
     expect(project?.tabs.map((t) => t.sessionId)).toEqual(["s1", "s2", "s3"]);
+    expect(project?.tabs.map((t) => t.title)).toEqual(["Terminal 1", "Terminal 2", "Terminal 3"]);
     expect(project?.activeSessionId).toBe("s3");
   });
 
-  it("scopes sessions per project", () => {
+  it("never reuses a closed tab's number — no duplicate titles", () => {
     const store = createSessionsStore();
-    store.getState().addSession("a", "a1", "A1");
-    store.getState().addSession("b", "b1", "B1");
+    store.getState().addSession("p", "s1");
+    store.getState().addSession("p", "s2");
+    store.getState().closeSession("p", "s1");
+
+    store.getState().addSession("p", "s3");
+
+    expect(store.getState().byProject["p"]?.tabs.map((t) => t.title)).toEqual([
+      "Terminal 2",
+      "Terminal 3",
+    ]);
+  });
+
+  it("scopes sessions and numbering per project", () => {
+    const store = createSessionsStore();
+    store.getState().addSession("a", "a1");
+    store.getState().addSession("b", "b1");
 
     expect(store.getState().byProject["a"]?.tabs.map((t) => t.sessionId)).toEqual(["a1"]);
     expect(store.getState().byProject["b"]?.tabs.map((t) => t.sessionId)).toEqual(["b1"]);
+    expect(store.getState().byProject["b"]?.tabs[0]?.title).toBe("Terminal 1");
   });
 
   it("ignores a duplicate sessionId in the same project", () => {
     const store = createSessionsStore();
-    store.getState().addSession("p", "s1", "One");
+    store.getState().addSession("p", "s1");
     const before = store.getState().byProject;
-    store.getState().addSession("p", "s1", "One again");
+    store.getState().addSession("p", "s1");
 
     expect(store.getState().byProject).toBe(before);
   });
@@ -44,8 +61,8 @@ describe("addSession", () => {
 describe("setActiveSession", () => {
   it("activates an existing session", () => {
     const store = createSessionsStore();
-    store.getState().addSession("p", "s1", "One");
-    store.getState().addSession("p", "s2", "Two");
+    store.getState().addSession("p", "s1");
+    store.getState().addSession("p", "s2");
 
     store.getState().setActiveSession("p", "s1");
     expect(store.getState().byProject["p"]?.activeSessionId).toBe("s1");
@@ -53,7 +70,7 @@ describe("setActiveSession", () => {
 
   it("is a no-op for an unknown project or session", () => {
     const store = createSessionsStore();
-    store.getState().addSession("p", "s1", "One");
+    store.getState().addSession("p", "s1");
     const before = store.getState().byProject;
 
     store.getState().setActiveSession("missing", "s1");
@@ -65,9 +82,9 @@ describe("setActiveSession", () => {
 describe("closeSession", () => {
   it("removes the tab and selects the neighbor now at the removed index", () => {
     const store = createSessionsStore();
-    store.getState().addSession("p", "s1", "One");
-    store.getState().addSession("p", "s2", "Two");
-    store.getState().addSession("p", "s3", "Three");
+    store.getState().addSession("p", "s1");
+    store.getState().addSession("p", "s2");
+    store.getState().addSession("p", "s3");
     store.getState().setActiveSession("p", "s2");
 
     store.getState().closeSession("p", "s2");
@@ -79,8 +96,8 @@ describe("closeSession", () => {
 
   it("selects the new last tab when closing the active last tab", () => {
     const store = createSessionsStore();
-    store.getState().addSession("p", "s1", "One");
-    store.getState().addSession("p", "s2", "Two");
+    store.getState().addSession("p", "s1");
+    store.getState().addSession("p", "s2");
     store.getState().setActiveSession("p", "s2");
 
     store.getState().closeSession("p", "s2");
@@ -90,8 +107,8 @@ describe("closeSession", () => {
 
   it("leaves the active selection untouched when closing a non-active tab", () => {
     const store = createSessionsStore();
-    store.getState().addSession("p", "s1", "One");
-    store.getState().addSession("p", "s2", "Two");
+    store.getState().addSession("p", "s1");
+    store.getState().addSession("p", "s2");
     store.getState().setActiveSession("p", "s1");
 
     store.getState().closeSession("p", "s2");
@@ -102,7 +119,7 @@ describe("closeSession", () => {
 
   it("sets activeSessionId to null when closing the only tab", () => {
     const store = createSessionsStore();
-    store.getState().addSession("p", "s1", "One");
+    store.getState().addSession("p", "s1");
 
     store.getState().closeSession("p", "s1");
 
@@ -113,7 +130,7 @@ describe("closeSession", () => {
 
   it("is a no-op for an unknown project or session", () => {
     const store = createSessionsStore();
-    store.getState().addSession("p", "s1", "One");
+    store.getState().addSession("p", "s1");
     const before = store.getState().byProject;
 
     store.getState().closeSession("missing", "s1");
@@ -122,35 +139,13 @@ describe("closeSession", () => {
   });
 });
 
-describe("renameSession", () => {
-  it("updates only the matching tab, leaving siblings untouched", () => {
-    const store = createSessionsStore();
-    store.getState().addSession("p", "s1", "One");
-    store.getState().addSession("p", "s2", "Two");
-
-    store.getState().renameSession("p", "s1", "Renamed");
-
-    expect(store.getState().byProject["p"]?.tabs.map((t) => t.title)).toEqual(["Renamed", "Two"]);
-  });
-
-  it("is a no-op for an unknown project or session", () => {
-    const store = createSessionsStore();
-    store.getState().addSession("p", "s1", "One");
-    const before = store.getState().byProject;
-
-    store.getState().renameSession("missing", "s1", "x");
-    store.getState().renameSession("p", "nope", "x");
-    expect(store.getState().byProject).toBe(before);
-  });
-});
-
 describe("markExited", () => {
   it("records the exit code on the matching tab, scanning across projects", () => {
     const store = createSessionsStore();
-    store.getState().addSession("a", "a1", "A1");
-    store.getState().addSession("b", "b1", "B1");
+    store.getState().addSession("a", "a1");
+    store.getState().addSession("b", "b1");
     // A sibling tab in the same project so the non-matching branch is exercised.
-    store.getState().addSession("b", "b2", "B2");
+    store.getState().addSession("b", "b2");
 
     store.getState().markExited("b1", 130);
 
@@ -162,7 +157,7 @@ describe("markExited", () => {
 
   it("is a no-op for an unknown session", () => {
     const store = createSessionsStore();
-    store.getState().addSession("a", "a1", "A1");
+    store.getState().addSession("a", "a1");
     const before = store.getState().byProject;
 
     store.getState().markExited("ghost", 0);
@@ -173,8 +168,8 @@ describe("markExited", () => {
 describe("forgetProject", () => {
   it("drops every session for the project", () => {
     const store = createSessionsStore();
-    store.getState().addSession("a", "a1", "A1");
-    store.getState().addSession("b", "b1", "B1");
+    store.getState().addSession("a", "a1");
+    store.getState().addSession("b", "b1");
 
     store.getState().forgetProject("a");
 
@@ -184,7 +179,7 @@ describe("forgetProject", () => {
 
   it("is a no-op for a project with no sessions", () => {
     const store = createSessionsStore();
-    store.getState().addSession("a", "a1", "A1");
+    store.getState().addSession("a", "a1");
     const before = store.getState().byProject;
 
     store.getState().forgetProject("never-added");

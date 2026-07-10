@@ -24,8 +24,13 @@ export function getOrCreateEngine(sessionId: string): TerminalEngine {
   return engine;
 }
 
-export function hasEngine(sessionId: string): boolean {
-  return engines.has(sessionId);
+/**
+ * Lookup only — for the PTY-output dispatch path, which must NEVER construct:
+ * get-or-create there would leak a fresh engine for every event that races a
+ * session close.
+ */
+export function getEngine(sessionId: string): TerminalEngine | undefined {
+  return engines.get(sessionId);
 }
 
 /** Dispose and forget an engine. Call only when its session is truly gone. */

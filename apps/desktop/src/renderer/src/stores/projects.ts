@@ -13,7 +13,7 @@ import { derivePrefix, PROJECT_COLORS, type Project } from "@volli/shared";
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
-import { useSessionsStore } from "./sessions";
+import { killProjectSessions } from "../terminal/session-lifecycle";
 import { useWorkspaceStore } from "./workspace";
 
 interface ProjectsState {
@@ -60,13 +60,14 @@ export function createProjectsStore(storage?: StateStorage) {
           const removedIndex = projects.findIndex((project) => project.id === id);
           if (removedIndex === -1) return;
 
-          // Removal, per-workspace-UI cleanup, and session cleanup are one
+          // Removal, per-workspace-UI cleanup, and session teardown are one
           // invariant, enforced here so no removal path (dialog today, context
-          // menu / CLI later) can forget the forget. The store→store calls all
-          // live in this one place. Dropping the project's sessions from the
-          // store unmounts their terminal views, which is what kills the PTYs.
+          // menu / CLI later) can forget the forget. killProjectSessions kills
+          // each live PTY and disposes its engine explicitly — teardown does
+          // NOT depend on a terminal view being mounted — then drops the
+          // project's session record.
           useWorkspaceStore.getState().forget(id);
-          useSessionsStore.getState().forgetProject(id);
+          killProjectSessions(id);
 
           const nextProjects = projects.filter((project) => project.id !== id);
           if (selectedProjectId !== id) {

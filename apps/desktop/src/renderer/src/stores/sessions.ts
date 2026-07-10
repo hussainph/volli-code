@@ -22,38 +22,48 @@ export interface SessionTab {
 export interface ProjectSessions {
   tabs: SessionTab[];
   activeSessionId: string | null;
+  /** Monotonic title counter — never reset or reused, so closing "Terminal 1"
+   *  and opening again yields "Terminal 3", not a duplicate "Terminal 2". */
+  nextTabNumber: number;
 }
 
 interface SessionsState {
   byProject: Record<string, ProjectSessions>;
-  /** Append a tab for a freshly-created PTY session and focus it. */
-  addSession(projectId: string, sessionId: string, title: string): void;
+  /** Append a tab for a freshly-created PTY session, title it, and focus it. */
+  addSession(projectId: string, sessionId: string): void;
   /** Remove a tab, selecting a neighbor like the project rail does. */
   closeSession(projectId: string, sessionId: string): void;
   setActiveSession(projectId: string, sessionId: string): void;
-  renameSession(projectId: string, sessionId: string, title: string): void;
   /** Record a PTY exit on whichever project owns the session. */
   markExited(sessionId: string, exitCode: number): void;
   /** Drop every session for a removed project. */
   forgetProject(projectId: string): void;
 }
 
-const EMPTY_PROJECT: ProjectSessions = { tabs: [], activeSessionId: null };
+const EMPTY_PROJECT: ProjectSessions = { tabs: [], activeSessionId: null, nextTabNumber: 1 };
 
 /** Factory so tests get isolated instances. */
 export function createSessionsStore() {
   return create<SessionsState>()((set) => ({
     byProject: {},
 
-    addSession(projectId, sessionId, title) {
+    addSession(projectId, sessionId) {
       set((state) => {
         const current = state.byProject[projectId] ?? EMPTY_PROJECT;
         if (current.tabs.some((tab) => tab.sessionId === sessionId)) return state;
-        const tab: SessionTab = { sessionId, title, exitCode: null };
+        const tab: SessionTab = {
+          sessionId,
+          title: `Terminal ${current.nextTabNumber}`,
+          exitCode: null,
+        };
         return {
           byProject: {
             ...state.byProject,
-            [projectId]: { tabs: [...current.tabs, tab], activeSessionId: sessionId },
+            [projectId]: {
+              tabs: [...current.tabs, tab],
+              activeSessionId: sessionId,
+              nextTabNumber: current.nextTabNumber + 1,
+            },
           },
         };
       });
@@ -73,7 +83,9 @@ export function createSessionsStore() {
           activeSessionId =
             tabs.length === 0 ? null : tabs[Math.min(removedIndex, tabs.length - 1)]!.sessionId;
         }
-        return { byProject: { ...state.byProject, [projectId]: { tabs, activeSessionId } } };
+        return {
+          byProject: { ...state.byProject, [projectId]: { ...current, tabs, activeSessionId } },
+        };
       });
     },
 
@@ -89,19 +101,6 @@ export function createSessionsStore() {
             [projectId]: { ...current, activeSessionId: sessionId },
           },
         };
-      });
-    },
-
-    renameSession(projectId, sessionId, title) {
-      set((state) => {
-        const current = state.byProject[projectId];
-        if (current === undefined || !current.tabs.some((tab) => tab.sessionId === sessionId)) {
-          return state;
-        }
-        const tabs = current.tabs.map((tab) =>
-          tab.sessionId === sessionId ? { ...tab, title } : tab,
-        );
-        return { byProject: { ...state.byProject, [projectId]: { ...current, tabs } } };
       });
     },
 
