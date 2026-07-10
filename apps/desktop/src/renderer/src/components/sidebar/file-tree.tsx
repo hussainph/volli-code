@@ -23,6 +23,15 @@ import { useWorkspaceStore } from "@renderer/stores/workspace";
 /** One directory level's listing state. `undefined` = not fetched yet. */
 type Listing = DirEntry[] | "loading" | { error: string } | undefined;
 
+/**
+ * The one place that discriminates the error member. Every narrowing site
+ * routes through this so a future object-shaped `Listing` member can't
+ * silently fall into an error branch by structural elimination.
+ */
+function isListingError(listing: Listing): listing is { error: string } {
+  return typeof listing === "object" && !Array.isArray(listing);
+}
+
 interface FileTreeProps {
   project: Project;
 }
@@ -102,7 +111,7 @@ function ListingRows({
     );
   }
 
-  if (!Array.isArray(listing)) {
+  if (isListingError(listing)) {
     return <div className="truncate px-2 py-1 text-xs text-destructive">{listing.error}</div>;
   }
 
@@ -163,11 +172,13 @@ function DirectoryNode({
   // The single fetch path: runs when a level is expanded but not yet fetched —
   // whether the user just opened it or it remounted already-expanded from the
   // workspace store after a project switch. A loaded listing is reused across
-  // collapse/expand. No cancellation flag, deliberately: `shouldFetch` flips
-  // false as soon as the listing leaves `undefined`, so a cleanup-driven
-  // cancel would discard the very fetch it started (the StrictMode deadlock
-  // the root fetch's comment describes); a duplicate StrictMode fetch is
-  // idempotent and last-write-wins.
+  // collapse/expand of THIS node; its descendants unmount with the collapsed
+  // content (stock Radix) and refetch fresh when it reopens, which is fine —
+  // listings are filesystem truth. No cancellation flag, deliberately:
+  // `shouldFetch` flips false as soon as the listing leaves `undefined`, so
+  // a cleanup-driven cancel would discard the very fetch it started (the
+  // StrictMode deadlock the root fetch's comment describes); a duplicate
+  // StrictMode fetch is idempotent and last-write-wins.
   const shouldFetch = expanded && children === undefined;
   React.useEffect(() => {
     if (!shouldFetch) return;
@@ -188,7 +199,7 @@ function DirectoryNode({
     // (e.g. losing the root-sync race, or a momentary EACCES/EMFILE)
     // shouldn't stick until the whole tree is remounted. Resetting to
     // `undefined` re-arms the fetch effect.
-    if (open && !Array.isArray(children) && typeof children === "object") {
+    if (open && isListingError(children)) {
       setChildren(undefined);
     }
   }
