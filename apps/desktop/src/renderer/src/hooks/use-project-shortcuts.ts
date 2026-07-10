@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 
+import { projectIndexForKeyEvent } from "@renderer/lib/project-shortcut";
 import { useProjectsStore } from "@renderer/stores/projects";
 
 /**
@@ -9,10 +10,10 @@ import { useProjectsStore } from "@renderer/stores/projects";
 export function useProjectShortcuts() {
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (!event.metaKey || event.ctrlKey || event.altKey) return;
-      if (!/^[1-9]$/.test(event.key)) return;
+      const index = projectIndexForKeyEvent(event);
+      if (index === null) return;
       event.preventDefault();
-      useProjectsStore.getState().selectByIndex(Number(event.key) - 1);
+      useProjectsStore.getState().selectByIndex(index);
     }
 
     window.addEventListener("keydown", onKeyDown);
