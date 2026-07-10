@@ -8,3 +8,4 @@ coverage/
 .vite-plus/
 .vite-hooks/
 *.tsbuildinfo
+coverage/

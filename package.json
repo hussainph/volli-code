@@ -12,11 +12,13 @@
     "ensure:electron": "vp run --filter @volli/desktop ensure:electron",
     "typecheck": "tsc --noEmit -p tsconfig.json && vp run -r typecheck",
     "test": "vp run -r test",
+    "test:coverage": "vp run -r test:coverage",
     "lint": "vp lint",
     "fmt": "vp fmt",
     "check": "vp check"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
   },
