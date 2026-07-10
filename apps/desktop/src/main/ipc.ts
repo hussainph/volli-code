@@ -1,6 +1,6 @@
 import { BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { promises as fs } from "node:fs";
-import { basename, resolve, sep } from "node:path";
+import { basename, resolve } from "node:path";
 import { compareDirEntries, errorMessage } from "@volli/shared";
 import type {
   DirEntry,
@@ -9,20 +9,13 @@ import type {
   RevealResult,
   VolliIpcChannel,
 } from "@volli/shared";
+import { isPathWithinRoots, syncProjectRoots } from "./project-roots";
 
-// Absolute project roots the renderer has registered. Filesystem handlers
-// only operate inside these. Defense-in-depth for a compromised renderer,
-// not a hard boundary — the registry itself is renderer-fed.
-const projectRoots = new Set<string>();
-
-export function isWithinRoots(roots: ReadonlySet<string>, absPath: string): boolean {
-  for (const root of roots) {
-    if (absPath === root || absPath.startsWith(root + sep)) {
-      return true;
-    }
-  }
-  return false;
-}
+// The project-roots registry lives in ./project-roots so main-process
+// consumers (this file, pty.ts) share one instance. Re-exported here so the
+// existing IPC test suite can keep importing the pure containment check from
+// its original home.
+export { isWithinRoots } from "./project-roots";
 
 // Failures travel back as typed result objects, never as rejections —
 // ipcMain.handle rejections serialize into useless "Error invoking remote
@@ -51,14 +44,7 @@ export function registerIpcHandlers(): void {
   );
 
   ipcMain.handle("volli:sync-project-roots" satisfies VolliIpcChannel, (_event, paths: unknown) => {
-    projectRoots.clear();
-    if (Array.isArray(paths)) {
-      for (const path of paths) {
-        if (typeof path === "string") {
-          projectRoots.add(resolve(path));
-        }
-      }
-    }
+    syncProjectRoots(paths);
   });
 
   ipcMain.handle(
@@ -68,7 +54,7 @@ export function registerIpcHandlers(): void {
         return { ok: false, error: "Invalid path" };
       }
       const resolved = resolve(absPath);
-      if (!isWithinRoots(projectRoots, resolved)) {
+      if (!isPathWithinRoots(resolved)) {
         return { ok: false, error: "Path is outside known projects" };
       }
       try {
@@ -99,7 +85,7 @@ export function registerIpcHandlers(): void {
         return { ok: false, error: "Invalid path" };
       }
       const resolved = resolve(absPath);
-      if (!isWithinRoots(projectRoots, resolved)) {
+      if (!isPathWithinRoots(resolved)) {
         return { ok: false, error: "Path is outside known projects" };
       }
       shell.showItemInFolder(resolved);

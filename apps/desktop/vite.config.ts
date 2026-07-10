@@ -69,6 +69,8 @@ export default defineConfig({
         "src/components/sidebar/listing.ts",
         "src/lib/project-shortcut.ts",
         "**/src/main/ipc.ts",
+        "**/src/main/project-roots.ts",
+        "**/src/main/pty.ts",
       ],
       // Global bar only — vitest applies global thresholds to every included
       // file even when per-glob entries exist, so partial carve-outs can't

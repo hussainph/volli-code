@@ -12,10 +12,17 @@ export type VolliIpcChannel =
   | "volli:sync-project-roots"
   | "volli:list-directory"
   | "volli:reveal-in-finder"
-  | "volli:window-is-fullscreen";
+  | "volli:window-is-fullscreen"
+  | "volli:terminal-create"
+  | "volli:terminal-write"
+  | "volli:terminal-resize"
+  | "volli:terminal-kill";
 
 /** Channel names for main→renderer push events (`webContents.send`). */
-export type VolliIpcEvent = "volli:fullscreen-changed";
+export type VolliIpcEvent =
+  | "volli:fullscreen-changed"
+  | "volli:terminal-data"
+  | "volli:terminal-exit";
 
 /**
  * Result types below travel as typed discriminated unions rather than

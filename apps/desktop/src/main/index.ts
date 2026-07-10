@@ -3,6 +3,7 @@ import { join } from "path";
 import { ticketBranchName } from "@volli/shared";
 import type { VolliIpcEvent } from "@volli/shared";
 import { registerIpcHandlers } from "./ipc";
+import { registerTerminalIpcHandlers } from "./pty";
 
 const isDev = !app.isPackaged;
 
@@ -72,6 +73,8 @@ app.whenReady().then(() => {
   }
 
   registerIpcHandlers();
+  // Boots the PTY multiplexer and its before-quit teardown (kills all PTYs).
+  registerTerminalIpcHandlers();
   createWindow();
 
   app.on("activate", () => {
