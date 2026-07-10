@@ -1,3 +1,4 @@
+import "vite-plus/test/config";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
@@ -39,6 +40,19 @@ export default defineConfig({
   server: {
     port: RENDERER_DEV_PORT,
     strictPort: true,
+  },
+  test: {
+    projects: [
+      // Inherits root src/renderer, plugins, @renderer alias — existing store
+      // tests keep working under the default include.
+      { extends: true, test: { name: "renderer" } },
+      // NOT extends: main tests need no plugins/alias; fresh entry avoids
+      // inheriting root src/renderer. @volli/shared resolves via workspace link.
+      {
+        root: fileURLToPath(new URL(".", import.meta.url)),
+        test: { name: "main", environment: "node", include: ["src/main/**/*.test.ts"] },
+      },
+    ],
   },
   build: {
     // Absolute — `outDir` otherwise resolves relative to `root` (src/renderer).
