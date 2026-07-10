@@ -1,11 +1,9 @@
 import * as React from "react";
-import {
-  CircleCheckIcon,
-  InfoIcon,
-  Loader2Icon,
-  OctagonXIcon,
-  TriangleAlertIcon,
-} from "lucide-react";
+import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
+import { InfoIcon } from "@phosphor-icons/react/dist/csr/Info";
+import { SpinnerGapIcon } from "@phosphor-icons/react/dist/csr/SpinnerGap";
+import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
+import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
 import { Toaster as Sonner, type ToasterProps } from "sonner";
 
 // This app is dark-only (no next-themes provider, see globals.css) — theme is
@@ -16,11 +14,11 @@ const Toaster = ({ ...props }: ToasterProps) => {
       theme="dark"
       className="toaster group"
       icons={{
-        success: <CircleCheckIcon className="size-4" />,
-        info: <InfoIcon className="size-4" />,
-        warning: <TriangleAlertIcon className="size-4" />,
-        error: <OctagonXIcon className="size-4" />,
-        loading: <Loader2Icon className="size-4 animate-spin" />,
+        success: <CheckCircleIcon weight="fill" className="size-4" />,
+        info: <InfoIcon weight="fill" className="size-4" />,
+        warning: <WarningCircleIcon weight="fill" className="size-4" />,
+        error: <XCircleIcon weight="fill" className="size-4" />,
+        loading: <SpinnerGapIcon weight="bold" className="size-4 animate-spin" />,
       }}
       style={
         {

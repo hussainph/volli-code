@@ -1,4 +1,4 @@
-import { Settings } from "lucide-react";
+import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
 
 import { ActiveSessions } from "@renderer/components/sidebar/active-sessions";
 import { FileTree } from "@renderer/components/sidebar/file-tree";
@@ -11,6 +11,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  useSidebar,
 } from "@renderer/components/ui/sidebar";
 import { useActiveNav } from "@renderer/hooks/use-active-nav";
 import { useAddProject } from "@renderer/hooks/use-add-project";
@@ -24,41 +25,51 @@ import { useUiStore } from "@renderer/stores/ui";
  * With no project selected, nav + contextual content are replaced by an
  * "add a project" prompt (header and footer stay put).
  *
- * When the sidebar collapses (⌘B) this pane narrows to a 48px icon strip:
- * the nav buttons shrink to icons with hover tooltips (stock icon-collapse
- * machinery), while the header text and contextual content hide.
+ * Expanded and collapsed presentations live in separate fixed-width layers.
+ * The outer sidebar clips and cross-fades those layers while its width moves,
+ * so text never reflows through intermediate widths and the collapsed icons
+ * keep stable, symmetrical positions.
  */
 export function PrimarySidebar() {
+  const { state: sidebarState } = useSidebar();
   const selected = useSelectedProject();
   const pickAndAdd = useAddProject();
   const [activeNav] = useActiveNav();
   const settingsOpen = useUiStore((state) => state.settingsOpen);
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
+  const collapsed = sidebarState === "collapsed";
 
   return (
-    <>
-      {/* ChromeBar above owns the traffic lights and the drag region — this
-          is now a plain panel header. */}
-      <SidebarHeader className="px-4 py-3">
-        {selected ? (
-          <div className="min-w-0 group-data-[collapsible=icon]:hidden">
-            <div className="truncate text-sm font-semibold">{selected.name}</div>
-            <div className="text-xs text-muted-foreground">{selected.ticketPrefix}</div>
-          </div>
-        ) : (
-          <div className="text-sm text-muted-foreground group-data-[collapsible=icon]:hidden">
-            No project selected
-          </div>
+    <div className="relative h-full w-full overflow-hidden">
+      <div
+        aria-hidden={collapsed}
+        inert={collapsed}
+        data-sidebar-presentation="expanded"
+        className={cn(
+          "absolute inset-y-0 left-0 flex min-h-0 w-[calc(var(--sidebar-width)-var(--rail-width))] flex-col overflow-hidden",
+          "transition-[opacity,transform] duration-[120ms] ease-swift group-data-[motion=instant]/sidebar-wrapper:transition-none motion-reduce:transform-none motion-reduce:transition-opacity motion-reduce:duration-100",
+          collapsed
+            ? "pointer-events-none -translate-x-1.5 opacity-0"
+            : "translate-x-0 opacity-100 delay-[30ms]",
         )}
-      </SidebarHeader>
+      >
+        {/* ChromeBar above owns the traffic lights and the drag region — this
+            is now a plain panel header. */}
+        <SidebarHeader className="px-4 py-3">
+          {selected ? (
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold">{selected.name}</div>
+              <div className="text-xs text-muted-foreground">{selected.ticketPrefix}</div>
+            </div>
+          ) : (
+            <div className="text-sm text-muted-foreground">No project selected</div>
+          )}
+        </SidebarHeader>
 
-      {selected ? (
-        <>
-          <NavList />
-          {/* Contextual content hides in the collapsed icon strip; the (empty)
-              SidebarContent stays in flow so the footer keeps to the bottom. */}
-          <SidebarContent>
-            <div className="group-data-[collapsible=icon]:hidden">
+        {selected ? (
+          <>
+            <NavList />
+            <SidebarContent className="overflow-x-hidden">
               {/* Render-hidden, not unmounted, across nav switches so the file
                   tree keeps its lazily-fetched listings and expansion state
                   (same keep-alive seam main-content.tsx documents for pages). */}
@@ -72,34 +83,71 @@ export function PrimarySidebar() {
               >
                 <ActiveSessions project={selected} />
               </div>
-            </div>
-          </SidebarContent>
-        </>
-      ) : (
-        <SidebarContent className="items-center justify-center gap-3 p-4 text-center">
-          <div className="contents group-data-[collapsible=icon]:hidden">
+            </SidebarContent>
+          </>
+        ) : (
+          <SidebarContent className="items-center justify-center gap-3 p-4 text-center">
             <p className="text-sm text-muted-foreground">Add a project to get started</p>
             <Button size="sm" className="app-region-no-drag" onClick={() => void pickAndAdd()}>
               Add Project…
             </Button>
-          </div>
-        </SidebarContent>
-      )}
+          </SidebarContent>
+        )}
 
-      <SidebarFooter>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              tooltip="Settings"
-              isActive={settingsOpen}
-              onClick={() => setSettingsOpen(true)}
-            >
-              <Settings />
-              <span>Settings</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarFooter>
-    </>
+        <SidebarFooter>
+          <SettingsMenuButton active={settingsOpen} onSelect={() => setSettingsOpen(true)} />
+        </SidebarFooter>
+      </div>
+
+      <div
+        aria-hidden={!collapsed}
+        inert={!collapsed}
+        data-sidebar-presentation="collapsed"
+        className={cn(
+          "absolute inset-y-0 left-0 flex w-[calc(var(--sidebar-width-icon)-var(--rail-width))] flex-col overflow-hidden",
+          "transition-[opacity,transform] duration-[120ms] ease-swift group-data-[motion=instant]/sidebar-wrapper:transition-none motion-reduce:transform-none motion-reduce:transition-opacity motion-reduce:duration-100",
+          collapsed
+            ? "translate-x-0 opacity-100 delay-[30ms]"
+            : "pointer-events-none translate-x-1.5 opacity-0",
+        )}
+      >
+        {/* Equal 8px top and bottom insets keep the icon rail visually balanced. */}
+        {selected && <NavList collapsed />}
+        <div className="min-h-0 flex-1" />
+        <SidebarFooter className="p-2">
+          <SettingsMenuButton
+            active={settingsOpen}
+            collapsed
+            onSelect={() => setSettingsOpen(true)}
+          />
+        </SidebarFooter>
+      </div>
+    </div>
+  );
+}
+
+function SettingsMenuButton({
+  active,
+  collapsed = false,
+  onSelect,
+}: {
+  active: boolean;
+  collapsed?: boolean;
+  onSelect(): void;
+}) {
+  return (
+    <SidebarMenu>
+      <SidebarMenuItem>
+        <SidebarMenuButton
+          aria-label={collapsed ? "Settings" : undefined}
+          tooltip={collapsed ? "Settings" : undefined}
+          isActive={active}
+          onClick={onSelect}
+        >
+          <GearSixIcon weight="fill" />
+          {!collapsed && <span>Settings</span>}
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+    </SidebarMenu>
   );
 }

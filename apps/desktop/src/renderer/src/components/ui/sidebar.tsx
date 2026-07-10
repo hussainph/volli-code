@@ -1,6 +1,6 @@
 import * as React from "react";
+import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
 import { cva, type VariantProps } from "class-variance-authority";
-import { PanelLeftIcon } from "lucide-react";
 import { Slot } from "radix-ui";
 
 import { useIsMobile } from "@renderer/hooks/use-mobile";
@@ -30,6 +30,12 @@ const SIDEBAR_WIDTH_MOBILE = "18rem";
 const SIDEBAR_WIDTH_ICON = "3rem";
 const SIDEBAR_KEYBOARD_SHORTCUT = "b";
 
+type SidebarToggleOptions = {
+  /** Repeated keyboard commands should update immediately, without waiting on
+   * decorative motion. Pointer-triggered toggles keep the short transition. */
+  instant?: boolean;
+};
+
 type SidebarContextProps = {
   state: "expanded" | "collapsed";
   open: boolean;
@@ -37,7 +43,7 @@ type SidebarContextProps = {
   openMobile: boolean;
   setOpenMobile: (open: boolean) => void;
   isMobile: boolean;
-  toggleSidebar: () => void;
+  toggleSidebar: (options?: SidebarToggleOptions) => void;
 };
 
 const SidebarContext = React.createContext<SidebarContextProps | null>(null);
@@ -66,6 +72,8 @@ function SidebarProvider({
 }) {
   const isMobile = useIsMobile();
   const [openMobile, setOpenMobile] = React.useState(false);
+  const [motionMode, setMotionMode] = React.useState<"animated" | "instant">("animated");
+  const motionFrameRef = React.useRef<number | null>(null);
 
   // This is the internal state of the sidebar.
   // We use openProp and setOpenProp for control from outside the component.
@@ -86,17 +94,48 @@ function SidebarProvider({
     [setOpenProp, open],
   );
 
-  // Helper to toggle the sidebar.
-  const toggleSidebar = React.useCallback(() => {
-    return isMobile ? setOpenMobile((prev) => !prev) : setOpen((prev) => !prev);
-  }, [isMobile, setOpen, setOpenMobile]);
+  const cancelMotionReset = React.useCallback(() => {
+    if (motionFrameRef.current === null) return;
+    cancelAnimationFrame(motionFrameRef.current);
+    motionFrameRef.current = null;
+  }, []);
+
+  // Helper to toggle the sidebar. Keyboard toggles suppress transition work
+  // for two paint frames, then restore pointer-triggered motion. The pending
+  // frame is always cancelled on re-toggle and unmount.
+  const toggleSidebar = React.useCallback(
+    (options?: SidebarToggleOptions) => {
+      cancelMotionReset();
+
+      if (options?.instant) {
+        setMotionMode("instant");
+        motionFrameRef.current = requestAnimationFrame(() => {
+          motionFrameRef.current = requestAnimationFrame(() => {
+            motionFrameRef.current = null;
+            setMotionMode("animated");
+          });
+        });
+      } else {
+        setMotionMode("animated");
+      }
+
+      if (isMobile) {
+        setOpenMobile((previous) => !previous);
+      } else {
+        setOpen((previous) => !previous);
+      }
+    },
+    [cancelMotionReset, isMobile, setOpen],
+  );
+
+  React.useEffect(() => cancelMotionReset, [cancelMotionReset]);
 
   // Adds a keyboard shortcut to toggle the sidebar.
   React.useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === SIDEBAR_KEYBOARD_SHORTCUT && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
-        toggleSidebar();
+        if (!event.repeat) toggleSidebar({ instant: true });
       }
     };
 
@@ -126,6 +165,7 @@ function SidebarProvider({
       <TooltipProvider delayDuration={0}>
         <div
           data-slot="sidebar-wrapper"
+          data-motion={motionMode}
           style={
             {
               "--sidebar-width": SIDEBAR_WIDTH,
@@ -216,10 +256,11 @@ function Sidebar({
       <div
         data-slot="sidebar-gap"
         className={cn(
-          "relative w-(--sidebar-width) bg-transparent transition-[width] duration-300 ease-swift",
+          "relative w-(--sidebar-width) bg-transparent transition-[width] duration-[180ms] ease-swift",
           // Instant tracking while the resize grip is dragged (AppShell sets
           // data-resizing on the provider) — a timed transition would rubber-band.
           "group-data-[resizing]/sidebar-wrapper:transition-none",
+          "group-data-[motion=instant]/sidebar-wrapper:transition-none",
           "group-data-[collapsible=offcanvas]:w-0",
           "group-data-[side=right]:rotate-180",
           variant === "floating" || variant === "inset"
@@ -230,8 +271,9 @@ function Sidebar({
       <div
         data-slot="sidebar-container"
         className={cn(
-          "fixed inset-y-0 z-10 flex h-svh w-(--sidebar-width) transition-[left,right,width] duration-300 ease-swift",
+          "fixed inset-y-0 z-10 flex h-svh w-(--sidebar-width) transition-[left,right,width] duration-[180ms] ease-swift",
           "group-data-[resizing]/sidebar-wrapper:transition-none",
+          "group-data-[motion=instant]/sidebar-wrapper:transition-none",
           side === "left"
             ? "left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]"
             : "right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",
@@ -271,7 +313,7 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
       }}
       {...props}
     >
-      <PanelLeftIcon />
+      <SidebarSimpleIcon weight="fill" />
       <span className="sr-only">Toggle Sidebar</span>
     </Button>
   );
@@ -286,7 +328,7 @@ function SidebarRail({ className, ...props }: React.ComponentProps<"button">) {
       data-slot="sidebar-rail"
       aria-label="Toggle Sidebar"
       tabIndex={-1}
-      onClick={toggleSidebar}
+      onClick={() => toggleSidebar()}
       title="Toggle Sidebar"
       className={cn(
         "absolute inset-y-0 z-20 hidden w-4 -translate-x-1/2 transition-all ease-linear group-data-[side=left]:-right-4 group-data-[side=right]:left-0 after:absolute after:inset-y-0 after:left-1/2 after:w-[2px] hover:after:bg-sidebar-border sm:flex",
@@ -463,7 +505,7 @@ function SidebarMenuItem({ className, ...props }: React.ComponentProps<"li">) {
 }
 
 const sidebarMenuButtonVariants = cva(
-  "peer/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:bg-sidebar-accent data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0",
+  "peer/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm ring-sidebar-ring outline-hidden transition-[width,height,padding,transform,background-color,color] duration-100 ease-out group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 active:scale-[0.97] active:bg-sidebar-accent active:text-sidebar-accent-foreground motion-reduce:transform-none disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:bg-sidebar-accent data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0",
   {
     variants: {
       variant: {

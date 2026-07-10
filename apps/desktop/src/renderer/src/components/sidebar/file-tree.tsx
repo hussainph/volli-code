@@ -1,5 +1,7 @@
 import * as React from "react";
-import { ChevronRight, File, Folder } from "lucide-react";
+import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
+import { FileIcon } from "@phosphor-icons/react/dist/csr/File";
+import { FolderIcon } from "@phosphor-icons/react/dist/csr/Folder";
 import type { DirEntry, Project } from "@volli/shared";
 
 import {
@@ -142,7 +144,7 @@ function FileTreeNode({ name, kind, path, projectId }: FileTreeNodeProps) {
   if (kind === "file") {
     return (
       <SidebarMenuButton className="data-[active=true]:bg-transparent">
-        <File />
+        <FileIcon weight="fill" />
         <span>{name}</span>
       </SidebarMenuButton>
     );
@@ -207,8 +209,8 @@ function DirectoryNode({
       >
         <CollapsibleTrigger asChild>
           <SidebarMenuButton>
-            <ChevronRight className="transition-transform" />
-            <Folder />
+            <CaretRightIcon weight="bold" className="transition-transform" />
+            <FolderIcon weight="fill" />
             <span>{name}</span>
           </SidebarMenuButton>
         </CollapsibleTrigger>
