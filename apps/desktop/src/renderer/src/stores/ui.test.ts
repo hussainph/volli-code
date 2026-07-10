@@ -44,10 +44,24 @@ describe("setSidebarWidth", () => {
   });
 });
 
+describe("setSettingsOpen", () => {
+  it("toggles the app-wide Settings overlay", () => {
+    const store = createUiStore(createMemoryStorage());
+    expect(store.getState().settingsOpen).toBe(false);
+
+    store.getState().setSettingsOpen(true);
+    expect(store.getState().settingsOpen).toBe(true);
+
+    store.getState().setSettingsOpen(false);
+    expect(store.getState().settingsOpen).toBe(false);
+  });
+});
+
 describe("persistence", () => {
-  it("persists only sidebarWidth", () => {
+  it("persists only sidebarWidth — settingsOpen resets each launch", () => {
     const storage = createMemoryStorage();
     const store = createUiStore(storage);
+    store.getState().setSettingsOpen(true);
     store.getState().setSidebarWidth(500);
 
     const persisted = JSON.parse(storage.getItem("volli:ui")!) as {

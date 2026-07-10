@@ -15,7 +15,7 @@ describe("setNav", () => {
     const store = createWorkspaceStore();
     store.getState().setNav("project-a", "files");
     store.getState().setNav("project-b", "board");
-    store.getState().setNav("project-b", "settings");
+    store.getState().setNav("project-b", "sessions");
 
     expect(store.getState().byProject["project-a"]?.nav).toBe("files");
   });

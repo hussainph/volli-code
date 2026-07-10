@@ -13,7 +13,8 @@
  */
 import { create } from "zustand";
 
-export type NavKey = "board" | "sessions" | "files" | "settings";
+/** The per-workspace nav pages (NAV_ITEMS). Settings is app-wide chrome — see stores/ui.ts. */
+export type NavKey = "board" | "sessions" | "files";
 
 export interface WorkspaceUiState {
   nav: NavKey;
