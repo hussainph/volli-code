@@ -29,6 +29,11 @@ export interface ProjectSessions {
 
 interface SessionsState {
   byProject: Record<string, ProjectSessions>;
+  /** Projects with a terminal-create currently in flight. Lives in the store
+   *  (not a component ref) so any surface — the sessions tab strip today,
+   *  the ticket board later — can observe "a session is being created for
+   *  project X" without reaching into SessionsLayer's internals. */
+  startingProjects: Record<string, true>;
   /** Append a tab for a freshly-created PTY session, title it, and focus it. */
   addSession(projectId: string, sessionId: string): void;
   /** Remove a tab, selecting a neighbor like the project rail does. */
@@ -36,6 +41,10 @@ interface SessionsState {
   setActiveSession(projectId: string, sessionId: string): void;
   /** Record a PTY exit on whichever project owns the session. */
   markExited(sessionId: string, exitCode: number): void;
+  /** Mark whether a terminal-create is in flight for a project. Idempotent:
+   *  callers bracket an async create with `true` then `false`/`finally`
+   *  without checking current state first. */
+  setStarting(projectId: string, starting: boolean): void;
   /** Drop every session for a removed project. */
   forgetProject(projectId: string): void;
 }
@@ -46,6 +55,7 @@ const EMPTY_PROJECT: ProjectSessions = { tabs: [], activeSessionId: null, nextTa
 export function createSessionsStore() {
   return create<SessionsState>()((set) => ({
     byProject: {},
+    startingProjects: {},
 
     addSession(projectId, sessionId) {
       set((state) => {
@@ -118,12 +128,31 @@ export function createSessionsStore() {
       });
     },
 
+    setStarting(projectId, starting) {
+      set((state) => {
+        const isStarting = projectId in state.startingProjects;
+        if (starting === isStarting) return state;
+        const startingProjects = { ...state.startingProjects };
+        if (starting) {
+          startingProjects[projectId] = true;
+        } else {
+          delete startingProjects[projectId];
+        }
+        return { startingProjects };
+      });
+    },
+
     forgetProject(projectId) {
       set((state) => {
-        if (!(projectId in state.byProject)) return state;
+        const hasSessions = projectId in state.byProject;
+        const hasStarting = projectId in state.startingProjects;
+        if (!hasSessions && !hasStarting) return state;
+
         const byProject = { ...state.byProject };
         delete byProject[projectId];
-        return { byProject };
+        const startingProjects = { ...state.startingProjects };
+        delete startingProjects[projectId];
+        return { byProject, startingProjects };
       });
     },
   }));

@@ -43,7 +43,7 @@ export function TerminalView({ projectId, sessionId, visible }: TerminalViewProp
         .byProject[projectId]?.tabs.find((tab) => tab.sessionId === sessionId)?.exitCode === null;
 
     // Keystrokes → PTY.
-    engine.onData((data) => {
+    const offData = engine.onData((data) => {
       if (!isLive()) return;
       window.api.terminal
         .write(sessionId, data)
@@ -56,7 +56,7 @@ export function TerminalView({ projectId, sessionId, visible }: TerminalViewProp
     });
 
     // Grid changes → PTY resize (fires immediately with the current grid).
-    engine.onResize(({ cols, rows }) => {
+    const offResize = engine.onResize(({ cols, rows }) => {
       if (!isLive()) return;
       window.api.terminal
         .resize(sessionId, cols, rows)
@@ -70,8 +70,16 @@ export function TerminalView({ projectId, sessionId, visible }: TerminalViewProp
 
     // Attach AFTER the callbacks are wired: attach flushes buffered PTY output
     // into the parser, and a reply it generates (e.g. a CPR response to a
-    // prompt's cursor probe) must find dataCb already set or it is dropped.
+    // prompt's cursor probe) must find a data subscriber or it is dropped.
     engine.attach(container);
+
+    // Unsubscribe on cleanup — onData/onResize are multi-subscriber now, so
+    // StrictMode's dev double-mount would otherwise forward every keystroke
+    // twice. The engine itself stays alive (registry owns its lifecycle).
+    return () => {
+      offData();
+      offResize();
+    };
   }, [projectId, sessionId]);
 
   // Hidden terminals pause rendering; a GPU canvas measures as zero while

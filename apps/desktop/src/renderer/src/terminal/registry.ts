@@ -9,10 +9,23 @@
  * engine up here on mount and re-parents it into the freshly-rendered
  * container, instead of constructing a new one.
  */
+import { getCurrentAppearance, onTerminalAppearanceChanged } from "./appearance";
+import { onGpuSessionRotated } from "./gpu-session";
 import { ResttyEngine } from "./restty-engine";
 import type { TerminalEngine } from "./engine";
 
 const engines = new Map<string, TerminalEngine>();
+
+// Module-lifetime subscriptions (the registry IS the app-wide engine list):
+// a GPU session rotation rebuilds every live renderer against the fresh
+// device, and a ghostty config edit re-themes them in place (issue #18).
+onGpuSessionRotated(() => {
+  for (const engine of engines.values()) engine.rebuildRenderer?.();
+});
+onTerminalAppearanceChanged(() => {
+  const appearance = getCurrentAppearance();
+  for (const engine of engines.values()) engine.applyAppearance?.(appearance);
+});
 
 /** The engine for `sessionId`, constructing it on first request. */
 export function getOrCreateEngine(sessionId: string): TerminalEngine {

@@ -177,12 +177,68 @@ describe("forgetProject", () => {
     expect(store.getState().byProject["b"]?.tabs.map((t) => t.sessionId)).toEqual(["b1"]);
   });
 
-  it("is a no-op for a project with no sessions", () => {
+  it("is a no-op for a project with no sessions and no starting flag", () => {
     const store = createSessionsStore();
     store.getState().addSession("a", "a1");
     const before = store.getState().byProject;
+    const beforeStarting = store.getState().startingProjects;
 
     store.getState().forgetProject("never-added");
     expect(store.getState().byProject).toBe(before);
+    expect(store.getState().startingProjects).toBe(beforeStarting);
+  });
+
+  it("clears the starting flag for a project removed mid-create", () => {
+    const store = createSessionsStore();
+    store.getState().setStarting("a", true);
+
+    store.getState().forgetProject("a");
+
+    expect(store.getState().startingProjects["a"]).toBeUndefined();
+  });
+});
+
+describe("setStarting", () => {
+  it("sets the flag for a project", () => {
+    const store = createSessionsStore();
+    store.getState().setStarting("a", true);
+
+    expect(store.getState().startingProjects["a"]).toBe(true);
+  });
+
+  it("clears the flag for a project", () => {
+    const store = createSessionsStore();
+    store.getState().setStarting("a", true);
+
+    store.getState().setStarting("a", false);
+
+    expect(store.getState().startingProjects["a"]).toBeUndefined();
+  });
+
+  it("is a no-op when setting true on an already-starting project", () => {
+    const store = createSessionsStore();
+    store.getState().setStarting("a", true);
+    const before = store.getState().startingProjects;
+
+    store.getState().setStarting("a", true);
+
+    expect(store.getState().startingProjects).toBe(before);
+  });
+
+  it("is a no-op when setting false on a project that isn't starting", () => {
+    const store = createSessionsStore();
+    const before = store.getState().startingProjects;
+
+    store.getState().setStarting("a", false);
+
+    expect(store.getState().startingProjects).toBe(before);
+  });
+
+  it("tracks the flag per project", () => {
+    const store = createSessionsStore();
+    store.getState().setStarting("a", true);
+
+    expect(store.getState().startingProjects["a"]).toBe(true);
+    expect(store.getState().startingProjects["b"]).toBeUndefined();
   });
 });

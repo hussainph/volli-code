@@ -37,15 +37,14 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
   const addSession = useSessionsStore((state) => state.addSession);
   const setActiveSession = useSessionsStore((state) => state.setActiveSession);
   const markExited = useSessionsStore((state) => state.markExited);
+  const setStarting = useSessionsStore((state) => state.setStarting);
   const selected = useSelectedProject();
 
-  const creatingRef = React.useRef(new Set<string>());
   // Projects that already got their one auto-opened session. Marked at attempt
   // time and never cleared — a failure's retry surface is the empty state's
   // "New session" button, and a user closing their last tab must be able to
   // hold zero sessions without the effect respawning one.
   const autoOpenedRef = React.useRef(new Set<string>());
-  const [, forceRender] = React.useReducer((n: number) => n + 1, 0);
 
   // The single subscription to the shared PTY streams: fan output out to the
   // matching engine (lookup ONLY — creating here would leak engines for events
@@ -68,9 +67,8 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
 
   const createSession = React.useCallback(
     async (project: Project) => {
-      if (creatingRef.current.has(project.id)) return;
-      creatingRef.current.add(project.id);
-      forceRender();
+      if (useSessionsStore.getState().startingProjects[project.id]) return;
+      setStarting(project.id, true);
       try {
         const result = await window.api.terminal.create({
           workspaceId: project.id,
@@ -106,31 +104,32 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
       } catch (error) {
         toast.error(`Could not start terminal: ${errorMessage(error)}`);
       } finally {
-        creatingRef.current.delete(project.id);
-        forceRender();
+        setStarting(project.id, false);
       }
     },
-    [addSession],
+    [addSession, setStarting],
   );
 
   // Zero-friction first visit: auto-open a session when Sessions is revealed
   // for a project that has never had one — once per project, see autoOpenedRef.
   const selectedTabCount = selected ? (byProject[selected.id]?.tabs.length ?? 0) : 0;
+  const creatingSelected = useSessionsStore((state) =>
+    selected ? (state.startingProjects[selected.id] ?? false) : false,
+  );
   React.useEffect(() => {
     if (
       visible &&
       selected &&
       selectedTabCount === 0 &&
       !autoOpenedRef.current.has(selected.id) &&
-      !creatingRef.current.has(selected.id)
+      !creatingSelected
     ) {
       autoOpenedRef.current.add(selected.id);
       void createSession(selected);
     }
-  }, [visible, selected, selectedTabCount, createSession]);
+  }, [visible, selected, selectedTabCount, creatingSelected, createSession]);
 
   const selectedSessions = selected ? byProject[selected.id] : undefined;
-  const creatingSelected = selected ? creatingRef.current.has(selected.id) : false;
 
   return (
     <div className={cn("flex min-h-0 flex-1 flex-col bg-background", !visible && "hidden")}>
