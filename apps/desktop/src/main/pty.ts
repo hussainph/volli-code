@@ -59,6 +59,8 @@ const BATCH_MAX_CHARS = 256_000;
 
 interface Session {
   pty: PtyProcess;
+  /** The workspace this session is scoped to (future `volli` CLI/notifications consumer). */
+  workspaceId: string;
   /** The window that created the session; where its output events are sent. */
   webContents: WebContents;
   /** The `destroyed` listener we attached, so we can detach it on cleanup. */
@@ -135,6 +137,7 @@ export class PtyManager {
       webContents.once("destroyed", onDestroyed);
       this.sessions.set(sessionId, {
         pty,
+        workspaceId: request.workspaceId,
         webContents,
         onDestroyed,
         pendingChunks: [],
@@ -223,6 +226,11 @@ export class PtyManager {
       session.paused = false;
       session.pty.resume();
     }
+  }
+
+  /** The workspace a live session was created for, or undefined if unknown. */
+  workspaceIdFor(sessionId: string): string | undefined {
+    return this.sessions.get(sessionId)?.workspaceId;
   }
 
   write(sessionId: string, data: string): TerminalIoResult {

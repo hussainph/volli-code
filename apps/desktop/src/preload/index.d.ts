@@ -1,6 +1,8 @@
 import type {
   CreateTerminalSessionRequest,
   CreateTerminalSessionResult,
+  GhosttyAppearancePayload,
+  GhosttyConfigResult,
   ListDirectoryResult,
   PickFolderResult,
   RevealResult,
@@ -48,6 +50,10 @@ export interface Api {
     onData: (callback: (event: TerminalDataEvent) => void) => () => void;
     /** Subscribes to PTY exit; returns the unsubscribe function. */
     onExit: (callback: (event: TerminalExitEvent) => void) => () => void;
+    /** Reads the user's resolved Ghostty config, mapped onto restty's appearance model. */
+    ghosttyConfig: () => Promise<GhosttyConfigResult>;
+    /** Subscribes to live Ghostty config reloads; returns the unsubscribe function. */
+    onGhosttyConfigChanged: (callback: (payload: GhosttyAppearancePayload) => void) => () => void;
   };
 }
 

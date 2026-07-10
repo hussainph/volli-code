@@ -5,6 +5,8 @@ import { contextBridge, ipcRenderer } from "electron";
 import type {
   CreateTerminalSessionRequest,
   CreateTerminalSessionResult,
+  GhosttyAppearancePayload,
+  GhosttyConfigResult,
   ListDirectoryResult,
   PickFolderResult,
   RevealResult,
@@ -77,6 +79,22 @@ const api = {
       ipcRenderer.on("volli:terminal-exit" satisfies VolliIpcEvent, listener);
       return () =>
         ipcRenderer.removeListener("volli:terminal-exit" satisfies VolliIpcEvent, listener);
+    },
+    /** Reads the user's resolved Ghostty config, mapped onto restty's appearance model. */
+    ghosttyConfig: (): Promise<GhosttyConfigResult> =>
+      ipcRenderer.invoke("volli:ghostty-config-get" satisfies VolliIpcChannel),
+    /** Subscribes to live Ghostty config reloads; returns the unsubscribe function. */
+    onGhosttyConfigChanged: (
+      callback: (payload: GhosttyAppearancePayload) => void,
+    ): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: GhosttyAppearancePayload) =>
+        callback(payload);
+      ipcRenderer.on("volli:ghostty-config-changed" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener(
+          "volli:ghostty-config-changed" satisfies VolliIpcEvent,
+          listener,
+        );
     },
   },
 };

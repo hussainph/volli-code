@@ -3,6 +3,8 @@
 // `import type` from here (pack keeps main/preload dependency-disjoint), so
 // nothing in this module may pull in Node/Electron/DOM at runtime.
 
+import type { GhosttyTerminalPrefs } from "./ghostty-config";
+
 /** Renderer → main request to boot a PTY session inside a workspace. */
 export interface CreateTerminalSessionRequest {
   /** The workspace (tracked project) the session is scoped to. */
@@ -37,6 +39,19 @@ export interface TerminalExitEvent {
   sessionId: string;
   exitCode: number;
 }
+
+/** main → renderer: everything the renderer needs to map the user's Ghostty config onto restty. */
+export interface GhosttyAppearancePayload {
+  prefs: GhosttyTerminalPrefs;
+  /** Merged config text in effective last-wins order (renderer overlays its inline color keys); null when no config file exists. */
+  configText: string | null;
+  /** Raw text of the resolved custom theme file when `theme` named one; null when builtin/absent. */
+  themeSource: string | null;
+}
+
+export type GhosttyConfigResult =
+  | { ok: true; value: GhosttyAppearancePayload }
+  | { ok: false; error: string };
 
 /** The shell binary and argv to spawn for a login terminal. */
 export interface ResolvedShell {

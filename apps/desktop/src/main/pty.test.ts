@@ -128,6 +128,7 @@ const flushBatchWindow = () => vi.advanceTimersByTime(8);
 
 let root: string;
 let outside: string;
+let manager: ReturnType<typeof registerTerminalIpcHandlers>;
 
 /** Spawns a session and returns its id plus the fake pty backing it. */
 async function createSession(sender = makeWebContents()) {
@@ -156,7 +157,7 @@ afterAll(async () => {
 beforeEach(() => {
   vi.clearAllMocks();
   // Fresh manager + handlers each test (Map overwrites); reset roots.
-  registerTerminalIpcHandlers();
+  manager = registerTerminalIpcHandlers();
   syncProjectRoots([root]);
 });
 
@@ -288,6 +289,17 @@ describe("volli:terminal-create", () => {
     const result = await invokeCreate(makeWebContents(), req);
     expect(result).toEqual({ ok: false, error: "Invalid terminal request" });
     expect(spawn).not.toHaveBeenCalled();
+  });
+});
+
+describe("PtyManager.workspaceIdFor", () => {
+  it("reports the workspaceId a live session was created for", async () => {
+    const { sessionId } = await createSession();
+    expect(manager.workspaceIdFor(sessionId)).toBe("w");
+  });
+
+  it("returns undefined for an unknown session", () => {
+    expect(manager.workspaceIdFor("nope")).toBeUndefined();
   });
 });
 
