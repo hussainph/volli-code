@@ -13,6 +13,8 @@ import { derivePrefix, PROJECT_COLORS, type Project } from "@volli/shared";
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
+import { useWorkspaceStore } from "./workspace";
+
 interface ProjectsState {
   projects: Project[];
   selectedProjectId: string | null;
@@ -56,6 +58,11 @@ export function createProjectsStore(storage?: StateStorage) {
           const { projects, selectedProjectId } = get();
           const removedIndex = projects.findIndex((project) => project.id === id);
           if (removedIndex === -1) return;
+
+          // Removal and per-workspace-UI cleanup are one invariant, enforced
+          // here so no removal path (dialog today, context menu / CLI later)
+          // can forget the forget. The one store→store call in the codebase.
+          useWorkspaceStore.getState().forget(id);
 
           const nextProjects = projects.filter((project) => project.id !== id);
           if (selectedProjectId !== id) {

@@ -11,7 +11,6 @@ import {
   AlertDialogTitle,
 } from "@renderer/components/ui/alert-dialog";
 import { useProjectsStore } from "@renderer/stores/projects";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
 
 interface RemoveProjectDialogProps {
   project: Project;
@@ -21,7 +20,6 @@ interface RemoveProjectDialogProps {
 
 export function RemoveProjectDialog({ project, open, onOpenChange }: RemoveProjectDialogProps) {
   const removeProject = useProjectsStore((state) => state.removeProject);
-  const forgetWorkspace = useWorkspaceStore((state) => state.forget);
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
@@ -34,13 +32,7 @@ export function RemoveProjectDialog({ project, open, onOpenChange }: RemoveProje
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            variant="destructive"
-            onClick={() => {
-              removeProject(project.id);
-              forgetWorkspace(project.id);
-            }}
-          >
+          <AlertDialogAction variant="destructive" onClick={() => removeProject(project.id)}>
             Remove
           </AlertDialogAction>
         </AlertDialogFooter>
