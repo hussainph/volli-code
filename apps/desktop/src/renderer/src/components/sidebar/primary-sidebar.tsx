@@ -12,10 +12,10 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@renderer/components/ui/sidebar";
+import { useActiveNav } from "@renderer/hooks/use-active-nav";
 import { useAddProject } from "@renderer/hooks/use-add-project";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { cn } from "@renderer/lib/utils";
-import { useUiStore } from "@renderer/stores/ui";
 
 /**
  * Two-tier sidebar's right pane: project header, feature nav, contextual
@@ -30,8 +30,7 @@ import { useUiStore } from "@renderer/stores/ui";
 export function PrimarySidebar() {
   const selected = useSelectedProject();
   const pickAndAdd = useAddProject();
-  const activeNav = useUiStore((state) => state.activeNav);
-  const setActiveNav = useUiStore((state) => state.setActiveNav);
+  const [activeNav, setActiveNav] = useActiveNav();
 
   return (
     <>

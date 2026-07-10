@@ -6,7 +6,8 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@renderer/components/ui/sidebar";
-import { useUiStore, type NavKey } from "@renderer/stores/ui";
+import { useActiveNav } from "@renderer/hooks/use-active-nav";
+import type { NavKey } from "@renderer/stores/workspace";
 
 const NAV_ITEMS: ReadonlyArray<{ key: NavKey; label: string; icon: typeof SquareKanban }> = [
   { key: "board", label: "Board", icon: SquareKanban },
@@ -16,8 +17,7 @@ const NAV_ITEMS: ReadonlyArray<{ key: NavKey; label: string; icon: typeof Square
 
 /** Primary feature navigation: Board / Sessions / Files. Settings lives in the sidebar footer. */
 export function NavList() {
-  const activeNav = useUiStore((state) => state.activeNav);
-  const setActiveNav = useUiStore((state) => state.setActiveNav);
+  const [activeNav, setActiveNav] = useActiveNav();
 
   return (
     <SidebarGroup>

@@ -45,10 +45,9 @@ describe("setSidebarWidth", () => {
 });
 
 describe("persistence", () => {
-  it("persists only sidebarWidth — activeNav resets each launch", () => {
+  it("persists only sidebarWidth", () => {
     const storage = createMemoryStorage();
     const store = createUiStore(storage);
-    store.getState().setActiveNav("files");
     store.getState().setSidebarWidth(500);
 
     const persisted = JSON.parse(storage.getItem("volli:ui")!) as {
@@ -64,6 +63,5 @@ describe("persistence", () => {
     const reloaded = createUiStore(storage);
     await reloaded.persist.rehydrate();
     expect(reloaded.getState().sidebarWidth).toBe(444);
-    expect(reloaded.getState().activeNav).toBe("board");
   });
 });

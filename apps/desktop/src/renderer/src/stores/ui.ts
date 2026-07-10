@@ -1,13 +1,13 @@
 /**
- * UI state. `activeNav` is deliberately session-only; `sidebarWidth` — the
- * full two-tier sidebar width (60px rail + resizable panel) — persists to
+ * App-wide (workspace-independent) UI state. `sidebarWidth` — the full
+ * two-tier sidebar width (60px rail + resizable panel) — persists to
  * localStorage so the grip position survives relaunch. Same interim-storage
  * caveat as the projects store: dev and packaged origins don't share data.
+ *
+ * Per-workspace UI state (the active nav page) lives in stores/workspace.ts.
  */
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
-
-export type NavKey = "board" | "sessions" | "files" | "settings";
 
 export const SIDEBAR_DEFAULT_WIDTH = 318;
 export const SIDEBAR_MIN_WIDTH = 280;
@@ -18,9 +18,7 @@ export function clampSidebarWidth(width: number): number {
 }
 
 interface UiState {
-  activeNav: NavKey;
   sidebarWidth: number;
-  setActiveNav(nav: NavKey): void;
   setSidebarWidth(width: number): void;
 }
 
@@ -31,9 +29,7 @@ export function createUiStore(storage?: StateStorage) {
   return create<UiState>()(
     persist(
       (set) => ({
-        activeNav: "board",
         sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
-        setActiveNav: (nav) => set({ activeNav: nav }),
         setSidebarWidth: (width) => set({ sidebarWidth: clampSidebarWidth(width) }),
       }),
       {
