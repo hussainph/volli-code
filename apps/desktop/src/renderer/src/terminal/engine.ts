@@ -35,8 +35,15 @@ export interface TerminalEngine {
   /** Subscribe to grid-size changes; fires immediately if a size is known. */
   onResize(callback: (dimensions: TerminalDimensions) => void): void;
 
-  /** The last measured grid, or null before the first layout. */
-  getDimensions(): TerminalDimensions | null;
+  /**
+   * Pause or resume the render loop (GPU frames). Pause hidden terminals: PTY
+   * output keeps being parsed so the buffer stays current, but no repaints or
+   * GPU ticks run — and therefore no `onResize` events fire while paused, so
+   * `fit()` after resuming a revealed terminal. Callable before `attach`
+   * (the state is applied when the renderer is created) and after `dispose`
+   * (no-op).
+   */
+  setPaused(paused: boolean): void;
 
   /**
    * Re-measure the container and repaint. Call after revealing a previously

@@ -2,7 +2,8 @@
  * restty-backed `TerminalEngine`. restty renders a terminal into a canvas via
  * WASM (libghostty-vt) + WebGPU, with automatic WebGL2 fallback. We drive it
  * manually (no `connectPty` websocket): PTY output is fed in with
- * `sendInput(data, "pty")`, and user keystrokes are captured in `beforeInput`.
+ * `sendInput(data, "pty")`, and everything PTY-bound flows back out through an
+ * injected always-"connected" `ptyTransport` (see `attach`).
  *
  * Two failure modes this file is built against (see CLAUDE.md):
  *  1. Never destroy a live terminal incidentally. The engine owns a persistent
@@ -27,6 +28,10 @@ export class ResttyEngine implements TerminalEngine {
   private dataCb: ((data: string) => void) | null = null;
   private resizeCb: ((dimensions: TerminalDimensions) => void) | null = null;
   private dimensions: TerminalDimensions | null = null;
+  /** PTY output that arrived before `attach` created restty; replayed in order. */
+  private pendingWrites: string[] = [];
+  /** Desired pause state; applied on attach if set before restty exists. */
+  private paused = false;
   /** The active renderer backend once known ("webgpu" | "webgl2"). */
   backend: string | null = null;
   private disposed = false;
@@ -48,21 +53,42 @@ export class ResttyEngine implements TerminalEngine {
       this.restty = createRestty({
         root: this.hostEl,
         terminal: terminalConfig(),
-        // Capture keystrokes here and forward them to the PTY. Returning null
-        // suppresses restty's local application: a terminal emulator must not
-        // echo — the shell/PTY echoes, and we render that echo as `write`
-        // output. PTY output itself arrives via `sendInput(_, "pty")` and is
-        // passed straight through so the VT parser renders it.
         services: {
-          beforeInput: ({ text, source }) => {
-            if (source === "pty") return text;
-            if (text) this.dataCb?.(text);
-            return null;
+          // An always-"connected" transport is the single path for ALL
+          // PTY-bound bytes, and it must stay that way:
+          //  - restty flushes emulator replies (CPR/DA/OSC color/clipboard,
+          //    mouse reports) to `sendInput` ONLY while `isConnected()` is
+          //    true — a disconnected transport silently drops them.
+          //  - keystrokes/pastes route through restty's `sendKeyInput`, which
+          //    runs `mapKeyForPty` (backspace → \x7f, enter → \r, kitty
+          //    legacy-compat) and, while connected, SKIPS local application —
+          //    the PTY echo we render via `write` is the only echo. Do not
+          //    also forward keys from a `beforeInput` hook: it runs before
+          //    the transport send, so a null return would starve this path
+          //    and a non-null return would double-send.
+          ptyTransport: {
+            connect: () => {},
+            disconnect: () => {},
+            isConnected: () => true,
+            sendInput: (data) => {
+              if (this.dataCb === null) return false;
+              this.dataCb(data);
+              return true;
+            },
+            // On every grid change restty calls this AND emits a `term-size`
+            // runtime event; the runtime event is the one authoritative
+            // PTY-resize path (see subscribeRuntimeEvents), so this no-ops
+            // to avoid a double resize.
+            resize: () => true,
           },
         },
       });
       this.pane = this.restty.getActivePane();
       this.subscribeRuntimeEvents();
+      if (this.paused) this.pane?.runtime.terminal.setPaused(true);
+      const buffered = this.pendingWrites;
+      this.pendingWrites = [];
+      for (const chunk of buffered) this.restty.sendInput(chunk, "pty");
     } else {
       // Re-parenting can leave stale layout; force a re-measure on the new box.
       this.fit();
@@ -79,9 +105,10 @@ export class ResttyEngine implements TerminalEngine {
     this.backend = safeBackend(this.restty);
     this.unsubscribeRuntime = this.pane.runtime.events.subscribe((event: ResttyRuntimeEvent) => {
       if (event.type === "term-size") {
-        // A hidden (zero-size) canvas can report a degenerate grid; ignore it
-        // so we never shrink the PTY to nothing. fit() re-measures on reveal.
-        if (event.cols < 1 || event.rows < 1) return;
+        // A hidden (zero-size) canvas is clamped to a degenerate 1×1 grid;
+        // ignore it so we never shrink the PTY to a single cell. fit()
+        // re-measures on reveal.
+        if (event.cols <= 1 || event.rows <= 1) return;
         this.dimensions = { cols: event.cols, rows: event.rows };
         this.resizeCb?.(this.dimensions);
       } else if (event.type === "backend") {
@@ -92,7 +119,13 @@ export class ResttyEngine implements TerminalEngine {
 
   write(data: string): void {
     if (this.disposed) return;
-    this.restty?.sendInput(data, "pty");
+    if (this.restty === null) {
+      // The shell's first output often lands before the view mounts; buffer
+      // until attach creates restty, then replay in order.
+      this.pendingWrites.push(data);
+      return;
+    }
+    this.restty.sendInput(data, "pty");
   }
 
   onData(callback: (data: string) => void): void {
@@ -104,8 +137,12 @@ export class ResttyEngine implements TerminalEngine {
     if (this.dimensions !== null) callback(this.dimensions);
   }
 
-  getDimensions(): TerminalDimensions | null {
-    return this.dimensions;
+  setPaused(paused: boolean): void {
+    if (this.disposed) return;
+    this.paused = paused;
+    // Skips repaints + GPU ticks; PTY parsing continues, so the buffer stays
+    // current while hidden.
+    this.pane?.runtime.terminal.setPaused(paused);
   }
 
   fit(): void {
@@ -127,6 +164,7 @@ export class ResttyEngine implements TerminalEngine {
     this.unsubscribeRuntime = null;
     this.dataCb = null;
     this.resizeCb = null;
+    this.pendingWrites = [];
     this.restty?.destroy();
     this.restty = null;
     this.pane = null;
