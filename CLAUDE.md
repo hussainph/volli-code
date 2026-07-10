@@ -17,7 +17,7 @@ App data lives under Electron's `userData` dir (a fresh start, not the Swift app
 ## Conventions
 
 - The ticket state machine and all auto-move logic: pure, tested TypeScript in `@volli/shared`; the UI only observes it.
-- Terminal access goes through the `TerminalEngine` interface over the preload bridge — node-pty never leaves `src/main`; xterm.js never leaves the renderer's terminal components.
+- Terminal access goes through the `TerminalEngine` interface over the preload bridge — node-pty never leaves `src/main`; restty (the ghostty-derived WebGPU renderer, decision #26) never leaves the renderer's terminal components. node-pty needs `pnpm -C apps/desktop run rebuild:pty` after every install (Electron ABI).
 - Ticket worktree branches: `volli/<TICKET-ID>-<slug>` (e.g. `volli/VC-12-mcp-server`).
 - Changes go through a branch + commit + PR flow — never commit directly to `main`.
 - Surface every failed mutation to the user (alert/toast); never silently swallow errors — the Swift app's top systemic defect.
