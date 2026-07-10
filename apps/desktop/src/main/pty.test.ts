@@ -2,12 +2,22 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
 import type { CreateTerminalSessionResult, TerminalIoResult, VolliIpcChannel } from "@volli/shared";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vite-plus/test";
 
 // Hoisted above module evaluation, like ipc.test.ts, so the electron/node-pty
 // mock factories can capture into them.
-const { handlers, appHandlers, spawn } = vi.hoisted(() => ({
+const { handlers, listeners, appHandlers, spawn } = vi.hoisted(() => ({
   handlers: new Map<string, (...args: never[]) => unknown>(),
+  listeners: new Map<string, (...args: never[]) => unknown>(),
   appHandlers: new Map<string, () => void>(),
   spawn: vi.fn(),
 }));
@@ -16,6 +26,9 @@ vi.mock("electron", () => ({
   ipcMain: {
     handle(channel: string, handler: (...args: never[]) => unknown) {
       handlers.set(channel, handler);
+    },
+    on(channel: string, listener: (...args: never[]) => unknown) {
+      listeners.set(channel, listener);
     },
   },
   app: {
@@ -46,6 +59,8 @@ function makeFakePty() {
     write: vi.fn(),
     resize: vi.fn(),
     kill: vi.fn(),
+    pause: vi.fn(),
+    resume: vi.fn(),
     emitData: (data: string) => dataCb?.(data),
     emitExit: (exitCode: number) => exitCb?.({ exitCode }),
   };
@@ -53,7 +68,7 @@ function makeFakePty() {
 
 /** A WebContents double; `destroyed` listener and destroyed-state are steerable. */
 function makeWebContents() {
-  const listeners = new Map<string, () => void>();
+  const eventListeners = new Map<string, () => void>();
   return {
     send: vi.fn(),
     destroyed: false,
@@ -61,11 +76,11 @@ function makeWebContents() {
       return this.destroyed;
     },
     once: vi.fn(function (this: unknown, event: string, cb: () => void) {
-      listeners.set(event, cb);
+      eventListeners.set(event, cb);
     }),
     removeListener: vi.fn(),
     fireDestroyed() {
-      listeners.get("destroyed")?.();
+      eventListeners.get("destroyed")?.();
     },
   };
 }
@@ -98,6 +113,18 @@ const invokeKill = (sessionId: unknown) =>
     { sender: {} },
     sessionId,
   ) as TerminalIoResult;
+
+// The ack channel is send-based (ipcMain.on), not invoke-based; it returns
+// nothing and identifies the caller only by the event's sender.
+const sendAck = (sender: unknown, sessionId: unknown, chars: unknown) =>
+  (listeners.get("volli:terminal-ack" satisfies VolliIpcChannel) as (...a: unknown[]) => unknown)(
+    { sender },
+    sessionId,
+    chars,
+  );
+
+/** Runs the pending batch timer so buffered output flushes (fake timers on). */
+const flushBatchWindow = () => vi.advanceTimersByTime(8);
 
 let root: string;
 let outside: string;
@@ -133,6 +160,10 @@ beforeEach(() => {
   syncProjectRoots([root]);
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("volli:terminal-create", () => {
   it("spawns a login shell in the requested cwd with a 256-color TERM", async () => {
     const { sessionId } = await createSession();
@@ -152,8 +183,10 @@ describe("volli:terminal-create", () => {
   });
 
   it("routes pty output to the creating window's webContents with the session id", async () => {
+    vi.useFakeTimers();
     const { sessionId, pty, sender } = await createSession();
     pty.emitData("hello world");
+    flushBatchWindow();
     expect(sender.send).toHaveBeenCalledWith("volli:terminal-data", {
       sessionId,
       data: "hello world",
@@ -200,6 +233,37 @@ describe("volli:terminal-create", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
+  it("does not spawn when the window is destroyed during the lazy node-pty import", async () => {
+    const sender = makeWebContents();
+    // The handler suspends at `await import("node-pty")`; flipping destroyed
+    // before awaiting the result models the window closing mid-import.
+    const pending = invokeCreate(sender, { workspaceId: "w", cwd: root, cols: 80, rows: 24 });
+    sender.destroyed = true;
+    const result = await pending;
+    expect(result).toEqual({
+      ok: false,
+      error: "Window was closed before the terminal could start",
+    });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(sender.once).not.toHaveBeenCalled();
+  });
+
+  it("kills the fresh pty when the window is destroyed during spawn", async () => {
+    const sender = makeWebContents();
+    const pty = makeFakePty();
+    spawn.mockImplementationOnce(() => {
+      sender.destroyed = true;
+      return pty;
+    });
+    const result = await invokeCreate(sender, { workspaceId: "w", cwd: root, cols: 80, rows: 24 });
+    expect(result).toEqual({
+      ok: false,
+      error: "Window was closed before the terminal could start",
+    });
+    expect(pty.kill).toHaveBeenCalledTimes(1);
+    expect(sender.once).not.toHaveBeenCalled();
+  });
+
   it("returns a typed error instead of throwing when spawn fails", async () => {
     spawn.mockImplementationOnce(() => {
       throw new Error("ptsname failed");
@@ -224,6 +288,134 @@ describe("volli:terminal-create", () => {
     const result = await invokeCreate(makeWebContents(), req);
     expect(result).toEqual({ ok: false, error: "Invalid terminal request" });
     expect(spawn).not.toHaveBeenCalled();
+  });
+});
+
+describe("output batching", () => {
+  it("coalesces chunks within the batch window into one send with the joined payload", async () => {
+    vi.useFakeTimers();
+    const { sessionId, pty, sender } = await createSession();
+    pty.emitData("foo");
+    pty.emitData("bar");
+    pty.emitData("baz");
+    expect(sender.send).not.toHaveBeenCalled();
+    flushBatchWindow();
+    expect(sender.send).toHaveBeenCalledTimes(1);
+    expect(sender.send).toHaveBeenCalledWith("volli:terminal-data", {
+      sessionId,
+      data: "foobarbaz",
+    });
+  });
+
+  it("flushes immediately when the buffer reaches 256k chars, without a stale second flush", async () => {
+    vi.useFakeTimers();
+    const { sessionId, pty, sender } = await createSession();
+    pty.emitData("x".repeat(255_999));
+    expect(sender.send).not.toHaveBeenCalled();
+    pty.emitData("yz");
+    expect(sender.send).toHaveBeenCalledTimes(1);
+    expect(sender.send).toHaveBeenCalledWith("volli:terminal-data", {
+      sessionId,
+      data: `${"x".repeat(255_999)}yz`,
+    });
+    // The pending timer was cleared by the size-triggered flush.
+    vi.advanceTimersByTime(100);
+    expect(sender.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("flushes buffered output before the exit event", async () => {
+    vi.useFakeTimers();
+    const { sessionId, pty, sender } = await createSession();
+    pty.emitData("final ");
+    pty.emitData("bytes");
+    pty.emitExit(0);
+    expect(sender.send.mock.calls).toEqual([
+      ["volli:terminal-data", { sessionId, data: "final bytes" }],
+      ["volli:terminal-exit", { sessionId, exitCode: 0 }],
+    ]);
+  });
+
+  it("drops buffered output and its timer on kill", async () => {
+    vi.useFakeTimers();
+    const { sessionId, pty, sender } = await createSession();
+    pty.emitData("never delivered");
+    expect(invokeKill(sessionId)).toEqual({ ok: true });
+    vi.advanceTimersByTime(100);
+    expect(sender.send).not.toHaveBeenCalled();
+  });
+
+  it("ignores chunks emitted after the session was killed", async () => {
+    vi.useFakeTimers();
+    const { sessionId, pty, sender } = await createSession();
+    expect(invokeKill(sessionId)).toEqual({ ok: true });
+    // node-pty can deliver a final read after kill; the session is forgotten,
+    // so the chunk must not buffer, schedule a flush, or send.
+    pty.emitData("posthumous");
+    vi.advanceTimersByTime(100);
+    expect(sender.send).not.toHaveBeenCalled();
+  });
+});
+
+describe("flow control", () => {
+  /** Boots a session and pushes one over-watermark payload through a flush. */
+  async function createPausedSession() {
+    const session = await createSession();
+    session.pty.emitData("x".repeat(100_001));
+    flushBatchWindow();
+    expect(session.pty.pause).toHaveBeenCalledTimes(1);
+    return session;
+  }
+
+  it("pauses the pty once unacked output exceeds the 100k high watermark", async () => {
+    vi.useFakeTimers();
+    const { pty } = await createSession();
+    pty.emitData("x".repeat(100_000));
+    flushBatchWindow();
+    // Exactly at the watermark: not yet over it.
+    expect(pty.pause).not.toHaveBeenCalled();
+    pty.emitData("y");
+    flushBatchWindow();
+    expect(pty.pause).toHaveBeenCalledTimes(1);
+  });
+
+  it("resumes only after acks drain unacked output to the 5k low watermark", async () => {
+    vi.useFakeTimers();
+    const { sessionId, pty, sender } = await createPausedSession();
+    sendAck(sender, sessionId, 50_000); // 50_001 unacked — still above low water.
+    expect(pty.resume).not.toHaveBeenCalled();
+    sendAck(sender, sessionId, 46_000); // 4_001 unacked — below low water.
+    expect(pty.resume).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores acks from a webContents that does not own the session", async () => {
+    vi.useFakeTimers();
+    const { sessionId, pty } = await createPausedSession();
+    const intruder = makeWebContents();
+    sendAck(intruder, sessionId, 100_001);
+    expect(pty.resume).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a non-string session id", 42, 100_001],
+    ["non-number chars", "SESSION", "100001"],
+    ["NaN chars", "SESSION", Number.NaN],
+    ["infinite chars", "SESSION", Number.POSITIVE_INFINITY],
+    ["zero chars", "SESSION", 0],
+    ["negative chars", "SESSION", -5],
+  ])("ignores an ack with %s", async (_label, badSessionId, badChars) => {
+    vi.useFakeTimers();
+    const { sessionId, pty, sender } = await createPausedSession();
+    // "SESSION" is a placeholder for the real (per-test) session id.
+    const sid = badSessionId === "SESSION" ? sessionId : badSessionId;
+    expect(() => sendAck(sender, sid, badChars)).not.toThrow();
+    expect(pty.resume).not.toHaveBeenCalled();
+    // The session still resumes on a subsequent valid ack.
+    sendAck(sender, sessionId, 100_001);
+    expect(pty.resume).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores an ack for an unknown session", () => {
+    expect(() => sendAck(makeWebContents(), "nope", 10)).not.toThrow();
   });
 });
 

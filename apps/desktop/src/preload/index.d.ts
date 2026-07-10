@@ -42,6 +42,8 @@ export interface Api {
     resize: (sessionId: string, cols: number, rows: number) => Promise<TerminalIoResult>;
     /** Kills a session's PTY. */
     kill: (sessionId: string) => Promise<TerminalIoResult>;
+    /** Flow-control ack: fire-and-forget count of consumed output chars. */
+    ack: (sessionId: string, chars: number) => void;
     /** Subscribes to PTY output; returns the unsubscribe function. */
     onData: (callback: (event: TerminalDataEvent) => void) => () => void;
     /** Subscribes to PTY exit; returns the unsubscribe function. */

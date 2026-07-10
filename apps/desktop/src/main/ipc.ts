@@ -9,13 +9,9 @@ import type {
   RevealResult,
   VolliIpcChannel,
 } from "@volli/shared";
-import { isPathWithinRoots, syncProjectRoots } from "./project-roots";
-
 // The project-roots registry lives in ./project-roots so main-process
-// consumers (this file, pty.ts) share one instance. Re-exported here so the
-// existing IPC test suite can keep importing the pure containment check from
-// its original home.
-export { isWithinRoots } from "./project-roots";
+// consumers (this file, pty.ts) share one instance.
+import { isPathWithinRoots, syncProjectRoots } from "./project-roots";
 
 // Failures travel back as typed result objects, never as rejections —
 // ipcMain.handle rejections serialize into useless "Error invoking remote

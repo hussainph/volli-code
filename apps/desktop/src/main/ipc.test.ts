@@ -31,7 +31,8 @@ vi.mock("electron", () => ({
   BrowserWindow: { fromWebContents },
 }));
 
-import { isWithinRoots, registerIpcHandlers } from "./ipc";
+import { registerIpcHandlers } from "./ipc";
+import { isWithinRoots } from "./project-roots";
 
 /** Fake IPC event; `sender` only matters to the mocked BrowserWindow lookup. */
 const fakeEvent = { sender: {} };

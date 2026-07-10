@@ -23,6 +23,10 @@ interface PtyProcess {
   write(data: string): void;
   resize(cols: number, rows: number): void;
   kill(): void;
+  /** Stops reading the pty fd — real backpressure, unlike handleFlowControl's
+   *  app-level XON/XOFF. The child blocks once the kernel buffer fills. */
+  pause(): void;
+  resume(): void;
 }
 
 interface NodePty {
@@ -39,12 +43,33 @@ interface NodePty {
   ): PtyProcess;
 }
 
+// Flow control (the VS Code ack pattern): the renderer acks every data event
+// it consumes; once the chars in flight exceed the high watermark the pty is
+// paused, and it resumes only after acks drain the count below the low one.
+// Without this, `yes` or `cat bigfile` queues unbounded IPC in the main
+// process faster than the renderer can render.
+const FLOW_CONTROL_HIGH_WATERMARK = 100_000;
+const FLOW_CONTROL_LOW_WATERMARK = 5_000;
+
+// Output batching: raw pty chunks are tiny (often <1 KiB), so a big `cat` is
+// thousands of IPC messages. Chunks coalesce for a frame's worth of time —
+// or until the buffer is large enough that waiting just adds latency.
+const BATCH_WINDOW_MS = 8;
+const BATCH_MAX_CHARS = 256_000;
+
 interface Session {
   pty: PtyProcess;
   /** The window that created the session; where its output events are sent. */
   webContents: WebContents;
   /** The `destroyed` listener we attached, so we can detach it on cleanup. */
   onDestroyed: () => void;
+  /** Output chunks coalescing toward the next flush. */
+  pendingChunks: string[];
+  pendingChars: number;
+  flushTimer: NodeJS.Timeout | null;
+  /** Chars sent to the renderer and not yet acked; drives pause/resume. */
+  unackedChars: number;
+  paused: boolean;
 }
 
 /**
@@ -79,6 +104,12 @@ export class PtyManager {
 
     try {
       const nodePty = await this.loadNodePty();
+      // The window can close during the awaited import above — its `destroyed`
+      // event has already fired, so a once() attached below would never run
+      // and the shell would idle as an orphan until quit. Bail before spawning.
+      if (webContents.isDestroyed()) {
+        return { ok: false, error: "Window was closed before the terminal could start" };
+      }
       const { file, args } = resolveShell(process.env);
       const sessionId = randomUUID();
       const pty = nodePty.spawn(file, args, {
@@ -90,21 +121,37 @@ export class PtyManager {
         // emulator negotiates 256-color regardless of the parent's TERM.
         env: { ...process.env, TERM: "xterm-256color" } as Record<string, string>,
       });
+      // Same race, other side of the spawn: never register against a window
+      // whose `destroyed` event already fired.
+      if (webContents.isDestroyed()) {
+        pty.kill();
+        return { ok: false, error: "Window was closed before the terminal could start" };
+      }
 
       const onDestroyed = (): void => {
         this.kill(sessionId);
       };
       // A window teardown must not leave an orphaned shell behind.
       webContents.once("destroyed", onDestroyed);
-      this.sessions.set(sessionId, { pty, webContents, onDestroyed });
+      this.sessions.set(sessionId, {
+        pty,
+        webContents,
+        onDestroyed,
+        pendingChunks: [],
+        pendingChars: 0,
+        flushTimer: null,
+        unackedChars: 0,
+        paused: false,
+      });
 
       pty.onData((data) => {
-        if (webContents.isDestroyed()) return;
-        const payload: TerminalDataEvent = { sessionId, data };
-        webContents.send("volli:terminal-data" satisfies VolliIpcEvent, payload);
+        this.enqueueData(sessionId, data);
       });
 
       pty.onExit(({ exitCode }) => {
+        // Flush buffered output first so the renderer never sees the exit
+        // event ahead of the shell's final bytes.
+        this.flush(sessionId);
         if (!webContents.isDestroyed()) {
           const payload: TerminalExitEvent = { sessionId, exitCode };
           webContents.send("volli:terminal-exit" satisfies VolliIpcEvent, payload);
@@ -115,6 +162,66 @@ export class PtyManager {
       return { ok: true, sessionId };
     } catch (error) {
       return { ok: false, error: errorMessage(error) };
+    }
+  }
+
+  /** Buffers a pty chunk toward the next coalesced volli:terminal-data send. */
+  private enqueueData(sessionId: string, data: string): void {
+    const session = this.sessions.get(sessionId);
+    if (session === undefined) return;
+    session.pendingChunks.push(data);
+    session.pendingChars += data.length;
+    if (session.pendingChars >= BATCH_MAX_CHARS) {
+      this.flush(sessionId);
+      return;
+    }
+    if (session.flushTimer === null) {
+      session.flushTimer = setTimeout(() => {
+        this.flush(sessionId);
+      }, BATCH_WINDOW_MS);
+    }
+  }
+
+  /**
+   * Sends the session's buffered output as ONE data event and applies the
+   * flow-control accounting to the joined payload. No-ops (dropping the
+   * buffer) once the owning window is destroyed. Note a paused pty stops
+   * producing new onData chunks, but anything already buffered still flushes.
+   */
+  private flush(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (session === undefined) return;
+    if (session.flushTimer !== null) {
+      clearTimeout(session.flushTimer);
+      session.flushTimer = null;
+    }
+    if (session.pendingChunks.length === 0) return;
+    const data = session.pendingChunks.join("");
+    session.pendingChunks = [];
+    session.pendingChars = 0;
+    if (session.webContents.isDestroyed()) return;
+    const payload: TerminalDataEvent = { sessionId, data };
+    session.webContents.send("volli:terminal-data" satisfies VolliIpcEvent, payload);
+    session.unackedChars += data.length;
+    if (!session.paused && session.unackedChars > FLOW_CONTROL_HIGH_WATERMARK) {
+      session.paused = true;
+      session.pty.pause();
+    }
+  }
+
+  /**
+   * Renderer flow-control ack: `chars` of output were consumed. Only honored
+   * from the session's owning webContents — the same window-scoping stance as
+   * the output events themselves.
+   */
+  ack(sender: WebContents, sessionId: string, chars: number): void {
+    const session = this.sessions.get(sessionId);
+    if (session === undefined) return;
+    if (session.webContents !== sender) return;
+    session.unackedChars = Math.max(0, session.unackedChars - chars);
+    if (session.paused && session.unackedChars <= FLOW_CONTROL_LOW_WATERMARK) {
+      session.paused = false;
+      session.pty.resume();
     }
   }
 
@@ -169,10 +276,19 @@ export class PtyManager {
     }
   }
 
-  /** Drops a session from the registry and detaches its window listener. */
+  /**
+   * Drops a session from the registry, detaches its window listener, and
+   * discards any buffered-but-unflushed output along with its flush timer.
+   */
   private forget(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (session === undefined) return;
+    if (session.flushTimer !== null) {
+      clearTimeout(session.flushTimer);
+      session.flushTimer = null;
+    }
+    session.pendingChunks = [];
+    session.pendingChars = 0;
     if (!session.webContents.isDestroyed()) {
       session.webContents.removeListener("destroyed", session.onDestroyed);
     }
@@ -241,6 +357,15 @@ export function registerTerminalIpcHandlers(): PtyManager {
       return manager.kill(sessionId);
     },
   );
+
+  // Fire-and-forget (ipcRenderer.send) — an ack has no result to return, and
+  // round-tripping one invoke per data event would defeat the flow control.
+  ipcMain.on("volli:terminal-ack" satisfies VolliIpcChannel, (event, ...args: unknown[]): void => {
+    const [sessionId, chars] = args;
+    if (typeof sessionId !== "string") return;
+    if (typeof chars !== "number" || !Number.isFinite(chars) || chars <= 0) return;
+    manager.ack(event.sender, sessionId, chars);
+  });
 
   // Kill every PTY on quit so no orphaned shells outlive the app.
   app.on("before-quit", () => {

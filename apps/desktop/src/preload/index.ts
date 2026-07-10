@@ -58,6 +58,10 @@ const api = {
     /** Kills a session's PTY. */
     kill: (sessionId: string): Promise<TerminalIoResult> =>
       ipcRenderer.invoke("volli:terminal-kill" satisfies VolliIpcChannel, sessionId),
+    /** Flow-control ack: fire-and-forget count of consumed output chars. */
+    ack: (sessionId: string, chars: number): void => {
+      ipcRenderer.send("volli:terminal-ack" satisfies VolliIpcChannel, sessionId, chars);
+    },
     /** Subscribes to PTY output; returns the unsubscribe function. */
     onData: (callback: (event: TerminalDataEvent) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, payload: TerminalDataEvent) =>
