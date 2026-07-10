@@ -11,7 +11,8 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vp test run"
+    "test": "vp test run",
+    "test:coverage": "vp test run --coverage"
   },
   "devDependencies": {
     "typescript": "catalog:",

@@ -39,7 +39,10 @@ export function registerIpcHandlers(): void {
         ? await dialog.showOpenDialog(win, options)
         : await dialog.showOpenDialog(options);
       const path = result.filePaths[0];
-      if (result.canceled || path === undefined) {
+      if (result.canceled) {
+        return { canceled: true };
+      }
+      if (path === undefined) {
         return { canceled: true };
       }
       // basename computed here: the renderer never does path math.
