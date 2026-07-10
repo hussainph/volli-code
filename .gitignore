@@ -4,6 +4,7 @@ dist/
 *.log
 .env
 dist-electron/
+coverage/
 .vite-plus/
 .vite-hooks/
 *.tsbuildinfo
