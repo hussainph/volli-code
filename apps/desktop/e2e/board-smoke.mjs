@@ -4,7 +4,10 @@
  * isolated localStorage, then exercises the board UI a user would touch — columns,
  * the collapsed-column rail, search, the priority facet, cross-column and
  * pill drag-and-drop, reload persistence, adding a card, and non-destructive
- * context-menu actions.
+ * context-menu actions. Later checks (13+) cover the board's second-generation
+ * surfaces: the Ordering dropdown, the board/list view toggle (list-view add +
+ * drag parity), the sidebar's Active Sessions link, and the chrome-static UI
+ * zoom (CSS `zoom` below the 40px chrome band, driven by a main-process IPC).
  *
  * Board state (`volli:board`, `volli:projects` in localStorage) is reset and
  * reseeded at startup, so reruns are deterministic — the 11-ticket demo seed
@@ -124,6 +127,59 @@ async function goToBoard(page) {
   const boardNav = page.getByRole("button", { name: "Board", exact: true });
   if (await boardNav.count()) await boardNav.first().click();
   await sleep(500);
+}
+
+/**
+ * The mono id of the FIRST card under a column header (board view) — the header
+ * div is the same `flex items-center gap-2` node `columnCount` keys on, and its
+ * parent is the column container, so we read the first `<article>`'s id span
+ * from there. Lets the ordering checks assert on display order without guessing
+ * pixel positions.
+ */
+async function firstCardIdInColumn(page, label) {
+  return page.evaluate((columnLabel) => {
+    const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2"));
+    const header = headers.find((div) => {
+      const first = div.children[0];
+      return first?.tagName === "SPAN" && first.textContent === columnLabel;
+    });
+    const article = header?.parentElement?.querySelector("article");
+    return article?.querySelector("span.font-mono")?.textContent?.trim() ?? null;
+  }, label);
+}
+
+/** Whether a board-view column (by header label) contains a card with mono id `id`. */
+async function columnHasCard(page, label, id) {
+  return page.evaluate(
+    ({ columnLabel, cardId }) => {
+      const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2"));
+      const header = headers.find((div) => {
+        const first = div.children[0];
+        return first?.tagName === "SPAN" && first.textContent === columnLabel;
+      });
+      const ids = Array.from(
+        header?.parentElement?.querySelectorAll("article span.font-mono") ?? [],
+      );
+      return ids.some((span) => span.textContent?.trim() === cardId);
+    },
+    { columnLabel: label, cardId: id },
+  );
+}
+
+/** The ticket ids listed in the sidebar's "Active Sessions" group, in DOM order. */
+async function sidebarSessionIds(page) {
+  return page.evaluate(() => {
+    const groups = Array.from(document.querySelectorAll('[data-sidebar="group"]'));
+    const group = groups.find((g) =>
+      Array.from(g.querySelectorAll('[data-sidebar="group-label"]')).some(
+        (label) => label.textContent?.trim() === "Active Sessions",
+      ),
+    );
+    if (!group) return null;
+    return Array.from(group.querySelectorAll('[data-sidebar="menu-button"] span.font-mono')).map(
+      (span) => span.textContent?.trim(),
+    );
+  });
 }
 
 // ---- main ------------------------------------------------------------------
@@ -384,6 +440,214 @@ async function main() {
       const ok = moveTo === 1 && priority === 1 && destructive === 0;
       return { ok, detail: `moveTo=${moveTo} priority=${priority} delete=${destructive}` };
     });
+
+    // Board state entering the second-generation surface checks (verified from
+    // the run above): Backlog 3 [VC-3, VC-4, VC-12], Todo 3 [VC-5, VC-6, VC-7],
+    // Doing 3, Needs Review 2, Done 1 — 12 tickets. Todo is untouched by every
+    // drag so far, so its manual order is still the seed order (VC-5, VC-6,
+    // VC-7) and VC-6 ("Harden terminal engine reconnect") is its lone High.
+
+    // The Ordering chip lives in the header's right-side cluster (`ml-auto`);
+    // scoping to it disambiguates from the FilterBar's "Priority" facet button,
+    // which shares the chip's label once Priority ordering is picked.
+    const orderingChip = page.locator("div.ml-auto.shrink-0 button").first();
+
+    // === 13. Ordering: Priority re-sorts a column, Manual restores it ========
+    await attempt(
+      13,
+      'Ordering dropdown: "Priority" floats Todo\'s High card up; "Manual" restores seed order',
+      async () => {
+        const manualFirst = await firstCardIdInColumn(page, "Todo");
+        await orderingChip.click();
+        await sleep(200);
+        await page.getByRole("menuitemradio", { name: "Priority", exact: true }).click();
+        await sleep(300);
+        const priorityFirst = await firstCardIdInColumn(page, "Todo");
+        await orderingChip.click();
+        await sleep(200);
+        await page.getByRole("menuitemradio", { name: "Manual", exact: true }).click();
+        await sleep(300);
+        const restoredFirst = await firstCardIdInColumn(page, "Todo");
+        const ok = manualFirst === "VC-5" && priorityFirst === "VC-6" && restoredFirst === "VC-5";
+        return {
+          ok,
+          detail: `manual=${manualFirst} priority=${priorityFirst} restored=${restoredFirst}`,
+        };
+      },
+    );
+
+    // === 14. View toggle: List view renders status sections + id rows ========
+    await attempt(
+      14,
+      "List view: section headers carry correct counts and tickets render as rows",
+      async () => {
+        await page.getByRole("button", { name: "List view", exact: true }).click();
+        await sleep(400);
+        const counts = {
+          Backlog: await columnCount(page, "Backlog"),
+          Todo: await columnCount(page, "Todo"),
+          Doing: await columnCount(page, "Doing"),
+          "Needs Review": await columnCount(page, "Needs Review"),
+          Done: await columnCount(page, "Done"),
+        };
+        // Rows are divs, not <article> — the list view mounts none.
+        const articleCount = await page.locator("article").count();
+        const rowCount = await page.locator("[data-ticket-row]").count();
+        const vc5Row = await page.locator('[data-ticket-id="VC-5"]').count();
+        const ok =
+          counts.Backlog === 3 &&
+          counts.Todo === 3 &&
+          counts.Doing === 3 &&
+          counts["Needs Review"] === 2 &&
+          counts.Done === 1 &&
+          articleCount === 0 &&
+          rowCount === 12 &&
+          vc5Row === 1;
+        return {
+          ok,
+          detail: `counts=${JSON.stringify(counts)} articles=${articleCount} rows=${rowCount} vc5Row=${vc5Row}`,
+        };
+      },
+    );
+
+    // === 15. List-view add: a section composer creates a row ==================
+    await attempt(
+      15,
+      'List view "+ New": Enter submits VC-13 as a row, Escape closes the composer',
+      async () => {
+        const before = await page.locator("[data-ticket-row]").count();
+        await page.getByRole("button", { name: "New", exact: true }).first().click();
+        await sleep(200);
+        await page.getByPlaceholder("Ticket title…").fill("List view smoke card");
+        await page.keyboard.press("Enter");
+        await sleep(400);
+        await page.keyboard.press("Escape");
+        await sleep(300);
+        const after = await page.locator("[data-ticket-row]").count();
+        const vc13Row = await page.locator('[data-ticket-id="VC-13"]').count();
+        const composerOpen = await page.getByPlaceholder("Ticket title…").count();
+        const ok = after === before + 1 && vc13Row === 1 && composerOpen === 0;
+        return {
+          ok,
+          detail: `before=${before} after=${after} vc13Row=${vc13Row} composer=${composerOpen}`,
+        };
+      },
+    );
+
+    // === 16. List-view drag: a row crosses sections and the move persists =====
+    await attempt(
+      16,
+      "List view drag: dragging VC-5 from Todo into Backlog moves it and survives reload",
+      async () => {
+        const beforeTodo = await columnCount(page, "Todo");
+        const beforeBacklog = await columnCount(page, "Backlog");
+        const sourceBox = await page.locator('[data-ticket-id="VC-5"]').boundingBox();
+        // Target the last Backlog row (VC-13, just added) — nearest to VC-5's
+        // origin and clear of Backlog's sticky header.
+        const targetBox = await page.locator('[data-ticket-id="VC-13"]').boundingBox();
+        if (!sourceBox || !targetBox) throw new Error("list rows not found");
+        await drag(page, sourceBox, {
+          x: targetBox.x + targetBox.width / 2,
+          y: targetBox.y + targetBox.height / 2,
+        });
+        const afterTodo = await columnCount(page, "Todo");
+        const afterBacklog = await columnCount(page, "Backlog");
+        // Persist: reload drops back to the default board view (view/sort are
+        // session-only); the ticket move lives in the persisted board store.
+        await page.reload();
+        await page.waitForLoadState("domcontentloaded");
+        await sleep(1500);
+        await goToBoard(page);
+        const persistedTodo = await columnCount(page, "Todo");
+        const persistedBacklog = await columnCount(page, "Backlog");
+        const vc5InBacklog = await columnHasCard(page, "Backlog", "VC-5");
+        const ok =
+          afterTodo === beforeTodo - 1 &&
+          afterBacklog === beforeBacklog + 1 &&
+          persistedTodo === beforeTodo - 1 &&
+          persistedBacklog === beforeBacklog + 1 &&
+          vc5InBacklog;
+        return {
+          ok,
+          detail: `todo ${beforeTodo}->${afterTodo} (persist ${persistedTodo}) backlog ${beforeBacklog}->${afterBacklog} (persist ${persistedBacklog}) vc5InBacklog=${vc5InBacklog}`,
+        };
+      },
+    );
+
+    // === 17. Sidebar Active Sessions link jumps to the board with selection ===
+    await attempt(
+      17,
+      "Sidebar Active Sessions lists doing+needs_review ids; clicking one selects its card",
+      async () => {
+        const ids = await sidebarSessionIds(page);
+        const expectedIds = ["VC-1", "VC-8", "VC-9", "VC-10", "VC-11"];
+        const idsMatch =
+          Array.isArray(ids) &&
+          ids.length === expectedIds.length &&
+          expectedIds.every((id) => ids.includes(id));
+        // Click VC-1's session row (scoped to the sidebar menu button so it can't
+        // hit the board card that shares the id).
+        await page
+          .locator('[data-sidebar="menu-button"]')
+          .filter({ has: page.locator("span.font-mono", { hasText: /^VC-1$/ }) })
+          .first()
+          .click();
+        await sleep(400);
+        const card = cardById(page, "VC-1");
+        const onBoard = (await card.count()) === 1;
+        const cardClass = onBoard ? ((await card.getAttribute("class")) ?? "") : "";
+        const selected = cardClass.includes("border-primary/70");
+        const ok = idsMatch && onBoard && selected;
+        return { ok, detail: `ids=${JSON.stringify(ids)} onBoard=${onBoard} selected=${selected}` };
+      },
+    );
+
+    // === 18. Chrome-static UI zoom: content scales, the chrome band doesn't ===
+    await attempt(
+      18,
+      "UI zoom command scales content (~1.1x) while the 40px chrome band stays put; reset restores",
+      async () => {
+        const band = page.locator(".app-region-drag").first();
+        const content = cardById(page, "VC-8");
+        const bandBefore = await band.boundingBox();
+        const contentBefore = await content.boundingBox();
+        if (!bandBefore || !contentBefore) throw new Error("band or content card not found");
+
+        await app.evaluate(({ BrowserWindow }) =>
+          BrowserWindow.getAllWindows()[0].webContents.send("volli:ui-zoom-command", "in"),
+        );
+        await sleep(400);
+        const bandZoomed = await band.boundingBox();
+        const contentZoomed = await content.boundingBox();
+        const persistedScale = await page.evaluate(() => {
+          const raw = localStorage.getItem("volli:ui");
+          return raw ? JSON.parse(raw).state?.uiScale : null;
+        });
+
+        await app.evaluate(({ BrowserWindow }) =>
+          BrowserWindow.getAllWindows()[0].webContents.send("volli:ui-zoom-command", "reset"),
+        );
+        await sleep(400);
+        const bandReset = await band.boundingBox();
+        const contentReset = await content.boundingBox();
+        if (!bandZoomed || !contentZoomed || !bandReset || !contentReset) {
+          throw new Error("missing box after zoom");
+        }
+
+        const bandStable =
+          Math.abs(bandBefore.height - 40) < 1 &&
+          Math.abs(bandZoomed.height - 40) < 1 &&
+          Math.abs(bandReset.height - 40) < 1;
+        const growth = contentZoomed.height / contentBefore.height;
+        const grew = growth > 1.07 && growth < 1.13;
+        const restored = Math.abs(contentReset.height - contentBefore.height) < 1;
+        const ok = bandStable && grew && restored && persistedScale === 1.1;
+        return {
+          ok,
+          detail: `band=${bandBefore.height.toFixed(1)}/${bandZoomed.height.toFixed(1)}/${bandReset.height.toFixed(1)} growth=${growth.toFixed(3)} persisted=${persistedScale} restored=${restored}`,
+        };
+      },
+    );
   } finally {
     await app.close();
   }
