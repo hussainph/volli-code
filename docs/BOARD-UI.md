@@ -14,8 +14,8 @@ only, animation frequency decides animation existence.
 ## Scope of the scaffold
 
 Ships: five fixed columns, Linear-style cards, drag & drop, filter bar,
-empty-column auto-hide, selection, non-destructive card context menu, inline
-add-card.
+column ordering, a Linear-style list view, empty-column auto-hide, selection,
+non-destructive card context menu, inline add-card.
 Doesn't ship (lands with later layers): SQLite persistence, agent-state
 badges (Needs Review reason, live-agent pulse, behind-base), ticket detail
 view, keyboard navigation between cards, WIP limits.
@@ -92,6 +92,53 @@ invisible filter after relaunch is worse than re-picking one). The Label
 chip hides itself when the project has no tags. "Clear" appears only while
 `isFilterActive`.
 
+## Ordering & list view
+
+Two header controls on the right (`ml-auto`, so they don't fight the wrapping
+filter bar): an **Ordering** dropdown and a two-segment **board / list** view
+toggle. Both read/write the per-workspace, **session-only** store
+(`stores/workspace.ts` — whether view/sort should survive relaunch is a future
+call; today they reset like nav and filters).
+
+Sorts (`@volli/shared` `ticket-sort.ts`, pure + tested; `sortTickets` orders
+**one column**): **Manual · Priority · Created · Updated · Title**. Manual is
+the drag-reorder mode — it reads the `order` field and *ignores* direction;
+picking it restores the hand-arranged sequence (the other keys never touch
+`order`). Each non-manual key seeds a natural direction on first pick (highest
+priority, newest, A→Z) then flips via the Asc/Desc toggle (disabled for
+manual). Every tie breaks by `ticketNumber` ascending for a total, deterministic
+order.
+
+Under a non-manual sort the board still drags: a drop writes the manual `order`
+as always, but the displayed position is sort-driven, so the card snaps to its
+sorted slot (Linear behaves the same). Manual ordering is the true
+drag-reorder mode.
+
+The **list view** is a second projection of the same data: same filtered set,
+same sort, same selection, same context menu, and **full drag & drop parity**.
+One sticky section per non-empty status (same auto-hide philosophy as the
+board, count-based), rows ordered by `sortTickets`. Single vertical scroller;
+`h-9` rows with priority glyph, mono id, truncated title, trailing tags. Each
+section ends in the same inline "+ New" composer contract as a board column
+(Enter submits and keeps composing, Escape closes, non-empty blur submits), so
+switching views never costs ticket creation.
+
+Drag & drop is driven by the **same** `DndContext` as the board — the view
+branch lives inside it, so the same handlers, preview/commit machinery, and
+ticket id space serve both. List rows `useSortable(ticket.id)` (identical ids
+to cards, so `resolveDrop` is unchanged); each section's row container is a
+`column:<status>` droppable with a `verticalListSortingStrategy`
+`SortableContext`, mirroring `board-column.tsx`. The dragged row dims
+(`opacity-40`); the `DragOverlay` renders a row-shaped lifted surface (bg +
+shadow) sized to the row. The board's frozen-topology invariant carries over:
+sections empty at drag start stay rendered as **slim drop-target header rows**
+(label + 0 count, brightened while dragging, ring/accent when hovered — the
+collapsed-pill affordance language) so a row can land in any status; on drop
+they become real sections via the normal data flow. Under a non-manual sort,
+same as the board: the drop commits the move, the displayed position is
+sort-driven. Selection-on-click coexists with drag via the shared
+`PointerSensor` distance-4 activation.
+
 ## Drag & drop
 
 - **Id scheme**: card draggable id = ticket id (`"VC-12"`); column droppable
@@ -136,10 +183,16 @@ layout.
 
 `stores/board.ts` — per-project `ticketsByProject` persisted to
 localStorage key `volli:board` (v1, partialized to scaffold metadata + tickets);
-`filterByProject` session-only. All mutations delegate to `@volli/shared`
-pure ops (`moveTicket`, `setTicketPriority`, `createTicket`,
-`nextTicketNumber`) and use their same-reference returns as no-op guards.
-`removeProject` calls `board.forget(id)`.
+`filterByProject` and `selectedByProject` (card selection) session-only.
+All mutations delegate to `@volli/shared` pure ops (`moveTicket`,
+`setTicketPriority`, `createTicket`, `nextTicketNumber`) and use their
+same-reference returns as no-op guards. `removeProject` calls
+`board.forget(id)`.
+
+The sidebar's Active Sessions group reads this same store — its rows are the
+project's tickets in `doing` / `needs_review` — and clicking one writes the
+shared selection (`selectTicket`) plus navigates to the board, so the sidebar
+and the board can never disagree about what's active or selected.
 
 SQLite swap path: replace the store's internals (seed → SELECT, mutations →
 UPDATEs via IPC) behind the same action surface; the shared ops and every
@@ -161,3 +214,4 @@ discard flow land (Concept decision #16).
 - Agent-state card badges (reason badge, live pulse, behind-base) — land
   with the automation layer, top row right slot is reserved for them.
 - Ticket detail view; keyboard card navigation; WIP limits.
+- Persisting board view + sort across relaunch (today session-only).

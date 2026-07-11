@@ -10,27 +10,42 @@
  *
  * Deliberately session-only (no `persist`): nav resetting to Board on relaunch
  * is a settled decision (see ui.ts's history) and now applies per workspace.
+ * Board view mode and sort ride here too and are therefore also session-only —
+ * whether the chosen view/ordering should survive relaunch is a future call
+ * (it'd move here or into SQLite alongside the ticket layer, not localStorage).
  */
+import { DEFAULT_TICKET_SORT, type TicketSort } from "@volli/shared";
 import { create } from "zustand";
 
 /** The per-workspace nav pages (NAV_ITEMS). Settings is app-wide chrome — see stores/ui.ts. */
 export type NavKey = "board" | "sessions" | "files";
 
+/** Kanban columns vs. Linear-style grouped list — same data, filter, selection. */
+export type BoardView = "board" | "list";
+
 export interface WorkspaceUiState {
   nav: NavKey;
   /** Absolute paths of expanded file-tree directories (collapsed = absent). */
   expandedDirs: readonly string[];
+  /** Board vs. list rendering of the ticket set. */
+  boardView: BoardView;
+  /** Column ordering shared by both views; "manual" is the drag-reorder mode. */
+  boardSort: TicketSort;
 }
 
 export const DEFAULT_WORKSPACE_UI: WorkspaceUiState = {
   nav: "board",
   expandedDirs: [],
+  boardView: "board",
+  boardSort: DEFAULT_TICKET_SORT,
 };
 
 interface WorkspaceState {
   byProject: Record<string, WorkspaceUiState>;
   setNav(projectId: string, nav: NavKey): void;
   setDirExpanded(projectId: string, dirPath: string, expanded: boolean): void;
+  setBoardView(projectId: string, view: BoardView): void;
+  setBoardSort(projectId: string, sort: TicketSort): void;
   /** Drop a removed project's record so re-adding it starts fresh. */
   forget(projectId: string): void;
 }
@@ -64,6 +79,14 @@ export function createWorkspaceStore() {
             : current.expandedDirs.filter((path) => path !== dirPath),
         });
       });
+    },
+
+    setBoardView(projectId, view) {
+      set((state) => patchWorkspace(state, projectId, { boardView: view }));
+    },
+
+    setBoardSort(projectId, sort) {
+      set((state) => patchWorkspace(state, projectId, { boardSort: sort }));
     },
 
     forget(projectId) {

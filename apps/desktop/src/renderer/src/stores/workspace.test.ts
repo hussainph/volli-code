@@ -1,3 +1,4 @@
+import { DEFAULT_TICKET_SORT } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 import { createWorkspaceStore, DEFAULT_WORKSPACE_UI } from "./workspace";
 
@@ -62,17 +63,66 @@ describe("setDirExpanded", () => {
   });
 });
 
+describe("setBoardView", () => {
+  it("tracks the board/list view independently per project", () => {
+    const store = createWorkspaceStore();
+    store.getState().setBoardView("project-a", "list");
+    store.getState().setBoardView("project-b", "board");
+
+    expect(store.getState().byProject["project-a"]?.boardView).toBe("list");
+    expect(store.getState().byProject["project-b"]?.boardView).toBe("board");
+  });
+
+  it("leaves nav and sort untouched", () => {
+    const store = createWorkspaceStore();
+    store.getState().setNav("project-a", "files");
+    store.getState().setBoardView("project-a", "list");
+
+    expect(store.getState().byProject["project-a"]?.nav).toBe("files");
+    expect(store.getState().byProject["project-a"]?.boardSort).toBe(DEFAULT_TICKET_SORT);
+  });
+});
+
+describe("setBoardSort", () => {
+  it("tracks the sort independently per project", () => {
+    const store = createWorkspaceStore();
+    store.getState().setBoardSort("project-a", { key: "priority", direction: "desc" });
+    store.getState().setBoardSort("project-b", { key: "title", direction: "asc" });
+
+    expect(store.getState().byProject["project-a"]?.boardSort).toEqual({
+      key: "priority",
+      direction: "desc",
+    });
+    expect(store.getState().byProject["project-b"]?.boardSort).toEqual({
+      key: "title",
+      direction: "asc",
+    });
+  });
+
+  it("leaves the view untouched", () => {
+    const store = createWorkspaceStore();
+    store.getState().setBoardView("project-a", "list");
+    store.getState().setBoardSort("project-a", { key: "updated", direction: "desc" });
+
+    expect(store.getState().byProject["project-a"]?.boardView).toBe("list");
+  });
+});
+
 describe("forget", () => {
   it("drops the project's record so a re-add starts at the defaults", () => {
     const store = createWorkspaceStore();
     store.getState().setNav("project-a", "files");
     store.getState().setDirExpanded("project-a", "/a/src", true);
+    store.getState().setBoardView("project-a", "list");
+    store.getState().setBoardSort("project-a", { key: "priority", direction: "desc" });
     store.getState().forget("project-a");
 
     expect(store.getState().byProject["project-a"]).toBeUndefined();
     expect(store.getState().byProject["project-a"] ?? DEFAULT_WORKSPACE_UI).toEqual({
       nav: "board",
       expandedDirs: [],
+      boardView: "board",
+      boardSort: DEFAULT_TICKET_SORT,
     });
   });
 

@@ -256,16 +256,77 @@ describe("clearFilter", () => {
   });
 });
 
+describe("selectTicket", () => {
+  it("records the selected ticket id for the project", () => {
+    const store = freshStore();
+
+    store.getState().selectTicket("p1", "TST-3");
+
+    expect(store.getState().selectedByProject.p1).toBe("TST-3");
+  });
+
+  it("clears via null by dropping the project's record entirely", () => {
+    const store = freshStore();
+    store.getState().selectTicket("p1", "TST-3");
+
+    store.getState().selectTicket("p1", null);
+
+    expect(store.getState().selectedByProject.p1).toBeUndefined();
+    expect("p1" in store.getState().selectedByProject).toBe(false);
+  });
+
+  it("is a no-op (unchanged identity) when clearing with no selection", () => {
+    const store = freshStore();
+    const before = store.getState();
+
+    store.getState().selectTicket("p1", null);
+
+    expect(store.getState()).toBe(before);
+  });
+
+  it("is a no-op (unchanged identity) when re-selecting the same ticket", () => {
+    const store = freshStore();
+    store.getState().selectTicket("p1", "TST-3");
+    const before = store.getState();
+
+    store.getState().selectTicket("p1", "TST-3");
+
+    expect(store.getState()).toBe(before);
+  });
+
+  it("keeps selections independent across projects", () => {
+    const store = freshStore();
+
+    store.getState().selectTicket("p1", "TST-3");
+    store.getState().selectTicket("p2", "OTH-1");
+    store.getState().selectTicket("p1", null);
+
+    expect(store.getState().selectedByProject.p1).toBeUndefined();
+    expect(store.getState().selectedByProject.p2).toBe("OTH-1");
+  });
+});
+
 describe("forget", () => {
-  it("removes both the ticket list and the filter record", () => {
+  it("removes the ticket list, the filter record, and the selection record", () => {
     const store = freshStore();
     store.getState().ensureSeeded("p1", "TST");
     store.getState().togglePriority("p1", "high");
+    store.getState().selectTicket("p1", "TST-1");
 
     store.getState().forget("p1");
 
     expect(store.getState().ticketsByProject.p1).toBeUndefined();
     expect(store.getState().filterByProject.p1).toBeUndefined();
+    expect(store.getState().selectedByProject.p1).toBeUndefined();
+  });
+
+  it("removes only the selection record when there is nothing else", () => {
+    const store = freshStore();
+    store.getState().selectTicket("p1", "TST-1");
+
+    store.getState().forget("p1");
+
+    expect(store.getState().selectedByProject.p1).toBeUndefined();
   });
 
   it("removes only the ticket list when there is no filter record", () => {
@@ -286,7 +347,7 @@ describe("forget", () => {
     expect(store.getState().filterByProject.p1).toBeUndefined();
   });
 
-  it("is a no-op for a project with neither tickets nor a filter", () => {
+  it("is a no-op for a project with no tickets, filter, or selection", () => {
     const store = freshStore();
     const before = store.getState();
 
@@ -302,6 +363,7 @@ describe("persistence", () => {
     const store = createBoardStore(storage);
     store.getState().ensureSeeded("p1", "TST");
     store.getState().togglePriority("p1", "high");
+    store.getState().selectTicket("p1", "TST-1");
 
     const raw = storage.getItem("volli:board");
     expect(raw).not.toBeNull();
@@ -310,18 +372,21 @@ describe("persistence", () => {
     expect(Object.keys(parsed.state)).toEqual(["persistenceKind", "ticketsByProject"]);
     expect(parsed.state.persistenceKind).toBe("demo-scaffold");
     expect(parsed.state).not.toHaveProperty("filterByProject");
+    expect(parsed.state).not.toHaveProperty("selectedByProject");
   });
 
-  it("rehydrates the same tickets in a new store over the same storage, filters reset", () => {
+  it("rehydrates the same tickets in a new store over the same storage, filters and selection reset", () => {
     const storage = createMemoryStorage();
     const store = createBoardStore(storage);
     store.getState().ensureSeeded("p1", "TST");
     store.getState().togglePriority("p1", "high");
+    store.getState().selectTicket("p1", "TST-1");
 
     const rehydrated = createBoardStore(storage);
 
     expect(rehydrated.getState().ticketsByProject).toEqual(store.getState().ticketsByProject);
     expect(rehydrated.getState().persistenceKind).toBe("demo-scaffold");
     expect(rehydrated.getState().filterByProject).toEqual({});
+    expect(rehydrated.getState().selectedByProject).toEqual({});
   });
 });

@@ -1,9 +1,12 @@
 /**
- * Per-project board: the ticket list (persisted) and its search/filter state.
- * Filters are session-only — like the rest of the app's transient UI, they
- * reset on relaunch instead of following the ticket data. `ensureSeeded`
- * plants the placeholder demo board (lib/demo-tickets.ts) the first time a
- * project's board is opened, until the SQLite ticket layer lands.
+ * Per-project board: the ticket list (persisted) and its search/filter and
+ * card-selection state. Filters AND selection are session-only (excluded from
+ * partialize) — like the rest of the app's transient UI, they reset on
+ * relaunch instead of following the ticket data. Selection lives here rather
+ * than in the board component so other surfaces (the sidebar's Active
+ * Sessions) can select a card too. `ensureSeeded` plants the placeholder demo
+ * board (lib/demo-tickets.ts) the first time a project's board is opened,
+ * until the SQLite ticket layer lands.
  */
 import {
   createTicket,
@@ -27,6 +30,8 @@ interface BoardState {
   ticketsByProject: Record<string, Ticket[]>;
   /** Session-only — never persisted; see module doc. */
   filterByProject: Record<string, TicketFilter>;
+  /** The selected card per project. Session-only — never persisted; see module doc. */
+  selectedByProject: Record<string, string | null>;
   ensureSeeded(projectId: string, ticketPrefix: string): void;
   moveTicket(projectId: string, ticketId: string, toStatus: TicketStatus, toIndex: number): void;
   addTicket(projectId: string, ticketPrefix: string, status: TicketStatus, title: string): void;
@@ -36,6 +41,7 @@ interface BoardState {
   toggleTag(projectId: string, tag: string): void;
   toggleHarness(projectId: string, harnessId: string): void;
   clearFilter(projectId: string): void;
+  selectTicket(projectId: string, ticketId: string | null): void;
   forget(projectId: string): void;
 }
 
@@ -54,6 +60,7 @@ export function createBoardStore(storage?: StateStorage) {
         persistenceKind: "demo-scaffold",
         ticketsByProject: {},
         filterByProject: {},
+        selectedByProject: {},
 
         ensureSeeded(projectId, ticketPrefix) {
           const { ticketsByProject } = get();
@@ -152,17 +159,40 @@ export function createBoardStore(storage?: StateStorage) {
           set({ filterByProject: next });
         },
 
+        // Clearing (ticketId === null) drops the project's record rather than
+        // storing an explicit null: a missing record already reads as "nothing
+        // selected" (`?? null` at use sites) — same shape as clearFilter above.
+        selectTicket(projectId, ticketId) {
+          const { selectedByProject } = get();
+          if (ticketId === null) {
+            if (!(projectId in selectedByProject)) return;
+            const next = { ...selectedByProject };
+            delete next[projectId];
+            set({ selectedByProject: next });
+            return;
+          }
+          if (selectedByProject[projectId] === ticketId) return;
+          set({ selectedByProject: { ...selectedByProject, [projectId]: ticketId } });
+        },
+
         forget(projectId) {
-          const { ticketsByProject, filterByProject } = get();
+          const { ticketsByProject, filterByProject, selectedByProject } = get();
           const hasTickets = projectId in ticketsByProject;
           const hasFilter = projectId in filterByProject;
-          if (!hasTickets && !hasFilter) return;
+          const hasSelection = projectId in selectedByProject;
+          if (!hasTickets && !hasFilter && !hasSelection) return;
 
           const nextTickets = { ...ticketsByProject };
           delete nextTickets[projectId];
           const nextFilter = { ...filterByProject };
           delete nextFilter[projectId];
-          set({ ticketsByProject: nextTickets, filterByProject: nextFilter });
+          const nextSelected = { ...selectedByProject };
+          delete nextSelected[projectId];
+          set({
+            ticketsByProject: nextTickets,
+            filterByProject: nextFilter,
+            selectedByProject: nextSelected,
+          });
         },
       }),
       {

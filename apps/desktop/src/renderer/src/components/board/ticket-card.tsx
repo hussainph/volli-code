@@ -1,28 +1,12 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import {
-  TICKET_PRIORITIES,
-  TICKET_PRIORITY_LABELS,
-  TICKET_STATUS_LABELS,
-  TICKET_STATUSES,
-  type Ticket,
-} from "@volli/shared";
+import { type Ticket } from "@volli/shared";
 
 import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
 import { TagChip } from "@renderer/components/board/tag-chip";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSub,
-  ContextMenuSubContent,
-  ContextMenuSubTrigger,
-  ContextMenuTrigger,
-} from "@renderer/components/ui/context-menu";
+import { TicketContextMenu } from "@renderer/components/board/ticket-context-menu";
 import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { cn } from "@renderer/lib/utils";
-import { useBoardStore } from "@renderer/stores/board";
 
 /** Pure presentational card body — also rendered inside the drag overlay (always unselected there). */
 export function TicketCardContent({
@@ -79,58 +63,17 @@ export function TicketCard({ ticket, projectId, selected, onSelect }: TicketCard
   });
 
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <div
-          ref={setNodeRef}
-          style={{ transform: CSS.Transform.toString(transform), transition }}
-          className={cn(isDragging && "opacity-40")}
-          onClick={onSelect}
-          {...attributes}
-          {...listeners}
-        >
-          <TicketCardContent ticket={ticket} selected={selected} />
-        </div>
-      </ContextMenuTrigger>
-      <ContextMenuContent>
-        <ContextMenuSub>
-          <ContextMenuSubTrigger>Move to</ContextMenuSubTrigger>
-          <ContextMenuSubContent>
-            {TICKET_STATUSES.filter((status) => status !== ticket.status).map((status) => (
-              <ContextMenuItem
-                key={status}
-                onSelect={() =>
-                  useBoardStore
-                    .getState()
-                    .moveTicket(projectId, ticket.id, status, Number.MAX_SAFE_INTEGER)
-                }
-              >
-                {TICKET_STATUS_LABELS[status]}
-              </ContextMenuItem>
-            ))}
-          </ContextMenuSubContent>
-        </ContextMenuSub>
-        <ContextMenuSub>
-          <ContextMenuSubTrigger>Priority</ContextMenuSubTrigger>
-          <ContextMenuSubContent>
-            {TICKET_PRIORITIES.map((priority) => (
-              <ContextMenuItem
-                key={priority}
-                onSelect={() =>
-                  useBoardStore.getState().setTicketPriority(projectId, ticket.id, priority)
-                }
-              >
-                <span className="flex size-3.5 items-center justify-center">
-                  {priority === ticket.priority ? (
-                    <CheckIcon weight="bold" className="size-3.5" />
-                  ) : null}
-                </span>
-                {TICKET_PRIORITY_LABELS[priority]}
-              </ContextMenuItem>
-            ))}
-          </ContextMenuSubContent>
-        </ContextMenuSub>
-      </ContextMenuContent>
-    </ContextMenu>
+    <TicketContextMenu ticket={ticket} projectId={projectId}>
+      <div
+        ref={setNodeRef}
+        style={{ transform: CSS.Transform.toString(transform), transition }}
+        className={cn(isDragging && "opacity-40")}
+        onClick={onSelect}
+        {...attributes}
+        {...listeners}
+      >
+        <TicketCardContent ticket={ticket} selected={selected} />
+      </div>
+    </TicketContextMenu>
   );
 }
