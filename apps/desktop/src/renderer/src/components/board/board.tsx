@@ -16,6 +16,8 @@ import {
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import {
   emptyStatuses,
+  EMPTY_TICKET_FILTER,
+  filterTickets,
   groupTicketsByStatus,
   moveTicket,
   TICKET_STATUSES,
@@ -54,6 +56,7 @@ const boardCollision: CollisionDetection = (args) => {
 /** The kanban board: columns scroll vertically, the canvas scrolls horizontally. */
 export function Board({ projectId }: { projectId: string; ticketPrefix: string }) {
   const storeTickets = useBoardStore((state) => state.ticketsByProject[projectId]) ?? [];
+  const filter = useBoardStore((state) => state.filterByProject[projectId]) ?? EMPTY_TICKET_FILTER;
   const [drag, setDrag] = React.useState<DragState | null>(null);
 
   // distance: 4 keeps plain clicks (selection, context menu) working — the
@@ -65,8 +68,9 @@ export function Board({ projectId }: { projectId: string; ticketPrefix: string }
   );
 
   const tickets = drag?.preview ?? storeTickets;
-  // No filter bar yet — every ticket is visible until that commit lands.
-  const visible = tickets;
+  // `tickets` may be the drag preview snapshot — filtering it is correct and
+  // expected here; `filterTickets` returns the same reference when inactive.
+  const visible = filterTickets(tickets, filter);
 
   const groups = groupTicketsByStatus(visible);
   const hidden = drag?.hiddenAtStart ?? emptyStatuses(visible);
@@ -115,7 +119,12 @@ export function Board({ projectId }: { projectId: string; ticketPrefix: string }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <BoardHeader ticketCount={visible.length} />
+      <BoardHeader
+        projectId={projectId}
+        ticketCount={visible.length}
+        tickets={storeTickets}
+        filter={filter}
+      />
       <DndContext
         sensors={sensors}
         collisionDetection={boardCollision}
