@@ -1,0 +1,331 @@
+/**
+ * End-to-end acceptance smoke for Volli's kanban board. Drives the REAL
+ * packaged renderer through Playwright: seeds one project's demo tickets via
+ * localStorage, then exercises the board UI a user would touch — columns,
+ * the collapsed-column rail, search, the priority facet, cross-column and
+ * pill drag-and-drop, reload persistence, adding a card, and deleting one via
+ * its context menu.
+ *
+ * Board state (`volli:board`, `volli:projects` in localStorage) is reset and
+ * reseeded at startup, so reruns are deterministic — the 11-ticket demo seed
+ * (`apps/desktop/src/renderer/src/lib/demo-tickets.ts`) always starts in the
+ * same shape: Backlog 4, Todo 3, Doing 2, Needs Review 2, Done 0 (collapsed).
+ *
+ * This is a MANUALLY-RUN smoke (needs a display + the built app); it is NOT
+ * wired into `vp test`.
+ *
+ *   Run:
+ *     pnpm run build                        # produce dist/ + dist-electron/
+ *     node apps/desktop/e2e/board-smoke.mjs
+ *
+ *   Requires: playwright-core (devDependency of @volli/desktop).
+ *   Exit code is non-zero if any numbered check fails.
+ */
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { _electron } from "playwright-core";
+
+const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+const APP_DIR = join(REPO, "apps", "desktop");
+const ELECTRON = join(
+  APP_DIR,
+  "node_modules",
+  "electron",
+  "dist",
+  "Electron.app",
+  "Contents",
+  "MacOS",
+  "Electron",
+);
+
+// ---- tiny test harness -----------------------------------------------------
+
+const results = [];
+/** Record a numbered PASS/FAIL line; never throws so later steps still run. */
+function check(n, label, ok, detail = "") {
+  const status = ok ? "PASS" : "FAIL";
+  results.push({ n, ok });
+  console.log(`  [${status}] ${n}. ${label}${detail ? ` — ${detail}` : ""}`);
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Run one check's body; a thrown error fails that check without aborting the run. */
+async function attempt(n, label, fn) {
+  try {
+    const { ok, detail } = await fn();
+    check(n, label, ok, detail);
+  } catch (error) {
+    check(n, label, false, `threw: ${error?.message ?? error}`);
+  }
+}
+
+// ---- board DOM helpers ------------------------------------------------------
+
+/** A locator for the single `<article>` whose mono id span equals `id` exactly. */
+function cardById(page, id) {
+  const exact = new RegExp(`^${id}$`);
+  return page
+    .locator("article")
+    .filter({ has: page.locator("span.font-mono", { hasText: exact }) });
+}
+
+/**
+ * The number next to a column's header label (e.g. Backlog's "4"), read
+ * straight from the DOM. Returns null while `label` is a collapsed rail pill
+ * instead of a real column — a column body and its pill are never both
+ * mounted (see board-dnd.ts's id-scheme comment), so this only matches the
+ * expanded-column header row.
+ */
+async function columnCount(page, label) {
+  return page.evaluate((columnLabel) => {
+    const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2"));
+    const header = headers.find((div) => {
+      const first = div.children[0];
+      return first?.tagName === "SPAN" && first.textContent === columnLabel;
+    });
+    const countSpan = header?.children[1];
+    if (!countSpan) return null;
+    const n = Number(countSpan.textContent.trim());
+    return Number.isNaN(n) ? null : n;
+  }, label);
+}
+
+/** Drag from `sourceBox`'s centre to `target`, with enough travel for dnd-kit's PointerSensor (distance 4) to activate and dragOver to fire on the target. */
+async function drag(page, sourceBox, target) {
+  await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(sourceBox.x + sourceBox.width / 2 + 30, sourceBox.y + 40, { steps: 8 });
+  await page.mouse.move(target.x, target.y, { steps: 20 });
+  await sleep(250);
+  await page.mouse.up();
+  await sleep(500);
+}
+
+/** Click the Board nav item if present (nav is remembered per-workspace and defaults to Board, but re-assert after every reload to be robust). */
+async function goToBoard(page) {
+  const boardNav = page.getByRole("button", { name: "Board", exact: true });
+  if (await boardNav.count()) await boardNav.first().click();
+  await sleep(500);
+}
+
+// ---- main ------------------------------------------------------------------
+
+async function main() {
+  const app = await _electron.launch({ executablePath: ELECTRON, args: [APP_DIR] });
+
+  try {
+    const page = await app.firstWindow();
+    await page.waitForLoadState("domcontentloaded");
+
+    // Seed one project + a fresh (unseeded) board, then reload so the demo
+    // tickets regenerate from a clean boot — deterministic on every rerun.
+    await page.evaluate((repo) => {
+      localStorage.setItem(
+        "volli:projects",
+        JSON.stringify({
+          state: {
+            projects: [
+              {
+                id: "board-smoke-project",
+                name: "Volli Code",
+                path: repo,
+                ticketPrefix: "VC",
+                createdAt: Date.now(),
+              },
+            ],
+            selectedProjectId: "board-smoke-project",
+          },
+          version: 1,
+        }),
+      );
+      localStorage.removeItem("volli:board");
+    }, REPO);
+    await page.reload();
+    await page.waitForLoadState("domcontentloaded");
+    await sleep(1500);
+    await goToBoard(page);
+
+    // === 1. All 5 status labels present (expanded columns or collapsed rail) ===
+    await attempt(1, "Board renders: all 5 status labels present", async () => {
+      const labels = ["Backlog", "Todo", "Doing", "Needs Review", "Done"];
+      const counts = {};
+      for (const label of labels) {
+        counts[label] = await page.getByText(label, { exact: true }).count();
+      }
+      const ok = labels.every((label) => counts[label] >= 1);
+      return { ok, detail: JSON.stringify(counts) };
+    });
+
+    // === 2. Demo seed: 11 cards, VC-1 present with its known title ===========
+    await attempt(2, "Demo seed: 11 cards; VC-1 shows mono id + title", async () => {
+      const count = await page.locator("article").count();
+      const vc1 = cardById(page, "VC-1");
+      const vc1Count = await vc1.count();
+      const title = vc1Count === 1 ? (await vc1.locator("p").first().textContent())?.trim() : null;
+      const ok = count === 11 && vc1Count === 1 && title === "Design SQLite ticket schema";
+      return { ok, detail: `count=${count} vc1Count=${vc1Count} title=${JSON.stringify(title)}` };
+    });
+
+    // === 3. Collapsed rail: Empty caption + Done starts as a pill ============
+    await attempt(
+      3,
+      'Collapsed rail: "Empty" caption present, Done is a pill (not a column)',
+      async () => {
+        const emptyCaption = await page.getByText("Empty", { exact: true }).count();
+        const doneAsColumn = await columnCount(page, "Done");
+        const donePillText = await page.getByText("Done", { exact: true }).count();
+        const ok = emptyCaption >= 1 && doneAsColumn === null && donePillText >= 1;
+        return {
+          ok,
+          detail: `empty=${emptyCaption} doneColumnCount=${doneAsColumn} donePillTextCount=${donePillText}`,
+        };
+      },
+    );
+
+    // === 4. Search filter: "ghostty" narrows to 1, clearing restores 11 =====
+    await attempt(4, 'Search "ghostty" narrows to 1 card, clearing restores 11', async () => {
+      const search = page.getByPlaceholder("Search tickets…");
+      await search.click();
+      await search.fill("ghostty");
+      await sleep(400);
+      const filtered = await page.locator("article").count();
+      await search.fill("");
+      await sleep(400);
+      const restored = await page.locator("article").count();
+      const ok = filtered === 1 && restored === 11;
+      return { ok, detail: `filtered=${filtered} restored=${restored}` };
+    });
+
+    // === 5. Priority facet: toggling High narrows, toggling off restores ====
+    await attempt(
+      5,
+      'Priority chip: toggling "High" narrows the board, toggling off restores',
+      async () => {
+        await page.getByRole("button", { name: "Priority", exact: true }).click();
+        await sleep(200);
+        const high = page.getByRole("menuitemcheckbox", { name: "High" });
+        await high.click();
+        await sleep(400);
+        const filtered = await page.locator("article").count();
+        // The checkbox item calls preventDefault on select, so the menu stays
+        // open across toggles — no need to reopen it.
+        await high.click();
+        await page.keyboard.press("Escape");
+        await sleep(400);
+        const restored = await page.locator("article").count();
+        const ok = filtered >= 1 && filtered < 11 && restored === 11;
+        return { ok, detail: `filtered=${filtered} restored=${restored}` };
+      },
+    );
+
+    // === 6. Cross-column drag: Backlog's first card into Doing's body =======
+    await attempt(
+      6,
+      "Cross-column drag: first Backlog card into Doing decrements/increments counts",
+      async () => {
+        const before = {
+          backlog: await columnCount(page, "Backlog"),
+          doing: await columnCount(page, "Doing"),
+        };
+        const cardBox = await page.locator("article").first().boundingBox();
+        const doingHeaderBox = await page.getByText("Doing", { exact: true }).first().boundingBox();
+        if (!cardBox || !doingHeaderBox) throw new Error("card or Doing header not found");
+        await drag(page, cardBox, { x: doingHeaderBox.x + 20, y: doingHeaderBox.y + 120 });
+        const after = {
+          backlog: await columnCount(page, "Backlog"),
+          doing: await columnCount(page, "Doing"),
+        };
+        const ok =
+          before.backlog !== null &&
+          before.doing !== null &&
+          after.backlog === before.backlog - 1 &&
+          after.doing === before.doing + 1;
+        return { ok, detail: `before=${JSON.stringify(before)} after=${JSON.stringify(after)}` };
+      },
+    );
+
+    // === 7. Pill drop: dropping onto the Done pill expands it into a column =
+    await attempt(
+      7,
+      'Pill drop: dragging onto the "Done" pill expands it into a column and clears "Empty"',
+      async () => {
+        const cardBox = await page.locator("article").first().boundingBox();
+        const donePillBox = await page.getByText("Done", { exact: true }).first().boundingBox();
+        if (!cardBox || !donePillBox) throw new Error("card or Done pill not found");
+        await drag(page, cardBox, {
+          x: donePillBox.x + donePillBox.width / 2,
+          y: donePillBox.y + donePillBox.height / 2,
+        });
+        const doneCount = await columnCount(page, "Done");
+        const emptyCaption = await page.getByText("Empty", { exact: true }).count();
+        const ok = doneCount === 1 && emptyCaption === 0;
+        return { ok, detail: `doneCount=${doneCount} emptyCaption=${emptyCaption}` };
+      },
+    );
+
+    // === 8. Persistence: reload and confirm the moves survived ===============
+    await attempt(8, "Persistence: reload keeps the Doing/Done moves", async () => {
+      await page.reload();
+      await page.waitForLoadState("domcontentloaded");
+      await sleep(1500);
+      await goToBoard(page);
+      const doing = await columnCount(page, "Doing");
+      const done = await columnCount(page, "Done");
+      const ok = doing === 3 && done === 1;
+      return { ok, detail: `doing=${doing} done=${done}` };
+    });
+
+    // === 9. Add-card: Backlog's "+ New" composer creates VC-12 ===============
+    await attempt(
+      9,
+      '"+ New" composer: Enter submits a card, Escape closes it, VC-12 appears',
+      async () => {
+        const before = await page.locator("article").count();
+        await page.getByRole("button", { name: "New", exact: true }).first().click();
+        await sleep(200);
+        await page.getByPlaceholder("Ticket title…").fill("Board smoke test card");
+        await page.keyboard.press("Enter");
+        await sleep(400);
+        await page.keyboard.press("Escape");
+        await sleep(300);
+        const after = await page.locator("article").count();
+        const vc12 = cardById(page, "VC-12");
+        const vc12Count = await vc12.count();
+        const ok = after === before + 1 && vc12Count === 1;
+        return { ok, detail: `before=${before} after=${after} vc12Count=${vc12Count}` };
+      },
+    );
+
+    // === 10. Context menu delete: right-click VC-12 -> Delete removes it ====
+    await attempt(10, "Context menu: right-click VC-12 -> Delete removes the card", async () => {
+      const before = await page.locator("article").count();
+      const vc12 = cardById(page, "VC-12");
+      await vc12.click({ button: "right" });
+      await sleep(300);
+      await page.getByRole("menuitem", { name: "Delete", exact: true }).click();
+      await sleep(400);
+      const after = await page.locator("article").count();
+      const vc12Count = await cardById(page, "VC-12").count();
+      const ok = after === before - 1 && vc12Count === 0;
+      return { ok, detail: `before=${before} after=${after} vc12Count=${vc12Count}` };
+    });
+  } finally {
+    await app.close();
+  }
+
+  const failures = results.filter((r) => !r.ok);
+  console.log(
+    `\n${failures.length === 0 ? "ALL CHECKS PASSED" : `${failures.length} CHECK(S) FAILED: ${failures.map((f) => f.n).join(", ")}`}`,
+  );
+  return failures.length === 0 ? 0 : 1;
+}
+
+let code = 1;
+try {
+  code = await main();
+} catch (error) {
+  console.error("\nSMOKE ABORTED:", error?.stack ?? error);
+  code = 1;
+}
+process.exit(code);
