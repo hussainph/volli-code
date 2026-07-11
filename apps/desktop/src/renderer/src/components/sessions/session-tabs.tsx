@@ -3,7 +3,7 @@ import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
-import type { SessionTab } from "@renderer/stores/sessions";
+import { sessionPanes, type SessionTab } from "@renderer/stores/sessions";
 
 interface SessionTabsProps {
   tabs: SessionTab[];
@@ -32,7 +32,9 @@ export function SessionTabs({
       <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
         {tabs.map((tab) => {
           const active = tab.sessionId === activeSessionId;
-          const exited = tab.exitCode !== null;
+          const panes = sessionPanes(tab.layout);
+          const exited = panes.every((pane) => pane.exitCode !== null);
+          const exitCode = panes.find((pane) => pane.exitCode !== null)?.exitCode ?? null;
           return (
             <div
               key={tab.sessionId}
@@ -48,7 +50,7 @@ export function SessionTabs({
                 onClick={() => onSelect(tab.sessionId)}
                 className="flex min-w-0 items-center gap-1.5"
                 // Active tab gets an ember dot; exited tabs read as muted.
-                title={exited ? `Exited (${tab.exitCode})` : tab.title}
+                title={exited ? `Exited (${exitCode})` : tab.title}
               >
                 <span
                   className={cn(

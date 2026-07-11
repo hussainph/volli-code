@@ -11,7 +11,7 @@ import type { GhosttyAppearancePayload } from "@volli/shared";
 import type { TerminalAppearance } from "./engine";
 
 /** Terminal font size in CSS pixels when the config sets none. */
-export const DEFAULT_TERMINAL_FONT_SIZE = 13;
+export const DEFAULT_TERMINAL_FONT_SIZE = 14;
 
 /**
  * Families appended after the user's `font-family` chain. JetBrains Mono is

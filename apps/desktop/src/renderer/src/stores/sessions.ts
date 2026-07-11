@@ -1,55 +1,135 @@
 /**
- * Per-workspace terminal sessions, keyed by project id. Each project owns an
- * ordered list of tabs and its own active tab, so switching workspaces
- * restores the same terminal you left running in each one.
+ * Per-workspace terminal tabs and app-owned split trees.
  *
- * Deliberately session-only (no `persist`): a tab maps to a live PTY in the
- * main process, and PTYs die with the app — a rehydrated tab pointing at a
- * dead sessionId would be a lie. The renderer's terminal layer owns the live
- * engine/PTY lifecycle; this store is the pure, observable record of which
- * tabs exist and which is focused.
+ * A split leaf is the ownership boundary: exactly one renderer engine and one
+ * main-process PTY session. Layout nodes own geometry only. This mirrors
+ * Ghostty/cmux, where a split inserts a fresh terminal surface instead of
+ * asking one renderer instance to paint the same PTY into another canvas.
  */
 import { create } from "zustand";
 
-/** One terminal tab. `exitCode` flips non-null once its PTY has exited. */
+export type TerminalSplitDirection = "vertical" | "horizontal";
+
+export interface SessionPane {
+  kind: "pane";
+  sessionId: string;
+  /** null while the pane's PTY is live; the shell's exit code once exited. */
+  exitCode: number | null;
+}
+
+export interface SessionSplit {
+  kind: "split";
+  /** Stable identity for resizing this layout node. */
+  id: string;
+  /** vertical = left/right; horizontal = top/bottom (restty/Ghostty naming). */
+  direction: TerminalSplitDirection;
+  ratio: number;
+  first: SessionLayout;
+  second: SessionLayout;
+}
+
+export type SessionLayout = SessionPane | SessionSplit;
+
 export interface SessionTab {
+  /** The root pane's session id is also the stable tab id. */
   sessionId: string;
   title: string;
-  /** null while the PTY is live; the shell's exit code once it has exited. */
-  exitCode: number | null;
+  layout: SessionLayout;
+  activePaneId: string;
 }
 
 export interface ProjectSessions {
   tabs: SessionTab[];
   activeSessionId: string | null;
-  /** Monotonic title counter — never reset or reused, so closing "Terminal 1"
-   *  and opening again yields "Terminal 3", not a duplicate "Terminal 2". */
+  /** Monotonic title counter — closed tab numbers are never reused. */
   nextTabNumber: number;
 }
 
 interface SessionsState {
   byProject: Record<string, ProjectSessions>;
-  /** Projects with a terminal-create currently in flight. Lives in the store
-   *  (not a component ref) so any surface — the sessions tab strip today,
-   *  the ticket board later — can observe "a session is being created for
-   *  project X" without reaching into SessionsLayer's internals. */
+  /** Projects with any terminal-create (tab or split leaf) in flight. */
   startingProjects: Record<string, true>;
-  /** Append a tab for a freshly-created PTY session, title it, and focus it. */
   addSession(projectId: string, sessionId: string): void;
-  /** Remove a tab, selecting a neighbor like the project rail does. */
-  closeSession(projectId: string, sessionId: string): void;
-  setActiveSession(projectId: string, sessionId: string): void;
-  /** Record a PTY exit on whichever project owns the session. */
+  /** Insert a fresh PTY/engine as a sibling of sourcePaneId. */
+  addSplit(
+    projectId: string,
+    tabId: string,
+    sourcePaneId: string,
+    sessionId: string,
+    direction: TerminalSplitDirection,
+  ): void;
+  closeSession(projectId: string, tabId: string): void;
+  closePane(projectId: string, tabId: string, sessionId: string): void;
+  setActiveSession(projectId: string, tabId: string): void;
+  setActivePane(projectId: string, tabId: string, sessionId: string): void;
+  setSplitRatio(projectId: string, tabId: string, splitId: string, ratio: number): void;
   markExited(sessionId: string, exitCode: number): void;
-  /** Mark whether a terminal-create is in flight for a project. Idempotent:
-   *  callers bracket an async create with `true` then `false`/`finally`
-   *  without checking current state first. */
   setStarting(projectId: string, starting: boolean): void;
-  /** Drop every session for a removed project. */
   forgetProject(projectId: string): void;
 }
 
 const EMPTY_PROJECT: ProjectSessions = { tabs: [], activeSessionId: null, nextTabNumber: 1 };
+
+export function sessionPanes(layout: SessionLayout): SessionPane[] {
+  return layout.kind === "pane"
+    ? [layout]
+    : [...sessionPanes(layout.first), ...sessionPanes(layout.second)];
+}
+
+export function findSessionPane(layout: SessionLayout, sessionId: string): SessionPane | null {
+  if (layout.kind === "pane") return layout.sessionId === sessionId ? layout : null;
+  return findSessionPane(layout.first, sessionId) ?? findSessionPane(layout.second, sessionId);
+}
+
+function replacePaneWithSplit(
+  layout: SessionLayout,
+  sourcePaneId: string,
+  sessionId: string,
+  direction: TerminalSplitDirection,
+): SessionLayout {
+  if (layout.kind === "pane") {
+    if (layout.sessionId !== sourcePaneId) return layout;
+    return {
+      kind: "split",
+      id: sessionId,
+      direction,
+      ratio: 0.5,
+      first: layout,
+      second: { kind: "pane", sessionId, exitCode: null },
+    };
+  }
+  const first = replacePaneWithSplit(layout.first, sourcePaneId, sessionId, direction);
+  if (first !== layout.first) return { ...layout, first };
+  const second = replacePaneWithSplit(layout.second, sourcePaneId, sessionId, direction);
+  return second === layout.second ? layout : { ...layout, second };
+}
+
+function removePane(layout: SessionLayout, sessionId: string): SessionLayout | null {
+  if (layout.kind === "pane") return layout.sessionId === sessionId ? null : layout;
+  const first = removePane(layout.first, sessionId);
+  const second = removePane(layout.second, sessionId);
+  if (first === null) return second;
+  if (second === null) return first;
+  if (first === layout.first && second === layout.second) return layout;
+  return { ...layout, first, second };
+}
+
+function updateSplitRatio(layout: SessionLayout, splitId: string, ratio: number): SessionLayout {
+  if (layout.kind === "pane") return layout;
+  if (layout.id === splitId) return { ...layout, ratio };
+  const first = updateSplitRatio(layout.first, splitId, ratio);
+  const second = updateSplitRatio(layout.second, splitId, ratio);
+  return first === layout.first && second === layout.second ? layout : { ...layout, first, second };
+}
+
+function updateExitCode(layout: SessionLayout, sessionId: string, exitCode: number): SessionLayout {
+  if (layout.kind === "pane") {
+    return layout.sessionId === sessionId ? { ...layout, exitCode } : layout;
+  }
+  const first = updateExitCode(layout.first, sessionId, exitCode);
+  const second = updateExitCode(layout.second, sessionId, exitCode);
+  return first === layout.first && second === layout.second ? layout : { ...layout, first, second };
+}
 
 /** Factory so tests get isolated instances. */
 export function createSessionsStore() {
@@ -60,11 +140,14 @@ export function createSessionsStore() {
     addSession(projectId, sessionId) {
       set((state) => {
         const current = state.byProject[projectId] ?? EMPTY_PROJECT;
-        if (current.tabs.some((tab) => tab.sessionId === sessionId)) return state;
+        if (current.tabs.some((tab) => findSessionPane(tab.layout, sessionId) !== null)) {
+          return state;
+        }
         const tab: SessionTab = {
           sessionId,
           title: `Terminal ${current.nextTabNumber}`,
-          exitCode: null,
+          layout: { kind: "pane", sessionId, exitCode: null },
+          activePaneId: sessionId,
         };
         return {
           byProject: {
@@ -79,17 +162,34 @@ export function createSessionsStore() {
       });
     },
 
-    closeSession(projectId, sessionId) {
+    addSplit(projectId, tabId, sourcePaneId, sessionId, direction) {
       set((state) => {
         const current = state.byProject[projectId];
         if (current === undefined) return state;
-        const removedIndex = current.tabs.findIndex((tab) => tab.sessionId === sessionId);
-        if (removedIndex === -1) return state;
+        if (current.tabs.some((tab) => findSessionPane(tab.layout, sessionId) !== null)) {
+          return state;
+        }
+        const tabIndex = current.tabs.findIndex((tab) => tab.sessionId === tabId);
+        const tab = current.tabs[tabIndex];
+        if (tab === undefined || findSessionPane(tab.layout, sourcePaneId) === null) return state;
+        const layout = replacePaneWithSplit(tab.layout, sourcePaneId, sessionId, direction);
+        const tabs = current.tabs.slice();
+        tabs[tabIndex] = { ...tab, layout, activePaneId: sessionId };
+        return {
+          byProject: { ...state.byProject, [projectId]: { ...current, tabs } },
+        };
+      });
+    },
 
-        const tabs = current.tabs.filter((tab) => tab.sessionId !== sessionId);
-        // Closing a background tab never moves focus.
+    closeSession(projectId, tabId) {
+      set((state) => {
+        const current = state.byProject[projectId];
+        if (current === undefined) return state;
+        const removedIndex = current.tabs.findIndex((tab) => tab.sessionId === tabId);
+        if (removedIndex === -1) return state;
+        const tabs = current.tabs.filter((tab) => tab.sessionId !== tabId);
         let activeSessionId = current.activeSessionId;
-        if (activeSessionId === sessionId) {
+        if (activeSessionId === tabId) {
           activeSessionId =
             tabs.length === 0 ? null : tabs[Math.min(removedIndex, tabs.length - 1)]!.sessionId;
         }
@@ -99,32 +199,87 @@ export function createSessionsStore() {
       });
     },
 
-    setActiveSession(projectId, sessionId) {
+    closePane(projectId, tabId, sessionId) {
       set((state) => {
         const current = state.byProject[projectId];
-        if (current === undefined || !current.tabs.some((tab) => tab.sessionId === sessionId)) {
+        if (current === undefined) return state;
+        const tabIndex = current.tabs.findIndex((tab) => tab.sessionId === tabId);
+        const tab = current.tabs[tabIndex];
+        if (tab === undefined) return state;
+        const before = sessionPanes(tab.layout);
+        const removedIndex = before.findIndex((pane) => pane.sessionId === sessionId);
+        if (removedIndex === -1 || before.length <= 1) return state;
+        // A known leaf in a 2+ pane tree cannot remove the whole tree.
+        const layout = removePane(tab.layout, sessionId)!;
+        const remaining = sessionPanes(layout);
+        const activePaneId =
+          tab.activePaneId === sessionId
+            ? remaining[Math.min(removedIndex, remaining.length - 1)]!.sessionId
+            : tab.activePaneId;
+        const tabs = current.tabs.slice();
+        tabs[tabIndex] = { ...tab, layout, activePaneId };
+        return { byProject: { ...state.byProject, [projectId]: { ...current, tabs } } };
+      });
+    },
+
+    setActiveSession(projectId, tabId) {
+      set((state) => {
+        const current = state.byProject[projectId];
+        if (current === undefined || !current.tabs.some((tab) => tab.sessionId === tabId)) {
           return state;
         }
         return {
           byProject: {
             ...state.byProject,
-            [projectId]: { ...current, activeSessionId: sessionId },
+            [projectId]: { ...current, activeSessionId: tabId },
           },
         };
       });
     },
 
+    setActivePane(projectId, tabId, sessionId) {
+      set((state) => {
+        const current = state.byProject[projectId];
+        if (current === undefined) return state;
+        const tabIndex = current.tabs.findIndex((tab) => tab.sessionId === tabId);
+        const tab = current.tabs[tabIndex];
+        if (tab === undefined || findSessionPane(tab.layout, sessionId) === null) return state;
+        if (tab.activePaneId === sessionId) return state;
+        const tabs = current.tabs.slice();
+        tabs[tabIndex] = { ...tab, activePaneId: sessionId };
+        return { byProject: { ...state.byProject, [projectId]: { ...current, tabs } } };
+      });
+    },
+
+    setSplitRatio(projectId, tabId, splitId, ratio) {
+      set((state) => {
+        const current = state.byProject[projectId];
+        if (current === undefined) return state;
+        const tabIndex = current.tabs.findIndex((tab) => tab.sessionId === tabId);
+        const tab = current.tabs[tabIndex];
+        if (tab === undefined) return state;
+        const clamped = Math.min(0.9, Math.max(0.1, ratio));
+        const layout = updateSplitRatio(tab.layout, splitId, clamped);
+        if (layout === tab.layout) return state;
+        const tabs = current.tabs.slice();
+        tabs[tabIndex] = { ...tab, layout };
+        return { byProject: { ...state.byProject, [projectId]: { ...current, tabs } } };
+      });
+    },
+
     markExited(sessionId, exitCode) {
       set((state) => {
-        const projectId = Object.keys(state.byProject).find((id) =>
-          state.byProject[id]!.tabs.some((tab) => tab.sessionId === sessionId),
-        );
-        if (projectId === undefined) return state;
-        const current = state.byProject[projectId]!;
-        const tabs = current.tabs.map((tab) =>
-          tab.sessionId === sessionId ? { ...tab, exitCode } : tab,
-        );
-        return { byProject: { ...state.byProject, [projectId]: { ...current, tabs } } };
+        for (const [projectId, current] of Object.entries(state.byProject)) {
+          const tabIndex = current.tabs.findIndex(
+            (tab) => findSessionPane(tab.layout, sessionId) !== null,
+          );
+          const tab = current.tabs[tabIndex];
+          if (tab === undefined) continue;
+          const tabs = current.tabs.slice();
+          tabs[tabIndex] = { ...tab, layout: updateExitCode(tab.layout, sessionId, exitCode) };
+          return { byProject: { ...state.byProject, [projectId]: { ...current, tabs } } };
+        }
+        return state;
       });
     },
 
@@ -133,11 +288,8 @@ export function createSessionsStore() {
         const isStarting = projectId in state.startingProjects;
         if (starting === isStarting) return state;
         const startingProjects = { ...state.startingProjects };
-        if (starting) {
-          startingProjects[projectId] = true;
-        } else {
-          delete startingProjects[projectId];
-        }
+        if (starting) startingProjects[projectId] = true;
+        else delete startingProjects[projectId];
         return { startingProjects };
       });
     },
@@ -147,7 +299,6 @@ export function createSessionsStore() {
         const hasSessions = projectId in state.byProject;
         const hasStarting = projectId in state.startingProjects;
         if (!hasSessions && !hasStarting) return state;
-
         const byProject = { ...state.byProject };
         delete byProject[projectId];
         const startingProjects = { ...state.startingProjects };
@@ -158,5 +309,4 @@ export function createSessionsStore() {
   }));
 }
 
-/** App-wide singleton; components import this directly. */
 export const useSessionsStore = createSessionsStore();

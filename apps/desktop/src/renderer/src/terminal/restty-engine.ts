@@ -37,6 +37,8 @@ import { heldAltSides, installAltSideTracker, optionAsAltSequence } from "./opti
  * hold at most ~20 MB of UTF-16 between them.
  */
 const REPLAY_BUFFER_MAX_CHARS = 512_000;
+const MIN_FONT_SIZE = 8;
+const MAX_FONT_SIZE = 40;
 
 /** Families resolve via Local Font Access, most-preferred first; the emoji
  *  face rides along as a glyph fallback (restty picks per-cluster). */
@@ -66,6 +68,8 @@ export class ResttyEngine implements TerminalEngine {
   private recentOutputChars = 0;
   /** Desired pause state; applied whenever a renderer is (re)created. */
   private paused = false;
+  /** Pane-local zoom layered over the live Ghostty-config base size. */
+  private fontSizeOffset = 0;
   /** The active renderer backend once known ("webgpu" | "webgl2"). */
   backend: string | null = null;
   private disposed = false;
@@ -103,9 +107,17 @@ export class ResttyEngine implements TerminalEngine {
       // The app-owned session (not restty's module-global default) is what
       // makes device-loss rotation possible — see gpu-session.ts.
       session: currentGpuSession(),
+      surface: {
+        // Volli owns split geometry and process/session creation. Restty's
+        // built-in Cmd+D listener is window-global PER engine, so leaving it
+        // enabled splits hidden tabs too and every new pane reuses this
+        // engine's single ptyTransport.
+        shortcuts: false,
+        defaultContextMenu: false,
+      },
       terminal: {
         renderer: "auto", // WebGPU with automatic WebGL2 fallback
-        fontSize: appearance.fontSize,
+        fontSize: this.resolvedFontSize(appearance.fontSize),
         fonts: resttyFonts(appearance.fontFamilies),
         theme: appearance.theme,
         ligatures: appearance.ligatures,
@@ -257,12 +269,37 @@ export class ResttyEngine implements TerminalEngine {
     this.restty?.focus();
   }
 
+  adjustFontSize(delta: number): void {
+    if (this.disposed || !Number.isFinite(delta) || delta === 0) return;
+    const base = getCurrentAppearance().fontSize;
+    const next = Math.min(
+      MAX_FONT_SIZE,
+      Math.max(MIN_FONT_SIZE, base + this.fontSizeOffset + delta),
+    );
+    this.fontSizeOffset = next - base;
+    this.pane?.runtime.terminal.setFontSize(next);
+    this.fit();
+    this.focus();
+  }
+
+  resetFontSize(): void {
+    if (this.disposed) return;
+    this.fontSizeOffset = 0;
+    this.pane?.runtime.terminal.setFontSize(getCurrentAppearance().fontSize);
+    this.fit();
+    this.focus();
+  }
+
+  private resolvedFontSize(base: number): number {
+    return Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, base + this.fontSizeOffset));
+  }
+
   /** Live re-apply for ghostty config edits (issue #18 live reload). */
   applyAppearance(appearance: TerminalAppearance): void {
     if (this.disposed || this.pane === null) return;
     const terminal = this.pane.runtime.terminal;
     terminal.applyTheme(appearance.theme);
-    terminal.setFontSize(appearance.fontSize);
+    terminal.setFontSize(this.resolvedFontSize(appearance.fontSize));
     terminal.setLigatures(appearance.ligatures);
     terminal.setFonts(resttyFonts(appearance.fontFamilies)).catch((error: unknown) => {
       // A family that fails to resolve keeps the previous faces — worth a

@@ -50,6 +50,7 @@ function check(n, label, ok, detail = "") {
   console.log(`  [${status}] ${n}. ${label}${detail ? ` — ${detail}` : ""}`);
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const terminalGrid = (value) => value?.split(/\s+/).map(Number) ?? [];
 
 // ---- process baseline (orphan-shell check) ---------------------------------
 
@@ -80,6 +81,27 @@ async function focusTerminal(page) {
     return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
   });
   if (!box) throw new Error("no visible terminal canvas to focus");
+  await page.mouse.click(box.x, box.y);
+  await sleep(200);
+}
+
+/** Focus a visible terminal canvas by its left-to-right, top-to-bottom index. */
+async function focusTerminalAt(page, index) {
+  const boxes = await page.evaluate(() =>
+    Array.from(document.querySelectorAll("canvas"))
+      .filter(
+        (canvas) =>
+          canvas.offsetParent !== null && canvas.clientWidth > 0 && canvas.clientHeight > 0,
+      )
+      .map((canvas) => {
+        const rect = canvas.getBoundingClientRect();
+        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+      })
+      .sort((a, b) => a.y - b.y || a.x - b.x),
+  );
+  const box = boxes[index];
+  if (!box)
+    throw new Error(`visible terminal canvas ${index} does not exist (count=${boxes.length})`);
   await page.mouse.click(box.x, box.y);
   await sleep(200);
 }
@@ -149,7 +171,29 @@ async function main() {
   const probeA = join(SCRATCH, "probe-a.txt");
   const probeB = join(SCRATCH, "probe-b.txt");
   const probeA2 = join(SCRATCH, "probe-a2.txt");
-  for (const p of [probeA, probeB, probeA2]) await fs.rm(p, { force: true });
+  const splitRootPid = join(SCRATCH, "split-root-pid.txt");
+  const splitChildPid = join(SCRATCH, "split-child-pid.txt");
+  const focusedLeftPid = join(SCRATCH, "focused-left-pid.txt");
+  const focusedRightPid = join(SCRATCH, "focused-right-pid.txt");
+  const rootGridBeforePath = join(SCRATCH, "root-grid-before.txt");
+  const rootGridAfterPath = join(SCRATCH, "root-grid-after.txt");
+  const childGridBeforePath = join(SCRATCH, "child-grid-before.txt");
+  const childGridAfterPath = join(SCRATCH, "child-grid-after.txt");
+  for (const p of [
+    probeA,
+    probeB,
+    probeA2,
+    splitRootPid,
+    splitChildPid,
+    focusedLeftPid,
+    focusedRightPid,
+    rootGridBeforePath,
+    rootGridAfterPath,
+    childGridBeforePath,
+    childGridAfterPath,
+  ]) {
+    await fs.rm(p, { force: true });
+  }
 
   // Distinct two-word names → distinct monograms "AR" / "BC" (rail tiles carry
   // a duplicate accessible name from the dnd-kit wrapper, so we click the
@@ -316,7 +360,97 @@ async function main() {
       `tabs=${aTabs4}`,
     );
 
-    // === 7. Renderer backend =================================================
+    // === 6. Split panes: each leaf owns an independent shell + renderer ====
+    // This is the architecture boundary used by Ghostty/cmux: splitting a
+    // surface creates a fresh terminal surface/PTY. A second canvas wired to
+    // the original PTY is not a split — input/output from both panes aliases.
+    await runInTerminal(page, `echo $$ > ${splitRootPid}`);
+    await waitForFileContains(splitRootPid, "", 3000);
+    await page.keyboard.press("Meta+d");
+    await page.waitForFunction(
+      () =>
+        Array.from(document.querySelectorAll("canvas")).filter(
+          (canvas) =>
+            canvas.offsetParent !== null && canvas.clientWidth > 0 && canvas.clientHeight > 0,
+        ).length === 2,
+      { timeout: 10000 },
+    );
+    await sleep(800);
+    await focusTerminalAt(page, 1);
+    await runInTerminal(page, `echo $$ > ${splitChildPid}`);
+    const rootPid = (await waitForFileContains(splitRootPid, "", 3000))?.trim() ?? null;
+    const childPid = (await waitForFileContains(splitChildPid, "", 5000))?.trim() ?? null;
+    await page.screenshot({ path: shot("06-independent-split.png") });
+    check(
+      6,
+      "Split right: two visible panes own two independent shell sessions",
+      rootPid !== null && childPid !== null && rootPid !== childPid,
+      `rootPid=${JSON.stringify(rootPid)} childPid=${JSON.stringify(childPid)}`,
+    );
+
+    // === 7. Keyboard split focus: Cmd+Option+arrows route input spatially ===
+    await page.keyboard.press("Meta+Alt+ArrowLeft");
+    await sleep(300);
+    await runInTerminal(page, `echo $$ > ${focusedLeftPid}`);
+    const leftFocusedPid = (await waitForFileContains(focusedLeftPid, "", 5000))?.trim() ?? null;
+    await page.keyboard.press("Meta+Alt+ArrowRight");
+    await sleep(300);
+    await runInTerminal(page, `echo $$ > ${focusedRightPid}`);
+    const rightFocusedPid = (await waitForFileContains(focusedRightPid, "", 5000))?.trim() ?? null;
+    check(
+      7,
+      "Cmd+Option+arrow keys move focus and route input to the adjacent split",
+      leftFocusedPid === rootPid && rightFocusedPid === childPid,
+      `left=${JSON.stringify(leftFocusedPid)} right=${JSON.stringify(rightFocusedPid)}`,
+    );
+
+    // === 8. Pane-local font zoom: focused grid changes, sibling/UI don't ===
+    await focusTerminalAt(page, 0);
+    await runInTerminal(page, `stty size > ${rootGridBeforePath}`);
+    const rootGridBefore =
+      (await waitForFileContains(rootGridBeforePath, "", 5000))?.trim() ?? null;
+    await focusTerminalAt(page, 1);
+    await runInTerminal(page, `stty size > ${childGridBeforePath}`);
+    const childGridBefore =
+      (await waitForFileContains(childGridBeforePath, "", 5000))?.trim() ?? null;
+    const chromeBefore = await page.evaluate(() => ({
+      dpr: window.devicePixelRatio,
+      sessionsFontSize: getComputedStyle(
+        Array.from(document.querySelectorAll("*")).find(
+          (element) => element.textContent === "Sessions" && element.children.length === 0,
+        ),
+      ).fontSize,
+    }));
+
+    await page.keyboard.press("Meta+Equal");
+    await sleep(1000);
+    await runInTerminal(page, `stty size > ${childGridAfterPath}`);
+    const childGridAfter =
+      (await waitForFileContains(childGridAfterPath, "", 5000))?.trim() ?? null;
+    await focusTerminalAt(page, 0);
+    await runInTerminal(page, `stty size > ${rootGridAfterPath}`);
+    const rootGridAfter = (await waitForFileContains(rootGridAfterPath, "", 5000))?.trim() ?? null;
+    const chromeAfter = await page.evaluate(() => ({
+      dpr: window.devicePixelRatio,
+      sessionsFontSize: getComputedStyle(
+        Array.from(document.querySelectorAll("*")).find(
+          (element) => element.textContent === "Sessions" && element.children.length === 0,
+        ),
+      ).fontSize,
+    }));
+    const [childRowsBefore, childColsBefore] = terminalGrid(childGridBefore);
+    const [childRowsAfter, childColsAfter] = terminalGrid(childGridAfter);
+    check(
+      8,
+      "Cmd+ zooms only the focused split pane, not its sibling or Volli chrome",
+      childRowsAfter < childRowsBefore &&
+        childColsAfter < childColsBefore &&
+        rootGridAfter === rootGridBefore &&
+        JSON.stringify(chromeAfter) === JSON.stringify(chromeBefore),
+      `child=${childGridBefore}→${childGridAfter} root=${rootGridBefore}→${rootGridAfter} chrome=${JSON.stringify(chromeAfter)}`,
+    );
+
+    // === 9. Renderer backend =================================================
     backendReport = await page.evaluate(() => {
       const ctx = window.volliCtxSpy || [];
       return {
@@ -326,7 +460,7 @@ async function main() {
       };
     });
     check(
-      7,
+      9,
       "Renderer is a real GPU canvas backend",
       backendReport.webgpu || backendReport.webgl2,
       `webgpu=${backendReport.webgpu} webgl2=${backendReport.webgl2} navigator.gpu=${backendReport.navigatorGpu}`,
@@ -335,14 +469,14 @@ async function main() {
     await app.close();
   }
 
-  // === 8. Clean teardown: no orphaned login shells ==========================
+  // === 10. Clean teardown: no orphaned login shells =========================
   let after = loginShellCount();
   for (let i = 0; i < 20 && after > baseline; i++) {
     await sleep(250);
     after = loginShellCount();
   }
   check(
-    8,
+    10,
     "Clean teardown: no orphaned login shells after quit",
     after <= baseline,
     `baseline=${baseline} after=${after}`,
@@ -359,6 +493,7 @@ async function main() {
   console.log(`  ${join(SCRATCH, "02-workspace-b-terminal.png")}  — Workspace B live terminal`);
   console.log(`  ${join(SCRATCH, "04-after-nav-return.png")}      — A after Board↔Sessions nav`);
   console.log(`  ${join(SCRATCH, "05-two-tabs.png")}              — A with two session tabs`);
+  console.log(`  ${join(SCRATCH, "06-independent-split.png")}      — two independent split panes`);
   console.log(
     `\nRenderer backend: ${backendReport.webgpu ? "WebGPU" : backendReport.webgl2 ? "WebGL2" : "UNKNOWN"}` +
       ` (webgpu=${backendReport.webgpu} webgl2=${backendReport.webgl2} navigator.gpu=${backendReport.navigatorGpu})`,

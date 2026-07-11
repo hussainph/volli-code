@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { createSessionsStore } from "./sessions";
+import { createSessionsStore, findSessionPane, sessionPanes } from "./sessions";
 
 describe("addSession", () => {
   it("appends a tab titled from the counter and makes it active", () => {
@@ -7,7 +7,14 @@ describe("addSession", () => {
     store.getState().addSession("p", "s1");
 
     const project = store.getState().byProject["p"];
-    expect(project?.tabs).toEqual([{ sessionId: "s1", title: "Terminal 1", exitCode: null }]);
+    expect(project?.tabs).toEqual([
+      {
+        sessionId: "s1",
+        title: "Terminal 1",
+        layout: { kind: "pane", sessionId: "s1", exitCode: null },
+        activePaneId: "s1",
+      },
+    ]);
     expect(project?.activeSessionId).toBe("s1");
     expect(project?.nextTabNumber).toBe(2);
   });
@@ -75,6 +82,180 @@ describe("setActiveSession", () => {
 
     store.getState().setActiveSession("missing", "s1");
     store.getState().setActiveSession("p", "nope");
+    expect(store.getState().byProject).toBe(before);
+  });
+});
+
+describe("split panes", () => {
+  it("inserts a fresh session leaf beside the focused pane and activates it", () => {
+    const store = createSessionsStore();
+    store.getState().addSession("p", "s1");
+
+    store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
+
+    const tab = store.getState().byProject["p"]?.tabs[0];
+    expect(tab?.activePaneId).toBe("s2");
+    expect(tab && sessionPanes(tab.layout).map((pane) => pane.sessionId)).toEqual(["s1", "s2"]);
+    expect(tab?.layout).toMatchObject({
+      kind: "split",
+      id: "s2",
+      direction: "vertical",
+      ratio: 0.5,
+    });
+  });
+
+  it("supports nested splits without duplicating or replacing sibling leaves", () => {
+    const store = createSessionsStore();
+    store.getState().addSession("p", "s1");
+    store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
+
+    store.getState().addSplit("p", "s1", "s1", "s3", "horizontal");
+
+    const tab = store.getState().byProject["p"]!.tabs[0]!;
+    expect(sessionPanes(tab.layout).map((pane) => pane.sessionId)).toEqual(["s1", "s3", "s2"]);
+  });
+
+  it("can split a leaf in the second branch after traversing an untouched subtree", () => {
+    const store = createSessionsStore();
+    store.getState().addSession("p", "s1");
+    store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
+    store.getState().addSplit("p", "s1", "s1", "s3", "horizontal");
+
+    store.getState().addSplit("p", "s1", "s2", "s4", "horizontal");
+
+    const tab = store.getState().byProject["p"]!.tabs[0]!;
+    expect(sessionPanes(tab.layout).map((pane) => pane.sessionId)).toEqual([
+      "s1",
+      "s3",
+      "s2",
+      "s4",
+    ]);
+  });
+
+  it("ignores unknown projects, tabs, source panes, and duplicate pane ids", () => {
+    const store = createSessionsStore();
+    store.getState().addSession("p", "s1");
+    const before = store.getState().byProject;
+
+    store.getState().addSplit("missing", "s1", "s1", "s2", "vertical");
+    store.getState().addSplit("p", "missing", "s1", "s2", "vertical");
+    store.getState().addSplit("p", "s1", "missing", "s2", "vertical");
+    store.getState().addSplit("p", "s1", "s1", "s1", "vertical");
+
+    expect(store.getState().byProject).toBe(before);
+  });
+
+  it("closes one leaf, collapses its parent split, and focuses a neighbor", () => {
+    const store = createSessionsStore();
+    store.getState().addSession("p", "s1");
+    store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
+
+    store.getState().closePane("p", "s1", "s1");
+
+    const tab = store.getState().byProject["p"]!.tabs[0]!;
+    expect(tab.layout).toEqual({ kind: "pane", sessionId: "s2", exitCode: null });
+    expect(tab.activePaneId).toBe("s2");
+  });
+
+  it("collapses either side of a split and preserves a non-removed active pane", () => {
+    const store = createSessionsStore();
+    store.getState().addSession("p", "s1");
+    store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
+    store.getState().setActivePane("p", "s1", "s1");
+
+    store.getState().closePane("p", "s1", "s2");
+
+    const tab = store.getState().byProject["p"]!.tabs[0]!;
+    expect(tab.activePaneId).toBe("s1");
+  });
+
+  it("collapses a nested split while leaving the sibling subtree intact", () => {
+    const store = createSessionsStore();
+    store.getState().addSession("p", "s1");
+    store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
+    store.getState().addSplit("p", "s1", "s1", "s3", "horizontal");
+
+    store.getState().closePane("p", "s1", "s2");
+
+    const tab = store.getState().byProject["p"]!.tabs[0]!;
+    expect(sessionPanes(tab.layout).map((pane) => pane.sessionId)).toEqual(["s1", "s3"]);
+  });
+
+  it("rebuilds an ancestor when a nested leaf is removed", () => {
+    const store = createSessionsStore();
+    store.getState().addSession("p", "s1");
+    store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
+    store.getState().addSplit("p", "s1", "s1", "s3", "horizontal");
+
+    store.getState().closePane("p", "s1", "s3");
+
+    const tab = store.getState().byProject["p"]!.tabs[0]!;
+    expect(sessionPanes(tab.layout).map((pane) => pane.sessionId)).toEqual(["s1", "s2"]);
+  });
+
+  it("ignores invalid pane-close targets and refuses to remove a tab's only leaf", () => {
+    const store = createSessionsStore();
+    store.getState().addSession("p", "s1");
+    const before = store.getState().byProject;
+
+    store.getState().closePane("missing", "s1", "s1");
+    store.getState().closePane("p", "missing", "s1");
+    store.getState().closePane("p", "s1", "missing");
+    store.getState().closePane("p", "s1", "s1");
+
+    expect(store.getState().byProject).toBe(before);
+  });
+
+  it("updates only the targeted split ratio and clamps unsafe extremes", () => {
+    const store = createSessionsStore();
+    store.getState().addSession("p", "s1");
+    store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
+
+    store.getState().setSplitRatio("p", "s1", "s2", 0.99);
+
+    expect(store.getState().byProject["p"]?.tabs[0]?.layout).toMatchObject({ ratio: 0.9 });
+  });
+
+  it("updates a nested split and ignores unknown split/project/tab ids", () => {
+    const store = createSessionsStore();
+    store.getState().addSession("p", "s1");
+    store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
+    store.getState().addSplit("p", "s1", "s1", "s3", "horizontal");
+
+    store.getState().setSplitRatio("p", "s1", "s3", 0.25);
+    const changed = store.getState().byProject;
+    expect(store.getState().byProject["p"]?.tabs[0]?.layout).toMatchObject({
+      first: { ratio: 0.25 },
+    });
+
+    store.getState().setSplitRatio("missing", "s1", "s3", 0.4);
+    store.getState().setSplitRatio("p", "missing", "s3", 0.4);
+    store.getState().setSplitRatio("p", "s1", "missing", 0.4);
+    expect(store.getState().byProject).toBe(changed);
+  });
+});
+
+describe("setActivePane", () => {
+  it("focuses a pane inside a split tree", () => {
+    const store = createSessionsStore();
+    store.getState().addSession("p", "s1");
+    store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
+
+    store.getState().setActivePane("p", "s1", "s1");
+
+    expect(store.getState().byProject["p"]?.tabs[0]?.activePaneId).toBe("s1");
+  });
+
+  it("is a no-op for the active pane or unknown project, tab, and pane", () => {
+    const store = createSessionsStore();
+    store.getState().addSession("p", "s1");
+    const before = store.getState().byProject;
+
+    store.getState().setActivePane("p", "s1", "s1");
+    store.getState().setActivePane("missing", "s1", "s1");
+    store.getState().setActivePane("p", "missing", "s1");
+    store.getState().setActivePane("p", "s1", "missing");
+
     expect(store.getState().byProject).toBe(before);
   });
 });
@@ -150,9 +331,29 @@ describe("markExited", () => {
     store.getState().markExited("b1", 130);
 
     const bTabs = store.getState().byProject["b"]?.tabs ?? [];
-    expect(bTabs.find((t) => t.sessionId === "b1")?.exitCode).toBe(130);
-    expect(bTabs.find((t) => t.sessionId === "b2")?.exitCode).toBeNull();
-    expect(store.getState().byProject["a"]?.tabs[0]?.exitCode).toBeNull();
+    expect(findSessionPane(bTabs.find((t) => t.sessionId === "b1")!.layout, "b1")?.exitCode).toBe(
+      130,
+    );
+    expect(
+      findSessionPane(bTabs.find((t) => t.sessionId === "b2")!.layout, "b2")?.exitCode,
+    ).toBeNull();
+    expect(
+      findSessionPane(store.getState().byProject["a"]!.tabs[0]!.layout, "a1")?.exitCode,
+    ).toBeNull();
+  });
+
+  it("records an exit on a nested split leaf without changing its sibling", () => {
+    const store = createSessionsStore();
+    store.getState().addSession("p", "s1");
+    store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
+    store.getState().addSplit("p", "s1", "s1", "s3", "horizontal");
+
+    store.getState().markExited("s2", 7);
+
+    const layout = store.getState().byProject["p"]!.tabs[0]!.layout;
+    expect(findSessionPane(layout, "s1")?.exitCode).toBeNull();
+    expect(findSessionPane(layout, "s2")?.exitCode).toBe(7);
+    expect(findSessionPane(layout, "s3")?.exitCode).toBeNull();
   });
 
   it("is a no-op for an unknown session", () => {

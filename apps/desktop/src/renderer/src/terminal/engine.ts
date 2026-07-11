@@ -90,6 +90,12 @@ export interface TerminalEngine {
 
   focus(): void;
 
+  /** Adjust only this pane's font size, preserving the Ghostty-config base. */
+  adjustFontSize(delta: number): void;
+
+  /** Reset only this pane to the current Ghostty-config font size. */
+  resetFontSize(): void;
+
   /**
    * Re-apply a changed appearance to the LIVE renderer (theme, font size,
    * fonts, ligatures, mouse mode) without recreating it — the live-reload

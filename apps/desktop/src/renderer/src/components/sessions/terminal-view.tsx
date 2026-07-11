@@ -2,15 +2,18 @@ import { errorMessage } from "@volli/shared";
 import * as React from "react";
 import { toast } from "sonner";
 
-import { useSessionsStore } from "@renderer/stores/sessions";
+import { findSessionPane, useSessionsStore } from "@renderer/stores/sessions";
 import { cn } from "@renderer/lib/utils";
 import { getEngine, getOrCreateEngine } from "@renderer/terminal/registry";
 
 interface TerminalViewProps {
   projectId: string;
+  tabId: string;
   sessionId: string;
-  /** Visible = the active tab of the selected project while Sessions is shown. */
+  /** Visible = inside the active tab of the selected project. */
   visible: boolean;
+  active: boolean;
+  onActivate(): void;
 }
 
 /**
@@ -24,7 +27,14 @@ interface TerminalViewProps {
  * which also keeps React StrictMode's dev double-mount trivially safe: attach
  * re-parents idempotently and onData/onResize replace the prior callback.
  */
-export function TerminalView({ projectId, sessionId, visible }: TerminalViewProps) {
+export function TerminalView({
+  projectId,
+  tabId,
+  sessionId,
+  visible,
+  active,
+  onActivate,
+}: TerminalViewProps) {
   const containerRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
@@ -37,10 +47,12 @@ export function TerminalView({ projectId, sessionId, visible }: TerminalViewProp
     // exit, so forwarding for an exited tab would only toast "Unknown
     // terminal session" at the user. A stale closure over the tab would
     // keep forwarding forever.
-    const isLive = () =>
-      useSessionsStore
+    const isLive = () => {
+      const tab = useSessionsStore
         .getState()
-        .byProject[projectId]?.tabs.find((tab) => tab.sessionId === sessionId)?.exitCode === null;
+        .byProject[projectId]?.tabs.find((candidate) => candidate.sessionId === tabId);
+      return tab !== undefined && findSessionPane(tab.layout, sessionId)?.exitCode === null;
+    };
 
     // Keystrokes → PTY.
     const offData = engine.onData((data) => {
@@ -80,26 +92,34 @@ export function TerminalView({ projectId, sessionId, visible }: TerminalViewProp
       offData();
       offResize();
     };
-  }, [projectId, sessionId]);
+  }, [projectId, tabId, sessionId]);
 
   // Hidden terminals pause rendering; a GPU canvas measures as zero while
-  // hidden, so reveal must unpause, refit, and focus.
+  // hidden, so reveal must unpause and refit. Focus is handled separately so
+  // revealing a split tab doesn't focus every leaf in mount order.
   React.useEffect(() => {
     const engine = getOrCreateEngine(sessionId);
     engine.setPaused(!visible);
     if (visible) {
       engine.fit();
-      engine.focus();
     }
   }, [visible, sessionId]);
+
+  React.useEffect(() => {
+    if (visible && active) getOrCreateEngine(sessionId).focus();
+  }, [visible, active, sessionId]);
 
   return (
     <div
       ref={containerRef}
-      // Every session's terminal stays mounted; only the active one shows.
-      // `hidden` (display:none) is why reveal must refit.
-      className={cn("absolute inset-0", !visible && "hidden")}
-      onMouseDown={() => getEngine(sessionId)?.focus()}
+      data-terminal-renderer={sessionId}
+      // Six pixels keeps the first glyph/cursor off Volli's chrome edge while
+      // preserving nearly the full terminal grid.
+      className={cn("h-full min-h-0 w-full min-w-0 overflow-hidden p-1.5", !visible && "hidden")}
+      onMouseDown={() => {
+        onActivate();
+        getEngine(sessionId)?.focus();
+      }}
     />
   );
 }
