@@ -2,6 +2,19 @@ import { DEFAULT_TICKET_SORT } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 import { createWorkspaceStore, DEFAULT_WORKSPACE_UI } from "./workspace";
 
+function createMemoryStorage() {
+  const data = new Map<string, string>();
+  return {
+    getItem: (name: string) => data.get(name) ?? null,
+    setItem: (name: string, value: string) => {
+      data.set(name, value);
+    },
+    removeItem: (name: string) => {
+      data.delete(name);
+    },
+  };
+}
+
 describe("setNav", () => {
   it("tracks nav independently per project", () => {
     const store = createWorkspaceStore();
@@ -136,5 +149,71 @@ describe("forget", () => {
 
     store.getState().forget("project-b");
     expect(store.getState().byProject["project-a"]?.nav).toBe("sessions");
+  });
+});
+
+describe("persistence", () => {
+  it("persists only non-default boardView/boardSort pairs under 'volli:workspace'", () => {
+    const storage = createMemoryStorage();
+    const store = createWorkspaceStore(storage);
+    store.getState().setBoardView("project-a", "list");
+    store.getState().setNav("project-b", "files"); // session-only change → record stays default-valued
+
+    const raw = storage.getItem("volli:workspace");
+    expect(raw).not.toBeNull();
+    const parsed = JSON.parse(raw!) as {
+      state: { byProject: Record<string, Record<string, unknown>> };
+    };
+    expect(Object.keys(parsed.state.byProject)).toEqual(["project-a"]);
+    expect(Object.keys(parsed.state.byProject["project-a"]!).toSorted()).toEqual([
+      "boardSort",
+      "boardView",
+    ]);
+  });
+
+  it("rehydrates view + sort while nav and expandedDirs reset to the defaults", () => {
+    const storage = createMemoryStorage();
+    const store = createWorkspaceStore(storage);
+    store.getState().setBoardView("project-a", "list");
+    store.getState().setBoardSort("project-a", { key: "priority", direction: "desc" });
+    store.getState().setNav("project-a", "files");
+    store.getState().setDirExpanded("project-a", "/a/src", true);
+
+    const rehydrated = createWorkspaceStore(storage);
+    const ui = rehydrated.getState().byProject["project-a"];
+    expect(ui?.boardView).toBe("list");
+    expect(ui?.boardSort).toEqual({ key: "priority", direction: "desc" });
+    expect(ui?.nav).toBe("board");
+    expect(ui?.expandedDirs).toEqual([]);
+  });
+
+  it("sanitizes stale persisted values back to the defaults", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:workspace",
+      JSON.stringify({
+        state: {
+          byProject: {
+            "project-a": { boardView: "spreadsheet", boardSort: { key: "gone", direction: "up" } },
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    const store = createWorkspaceStore(storage);
+    const ui = store.getState().byProject["project-a"];
+    expect(ui?.boardView).toBe("board");
+    expect(ui?.boardSort).toEqual(DEFAULT_TICKET_SORT);
+  });
+
+  it("a forgotten project's persisted prefs do not survive the next write", () => {
+    const storage = createMemoryStorage();
+    const store = createWorkspaceStore(storage);
+    store.getState().setBoardView("project-a", "list");
+    store.getState().forget("project-a");
+
+    const rehydrated = createWorkspaceStore(storage);
+    expect(rehydrated.getState().byProject["project-a"]).toBeUndefined();
   });
 });

@@ -552,24 +552,35 @@ async function main() {
         });
         const afterTodo = await columnCount(page, "Todo");
         const afterBacklog = await columnCount(page, "Backlog");
-        // Persist: reload drops back to the default board view (view/sort are
-        // session-only); the ticket move lives in the persisted board store.
+        // Persist: the ticket move lives in the persisted board store, AND the
+        // list view itself survives the reload (volli:workspace persists
+        // view+sort per project) — assert both, then switch back to Board view
+        // for the checks that follow.
         await page.reload();
         await page.waitForLoadState("domcontentloaded");
         await sleep(1500);
         await goToBoard(page);
+        const listViewPersisted = (await page.locator("[data-ticket-row]").count()) > 0;
         const persistedTodo = await columnCount(page, "Todo");
         const persistedBacklog = await columnCount(page, "Backlog");
+        const vc5InListBacklog =
+          (await page
+            .locator('[data-list-section][data-status="backlog"] [data-ticket-id="VC-5"]')
+            .count()) === 1;
+        await page.getByRole("button", { name: "Board view", exact: true }).click();
+        await sleep(300);
         const vc5InBacklog = await columnHasCard(page, "Backlog", "VC-5");
         const ok =
           afterTodo === beforeTodo - 1 &&
           afterBacklog === beforeBacklog + 1 &&
           persistedTodo === beforeTodo - 1 &&
           persistedBacklog === beforeBacklog + 1 &&
+          listViewPersisted &&
+          vc5InListBacklog &&
           vc5InBacklog;
         return {
           ok,
-          detail: `todo ${beforeTodo}->${afterTodo} (persist ${persistedTodo}) backlog ${beforeBacklog}->${afterBacklog} (persist ${persistedBacklog}) vc5InBacklog=${vc5InBacklog}`,
+          detail: `todo ${beforeTodo}->${afterTodo} (persist ${persistedTodo}) backlog ${beforeBacklog}->${afterBacklog} (persist ${persistedBacklog}) listViewPersisted=${listViewPersisted} vc5InBacklog=${vc5InBacklog}`,
         };
       },
     );

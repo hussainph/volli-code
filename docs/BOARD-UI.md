@@ -96,9 +96,11 @@ chip hides itself when the project has no tags. "Clear" appears only while
 
 Two header controls on the right (`ml-auto`, so they don't fight the wrapping
 filter bar): an **Ordering** dropdown and a two-segment **board / list** view
-toggle. Both read/write the per-workspace, **session-only** store
-(`stores/workspace.ts` — whether view/sort should survive relaunch is a future
-call; today they reset like nav and filters).
+toggle. Both read/write the per-workspace store (`stores/workspace.ts`), which
+persists exactly this pair per project (`volli:workspace`) — view and sort are
+deliberate preferences that survive relaunch, while nav and expandedDirs stay
+session-only (the nav-resets-to-Board decision). Default-valued records are
+pruned from storage, and rehydration sanitizes stale values back to defaults.
 
 Sorts (`@volli/shared` `ticket-sort.ts`, pure + tested; `sortTickets` orders
 **one column**): **Manual · Priority · Created · Updated · Title**. Manual is
@@ -214,4 +216,3 @@ discard flow land (Concept decision #16).
 - Agent-state card badges (reason badge, live pulse, behind-base) — land
   with the automation layer, top row right slot is reserved for them.
 - Ticket detail view; keyboard card navigation; WIP limits.
-- Persisting board view + sort across relaunch (today session-only).
