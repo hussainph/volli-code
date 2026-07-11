@@ -45,7 +45,7 @@ export function FilterBar({ projectId, tickets, filter, className }: FilterBarPr
   );
 
   return (
-    <div className={cn("flex flex-none items-center gap-2", className)}>
+    <div className={cn("flex min-w-0 flex-wrap items-center gap-2", className)}>
       <div className="relative">
         <MagnifyingGlassIcon className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
         <Input
