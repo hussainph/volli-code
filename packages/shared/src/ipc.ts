@@ -12,10 +12,22 @@ export type VolliIpcChannel =
   | "volli:sync-project-roots"
   | "volli:list-directory"
   | "volli:reveal-in-finder"
-  | "volli:window-is-fullscreen";
+  | "volli:window-is-fullscreen"
+  | "volli:terminal-create"
+  | "volli:terminal-write"
+  | "volli:terminal-resize"
+  | "volli:terminal-kill"
+  // Send-based (ipcRenderer.send, not invoke): a fire-and-forget flow-control
+  // ack needs no reply, and awaiting one per data event would defeat it.
+  | "volli:terminal-ack"
+  | "volli:ghostty-config-get";
 
 /** Channel names for main→renderer push events (`webContents.send`). */
-export type VolliIpcEvent = "volli:fullscreen-changed";
+export type VolliIpcEvent =
+  | "volli:fullscreen-changed"
+  | "volli:terminal-data"
+  | "volli:terminal-exit"
+  | "volli:ghostty-config-changed";
 
 /**
  * Result types below travel as typed discriminated unions rather than

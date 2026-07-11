@@ -1,7 +1,12 @@
 import { derivePrefix, PROJECT_COLORS, type Project } from "@volli/shared";
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createProjectsStore } from "./projects";
+import { useSessionsStore } from "./sessions";
 import { useWorkspaceStore } from "./workspace";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 /** Simple in-memory `StateStorage` so each test gets its own isolated backing. */
 function createMemoryStorage() {
@@ -110,6 +115,24 @@ describe("removeProject", () => {
     store.getState().removeProject(only.id);
 
     expect(useWorkspaceStore.getState().byProject[only.id]).toBeUndefined();
+  });
+
+  it("kills the removed project's live PTYs and forgets its terminal sessions", () => {
+    // removeProject must tear PTYs down explicitly (no terminal view is
+    // mounted here — or in headless flows — to do it as an unmount side effect).
+    const kill = vi
+      .fn<(sessionId: string) => Promise<{ ok: boolean }>>()
+      .mockResolvedValue({ ok: true });
+    vi.stubGlobal("window", { api: { terminal: { kill } } });
+    const store = freshStore();
+    store.getState().addProject({ path: "/a", defaultName: "A" });
+    const only = store.getState().projects[0]!;
+    useSessionsStore.getState().addSession(only.id, "s1");
+
+    store.getState().removeProject(only.id);
+
+    expect(useSessionsStore.getState().byProject[only.id]).toBeUndefined();
+    expect(kill).toHaveBeenCalledWith("s1");
   });
 
   it("leaves the selection unchanged when removing a non-selected project", () => {

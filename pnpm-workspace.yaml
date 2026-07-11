@@ -8,6 +8,10 @@ packages:
 # this entry — do not remove it.
 allowBuilds:
   electron: true
+  # node-pty ships a native addon compiled against the *system* Node ABI at
+  # install time. Electron ^43 runs a different ABI, so after every install run
+  # `pnpm -C apps/desktop run rebuild:pty` to recompile it for Electron.
+  node-pty: true
 
 catalog:
   "@types/node": ^26.1.0

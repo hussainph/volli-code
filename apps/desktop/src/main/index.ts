@@ -1,8 +1,10 @@
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, session } from "electron";
 import { join } from "path";
 import { ticketBranchName } from "@volli/shared";
 import type { VolliIpcEvent } from "@volli/shared";
+import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
+import { registerTerminalIpcHandlers } from "./pty";
 
 const isDev = !app.isPackaged;
 
@@ -71,7 +73,32 @@ app.whenReady().then(() => {
     console.log("[volli] shared wiring OK:", ticketBranchName("VC-0", "monorepo migration"));
   }
 
+  // Renderer permission policy. Electron's default with NO handler installed
+  // is grant-everything; this allowlist keeps exactly what the app uses:
+  //  - local-fonts: restty resolves the ghostty-config font families against
+  //    installed fonts via the Local Font Access API (issue #18).
+  //  - clipboard-read / clipboard-sanitized-write: terminal copy/paste and
+  //    OSC 52 (status quo under the old default-grant; a ghostty-style
+  //    clipboard-read=ask policy needs a restty seam that 0.2.0 lacks).
+  //  - fullscreen: standard window affordance.
+  const allowedPermissions = new Set([
+    "local-fonts",
+    "clipboard-read",
+    "clipboard-sanitized-write",
+    "fullscreen",
+  ]);
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(allowedPermissions.has(permission));
+  });
+  session.defaultSession.setPermissionCheckHandler((_wc, permission) =>
+    allowedPermissions.has(permission),
+  );
+
   registerIpcHandlers();
+  // Boots the PTY multiplexer and its before-quit teardown (kills all PTYs).
+  registerTerminalIpcHandlers();
+  // Ghostty config read + live-reload watch, feeding restty's appearance.
+  registerGhosttyConfigIpc();
   createWindow();
 
   app.on("activate", () => {
