@@ -39,7 +39,11 @@ export function SidebarResizeHandle({ onResizingChange }: SidebarResizeHandlePro
   function handlePointerMove(event: React.PointerEvent<HTMLDivElement>) {
     const drag = dragRef.current;
     if (!drag || event.pointerId !== drag.pointerId) return;
-    setSidebarWidth(drag.startWidth + (event.clientX - drag.startX));
+    // clientX is viewport px, but --sidebar-width renders inside the zoomed
+    // content row (app-shell.tsx), where CSS px are multiplied by uiScale —
+    // divide the delta back out or the edge outruns the pointer at zoom ≠ 1.
+    const scale = useUiStore.getState().uiScale;
+    setSidebarWidth(drag.startWidth + (event.clientX - drag.startX) / scale);
   }
 
   function endDrag(event: React.PointerEvent<HTMLDivElement>) {

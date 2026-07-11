@@ -1,5 +1,6 @@
 import { derivePrefix, PROJECT_COLORS, type Project } from "@volli/shared";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { useBoardStore } from "./board";
 import { createProjectsStore } from "./projects";
 import { useSessionsStore } from "./sessions";
 import { useWorkspaceStore } from "./workspace";
@@ -115,6 +116,17 @@ describe("removeProject", () => {
     store.getState().removeProject(only.id);
 
     expect(useWorkspaceStore.getState().byProject[only.id]).toBeUndefined();
+  });
+
+  it("forgets the removed project's board state", () => {
+    const store = freshStore();
+    store.getState().addProject({ path: "/a", defaultName: "A" });
+    const only = store.getState().projects[0]!;
+    useBoardStore.getState().ensureSeeded(only.id, only.ticketPrefix);
+
+    store.getState().removeProject(only.id);
+
+    expect(useBoardStore.getState().ticketsByProject[only.id]).toBeUndefined();
   });
 
   it("kills the removed project's live PTYs and forgets its terminal sessions", () => {

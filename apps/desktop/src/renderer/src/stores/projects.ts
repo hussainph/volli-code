@@ -14,6 +14,7 @@ import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
 import { killProjectSessions } from "../terminal/session-lifecycle";
+import { useBoardStore } from "./board";
 import { useWorkspaceStore } from "./workspace";
 
 interface ProjectsState {
@@ -67,6 +68,7 @@ export function createProjectsStore(storage?: StateStorage) {
           // NOT depend on a terminal view being mounted — then drops the
           // project's session record.
           useWorkspaceStore.getState().forget(id);
+          useBoardStore.getState().forget(id);
           killProjectSessions(id);
 
           const nextProjects = projects.filter((project) => project.id !== id);

@@ -66,8 +66,10 @@ export default defineConfig({
       // lifecycle bootstrap: excluded on purpose, never add ../main/**.
       include: [
         "src/stores/**",
+        "src/components/board/board-dnd.ts",
         "src/components/sidebar/listing.ts",
         "src/lib/project-shortcut.ts",
+        "src/lib/new-ticket-shortcut.ts",
         "src/terminal/css-color.ts",
         "src/terminal/appearance-model.ts",
         "src/terminal/option-as-alt.ts",

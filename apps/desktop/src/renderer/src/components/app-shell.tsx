@@ -2,14 +2,18 @@ import * as React from "react";
 import { toast } from "sonner";
 
 import { ChromeBar } from "@renderer/components/chrome-bar";
+import { NewTicketDialog } from "@renderer/components/board/new-ticket-dialog";
 import { MainContent } from "@renderer/components/pages/main-content";
 import { ProjectRail } from "@renderer/components/rail/project-rail";
 import { PrimarySidebar } from "@renderer/components/sidebar/primary-sidebar";
 import { SidebarResizeHandle } from "@renderer/components/sidebar/sidebar-resize-handle";
 import { Sidebar, SidebarInset, SidebarProvider } from "@renderer/components/ui/sidebar";
 import { Toaster } from "@renderer/components/ui/sonner";
+import { useNewTicketShortcut } from "@renderer/hooks/use-new-ticket-shortcut";
 import { useProjectShortcuts } from "@renderer/hooks/use-project-shortcuts";
+import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { errorMessage } from "@volli/shared";
+import { useBoardStore } from "@renderer/stores/board";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
 
@@ -25,8 +29,12 @@ import { useUiStore } from "@renderer/stores/ui";
  */
 export function AppShell() {
   useProjectShortcuts();
+  useNewTicketShortcut();
   useProjectRootsSync();
+  useZoomCommands();
+  useSeedSelectedProjectBoard();
   const sidebarWidth = useUiStore((state) => state.sidebarWidth);
+  const uiScale = useUiStore((state) => state.uiScale);
   const [resizing, setResizing] = React.useState(false);
 
   return (
@@ -52,7 +60,18 @@ export function AppShell() {
           tracks this row, not the window; h-full below (overriding the
           Sidebar's own h-svh) makes that height resolve exactly, not just
           get clipped at the window edge. */}
-      <div className="flex min-h-0 flex-1 contain-layout">
+      {/* UI-zoom invariant: CSS `zoom` scales everything BELOW the chrome band
+          (sidebar + content), never the band itself and never SidebarProvider —
+          so the band stays at native scale and its SidebarTrigger keeps aligning
+          with the fixed native traffic lights (which don't scale). Unlike
+          transform:scale, CSS `zoom` participates in layout, so terminal
+          canvases and ResizeObservers below see real resized boxes. `zoom` is
+          missing from this TS lib's CSSProperties, hence the same cast style
+          used for the CSS custom properties above. */}
+      <div
+        className="flex min-h-0 flex-1 contain-layout"
+        style={{ zoom: uiScale } as React.CSSProperties}
+      >
         <Sidebar
           collapsible="icon"
           className="h-full overflow-hidden *:data-[sidebar=sidebar]:flex-row"
@@ -70,8 +89,43 @@ export function AppShell() {
         </SidebarInset>
       </div>
       <Toaster />
+      <NewTicketDialog />
     </SidebarProvider>
   );
+}
+
+/**
+ * Bridges the native View-menu zoom items (⌘+/⌘-/⌘0) to the ui store. The
+ * menu handlers live in the main process (menu.ts) because global accelerators
+ * must; they only fire an event, and the store — not Electron's page zoom —
+ * owns UI scale so the chrome band stays at native scale (see the zoom
+ * invariant on the content row above).
+ */
+function useZoomCommands() {
+  React.useEffect(() => {
+    return window.api.window.onZoomCommand((cmd) => {
+      const { stepUiScale, resetUiScale } = useUiStore.getState();
+      if (cmd === "in") stepUiScale(1);
+      else if (cmd === "out") stepUiScale(-1);
+      else resetUiScale();
+    });
+  }, []);
+}
+
+/**
+ * Seeds the selected project's demo board — the ONE seeding site, so every
+ * surface reading `ticketsByProject` (board page, sidebar Active Sessions, and
+ * whatever comes next) is a pure reader. A layout effect: children's layout
+ * effects run first, but all run before paint, and the seeding `set` re-renders
+ * synchronously — so the first paint already has the seeded board. Goes away
+ * with the SQLite ticket layer.
+ */
+function useSeedSelectedProjectBoard() {
+  const project = useSelectedProject();
+  React.useLayoutEffect(() => {
+    if (project === null) return;
+    useBoardStore.getState().ensureSeeded(project.id, project.ticketPrefix);
+  }, [project]);
 }
 
 /** Mirrors tracked project paths into the main process's fs-root allowlist. */

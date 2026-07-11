@@ -5,6 +5,7 @@ import {
   SIDEBAR_DEFAULT_WIDTH,
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
+  UI_SCALE_STEPS,
 } from "./ui";
 
 /** Simple in-memory `StateStorage` so each test gets its own isolated backing. */
@@ -44,6 +45,61 @@ describe("setSidebarWidth", () => {
   });
 });
 
+describe("stepUiScale", () => {
+  const MIN = UI_SCALE_STEPS[0];
+  const MAX = UI_SCALE_STEPS[UI_SCALE_STEPS.length - 1];
+
+  it("defaults to native scale (1)", () => {
+    const store = createUiStore(createMemoryStorage());
+    expect(store.getState().uiScale).toBe(1);
+  });
+
+  it("steps up and down the ladder one rung at a time", () => {
+    const store = createUiStore(createMemoryStorage());
+    // 1 is index 2 in the ladder; one step up is index 3 (1.1).
+    store.getState().stepUiScale(1);
+    expect(store.getState().uiScale).toBe(UI_SCALE_STEPS[3]);
+    store.getState().stepUiScale(-1);
+    expect(store.getState().uiScale).toBe(1);
+  });
+
+  it("clamps at the top rung", () => {
+    const store = createUiStore(createMemoryStorage());
+    for (let i = 0; i < 10; i++) store.getState().stepUiScale(1);
+    expect(store.getState().uiScale).toBe(MAX);
+  });
+
+  it("clamps at the bottom rung", () => {
+    const store = createUiStore(createMemoryStorage());
+    for (let i = 0; i < 10; i++) store.getState().stepUiScale(-1);
+    expect(store.getState().uiScale).toBe(MIN);
+  });
+
+  it("snaps an off-ladder value to the nearest rung before stepping", () => {
+    // Seed a stale, off-ladder scale via persisted storage.
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:ui",
+      JSON.stringify({ state: { sidebarWidth: SIDEBAR_DEFAULT_WIDTH, uiScale: 1.18 }, version: 1 }),
+    );
+    const store = createUiStore(storage);
+    // 1.18 is nearest to 1.25 (index 4); a step up lands on 1.5 (index 5).
+    store.getState().stepUiScale(1);
+    expect(store.getState().uiScale).toBe(UI_SCALE_STEPS[5]);
+  });
+});
+
+describe("resetUiScale", () => {
+  it("returns scale to native (1)", () => {
+    const store = createUiStore(createMemoryStorage());
+    store.getState().stepUiScale(1);
+    store.getState().stepUiScale(1);
+    expect(store.getState().uiScale).not.toBe(1);
+    store.getState().resetUiScale();
+    expect(store.getState().uiScale).toBe(1);
+  });
+});
+
 describe("setSettingsOpen", () => {
   it("toggles the app-wide Settings overlay", () => {
     const store = createUiStore(createMemoryStorage());
@@ -57,17 +113,31 @@ describe("setSettingsOpen", () => {
   });
 });
 
+describe("setNewTicketOpen", () => {
+  it("toggles the app-wide New-ticket dialog", () => {
+    const store = createUiStore(createMemoryStorage());
+    expect(store.getState().newTicketOpen).toBe(false);
+
+    store.getState().setNewTicketOpen(true);
+    expect(store.getState().newTicketOpen).toBe(true);
+
+    store.getState().setNewTicketOpen(false);
+    expect(store.getState().newTicketOpen).toBe(false);
+  });
+});
+
 describe("persistence", () => {
-  it("persists only sidebarWidth — settingsOpen resets each launch", () => {
+  it("persists sidebarWidth + uiScale — settingsOpen resets each launch", () => {
     const storage = createMemoryStorage();
     const store = createUiStore(storage);
     store.getState().setSettingsOpen(true);
     store.getState().setSidebarWidth(500);
+    store.getState().stepUiScale(1);
 
     const persisted = JSON.parse(storage.getItem("volli:ui")!) as {
       state: Record<string, unknown>;
     };
-    expect(persisted.state).toEqual({ sidebarWidth: 500 });
+    expect(persisted.state).toEqual({ sidebarWidth: 500, uiScale: UI_SCALE_STEPS[3] });
   });
 
   it("rehydrates sidebarWidth from storage into a fresh store", async () => {
@@ -77,5 +147,50 @@ describe("persistence", () => {
     const reloaded = createUiStore(storage);
     await reloaded.persist.rehydrate();
     expect(reloaded.getState().sidebarWidth).toBe(444);
+  });
+});
+
+describe("rehydration sanitization (corrupt JSON)", () => {
+  it("snaps a corrupt persisted uiScale back onto the ladder", () => {
+    // uiScale is applied verbatim as CSS `zoom` — a persisted 0 would render
+    // the whole app below the chrome band invisible on every launch.
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:ui",
+      JSON.stringify({ state: { sidebarWidth: 320, uiScale: 0 }, version: 1 }),
+    );
+    expect(createUiStore(storage).getState().uiScale).toBe(UI_SCALE_STEPS[0]);
+
+    const nonNumeric = createMemoryStorage();
+    nonNumeric.setItem(
+      "volli:ui",
+      JSON.stringify({ state: { sidebarWidth: 320, uiScale: "huge" }, version: 1 }),
+    );
+    expect(createUiStore(nonNumeric).getState().uiScale).toBe(1);
+  });
+
+  it("clamps a corrupt persisted sidebarWidth back into the resize bounds", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:ui",
+      JSON.stringify({ state: { sidebarWidth: 10_000, uiScale: 1 }, version: 1 }),
+    );
+    expect(createUiStore(storage).getState().sidebarWidth).toBe(SIDEBAR_MAX_WIDTH);
+
+    const nonNumeric = createMemoryStorage();
+    nonNumeric.setItem(
+      "volli:ui",
+      JSON.stringify({ state: { sidebarWidth: null, uiScale: 1 }, version: 1 }),
+    );
+    expect(createUiStore(nonNumeric).getState().sidebarWidth).toBe(SIDEBAR_DEFAULT_WIDTH);
+  });
+
+  it("falls back to defaults when the persisted state is not an object", () => {
+    const storage = createMemoryStorage();
+    storage.setItem("volli:ui", JSON.stringify({ state: null, version: 1 }));
+
+    const store = createUiStore(storage);
+    expect(store.getState().sidebarWidth).toBe(SIDEBAR_DEFAULT_WIDTH);
+    expect(store.getState().uiScale).toBe(1);
   });
 });
