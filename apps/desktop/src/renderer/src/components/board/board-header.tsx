@@ -1,6 +1,7 @@
 import { ArrowsDownUpIcon } from "@phosphor-icons/react/dist/csr/ArrowsDownUp";
 import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
 import { ListBulletsIcon } from "@phosphor-icons/react/dist/csr/ListBullets";
+import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import {
   DEFAULT_SORT_DIRECTION,
   TICKET_SORT_KEYS,
@@ -20,6 +21,7 @@ import {
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
 import { cn } from "@renderer/lib/utils";
+import { useUiStore } from "@renderer/stores/ui";
 import {
   DEFAULT_WORKSPACE_UI,
   useWorkspaceStore,
@@ -134,6 +136,20 @@ export function BoardHeader({ projectId, ticketCount, tickets, filter }: BoardHe
       <div className="ml-auto flex shrink-0 items-center gap-2">
         <OrderingMenu projectId={projectId} />
         <ViewToggle projectId={projectId} />
+        {/* The prominent, always-reachable create entry point — the column
+            composers (board-column.tsx) hide at the bottom of long columns,
+            so this + the plain "c" hotkey (use-new-ticket-shortcut.ts) are
+            the discoverable ways in. Default variant (not ghost/outline like
+            the chips around it) so it visibly pops. Accessible name is "New
+            ticket", not bare "New" — the column composers' buttons are named
+            "New" and the e2e smoke matches both with exact:true. */}
+        <Button
+          className="h-7 gap-1 px-2.5 text-xs"
+          onClick={() => useUiStore.getState().setNewTicketOpen(true)}
+        >
+          <PlusIcon className="size-3.5" />
+          New ticket
+        </Button>
       </div>
     </div>
   );

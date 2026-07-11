@@ -140,6 +140,43 @@ describe("addTicket", () => {
     expect(store.getState()).toBe(before);
     expect(store.getState().ticketsByProject.p1).toBeUndefined();
   });
+
+  it("stores an explicit priority", () => {
+    const store = freshStore();
+
+    store.getState().addTicket("p1", "TST", "todo", "Urgent fix", { priority: "high" });
+
+    expect(store.getState().ticketsByProject.p1![0]!.priority).toBe("high");
+  });
+
+  it("defaults to medium priority when options is omitted", () => {
+    const store = freshStore();
+
+    store.getState().addTicket("p1", "TST", "todo", "No priority specified");
+
+    expect(store.getState().ticketsByProject.p1![0]!.priority).toBe("medium");
+  });
+
+  it("returns the created ticket", () => {
+    const store = freshStore();
+
+    const ticket = store.getState().addTicket("p1", "TST", "todo", "First ticket");
+
+    expect(ticket).not.toBeNull();
+    expect(ticket!.id).toBe("TST-1");
+    expect(ticket!.title).toBe("First ticket");
+  });
+
+  it("returns null and adds nothing for a whitespace-only title", () => {
+    const store = freshStore();
+    const before = store.getState();
+
+    const ticket = store.getState().addTicket("p1", "TST", "todo", "   ");
+
+    expect(ticket).toBeNull();
+    expect(store.getState()).toBe(before);
+    expect(store.getState().ticketsByProject.p1).toBeUndefined();
+  });
 });
 
 describe("setTicketPriority", () => {

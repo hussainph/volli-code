@@ -113,6 +113,19 @@ describe("setSettingsOpen", () => {
   });
 });
 
+describe("setNewTicketOpen", () => {
+  it("toggles the app-wide New-ticket dialog", () => {
+    const store = createUiStore(createMemoryStorage());
+    expect(store.getState().newTicketOpen).toBe(false);
+
+    store.getState().setNewTicketOpen(true);
+    expect(store.getState().newTicketOpen).toBe(true);
+
+    store.getState().setNewTicketOpen(false);
+    expect(store.getState().newTicketOpen).toBe(false);
+  });
+});
+
 describe("persistence", () => {
   it("persists sidebarWidth + uiScale — settingsOpen resets each launch", () => {
     const storage = createMemoryStorage();

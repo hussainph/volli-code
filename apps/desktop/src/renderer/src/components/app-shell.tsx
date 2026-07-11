@@ -2,12 +2,14 @@ import * as React from "react";
 import { toast } from "sonner";
 
 import { ChromeBar } from "@renderer/components/chrome-bar";
+import { NewTicketDialog } from "@renderer/components/board/new-ticket-dialog";
 import { MainContent } from "@renderer/components/pages/main-content";
 import { ProjectRail } from "@renderer/components/rail/project-rail";
 import { PrimarySidebar } from "@renderer/components/sidebar/primary-sidebar";
 import { SidebarResizeHandle } from "@renderer/components/sidebar/sidebar-resize-handle";
 import { Sidebar, SidebarInset, SidebarProvider } from "@renderer/components/ui/sidebar";
 import { Toaster } from "@renderer/components/ui/sonner";
+import { useNewTicketShortcut } from "@renderer/hooks/use-new-ticket-shortcut";
 import { useProjectShortcuts } from "@renderer/hooks/use-project-shortcuts";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { errorMessage } from "@volli/shared";
@@ -27,6 +29,7 @@ import { useUiStore } from "@renderer/stores/ui";
  */
 export function AppShell() {
   useProjectShortcuts();
+  useNewTicketShortcut();
   useProjectRootsSync();
   useZoomCommands();
   useSeedSelectedProjectBoard();
@@ -86,6 +89,7 @@ export function AppShell() {
         </SidebarInset>
       </div>
       <Toaster />
+      <NewTicketDialog />
     </SidebarProvider>
   );
 }

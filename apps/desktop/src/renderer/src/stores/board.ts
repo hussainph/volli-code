@@ -36,7 +36,20 @@ interface BoardState {
   selectedByProject: Record<string, string | null>;
   ensureSeeded(projectId: string, ticketPrefix: string): void;
   moveTicket(projectId: string, ticketId: string, toStatus: TicketStatus, toIndex: number): void;
-  addTicket(projectId: string, ticketPrefix: string, status: TicketStatus, title: string): void;
+  /**
+   * Appends a new ticket to the end of `status`'s column. Returns the created
+   * {@link Ticket}, or `null` (no-op) when the trimmed title is empty —
+   * callers that need the new ticket (e.g. the global New-ticket dialog, to
+   * toast its id) can use the return value; the inline column composers
+   * ignore it.
+   */
+  addTicket(
+    projectId: string,
+    ticketPrefix: string,
+    status: TicketStatus,
+    title: string,
+    options?: { priority?: TicketPriority },
+  ): Ticket | null;
   setTicketPriority(projectId: string, ticketId: string, priority: TicketPriority): void;
   setSearch(projectId: string, search: string): void;
   togglePriority(projectId: string, priority: TicketPriority): void;
@@ -149,9 +162,9 @@ export function createBoardStore(storage?: StateStorage) {
             set({ ticketsByProject: { ...ticketsByProject, [projectId]: next } });
           },
 
-          addTicket(projectId, ticketPrefix, status, title) {
+          addTicket(projectId, ticketPrefix, status, title, options) {
             const trimmed = title.trim();
-            if (trimmed === "") return;
+            if (trimmed === "") return null;
 
             const { ticketsByProject } = get();
             const current = ticketsByProject[projectId] ?? [];
@@ -164,8 +177,10 @@ export function createBoardStore(storage?: StateStorage) {
               status,
               order,
               now: Date.now(),
+              priority: options?.priority,
             });
             set({ ticketsByProject: { ...ticketsByProject, [projectId]: [...current, ticket] } });
+            return ticket;
           },
 
           setTicketPriority(projectId, ticketId, priority) {

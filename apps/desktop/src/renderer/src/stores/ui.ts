@@ -5,7 +5,10 @@
  * caveat as the projects store: dev and packaged origins don't share data.
  * `settingsOpen` is session-only: Settings is app-wide chrome (the sidebar
  * footer entry), not a per-workspace place, so it stays up across project
- * switches and closes when a nav page is picked.
+ * switches and closes when a nav page is picked. `newTicketOpen` is
+ * session-only for the same reason: the global New-ticket dialog (board
+ * header button + the "c" hotkey) is app-wide chrome, not per-workspace
+ * state, so it never follows a project into persisted storage.
  *
  * Per-workspace UI state (the active nav page) lives in stores/workspace.ts.
  */
@@ -73,10 +76,13 @@ interface UiState {
   sidebarWidth: number;
   uiScale: number;
   settingsOpen: boolean;
+  /** Session-only — never persisted; see module doc. */
+  newTicketOpen: boolean;
   setSidebarWidth(width: number): void;
   stepUiScale(delta: 1 | -1): void;
   resetUiScale(): void;
   setSettingsOpen(open: boolean): void;
+  setNewTicketOpen(open: boolean): void;
 }
 
 type PersistedUiState = Pick<UiState, "sidebarWidth" | "uiScale">;
@@ -89,10 +95,12 @@ export function createUiStore(storage?: StateStorage) {
         sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
         uiScale: UI_SCALE_DEFAULT,
         settingsOpen: false,
+        newTicketOpen: false,
         setSidebarWidth: (width) => set({ sidebarWidth: clampSidebarWidth(width) }),
         stepUiScale: (delta) => set((state) => ({ uiScale: steppedScale(state.uiScale, delta) })),
         resetUiScale: () => set({ uiScale: UI_SCALE_DEFAULT }),
         setSettingsOpen: (open) => set({ settingsOpen: open }),
+        setNewTicketOpen: (open) => set({ newTicketOpen: open }),
       }),
       {
         name: "volli:ui",

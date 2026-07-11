@@ -6,8 +6,10 @@
  * pill drag-and-drop, reload persistence, adding a card, and non-destructive
  * context-menu actions. Later checks (13+) cover the board's second-generation
  * surfaces: the Ordering dropdown, the board/list view toggle (list-view add +
- * drag parity), the sidebar's Active Sessions link, and the chrome-static UI
- * zoom (CSS `zoom` below the 40px chrome band, driven by a main-process IPC).
+ * drag parity), the sidebar's Active Sessions link, the chrome-static UI
+ * zoom (CSS `zoom` below the 40px chrome band, driven by a main-process IPC),
+ * and the global New-ticket dialog (plain "c" hotkey, the chrome search
+ * input's text-entry guard, and the board header's "New ticket" button).
  *
  * Board state (`volli:board`, `volli:projects` in localStorage) is reset and
  * reseeded at startup, so reruns are deterministic — the 11-ticket demo seed
@@ -659,6 +661,62 @@ async function main() {
         };
       },
     );
+
+    // === 19. Global create: plain "c" opens the New-ticket dialog; Enter creates a card ===
+    await attempt(
+      19,
+      'Plain "c" hotkey opens the New-ticket dialog; typing a title + Enter creates a card and closes it',
+      async () => {
+        // Click neutral static text (the "Board" heading) so focus lands
+        // somewhere that is definitely not a text-entry target, matching how
+        // the hotkey is meant to fire "anywhere in the app".
+        await page.getByRole("heading", { name: "Board", exact: true }).click();
+        await page.keyboard.press("c");
+        await sleep(200);
+        const dialogOpenCount = await page.getByRole("dialog").count();
+        const title = "Global create dialog smoke card";
+        await page.getByPlaceholder("Ticket title…").fill(title);
+        await page.keyboard.press("Enter");
+        await sleep(400);
+        const dialogClosedCount = await page.getByRole("dialog").count();
+        const cardVisible = (await page.getByText(title, { exact: true }).count()) >= 1;
+        const ok = dialogOpenCount === 1 && dialogClosedCount === 0 && cardVisible;
+        return {
+          ok,
+          detail: `dialogOpen=${dialogOpenCount} dialogClosedAfter=${dialogClosedCount} cardVisible=${cardVisible}`,
+        };
+      },
+    );
+
+    // === 20. Guard: typing "c" into the chrome search input does not open the dialog ===
+    await attempt(
+      20,
+      'Guard: "c" typed into the chrome search input does not open the New-ticket dialog',
+      async () => {
+        const search = page.getByPlaceholder("Search tickets…");
+        await search.click();
+        await search.pressSequentially("c");
+        await sleep(300);
+        const dialogCount = await page.getByRole("dialog").count();
+        await search.fill("");
+        await page.keyboard.press("Escape");
+        await sleep(300);
+        const ok = dialogCount === 0;
+        return { ok, detail: `dialogCount=${dialogCount}` };
+      },
+    );
+
+    // === 21. Header "New ticket" button opens the dialog; Escape closes it ===
+    await attempt(21, '"New ticket" header button opens the dialog; Escape closes it', async () => {
+      await page.getByRole("button", { name: "New ticket", exact: true }).click();
+      await sleep(200);
+      const openCount = await page.getByRole("dialog").count();
+      await page.keyboard.press("Escape");
+      await sleep(300);
+      const closedCount = await page.getByRole("dialog").count();
+      const ok = openCount === 1 && closedCount === 0;
+      return { ok, detail: `open=${openCount} closedAfterEscape=${closedCount}` };
+    });
   } finally {
     await app.close();
   }
