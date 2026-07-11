@@ -90,7 +90,12 @@ export function ActiveSessions({ project }: ActiveSessionsProps) {
                   aria-hidden
                   className={cn("size-1.5 shrink-0 rounded-full", STATUS_DOT_CLASS[status])}
                 />
-                <span className="font-mono text-xs text-muted-foreground">{ticket.id}</span>
+                {/* shrink-0 + nowrap: the id must never wrap onto a second line
+                    when the sidebar is resized narrow (even for long ids) — the
+                    truncating title absorbs all the shrinkage instead. */}
+                <span className="shrink-0 whitespace-nowrap font-mono text-xs text-muted-foreground">
+                  {ticket.id}
+                </span>
                 <span className="truncate">{ticket.title}</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
