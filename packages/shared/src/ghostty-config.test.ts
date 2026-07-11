@@ -128,6 +128,10 @@ theme =
     expect(parseGhosttyTerminalPrefs("theme = Nord").themeName).toBe("Nord");
   });
 
+  it("skips entries without a light:/dark: prefix inside a variant pair", () => {
+    expect(parseGhosttyTerminalPrefs("theme = Nord Storm,dark:Dusk").themeName).toBe("Dusk");
+  });
+
   it("skips junk lines with no =", () => {
     const text = `
 this is not a config line
@@ -170,6 +174,10 @@ font-size = 14
 
     it("handles multiple comma-separated tags in one value", () => {
       expect(parseGhosttyTerminalPrefs("font-feature = -liga, -dlig").ligatures).toBe(false);
+    });
+
+    it("skips empty segments from doubled or trailing commas", () => {
+      expect(parseGhosttyTerminalPrefs("font-feature = ,-calt,").ligatures).toBe(false);
     });
 
     it("tolerates whitespace around comma-separated tags", () => {
@@ -372,6 +380,70 @@ describe("resolveGhosttyConfigText", () => {
     // The shared file's text appears exactly once in the merged output.
     const occurrences = (text ?? "").split("font-size = 9").length - 1;
     expect(occurrences).toBe(1);
+  });
+
+  it("collapses .. segments when an include points outside the config directory", () => {
+    const files = {
+      "/home/u/.config/ghostty/config": "config-file = ../themes/dark.conf\n",
+      "/home/u/.config/themes/dark.conf": "font-size = 11\n",
+    };
+    const { text, warnings } = resolveGhosttyConfigText(
+      "/home/u/.config/ghostty/config",
+      readerFor(files),
+    );
+    expect(warnings).toEqual([]);
+    expect(parseGhosttyTerminalPrefs(text ?? "").fontSize).toBe(11);
+  });
+
+  it("preserves .. segments a relative entry path cannot collapse", () => {
+    const files = { "../ghostty/config": "font-size = 8\n" };
+    const { text } = resolveGhosttyConfigText("cfg/../../ghostty/config", readerFor(files));
+    expect(parseGhosttyTerminalPrefs(text ?? "").fontSize).toBe(8);
+  });
+
+  it("drops a .. that would climb above the root of an absolute path", () => {
+    const files = { "/cfg/config": "font-size = 7\n" };
+    const { text } = resolveGhosttyConfigText("/../cfg/config", readerFor(files));
+    expect(parseGhosttyTerminalPrefs(text ?? "").fontSize).toBe(7);
+  });
+
+  it("resolves a relative include from an entry file at the filesystem root", () => {
+    const files = {
+      "/config": "config-file = extra.conf\n",
+      "/extra.conf": "font-size = 15\n",
+    };
+    const { text, warnings } = resolveGhosttyConfigText("/config", readerFor(files));
+    expect(warnings).toEqual([]);
+    expect(parseGhosttyTerminalPrefs(text ?? "").fontSize).toBe(15);
+  });
+
+  it("uses an absolute include path as-is, ignoring the containing directory", () => {
+    const files = {
+      "/cfg/config": "config-file = /themes/dark.conf\n",
+      "/themes/dark.conf": "font-size = 13\n",
+    };
+    const { text, warnings } = resolveGhosttyConfigText("/cfg/config", readerFor(files));
+    expect(warnings).toEqual([]);
+    expect(parseGhosttyTerminalPrefs(text ?? "").fontSize).toBe(13);
+  });
+
+  it("normalizes a fully-collapsed relative entry path to '.'", () => {
+    const files = { ".": "font-size = 6\n" };
+    const { text } = resolveGhosttyConfigText("cfg/..", readerFor(files));
+    expect(parseGhosttyTerminalPrefs(text ?? "").fontSize).toBe(6);
+  });
+
+  it("resets accumulated includes when a config-file line has an empty value (ghostty semantics)", () => {
+    const files = {
+      "/cfg/config": "config-file = a.conf\nconfig-file =\nconfig-file = b.conf\n",
+      "/cfg/a.conf": "font-size = 1\n",
+      "/cfg/b.conf": "theme = Kept\n",
+    };
+    const { text, warnings } = resolveGhosttyConfigText("/cfg/config", readerFor(files));
+    expect(warnings).toEqual([]);
+    expect(parseGhosttyTerminalPrefs(text ?? "").themeName).toBe("Kept");
+    // The reset discards a.conf entirely — it is never read or emitted.
+    expect(text).not.toContain("font-size = 1");
   });
 });
 

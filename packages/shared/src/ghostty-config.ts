@@ -48,10 +48,6 @@ function stripSurroundingQuotes(value: string): string {
  * fallback. A value with no `light:`/`dark:` prefixes is used verbatim.
  */
 function resolveThemeName(value: string): string {
-  if (!/(?:^|,)\s*(?:light|dark)\s*:/.test(value)) {
-    return value;
-  }
-
   let lightName: string | null = null;
   let darkName: string | null = null;
   for (const rawEntry of value.split(",")) {
