@@ -55,6 +55,12 @@ const PRIORITY_RANK: Record<TicketPriority, number> = {
   high: 2,
 };
 
+// Case-insensitive so "apple" and "Apple" sort together; `sensitivity: base`
+// also folds accents, matching how a user reads the title. A prebuilt
+// Collator: `localeCompare` with an options object re-resolves the locale on
+// every comparison, and this runs O(n log n) per column per render.
+const TITLE_COLLATOR = new Intl.Collator(undefined, { sensitivity: "base" });
+
 /**
  * The key's primary comparison in ascending form only. Ties (0) are left for
  * {@link sortTickets} to break by `ticketNumber` — kept out of here so the
@@ -71,9 +77,7 @@ function primaryCompareAsc(a: Ticket, b: Ticket, key: TicketSortKey): number {
     case "updated":
       return a.updatedAt - b.updatedAt;
     case "title":
-      // Case-insensitive so "apple" and "Apple" sort together; `sensitivity:
-      // base` also folds accents, matching how a user reads the title.
-      return a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
+      return TITLE_COLLATOR.compare(a.title, b.title);
   }
 }
 

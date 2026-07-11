@@ -1,13 +1,13 @@
 import { TICKET_PRIORITY_LABELS, type TicketPriority } from "@volli/shared";
 
-// Design pass pending: these three hexes (low/medium/high fill + unfilled
-// gray) are a first pass, not final tokens — see docs note tracking this.
+// Design pass pending: the low/medium fill hexes are a first pass, not final
+// tokens — see docs note tracking this.
 const FILLED_COLOR: Record<TicketPriority, string> = {
   low: "#7d8ca3",
   medium: "#b8935f",
   high: "var(--destructive)",
 };
-const UNFILLED_COLOR = "#3a3a3a";
+const UNFILLED_COLOR = "var(--border-strong)";
 
 const FILLED_COUNT: Record<TicketPriority, number> = {
   low: 1,

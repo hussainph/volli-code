@@ -32,7 +32,7 @@ export function FilterChip({ label, options, selected, onToggle }: FilterChipPro
           variant="ghost"
           className={cn(
             "h-7 rounded-full border border-border px-2.5 text-xs text-muted-foreground",
-            active && "border-[#3a3a3a] text-foreground",
+            active && "border-border-strong text-foreground",
           )}
         >
           {active ? `${label} · ${selected.length}` : label}

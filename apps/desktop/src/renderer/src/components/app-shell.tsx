@@ -9,7 +9,9 @@ import { SidebarResizeHandle } from "@renderer/components/sidebar/sidebar-resize
 import { Sidebar, SidebarInset, SidebarProvider } from "@renderer/components/ui/sidebar";
 import { Toaster } from "@renderer/components/ui/sonner";
 import { useProjectShortcuts } from "@renderer/hooks/use-project-shortcuts";
+import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { errorMessage } from "@volli/shared";
+import { useBoardStore } from "@renderer/stores/board";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
 
@@ -27,6 +29,7 @@ export function AppShell() {
   useProjectShortcuts();
   useProjectRootsSync();
   useZoomCommands();
+  useSeedSelectedProjectBoard();
   const sidebarWidth = useUiStore((state) => state.sidebarWidth);
   const uiScale = useUiStore((state) => state.uiScale);
   const [resizing, setResizing] = React.useState(false);
@@ -103,6 +106,22 @@ function useZoomCommands() {
       else resetUiScale();
     });
   }, []);
+}
+
+/**
+ * Seeds the selected project's demo board — the ONE seeding site, so every
+ * surface reading `ticketsByProject` (board page, sidebar Active Sessions, and
+ * whatever comes next) is a pure reader. A layout effect: children's layout
+ * effects run first, but all run before paint, and the seeding `set` re-renders
+ * synchronously — so the first paint already has the seeded board. Goes away
+ * with the SQLite ticket layer.
+ */
+function useSeedSelectedProjectBoard() {
+  const project = useSelectedProject();
+  React.useLayoutEffect(() => {
+    if (project === null) return;
+    useBoardStore.getState().ensureSeeded(project.id, project.ticketPrefix);
+  }, [project]);
 }
 
 /** Mirrors tracked project paths into the main process's fs-root allowlist. */

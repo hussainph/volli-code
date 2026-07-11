@@ -1,3 +1,4 @@
+import * as React from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { type Ticket } from "@volli/shared";
@@ -22,7 +23,7 @@ export function TicketCardContent({
         "flex flex-col gap-1.5 rounded-lg border bg-card px-3 py-2.5 cursor-default select-none transition-[border-color] duration-150 ease-out",
         // Selection colors the card's own border: a ring draws OUTSIDE the box
         // and the column scroller clips its top edge on the first card.
-        selected ? "border-primary/70" : "border-border hover:border-[#333333]",
+        selected ? "border-primary/70" : "border-border hover:border-border-hover",
       )}
     >
       <div className="flex items-center justify-between gap-2">
@@ -43,19 +44,30 @@ export function TicketCardContent({
   );
 }
 
-interface TicketCardProps {
+// Sibling shift while a drag reorders the column: Linear-crisp, a strong
+// ease-out well under 300ms (dnd-kit's 250ms default reads floaty). Shared by
+// the board card and the list row so the two views' drag feel stays one value.
+export const SORT_TRANSITION = { duration: 180, easing: "cubic-bezier(0.23, 1, 0.32, 1)" };
+
+/**
+ * Sortable + context-menu wrapper shared by the board card and the list row:
+ * one useSortable wiring, one reduced-motion gate, one dimmed-while-dragging
+ * treatment. Consumers supply only the presentational body (and, for the list
+ * row, its data-* e2e hooks via `dataAttributes`).
+ */
+export function SortableTicketShell({
+  ticket,
+  projectId,
+  onSelect,
+  dataAttributes,
+  children,
+}: {
   ticket: Ticket;
   projectId: string;
-  selected: boolean;
-  onSelect(): void;
-}
-
-// Sibling shift while a drag reorders the column: Linear-crisp, a strong
-// ease-out well under 300ms (dnd-kit's 250ms default reads floaty).
-const SORT_TRANSITION = { duration: 180, easing: "cubic-bezier(0.23, 1, 0.32, 1)" };
-
-/** Sortable wrapper: the in-column card. Dims while its drag overlay is out. */
-export function TicketCard({ ticket, projectId, selected, onSelect }: TicketCardProps) {
+  onSelect(ticketId: string): void;
+  dataAttributes?: Record<string, string>;
+  children: React.ReactNode;
+}) {
   const reducedMotion = useReducedMotion();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: ticket.id,
@@ -68,12 +80,39 @@ export function TicketCard({ ticket, projectId, selected, onSelect }: TicketCard
         ref={setNodeRef}
         style={{ transform: CSS.Transform.toString(transform), transition }}
         className={cn(isDragging && "opacity-40")}
-        onClick={onSelect}
+        onClick={() => onSelect(ticket.id)}
+        {...dataAttributes}
         {...attributes}
         {...listeners}
       >
-        <TicketCardContent ticket={ticket} selected={selected} />
+        {children}
       </div>
     </TicketContextMenu>
   );
 }
+
+interface TicketCardProps {
+  ticket: Ticket;
+  projectId: string;
+  selected: boolean;
+  onSelect(ticketId: string): void;
+}
+
+/**
+ * Sortable wrapper: the in-column card. Dims while its drag overlay is out.
+ * Memoized — every card in every column would otherwise re-render on each
+ * board render (drag-over events, selection changes, filter keystrokes);
+ * `onSelect` is a stable id-taking callback from the board for that reason.
+ */
+export const TicketCard = React.memo(function TicketCard({
+  ticket,
+  projectId,
+  selected,
+  onSelect,
+}: TicketCardProps) {
+  return (
+    <SortableTicketShell ticket={ticket} projectId={projectId} onSelect={onSelect}>
+      <TicketCardContent ticket={ticket} selected={selected} />
+    </SortableTicketShell>
+  );
+});

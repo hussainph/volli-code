@@ -1,4 +1,3 @@
-import { useLayoutEffect } from "react";
 import type { Project, Ticket, TicketStatus } from "@volli/shared";
 
 import {
@@ -55,12 +54,6 @@ export function ActiveSessions({ project }: ActiveSessionsProps) {
   const selectedTicketId = useBoardStore((state) => state.selectedByProject[project.id] ?? null);
   const selectTicket = useBoardStore((state) => state.selectTicket);
   const setNav = useWorkspaceStore((state) => state.setNav);
-
-  // Layout effect so the first paint already has rows — the sidebar can mount
-  // before the board page runs this same (idempotent) seed for the project.
-  useLayoutEffect(() => {
-    useBoardStore.getState().ensureSeeded(project.id, project.ticketPrefix);
-  }, [project.id, project.ticketPrefix]);
 
   const sessions = sessionRows(tickets);
 

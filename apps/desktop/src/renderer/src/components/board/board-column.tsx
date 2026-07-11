@@ -1,4 +1,3 @@
-import * as React from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
@@ -6,9 +5,9 @@ import { TICKET_STATUS_LABELS, type Ticket, type TicketStatus } from "@volli/sha
 
 import { columnDroppableId } from "@renderer/components/board/board-dnd";
 import { TicketCard } from "@renderer/components/board/ticket-card";
+import { useTicketComposer } from "@renderer/components/board/use-ticket-composer";
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
-import { useBoardStore } from "@renderer/stores/board";
 
 interface BoardColumnProps {
   status: TicketStatus;
@@ -18,7 +17,7 @@ interface BoardColumnProps {
   selectedId: string | null;
   onSelect(ticketId: string): void;
   composerInitiallyOpen: boolean;
-  onComposerClose(): void;
+  onComposerClose(status: TicketStatus): void;
   /** Play the enter transition — true for columns appearing on an already-mounted board. */
   animateEnter: boolean;
 }
@@ -38,37 +37,13 @@ export function BoardColumn({
   // The body is the column's droppable so cards can be dropped onto the empty
   // space below the list (or into a column emptied mid-drag).
   const { setNodeRef } = useDroppable({ id: columnDroppableId(status) });
-  const [composerOpen, setComposerOpen] = React.useState(composerInitiallyOpen);
-  const [title, setTitle] = React.useState("");
-  const inputRef = React.useRef<HTMLInputElement>(null);
-
-  React.useEffect(() => {
-    if (composerOpen) inputRef.current?.scrollIntoView({ block: "nearest" });
-  }, [composerOpen]);
-
-  function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      const trimmed = title.trim();
-      if (trimmed === "") return;
-      useBoardStore.getState().addTicket(projectId, ticketPrefix, status, trimmed);
-      setTitle("");
-    } else if (event.key === "Escape") {
-      setTitle("");
-      setComposerOpen(false);
-      onComposerClose();
-    }
-  }
-
-  function handleBlur() {
-    const trimmed = title.trim();
-    if (trimmed !== "") {
-      useBoardStore.getState().addTicket(projectId, ticketPrefix, status, trimmed);
-    }
-    setTitle("");
-    setComposerOpen(false);
-    onComposerClose();
-  }
+  const composer = useTicketComposer({
+    projectId,
+    ticketPrefix,
+    status,
+    initiallyOpen: composerInitiallyOpen,
+    onClose: () => onComposerClose(status),
+  });
 
   return (
     <div
@@ -100,20 +75,20 @@ export function BoardColumn({
               ticket={ticket}
               projectId={projectId}
               selected={ticket.id === selectedId}
-              onSelect={() => onSelect(ticket.id)}
+              onSelect={onSelect}
             />
           ))}
         </div>
       </SortableContext>
-      {composerOpen ? (
+      {composer.open ? (
         <div className="mx-2 mb-2 rounded-lg border border-border bg-card px-3 py-2.5">
           <input
-            ref={inputRef}
+            ref={composer.inputRef}
             autoFocus
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            onKeyDown={handleKeyDown}
-            onBlur={handleBlur}
+            value={composer.title}
+            onChange={(event) => composer.setTitle(event.target.value)}
+            onKeyDown={composer.handleKeyDown}
+            onBlur={composer.handleBlur}
             placeholder="Ticket title…"
             className="w-full border-none bg-transparent text-sm font-medium text-foreground outline-none placeholder:text-muted-foreground"
           />
@@ -121,7 +96,7 @@ export function BoardColumn({
       ) : (
         <Button
           variant="ghost"
-          onClick={() => setComposerOpen(true)}
+          onClick={composer.openComposer}
           className="mx-2 mb-2 h-7 justify-start gap-1.5 text-xs text-muted-foreground"
         >
           <PlusIcon className="size-3.5" />

@@ -36,6 +36,10 @@
   --destructive: #e5484d;
   --destructive-foreground: #ffffff;
   --border: #262626;
+  /* Slightly-brighter-than---border grays for hover/active edge emphasis
+   * (card hover, active filter chips, unfilled priority bars). */
+  --border-hover: #333333;
+  --border-strong: #3a3a3a;
   --input: #262626;
   --ring: #e8652a;
   --radius: 0.625rem;
@@ -69,6 +73,8 @@
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
   --color-border: var(--border);
+  --color-border-hover: var(--border-hover);
+  --color-border-strong: var(--border-strong);
   --color-input: var(--input);
   --color-ring: var(--ring);
   --color-rail: var(--rail);

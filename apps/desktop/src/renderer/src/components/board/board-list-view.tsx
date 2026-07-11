@@ -1,27 +1,20 @@
 import * as React from "react";
 import { useDroppable } from "@dnd-kit/core";
-import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
+import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import {
-  sortTickets,
   TICKET_STATUS_LABELS,
   TICKET_STATUSES,
   type Ticket,
-  type TicketSort,
   type TicketStatus,
 } from "@volli/shared";
 
 import { columnDroppableId } from "@renderer/components/board/board-dnd";
 import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
 import { TagChip } from "@renderer/components/board/tag-chip";
-import { TicketContextMenu } from "@renderer/components/board/ticket-context-menu";
-import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
+import { SortableTicketShell } from "@renderer/components/board/ticket-card";
+import { useTicketComposer } from "@renderer/components/board/use-ticket-composer";
 import { cn } from "@renderer/lib/utils";
-import { useBoardStore } from "@renderer/stores/board";
-
-// Same sibling-shift feel as the board's cards — a crisp sub-200ms ease-out.
-const ROW_TRANSITION = { duration: 180, easing: "cubic-bezier(0.23, 1, 0.32, 1)" };
 
 /**
  * Pure presentational row — also rendered inside the drag overlay (unselected
@@ -55,8 +48,12 @@ export function TicketRowContent({
   );
 }
 
-/** Sortable list row: same id space as the board's cards, so `resolveDrop` works unchanged. */
-function SortableTicketRow({
+/**
+ * Sortable list row: same id space as the board's cards, so `resolveDrop`
+ * works unchanged. Memoized for the same reason as `TicketCard` — every row
+ * would otherwise re-render on each board render.
+ */
+const SortableTicketRow = React.memo(function SortableTicketRow({
   ticket,
   projectId,
   selected,
@@ -67,29 +64,17 @@ function SortableTicketRow({
   selected: boolean;
   onSelect(ticketId: string): void;
 }) {
-  const reducedMotion = useReducedMotion();
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: ticket.id,
-    transition: reducedMotion ? null : ROW_TRANSITION,
-  });
-
   return (
-    <TicketContextMenu ticket={ticket} projectId={projectId}>
-      <div
-        ref={setNodeRef}
-        data-ticket-row
-        data-ticket-id={ticket.id}
-        style={{ transform: CSS.Transform.toString(transform), transition }}
-        className={cn(isDragging && "opacity-40")}
-        onClick={() => onSelect(ticket.id)}
-        {...attributes}
-        {...listeners}
-      >
-        <TicketRowContent ticket={ticket} selected={selected} />
-      </div>
-    </TicketContextMenu>
+    <SortableTicketShell
+      ticket={ticket}
+      projectId={projectId}
+      onSelect={onSelect}
+      dataAttributes={{ "data-ticket-row": "true", "data-ticket-id": ticket.id }}
+    >
+      <TicketRowContent ticket={ticket} selected={selected} />
+    </SortableTicketShell>
   );
-}
+});
 
 /**
  * A full status section: sticky header + its sortable rows. The row container
@@ -147,10 +132,11 @@ function ListSection({
 }
 
 /**
- * Inline add-card composer — the list-row twin of board-column.tsx's. Same
- * store call and the same contract (Enter submits and keeps composing, Escape
- * closes, a non-empty blur submits then closes), so switching views never
- * costs ticket creation.
+ * Inline add-card composer — the list-row twin of board-column.tsx's, sharing
+ * its whole contract via `useTicketComposer` (Enter submits and keeps
+ * composing, Escape closes, a non-empty blur submits then closes), so
+ * switching views never costs ticket creation. Only the wrapper markup is its
+ * own.
  */
 function SectionComposer({
   projectId,
@@ -161,41 +147,13 @@ function SectionComposer({
   ticketPrefix: string;
   status: TicketStatus;
 }) {
-  const [open, setOpen] = React.useState(false);
-  const [title, setTitle] = React.useState("");
-  const inputRef = React.useRef<HTMLInputElement>(null);
+  const composer = useTicketComposer({ projectId, ticketPrefix, status });
 
-  React.useEffect(() => {
-    if (open) inputRef.current?.scrollIntoView({ block: "nearest" });
-  }, [open]);
-
-  function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      const trimmed = title.trim();
-      if (trimmed === "") return;
-      useBoardStore.getState().addTicket(projectId, ticketPrefix, status, trimmed);
-      setTitle("");
-    } else if (event.key === "Escape") {
-      setTitle("");
-      setOpen(false);
-    }
-  }
-
-  function handleBlur() {
-    const trimmed = title.trim();
-    if (trimmed !== "") {
-      useBoardStore.getState().addTicket(projectId, ticketPrefix, status, trimmed);
-    }
-    setTitle("");
-    setOpen(false);
-  }
-
-  if (!open) {
+  if (!composer.open) {
     return (
       <button
         type="button"
-        onClick={() => setOpen(true)}
+        onClick={composer.openComposer}
         className="flex h-8 w-full items-center gap-1.5 px-4 text-xs text-muted-foreground transition-colors duration-150 ease-out hover:text-foreground"
       >
         <PlusIcon className="size-3.5" />
@@ -207,12 +165,12 @@ function SectionComposer({
   return (
     <div className="flex h-9 items-center border-b border-border/40 bg-card px-4">
       <input
-        ref={inputRef}
+        ref={composer.inputRef}
         autoFocus
-        value={title}
-        onChange={(event) => setTitle(event.target.value)}
-        onKeyDown={handleKeyDown}
-        onBlur={handleBlur}
+        value={composer.title}
+        onChange={(event) => composer.setTitle(event.target.value)}
+        onKeyDown={composer.handleKeyDown}
+        onBlur={composer.handleBlur}
         placeholder="Ticket title…"
         className="w-full border-none bg-transparent text-sm font-medium text-foreground outline-none placeholder:text-muted-foreground"
       />
@@ -248,9 +206,8 @@ function EmptyDropRow({ status }: { status: TicketStatus }) {
 interface BoardListViewProps {
   projectId: string;
   ticketPrefix: string;
-  /** Grouped from the already-filtered (and possibly drag-preview) ticket set. */
+  /** Grouped AND per-column sorted by the board (one sort pass shared with the columns view). */
   groups: Record<TicketStatus, Ticket[]>;
-  sort: TicketSort;
   /** Statuses rendered as full sections — frozen during a drag (board's `shown`). */
   shownStatuses: readonly TicketStatus[];
   /** Empty-at-start statuses shown as slim drop rows — only during a drag (board's `hidden`). */
@@ -271,7 +228,6 @@ export function BoardListView({
   projectId,
   ticketPrefix,
   groups,
-  sort,
   shownStatuses,
   emptyDropStatuses,
   dragActive,
@@ -294,7 +250,7 @@ export function BoardListView({
             <ListSection
               key={status}
               status={status}
-              tickets={sortTickets(groups[status], sort)}
+              tickets={groups[status]}
               projectId={projectId}
               ticketPrefix={ticketPrefix}
               selectedId={selectedId}
