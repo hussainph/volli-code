@@ -54,10 +54,20 @@ const boardCollision: CollisionDetection = (args) => {
 };
 
 /** The kanban board: columns scroll vertically, the canvas scrolls horizontally. */
-export function Board({ projectId }: { projectId: string; ticketPrefix: string }) {
+export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPrefix: string }) {
   const storeTickets = useBoardStore((state) => state.ticketsByProject[projectId]) ?? [];
   const filter = useBoardStore((state) => state.filterByProject[projectId]) ?? EMPTY_TICKET_FILTER;
   const [drag, setDrag] = React.useState<DragState | null>(null);
+  const [selectedId, setSelectedId] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (selectedId === null) return;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setSelectedId(null);
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedId]);
 
   // distance: 4 keeps plain clicks (selection, context menu) working — the
   // drag only activates after real pointer travel. Keyboard drags come free
@@ -79,6 +89,7 @@ export function Board({ projectId }: { projectId: string; ticketPrefix: string }
   function handleDragStart({ active }: DragStartEvent) {
     const ticket = storeTickets.find((candidate) => candidate.id === String(active.id));
     if (!ticket) return;
+    setSelectedId(null);
     setDrag({ ticket, preview: storeTickets, hiddenAtStart: emptyStatuses(storeTickets) });
   }
 
@@ -133,9 +144,22 @@ export function Board({ projectId }: { projectId: string; ticketPrefix: string }
         onDragEnd={handleDragEnd}
         onDragCancel={handleDragCancel}
       >
-        <div className="flex min-h-0 flex-1 items-start gap-3 overflow-x-auto px-4 pb-4">
+        <div
+          className="flex min-h-0 flex-1 items-start gap-3 overflow-x-auto px-4 pb-4"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setSelectedId(null);
+          }}
+        >
           {shown.map((status) => (
-            <BoardColumn key={status} status={status} tickets={groups[status]} />
+            <BoardColumn
+              key={status}
+              status={status}
+              tickets={groups[status]}
+              projectId={projectId}
+              ticketPrefix={ticketPrefix}
+              selectedId={selectedId}
+              onSelect={setSelectedId}
+            />
           ))}
           <CollapsedColumnRail statuses={hidden} dragActive={drag !== null} />
         </div>

@@ -1,15 +1,44 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import type { Ticket } from "@volli/shared";
+import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
+import {
+  TICKET_PRIORITIES,
+  TICKET_PRIORITY_LABELS,
+  TICKET_STATUS_LABELS,
+  TICKET_STATUSES,
+  type Ticket,
+} from "@volli/shared";
 
 import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
 import { TagChip } from "@renderer/components/board/tag-chip";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "@renderer/components/ui/context-menu";
 import { cn } from "@renderer/lib/utils";
+import { useBoardStore } from "@renderer/stores/board";
 
-/** Pure presentational card body — also rendered inside the drag overlay. */
-export function TicketCardContent({ ticket }: { ticket: Ticket }) {
+/** Pure presentational card body — also rendered inside the drag overlay (always unselected there). */
+export function TicketCardContent({
+  ticket,
+  selected = false,
+}: {
+  ticket: Ticket;
+  selected?: boolean;
+}) {
   return (
-    <article className="flex flex-col gap-1.5 rounded-lg border border-border bg-card px-3 py-2.5 hover:border-[#333333] cursor-default select-none">
+    <article
+      className={cn(
+        "flex flex-col gap-1.5 rounded-lg border border-border bg-card px-3 py-2.5 hover:border-[#333333] cursor-default select-none",
+        selected && "border-transparent ring-1 ring-primary/70",
+      )}
+    >
       <div className="flex items-center justify-between gap-2">
         <span className="font-mono text-[11px] text-muted-foreground">{ticket.id}</span>
         <PriorityIndicator priority={ticket.priority} />
@@ -28,21 +57,79 @@ export function TicketCardContent({ ticket }: { ticket: Ticket }) {
   );
 }
 
+interface TicketCardProps {
+  ticket: Ticket;
+  projectId: string;
+  selected: boolean;
+  onSelect(): void;
+}
+
 /** Sortable wrapper: the in-column card. Dims while its drag overlay is out. */
-export function TicketCard({ ticket }: { ticket: Ticket }) {
+export function TicketCard({ ticket, projectId, selected, onSelect }: TicketCardProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: ticket.id,
   });
 
   return (
-    <div
-      ref={setNodeRef}
-      style={{ transform: CSS.Transform.toString(transform), transition }}
-      className={cn(isDragging && "opacity-40")}
-      {...attributes}
-      {...listeners}
-    >
-      <TicketCardContent ticket={ticket} />
-    </div>
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div
+          ref={setNodeRef}
+          style={{ transform: CSS.Transform.toString(transform), transition }}
+          className={cn(isDragging && "opacity-40")}
+          onClick={onSelect}
+          {...attributes}
+          {...listeners}
+        >
+          <TicketCardContent ticket={ticket} selected={selected} />
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuSub>
+          <ContextMenuSubTrigger>Move to</ContextMenuSubTrigger>
+          <ContextMenuSubContent>
+            {TICKET_STATUSES.filter((status) => status !== ticket.status).map((status) => (
+              <ContextMenuItem
+                key={status}
+                onSelect={() =>
+                  useBoardStore
+                    .getState()
+                    .moveTicket(projectId, ticket.id, status, Number.MAX_SAFE_INTEGER)
+                }
+              >
+                {TICKET_STATUS_LABELS[status]}
+              </ContextMenuItem>
+            ))}
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+        <ContextMenuSub>
+          <ContextMenuSubTrigger>Priority</ContextMenuSubTrigger>
+          <ContextMenuSubContent>
+            {TICKET_PRIORITIES.map((priority) => (
+              <ContextMenuItem
+                key={priority}
+                onSelect={() =>
+                  useBoardStore.getState().setTicketPriority(projectId, ticket.id, priority)
+                }
+              >
+                <span className="flex size-3.5 items-center justify-center">
+                  {priority === ticket.priority ? (
+                    <CheckIcon weight="bold" className="size-3.5" />
+                  ) : null}
+                </span>
+                {TICKET_PRIORITY_LABELS[priority]}
+              </ContextMenuItem>
+            ))}
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          variant="destructive"
+          onSelect={() => useBoardStore.getState().removeTicket(projectId, ticket.id)}
+        >
+          Delete
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
