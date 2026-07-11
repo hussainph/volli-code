@@ -12,6 +12,8 @@ import { cn } from "@renderer/lib/utils";
 interface FilterChipOption {
   value: string;
   label: string;
+  /** Rendered before the label, e.g. a priority signal or a tag color dot. */
+  icon?: React.ReactNode;
 }
 
 interface FilterChipProps {
@@ -24,6 +26,9 @@ interface FilterChipProps {
 /** Generic multi-select facet chip: a dropdown of checkbox options that stays open per-toggle. */
 export function FilterChip({ label, options, selected, onToggle }: FilterChipProps) {
   const active = selected.length > 0;
+  // Reserve the icon slot for every option once any option in this menu has
+  // one, so labels stay left-aligned across icon and non-icon rows.
+  const hasIcons = options.some((option) => option.icon !== undefined);
 
   return (
     <DropdownMenu>
@@ -47,6 +52,11 @@ export function FilterChip({ label, options, selected, onToggle }: FilterChipPro
             onSelect={(event) => event.preventDefault()}
             onCheckedChange={() => onToggle(option.value)}
           >
+            {hasIcons ? (
+              <span className="flex size-4 shrink-0 items-center justify-center">
+                {option.icon}
+              </span>
+            ) : null}
             {option.label}
           </DropdownMenuCheckboxItem>
         ))}

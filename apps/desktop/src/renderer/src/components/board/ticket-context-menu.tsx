@@ -7,6 +7,7 @@ import {
   type Ticket,
 } from "@volli/shared";
 
+import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -74,6 +75,7 @@ export function TicketContextMenu({
                     <CheckIcon weight="bold" className="size-3.5" />
                   ) : null}
                 </span>
+                <PriorityIndicator priority={priority} />
                 {TICKET_PRIORITY_LABELS[priority]}
               </ContextMenuItem>
             ))}

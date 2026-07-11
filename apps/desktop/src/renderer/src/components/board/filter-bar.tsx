@@ -5,6 +5,7 @@ import {
   HARNESS_IDS,
   HARNESS_LABELS,
   isFilterActive,
+  tagColor,
   TICKET_PRIORITIES,
   TICKET_PRIORITY_LABELS,
   type Ticket,
@@ -13,13 +14,17 @@ import {
 } from "@volli/shared";
 
 import { FilterChip } from "@renderer/components/board/filter-chip";
+import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
 
+// Same 3-bar signal as the cards, so the dropdown reads as the same visual
+// language as the board itself.
 const PRIORITY_OPTIONS = TICKET_PRIORITIES.map((priority) => ({
   value: priority,
   label: TICKET_PRIORITY_LABELS[priority],
+  icon: <PriorityIndicator priority={priority} />,
 }));
 
 const HARNESS_OPTIONS = HARNESS_IDS.map((harnessId) => ({
@@ -43,7 +48,18 @@ interface FilterBarProps {
  */
 export function FilterBar({ projectId, tickets, filter, className }: FilterBarProps) {
   const tagOptions = React.useMemo(
-    () => distinctTags(tickets).map((tag) => ({ value: tag, label: tag })),
+    () =>
+      distinctTags(tickets).map((tag) => ({
+        value: tag,
+        label: tag,
+        icon: (
+          <span
+            aria-hidden
+            className="size-1.5 shrink-0 rounded-full"
+            style={{ backgroundColor: tagColor(tag) }}
+          />
+        ),
+      })),
     [tickets],
   );
 
