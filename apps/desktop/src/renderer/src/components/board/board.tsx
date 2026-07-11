@@ -15,7 +15,6 @@ import {
 } from "@dnd-kit/core";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import {
-  emptyStatuses,
   EMPTY_TICKET_FILTER,
   filterTickets,
   groupTicketsByStatus,
@@ -57,9 +56,14 @@ const boardCollision: CollisionDetection = (args) => {
   return within.length > 0 ? within : closestCorners(args);
 };
 
+// Stable fallback for projects with no ticket record yet — an inline `?? []`
+// would mint a fresh array identity every render and defeat the memos below.
+// Never mutated (every board op is pure); typed mutable to match the store.
+const EMPTY_TICKETS: Ticket[] = [];
+
 /** The kanban board: columns scroll vertically, the canvas scrolls horizontally. */
 export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPrefix: string }) {
-  const storeTickets = useBoardStore((state) => state.ticketsByProject[projectId]) ?? [];
+  const storeTickets = useBoardStore((state) => state.ticketsByProject[projectId]) ?? EMPTY_TICKETS;
   const filter = useBoardStore((state) => state.filterByProject[projectId]) ?? EMPTY_TICKET_FILTER;
   // View mode and sort are per-workspace, session-only (same pattern as
   // use-active-nav.ts): fall back to the shared default for never-visited projects.
@@ -89,7 +93,18 @@ export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPr
   React.useEffect(() => {
     if (selectedId === null) return;
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") selectTicket(projectId, null);
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      // An Escape aimed at a focused control — the add-card composer, the ⌘K
+      // search pill, an open context menu — is that control's dismissal, not a
+      // board deselect; it still bubbles to window, so filter it out here.
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        target.closest("input, textarea, [contenteditable], [role=menu], [role=dialog]") !== null
+      ) {
+        return;
+      }
+      selectTicket(projectId, null);
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
@@ -106,13 +121,40 @@ export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPr
   const tickets = drag?.preview ?? storeTickets;
   // `tickets` may be the drag preview snapshot — filtering it is correct and
   // expected here; `filterTickets` returns the same reference when inactive.
-  const visible = filterTickets(tickets, filter);
-
-  const groups = groupTicketsByStatus(visible);
+  // The whole derived pipeline is memoized: the board re-renders on every
+  // drag-over event and on selection changes, and none of those should re-run
+  // a filter pass plus five column sorts.
+  const visible = React.useMemo(() => filterTickets(tickets, filter), [tickets, filter]);
+  const groups = React.useMemo(() => groupTicketsByStatus(visible), [visible]);
+  // One sort pass shared by BOTH views (the columns and the list sections
+  // previously each re-sorted per render).
+  const sortedGroups = React.useMemo(() => {
+    const sorted = {} as Record<TicketStatus, Ticket[]>;
+    for (const status of TICKET_STATUSES) {
+      sorted[status] = sortTickets(groups[status], boardSort);
+    }
+    return sorted;
+  }, [groups, boardSort]);
   const hidden =
     drag?.hiddenAtStart ??
-    emptyStatuses(visible).filter((status) => status !== expandedEmptyStatus);
+    // Derived straight from `groups` — the shared `emptyStatuses` helper would
+    // group (and sort) the same array a second time.
+    TICKET_STATUSES.filter(
+      (status) => groups[status].length === 0 && status !== expandedEmptyStatus,
+    );
   const shown = TICKET_STATUSES.filter((status) => !hidden.includes(status));
+
+  const handleSelect = React.useCallback(
+    (ticketId: string | null) => selectTicket(projectId, ticketId),
+    [selectTicket, projectId],
+  );
+  // Stable (the column passes its own status back) so columns aren't handed a
+  // fresh closure every board render.
+  const handleComposerClose = React.useCallback(
+    (status: TicketStatus) =>
+      setExpandedEmptyStatus((current) => (current === status ? null : current)),
+    [],
+  );
 
   function handleDragStart({ active }: DragStartEvent) {
     const ticket = storeTickets.find((candidate) => candidate.id === String(active.id));
@@ -141,8 +183,12 @@ export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPr
     });
   }
 
-  function handleDragEnd({ active }: DragEndEvent) {
-    if (drag) {
+  function handleDragEnd({ active, over }: DragEndEvent) {
+    // Released over no droppable at all → treat as a cancel, not a commit of
+    // whatever the last hovered preview position happened to be. (Rare with
+    // the closestCorners fallback, but a stray status change is consequential
+    // once Doing boots an agent.)
+    if (drag && over !== null) {
       const finalPosition = ticketPosition(drag.preview, String(active.id));
       if (finalPosition) {
         useBoardStore
@@ -185,40 +231,37 @@ export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPr
           <BoardListView
             projectId={projectId}
             ticketPrefix={ticketPrefix}
-            groups={groups}
-            sort={boardSort}
+            groups={sortedGroups}
             shownStatuses={shown}
             emptyDropStatuses={drag ? hidden : []}
             dragActive={drag !== null}
             selectedId={selectedId}
-            onSelect={(ticketId) => selectTicket(projectId, ticketId)}
+            onSelect={handleSelect}
           />
         ) : (
           <div
             className="flex min-h-0 flex-1 items-start gap-3 overflow-x-auto px-4 pb-4"
             onClick={(event) => {
-              if (event.target === event.currentTarget) selectTicket(projectId, null);
+              if (event.target === event.currentTarget) handleSelect(null);
             }}
           >
             {shown.map((status) => (
               <BoardColumn
                 key={status}
                 status={status}
-                // Display order is sort-driven: `sortTickets` reorders each
+                // Display order is sort-driven: `sortedGroups` reorders each
                 // column for rendering. Drag mechanics stay unchanged — a drop
                 // still writes the manual `order` (see handleDragEnd), but under
                 // a non-manual sort the displayed position is sort-driven, so the
                 // card snaps to its sorted slot after the drop (Linear behaves the
                 // same). "manual" remains the true drag-reorder mode.
-                tickets={sortTickets(groups[status], boardSort)}
+                tickets={sortedGroups[status]}
                 projectId={projectId}
                 ticketPrefix={ticketPrefix}
                 selectedId={selectedId}
-                onSelect={(ticketId) => selectTicket(projectId, ticketId)}
+                onSelect={handleSelect}
                 composerInitiallyOpen={expandedEmptyStatus === status}
-                onComposerClose={() =>
-                  setExpandedEmptyStatus((current) => (current === status ? null : current))
-                }
+                onComposerClose={handleComposerClose}
                 animateEnter={boardMounted.current}
               />
             ))}

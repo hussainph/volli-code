@@ -90,11 +90,13 @@ function UniversalSearchPill() {
   return (
     <div
       className={cn(
-        // app-region-no-drag: the pill sits inside the drag region and must
-        // reclaim its clicks or the window steals them as drag-to-move.
-        "app-region-no-drag absolute left-1/2 top-1/2 flex h-[26px] w-[380px] max-w-[40vw] -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-md border border-border/60 bg-white/[0.06] px-2 transition-colors",
+        "absolute left-1/2 top-1/2 flex h-[26px] w-[380px] max-w-[40vw] -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-md border border-border/60 bg-white/[0.06] px-2 transition-colors",
         "focus-within:border-ring/60 focus-within:ring-1 focus-within:ring-ring/40",
-        disabled ? "opacity-50" : "hover:bg-white/[0.08]",
+        // app-region-no-drag: the pill sits inside the drag region and must
+        // reclaim its clicks or the window steals them as drag-to-move. Only
+        // while it's live — the disabled pill (no project) is inert, so it
+        // stays draggable window chrome rather than a dead strip in the band.
+        disabled ? "opacity-50" : "app-region-no-drag hover:bg-white/[0.08]",
       )}
     >
       <MagnifyingGlassIcon className="size-3.5 shrink-0 text-muted-foreground" />
