@@ -1,29 +1,143 @@
-import { emptyStatuses, groupTicketsByStatus, TICKET_STATUSES } from "@volli/shared";
+import * as React from "react";
+import {
+  closestCorners,
+  DndContext,
+  DragOverlay,
+  KeyboardSensor,
+  PointerSensor,
+  pointerWithin,
+  useSensor,
+  useSensors,
+  type CollisionDetection,
+  type DragEndEvent,
+  type DragOverEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
+import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
+import {
+  emptyStatuses,
+  groupTicketsByStatus,
+  moveTicket,
+  TICKET_STATUSES,
+  type Ticket,
+  type TicketStatus,
+} from "@volli/shared";
 
+import { resolveDrop, ticketPosition } from "@renderer/components/board/board-dnd";
 import { BoardColumn } from "@renderer/components/board/board-column";
 import { BoardHeader } from "@renderer/components/board/board-header";
 import { CollapsedColumnRail } from "@renderer/components/board/collapsed-column-rail";
+import { TicketCardContent } from "@renderer/components/board/ticket-card";
 import { useBoardStore } from "@renderer/stores/board";
 
-/** The static kanban board: columns scroll vertically, the canvas scrolls horizontally. */
+/**
+ * Everything alive only while a card is mid-drag. The preview is a local
+ * snapshot the drag mutates (via the shared moveTicket op) so the store —
+ * and its localStorage persist — is written exactly once, on drop; cancel
+ * simply discards the snapshot. The hidden set is frozen at drag start so
+ * columns never collapse or expand under the pointer.
+ */
+interface DragState {
+  ticket: Ticket;
+  preview: Ticket[];
+  hiddenAtStart: TicketStatus[];
+}
+
+// Precise pointer hits first (narrow collapsed pills, tall columns), corner
+// proximity as the fallback for fast flicks where the pointer sits between
+// rects — dnd-kit's own multi-container recipe.
+const boardCollision: CollisionDetection = (args) => {
+  const within = pointerWithin(args);
+  return within.length > 0 ? within : closestCorners(args);
+};
+
+/** The kanban board: columns scroll vertically, the canvas scrolls horizontally. */
 export function Board({ projectId }: { projectId: string; ticketPrefix: string }) {
-  const tickets = useBoardStore((state) => state.ticketsByProject[projectId]) ?? [];
+  const storeTickets = useBoardStore((state) => state.ticketsByProject[projectId]) ?? [];
+  const [drag, setDrag] = React.useState<DragState | null>(null);
+
+  // distance: 4 keeps plain clicks (selection, context menu) working — the
+  // drag only activates after real pointer travel. Keyboard drags come free
+  // with the sortable coordinate getter.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  const tickets = drag?.preview ?? storeTickets;
   // No filter bar yet — every ticket is visible until that commit lands.
   const visible = tickets;
 
   const groups = groupTicketsByStatus(visible);
-  const hidden = emptyStatuses(visible);
+  const hidden = drag?.hiddenAtStart ?? emptyStatuses(visible);
   const shown = TICKET_STATUSES.filter((status) => !hidden.includes(status));
+
+  function handleDragStart({ active }: DragStartEvent) {
+    const ticket = storeTickets.find((candidate) => candidate.id === String(active.id));
+    if (!ticket) return;
+    setDrag({ ticket, preview: storeTickets, hiddenAtStart: emptyStatuses(storeTickets) });
+  }
+
+  function handleDragOver({ active, over }: DragOverEvent) {
+    if (!over) return;
+    const activeId = String(active.id);
+    const overId = String(over.id);
+    setDrag((current) => {
+      if (!current) return current;
+      const target = resolveDrop(current.preview, activeId, overId);
+      if (!target) return current;
+      const next = moveTicket(
+        current.preview,
+        activeId,
+        target.toStatus,
+        target.toIndex,
+        Date.now(),
+      );
+      return next === current.preview ? current : { ...current, preview: next };
+    });
+  }
+
+  function handleDragEnd({ active }: DragEndEvent) {
+    if (drag) {
+      const finalPosition = ticketPosition(drag.preview, String(active.id));
+      if (finalPosition) {
+        useBoardStore
+          .getState()
+          .moveTicket(projectId, String(active.id), finalPosition.toStatus, finalPosition.toIndex);
+      }
+    }
+    setDrag(null);
+  }
+
+  function handleDragCancel() {
+    setDrag(null);
+  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <BoardHeader ticketCount={visible.length} />
-      <div className="flex min-h-0 flex-1 items-start gap-3 overflow-x-auto px-4 pb-4">
-        {shown.map((status) => (
-          <BoardColumn key={status} status={status} tickets={groups[status]} />
-        ))}
-        <CollapsedColumnRail statuses={hidden} />
-      </div>
+      <DndContext
+        sensors={sensors}
+        collisionDetection={boardCollision}
+        onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
+        onDragEnd={handleDragEnd}
+        onDragCancel={handleDragCancel}
+      >
+        <div className="flex min-h-0 flex-1 items-start gap-3 overflow-x-auto px-4 pb-4">
+          {shown.map((status) => (
+            <BoardColumn key={status} status={status} tickets={groups[status]} />
+          ))}
+          <CollapsedColumnRail statuses={hidden} />
+        </div>
+        <DragOverlay dropAnimation={{ duration: 200, easing: "cubic-bezier(0.32, 0.72, 0, 1)" }}>
+          {drag ? (
+            <div className="scale-[1.03] cursor-grabbing rounded-lg shadow-lg shadow-black/40">
+              <TicketCardContent ticket={drag.ticket} />
+            </div>
+          ) : null}
+        </DragOverlay>
+      </DndContext>
     </div>
   );
 }
