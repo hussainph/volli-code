@@ -217,3 +217,63 @@ describe("persistence", () => {
     expect(rehydrated.getState().byProject["project-a"]).toBeUndefined();
   });
 });
+
+describe("rehydration sanitization (corrupt JSON)", () => {
+  it("survives a persisted null boardSort and a null record without crashing", () => {
+    // `null !== undefined` used to pass the guard and throw on `.key` during
+    // store creation — a corrupt write bricked the renderer on every launch.
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:workspace",
+      JSON.stringify({
+        state: {
+          byProject: {
+            "project-a": { boardView: "list", boardSort: null },
+            "project-b": null,
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    const store = createWorkspaceStore(storage);
+    expect(store.getState().byProject["project-a"]?.boardView).toBe("list");
+    expect(store.getState().byProject["project-a"]?.boardSort).toEqual(DEFAULT_TICKET_SORT);
+    expect(store.getState().byProject["project-b"]).toEqual(DEFAULT_WORKSPACE_UI);
+  });
+
+  it("falls back to the default sort when only the direction is invalid", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:workspace",
+      JSON.stringify({
+        state: { byProject: { "project-a": { boardSort: { key: "priority", direction: "up" } } } },
+        version: 1,
+      }),
+    );
+
+    const store = createWorkspaceStore(storage);
+    expect(store.getState().byProject["project-a"]?.boardSort).toEqual(DEFAULT_TICKET_SORT);
+  });
+
+  it("strips stray keys from a persisted sort instead of spreading them into state", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:workspace",
+      JSON.stringify({
+        state: {
+          byProject: {
+            "project-a": { boardSort: { key: "title", direction: "asc", stray: true } },
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    const store = createWorkspaceStore(storage);
+    expect(store.getState().byProject["project-a"]?.boardSort).toEqual({
+      key: "title",
+      direction: "asc",
+    });
+  });
+});

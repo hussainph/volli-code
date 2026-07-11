@@ -390,3 +390,77 @@ describe("persistence", () => {
     expect(rehydrated.getState().selectedByProject).toEqual({});
   });
 });
+
+describe("rehydration sanitization", () => {
+  it("drops rehydrated tickets that fail validation, keeping the valid ones", () => {
+    // A ticket with an unknown status would throw inside groupTicketsByStatus
+    // (`groups[status].push`) on every board render — persisted JSON from a
+    // different build (or a corrupt write) must never smuggle one into state.
+    const valid = {
+      id: "TST-1",
+      projectId: "p1",
+      ticketNumber: 1,
+      title: "Valid",
+      body: "",
+      status: "todo",
+      priority: "medium",
+      tags: ["infra"],
+      usesWorktree: true,
+      harnessId: "claude-code",
+      order: 0,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const invalid = [
+      "junk",
+      null,
+      { ...valid, id: 7 },
+      { ...valid, order: "0" },
+      { ...valid, status: "in_progress" },
+      { ...valid, priority: "urgent" },
+      { ...valid, usesWorktree: "yes" },
+      { ...valid, tags: "infra" },
+      { ...valid, tags: ["infra", 7] },
+    ];
+
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:board",
+      JSON.stringify({
+        state: {
+          persistenceKind: "demo-scaffold",
+          ticketsByProject: { p1: [valid, ...invalid], p2: "not-an-array" },
+        },
+        version: 1,
+      }),
+    );
+
+    const store = createBoardStore(storage);
+    expect(store.getState().ticketsByProject.p1).toEqual([valid]);
+    // A record that is not an array at all is dropped whole.
+    expect(store.getState().ticketsByProject.p2).toBeUndefined();
+  });
+
+  it("rehydrates to an empty board when the persisted shape is not an object", () => {
+    const storage = createMemoryStorage();
+    storage.setItem("volli:board", JSON.stringify({ state: null, version: 1 }));
+    expect(createBoardStore(storage).getState().ticketsByProject).toEqual({});
+
+    const noRecordStorage = createMemoryStorage();
+    noRecordStorage.setItem(
+      "volli:board",
+      JSON.stringify({ state: { persistenceKind: "demo-scaffold" }, version: 1 }),
+    );
+    expect(createBoardStore(noRecordStorage).getState().ticketsByProject).toEqual({});
+
+    const nullRecordStorage = createMemoryStorage();
+    nullRecordStorage.setItem(
+      "volli:board",
+      JSON.stringify({
+        state: { persistenceKind: "demo-scaffold", ticketsByProject: null },
+        version: 1,
+      }),
+    );
+    expect(createBoardStore(nullRecordStorage).getState().ticketsByProject).toEqual({});
+  });
+});

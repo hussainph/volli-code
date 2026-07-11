@@ -70,12 +70,22 @@ function sanitizePersistedUi(persisted: Partial<PersistedWorkspaceUi>): Persiste
     persisted.boardView === "board" || persisted.boardView === "list"
       ? persisted.boardView
       : DEFAULT_WORKSPACE_UI.boardView;
+  // Runtime JSON can hold anything — `null` in particular passes a bare
+  // `!== undefined` check and then throws on `.key`, taking the renderer down
+  // during store creation. Require a real object before touching fields.
   const sort = persisted.boardSort;
   const sortValid =
-    sort !== undefined &&
+    typeof sort === "object" &&
+    sort !== null &&
     TICKET_SORT_KEYS.includes(sort.key) &&
     (sort.direction === "asc" || sort.direction === "desc");
-  return { boardView: view, boardSort: sortValid ? sort : DEFAULT_WORKSPACE_UI.boardSort };
+  return {
+    boardView: view,
+    // Rebuild rather than spread so stray keys in old JSON never enter state.
+    boardSort: sortValid
+      ? { key: sort.key, direction: sort.direction }
+      : DEFAULT_WORKSPACE_UI.boardSort,
+  };
 }
 
 /** Whether a record's persisted pair still matches the defaults (by value). */
@@ -160,7 +170,10 @@ export function createWorkspaceStore(storage?: StateStorage) {
           const byProject: Record<string, WorkspaceUiState> = {};
           const persistedByProject = (persisted as PersistedWorkspaceState | undefined)?.byProject;
           for (const [projectId, ui] of Object.entries(persistedByProject ?? {})) {
-            byProject[projectId] = { ...DEFAULT_WORKSPACE_UI, ...sanitizePersistedUi(ui) };
+            // A non-object record (null from a corrupt write) would throw
+            // inside sanitizePersistedUi's property reads — treat it as empty.
+            const record = typeof ui === "object" && ui !== null ? ui : {};
+            byProject[projectId] = { ...DEFAULT_WORKSPACE_UI, ...sanitizePersistedUi(record) };
           }
           return { ...current, byProject };
         },

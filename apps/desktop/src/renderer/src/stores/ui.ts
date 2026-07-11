@@ -30,6 +30,17 @@ export const UI_SCALE_STEPS = [0.8, 0.9, 1, 1.1, 1.25, 1.5] as const;
 
 const UI_SCALE_DEFAULT = 1;
 
+/** Index of the ladder rung closest to `scale`. */
+function nearestScaleIndex(scale: number): number {
+  let nearest = 0;
+  for (let i = 1; i < UI_SCALE_STEPS.length; i++) {
+    if (Math.abs(UI_SCALE_STEPS[i]! - scale) < Math.abs(UI_SCALE_STEPS[nearest]! - scale)) {
+      nearest = i;
+    }
+  }
+  return nearest;
+}
+
 /**
  * Index of the rung to move to when stepping `delta` from `scale`. If `scale`
  * isn't exactly a rung (e.g. a stale persisted value from an older ladder), we
@@ -37,14 +48,25 @@ const UI_SCALE_DEFAULT = 1;
  * defined rung rather than compounding an off-ladder value.
  */
 function steppedScale(scale: number, delta: 1 | -1): number {
-  let nearest = 0;
-  for (let i = 1; i < UI_SCALE_STEPS.length; i++) {
-    if (Math.abs(UI_SCALE_STEPS[i]! - scale) < Math.abs(UI_SCALE_STEPS[nearest]! - scale)) {
-      nearest = i;
-    }
-  }
-  const next = Math.min(UI_SCALE_STEPS.length - 1, Math.max(0, nearest + delta));
+  const next = Math.min(UI_SCALE_STEPS.length - 1, Math.max(0, nearestScaleIndex(scale) + delta));
   return UI_SCALE_STEPS[next]!;
+}
+
+/**
+ * A persisted scale, snapped to the ladder. `uiScale` is applied verbatim as
+ * CSS `zoom` on the content row, so a corrupt value (`0`, NaN, a huge number)
+ * would render the entire app below the chrome band invisible/unusable on
+ * every launch — with the zoom-reset menu item unreachable by mouse.
+ */
+function sanitizeUiScale(scale: unknown): number {
+  if (typeof scale !== "number" || !Number.isFinite(scale)) return UI_SCALE_DEFAULT;
+  return UI_SCALE_STEPS[nearestScaleIndex(scale)]!;
+}
+
+/** A persisted sidebar width, put back inside the resize grip's own bounds. */
+function sanitizeSidebarWidth(width: unknown): number {
+  if (typeof width !== "number" || !Number.isFinite(width)) return SIDEBAR_DEFAULT_WIDTH;
+  return clampSidebarWidth(width);
 }
 
 interface UiState {
@@ -81,6 +103,19 @@ export function createUiStore(storage?: StateStorage) {
           sidebarWidth: state.sidebarWidth,
           uiScale: state.uiScale,
         }),
+        // Rehydrated values come from JSON a past build wrote — sanitize
+        // rather than trust (see sanitizeUiScale; a raw `zoom: 0` bricks the UI).
+        merge: (persisted, current) => {
+          const stored =
+            typeof persisted === "object" && persisted !== null
+              ? (persisted as Partial<PersistedUiState>)
+              : {};
+          return {
+            ...current,
+            sidebarWidth: sanitizeSidebarWidth(stored.sidebarWidth),
+            uiScale: sanitizeUiScale(stored.uiScale),
+          };
+        },
       },
     ),
   );

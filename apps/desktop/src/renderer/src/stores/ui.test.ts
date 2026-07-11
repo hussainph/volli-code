@@ -136,3 +136,48 @@ describe("persistence", () => {
     expect(reloaded.getState().sidebarWidth).toBe(444);
   });
 });
+
+describe("rehydration sanitization (corrupt JSON)", () => {
+  it("snaps a corrupt persisted uiScale back onto the ladder", () => {
+    // uiScale is applied verbatim as CSS `zoom` — a persisted 0 would render
+    // the whole app below the chrome band invisible on every launch.
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:ui",
+      JSON.stringify({ state: { sidebarWidth: 320, uiScale: 0 }, version: 1 }),
+    );
+    expect(createUiStore(storage).getState().uiScale).toBe(UI_SCALE_STEPS[0]);
+
+    const nonNumeric = createMemoryStorage();
+    nonNumeric.setItem(
+      "volli:ui",
+      JSON.stringify({ state: { sidebarWidth: 320, uiScale: "huge" }, version: 1 }),
+    );
+    expect(createUiStore(nonNumeric).getState().uiScale).toBe(1);
+  });
+
+  it("clamps a corrupt persisted sidebarWidth back into the resize bounds", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:ui",
+      JSON.stringify({ state: { sidebarWidth: 10_000, uiScale: 1 }, version: 1 }),
+    );
+    expect(createUiStore(storage).getState().sidebarWidth).toBe(SIDEBAR_MAX_WIDTH);
+
+    const nonNumeric = createMemoryStorage();
+    nonNumeric.setItem(
+      "volli:ui",
+      JSON.stringify({ state: { sidebarWidth: null, uiScale: 1 }, version: 1 }),
+    );
+    expect(createUiStore(nonNumeric).getState().sidebarWidth).toBe(SIDEBAR_DEFAULT_WIDTH);
+  });
+
+  it("falls back to defaults when the persisted state is not an object", () => {
+    const storage = createMemoryStorage();
+    storage.setItem("volli:ui", JSON.stringify({ state: null, version: 1 }));
+
+    const store = createUiStore(storage);
+    expect(store.getState().sidebarWidth).toBe(SIDEBAR_DEFAULT_WIDTH);
+    expect(store.getState().uiScale).toBe(1);
+  });
+});
