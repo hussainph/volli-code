@@ -1,5 +1,4 @@
 import * as React from "react";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import {
   distinctTags,
@@ -15,7 +14,6 @@ import {
 
 import { FilterChip } from "@renderer/components/board/filter-chip";
 import { Button } from "@renderer/components/ui/button";
-import { Input } from "@renderer/components/ui/input";
 import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
 
@@ -37,7 +35,12 @@ interface FilterBarProps {
   className?: string;
 }
 
-/** Search + facet chips for the board header. Session-only, store-backed. */
+/**
+ * Facet chips for the board header. Session-only, store-backed. Search lives
+ * in the ChromeBar's universal search pill — this bar is facets only (the
+ * filter prop still carries `search` because Clear resets it too, via
+ * isFilterActive / clearFilter).
+ */
 export function FilterBar({ projectId, tickets, filter, className }: FilterBarProps) {
   const tagOptions = React.useMemo(
     () => distinctTags(tickets).map((tag) => ({ value: tag, label: tag })),
@@ -46,24 +49,6 @@ export function FilterBar({ projectId, tickets, filter, className }: FilterBarPr
 
   return (
     <div className={cn("flex min-w-0 flex-wrap items-center gap-2", className)}>
-      <div className="relative">
-        <MagnifyingGlassIcon className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          value={filter.search}
-          onChange={(event) => useBoardStore.getState().setSearch(projectId, event.target.value)}
-          placeholder="Search tickets…"
-          className="h-7 w-52 pl-7 pr-7 text-xs"
-        />
-        {filter.search !== "" ? (
-          <button
-            type="button"
-            onClick={() => useBoardStore.getState().setSearch(projectId, "")}
-            className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-          >
-            <XIcon className="size-3.5" />
-          </button>
-        ) : null}
-      </div>
       <FilterChip
         label="Priority"
         options={PRIORITY_OPTIONS}
