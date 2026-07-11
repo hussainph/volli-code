@@ -128,7 +128,7 @@ export function Board({ projectId }: { projectId: string; ticketPrefix: string }
           {shown.map((status) => (
             <BoardColumn key={status} status={status} tickets={groups[status]} />
           ))}
-          <CollapsedColumnRail statuses={hidden} />
+          <CollapsedColumnRail statuses={hidden} dragActive={drag !== null} />
         </div>
         <DragOverlay dropAnimation={{ duration: 200, easing: "cubic-bezier(0.32, 0.72, 0, 1)" }}>
           {drag ? (
