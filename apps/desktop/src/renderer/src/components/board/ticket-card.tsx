@@ -35,8 +35,10 @@ export function TicketCardContent({
   return (
     <article
       className={cn(
-        "flex flex-col gap-1.5 rounded-lg border border-border bg-card px-3 py-2.5 hover:border-[#333333] cursor-default select-none transition-[border-color] duration-150 ease-out",
-        selected && "border-transparent ring-1 ring-primary/70",
+        "flex flex-col gap-1.5 rounded-lg border bg-card px-3 py-2.5 cursor-default select-none transition-[border-color] duration-150 ease-out",
+        // Selection colors the card's own border: a ring draws OUTSIDE the box
+        // and the column scroller clips its top edge on the first card.
+        selected ? "border-primary/70" : "border-border hover:border-[#333333]",
       )}
     >
       <div className="flex items-center justify-between gap-2">
