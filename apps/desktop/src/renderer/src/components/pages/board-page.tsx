@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useLayoutEffect } from "react";
 
 import { Board } from "@renderer/components/board/board";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
@@ -8,7 +8,9 @@ import { useBoardStore } from "@renderer/stores/board";
 export function BoardPage() {
   const project = useSelectedProject();
 
-  useEffect(() => {
+  // Layout effect so the first paint already has the seeded board — a plain
+  // effect flashes one empty frame (all five columns collapsed) on first open.
+  useLayoutEffect(() => {
     if (project === null) return;
     useBoardStore.getState().ensureSeeded(project.id, project.ticketPrefix);
   }, [project]);

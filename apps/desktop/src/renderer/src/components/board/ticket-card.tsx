@@ -21,6 +21,7 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
+import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
 
@@ -35,7 +36,7 @@ export function TicketCardContent({
   return (
     <article
       className={cn(
-        "flex flex-col gap-1.5 rounded-lg border border-border bg-card px-3 py-2.5 hover:border-[#333333] cursor-default select-none",
+        "flex flex-col gap-1.5 rounded-lg border border-border bg-card px-3 py-2.5 hover:border-[#333333] cursor-default select-none transition-[border-color] duration-150 ease-out",
         selected && "border-transparent ring-1 ring-primary/70",
       )}
     >
@@ -64,10 +65,16 @@ interface TicketCardProps {
   onSelect(): void;
 }
 
+// Sibling shift while a drag reorders the column: Linear-crisp, a strong
+// ease-out well under 300ms (dnd-kit's 250ms default reads floaty).
+const SORT_TRANSITION = { duration: 180, easing: "cubic-bezier(0.23, 1, 0.32, 1)" };
+
 /** Sortable wrapper: the in-column card. Dims while its drag overlay is out. */
 export function TicketCard({ ticket, projectId, selected, onSelect }: TicketCardProps) {
+  const reducedMotion = useReducedMotion();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: ticket.id,
+    transition: reducedMotion ? null : SORT_TRANSITION,
   });
 
   return (

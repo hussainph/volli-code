@@ -13,9 +13,12 @@ import { cn } from "@renderer/lib/utils";
 export function CollapsedColumnRail({
   statuses,
   dragActive,
+  animateEnter,
 }: {
   statuses: TicketStatus[];
   dragActive: boolean;
+  /** Play the enter transition — true for pills appearing on an already-mounted board. */
+  animateEnter: boolean;
 }) {
   if (statuses.length === 0) return null;
 
@@ -23,7 +26,12 @@ export function CollapsedColumnRail({
     <div className="flex w-44 flex-none flex-col gap-1.5">
       <span className="text-[11px] uppercase tracking-wide text-muted-foreground/70">Empty</span>
       {statuses.map((status) => (
-        <CollapsedColumnTarget key={status} status={status} dragActive={dragActive} />
+        <CollapsedColumnTarget
+          key={status}
+          status={status}
+          dragActive={dragActive}
+          animateEnter={animateEnter}
+        />
       ))}
     </div>
   );
@@ -32,9 +40,11 @@ export function CollapsedColumnRail({
 function CollapsedColumnTarget({
   status,
   dragActive,
+  animateEnter,
 }: {
   status: TicketStatus;
   dragActive: boolean;
+  animateEnter: boolean;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: columnDroppableId(status) });
 
@@ -43,7 +53,8 @@ function CollapsedColumnTarget({
       ref={setNodeRef}
       className={cn(
         "flex items-center justify-between rounded-md border border-border/60 px-3 py-2 text-xs text-muted-foreground",
-        "transition-[color,background-color,border-color,box-shadow] duration-150 ease-out",
+        "transition-[color,background-color,border-color,box-shadow,opacity,transform] duration-150 ease-out",
+        animateEnter && "starting:scale-[0.98] starting:opacity-0 motion-reduce:starting:scale-100",
         // While any card is mid-drag every pill brightens into an affordance…
         dragActive && "border-border text-foreground/80",
         // …and the hovered one lights up as the drop target.

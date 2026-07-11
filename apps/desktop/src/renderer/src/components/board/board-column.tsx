@@ -7,6 +7,7 @@ import { TICKET_STATUS_LABELS, type Ticket, type TicketStatus } from "@volli/sha
 import { columnDroppableId } from "@renderer/components/board/board-dnd";
 import { TicketCard } from "@renderer/components/board/ticket-card";
 import { Button } from "@renderer/components/ui/button";
+import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
 
 interface BoardColumnProps {
@@ -16,6 +17,8 @@ interface BoardColumnProps {
   ticketPrefix: string;
   selectedId: string | null;
   onSelect(ticketId: string): void;
+  /** Play the enter transition — true for columns appearing on an already-mounted board. */
+  animateEnter: boolean;
 }
 
 /** A single status column: header, its own vertically-scrolling ticket list, and an add-card composer. */
@@ -26,6 +29,7 @@ export function BoardColumn({
   ticketPrefix,
   selectedId,
   onSelect,
+  animateEnter,
 }: BoardColumnProps) {
   // The body is the column's droppable so cards can be dropped onto the empty
   // space below the list (or into a column emptied mid-drag).
@@ -61,7 +65,15 @@ export function BoardColumn({
   }
 
   return (
-    <div className="flex min-h-0 max-h-full w-72 flex-none flex-col rounded-lg bg-muted/40">
+    <div
+      className={cn(
+        "flex min-h-0 max-h-full w-72 flex-none flex-col rounded-lg bg-muted/40",
+        // Layout snaps (no width tween — transform/opacity only); the newly
+        // expanded column plays a short ease-out enter instead.
+        animateEnter &&
+          "transition-[opacity,transform] duration-200 ease-out starting:scale-[0.98] starting:opacity-0 motion-reduce:starting:scale-100",
+      )}
+    >
       <div className="flex items-center gap-2 px-3 pt-2.5 pb-2">
         <span className="text-[13px] font-medium text-foreground">
           {TICKET_STATUS_LABELS[status]}

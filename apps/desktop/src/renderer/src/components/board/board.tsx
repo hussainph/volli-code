@@ -30,6 +30,7 @@ import { BoardColumn } from "@renderer/components/board/board-column";
 import { BoardHeader } from "@renderer/components/board/board-header";
 import { CollapsedColumnRail } from "@renderer/components/board/collapsed-column-rail";
 import { TicketCardContent } from "@renderer/components/board/ticket-card";
+import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { useBoardStore } from "@renderer/stores/board";
 
 /**
@@ -59,6 +60,15 @@ export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPr
   const filter = useBoardStore((state) => state.filterByProject[projectId]) ?? EMPTY_TICKET_FILTER;
   const [drag, setDrag] = React.useState<DragState | null>(null);
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
+  const reducedMotion = useReducedMotion();
+
+  // Columns and pills only play their enter transition when they appear on an
+  // ALREADY-mounted board (a drop expanded a column, a filter emptied one).
+  // Opening the board page — a many-times-a-day action — stays instant.
+  const boardMounted = React.useRef(false);
+  React.useEffect(() => {
+    boardMounted.current = true;
+  }, []);
 
   React.useEffect(() => {
     if (selectedId === null) return;
@@ -159,11 +169,20 @@ export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPr
               ticketPrefix={ticketPrefix}
               selectedId={selectedId}
               onSelect={setSelectedId}
+              animateEnter={boardMounted.current}
             />
           ))}
-          <CollapsedColumnRail statuses={hidden} dragActive={drag !== null} />
+          <CollapsedColumnRail
+            statuses={hidden}
+            dragActive={drag !== null}
+            animateEnter={boardMounted.current}
+          />
         </div>
-        <DragOverlay dropAnimation={{ duration: 200, easing: "cubic-bezier(0.32, 0.72, 0, 1)" }}>
+        <DragOverlay
+          dropAnimation={
+            reducedMotion ? null : { duration: 200, easing: "cubic-bezier(0.32, 0.72, 0, 1)" }
+          }
+        >
           {drag ? (
             <div className="scale-[1.03] cursor-grabbing rounded-lg shadow-lg shadow-black/40">
               <TicketCardContent ticket={drag.ticket} />
