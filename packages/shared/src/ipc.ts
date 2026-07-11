@@ -27,7 +27,14 @@ export type VolliIpcEvent =
   | "volli:fullscreen-changed"
   | "volli:terminal-data"
   | "volli:terminal-exit"
-  | "volli:ghostty-config-changed";
+  | "volli:ghostty-config-changed"
+  // Fired by the native View menu's zoom items. The renderer applies CSS zoom
+  // to the content row (below the chrome band) rather than letting Electron
+  // scale the whole page — see menu.ts for why the zoom roles are replaced.
+  | "volli:ui-zoom-command";
+
+/** Direction of a `volli:ui-zoom-command` event: step in/out one rung, or reset. */
+export type UiZoomCommand = "in" | "out" | "reset";
 
 /**
  * Result types below travel as typed discriminated unions rather than

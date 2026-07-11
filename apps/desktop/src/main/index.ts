@@ -4,6 +4,7 @@ import { ticketBranchName } from "@volli/shared";
 import type { VolliIpcEvent } from "@volli/shared";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
+import { registerAppMenu } from "./menu";
 import { registerTerminalIpcHandlers } from "./pty";
 
 const isDev = !app.isPackaged;
@@ -37,6 +38,16 @@ function createWindow(): void {
 
   mainWindow.on("ready-to-show", () => {
     mainWindow.show();
+  });
+
+  // Neutralize any per-origin zoom Electron persisted before UI zoom moved to
+  // CSS `zoom` in the renderer: a stale native zoom level would still scale the
+  // chrome band away from the native traffic lights. Pin the page to native
+  // scale and disable pinch-to-zoom (visual zoom) so only the renderer's CSS
+  // zoom — applied below the chrome band — ever changes UI scale.
+  mainWindow.webContents.on("did-finish-load", () => {
+    mainWindow.webContents.setZoomLevel(0);
+    mainWindow.webContents.setVisualZoomLevelLimits(1, 1);
   });
 
   // macOS fullscreen: mousing to the top slides the menu bar plus a native
@@ -94,6 +105,9 @@ app.whenReady().then(() => {
     allowedPermissions.has(permission),
   );
 
+  // Standard macOS menu, but with the View-menu zoom roles replaced by
+  // renderer-driven CSS zoom (see menu.ts for the rationale).
+  registerAppMenu();
   registerIpcHandlers();
   // Boots the PTY multiplexer and its before-quit teardown (kills all PTYs).
   registerTerminalIpcHandlers();

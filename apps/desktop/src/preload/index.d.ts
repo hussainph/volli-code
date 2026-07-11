@@ -9,6 +9,7 @@ import type {
   TerminalDataEvent,
   TerminalExitEvent,
   TerminalIoResult,
+  UiZoomCommand,
 } from "@volli/shared";
 
 export interface Api {
@@ -34,6 +35,8 @@ export interface Api {
     isFullScreen: () => Promise<boolean>;
     /** Subscribes to fullscreen enter/leave; returns the unsubscribe function. */
     onFullScreenChange: (callback: (isFullScreen: boolean) => void) => () => void;
+    /** Subscribes to native View-menu zoom commands; returns the unsubscribe function. */
+    onZoomCommand: (callback: (cmd: UiZoomCommand) => void) => () => void;
   };
   terminal: {
     /** Boots a PTY session; resolves with its id or a typed error. */

@@ -13,6 +13,7 @@ import type {
   TerminalDataEvent,
   TerminalExitEvent,
   TerminalIoResult,
+  UiZoomCommand,
   VolliIpcChannel,
   VolliIpcEvent,
 } from "@volli/shared";
@@ -45,6 +46,13 @@ const api = {
       ipcRenderer.on("volli:fullscreen-changed" satisfies VolliIpcEvent, listener);
       return () =>
         ipcRenderer.removeListener("volli:fullscreen-changed" satisfies VolliIpcEvent, listener);
+    },
+    /** Subscribes to native View-menu zoom commands; returns the unsubscribe function. */
+    onZoomCommand: (callback: (cmd: UiZoomCommand) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, cmd: UiZoomCommand) => callback(cmd);
+      ipcRenderer.on("volli:ui-zoom-command" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:ui-zoom-command" satisfies VolliIpcEvent, listener);
     },
   },
   terminal: {
