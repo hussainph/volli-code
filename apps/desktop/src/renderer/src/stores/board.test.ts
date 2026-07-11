@@ -187,39 +187,6 @@ describe("setTicketPriority", () => {
   });
 });
 
-describe("removeTicket", () => {
-  it("removes a ticket and rebalances its column's order", () => {
-    const store = freshStore();
-    store.getState().ensureSeeded("p1", "TST");
-    const backlog = byStatus(store.getState().ticketsByProject.p1!, "backlog");
-
-    store.getState().removeTicket("p1", backlog[0]!.id);
-
-    const remainingBacklog = byStatus(store.getState().ticketsByProject.p1!, "backlog");
-    expect(remainingBacklog).toHaveLength(3);
-    expect(remainingBacklog.map((t) => t.order)).toEqual([0, 1, 2]);
-  });
-
-  it("is a no-op for an unknown ticket id", () => {
-    const store = freshStore();
-    store.getState().ensureSeeded("p1", "TST");
-    const before = store.getState();
-
-    store.getState().removeTicket("p1", "does-not-exist");
-
-    expect(store.getState()).toBe(before);
-  });
-
-  it("is a no-op for an unknown ticket id on an unseeded project", () => {
-    const store = freshStore();
-    const before = store.getState();
-
-    store.getState().removeTicket("p1", "does-not-exist");
-
-    expect(store.getState()).toBe(before);
-  });
-});
-
 describe("setSearch", () => {
   it("sets the search string verbatim, initializing from EMPTY_TICKET_FILTER", () => {
     const store = freshStore();
@@ -330,7 +297,7 @@ describe("forget", () => {
 });
 
 describe("persistence", () => {
-  it("writes only { ticketsByProject } under the 'volli:board' key", () => {
+  it("marks localStorage as disposable scaffold data and persists only board records", () => {
     const storage = createMemoryStorage();
     const store = createBoardStore(storage);
     store.getState().ensureSeeded("p1", "TST");
@@ -340,7 +307,8 @@ describe("persistence", () => {
     expect(raw).not.toBeNull();
 
     const parsed = JSON.parse(raw!) as { state: Record<string, unknown>; version: number };
-    expect(Object.keys(parsed.state)).toEqual(["ticketsByProject"]);
+    expect(Object.keys(parsed.state)).toEqual(["persistenceKind", "ticketsByProject"]);
+    expect(parsed.state.persistenceKind).toBe("demo-scaffold");
     expect(parsed.state).not.toHaveProperty("filterByProject");
   });
 
@@ -353,6 +321,7 @@ describe("persistence", () => {
     const rehydrated = createBoardStore(storage);
 
     expect(rehydrated.getState().ticketsByProject).toEqual(store.getState().ticketsByProject);
+    expect(rehydrated.getState().persistenceKind).toBe("demo-scaffold");
     expect(rehydrated.getState().filterByProject).toEqual({});
   });
 });

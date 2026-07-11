@@ -1,7 +1,7 @@
 // DEMO DATA — placeholder board tickets until the SQLite ticket layer lands;
 // delete with it.
 
-import { createTicket, type Ticket } from "@volli/shared";
+import { createTicket, TICKET_STATUSES, type Ticket, type TicketStatus } from "@volli/shared";
 
 /** Fixed epoch so demo tickets (and their tests) are deterministic. */
 const BASE_TIMESTAMP = new Date("2026-01-01T00:00:00Z").getTime();
@@ -15,7 +15,7 @@ interface DemoTicketInput {
 }
 
 /** Backlog (4), Todo (3), Doing (2), Needs Review (2), Done (0 — the rail starts collapsed). */
-const DEMO_TICKETS_BY_STATUS: Record<string, DemoTicketInput[]> = {
+const DEMO_TICKETS_BY_STATUS: Record<TicketStatus, DemoTicketInput[]> = {
   backlog: [
     {
       title: "Design SQLite ticket schema",
@@ -101,7 +101,8 @@ export function buildDemoTickets(projectId: string, ticketPrefix: string): Ticke
   const tickets: Ticket[] = [];
   let ticketNumber = 1;
 
-  for (const [status, inputs] of Object.entries(DEMO_TICKETS_BY_STATUS)) {
+  for (const status of TICKET_STATUSES) {
+    const inputs = DEMO_TICKETS_BY_STATUS[status];
     inputs.forEach((input, order) => {
       tickets.push(
         createTicket({
@@ -109,7 +110,7 @@ export function buildDemoTickets(projectId: string, ticketPrefix: string): Ticke
           projectId,
           ticketNumber: ticketNumber++,
           title: input.title,
-          status: status as Ticket["status"],
+          status,
           order,
           now: BASE_TIMESTAMP,
           body: input.body,

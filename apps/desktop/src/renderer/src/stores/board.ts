@@ -10,7 +10,6 @@ import {
   EMPTY_TICKET_FILTER,
   moveTicket as moveTicketOp,
   nextTicketNumber,
-  removeTicket as removeTicketOp,
   setTicketPriority as setTicketPriorityOp,
   type Ticket,
   type TicketFilter,
@@ -23,6 +22,8 @@ import { createJSONStorage, persist, type StateStorage } from "zustand/middlewar
 import { buildDemoTickets } from "../lib/demo-tickets";
 
 interface BoardState {
+  /** Marks all localStorage board data as disposable scaffold state, never SQLite input. */
+  persistenceKind: "demo-scaffold";
   ticketsByProject: Record<string, Ticket[]>;
   /** Session-only — never persisted; see module doc. */
   filterByProject: Record<string, TicketFilter>;
@@ -30,7 +31,6 @@ interface BoardState {
   moveTicket(projectId: string, ticketId: string, toStatus: TicketStatus, toIndex: number): void;
   addTicket(projectId: string, ticketPrefix: string, status: TicketStatus, title: string): void;
   setTicketPriority(projectId: string, ticketId: string, priority: TicketPriority): void;
-  removeTicket(projectId: string, ticketId: string): void;
   setSearch(projectId: string, search: string): void;
   togglePriority(projectId: string, priority: TicketPriority): void;
   toggleTag(projectId: string, tag: string): void;
@@ -39,7 +39,7 @@ interface BoardState {
   forget(projectId: string): void;
 }
 
-type PersistedBoardState = Pick<BoardState, "ticketsByProject">;
+type PersistedBoardState = Pick<BoardState, "persistenceKind" | "ticketsByProject">;
 
 /** Toggles `value` in `values`: drops it if present, appends it otherwise. */
 function toggleValue<T>(values: readonly T[], value: T): T[] {
@@ -51,6 +51,7 @@ export function createBoardStore(storage?: StateStorage) {
   return create<BoardState>()(
     persist(
       (set, get) => ({
+        persistenceKind: "demo-scaffold",
         ticketsByProject: {},
         filterByProject: {},
 
@@ -97,14 +98,6 @@ export function createBoardStore(storage?: StateStorage) {
           const current = ticketsByProject[projectId] ?? [];
           const next = setTicketPriorityOp(current, ticketId, priority, Date.now());
           if (next === current) return; // shared op's no-op guard: unknown id or unchanged priority
-          set({ ticketsByProject: { ...ticketsByProject, [projectId]: next } });
-        },
-
-        removeTicket(projectId, ticketId) {
-          const { ticketsByProject } = get();
-          const current = ticketsByProject[projectId] ?? [];
-          const next = removeTicketOp(current, ticketId);
-          if (next === current) return; // shared op's no-op guard: unknown id
           set({ ticketsByProject: { ...ticketsByProject, [projectId]: next } });
         },
 
@@ -176,7 +169,10 @@ export function createBoardStore(storage?: StateStorage) {
         name: "volli:board",
         version: 1,
         storage: createJSONStorage(() => storage ?? localStorage),
-        partialize: (state): PersistedBoardState => ({ ticketsByProject: state.ticketsByProject }),
+        partialize: (state): PersistedBoardState => ({
+          persistenceKind: state.persistenceKind,
+          ticketsByProject: state.ticketsByProject,
+        }),
       },
     ),
   );

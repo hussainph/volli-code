@@ -13,10 +13,12 @@ import { cn } from "@renderer/lib/utils";
 export function CollapsedColumnRail({
   statuses,
   dragActive,
+  onExpand,
   animateEnter,
 }: {
   statuses: TicketStatus[];
   dragActive: boolean;
+  onExpand(status: TicketStatus): void;
   /** Play the enter transition — true for pills appearing on an already-mounted board. */
   animateEnter: boolean;
 }) {
@@ -30,6 +32,7 @@ export function CollapsedColumnRail({
           key={status}
           status={status}
           dragActive={dragActive}
+          onExpand={onExpand}
           animateEnter={animateEnter}
         />
       ))}
@@ -40,20 +43,27 @@ export function CollapsedColumnRail({
 function CollapsedColumnTarget({
   status,
   dragActive,
+  onExpand,
   animateEnter,
 }: {
   status: TicketStatus;
   dragActive: boolean;
+  onExpand(status: TicketStatus): void;
   animateEnter: boolean;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: columnDroppableId(status) });
 
   return (
-    <div
+    <button
+      type="button"
       ref={setNodeRef}
+      onClick={() => {
+        if (!dragActive) onExpand(status);
+      }}
       className={cn(
-        "flex items-center justify-between rounded-md border border-border/60 px-3 py-2 text-xs text-muted-foreground",
+        "flex items-center justify-between rounded-md border border-border/60 px-3 py-2 text-left text-xs text-muted-foreground outline-none",
         "transition-[color,background-color,border-color,box-shadow,opacity,transform] duration-150 ease-out",
+        "hover:border-border hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring",
         animateEnter && "starting:scale-[0.98] starting:opacity-0 motion-reduce:starting:scale-100",
         // While any card is mid-drag every pill brightens into an affordance…
         dragActive && "border-border text-foreground/80",
@@ -63,6 +73,6 @@ function CollapsedColumnTarget({
     >
       <span>{TICKET_STATUS_LABELS[status]}</span>
       <span className="font-mono text-[11px]">0</span>
-    </div>
+    </button>
   );
 }

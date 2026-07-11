@@ -122,24 +122,3 @@ export function setTicketPriority(
     ticket.id === ticketId ? { ...ticket, priority, updatedAt: now } : ticket,
   );
 }
-
-/**
- * Removes a ticket. Returns the same array reference when the id is unknown;
- * otherwise a new array with the ticket removed and its source column's
- * `order` rebalanced to `0..n-1`.
- */
-export function removeTicket(tickets: readonly Ticket[], ticketId: string): Ticket[] {
-  const target = tickets.find((ticket) => ticket.id === ticketId);
-  if (!target) return tickets as Ticket[];
-
-  const groups = groupTicketsByStatus(tickets);
-  const rebalancedSource = reorder(
-    groups[target.status].filter((ticket) => ticket.id !== ticketId),
-  );
-
-  const result: Ticket[] = [];
-  for (const status of TICKET_STATUSES) {
-    result.push(...(status === target.status ? rebalancedSource : groups[status]));
-  }
-  return result;
-}

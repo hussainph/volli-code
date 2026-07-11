@@ -14,7 +14,8 @@ only, animation frequency decides animation existence.
 ## Scope of the scaffold
 
 Ships: five fixed columns, Linear-style cards, drag & drop, filter bar,
-empty-column auto-hide, selection, card context menu, inline add-card.
+empty-column auto-hide, selection, non-destructive card context menu, inline
+add-card.
 Doesn't ship (lands with later layers): SQLite persistence, agent-state
 badges (Needs Review reason, live-agent pulse, behind-base), ticket detail
 view, keyboard navigation between cards, WIP limits.
@@ -73,6 +74,8 @@ out of ember's lane, not blessed tokens.
 - During a drag, all pills brighten (affordance); the hovered pill gets
   `ring-1 ring-primary/60 bg-accent`. Dropping on a pill sends the card to
   that column's end and the column expands in place.
+- Clicking a pill expands that empty column directly into its focused inline
+  composer. Escape or an empty blur closes it and restores the pill.
 - **No width tween** on collapse/expand — layout snaps at the drop moment
   (user-initiated commit reads as responsiveness) and the entering
   column/pill plays a 200ms opacity+scale enter instead. FLIP everything on
@@ -132,15 +135,24 @@ layout.
 ## Data layer
 
 `stores/board.ts` — per-project `ticketsByProject` persisted to
-localStorage key `volli:board` (v1, partialized to tickets only);
+localStorage key `volli:board` (v1, partialized to scaffold metadata + tickets);
 `filterByProject` session-only. All mutations delegate to `@volli/shared`
-pure ops (`moveTicket`, `setTicketPriority`, `removeTicket`, `createTicket`,
+pure ops (`moveTicket`, `setTicketPriority`, `createTicket`,
 `nextTicketNumber`) and use their same-reference returns as no-op guards.
 `removeProject` calls `board.forget(id)`.
 
 SQLite swap path: replace the store's internals (seed → SELECT, mutations →
 UPDATEs via IPC) behind the same action surface; the shared ops and every
 component stay untouched.
+
+Cutover policy: localStorage records carry `persistenceKind: "demo-scaffold"`.
+They are disposable preview state, not SQLite migration input. The SQLite
+ticket layer must start from its own fresh database and remove the `volli:board`
+key after a one-time in-app notice; no demo or preview edits are silently
+imported as real tickets.
+
+Ticket deletion is intentionally absent until the Archive and its explicit
+discard flow land (Concept decision #16).
 
 ## Open items
 

@@ -15,7 +15,6 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
-  ContextMenuSeparator,
   ContextMenuSub,
   ContextMenuSubContent,
   ContextMenuSubTrigger,
@@ -129,13 +128,6 @@ export function TicketCard({ ticket, projectId, selected, onSelect }: TicketCard
             ))}
           </ContextMenuSubContent>
         </ContextMenuSub>
-        <ContextMenuSeparator />
-        <ContextMenuItem
-          variant="destructive"
-          onSelect={() => useBoardStore.getState().removeTicket(projectId, ticket.id)}
-        >
-          Delete
-        </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
   );

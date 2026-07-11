@@ -7,7 +7,6 @@ import {
   emptyStatuses,
   nextTicketNumber,
   setTicketPriority,
-  removeTicket,
 } from "./board";
 
 function ticket(overrides: {
@@ -198,30 +197,5 @@ describe("setTicketPriority", () => {
     expect(result[0]!.priority).toBe("high");
     expect(result[0]!.updatedAt).toBe(555);
     expect(result[1]).toBe(b);
-  });
-});
-
-describe("removeTicket", () => {
-  it("returns the same array reference when the ticket id is unknown", () => {
-    const tickets = [ticket({ ticketNumber: 1, status: "todo", order: 0 })];
-    expect(removeTicket(tickets, "VC-999")).toBe(tickets);
-  });
-
-  it("removes the ticket and rebalances the source column's order", () => {
-    const a = ticket({ ticketNumber: 1, status: "todo", order: 0 });
-    const b = ticket({ ticketNumber: 2, status: "todo", order: 1 });
-    const c = ticket({ ticketNumber: 3, status: "todo", order: 2 });
-    const result = removeTicket([a, b, c], "VC-2");
-    expect(result.map((t) => t.ticketNumber)).toEqual([1, 3]);
-    const groups = groupTicketsByStatus(result);
-    expect(groups.todo.map((t) => t.order)).toEqual([0, 1]);
-  });
-
-  it("does not affect other columns' order", () => {
-    const a = ticket({ ticketNumber: 1, status: "todo", order: 0 });
-    const b = ticket({ ticketNumber: 2, status: "doing", order: 0 });
-    const result = removeTicket([a, b], "VC-1");
-    expect(result.map((t) => t.ticketNumber)).toEqual([2]);
-    expect(result[0]!.order).toBe(0);
   });
 });

@@ -17,6 +17,8 @@ interface BoardColumnProps {
   ticketPrefix: string;
   selectedId: string | null;
   onSelect(ticketId: string): void;
+  composerInitiallyOpen: boolean;
+  onComposerClose(): void;
   /** Play the enter transition — true for columns appearing on an already-mounted board. */
   animateEnter: boolean;
 }
@@ -29,12 +31,14 @@ export function BoardColumn({
   ticketPrefix,
   selectedId,
   onSelect,
+  composerInitiallyOpen,
+  onComposerClose,
   animateEnter,
 }: BoardColumnProps) {
   // The body is the column's droppable so cards can be dropped onto the empty
   // space below the list (or into a column emptied mid-drag).
   const { setNodeRef } = useDroppable({ id: columnDroppableId(status) });
-  const [composerOpen, setComposerOpen] = React.useState(false);
+  const [composerOpen, setComposerOpen] = React.useState(composerInitiallyOpen);
   const [title, setTitle] = React.useState("");
   const inputRef = React.useRef<HTMLInputElement>(null);
 
@@ -52,6 +56,7 @@ export function BoardColumn({
     } else if (event.key === "Escape") {
       setTitle("");
       setComposerOpen(false);
+      onComposerClose();
     }
   }
 
@@ -62,6 +67,7 @@ export function BoardColumn({
     }
     setTitle("");
     setComposerOpen(false);
+    onComposerClose();
   }
 
   return (

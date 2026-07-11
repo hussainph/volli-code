@@ -1,10 +1,10 @@
 /**
  * End-to-end acceptance smoke for Volli's kanban board. Drives the REAL
  * packaged renderer through Playwright: seeds one project's demo tickets via
- * localStorage, then exercises the board UI a user would touch — columns,
+ * isolated localStorage, then exercises the board UI a user would touch — columns,
  * the collapsed-column rail, search, the priority facet, cross-column and
- * pill drag-and-drop, reload persistence, adding a card, and deleting one via
- * its context menu.
+ * pill drag-and-drop, reload persistence, adding a card, and non-destructive
+ * context-menu actions.
  *
  * Board state (`volli:board`, `volli:projects` in localStorage) is reset and
  * reseeded at startup, so reruns are deterministic — the 11-ticket demo seed
@@ -21,6 +21,8 @@
  *   Requires: playwright-core (devDependency of @volli/desktop).
  *   Exit code is non-zero if any numbered check fails.
  */
+import { promises as fs } from "node:fs";
+import os from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -38,6 +40,11 @@ const ELECTRON = join(
   "MacOS",
   "Electron",
 );
+const ownsScratch = process.env.VOLLI_SMOKE_DIR === undefined;
+const SCRATCH =
+  process.env.VOLLI_SMOKE_DIR ?? (await fs.mkdtemp(join(os.tmpdir(), "volli-board-smoke-")));
+const USER_DATA_DIR = join(SCRATCH, "user-data");
+await fs.mkdir(USER_DATA_DIR, { recursive: true });
 
 // ---- tiny test harness -----------------------------------------------------
 
@@ -91,6 +98,16 @@ async function columnCount(page, label) {
   }, label);
 }
 
+/** Expanded status labels, left to right. Collapsed rail pills return null from columnCount. */
+async function expandedStatuses(page) {
+  const labels = ["Backlog", "Todo", "Doing", "Needs Review", "Done"];
+  const expanded = [];
+  for (const label of labels) {
+    if ((await columnCount(page, label)) !== null) expanded.push(label);
+  }
+  return expanded;
+}
+
 /** Drag from `sourceBox`'s centre to `target`, with enough travel for dnd-kit's PointerSensor (distance 4) to activate and dragOver to fire on the target. */
 async function drag(page, sourceBox, target) {
   await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
@@ -112,9 +129,23 @@ async function goToBoard(page) {
 // ---- main ------------------------------------------------------------------
 
 async function main() {
-  const app = await _electron.launch({ executablePath: ELECTRON, args: [APP_DIR] });
+  const app = await _electron.launch({
+    executablePath: ELECTRON,
+    args: [APP_DIR, `--user-data-dir=${USER_DATA_DIR}`],
+  });
 
   try {
+    const actualUserDataDir = await app.evaluate(({ app: electronApp }) =>
+      electronApp.getPath("userData"),
+    );
+    const [actual, expected] = await Promise.all([
+      fs.realpath(actualUserDataDir),
+      fs.realpath(USER_DATA_DIR),
+    ]);
+    if (actual !== expected) {
+      throw new Error(`smoke profile is not isolated: expected ${expected}, got ${actual}`);
+    }
+
     const page = await app.firstWindow();
     await page.waitForLoadState("domcontentloaded");
 
@@ -183,8 +214,52 @@ async function main() {
       },
     );
 
-    // === 4. Search filter: "ghostty" narrows to 1, clearing restores 11 =====
-    await attempt(4, 'Search "ghostty" narrows to 1 card, clearing restores 11', async () => {
+    // === 4. Empty-column creation: clicking Done opens its composer ==========
+    await attempt(
+      4,
+      "Collapsed pill: click opens Done's composer; Escape re-collapses it",
+      async () => {
+        await page.getByText("Done", { exact: true }).first().click();
+        await sleep(250);
+        const expandedCount = await columnCount(page, "Done");
+        const composerCount = await page.getByPlaceholder("Ticket title…").count();
+        await page.keyboard.press("Escape");
+        await sleep(250);
+        const collapsedCount = await columnCount(page, "Done");
+        const ok = expandedCount === 0 && composerCount === 1 && collapsedCount === null;
+        return {
+          ok,
+          detail: `expanded=${expandedCount} composer=${composerCount} afterEscape=${collapsedCount}`,
+        };
+      },
+    );
+
+    // === 5. Filtered drag freezes the visible column topology ================
+    await attempt(
+      5,
+      "Filtered drag: starting a drag does not expand filtered-empty columns",
+      async () => {
+        const search = page.getByPlaceholder("Search tickets…");
+        await search.fill("Design SQLite ticket schema");
+        await sleep(300);
+        const before = await expandedStatuses(page);
+        const cardBox = await page.locator("article").first().boundingBox();
+        if (!cardBox) throw new Error("filtered card not found");
+        await page.mouse.move(cardBox.x + cardBox.width / 2, cardBox.y + cardBox.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(cardBox.x + cardBox.width / 2 + 30, cardBox.y + 20, { steps: 8 });
+        await sleep(250);
+        const during = await expandedStatuses(page);
+        await page.mouse.up();
+        await search.fill("");
+        await sleep(300);
+        const ok = JSON.stringify(during) === JSON.stringify(before);
+        return { ok, detail: `before=${JSON.stringify(before)} during=${JSON.stringify(during)}` };
+      },
+    );
+
+    // === 6. Search filter: "ghostty" narrows to 1, clearing restores 11 =====
+    await attempt(6, 'Search "ghostty" narrows to 1 card, clearing restores 11', async () => {
       const search = page.getByPlaceholder("Search tickets…");
       await search.click();
       await search.fill("ghostty");
@@ -197,9 +272,9 @@ async function main() {
       return { ok, detail: `filtered=${filtered} restored=${restored}` };
     });
 
-    // === 5. Priority facet: toggling High narrows, toggling off restores ====
+    // === 7. Priority facet: toggling High narrows, toggling off restores ====
     await attempt(
-      5,
+      7,
       'Priority chip: toggling "High" narrows the board, toggling off restores',
       async () => {
         await page.getByRole("button", { name: "Priority", exact: true }).click();
@@ -219,9 +294,9 @@ async function main() {
       },
     );
 
-    // === 6. Cross-column drag: Backlog's first card into Doing's body =======
+    // === 8. Cross-column drag: Backlog's first card into Doing's body =======
     await attempt(
-      6,
+      8,
       "Cross-column drag: first Backlog card into Doing decrements/increments counts",
       async () => {
         const before = {
@@ -245,9 +320,9 @@ async function main() {
       },
     );
 
-    // === 7. Pill drop: dropping onto the Done pill expands it into a column =
+    // === 9. Pill drop: dropping onto the Done pill expands it into a column =
     await attempt(
-      7,
+      9,
       'Pill drop: dragging onto the "Done" pill expands it into a column and clears "Empty"',
       async () => {
         const cardBox = await page.locator("article").first().boundingBox();
@@ -264,8 +339,8 @@ async function main() {
       },
     );
 
-    // === 8. Persistence: reload and confirm the moves survived ===============
-    await attempt(8, "Persistence: reload keeps the Doing/Done moves", async () => {
+    // === 10. Persistence: reload and confirm the moves survived ==============
+    await attempt(10, "Persistence: reload keeps the Doing/Done moves", async () => {
       await page.reload();
       await page.waitForLoadState("domcontentloaded");
       await sleep(1500);
@@ -276,9 +351,9 @@ async function main() {
       return { ok, detail: `doing=${doing} done=${done}` };
     });
 
-    // === 9. Add-card: Backlog's "+ New" composer creates VC-12 ===============
+    // === 11. Add-card: Backlog's "+ New" composer creates VC-12 ==============
     await attempt(
-      9,
+      11,
       '"+ New" composer: Enter submits a card, Escape closes it, VC-12 appears',
       async () => {
         const before = await page.locator("article").count();
@@ -297,18 +372,17 @@ async function main() {
       },
     );
 
-    // === 10. Context menu delete: right-click VC-12 -> Delete removes it ====
-    await attempt(10, "Context menu: right-click VC-12 -> Delete removes the card", async () => {
-      const before = await page.locator("article").count();
+    // === 12. Context menu has no destructive board-level action ==============
+    await attempt(12, "Context menu: ticket actions are non-destructive", async () => {
       const vc12 = cardById(page, "VC-12");
       await vc12.click({ button: "right" });
       await sleep(300);
-      await page.getByRole("menuitem", { name: "Delete", exact: true }).click();
-      await sleep(400);
-      const after = await page.locator("article").count();
-      const vc12Count = await cardById(page, "VC-12").count();
-      const ok = after === before - 1 && vc12Count === 0;
-      return { ok, detail: `before=${before} after=${after} vc12Count=${vc12Count}` };
+      const moveTo = await page.getByRole("menuitem", { name: "Move to", exact: true }).count();
+      const priority = await page.getByRole("menuitem", { name: "Priority", exact: true }).count();
+      const destructive = await page.getByRole("menuitem", { name: "Delete", exact: true }).count();
+      await page.keyboard.press("Escape");
+      const ok = moveTo === 1 && priority === 1 && destructive === 0;
+      return { ok, detail: `moveTo=${moveTo} priority=${priority} delete=${destructive}` };
     });
   } finally {
     await app.close();
@@ -327,5 +401,7 @@ try {
 } catch (error) {
   console.error("\nSMOKE ABORTED:", error?.stack ?? error);
   code = 1;
+} finally {
+  if (ownsScratch) await fs.rm(SCRATCH, { recursive: true, force: true });
 }
 process.exit(code);

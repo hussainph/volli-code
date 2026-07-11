@@ -60,6 +60,7 @@ export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPr
   const filter = useBoardStore((state) => state.filterByProject[projectId]) ?? EMPTY_TICKET_FILTER;
   const [drag, setDrag] = React.useState<DragState | null>(null);
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
+  const [expandedEmptyStatus, setExpandedEmptyStatus] = React.useState<TicketStatus | null>(null);
   const reducedMotion = useReducedMotion();
 
   // Columns and pills only play their enter transition when they appear on an
@@ -93,14 +94,17 @@ export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPr
   const visible = filterTickets(tickets, filter);
 
   const groups = groupTicketsByStatus(visible);
-  const hidden = drag?.hiddenAtStart ?? emptyStatuses(visible);
+  const hidden =
+    drag?.hiddenAtStart ??
+    emptyStatuses(visible).filter((status) => status !== expandedEmptyStatus);
   const shown = TICKET_STATUSES.filter((status) => !hidden.includes(status));
 
   function handleDragStart({ active }: DragStartEvent) {
     const ticket = storeTickets.find((candidate) => candidate.id === String(active.id));
     if (!ticket) return;
     setSelectedId(null);
-    setDrag({ ticket, preview: storeTickets, hiddenAtStart: emptyStatuses(storeTickets) });
+    setExpandedEmptyStatus(null);
+    setDrag({ ticket, preview: storeTickets, hiddenAtStart: hidden });
   }
 
   function handleDragOver({ active, over }: DragOverEvent) {
@@ -169,12 +173,17 @@ export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPr
               ticketPrefix={ticketPrefix}
               selectedId={selectedId}
               onSelect={setSelectedId}
+              composerInitiallyOpen={expandedEmptyStatus === status}
+              onComposerClose={() =>
+                setExpandedEmptyStatus((current) => (current === status ? null : current))
+              }
               animateEnter={boardMounted.current}
             />
           ))}
           <CollapsedColumnRail
             statuses={hidden}
             dragActive={drag !== null}
+            onExpand={setExpandedEmptyStatus}
             animateEnter={boardMounted.current}
           />
         </div>
