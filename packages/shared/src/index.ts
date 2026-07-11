@@ -4,6 +4,7 @@ export * from "./ticket-branch";
 export * from "./ticket-filter";
 export * from "./ticket-sort";
 export * from "./project-identity";
+export * from "./tag-color";
 export * from "./fs-entries";
 export * from "./errors";
 export * from "./terminal";
