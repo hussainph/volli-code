@@ -57,15 +57,20 @@ export type UiZoomCommand = "in" | "out" | "reset";
  * thrown errors: `ipcMain.handle` rejections serialize into useless
  * strings across the IPC boundary, and every failure must be surfaceable
  * in the UI.
+ *
+ * {@link Result} is the shared shape every one of them had by hand: a success
+ * carrying payload `T`, or a failure carrying an `error` string. Bare
+ * `Result` (no payload) is a plain ok/error ack.
  */
+export type Result<T = unknown> = ({ ok: true } & T) | { ok: false; error: string };
 
 export type PickFolderResult =
   | { canceled: true }
   | { canceled: false; path: string; defaultName: string };
 
-export type ListDirectoryResult = { ok: true; entries: DirEntry[] } | { ok: false; error: string };
+export type ListDirectoryResult = Result<{ entries: DirEntry[] }>;
 
-export type RevealResult = { ok: true } | { ok: false; error: string };
+export type RevealResult = Result;
 
 /**
  * The full data snapshot handed to the renderer on boot
@@ -85,7 +90,7 @@ export interface BootstrapPayload {
   appState: Record<string, string>;
 }
 
-export type BootstrapResult = { ok: true; data: BootstrapPayload } | { ok: false; error: string };
+export type BootstrapResult = Result<{ data: BootstrapPayload }>;
 
 export interface LegacyImportRequest {
   projects: LegacyProject[];
@@ -101,16 +106,12 @@ export interface LegacyImportRequest {
   rawBackup: Record<string, string>;
 }
 
-export type LegacyImportResult =
-  | { ok: true; data: BootstrapPayload; imported: number }
-  | { ok: false; error: string };
+export type LegacyImportResult = Result<{ data: BootstrapPayload; imported: number }>;
 
 /** `created: false` means an existing project at that path was selected instead of inserted. */
-export type ProjectCreateResult =
-  | { ok: true; project: Project; created: boolean }
-  | { ok: false; error: string };
+export type ProjectCreateResult = Result<{ project: Project; created: boolean }>;
 
-export type ProjectMutationResult = { ok: true } | { ok: false; error: string };
+export type ProjectMutationResult = Result;
 
 /**
  * A single ticket, returned by a mutation that affects only that one ticket —
@@ -119,11 +120,11 @@ export type ProjectMutationResult = { ok: true } | { ok: false; error: string };
  * whole list). Contrast {@link TicketsResult}, which move returns because a move
  * genuinely reorders many rows.
  */
-export type TicketResult = { ok: true; ticket: Ticket } | { ok: false; error: string };
+export type TicketResult = Result<{ ticket: Ticket }>;
 
 /** The full authoritative project ticket list — returned by `ticket-move`, which reorders many rows. */
-export type TicketsResult = { ok: true; tickets: Ticket[] } | { ok: false; error: string };
+export type TicketsResult = Result<{ tickets: Ticket[] }>;
 
-export type LabelResult = { ok: true; label: Label } | { ok: false; error: string };
+export type LabelResult = Result<{ label: Label }>;
 
-export type AppStateSetResult = { ok: true } | { ok: false; error: string };
+export type AppStateSetResult = Result;
