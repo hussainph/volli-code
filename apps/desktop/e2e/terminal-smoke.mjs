@@ -179,6 +179,8 @@ async function main() {
   const rootGridAfterPath = join(SCRATCH, "root-grid-after.txt");
   const childGridBeforePath = join(SCRATCH, "child-grid-before.txt");
   const childGridAfterPath = join(SCRATCH, "child-grid-after.txt");
+  const mouseReportPath = join(SCRATCH, "mouse-report.txt");
+  const mouseReadyPath = join(SCRATCH, "mouse-ready.txt");
   for (const p of [
     probeA,
     probeB,
@@ -191,6 +193,8 @@ async function main() {
     rootGridAfterPath,
     childGridBeforePath,
     childGridAfterPath,
+    mouseReportPath,
+    mouseReadyPath,
   ]) {
     await fs.rm(p, { force: true });
   }
@@ -465,18 +469,96 @@ async function main() {
       backendReport.webgpu || backendReport.webgl2,
       `webgpu=${backendReport.webgpu} webgl2=${backendReport.webgl2} navigator.gpu=${backendReport.navigatorGpu}`,
     );
+
+    // === 10. Mouse reporting reaches the PTY ================================
+    // The probe enables DECSET 1000 + SGR 1006 and records raw stdin bytes.
+    // This is the same protocol Claude Code's TUI relies on for clickable UI
+    // and wheel input; checking the PTY bytes avoids canvas/OCR ambiguity.
+    await focusTerminalAt(page, 0);
+    await runInTerminal(
+      page,
+      `node ${join(APP_DIR, "e2e", "mouse-report-probe.mjs")} ${mouseReportPath} ${mouseReadyPath}`,
+    );
+    await waitForFileContains(mouseReadyPath, "ready", 5000);
+    // The readiness file is written immediately after stdout.write(DECSET),
+    // while node-pty batches output for up to one frame. Wait until restty has
+    // consumed the mode sequences before generating pointer input.
+    await sleep(250);
+    const mouseBox = await page.evaluate(() => {
+      const canvas = Array.from(document.querySelectorAll("canvas")).find(
+        (element) =>
+          element.offsetParent !== null && element.clientWidth > 0 && element.clientHeight > 0,
+      );
+      if (!canvas) return null;
+      const rect = canvas.getBoundingClientRect();
+      return { x: rect.x + rect.width * 0.7, y: rect.y + rect.height * 0.6 };
+    });
+    if (mouseBox !== null) {
+      await page.mouse.click(mouseBox.x, mouseBox.y);
+      await page.mouse.wheel(0, 180);
+    }
+    const mouseHex = await waitForFileContains(mouseReportPath, "1b5b3c", 5000);
+    await page.keyboard.press("Control+c");
+    await sleep(400);
+    const hasMouseDown = /1b5b3c303b[0-9a-f]+4d/.test(mouseHex ?? "");
+    const hasMouseWheel = /1b5b3c(?:3634|3635)3b[0-9a-f]+4d/.test(mouseHex ?? "");
+    check(
+      10,
+      "Canvas click + wheel become SGR mouse reports at the PTY",
+      mouseBox !== null && hasMouseDown && hasMouseWheel,
+      `canvas=${mouseBox !== null} down=${hasMouseDown} wheel=${hasMouseWheel} raw=${JSON.stringify(mouseHex?.trim() ?? null)}`,
+    );
+
+    // === 11. Normal-screen wheel scrolls restty's viewport ==================
+    await runInTerminal(page, "seq 1 500");
+    await sleep(1000);
+    const scrollBefore = await page.evaluate(() => {
+      const host = Array.from(document.querySelectorAll(".restty-native-scroll-host")).find(
+        (element) => element.offsetParent !== null,
+      );
+      return host ? { top: host.scrollTop, max: host.scrollHeight - host.clientHeight } : null;
+    });
+    if (mouseBox !== null) {
+      await page.mouse.move(mouseBox.x, mouseBox.y);
+      await page.mouse.wheel(0, -600);
+      await sleep(300);
+    }
+    const scrollAfter = await page.evaluate(() => {
+      const host = Array.from(document.querySelectorAll(".restty-native-scroll-host")).find(
+        (element) => element.offsetParent !== null,
+      );
+      return host ? { top: host.scrollTop, max: host.scrollHeight - host.clientHeight } : null;
+    });
+    check(
+      11,
+      "Wheel scrolls ordinary terminal scrollback",
+      scrollBefore !== null && scrollAfter !== null && scrollAfter.top < scrollBefore.top,
+      `before=${JSON.stringify(scrollBefore)} after=${JSON.stringify(scrollAfter)}`,
+    );
+
+    // Keep a visual artifact for the ambiguous-symbol presentation regression:
+    // U+23FA must use the active ANSI green from the text font, not Apple's
+    // blue color-emoji glyph. The pure transformer has deterministic unit
+    // coverage; this screenshot covers the actual GPU font-selection result.
+    await runInTerminal(page, "printf '\\033[32m⏺\\033[0m symbol-probe\\n'");
+    if (mouseBox !== null) {
+      await page.mouse.move(mouseBox.x, mouseBox.y);
+      await page.mouse.wheel(0, 100_000);
+    }
+    await sleep(500);
+    await page.screenshot({ path: shot("07-symbol-presentation.png") });
   } finally {
     await app.close();
   }
 
-  // === 10. Clean teardown: no orphaned login shells =========================
+  // === 12. Clean teardown: no orphaned login shells =========================
   let after = loginShellCount();
   for (let i = 0; i < 20 && after > baseline; i++) {
     await sleep(250);
     after = loginShellCount();
   }
   check(
-    10,
+    12,
     "Clean teardown: no orphaned login shells after quit",
     after <= baseline,
     `baseline=${baseline} after=${after}`,
@@ -494,6 +576,7 @@ async function main() {
   console.log(`  ${join(SCRATCH, "04-after-nav-return.png")}      — A after Board↔Sessions nav`);
   console.log(`  ${join(SCRATCH, "05-two-tabs.png")}              — A with two session tabs`);
   console.log(`  ${join(SCRATCH, "06-independent-split.png")}      — two independent split panes`);
+  console.log(`  ${join(SCRATCH, "07-symbol-presentation.png")}     — U+23FA text presentation`);
   console.log(
     `\nRenderer backend: ${backendReport.webgpu ? "WebGPU" : backendReport.webgl2 ? "WebGL2" : "UNKNOWN"}` +
       ` (webgpu=${backendReport.webgpu} webgl2=${backendReport.webgl2} navigator.gpu=${backendReport.navigatorGpu})`,
