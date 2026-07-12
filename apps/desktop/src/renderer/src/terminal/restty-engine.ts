@@ -66,9 +66,11 @@ export class ResttyEngine implements TerminalEngine {
   private pane: ResttySurfacePane | null = null;
   private unsubscribeRuntime: (() => void) | null = null;
   /** Restty's PTY callbacks are the only public path that runs its output
-   * filter (mouse-mode tracking, OSC handlers, reply state) before WASM. */
+   * filter (mouse-mode tracking, OSC handlers, reply state) before WASM.
+   * Their presence IS the connection state — `isConnected()` derives from it,
+   * so the transport can never report connected while replies have nowhere
+   * to go (restty drops emulator replies + mouse reports when disconnected). */
   private ptyCallbacks: PtyCallbacks | null = null;
-  private ptyConnected = false;
 
   private readonly dataCbs = new Set<(data: string) => void>();
   private readonly resizeCbs = new Set<(dimensions: TerminalDimensions) => void>();
@@ -117,7 +119,6 @@ export class ResttyEngine implements TerminalEngine {
   private createInstance(): void {
     const appearance = getCurrentAppearance();
     this.ptyCallbacks = null;
-    this.ptyConnected = false;
     this.restty = createRestty({
       root: this.hostEl,
       // The app-owned session (not restty's module-global default) is what
@@ -152,16 +153,14 @@ export class ResttyEngine implements TerminalEngine {
         ptyTransport: {
           connect: ({ callbacks }) => {
             this.ptyCallbacks = callbacks;
-            this.ptyConnected = true;
             callbacks.onConnect?.();
           },
           disconnect: () => {
             const callbacks = this.ptyCallbacks;
             this.ptyCallbacks = null;
-            this.ptyConnected = false;
             callbacks?.onDisconnect?.();
           },
-          isConnected: () => this.ptyConnected,
+          isConnected: () => this.ptyCallbacks !== null,
           sendInput: (data) => {
             if (this.dataCbs.size === 0) return false;
             this.emitData(data);
@@ -351,7 +350,6 @@ export class ResttyEngine implements TerminalEngine {
     this.pane = null;
     this.backend = null;
     this.ptyCallbacks = null;
-    this.ptyConnected = false;
     // Detached engines (created, never attached) just wait for attach —
     // createInstance needs a laid-out host to measure.
     if (this.hostEl.parentElement !== null) {
@@ -379,7 +377,6 @@ export class ResttyEngine implements TerminalEngine {
     this.restty = null;
     this.pane = null;
     this.ptyCallbacks = null;
-    this.ptyConnected = false;
     this.hostEl.remove();
   }
 }
