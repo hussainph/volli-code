@@ -322,6 +322,33 @@ describe("removeProject", () => {
     expect(store.getState().projects).toEqual([only]);
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not remove project: ipc gone");
   });
+
+  it("does not clobber a project added while the remove IPC was in flight", async () => {
+    const [a, b] = [project({ id: "a", path: "/a" }), project({ id: "b", path: "/b" })];
+    const added = project({ id: "c", path: "/c" });
+    let resolveRemove!: (result: { ok: true }) => void;
+    const gateway = fakeGateway({
+      remove: vi.fn<ProjectsGateway["remove"]>(
+        () => new Promise((resolve) => (resolveRemove = resolve)),
+      ),
+      create: vi.fn<ProjectsGateway["create"]>(async () => ({
+        ok: true,
+        created: true,
+        project: added,
+      })),
+    });
+    const { store } = freshStore(gateway);
+    store.getState().hydrate([a, b], a.id);
+
+    const remove = store.getState().removeProject(b.id);
+    await store.getState().addProject({ path: "/c", defaultName: "C" }); // lands mid-flight
+    resolveRemove({ ok: true });
+    await remove;
+
+    // b is gone, but the concurrently-added c survives (pre-fix, removeProject's
+    // pre-await snapshot overwrote `projects` and dropped c though SQLite had it).
+    expect(store.getState().projects.map((p) => p.id)).toEqual([a.id, added.id]);
+  });
 });
 
 describe("reorder", () => {
@@ -424,6 +451,35 @@ describe("commitReorder", () => {
 
     expect(store.getState().projects).toEqual(previousOrder);
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not save project order: ipc gone");
+  });
+
+  it("restores the previous order on failure but keeps a project added mid-flight", async () => {
+    const [a, b] = [project({ id: "a", path: "/a" }), project({ id: "b", path: "/b" })];
+    const added = project({ id: "c", path: "/c" });
+    let rejectReorder!: (result: { ok: false; error: string }) => void;
+    const gateway = fakeGateway({
+      reorder: vi.fn<ProjectsGateway["reorder"]>(
+        () => new Promise((resolve) => (rejectReorder = resolve)),
+      ),
+      create: vi.fn<ProjectsGateway["create"]>(async () => ({
+        ok: true,
+        created: true,
+        project: added,
+      })),
+    });
+    const { store } = freshStore(gateway);
+    store.getState().hydrate([a, b], null);
+    const previousOrder = store.getState().projects;
+    store.getState().reorder(a.id, b.id); // optimistic → [b, a]
+
+    const commit = store.getState().commitReorder(previousOrder);
+    await store.getState().addProject({ path: "/c", defaultName: "C" }); // lands mid-flight → [b, a, c]
+    rejectReorder({ ok: false, error: "conflict" });
+    await commit;
+
+    // Order of the pre-drag members is restored ([a, b]); the newcomer c isn't
+    // wiped by the revert (pre-fix, set(previousOrder) dropped it).
+    expect(store.getState().projects.map((p) => p.id)).toEqual([a.id, b.id, added.id]);
   });
 });
 

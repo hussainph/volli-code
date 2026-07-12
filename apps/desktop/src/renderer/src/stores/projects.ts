@@ -24,6 +24,7 @@ import { create } from "zustand";
 import { killProjectSessions } from "@renderer/terminal/session-lifecycle";
 
 import { useBoardStore } from "./board";
+import { writeThrough } from "./mutate";
 import { useWorkspaceStore } from "./workspace";
 
 /** The `app_state` key `selectedProjectId` is persisted under — also read by lib/boot.ts. */
@@ -96,22 +97,16 @@ export function createProjectsStore(gateway: ProjectsGateway = defaultGateway) {
     },
 
     async addProject({ path, defaultName }) {
-      let result: ProjectCreateResult;
-      try {
-        result = await gateway.create({ path, name: defaultName });
-      } catch (error) {
-        toast.error(`Could not add project: ${errorMessage(error)}`);
-        return;
-      }
-      if (!result.ok) {
-        toast.error(`Could not add project: ${result.error}`);
-        return;
-      }
+      const result = await writeThrough(
+        "add project",
+        (): Promise<ProjectCreateResult> => gateway.create({ path, name: defaultName }),
+      );
+      if (!result) return;
 
-      // `created: false` means an existing project at that path was selected
-      // rather than inserted; append it defensively only if this renderer
-      // doesn't already have it (a fresh insert never will, so the guard is a
-      // no-op there and both cases collapse to one set()).
+      // Re-read FRESH after the await, then: `created: false` means an existing
+      // project at that path was selected rather than inserted; append it
+      // defensively only if this renderer doesn't already have it (a fresh
+      // insert never will, so the guard is a no-op there).
       const { projects } = get();
       const exists = projects.some((project) => project.id === result.project.id);
       set({
@@ -122,21 +117,15 @@ export function createProjectsStore(gateway: ProjectsGateway = defaultGateway) {
     },
 
     async removeProject(id) {
-      const { projects, selectedProjectId } = get();
-      const removedIndex = projects.findIndex((project) => project.id === id);
-      if (removedIndex === -1) return;
+      // No-op (and no IPC) for an unknown id — checked against the pre-await
+      // snapshot; the fresh re-read below handles what actually changed.
+      if (!get().projects.some((project) => project.id === id)) return;
 
-      let result: ProjectMutationResult;
-      try {
-        result = await gateway.remove(id);
-      } catch (error) {
-        toast.error(`Could not remove project: ${errorMessage(error)}`);
-        return;
-      }
-      if (!result.ok) {
-        toast.error(`Could not remove project: ${result.error}`);
-        return;
-      }
+      const result = await writeThrough(
+        "remove project",
+        (): Promise<ProjectMutationResult> => gateway.remove(id),
+      );
+      if (!result) return;
 
       // Removal, per-workspace-UI cleanup, and session teardown are one
       // invariant, enforced here so no removal path (dialog today, context
@@ -148,6 +137,12 @@ export function createProjectsStore(gateway: ProjectsGateway = defaultGateway) {
       useBoardStore.getState().forget(id);
       killProjectSessions(id);
 
+      // Re-read FRESH: a concurrent add/reorder may have changed `projects`
+      // while the remove IPC was in flight; computing the next list from the
+      // pre-await snapshot would clobber that concurrent change (drop a
+      // just-added project from the rail though SQLite still has it).
+      const { projects, selectedProjectId } = get();
+      const removedIndex = projects.findIndex((project) => project.id === id);
       const nextProjects = projects.filter((project) => project.id !== id);
       if (selectedProjectId !== id) {
         set({ projects: nextProjects });
@@ -157,7 +152,7 @@ export function createProjectsStore(gateway: ProjectsGateway = defaultGateway) {
       const nextSelectedId =
         nextProjects.length === 0
           ? null
-          : nextProjects[Math.min(removedIndex, nextProjects.length - 1)]!.id;
+          : nextProjects[Math.min(Math.max(removedIndex, 0), nextProjects.length - 1)]!.id;
       set({ projects: nextProjects, selectedProjectId: nextSelectedId });
       persistSelection(nextSelectedId);
     },
@@ -180,18 +175,26 @@ export function createProjectsStore(gateway: ProjectsGateway = defaultGateway) {
       const { projects } = get();
       if (sameOrder(projects, previousOrder)) return; // nothing moved since the drag started
 
-      let result: ProjectMutationResult;
-      try {
-        result = await gateway.reorder(projects.map((project) => project.id));
-      } catch (error) {
-        set({ projects: previousOrder as Project[] });
-        toast.error(`Could not save project order: ${errorMessage(error)}`);
-        return;
-      }
-      if (!result.ok) {
-        set({ projects: previousOrder as Project[] });
-        toast.error(`Could not save project order: ${result.error}`);
-      }
+      const result = await writeThrough(
+        "save project order",
+        (): Promise<ProjectMutationResult> =>
+          gateway.reorder(projects.map((project) => project.id)),
+      );
+      if (result) return; // persisted — the optimistic order stands
+
+      // Failure: restore the PREVIOUS order, but reconcile membership against
+      // FRESH state — a project added (or removed) while the reorder IPC was in
+      // flight must survive the revert. Restore order, not membership: drop
+      // previous entries no longer present, then append any newcomer.
+      const current = get().projects;
+      const currentIds = new Set(current.map((project) => project.id));
+      const previousIds = new Set(previousOrder.map((project) => project.id));
+      set({
+        projects: [
+          ...previousOrder.filter((project) => currentIds.has(project.id)),
+          ...current.filter((project) => !previousIds.has(project.id)),
+        ],
+      });
     },
 
     select(id) {

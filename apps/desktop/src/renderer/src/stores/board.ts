@@ -14,7 +14,6 @@
  */
 import {
   EMPTY_TICKET_FILTER,
-  errorMessage,
   moveTicket as moveTicketOp,
   setTicketPriority as setTicketPriorityOp,
   type Label,
@@ -25,8 +24,9 @@ import {
   type TicketsResult,
   type TicketStatus,
 } from "@volli/shared";
-import { toast } from "sonner";
 import { create } from "zustand";
+
+import { writeThrough } from "./mutate";
 
 /** The subset of the preload API the board store needs — narrow and fake-able for tests. */
 export interface BoardGateway {
@@ -97,6 +97,20 @@ function toggleValue<T>(values: readonly T[], value: T): T[] {
   return values.includes(value) ? values.filter((v) => v !== value) : [...values, value];
 }
 
+/**
+ * The `authoritative` list, plus any ticket in `current` it doesn't mention —
+ * a ticket created (in another action) while the mutation that produced
+ * `authoritative` was in flight, not yet reflected in its snapshot. Preserving
+ * those "extras" is what keeps a concurrent create (or a revert) from silently
+ * dropping a ticket SQLite already holds. Returns `authoritative` unchanged
+ * (same reference) when there are no extras — the common case.
+ */
+function mergeAuthoritative(authoritative: Ticket[], current: Ticket[]): Ticket[] {
+  const ids = new Set(authoritative.map((ticket) => ticket.id));
+  const extras = current.filter((ticket) => !ids.has(ticket.id));
+  return extras.length === 0 ? authoritative : [...authoritative, ...extras];
+}
+
 /** Factory so tests can inject a fake gateway instead of the real preload bridge. */
 export function createBoardStore(gateway: BoardGateway = defaultGateway) {
   return create<BoardState>()((set, get) => {
@@ -119,6 +133,19 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
       });
     }
 
+    /**
+     * Applies `update` to the project's ticket slice read FRESH from state (so
+     * a mutation that landed on another card mid-flight isn't clobbered),
+     * guarding a slice the project's removal (`forget`) dropped while the IPC
+     * was in flight — never resurrect a slice SQLite no longer has. The single
+     * reconcile path behind every ticket mutation's success and revert.
+     */
+    function reconcileSlice(projectId: string, update: (slice: Ticket[]) => Ticket[]): void {
+      const byProject = get().ticketsByProject;
+      if (!(projectId in byProject)) return;
+      set({ ticketsByProject: { ...byProject, [projectId]: update(byProject[projectId] ?? []) } });
+    }
+
     return {
       ticketsByProject: {},
       labelsByProject: {},
@@ -133,100 +160,73 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         const trimmed = title.trim();
         if (trimmed === "") return null;
 
-        let result: TicketResult;
-        try {
-          result = await gateway.createTicket({
-            projectId,
-            status,
-            title: trimmed,
-            priority: options?.priority,
-          });
-        } catch (error) {
-          toast.error(`Could not create ticket: ${errorMessage(error)}`);
-          return null;
-        }
-        if (!result.ok) {
-          toast.error(`Could not create ticket: ${result.error}`);
-          return null;
-        }
+        const result = await writeThrough(
+          "create ticket",
+          (): Promise<TicketResult> =>
+            gateway.createTicket({
+              projectId,
+              status,
+              title: trimmed,
+              priority: options?.priority,
+            }),
+        );
+        if (!result) return null;
 
-        const { ticketsByProject } = get();
-        const current = ticketsByProject[projectId] ?? [];
-        set({
-          ticketsByProject: { ...ticketsByProject, [projectId]: [...current, result.ticket] },
-        });
+        // Append to the FRESH slice; `reconcileSlice` drops the write if the
+        // project was removed while the create was in flight (the row is
+        // cascade-deleted in SQLite), so we never resurrect a dead slice.
+        reconcileSlice(projectId, (slice) => [...slice, result.ticket]);
         return result.ticket;
       },
 
       async moveTicket(projectId, ticketId, toStatus, toIndex) {
-        const { ticketsByProject } = get();
-        const previous = ticketsByProject[projectId] ?? [];
+        const previous = get().ticketsByProject[projectId] ?? [];
         const optimistic = moveTicketOp(previous, ticketId, toStatus, toIndex, Date.now());
         if (optimistic === previous) return; // shared op's no-op guard: unknown id or unchanged position
-        set({ ticketsByProject: { ...ticketsByProject, [projectId]: optimistic } });
+        set({ ticketsByProject: { ...get().ticketsByProject, [projectId]: optimistic } });
 
-        let result: TicketsResult;
-        try {
-          result = await gateway.moveTicket({ projectId, ticketId, toStatus, toIndex });
-        } catch (error) {
-          set({ ticketsByProject: { ...get().ticketsByProject, [projectId]: previous } });
-          toast.error(`Could not move ticket: ${errorMessage(error)}`);
+        const result = await writeThrough(
+          "move ticket",
+          (): Promise<TicketsResult> =>
+            gateway.moveTicket({ projectId, ticketId, toStatus, toIndex }),
+        );
+        if (!result) {
+          // Revert to the pre-move list, but preserve any ticket created
+          // concurrently (in `current`, absent from `previous`) — restoring the
+          // bare snapshot would drop it, the confirmed race this fixes.
+          reconcileSlice(projectId, (slice) => mergeAuthoritative(previous, slice));
           return;
         }
-        if (!result.ok) {
-          set({ ticketsByProject: { ...get().ticketsByProject, [projectId]: previous } });
-          toast.error(`Could not move ticket: ${result.error}`);
-          return;
-        }
-        set({ ticketsByProject: { ...get().ticketsByProject, [projectId]: result.tickets } });
+        // The authoritative post-move list wins for the rows it names; a ticket
+        // created concurrently and not yet in that snapshot is preserved.
+        reconcileSlice(projectId, (slice) => mergeAuthoritative(result.tickets, slice));
       },
 
       async setTicketPriority(projectId, ticketId, priority) {
-        const { ticketsByProject } = get();
-        const previous = ticketsByProject[projectId] ?? [];
+        const previous = get().ticketsByProject[projectId] ?? [];
         const optimistic = setTicketPriorityOp(previous, ticketId, priority, Date.now());
         if (optimistic === previous) return; // shared op's no-op guard: unknown id or unchanged priority
-        set({ ticketsByProject: { ...ticketsByProject, [projectId]: optimistic } });
+        set({ ticketsByProject: { ...get().ticketsByProject, [projectId]: optimistic } });
 
-        // Reconcile (and revert) by patching just this one ticket by id into the
-        // CURRENT list, rather than replacing the whole project slice — so a
-        // mutation that lands on another card while this IPC is in flight isn't
-        // clobbered. Priority never reorders a column (the shared op only edits
-        // the ticket's fields), so an in-place patch is exact.
-        const patchTicket = (ticket: Ticket) => {
-          const byProject = get().ticketsByProject;
-          // The project's slice can vanish if the project is removed (forget)
-          // while this IPC is in flight — don't resurrect a slice SQLite no
-          // longer has.
-          if (!(projectId in byProject)) return;
-          set({
-            ticketsByProject: {
-              ...byProject,
-              [projectId]: (byProject[projectId] ?? []).map((existing) =>
-                existing.id === ticket.id ? ticket : existing,
-              ),
-            },
-          });
-        };
-        const revert = () => {
+        // Priority never reorders a column (the shared op only edits the
+        // ticket's fields), so reconcile by patching just this one ticket by id
+        // into the FRESH slice — leaving any sibling a concurrent mutation
+        // touched untouched.
+        const patch = (ticket: Ticket) =>
+          reconcileSlice(projectId, (slice) =>
+            slice.map((existing) => (existing.id === ticket.id ? ticket : existing)),
+          );
+
+        const result = await writeThrough(
+          "update priority",
+          (): Promise<TicketResult> => gateway.setTicketPriority({ ticketId, priority }),
+        );
+        if (!result) {
           const original = previous.find((ticket) => ticket.id === ticketId);
-          if (original) patchTicket(original);
-        };
-
-        let result: TicketResult;
-        try {
-          result = await gateway.setTicketPriority({ ticketId, priority });
-        } catch (error) {
-          revert();
-          toast.error(`Could not update priority: ${errorMessage(error)}`);
+          if (original) patch(original);
           return;
         }
-        if (!result.ok) {
-          revert();
-          toast.error(`Could not update priority: ${result.error}`);
-          return;
-        }
-        patchTicket(result.ticket);
+        patch(result.ticket);
       },
 
       setSearch(projectId, search) {

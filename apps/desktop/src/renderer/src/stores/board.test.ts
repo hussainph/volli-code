@@ -137,6 +137,24 @@ describe("addTicket", () => {
     expect(result).toBeNull();
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not create ticket: ipc gone");
   });
+
+  it("does not resurrect a project slice forgotten while the create IPC was in flight", async () => {
+    let resolveCreate!: (result: { ok: true; ticket: Ticket }) => void;
+    const gateway = fakeGateway({
+      createTicket: vi.fn<BoardGateway["createTicket"]>(
+        () => new Promise((resolve) => (resolveCreate = resolve)),
+      ),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [] }, {});
+
+    const pending = store.getState().addTicket("p1", "todo", "New");
+    store.getState().forget("p1"); // project removed mid-flight (row cascade-deleted)
+    resolveCreate({ ok: true, ticket: ticket({ id: "new-1", status: "todo" }) });
+    await pending;
+
+    expect("p1" in store.getState().ticketsByProject).toBe(false);
+  });
 });
 
 describe("moveTicket", () => {
@@ -219,6 +237,54 @@ describe("moveTicket", () => {
 
     expect(gateway.moveTicket).not.toHaveBeenCalled();
     expect(store.getState().ticketsByProject.p1).toBeUndefined();
+  });
+
+  it("preserves a ticket created while the move IPC was in flight when the move then fails", async () => {
+    const a = ticket({ id: "a", status: "backlog", order: 0 });
+    let rejectMove!: (result: { ok: false; error: string }) => void;
+    const gateway = fakeGateway({
+      moveTicket: vi.fn<BoardGateway["moveTicket"]>(
+        () => new Promise((resolve) => (rejectMove = resolve)),
+      ),
+      createTicket: vi.fn<BoardGateway["createTicket"]>(async () => ({
+        ok: true,
+        ticket: ticket({ id: "c", status: "backlog", order: 1 }),
+      })),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a] }, {});
+
+    const move = store.getState().moveTicket("p1", "a", "doing", 0);
+    await store.getState().addTicket("p1", "backlog", "C"); // lands mid-flight
+    rejectMove({ ok: false, error: "conflict" });
+    await move;
+
+    // The move reverted, but the concurrently-created ticket is NOT dropped —
+    // the pre-fix wholesale `set(previous)` revert lost it (it exists in SQLite).
+    const ids = store
+      .getState()
+      .ticketsByProject.p1!.map((t) => t.id)
+      .toSorted();
+    expect(ids).toEqual(["a", "c"]);
+  });
+
+  it("does not resurrect a project slice forgotten while the move IPC was in flight", async () => {
+    const a = ticket({ id: "a", status: "backlog", order: 0 });
+    let resolveMove!: (result: { ok: true; tickets: Ticket[] }) => void;
+    const gateway = fakeGateway({
+      moveTicket: vi.fn<BoardGateway["moveTicket"]>(
+        () => new Promise((resolve) => (resolveMove = resolve)),
+      ),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a, ticket({ id: "b", status: "backlog", order: 1 })] }, {});
+
+    const move = store.getState().moveTicket("p1", "a", "doing", 0);
+    store.getState().forget("p1"); // project removed mid-flight
+    resolveMove({ ok: true, tickets: [{ ...a, status: "doing", order: 0 }] });
+    await move;
+
+    expect("p1" in store.getState().ticketsByProject).toBe(false);
   });
 });
 
