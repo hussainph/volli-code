@@ -7,6 +7,15 @@
  * rather than trust, drop invalid rows individually rather than throwing.
  */
 
+/**
+ * The `app_state` key the raw legacy localStorage backup is persisted under.
+ * The one-time import stashes every `volli:*` string here verbatim before boot
+ * clears localStorage, so a lossy/unreadable import is still recoverable from
+ * SQLite (decision #29: automation never destroys data). Read by no store — a
+ * cold recovery artifact, not live state.
+ */
+export const LEGACY_BACKUP_APP_STATE_KEY = "volli:legacy-backup";
+
 /** The pre-SQLite `Project` shape: no `sortOrder`, no `updatedAt`. */
 export interface LegacyProject {
   id: string;

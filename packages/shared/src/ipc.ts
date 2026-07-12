@@ -73,9 +73,11 @@ export type RevealResult = { ok: true } | { ok: false; error: string };
  * `app_state` JSON the ui/workspace persist stores rehydrate from.
  */
 export interface BootstrapPayload {
-  /** `true` when the projects table is empty AND app_state is empty. */
-  firstRun: boolean;
-  /** Ordered by `sort_order`. */
+  /** Ordered by `sort_order`. An empty list is the sole signal boot uses to
+   * decide whether to attempt the one-time legacy import (see lib/boot.ts) —
+   * deliberately NOT coupled to `app_state` emptiness, since normal UI use
+   * (sidebar resize, zoom) writes app_state and must not suppress a pending
+   * import after a transient failure. */
   projects: Project[];
   ticketsByProject: Record<string, Ticket[]>;
   labelsByProject: Record<string, Label[]>;
@@ -88,10 +90,19 @@ export type BootstrapResult = { ok: true; data: BootstrapPayload } | { ok: false
 export interface LegacyImportRequest {
   projects: LegacyProject[];
   appState: Record<string, string>;
+  /**
+   * The raw, untouched `volli:*` localStorage strings, keyed by their original
+   * key. Persisted verbatim into `app_state` (under `LEGACY_BACKUP_APP_STATE_KEY`,
+   * exported from `legacy-import.ts`) inside the import transaction, so the
+   * source survives in SQLite even after boot clears localStorage — a
+   * recoverable backup against a lossy or unreadable import (decision #29:
+   * automation never destroys data).
+   */
+  rawBackup: Record<string, string>;
 }
 
 export type LegacyImportResult =
-  | { ok: true; data: BootstrapPayload }
+  | { ok: true; data: BootstrapPayload; imported: number }
   | { ok: false; error: string };
 
 /** `created: false` means an existing project at that path was selected instead of inserted. */

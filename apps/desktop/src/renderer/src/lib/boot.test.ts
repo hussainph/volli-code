@@ -1,5 +1,5 @@
 import type { BootstrapPayload } from "@volli/shared";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { useBoardStore } from "@renderer/stores/board";
 import { useProjectsStore } from "@renderer/stores/projects";
@@ -12,7 +12,6 @@ import { takeBootNotice } from "./boot-notice";
 /** A full BootstrapPayload, defaulting to the "nothing here yet" shape. */
 function payload(overrides: Partial<BootstrapPayload> = {}): BootstrapPayload {
   return {
-    firstRun: false,
     projects: [],
     ticketsByProject: {},
     labelsByProject: {},
@@ -27,6 +26,7 @@ function fakeGateway(overrides: Partial<BootGateway> = {}): BootGateway {
   const importLegacy = vi.fn<BootGateway["importLegacy"]>(async () => ({
     ok: true,
     data: payload(),
+    imported: 0,
   }));
   return { bootstrap, importLegacy, ...overrides };
 }
@@ -47,6 +47,13 @@ function fakeStorage(initial: Record<string, string> = {}): BootStorage {
 }
 
 describe("boot", () => {
+  // The boot notice is a module-global stash (boot runs before the Toaster
+  // mounts); drain any residual so a notice set by one test can't leak into
+  // the next's `takeBootNotice()` assertion.
+  beforeEach(() => {
+    takeBootNotice();
+  });
+
   it("returns the bootstrap failure untouched and never attempts an import", async () => {
     const gateway = fakeGateway({
       bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({
@@ -63,7 +70,7 @@ describe("boot", () => {
     expect(storage.getItem("volli:projects")).toBe("untouched");
   });
 
-  it("skips the legacy import when firstRun is false, but still clears stray volli:* keys and hydrates stores", async () => {
+  it("skips the legacy import when the projects table is non-empty, but still clears stray volli:* keys and hydrates stores", async () => {
     const project = {
       id: "p1",
       name: "P1",
@@ -77,7 +84,7 @@ describe("boot", () => {
     const gateway = fakeGateway({
       bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({
         ok: true,
-        data: payload({ firstRun: false, projects: [project] }),
+        data: payload({ projects: [project] }),
       })),
     });
     const storage = fakeStorage({
@@ -96,17 +103,79 @@ describe("boot", () => {
     expect(useProjectsStore.getState().projects).toEqual([project]);
   });
 
-  it("does not attempt an import when firstRun but volli:projects is absent", async () => {
+  it("does not attempt an import when the DB is empty but no legacy keys are present", async () => {
     const gateway = fakeGateway({
       bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({
         ok: true,
-        data: payload({ firstRun: true }),
+        data: payload(),
       })),
     });
 
     await boot(gateway, fakeStorage());
 
     expect(gateway.importLegacy).not.toHaveBeenCalled();
+  });
+
+  it("retries the import when the DB is still empty even though app_state is not (the post-failure regression)", async () => {
+    // A prior boot's import failed, then the user resized the sidebar — writing
+    // an app_state row. The DB still has no projects, so the import MUST run
+    // again; the old firstRun gate (projects AND app_state empty) skipped it
+    // here and then destroyed the source.
+    const gateway = fakeGateway({
+      bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({
+        ok: true,
+        data: payload({ appState: { "volli:ui": "{}" } }),
+      })),
+    });
+    const storage = fakeStorage({
+      "volli:projects": JSON.stringify({ state: { projects: [], selectedProjectId: null } }),
+    });
+
+    await boot(gateway, storage);
+
+    expect(gateway.importLegacy).toHaveBeenCalledTimes(1);
+  });
+
+  it("migrates ui/workspace prefs even when volli:projects is absent (prefs-only user)", async () => {
+    const uiJson = JSON.stringify({ state: { sidebarWidth: 480 }, version: 1 });
+    const importLegacy = vi.fn<BootGateway["importLegacy"]>(async () => ({
+      ok: true,
+      data: payload(),
+      imported: 0,
+    }));
+    const gateway = fakeGateway({ importLegacy });
+    const storage = fakeStorage({ "volli:ui": uiJson });
+
+    await boot(gateway, storage);
+
+    expect(importLegacy).toHaveBeenCalledTimes(1);
+    const request = importLegacy.mock.calls[0]![0];
+    expect(request.projects).toEqual([]);
+    expect(request.appState["volli:ui"]).toBe(uiJson);
+    expect(request.rawBackup["volli:ui"]).toBe(uiJson);
+    // A prefs-only migration is clean — no "couldn't read" notice.
+    expect(takeBootNotice()).toBeNull();
+    expect(storage.getItem("volli:ui")).toBeNull();
+  });
+
+  it("backs up and surfaces (never silently wipes) an unreadable volli:projects blob", async () => {
+    const corrupt = '{"state":{"projects":'; // truncated JSON — unwraps to nothing
+    const importLegacy = vi.fn<BootGateway["importLegacy"]>(async () => ({
+      ok: true,
+      data: payload(),
+      imported: 0,
+    }));
+    const gateway = fakeGateway({ importLegacy });
+    const storage = fakeStorage({ "volli:projects": corrupt });
+
+    await boot(gateway, storage);
+
+    // The raw source is handed to the import for backup into SQLite...
+    const request = importLegacy.mock.calls[0]![0];
+    expect(request.projects).toEqual([]);
+    expect(request.rawBackup["volli:projects"]).toBe(corrupt);
+    // ...and the user is told it couldn't be read, rather than it vanishing.
+    expect(takeBootNotice()).toContain("couldn't read");
   });
 
   it("imports on first run: unwraps the persist envelope, sanitizes projects, synthesizes volli:projects-ui, passes through ui/workspace, and clears localStorage after", async () => {
@@ -147,11 +216,12 @@ describe("boot", () => {
     const importLegacy = vi.fn<BootGateway["importLegacy"]>(async () => ({
       ok: true,
       data: importedPayload,
+      imported: 1,
     }));
     const gateway = fakeGateway({
       bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({
         ok: true,
-        data: payload({ firstRun: true }),
+        data: payload(),
       })),
       importLegacy,
     });
@@ -191,7 +261,7 @@ describe("boot", () => {
       version: 1,
     });
     const storage = fakeStorage({ "volli:projects": legacyProjects });
-    const originalPayload = payload({ firstRun: true, projects: [] });
+    const originalPayload = payload({ projects: [] });
     const gateway = fakeGateway({
       bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({ ok: true, data: originalPayload })),
       importLegacy: vi.fn<BootGateway["importLegacy"]>(async () => ({

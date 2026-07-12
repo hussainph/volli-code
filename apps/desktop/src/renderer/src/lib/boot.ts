@@ -87,35 +87,65 @@ function clearLegacyStorage(storage: BootStorage): void {
 
 /**
  * Builds the one-time legacy import request from localStorage, or `null` when
- * there is nothing to import (`volli:projects` absent). `volli:board` (the
- * old demo scaffold) is deliberately never read — decision #29 discards it.
+ * there is nothing worth importing or preserving — i.e. none of
+ * `volli:projects`/`volli:ui`/`volli:workspace` is present. A bare
+ * `volli:board` (the old demo scaffold) is deliberately never read — decision
+ * #29 discards it, and `clearLegacyStorage` sweeps it away instead.
+ *
+ * The request also carries `rawBackup`: every `volli:*` string, untouched, so
+ * the import transaction can stash the raw source in SQLite before boot clears
+ * localStorage (a lossy/unreadable import stays recoverable).
+ *
+ * `sourceUnreadable` flags that a `volli:projects` blob was present but yielded
+ * no importable projects despite *having* project data — i.e. it was corrupt/
+ * truncated, or its entries all failed validation. A cleanly-empty project
+ * list (`{ projects: [] }`) is readable, just empty, and does NOT set it.
  */
-function buildLegacyImportRequest(storage: BootStorage): LegacyImportRequest | null {
+function buildLegacyImportRequest(
+  storage: BootStorage,
+): { request: LegacyImportRequest; sourceUnreadable: boolean } | null {
   const rawProjects = storage.getItem(LEGACY_PROJECTS_KEY);
-  if (rawProjects === null) return null;
+  const rawUi = storage.getItem(LEGACY_UI_KEY);
+  const rawWorkspace = storage.getItem(LEGACY_WORKSPACE_KEY);
+  if (rawProjects === null && rawUi === null && rawWorkspace === null) return null;
 
   // The persisted `volli:projects` state is `{ projects: [...], selectedProjectId }`
   // (the old store's `partialize` shape) — sanitize the `projects` array, not
-  // the envelope's `state` object itself.
-  const legacyState = unwrapPersistEnvelope(rawProjects);
+  // the envelope's `state` object itself. Absent `volli:projects` yields an
+  // empty project list (a prefs-only migration), which is still worth running
+  // so the ui/workspace prefs below are carried over rather than discarded.
+  const legacyState = rawProjects !== null ? unwrapPersistEnvelope(rawProjects) : undefined;
   const legacyStateRecord =
     typeof legacyState === "object" && legacyState !== null
       ? (legacyState as Record<string, unknown>)
       : undefined;
-  const projects = sanitizeLegacyProjects(legacyStateRecord?.projects);
+  const rawProjectsField = legacyStateRecord?.projects;
+  const projects = sanitizeLegacyProjects(rawProjectsField);
   const legacySelectedId = legacyStateRecord?.selectedProjectId;
+
+  // "Had project data we couldn't use": a present blob that either didn't parse
+  // into a projects array at all, or parsed to a non-empty array none of whose
+  // entries survived validation. An empty array is readable-but-empty.
+  const hadProjectData = Array.isArray(rawProjectsField)
+    ? rawProjectsField.length > 0
+    : rawProjects !== null;
+  const sourceUnreadable = hadProjectData && projects.length === 0;
 
   const appState: Record<string, string> = {
     [PROJECTS_UI_APP_STATE_KEY]: JSON.stringify({
       selectedProjectId: typeof legacySelectedId === "string" ? legacySelectedId : null,
     }),
   };
-  const rawUi = storage.getItem(LEGACY_UI_KEY);
   if (rawUi !== null) appState[LEGACY_UI_KEY] = rawUi;
-  const rawWorkspace = storage.getItem(LEGACY_WORKSPACE_KEY);
   if (rawWorkspace !== null) appState[LEGACY_WORKSPACE_KEY] = rawWorkspace;
 
-  return { projects, appState };
+  const rawBackup: Record<string, string> = {};
+  for (const key of volliKeys(storage)) {
+    const raw = storage.getItem(key);
+    if (raw !== null) rawBackup[key] = raw;
+  }
+
+  return { request: { projects, appState, rawBackup }, sourceUnreadable };
 }
 
 /** The app_state-persisted selection, or `null` when absent/stale (points at a project that no longer exists). */
@@ -142,32 +172,49 @@ export async function boot(
 
   let payload = bootstrapResult.data;
 
-  let importFailed = false;
-  if (payload.firstRun) {
-    const importRequest = buildLegacyImportRequest(storage);
-    if (importRequest !== null) {
-      const importResult = await gateway.importLegacy(importRequest);
-      if (importResult.ok) {
-        payload = importResult.data;
-      } else {
-        // A failed import still boots the app (with the empty bootstrap
-        // payload), but — unlike a success — must NOT clear the legacy
-        // localStorage: it's the user's only copy of that data, so keep it for
-        // a retry next launch and surface the failure (CLAUDE.md: never
-        // silently swallow a failed mutation). The Toaster isn't mounted yet,
-        // so stash the message; AppShell surfaces it on mount.
-        importFailed = true;
+  // Attempt the one-time legacy import whenever the projects table is still
+  // empty and localStorage holds legacy data. Gating on projects-emptiness
+  // alone (NOT the old `firstRun`, which also required app_state to be empty)
+  // is what makes a transient import failure retriable: normal UI use writes
+  // app_state, which used to flip `firstRun` false and both skip the pending
+  // import AND destroy its source on the next boot. The main handler is itself
+  // idempotent (it no-ops once projects exist), so re-attempting is safe.
+  let preserveSource = false;
+  if (payload.projects.length === 0) {
+    const built = buildLegacyImportRequest(storage);
+    if (built !== null) {
+      const importResult = await gateway.importLegacy(built.request);
+      if (!importResult.ok) {
+        // A failed import rolled back its transaction — nothing was persisted,
+        // not even the backup, so the localStorage source is the only copy.
+        // Keep it for a retry next launch and surface the failure (CLAUDE.md:
+        // never silently swallow a failed mutation). The Toaster isn't mounted
+        // yet, so stash the message; AppShell surfaces it on mount.
+        preserveSource = true;
         setBootNotice(
           `Couldn't import your existing data (${importResult.error}). It's been left untouched — relaunch to try again.`,
         );
+      } else {
+        payload = importResult.data;
+        // A present-but-unreadable `volli:projects` blob imported nothing (the
+        // authoritative `imported` count confirms it). The import transaction
+        // already backed up the raw source into SQLite, so clearing localStorage
+        // below is safe — but tell the user their data couldn't be read rather
+        // than discarding it silently.
+        if (built.sourceUnreadable && importResult.imported === 0) {
+          setBootNotice(
+            "Found existing project data we couldn't read. It's been backed up but not imported — reach out if you need it recovered.",
+          );
+        }
       }
     }
   }
 
   // Clear the legacy localStorage once we've booted (decision #29) — a clean
-  // import, or a first run with nothing importable, discards it. The one
-  // exception is a failed import, handled above: never destroy the source.
-  if (!importFailed) clearLegacyStorage(storage);
+  // (or zero-project, already-backed-up) import discards it, as does a boot
+  // with nothing importable. The one exception is a failed import, handled
+  // above: never destroy the source when nothing was persisted in its place.
+  if (!preserveSource) clearLegacyStorage(storage);
 
   seedAppStateCache(payload.appState);
 

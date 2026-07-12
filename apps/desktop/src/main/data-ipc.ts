@@ -7,6 +7,7 @@ import {
   errorMessage,
   isTicketPriority,
   isTicketStatus,
+  LEGACY_BACKUP_APP_STATE_KEY,
   moveTicket,
   PROJECT_COLORS,
   sanitizeLegacyProjects,
@@ -92,16 +93,23 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
+/** Whether `value` is a `Record<string, string>` (the appState/rawBackup payload shape). */
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.values(value as Record<string, unknown>).every((entry) => typeof entry === "string")
+  );
+}
+
 function isLegacyImportRequest(value: unknown): value is LegacyImportRequest {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
-  const appState = candidate["appState"];
   return (
     Array.isArray(candidate["projects"]) &&
-    typeof appState === "object" &&
-    appState !== null &&
-    !Array.isArray(appState) &&
-    Object.values(appState as Record<string, unknown>).every((entry) => typeof entry === "string")
+    isStringRecord(candidate["appState"]) &&
+    isStringRecord(candidate["rawBackup"])
   );
 }
 
@@ -211,7 +219,6 @@ function isLabelSetColorInput(value: unknown): value is LabelSetColorInput {
 function buildBootstrapPayload(db: Database.Database): BootstrapPayload {
   const projects = listProjects(db);
   const appState = getAllAppState(db);
-  const firstRun = projects.length === 0 && Object.keys(appState).length === 0;
 
   const ticketsByProject: Record<string, Ticket[]> = {};
   const labelsByProject: Record<string, Label[]> = {};
@@ -226,7 +233,7 @@ function buildBootstrapPayload(db: Database.Database): BootstrapPayload {
     (labelsByProject[label.projectId] ??= []).push(label);
   }
 
-  return { firstRun, projects, ticketsByProject, labelsByProject, appState };
+  return { projects, ticketsByProject, labelsByProject, appState };
 }
 
 // ---- registration --------------------------------------------------------
@@ -269,11 +276,18 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
         // table; a second call (e.g. a relaunch racing the renderer) just
         // hands back the current state instead of re-importing over it.
         if (countProjects(db) > 0) {
-          return { ok: true, data: buildBootstrapPayload(db) };
+          return { ok: true, data: buildBootstrapPayload(db), imported: 0 };
         }
         const legacyProjects = sanitizeLegacyProjects(request.projects);
         const now = Date.now();
         const run = db.transaction(() => {
+          // Back up the raw source FIRST, in the same transaction: whatever
+          // else happens, once this commits the untouched localStorage strings
+          // live in SQLite, so boot can clear localStorage without ever making
+          // a lossy/unreadable import unrecoverable (decision #29).
+          if (Object.keys(request.rawBackup).length > 0) {
+            setAppState(db, LEGACY_BACKUP_APP_STATE_KEY, JSON.stringify(request.rawBackup), now);
+          }
           legacyProjects.forEach((legacy, index) => {
             insertProject(db, {
               id: legacy.id,
@@ -291,7 +305,7 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
           }
         });
         run();
-        return { ok: true, data: buildBootstrapPayload(db) };
+        return { ok: true, data: buildBootstrapPayload(db), imported: legacyProjects.length };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }
