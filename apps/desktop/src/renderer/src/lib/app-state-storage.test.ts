@@ -5,7 +5,7 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
 // A fresh module instance per test file run gets a fresh `cache` Map — reset
 // it explicitly between tests instead, since the module is only imported once.
-import { appStateStorage, seedAppStateCache } from "./app-state-storage";
+import { appStateStorage, flushPendingAppState, seedAppStateCache } from "./app-state-storage";
 
 const setMock = vi.fn<(key: string, value: string) => Promise<{ ok: boolean; error?: string }>>();
 
@@ -22,11 +22,13 @@ beforeEach(() => {
   setMock.mockResolvedValue({ ok: true });
   vi.stubGlobal("window", { api: { appState: { set: setMock } } });
   // Clear anything a previous test seeded/wrote into the shared module-level
-  // cache, then drop the debounced writes that cleanup just scheduled (and
-  // their mock calls) so each test starts from a clean slate.
+  // cache, then drain the debounced writes that cleanup just scheduled (flush
+  // empties the pending map so none linger into the test) and reset their mock
+  // calls, so each test starts from a clean slate.
   for (const key of ["volli:ui", "volli:workspace", "volli:projects-ui"]) {
     appStateStorage.removeItem(key);
   }
+  flushPendingAppState();
   vi.clearAllTimers();
   vi.clearAllMocks();
 });
@@ -88,6 +90,22 @@ describe("setItem", () => {
     await settle();
 
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Could not save "volli:ui": ipc gone');
+  });
+});
+
+describe("flushPendingAppState", () => {
+  it("writes all pending values immediately (before the debounce) and doesn't re-fire them later", async () => {
+    appStateStorage.setItem("volli:ui", '{"a":1}');
+    appStateStorage.setItem("volli:workspace", '{"b":2}');
+    expect(setMock).not.toHaveBeenCalled(); // still inside the debounce window
+
+    flushPendingAppState();
+
+    expect(setMock).toHaveBeenCalledWith("volli:ui", '{"a":1}');
+    expect(setMock).toHaveBeenCalledWith("volli:workspace", '{"b":2}');
+    // Advancing past the debounce must NOT re-send the already-flushed writes.
+    await settle();
+    expect(setMock).toHaveBeenCalledTimes(2);
   });
 });
 

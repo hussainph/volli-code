@@ -246,6 +246,25 @@ describe("setTicketPriority", () => {
     expect(result.find((t) => t.id === "b")).toBe(b);
   });
 
+  it("does not resurrect a project slice forgotten while the priority IPC is in flight", async () => {
+    let resolvePriority!: (result: { ok: true; ticket: Ticket }) => void;
+    const gateway = fakeGateway({
+      setTicketPriority: vi.fn<BoardGateway["setTicketPriority"]>(
+        () => new Promise((resolve) => (resolvePriority = resolve)),
+      ),
+    });
+    const store = createBoardStore(gateway);
+    const a = ticket({ id: "a", status: "backlog", priority: "low" });
+    store.getState().hydrate({ p1: [a] }, {});
+
+    const pending = store.getState().setTicketPriority("p1", "a", "high");
+    store.getState().forget("p1"); // project removed mid-flight
+    resolvePriority({ ok: true, ticket: { ...a, priority: "high" } });
+    await pending;
+
+    expect("p1" in store.getState().ticketsByProject).toBe(false);
+  });
+
   it("is a no-op when the priority is unchanged", async () => {
     const a = ticket({ id: "a", status: "backlog", priority: "high" });
     const gateway = fakeGateway();

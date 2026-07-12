@@ -49,18 +49,44 @@ function persist(key: string, value: string, failureVerb: string): void {
  * to reach SQLite, once the burst settles.
  */
 const PERSIST_DEBOUNCE_MS = 200;
-const pendingWrites = new Map<string, ReturnType<typeof setTimeout>>();
+
+interface PendingWrite {
+  value: string;
+  failureVerb: string;
+  timer: ReturnType<typeof setTimeout>;
+}
+const pendingWrites = new Map<string, PendingWrite>();
 
 function persistDebounced(key: string, value: string, failureVerb: string): void {
   const existing = pendingWrites.get(key);
-  if (existing !== undefined) clearTimeout(existing);
-  pendingWrites.set(
-    key,
-    setTimeout(() => {
-      pendingWrites.delete(key);
-      persist(key, value, failureVerb);
-    }, PERSIST_DEBOUNCE_MS),
-  );
+  if (existing !== undefined) clearTimeout(existing.timer);
+  const timer = setTimeout(() => {
+    pendingWrites.delete(key);
+    persist(key, value, failureVerb);
+  }, PERSIST_DEBOUNCE_MS);
+  pendingWrites.set(key, { value, failureVerb, timer });
+}
+
+/**
+ * Flushes every pending debounced write immediately — best-effort durability
+ * before the window unloads. A pref changed within the debounce window of an
+ * app quit would otherwise be lost, where the localStorage this replaced wrote
+ * synchronously. The write stays fire-and-forget, so completion before exit
+ * isn't guaranteed, but firing now beats waiting out the debounce. Registered
+ * on `beforeunload` below.
+ */
+export function flushPendingAppState(): void {
+  for (const [key, pending] of pendingWrites) {
+    clearTimeout(pending.timer);
+    persist(key, pending.value, pending.failureVerb);
+  }
+  pendingWrites.clear();
+}
+
+// Renderer-only module: flush pending prefs before the window tears down so a
+// last-moment zoom/resize isn't dropped by the debounce.
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeunload", flushPendingAppState);
 }
 
 /** The ui/workspace persist stores' storage adapter (see stores/ui.ts, stores/workspace.ts). */

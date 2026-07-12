@@ -194,11 +194,15 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         // clobbered. Priority never reorders a column (the shared op only edits
         // the ticket's fields), so an in-place patch is exact.
         const patchTicket = (ticket: Ticket) => {
-          const current = get().ticketsByProject[projectId] ?? [];
+          const byProject = get().ticketsByProject;
+          // The project's slice can vanish if the project is removed (forget)
+          // while this IPC is in flight — don't resurrect a slice SQLite no
+          // longer has.
+          if (!(projectId in byProject)) return;
           set({
             ticketsByProject: {
-              ...get().ticketsByProject,
-              [projectId]: current.map((existing) =>
+              ...byProject,
+              [projectId]: (byProject[projectId] ?? []).map((existing) =>
                 existing.id === ticket.id ? ticket : existing,
               ),
             },
