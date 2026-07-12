@@ -86,8 +86,9 @@ async function focusTerminal(page) {
 }
 
 /** Focus a visible terminal canvas by its left-to-right, top-to-bottom index. */
-async function focusTerminalAt(page, index) {
-  const boxes = await page.evaluate(() =>
+/** Rects of visible terminal canvases, spatially ordered (top-left first). */
+async function visibleCanvasRects(page) {
+  return page.evaluate(() =>
     Array.from(document.querySelectorAll("canvas"))
       .filter(
         (canvas) =>
@@ -95,14 +96,26 @@ async function focusTerminalAt(page, index) {
       )
       .map((canvas) => {
         const rect = canvas.getBoundingClientRect();
-        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+        return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
       })
       .sort((a, b) => a.y - b.y || a.x - b.x),
   );
-  const box = boxes[index];
-  if (!box)
-    throw new Error(`visible terminal canvas ${index} does not exist (count=${boxes.length})`);
-  await page.mouse.click(box.x, box.y);
+}
+
+/** A viewport point inside the `index`-th visible canvas, at box fractions
+ *  (fx, fy). Throws if that canvas is absent so callers can't silently target
+ *  the wrong pane. */
+async function visibleCanvasPointAt(page, index, fx = 0.5, fy = 0.5) {
+  const rects = await visibleCanvasRects(page);
+  const rect = rects[index];
+  if (!rect)
+    throw new Error(`visible terminal canvas ${index} does not exist (count=${rects.length})`);
+  return { x: rect.x + rect.width * fx, y: rect.y + rect.height * fy };
+}
+
+async function focusTerminalAt(page, index) {
+  const point = await visibleCanvasPointAt(page, index);
+  await page.mouse.click(point.x, point.y);
   await sleep(200);
 }
 
@@ -484,19 +497,11 @@ async function main() {
     // while node-pty batches output for up to one frame. Wait until restty has
     // consumed the mode sequences before generating pointer input.
     await sleep(250);
-    const mouseBox = await page.evaluate(() => {
-      const canvas = Array.from(document.querySelectorAll("canvas")).find(
-        (element) =>
-          element.offsetParent !== null && element.clientWidth > 0 && element.clientHeight > 0,
-      );
-      if (!canvas) return null;
-      const rect = canvas.getBoundingClientRect();
-      return { x: rect.x + rect.width * 0.7, y: rect.y + rect.height * 0.6 };
-    });
-    if (mouseBox !== null) {
-      await page.mouse.click(mouseBox.x, mouseBox.y);
-      await page.mouse.wheel(0, 180);
-    }
+    // Target the SAME canvas focusTerminalAt(page, 0) just focused — the probe
+    // runs in that pane, so pointer input must land there too.
+    const mouseBox = await visibleCanvasPointAt(page, 0, 0.7, 0.6);
+    await page.mouse.click(mouseBox.x, mouseBox.y);
+    await page.mouse.wheel(0, 180);
     const mouseHex = await waitForFileContains(mouseReportPath, "1b5b3c", 5000);
     await page.keyboard.press("Control+c");
     await sleep(400);
@@ -505,30 +510,25 @@ async function main() {
     check(
       10,
       "Canvas click + wheel become SGR mouse reports at the PTY",
-      mouseBox !== null && hasMouseDown && hasMouseWheel,
-      `canvas=${mouseBox !== null} down=${hasMouseDown} wheel=${hasMouseWheel} raw=${JSON.stringify(mouseHex?.trim() ?? null)}`,
+      hasMouseDown && hasMouseWheel,
+      `down=${hasMouseDown} wheel=${hasMouseWheel} raw=${JSON.stringify(mouseHex?.trim() ?? null)}`,
     );
 
     // === 11. Normal-screen wheel scrolls restty's viewport ==================
+    const readScrollHost = () =>
+      page.evaluate(() => {
+        const host = Array.from(document.querySelectorAll(".restty-native-scroll-host")).find(
+          (element) => element.offsetParent !== null,
+        );
+        return host ? { top: host.scrollTop, max: host.scrollHeight - host.clientHeight } : null;
+      });
     await runInTerminal(page, "seq 1 500");
     await sleep(1000);
-    const scrollBefore = await page.evaluate(() => {
-      const host = Array.from(document.querySelectorAll(".restty-native-scroll-host")).find(
-        (element) => element.offsetParent !== null,
-      );
-      return host ? { top: host.scrollTop, max: host.scrollHeight - host.clientHeight } : null;
-    });
-    if (mouseBox !== null) {
-      await page.mouse.move(mouseBox.x, mouseBox.y);
-      await page.mouse.wheel(0, -600);
-      await sleep(300);
-    }
-    const scrollAfter = await page.evaluate(() => {
-      const host = Array.from(document.querySelectorAll(".restty-native-scroll-host")).find(
-        (element) => element.offsetParent !== null,
-      );
-      return host ? { top: host.scrollTop, max: host.scrollHeight - host.clientHeight } : null;
-    });
+    const scrollBefore = await readScrollHost();
+    await page.mouse.move(mouseBox.x, mouseBox.y);
+    await page.mouse.wheel(0, -600);
+    await sleep(300);
+    const scrollAfter = await readScrollHost();
     check(
       11,
       "Wheel scrolls ordinary terminal scrollback",
@@ -541,10 +541,8 @@ async function main() {
     // blue color-emoji glyph. The pure transformer has deterministic unit
     // coverage; this screenshot covers the actual GPU font-selection result.
     await runInTerminal(page, "printf '\\033[32m⏺\\033[0m symbol-probe\\n'");
-    if (mouseBox !== null) {
-      await page.mouse.move(mouseBox.x, mouseBox.y);
-      await page.mouse.wheel(0, 100_000);
-    }
+    await page.mouse.move(mouseBox.x, mouseBox.y);
+    await page.mouse.wheel(0, 100_000);
     await sleep(500);
     await page.screenshot({ path: shot("07-symbol-presentation.png") });
   } finally {
