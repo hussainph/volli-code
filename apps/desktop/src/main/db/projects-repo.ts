@@ -5,6 +5,7 @@
  */
 import type Database from "better-sqlite3";
 import type { Project } from "@volli/shared";
+import { prepared } from "./prepared";
 
 interface ProjectRow {
   id: string;
@@ -33,31 +34,33 @@ function mapProject(row: ProjectRow): Project {
 
 /** Every project, ordered by rail position. */
 export function listProjects(db: Database.Database): Project[] {
-  const rows = db.prepare<[], ProjectRow>("SELECT * FROM projects ORDER BY sort_order").all();
+  const rows = prepared<[], ProjectRow>(db, "SELECT * FROM projects ORDER BY sort_order").all();
   return rows.map(mapProject);
 }
 
 export function countProjects(db: Database.Database): number {
-  const row = db.prepare<[], { count: number }>("SELECT COUNT(*) as count FROM projects").get();
+  const row = prepared<[], { count: number }>(db, "SELECT COUNT(*) as count FROM projects").get();
   return row?.count ?? 0;
 }
 
 export function findProjectByPath(db: Database.Database, path: string): Project | undefined {
-  const row = db.prepare<[string], ProjectRow>("SELECT * FROM projects WHERE path = ?").get(path);
+  const row = prepared<[string], ProjectRow>(db, "SELECT * FROM projects WHERE path = ?").get(path);
   return row ? mapProject(row) : undefined;
 }
 
 /** The `sortOrder` one past the current max (`-1` when the table is empty, so this returns `0`). */
 export function nextSortOrder(db: Database.Database): number {
-  const row = db
-    .prepare<[], { max: number | null }>("SELECT MAX(sort_order) as max FROM projects")
-    .get();
+  const row = prepared<[], { max: number | null }>(
+    db,
+    "SELECT MAX(sort_order) as max FROM projects",
+  ).get();
   return (row?.max ?? -1) + 1;
 }
 
 /** Inserts a brand-new project row (`row_version` starts at `1`). */
 export function insertProject(db: Database.Database, project: Project): void {
-  db.prepare(
+  prepared(
+    db,
     `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
      VALUES (@id, @name, @path, @ticketPrefix, @colorIndex, @sortOrder, 1, @createdAt, @updatedAt)`,
   ).run({
@@ -74,7 +77,7 @@ export function insertProject(db: Database.Database, project: Project): void {
 
 /** Deletes a project; `ON DELETE CASCADE` takes its tickets/labels/ticket_events with it. */
 export function deleteProject(db: Database.Database, id: string): void {
-  db.prepare("DELETE FROM projects WHERE id = ?").run(id);
+  prepared(db, "DELETE FROM projects WHERE id = ?").run(id);
 }
 
 /**
@@ -88,10 +91,11 @@ export function reorderProjects(
   orderedIds: readonly string[],
   now: number,
 ): void {
-  const stmt = db.prepare(
-    "UPDATE projects SET sort_order = ?, row_version = row_version + 1, updated_at = ? WHERE id = ?",
-  );
   const run = db.transaction((ids: readonly string[]) => {
+    const stmt = prepared(
+      db,
+      "UPDATE projects SET sort_order = ?, row_version = row_version + 1, updated_at = ? WHERE id = ?",
+    );
     ids.forEach((id, index) => {
       stmt.run(index, now, id);
     });

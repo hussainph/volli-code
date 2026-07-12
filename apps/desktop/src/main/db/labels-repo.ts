@@ -8,6 +8,7 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import type { Label } from "@volli/shared";
+import { prepared } from "./prepared";
 
 interface LabelRow {
   id: string;
@@ -25,7 +26,7 @@ function mapLabel(row: LabelRow): Label {
 
 /** Every label across every project — used only to build the boot bootstrap payload. */
 export function listAllLabels(db: Database.Database): Label[] {
-  const rows = db.prepare<[], LabelRow>("SELECT * FROM labels ORDER BY project_id, name").all();
+  const rows = prepared<[], LabelRow>(db, "SELECT * FROM labels ORDER BY project_id, name").all();
   return rows.map(mapLabel);
 }
 
@@ -34,14 +35,15 @@ export function findLabelByName(
   projectId: string,
   name: string,
 ): Label | undefined {
-  const row = db
-    .prepare<[string, string], LabelRow>("SELECT * FROM labels WHERE project_id = ? AND name = ?")
-    .get(projectId, name);
+  const row = prepared<[string, string], LabelRow>(
+    db,
+    "SELECT * FROM labels WHERE project_id = ? AND name = ?",
+  ).get(projectId, name);
   return row ? mapLabel(row) : undefined;
 }
 
 export function getLabel(db: Database.Database, labelId: string): Label | undefined {
-  const row = db.prepare<[string], LabelRow>("SELECT * FROM labels WHERE id = ?").get(labelId);
+  const row = prepared<[string], LabelRow>(db, "SELECT * FROM labels WHERE id = ?").get(labelId);
   return row ? mapLabel(row) : undefined;
 }
 
@@ -55,7 +57,8 @@ export function getOrCreateLabel(
   const existing = findLabelByName(db, projectId, name);
   if (existing) return existing;
   const id = randomUUID();
-  db.prepare(
+  prepared(
+    db,
     `INSERT INTO labels (id, project_id, name, color, row_version, created_at, updated_at)
      VALUES (?, ?, ?, NULL, 1, ?, ?)`,
   ).run(id, projectId, name, now, now);
@@ -69,25 +72,24 @@ export function setLabelColor(
   color: string | null,
   now: number,
 ): Label | undefined {
-  const result = db
-    .prepare(
-      "UPDATE labels SET color = ?, row_version = row_version + 1, updated_at = ? WHERE id = ?",
-    )
-    .run(color, now, labelId);
+  const result = prepared(
+    db,
+    "UPDATE labels SET color = ?, row_version = row_version + 1, updated_at = ? WHERE id = ?",
+  ).run(color, now, labelId);
   if (result.changes === 0) return undefined;
   return getLabel(db, labelId);
 }
 
 /** Idempotent: a duplicate `(ticket_id, label_id)` pair is silently ignored (preserves the original rowid/order). */
 export function addTicketLabel(db: Database.Database, ticketId: string, labelId: string): void {
-  db.prepare("INSERT OR IGNORE INTO ticket_labels (ticket_id, label_id) VALUES (?, ?)").run(
+  prepared(db, "INSERT OR IGNORE INTO ticket_labels (ticket_id, label_id) VALUES (?, ?)").run(
     ticketId,
     labelId,
   );
 }
 
 export function removeTicketLabel(db: Database.Database, ticketId: string, labelId: string): void {
-  db.prepare("DELETE FROM ticket_labels WHERE ticket_id = ? AND label_id = ?").run(
+  prepared(db, "DELETE FROM ticket_labels WHERE ticket_id = ? AND label_id = ?").run(
     ticketId,
     labelId,
   );

@@ -6,6 +6,7 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import type { TicketEventPayload } from "@volli/shared";
+import { prepared } from "./prepared";
 
 /** Appends one `ticket_events` row; `kind` mirrors `payload.kind`. */
 export function recordTicketEvent(
@@ -14,7 +15,8 @@ export function recordTicketEvent(
   payload: TicketEventPayload,
   now: number,
 ): void {
-  db.prepare(
+  prepared(
+    db,
     `INSERT INTO ticket_events (id, ticket_id, kind, actor, payload, created_at)
      VALUES (?, ?, ?, 'user', ?, ?)`,
   ).run(randomUUID(), ticketId, payload.kind, JSON.stringify(payload), now);

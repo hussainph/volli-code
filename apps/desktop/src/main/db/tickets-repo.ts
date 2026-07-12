@@ -8,34 +8,7 @@
  */
 import type Database from "better-sqlite3";
 import type { Ticket, TicketPriority, TicketStatus } from "@volli/shared";
-
-/**
- * better-sqlite3 does not cache prepared statements — every `db.prepare(sql)`
- * call re-parses and re-plans the SQL. This repo's hot paths (notably the
- * per-row UPDATE inside a board-move transaction) call `prepare` many times
- * per invocation, so statements are memoized by SQL text, per db handle. The
- * WeakMap key (rather than a module-level Map) means a second db handle
- * (e.g. in tests) gets its own cache and can't collide with — or leak past
- * — another handle's lifetime.
- */
-const stmtCache = new WeakMap<Database.Database, Map<string, Database.Statement>>();
-
-function prepared<Params extends unknown[] = unknown[], Row = unknown>(
-  db: Database.Database,
-  sql: string,
-): Database.Statement<Params, Row> {
-  let cache = stmtCache.get(db);
-  if (!cache) {
-    cache = new Map();
-    stmtCache.set(db, cache);
-  }
-  let stmt = cache.get(sql);
-  if (!stmt) {
-    stmt = db.prepare<Params, Row>(sql) as Database.Statement;
-    cache.set(sql, stmt);
-  }
-  return stmt as Database.Statement<Params, Row>;
-}
+import { prepared } from "./prepared";
 
 export interface TicketRow {
   id: string;
