@@ -1,232 +1,288 @@
-import { EMPTY_TICKET_FILTER, type Ticket } from "@volli/shared";
-import { describe, expect, it } from "vite-plus/test";
-import { createBoardStore } from "./board";
+import {
+  EMPTY_TICKET_FILTER,
+  type Label,
+  type Ticket,
+  type TicketPriority,
+  type TicketStatus,
+} from "@volli/shared";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { toast } from "sonner";
+import { type BoardGateway, createBoardStore } from "./board";
 
-/** Simple in-memory `StateStorage` so each test gets its own isolated backing. */
-function createMemoryStorage() {
-  const data = new Map<string, string>();
+vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+
+let nextId = 1;
+
+/** A minimal, deterministic ticket for hydrate() seeding and gateway stubs. */
+function ticket(overrides: Partial<Ticket> & { status: TicketStatus }): Ticket {
   return {
-    getItem: (name: string) => data.get(name) ?? null,
-    setItem: (name: string, value: string) => {
-      data.set(name, value);
-    },
-    removeItem: (name: string) => {
-      data.delete(name);
-    },
+    id: overrides.id ?? `t${nextId++}`,
+    projectId: overrides.projectId ?? "p1",
+    ticketNumber: overrides.ticketNumber ?? nextId,
+    title: overrides.title ?? "Ticket",
+    body: overrides.body ?? "",
+    status: overrides.status,
+    priority: overrides.priority ?? "medium",
+    labels: overrides.labels ?? [],
+    usesWorktree: overrides.usesWorktree ?? true,
+    harnessId: overrides.harnessId ?? "claude-code",
+    order: overrides.order ?? 0,
+    createdAt: overrides.createdAt ?? 0,
+    updatedAt: overrides.updatedAt ?? 0,
   };
 }
 
-/** Fresh store over fresh, isolated storage — never shared across tests. */
-function freshStore() {
-  return createBoardStore(createMemoryStorage());
+/** A fake in-memory gateway implementing BoardGateway's result unions, controllable per test. */
+function fakeGateway(overrides: Partial<BoardGateway> = {}): BoardGateway {
+  const createTicket = vi.fn<BoardGateway["createTicket"]>(async (input) => ({
+    ok: true,
+    ticket: ticket({
+      projectId: input.projectId,
+      status: input.status,
+      title: input.title,
+      priority: input.priority,
+    }),
+  }));
+  const moveTicket = vi.fn<BoardGateway["moveTicket"]>(async () => ({ ok: true, tickets: [] }));
+  const setTicketPriority = vi.fn<BoardGateway["setTicketPriority"]>(async () => ({
+    ok: true,
+    tickets: [],
+  }));
+  return { createTicket, moveTicket, setTicketPriority, ...overrides };
 }
 
-function byStatus(tickets: Ticket[], status: Ticket["status"]) {
-  return tickets.filter((ticket) => ticket.status === status);
-}
-
-describe("ensureSeeded", () => {
-  it("seeds the demo board for a project not yet in ticketsByProject", () => {
-    const store = freshStore();
-
-    store.getState().ensureSeeded("p1", "TST");
-
-    const tickets = store.getState().ticketsByProject.p1!;
-    expect(tickets).toHaveLength(11);
-    expect(byStatus(tickets, "backlog")).toHaveLength(4);
-    expect(byStatus(tickets, "todo")).toHaveLength(3);
-    expect(byStatus(tickets, "doing")).toHaveLength(2);
-    expect(byStatus(tickets, "needs_review")).toHaveLength(2);
-    expect(byStatus(tickets, "done")).toHaveLength(0);
-    expect(tickets.every((t) => t.id.startsWith("TST-"))).toBe(true);
-  });
-
-  it("is idempotent — a second call does not reseed or change identity", () => {
-    const store = freshStore();
-    store.getState().ensureSeeded("p1", "TST");
-    const before = store.getState().ticketsByProject.p1;
-
-    store.getState().ensureSeeded("p1", "TST");
-
-    expect(store.getState().ticketsByProject.p1).toBe(before);
-  });
-
-  it("treats an already-empty ticket array as seeded", () => {
-    const store = freshStore();
-    store.setState({ ticketsByProject: { p1: [] } });
-
-    store.getState().ensureSeeded("p1", "TST");
-
-    expect(store.getState().ticketsByProject.p1).toEqual([]);
-  });
+afterEach(() => {
+  vi.clearAllMocks();
 });
 
-describe("moveTicket", () => {
-  it("moves a ticket to a new status and index", () => {
-    const store = freshStore();
-    store.getState().ensureSeeded("p1", "TST");
-    const backlogFirst = byStatus(store.getState().ticketsByProject.p1!, "backlog")[0]!;
+describe("hydrate", () => {
+  it("seeds ticketsByProject and labelsByProject wholesale", () => {
+    const store = createBoardStore(fakeGateway());
+    const tickets = [ticket({ status: "backlog" })];
+    const labels: Label[] = [{ id: "l1", projectId: "p1", name: "bug", color: null }];
 
-    store.getState().moveTicket("p1", backlogFirst.id, "doing", 0);
+    store.getState().hydrate({ p1: tickets }, { p1: labels });
 
-    const moved = store.getState().ticketsByProject.p1!.find((t) => t.id === backlogFirst.id)!;
-    expect(moved.status).toBe("doing");
-    expect(moved.order).toBe(0);
-  });
-
-  it("is a no-op (unchanged identity) when the shared op reports unchanged position", () => {
-    const store = freshStore();
-    store.getState().ensureSeeded("p1", "TST");
-    const backlogFirst = byStatus(store.getState().ticketsByProject.p1!, "backlog")[0]!;
-    const before = store.getState();
-
-    store.getState().moveTicket("p1", backlogFirst.id, "backlog", 0);
-
-    expect(store.getState()).toBe(before);
-  });
-
-  it("is a no-op for an unknown ticket id on an unseeded project", () => {
-    const store = freshStore();
-    const before = store.getState();
-
-    store.getState().moveTicket("p1", "does-not-exist", "doing", 0);
-
-    expect(store.getState()).toBe(before);
-    expect(store.getState().ticketsByProject.p1).toBeUndefined();
+    expect(store.getState().ticketsByProject.p1).toBe(tickets);
+    expect(store.getState().labelsByProject.p1).toBe(labels);
   });
 });
 
 describe("addTicket", () => {
-  it("appends a ticket with the next ticket number and end-of-column order", () => {
-    const store = freshStore();
-    store.getState().ensureSeeded("p1", "TST");
+  it("is a no-op (no IPC call) when the trimmed title is empty", async () => {
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
 
-    store.getState().addTicket("p1", "TST", "backlog", "Ship the widget");
+    const result = await store.getState().addTicket("p1", "backlog", "   ");
 
-    const tickets = store.getState().ticketsByProject.p1!;
-    expect(tickets).toHaveLength(12);
-    const added = tickets.find((t) => t.title === "Ship the widget")!;
-    expect(added.id).toBe("TST-12");
-    expect(added.ticketNumber).toBe(12);
-    expect(added.status).toBe("backlog");
-    expect(added.order).toBe(4); // 4 existing backlog tickets, 0-indexed end
-  });
-
-  it("adds the first ticket to an unseeded project at order 0, number 1", () => {
-    const store = freshStore();
-
-    store.getState().addTicket("p1", "TST", "todo", "First ticket");
-
-    const tickets = store.getState().ticketsByProject.p1!;
-    expect(tickets).toHaveLength(1);
-    expect(tickets[0]!.id).toBe("TST-1");
-    expect(tickets[0]!.order).toBe(0);
-  });
-
-  it("trims the title before storing it", () => {
-    const store = freshStore();
-
-    store.getState().addTicket("p1", "TST", "todo", "  Padded title  ");
-
-    expect(store.getState().ticketsByProject.p1![0]!.title).toBe("Padded title");
-  });
-
-  it("is a no-op when the trimmed title is empty", () => {
-    const store = freshStore();
-    const before = store.getState();
-
-    store.getState().addTicket("p1", "TST", "todo", "   ");
-
-    expect(store.getState()).toBe(before);
+    expect(result).toBeNull();
+    expect(gateway.createTicket).not.toHaveBeenCalled();
     expect(store.getState().ticketsByProject.p1).toBeUndefined();
   });
 
-  it("stores an explicit priority", () => {
-    const store = freshStore();
+  it("trims the title before sending it to the gateway", async () => {
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
 
-    store.getState().addTicket("p1", "TST", "todo", "Urgent fix", { priority: "high" });
+    await store.getState().addTicket("p1", "backlog", "  Padded  ");
 
-    expect(store.getState().ticketsByProject.p1![0]!.priority).toBe("high");
+    expect(gateway.createTicket).toHaveBeenCalledWith(expect.objectContaining({ title: "Padded" }));
   });
 
-  it("defaults to medium priority when options is omitted", () => {
-    const store = freshStore();
+  it("appends the gateway's created ticket and returns it", async () => {
+    const created = ticket({ id: "new-1", projectId: "p1", status: "todo", title: "New" });
+    const gateway = fakeGateway({
+      createTicket: vi.fn<BoardGateway["createTicket"]>(async () => ({
+        ok: true,
+        ticket: created,
+      })),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [ticket({ status: "backlog" })] }, {});
 
-    store.getState().addTicket("p1", "TST", "todo", "No priority specified");
+    const result = await store.getState().addTicket("p1", "todo", "New", { priority: "high" });
 
-    expect(store.getState().ticketsByProject.p1![0]!.priority).toBe("medium");
+    expect(result).toBe(created);
+    expect(store.getState().ticketsByProject.p1).toHaveLength(2);
+    expect(store.getState().ticketsByProject.p1).toContain(created);
   });
 
-  it("returns the created ticket", () => {
-    const store = freshStore();
+  it("toasts and returns null on a typed gateway failure", async () => {
+    const gateway = fakeGateway({
+      createTicket: vi.fn<BoardGateway["createTicket"]>(async () => ({
+        ok: false,
+        error: "db locked",
+      })),
+    });
+    const store = createBoardStore(gateway);
 
-    const ticket = store.getState().addTicket("p1", "TST", "todo", "First ticket");
+    const result = await store.getState().addTicket("p1", "todo", "New");
 
-    expect(ticket).not.toBeNull();
-    expect(ticket!.id).toBe("TST-1");
-    expect(ticket!.title).toBe("First ticket");
+    expect(result).toBeNull();
+    expect(store.getState().ticketsByProject.p1).toBeUndefined();
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not create ticket: db locked");
   });
 
-  it("returns null and adds nothing for a whitespace-only title", () => {
-    const store = freshStore();
-    const before = store.getState();
+  it("toasts and returns null when the gateway call rejects", async () => {
+    const gateway = fakeGateway({
+      createTicket: vi.fn<BoardGateway["createTicket"]>(async () => {
+        throw new Error("ipc gone");
+      }),
+    });
+    const store = createBoardStore(gateway);
 
-    const ticket = store.getState().addTicket("p1", "TST", "todo", "   ");
+    const result = await store.getState().addTicket("p1", "todo", "New");
 
-    expect(ticket).toBeNull();
-    expect(store.getState()).toBe(before);
+    expect(result).toBeNull();
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not create ticket: ipc gone");
+  });
+});
+
+describe("moveTicket", () => {
+  it("optimistically moves, then reconciles with the gateway's authoritative list", async () => {
+    const a = ticket({ id: "a", status: "backlog", order: 0 });
+    const b = ticket({ id: "b", status: "backlog", order: 1 });
+    const authoritative = [
+      { ...a, status: "doing" as const, order: 0 },
+      { ...b, status: "backlog" as const, order: 0 },
+    ];
+    const gateway = fakeGateway({
+      moveTicket: vi.fn<BoardGateway["moveTicket"]>(async () => ({
+        ok: true,
+        tickets: authoritative,
+      })),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a, b] }, {});
+
+    await store.getState().moveTicket("p1", "a", "doing", 0);
+
+    expect(gateway.moveTicket).toHaveBeenCalledWith({
+      projectId: "p1",
+      ticketId: "a",
+      toStatus: "doing",
+      toIndex: 0,
+    });
+    expect(store.getState().ticketsByProject.p1).toBe(authoritative);
+  });
+
+  it("is a no-op when the shared op reports an unchanged position", async () => {
+    const a = ticket({ id: "a", status: "backlog", order: 0 });
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a] }, {});
+
+    await store.getState().moveTicket("p1", "a", "backlog", 0);
+
+    expect(gateway.moveTicket).not.toHaveBeenCalled();
+  });
+
+  it("reverts to the pre-move snapshot and toasts on a typed failure", async () => {
+    const a = ticket({ id: "a", status: "backlog", order: 0 });
+    const b = ticket({ id: "b", status: "backlog", order: 1 });
+    const before = [a, b];
+    const gateway = fakeGateway({
+      moveTicket: vi.fn<BoardGateway["moveTicket"]>(async () => ({ ok: false, error: "conflict" })),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: before }, {});
+
+    await store.getState().moveTicket("p1", "a", "doing", 0);
+
+    expect(store.getState().ticketsByProject.p1).toEqual(before);
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not move ticket: conflict");
+  });
+
+  it("reverts to the pre-move snapshot and toasts when the gateway call rejects", async () => {
+    const a = ticket({ id: "a", status: "backlog", order: 0 });
+    const before = [a];
+    const gateway = fakeGateway({
+      moveTicket: vi.fn<BoardGateway["moveTicket"]>(async () => {
+        throw new Error("ipc gone");
+      }),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: before }, {});
+
+    await store.getState().moveTicket("p1", "a", "doing", 0);
+
+    expect(store.getState().ticketsByProject.p1).toEqual(before);
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not move ticket: ipc gone");
+  });
+
+  it("is a no-op for an unknown ticket id on an unhydrated project", async () => {
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+
+    await store.getState().moveTicket("p1", "does-not-exist", "doing", 0);
+
+    expect(gateway.moveTicket).not.toHaveBeenCalled();
     expect(store.getState().ticketsByProject.p1).toBeUndefined();
   });
 });
 
 describe("setTicketPriority", () => {
-  it("updates a ticket's priority", () => {
-    const store = freshStore();
-    store.getState().ensureSeeded("p1", "TST");
-    const ticket = store.getState().ticketsByProject.p1![0]!;
-    const nextPriority = ticket.priority === "high" ? "low" : "high";
+  it("optimistically updates, then reconciles with the gateway's authoritative list", async () => {
+    const a = ticket({ id: "a", status: "backlog", priority: "low" });
+    const authoritative = [{ ...a, priority: "high" as const }];
+    const gateway = fakeGateway({
+      setTicketPriority: vi.fn<BoardGateway["setTicketPriority"]>(async () => ({
+        ok: true,
+        tickets: authoritative,
+      })),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a] }, {});
 
-    store.getState().setTicketPriority("p1", ticket.id, nextPriority);
+    await store.getState().setTicketPriority("p1", "a", "high");
 
-    expect(store.getState().ticketsByProject.p1!.find((t) => t.id === ticket.id)!.priority).toBe(
-      nextPriority,
-    );
+    expect(gateway.setTicketPriority).toHaveBeenCalledWith({ ticketId: "a", priority: "high" });
+    expect(store.getState().ticketsByProject.p1).toBe(authoritative);
   });
 
-  it("is a no-op (unchanged identity) when the priority is unchanged", () => {
-    const store = freshStore();
-    store.getState().ensureSeeded("p1", "TST");
-    const ticket = store.getState().ticketsByProject.p1![0]!;
-    const before = store.getState();
+  it("is a no-op when the priority is unchanged", async () => {
+    const a = ticket({ id: "a", status: "backlog", priority: "high" });
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a] }, {});
 
-    store.getState().setTicketPriority("p1", ticket.id, ticket.priority);
+    await store.getState().setTicketPriority("p1", "a", "high");
 
-    expect(store.getState()).toBe(before);
+    expect(gateway.setTicketPriority).not.toHaveBeenCalled();
   });
 
-  it("is a no-op for an unknown ticket id", () => {
-    const store = freshStore();
-    store.getState().ensureSeeded("p1", "TST");
-    const before = store.getState();
+  it("reverts and toasts on a typed failure", async () => {
+    const a = ticket({ id: "a", status: "backlog", priority: "low" });
+    const before = [a];
+    const gateway = fakeGateway({
+      setTicketPriority: vi.fn<BoardGateway["setTicketPriority"]>(async () => ({
+        ok: false,
+        error: "conflict",
+      })),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: before }, {});
 
-    store.getState().setTicketPriority("p1", "does-not-exist", "high");
+    await store.getState().setTicketPriority("p1", "a", "high");
 
-    expect(store.getState()).toBe(before);
+    expect(store.getState().ticketsByProject.p1).toEqual(before);
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not update priority: conflict");
   });
 
-  it("is a no-op for an unknown ticket id on an unseeded project", () => {
-    const store = freshStore();
-    const before = store.getState();
+  it("is a no-op for an unknown ticket id", async () => {
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [ticket({ id: "a", status: "backlog" })] }, {});
 
-    store.getState().setTicketPriority("p1", "does-not-exist", "high");
+    await store.getState().setTicketPriority("p1", "does-not-exist", "high");
 
-    expect(store.getState()).toBe(before);
+    expect(gateway.setTicketPriority).not.toHaveBeenCalled();
   });
 });
 
 describe("setSearch", () => {
   it("sets the search string verbatim, initializing from EMPTY_TICKET_FILTER", () => {
-    const store = freshStore();
+    const store = createBoardStore(fakeGateway());
 
     store.getState().setSearch("p1", "  widget ");
 
@@ -239,31 +295,31 @@ describe("setSearch", () => {
 
 describe("togglePriority", () => {
   it("adds then removes a priority from the facet", () => {
-    const store = freshStore();
+    const store = createBoardStore(fakeGateway());
 
-    store.getState().togglePriority("p1", "high");
+    store.getState().togglePriority("p1", "high" as TicketPriority);
     expect(store.getState().filterByProject.p1!.priorities).toEqual(["high"]);
 
-    store.getState().togglePriority("p1", "high");
+    store.getState().togglePriority("p1", "high" as TicketPriority);
     expect(store.getState().filterByProject.p1!.priorities).toEqual([]);
   });
 });
 
-describe("toggleTag", () => {
-  it("adds then removes a tag from the facet", () => {
-    const store = freshStore();
+describe("toggleLabel", () => {
+  it("adds then removes a label from the facet", () => {
+    const store = createBoardStore(fakeGateway());
 
-    store.getState().toggleTag("p1", "terminal");
-    expect(store.getState().filterByProject.p1!.tags).toEqual(["terminal"]);
+    store.getState().toggleLabel("p1", "terminal");
+    expect(store.getState().filterByProject.p1!.labels).toEqual(["terminal"]);
 
-    store.getState().toggleTag("p1", "terminal");
-    expect(store.getState().filterByProject.p1!.tags).toEqual([]);
+    store.getState().toggleLabel("p1", "terminal");
+    expect(store.getState().filterByProject.p1!.labels).toEqual([]);
   });
 });
 
 describe("toggleHarness", () => {
   it("adds then removes a harness id from the facet", () => {
-    const store = freshStore();
+    const store = createBoardStore(fakeGateway());
 
     store.getState().toggleHarness("p1", "codex");
     expect(store.getState().filterByProject.p1!.harnessIds).toEqual(["codex"]);
@@ -275,8 +331,8 @@ describe("toggleHarness", () => {
 
 describe("clearFilter", () => {
   it("drops the project's filter record entirely", () => {
-    const store = freshStore();
-    store.getState().togglePriority("p1", "high");
+    const store = createBoardStore(fakeGateway());
+    store.getState().togglePriority("p1", "high" as TicketPriority);
 
     store.getState().clearFilter("p1");
 
@@ -284,7 +340,7 @@ describe("clearFilter", () => {
   });
 
   it("is a no-op when there is no filter record for the project", () => {
-    const store = freshStore();
+    const store = createBoardStore(fakeGateway());
     const before = store.getState();
 
     store.getState().clearFilter("p1");
@@ -295,16 +351,16 @@ describe("clearFilter", () => {
 
 describe("selectTicket", () => {
   it("records the selected ticket id for the project", () => {
-    const store = freshStore();
+    const store = createBoardStore(fakeGateway());
 
-    store.getState().selectTicket("p1", "TST-3");
+    store.getState().selectTicket("p1", "t3");
 
-    expect(store.getState().selectedByProject.p1).toBe("TST-3");
+    expect(store.getState().selectedByProject.p1).toBe("t3");
   });
 
   it("clears via null by dropping the project's record entirely", () => {
-    const store = freshStore();
-    store.getState().selectTicket("p1", "TST-3");
+    const store = createBoardStore(fakeGateway());
+    store.getState().selectTicket("p1", "t3");
 
     store.getState().selectTicket("p1", null);
 
@@ -313,7 +369,7 @@ describe("selectTicket", () => {
   });
 
   it("is a no-op (unchanged identity) when clearing with no selection", () => {
-    const store = freshStore();
+    const store = createBoardStore(fakeGateway());
     const before = store.getState();
 
     store.getState().selectTicket("p1", null);
@@ -322,53 +378,59 @@ describe("selectTicket", () => {
   });
 
   it("is a no-op (unchanged identity) when re-selecting the same ticket", () => {
-    const store = freshStore();
-    store.getState().selectTicket("p1", "TST-3");
+    const store = createBoardStore(fakeGateway());
+    store.getState().selectTicket("p1", "t3");
     const before = store.getState();
 
-    store.getState().selectTicket("p1", "TST-3");
+    store.getState().selectTicket("p1", "t3");
 
     expect(store.getState()).toBe(before);
   });
 
   it("keeps selections independent across projects", () => {
-    const store = freshStore();
+    const store = createBoardStore(fakeGateway());
 
-    store.getState().selectTicket("p1", "TST-3");
-    store.getState().selectTicket("p2", "OTH-1");
+    store.getState().selectTicket("p1", "t3");
+    store.getState().selectTicket("p2", "o1");
     store.getState().selectTicket("p1", null);
 
     expect(store.getState().selectedByProject.p1).toBeUndefined();
-    expect(store.getState().selectedByProject.p2).toBe("OTH-1");
+    expect(store.getState().selectedByProject.p2).toBe("o1");
   });
 });
 
 describe("forget", () => {
-  it("removes the ticket list, the filter record, and the selection record", () => {
-    const store = freshStore();
-    store.getState().ensureSeeded("p1", "TST");
-    store.getState().togglePriority("p1", "high");
-    store.getState().selectTicket("p1", "TST-1");
+  it("removes the ticket list, label list, filter record, and selection record", () => {
+    const store = createBoardStore(fakeGateway());
+    store
+      .getState()
+      .hydrate(
+        { p1: [ticket({ id: "t1", status: "backlog" })] },
+        { p1: [{ id: "l1", projectId: "p1", name: "bug", color: null }] },
+      );
+    store.getState().togglePriority("p1", "high" as TicketPriority);
+    store.getState().selectTicket("p1", "t1");
 
     store.getState().forget("p1");
 
     expect(store.getState().ticketsByProject.p1).toBeUndefined();
+    expect(store.getState().labelsByProject.p1).toBeUndefined();
     expect(store.getState().filterByProject.p1).toBeUndefined();
     expect(store.getState().selectedByProject.p1).toBeUndefined();
   });
 
   it("removes only the selection record when there is nothing else", () => {
-    const store = freshStore();
-    store.getState().selectTicket("p1", "TST-1");
+    const store = createBoardStore(fakeGateway());
+    store.getState().selectTicket("p1", "t1");
 
     store.getState().forget("p1");
 
     expect(store.getState().selectedByProject.p1).toBeUndefined();
   });
 
-  it("removes only the ticket list when there is no filter record", () => {
-    const store = freshStore();
-    store.getState().ensureSeeded("p1", "TST");
+  it("removes only the ticket list when there is nothing else", () => {
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [ticket({ id: "t1", status: "backlog" })] }, {});
 
     store.getState().forget("p1");
 
@@ -376,128 +438,20 @@ describe("forget", () => {
   });
 
   it("removes only the filter record when there is no ticket list", () => {
-    const store = freshStore();
-    store.getState().togglePriority("p1", "high");
+    const store = createBoardStore(fakeGateway());
+    store.getState().togglePriority("p1", "high" as TicketPriority);
 
     store.getState().forget("p1");
 
     expect(store.getState().filterByProject.p1).toBeUndefined();
   });
 
-  it("is a no-op for a project with no tickets, filter, or selection", () => {
-    const store = freshStore();
+  it("is a no-op for a project with no tickets, labels, filter, or selection", () => {
+    const store = createBoardStore(fakeGateway());
     const before = store.getState();
 
     store.getState().forget("p1");
 
     expect(store.getState()).toBe(before);
-  });
-});
-
-describe("persistence", () => {
-  it("marks localStorage as disposable scaffold data and persists only board records", () => {
-    const storage = createMemoryStorage();
-    const store = createBoardStore(storage);
-    store.getState().ensureSeeded("p1", "TST");
-    store.getState().togglePriority("p1", "high");
-    store.getState().selectTicket("p1", "TST-1");
-
-    const raw = storage.getItem("volli:board");
-    expect(raw).not.toBeNull();
-
-    const parsed = JSON.parse(raw!) as { state: Record<string, unknown>; version: number };
-    expect(Object.keys(parsed.state)).toEqual(["persistenceKind", "ticketsByProject"]);
-    expect(parsed.state.persistenceKind).toBe("demo-scaffold");
-    expect(parsed.state).not.toHaveProperty("filterByProject");
-    expect(parsed.state).not.toHaveProperty("selectedByProject");
-  });
-
-  it("rehydrates the same tickets in a new store over the same storage, filters and selection reset", () => {
-    const storage = createMemoryStorage();
-    const store = createBoardStore(storage);
-    store.getState().ensureSeeded("p1", "TST");
-    store.getState().togglePriority("p1", "high");
-    store.getState().selectTicket("p1", "TST-1");
-
-    const rehydrated = createBoardStore(storage);
-
-    expect(rehydrated.getState().ticketsByProject).toEqual(store.getState().ticketsByProject);
-    expect(rehydrated.getState().persistenceKind).toBe("demo-scaffold");
-    expect(rehydrated.getState().filterByProject).toEqual({});
-    expect(rehydrated.getState().selectedByProject).toEqual({});
-  });
-});
-
-describe("rehydration sanitization", () => {
-  it("drops rehydrated tickets that fail validation, keeping the valid ones", () => {
-    // A ticket with an unknown status would throw inside groupTicketsByStatus
-    // (`groups[status].push`) on every board render — persisted JSON from a
-    // different build (or a corrupt write) must never smuggle one into state.
-    const valid = {
-      id: "TST-1",
-      projectId: "p1",
-      ticketNumber: 1,
-      title: "Valid",
-      body: "",
-      status: "todo",
-      priority: "medium",
-      tags: ["infra"],
-      usesWorktree: true,
-      harnessId: "claude-code",
-      order: 0,
-      createdAt: 1,
-      updatedAt: 1,
-    };
-    const invalid = [
-      "junk",
-      null,
-      { ...valid, id: 7 },
-      { ...valid, order: "0" },
-      { ...valid, status: "in_progress" },
-      { ...valid, priority: "urgent" },
-      { ...valid, usesWorktree: "yes" },
-      { ...valid, tags: "infra" },
-      { ...valid, tags: ["infra", 7] },
-    ];
-
-    const storage = createMemoryStorage();
-    storage.setItem(
-      "volli:board",
-      JSON.stringify({
-        state: {
-          persistenceKind: "demo-scaffold",
-          ticketsByProject: { p1: [valid, ...invalid], p2: "not-an-array" },
-        },
-        version: 1,
-      }),
-    );
-
-    const store = createBoardStore(storage);
-    expect(store.getState().ticketsByProject.p1).toEqual([valid]);
-    // A record that is not an array at all is dropped whole.
-    expect(store.getState().ticketsByProject.p2).toBeUndefined();
-  });
-
-  it("rehydrates to an empty board when the persisted shape is not an object", () => {
-    const storage = createMemoryStorage();
-    storage.setItem("volli:board", JSON.stringify({ state: null, version: 1 }));
-    expect(createBoardStore(storage).getState().ticketsByProject).toEqual({});
-
-    const noRecordStorage = createMemoryStorage();
-    noRecordStorage.setItem(
-      "volli:board",
-      JSON.stringify({ state: { persistenceKind: "demo-scaffold" }, version: 1 }),
-    );
-    expect(createBoardStore(noRecordStorage).getState().ticketsByProject).toEqual({});
-
-    const nullRecordStorage = createMemoryStorage();
-    nullRecordStorage.setItem(
-      "volli:board",
-      JSON.stringify({
-        state: { persistenceKind: "demo-scaffold", ticketsByProject: null },
-        version: 1,
-      }),
-    );
-    expect(createBoardStore(nullRecordStorage).getState().ticketsByProject).toEqual({});
   });
 });

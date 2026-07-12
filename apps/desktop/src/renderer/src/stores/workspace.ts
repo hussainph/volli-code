@@ -20,6 +20,8 @@ import { DEFAULT_TICKET_SORT, TICKET_SORT_KEYS, type TicketSort } from "@volli/s
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
+import { appStateStorage } from "@renderer/lib/app-state-storage";
+
 /** The per-workspace nav pages (NAV_ITEMS). Settings is app-wide chrome — see stores/ui.ts. */
 export type NavKey = "board" | "sessions" | "files";
 
@@ -107,7 +109,11 @@ function patchWorkspace(
   return { byProject: { ...state.byProject, [projectId]: { ...current, ...changes } } };
 }
 
-/** Factory so tests can supply an in-memory storage instead of localStorage. */
+/**
+ * Factory so tests can supply an in-memory storage instead of the real
+ * app_state bridge. `skipHydration` only applies to the real singleton (no
+ * `storage` injected) — see ui.ts's factory doc for why.
+ */
 export function createWorkspaceStore(storage?: StateStorage) {
   return create<WorkspaceState>()(
     persist(
@@ -150,7 +156,8 @@ export function createWorkspaceStore(storage?: StateStorage) {
       {
         name: "volli:workspace",
         version: 1,
-        storage: createJSONStorage(() => storage ?? localStorage),
+        storage: createJSONStorage(() => storage ?? appStateStorage),
+        skipHydration: storage === undefined,
         // Persist ONLY the view prefs per record (see module doc); records
         // that still match the defaults are dropped entirely so the stored
         // map never accretes entries for projects that were merely visited.

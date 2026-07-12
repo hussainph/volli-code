@@ -1,14 +1,25 @@
 import type {
+  AppStateSetResult,
+  BootstrapResult,
   CreateTerminalSessionRequest,
   CreateTerminalSessionResult,
   GhosttyAppearancePayload,
   GhosttyConfigResult,
+  LabelResult,
+  LegacyImportRequest,
+  LegacyImportResult,
   ListDirectoryResult,
   PickFolderResult,
+  ProjectCreateResult,
+  ProjectMutationResult,
   RevealResult,
   TerminalDataEvent,
   TerminalExitEvent,
   TerminalIoResult,
+  TicketCreateResult,
+  TicketPriority,
+  TicketsResult,
+  TicketStatus,
   UiZoomCommand,
 } from "@volli/shared";
 
@@ -18,11 +29,49 @@ export interface Api {
     chrome: string;
     node: string;
   };
+  data: {
+    /** Reads the full SQLite snapshot (projects/tickets/labels/app_state) the renderer boots from. */
+    bootstrap: () => Promise<BootstrapResult>;
+    /** One-time localStorage → SQLite import; a no-op (returns current state) once the db is non-empty. */
+    importLegacy: (req: LegacyImportRequest) => Promise<LegacyImportResult>;
+  };
   projects: {
     /** Native folder picker; resolves canceled or with the chosen path + basename. */
     pickFolder: () => Promise<PickFolderResult>;
     /** Registers the set of project roots the fs handlers may operate inside. */
     syncRoots: (paths: string[]) => Promise<void>;
+    /** Creates a project row, or (`created: false`) returns the existing one already tracked at `path`. */
+    create: (input: { path: string; name: string }) => Promise<ProjectCreateResult>;
+    /** Deletes a project; cascades its tickets/labels/events in SQLite. */
+    remove: (id: string) => Promise<ProjectMutationResult>;
+    /** Rewrites rail `sort_order` to `0..n-1` following `orderedIds`. */
+    reorder: (orderedIds: string[]) => Promise<ProjectMutationResult>;
+  };
+  tickets: {
+    create: (input: {
+      projectId: string;
+      status: TicketStatus;
+      title: string;
+      priority?: TicketPriority;
+    }) => Promise<TicketCreateResult>;
+    /** Runs the shared board move + persists it; resolves with the project's full authoritative ticket list. */
+    move: (input: {
+      projectId: string;
+      ticketId: string;
+      toStatus: TicketStatus;
+      toIndex: number;
+    }) => Promise<TicketsResult>;
+    setPriority: (input: { ticketId: string; priority: TicketPriority }) => Promise<TicketsResult>;
+    update: (input: { ticketId: string; title?: string; body?: string }) => Promise<TicketsResult>;
+    /** Replaces a ticket's labels by name; unknown names are created (`color: null`) per project. */
+    setLabels: (input: { ticketId: string; labels: string[] }) => Promise<TicketsResult>;
+  };
+  labels: {
+    setColor: (input: { labelId: string; color: string | null }) => Promise<LabelResult>;
+  };
+  appState: {
+    /** Upserts one `app_state` key — the async write-through the ui/workspace persist stores' storage adapter uses. */
+    set: (key: string, value: string) => Promise<AppStateSetResult>;
   };
   fs: {
     /** Lists one directory level (dirs-first, `.git` hidden, symlinks as files). */

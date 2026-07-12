@@ -46,7 +46,13 @@ export const DEFAULT_HARNESS_ID: HarnessId = "claude-code";
 
 /** A board card and, once it reaches Doing, a terminal workspace. */
 export interface Ticket {
-  /** `<PREFIX>-<n>`, e.g. `"VC-12"`. */
+  /**
+   * Opaque UUID (`crypto.randomUUID()`), like a project's `id`. This is
+   * record identity, not presentation — the human-facing `"VC-12"` form is a
+   * *display* id derived on demand from `projectId`'s ticket prefix and
+   * `ticketNumber`; see {@link displayTicketId}. Unique `(project_id,
+   * ticket_number)` is enforced separately (the DB layer, migration 001).
+   */
   id: string;
   projectId: string;
   ticketNumber: number;
@@ -55,7 +61,8 @@ export interface Ticket {
   body: string;
   status: TicketStatus;
   priority: TicketPriority;
-  tags: string[];
+  /** Label names, display order = insertion. */
+  labels: string[];
   /** Whether this ticket boots its agent in an isolated git worktree. Default `true`. */
   usesWorktree: boolean;
   /**
@@ -71,13 +78,19 @@ export interface Ticket {
   updatedAt: number;
 }
 
-/** Builds a ticket id from a project's ticket prefix and a ticket number. */
-export function ticketId(prefix: string, ticketNumber: number): string {
+/**
+ * Builds a ticket's *display* id (e.g. `"VC-12"`) from a project's ticket
+ * prefix and a ticket number. Presentation and branch-naming use only
+ * (`ticketBranchName` in `ticket-branch.ts`) — never record identity; a
+ * ticket's actual identity is its opaque {@link Ticket.id}.
+ */
+export function displayTicketId(prefix: string, ticketNumber: number): string {
   return `${prefix}-${ticketNumber}`;
 }
 
 export interface CreateTicketInput {
-  prefix: string;
+  /** Opaque UUID supplied by the caller — kept out of this function so it stays pure/deterministic. */
+  id: string;
   projectId: string;
   ticketNumber: number;
   title: string;
@@ -91,24 +104,24 @@ export interface CreateTicketInput {
   /** Defaults to `"medium"`. */
   priority?: TicketPriority;
   /** Defaults to `[]`. */
-  tags?: string[];
+  labels?: string[];
   /** Defaults to `true`. */
   usesWorktree?: boolean;
   /** Defaults to {@link DEFAULT_HARNESS_ID}. */
   harnessId?: string;
 }
 
-/** Creates a {@link Ticket}. Pure and deterministic — the caller supplies `now`. */
+/** Creates a {@link Ticket}. Pure and deterministic — the caller supplies `id` and `now`. */
 export function createTicket(input: CreateTicketInput): Ticket {
   return {
-    id: ticketId(input.prefix, input.ticketNumber),
+    id: input.id,
     projectId: input.projectId,
     ticketNumber: input.ticketNumber,
     title: input.title,
     body: input.body ?? "",
     status: input.status,
     priority: input.priority ?? "medium",
-    tags: input.tags ?? [],
+    labels: input.labels ?? [],
     usesWorktree: input.usesWorktree ?? true,
     harnessId: input.harnessId ?? DEFAULT_HARNESS_ID,
     order: input.order,

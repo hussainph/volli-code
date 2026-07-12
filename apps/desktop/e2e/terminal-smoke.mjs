@@ -218,7 +218,16 @@ async function main() {
   ];
 
   const consoleErrors = [];
-  const app = await _electron.launch({ executablePath: ELECTRON, args: [APP_DIR] });
+  // Isolated SQLite db: without VOLLI_DB_PATH the app opens the real
+  // <userData>/volli.db, whose non-empty state makes bootstrap's firstRun
+  // false — skipping the one-time localStorage import this smoke's project
+  // seeding relies on (and polluting the owner's real data).
+  const dbDir = await fs.mkdtemp(join(os.tmpdir(), "volli-terminal-smoke-db-"));
+  const app = await _electron.launch({
+    executablePath: ELECTRON,
+    args: [APP_DIR],
+    env: { ...process.env, VOLLI_DB_PATH: join(dbDir, "volli.db") },
+  });
   let backendReport = { webgpu: false, webgl2: false, navigatorGpu: false };
 
   try {

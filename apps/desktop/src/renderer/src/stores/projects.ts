@@ -1,124 +1,200 @@
 /**
- * Persisted store of tracked projects. Array order IS the rail order — drag
- * reorder writes it directly; there is no separate `sortOrder` field until
- * the SQLite layer lands (locked decision, see docs/CONCEPT.md #3).
+ * Tracked projects (SQLite-backed, migration 001 — `projects.sort_order`
+ * drives rail order). `hydrate` is the ONE place state is seeded wholesale,
+ * from the boot payload (see lib/boot.ts); every mutation after that is an
+ * async write-through via `gateway` that reconciles or reverts on failure,
+ * surfacing every failure via a toast (CLAUDE.md: never silently swallow a
+ * failed mutation — the Swift app's top systemic defect).
  *
- * Persistence is localStorage via zustand's `persist` middleware, an interim
- * choice ahead of that SQLite layer. Known and accepted limitation: dev
- * (localhost:5173) and the packaged app (file://) are different origins, so
- * their localStorage — and therefore their tracked projects — do not share
- * data across the two.
+ * `reorder` stays a synchronous, optimistic local array move for live drag
+ * feedback (the rail calls it on every pointer-cross) and does NOT persist —
+ * persistence is the separate `commitReorder`, which the rail calls once, on
+ * drag end/cancel, so a single drag doesn't spam `api.projects.reorder`.
  */
-import { derivePrefix, PROJECT_COLORS, type Project } from "@volli/shared";
+import {
+  errorMessage,
+  type AppStateSetResult,
+  type Project,
+  type ProjectCreateResult,
+  type ProjectMutationResult,
+} from "@volli/shared";
+import { toast } from "sonner";
 import { create } from "zustand";
-import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
-import { killProjectSessions } from "../terminal/session-lifecycle";
+import { killProjectSessions } from "@renderer/terminal/session-lifecycle";
+
 import { useBoardStore } from "./board";
 import { useWorkspaceStore } from "./workspace";
+
+/** The `app_state` key `selectedProjectId` is persisted under — also read by lib/boot.ts. */
+export const PROJECTS_UI_APP_STATE_KEY = "volli:projects-ui";
+
+/** The subset of the preload API the projects store needs — narrow and fake-able for tests. */
+export interface ProjectsGateway {
+  create(input: { path: string; name: string }): Promise<ProjectCreateResult>;
+  remove(id: string): Promise<ProjectMutationResult>;
+  reorder(orderedIds: string[]): Promise<ProjectMutationResult>;
+  /** Fire-and-forget persistence of the current selection under {@link PROJECTS_UI_APP_STATE_KEY}. */
+  setSelection(selectedProjectId: string | null): Promise<AppStateSetResult>;
+}
+
+const defaultGateway: ProjectsGateway = {
+  create: (input) => window.api.projects.create(input),
+  remove: (id) => window.api.projects.remove(id),
+  reorder: (orderedIds) => window.api.projects.reorder(orderedIds),
+  setSelection: (selectedProjectId) =>
+    window.api.appState.set(PROJECTS_UI_APP_STATE_KEY, JSON.stringify({ selectedProjectId })),
+};
 
 interface ProjectsState {
   projects: Project[];
   selectedProjectId: string | null;
-  addProject(input: { path: string; defaultName: string }): void;
-  removeProject(id: string): void;
+  /** Seeds state from the boot payload — the ONE place state is set wholesale outside a mutation. */
+  hydrate(projects: Project[], selectedProjectId: string | null): void;
+  addProject(input: { path: string; defaultName: string }): Promise<void>;
+  removeProject(id: string): Promise<void>;
+  /** Optimistic local reorder for live drag feedback; does not persist — see `commitReorder`. */
   reorder(activeId: string, overId: string): void;
+  /** Persists the rail's current order against `previousOrder` (captured at drag start); reverts + toasts on failure. */
+  commitReorder(previousOrder: readonly Project[]): Promise<void>;
   select(id: string): void;
   selectByIndex(index: number): void;
 }
 
-type PersistedProjectsState = Pick<ProjectsState, "projects" | "selectedProjectId">;
+/** Whether two orderings name the same ids in the same sequence. */
+function sameOrder(a: readonly Project[], b: readonly Project[]): boolean {
+  return a.length === b.length && a.every((project, index) => project.id === b[index]?.id);
+}
 
-/** Factory so tests can supply an in-memory storage instead of localStorage. */
-export function createProjectsStore(storage?: StateStorage) {
-  return create<ProjectsState>()(
-    persist(
-      (set, get) => ({
-        projects: [],
-        selectedProjectId: null,
+/** Factory so tests can inject a fake gateway instead of the real preload bridge. */
+export function createProjectsStore(gateway: ProjectsGateway = defaultGateway) {
+  return create<ProjectsState>()((set, get) => ({
+    projects: [],
+    selectedProjectId: null,
 
-        addProject({ path, defaultName }) {
-          const { projects } = get();
-          const existing = projects.find((project) => project.path === path);
-          if (existing) {
-            set({ selectedProjectId: existing.id });
-            return;
-          }
+    hydrate(projects, selectedProjectId) {
+      set({ projects, selectedProjectId });
+    },
 
-          const project: Project = {
-            id: crypto.randomUUID(),
-            name: defaultName,
-            path,
-            ticketPrefix: derivePrefix(defaultName),
-            colorIndex: projects.length % PROJECT_COLORS.length,
-            createdAt: Date.now(),
-          };
-          set({ projects: [...projects, project], selectedProjectId: project.id });
-        },
+    async addProject({ path, defaultName }) {
+      let result: ProjectCreateResult;
+      try {
+        result = await gateway.create({ path, name: defaultName });
+      } catch (error) {
+        toast.error(`Could not add project: ${errorMessage(error)}`);
+        return;
+      }
+      if (!result.ok) {
+        toast.error(`Could not add project: ${result.error}`);
+        return;
+      }
 
-        removeProject(id) {
-          const { projects, selectedProjectId } = get();
-          const removedIndex = projects.findIndex((project) => project.id === id);
-          if (removedIndex === -1) return;
+      const { projects } = get();
+      if (!result.created) {
+        // `created: false` means an existing project at that path was
+        // selected instead of inserted — append it defensively if this
+        // renderer somehow doesn't have it yet (another window created it).
+        const exists = projects.some((project) => project.id === result.project.id);
+        set({
+          projects: exists ? projects : [...projects, result.project],
+          selectedProjectId: result.project.id,
+        });
+        return;
+      }
+      set({ projects: [...projects, result.project], selectedProjectId: result.project.id });
+    },
 
-          // Removal, per-workspace-UI cleanup, and session teardown are one
-          // invariant, enforced here so no removal path (dialog today, context
-          // menu / CLI later) can forget the forget. killProjectSessions kills
-          // each live PTY and disposes its engine explicitly — teardown does
-          // NOT depend on a terminal view being mounted — then drops the
-          // project's session record.
-          useWorkspaceStore.getState().forget(id);
-          useBoardStore.getState().forget(id);
-          killProjectSessions(id);
+    async removeProject(id) {
+      const { projects, selectedProjectId } = get();
+      const removedIndex = projects.findIndex((project) => project.id === id);
+      if (removedIndex === -1) return;
 
-          const nextProjects = projects.filter((project) => project.id !== id);
-          if (selectedProjectId !== id) {
-            set({ projects: nextProjects });
-            return;
-          }
+      let result: ProjectMutationResult;
+      try {
+        result = await gateway.remove(id);
+      } catch (error) {
+        toast.error(`Could not remove project: ${errorMessage(error)}`);
+        return;
+      }
+      if (!result.ok) {
+        toast.error(`Could not remove project: ${result.error}`);
+        return;
+      }
 
-          const nextSelectedId =
-            nextProjects.length === 0
-              ? null
-              : nextProjects[Math.min(removedIndex, nextProjects.length - 1)]!.id;
-          set({ projects: nextProjects, selectedProjectId: nextSelectedId });
-        },
+      // Removal, per-workspace-UI cleanup, and session teardown are one
+      // invariant, enforced here so no removal path (dialog today, context
+      // menu / CLI later) can forget the forget. killProjectSessions kills
+      // each live PTY and disposes its engine explicitly — teardown does
+      // NOT depend on a terminal view being mounted — then drops the
+      // project's session record.
+      useWorkspaceStore.getState().forget(id);
+      useBoardStore.getState().forget(id);
+      killProjectSessions(id);
 
-        reorder(activeId, overId) {
-          if (activeId === overId) return;
+      const nextProjects = projects.filter((project) => project.id !== id);
+      if (selectedProjectId !== id) {
+        set({ projects: nextProjects });
+        return;
+      }
 
-          const { projects } = get();
-          const activeIndex = projects.findIndex((project) => project.id === activeId);
-          const overIndex = projects.findIndex((project) => project.id === overId);
-          if (activeIndex === -1 || overIndex === -1) return;
+      const nextSelectedId =
+        nextProjects.length === 0
+          ? null
+          : nextProjects[Math.min(removedIndex, nextProjects.length - 1)]!.id;
+      set({ projects: nextProjects, selectedProjectId: nextSelectedId });
+    },
 
-          const next = projects.slice();
-          const [moved] = next.splice(activeIndex, 1);
-          next.splice(overIndex, 0, moved!);
-          set({ projects: next });
-        },
+    reorder(activeId, overId) {
+      if (activeId === overId) return;
 
-        select(id) {
-          const exists = get().projects.some((project) => project.id === id);
-          if (exists) set({ selectedProjectId: id });
-        },
+      const { projects } = get();
+      const activeIndex = projects.findIndex((project) => project.id === activeId);
+      const overIndex = projects.findIndex((project) => project.id === overId);
+      if (activeIndex === -1 || overIndex === -1) return;
 
-        selectByIndex(index) {
-          const project = get().projects[index];
-          if (project) set({ selectedProjectId: project.id });
-        },
-      }),
-      {
-        name: "volli:projects",
-        version: 1,
-        storage: createJSONStorage(() => storage ?? localStorage),
-        partialize: (state): PersistedProjectsState => ({
-          projects: state.projects,
-          selectedProjectId: state.selectedProjectId,
-        }),
-      },
-    ),
-  );
+      const next = projects.slice();
+      const [moved] = next.splice(activeIndex, 1);
+      next.splice(overIndex, 0, moved!);
+      set({ projects: next });
+    },
+
+    async commitReorder(previousOrder) {
+      const { projects } = get();
+      if (sameOrder(projects, previousOrder)) return; // nothing moved since the drag started
+
+      let result: ProjectMutationResult;
+      try {
+        result = await gateway.reorder(projects.map((project) => project.id));
+      } catch (error) {
+        set({ projects: previousOrder as Project[] });
+        toast.error(`Could not save project order: ${errorMessage(error)}`);
+        return;
+      }
+      if (!result.ok) {
+        set({ projects: previousOrder as Project[] });
+        toast.error(`Could not save project order: ${result.error}`);
+      }
+    },
+
+    select(id) {
+      const exists = get().projects.some((project) => project.id === id);
+      if (!exists) return;
+      set({ selectedProjectId: id });
+      gateway
+        .setSelection(id)
+        .then((result) => {
+          if (!result.ok) toast.error(`Could not save selected project: ${result.error}`);
+        })
+        .catch((error: unknown) => {
+          toast.error(`Could not save selected project: ${errorMessage(error)}`);
+        });
+    },
+
+    selectByIndex(index) {
+      const project = get().projects[index];
+      if (project) get().select(project.id);
+    },
+  }));
 }
 
 /** App-wide singleton; components import this directly. */

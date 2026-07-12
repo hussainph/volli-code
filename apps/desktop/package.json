@@ -10,7 +10,7 @@
     "start": "node scripts/start-electron.mjs",
     "ensure:electron": "node -e \"console.log(require('electron'))\"",
     "test:coverage": "vp test run --coverage",
-    "rebuild:pty": "electron-rebuild -f -w node-pty"
+    "rebuild:native": "electron-rebuild -f -w node-pty,better-sqlite3"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -21,6 +21,7 @@
     "@fontsource-variable/mona-sans": "^5.2.8",
     "@phosphor-icons/react": "^2.1.10",
     "@volli/shared": "workspace:*",
+    "better-sqlite3": "^12.4.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "electron": "^43.0.0",
@@ -36,6 +37,7 @@
   "devDependencies": {
     "@electron/rebuild": "4.2.0",
     "@tailwindcss/vite": "^4.3.2",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",

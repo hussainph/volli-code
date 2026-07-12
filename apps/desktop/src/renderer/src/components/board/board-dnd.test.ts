@@ -8,9 +8,11 @@ import {
   ticketPosition,
 } from "./board-dnd";
 
+// Ids are opaque (a real ticket's `id` is a UUID) — "VC-n" here is just a
+// stable, readable test id, not a display id.
 function ticket(ticketNumber: number, status: TicketStatus, order: number): Ticket {
   return createTicket({
-    prefix: "VC",
+    id: `VC-${ticketNumber}`,
     projectId: "p1",
     ticketNumber,
     title: `Ticket ${ticketNumber}`,

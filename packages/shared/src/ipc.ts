@@ -5,6 +5,10 @@
 // runtime.
 
 import type { DirEntry } from "./fs-entries";
+import type { Label } from "./label";
+import type { LegacyProject } from "./legacy-import";
+import type { Project } from "./project-identity";
+import type { Ticket } from "./ticket";
 
 /** Channel names for the preload's `contextBridge` API. */
 export type VolliIpcChannel =
@@ -20,7 +24,19 @@ export type VolliIpcChannel =
   // Send-based (ipcRenderer.send, not invoke): a fire-and-forget flow-control
   // ack needs no reply, and awaiting one per data event would defeat it.
   | "volli:terminal-ack"
-  | "volli:ghostty-config-get";
+  | "volli:ghostty-config-get"
+  | "volli:data-bootstrap"
+  | "volli:legacy-import"
+  | "volli:project-create"
+  | "volli:project-remove"
+  | "volli:project-reorder"
+  | "volli:ticket-create"
+  | "volli:ticket-move"
+  | "volli:ticket-set-priority"
+  | "volli:ticket-update"
+  | "volli:ticket-set-labels"
+  | "volli:label-set-color"
+  | "volli:app-state-set";
 
 /** Channel names for main→renderer push events (`webContents.send`). */
 export type VolliIpcEvent =
@@ -50,3 +66,46 @@ export type PickFolderResult =
 export type ListDirectoryResult = { ok: true; entries: DirEntry[] } | { ok: false; error: string };
 
 export type RevealResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * The full data snapshot handed to the renderer on boot
+ * (`volli:data-bootstrap`): projects/tickets/labels from SQLite, plus the raw
+ * `app_state` JSON the ui/workspace persist stores rehydrate from.
+ */
+export interface BootstrapPayload {
+  /** `true` when the projects table is empty AND app_state is empty. */
+  firstRun: boolean;
+  /** Ordered by `sort_order`. */
+  projects: Project[];
+  ticketsByProject: Record<string, Ticket[]>;
+  labelsByProject: Record<string, Label[]>;
+  /** Raw JSON strings by key (`'volli:ui'`, `'volli:workspace'`, `'volli:projects-ui'`). */
+  appState: Record<string, string>;
+}
+
+export type BootstrapResult = { ok: true; data: BootstrapPayload } | { ok: false; error: string };
+
+export interface LegacyImportRequest {
+  projects: LegacyProject[];
+  appState: Record<string, string>;
+}
+
+export type LegacyImportResult =
+  | { ok: true; data: BootstrapPayload }
+  | { ok: false; error: string };
+
+/** `created: false` means an existing project at that path was selected instead of inserted. */
+export type ProjectCreateResult =
+  | { ok: true; project: Project; created: boolean }
+  | { ok: false; error: string };
+
+export type ProjectMutationResult = { ok: true } | { ok: false; error: string };
+
+export type TicketCreateResult = { ok: true; ticket: Ticket } | { ok: false; error: string };
+
+/** The full authoritative project ticket list, returned after any ticket mutation. */
+export type TicketsResult = { ok: true; tickets: Ticket[] } | { ok: false; error: string };
+
+export type LabelResult = { ok: true; label: Label } | { ok: false; error: string };
+
+export type AppStateSetResult = { ok: true } | { ok: false; error: string };

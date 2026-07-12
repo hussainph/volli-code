@@ -1,0 +1,589 @@
+import { randomUUID } from "node:crypto";
+import { ipcMain } from "electron";
+import type Database from "better-sqlite3";
+import {
+  createTicket,
+  derivePrefix,
+  errorMessage,
+  moveTicket,
+  PROJECT_COLORS,
+  sanitizeLegacyProjects,
+  TICKET_PRIORITIES,
+  TICKET_STATUSES,
+} from "@volli/shared";
+import type {
+  AppStateSetResult,
+  BootstrapPayload,
+  BootstrapResult,
+  Label,
+  LabelResult,
+  LegacyImportRequest,
+  LegacyImportResult,
+  Project,
+  ProjectCreateResult,
+  ProjectMutationResult,
+  Ticket,
+  TicketCreateResult,
+  TicketPriority,
+  TicketsResult,
+  TicketStatus,
+  VolliIpcChannel,
+} from "@volli/shared";
+import { getAllAppState, setAppState } from "./db/app-state-repo";
+import { recordTicketEvent } from "./db/events-repo";
+import {
+  addTicketLabel,
+  findLabelByName,
+  getOrCreateLabel,
+  listAllLabels,
+  removeTicketLabel,
+  setLabelColor,
+} from "./db/labels-repo";
+import {
+  countProjects,
+  deleteProject,
+  findProjectByPath,
+  insertProject,
+  listProjects,
+  nextSortOrder,
+  reorderProjects,
+} from "./db/projects-repo";
+import {
+  bumpTicketVersion,
+  countTicketsInStatus,
+  getTicketLabelNames,
+  getTicketRow,
+  insertTicket,
+  listAllTickets,
+  listTicketsByProject,
+  nextTicketNumberForProject,
+  updateTicketFields,
+  updateTicketPositionStatus,
+  updateTicketPriority,
+} from "./db/tickets-repo";
+import type { TicketFieldUpdate } from "./db/tickets-repo";
+
+/** The result of the main-process open+migrate attempt (`src/main/index.ts`), fed into {@link registerDataIpcHandlers}. */
+export type DbHandle = { ok: true; db: Database.Database } | { ok: false; error: string };
+
+/** Every channel this module owns — used to register the uniform degraded-DB failure path. */
+const DATA_CHANNELS: readonly VolliIpcChannel[] = [
+  "volli:data-bootstrap",
+  "volli:legacy-import",
+  "volli:project-create",
+  "volli:project-remove",
+  "volli:project-reorder",
+  "volli:ticket-create",
+  "volli:ticket-move",
+  "volli:ticket-set-priority",
+  "volli:ticket-update",
+  "volli:ticket-set-labels",
+  "volli:label-set-color",
+  "volli:app-state-set",
+];
+
+// ---- input validation -------------------------------------------------
+
+function isTicketStatus(value: unknown): value is TicketStatus {
+  return typeof value === "string" && (TICKET_STATUSES as readonly string[]).includes(value);
+}
+
+function isTicketPriority(value: unknown): value is TicketPriority {
+  return typeof value === "string" && (TICKET_PRIORITIES as readonly string[]).includes(value);
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+function isLegacyImportRequest(value: unknown): value is LegacyImportRequest {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  const appState = candidate["appState"];
+  return (
+    Array.isArray(candidate["projects"]) &&
+    typeof appState === "object" &&
+    appState !== null &&
+    !Array.isArray(appState) &&
+    Object.values(appState as Record<string, unknown>).every((entry) => typeof entry === "string")
+  );
+}
+
+interface ProjectCreateInput {
+  path: string;
+  name: string;
+}
+
+function isProjectCreateInput(value: unknown): value is ProjectCreateInput {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate["path"] === "string" && typeof candidate["name"] === "string";
+}
+
+interface TicketCreateInput {
+  projectId: string;
+  status: TicketStatus;
+  title: string;
+  priority?: TicketPriority;
+}
+
+function isTicketCreateInput(value: unknown): value is TicketCreateInput {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate["projectId"] === "string" &&
+    typeof candidate["title"] === "string" &&
+    candidate["title"].trim().length > 0 &&
+    isTicketStatus(candidate["status"]) &&
+    (candidate["priority"] === undefined || isTicketPriority(candidate["priority"]))
+  );
+}
+
+interface TicketMoveInput {
+  projectId: string;
+  ticketId: string;
+  toStatus: TicketStatus;
+  toIndex: number;
+}
+
+function isTicketMoveInput(value: unknown): value is TicketMoveInput {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate["projectId"] === "string" &&
+    typeof candidate["ticketId"] === "string" &&
+    isTicketStatus(candidate["toStatus"]) &&
+    typeof candidate["toIndex"] === "number" &&
+    Number.isInteger(candidate["toIndex"])
+  );
+}
+
+interface TicketSetPriorityInput {
+  ticketId: string;
+  priority: TicketPriority;
+}
+
+function isTicketSetPriorityInput(value: unknown): value is TicketSetPriorityInput {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate["ticketId"] === "string" && isTicketPriority(candidate["priority"]);
+}
+
+interface TicketUpdateInput {
+  ticketId: string;
+  title?: string;
+  body?: string;
+}
+
+function isTicketUpdateInput(value: unknown): value is TicketUpdateInput {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate["ticketId"] === "string" &&
+    (candidate["title"] === undefined || typeof candidate["title"] === "string") &&
+    (candidate["body"] === undefined || typeof candidate["body"] === "string")
+  );
+}
+
+interface TicketSetLabelsInput {
+  ticketId: string;
+  labels: string[];
+}
+
+function isTicketSetLabelsInput(value: unknown): value is TicketSetLabelsInput {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate["ticketId"] === "string" && isStringArray(candidate["labels"]);
+}
+
+interface LabelSetColorInput {
+  labelId: string;
+  color: string | null;
+}
+
+function isLabelSetColorInput(value: unknown): value is LabelSetColorInput {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate["labelId"] === "string" &&
+    (candidate["color"] === null || typeof candidate["color"] === "string")
+  );
+}
+
+// ---- bootstrap payload --------------------------------------------------
+
+function buildBootstrapPayload(db: Database.Database): BootstrapPayload {
+  const projects = listProjects(db);
+  const appState = getAllAppState(db);
+  const firstRun = projects.length === 0 && Object.keys(appState).length === 0;
+
+  const ticketsByProject: Record<string, Ticket[]> = {};
+  const labelsByProject: Record<string, Label[]> = {};
+  for (const project of projects) {
+    ticketsByProject[project.id] = [];
+    labelsByProject[project.id] = [];
+  }
+  for (const ticket of listAllTickets(db)) {
+    (ticketsByProject[ticket.projectId] ??= []).push(ticket);
+  }
+  for (const label of listAllLabels(db)) {
+    (labelsByProject[label.projectId] ??= []).push(label);
+  }
+
+  return { firstRun, projects, ticketsByProject, labelsByProject, appState };
+}
+
+// ---- registration --------------------------------------------------------
+
+/**
+ * Registers every `volli:data-*`/`volli:project-*`/`volli:ticket-*`/
+ * `volli:label-*`/`volli:app-state-*` handler. When the db failed to open
+ * (`handle.ok === false`), every channel instead resolves with `{ ok: false,
+ * error: handle.error }` — main never crashes and invoke() never hangs; the
+ * renderer surfaces the error itself. Failures never throw across the IPC
+ * boundary either way — every handler below catches and converts.
+ */
+export function registerDataIpcHandlers(handle: DbHandle): void {
+  if (!handle.ok) {
+    const error = handle.error;
+    for (const channel of DATA_CHANNELS) {
+      ipcMain.handle(channel, () => ({ ok: false, error }));
+    }
+    return;
+  }
+
+  const db = handle.db;
+
+  ipcMain.handle("volli:data-bootstrap" satisfies VolliIpcChannel, (): BootstrapResult => {
+    try {
+      return { ok: true, data: buildBootstrapPayload(db) };
+    } catch (error) {
+      return { ok: false, error: errorMessage(error) };
+    }
+  });
+
+  ipcMain.handle(
+    "volli:legacy-import" satisfies VolliIpcChannel,
+    (_event, request: unknown): LegacyImportResult => {
+      if (!isLegacyImportRequest(request)) {
+        return { ok: false, error: "Invalid legacy import payload" };
+      }
+      try {
+        // Idempotent-safe: only import into a genuinely empty projects
+        // table; a second call (e.g. a relaunch racing the renderer) just
+        // hands back the current state instead of re-importing over it.
+        if (countProjects(db) > 0) {
+          return { ok: true, data: buildBootstrapPayload(db) };
+        }
+        const legacyProjects = sanitizeLegacyProjects(request.projects);
+        const now = Date.now();
+        const run = db.transaction(() => {
+          legacyProjects.forEach((legacy, index) => {
+            insertProject(db, {
+              id: legacy.id,
+              name: legacy.name,
+              path: legacy.path,
+              ticketPrefix: legacy.ticketPrefix,
+              colorIndex: legacy.colorIndex,
+              sortOrder: index,
+              createdAt: legacy.createdAt,
+              updatedAt: now,
+            });
+          });
+          for (const [key, value] of Object.entries(request.appState)) {
+            setAppState(db, key, value, now);
+          }
+        });
+        run();
+        return { ok: true, data: buildBootstrapPayload(db) };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:project-create" satisfies VolliIpcChannel,
+    (_event, input: unknown): ProjectCreateResult => {
+      if (!isProjectCreateInput(input)) {
+        return { ok: false, error: "Invalid project" };
+      }
+      try {
+        const existing = findProjectByPath(db, input.path);
+        if (existing) {
+          return { ok: true, project: existing, created: false };
+        }
+        const now = Date.now();
+        const project: Project = {
+          id: randomUUID(),
+          name: input.name,
+          path: input.path,
+          ticketPrefix: derivePrefix(input.name),
+          colorIndex: countProjects(db) % PROJECT_COLORS.length,
+          sortOrder: nextSortOrder(db),
+          createdAt: now,
+          updatedAt: now,
+        };
+        insertProject(db, project);
+        return { ok: true, project, created: true };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:project-remove" satisfies VolliIpcChannel,
+    (_event, id: unknown): ProjectMutationResult => {
+      if (typeof id !== "string") {
+        return { ok: false, error: "Invalid project id" };
+      }
+      try {
+        deleteProject(db, id);
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:project-reorder" satisfies VolliIpcChannel,
+    (_event, orderedIds: unknown): ProjectMutationResult => {
+      if (!isStringArray(orderedIds)) {
+        return { ok: false, error: "Invalid project order" };
+      }
+      try {
+        reorderProjects(db, orderedIds, Date.now());
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:ticket-create" satisfies VolliIpcChannel,
+    (_event, input: unknown): TicketCreateResult => {
+      if (!isTicketCreateInput(input)) {
+        return { ok: false, error: "Invalid ticket" };
+      }
+      try {
+        const now = Date.now();
+        const run = db.transaction((): Ticket => {
+          const ticketNumber = nextTicketNumberForProject(db, input.projectId);
+          const position = countTicketsInStatus(db, input.projectId, input.status);
+          const ticket = createTicket({
+            id: randomUUID(),
+            projectId: input.projectId,
+            ticketNumber,
+            title: input.title,
+            status: input.status,
+            order: position,
+            now,
+            priority: input.priority,
+          });
+          insertTicket(db, ticket);
+          recordTicketEvent(
+            db,
+            ticket.id,
+            { kind: "created", status: ticket.status, title: ticket.title },
+            now,
+          );
+          return ticket;
+        });
+        return { ok: true, ticket: run() };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:ticket-move" satisfies VolliIpcChannel,
+    (_event, input: unknown): TicketsResult => {
+      if (!isTicketMoveInput(input)) {
+        return { ok: false, error: "Invalid ticket move" };
+      }
+      try {
+        const now = Date.now();
+        const run = db.transaction((): Ticket[] => {
+          const before = listTicketsByProject(db, input.projectId);
+          const beforeById = new Map(before.map((ticket) => [ticket.id, ticket]));
+          const after = moveTicket(before, input.ticketId, input.toStatus, input.toIndex, now);
+
+          if (after !== before) {
+            for (const ticket of after) {
+              const prior = beforeById.get(ticket.id);
+              if (!prior) continue;
+              if (prior.status !== ticket.status || prior.order !== ticket.order) {
+                updateTicketPositionStatus(
+                  db,
+                  ticket.id,
+                  ticket.status,
+                  ticket.order,
+                  ticket.updatedAt,
+                );
+              }
+            }
+            const movedBefore = beforeById.get(input.ticketId);
+            const movedAfter = after.find((ticket) => ticket.id === input.ticketId);
+            if (movedBefore && movedAfter && movedBefore.status !== movedAfter.status) {
+              recordTicketEvent(
+                db,
+                input.ticketId,
+                { kind: "status_changed", from: movedBefore.status, to: movedAfter.status },
+                now,
+              );
+            }
+          }
+          return after;
+        });
+        return { ok: true, tickets: run() };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:ticket-set-priority" satisfies VolliIpcChannel,
+    (_event, input: unknown): TicketsResult => {
+      if (!isTicketSetPriorityInput(input)) {
+        return { ok: false, error: "Invalid priority change" };
+      }
+      try {
+        const now = Date.now();
+        const run = db.transaction((): Ticket[] => {
+          const row = getTicketRow(db, input.ticketId);
+          if (!row) throw new Error("Unknown ticket");
+          if (row.priority !== input.priority) {
+            updateTicketPriority(db, input.ticketId, input.priority, now);
+            recordTicketEvent(
+              db,
+              input.ticketId,
+              {
+                kind: "priority_changed",
+                from: row.priority as TicketPriority,
+                to: input.priority,
+              },
+              now,
+            );
+          }
+          return listTicketsByProject(db, row.project_id);
+        });
+        return { ok: true, tickets: run() };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:ticket-update" satisfies VolliIpcChannel,
+    (_event, input: unknown): TicketsResult => {
+      if (!isTicketUpdateInput(input)) {
+        return { ok: false, error: "Invalid ticket update" };
+      }
+      try {
+        const now = Date.now();
+        const run = db.transaction((): Ticket[] => {
+          const row = getTicketRow(db, input.ticketId);
+          if (!row) throw new Error("Unknown ticket");
+
+          const fields: TicketFieldUpdate = {};
+          if (input.title !== undefined && input.title !== row.title) fields.title = input.title;
+          if (input.body !== undefined && input.body !== row.body) fields.body = input.body;
+
+          if (fields.title !== undefined || fields.body !== undefined) {
+            updateTicketFields(db, input.ticketId, fields, now);
+            if (fields.title !== undefined) {
+              recordTicketEvent(
+                db,
+                input.ticketId,
+                { kind: "retitled", from: row.title, to: fields.title },
+                now,
+              );
+            }
+            if (fields.body !== undefined) {
+              recordTicketEvent(db, input.ticketId, { kind: "body_edited" }, now);
+            }
+          }
+          return listTicketsByProject(db, row.project_id);
+        });
+        return { ok: true, tickets: run() };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:ticket-set-labels" satisfies VolliIpcChannel,
+    (_event, input: unknown): TicketsResult => {
+      if (!isTicketSetLabelsInput(input)) {
+        return { ok: false, error: "Invalid labels" };
+      }
+      try {
+        const now = Date.now();
+        const run = db.transaction((): Ticket[] => {
+          const row = getTicketRow(db, input.ticketId);
+          if (!row) throw new Error("Unknown ticket");
+
+          const current = getTicketLabelNames(db, input.ticketId);
+          const requested = input.labels;
+          const added = requested.filter((name) => !current.includes(name));
+          const removed = current.filter((name) => !requested.includes(name));
+
+          if (added.length > 0 || removed.length > 0) {
+            for (const name of added) {
+              const label = getOrCreateLabel(db, row.project_id, name, now);
+              addTicketLabel(db, input.ticketId, label.id);
+            }
+            for (const name of removed) {
+              const label = findLabelByName(db, row.project_id, name);
+              if (label) removeTicketLabel(db, input.ticketId, label.id);
+            }
+            bumpTicketVersion(db, input.ticketId, now);
+            recordTicketEvent(db, input.ticketId, { kind: "labels_changed", added, removed }, now);
+          }
+          return listTicketsByProject(db, row.project_id);
+        });
+        return { ok: true, tickets: run() };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:label-set-color" satisfies VolliIpcChannel,
+    (_event, input: unknown): LabelResult => {
+      if (!isLabelSetColorInput(input)) {
+        return { ok: false, error: "Invalid label color" };
+      }
+      try {
+        const label = setLabelColor(db, input.labelId, input.color, Date.now());
+        if (!label) return { ok: false, error: "Unknown label" };
+        return { ok: true, label };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:app-state-set" satisfies VolliIpcChannel,
+    (_event, key: unknown, value: unknown): AppStateSetResult => {
+      if (typeof key !== "string" || typeof value !== "string") {
+        return { ok: false, error: "Invalid app state" };
+      }
+      try {
+        setAppState(db, key, value, Date.now());
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+}

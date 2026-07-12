@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vite-plus/test";
-import { createTicket } from "./ticket";
+import { createTicket, displayTicketId } from "./ticket";
 import type { Ticket, TicketPriority } from "./ticket";
 import {
   DEFAULT_SORT_DIRECTION,
@@ -19,7 +19,7 @@ function ticket(overrides: {
   updatedAt?: number;
 }): Ticket {
   const created = createTicket({
-    prefix: "VC",
+    id: displayTicketId("VC", overrides.ticketNumber),
     projectId: "proj-1",
     ticketNumber: overrides.ticketNumber,
     title: overrides.title ?? `Ticket ${overrides.ticketNumber}`,

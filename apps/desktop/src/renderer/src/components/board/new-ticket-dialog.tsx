@@ -1,6 +1,7 @@
 import * as React from "react";
 import { toast } from "sonner";
 import {
+  displayTicketId,
   TICKET_PRIORITIES,
   TICKET_PRIORITY_LABELS,
   TICKET_STATUSES,
@@ -118,19 +119,20 @@ function NewTicketForm({ project }: { project: Project }) {
   const [priority, setPriority] = React.useState<TicketPriority>("medium");
   const trimmedTitle = title.trim();
 
-  function submit() {
+  async function submit() {
     if (trimmedTitle === "") return;
-    const ticket = useBoardStore
+    const ticket = await useBoardStore
       .getState()
-      .addTicket(project.id, project.ticketPrefix, status, title, { priority });
-    // ticket is only null when the trimmed title is empty, already ruled out
-    // above (and by the Create button's disabled state) — but toast only on
-    // an actual creation, not defensively.
+      .addTicket(project.id, status, title, { priority });
+    // ticket is null when the trimmed title was empty (already ruled out
+    // above and by the Create button's disabled state) or creation failed
+    // (already toasted by the store) — toast success only on an actual
+    // creation.
     if (ticket !== null) {
       // This dialog is reachable from pages (Files/Sessions) where the board
       // itself isn't on screen, so the toast is the only confirmation the
       // user gets that the ticket was created.
-      toast.success(`${ticket.id} created`);
+      toast.success(`${displayTicketId(project.ticketPrefix, ticket.ticketNumber)} created`);
     }
     useUiStore.getState().setNewTicketOpen(false);
   }
@@ -138,7 +140,7 @@ function NewTicketForm({ project }: { project: Project }) {
   function handleTitleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
     if (event.key === "Enter") {
       event.preventDefault();
-      submit();
+      void submit();
     }
   }
 
@@ -163,7 +165,7 @@ function NewTicketForm({ project }: { project: Project }) {
         </div>
       </div>
       <DialogFooter>
-        <Button onClick={submit} disabled={trimmedTitle === ""}>
+        <Button onClick={() => void submit()} disabled={trimmedTitle === ""}>
           Create
         </Button>
       </DialogFooter>

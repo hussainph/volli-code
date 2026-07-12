@@ -3,9 +3,11 @@
  * id pair onto a concrete `{ toStatus, toIndex }` for the shared `moveTicket`
  * op. Kept free of dnd-kit/React so the drop semantics stay unit-testable.
  *
- * Id scheme: card draggables use the ticket id verbatim (`"VC-12"`); column
- * droppables — a column body or its collapsed empty-column pill, never both
- * mounted at once — use `"column:<status>"`.
+ * Id scheme: card draggables use the ticket's opaque `id` (a UUID) verbatim —
+ * NOT its display id ("VC-12"), which is presentation-only and resolved
+ * separately (see lib/display-id.ts); column droppables — a column body or
+ * its collapsed empty-column pill, never both mounted at once — use
+ * `"column:<status>"`.
  */
 import {
   groupTicketsByStatus,

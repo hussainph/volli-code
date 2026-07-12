@@ -1,4 +1,4 @@
-import type { Project, Ticket, TicketStatus } from "@volli/shared";
+import { displayTicketId, type Project, type Ticket, type TicketStatus } from "@volli/shared";
 
 import {
   SidebarGroup,
@@ -87,7 +87,7 @@ export function ActiveSessions({ project }: ActiveSessionsProps) {
                     when the sidebar is resized narrow (even for long ids) — the
                     truncating title absorbs all the shrinkage instead. */}
                 <span className="shrink-0 whitespace-nowrap font-mono text-xs text-muted-foreground">
-                  {ticket.id}
+                  {displayTicketId(project.ticketPrefix, ticket.ticketNumber)}
                 </span>
                 <span className="truncate">{ticket.title}</span>
               </SidebarMenuButton>

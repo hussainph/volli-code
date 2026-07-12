@@ -13,7 +13,6 @@ interface BoardColumnProps {
   status: TicketStatus;
   tickets: Ticket[];
   projectId: string;
-  ticketPrefix: string;
   selectedId: string | null;
   onSelect(ticketId: string): void;
   composerInitiallyOpen: boolean;
@@ -27,7 +26,6 @@ export function BoardColumn({
   status,
   tickets,
   projectId,
-  ticketPrefix,
   selectedId,
   onSelect,
   composerInitiallyOpen,
@@ -39,7 +37,6 @@ export function BoardColumn({
   const { setNodeRef } = useDroppable({ id: columnDroppableId(status) });
   const composer = useTicketComposer({
     projectId,
-    ticketPrefix,
     status,
     initiallyOpen: composerInitiallyOpen,
     onClose: () => onComposerClose(status),

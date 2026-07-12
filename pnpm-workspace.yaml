@@ -7,6 +7,7 @@ packages:
 # fetch), but pnpm 11 still hard-fails install (ERR_PNPM_IGNORED_BUILDS) without
 # this entry — do not remove it.
 allowBuilds:
+  better-sqlite3: true
   electron: true
   # node-pty ships a native addon compiled against the *system* Node ABI at
   # install time. Electron ^43 runs a different ABI, so after every install run

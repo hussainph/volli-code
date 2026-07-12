@@ -17,7 +17,7 @@ function createMemoryStorage() {
 
 describe("setNav", () => {
   it("tracks nav independently per project", () => {
-    const store = createWorkspaceStore();
+    const store = createWorkspaceStore(createMemoryStorage());
     store.getState().setNav("project-a", "files");
     store.getState().setNav("project-b", "sessions");
 
@@ -26,7 +26,7 @@ describe("setNav", () => {
   });
 
   it("keeps a project's nav across changes to other projects", () => {
-    const store = createWorkspaceStore();
+    const store = createWorkspaceStore(createMemoryStorage());
     store.getState().setNav("project-a", "files");
     store.getState().setNav("project-b", "board");
     store.getState().setNav("project-b", "sessions");
@@ -37,7 +37,7 @@ describe("setNav", () => {
 
 describe("setDirExpanded", () => {
   it("tracks expanded directories independently per project", () => {
-    const store = createWorkspaceStore();
+    const store = createWorkspaceStore(createMemoryStorage());
     store.getState().setDirExpanded("project-a", "/a/src", true);
     store.getState().setDirExpanded("project-a", "/a/src/lib", true);
     store.getState().setDirExpanded("project-b", "/b/docs", true);
@@ -47,7 +47,7 @@ describe("setDirExpanded", () => {
   });
 
   it("collapsing removes only that directory, keeping descendants remembered", () => {
-    const store = createWorkspaceStore();
+    const store = createWorkspaceStore(createMemoryStorage());
     store.getState().setDirExpanded("project-a", "/a/src", true);
     store.getState().setDirExpanded("project-a", "/a/src/lib", true);
     store.getState().setDirExpanded("project-a", "/a/src", false);
@@ -58,7 +58,7 @@ describe("setDirExpanded", () => {
   });
 
   it("is a no-op when the state already matches", () => {
-    const store = createWorkspaceStore();
+    const store = createWorkspaceStore(createMemoryStorage());
     store.getState().setDirExpanded("project-a", "/a/src", true);
 
     const before = store.getState().byProject;
@@ -68,7 +68,7 @@ describe("setDirExpanded", () => {
   });
 
   it("leaves nav untouched", () => {
-    const store = createWorkspaceStore();
+    const store = createWorkspaceStore(createMemoryStorage());
     store.getState().setNav("project-a", "files");
     store.getState().setDirExpanded("project-a", "/a/src", true);
 
@@ -78,7 +78,7 @@ describe("setDirExpanded", () => {
 
 describe("setBoardView", () => {
   it("tracks the board/list view independently per project", () => {
-    const store = createWorkspaceStore();
+    const store = createWorkspaceStore(createMemoryStorage());
     store.getState().setBoardView("project-a", "list");
     store.getState().setBoardView("project-b", "board");
 
@@ -87,7 +87,7 @@ describe("setBoardView", () => {
   });
 
   it("leaves nav and sort untouched", () => {
-    const store = createWorkspaceStore();
+    const store = createWorkspaceStore(createMemoryStorage());
     store.getState().setNav("project-a", "files");
     store.getState().setBoardView("project-a", "list");
 
@@ -98,7 +98,7 @@ describe("setBoardView", () => {
 
 describe("setBoardSort", () => {
   it("tracks the sort independently per project", () => {
-    const store = createWorkspaceStore();
+    const store = createWorkspaceStore(createMemoryStorage());
     store.getState().setBoardSort("project-a", { key: "priority", direction: "desc" });
     store.getState().setBoardSort("project-b", { key: "title", direction: "asc" });
 
@@ -113,7 +113,7 @@ describe("setBoardSort", () => {
   });
 
   it("leaves the view untouched", () => {
-    const store = createWorkspaceStore();
+    const store = createWorkspaceStore(createMemoryStorage());
     store.getState().setBoardView("project-a", "list");
     store.getState().setBoardSort("project-a", { key: "updated", direction: "desc" });
 
@@ -123,7 +123,7 @@ describe("setBoardSort", () => {
 
 describe("forget", () => {
   it("drops the project's record so a re-add starts at the defaults", () => {
-    const store = createWorkspaceStore();
+    const store = createWorkspaceStore(createMemoryStorage());
     store.getState().setNav("project-a", "files");
     store.getState().setDirExpanded("project-a", "/a/src", true);
     store.getState().setBoardView("project-a", "list");
@@ -140,7 +140,7 @@ describe("forget", () => {
   });
 
   it("leaves other projects untouched and is a no-op for unknown ids", () => {
-    const store = createWorkspaceStore();
+    const store = createWorkspaceStore(createMemoryStorage());
     store.getState().setNav("project-a", "sessions");
 
     const before = store.getState().byProject;

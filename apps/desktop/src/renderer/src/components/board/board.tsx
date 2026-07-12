@@ -124,7 +124,10 @@ export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPr
   // The whole derived pipeline is memoized: the board re-renders on every
   // drag-over event and on selection changes, and none of those should re-run
   // a filter pass plus five column sorts.
-  const visible = React.useMemo(() => filterTickets(tickets, filter), [tickets, filter]);
+  const visible = React.useMemo(
+    () => filterTickets(tickets, filter, ticketPrefix),
+    [tickets, filter, ticketPrefix],
+  );
   const groups = React.useMemo(() => groupTicketsByStatus(visible), [visible]);
   // One sort pass shared by BOTH views (the columns and the list sections
   // previously each re-sorted per render).
@@ -230,7 +233,6 @@ export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPr
           // rendered only while dragging so a row can land in any status.
           <BoardListView
             projectId={projectId}
-            ticketPrefix={ticketPrefix}
             groups={sortedGroups}
             shownStatuses={shown}
             emptyDropStatuses={drag ? hidden : []}
@@ -257,7 +259,6 @@ export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPr
                 // same). "manual" remains the true drag-reorder mode.
                 tickets={sortedGroups[status]}
                 projectId={projectId}
-                ticketPrefix={ticketPrefix}
                 selectedId={selectedId}
                 onSelect={handleSelect}
                 composerInitiallyOpen={expandedEmptyStatus === status}

@@ -3,16 +3,27 @@ import { contextBridge, ipcRenderer } from "electron";
 // dependency-disjoint (see CAUTION in vite.config.ts) — a runtime import
 // from @volli/shared here could split a shared chunk out of preload.cjs.
 import type {
+  AppStateSetResult,
+  BootstrapResult,
   CreateTerminalSessionRequest,
   CreateTerminalSessionResult,
   GhosttyAppearancePayload,
   GhosttyConfigResult,
+  LabelResult,
+  LegacyImportRequest,
+  LegacyImportResult,
   ListDirectoryResult,
   PickFolderResult,
+  ProjectCreateResult,
+  ProjectMutationResult,
   RevealResult,
   TerminalDataEvent,
   TerminalExitEvent,
   TerminalIoResult,
+  TicketCreateResult,
+  TicketPriority,
+  TicketsResult,
+  TicketStatus,
   UiZoomCommand,
   VolliIpcChannel,
   VolliIpcEvent,
@@ -25,11 +36,61 @@ const api = {
     chrome: process.versions.chrome,
     node: process.versions.node,
   },
+  data: {
+    /** Reads the full SQLite snapshot (projects/tickets/labels/app_state) the renderer boots from. */
+    bootstrap: (): Promise<BootstrapResult> =>
+      ipcRenderer.invoke("volli:data-bootstrap" satisfies VolliIpcChannel),
+    /** One-time localStorage → SQLite import; a no-op (returns current state) once the db is non-empty. */
+    importLegacy: (req: LegacyImportRequest): Promise<LegacyImportResult> =>
+      ipcRenderer.invoke("volli:legacy-import" satisfies VolliIpcChannel, req),
+  },
   projects: {
     pickFolder: (): Promise<PickFolderResult> =>
       ipcRenderer.invoke("volli:pick-project-folder" satisfies VolliIpcChannel),
     syncRoots: (paths: string[]): Promise<void> =>
       ipcRenderer.invoke("volli:sync-project-roots" satisfies VolliIpcChannel, paths),
+    /** Creates a project row, or (`created: false`) returns the existing one already tracked at `path`. */
+    create: (input: { path: string; name: string }): Promise<ProjectCreateResult> =>
+      ipcRenderer.invoke("volli:project-create" satisfies VolliIpcChannel, input),
+    /** Deletes a project; cascades its tickets/labels/events in SQLite. */
+    remove: (id: string): Promise<ProjectMutationResult> =>
+      ipcRenderer.invoke("volli:project-remove" satisfies VolliIpcChannel, id),
+    /** Rewrites rail `sort_order` to `0..n-1` following `orderedIds`. */
+    reorder: (orderedIds: string[]): Promise<ProjectMutationResult> =>
+      ipcRenderer.invoke("volli:project-reorder" satisfies VolliIpcChannel, orderedIds),
+  },
+  tickets: {
+    create: (input: {
+      projectId: string;
+      status: TicketStatus;
+      title: string;
+      priority?: TicketPriority;
+    }): Promise<TicketCreateResult> =>
+      ipcRenderer.invoke("volli:ticket-create" satisfies VolliIpcChannel, input),
+    /** Runs the shared board move + persists it; resolves with the project's full authoritative ticket list. */
+    move: (input: {
+      projectId: string;
+      ticketId: string;
+      toStatus: TicketStatus;
+      toIndex: number;
+    }): Promise<TicketsResult> =>
+      ipcRenderer.invoke("volli:ticket-move" satisfies VolliIpcChannel, input),
+    setPriority: (input: { ticketId: string; priority: TicketPriority }): Promise<TicketsResult> =>
+      ipcRenderer.invoke("volli:ticket-set-priority" satisfies VolliIpcChannel, input),
+    update: (input: { ticketId: string; title?: string; body?: string }): Promise<TicketsResult> =>
+      ipcRenderer.invoke("volli:ticket-update" satisfies VolliIpcChannel, input),
+    /** Replaces a ticket's labels by name; unknown names are created (`color: null`) per project. */
+    setLabels: (input: { ticketId: string; labels: string[] }): Promise<TicketsResult> =>
+      ipcRenderer.invoke("volli:ticket-set-labels" satisfies VolliIpcChannel, input),
+  },
+  labels: {
+    setColor: (input: { labelId: string; color: string | null }): Promise<LabelResult> =>
+      ipcRenderer.invoke("volli:label-set-color" satisfies VolliIpcChannel, input),
+  },
+  appState: {
+    /** Upserts one `app_state` key — the async write-through the ui/workspace persist stores' storage adapter uses. */
+    set: (key: string, value: string): Promise<AppStateSetResult> =>
+      ipcRenderer.invoke("volli:app-state-set" satisfies VolliIpcChannel, key, value),
   },
   fs: {
     listDirectory: (absPath: string): Promise<ListDirectoryResult> =>

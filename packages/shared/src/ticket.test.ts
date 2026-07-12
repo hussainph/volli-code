@@ -7,13 +7,13 @@ import {
   HARNESS_IDS,
   HARNESS_LABELS,
   DEFAULT_HARNESS_ID,
-  ticketId,
+  displayTicketId,
   createTicket,
 } from "./ticket";
 
-describe("ticketId", () => {
+describe("displayTicketId", () => {
   it("joins the prefix and ticket number", () => {
-    expect(ticketId("VC", 12)).toBe("VC-12");
+    expect(displayTicketId("VC", 12)).toBe("VC-12");
   });
 });
 
@@ -50,9 +50,9 @@ describe("HARNESS_LABELS", () => {
 });
 
 describe("createTicket", () => {
-  it("builds a ticket id from the prefix and ticket number", () => {
+  it("uses the supplied id verbatim", () => {
     const ticket = createTicket({
-      prefix: "VC",
+      id: "11111111-1111-1111-1111-111111111111",
       projectId: "proj-1",
       ticketNumber: 12,
       title: "MCP server",
@@ -60,7 +60,7 @@ describe("createTicket", () => {
       order: 0,
       now: 1000,
     });
-    expect(ticket.id).toBe("VC-12");
+    expect(ticket.id).toBe("11111111-1111-1111-1111-111111111111");
     expect(ticket.projectId).toBe("proj-1");
     expect(ticket.ticketNumber).toBe(12);
     expect(ticket.title).toBe("MCP server");
@@ -70,7 +70,7 @@ describe("createTicket", () => {
 
   it("stamps createdAt and updatedAt from now", () => {
     const ticket = createTicket({
-      prefix: "VC",
+      id: "id-1",
       projectId: "proj-1",
       ticketNumber: 1,
       title: "Title",
@@ -84,7 +84,7 @@ describe("createTicket", () => {
 
   it("defaults body to an empty string", () => {
     const ticket = createTicket({
-      prefix: "VC",
+      id: "id-1",
       projectId: "proj-1",
       ticketNumber: 1,
       title: "Title",
@@ -97,7 +97,7 @@ describe("createTicket", () => {
 
   it("defaults priority to medium", () => {
     const ticket = createTicket({
-      prefix: "VC",
+      id: "id-1",
       projectId: "proj-1",
       ticketNumber: 1,
       title: "Title",
@@ -108,9 +108,9 @@ describe("createTicket", () => {
     expect(ticket.priority).toBe("medium");
   });
 
-  it("defaults tags to an empty array", () => {
+  it("defaults labels to an empty array", () => {
     const ticket = createTicket({
-      prefix: "VC",
+      id: "id-1",
       projectId: "proj-1",
       ticketNumber: 1,
       title: "Title",
@@ -118,12 +118,12 @@ describe("createTicket", () => {
       order: 0,
       now: 0,
     });
-    expect(ticket.tags).toEqual([]);
+    expect(ticket.labels).toEqual([]);
   });
 
   it("defaults usesWorktree to true", () => {
     const ticket = createTicket({
-      prefix: "VC",
+      id: "id-1",
       projectId: "proj-1",
       ticketNumber: 1,
       title: "Title",
@@ -136,7 +136,7 @@ describe("createTicket", () => {
 
   it("defaults harnessId to DEFAULT_HARNESS_ID", () => {
     const ticket = createTicket({
-      prefix: "VC",
+      id: "id-1",
       projectId: "proj-1",
       ticketNumber: 1,
       title: "Title",
@@ -149,7 +149,7 @@ describe("createTicket", () => {
 
   it("honors explicit overrides for all optional fields", () => {
     const ticket = createTicket({
-      prefix: "VC",
+      id: "id-1",
       projectId: "proj-1",
       ticketNumber: 1,
       title: "Title",
@@ -158,13 +158,13 @@ describe("createTicket", () => {
       now: 0,
       body: "Some markdown body",
       priority: "high",
-      tags: ["bug", "urgent"],
+      labels: ["bug", "urgent"],
       usesWorktree: false,
       harnessId: "custom-harness",
     });
     expect(ticket.body).toBe("Some markdown body");
     expect(ticket.priority).toBe("high");
-    expect(ticket.tags).toEqual(["bug", "urgent"]);
+    expect(ticket.labels).toEqual(["bug", "urgent"]);
     expect(ticket.usesWorktree).toBe(false);
     expect(ticket.harnessId).toBe("custom-harness");
   });
