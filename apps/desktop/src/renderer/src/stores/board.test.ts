@@ -52,6 +52,7 @@ function fakeGateway(overrides: Partial<BoardGateway> = {}): BoardGateway {
 }
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
 
@@ -278,6 +279,33 @@ describe("setTicketPriority", () => {
 
     expect(gateway.setTicketPriority).not.toHaveBeenCalled();
   });
+
+  it("is a no-op for an unknown ticket id on an unhydrated project", async () => {
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+
+    await store.getState().setTicketPriority("p1", "does-not-exist", "high");
+
+    expect(gateway.setTicketPriority).not.toHaveBeenCalled();
+    expect(store.getState().ticketsByProject.p1).toBeUndefined();
+  });
+
+  it("reverts to the pre-update snapshot and toasts when the gateway call rejects", async () => {
+    const a = ticket({ id: "a", status: "backlog", priority: "low" });
+    const before = [a];
+    const gateway = fakeGateway({
+      setTicketPriority: vi.fn<BoardGateway["setTicketPriority"]>(async () => {
+        throw new Error("ipc gone");
+      }),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: before }, {});
+
+    await store.getState().setTicketPriority("p1", "a", "high");
+
+    expect(store.getState().ticketsByProject.p1).toEqual(before);
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not update priority: ipc gone");
+  });
 });
 
 describe("setSearch", () => {
@@ -453,5 +481,66 @@ describe("forget", () => {
     store.getState().forget("p1");
 
     expect(store.getState()).toBe(before);
+  });
+});
+
+describe("createBoardStore() with the default gateway", () => {
+  // No fake gateway injected here — these exercise the real
+  // `defaultGateway` wrappers (window.api.tickets.*), which every other
+  // test in this file bypasses by always constructing with a fake.
+
+  it("addTicket calls window.api.tickets.create", async () => {
+    const create = vi.fn(
+      async (input: { projectId: string; status: TicketStatus; title: string }) => ({
+        ok: true as const,
+        ticket: ticket({ projectId: input.projectId, status: input.status, title: input.title }),
+      }),
+    );
+    vi.stubGlobal("window", {
+      api: { tickets: { create, move: vi.fn(), setPriority: vi.fn() } },
+    });
+    const store = createBoardStore();
+
+    await store.getState().addTicket("p1", "backlog", "New");
+
+    expect(create).toHaveBeenCalledWith({
+      projectId: "p1",
+      status: "backlog",
+      title: "New",
+      priority: undefined,
+    });
+  });
+
+  it("moveTicket calls window.api.tickets.move", async () => {
+    const move = vi.fn(async () => ({ ok: true as const, tickets: [] }));
+    vi.stubGlobal("window", {
+      api: { tickets: { create: vi.fn(), move, setPriority: vi.fn() } },
+    });
+    const store = createBoardStore();
+    const a = ticket({ id: "a", status: "backlog", order: 0 });
+    store.getState().hydrate({ p1: [a] }, {});
+
+    await store.getState().moveTicket("p1", "a", "doing", 0);
+
+    expect(move).toHaveBeenCalledWith({
+      projectId: "p1",
+      ticketId: "a",
+      toStatus: "doing",
+      toIndex: 0,
+    });
+  });
+
+  it("setTicketPriority calls window.api.tickets.setPriority", async () => {
+    const setPriority = vi.fn(async () => ({ ok: true as const, tickets: [] }));
+    vi.stubGlobal("window", {
+      api: { tickets: { create: vi.fn(), move: vi.fn(), setPriority } },
+    });
+    const store = createBoardStore();
+    const a = ticket({ id: "a", status: "backlog", priority: "low" });
+    store.getState().hydrate({ p1: [a] }, {});
+
+    await store.getState().setTicketPriority("p1", "a", "high");
+
+    expect(setPriority).toHaveBeenCalledWith({ ticketId: "a", priority: "high" });
   });
 });

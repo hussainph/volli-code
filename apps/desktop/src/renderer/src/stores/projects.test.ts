@@ -2,7 +2,7 @@ import type { Project } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
 import { useBoardStore } from "./board";
-import { type ProjectsGateway, createProjectsStore } from "./projects";
+import { PROJECTS_UI_APP_STATE_KEY, type ProjectsGateway, createProjectsStore } from "./projects";
 import { useSessionsStore } from "./sessions";
 import { useWorkspaceStore } from "./workspace";
 
@@ -408,6 +408,24 @@ describe("select", () => {
 
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not save selected project: locked");
   });
+
+  it("toasts when the persistence call rejects", async () => {
+    const only = project({ id: "only", path: "/a" });
+    const gateway = fakeGateway({
+      setSelection: vi.fn<ProjectsGateway["setSelection"]>(async () => {
+        throw new Error("ipc gone");
+      }),
+    });
+    const { store } = freshStore(gateway);
+    store.getState().hydrate([only], null);
+
+    store.getState().select(only.id);
+    await flush();
+
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      "Could not save selected project: ipc gone",
+    );
+  });
 });
 
 describe("selectByIndex", () => {
@@ -449,5 +467,94 @@ describe("hydrate", () => {
 
     expect(store.getState().projects).toEqual([a, b]);
     expect(store.getState().selectedProjectId).toBe(b.id);
+  });
+});
+
+describe("createProjectsStore() with the default gateway", () => {
+  // No fake gateway injected here — these exercise the real
+  // `defaultGateway` wrappers (window.api.projects.* and
+  // window.api.appState.set), which every other test in this file bypasses
+  // by always constructing with a fake. removeProject's cascade still
+  // touches the real board/workspace/sessions singletons (reset in the
+  // top-level beforeEach), so `terminal.kill` is stubbed here too.
+
+  it("addProject calls window.api.projects.create", async () => {
+    const create = vi.fn(async (input: { path: string; name: string }) => ({
+      ok: true as const,
+      created: true as const,
+      project: project({ id: "new", path: input.path, name: input.name }),
+    }));
+    vi.stubGlobal("window", {
+      api: {
+        projects: { create, remove: vi.fn(), reorder: vi.fn() },
+        terminal: { kill: vi.fn().mockResolvedValue({ ok: true }) },
+        appState: { set: vi.fn().mockResolvedValue({ ok: true }) },
+      },
+    });
+    const store = createProjectsStore();
+
+    await store.getState().addProject({ path: "/a", defaultName: "A" });
+
+    expect(create).toHaveBeenCalledWith({ path: "/a", name: "A" });
+  });
+
+  it("removeProject calls window.api.projects.remove", async () => {
+    const remove = vi.fn(async () => ({ ok: true as const }));
+    vi.stubGlobal("window", {
+      api: {
+        projects: { create: vi.fn(), remove, reorder: vi.fn() },
+        terminal: { kill: vi.fn().mockResolvedValue({ ok: true }) },
+        appState: { set: vi.fn().mockResolvedValue({ ok: true }) },
+      },
+    });
+    const only = project({ id: "only", path: "/a" });
+    const store = createProjectsStore();
+    store.getState().hydrate([only], only.id);
+
+    await store.getState().removeProject(only.id);
+
+    expect(remove).toHaveBeenCalledWith(only.id);
+  });
+
+  it("commitReorder calls window.api.projects.reorder", async () => {
+    const reorder = vi.fn(async () => ({ ok: true as const }));
+    vi.stubGlobal("window", {
+      api: {
+        projects: { create: vi.fn(), remove: vi.fn(), reorder },
+        terminal: { kill: vi.fn().mockResolvedValue({ ok: true }) },
+        appState: { set: vi.fn().mockResolvedValue({ ok: true }) },
+      },
+    });
+    const [a, b] = [project({ id: "a", path: "/a" }), project({ id: "b", path: "/b" })];
+    const store = createProjectsStore();
+    store.getState().hydrate([a, b], null);
+    const previousOrder = store.getState().projects;
+    store.getState().reorder(a.id, b.id);
+
+    await store.getState().commitReorder(previousOrder);
+
+    expect(reorder).toHaveBeenCalledWith([b.id, a.id]);
+  });
+
+  it("select calls window.api.appState.set with the selection payload", async () => {
+    const appStateSet = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("window", {
+      api: {
+        projects: { create: vi.fn(), remove: vi.fn(), reorder: vi.fn() },
+        terminal: { kill: vi.fn().mockResolvedValue({ ok: true }) },
+        appState: { set: appStateSet },
+      },
+    });
+    const only = project({ id: "only", path: "/a" });
+    const store = createProjectsStore();
+    store.getState().hydrate([only], null);
+
+    store.getState().select(only.id);
+    await flush();
+
+    expect(appStateSet).toHaveBeenCalledWith(
+      PROJECTS_UI_APP_STATE_KEY,
+      JSON.stringify({ selectedProjectId: only.id }),
+    );
   });
 });
