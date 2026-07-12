@@ -5,6 +5,8 @@
  * (`VOLLI_DB_PATH`, passed via the Electron process env), exercising the whole
  * new boot/import/durability path a user would hit:
  *
+ *   0. First-run empty state — assert the neutral textured project canvas has
+ *      one clear import action and no duplicate sidebar prompt.
  *   A. First-boot legacy import — seed the OLD `volli:projects` localStorage
  *      envelope + a junk `volli:board` key, reload, and assert the project is
  *      imported into SQLite, the board starts EMPTY (the demo seed is gone),
@@ -66,6 +68,9 @@ const ELECTRON = join(
 const ownsScratch = process.env.VOLLI_SMOKE_DIR === undefined;
 const SCRATCH =
   process.env.VOLLI_SMOKE_DIR ?? (await fs.mkdtemp(join(os.tmpdir(), "volli-board-smoke-")));
+// Optional visual-review artifact for the zero-project state. Kept opt-in so
+// normal smoke runs stay artifact-free.
+const FIRST_RUN_CAPTURE_PATH = process.env.VOLLI_SMOKE_CAPTURE_FIRST_RUN;
 const USER_DATA_DIR = join(SCRATCH, "user-data");
 // The scratch SQLite database, handed to main via VOLLI_DB_PATH. Lives inside
 // the profile dir so `ownsScratch` cleanup removes it too. Survives a renderer
@@ -297,6 +302,45 @@ async function main() {
     let page = await app.firstWindow();
     await page.waitForLoadState("domcontentloaded");
     await sleep(1000);
+
+    if (FIRST_RUN_CAPTURE_PATH) await page.screenshot({ path: FIRST_RUN_CAPTURE_PATH });
+
+    // ===================================================================
+    // PHASE 0 — first-run empty project canvas
+    // ===================================================================
+    await attempt(
+      0,
+      "Fresh profile: one textured project-start canvas with a display heading and text-only action",
+      async () => {
+        const state = page.locator("[data-empty-projects-state]");
+        const primaryAction = page.getByRole("button", { name: "Add Project…", exact: true });
+        const heading = page.getByRole("heading", { name: "Add your first project", exact: true });
+        const oldSidebarPrompt = page.getByText("Add a project to get started", { exact: true });
+        const oldSidebarHeader = page.getByText("No project selected", { exact: true });
+        const texture = await state.evaluate((element) => {
+          const canvas = getComputedStyle(element).backgroundImage;
+          const dots = getComputedStyle(element, "::before").backgroundImage;
+          return { canvas, dots };
+        });
+        const headingSize = await heading.evaluate((element) =>
+          Number.parseFloat(getComputedStyle(element).fontSize),
+        );
+
+        const ok =
+          (await state.count()) === 1 &&
+          (await primaryAction.count()) === 1 &&
+          (await primaryAction.locator("svg").count()) === 0 &&
+          headingSize >= 32 &&
+          (await oldSidebarPrompt.count()) === 0 &&
+          (await oldSidebarHeader.count()) === 0 &&
+          texture.canvas !== "none" &&
+          texture.dots !== "none";
+        return {
+          ok,
+          detail: `state=${await state.count()} primaryAction=${await primaryAction.count()} actionIcons=${await primaryAction.locator("svg").count()} headingSize=${headingSize}px oldPrompt=${await oldSidebarPrompt.count()} oldHeader=${await oldSidebarHeader.count()} texture=${JSON.stringify(texture)}`,
+        };
+      },
+    );
 
     // ===================================================================
     // PHASE A — first-boot legacy import (localStorage → SQLite)

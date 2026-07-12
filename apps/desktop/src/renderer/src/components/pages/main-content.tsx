@@ -1,14 +1,20 @@
+import { FolderPlusIcon } from "@phosphor-icons/react/dist/csr/FolderPlus";
+
 import { BoardPage } from "@renderer/components/pages/board-page";
 import { FilesPage } from "@renderer/components/pages/files-page";
 import { SettingsPage } from "@renderer/components/pages/settings-page";
 import { SessionsLayer } from "@renderer/components/sessions/sessions-layer";
+import { Button } from "@renderer/components/ui/button";
 import { useActiveNav } from "@renderer/hooks/use-active-nav";
+import { useAddProject } from "@renderer/hooks/use-add-project";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
+import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
 
 /** No router: the selected project's nav page dispatches directly to a page component. */
 export function MainContent() {
   const selected = useSelectedProject();
+  const projectCount = useProjectsStore((state) => state.projects.length);
   const [activeNav] = useActiveNav();
   const settingsOpen = useUiStore((state) => state.settingsOpen);
 
@@ -26,6 +32,8 @@ export function MainContent() {
       {
         settingsOpen ? (
           <SettingsPage />
+        ) : selected === null && projectCount === 0 ? (
+          <EmptyProjectsState />
         ) : selected === null ? (
           <div className="flex flex-1 items-center justify-center">
             <p className="text-sm text-muted-foreground">Select a project</p>
@@ -36,6 +44,37 @@ export function MainContent() {
           <FilesPage />
         ) : null /* sessions: rendered by the always-mounted SessionsLayer above */
       }
+    </div>
+  );
+}
+
+/**
+ * The only explanatory first-run surface. The rail's compact plus button stays
+ * available as a shortcut, but this canvas owns the next step and avoids
+ * competing empty-state messages in the sidebar and content area.
+ */
+function EmptyProjectsState() {
+  const pickAndAdd = useAddProject();
+
+  return (
+    <div
+      data-empty-projects-state
+      className="empty-projects-canvas relative flex flex-1 items-center justify-center overflow-hidden px-6"
+    >
+      <div className="relative z-10 flex max-w-sm flex-col items-center text-center">
+        <div className="mb-5 flex size-11 items-center justify-center rounded-xl border border-border bg-card/70 shadow-sm">
+          <FolderPlusIcon className="size-5 text-muted-foreground" weight="regular" />
+        </div>
+        <h1 className="text-[2rem] font-semibold leading-tight tracking-[-0.035em]">
+          Add your first project
+        </h1>
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">
+          Choose a local codebase to start planning work.
+        </p>
+        <Button className="mt-6 app-region-no-drag" onClick={() => void pickAndAdd()}>
+          Add Project…
+        </Button>
+      </div>
     </div>
   );
 }
