@@ -68,6 +68,25 @@ function sameOrder(a: readonly Project[], b: readonly Project[]): boolean {
 
 /** Factory so tests can inject a fake gateway instead of the real preload bridge. */
 export function createProjectsStore(gateway: ProjectsGateway = defaultGateway) {
+  /**
+   * Fire-and-forget persistence of the current selection under
+   * {@link PROJECTS_UI_APP_STATE_KEY}. Every path that changes the selection —
+   * `select`, `addProject` (auto-selects the new project), `removeProject`
+   * (falls to a neighbor) — routes through here, so the choice always survives
+   * relaunch. A failure only costs the persisted selection, so toast but never
+   * block or revert the in-memory change.
+   */
+  function persistSelection(selectedProjectId: string | null): void {
+    gateway
+      .setSelection(selectedProjectId)
+      .then((result) => {
+        if (!result.ok) toast.error(`Could not save selected project: ${result.error}`);
+      })
+      .catch((error: unknown) => {
+        toast.error(`Could not save selected project: ${errorMessage(error)}`);
+      });
+  }
+
   return create<ProjectsState>()((set, get) => ({
     projects: [],
     selectedProjectId: null,
@@ -89,19 +108,17 @@ export function createProjectsStore(gateway: ProjectsGateway = defaultGateway) {
         return;
       }
 
+      // `created: false` means an existing project at that path was selected
+      // rather than inserted; append it defensively only if this renderer
+      // doesn't already have it (a fresh insert never will, so the guard is a
+      // no-op there and both cases collapse to one set()).
       const { projects } = get();
-      if (!result.created) {
-        // `created: false` means an existing project at that path was
-        // selected instead of inserted — append it defensively if this
-        // renderer somehow doesn't have it yet (another window created it).
-        const exists = projects.some((project) => project.id === result.project.id);
-        set({
-          projects: exists ? projects : [...projects, result.project],
-          selectedProjectId: result.project.id,
-        });
-        return;
-      }
-      set({ projects: [...projects, result.project], selectedProjectId: result.project.id });
+      const exists = projects.some((project) => project.id === result.project.id);
+      set({
+        projects: exists ? projects : [...projects, result.project],
+        selectedProjectId: result.project.id,
+      });
+      persistSelection(result.project.id);
     },
 
     async removeProject(id) {
@@ -142,6 +159,7 @@ export function createProjectsStore(gateway: ProjectsGateway = defaultGateway) {
           ? null
           : nextProjects[Math.min(removedIndex, nextProjects.length - 1)]!.id;
       set({ projects: nextProjects, selectedProjectId: nextSelectedId });
+      persistSelection(nextSelectedId);
     },
 
     reorder(activeId, overId) {
@@ -180,14 +198,7 @@ export function createProjectsStore(gateway: ProjectsGateway = defaultGateway) {
       const exists = get().projects.some((project) => project.id === id);
       if (!exists) return;
       set({ selectedProjectId: id });
-      gateway
-        .setSelection(id)
-        .then((result) => {
-          if (!result.ok) toast.error(`Could not save selected project: ${result.error}`);
-        })
-        .catch((error: unknown) => {
-          toast.error(`Could not save selected project: ${errorMessage(error)}`);
-        });
+      persistSelection(id);
     },
 
     selectByIndex(index) {

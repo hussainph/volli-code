@@ -117,23 +117,30 @@ function NewTicketForm({ project }: { project: Project }) {
   const [title, setTitle] = React.useState("");
   const [status, setStatus] = React.useState<TicketStatus>("backlog");
   const [priority, setPriority] = React.useState<TicketPriority>("medium");
+  const [submitting, setSubmitting] = React.useState(false);
   const trimmedTitle = title.trim();
 
   async function submit() {
-    if (trimmedTitle === "") return;
+    // `submitting` guards against a second Enter (key auto-repeat) or an
+    // Enter-then-click landing inside the pending create round-trip, which
+    // would otherwise create two identical tickets.
+    if (trimmedTitle === "" || submitting) return;
+    setSubmitting(true);
     const ticket = await useBoardStore
       .getState()
       .addTicket(project.id, status, title, { priority });
-    // ticket is null when the trimmed title was empty (already ruled out
-    // above and by the Create button's disabled state) or creation failed
-    // (already toasted by the store) — toast success only on an actual
-    // creation.
-    if (ticket !== null) {
-      // This dialog is reachable from pages (Files/Sessions) where the board
-      // itself isn't on screen, so the toast is the only confirmation the
-      // user gets that the ticket was created.
-      toast.success(`${displayTicketId(project.ticketPrefix, ticket.ticketNumber)} created`);
+    if (ticket === null) {
+      // Creation failed (already toasted by the store) — keep the dialog open
+      // with the composed title/status/priority so the user can retry without
+      // retyping (Radix unmounts the form on close, discarding that state).
+      setSubmitting(false);
+      return;
     }
+    // This dialog is reachable from pages (Files/Sessions) where the board
+    // itself isn't on screen, so the toast is the only confirmation the user
+    // gets that the ticket was created. Closing unmounts the form, so no need
+    // to reset `submitting`.
+    toast.success(`${displayTicketId(project.ticketPrefix, ticket.ticketNumber)} created`);
     useUiStore.getState().setNewTicketOpen(false);
   }
 
@@ -165,7 +172,7 @@ function NewTicketForm({ project }: { project: Project }) {
         </div>
       </div>
       <DialogFooter>
-        <Button onClick={() => void submit()} disabled={trimmedTitle === ""}>
+        <Button onClick={() => void submit()} disabled={trimmedTitle === "" || submitting}>
           Create
         </Button>
       </DialogFooter>

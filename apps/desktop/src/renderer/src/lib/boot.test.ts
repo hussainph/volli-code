@@ -7,6 +7,7 @@ import { useUiStore } from "@renderer/stores/ui";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
 import { boot, type BootGateway, type BootStorage } from "./boot";
+import { takeBootNotice } from "./boot-notice";
 
 /** A full BootstrapPayload, defaulting to the "nothing here yet" shape. */
 function payload(overrides: Partial<BootstrapPayload> = {}): BootstrapPayload {
@@ -180,15 +181,16 @@ describe("boot", () => {
     // Stores hydrate from the IMPORT's returned payload, not the original (empty) bootstrap data.
     expect(useProjectsStore.getState().projects).toEqual(importedPayload.projects);
     expect(useProjectsStore.getState().selectedProjectId).toBe("p1");
+    // A clean import never raises a boot notice.
+    expect(takeBootNotice()).toBeNull();
   });
 
-  it("falls back to the original bootstrap payload when the import itself fails, but still clears localStorage", async () => {
-    const storage = fakeStorage({
-      "volli:projects": JSON.stringify({
-        state: { projects: [], selectedProjectId: null },
-        version: 1,
-      }),
+  it("keeps localStorage and surfaces a notice when the import itself fails (never destroys the source)", async () => {
+    const legacyProjects = JSON.stringify({
+      state: { projects: [], selectedProjectId: null },
+      version: 1,
     });
+    const storage = fakeStorage({ "volli:projects": legacyProjects });
     const originalPayload = payload({ firstRun: true, projects: [] });
     const gateway = fakeGateway({
       bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({ ok: true, data: originalPayload })),
@@ -200,8 +202,15 @@ describe("boot", () => {
 
     const result = await boot(gateway, storage);
 
+    // The app still boots (with the empty bootstrap payload) — a failed legacy
+    // import is non-fatal...
     expect(result).toEqual({ ok: true });
-    expect(storage.getItem("volli:projects")).toBeNull();
+    // ...but the source localStorage is preserved for a retry next launch,
+    // never wiped (the pre-fix regression destroyed it silently)...
+    expect(storage.getItem("volli:projects")).toBe(legacyProjects);
+    // ...and the failure is surfaced (AppShell drains the stashed notice into
+    // a toast on mount, since boot runs before the Toaster).
+    expect(takeBootNotice()).toContain("constraint violation");
     expect(useProjectsStore.getState().projects).toEqual(originalPayload.projects);
   });
 

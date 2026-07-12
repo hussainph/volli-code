@@ -9,6 +9,7 @@ import { PrimarySidebar } from "@renderer/components/sidebar/primary-sidebar";
 import { SidebarResizeHandle } from "@renderer/components/sidebar/sidebar-resize-handle";
 import { Sidebar, SidebarInset, SidebarProvider } from "@renderer/components/ui/sidebar";
 import { Toaster } from "@renderer/components/ui/sonner";
+import { takeBootNotice } from "@renderer/lib/boot-notice";
 import { useNewTicketShortcut } from "@renderer/hooks/use-new-ticket-shortcut";
 import { useProjectShortcuts } from "@renderer/hooks/use-project-shortcuts";
 import { errorMessage } from "@volli/shared";
@@ -30,6 +31,7 @@ export function AppShell() {
   useNewTicketShortcut();
   useProjectRootsSync();
   useZoomCommands();
+  useBootNotice();
   const sidebarWidth = useUiStore((state) => state.sidebarWidth);
   const uiScale = useUiStore((state) => state.uiScale);
   const [resizing, setResizing] = React.useState(false);
@@ -106,6 +108,19 @@ function useZoomCommands() {
       else if (cmd === "out") stepUiScale(-1);
       else resetUiScale();
     });
+  }, []);
+}
+
+/**
+ * Surfaces a one-shot boot notice (e.g. a failed legacy import) as a toast on
+ * mount. boot() runs before the Toaster mounts, so it stashes the message
+ * rather than toasting directly (see lib/boot-notice.ts). `takeBootNotice`
+ * clears as it reads, so StrictMode's double-invoke surfaces it exactly once.
+ */
+function useBootNotice() {
+  React.useEffect(() => {
+    const notice = takeBootNotice();
+    if (notice !== null) toast.error(notice, { duration: 8000 });
   }, []);
 }
 

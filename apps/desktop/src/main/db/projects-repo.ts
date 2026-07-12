@@ -77,7 +77,12 @@ export function deleteProject(db: Database.Database, id: string): void {
   db.prepare("DELETE FROM projects WHERE id = ?").run(id);
 }
 
-/** Rewrites `sort_order` to `0..n-1` following `orderedIds`; unknown ids are silently no-ops. */
+/**
+ * Rewrites `sort_order` to `0..n-1` following `orderedIds`; unknown ids are
+ * silently no-ops. Wrapped in a transaction so the N row updates commit
+ * atomically (one WAL commit, not N) — a mid-loop failure can never persist a
+ * half-renumbered order the next boot would hydrate.
+ */
 export function reorderProjects(
   db: Database.Database,
   orderedIds: readonly string[],
@@ -86,7 +91,10 @@ export function reorderProjects(
   const stmt = db.prepare(
     "UPDATE projects SET sort_order = ?, row_version = row_version + 1, updated_at = ? WHERE id = ?",
   );
-  orderedIds.forEach((id, index) => {
-    stmt.run(index, now, id);
+  const run = db.transaction((ids: readonly string[]) => {
+    ids.forEach((id, index) => {
+      stmt.run(index, now, id);
+    });
   });
+  run(orderedIds);
 }

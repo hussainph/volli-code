@@ -48,9 +48,21 @@ describe("sanitizeLegacyProjects", () => {
   });
 
   it("keeps multiple valid projects in order", () => {
-    const a = project({ id: "a" });
-    const b = project({ id: "b" });
+    const a = project({ id: "a", path: "/Users/x/a" });
+    const b = project({ id: "b", path: "/Users/x/b" });
     expect(sanitizeLegacyProjects([a, b])).toEqual([a, b]);
+  });
+
+  it("drops a later entry that duplicates an earlier id, keeping the first", () => {
+    const first = project({ id: "dup", path: "/Users/x/first" });
+    const second = project({ id: "dup", path: "/Users/x/second" });
+    expect(sanitizeLegacyProjects([first, second])).toEqual([first]);
+  });
+
+  it("drops a later entry that duplicates an earlier path, keeping the first", () => {
+    const first = project({ id: "first", path: "/Users/x/shared" });
+    const second = project({ id: "second", path: "/Users/x/shared" });
+    expect(sanitizeLegacyProjects([first, second])).toEqual([first]);
   });
 
   it("drops non-object entries (null, primitives)", () => {

@@ -37,8 +37,25 @@ function isValidLegacyProject(value: unknown): value is LegacyProject {
  * an array of trustworthy {@link LegacyProject}s. A non-array input yields an
  * empty array; individual entries that fail validation are dropped rather
  * than aborting the whole import.
+ *
+ * Duplicate `id` or `path` entries (from hand-edited or version-drifted
+ * localStorage) are also dropped, keeping the first occurrence: the `projects`
+ * table has `PRIMARY KEY(id)` and `UNIQUE(path)`, so a duplicate would throw on
+ * insert and — since the import is one transaction — abort the whole batch,
+ * losing every valid project. Deduping here keeps one bad row from destroying
+ * the rest.
  */
 export function sanitizeLegacyProjects(value: unknown): LegacyProject[] {
   if (!Array.isArray(value)) return [];
-  return value.filter(isValidLegacyProject);
+  const seenIds = new Set<string>();
+  const seenPaths = new Set<string>();
+  const projects: LegacyProject[] = [];
+  for (const entry of value) {
+    if (!isValidLegacyProject(entry)) continue;
+    if (seenIds.has(entry.id) || seenPaths.has(entry.path)) continue;
+    seenIds.add(entry.id);
+    seenPaths.add(entry.path);
+    projects.push(entry);
+  }
+  return projects;
 }

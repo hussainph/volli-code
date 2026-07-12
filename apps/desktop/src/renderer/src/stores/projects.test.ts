@@ -111,6 +111,16 @@ describe("addProject", () => {
     expect(store.getState().selectedProjectId).toBe(existing.id);
   });
 
+  it("persists the auto-selected project so the choice survives relaunch", async () => {
+    const { store, gateway } = freshStore();
+
+    await store.getState().addProject({ path: "/a", defaultName: "A" });
+    await flush();
+
+    const [a] = store.getState().projects;
+    expect(gateway.setSelection).toHaveBeenCalledWith(a!.id);
+  });
+
   it("toasts and leaves state unchanged on a typed gateway failure", async () => {
     const gateway = fakeGateway({
       create: vi.fn<ProjectsGateway["create"]>(async () => ({ ok: false, error: "disk full" })),
@@ -121,6 +131,18 @@ describe("addProject", () => {
 
     expect(store.getState().projects).toEqual([]);
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not add project: disk full");
+  });
+
+  it("does not persist a selection when creation fails", async () => {
+    const gateway = fakeGateway({
+      create: vi.fn<ProjectsGateway["create"]>(async () => ({ ok: false, error: "disk full" })),
+    });
+    const { store } = freshStore(gateway);
+
+    await store.getState().addProject({ path: "/a", defaultName: "A" });
+    await flush();
+
+    expect(gateway.setSelection).not.toHaveBeenCalled();
   });
 
   it("toasts when the gateway call rejects", async () => {
@@ -174,6 +196,43 @@ describe("removeProject", () => {
 
     expect(store.getState().projects.map((p) => p.id)).toEqual([a.id]);
     expect(store.getState().selectedProjectId).toBe(a.id);
+  });
+
+  it("persists the neighbor selection when the removed project was selected", async () => {
+    const [a, b, c] = [
+      project({ id: "a", path: "/a" }),
+      project({ id: "b", path: "/b" }),
+      project({ id: "c", path: "/c" }),
+    ];
+    const { store, gateway } = freshStore();
+    store.getState().hydrate([a, b, c], b.id);
+
+    await store.getState().removeProject(b.id);
+    await flush();
+
+    expect(gateway.setSelection).toHaveBeenCalledWith(c.id);
+  });
+
+  it("persists a null selection when removing the only project", async () => {
+    const only = project({ id: "only", path: "/a" });
+    const { store, gateway } = freshStore();
+    store.getState().hydrate([only], only.id);
+
+    await store.getState().removeProject(only.id);
+    await flush();
+
+    expect(gateway.setSelection).toHaveBeenCalledWith(null);
+  });
+
+  it("does not persist a selection when removing a non-selected project", async () => {
+    const [a, b] = [project({ id: "a", path: "/a" }), project({ id: "b", path: "/b" })];
+    const { store, gateway } = freshStore();
+    store.getState().hydrate([a, b], a.id);
+
+    await store.getState().removeProject(b.id);
+    await flush();
+
+    expect(gateway.setSelection).not.toHaveBeenCalled();
   });
 
   it("forgets the removed project's per-workspace UI record", async () => {

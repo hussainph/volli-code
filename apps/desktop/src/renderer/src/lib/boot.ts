@@ -14,6 +14,7 @@ import {
 } from "@volli/shared";
 
 import { seedAppStateCache } from "@renderer/lib/app-state-storage";
+import { setBootNotice } from "@renderer/lib/boot-notice";
 import { PROJECTS_UI_APP_STATE_KEY, useProjectsStore } from "@renderer/stores/projects";
 import { useBoardStore } from "@renderer/stores/board";
 import { useUiStore } from "@renderer/stores/ui";
@@ -141,21 +142,32 @@ export async function boot(
 
   let payload = bootstrapResult.data;
 
+  let importFailed = false;
   if (payload.firstRun) {
     const importRequest = buildLegacyImportRequest(storage);
     if (importRequest !== null) {
       const importResult = await gateway.importLegacy(importRequest);
-      // A failed import still proceeds with the original (empty) bootstrap
-      // payload — the legacy localStorage is cleared below regardless
-      // (decision #29: "always clear... regardless of import success-path
-      // details"); losing an unimportable legacy board beats getting stuck
-      // re-attempting the same import (and re-showing stale local data) on
-      // every future launch.
-      if (importResult.ok) payload = importResult.data;
+      if (importResult.ok) {
+        payload = importResult.data;
+      } else {
+        // A failed import still boots the app (with the empty bootstrap
+        // payload), but — unlike a success — must NOT clear the legacy
+        // localStorage: it's the user's only copy of that data, so keep it for
+        // a retry next launch and surface the failure (CLAUDE.md: never
+        // silently swallow a failed mutation). The Toaster isn't mounted yet,
+        // so stash the message; AppShell surfaces it on mount.
+        importFailed = true;
+        setBootNotice(
+          `Couldn't import your existing data (${importResult.error}). It's been left untouched — relaunch to try again.`,
+        );
+      }
     }
   }
 
-  clearLegacyStorage(storage);
+  // Clear the legacy localStorage once we've booted (decision #29) — a clean
+  // import, or a first run with nothing importable, discards it. The one
+  // exception is a failed import, handled above: never destroy the source.
+  if (!importFailed) clearLegacyStorage(storage);
 
   seedAppStateCache(payload.appState);
 
