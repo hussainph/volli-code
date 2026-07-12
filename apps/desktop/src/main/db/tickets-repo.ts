@@ -9,6 +9,34 @@
 import type Database from "better-sqlite3";
 import type { Ticket, TicketPriority, TicketStatus } from "@volli/shared";
 
+/**
+ * better-sqlite3 does not cache prepared statements — every `db.prepare(sql)`
+ * call re-parses and re-plans the SQL. This repo's hot paths (notably the
+ * per-row UPDATE inside a board-move transaction) call `prepare` many times
+ * per invocation, so statements are memoized by SQL text, per db handle. The
+ * WeakMap key (rather than a module-level Map) means a second db handle
+ * (e.g. in tests) gets its own cache and can't collide with — or leak past
+ * — another handle's lifetime.
+ */
+const stmtCache = new WeakMap<Database.Database, Map<string, Database.Statement>>();
+
+function prepared<Params extends unknown[] = unknown[], Row = unknown>(
+  db: Database.Database,
+  sql: string,
+): Database.Statement<Params, Row> {
+  let cache = stmtCache.get(db);
+  if (!cache) {
+    cache = new Map();
+    stmtCache.set(db, cache);
+  }
+  let stmt = cache.get(sql);
+  if (!stmt) {
+    stmt = db.prepare<Params, Row>(sql) as Database.Statement;
+    cache.set(sql, stmt);
+  }
+  return stmt as Database.Statement<Params, Row>;
+}
+
 export interface TicketRow {
   id: string;
   project_id: string;
@@ -48,16 +76,8 @@ interface TicketLabelJoinRow {
   name: string;
 }
 
-/** Label names for every ticket in `projectId`, insertion-ordered, grouped by ticket id. */
-function labelNamesByTicket(db: Database.Database, projectId: string): Map<string, string[]> {
-  const rows = db
-    .prepare<[string], TicketLabelJoinRow>(`SELECT tl.ticket_id as ticket_id, l.name as name
-       FROM ticket_labels tl
-       JOIN tickets t ON t.id = tl.ticket_id
-       JOIN labels l ON l.id = tl.label_id
-       WHERE t.project_id = ?
-       ORDER BY tl.rowid`)
-    .all(projectId);
+/** Groups insertion-ordered `(ticket_id, name)` rows by ticket id. */
+function groupLabelRows(rows: TicketLabelJoinRow[]): Map<string, string[]> {
   const byTicket = new Map<string, string[]>();
   for (const row of rows) {
     const names = byTicket.get(row.ticket_id);
@@ -70,15 +90,42 @@ function labelNamesByTicket(db: Database.Database, projectId: string): Map<strin
   return byTicket;
 }
 
+/** Label names for every ticket in `projectId`, insertion-ordered, grouped by ticket id. */
+function labelNamesByTicket(db: Database.Database, projectId: string): Map<string, string[]> {
+  const rows = prepared<[string], TicketLabelJoinRow>(
+    db,
+    `SELECT tl.ticket_id as ticket_id, l.name as name
+       FROM ticket_labels tl
+       JOIN tickets t ON t.id = tl.ticket_id
+       JOIN labels l ON l.id = tl.label_id
+       WHERE t.project_id = ?
+       ORDER BY tl.rowid`,
+  ).all(projectId);
+  return groupLabelRows(rows);
+}
+
 /** One ticket's label names, insertion-ordered — used to diff `ticket.setLabels` requests. */
 export function getTicketLabelNames(db: Database.Database, ticketId: string): string[] {
-  const rows = db
-    .prepare<[string], { name: string }>(`SELECT l.name as name FROM ticket_labels tl
+  const rows = prepared<[string], { name: string }>(
+    db,
+    `SELECT l.name as name FROM ticket_labels tl
        JOIN labels l ON l.id = tl.label_id
        WHERE tl.ticket_id = ?
-       ORDER BY tl.rowid`)
-    .all(ticketId);
+       ORDER BY tl.rowid`,
+  ).all(ticketId);
   return rows.map((row) => row.name);
+}
+
+/** Label names for every ticket across every project, insertion-ordered, grouped by ticket id. */
+function labelNamesByTicketAll(db: Database.Database): Map<string, string[]> {
+  const rows = prepared<[], TicketLabelJoinRow>(
+    db,
+    `SELECT tl.ticket_id as ticket_id, l.name as name
+       FROM ticket_labels tl
+       JOIN labels l ON l.id = tl.label_id
+       ORDER BY tl.rowid`,
+  ).all();
+  return groupLabelRows(rows);
 }
 
 /**
@@ -87,42 +134,50 @@ export function getTicketLabelNames(db: Database.Database, ticketId: string): st
  * IPC handler returns.
  */
 export function listTicketsByProject(db: Database.Database, projectId: string): Ticket[] {
-  const rows = db
-    .prepare<[string], TicketRow>(
-      "SELECT * FROM tickets WHERE project_id = ? ORDER BY status, position",
-    )
-    .all(projectId);
+  const rows = prepared<[string], TicketRow>(
+    db,
+    "SELECT * FROM tickets WHERE project_id = ? ORDER BY status, position",
+  ).all(projectId);
   const labelsByTicket = labelNamesByTicket(db, projectId);
   return rows.map((row) => mapTicket(row, labelsByTicket.get(row.id) ?? []));
 }
 
-/** Every ticket across every project, labels attached — used only to build the boot bootstrap payload. */
+/**
+ * Every ticket across every project, labels attached — used only to build the
+ * boot bootstrap payload. Fetches labels for every project in a single query
+ * (rather than once per DISTINCT project) since this runs on the boot path.
+ */
 export function listAllTickets(db: Database.Database): Ticket[] {
-  const rows = db
-    .prepare<[], TicketRow>("SELECT * FROM tickets ORDER BY project_id, status, position")
-    .all();
-  const labelsByProjectCache = new Map<string, Map<string, string[]>>();
-  return rows.map((row) => {
-    let labelsByTicket = labelsByProjectCache.get(row.project_id);
-    if (!labelsByTicket) {
-      labelsByTicket = labelNamesByTicket(db, row.project_id);
-      labelsByProjectCache.set(row.project_id, labelsByTicket);
-    }
-    return mapTicket(row, labelsByTicket.get(row.id) ?? []);
-  });
+  const rows = prepared<[], TicketRow>(
+    db,
+    "SELECT * FROM tickets ORDER BY project_id, status, position",
+  ).all();
+  const labelsByTicket = labelNamesByTicketAll(db);
+  return rows.map((row) => mapTicket(row, labelsByTicket.get(row.id) ?? []));
+}
+
+/**
+ * One ticket by id, labels attached — the single-row analog of
+ * `listTicketsByProject`. Lets a mutation IPC handler return just the changed
+ * ticket instead of re-reading the whole project list. `undefined` when no row
+ * matches.
+ */
+export function getTicket(db: Database.Database, ticketId: string): Ticket | undefined {
+  const row = getTicketRow(db, ticketId);
+  if (!row) return undefined;
+  return mapTicket(row, getTicketLabelNames(db, ticketId));
 }
 
 /** The raw row (no labels attached) — used internally to read current values before a mutation. */
 export function getTicketRow(db: Database.Database, ticketId: string): TicketRow | undefined {
-  return db.prepare<[string], TicketRow>("SELECT * FROM tickets WHERE id = ?").get(ticketId);
+  return prepared<[string], TicketRow>(db, "SELECT * FROM tickets WHERE id = ?").get(ticketId);
 }
 
 export function nextTicketNumberForProject(db: Database.Database, projectId: string): number {
-  const row = db
-    .prepare<[string], { max: number | null }>(
-      "SELECT MAX(ticket_number) as max FROM tickets WHERE project_id = ?",
-    )
-    .get(projectId);
+  const row = prepared<[string], { max: number | null }>(
+    db,
+    "SELECT MAX(ticket_number) as max FROM tickets WHERE project_id = ?",
+  ).get(projectId);
   return (row?.max ?? 0) + 1;
 }
 
@@ -131,17 +186,17 @@ export function countTicketsInStatus(
   projectId: string,
   status: TicketStatus,
 ): number {
-  const row = db
-    .prepare<[string, string], { count: number }>(
-      "SELECT COUNT(*) as count FROM tickets WHERE project_id = ? AND status = ?",
-    )
-    .get(projectId, status);
+  const row = prepared<[string, string], { count: number }>(
+    db,
+    "SELECT COUNT(*) as count FROM tickets WHERE project_id = ? AND status = ?",
+  ).get(projectId, status);
   return row?.count ?? 0;
 }
 
 /** Inserts a brand-new ticket row (`row_version` starts at `1`); its labels start empty. */
 export function insertTicket(db: Database.Database, ticket: Ticket): void {
-  db.prepare(
+  prepared(
+    db,
     `INSERT INTO tickets
        (id, project_id, ticket_number, title, body, status, priority, uses_worktree, harness_id, position, row_version, created_at, updated_at)
      VALUES
@@ -170,7 +225,8 @@ export function updateTicketPositionStatus(
   position: number,
   updatedAt: number,
 ): void {
-  db.prepare(
+  prepared(
+    db,
     "UPDATE tickets SET status = ?, position = ?, row_version = row_version + 1, updated_at = ? WHERE id = ?",
   ).run(status, position, updatedAt, ticketId);
 }
@@ -181,7 +237,8 @@ export function updateTicketPriority(
   priority: TicketPriority,
   updatedAt: number,
 ): void {
-  db.prepare(
+  prepared(
+    db,
     "UPDATE tickets SET priority = ?, row_version = row_version + 1, updated_at = ? WHERE id = ?",
   ).run(priority, updatedAt, ticketId);
 }
@@ -211,7 +268,7 @@ export function updateTicketFields(
   if (sets.length === 0) return;
   sets.push("row_version = row_version + 1", "updated_at = ?");
   params.push(updatedAt, ticketId);
-  db.prepare(`UPDATE tickets SET ${sets.join(", ")} WHERE id = ?`).run(...params);
+  prepared(db, `UPDATE tickets SET ${sets.join(", ")} WHERE id = ?`).run(...params);
 }
 
 /** Bumps `row_version`/`updated_at` alone — used after a `ticket_labels` junction change. */
@@ -220,7 +277,7 @@ export function bumpTicketVersion(
   ticketId: string,
   updatedAt: number,
 ): void {
-  db.prepare("UPDATE tickets SET row_version = row_version + 1, updated_at = ? WHERE id = ?").run(
+  prepared(db, "UPDATE tickets SET row_version = row_version + 1, updated_at = ? WHERE id = ?").run(
     updatedAt,
     ticketId,
   );

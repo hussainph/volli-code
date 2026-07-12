@@ -13,6 +13,8 @@ interface BoardColumnProps {
   status: TicketStatus;
   tickets: Ticket[];
   projectId: string;
+  /** The board's owning project's ticket prefix — constant for the whole board tree. */
+  ticketPrefix: string;
   selectedId: string | null;
   onSelect(ticketId: string): void;
   composerInitiallyOpen: boolean;
@@ -26,6 +28,7 @@ export function BoardColumn({
   status,
   tickets,
   projectId,
+  ticketPrefix,
   selectedId,
   onSelect,
   composerInitiallyOpen,
@@ -71,6 +74,7 @@ export function BoardColumn({
               key={ticket.id}
               ticket={ticket}
               projectId={projectId}
+              ticketPrefix={ticketPrefix}
               selected={ticket.id === selectedId}
               onSelect={onSelect}
             />

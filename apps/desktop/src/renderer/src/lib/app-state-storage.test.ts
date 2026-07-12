@@ -9,21 +9,31 @@ import { appStateStorage, seedAppStateCache } from "./app-state-storage";
 
 const setMock = vi.fn<(key: string, value: string) => Promise<{ ok: boolean; error?: string }>>();
 
-/** Flush the `.then/.catch` microtask queue on the fire-and-forget write. */
-const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+// setItem/removeItem debounce the write-through (~200ms) before touching the
+// bridge, so tests run on fake timers and advance past the debounce window to
+// observe the write; `advanceTimersByTimeAsync` also flushes the fire-and-forget
+// `.then/.catch` microtasks the write's result runs through.
+const DEBOUNCE_MS = 200;
+const settle = () => vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
 
 beforeEach(() => {
+  vi.useFakeTimers();
   vi.clearAllMocks();
   setMock.mockResolvedValue({ ok: true });
   vi.stubGlobal("window", { api: { appState: { set: setMock } } });
-  // Clear anything a previous test seeded/wrote into the shared module-level cache.
+  // Clear anything a previous test seeded/wrote into the shared module-level
+  // cache, then drop the debounced writes that cleanup just scheduled (and
+  // their mock calls) so each test starts from a clean slate.
   for (const key of ["volli:ui", "volli:workspace", "volli:projects-ui"]) {
     appStateStorage.removeItem(key);
   }
+  vi.clearAllTimers();
   vi.clearAllMocks();
 });
 
 afterEach(() => {
+  vi.clearAllTimers();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -41,19 +51,32 @@ describe("seedAppStateCache", () => {
 });
 
 describe("setItem", () => {
-  it("updates the cache synchronously and writes through to the bridge", async () => {
+  it("updates the cache synchronously and writes through to the bridge after the debounce", async () => {
     appStateStorage.setItem("volli:ui", '{"sidebarWidth":420}');
 
+    // Cache is updated synchronously (read-after-write stays correct)...
     expect(appStateStorage.getItem("volli:ui")).toBe('{"sidebarWidth":420}');
-    await flush();
+    // ...but the bridge write only fires once the debounce window elapses.
+    expect(setMock).not.toHaveBeenCalled();
+    await settle();
     expect(setMock).toHaveBeenCalledWith("volli:ui", '{"sidebarWidth":420}');
+  });
+
+  it("collapses a burst of writes to the same key into a single trailing write", async () => {
+    appStateStorage.setItem("volli:ui", '{"sidebarWidth":300}');
+    appStateStorage.setItem("volli:ui", '{"sidebarWidth":301}');
+    appStateStorage.setItem("volli:ui", '{"sidebarWidth":302}');
+    await settle();
+
+    expect(setMock).toHaveBeenCalledTimes(1);
+    expect(setMock).toHaveBeenCalledWith("volli:ui", '{"sidebarWidth":302}');
   });
 
   it("toasts on a typed write failure", async () => {
     setMock.mockResolvedValue({ ok: false, error: "disk full" });
 
     appStateStorage.setItem("volli:ui", "{}");
-    await flush();
+    await settle();
 
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Could not save "volli:ui": disk full');
   });
@@ -62,20 +85,20 @@ describe("setItem", () => {
     setMock.mockRejectedValue(new Error("ipc gone"));
 
     appStateStorage.setItem("volli:ui", "{}");
-    await flush();
+    await settle();
 
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Could not save "volli:ui": ipc gone');
   });
 });
 
 describe("removeItem", () => {
-  it("clears the cache synchronously and persists an empty value", async () => {
+  it("clears the cache synchronously and persists an empty value after the debounce", async () => {
     seedAppStateCache({ "volli:ui": "stale" });
 
     appStateStorage.removeItem("volli:ui");
 
     expect(appStateStorage.getItem("volli:ui")).toBeNull();
-    await flush();
+    await settle();
     expect(setMock).toHaveBeenCalledWith("volli:ui", "");
   });
 
@@ -83,7 +106,7 @@ describe("removeItem", () => {
     setMock.mockResolvedValue({ ok: false, error: "locked" });
 
     appStateStorage.removeItem("volli:ui");
-    await flush();
+    await settle();
 
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Could not clear "volli:ui": locked');
   });

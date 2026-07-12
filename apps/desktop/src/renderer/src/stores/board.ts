@@ -19,9 +19,9 @@ import {
   setTicketPriority as setTicketPriorityOp,
   type Label,
   type Ticket,
-  type TicketCreateResult,
   type TicketFilter,
   type TicketPriority,
+  type TicketResult,
   type TicketsResult,
   type TicketStatus,
 } from "@volli/shared";
@@ -35,14 +35,14 @@ export interface BoardGateway {
     status: TicketStatus;
     title: string;
     priority?: TicketPriority;
-  }): Promise<TicketCreateResult>;
+  }): Promise<TicketResult>;
   moveTicket(input: {
     projectId: string;
     ticketId: string;
     toStatus: TicketStatus;
     toIndex: number;
   }): Promise<TicketsResult>;
-  setTicketPriority(input: { ticketId: string; priority: TicketPriority }): Promise<TicketsResult>;
+  setTicketPriority(input: { ticketId: string; priority: TicketPriority }): Promise<TicketResult>;
 }
 
 const defaultGateway: BoardGateway = {
@@ -133,7 +133,7 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         const trimmed = title.trim();
         if (trimmed === "") return null;
 
-        let result: TicketCreateResult;
+        let result: TicketResult;
         try {
           result = await gateway.createTicket({
             projectId,
@@ -188,20 +188,41 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         if (optimistic === previous) return; // shared op's no-op guard: unknown id or unchanged priority
         set({ ticketsByProject: { ...ticketsByProject, [projectId]: optimistic } });
 
-        let result: TicketsResult;
+        // Reconcile (and revert) by patching just this one ticket by id into the
+        // CURRENT list, rather than replacing the whole project slice — so a
+        // mutation that lands on another card while this IPC is in flight isn't
+        // clobbered. Priority never reorders a column (the shared op only edits
+        // the ticket's fields), so an in-place patch is exact.
+        const patchTicket = (ticket: Ticket) => {
+          const current = get().ticketsByProject[projectId] ?? [];
+          set({
+            ticketsByProject: {
+              ...get().ticketsByProject,
+              [projectId]: current.map((existing) =>
+                existing.id === ticket.id ? ticket : existing,
+              ),
+            },
+          });
+        };
+        const revert = () => {
+          const original = previous.find((ticket) => ticket.id === ticketId);
+          if (original) patchTicket(original);
+        };
+
+        let result: TicketResult;
         try {
           result = await gateway.setTicketPriority({ ticketId, priority });
         } catch (error) {
-          set({ ticketsByProject: { ...get().ticketsByProject, [projectId]: previous } });
+          revert();
           toast.error(`Could not update priority: ${errorMessage(error)}`);
           return;
         }
         if (!result.ok) {
-          set({ ticketsByProject: { ...get().ticketsByProject, [projectId]: previous } });
+          revert();
           toast.error(`Could not update priority: ${result.error}`);
           return;
         }
-        set({ ticketsByProject: { ...get().ticketsByProject, [projectId]: result.tickets } });
+        patchTicket(result.ticket);
       },
 
       setSearch(projectId, search) {

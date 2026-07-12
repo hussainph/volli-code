@@ -3,6 +3,7 @@ import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import {
+  displayTicketId,
   TICKET_STATUS_LABELS,
   TICKET_STATUSES,
   type Ticket,
@@ -14,7 +15,6 @@ import { PriorityIndicator } from "@renderer/components/board/priority-indicator
 import { TagChip } from "@renderer/components/board/tag-chip";
 import { SortableTicketShell } from "@renderer/components/board/ticket-card";
 import { useTicketComposer } from "@renderer/components/board/use-ticket-composer";
-import { useTicketDisplayId } from "@renderer/lib/display-id";
 import { resolveLabelColor } from "@renderer/lib/labels";
 import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
@@ -22,15 +22,19 @@ import { useBoardStore } from "@renderer/stores/board";
 /**
  * Pure presentational row — also rendered inside the drag overlay (unselected
  * there), mirroring how `TicketCardContent` doubles as the card overlay body.
+ * `ticketPrefix` comes from the board (constant for the whole board tree) —
+ * see `displayTicketId`.
  */
 export function TicketRowContent({
   ticket,
+  ticketPrefix,
   selected = false,
 }: {
   ticket: Ticket;
+  ticketPrefix: string;
   selected?: boolean;
 }) {
-  const displayId = useTicketDisplayId(ticket);
+  const displayId = displayTicketId(ticketPrefix, ticket.ticketNumber);
   const projectLabels = useBoardStore((state) => state.labelsByProject[ticket.projectId]);
 
   return (
@@ -62,18 +66,20 @@ export function TicketRowContent({
 const SortableTicketRow = React.memo(function SortableTicketRow({
   ticket,
   projectId,
+  ticketPrefix,
   selected,
   onSelect,
 }: {
   ticket: Ticket;
   projectId: string;
+  ticketPrefix: string;
   selected: boolean;
   onSelect(ticketId: string): void;
 }) {
   // The e2e-facing handle mirrors what's visible on screen — the DISPLAY id,
   // not the drag/sort identity (still the opaque `ticket.id` UUID, unchanged
   // below).
-  const displayId = useTicketDisplayId(ticket);
+  const displayId = displayTicketId(ticketPrefix, ticket.ticketNumber);
   return (
     <SortableTicketShell
       ticket={ticket}
@@ -81,7 +87,7 @@ const SortableTicketRow = React.memo(function SortableTicketRow({
       onSelect={onSelect}
       dataAttributes={{ "data-ticket-row": "true", "data-ticket-id": displayId }}
     >
-      <TicketRowContent ticket={ticket} selected={selected} />
+      <TicketRowContent ticket={ticket} ticketPrefix={ticketPrefix} selected={selected} />
     </SortableTicketShell>
   );
 });
@@ -97,6 +103,7 @@ function ListSection({
   status,
   tickets,
   projectId,
+  ticketPrefix,
   selectedId,
   onSelect,
   dragActive,
@@ -104,6 +111,7 @@ function ListSection({
   status: TicketStatus;
   tickets: Ticket[];
   projectId: string;
+  ticketPrefix: string;
   selectedId: string | null;
   onSelect(ticketId: string): void;
   dragActive: boolean;
@@ -128,6 +136,7 @@ function ListSection({
               key={ticket.id}
               ticket={ticket}
               projectId={projectId}
+              ticketPrefix={ticketPrefix}
               selected={ticket.id === selectedId}
               onSelect={onSelect}
             />
@@ -205,6 +214,8 @@ function EmptyDropRow({ status }: { status: TicketStatus }) {
 
 interface BoardListViewProps {
   projectId: string;
+  /** The board's owning project's ticket prefix — constant for the whole board tree. */
+  ticketPrefix: string;
   /** Grouped AND per-column sorted by the board (one sort pass shared with the columns view). */
   groups: Record<TicketStatus, Ticket[]>;
   /** Statuses rendered as full sections — frozen during a drag (board's `shown`). */
@@ -225,6 +236,7 @@ interface BoardListViewProps {
  */
 export function BoardListView({
   projectId,
+  ticketPrefix,
   groups,
   shownStatuses,
   emptyDropStatuses,
@@ -250,6 +262,7 @@ export function BoardListView({
               status={status}
               tickets={groups[status]}
               projectId={projectId}
+              ticketPrefix={ticketPrefix}
               selectedId={selectedId}
               onSelect={onSelect}
               dragActive={dragActive}

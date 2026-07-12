@@ -40,15 +40,38 @@ function persist(key: string, value: string, failureVerb: string): void {
     });
 }
 
+/**
+ * Trailing-edge debounce, per key: zustand's `persist` calls `setItem` on EVERY
+ * store change, and some fire in bursts — the sidebar resize handle writes
+ * `sidebarWidth` on every pointermove, which would otherwise be hundreds of IPC
+ * round-trips + SQLite UPSERTs per drag. The cache is updated synchronously
+ * (below), so read-after-write stays correct; only the last value per key needs
+ * to reach SQLite, once the burst settles.
+ */
+const PERSIST_DEBOUNCE_MS = 200;
+const pendingWrites = new Map<string, ReturnType<typeof setTimeout>>();
+
+function persistDebounced(key: string, value: string, failureVerb: string): void {
+  const existing = pendingWrites.get(key);
+  if (existing !== undefined) clearTimeout(existing);
+  pendingWrites.set(
+    key,
+    setTimeout(() => {
+      pendingWrites.delete(key);
+      persist(key, value, failureVerb);
+    }, PERSIST_DEBOUNCE_MS),
+  );
+}
+
 /** The ui/workspace persist stores' storage adapter (see stores/ui.ts, stores/workspace.ts). */
 export const appStateStorage: StateStorage = {
   getItem: (key) => cache.get(key) ?? null,
   setItem: (key, value) => {
     cache.set(key, value);
-    persist(key, value, "save");
+    persistDebounced(key, value, "save");
   },
   removeItem: (key) => {
     cache.delete(key);
-    persist(key, "", "clear");
+    persistDebounced(key, "", "clear");
   },
 };

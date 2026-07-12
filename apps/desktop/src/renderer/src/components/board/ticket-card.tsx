@@ -1,26 +1,32 @@
 import * as React from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { type Ticket } from "@volli/shared";
+import { displayTicketId, type Ticket } from "@volli/shared";
 
 import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
 import { TagChip } from "@renderer/components/board/tag-chip";
 import { TicketContextMenu } from "@renderer/components/board/ticket-context-menu";
 import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
-import { useTicketDisplayId } from "@renderer/lib/display-id";
 import { resolveLabelColor } from "@renderer/lib/labels";
 import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
 
-/** Pure presentational card body — also rendered inside the drag overlay (always unselected there). */
+/**
+ * Pure presentational card body — also rendered inside the drag overlay
+ * (always unselected there). `ticketPrefix` comes from the board (a board
+ * only ever shows one project, so it's constant for the whole tree) rather
+ * than a per-card projects-store subscription — see `displayTicketId`.
+ */
 export function TicketCardContent({
   ticket,
+  ticketPrefix,
   selected = false,
 }: {
   ticket: Ticket;
+  ticketPrefix: string;
   selected?: boolean;
 }) {
-  const displayId = useTicketDisplayId(ticket);
+  const displayId = displayTicketId(ticketPrefix, ticket.ticketNumber);
   const projectLabels = useBoardStore((state) => state.labelsByProject[ticket.projectId]);
 
   return (
@@ -100,6 +106,7 @@ export function SortableTicketShell({
 interface TicketCardProps {
   ticket: Ticket;
   projectId: string;
+  ticketPrefix: string;
   selected: boolean;
   onSelect(ticketId: string): void;
 }
@@ -108,17 +115,19 @@ interface TicketCardProps {
  * Sortable wrapper: the in-column card. Dims while its drag overlay is out.
  * Memoized — every card in every column would otherwise re-render on each
  * board render (drag-over events, selection changes, filter keystrokes);
- * `onSelect` is a stable id-taking callback from the board for that reason.
+ * `onSelect` is a stable id-taking callback from the board for that reason,
+ * and `ticketPrefix` is a plain string from the board for the same reason.
  */
 export const TicketCard = React.memo(function TicketCard({
   ticket,
   projectId,
+  ticketPrefix,
   selected,
   onSelect,
 }: TicketCardProps) {
   return (
     <SortableTicketShell ticket={ticket} projectId={projectId} onSelect={onSelect}>
-      <TicketCardContent ticket={ticket} selected={selected} />
+      <TicketCardContent ticket={ticket} ticketPrefix={ticketPrefix} selected={selected} />
     </SortableTicketShell>
   );
 });

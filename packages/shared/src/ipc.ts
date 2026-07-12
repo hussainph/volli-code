@@ -101,9 +101,16 @@ export type ProjectCreateResult =
 
 export type ProjectMutationResult = { ok: true } | { ok: false; error: string };
 
-export type TicketCreateResult = { ok: true; ticket: Ticket } | { ok: false; error: string };
+/**
+ * A single ticket, returned by a mutation that affects only that one ticket —
+ * create, set-priority, update, set-labels. The renderer patches it into the
+ * project's list by id (cheaper than, and non-clobbering versus, re-reading the
+ * whole list). Contrast {@link TicketsResult}, which move returns because a move
+ * genuinely reorders many rows.
+ */
+export type TicketResult = { ok: true; ticket: Ticket } | { ok: false; error: string };
 
-/** The full authoritative project ticket list, returned after any ticket mutation. */
+/** The full authoritative project ticket list — returned by `ticket-move`, which reorders many rows. */
 export type TicketsResult = { ok: true; tickets: Ticket[] } | { ok: false; error: string };
 
 export type LabelResult = { ok: true; label: Label } | { ok: false; error: string };

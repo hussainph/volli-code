@@ -23,13 +23,6 @@ function mapLabel(row: LabelRow): Label {
   return { id: row.id, projectId: row.project_id, name: row.name, color: row.color };
 }
 
-export function listLabelsByProject(db: Database.Database, projectId: string): Label[] {
-  const rows = db
-    .prepare<[string], LabelRow>("SELECT * FROM labels WHERE project_id = ? ORDER BY name")
-    .all(projectId);
-  return rows.map(mapLabel);
-}
-
 /** Every label across every project — used only to build the boot bootstrap payload. */
 export function listAllLabels(db: Database.Database): Label[] {
   const rows = db.prepare<[], LabelRow>("SELECT * FROM labels ORDER BY project_id, name").all();

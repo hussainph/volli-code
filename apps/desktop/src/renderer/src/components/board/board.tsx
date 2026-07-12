@@ -233,6 +233,7 @@ export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPr
           // rendered only while dragging so a row can land in any status.
           <BoardListView
             projectId={projectId}
+            ticketPrefix={ticketPrefix}
             groups={sortedGroups}
             shownStatuses={shown}
             emptyDropStatuses={drag ? hidden : []}
@@ -259,6 +260,7 @@ export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPr
                 // same). "manual" remains the true drag-reorder mode.
                 tickets={sortedGroups[status]}
                 projectId={projectId}
+                ticketPrefix={ticketPrefix}
                 selectedId={selectedId}
                 onSelect={handleSelect}
                 composerInitiallyOpen={expandedEmptyStatus === status}
@@ -284,11 +286,11 @@ export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPr
               // Row-shaped overlay sized to the active row by dnd-kit; a lifted
               // surface (bg + shadow) instead of the card's scale-up.
               <div className="cursor-grabbing overflow-hidden rounded-md bg-card shadow-lg shadow-black/40">
-                <TicketRowContent ticket={drag.ticket} />
+                <TicketRowContent ticket={drag.ticket} ticketPrefix={ticketPrefix} />
               </div>
             ) : (
               <div className="scale-[1.03] cursor-grabbing rounded-lg shadow-lg shadow-black/40">
-                <TicketCardContent ticket={drag.ticket} />
+                <TicketCardContent ticket={drag.ticket} ticketPrefix={ticketPrefix} />
               </div>
             )
           ) : null}

@@ -5,9 +5,9 @@
  *
  * Id scheme: card draggables use the ticket's opaque `id` (a UUID) verbatim —
  * NOT its display id ("VC-12"), which is presentation-only and resolved
- * separately (see lib/display-id.ts); column droppables — a column body or
- * its collapsed empty-column pill, never both mounted at once — use
- * `"column:<status>"`.
+ * separately (see `displayTicketId` in `@volli/shared`); column droppables —
+ * a column body or its collapsed empty-column pill, never both mounted at
+ * once — use `"column:<status>"`.
  */
 import {
   groupTicketsByStatus,

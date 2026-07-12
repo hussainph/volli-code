@@ -5,11 +5,11 @@ import {
   createTicket,
   derivePrefix,
   errorMessage,
+  isTicketPriority,
+  isTicketStatus,
   moveTicket,
   PROJECT_COLORS,
   sanitizeLegacyProjects,
-  TICKET_PRIORITIES,
-  TICKET_STATUSES,
 } from "@volli/shared";
 import type {
   AppStateSetResult,
@@ -23,8 +23,8 @@ import type {
   ProjectCreateResult,
   ProjectMutationResult,
   Ticket,
-  TicketCreateResult,
   TicketPriority,
+  TicketResult,
   TicketsResult,
   TicketStatus,
   VolliIpcChannel,
@@ -51,6 +51,7 @@ import {
 import {
   bumpTicketVersion,
   countTicketsInStatus,
+  getTicket,
   getTicketLabelNames,
   getTicketRow,
   insertTicket,
@@ -83,14 +84,9 @@ const DATA_CHANNELS: readonly VolliIpcChannel[] = [
 ];
 
 // ---- input validation -------------------------------------------------
-
-function isTicketStatus(value: unknown): value is TicketStatus {
-  return typeof value === "string" && (TICKET_STATUSES as readonly string[]).includes(value);
-}
-
-function isTicketPriority(value: unknown): value is TicketPriority {
-  return typeof value === "string" && (TICKET_PRIORITIES as readonly string[]).includes(value);
-}
+// The status/priority vocabulary guards live in @volli/shared next to the
+// TICKET_STATUSES/TICKET_PRIORITIES constants they guard (isTicketStatus/
+// isTicketPriority), imported above.
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
@@ -364,7 +360,7 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
 
   ipcMain.handle(
     "volli:ticket-create" satisfies VolliIpcChannel,
-    (_event, input: unknown): TicketCreateResult => {
+    (_event, input: unknown): TicketResult => {
       if (!isTicketCreateInput(input)) {
         return { ok: false, error: "Invalid ticket" };
       }
@@ -448,13 +444,13 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
 
   ipcMain.handle(
     "volli:ticket-set-priority" satisfies VolliIpcChannel,
-    (_event, input: unknown): TicketsResult => {
+    (_event, input: unknown): TicketResult => {
       if (!isTicketSetPriorityInput(input)) {
         return { ok: false, error: "Invalid priority change" };
       }
       try {
         const now = Date.now();
-        const run = db.transaction((): Ticket[] => {
+        const run = db.transaction((): Ticket => {
           const row = getTicketRow(db, input.ticketId);
           if (!row) throw new Error("Unknown ticket");
           if (row.priority !== input.priority) {
@@ -470,9 +466,11 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
               now,
             );
           }
-          return listTicketsByProject(db, row.project_id);
+          const ticket = getTicket(db, input.ticketId);
+          if (!ticket) throw new Error("Unknown ticket");
+          return ticket;
         });
-        return { ok: true, tickets: run() };
+        return { ok: true, ticket: run() };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }
@@ -481,13 +479,13 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
 
   ipcMain.handle(
     "volli:ticket-update" satisfies VolliIpcChannel,
-    (_event, input: unknown): TicketsResult => {
+    (_event, input: unknown): TicketResult => {
       if (!isTicketUpdateInput(input)) {
         return { ok: false, error: "Invalid ticket update" };
       }
       try {
         const now = Date.now();
-        const run = db.transaction((): Ticket[] => {
+        const run = db.transaction((): Ticket => {
           const row = getTicketRow(db, input.ticketId);
           if (!row) throw new Error("Unknown ticket");
 
@@ -509,9 +507,11 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
               recordTicketEvent(db, input.ticketId, { kind: "body_edited" }, now);
             }
           }
-          return listTicketsByProject(db, row.project_id);
+          const ticket = getTicket(db, input.ticketId);
+          if (!ticket) throw new Error("Unknown ticket");
+          return ticket;
         });
-        return { ok: true, tickets: run() };
+        return { ok: true, ticket: run() };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }
@@ -520,13 +520,13 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
 
   ipcMain.handle(
     "volli:ticket-set-labels" satisfies VolliIpcChannel,
-    (_event, input: unknown): TicketsResult => {
+    (_event, input: unknown): TicketResult => {
       if (!isTicketSetLabelsInput(input)) {
         return { ok: false, error: "Invalid labels" };
       }
       try {
         const now = Date.now();
-        const run = db.transaction((): Ticket[] => {
+        const run = db.transaction((): Ticket => {
           const row = getTicketRow(db, input.ticketId);
           if (!row) throw new Error("Unknown ticket");
 
@@ -547,9 +547,11 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
             bumpTicketVersion(db, input.ticketId, now);
             recordTicketEvent(db, input.ticketId, { kind: "labels_changed", added, removed }, now);
           }
-          return listTicketsByProject(db, row.project_id);
+          const ticket = getTicket(db, input.ticketId);
+          if (!ticket) throw new Error("Unknown ticket");
+          return ticket;
         });
-        return { ok: true, tickets: run() };
+        return { ok: true, ticket: run() };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }

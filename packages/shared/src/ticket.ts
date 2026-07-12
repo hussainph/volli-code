@@ -19,9 +19,19 @@ export const TICKET_STATUS_LABELS: Record<TicketStatus, string> = {
   done: "Done",
 };
 
+/** Whether `value` is one of the {@link TICKET_STATUSES} — IPC-boundary vocabulary guard. */
+export function isTicketStatus(value: unknown): value is TicketStatus {
+  return typeof value === "string" && (TICKET_STATUSES as readonly string[]).includes(value);
+}
+
 export const TICKET_PRIORITIES = ["low", "medium", "high"] as const;
 
 export type TicketPriority = (typeof TICKET_PRIORITIES)[number];
+
+/** Whether `value` is one of the {@link TICKET_PRIORITIES} — IPC-boundary vocabulary guard. */
+export function isTicketPriority(value: unknown): value is TicketPriority {
+  return typeof value === "string" && (TICKET_PRIORITIES as readonly string[]).includes(value);
+}
 
 /** Human-readable label for each {@link TicketPriority}. */
 export const TICKET_PRIORITY_LABELS: Record<TicketPriority, string> = {

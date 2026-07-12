@@ -20,8 +20,8 @@ import type {
   TerminalDataEvent,
   TerminalExitEvent,
   TerminalIoResult,
-  TicketCreateResult,
   TicketPriority,
+  TicketResult,
   TicketsResult,
   TicketStatus,
   UiZoomCommand,
@@ -65,7 +65,7 @@ const api = {
       status: TicketStatus;
       title: string;
       priority?: TicketPriority;
-    }): Promise<TicketCreateResult> =>
+    }): Promise<TicketResult> =>
       ipcRenderer.invoke("volli:ticket-create" satisfies VolliIpcChannel, input),
     /** Runs the shared board move + persists it; resolves with the project's full authoritative ticket list. */
     move: (input: {
@@ -75,12 +75,13 @@ const api = {
       toIndex: number;
     }): Promise<TicketsResult> =>
       ipcRenderer.invoke("volli:ticket-move" satisfies VolliIpcChannel, input),
-    setPriority: (input: { ticketId: string; priority: TicketPriority }): Promise<TicketsResult> =>
+    /** Resolves with just the mutated ticket (patched into the list by id), not the whole project. */
+    setPriority: (input: { ticketId: string; priority: TicketPriority }): Promise<TicketResult> =>
       ipcRenderer.invoke("volli:ticket-set-priority" satisfies VolliIpcChannel, input),
-    update: (input: { ticketId: string; title?: string; body?: string }): Promise<TicketsResult> =>
+    update: (input: { ticketId: string; title?: string; body?: string }): Promise<TicketResult> =>
       ipcRenderer.invoke("volli:ticket-update" satisfies VolliIpcChannel, input),
-    /** Replaces a ticket's labels by name; unknown names are created (`color: null`) per project. */
-    setLabels: (input: { ticketId: string; labels: string[] }): Promise<TicketsResult> =>
+    /** Replaces a ticket's labels by name; unknown names are created (`color: null`) per project. Resolves with just that ticket. */
+    setLabels: (input: { ticketId: string; labels: string[] }): Promise<TicketResult> =>
       ipcRenderer.invoke("volli:ticket-set-labels" satisfies VolliIpcChannel, input),
   },
   labels: {
@@ -168,6 +169,14 @@ const api = {
   },
 };
 
+/**
+ * The renderer-facing shape of `window.api`, derived from the implementation
+ * so the two can't drift (consumed by the global augmentation in index.d.ts).
+ * Type-only — erased at compile, so it doesn't pull a runtime @volli/shared
+ * import into preload.cjs.
+ */
+export type Api = typeof api;
+
 if (process.contextIsolated) {
   try {
     contextBridge.exposeInMainWorld("api", api);
@@ -175,6 +184,9 @@ if (process.contextIsolated) {
     console.error(error);
   }
 } else {
-  // @ts-expect-error (define in dts) — only reachable if contextIsolation is disabled
-  window.api = api;
+  // Only reachable if contextIsolation is disabled. Object.assign (rather than
+  // `window.api = api`) avoids depending on the index.d.ts global augmentation,
+  // which the preload's own tsconfig doesn't load — so this typechecks the same
+  // under both the node and web compiles.
+  Object.assign(window, { api });
 }

@@ -44,9 +44,9 @@ function fakeGateway(overrides: Partial<BoardGateway> = {}): BoardGateway {
     }),
   }));
   const moveTicket = vi.fn<BoardGateway["moveTicket"]>(async () => ({ ok: true, tickets: [] }));
-  const setTicketPriority = vi.fn<BoardGateway["setTicketPriority"]>(async () => ({
+  const setTicketPriority = vi.fn<BoardGateway["setTicketPriority"]>(async (input) => ({
     ok: true,
-    tickets: [],
+    ticket: ticket({ id: input.ticketId, status: "backlog", priority: input.priority }),
   }));
   return { createTicket, moveTicket, setTicketPriority, ...overrides };
 }
@@ -223,22 +223,27 @@ describe("moveTicket", () => {
 });
 
 describe("setTicketPriority", () => {
-  it("optimistically updates, then reconciles with the gateway's authoritative list", async () => {
+  it("optimistically updates, then patches in the gateway's returned ticket by id", async () => {
     const a = ticket({ id: "a", status: "backlog", priority: "low" });
-    const authoritative = [{ ...a, priority: "high" as const }];
+    const b = ticket({ id: "b", status: "backlog", priority: "low", order: 1 });
+    const authoritative = { ...a, priority: "high" as const, updatedAt: 999 };
     const gateway = fakeGateway({
       setTicketPriority: vi.fn<BoardGateway["setTicketPriority"]>(async () => ({
         ok: true,
-        tickets: authoritative,
+        ticket: authoritative,
       })),
     });
     const store = createBoardStore(gateway);
-    store.getState().hydrate({ p1: [a] }, {});
+    store.getState().hydrate({ p1: [a, b] }, {});
 
     await store.getState().setTicketPriority("p1", "a", "high");
 
     expect(gateway.setTicketPriority).toHaveBeenCalledWith({ ticketId: "a", priority: "high" });
-    expect(store.getState().ticketsByProject.p1).toBe(authoritative);
+    // The returned ticket is patched in by id; the sibling card is untouched
+    // (same reference — not clobbered by a wholesale slice replace).
+    const result = store.getState().ticketsByProject.p1!;
+    expect(result).toContainEqual(authoritative);
+    expect(result.find((t) => t.id === "b")).toBe(b);
   });
 
   it("is a no-op when the priority is unchanged", async () => {
@@ -531,7 +536,10 @@ describe("createBoardStore() with the default gateway", () => {
   });
 
   it("setTicketPriority calls window.api.tickets.setPriority", async () => {
-    const setPriority = vi.fn(async () => ({ ok: true as const, tickets: [] }));
+    const setPriority = vi.fn(async () => ({
+      ok: true as const,
+      ticket: ticket({ id: "a", status: "backlog", priority: "high" as const }),
+    }));
     vi.stubGlobal("window", {
       api: { tickets: { create: vi.fn(), move: vi.fn(), setPriority } },
     });
