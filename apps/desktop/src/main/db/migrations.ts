@@ -82,8 +82,29 @@ CREATE TABLE app_state (
 );
 `;
 
+/**
+ * Migration 002: ticket archival (CONCEPT #16/#92). `archived_at` (nullable
+ * epoch ms) is the lifecycle marker, orthogonal to `status` — an archived
+ * ticket keeps its column (Done stays Done) but leaves the board. It is NOT a
+ * soft-delete flag smeared across every query: only the board reads filter it,
+ * and they do so through a PARTIAL index that doesn't even contain archived
+ * rows, so the hot path stays lean. The old full board index is replaced by
+ * that partial one; a second partial index backs the on-demand Archive view.
+ * The sole destructive act, delete-from-archive, is a real `DELETE` — no flag.
+ */
+const MIGRATION_002_TICKET_ARCHIVAL = `
+ALTER TABLE tickets ADD COLUMN archived_at INTEGER;
+
+DROP INDEX tickets_project_status;
+CREATE INDEX tickets_board ON tickets(project_id, status, position)
+  WHERE archived_at IS NULL;
+CREATE INDEX tickets_archived ON tickets(project_id, archived_at)
+  WHERE archived_at IS NOT NULL;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
+  { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
 ];
 
 /** Applies every migration whose `version` is greater than the db's current `user_version`, in order. */

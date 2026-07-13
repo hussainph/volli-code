@@ -1,3 +1,4 @@
+import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
 import { ArrowsDownUpIcon } from "@phosphor-icons/react/dist/csr/ArrowsDownUp";
 import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
 import { ListBulletsIcon } from "@phosphor-icons/react/dist/csr/ListBullets";
@@ -136,6 +137,17 @@ export function BoardHeader({ projectId, ticketCount, tickets, filter }: BoardHe
       <div className="ml-auto flex shrink-0 items-center gap-2">
         <OrderingMenu projectId={projectId} />
         <ViewToggle projectId={projectId} />
+        {/* The Archive is a per-project view, not a sixth column (CONCEPT #92) —
+            reached from here. Opens the app-wide ArchiveDialog for the selected
+            project via the ui store, same pattern as the New-ticket button. */}
+        <Button
+          variant="ghost"
+          aria-label="Archive"
+          className="size-7 rounded-full border border-border text-muted-foreground"
+          onClick={() => useUiStore.getState().setArchiveOpen(true)}
+        >
+          <ArchiveIcon className="size-3.5" />
+        </Button>
         {/* The prominent, always-reachable create entry point — the column
             composers (board-column.tsx) hide at the bottom of long columns,
             so this + the plain "c" hotkey (use-new-ticket-shortcut.ts) are

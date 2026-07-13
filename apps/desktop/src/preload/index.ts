@@ -4,6 +4,7 @@ import { contextBridge, ipcRenderer } from "electron";
 // from @volli/shared here could split a shared chunk out of preload.cjs.
 import type {
   AppStateSetResult,
+  ArchivedTicketsResult,
   BootstrapResult,
   CreateTerminalSessionRequest,
   CreateTerminalSessionResult,
@@ -16,6 +17,7 @@ import type {
   PickFolderResult,
   ProjectCreateResult,
   ProjectMutationResult,
+  Result,
   RevealResult,
   TerminalDataEvent,
   TerminalExitEvent,
@@ -83,6 +85,18 @@ const api = {
     /** Replaces a ticket's labels by name; unknown names are created (`color: null`) per project. Resolves with just that ticket. */
     setLabels: (input: { ticketId: string; labels: string[] }): Promise<TicketResult> =>
       ipcRenderer.invoke("volli:ticket-set-labels" satisfies VolliIpcChannel, input),
+    /** Archives a ticket — it leaves the board but the row, labels, and event log survive (reversible). */
+    archive: (input: { ticketId: string }): Promise<Result> =>
+      ipcRenderer.invoke("volli:ticket-archive" satisfies VolliIpcChannel, input),
+    /** Returns an archived ticket to the board (appended to its retained column); resolves with the revived live ticket. */
+    unarchive: (input: { ticketId: string }): Promise<TicketResult> =>
+      ipcRenderer.invoke("volli:ticket-unarchive" satisfies VolliIpcChannel, input),
+    /** Hard-deletes an archived ticket (cascades its labels + events). The only destructive act — rejects a live ticket. */
+    delete: (input: { ticketId: string }): Promise<Result> =>
+      ipcRenderer.invoke("volli:ticket-delete" satisfies VolliIpcChannel, input),
+    /** The project's archived tickets, newest first — loaded on demand for the Archive view. */
+    listArchived: (projectId: string): Promise<ArchivedTicketsResult> =>
+      ipcRenderer.invoke("volli:ticket-list-archived" satisfies VolliIpcChannel, projectId),
   },
   labels: {
     setColor: (input: { labelId: string; color: string | null }): Promise<LabelResult> =>

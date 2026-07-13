@@ -1,5 +1,6 @@
 import {
   EMPTY_TICKET_FILTER,
+  type ArchivedTicket,
   type Label,
   type Ticket,
   type TicketPriority,
@@ -32,6 +33,13 @@ function ticket(overrides: Partial<Ticket> & { status: TicketStatus }): Ticket {
   };
 }
 
+/** An archived ticket fixture: a live ticket plus its `archivedAt` stamp. */
+function archivedTicket(
+  overrides: Partial<ArchivedTicket> & { status: TicketStatus },
+): ArchivedTicket {
+  return { ...ticket(overrides), archivedAt: overrides.archivedAt ?? 0 };
+}
+
 /** A fake in-memory gateway implementing BoardGateway's result unions, controllable per test. */
 function fakeGateway(overrides: Partial<BoardGateway> = {}): BoardGateway {
   const createTicket = vi.fn<BoardGateway["createTicket"]>(async (input) => ({
@@ -48,7 +56,23 @@ function fakeGateway(overrides: Partial<BoardGateway> = {}): BoardGateway {
     ok: true,
     ticket: ticket({ id: input.ticketId, status: "backlog", priority: input.priority }),
   }));
-  return { createTicket, moveTicket, setTicketPriority, ...overrides };
+  const archiveTicket = vi.fn<BoardGateway["archiveTicket"]>(async () => ({ ok: true }));
+  const unarchiveTicket = vi.fn<BoardGateway["unarchiveTicket"]>(async (input) => ({
+    ok: true,
+    ticket: ticket({ id: input.ticketId, status: "backlog" }),
+  }));
+  const deleteTicket = vi.fn<BoardGateway["deleteTicket"]>(async () => ({ ok: true }));
+  const listArchived = vi.fn<BoardGateway["listArchived"]>(async () => ({ ok: true, tickets: [] }));
+  return {
+    createTicket,
+    moveTicket,
+    setTicketPriority,
+    archiveTicket,
+    unarchiveTicket,
+    deleteTicket,
+    listArchived,
+    ...overrides,
+  };
 }
 
 afterEach(() => {
@@ -398,6 +422,169 @@ describe("setTicketPriority", () => {
   });
 });
 
+describe("loadArchived", () => {
+  it("fetches the project's archived tickets into archivedByProject", async () => {
+    const archived = [archivedTicket({ id: "a", status: "done", archivedAt: 5 })];
+    const gateway = fakeGateway({
+      listArchived: vi.fn<BoardGateway["listArchived"]>(async () => ({
+        ok: true,
+        tickets: archived,
+      })),
+    });
+    const store = createBoardStore(gateway);
+
+    await store.getState().loadArchived("p1");
+
+    expect(gateway.listArchived).toHaveBeenCalledWith("p1");
+    expect(store.getState().archivedByProject.p1).toBe(archived);
+  });
+
+  it("toasts and leaves the slice unset on a typed failure", async () => {
+    const gateway = fakeGateway({
+      listArchived: vi.fn<BoardGateway["listArchived"]>(async () => ({
+        ok: false,
+        error: "db locked",
+      })),
+    });
+    const store = createBoardStore(gateway);
+
+    await store.getState().loadArchived("p1");
+
+    expect(store.getState().archivedByProject.p1).toBeUndefined();
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not load archive: db locked");
+  });
+});
+
+describe("archiveTicket", () => {
+  it("optimistically removes the card from the board", async () => {
+    const a = ticket({ id: "a", status: "doing" });
+    const b = ticket({ id: "b", status: "doing", order: 1 });
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a, b] }, {});
+
+    await store.getState().archiveTicket("p1", "a");
+
+    expect(gateway.archiveTicket).toHaveBeenCalledWith({ ticketId: "a" });
+    expect(store.getState().ticketsByProject.p1!.map((t) => t.id)).toEqual(["b"]);
+  });
+
+  it("drops any cached Archive slice so it refetches fresh on next open", async () => {
+    const a = ticket({ id: "a", status: "done" });
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [a] }, {});
+    // Pretend the Archive view was opened earlier and cached a (now-stale) slice.
+    store.setState({ archivedByProject: { p1: [] } });
+
+    await store.getState().archiveTicket("p1", "a");
+
+    expect("p1" in store.getState().archivedByProject).toBe(false);
+  });
+
+  it("is a no-op for an unknown ticket id (no IPC call)", async () => {
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing" })] }, {});
+
+    await store.getState().archiveTicket("p1", "does-not-exist");
+
+    expect(gateway.archiveTicket).not.toHaveBeenCalled();
+  });
+
+  it("reverts the card onto the board and toasts on a typed failure", async () => {
+    const a = ticket({ id: "a", status: "doing" });
+    const gateway = fakeGateway({
+      archiveTicket: vi.fn<BoardGateway["archiveTicket"]>(async () => ({
+        ok: false,
+        error: "conflict",
+      })),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a] }, {});
+
+    await store.getState().archiveTicket("p1", "a");
+
+    expect(store.getState().ticketsByProject.p1!.map((t) => t.id)).toEqual(["a"]);
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not archive ticket: conflict");
+  });
+});
+
+describe("unarchiveTicket", () => {
+  it("drops the ticket from the Archive slice and appends the revived live ticket to the board", async () => {
+    const revived = ticket({ id: "a", status: "done", title: "Revived" });
+    const gateway = fakeGateway({
+      unarchiveTicket: vi.fn<BoardGateway["unarchiveTicket"]>(async () => ({
+        ok: true,
+        ticket: revived,
+      })),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [] }, {});
+    store.setState({ archivedByProject: { p1: [archivedTicket({ id: "a", status: "done" })] } });
+
+    await store.getState().unarchiveTicket("p1", "a");
+
+    expect(gateway.unarchiveTicket).toHaveBeenCalledWith({ ticketId: "a" });
+    expect(store.getState().archivedByProject.p1).toEqual([]);
+    expect(store.getState().ticketsByProject.p1).toContain(revived);
+  });
+
+  it("restores the ticket to the Archive slice and toasts on a typed failure", async () => {
+    const archived = archivedTicket({ id: "a", status: "done" });
+    const gateway = fakeGateway({
+      unarchiveTicket: vi.fn<BoardGateway["unarchiveTicket"]>(async () => ({
+        ok: false,
+        error: "conflict",
+      })),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [] }, {});
+    store.setState({ archivedByProject: { p1: [archived] } });
+
+    await store.getState().unarchiveTicket("p1", "a");
+
+    expect(store.getState().archivedByProject.p1!.map((t) => t.id)).toEqual(["a"]);
+    expect(store.getState().ticketsByProject.p1).toEqual([]);
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not unarchive ticket: conflict");
+  });
+});
+
+describe("deleteArchivedTicket", () => {
+  it("optimistically removes the ticket from the Archive slice", async () => {
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.setState({
+      archivedByProject: {
+        p1: [
+          archivedTicket({ id: "a", status: "done" }),
+          archivedTicket({ id: "b", status: "done" }),
+        ],
+      },
+    });
+
+    await store.getState().deleteArchivedTicket("p1", "a");
+
+    expect(gateway.deleteTicket).toHaveBeenCalledWith({ ticketId: "a" });
+    expect(store.getState().archivedByProject.p1!.map((t) => t.id)).toEqual(["b"]);
+  });
+
+  it("restores the ticket to the Archive slice and toasts on a typed failure", async () => {
+    const gateway = fakeGateway({
+      deleteTicket: vi.fn<BoardGateway["deleteTicket"]>(async () => ({
+        ok: false,
+        error: "db locked",
+      })),
+    });
+    const store = createBoardStore(gateway);
+    store.setState({ archivedByProject: { p1: [archivedTicket({ id: "a", status: "done" })] } });
+
+    await store.getState().deleteArchivedTicket("p1", "a");
+
+    expect(store.getState().archivedByProject.p1!.map((t) => t.id)).toEqual(["a"]);
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not delete ticket: db locked");
+  });
+});
+
 describe("setSearch", () => {
   it("sets the search string verbatim, initializing from EMPTY_TICKET_FILTER", () => {
     const store = createBoardStore(fakeGateway());
@@ -553,6 +740,15 @@ describe("forget", () => {
     store.getState().forget("p1");
 
     expect(store.getState().ticketsByProject.p1).toBeUndefined();
+  });
+
+  it("drops a loaded Archive slice too", () => {
+    const store = createBoardStore(fakeGateway());
+    store.setState({ archivedByProject: { p1: [archivedTicket({ id: "a", status: "done" })] } });
+
+    store.getState().forget("p1");
+
+    expect(store.getState().archivedByProject.p1).toBeUndefined();
   });
 
   it("removes only the filter record when there is no ticket list", () => {
