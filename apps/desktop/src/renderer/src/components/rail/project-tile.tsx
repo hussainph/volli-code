@@ -1,6 +1,8 @@
 import * as React from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
+import { MinusCircleIcon } from "@phosphor-icons/react/dist/csr/MinusCircle";
 import { errorMessage, monogram, projectColor, type Project } from "@volli/shared";
 import { toast } from "sonner";
 
@@ -85,10 +87,14 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
             </TooltipContent>
           </Tooltip>
           <ContextMenuContent>
-            <ContextMenuItem onSelect={() => void revealInFinder()}>
+            <ContextMenuItem icon={FolderOpenIcon} onSelect={() => void revealInFinder()}>
               Reveal in Finder
             </ContextMenuItem>
-            <ContextMenuItem variant="destructive" onSelect={() => setRemoveOpen(true)}>
+            <ContextMenuItem
+              icon={MinusCircleIcon}
+              variant="destructive"
+              onSelect={() => setRemoveOpen(true)}
+            >
               Remove from Volli…
             </ContextMenuItem>
           </ContextMenuContent>

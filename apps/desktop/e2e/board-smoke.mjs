@@ -632,17 +632,56 @@ async function main() {
       },
     );
 
-    // === 11. Context menu has no destructive board-level action =============
-    await attempt(11, "Context menu: ticket actions are non-destructive", async () => {
+    // === 11. Context menu actions have icons and stay non-destructive =========
+    await attempt(11, "Context menu: every ticket action has an icon", async () => {
       const vc12 = cardById(page, "VC-12");
       await vc12.click({ button: "right" });
       await sleep(300);
-      const moveTo = await page.getByRole("menuitem", { name: "Move to", exact: true }).count();
-      const priority = await page.getByRole("menuitem", { name: "Priority", exact: true }).count();
+      const moveTo = page.getByRole("menuitem", { name: "Move to", exact: true });
+      const priority = page.getByRole("menuitem", { name: "Priority", exact: true });
+      const rootItems = page.locator('[data-slot="context-menu-content"] > [role="menuitem"]');
+      const rootCount = await rootItems.count();
+      const rootRowsWithIcons = await rootItems.evaluateAll(
+        (items) => items.filter((item) => item.querySelector(":scope > svg") !== null).length,
+      );
+
+      await moveTo.hover();
+      await page.getByRole("menuitem", { name: "Todo", exact: true }).waitFor();
+      const moveItems = page.locator(
+        '[data-slot="context-menu-sub-content"]:visible > [role="menuitem"]',
+      );
+      const moveCount = await moveItems.count();
+      const moveRowsWithIcons = await moveItems.evaluateAll(
+        (items) => items.filter((item) => item.querySelector(":scope > svg") !== null).length,
+      );
+
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("Escape");
+      await vc12.click({ button: "right" });
+      await sleep(300);
+      await priority.hover();
+      await page.getByRole("menuitem", { name: "Low", exact: true }).waitFor();
+      const priorityItems = page.locator(
+        '[data-slot="context-menu-sub-content"]:visible > [role="menuitem"]',
+      );
+      const priorityCount = await priorityItems.count();
+      const priorityRowsWithIcons = await priorityItems.evaluateAll(
+        (items) => items.filter((item) => item.querySelector(":scope > svg") !== null).length,
+      );
       const destructive = await page.getByRole("menuitem", { name: "Delete", exact: true }).count();
       await page.keyboard.press("Escape");
-      const ok = moveTo === 1 && priority === 1 && destructive === 0;
-      return { ok, detail: `moveTo=${moveTo} priority=${priority} delete=${destructive}` };
+      const ok =
+        rootCount === 3 &&
+        rootRowsWithIcons === rootCount &&
+        moveCount === 4 &&
+        moveRowsWithIcons === moveCount &&
+        priorityCount === 3 &&
+        priorityRowsWithIcons === priorityCount &&
+        destructive === 0;
+      return {
+        ok,
+        detail: `root=${rootRowsWithIcons}/${rootCount} move=${moveRowsWithIcons}/${moveCount} priority=${priorityRowsWithIcons}/${priorityCount} delete=${destructive}`,
+      };
     });
 
     // Board state entering the second-generation surface checks: Backlog 3
