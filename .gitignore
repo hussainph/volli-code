@@ -10,3 +10,4 @@ coverage/
 .vite-hooks/
 *.tsbuildinfo
 coverage/
+docs/ROADMAP.md

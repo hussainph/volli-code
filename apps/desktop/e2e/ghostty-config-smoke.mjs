@@ -223,7 +223,16 @@ async function main() {
   const app = await _electron.launch({
     executablePath: ELECTRON,
     args: [APP_DIR],
-    env: { ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, ".config") },
+    // VOLLI_DB_PATH: the HOME override does NOT relocate Electron's userData
+    // on macOS, so without it the app opens the real <userData>/volli.db —
+    // whose non-empty state makes bootstrap's firstRun false, skipping the
+    // localStorage import this smoke's project seeding relies on.
+    env: {
+      ...process.env,
+      HOME: home,
+      XDG_CONFIG_HOME: join(home, ".config"),
+      VOLLI_DB_PATH: join(home, "volli.db"),
+    },
   });
 
   try {

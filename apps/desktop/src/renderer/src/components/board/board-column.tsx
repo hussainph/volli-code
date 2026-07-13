@@ -13,6 +13,7 @@ interface BoardColumnProps {
   status: TicketStatus;
   tickets: Ticket[];
   projectId: string;
+  /** The board's owning project's ticket prefix — constant for the whole board tree. */
   ticketPrefix: string;
   selectedId: string | null;
   onSelect(ticketId: string): void;
@@ -39,7 +40,6 @@ export function BoardColumn({
   const { setNodeRef } = useDroppable({ id: columnDroppableId(status) });
   const composer = useTicketComposer({
     projectId,
-    ticketPrefix,
     status,
     initiallyOpen: composerInitiallyOpen,
     onClose: () => onComposerClose(status),
@@ -74,6 +74,7 @@ export function BoardColumn({
               key={ticket.id}
               ticket={ticket}
               projectId={projectId}
+              ticketPrefix={ticketPrefix}
               selected={ticket.id === selectedId}
               onSelect={onSelect}
             />

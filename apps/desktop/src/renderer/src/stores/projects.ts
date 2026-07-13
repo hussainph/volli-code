@@ -1,124 +1,214 @@
 /**
- * Persisted store of tracked projects. Array order IS the rail order — drag
- * reorder writes it directly; there is no separate `sortOrder` field until
- * the SQLite layer lands (locked decision, see docs/CONCEPT.md #3).
+ * Tracked projects (SQLite-backed, migration 001 — `projects.sort_order`
+ * drives rail order). `hydrate` is the ONE place state is seeded wholesale,
+ * from the boot payload (see lib/boot.ts); every mutation after that is an
+ * async write-through via `gateway` that reconciles or reverts on failure,
+ * surfacing every failure via a toast (CLAUDE.md: never silently swallow a
+ * failed mutation — the Swift app's top systemic defect).
  *
- * Persistence is localStorage via zustand's `persist` middleware, an interim
- * choice ahead of that SQLite layer. Known and accepted limitation: dev
- * (localhost:5173) and the packaged app (file://) are different origins, so
- * their localStorage — and therefore their tracked projects — do not share
- * data across the two.
+ * `reorder` stays a synchronous, optimistic local array move for live drag
+ * feedback (the rail calls it on every pointer-cross) and does NOT persist —
+ * persistence is the separate `commitReorder`, which the rail calls once, on
+ * drag end/cancel, so a single drag doesn't spam `api.projects.reorder`.
  */
-import { derivePrefix, PROJECT_COLORS, type Project } from "@volli/shared";
+import {
+  errorMessage,
+  type AppStateSetResult,
+  type Project,
+  type ProjectCreateResult,
+  type ProjectMutationResult,
+} from "@volli/shared";
+import { toast } from "sonner";
 import { create } from "zustand";
-import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
-import { killProjectSessions } from "../terminal/session-lifecycle";
+import { killProjectSessions } from "@renderer/terminal/session-lifecycle";
+
 import { useBoardStore } from "./board";
+import { writeThrough } from "./mutate";
 import { useWorkspaceStore } from "./workspace";
+
+/** The `app_state` key `selectedProjectId` is persisted under — also read by lib/boot.ts. */
+export const PROJECTS_UI_APP_STATE_KEY = "volli:projects-ui";
+
+/** The subset of the preload API the projects store needs — narrow and fake-able for tests. */
+export interface ProjectsGateway {
+  create(input: { path: string; name: string }): Promise<ProjectCreateResult>;
+  remove(id: string): Promise<ProjectMutationResult>;
+  reorder(orderedIds: string[]): Promise<ProjectMutationResult>;
+  /** Fire-and-forget persistence of the current selection under {@link PROJECTS_UI_APP_STATE_KEY}. */
+  setSelection(selectedProjectId: string | null): Promise<AppStateSetResult>;
+}
+
+const defaultGateway: ProjectsGateway = {
+  create: (input) => window.api.projects.create(input),
+  remove: (id) => window.api.projects.remove(id),
+  reorder: (orderedIds) => window.api.projects.reorder(orderedIds),
+  setSelection: (selectedProjectId) =>
+    window.api.appState.set(PROJECTS_UI_APP_STATE_KEY, JSON.stringify({ selectedProjectId })),
+};
 
 interface ProjectsState {
   projects: Project[];
   selectedProjectId: string | null;
-  addProject(input: { path: string; defaultName: string }): void;
-  removeProject(id: string): void;
+  /** Seeds state from the boot payload — the ONE place state is set wholesale outside a mutation. */
+  hydrate(projects: Project[], selectedProjectId: string | null): void;
+  addProject(input: { path: string; defaultName: string }): Promise<void>;
+  removeProject(id: string): Promise<void>;
+  /** Optimistic local reorder for live drag feedback; does not persist — see `commitReorder`. */
   reorder(activeId: string, overId: string): void;
+  /** Persists the rail's current order against `previousOrder` (captured at drag start); reverts + toasts on failure. */
+  commitReorder(previousOrder: readonly Project[]): Promise<void>;
   select(id: string): void;
   selectByIndex(index: number): void;
 }
 
-type PersistedProjectsState = Pick<ProjectsState, "projects" | "selectedProjectId">;
+/** Whether two orderings name the same ids in the same sequence. */
+function sameOrder(a: readonly Project[], b: readonly Project[]): boolean {
+  return a.length === b.length && a.every((project, index) => project.id === b[index]?.id);
+}
 
-/** Factory so tests can supply an in-memory storage instead of localStorage. */
-export function createProjectsStore(storage?: StateStorage) {
-  return create<ProjectsState>()(
-    persist(
-      (set, get) => ({
-        projects: [],
-        selectedProjectId: null,
+/** Factory so tests can inject a fake gateway instead of the real preload bridge. */
+export function createProjectsStore(gateway: ProjectsGateway = defaultGateway) {
+  /**
+   * Fire-and-forget persistence of the current selection under
+   * {@link PROJECTS_UI_APP_STATE_KEY}. Every path that changes the selection —
+   * `select`, `addProject` (auto-selects the new project), `removeProject`
+   * (falls to a neighbor) — routes through here, so the choice always survives
+   * relaunch. A failure only costs the persisted selection, so toast but never
+   * block or revert the in-memory change.
+   */
+  function persistSelection(selectedProjectId: string | null): void {
+    gateway
+      .setSelection(selectedProjectId)
+      .then((result) => {
+        if (!result.ok) toast.error(`Could not save selected project: ${result.error}`);
+      })
+      .catch((error: unknown) => {
+        toast.error(`Could not save selected project: ${errorMessage(error)}`);
+      });
+  }
 
-        addProject({ path, defaultName }) {
-          const { projects } = get();
-          const existing = projects.find((project) => project.path === path);
-          if (existing) {
-            set({ selectedProjectId: existing.id });
-            return;
-          }
+  return create<ProjectsState>()((set, get) => ({
+    projects: [],
+    selectedProjectId: null,
 
-          const project: Project = {
-            id: crypto.randomUUID(),
-            name: defaultName,
-            path,
-            ticketPrefix: derivePrefix(defaultName),
-            colorIndex: projects.length % PROJECT_COLORS.length,
-            createdAt: Date.now(),
-          };
-          set({ projects: [...projects, project], selectedProjectId: project.id });
-        },
+    hydrate(projects, selectedProjectId) {
+      set({ projects, selectedProjectId });
+    },
 
-        removeProject(id) {
-          const { projects, selectedProjectId } = get();
-          const removedIndex = projects.findIndex((project) => project.id === id);
-          if (removedIndex === -1) return;
+    async addProject({ path, defaultName }) {
+      const result = await writeThrough(
+        "add project",
+        (): Promise<ProjectCreateResult> => gateway.create({ path, name: defaultName }),
+      );
+      if (!result) return;
 
-          // Removal, per-workspace-UI cleanup, and session teardown are one
-          // invariant, enforced here so no removal path (dialog today, context
-          // menu / CLI later) can forget the forget. killProjectSessions kills
-          // each live PTY and disposes its engine explicitly — teardown does
-          // NOT depend on a terminal view being mounted — then drops the
-          // project's session record.
-          useWorkspaceStore.getState().forget(id);
-          useBoardStore.getState().forget(id);
-          killProjectSessions(id);
+      // Re-read FRESH after the await, then: `created: false` means an existing
+      // project at that path was selected rather than inserted; append it
+      // defensively only if this renderer doesn't already have it (a fresh
+      // insert never will, so the guard is a no-op there).
+      const { projects } = get();
+      const exists = projects.some((project) => project.id === result.project.id);
+      set({
+        projects: exists ? projects : [...projects, result.project],
+        selectedProjectId: result.project.id,
+      });
+      persistSelection(result.project.id);
+    },
 
-          const nextProjects = projects.filter((project) => project.id !== id);
-          if (selectedProjectId !== id) {
-            set({ projects: nextProjects });
-            return;
-          }
+    async removeProject(id) {
+      // No-op (and no IPC) for an unknown id — checked against the pre-await
+      // snapshot; the fresh re-read below handles what actually changed.
+      if (!get().projects.some((project) => project.id === id)) return;
 
-          const nextSelectedId =
-            nextProjects.length === 0
-              ? null
-              : nextProjects[Math.min(removedIndex, nextProjects.length - 1)]!.id;
-          set({ projects: nextProjects, selectedProjectId: nextSelectedId });
-        },
+      const result = await writeThrough(
+        "remove project",
+        (): Promise<ProjectMutationResult> => gateway.remove(id),
+      );
+      if (!result) return;
 
-        reorder(activeId, overId) {
-          if (activeId === overId) return;
+      // Removal, per-workspace-UI cleanup, and session teardown are one
+      // invariant, enforced here so no removal path (dialog today, context
+      // menu / CLI later) can forget the forget. killProjectSessions kills
+      // each live PTY and disposes its engine explicitly — teardown does
+      // NOT depend on a terminal view being mounted — then drops the
+      // project's session record.
+      useWorkspaceStore.getState().forget(id);
+      useBoardStore.getState().forget(id);
+      killProjectSessions(id);
 
-          const { projects } = get();
-          const activeIndex = projects.findIndex((project) => project.id === activeId);
-          const overIndex = projects.findIndex((project) => project.id === overId);
-          if (activeIndex === -1 || overIndex === -1) return;
+      // Re-read FRESH: a concurrent add/reorder may have changed `projects`
+      // while the remove IPC was in flight; computing the next list from the
+      // pre-await snapshot would clobber that concurrent change (drop a
+      // just-added project from the rail though SQLite still has it).
+      const { projects, selectedProjectId } = get();
+      const removedIndex = projects.findIndex((project) => project.id === id);
+      const nextProjects = projects.filter((project) => project.id !== id);
+      if (selectedProjectId !== id) {
+        set({ projects: nextProjects });
+        return;
+      }
 
-          const next = projects.slice();
-          const [moved] = next.splice(activeIndex, 1);
-          next.splice(overIndex, 0, moved!);
-          set({ projects: next });
-        },
+      const nextSelectedId =
+        nextProjects.length === 0
+          ? null
+          : nextProjects[Math.min(Math.max(removedIndex, 0), nextProjects.length - 1)]!.id;
+      set({ projects: nextProjects, selectedProjectId: nextSelectedId });
+      persistSelection(nextSelectedId);
+    },
 
-        select(id) {
-          const exists = get().projects.some((project) => project.id === id);
-          if (exists) set({ selectedProjectId: id });
-        },
+    reorder(activeId, overId) {
+      if (activeId === overId) return;
 
-        selectByIndex(index) {
-          const project = get().projects[index];
-          if (project) set({ selectedProjectId: project.id });
-        },
-      }),
-      {
-        name: "volli:projects",
-        version: 1,
-        storage: createJSONStorage(() => storage ?? localStorage),
-        partialize: (state): PersistedProjectsState => ({
-          projects: state.projects,
-          selectedProjectId: state.selectedProjectId,
-        }),
-      },
-    ),
-  );
+      const { projects } = get();
+      const activeIndex = projects.findIndex((project) => project.id === activeId);
+      const overIndex = projects.findIndex((project) => project.id === overId);
+      if (activeIndex === -1 || overIndex === -1) return;
+
+      const next = projects.slice();
+      const [moved] = next.splice(activeIndex, 1);
+      next.splice(overIndex, 0, moved!);
+      set({ projects: next });
+    },
+
+    async commitReorder(previousOrder) {
+      const { projects } = get();
+      if (sameOrder(projects, previousOrder)) return; // nothing moved since the drag started
+
+      const result = await writeThrough(
+        "save project order",
+        (): Promise<ProjectMutationResult> =>
+          gateway.reorder(projects.map((project) => project.id)),
+      );
+      if (result) return; // persisted — the optimistic order stands
+
+      // Failure: restore the PREVIOUS order, but reconcile membership against
+      // FRESH state — a project added (or removed) while the reorder IPC was in
+      // flight must survive the revert. Restore order, not membership: drop
+      // previous entries no longer present, then append any newcomer.
+      const current = get().projects;
+      const currentIds = new Set(current.map((project) => project.id));
+      const previousIds = new Set(previousOrder.map((project) => project.id));
+      set({
+        projects: [
+          ...previousOrder.filter((project) => currentIds.has(project.id)),
+          ...current.filter((project) => !previousIds.has(project.id)),
+        ],
+      });
+    },
+
+    select(id) {
+      const exists = get().projects.some((project) => project.id === id);
+      if (!exists) return;
+      set({ selectedProjectId: id });
+      persistSelection(id);
+    },
+
+    selectByIndex(index) {
+      const project = get().projects[index];
+      if (project) get().select(project.id);
+    },
+  }));
 }
 
 /** App-wide singleton; components import this directly. */

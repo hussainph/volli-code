@@ -195,7 +195,12 @@ describe("registerGhosttyConfigIpc", () => {
     readFileSyncMock.mockImplementation(() => {
       throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
     });
-    existsSyncMock.mockReturnValue(false);
+    existsSyncMock.mockImplementation((path: string) =>
+      [
+        "/Users/test/.config/ghostty",
+        "/Users/test/Library/Application Support/com.mitchellh.ghostty",
+      ].includes(path),
+    );
     watchMock.mockReturnValue(undefined);
     getAllWindows.mockReturnValue([]);
   });
@@ -255,6 +260,17 @@ describe("registerGhosttyConfigIpc", () => {
       "/Users/test/.config/ghostty",
       "/Users/test/Library/Application Support/com.mitchellh.ghostty",
     ]);
+  });
+
+  it("silently skips config directories that do not exist", () => {
+    existsSyncMock.mockReturnValue(false);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    registerGhosttyConfigIpc();
+
+    expect(watchMock).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 
   it("logs a warning and keeps watching the other directory when one fs.watch call throws", () => {

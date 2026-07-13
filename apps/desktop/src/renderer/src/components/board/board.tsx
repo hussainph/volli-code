@@ -124,7 +124,10 @@ export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPr
   // The whole derived pipeline is memoized: the board re-renders on every
   // drag-over event and on selection changes, and none of those should re-run
   // a filter pass plus five column sorts.
-  const visible = React.useMemo(() => filterTickets(tickets, filter), [tickets, filter]);
+  const visible = React.useMemo(
+    () => filterTickets(tickets, filter, ticketPrefix),
+    [tickets, filter, ticketPrefix],
+  );
   const groups = React.useMemo(() => groupTicketsByStatus(visible), [visible]);
   // One sort pass shared by BOTH views (the columns and the list sections
   // previously each re-sorted per render).
@@ -283,11 +286,11 @@ export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPr
               // Row-shaped overlay sized to the active row by dnd-kit; a lifted
               // surface (bg + shadow) instead of the card's scale-up.
               <div className="cursor-grabbing overflow-hidden rounded-md bg-card shadow-lg shadow-black/40">
-                <TicketRowContent ticket={drag.ticket} />
+                <TicketRowContent ticket={drag.ticket} ticketPrefix={ticketPrefix} />
               </div>
             ) : (
               <div className="scale-[1.03] cursor-grabbing rounded-lg shadow-lg shadow-black/40">
-                <TicketCardContent ticket={drag.ticket} />
+                <TicketCardContent ticket={drag.ticket} ticketPrefix={ticketPrefix} />
               </div>
             )
           ) : null}

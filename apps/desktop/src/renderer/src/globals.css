@@ -143,3 +143,25 @@
 .app-region-no-drag {
   -webkit-app-region: no-drag;
 }
+
+/* A quiet first-run field: neutral on purpose, so the ember accent remains
+ * reserved for the single action. The dot layer is static and fades before the
+ * canvas edge; it adds depth without turning the empty state into onboarding. */
+.empty-projects-canvas {
+  background-image: radial-gradient(
+    ellipse 72% 58% at 50% 48%,
+    rgb(255 255 255 / 0.028),
+    transparent 76%
+  );
+}
+
+.empty-projects-canvas::before {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  content: "";
+  background-image: radial-gradient(rgb(255 255 255 / 0.1) 0.65px, transparent 0.8px);
+  background-position: center;
+  background-size: 24px 24px;
+  mask-image: radial-gradient(ellipse 76% 62% at 50% 48%, black 0%, transparent 78%);
+}

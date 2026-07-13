@@ -3,6 +3,7 @@ import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import {
+  displayTicketId,
   TICKET_STATUS_LABELS,
   TICKET_STATUSES,
   type Ticket,
@@ -14,19 +15,28 @@ import { PriorityIndicator } from "@renderer/components/board/priority-indicator
 import { TagChip } from "@renderer/components/board/tag-chip";
 import { SortableTicketShell } from "@renderer/components/board/ticket-card";
 import { useTicketComposer } from "@renderer/components/board/use-ticket-composer";
+import { resolveLabelColor } from "@renderer/lib/labels";
 import { cn } from "@renderer/lib/utils";
+import { useBoardStore } from "@renderer/stores/board";
 
 /**
  * Pure presentational row — also rendered inside the drag overlay (unselected
  * there), mirroring how `TicketCardContent` doubles as the card overlay body.
+ * `ticketPrefix` comes from the board (constant for the whole board tree) —
+ * see `displayTicketId`.
  */
 export function TicketRowContent({
   ticket,
+  ticketPrefix,
   selected = false,
 }: {
   ticket: Ticket;
+  ticketPrefix: string;
   selected?: boolean;
 }) {
+  const displayId = displayTicketId(ticketPrefix, ticket.ticketNumber);
+  const projectLabels = useBoardStore((state) => state.labelsByProject[ticket.projectId]);
+
   return (
     <div
       className={cn(
@@ -35,12 +45,12 @@ export function TicketRowContent({
       )}
     >
       <PriorityIndicator priority={ticket.priority} />
-      <span className="w-14 shrink-0 font-mono text-[11px] text-muted-foreground">{ticket.id}</span>
+      <span className="w-14 shrink-0 font-mono text-[11px] text-muted-foreground">{displayId}</span>
       <span className="truncate text-sm text-foreground">{ticket.title}</span>
-      {ticket.tags.length > 0 ? (
+      {ticket.labels.length > 0 ? (
         <div className="ml-auto hidden shrink-0 items-center gap-1 sm:flex">
-          {ticket.tags.map((tag) => (
-            <TagChip key={tag} tag={tag} />
+          {ticket.labels.map((label) => (
+            <TagChip key={label} tag={label} color={resolveLabelColor(projectLabels, label)} />
           ))}
         </div>
       ) : null}
@@ -56,22 +66,28 @@ export function TicketRowContent({
 const SortableTicketRow = React.memo(function SortableTicketRow({
   ticket,
   projectId,
+  ticketPrefix,
   selected,
   onSelect,
 }: {
   ticket: Ticket;
   projectId: string;
+  ticketPrefix: string;
   selected: boolean;
   onSelect(ticketId: string): void;
 }) {
+  // The e2e-facing handle mirrors what's visible on screen — the DISPLAY id,
+  // not the drag/sort identity (still the opaque `ticket.id` UUID, unchanged
+  // below).
+  const displayId = displayTicketId(ticketPrefix, ticket.ticketNumber);
   return (
     <SortableTicketShell
       ticket={ticket}
       projectId={projectId}
       onSelect={onSelect}
-      dataAttributes={{ "data-ticket-row": "true", "data-ticket-id": ticket.id }}
+      dataAttributes={{ "data-ticket-row": "true", "data-ticket-id": displayId }}
     >
-      <TicketRowContent ticket={ticket} selected={selected} />
+      <TicketRowContent ticket={ticket} ticketPrefix={ticketPrefix} selected={selected} />
     </SortableTicketShell>
   );
 });
@@ -120,13 +136,14 @@ function ListSection({
               key={ticket.id}
               ticket={ticket}
               projectId={projectId}
+              ticketPrefix={ticketPrefix}
               selected={ticket.id === selectedId}
               onSelect={onSelect}
             />
           ))}
         </div>
       </SortableContext>
-      <SectionComposer projectId={projectId} ticketPrefix={ticketPrefix} status={status} />
+      <SectionComposer projectId={projectId} status={status} />
     </section>
   );
 }
@@ -138,16 +155,8 @@ function ListSection({
  * switching views never costs ticket creation. Only the wrapper markup is its
  * own.
  */
-function SectionComposer({
-  projectId,
-  ticketPrefix,
-  status,
-}: {
-  projectId: string;
-  ticketPrefix: string;
-  status: TicketStatus;
-}) {
-  const composer = useTicketComposer({ projectId, ticketPrefix, status });
+function SectionComposer({ projectId, status }: { projectId: string; status: TicketStatus }) {
+  const composer = useTicketComposer({ projectId, status });
 
   if (!composer.open) {
     return (
@@ -205,6 +214,7 @@ function EmptyDropRow({ status }: { status: TicketStatus }) {
 
 interface BoardListViewProps {
   projectId: string;
+  /** The board's owning project's ticket prefix — constant for the whole board tree. */
   ticketPrefix: string;
   /** Grouped AND per-column sorted by the board (one sort pass shared with the columns view). */
   groups: Record<TicketStatus, Ticket[]>;

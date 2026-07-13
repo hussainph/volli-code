@@ -1,13 +1,7 @@
 import { describe, it, expect } from "vite-plus/test";
-import { createTicket } from "./ticket";
+import { createTicket, displayTicketId } from "./ticket";
 import type { Ticket, TicketStatus } from "./ticket";
-import {
-  groupTicketsByStatus,
-  moveTicket,
-  emptyStatuses,
-  nextTicketNumber,
-  setTicketPriority,
-} from "./board";
+import { groupTicketsByStatus, moveTicket, emptyStatuses, setTicketPriority } from "./board";
 
 function ticket(overrides: {
   ticketNumber: number;
@@ -16,7 +10,7 @@ function ticket(overrides: {
   updatedAt?: number;
 }): Ticket {
   return createTicket({
-    prefix: "VC",
+    id: displayTicketId("VC", overrides.ticketNumber),
     projectId: "proj-1",
     ticketNumber: overrides.ticketNumber,
     title: `Ticket ${overrides.ticketNumber}`,
@@ -162,18 +156,6 @@ describe("emptyStatuses", () => {
       ticket({ ticketNumber: i + 1, status: status as TicketStatus, order: 0 }),
     );
     expect(emptyStatuses(tickets)).toEqual([]);
-  });
-});
-
-describe("nextTicketNumber", () => {
-  it("returns 1 when there are no tickets", () => {
-    expect(nextTicketNumber([])).toBe(1);
-  });
-
-  it("returns one greater than the highest ticket number", () => {
-    const a = ticket({ ticketNumber: 3, status: "todo", order: 0 });
-    const b = ticket({ ticketNumber: 7, status: "done", order: 0 });
-    expect(nextTicketNumber([a, b])).toBe(8);
   });
 });
 

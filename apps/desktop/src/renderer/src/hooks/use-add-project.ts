@@ -16,7 +16,8 @@ export function useAddProject(): () => Promise<void> {
   return React.useCallback(async () => {
     try {
       const result = await window.api.projects.pickFolder();
-      if (!result.canceled) addProject({ path: result.path, defaultName: result.defaultName });
+      if (!result.canceled)
+        await addProject({ path: result.path, defaultName: result.defaultName });
     } catch (error) {
       toast.error(`Could not open folder picker: ${errorMessage(error)}`);
     }

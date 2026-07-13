@@ -15,6 +15,8 @@
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
+import { appStateStorage } from "@renderer/lib/app-state-storage";
+
 export const SIDEBAR_DEFAULT_WIDTH = 318;
 export const SIDEBAR_MIN_WIDTH = 280;
 export const SIDEBAR_MAX_WIDTH = 640;
@@ -87,7 +89,15 @@ interface UiState {
 
 type PersistedUiState = Pick<UiState, "sidebarWidth" | "uiScale">;
 
-/** Factory so tests can supply an in-memory storage instead of localStorage. */
+/**
+ * Factory so tests can supply an in-memory storage instead of the real
+ * app_state bridge. `skipHydration` only applies to the real singleton (no
+ * `storage` injected): a real boot round-trips through main before the store
+ * can rehydrate (`lib/boot.ts` seeds the cache, then calls
+ * `useUiStore.persist.rehydrate()` explicitly), whereas an injected test
+ * storage is synchronous, so tests keep today's implicit-hydrate-on-create
+ * behavior.
+ */
 export function createUiStore(storage?: StateStorage) {
   return create<UiState>()(
     persist(
@@ -105,7 +115,8 @@ export function createUiStore(storage?: StateStorage) {
       {
         name: "volli:ui",
         version: 1,
-        storage: createJSONStorage(() => storage ?? localStorage),
+        storage: createJSONStorage(() => storage ?? appStateStorage),
+        skipHydration: storage === undefined,
         // A missing `uiScale` key (pre-zoom persisted state) just defaults to 1.
         partialize: (state): PersistedUiState => ({
           sidebarWidth: state.sidebarWidth,

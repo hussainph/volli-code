@@ -1,20 +1,40 @@
 /**
- * End-to-end acceptance smoke for Volli's kanban board. Drives the REAL
- * packaged renderer through Playwright: seeds one project's demo tickets via
- * isolated localStorage, then exercises the board UI a user would touch — columns,
- * the collapsed-column rail, search, the priority facet, cross-column and
- * pill drag-and-drop, reload persistence, adding a card, and non-destructive
- * context-menu actions. Later checks (13+) cover the board's second-generation
- * surfaces: the Ordering dropdown, the board/list view toggle (list-view add +
- * drag parity), the sidebar's Active Sessions link, the chrome-static UI
- * zoom (CSS `zoom` below the 40px chrome band, driven by a main-process IPC),
- * and the global New-ticket dialog (plain "c" hotkey, the chrome search
- * input's text-entry guard, and the board header's "New ticket" button).
+ * End-to-end acceptance smoke for Volli's kanban board — reworked for the
+ * SQLite persistence migration (docs/CONCEPT.md decision #29). Drives the REAL
+ * packaged renderer through Playwright against a scratch SQLite database
+ * (`VOLLI_DB_PATH`, passed via the Electron process env), exercising the whole
+ * new boot/import/durability path a user would hit:
  *
- * Board state (`volli:board`, `volli:projects` in localStorage) is reset and
- * reseeded at startup, so reruns are deterministic — the 11-ticket demo seed
- * (`apps/desktop/src/renderer/src/lib/demo-tickets.ts`) always starts in the
- * same shape: Backlog 4, Todo 3, Doing 2, Needs Review 2, Done 0 (collapsed).
+ *   0. First-run empty state — assert the neutral textured project canvas has
+ *      one clear import action and no duplicate sidebar prompt.
+ *   A. First-boot legacy import — seed the OLD `volli:projects` localStorage
+ *      envelope + a junk `volli:board` key, reload, and assert the project is
+ *      imported into SQLite, the board starts EMPTY (the demo seed is gone),
+ *      and every `volli:*` localStorage key is cleared.
+ *   B. Fixture seeding through the preload bridge — resolve the imported
+ *      project via `window.api.data.bootstrap()`, create the 11 tickets of the
+ *      retired demo distribution via `window.api.tickets.create`, attach
+ *      labels to three via `tickets.setLabels`, then reload (the board store
+ *      hydrates at boot) and assert they render.
+ *   C. The board UI a user touches — collapsed-column rail, search, the
+ *      priority + label facets, cross-column and pill drag-and-drop, the
+ *      column composer, the non-destructive context menu, the Ordering
+ *      dropdown, the board/list view toggle (list-view add + drag parity),
+ *      the sidebar's Active Sessions, the chrome-static UI zoom (uiScale now
+ *      read back from SQLite `app_state`, not localStorage), and the global
+ *      New-ticket dialog ("c" hotkey, chrome-search guard, header button).
+ *   D. DURABILITY — capture the full board state, `electronApp.close()`, then
+ *      relaunch a fresh Electron process against the SAME `VOLLI_DB_PATH` and
+ *      assert the board survived (SQLite, not localStorage — the relaunch's
+ *      localStorage still has no `volli:*` keys).
+ *   E. Boot-failure path — launch once with `VOLLI_DB_PATH` under an
+ *      unwritable parent (a FILE) and assert the "Volli couldn't load its
+ *      data" panel renders.
+ *
+ * All domain data now lives in SQLite; there is no demo seed and no
+ * `volli:board` persistence. Display ids ("VC-5") are derived from the
+ * project prefix + a per-project ticket number; `data-ticket-id` attributes
+ * carry the display id, dnd internals use the opaque ticket UUID.
  *
  * This is a MANUALLY-RUN smoke (needs a display + the built app); it is NOT
  * wired into `vp test`.
@@ -48,8 +68,41 @@ const ELECTRON = join(
 const ownsScratch = process.env.VOLLI_SMOKE_DIR === undefined;
 const SCRATCH =
   process.env.VOLLI_SMOKE_DIR ?? (await fs.mkdtemp(join(os.tmpdir(), "volli-board-smoke-")));
+// Optional visual-review artifact for the zero-project state. Kept opt-in so
+// normal smoke runs stay artifact-free.
+const FIRST_RUN_CAPTURE_PATH = process.env.VOLLI_SMOKE_CAPTURE_FIRST_RUN;
 const USER_DATA_DIR = join(SCRATCH, "user-data");
+// The scratch SQLite database, handed to main via VOLLI_DB_PATH. Lives inside
+// the profile dir so `ownsScratch` cleanup removes it too. Survives a renderer
+// reload AND a full Electron relaunch — that persistence is what phase D tests.
+const DB_PATH = join(SCRATCH, "volli.db");
 await fs.mkdir(USER_DATA_DIR, { recursive: true });
+
+// ---- the 11-ticket fixture, recovered from the retired demo-tickets.ts -----
+//
+// Created in this order so the per-project ticket_number (COALESCE(MAX)+1)
+// assigns VC-1..VC-11 exactly as the old demo did: Backlog 4, Todo 3, Doing 2,
+// Needs Review 2, Done 0. Statuses/priorities/titles mirror the old DEMO seed.
+const FIXTURE_TICKETS = [
+  { title: "Design SQLite ticket schema", status: "backlog", priority: "low" }, // VC-1
+  { title: "Prototype worktree archive flow", status: "backlog", priority: "medium" }, // VC-2
+  { title: "Spike: volli CLI socket handshake", status: "backlog", priority: "high" }, // VC-3
+  { title: "Sketch board column drag affordance", status: "backlog", priority: "low" }, // VC-4
+  { title: "Wire native notifications for ticket moves", status: "todo", priority: "medium" }, // VC-5
+  { title: "Harden terminal engine reconnect", status: "todo", priority: "high" }, // VC-6
+  { title: "Add opencode harness adapter", status: "todo", priority: "medium" }, // VC-7
+  { title: "Implement worktree-per-ticket boot", status: "doing", priority: "high" }, // VC-8
+  { title: "Fix ghostty config Cmd+Opt+arrow nav", status: "doing", priority: "medium" }, // VC-9
+  { title: "Polish board card hover states", status: "needs_review", priority: "low" }, // VC-10
+  { title: "Restty GPU device-loss recovery", status: "needs_review", priority: "high" }, // VC-11
+];
+// Labels on three tickets (mirroring the old demo tags). "board" lands on VC-1
+// only, giving the label facet a single-card narrow to assert on.
+const FIXTURE_LABELS = {
+  "Design SQLite ticket schema": ["board", "infra"], // VC-1
+  "Harden terminal engine reconnect": ["terminal", "bug"], // VC-6
+  "Implement worktree-per-ticket boot": ["agent", "infra"], // VC-8
+};
 
 // ---- tiny test harness -----------------------------------------------------
 
@@ -72,6 +125,22 @@ async function attempt(n, label, fn) {
   }
 }
 
+// ---- launch ----------------------------------------------------------------
+
+/**
+ * Launch the built app with `VOLLI_DB_PATH` (and the isolated user-data dir)
+ * injected via the Electron process env — merged over `process.env` so the
+ * child keeps PATH etc. Returns the ElectronApplication; callers grab
+ * `firstWindow()` themselves.
+ */
+function launch(dbPath) {
+  return _electron.launch({
+    executablePath: ELECTRON,
+    args: [APP_DIR, `--user-data-dir=${USER_DATA_DIR}`],
+    env: { ...process.env, VOLLI_DB_PATH: dbPath },
+  });
+}
+
 // ---- board DOM helpers ------------------------------------------------------
 
 /** A locator for the single `<article>` whose mono id span equals `id` exactly. */
@@ -87,7 +156,7 @@ function cardById(page, id) {
  * straight from the DOM. Returns null while `label` is a collapsed rail pill
  * instead of a real column — a column body and its pill are never both
  * mounted (see board-dnd.ts's id-scheme comment), so this only matches the
- * expanded-column header row.
+ * expanded-column header row (works in both board and list views).
  */
 async function columnCount(page, label) {
   return page.evaluate((columnLabel) => {
@@ -103,14 +172,43 @@ async function columnCount(page, label) {
   }, label);
 }
 
-/** Expanded status labels, left to right. Collapsed rail pills return null from columnCount. */
-async function expandedStatuses(page) {
-  const labels = ["Backlog", "Todo", "Doing", "Needs Review", "Done"];
-  const expanded = [];
-  for (const label of labels) {
-    if ((await columnCount(page, label)) !== null) expanded.push(label);
-  }
-  return expanded;
+/**
+ * The ordered display ids under each expanded board-view column, keyed by
+ * status label (null for a collapsed pill). The full board fingerprint the
+ * durability check captures before close and re-reads after relaunch.
+ */
+async function boardStateByColumn(page) {
+  return page.evaluate(() => {
+    const labels = ["Backlog", "Todo", "Doing", "Needs Review", "Done"];
+    const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2"));
+    const state = {};
+    for (const label of labels) {
+      const header = headers.find((div) => {
+        const first = div.children[0];
+        return first?.tagName === "SPAN" && first.textContent === label;
+      });
+      if (!header) {
+        state[label] = null; // collapsed pill
+        continue;
+      }
+      state[label] = Array.from(
+        header.parentElement?.querySelectorAll("article span.font-mono") ?? [],
+      ).map((span) => span.textContent?.trim());
+    }
+    return state;
+  });
+}
+
+/** Every `volli:*` key currently in the page's localStorage (should be empty post-boot). */
+async function volliLocalStorageKeys(page) {
+  return page.evaluate(() => {
+    const keys = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key !== null && key.startsWith("volli:")) keys.push(key);
+    }
+    return keys;
+  });
 }
 
 /** Drag from `sourceBox`'s centre to `target`, with enough travel for dnd-kit's PointerSensor (distance 4) to activate and dragOver to fire on the target. */
@@ -187,10 +285,7 @@ async function sidebarSessionIds(page) {
 // ---- main ------------------------------------------------------------------
 
 async function main() {
-  const app = await _electron.launch({
-    executablePath: ELECTRON,
-    args: [APP_DIR, `--user-data-dir=${USER_DATA_DIR}`],
-  });
+  let app = await launch(DB_PATH);
 
   try {
     const actualUserDataDir = await app.evaluate(({ app: electronApp }) =>
@@ -204,11 +299,56 @@ async function main() {
       throw new Error(`smoke profile is not isolated: expected ${expected}, got ${actual}`);
     }
 
-    const page = await app.firstWindow();
+    let page = await app.firstWindow();
     await page.waitForLoadState("domcontentloaded");
+    await sleep(1000);
 
-    // Seed one project + a fresh (unseeded) board, then reload so the demo
-    // tickets regenerate from a clean boot — deterministic on every rerun.
+    if (FIRST_RUN_CAPTURE_PATH) await page.screenshot({ path: FIRST_RUN_CAPTURE_PATH });
+
+    // ===================================================================
+    // PHASE 0 — first-run empty project canvas
+    // ===================================================================
+    await attempt(
+      0,
+      "Fresh profile: one textured project-start canvas with a display heading and text-only action",
+      async () => {
+        const state = page.locator("[data-empty-projects-state]");
+        const primaryAction = page.getByRole("button", { name: "Add Project…", exact: true });
+        const heading = page.getByRole("heading", { name: "Add your first project", exact: true });
+        const oldSidebarPrompt = page.getByText("Add a project to get started", { exact: true });
+        const oldSidebarHeader = page.getByText("No project selected", { exact: true });
+        const texture = await state.evaluate((element) => {
+          const canvas = getComputedStyle(element).backgroundImage;
+          const dots = getComputedStyle(element, "::before").backgroundImage;
+          return { canvas, dots };
+        });
+        const headingSize = await heading.evaluate((element) =>
+          Number.parseFloat(getComputedStyle(element).fontSize),
+        );
+
+        const ok =
+          (await state.count()) === 1 &&
+          (await primaryAction.count()) === 1 &&
+          (await primaryAction.locator("svg").count()) === 0 &&
+          headingSize >= 32 &&
+          (await oldSidebarPrompt.count()) === 0 &&
+          (await oldSidebarHeader.count()) === 0 &&
+          texture.canvas !== "none" &&
+          texture.dots !== "none";
+        return {
+          ok,
+          detail: `state=${await state.count()} primaryAction=${await primaryAction.count()} actionIcons=${await primaryAction.locator("svg").count()} headingSize=${headingSize}px oldPrompt=${await oldSidebarPrompt.count()} oldHeader=${await oldSidebarHeader.count()} texture=${JSON.stringify(texture)}`,
+        };
+      },
+    );
+
+    // ===================================================================
+    // PHASE A — first-boot legacy import (localStorage → SQLite)
+    // ===================================================================
+    // Seed the OLD zustand `volli:projects` envelope exactly as the pre-SQLite
+    // app persisted it (a readable project id — the import PRESERVES it), plus
+    // a junk `volli:board` key (decision #29 discards the demo board). Then
+    // reload so boot()'s first-run import fires against the empty scratch DB.
     await page.evaluate((repo) => {
       localStorage.setItem(
         "volli:projects",
@@ -220,6 +360,7 @@ async function main() {
                 name: "Volli Code",
                 path: repo,
                 ticketPrefix: "VC",
+                colorIndex: 0,
                 createdAt: Date.now(),
               },
             ],
@@ -228,33 +369,110 @@ async function main() {
           version: 1,
         }),
       );
-      localStorage.removeItem("volli:board");
+      localStorage.setItem("volli:board", '{"state":{"junk":true},"version":1}');
     }, REPO);
     await page.reload();
     await page.waitForLoadState("domcontentloaded");
     await sleep(1500);
     await goToBoard(page);
 
-    // === 1. All 5 status labels present (expanded columns or collapsed rail) ===
-    await attempt(1, "Board renders: all 5 status labels present", async () => {
-      const labels = ["Backlog", "Todo", "Doing", "Needs Review", "Done"];
-      const counts = {};
-      for (const label of labels) {
-        counts[label] = await page.getByText(label, { exact: true }).count();
-      }
-      const ok = labels.every((label) => counts[label] >= 1);
-      return { ok, detail: JSON.stringify(counts) };
-    });
+    // === 1. First boot imports the project; board starts EMPTY; storage cleared
+    await attempt(
+      1,
+      "First-boot import: project in rail, board EMPTY (demo gone), volli:* localStorage cleared",
+      async () => {
+        const projectName = await page.getByText("Volli Code", { exact: true }).count();
+        const statusLabels = ["Backlog", "Todo", "Doing", "Needs Review", "Done"];
+        const labelsPresent = {};
+        for (const label of statusLabels) {
+          labelsPresent[label] = await page.getByText(label, { exact: true }).count();
+        }
+        const cardCount = await page.locator("article").count();
+        const emptyCaption = await page.getByText("Empty", { exact: true }).count();
+        const volliKeys = await volliLocalStorageKeys(page);
+        const ok =
+          projectName >= 1 &&
+          statusLabels.every((label) => labelsPresent[label] >= 1) &&
+          cardCount === 0 &&
+          emptyCaption >= 1 &&
+          volliKeys.length === 0;
+        return {
+          ok,
+          detail: `project=${projectName} cards=${cardCount} empty=${emptyCaption} volliKeys=${JSON.stringify(volliKeys)} labels=${JSON.stringify(labelsPresent)}`,
+        };
+      },
+    );
 
-    // === 2. Demo seed: 11 cards, VC-1 present with its known title ===========
-    await attempt(2, "Demo seed: 11 cards; VC-1 shows mono id + title", async () => {
-      const count = await page.locator("article").count();
-      const vc1 = cardById(page, "VC-1");
-      const vc1Count = await vc1.count();
-      const title = vc1Count === 1 ? (await vc1.locator("p").first().textContent())?.trim() : null;
-      const ok = count === 11 && vc1Count === 1 && title === "Design SQLite ticket schema";
-      return { ok, detail: `count=${count} vc1Count=${vc1Count} title=${JSON.stringify(title)}` };
-    });
+    // ===================================================================
+    // PHASE B — seed the 11-ticket fixture through the preload bridge
+    // ===================================================================
+    // Resolve the imported project via bootstrap, create the fixture in order
+    // (so ticket_number → VC-1..VC-11), attach labels to three, then reload so
+    // the hydrate-at-boot board store picks them up.
+    await attempt(
+      2,
+      "Bridge seed + reload: 11 cards render; VC-1 shows mono id + title; column counts match demo",
+      async () => {
+        const seedResult = await page.evaluate(
+          async ({ tickets, labels }) => {
+            const boot = await window.api.data.bootstrap();
+            if (!boot.ok) return { ok: false, error: `bootstrap: ${boot.error}` };
+            const project = boot.data.projects[0];
+            if (!project) return { ok: false, error: "no project after import" };
+            const idByTitle = {};
+            for (const t of tickets) {
+              const res = await window.api.tickets.create({
+                projectId: project.id,
+                status: t.status,
+                title: t.title,
+                priority: t.priority,
+              });
+              if (!res.ok) return { ok: false, error: `create ${t.title}: ${res.error}` };
+              idByTitle[t.title] = res.ticket.id;
+            }
+            for (const [title, names] of Object.entries(labels)) {
+              const res = await window.api.tickets.setLabels({
+                ticketId: idByTitle[title],
+                labels: names,
+              });
+              if (!res.ok) return { ok: false, error: `setLabels ${title}: ${res.error}` };
+            }
+            return { ok: true, projectId: project.id, created: Object.keys(idByTitle).length };
+          },
+          { tickets: FIXTURE_TICKETS, labels: FIXTURE_LABELS },
+        );
+        if (!seedResult.ok) throw new Error(seedResult.error);
+
+        await page.reload();
+        await page.waitForLoadState("domcontentloaded");
+        await sleep(1500);
+        await goToBoard(page);
+
+        const count = await page.locator("article").count();
+        const vc1 = cardById(page, "VC-1");
+        const vc1Count = await vc1.count();
+        const title =
+          vc1Count === 1 ? (await vc1.locator("p").first().textContent())?.trim() : null;
+        const counts = {
+          backlog: await columnCount(page, "Backlog"),
+          todo: await columnCount(page, "Todo"),
+          doing: await columnCount(page, "Doing"),
+          needsReview: await columnCount(page, "Needs Review"),
+        };
+        const ok =
+          count === 11 &&
+          vc1Count === 1 &&
+          title === "Design SQLite ticket schema" &&
+          counts.backlog === 4 &&
+          counts.todo === 3 &&
+          counts.doing === 2 &&
+          counts.needsReview === 2;
+        return {
+          ok,
+          detail: `seeded=${seedResult.created} count=${count} vc1=${JSON.stringify(title)} counts=${JSON.stringify(counts)}`,
+        };
+      },
+    );
 
     // === 3. Collapsed rail: Empty caption + Done starts as a pill ============
     await attempt(
@@ -292,32 +510,8 @@ async function main() {
       },
     );
 
-    // === 5. Filtered drag freezes the visible column topology ================
-    await attempt(
-      5,
-      "Filtered drag: starting a drag does not expand filtered-empty columns",
-      async () => {
-        const search = page.getByPlaceholder("Search tickets…");
-        await search.fill("Design SQLite ticket schema");
-        await sleep(300);
-        const before = await expandedStatuses(page);
-        const cardBox = await page.locator("article").first().boundingBox();
-        if (!cardBox) throw new Error("filtered card not found");
-        await page.mouse.move(cardBox.x + cardBox.width / 2, cardBox.y + cardBox.height / 2);
-        await page.mouse.down();
-        await page.mouse.move(cardBox.x + cardBox.width / 2 + 30, cardBox.y + 20, { steps: 8 });
-        await sleep(250);
-        const during = await expandedStatuses(page);
-        await page.mouse.up();
-        await search.fill("");
-        await sleep(300);
-        const ok = JSON.stringify(during) === JSON.stringify(before);
-        return { ok, detail: `before=${JSON.stringify(before)} during=${JSON.stringify(during)}` };
-      },
-    );
-
-    // === 6. Search filter: "ghostty" narrows to 1, clearing restores 11 =====
-    await attempt(6, 'Search "ghostty" narrows to 1 card, clearing restores 11', async () => {
+    // === 5. Search filter: "ghostty" narrows to 1, clearing restores 11 =====
+    await attempt(5, 'Search "ghostty" narrows to 1 card, clearing restores 11', async () => {
       const search = page.getByPlaceholder("Search tickets…");
       await search.click();
       await search.fill("ghostty");
@@ -330,9 +524,9 @@ async function main() {
       return { ok, detail: `filtered=${filtered} restored=${restored}` };
     });
 
-    // === 7. Priority facet: toggling High narrows, toggling off restores ====
+    // === 6. Priority facet: toggling High narrows, toggling off restores ====
     await attempt(
-      7,
+      6,
       'Priority chip: toggling "High" narrows the board, toggling off restores',
       async () => {
         await page.getByRole("button", { name: "Priority", exact: true }).click();
@@ -348,6 +542,26 @@ async function main() {
         await sleep(400);
         const restored = await page.locator("article").count();
         const ok = filtered >= 1 && filtered < 11 && restored === 11;
+        return { ok, detail: `filtered=${filtered} restored=${restored}` };
+      },
+    );
+
+    // === 7. Label facet: toggling a seeded label narrows, toggling off restores
+    await attempt(
+      7,
+      'Label chip: toggling "board" narrows to its 1 card, toggling off restores 11',
+      async () => {
+        await page.getByRole("button", { name: "Label", exact: true }).click();
+        await sleep(200);
+        const boardLabel = page.getByRole("menuitemcheckbox", { name: "board", exact: true });
+        await boardLabel.click();
+        await sleep(400);
+        const filtered = await page.locator("article").count();
+        await boardLabel.click();
+        await page.keyboard.press("Escape");
+        await sleep(400);
+        const restored = await page.locator("article").count();
+        const ok = filtered === 1 && restored === 11;
         return { ok, detail: `filtered=${filtered} restored=${restored}` };
       },
     );
@@ -397,22 +611,10 @@ async function main() {
       },
     );
 
-    // === 10. Persistence: reload and confirm the moves survived ==============
-    await attempt(10, "Persistence: reload keeps the Doing/Done moves", async () => {
-      await page.reload();
-      await page.waitForLoadState("domcontentloaded");
-      await sleep(1500);
-      await goToBoard(page);
-      const doing = await columnCount(page, "Doing");
-      const done = await columnCount(page, "Done");
-      const ok = doing === 3 && done === 1;
-      return { ok, detail: `doing=${doing} done=${done}` };
-    });
-
-    // === 11. Add-card: Backlog's "+ New" composer creates VC-12 ==============
+    // === 10. Add-card: Backlog's "+ New" composer creates VC-12 =============
     await attempt(
-      11,
-      '"+ New" composer: Enter submits a card, Escape closes it, VC-12 appears',
+      10,
+      '"+ New" composer: Enter submits a card, Escape closes it, VC-12 appears (numbering continues)',
       async () => {
         const before = await page.locator("article").count();
         await page.getByRole("button", { name: "New", exact: true }).first().click();
@@ -430,8 +632,8 @@ async function main() {
       },
     );
 
-    // === 12. Context menu has no destructive board-level action ==============
-    await attempt(12, "Context menu: ticket actions are non-destructive", async () => {
+    // === 11. Context menu has no destructive board-level action =============
+    await attempt(11, "Context menu: ticket actions are non-destructive", async () => {
       const vc12 = cardById(page, "VC-12");
       await vc12.click({ button: "right" });
       await sleep(300);
@@ -443,20 +645,20 @@ async function main() {
       return { ok, detail: `moveTo=${moveTo} priority=${priority} delete=${destructive}` };
     });
 
-    // Board state entering the second-generation surface checks (verified from
-    // the run above): Backlog 3 [VC-3, VC-4, VC-12], Todo 3 [VC-5, VC-6, VC-7],
-    // Doing 3, Needs Review 2, Done 1 — 12 tickets. Todo is untouched by every
-    // drag so far, so its manual order is still the seed order (VC-5, VC-6,
-    // VC-7) and VC-6 ("Harden terminal engine reconnect") is its lone High.
+    // Board state entering the second-generation surface checks: Backlog 3
+    // [VC-3, VC-4, VC-12], Todo 3 [VC-5, VC-6, VC-7], Doing 3, Needs Review 2,
+    // Done 1 — 12 tickets. Todo is untouched by every drag so far, so its
+    // manual order is still the seed order (VC-5, VC-6, VC-7) and VC-6 ("Harden
+    // terminal engine reconnect") is its lone High.
 
     // The Ordering chip lives in the header's right-side cluster (`ml-auto`);
     // scoping to it disambiguates from the FilterBar's "Priority" facet button,
     // which shares the chip's label once Priority ordering is picked.
     const orderingChip = page.locator("div.ml-auto.shrink-0 button").first();
 
-    // === 13. Ordering: Priority re-sorts a column, Manual restores it ========
+    // === 12. Ordering: Priority re-sorts a column, Manual restores it =======
     await attempt(
-      13,
+      12,
       'Ordering dropdown: "Priority" floats Todo\'s High card up; "Manual" restores seed order',
       async () => {
         const manualFirst = await firstCardIdInColumn(page, "Todo");
@@ -478,9 +680,9 @@ async function main() {
       },
     );
 
-    // === 14. View toggle: List view renders status sections + id rows ========
+    // === 13. View toggle: List view renders status sections + id rows =======
     await attempt(
-      14,
+      13,
       "List view: section headers carry correct counts and tickets render as rows",
       async () => {
         await page.getByRole("button", { name: "List view", exact: true }).click();
@@ -512,9 +714,9 @@ async function main() {
       },
     );
 
-    // === 15. List-view add: a section composer creates a row ==================
+    // === 14. List-view add: a section composer creates a row ================
     await attempt(
-      15,
+      14,
       'List view "+ New": Enter submits VC-13 as a row, Escape closes the composer',
       async () => {
         const before = await page.locator("[data-ticket-row]").count();
@@ -536,9 +738,9 @@ async function main() {
       },
     );
 
-    // === 16. List-view drag: a row crosses sections and the move persists =====
+    // === 15. List-view drag: a row crosses sections and the move persists ====
     await attempt(
-      16,
+      15,
       "List view drag: dragging VC-5 from Todo into Backlog moves it and survives reload",
       async () => {
         const beforeTodo = await columnCount(page, "Todo");
@@ -554,10 +756,9 @@ async function main() {
         });
         const afterTodo = await columnCount(page, "Todo");
         const afterBacklog = await columnCount(page, "Backlog");
-        // Persist: the ticket move lives in the persisted board store, AND the
-        // list view itself survives the reload (volli:workspace persists
-        // view+sort per project) — assert both, then switch back to Board view
-        // for the checks that follow.
+        // Persist: the ticket move lives in SQLite, AND the list view itself
+        // survives the reload (boardView persists per project via app_state) —
+        // assert both, then switch back to Board view for the checks that follow.
         await page.reload();
         await page.waitForLoadState("domcontentloaded");
         await sleep(1500);
@@ -587,9 +788,9 @@ async function main() {
       },
     );
 
-    // === 17. Sidebar Active Sessions link jumps to the board with selection ===
+    // === 16. Sidebar Active Sessions link jumps to the board with selection ==
     await attempt(
-      17,
+      16,
       "Sidebar Active Sessions lists doing+needs_review ids; clicking one selects its card",
       async () => {
         const ids = await sidebarSessionIds(page);
@@ -615,10 +816,12 @@ async function main() {
       },
     );
 
-    // === 18. Chrome-static UI zoom: content scales, the chrome band doesn't ===
+    // === 17. Chrome-static UI zoom: content scales, the chrome band doesn't ==
+    // uiScale now persists to SQLite's app_state (not localStorage) — read it
+    // back through the bootstrap payload, per the migration.
     await attempt(
-      18,
-      "UI zoom command scales content (~1.1x) while the 40px chrome band stays put; reset restores",
+      17,
+      "UI zoom command scales content (~1.1x) while the 40px chrome band stays put; uiScale persists to app_state",
       async () => {
         const band = page.locator(".app-region-drag").first();
         const content = cardById(page, "VC-8");
@@ -629,12 +832,19 @@ async function main() {
         await app.evaluate(({ BrowserWindow }) =>
           BrowserWindow.getAllWindows()[0].webContents.send("volli:ui-zoom-command", "in"),
         );
-        await sleep(400);
+        await sleep(500);
         const bandZoomed = await band.boundingBox();
         const contentZoomed = await content.boundingBox();
-        const persistedScale = await page.evaluate(() => {
-          const raw = localStorage.getItem("volli:ui");
-          return raw ? JSON.parse(raw).state?.uiScale : null;
+        const persistedScale = await page.evaluate(async () => {
+          const res = await window.api.data.bootstrap();
+          if (!res.ok) return null;
+          const raw = res.data.appState["volli:ui"];
+          if (!raw) return null;
+          try {
+            return JSON.parse(raw).state?.uiScale ?? null;
+          } catch {
+            return null;
+          }
         });
 
         await app.evaluate(({ BrowserWindow }) =>
@@ -662,10 +872,10 @@ async function main() {
       },
     );
 
-    // === 19. Global create: plain "c" opens the New-ticket dialog; Enter creates a card ===
+    // === 18. Global create: plain "c" opens the New-ticket dialog; Enter creates
     await attempt(
-      19,
-      'Plain "c" hotkey opens the New-ticket dialog; typing a title + Enter creates a card and closes it',
+      18,
+      'Plain "c" hotkey opens the New-ticket dialog; typing a title + Enter creates VC-14 and closes it',
       async () => {
         // Click neutral static text (the "Board" heading) so focus lands
         // somewhere that is definitely not a text-entry target, matching how
@@ -680,17 +890,18 @@ async function main() {
         await sleep(400);
         const dialogClosedCount = await page.getByRole("dialog").count();
         const cardVisible = (await page.getByText(title, { exact: true }).count()) >= 1;
-        const ok = dialogOpenCount === 1 && dialogClosedCount === 0 && cardVisible;
+        const vc14 = await cardById(page, "VC-14").count();
+        const ok = dialogOpenCount === 1 && dialogClosedCount === 0 && cardVisible && vc14 === 1;
         return {
           ok,
-          detail: `dialogOpen=${dialogOpenCount} dialogClosedAfter=${dialogClosedCount} cardVisible=${cardVisible}`,
+          detail: `dialogOpen=${dialogOpenCount} dialogClosedAfter=${dialogClosedCount} cardVisible=${cardVisible} vc14=${vc14}`,
         };
       },
     );
 
-    // === 20. Guard: typing "c" into the chrome search input does not open the dialog ===
+    // === 19. Guard: typing "c" into the chrome search input does not open the dialog
     await attempt(
-      20,
+      19,
       'Guard: "c" typed into the chrome search input does not open the New-ticket dialog',
       async () => {
         const search = page.getByPlaceholder("Search tickets…");
@@ -706,8 +917,8 @@ async function main() {
       },
     );
 
-    // === 21. Header "New ticket" button opens the dialog; Escape closes it ===
-    await attempt(21, '"New ticket" header button opens the dialog; Escape closes it', async () => {
+    // === 20. Header "New ticket" button opens the dialog; Escape closes it ===
+    await attempt(20, '"New ticket" header button opens the dialog; Escape closes it', async () => {
       await page.getByRole("button", { name: "New ticket", exact: true }).click();
       await sleep(200);
       const openCount = await page.getByRole("dialog").count();
@@ -717,9 +928,82 @@ async function main() {
       const ok = openCount === 1 && closedCount === 0;
       return { ok, detail: `open=${openCount} closedAfterEscape=${closedCount}` };
     });
+
+    // ===================================================================
+    // PHASE D — DURABILITY: the board survives a full Electron relaunch
+    // ===================================================================
+    // Capture the whole board fingerprint, close the ENTIRE app (not a renderer
+    // reload), relaunch a fresh Electron process against the same VOLLI_DB_PATH,
+    // and assert the board is byte-for-byte the same — proving it came from
+    // SQLite, not localStorage (which is asserted empty of volli:* keys too).
+    const preCloseState = await boardStateByColumn(page);
+    const preCloseTotal = Object.values(preCloseState).reduce(
+      (sum, ids) => sum + (ids?.length ?? 0),
+      0,
+    );
+
+    await app.close();
+    app = await launch(DB_PATH);
+    page = await app.firstWindow();
+    await page.waitForLoadState("domcontentloaded");
+    await sleep(1500);
+    await goToBoard(page);
+
+    await attempt(
+      21,
+      "Durability: full board state survives an Electron close+relaunch from SQLite; no volli:* localStorage",
+      async () => {
+        const postRelaunchState = await boardStateByColumn(page);
+        const postTotal = Object.values(postRelaunchState).reduce(
+          (sum, ids) => sum + (ids?.length ?? 0),
+          0,
+        );
+        const volliKeys = await volliLocalStorageKeys(page);
+        const stateSurvived =
+          JSON.stringify(preCloseState) === JSON.stringify(postRelaunchState) &&
+          preCloseTotal >= 14 &&
+          postTotal === preCloseTotal;
+        const ok = stateSurvived && volliKeys.length === 0;
+        return {
+          ok,
+          detail: `total=${preCloseTotal}->${postTotal} identical=${JSON.stringify(preCloseState) === JSON.stringify(postRelaunchState)} volliKeys=${JSON.stringify(volliKeys)}`,
+        };
+      },
+    );
   } finally {
     await app.close();
   }
+
+  // ===================================================================
+  // PHASE E — boot-failure panel on an unwritable VOLLI_DB_PATH
+  // ===================================================================
+  // Point the DB at a path whose PARENT is a regular file: main's
+  // mkdirSync(dirname) throws ENOTDIR, dbHandle is { ok:false }, bootstrap
+  // fails, and main.tsx renders the BootErrorPanel instead of the app.
+  await attempt(
+    22,
+    'Boot-failure: an unwritable VOLLI_DB_PATH renders the "Volli couldn\'t load its data" panel',
+    async () => {
+      const notADir = join(SCRATCH, "not-a-dir");
+      await fs.writeFile(notADir, "x"); // a FILE, so join(notADir, "volli.db")'s dirname is unwritable
+      const badApp = await launch(join(notADir, "volli.db"));
+      try {
+        const badPage = await badApp.firstWindow();
+        await badPage.waitForLoadState("domcontentloaded");
+        await sleep(1500);
+        const panel = await badPage
+          .getByText("Volli couldn't load its data", { exact: true })
+          .count();
+        const boardRendered = await badPage
+          .getByRole("heading", { name: "Board", exact: true })
+          .count();
+        const ok = panel === 1 && boardRendered === 0;
+        return { ok, detail: `panel=${panel} boardHeading=${boardRendered}` };
+      } finally {
+        await badApp.close();
+      }
+    },
+  );
 
   const failures = results.filter((r) => !r.ok);
   console.log(

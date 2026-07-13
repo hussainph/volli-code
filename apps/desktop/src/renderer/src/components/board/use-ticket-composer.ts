@@ -5,7 +5,6 @@ import { useBoardStore } from "@renderer/stores/board";
 
 interface TicketComposerOptions {
   projectId: string;
-  ticketPrefix: string;
   status: TicketStatus;
   initiallyOpen?: boolean;
   /** Fired whenever the composer closes (Escape or blur). */
@@ -20,7 +19,6 @@ interface TicketComposerOptions {
  */
 export function useTicketComposer({
   projectId,
-  ticketPrefix,
   status,
   initiallyOpen = false,
   onClose,
@@ -37,7 +35,9 @@ export function useTicketComposer({
   function submit(): boolean {
     const trimmed = title.trim();
     if (trimmed === "") return false;
-    useBoardStore.getState().addTicket(projectId, ticketPrefix, status, trimmed);
+    // Fire-and-forget: the store surfaces creation failures via toast; this
+    // composer only needs to know locally whether it had a title to submit.
+    void useBoardStore.getState().addTicket(projectId, status, trimmed);
     return true;
   }
 

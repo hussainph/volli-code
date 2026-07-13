@@ -125,8 +125,15 @@ function broadcastAppearance(deps: GhosttyConfigDeps): void {
  * missing directory (no ghostty installed, or only one of the two config
  * locations exists) must not crash startup, hence the try/catch.
  */
-function watchConfigDir(dir: string, filename: string, scheduleReload: () => void): void {
+function watchConfigDir(
+  dir: string,
+  filename: string,
+  scheduleReload: () => void,
+  deps: GhosttyConfigDeps,
+): void {
   try {
+    if (!deps.exists(dir)) return;
+
     fsWatch(dir, (_event, changedName) => {
       if (changedName === filename) scheduleReload();
     });
@@ -147,8 +154,8 @@ function watchForChanges(deps: GhosttyConfigDeps): void {
   };
 
   const { xdgDir, appSupportDir } = ghosttyDirs(deps);
-  watchConfigDir(`${xdgDir}/ghostty`, "config", scheduleReload);
-  watchConfigDir(appSupportDir, "config", scheduleReload);
+  watchConfigDir(`${xdgDir}/ghostty`, "config", scheduleReload, deps);
+  watchConfigDir(appSupportDir, "config", scheduleReload, deps);
 }
 
 /**

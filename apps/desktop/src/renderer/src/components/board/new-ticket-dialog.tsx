@@ -1,6 +1,7 @@
 import * as React from "react";
 import { toast } from "sonner";
 import {
+  displayTicketId,
   TICKET_PRIORITIES,
   TICKET_PRIORITY_LABELS,
   TICKET_STATUSES,
@@ -116,29 +117,37 @@ function NewTicketForm({ project }: { project: Project }) {
   const [title, setTitle] = React.useState("");
   const [status, setStatus] = React.useState<TicketStatus>("backlog");
   const [priority, setPriority] = React.useState<TicketPriority>("medium");
+  const [submitting, setSubmitting] = React.useState(false);
   const trimmedTitle = title.trim();
 
-  function submit() {
-    if (trimmedTitle === "") return;
-    const ticket = useBoardStore
+  async function submit() {
+    // `submitting` guards against a second Enter (key auto-repeat) or an
+    // Enter-then-click landing inside the pending create round-trip, which
+    // would otherwise create two identical tickets.
+    if (trimmedTitle === "" || submitting) return;
+    setSubmitting(true);
+    const ticket = await useBoardStore
       .getState()
-      .addTicket(project.id, project.ticketPrefix, status, title, { priority });
-    // ticket is only null when the trimmed title is empty, already ruled out
-    // above (and by the Create button's disabled state) — but toast only on
-    // an actual creation, not defensively.
-    if (ticket !== null) {
-      // This dialog is reachable from pages (Files/Sessions) where the board
-      // itself isn't on screen, so the toast is the only confirmation the
-      // user gets that the ticket was created.
-      toast.success(`${ticket.id} created`);
+      .addTicket(project.id, status, title, { priority });
+    if (ticket === null) {
+      // Creation failed (already toasted by the store) — keep the dialog open
+      // with the composed title/status/priority so the user can retry without
+      // retyping (Radix unmounts the form on close, discarding that state).
+      setSubmitting(false);
+      return;
     }
+    // This dialog is reachable from pages (Files/Sessions) where the board
+    // itself isn't on screen, so the toast is the only confirmation the user
+    // gets that the ticket was created. Closing unmounts the form, so no need
+    // to reset `submitting`.
+    toast.success(`${displayTicketId(project.ticketPrefix, ticket.ticketNumber)} created`);
     useUiStore.getState().setNewTicketOpen(false);
   }
 
   function handleTitleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
     if (event.key === "Enter") {
       event.preventDefault();
-      submit();
+      void submit();
     }
   }
 
@@ -163,7 +172,7 @@ function NewTicketForm({ project }: { project: Project }) {
         </div>
       </div>
       <DialogFooter>
-        <Button onClick={submit} disabled={trimmedTitle === ""}>
+        <Button onClick={() => void submit()} disabled={trimmedTitle === "" || submitting}>
           Create
         </Button>
       </DialogFooter>

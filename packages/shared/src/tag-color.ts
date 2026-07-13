@@ -1,12 +1,13 @@
 /**
- * Deterministic tag colors. Tags are ad-hoc strings (`Ticket.tags: string[]`,
- * see `ticket.ts`) with no stored color, so a color is derived from the tag
- * text itself — the same round-robin-palette idea as `projectColor` in
- * `project-identity.ts`, but hashed rather than round-robin since tags aren't
- * assigned in creation order.
+ * Deterministic tag colors, hashed from the tag text — the same
+ * round-robin-palette idea as `projectColor` in `project-identity.ts`, but
+ * hashed rather than round-robin since tags/labels aren't assigned in
+ * creation order.
  *
- * This is an interim scheme: once labels become first-class entities with a
- * stored color, that stored value should win and this module goes away.
+ * Labels (`Label` in `label.ts`) are first-class entities with an optional
+ * stored `color`; `null` means "derive by hash," and this module IS that
+ * default — see `labelColor` in `label.ts`, which this backs. A stored color
+ * always wins; this module doesn't go away, it's the fallback path.
  */
 
 /** Palette a tag color is hashed into. Order is data, not meaningful. */

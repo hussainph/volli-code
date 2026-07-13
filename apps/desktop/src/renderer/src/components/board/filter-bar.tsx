@@ -1,11 +1,10 @@
 import * as React from "react";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import {
-  distinctTags,
+  distinctLabels,
   HARNESS_IDS,
   HARNESS_LABELS,
   isFilterActive,
-  tagColor,
   TICKET_PRIORITIES,
   TICKET_PRIORITY_LABELS,
   type Ticket,
@@ -16,6 +15,7 @@ import {
 import { FilterChip } from "@renderer/components/board/filter-chip";
 import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
 import { Button } from "@renderer/components/ui/button";
+import { resolveLabelColor } from "@renderer/lib/labels";
 import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
 
@@ -47,20 +47,21 @@ interface FilterBarProps {
  * isFilterActive / clearFilter).
  */
 export function FilterBar({ projectId, tickets, filter, className }: FilterBarProps) {
-  const tagOptions = React.useMemo(
+  const projectLabels = useBoardStore((state) => state.labelsByProject[projectId]);
+  const labelOptions = React.useMemo(
     () =>
-      distinctTags(tickets).map((tag) => ({
-        value: tag,
-        label: tag,
+      distinctLabels(tickets).map((label) => ({
+        value: label,
+        label,
         icon: (
           <span
             aria-hidden
             className="size-1.5 shrink-0 rounded-full"
-            style={{ backgroundColor: tagColor(tag) }}
+            style={{ backgroundColor: resolveLabelColor(projectLabels, label) }}
           />
         ),
       })),
-    [tickets],
+    [tickets, projectLabels],
   );
 
   return (
@@ -73,12 +74,12 @@ export function FilterBar({ projectId, tickets, filter, className }: FilterBarPr
           useBoardStore.getState().togglePriority(projectId, value as TicketPriority)
         }
       />
-      {tagOptions.length > 0 ? (
+      {labelOptions.length > 0 ? (
         <FilterChip
           label="Label"
-          options={tagOptions}
-          selected={filter.tags}
-          onToggle={(value) => useBoardStore.getState().toggleTag(projectId, value)}
+          options={labelOptions}
+          selected={filter.labels}
+          onToggle={(value) => useBoardStore.getState().toggleLabel(projectId, value)}
         />
       ) : null}
       <FilterChip

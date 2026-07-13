@@ -6,9 +6,9 @@
  */
 
 /**
- * A tracked project. This is the future SQLite row shape — rail order is
- * simply the array order in the store; there is no `sortOrder` field until
- * the SQLite layer lands.
+ * A tracked project. Mirrors the SQLite `projects` row shape (migration
+ * 001): `sortOrder` drives rail order (dense, rewritten `0..n-1` on
+ * reorder) and `updatedAt` tracks the row's last write.
  */
 export interface Project {
   id: string;
@@ -17,8 +17,12 @@ export interface Project {
   ticketPrefix: string;
   /** Index into {@link PROJECT_COLORS}, assigned round-robin at creation. */
   colorIndex: number;
+  /** Rail order; dense, rewritten `0..n-1` whenever the rail is reordered. */
+  sortOrder: number;
   /** Epoch milliseconds. */
   createdAt: number;
+  /** Epoch milliseconds. */
+  updatedAt: number;
 }
 
 /** Splits on runs of non-alphanumeric characters (Unicode-aware), dropping empties. */

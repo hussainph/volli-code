@@ -97,12 +97,6 @@ export function emptyStatuses(tickets: readonly Ticket[]): TicketStatus[] {
   return TICKET_STATUSES.filter((status) => groups[status].length === 0);
 }
 
-/** The next ticket number for a project: one past the highest existing number, or `1` when empty. */
-export function nextTicketNumber(tickets: readonly Ticket[]): number {
-  if (tickets.length === 0) return 1;
-  return Math.max(...tickets.map((ticket) => ticket.ticketNumber)) + 1;
-}
-
 /**
  * Sets a ticket's priority. Returns the same array reference when the id is
  * unknown or the priority is unchanged; otherwise a new array with the

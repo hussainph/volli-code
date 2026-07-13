@@ -3,7 +3,6 @@ import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
 import { ActiveSessions } from "@renderer/components/sidebar/active-sessions";
 import { FileTree } from "@renderer/components/sidebar/file-tree";
 import { NavList } from "@renderer/components/sidebar/nav-list";
-import { Button } from "@renderer/components/ui/button";
 import {
   SidebarContent,
   SidebarFooter,
@@ -14,7 +13,6 @@ import {
   useSidebar,
 } from "@renderer/components/ui/sidebar";
 import { useActiveNav } from "@renderer/hooks/use-active-nav";
-import { useAddProject } from "@renderer/hooks/use-add-project";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { cn } from "@renderer/lib/utils";
 import { useUiStore } from "@renderer/stores/ui";
@@ -22,8 +20,8 @@ import { useUiStore } from "@renderer/stores/ui";
 /**
  * Two-tier sidebar's right pane: project header, feature nav, contextual
  * content keyed to the active nav item, and a pinned Settings footer entry.
- * With no project selected, nav + contextual content are replaced by an
- * "add a project" prompt (header and footer stay put).
+ * With no project selected, nav + contextual content stay intentionally quiet:
+ * the first-run canvas owns the explanatory import state and primary action.
  *
  * Expanded and collapsed presentations live in separate fixed-width layers.
  * The outer sidebar clips and cross-fades those layers while its width moves,
@@ -33,7 +31,6 @@ import { useUiStore } from "@renderer/stores/ui";
 export function PrimarySidebar() {
   const { state: sidebarState } = useSidebar();
   const selected = useSelectedProject();
-  const pickAndAdd = useAddProject();
   const [activeNav] = useActiveNav();
   const settingsOpen = useUiStore((state) => state.settingsOpen);
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
@@ -62,7 +59,7 @@ export function PrimarySidebar() {
               <div className="text-xs text-muted-foreground">{selected.ticketPrefix}</div>
             </div>
           ) : (
-            <div className="text-sm text-muted-foreground">No project selected</div>
+            <div className="text-sm font-medium text-sidebar-foreground">Projects</div>
           )}
         </SidebarHeader>
 
@@ -86,12 +83,7 @@ export function PrimarySidebar() {
             </SidebarContent>
           </>
         ) : (
-          <SidebarContent className="items-center justify-center gap-3 p-4 text-center">
-            <p className="text-sm text-muted-foreground">Add a project to get started</p>
-            <Button size="sm" className="app-region-no-drag" onClick={() => void pickAndAdd()}>
-              Add Project…
-            </Button>
-          </SidebarContent>
+          <SidebarContent />
         )}
 
         <SidebarFooter>

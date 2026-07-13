@@ -1,11 +1,25 @@
 import { app, BrowserWindow, session } from "electron";
-import { join } from "path";
-import { ticketBranchName } from "@volli/shared";
+import { mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { errorMessage, ticketBranchName } from "@volli/shared";
 import type { VolliIpcEvent } from "@volli/shared";
+import type { DbHandle } from "./data-ipc";
+import { registerDataIpcHandlers } from "./data-ipc";
+import { openVolliDb } from "./db";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
 import { registerAppMenu } from "./menu";
 import { registerTerminalIpcHandlers } from "./pty";
+
+// Fixes dev and the packaged app to one shared Electron `userData` dir (by
+// default they diverge: packaged apps use the productName, dev falls back to
+// "Electron"). Must run before anything reads app.getPath — as early as
+// possible, well ahead of app.whenReady. This is what lets the SQLite db
+// (and, before it, the interim localStorage stores) survive across dev vs.
+// packaged launches instead of silently forking data — see the "known and
+// accepted limitation" doc comment atop the old (pre-SQLite)
+// stores/projects.ts for the localStorage-origin version of this same split.
+app.setName("Volli Code");
 
 const isDev = !app.isPackaged;
 
@@ -113,6 +127,26 @@ app.whenReady().then(() => {
   registerTerminalIpcHandlers();
   // Ghostty config read + live-reload watch, feeding restty's appearance.
   registerGhosttyConfigIpc();
+
+  // Open (creating + migrating if needed) the SQLite db before the window
+  // exists, so the renderer's boot-time volli:data-bootstrap call always has
+  // somewhere to land. VOLLI_DB_PATH overrides the path (dev/tests/e2e);
+  // otherwise it's <userData>/volli.db, made possible sharing one userData
+  // dir across dev/packaged by the app.setName call above. Failure here must
+  // never crash main or leave invoke() hanging: register every data IPC
+  // channel with a typed { ok: false, error } response instead, so the
+  // renderer can surface the failure like any other failed mutation.
+  const dbPath = process.env["VOLLI_DB_PATH"] ?? join(app.getPath("userData"), "volli.db");
+  let dbHandle: DbHandle;
+  try {
+    mkdirSync(dirname(dbPath), { recursive: true });
+    dbHandle = { ok: true, db: openVolliDb(dbPath) };
+  } catch (error) {
+    dbHandle = { ok: false, error: errorMessage(error) };
+    console.error("[volli] failed to open database:", dbHandle.error);
+  }
+  registerDataIpcHandlers(dbHandle);
+
   createWindow();
 
   app.on("activate", () => {

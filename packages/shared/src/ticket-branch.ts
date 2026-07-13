@@ -1,4 +1,9 @@
-/** Branch-naming convention for ticket worktrees: `volli/<TICKET-ID>-<slug>`. */
+/**
+ * Branch-naming convention for ticket worktrees: `volli/<TICKET-ID>-<slug>`.
+ * `<TICKET-ID>` is the ticket's *display* id (e.g. `"VC-12"`, from
+ * `displayTicketId` in `ticket.ts`) — worktree branches, like presentation,
+ * never use the ticket's opaque UUID.
+ */
 
 const MAX_SLUG_LENGTH = 48;
 
@@ -16,9 +21,10 @@ export function slugify(text: string): string {
 }
 
 /**
- * Build the worktree branch name for a ticket. The ticket id is used verbatim
- * (case preserved); the title is slugified. When the slug is empty the branch
- * omits the trailing separator.
+ * Build the worktree branch name for a ticket. `ticketId` is the ticket's
+ * *display* id (e.g. `"VC-12"`), not its opaque UUID, and is used verbatim
+ * (case preserved); the title is slugified. When the slug is empty the
+ * branch omits the trailing separator.
  */
 export function ticketBranchName(ticketId: string, title: string): string {
   const slug = slugify(title);

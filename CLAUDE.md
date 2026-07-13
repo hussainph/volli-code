@@ -2,7 +2,7 @@
 
 A macOS desktop app (Electron + React + TypeScript) that merges Linear-style kanban planning with cmux-style embedded terminal agents. A ticket *is* a terminal workspace: moving it to **Doing** boots a coding agent (Claude Code / Codex / Opencode / any CLI harness) in an isolated git worktree; the agent's lifecycle drives the board and fires native notifications. Rewrite of the native Swift original at `../volli-swift` (agent-driven dev proved slower in SwiftUI than in TS).
 
-**Read `docs/CONCEPT.md` before any product or architecture decision** — it holds the full concept and the settled decision log (the rationale behind everything here; don't relitigate casually). `docs/SWIFT-REFERENCE.md` is the Swift app's feature-parity and data-model reference.
+**Read `docs/CONCEPT.md` before any product or architecture decision** — it holds the full concept and the settled decision log (the rationale behind everything here; don't relitigate casually). `docs/SWIFT-REFERENCE.md` is the Swift app's feature-parity and data-model reference. `CONTEXT.md` (repo root) is the domain glossary — use its terms.
 
 ## Structure
 
@@ -17,7 +17,8 @@ App data lives under Electron's `userData` dir (a fresh start, not the Swift app
 ## Conventions
 
 - The ticket state machine and all auto-move logic: pure, tested TypeScript in `@volli/shared`; the UI only observes it.
-- Terminal access goes through the `TerminalEngine` interface over the preload bridge — node-pty never leaves `src/main`; restty (the ghostty-derived WebGPU renderer, decision #26) never leaves the renderer's terminal components. node-pty needs `pnpm -C apps/desktop run rebuild:pty` after every install (Electron ABI).
+- Terminal access goes through the `TerminalEngine` interface over the preload bridge — node-pty never leaves `src/main`; restty (the ghostty-derived WebGPU renderer, decision #26) never leaves the renderer's terminal components. Native modules (node-pty, better-sqlite3) need `pnpm -C apps/desktop run rebuild:native` after every install (Electron ABI).
+- Domain data (projects, tickets, labels, ticket events) lives in SQLite at `<userData>/volli.db` behind `src/main/db`; renderer Zustand stores hydrate at boot and write through semantic preload commands (`api.projects` / `api.tickets` / …) — no renderer-side persistence, no localStorage.
 - Ticket worktree branches: `volli/<TICKET-ID>-<slug>` (e.g. `volli/VC-12-mcp-server`).
 - Changes go through a branch + commit + PR flow — never commit directly to `main`.
 - Surface every failed mutation to the user (alert/toast); never silently swallow errors — the Swift app's top systemic defect.
