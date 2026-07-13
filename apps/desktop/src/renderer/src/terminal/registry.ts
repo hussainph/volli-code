@@ -10,11 +10,16 @@
  * container, instead of constructing a new one.
  */
 import { getCurrentAppearance, onTerminalAppearanceChanged } from "./appearance";
+import { watchDevicePixelRatio } from "./device-pixel-ratio";
 import { onGpuSessionRotated } from "./gpu-session";
 import { ResttyEngine } from "./restty-engine";
 import type { TerminalEngine } from "./engine";
 
 const engines = new Map<string, TerminalEngine>();
+
+function fitLiveEngines(): void {
+  for (const engine of engines.values()) engine.fit();
+}
 
 // Module-lifetime subscriptions (the registry IS the app-wide engine list):
 // a GPU session rotation rebuilds every live renderer against the fresh
@@ -26,6 +31,19 @@ onTerminalAppearanceChanged(() => {
   const appearance = getCurrentAppearance();
   for (const engine of engines.values()) engine.applyAppearance?.(appearance);
 });
+
+// restty's ResizeObserver catches CSS-size changes, but not a pure backing-scale
+// change when a window moves between displays. Keep the recovery at the
+// TerminalEngine seam: every current/future renderer only has to implement
+// fit(), while the app owns display lifecycle events.
+if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
+  watchDevicePixelRatio(window, () => {
+    fitLiveEngines();
+    // Chromium can report the new DPR just before the final layout settles.
+    // Refit once more at the next paint boundary for that presentation race.
+    window.requestAnimationFrame(fitLiveEngines);
+  });
+}
 
 /** The engine for `sessionId`, constructing it on first request. */
 export function getOrCreateEngine(sessionId: string): TerminalEngine {

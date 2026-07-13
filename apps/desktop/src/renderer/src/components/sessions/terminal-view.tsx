@@ -102,7 +102,14 @@ export function TerminalView({
     engine.setPaused(!visible);
     if (visible) {
       engine.fit();
+      // The first visible effect can run while Chromium is still finalizing
+      // the window/display association. A next-frame fit gives the renderer
+      // the settled CSS box and devicePixelRatio without leaking restty into
+      // the React layer.
+      const frame = window.requestAnimationFrame(() => engine.fit());
+      return () => window.cancelAnimationFrame(frame);
     }
+    return undefined;
   }, [visible, sessionId]);
 
   React.useEffect(() => {

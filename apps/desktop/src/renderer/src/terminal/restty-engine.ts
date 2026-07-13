@@ -284,6 +284,8 @@ export class ResttyEngine implements TerminalEngine {
 
   fit(): void {
     if (this.disposed || this.restty === null) return;
+    const bounds = this.hostEl.getBoundingClientRect();
+    if (bounds.width <= 0 || bounds.height <= 0) return;
     // Re-measure from the (now visible) canvas size and repaint. The follow-up
     // `term-size` event forwards the corrected grid to the PTY.
     this.restty.updateSize(true);
