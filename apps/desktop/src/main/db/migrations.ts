@@ -16,7 +16,12 @@ export interface Migration {
   sql: string;
 }
 
-/** Migration 001: the full schema — see docs/CONCEPT.md decisions #28–#30. */
+/**
+ * Migration 001: the v1 schema — see docs/CONCEPT.md decisions #28–#30. A
+ * SNAPSHOT, not the current schema: applied migrations are immutable, so later
+ * evolution lives in the migrations below it (002 adds `tickets.archived_at`
+ * and replaces `tickets_project_status` with the two partial indexes).
+ */
 const MIGRATION_001_INITIAL_SCHEMA = `
 CREATE TABLE projects (
   id            TEXT PRIMARY KEY,

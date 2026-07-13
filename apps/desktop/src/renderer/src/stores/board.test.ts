@@ -510,6 +510,30 @@ describe("archiveTicket", () => {
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not archive ticket: conflict");
   });
 
+  it("clears the selection when the archived card was selected", async () => {
+    const a = ticket({ id: "a", status: "doing" });
+    const b = ticket({ id: "b", status: "doing", order: 1 });
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [a, b] }, {});
+    store.getState().selectTicket("p1", "a");
+
+    await store.getState().archiveTicket("p1", "a");
+
+    expect(store.getState().selectedByProject.p1).toBeNull();
+  });
+
+  it("keeps the selection when a different card is archived", async () => {
+    const a = ticket({ id: "a", status: "doing" });
+    const b = ticket({ id: "b", status: "doing", order: 1 });
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [a, b] }, {});
+    store.getState().selectTicket("p1", "b");
+
+    await store.getState().archiveTicket("p1", "a");
+
+    expect(store.getState().selectedByProject.p1).toBe("b");
+  });
+
   it("re-drops the card when a concurrent move's authoritative list resurrected it mid-flight", async () => {
     const a = ticket({ id: "a", status: "doing" });
     const b = ticket({ id: "b", status: "doing", order: 1 });

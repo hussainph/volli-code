@@ -337,6 +337,14 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
           delete next[projectId];
           set({ archivedByProject: next });
         }
+        // An archived card can't stay selected — `forget` clears selection on
+        // project removal; the archive lifecycle does the same on its way out
+        // (otherwise Escape-deselect binds to a phantom and a later restore
+        // reappears pre-selected).
+        const { selectedByProject } = get();
+        if (selectedByProject[projectId] === ticketId) {
+          set({ selectedByProject: { ...selectedByProject, [projectId]: null } });
+        }
       },
 
       async unarchiveTicket(projectId, ticketId) {
