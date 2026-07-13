@@ -9,6 +9,8 @@ import {
   DEFAULT_HARNESS_ID,
   displayTicketId,
   createTicket,
+  isTicketStatus,
+  isTicketPriority,
 } from "./ticket";
 
 describe("displayTicketId", () => {
@@ -26,6 +28,38 @@ describe("TICKET_STATUS_LABELS", () => {
 
   it("labels needs_review as two words", () => {
     expect(TICKET_STATUS_LABELS.needs_review).toBe("Needs Review");
+  });
+});
+
+describe("isTicketStatus", () => {
+  it("accepts every board status", () => {
+    for (const status of TICKET_STATUSES) {
+      expect(isTicketStatus(status)).toBe(true);
+    }
+  });
+
+  it("rejects unknown strings and non-strings", () => {
+    expect(isTicketStatus("archived")).toBe(false);
+    expect(isTicketStatus("")).toBe(false);
+    expect(isTicketStatus(42)).toBe(false);
+    expect(isTicketStatus(null)).toBe(false);
+    expect(isTicketStatus(undefined)).toBe(false);
+  });
+});
+
+describe("isTicketPriority", () => {
+  it("accepts every priority", () => {
+    for (const priority of TICKET_PRIORITIES) {
+      expect(isTicketPriority(priority)).toBe(true);
+    }
+  });
+
+  it("rejects unknown strings and non-strings", () => {
+    expect(isTicketPriority("urgent")).toBe(false);
+    expect(isTicketPriority("")).toBe(false);
+    expect(isTicketPriority(1)).toBe(false);
+    expect(isTicketPriority(null)).toBe(false);
+    expect(isTicketPriority(undefined)).toBe(false);
   });
 });
 

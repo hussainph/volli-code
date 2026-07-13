@@ -142,8 +142,9 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
      */
     function reconcileSlice(projectId: string, update: (slice: Ticket[]) => Ticket[]): void {
       const byProject = get().ticketsByProject;
-      if (!(projectId in byProject)) return;
-      set({ ticketsByProject: { ...byProject, [projectId]: update(byProject[projectId] ?? []) } });
+      const slice: Ticket[] | undefined = byProject[projectId];
+      if (!slice) return;
+      set({ ticketsByProject: { ...byProject, [projectId]: update(slice) } });
     }
 
     return {
@@ -204,8 +205,9 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
 
       async setTicketPriority(projectId, ticketId, priority) {
         const previous = get().ticketsByProject[projectId] ?? [];
+        const original = previous.find((ticket) => ticket.id === ticketId);
         const optimistic = setTicketPriorityOp(previous, ticketId, priority, Date.now());
-        if (optimistic === previous) return; // shared op's no-op guard: unknown id or unchanged priority
+        if (!original || optimistic === previous) return; // unknown id or unchanged priority (the shared op's no-op guard)
         set({ ticketsByProject: { ...get().ticketsByProject, [projectId]: optimistic } });
 
         // Priority never reorders a column (the shared op only edits the
@@ -222,8 +224,7 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
           (): Promise<TicketResult> => gateway.setTicketPriority({ ticketId, priority }),
         );
         if (!result) {
-          const original = previous.find((ticket) => ticket.id === ticketId);
-          if (original) patch(original);
+          patch(original);
           return;
         }
         patch(result.ticket);
