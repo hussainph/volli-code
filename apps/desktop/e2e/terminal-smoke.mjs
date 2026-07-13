@@ -354,7 +354,68 @@ async function main() {
       `tabs=${aTabs3}`,
     );
 
-    // === 5. Second tab in A: "+" → two tabs, each its own live shell ========
+    // === 5. Display-scale change: backing buffer follows DPR without resize =
+    // Electron cannot be moved between physical monitors deterministically in
+    // CI, so override only the DPR getter and dispatch the presentation-level
+    // resize fallback. The terminal's CSS box stays fixed; a correct refit must
+    // still rebuild the canvas backing buffer at the new pixel density.
+    const dprReport = await page.evaluate(async () => {
+      const canvas = Array.from(document.querySelectorAll("canvas")).find(
+        (candidate) =>
+          candidate.offsetParent !== null &&
+          candidate.clientWidth > 0 &&
+          candidate.clientHeight > 0,
+      );
+      if (!(canvas instanceof HTMLCanvasElement)) return null;
+
+      const originalDescriptor = Object.getOwnPropertyDescriptor(window, "devicePixelRatio");
+      const originalDpr = window.devicePixelRatio;
+      const forcedDpr = originalDpr === 1 ? 2 : 1;
+      const scale = () => {
+        const rect = canvas.getBoundingClientRect();
+        return {
+          x: canvas.width / rect.width,
+          y: canvas.height / rect.height,
+          cssWidth: rect.width,
+          cssHeight: rect.height,
+        };
+      };
+
+      const before = scale();
+      let after = before;
+      try {
+        Object.defineProperty(window, "devicePixelRatio", {
+          configurable: true,
+          get: () => forcedDpr,
+        });
+        window.dispatchEvent(new Event("resize"));
+
+        const deadline = performance.now() + 3000;
+        do {
+          await new Promise(requestAnimationFrame);
+          after = scale();
+        } while (performance.now() < deadline && Math.abs(after.x - forcedDpr) > 0.05);
+      } finally {
+        if (originalDescriptor === undefined) delete window.devicePixelRatio;
+        else Object.defineProperty(window, "devicePixelRatio", originalDescriptor);
+        window.dispatchEvent(new Event("resize"));
+        await new Promise(requestAnimationFrame);
+      }
+
+      return { originalDpr, forcedDpr, before, after };
+    });
+    check(
+      5,
+      "Canvas backing buffer tracks DPR-only display changes without a layout resize",
+      dprReport !== null &&
+        Math.abs(dprReport.before.x - dprReport.originalDpr) < 0.05 &&
+        Math.abs(dprReport.before.y - dprReport.originalDpr) < 0.05 &&
+        Math.abs(dprReport.after.x - dprReport.forcedDpr) < 0.05 &&
+        Math.abs(dprReport.after.y - dprReport.forcedDpr) < 0.05,
+      JSON.stringify(dprReport),
+    );
+
+    // === 6. Second tab in A: "+" → two tabs, each its own live shell ========
     await page.getByLabel("New session").click();
     await page.waitForFunction(
       () => document.querySelectorAll('[aria-label^="Close Terminal"]').length === 2,
@@ -376,7 +437,7 @@ async function main() {
     await runInTerminal(page, `echo tab1again-$PWD >> ${probeA}`);
     const a1Again = await waitForFileContains(probeA, `tab1again-${alphaDir}`);
     check(
-      5,
+      6,
       "Second tab in A: two live shells, tab2 cwd ok, tab1 still responds",
       a2Text !== null &&
         a2Text.includes(`tab2-${alphaDir}`) &&
@@ -386,7 +447,7 @@ async function main() {
       `tabs=${aTabs4}`,
     );
 
-    // === 6. Split panes: each leaf owns an independent shell + renderer ====
+    // === 7. Split panes: each leaf owns an independent shell + renderer ====
     // This is the architecture boundary used by Ghostty/cmux: splitting a
     // surface creates a fresh terminal surface/PTY. A second canvas wired to
     // the original PTY is not a split — input/output from both panes aliases.
@@ -408,13 +469,13 @@ async function main() {
     const childPid = (await waitForFileContains(splitChildPid, "", 5000))?.trim() ?? null;
     await page.screenshot({ path: shot("06-independent-split.png") });
     check(
-      6,
+      7,
       "Split right: two visible panes own two independent shell sessions",
       rootPid !== null && childPid !== null && rootPid !== childPid,
       `rootPid=${JSON.stringify(rootPid)} childPid=${JSON.stringify(childPid)}`,
     );
 
-    // === 7. Keyboard split focus: Cmd+Option+arrows route input spatially ===
+    // === 8. Keyboard split focus: Cmd+Option+arrows route input spatially ===
     await page.keyboard.press("Meta+Alt+ArrowLeft");
     await sleep(300);
     await runInTerminal(page, `echo $$ > ${focusedLeftPid}`);
@@ -424,13 +485,13 @@ async function main() {
     await runInTerminal(page, `echo $$ > ${focusedRightPid}`);
     const rightFocusedPid = (await waitForFileContains(focusedRightPid, "", 5000))?.trim() ?? null;
     check(
-      7,
+      8,
       "Cmd+Option+arrow keys move focus and route input to the adjacent split",
       leftFocusedPid === rootPid && rightFocusedPid === childPid,
       `left=${JSON.stringify(leftFocusedPid)} right=${JSON.stringify(rightFocusedPid)}`,
     );
 
-    // === 8. Pane-local font zoom: focused grid changes, sibling/UI don't ===
+    // === 9. Pane-local font zoom: focused grid changes, sibling/UI don't ===
     await focusTerminalAt(page, 0);
     await runInTerminal(page, `stty size > ${rootGridBeforePath}`);
     const rootGridBefore =
@@ -467,7 +528,7 @@ async function main() {
     const [childRowsBefore, childColsBefore] = terminalGrid(childGridBefore);
     const [childRowsAfter, childColsAfter] = terminalGrid(childGridAfter);
     check(
-      8,
+      9,
       "Cmd+ zooms only the focused split pane, not its sibling or Volli chrome",
       childRowsAfter < childRowsBefore &&
         childColsAfter < childColsBefore &&
@@ -476,7 +537,7 @@ async function main() {
       `child=${childGridBefore}→${childGridAfter} root=${rootGridBefore}→${rootGridAfter} chrome=${JSON.stringify(chromeAfter)}`,
     );
 
-    // === 9. Renderer backend =================================================
+    // === 10. Renderer backend ================================================
     backendReport = await page.evaluate(() => {
       const ctx = window.volliCtxSpy || [];
       return {
@@ -486,13 +547,13 @@ async function main() {
       };
     });
     check(
-      9,
+      10,
       "Renderer is a real GPU canvas backend",
       backendReport.webgpu || backendReport.webgl2,
       `webgpu=${backendReport.webgpu} webgl2=${backendReport.webgl2} navigator.gpu=${backendReport.navigatorGpu}`,
     );
 
-    // === 10. Mouse reporting reaches the PTY ================================
+    // === 11. Mouse reporting reaches the PTY ================================
     // The probe enables DECSET 1000 + SGR 1006 and records raw stdin bytes.
     // This is the same protocol Claude Code's TUI relies on for clickable UI
     // and wheel input; checking the PTY bytes avoids canvas/OCR ambiguity.
@@ -517,13 +578,13 @@ async function main() {
     const hasMouseDown = /1b5b3c303b[0-9a-f]+4d/.test(mouseHex ?? "");
     const hasMouseWheel = /1b5b3c(?:3634|3635)3b[0-9a-f]+4d/.test(mouseHex ?? "");
     check(
-      10,
+      11,
       "Canvas click + wheel become SGR mouse reports at the PTY",
       hasMouseDown && hasMouseWheel,
       `down=${hasMouseDown} wheel=${hasMouseWheel} raw=${JSON.stringify(mouseHex?.trim() ?? null)}`,
     );
 
-    // === 11. Normal-screen wheel scrolls restty's viewport ==================
+    // === 12. Normal-screen wheel scrolls restty's viewport ==================
     const readScrollHost = () =>
       page.evaluate(() => {
         const host = Array.from(document.querySelectorAll(".restty-native-scroll-host")).find(
@@ -539,7 +600,7 @@ async function main() {
     await sleep(300);
     const scrollAfter = await readScrollHost();
     check(
-      11,
+      12,
       "Wheel scrolls ordinary terminal scrollback",
       scrollBefore !== null && scrollAfter !== null && scrollAfter.top < scrollBefore.top,
       `before=${JSON.stringify(scrollBefore)} after=${JSON.stringify(scrollAfter)}`,
@@ -558,14 +619,14 @@ async function main() {
     await app.close();
   }
 
-  // === 12. Clean teardown: no orphaned login shells =========================
+  // === 13. Clean teardown: no orphaned login shells =========================
   let after = loginShellCount();
   for (let i = 0; i < 20 && after > baseline; i++) {
     await sleep(250);
     after = loginShellCount();
   }
   check(
-    12,
+    13,
     "Clean teardown: no orphaned login shells after quit",
     after <= baseline,
     `baseline=${baseline} after=${after}`,
