@@ -4,10 +4,14 @@ dist/
 .DS_Store
 *.log
 .env
+.env.local
+.env.*.local
 dist-electron/
 coverage/
 .vite-plus/
 .vite-hooks/
 *.tsbuildinfo
-coverage/
 docs/ROADMAP.md
+.claude/settings.local.json
+vite.config.ts.timestamp-*.mjs
+volli.db*
