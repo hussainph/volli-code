@@ -67,7 +67,7 @@ function ArchiveRow({
         variant="ghost"
         size="xs"
         className="shrink-0 text-muted-foreground"
-        onClick={() => useBoardStore.getState().unarchiveTicket(project.id, ticket.id)}
+        onClick={() => void useBoardStore.getState().unarchiveTicket(project.id, ticket.id)}
       >
         <ArrowUUpLeftIcon />
         Restore
@@ -95,10 +95,21 @@ function ArchiveRow({
 function ArchiveList({ project }: { project: Project }) {
   const archived = useBoardStore((state) => state.archivedByProject[project.id]);
   const [pendingDelete, setPendingDelete] = React.useState<ArchivedTicket | null>(null);
+  // A failed fetch leaves `archived` undefined — without this flag that's the
+  // "Loading…" branch with no way out. Tracked here so the body can offer Retry.
+  const [loadFailed, setLoadFailed] = React.useState(false);
 
-  React.useEffect(() => {
-    void useBoardStore.getState().loadArchived(project.id);
+  const load = React.useCallback(() => {
+    setLoadFailed(false);
+    void useBoardStore
+      .getState()
+      .loadArchived(project.id)
+      .then((ok) => {
+        if (!ok) setLoadFailed(true);
+      });
   }, [project.id]);
+
+  React.useEffect(load, [load]);
 
   return (
     <>
@@ -109,7 +120,14 @@ function ArchiveList({ project }: { project: Project }) {
       {/* `undefined` = not loaded yet (a fetch is in flight); `[]` = loaded,
           genuinely empty. Distinguishing them avoids flashing "empty" before
           the first read lands. */}
-      {archived === undefined ? (
+      {loadFailed && archived === undefined ? (
+        <div className="flex flex-col items-center gap-3 py-10 text-center text-muted-foreground">
+          <p className="text-sm">Couldn’t load the archive.</p>
+          <Button variant="outline" size="xs" onClick={load}>
+            Retry
+          </Button>
+        </div>
+      ) : archived === undefined ? (
         <p className="py-8 text-center text-sm text-muted-foreground">Loading…</p>
       ) : archived.length === 0 ? (
         <div className="flex flex-col items-center gap-2 py-10 text-center text-muted-foreground">
@@ -174,6 +192,14 @@ export function ArchiveDialog() {
   const project = useSelectedProject();
   const archiveOpen = useUiStore((state) => state.archiveOpen);
   const open = archiveOpen && project !== null;
+
+  // If the selected project vanishes while the dialog is open, `open` just
+  // computes false — Radix closes WITHOUT firing onOpenChange, which would
+  // strand `archiveOpen === true` and pop the Archive back up uninvited on
+  // the next project selection.
+  React.useEffect(() => {
+    if (archiveOpen && project === null) useUiStore.getState().setArchiveOpen(false);
+  }, [archiveOpen, project]);
 
   return (
     <Dialog

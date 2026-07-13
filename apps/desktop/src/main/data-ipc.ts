@@ -54,7 +54,6 @@ import {
 import {
   archiveTicket,
   bumpTicketVersion,
-  countTicketsInStatus,
   deleteTicket,
   getTicket,
   getTicketLabelNames,
@@ -63,6 +62,7 @@ import {
   listAllTickets,
   listArchivedTicketsByProject,
   listTicketsByProject,
+  nextPositionInStatus,
   nextTicketNumberForProject,
   unarchiveTicket,
   updateTicketFields,
@@ -402,7 +402,7 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
         const now = Date.now();
         const run = db.transaction((): Ticket => {
           const ticketNumber = nextTicketNumberForProject(db, input.projectId);
-          const position = countTicketsInStatus(db, input.projectId, input.status);
+          const position = nextPositionInStatus(db, input.projectId, input.status);
           const ticket = createTicket({
             id: randomUUID(),
             projectId: input.projectId,
@@ -629,9 +629,9 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
           const row = getTicketRow(db, input.ticketId);
           if (!row) throw new Error("Unknown ticket");
           if (row.archived_at !== null) {
-            // Append at the live end of its retained column — count runs while
-            // this ticket is still archived, so it isn't counted itself.
-            const position = countTicketsInStatus(db, row.project_id, row.status as TicketStatus);
+            // Append at the live end of its retained column — MAX+1 runs while
+            // this ticket is still archived, so its own row can't contribute.
+            const position = nextPositionInStatus(db, row.project_id, row.status as TicketStatus);
             unarchiveTicket(db, input.ticketId, position, now);
             recordTicketEvent(db, input.ticketId, { kind: "unarchived" }, now);
           }

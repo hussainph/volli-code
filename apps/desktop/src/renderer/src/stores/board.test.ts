@@ -433,13 +433,14 @@ describe("loadArchived", () => {
     });
     const store = createBoardStore(gateway);
 
-    await store.getState().loadArchived("p1");
+    const ok = await store.getState().loadArchived("p1");
 
+    expect(ok).toBe(true);
     expect(gateway.listArchived).toHaveBeenCalledWith("p1");
     expect(store.getState().archivedByProject.p1).toBe(archived);
   });
 
-  it("toasts and leaves the slice unset on a typed failure", async () => {
+  it("resolves false, toasts, and leaves the slice unset on a typed failure", async () => {
     const gateway = fakeGateway({
       listArchived: vi.fn<BoardGateway["listArchived"]>(async () => ({
         ok: false,
@@ -448,8 +449,9 @@ describe("loadArchived", () => {
     });
     const store = createBoardStore(gateway);
 
-    await store.getState().loadArchived("p1");
+    const ok = await store.getState().loadArchived("p1");
 
+    expect(ok).toBe(false);
     expect(store.getState().archivedByProject.p1).toBeUndefined();
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not load archive: db locked");
   });
@@ -507,6 +509,24 @@ describe("archiveTicket", () => {
     expect(store.getState().ticketsByProject.p1!.map((t) => t.id)).toEqual(["a"]);
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not archive ticket: conflict");
   });
+
+  it("re-drops the card when a concurrent move's authoritative list resurrected it mid-flight", async () => {
+    const a = ticket({ id: "a", status: "doing" });
+    const b = ticket({ id: "b", status: "doing", order: 1 });
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a, b] }, {});
+    // A move IPC snapshotted while `a` was still live lands between the
+    // optimistic drop and the archive ack — mergeAuthoritative puts `a` back.
+    vi.mocked(gateway.archiveTicket).mockImplementation(async () => {
+      store.setState({ ticketsByProject: { p1: [a, b] } });
+      return { ok: true };
+    });
+
+    await store.getState().archiveTicket("p1", "a");
+
+    expect(store.getState().ticketsByProject.p1!.map((t) => t.id)).toEqual(["b"]);
+  });
 });
 
 describe("unarchiveTicket", () => {
@@ -547,6 +567,55 @@ describe("unarchiveTicket", () => {
     expect(store.getState().ticketsByProject.p1).toEqual([]);
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not unarchive ticket: conflict");
   });
+
+  it("restores the ticket at its original slot on failure (newest-first order kept)", async () => {
+    const x = archivedTicket({ id: "x", status: "done", archivedAt: 3 });
+    const y = archivedTicket({ id: "y", status: "done", archivedAt: 2 });
+    const z = archivedTicket({ id: "z", status: "done", archivedAt: 1 });
+    const gateway = fakeGateway({
+      unarchiveTicket: vi.fn<BoardGateway["unarchiveTicket"]>(async () => ({
+        ok: false,
+        error: "conflict",
+      })),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [] }, {});
+    store.setState({ archivedByProject: { p1: [x, y, z] } });
+
+    await store.getState().unarchiveTicket("p1", "y");
+
+    expect(store.getState().archivedByProject.p1!.map((t) => t.id)).toEqual(["x", "y", "z"]);
+  });
+
+  it("re-drops the ticket when an in-flight Archive refetch re-listed it mid-flight", async () => {
+    const archived = archivedTicket({ id: "a", status: "done" });
+    const revived = ticket({ id: "a", status: "done" });
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [] }, {});
+    store.setState({ archivedByProject: { p1: [archived] } });
+    // A loadArchived refetch snapshotted before the unarchive committed lands
+    // between the optimistic drop and the ack, wholesale-setting the stale list.
+    vi.mocked(gateway.unarchiveTicket).mockImplementation(async () => {
+      store.setState({ archivedByProject: { p1: [archived] } });
+      return { ok: true, ticket: revived };
+    });
+
+    await store.getState().unarchiveTicket("p1", "a");
+
+    expect(store.getState().archivedByProject.p1).toEqual([]);
+    expect(store.getState().ticketsByProject.p1).toContain(revived);
+  });
+
+  it("is a no-op for a ticket not in the loaded Archive slice (no IPC call)", async () => {
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.setState({ archivedByProject: { p1: [archivedTicket({ id: "a", status: "done" })] } });
+
+    await store.getState().unarchiveTicket("p1", "does-not-exist");
+
+    expect(gateway.unarchiveTicket).not.toHaveBeenCalled();
+  });
 });
 
 describe("deleteArchivedTicket", () => {
@@ -582,6 +651,16 @@ describe("deleteArchivedTicket", () => {
 
     expect(store.getState().archivedByProject.p1!.map((t) => t.id)).toEqual(["a"]);
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not delete ticket: db locked");
+  });
+
+  it("is a no-op for a ticket not in the loaded Archive slice (no second IPC on a double-fire)", async () => {
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.setState({ archivedByProject: { p1: [archivedTicket({ id: "a", status: "done" })] } });
+
+    await store.getState().deleteArchivedTicket("p1", "does-not-exist");
+
+    expect(gateway.deleteTicket).not.toHaveBeenCalled();
   });
 });
 
