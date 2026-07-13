@@ -65,6 +65,8 @@ export class ResttyEngine implements TerminalEngine {
   private restty: Restty | null = null;
   private pane: ResttySurfacePane | null = null;
   private unsubscribeRuntime: (() => void) | null = null;
+  /** Follow-up fit scheduled when restty's asynchronous renderer becomes ready. */
+  private readyFitFrame: number | null = null;
   /** Restty's PTY callbacks are the only public path that runs its output
    * filter (mouse-mode tracking, OSC handlers, reply state) before WASM.
    * Their presence IS the connection state — `isConnected()` derives from it,
@@ -213,6 +215,16 @@ export class ResttyEngine implements TerminalEngine {
       } else if (event.type === "backend") {
         this.backend = event.backend;
         if (event.backend === "webgpu") this.armDeviceLossWatch();
+      } else if (event.type === "state" && event.state === "ready" && !this.paused) {
+        // The first visible fit can happen while restty is still loading fonts,
+        // WASM, and its GPU backend. Refit again at the lifecycle boundary
+        // where the backing canvas can actually consume the settled geometry.
+        this.fit();
+        if (this.readyFitFrame !== null) window.cancelAnimationFrame(this.readyFitFrame);
+        this.readyFitFrame = window.requestAnimationFrame(() => {
+          this.readyFitFrame = null;
+          this.fit();
+        });
       }
     });
   }
@@ -340,6 +352,8 @@ export class ResttyEngine implements TerminalEngine {
   /** Recreate the renderer after a GPU device loss (session already rotated). */
   rebuildRenderer(): void {
     if (this.disposed || this.restty === null) return;
+    if (this.readyFitFrame !== null) window.cancelAnimationFrame(this.readyFitFrame);
+    this.readyFitFrame = null;
     this.unsubscribeRuntime?.();
     this.unsubscribeRuntime = null;
     try {
@@ -364,6 +378,8 @@ export class ResttyEngine implements TerminalEngine {
     if (this.disposed) return;
     this.disposed = true;
     this.hostEl.removeEventListener("keydown", this.onKeyDownCapture, true);
+    if (this.readyFitFrame !== null) window.cancelAnimationFrame(this.readyFitFrame);
+    this.readyFitFrame = null;
     this.unsubscribeRuntime?.();
     this.unsubscribeRuntime = null;
     this.dataCbs.clear();
