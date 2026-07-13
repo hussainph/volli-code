@@ -1,0 +1,46 @@
+diff --git a/dist/chunk-db9dt7pr.js b/dist/chunk-db9dt7pr.js
+index d1f8f49c9b625be8ecbf5d71540a1436d0136771..0380f7074497436aa5f52f450d07fca62afc8303 100644
+--- a/dist/chunk-db9dt7pr.js
++++ b/dist/chunk-db9dt7pr.js
+@@ -1727,18 +1727,9 @@ function isNerdSymbolCodepoint(cp) {
+ }
+ 
+ // src/fonts/manager/picker.ts
++var EMOJI_PRESENTATION_PATTERN = /\p{Emoji_Presentation}/u;
+ function isLikelyEmojiCodepoint(cp) {
+-  if (cp >= 127462 && cp <= 127487)
+-    return true;
+-  if (cp >= 127744 && cp <= 129791)
+-    return true;
+-  if (cp >= 8960 && cp <= 9215)
+-    return true;
+-  if (cp >= 9728 && cp <= 10175)
+-    return true;
+-  if (cp >= 11088 && cp <= 11093)
+-    return true;
+-  return false;
++  return EMOJI_PRESENTATION_PATTERN.test(String.fromCodePoint(cp));
+ }
+ function isVariationSelectorCodepoint(cp) {
+   if (cp >= 65024 && cp <= 65039)
+@@ -45580,18 +45571,9 @@ function fade(color, factor) {
+ }
+ 
+ // src/runtime/create-runtime/codepoint-utils.ts
++var EMOJI_PRESENTATION_PATTERN2 = /\p{Emoji_Presentation}/u;
+ function isLikelyEmojiCodepoint2(cp) {
+-  if (cp >= 127462 && cp <= 127487)
+-    return true;
+-  if (cp >= 127744 && cp <= 129791)
+-    return true;
+-  if (cp >= 8960 && cp <= 9215)
+-    return true;
+-  if (cp >= 9728 && cp <= 10175)
+-    return true;
+-  if (cp >= 11088 && cp <= 11093)
+-    return true;
+-  return false;
++  return EMOJI_PRESENTATION_PATTERN2.test(String.fromCodePoint(cp));
+ }
+ function isVariationSelectorCodepoint2(cp) {
+   if (cp >= 65024 && cp <= 65039)

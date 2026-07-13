@@ -65,6 +65,9 @@ packageExtensions:
     dependencies:
       vite: "catalog:"
 
+patchedDependencies:
+  restty@0.2.0: patches/restty@0.2.0.patch
+
 peerDependencyRules:
   allowAny:
     - vite
