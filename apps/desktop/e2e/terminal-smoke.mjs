@@ -394,7 +394,10 @@ async function main() {
         do {
           await new Promise(requestAnimationFrame);
           after = scale();
-        } while (performance.now() < deadline && Math.abs(after.x - forcedDpr) > 0.05);
+        } while (
+          performance.now() < deadline &&
+          (Math.abs(after.x - forcedDpr) > 0.05 || Math.abs(after.y - forcedDpr) > 0.05)
+        );
       } finally {
         if (originalDescriptor === undefined) delete window.devicePixelRatio;
         else Object.defineProperty(window, "devicePixelRatio", originalDescriptor);
@@ -423,7 +426,7 @@ async function main() {
     );
     await waitForLiveCanvas(page); // tab 2 becomes active on create
     const aTabs4 = await tabCount(page);
-    await page.screenshot({ path: shot("05-two-tabs.png") });
+    await page.screenshot({ path: shot("06-two-tabs.png") });
 
     // Probe from the freshly-focused tab 2.
     await focusTerminal(page);
@@ -467,7 +470,7 @@ async function main() {
     await runInTerminal(page, `echo $$ > ${splitChildPid}`);
     const rootPid = (await waitForFileContains(splitRootPid, "", 3000))?.trim() ?? null;
     const childPid = (await waitForFileContains(splitChildPid, "", 5000))?.trim() ?? null;
-    await page.screenshot({ path: shot("06-independent-split.png") });
+    await page.screenshot({ path: shot("07-independent-split.png") });
     check(
       7,
       "Split right: two visible panes own two independent shell sessions",
@@ -614,7 +617,7 @@ async function main() {
     await page.mouse.move(mouseBox.x, mouseBox.y);
     await page.mouse.wheel(0, 100_000);
     await sleep(500);
-    await page.screenshot({ path: shot("07-symbol-presentation.png") });
+    await page.screenshot({ path: shot("08-symbol-presentation.png") });
   } finally {
     await app.close();
   }
@@ -642,9 +645,9 @@ async function main() {
   console.log(`  ${join(SCRATCH, "01-workspace-a-terminal.png")}  — Workspace A live terminal`);
   console.log(`  ${join(SCRATCH, "02-workspace-b-terminal.png")}  — Workspace B live terminal`);
   console.log(`  ${join(SCRATCH, "04-after-nav-return.png")}      — A after Board↔Sessions nav`);
-  console.log(`  ${join(SCRATCH, "05-two-tabs.png")}              — A with two session tabs`);
-  console.log(`  ${join(SCRATCH, "06-independent-split.png")}      — two independent split panes`);
-  console.log(`  ${join(SCRATCH, "07-symbol-presentation.png")}     — U+23FA text presentation`);
+  console.log(`  ${join(SCRATCH, "06-two-tabs.png")}              — A with two session tabs`);
+  console.log(`  ${join(SCRATCH, "07-independent-split.png")}      — two independent split panes`);
+  console.log(`  ${join(SCRATCH, "08-symbol-presentation.png")}     — U+23FA text presentation`);
   console.log(
     `\nRenderer backend: ${backendReport.webgpu ? "WebGPU" : backendReport.webgl2 ? "WebGL2" : "UNKNOWN"}` +
       ` (webgpu=${backendReport.webgpu} webgl2=${backendReport.webgl2} navigator.gpu=${backendReport.navigatorGpu})`,

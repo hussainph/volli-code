@@ -40,6 +40,7 @@ App data lives under Electron's `userData` directory as a fresh start, separate 
 - `vp run -r typecheck` — type-check the workspace.
 - `vp run -r test` — run workspace tests.
 - `vp check` — run `vp fmt` and `vp lint`.
+- `act pull_request --container-architecture linux/amd64` — run CI locally before submitting a PR.
 - `vp install` or `pnpm install` — install dependencies.
 - `pnpm run ensure:electron` from `apps/desktop` — prefetch Electron when needed; its binary is otherwise fetched lazily on first `require("electron")`.
 

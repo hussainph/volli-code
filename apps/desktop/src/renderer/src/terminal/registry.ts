@@ -18,7 +18,16 @@ import type { TerminalEngine } from "./engine";
 const engines = new Map<string, TerminalEngine>();
 
 function fitLiveEngines(): void {
-  for (const engine of engines.values()) engine.fit();
+  for (const engine of engines.values()) {
+    try {
+      engine.fit();
+    } catch (error) {
+      // A display hop can kill one engine's GPU device mid-refit; the others
+      // must still get theirs. Device-loss recovery arrives separately via
+      // gpu-session rotation.
+      console.warn("terminal refit failed:", error);
+    }
+  }
 }
 
 // Module-lifetime subscriptions (the registry IS the app-wide engine list):
@@ -37,12 +46,9 @@ onTerminalAppearanceChanged(() => {
 // TerminalEngine seam: every current/future renderer only has to implement
 // fit(), while the app owns display lifecycle events.
 if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
-  watchDevicePixelRatio(window, () => {
-    fitLiveEngines();
-    // Chromium can report the new DPR just before the final layout settles.
-    // Refit once more at the next paint boundary for that presentation race.
-    window.requestAnimationFrame(fitLiveEngines);
-  });
+  // fit() itself re-measures once more next frame, covering the window where
+  // Chromium reports the new DPR just before the final layout settles.
+  watchDevicePixelRatio(window, fitLiveEngines);
 }
 
 /** The engine for `sessionId`, constructing it on first request. */
