@@ -1,9 +1,13 @@
 /**
  * restty-backed `TerminalEngine`. restty renders a terminal into a canvas via
  * WASM (libghostty-vt) + WebGPU, with automatic WebGL2 fallback. We drive it
- * manually (no `connectPty` websocket): PTY output is fed in with
- * `sendInput(data, "pty")`, and everything PTY-bound flows back out through an
- * injected always-"connected" `ptyTransport` (see `createInstance`).
+ * manually: an in-memory `ptyTransport` (see `createInstance`) bridges restty's
+ * WebSocket-oriented API to Electron IPC. `connectPty()` wires it up; PTY output
+ * enters through `ptyCallbacks.onData(data)` so it passes restty's output filter
+ * (DECSET mouse-mode tracking, OSC handlers, reply state) — `sendInput(data,
+ * "pty")` would bypass that, leaving TUIs drawn but blind to pointer input.
+ * Everything PTY-bound (keystrokes, mouse reports, terminal replies) flows back
+ * out through the transport's `sendInput`.
  *
  * Failure modes this file is built against (see CLAUDE.md):
  *  1. Never destroy a live terminal incidentally. The engine owns a persistent
@@ -20,6 +24,7 @@
  */
 import {
   createRestty,
+  type PtyCallbacks,
   type Restty,
   type ResttyFontInput,
   type ResttyRuntimeEvent,
@@ -30,6 +35,7 @@ import { getCurrentAppearance } from "./appearance";
 import type { TerminalAppearance, TerminalDimensions, TerminalEngine } from "./engine";
 import { currentGpuSession, watchGpuDeviceLoss } from "./gpu-session";
 import { heldAltSides, installAltSideTracker, optionAsAltSequence } from "./option-as-alt";
+import { preferTextPresentationForAmbiguousSymbols } from "./symbol-presentation";
 
 /**
  * Replay-buffer cap. Sized for the device-loss rebuild: enough to restore the
@@ -40,11 +46,15 @@ const REPLAY_BUFFER_MAX_CHARS = 512_000;
 const MIN_FONT_SIZE = 8;
 const MAX_FONT_SIZE = 40;
 
-/** Families resolve via Local Font Access, most-preferred first; the emoji
- *  face rides along as a glyph fallback (restty picks per-cluster). */
+/** Families resolve via Local Font Access, most-preferred first. macOS's
+ * Apple Symbols covers the common terminal-symbol blocks, while STIX Two Math
+ * fills later Misc Technical codepoints such as U+23FA that Apple Symbols
+ * omits. Color emoji remains last and is selected only for emoji presentation. */
 function resttyFonts(fontFamilies: readonly string[]): ResttyFontInput[] {
   return [
     ...fontFamilies.map((family) => ({ family, local: "prefer" as const })),
+    { family: "Apple Symbols", local: "prefer" as const },
+    { family: "STIX Two Math", local: "prefer" as const },
     { family: "Apple Color Emoji", local: "prefer" as const },
   ];
 }
@@ -55,6 +65,12 @@ export class ResttyEngine implements TerminalEngine {
   private restty: Restty | null = null;
   private pane: ResttySurfacePane | null = null;
   private unsubscribeRuntime: (() => void) | null = null;
+  /** Restty's PTY callbacks are the only public path that runs its output
+   * filter (mouse-mode tracking, OSC handlers, reply state) before WASM.
+   * Their presence IS the connection state — `isConnected()` derives from it,
+   * so the transport can never report connected while replies have nowhere
+   * to go (restty drops emulator replies + mouse reports when disconnected). */
+  private ptyCallbacks: PtyCallbacks | null = null;
 
   private readonly dataCbs = new Set<(data: string) => void>();
   private readonly resizeCbs = new Set<(dimensions: TerminalDimensions) => void>();
@@ -102,6 +118,7 @@ export class ResttyEngine implements TerminalEngine {
   /** Create the restty renderer inside hostEl and replay buffered output. */
   private createInstance(): void {
     const appearance = getCurrentAppearance();
+    this.ptyCallbacks = null;
     this.restty = createRestty({
       root: this.hostEl,
       // The app-owned session (not restty's module-global default) is what
@@ -129,22 +146,21 @@ export class ResttyEngine implements TerminalEngine {
         autoResize: true,
       },
       services: {
-        // An always-"connected" transport is the single path for ALL
-        // PTY-bound bytes, and it must stay that way:
-        //  - restty flushes emulator replies (CPR/DA/OSC color/clipboard,
-        //    mouse reports) to `sendInput` ONLY while `isConnected()` is
-        //    true — a disconnected transport silently drops them.
-        //  - keystrokes/pastes route through restty's `sendKeyInput`, which
-        //    runs `mapKeyForPty` (backspace → \x7f, enter → \r, kitty
-        //    legacy-compat) and, while connected, SKIPS local application —
-        //    the PTY echo we render via `write` is the only echo. Do not
-        //    also forward keys from a `beforeInput` hook: it runs before
-        //    the transport send, so a null return would starve this path
-        //    and a non-null return would double-send.
+        // The in-memory transport bridges restty's WebSocket-oriented API to
+        // Volli's Electron IPC. PTY output MUST enter through callbacks.onData:
+        // restty.sendInput(data, "pty") bypasses the output filter that tracks
+        // DECSET mouse modes, so TUIs draw but never receive pointer reports.
         ptyTransport: {
-          connect: () => {},
-          disconnect: () => {},
-          isConnected: () => true,
+          connect: ({ callbacks }) => {
+            this.ptyCallbacks = callbacks;
+            callbacks.onConnect?.();
+          },
+          disconnect: () => {
+            const callbacks = this.ptyCallbacks;
+            this.ptyCallbacks = null;
+            callbacks?.onDisconnect?.();
+          },
+          isConnected: () => this.ptyCallbacks !== null,
           sendInput: (data) => {
             if (this.dataCbs.size === 0) return false;
             this.emitData(data);
@@ -156,8 +172,13 @@ export class ResttyEngine implements TerminalEngine {
           // to avoid a double resize.
           resize: () => true,
         },
+        beforeRenderOutput: ({ text }) => preferTextPresentationForAmbiguousSymbols(text),
       },
     });
+    // Registers the transport callbacks used by write()/replay and marks the
+    // transport connected so keystrokes, terminal replies, and mouse reports
+    // all route back through sendInput above.
+    this.restty.connectPty();
     this.pane = this.restty.getActivePane();
     this.subscribeRuntimeEvents();
     if (!getCurrentAppearance().mouseReporting) {
@@ -168,7 +189,7 @@ export class ResttyEngine implements TerminalEngine {
     // device-loss rebuild it restores the visible screen. Chunks can split
     // escape sequences at the trim boundary — the VT parser tolerates it,
     // at worst the oldest replayed line renders garbled.
-    for (const chunk of this.recentOutput) this.restty.sendInput(chunk, "pty");
+    for (const chunk of this.recentOutput) this.deliverPtyOutput(chunk);
   }
 
   /**
@@ -204,7 +225,11 @@ export class ResttyEngine implements TerminalEngine {
   write(data: string): void {
     if (this.disposed) return;
     this.remember(data);
-    this.restty?.sendInput(data, "pty");
+    this.deliverPtyOutput(data);
+  }
+
+  private deliverPtyOutput(data: string): void {
+    this.ptyCallbacks?.onData?.(data);
   }
 
   /** Append to the replay buffer, trimming whole chunks past the cap. */
@@ -324,6 +349,7 @@ export class ResttyEngine implements TerminalEngine {
     this.restty = null;
     this.pane = null;
     this.backend = null;
+    this.ptyCallbacks = null;
     // Detached engines (created, never attached) just wait for attach —
     // createInstance needs a laid-out host to measure.
     if (this.hostEl.parentElement !== null) {
@@ -350,6 +376,7 @@ export class ResttyEngine implements TerminalEngine {
     }
     this.restty = null;
     this.pane = null;
+    this.ptyCallbacks = null;
     this.hostEl.remove();
   }
 }
