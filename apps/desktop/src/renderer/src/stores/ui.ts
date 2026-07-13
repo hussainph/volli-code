@@ -80,14 +80,11 @@ interface UiState {
   settingsOpen: boolean;
   /** Session-only — never persisted; see module doc. */
   newTicketOpen: boolean;
-  /** Session-only — the per-project Archive dialog (board header entry). App-wide chrome, like `newTicketOpen`. */
-  archiveOpen: boolean;
   setSidebarWidth(width: number): void;
   stepUiScale(delta: 1 | -1): void;
   resetUiScale(): void;
   setSettingsOpen(open: boolean): void;
   setNewTicketOpen(open: boolean): void;
-  setArchiveOpen(open: boolean): void;
 }
 
 type PersistedUiState = Pick<UiState, "sidebarWidth" | "uiScale">;
@@ -109,13 +106,11 @@ export function createUiStore(storage?: StateStorage) {
         uiScale: UI_SCALE_DEFAULT,
         settingsOpen: false,
         newTicketOpen: false,
-        archiveOpen: false,
         setSidebarWidth: (width) => set({ sidebarWidth: clampSidebarWidth(width) }),
         stepUiScale: (delta) => set((state) => ({ uiScale: steppedScale(state.uiScale, delta) })),
         resetUiScale: () => set({ uiScale: UI_SCALE_DEFAULT }),
         setSettingsOpen: (open) => set({ settingsOpen: open }),
         setNewTicketOpen: (open) => set({ newTicketOpen: open }),
-        setArchiveOpen: (open) => set({ archiveOpen: open }),
       }),
       {
         name: "volli:ui",

@@ -29,7 +29,6 @@ import {
 } from "@renderer/components/ui/dialog";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { useBoardStore } from "@renderer/stores/board";
-import { useUiStore } from "@renderer/stores/ui";
 
 /** "Jul 14, 2026" — a compact archived-on stamp. */
 function formatArchivedAt(epochMs: number): string {
@@ -183,31 +182,24 @@ function ArchiveList({ project }: { project: Project }) {
 }
 
 /**
- * The per-project Archive dialog: opened from the board header's Archive
- * button, controlled by the ui store's `archiveOpen` flag plus a selected
- * project (there's no Archive without one). Mirrors {@link NewTicketDialog}'s
- * shape — mounted app-wide, its body remounted per open so each open refetches.
+ * The per-project Archive dialog, owned by the board header — its only entry
+ * point, so open state is the header's local useState rather than a global
+ * ui-store flag (unlike {@link NewTicketDialog}, whose app-shell mount is
+ * justified by the app-wide "c" hotkey). A vanished project can't strand the
+ * open flag either: the header unmounts with the board and the state dies
+ * with it. The body remounts per open, so every open refetches.
  */
-export function ArchiveDialog() {
+export function ArchiveDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange(open: boolean): void;
+}) {
   const project = useSelectedProject();
-  const archiveOpen = useUiStore((state) => state.archiveOpen);
-  const open = archiveOpen && project !== null;
-
-  // If the selected project vanishes while the dialog is open, `open` just
-  // computes false — Radix closes WITHOUT firing onOpenChange, which would
-  // strand `archiveOpen === true` and pop the Archive back up uninvited on
-  // the next project selection.
-  React.useEffect(() => {
-    if (archiveOpen && project === null) useUiStore.getState().setArchiveOpen(false);
-  }, [archiveOpen, project]);
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        if (!next) useUiStore.getState().setArchiveOpen(false);
-      }}
-    >
+    <Dialog open={open && project !== null} onOpenChange={onOpenChange}>
       <DialogContent>{project !== null && <ArchiveList project={project} />}</DialogContent>
     </Dialog>
   );

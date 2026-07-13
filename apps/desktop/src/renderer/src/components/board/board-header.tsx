@@ -1,3 +1,4 @@
+import * as React from "react";
 import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
 import { ArrowsDownUpIcon } from "@phosphor-icons/react/dist/csr/ArrowsDownUp";
 import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
@@ -11,6 +12,7 @@ import {
   type TicketFilter,
 } from "@volli/shared";
 
+import { ArchiveDialog } from "@renderer/components/board/archive-dialog";
 import { FilterBar } from "@renderer/components/board/filter-bar";
 import { Button } from "@renderer/components/ui/button";
 import {
@@ -127,6 +129,11 @@ function ViewToggle({ projectId }: { projectId: string }) {
 
 /** Compact board page header: title · count · filter bar · ordering + view controls. */
 export function BoardHeader({ projectId, ticketCount, tickets, filter }: BoardHeaderProps) {
+  // The Archive dialog's one entry point is the button below, so its open
+  // state lives here (not in the ui store — no hotkey or second surface needs
+  // it, unlike the New-ticket dialog's app-wide "c" shortcut).
+  const [archiveOpen, setArchiveOpen] = React.useState(false);
+
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 px-4 pt-3 pb-3">
       <h2 className="shrink-0 text-sm font-semibold">Board</h2>
@@ -138,16 +145,16 @@ export function BoardHeader({ projectId, ticketCount, tickets, filter }: BoardHe
         <OrderingMenu projectId={projectId} />
         <ViewToggle projectId={projectId} />
         {/* The Archive is a per-project view, not a sixth column (CONCEPT #92) —
-            reached from here. Opens the app-wide ArchiveDialog for the selected
-            project via the ui store, same pattern as the New-ticket button. */}
+            reached from here and only here. */}
         <Button
           variant="ghost"
           aria-label="Archive"
           className="size-7 rounded-full border border-border text-muted-foreground"
-          onClick={() => useUiStore.getState().setArchiveOpen(true)}
+          onClick={() => setArchiveOpen(true)}
         >
           <ArchiveIcon className="size-3.5" />
         </Button>
+        <ArchiveDialog open={archiveOpen} onOpenChange={setArchiveOpen} />
         {/* The prominent, always-reachable create entry point — the column
             composers (board-column.tsx) hide at the bottom of long columns,
             so this + the plain "c" hotkey (use-new-ticket-shortcut.ts) are
