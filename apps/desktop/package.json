@@ -5,6 +5,7 @@
   "type": "module",
   "main": "dist-electron/main.cjs",
   "scripts": {
+    "postinstall": "pnpm run rebuild:native",
     "typecheck": "tsc --noEmit -p tsconfig.node.json --composite false && tsc --noEmit -p tsconfig.web.json --composite false",
     "test": "vp test run",
     "start": "node scripts/start-electron.mjs",

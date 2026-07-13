@@ -9,9 +9,8 @@ packages:
 allowBuilds:
   better-sqlite3: true
   electron: true
-  # node-pty ships a native addon compiled against the *system* Node ABI at
-  # install time. Electron ^43 runs a different ABI, so after every install run
-  # `pnpm -C apps/desktop run rebuild:pty` to recompile it for Electron.
+  # Native addons are initially compiled against the system Node ABI. The
+  # desktop package's postinstall rebuilds them for Electron's ABI.
   node-pty: true
 
 catalog:
