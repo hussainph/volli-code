@@ -370,17 +370,17 @@ describe("rehydration sanitization (corrupt JSON)", () => {
   });
 });
 
-describe("navHistory", () => {
-  const snap = (
-    projectId: string | null,
-    nav: NavKey = "board",
-    openTicketId: string | null = null,
-  ) => ({
-    projectId,
-    nav,
-    openTicketId,
-  });
+const snap = (
+  projectId: string | null,
+  nav: NavKey = "board",
+  openTicketId: string | null = null,
+) => ({
+  projectId,
+  nav,
+  openTicketId,
+});
 
+describe("navHistory", () => {
   it("starts empty", () => {
     const store = createWorkspaceStore(createMemoryStorage());
     expect(store.getState().navHistory).toEqual({ back: [], current: null, forward: [] });
