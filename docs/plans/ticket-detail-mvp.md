@@ -66,6 +66,20 @@ Worktrees are **pure code isolation** for parallelizing dozens of tickets. Creat
 27. **Red-green-refactor** throughout. Strong **integration tests** (IPC/repo, main-process) and **e2e tests** (Playwright `_electron` — see memory `volli-live-smoke-test-recipe`) covering: open-detail flow, title/body edit + persistence, labels, comments CRUD, activity feed, artifact render/edit, ticket-session creation + env injection, tab plane switching, restart persistence of open ticket.
 28. All existing conventions hold: no Node in renderer, preload is the only door, every failed mutation surfaces a toast, strict TS, branch+PR flow (never commit to main), 100% coverage gate on shared package.
 
+## Round 2 — UX revision (grilling 2026-07-14, Hussain × Fable; supersedes conflicting round-1 items)
+
+29. **Editor is Obsidian-style live preview**, replacing click-to-edit (supersedes #9's textarea flip). CodeMirror 6 + an owned decoration layer (Obsidian's architecture): the markdown buffer is the document; syntax renders in place and reveals near the cursor. No mode flip, no accent border on edit — clicking just places a cursor. Byte-faithful to agent-written files.
+30. Editor v1 construct set: headings, bold/italic/strike, inline code, links (syntax hidden, click-to-open), bullet/ordered/task lists, blockquotes, code fences, images inline, horizontal rules. Tables stay raw syntax. No floating toolbar; ⌘B/⌘I wrap selection. Debounced autosave semantics from #10 unchanged.
+31. **Artifacts `.md` editing uses the same editor** with autosave (explicit Save button removed) + an on-disk conflict guard: if the file changed on disk since load, don't clobber — surface it. Title stays an inline input; comment composing stays a plain textarea this round.
+32. **Activity feed = hybrid signal/collapse**: comments and high-signal events (`created`, `status_changed`, `session_started`, `session_ended`) render inline; runs of low-signal events (`retitled`, `body_edited`, `priority_changed`, `labels_changed`, `worktree_changed`, `archived`, `unarchived`) collapse into a trailing "+N more" inline expander.
+33. **Harness removed from tickets entirely** (migration 004 drops `tickets.harness_id`; type, filter model, properties row, filter chip, create-dialog picker all go). Harness identity lives on sessions only. `HARNESS_IDS`/labels stay in shared for session identity.
+34. **Right rail is sessions-first**: sessions list gets the rail; a "Details" collapsible (default collapsed, persisted) pinned at the bottom holds status/priority/labels/worktree (resolves #4's flagged placement revisit).
+35. **Right-rail toggle** at the chrome bar's right edge (mirrored sidebar icon, visible when a ticket is open), ⌥⌘B, collapsed state persisted.
+36. **Chrome-style tab strip at the top of the detail view**, spanning main column + rail (browser-window metaphor): Doc tab labeled with the ticket display ID, Artifacts, session tabs with close ×, a `+` for new session. Breadcrumb header retires.
+37. **Slack-style ←/→ workspace nav history** in the chrome bar traversing all navigation snapshots (project switches, sidebar nav, ticket open/close); ⌘[ / ⌘]; Escape-in-detail still returns to Board. History is in-memory (not persisted).
+38. **Sessions unified onto one store + resident layer**: scratch and ticket sessions share `stores/sessions.ts` machinery with a scope field; the always-mounted layer owns all live terminal views (ticket detail becomes a view over it — terminals survive navigating back to Board). Splits, font controls, kill/close reach parity inside tickets.
+39. **Sessions renameable**: double-click tab / rail row for inline rename + context-menu Rename (filled Phosphor icon); persists via `api.sessions.rename` → sessions repo title update; both surfaces.
+
 ## Deferred / flagged (do not build, do not forget)
 - Merge Backlog+Todo columns (product decision, later).
 - Properties-rail placement revisit.
