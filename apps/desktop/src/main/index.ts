@@ -10,6 +10,7 @@ import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
 import { registerAppMenu } from "./menu";
 import { registerTerminalIpcHandlers } from "./pty";
+import { registerArtifactIpcHandlers } from "./volli-fs";
 
 // Fixes dev and the packaged app to one shared Electron `userData` dir (by
 // default they diverge: packaged apps use the productName, dev falls back to
@@ -146,6 +147,9 @@ app.whenReady().then(() => {
     console.error("[volli] failed to open database:", dbHandle.error);
   }
   registerDataIpcHandlers(dbHandle);
+  // `.volli` artifacts fs plumbing (list/read/write/create/promote/watch);
+  // same degraded-DB stance as registerDataIpcHandlers.
+  registerArtifactIpcHandlers(dbHandle);
 
   createWindow();
 

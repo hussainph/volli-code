@@ -1,3 +1,4 @@
+export * from "./artifact";
 export * from "./board";
 export * from "./ticket";
 export * from "./ticket-branch";

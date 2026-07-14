@@ -5,6 +5,13 @@ import { contextBridge, ipcRenderer } from "electron";
 import type {
   AppStateSetResult,
   ArchivedTicketsResult,
+  ArtifactCreateResult,
+  ArtifactListResult,
+  ArtifactPromoteResult,
+  ArtifactReadImageResult,
+  ArtifactReadResult,
+  ArtifactsChangedEvent,
+  ArtifactTier,
   BootstrapResult,
   CreateTerminalSessionRequest,
   CreateTerminalSessionResult,
@@ -142,6 +149,70 @@ const api = {
   labels: {
     setColor: (input: { labelId: string; color: string | null }): Promise<LabelResult> =>
       ipcRenderer.invoke("volli:label-set-color" satisfies VolliIpcChannel, input),
+  },
+  artifacts: {
+    /** Both artifact tiers for a ticket (ticket resolved to its display id in main via the db). */
+    list: (input: { projectId: string; ticketId: string }): Promise<ArtifactListResult> =>
+      ipcRenderer.invoke("volli:artifact-list" satisfies VolliIpcChannel, input),
+    /** A markdown artifact's raw utf8 content. */
+    read: (input: {
+      projectId: string;
+      ticketId: string;
+      tier: ArtifactTier;
+      name: string;
+    }): Promise<ArtifactReadResult> =>
+      ipcRenderer.invoke("volli:artifact-read" satisfies VolliIpcChannel, input),
+    /** An image artifact's content as an inline `data:` URI (base64) — the CSP-safe `<img>` path. */
+    readImage: (input: {
+      projectId: string;
+      ticketId: string;
+      tier: ArtifactTier;
+      name: string;
+    }): Promise<ArtifactReadImageResult> =>
+      ipcRenderer.invoke("volli:artifact-read-image" satisfies VolliIpcChannel, input),
+    /** Writes markdown content; creates the tier's directory chain on demand. */
+    write: (input: {
+      projectId: string;
+      ticketId: string;
+      tier: ArtifactTier;
+      name: string;
+      content: string;
+    }): Promise<Result> =>
+      ipcRenderer.invoke("volli:artifact-write" satisfies VolliIpcChannel, input),
+    /** Creates a new, minimally-templated `.md` artifact in the ticket tier; `name` is forced to `.md`. */
+    create: (input: {
+      projectId: string;
+      ticketId: string;
+      name: string;
+    }): Promise<ArtifactCreateResult> =>
+      ipcRenderer.invoke("volli:artifact-create" satisfies VolliIpcChannel, input),
+    /** Moves a ticket-tier artifact up to the project tier; fails on a name collision (no silent overwrite). */
+    promote: (input: {
+      projectId: string;
+      ticketId: string;
+      name: string;
+    }): Promise<ArtifactPromoteResult> =>
+      ipcRenderer.invoke("volli:artifact-promote" satisfies VolliIpcChannel, input),
+    /** Reveals a tier's artifacts directory in Finder (creating it first if needed). */
+    revealDir: (input: {
+      projectId: string;
+      ticketId: string;
+      tier: ArtifactTier;
+    }): Promise<RevealResult> =>
+      ipcRenderer.invoke("volli:artifact-reveal-dir" satisfies VolliIpcChannel, input),
+    /** Subscribes main's `fs.watch` on both of a ticket's artifact-tier directories; pair with `unsubscribe` on unmount. */
+    subscribe: (input: { projectId: string; ticketId: string }): Promise<Result> =>
+      ipcRenderer.invoke("volli:artifact-subscribe" satisfies VolliIpcChannel, input),
+    unsubscribe: (input: { projectId: string; ticketId: string }): Promise<Result> =>
+      ipcRenderer.invoke("volli:artifact-unsubscribe" satisfies VolliIpcChannel, input),
+    /** Subscribes to debounced artifact-directory change events; returns the unsubscribe function. */
+    onChanged: (callback: (event: ArtifactsChangedEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: ArtifactsChangedEvent) =>
+        callback(payload);
+      ipcRenderer.on("volli:artifacts-changed" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:artifacts-changed" satisfies VolliIpcEvent, listener);
+    },
   },
   appState: {
     /** Upserts one `app_state` key — the async write-through the ui/workspace persist stores' storage adapter uses. */

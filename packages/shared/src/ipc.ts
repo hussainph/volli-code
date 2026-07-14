@@ -4,6 +4,7 @@
 // runtime export here is fine for main, but preload must never import it at
 // runtime.
 
+import type { ArtifactEntry } from "./artifact";
 import type { DirEntry } from "./fs-entries";
 import type { Label } from "./label";
 import type { LegacyProject } from "./legacy-import";
@@ -50,7 +51,16 @@ export type VolliIpcChannel =
   | "volli:session-list"
   | "volli:session-list-for-ticket"
   | "volli:label-set-color"
-  | "volli:app-state-set";
+  | "volli:app-state-set"
+  | "volli:artifact-list"
+  | "volli:artifact-read"
+  | "volli:artifact-read-image"
+  | "volli:artifact-write"
+  | "volli:artifact-create"
+  | "volli:artifact-promote"
+  | "volli:artifact-reveal-dir"
+  | "volli:artifact-subscribe"
+  | "volli:artifact-unsubscribe";
 
 /** Channel names for main→renderer push events (`webContents.send`). */
 export type VolliIpcEvent =
@@ -61,7 +71,10 @@ export type VolliIpcEvent =
   // Fired by the native View menu's zoom items. The renderer applies CSS zoom
   // to the content row (below the chrome band) rather than letting Electron
   // scale the whole page — see menu.ts for why the zoom roles are replaced.
-  | "volli:ui-zoom-command";
+  | "volli:ui-zoom-command"
+  // Debounced fs.watch broadcast (~250ms) for a subscribed ticket's two
+  // artifact-tier directories — see volli-fs.ts's ArtifactWatchManager.
+  | "volli:artifacts-changed";
 
 /** Direction of a `volli:ui-zoom-command` event: step in/out one rung, or reset. */
 export type UiZoomCommand = "in" | "out" | "reset";
@@ -161,3 +174,26 @@ export type TicketCommentsResult = Result<{ comments: TicketComment[] }>;
 
 /** A project's or a ticket's durable session records, newest first — returned by `session-list`/`session-list-for-ticket`. */
 export type SessionsResult = Result<{ sessions: SessionRecord[] }>;
+
+// ---- artifacts (.volli filesystem, ticket-detail-mvp decisions #13-17) --
+
+/** Both artifact tiers for a ticket, flat (tier discriminates) — returned by `artifact-list`. */
+export type ArtifactListResult = Result<{ entries: ArtifactEntry[] }>;
+
+/** A markdown artifact's raw utf8 content — returned by `artifact-read`. */
+export type ArtifactReadResult = Result<{ content: string }>;
+
+/** An image artifact's content as an inline `data:` URI — returned by `artifact-read-image`. */
+export type ArtifactReadImageResult = Result<{ dataUrl: string }>;
+
+/** A newly-created ticket-tier artifact's listing row — returned by `artifact-create`. */
+export type ArtifactCreateResult = Result<{ entry: ArtifactEntry }>;
+
+/** The promoted artifact's project-tier listing row — returned by `artifact-promote`. */
+export type ArtifactPromoteResult = Result<{ entry: ArtifactEntry }>;
+
+/** The `{projectId, ticketId}` a `volli:artifacts-changed` push event fired for. */
+export interface ArtifactsChangedEvent {
+  projectId: string;
+  ticketId: string;
+}
