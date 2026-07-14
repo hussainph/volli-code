@@ -84,7 +84,9 @@ export interface TerminalEngine {
   /**
    * Re-measure the container and repaint. Call after revealing a previously
    * hidden (display:none, zero-size) terminal — a hidden GPU canvas measures
-   * as zero and must be refit on show.
+   * as zero and must be refit on show. Implementations own settle timing:
+   * a fit that lands while hidden is applied on the next unpause, and the
+   * measurement is repeated once geometry/DPR have settled.
    */
   fit(): void;
 

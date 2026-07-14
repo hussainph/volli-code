@@ -100,9 +100,10 @@ export function TerminalView({
   React.useEffect(() => {
     const engine = getOrCreateEngine(sessionId);
     engine.setPaused(!visible);
-    if (visible) {
-      engine.fit();
-    }
+    // fit() re-measures now and once more next frame (engine-internal settle
+    // fit), so the settled CSS box and devicePixelRatio land without the React
+    // layer carrying renderer-timing knowledge.
+    if (visible) engine.fit();
   }, [visible, sessionId]);
 
   React.useEffect(() => {

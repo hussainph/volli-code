@@ -65,6 +65,10 @@ export class ResttyEngine implements TerminalEngine {
   private restty: Restty | null = null;
   private pane: ResttySurfacePane | null = null;
   private unsubscribeRuntime: (() => void) | null = null;
+  /** Coalesced follow-up fit — every fit() re-measures once more next frame. */
+  private settleFitFrame: number | null = null;
+  /** A fit arrived while hidden (zero-size) or paused; flushed on unpause. */
+  private pendingFit = false;
   /** Restty's PTY callbacks are the only public path that runs its output
    * filter (mouse-mode tracking, OSC handlers, reply state) before WASM.
    * Their presence IS the connection state — `isConnected()` derives from it,
@@ -213,6 +217,13 @@ export class ResttyEngine implements TerminalEngine {
       } else if (event.type === "backend") {
         this.backend = event.backend;
         if (event.backend === "webgpu") this.armDeviceLossWatch();
+      } else if (event.type === "state" && event.state === "ready") {
+        // The first visible fit can happen while restty is still loading fonts,
+        // WASM, and its GPU backend. Refit again at the lifecycle boundary
+        // where the backing canvas can actually consume the settled geometry —
+        // or, if the engine is hidden right now, owe the fit until reveal.
+        if (this.paused) this.pendingFit = true;
+        else this.fit();
       }
     });
   }
@@ -280,10 +291,35 @@ export class ResttyEngine implements TerminalEngine {
     // Skips repaints + GPU ticks; PTY parsing continues, so the buffer stays
     // current while hidden.
     this.pane?.runtime.terminal.setPaused(paused);
+    // Flush any fit that arrived while hidden (DPR change, renderer-ready) so
+    // reveal is correct even for hosts that don't pair setPaused with fit().
+    if (!paused && this.pendingFit) this.fit();
   }
 
   fit(): void {
     if (this.disposed || this.restty === null) return;
+    this.fitNow();
+    // Chromium can hand out geometry/devicePixelRatio one frame before layout
+    // and the display association settle (reveal, monitor move, renderer
+    // startup). One coalesced next-frame re-measure covers that race for every
+    // caller, so no call site needs its own requestAnimationFrame twin.
+    if (this.settleFitFrame !== null) window.cancelAnimationFrame(this.settleFitFrame);
+    this.settleFitFrame = window.requestAnimationFrame(() => {
+      this.settleFitFrame = null;
+      this.fitNow();
+    });
+  }
+
+  private fitNow(): void {
+    if (this.disposed || this.restty === null) return;
+    const bounds = this.hostEl.getBoundingClientRect();
+    if (bounds.width <= 0 || bounds.height <= 0) {
+      // A hidden host measures as zero — don't feed restty a degenerate box;
+      // owe the fit so unpausing (reveal) applies it instead of losing it.
+      this.pendingFit = true;
+      return;
+    }
+    this.pendingFit = false;
     // Re-measure from the (now visible) canvas size and repaint. The follow-up
     // `term-size` event forwards the corrected grid to the PTY.
     this.restty.updateSize(true);
@@ -338,6 +374,8 @@ export class ResttyEngine implements TerminalEngine {
   /** Recreate the renderer after a GPU device loss (session already rotated). */
   rebuildRenderer(): void {
     if (this.disposed || this.restty === null) return;
+    if (this.settleFitFrame !== null) window.cancelAnimationFrame(this.settleFitFrame);
+    this.settleFitFrame = null;
     this.unsubscribeRuntime?.();
     this.unsubscribeRuntime = null;
     try {
@@ -362,6 +400,8 @@ export class ResttyEngine implements TerminalEngine {
     if (this.disposed) return;
     this.disposed = true;
     this.hostEl.removeEventListener("keydown", this.onKeyDownCapture, true);
+    if (this.settleFitFrame !== null) window.cancelAnimationFrame(this.settleFitFrame);
+    this.settleFitFrame = null;
     this.unsubscribeRuntime?.();
     this.unsubscribeRuntime = null;
     this.dataCbs.clear();
