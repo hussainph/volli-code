@@ -244,6 +244,17 @@ describe("renameTerminalSession", () => {
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Rename failed: nope");
   });
 
+  it("rolls the title back and toasts when the persist invocation rejects", async () => {
+    renameMock.mockRejectedValue(new Error("ipc down"));
+    useSessionsStore.getState().addSession(scratchScope("p"), "s1"); // "Terminal 1"
+
+    renameTerminalSession("s1", "Renamed");
+    await flush();
+
+    expect(useSessionsStore.getState().byOwner["p"]?.tabs[0]?.title).toBe("Terminal 1");
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Rename failed: ipc down");
+  });
+
   it("is a no-op for a blank or unchanged title, and never calls main", () => {
     useSessionsStore.getState().addSession(scratchScope("p"), "s1", "Session 1");
 

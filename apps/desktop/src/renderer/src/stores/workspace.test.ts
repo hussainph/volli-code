@@ -398,6 +398,14 @@ describe("navHistory", () => {
     expect(store.getState().stepNavForward()).toEqual(snap("a", "sessions"));
   });
 
+  it("stepNavForward returns null and leaves history unchanged when the forward stack is empty", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    const before = store.getState().navHistory;
+
+    expect(store.getState().stepNavForward()).toBeNull();
+    expect(store.getState().navHistory).toBe(before);
+  });
+
   it("dedupes a consecutive identical snapshot without notifying", () => {
     const store = createWorkspaceStore(createMemoryStorage());
     store.getState().recordNav(snap("a"));

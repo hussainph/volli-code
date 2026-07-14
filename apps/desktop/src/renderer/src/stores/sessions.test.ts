@@ -165,6 +165,91 @@ describe("split panes", () => {
     expect(store.getState().sessionOwner["s2"]).toBe("t1");
   });
 
+  it("splits a pane that lives in the second child of an existing split", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1");
+    store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
+
+    // s2 is the SECOND child of the split — this recurses past an unchanged
+    // first subtree into the second before replacing the leaf.
+    store.getState().addSplit("p", "s1", "s2", "s3", "horizontal");
+
+    const tab = store.getState().byOwner["p"]!.tabs[0]!;
+    expect(tab.layout).toEqual({
+      kind: "split",
+      id: "s2",
+      direction: "vertical",
+      ratio: 0.5,
+      first: { kind: "pane", sessionId: "s1", exitCode: null },
+      second: {
+        kind: "split",
+        id: "s3",
+        direction: "horizontal",
+        ratio: 0.5,
+        first: { kind: "pane", sessionId: "s2", exitCode: null },
+        second: { kind: "pane", sessionId: "s3", exitCode: null },
+      },
+    });
+  });
+
+  it("rebuilds a split when removing a deep pane collapses its nested first subtree but leaves the second sibling intact", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1");
+    store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
+    store.getState().addSplit("p", "s1", "s1", "s3", "horizontal");
+    // layout: split(s2, vertical){ first: split(s3, horizontal){first: s1, second: s3}, second: s2 }
+
+    store.getState().closePane("p", "s1", "s1");
+
+    const tab = store.getState().byOwner["p"]!.tabs[0]!;
+    expect(tab.layout).toEqual({
+      kind: "split",
+      id: "s2",
+      direction: "vertical",
+      ratio: 0.5,
+      first: { kind: "pane", sessionId: "s3", exitCode: null },
+      second: { kind: "pane", sessionId: "s2", exitCode: null },
+    });
+  });
+
+  it("leaves a nested split subtree untouched (same reference) when the split target lives outside it entirely", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1");
+    store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
+    store.getState().addSplit("p", "s1", "s1", "s3", "horizontal");
+    // layout: split(s2, vertical){ first: split(s3, horizontal){first: s1, second: s3}, second: s2 }
+    const nestedFirst = (store.getState().byOwner["p"]!.tabs[0]!.layout as { first: unknown })
+      .first;
+
+    // s2 is the SIMPLE second pane, entirely outside the nested first subtree —
+    // recursing into that subtree to look for s2 finds no match on either side,
+    // so it must come back unchanged (the ternary's untouched-layout arm).
+    store.getState().addSplit("p", "s1", "s2", "s4", "vertical");
+
+    const layout = store.getState().byOwner["p"]!.tabs[0]!.layout as { first: unknown };
+    expect(layout.first).toBe(nestedFirst);
+  });
+
+  it("rebuilds a split when removing a deep pane collapses its nested second subtree but leaves the first sibling intact", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1");
+    store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
+    store.getState().addSplit("p", "s1", "s2", "s3", "horizontal");
+    // layout: split(s2, vertical){ first: s1, second: split(s3, horizontal){first: s2, second: s3} }
+
+    store.getState().closePane("p", "s1", "s2");
+
+    const tab = store.getState().byOwner["p"]!.tabs[0]!;
+    expect(tab.layout).toEqual({
+      kind: "split",
+      id: "s2",
+      direction: "vertical",
+      ratio: 0.5,
+      first: { kind: "pane", sessionId: "s1", exitCode: null },
+      second: { kind: "pane", sessionId: "s3", exitCode: null },
+    });
+  });
+
   it("ignores unknown owners, tabs, source panes, and duplicate pane ids", () => {
     const store = createSessionsStore();
     store.getState().addSession(P, "s1");
@@ -331,6 +416,16 @@ describe("renameSession", () => {
 
     expect(store.getState().byOwner).toBe(before);
   });
+
+  it("is a no-op when the routing index names an owner with no container (defensive)", () => {
+    const store = createSessionsStore();
+    store.setState({ sessionOwner: { s1: "ghost-owner" } });
+    const before = store.getState().byOwner;
+
+    store.getState().renameSession("s1", "New title");
+
+    expect(store.getState().byOwner).toBe(before);
+  });
 });
 
 describe("markExited", () => {
@@ -369,6 +464,29 @@ describe("markExited", () => {
     const before = store.getState().byOwner;
 
     store.getState().markExited("ghost", 0);
+    expect(store.getState().byOwner).toBe(before);
+  });
+
+  it("is a no-op when the routing index names an owner with no container (defensive)", () => {
+    const store = createSessionsStore();
+    store.setState({ sessionOwner: { s1: "ghost-owner" } });
+    const before = store.getState().byOwner;
+
+    store.getState().markExited("s1", 1);
+
+    expect(store.getState().byOwner).toBe(before);
+  });
+
+  it("is a no-op when the routing index outlives the pane it points to (defensive)", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1");
+    // s1's own routing index is intact, but "ghost" is (incorrectly) routed to
+    // the same owner without any pane in its tabs to match.
+    store.setState((state) => ({ sessionOwner: { ...state.sessionOwner, ghost: "p" } }));
+    const before = store.getState().byOwner;
+
+    store.getState().markExited("ghost", 1);
+
     expect(store.getState().byOwner).toBe(before);
   });
 });

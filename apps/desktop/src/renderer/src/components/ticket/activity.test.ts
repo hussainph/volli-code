@@ -162,6 +162,12 @@ describe("pickBunchLabel", () => {
     const edited = event({ kind: "body_edited" }, 30);
     expect(pickBunchLabel([first, second, edited]).id).toBe(second.id);
   });
+
+  it("falls back to the latest event when no kind matches the priority list (defensive; unreachable for real bunches since `commented` is filtered before bunching)", () => {
+    const first = event({ kind: "commented", commentId: "c1" }, 10);
+    const second = event({ kind: "commented", commentId: "c2" }, 20);
+    expect(pickBunchLabel([first, second]).id).toBe(second.id);
+  });
 });
 
 describe("buildActivityFeed", () => {
