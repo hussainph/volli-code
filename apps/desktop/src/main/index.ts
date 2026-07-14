@@ -287,6 +287,13 @@ app.whenReady().then(async () => {
   // renderer can surface the failure like any other failed mutation.
   const dbPath =
     (isDev ? process.env["VOLLI_DB_PATH"] : undefined) ?? join(app.getPath("userData"), "volli.db");
+  // Log the resolved db up front: dev and packaged deliberately open DIFFERENT
+  // files (the `-dev` userData split above), so a `pnpm dev` boot lands on the
+  // empty `Volli Code-dev/volli.db` while your real data sits in the packaged
+  // app's `Volli Code/volli.db`. Without this line an empty dev UI is
+  // indistinguishable from a broken data pointer — surface which db is live.
+  const dbSource = isDev && process.env["VOLLI_DB_PATH"] ? "VOLLI_DB_PATH" : "userData";
+  console.info(`[volli] db: mode=${isDev ? "dev" : "packaged"} source=${dbSource} path=${dbPath}`);
   let dbHandle: DbHandle;
   try {
     mkdirSync(dirname(dbPath), { recursive: true });
