@@ -1,3 +1,4 @@
+import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
 import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
 import {
   TICKET_PRIORITIES,
@@ -12,6 +13,7 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuSeparator,
   ContextMenuSub,
   ContextMenuSubContent,
   ContextMenuSubTrigger,
@@ -29,6 +31,10 @@ import { useBoardStore } from "@renderer/stores/board";
  * (`Number.MAX_SAFE_INTEGER`, clamped by the shared `moveTicket` op). Under a
  * non-manual sort the card still snaps to its sorted slot afterward — the same
  * displayed-position-is-sort-driven behavior as a drag drop.
+ *
+ * "Archive" is non-destructive (CONCEPT #16/#92): the card leaves the board but
+ * the ticket, its labels, and its event log survive in the project's Archive,
+ * from where it can be restored or — the only destructive act — deleted.
  */
 export function TicketContextMenu({
   ticket,
@@ -81,6 +87,13 @@ export function TicketContextMenu({
             ))}
           </ContextMenuSubContent>
         </ContextMenuSub>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          onSelect={() => useBoardStore.getState().archiveTicket(projectId, ticket.id)}
+        >
+          <ArchiveIcon className="size-3.5" />
+          Archive
+        </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
   );

@@ -16,7 +16,10 @@ import {
   EMPTY_TICKET_FILTER,
   moveTicket as moveTicketOp,
   setTicketPriority as setTicketPriorityOp,
+  type ArchivedTicket,
+  type ArchivedTicketsResult,
   type Label,
+  type Result,
   type Ticket,
   type TicketFilter,
   type TicketPriority,
@@ -43,17 +46,32 @@ export interface BoardGateway {
     toIndex: number;
   }): Promise<TicketsResult>;
   setTicketPriority(input: { ticketId: string; priority: TicketPriority }): Promise<TicketResult>;
+  archiveTicket(input: { ticketId: string }): Promise<Result>;
+  unarchiveTicket(input: { ticketId: string }): Promise<TicketResult>;
+  deleteTicket(input: { ticketId: string }): Promise<Result>;
+  listArchived(projectId: string): Promise<ArchivedTicketsResult>;
 }
 
 const defaultGateway: BoardGateway = {
   createTicket: (input) => window.api.tickets.create(input),
   moveTicket: (input) => window.api.tickets.move(input),
   setTicketPriority: (input) => window.api.tickets.setPriority(input),
+  archiveTicket: (input) => window.api.tickets.archive(input),
+  unarchiveTicket: (input) => window.api.tickets.unarchive(input),
+  deleteTicket: (input) => window.api.tickets.delete(input),
+  listArchived: (projectId) => window.api.tickets.listArchived(projectId),
 };
 
 interface BoardState {
   ticketsByProject: Record<string, Ticket[]>;
   labelsByProject: Record<string, Label[]>;
+  /**
+   * A project's archived tickets — cold storage for the Archive view, kept OUT
+   * of `ticketsByProject` (the board holds only live cards) and loaded on
+   * demand via {@link BoardState.loadArchived}, not at boot. A missing entry
+   * means "not loaded yet", not "no archived tickets".
+   */
+  archivedByProject: Record<string, ArchivedTicket[]>;
   /** Session-only — never persisted; see module doc. */
   filterByProject: Record<string, TicketFilter>;
   /** The selected card per project. Session-only — never persisted; see module doc. */
@@ -83,6 +101,19 @@ interface BoardState {
     options?: { priority?: TicketPriority },
   ): Promise<Ticket | null>;
   setTicketPriority(projectId: string, ticketId: string, priority: TicketPriority): Promise<void>;
+  /**
+   * Fetches the project's archived tickets into `archivedByProject` (the
+   * Archive view calls this on open). Resolves `false` when the fetch failed
+   * (already toasted) so the view can show a retry state instead of an
+   * indefinite "Loading…".
+   */
+  loadArchived(projectId: string): Promise<boolean>;
+  /** Archives a ticket: optimistically removes it from the board, reverting (and toasting) on failure. */
+  archiveTicket(projectId: string, ticketId: string): Promise<void>;
+  /** Returns an archived ticket to the board: drops it from the Archive slice and appends the revived live ticket. */
+  unarchiveTicket(projectId: string, ticketId: string): Promise<void>;
+  /** Permanently deletes an archived ticket (the only destructive act); optimistic, reverts on failure. */
+  deleteArchivedTicket(projectId: string, ticketId: string): Promise<void>;
   setSearch(projectId: string, search: string): void;
   togglePriority(projectId: string, priority: TicketPriority): void;
   toggleLabel(projectId: string, label: string): void;
@@ -109,6 +140,19 @@ function mergeAuthoritative(authoritative: Ticket[], current: Ticket[]): Ticket[
   const ids = new Set(authoritative.map((ticket) => ticket.id));
   const extras = current.filter((ticket) => !ids.has(ticket.id));
   return extras.length === 0 ? authoritative : [...authoritative, ...extras];
+}
+
+/**
+ * `slice` with `ticket` restored at `index` (clamped into range) — the shared
+ * failure-revert shape, a no-op when a concurrent mutation already put the
+ * ticket back. Restoring at the ORIGINAL index (not appending) matters for the
+ * Archive slice, whose array order (newest-archived first) the Archive view
+ * renders verbatim — an appended revert would sink the ticket to the bottom.
+ */
+function restoreAt<T extends { id: string }>(slice: T[], ticket: T, index: number): T[] {
+  if (slice.some((existing) => existing.id === ticket.id)) return slice;
+  const at = Math.max(0, Math.min(index, slice.length));
+  return [...slice.slice(0, at), ticket, ...slice.slice(at)];
 }
 
 /** Factory so tests can inject a fake gateway instead of the real preload bridge. */
@@ -147,9 +191,26 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
       set({ ticketsByProject: { ...byProject, [projectId]: update(slice) } });
     }
 
+    /**
+     * The Archive-slice analog of {@link reconcileSlice}: applies `update` to
+     * the project's archived list read FRESH from state, guarding a slice that
+     * was never loaded (or was dropped by `forget` while an IPC was in flight)
+     * — never resurrect Archive data the store isn't holding.
+     */
+    function reconcileArchived(
+      projectId: string,
+      update: (slice: ArchivedTicket[]) => ArchivedTicket[],
+    ): void {
+      const byProject = get().archivedByProject;
+      const slice: ArchivedTicket[] | undefined = byProject[projectId];
+      if (!slice) return;
+      set({ archivedByProject: { ...byProject, [projectId]: update(slice) } });
+    }
+
     return {
       ticketsByProject: {},
       labelsByProject: {},
+      archivedByProject: {},
       filterByProject: {},
       selectedByProject: {},
 
@@ -230,6 +291,119 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         patch(result.ticket);
       },
 
+      async loadArchived(projectId) {
+        const result = await writeThrough(
+          "load archive",
+          (): Promise<ArchivedTicketsResult> => gateway.listArchived(projectId),
+        );
+        if (!result) return false;
+        // Wholesale-set this ONE project's archived slice from the authoritative
+        // fetch — the Archive view is a fresh read each open, so a snapshot
+        // replace (not a merge) is exactly right here.
+        set({ archivedByProject: { ...get().archivedByProject, [projectId]: result.tickets } });
+        return true;
+      },
+
+      async archiveTicket(projectId, ticketId) {
+        const previous = get().ticketsByProject[projectId] ?? [];
+        const target = previous.find((ticket) => ticket.id === ticketId);
+        if (!target) return; // unknown id — nothing to archive
+        const index = previous.indexOf(target);
+
+        // Optimistically drop the card from the board.
+        reconcileSlice(projectId, (slice) => slice.filter((ticket) => ticket.id !== ticketId));
+
+        const result = await writeThrough(
+          "archive ticket",
+          (): Promise<Result> => gateway.archiveTicket({ ticketId }),
+        );
+        if (!result) {
+          // Revert: restore the card into the FRESH slice, unless a concurrent
+          // mutation already put it back.
+          reconcileSlice(projectId, (slice) => restoreAt(slice, target, index));
+          return;
+        }
+        // Success — drop it from the board slice AGAIN: a move IPC in flight
+        // when the archive committed returns an authoritative list snapshotted
+        // while this ticket was still live, and mergeAuthoritative would have
+        // resurrected it as an "extra". Responses arrive in send order, so
+        // this later word wins.
+        reconcileSlice(projectId, (slice) => slice.filter((ticket) => ticket.id !== ticketId));
+        // The ticket is now archived; any cached Archive slice is stale, so drop
+        // it — the next `loadArchived` (on Archive-view open) refetches it in.
+        const { archivedByProject } = get();
+        if (projectId in archivedByProject) {
+          const next = { ...archivedByProject };
+          delete next[projectId];
+          set({ archivedByProject: next });
+        }
+        // An archived card can't stay selected — `forget` clears selection on
+        // project removal; the archive lifecycle does the same on its way out
+        // (otherwise Escape-deselect binds to a phantom and a later restore
+        // reappears pre-selected).
+        const { selectedByProject } = get();
+        if (selectedByProject[projectId] === ticketId) {
+          set({ selectedByProject: { ...selectedByProject, [projectId]: null } });
+        }
+      },
+
+      async unarchiveTicket(projectId, ticketId) {
+        const previousArchived = get().archivedByProject[projectId] ?? [];
+        const target = previousArchived.find((ticket) => ticket.id === ticketId);
+        if (!target) return; // not in the loaded Archive slice (e.g. a double-fired Restore) — no IPC
+
+        const index = previousArchived.indexOf(target);
+        // Optimistically drop it from the Archive slice.
+        reconcileArchived(projectId, (slice) => slice.filter((ticket) => ticket.id !== ticketId));
+
+        const result = await writeThrough(
+          "unarchive ticket",
+          (): Promise<TicketResult> => gateway.unarchiveTicket({ ticketId }),
+        );
+        if (!result) {
+          // Revert: restore it to its old Archive slot unless already back.
+          reconcileArchived(projectId, (slice) => restoreAt(slice, target, index));
+          return;
+        }
+        // Success — drop it from the Archive slice AGAIN: a `loadArchived`
+        // refetch in flight (snapshotted before the unarchive committed) can
+        // have wholesale-set the slice with this ticket still listed; responses
+        // arrive in send order, so this later word wins. Then append the
+        // revived LIVE ticket to the board (reconcileSlice drops it if the
+        // project was forgotten mid-flight — never resurrect a dead slice).
+        reconcileArchived(projectId, (slice) => slice.filter((ticket) => ticket.id !== ticketId));
+        const revived = result.ticket;
+        reconcileSlice(projectId, (slice) =>
+          slice.some((ticket) => ticket.id === revived.id) ? slice : [...slice, revived],
+        );
+      },
+
+      async deleteArchivedTicket(projectId, ticketId) {
+        const previousArchived = get().archivedByProject[projectId] ?? [];
+        const target = previousArchived.find((ticket) => ticket.id === ticketId);
+        // Not in the loaded Archive slice (e.g. a double-fired Delete after the
+        // optimistic drop) — no IPC, which would throw "Unknown ticket" and
+        // toast a spurious error for an operation that already succeeded.
+        if (!target) return;
+
+        const index = previousArchived.indexOf(target);
+        // Optimistically drop it from the Archive slice.
+        reconcileArchived(projectId, (slice) => slice.filter((ticket) => ticket.id !== ticketId));
+
+        const result = await writeThrough(
+          "delete ticket",
+          (): Promise<Result> => gateway.deleteTicket({ ticketId }),
+        );
+        if (!result) {
+          // Revert: restore it to its old Archive slot unless already back.
+          reconcileArchived(projectId, (slice) => restoreAt(slice, target, index));
+          return;
+        }
+        // Success — drop it AGAIN: an in-flight `loadArchived` refetch can have
+        // re-listed it (see unarchiveTicket); the later response wins.
+        reconcileArchived(projectId, (slice) => slice.filter((ticket) => ticket.id !== ticketId));
+      },
+
       setSearch(projectId, search) {
         patchFilter(projectId, () => ({ search }));
       },
@@ -279,17 +453,26 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
       },
 
       forget(projectId) {
-        const { ticketsByProject, labelsByProject, filterByProject, selectedByProject } = get();
+        const {
+          ticketsByProject,
+          labelsByProject,
+          archivedByProject,
+          filterByProject,
+          selectedByProject,
+        } = get();
         const hasTickets = projectId in ticketsByProject;
         const hasLabels = projectId in labelsByProject;
+        const hasArchived = projectId in archivedByProject;
         const hasFilter = projectId in filterByProject;
         const hasSelection = projectId in selectedByProject;
-        if (!hasTickets && !hasLabels && !hasFilter && !hasSelection) return;
+        if (!hasTickets && !hasLabels && !hasArchived && !hasFilter && !hasSelection) return;
 
         const nextTickets = { ...ticketsByProject };
         delete nextTickets[projectId];
         const nextLabels = { ...labelsByProject };
         delete nextLabels[projectId];
+        const nextArchived = { ...archivedByProject };
+        delete nextArchived[projectId];
         const nextFilter = { ...filterByProject };
         delete nextFilter[projectId];
         const nextSelected = { ...selectedByProject };
@@ -297,6 +480,7 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         set({
           ticketsByProject: nextTickets,
           labelsByProject: nextLabels,
+          archivedByProject: nextArchived,
           filterByProject: nextFilter,
           selectedByProject: nextSelected,
         });

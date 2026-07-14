@@ -8,7 +8,7 @@ import type { DirEntry } from "./fs-entries";
 import type { Label } from "./label";
 import type { LegacyProject } from "./legacy-import";
 import type { Project } from "./project-identity";
-import type { Ticket } from "./ticket";
+import type { ArchivedTicket, Ticket } from "./ticket";
 
 /** Channel names for the preload's `contextBridge` API. */
 export type VolliIpcChannel =
@@ -35,6 +35,10 @@ export type VolliIpcChannel =
   | "volli:ticket-set-priority"
   | "volli:ticket-update"
   | "volli:ticket-set-labels"
+  | "volli:ticket-archive"
+  | "volli:ticket-unarchive"
+  | "volli:ticket-delete"
+  | "volli:ticket-list-archived"
   | "volli:label-set-color"
   | "volli:app-state-set";
 
@@ -124,6 +128,13 @@ export type TicketResult = Result<{ ticket: Ticket }>;
 
 /** The full authoritative project ticket list — returned by `ticket-move`, which reorders many rows. */
 export type TicketsResult = Result<{ tickets: Ticket[] }>;
+
+/**
+ * A project's archived tickets, newest-archived first — returned by
+ * `ticket-list-archived`, which the Archive view loads on demand (archived
+ * tickets never ride along in the boot payload; the board only holds live ones).
+ */
+export type ArchivedTicketsResult = Result<{ tickets: ArchivedTicket[] }>;
 
 export type LabelResult = Result<{ label: Label }>;
 

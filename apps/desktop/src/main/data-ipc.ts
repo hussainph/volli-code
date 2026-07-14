@@ -14,6 +14,7 @@ import {
 } from "@volli/shared";
 import type {
   AppStateSetResult,
+  ArchivedTicketsResult,
   BootstrapPayload,
   BootstrapResult,
   Label,
@@ -23,6 +24,7 @@ import type {
   Project,
   ProjectCreateResult,
   ProjectMutationResult,
+  Result,
   Ticket,
   TicketPriority,
   TicketResult,
@@ -50,15 +52,19 @@ import {
   reorderProjects,
 } from "./db/projects-repo";
 import {
+  archiveTicket,
   bumpTicketVersion,
-  countTicketsInStatus,
+  deleteTicket,
   getTicket,
   getTicketLabelNames,
   getTicketRow,
   insertTicket,
   listAllTickets,
+  listArchivedTicketsByProject,
   listTicketsByProject,
+  nextPositionInStatus,
   nextTicketNumberForProject,
+  unarchiveTicket,
   updateTicketFields,
   updateTicketPositionStatus,
   updateTicketPriority,
@@ -80,6 +86,10 @@ const DATA_CHANNELS: readonly VolliIpcChannel[] = [
   "volli:ticket-set-priority",
   "volli:ticket-update",
   "volli:ticket-set-labels",
+  "volli:ticket-archive",
+  "volli:ticket-unarchive",
+  "volli:ticket-delete",
+  "volli:ticket-list-archived",
   "volli:label-set-color",
   "volli:app-state-set",
 ];
@@ -198,6 +208,16 @@ function isTicketSetLabelsInput(value: unknown): value is TicketSetLabelsInput {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
   return typeof candidate["ticketId"] === "string" && isStringArray(candidate["labels"]);
+}
+
+interface TicketIdInput {
+  ticketId: string;
+}
+
+/** The `{ ticketId }` shape shared by the archive/unarchive/delete handlers. */
+function isTicketIdInput(value: unknown): value is TicketIdInput {
+  if (typeof value !== "object" || value === null) return false;
+  return typeof (value as Record<string, unknown>)["ticketId"] === "string";
 }
 
 interface LabelSetColorInput {
@@ -382,7 +402,7 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
         const now = Date.now();
         const run = db.transaction((): Ticket => {
           const ticketNumber = nextTicketNumberForProject(db, input.projectId);
-          const position = countTicketsInStatus(db, input.projectId, input.status);
+          const position = nextPositionInStatus(db, input.projectId, input.status);
           const ticket = createTicket({
             id: randomUUID(),
             projectId: input.projectId,
@@ -566,6 +586,101 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
           return ticket;
         });
         return { ok: true, ticket: run() };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:ticket-archive" satisfies VolliIpcChannel,
+    (_event, input: unknown): Result => {
+      if (!isTicketIdInput(input)) {
+        return { ok: false, error: "Invalid ticket" };
+      }
+      try {
+        const now = Date.now();
+        const run = db.transaction((): void => {
+          const row = getTicketRow(db, input.ticketId);
+          if (!row) throw new Error("Unknown ticket");
+          // Idempotent: re-archiving an already-archived ticket records nothing.
+          if (row.archived_at === null) {
+            archiveTicket(db, input.ticketId, now);
+            recordTicketEvent(db, input.ticketId, { kind: "archived" }, now);
+          }
+        });
+        run();
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:ticket-unarchive" satisfies VolliIpcChannel,
+    (_event, input: unknown): TicketResult => {
+      if (!isTicketIdInput(input)) {
+        return { ok: false, error: "Invalid ticket" };
+      }
+      try {
+        const now = Date.now();
+        const run = db.transaction((): Ticket => {
+          const row = getTicketRow(db, input.ticketId);
+          if (!row) throw new Error("Unknown ticket");
+          if (row.archived_at !== null) {
+            // Append at the live end of its retained column — MAX+1 runs while
+            // this ticket is still archived, so its own row can't contribute.
+            const position = nextPositionInStatus(db, row.project_id, row.status as TicketStatus);
+            unarchiveTicket(db, input.ticketId, position, now);
+            recordTicketEvent(db, input.ticketId, { kind: "unarchived" }, now);
+          }
+          const ticket = getTicket(db, input.ticketId);
+          if (!ticket) throw new Error("Unknown ticket");
+          return ticket;
+        });
+        return { ok: true, ticket: run() };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:ticket-delete" satisfies VolliIpcChannel,
+    (_event, input: unknown): Result => {
+      if (!isTicketIdInput(input)) {
+        return { ok: false, error: "Invalid ticket" };
+      }
+      try {
+        const run = db.transaction((): void => {
+          const row = getTicketRow(db, input.ticketId);
+          if (!row) throw new Error("Unknown ticket");
+          // The only destructive act, and only from the Archive: a live board
+          // ticket is archived, never hard-deleted (CONCEPT #16/#92). Guarding
+          // here — not just in the UI — keeps a stray call from nuking a live
+          // ticket's history. The FK cascades take its labels + events with it.
+          if (row.archived_at === null) {
+            throw new Error("Only archived tickets can be deleted");
+          }
+          deleteTicket(db, input.ticketId);
+        });
+        run();
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:ticket-list-archived" satisfies VolliIpcChannel,
+    (_event, projectId: unknown): ArchivedTicketsResult => {
+      if (typeof projectId !== "string") {
+        return { ok: false, error: "Invalid project id" };
+      }
+      try {
+        return { ok: true, tickets: listArchivedTicketsByProject(db, projectId) };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }

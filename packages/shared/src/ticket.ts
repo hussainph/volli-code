@@ -89,6 +89,18 @@ export interface Ticket {
 }
 
 /**
+ * An archived ticket: a {@link Ticket} that has left the board into its
+ * project's Archive (CONCEPT #16/#92). It is NOT a board card — archived
+ * tickets are read on demand for the Archive view, never hydrated into the
+ * board store. Everything about the ticket is retained; `archivedAt` (epoch
+ * ms) records when it left the board. Unarchiving returns it to the board in
+ * its retained `status`; deleting it is the only destructive act.
+ */
+export interface ArchivedTicket extends Ticket {
+  archivedAt: number;
+}
+
+/**
  * Builds a ticket's *display* id (e.g. `"VC-12"`) from a project's ticket
  * prefix and a ticket number. Presentation and branch-naming use only
  * (`ticketBranchName` in `ticket-branch.ts`) — never record identity; a

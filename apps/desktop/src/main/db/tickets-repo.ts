@@ -7,7 +7,7 @@
  * sequence for a table with no `WITHOUT ROWID` clause).
  */
 import type Database from "better-sqlite3";
-import type { Ticket, TicketPriority, TicketStatus } from "@volli/shared";
+import type { ArchivedTicket, Ticket, TicketPriority, TicketStatus } from "@volli/shared";
 import { prepared } from "./prepared";
 
 export interface TicketRow {
@@ -24,6 +24,8 @@ export interface TicketRow {
   row_version: number;
   created_at: number;
   updated_at: number;
+  /** Epoch ms the ticket was archived, or `null` while it's live on the board (migration 002). */
+  archived_at: number | null;
 }
 
 function mapTicket(row: TicketRow, labels: string[]): Ticket {
@@ -63,15 +65,26 @@ function groupLabelRows(rows: TicketLabelJoinRow[]): Map<string, string[]> {
   return byTicket;
 }
 
-/** Label names for every ticket in `projectId`, insertion-ordered, grouped by ticket id. */
-function labelNamesByTicket(db: Database.Database, projectId: string): Map<string, string[]> {
+/**
+ * Label names for every LIVE or every ARCHIVED ticket in `projectId` (per
+ * `scope`), insertion-ordered, grouped by ticket id. Scoped because the two
+ * callers never want the other half: `listTicketsByProject` runs inside every
+ * ticket-move transaction, and without the predicate it would drag every
+ * archived ticket's label rows through the join just to discard them — a cost
+ * that grows with the archive, on the hot path.
+ */
+function labelNamesByTicket(
+  db: Database.Database,
+  projectId: string,
+  scope: "live" | "archived",
+): Map<string, string[]> {
   const rows = prepared<[string], TicketLabelJoinRow>(
     db,
     `SELECT tl.ticket_id as ticket_id, l.name as name
        FROM ticket_labels tl
        JOIN tickets t ON t.id = tl.ticket_id
        JOIN labels l ON l.id = tl.label_id
-       WHERE t.project_id = ?
+       WHERE t.project_id = ? AND t.archived_at IS ${scope === "live" ? "NULL" : "NOT NULL"}
        ORDER BY tl.rowid`,
   ).all(projectId);
   return groupLabelRows(rows);
@@ -102,31 +115,60 @@ function labelNamesByTicketAll(db: Database.Database): Map<string, string[]> {
 }
 
 /**
- * Every ticket in a project, labels attached, ordered by column then
+ * Every LIVE ticket in a project, labels attached, ordered by column then
  * position. This is the "full authoritative list" every ticket mutation
- * IPC handler returns.
+ * IPC handler returns. Archived tickets (`archived_at IS NOT NULL`) are
+ * excluded — they live in the Archive, read via {@link
+ * listArchivedTicketsByProject}, never on the board.
  */
 export function listTicketsByProject(db: Database.Database, projectId: string): Ticket[] {
   const rows = prepared<[string], TicketRow>(
     db,
-    "SELECT * FROM tickets WHERE project_id = ? ORDER BY status, position",
+    "SELECT * FROM tickets WHERE project_id = ? AND archived_at IS NULL ORDER BY status, position",
   ).all(projectId);
-  const labelsByTicket = labelNamesByTicket(db, projectId);
+  const labelsByTicket = labelNamesByTicket(db, projectId, "live");
   return rows.map((row) => mapTicket(row, labelsByTicket.get(row.id) ?? []));
 }
 
 /**
- * Every ticket across every project, labels attached — used only to build the
- * boot bootstrap payload. Fetches labels for every project in a single query
- * (rather than once per DISTINCT project) since this runs on the boot path.
+ * Every LIVE ticket across every project, labels attached — used only to build
+ * the boot bootstrap payload. Fetches labels for every project in a single
+ * query (rather than once per DISTINCT project) since this runs on the boot
+ * path. Archived tickets never ride along in the boot payload; the Archive
+ * view loads them on demand.
  */
 export function listAllTickets(db: Database.Database): Ticket[] {
   const rows = prepared<[], TicketRow>(
     db,
-    "SELECT * FROM tickets ORDER BY project_id, status, position",
+    "SELECT * FROM tickets WHERE archived_at IS NULL ORDER BY project_id, status, position",
   ).all();
   const labelsByTicket = labelNamesByTicketAll(db);
   return rows.map((row) => mapTicket(row, labelsByTicket.get(row.id) ?? []));
+}
+
+/**
+ * A project's archived tickets, newest-archived first, labels attached — the
+ * cold-storage read behind the Archive view. Loaded on demand (an archived
+ * ticket never enters the board store), so this is off the hot path; the
+ * `tickets_archived` partial index (migration 002) still backs it.
+ */
+export function listArchivedTicketsByProject(
+  db: Database.Database,
+  projectId: string,
+): ArchivedTicket[] {
+  // The WHERE clause guarantees `archived_at` is non-null, encoded in the row
+  // type — the same trust-the-SQL convention as mapTicket's `status` cast.
+  const rows = prepared<[string], TicketRow & { archived_at: number }>(
+    db,
+    "SELECT * FROM tickets WHERE project_id = ? AND archived_at IS NOT NULL ORDER BY archived_at DESC",
+  ).all(projectId);
+  const labelsByTicket = labelNamesByTicket(db, projectId, "archived");
+  return rows.map((row): ArchivedTicket => {
+    // `mapTicket` returns a fresh object, so mutating it in place (rather than
+    // spreading a copy per row) is safe and lint-clean.
+    const ticket = mapTicket(row, labelsByTicket.get(row.id) ?? []);
+    return Object.assign(ticket, { archivedAt: row.archived_at });
+  });
 }
 
 /**
@@ -154,16 +196,23 @@ export function nextTicketNumberForProject(db: Database.Database, projectId: str
   return (row?.max ?? 0) + 1;
 }
 
-export function countTicketsInStatus(
+/**
+ * The append position for the next card in a column: one past the highest LIVE
+ * position there (archived tickets hold no board slot). MAX+1, not COUNT —
+ * archiving leaves gaps in a column's positions, so a count can land ON an
+ * existing card's position (duplicate positions, card sorted mid-column);
+ * MAX+1 is collision-proof no matter how gappy the column is.
+ */
+export function nextPositionInStatus(
   db: Database.Database,
   projectId: string,
   status: TicketStatus,
 ): number {
-  const row = prepared<[string, string], { count: number }>(
+  const row = prepared<[string, string], { next: number }>(
     db,
-    "SELECT COUNT(*) as count FROM tickets WHERE project_id = ? AND status = ?",
+    "SELECT COALESCE(MAX(position), -1) + 1 as next FROM tickets WHERE project_id = ? AND status = ? AND archived_at IS NULL",
   ).get(projectId, status);
-  return row?.count ?? 0;
+  return row?.next ?? 0;
 }
 
 /** Inserts a brand-new ticket row (`row_version` starts at `1`); its labels start empty. */
@@ -254,4 +303,45 @@ export function bumpTicketVersion(
     updatedAt,
     ticketId,
   );
+}
+
+/**
+ * Marks a ticket archived (stamps `archived_at`) — it leaves the board but the
+ * row, its labels, and its event log all survive. `status` is untouched, so an
+ * unarchive returns it to the same column. A no-op reflow of the gap it leaves
+ * in that column is unnecessary: the board tolerates position gaps (a later
+ * move normalizes them), exactly as it already does after a cross-column move.
+ */
+export function archiveTicket(db: Database.Database, ticketId: string, now: number): void {
+  prepared(
+    db,
+    "UPDATE tickets SET archived_at = ?, row_version = row_version + 1, updated_at = ? WHERE id = ?",
+  ).run(now, now, ticketId);
+}
+
+/**
+ * Returns an archived ticket to the board: clears `archived_at` and re-seats it
+ * at `position` (the caller passes the live end-of-column slot from
+ * {@link nextPositionInStatus}, so it can't collide with a card that took its
+ * old spot while it was gone).
+ */
+export function unarchiveTicket(
+  db: Database.Database,
+  ticketId: string,
+  position: number,
+  now: number,
+): void {
+  prepared(
+    db,
+    "UPDATE tickets SET archived_at = NULL, position = ?, row_version = row_version + 1, updated_at = ? WHERE id = ?",
+  ).run(position, now, ticketId);
+}
+
+/**
+ * The only destructive act (CONCEPT #16/#92): hard-deletes a ticket. Its
+ * `ticket_labels` and `ticket_events` rows go with it via the migration-001 FK
+ * cascades. Callers gate this to archived tickets behind an explicit confirm.
+ */
+export function deleteTicket(db: Database.Database, ticketId: string): void {
+  prepared(db, "DELETE FROM tickets WHERE id = ?").run(ticketId);
 }

@@ -12,6 +12,8 @@ describe("TICKET_EVENT_KINDS", () => {
       "retitled",
       "body_edited",
       "labels_changed",
+      "archived",
+      "unarchived",
     ]);
   });
 
@@ -30,6 +32,8 @@ describe("TicketEventPayload", () => {
       { kind: "retitled", from: "Old", to: "New" },
       { kind: "body_edited" },
       { kind: "labels_changed", added: ["bug"], removed: ["chore"] },
+      { kind: "archived" },
+      { kind: "unarchived" },
     ];
     expect(payloads.map((p) => p.kind)).toEqual(TICKET_EVENT_KINDS);
   });
