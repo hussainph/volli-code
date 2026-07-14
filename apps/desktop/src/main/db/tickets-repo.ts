@@ -26,6 +26,10 @@ export interface TicketRow {
   updated_at: number;
   /** Epoch ms the ticket was archived, or `null` while it's live on the board (migration 002). */
   archived_at: number | null;
+  /** First-class worktree identity (migration 003) — all three `null` until a worktree exists. */
+  worktree_path: string | null;
+  branch: string | null;
+  base_branch: string | null;
 }
 
 function mapTicket(row: TicketRow, labels: string[]): Ticket {
@@ -41,6 +45,9 @@ function mapTicket(row: TicketRow, labels: string[]): Ticket {
     usesWorktree: row.uses_worktree !== 0,
     harnessId: row.harness_id,
     order: row.position,
+    worktreePath: row.worktree_path,
+    branch: row.branch,
+    baseBranch: row.base_branch,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -220,9 +227,9 @@ export function insertTicket(db: Database.Database, ticket: Ticket): void {
   prepared(
     db,
     `INSERT INTO tickets
-       (id, project_id, ticket_number, title, body, status, priority, uses_worktree, harness_id, position, row_version, created_at, updated_at)
+       (id, project_id, ticket_number, title, body, status, priority, uses_worktree, harness_id, position, worktree_path, branch, base_branch, row_version, created_at, updated_at)
      VALUES
-       (@id, @projectId, @ticketNumber, @title, @body, @status, @priority, @usesWorktree, @harnessId, @position, 1, @createdAt, @updatedAt)`,
+       (@id, @projectId, @ticketNumber, @title, @body, @status, @priority, @usesWorktree, @harnessId, @position, @worktreePath, @branch, @baseBranch, 1, @createdAt, @updatedAt)`,
   ).run({
     id: ticket.id,
     projectId: ticket.projectId,
@@ -234,6 +241,9 @@ export function insertTicket(db: Database.Database, ticket: Ticket): void {
     usesWorktree: ticket.usesWorktree ? 1 : 0,
     harnessId: ticket.harnessId,
     position: ticket.order,
+    worktreePath: ticket.worktreePath,
+    branch: ticket.branch,
+    baseBranch: ticket.baseBranch,
     createdAt: ticket.createdAt,
     updatedAt: ticket.updatedAt,
   });
@@ -268,9 +278,17 @@ export function updateTicketPriority(
 export interface TicketFieldUpdate {
   title?: string;
   body?: string;
+  /** First-class worktree identity (migration 003); `null` clears the field. */
+  worktreePath?: string | null;
+  branch?: string | null;
+  baseBranch?: string | null;
 }
 
-/** Applies whichever of `title`/`body` are present; bumps `row_version`. No-ops when neither is set. */
+/**
+ * Applies whichever of `title`/`body`/`worktreePath`/`branch`/`baseBranch` are
+ * present (including explicit `null` for the worktree fields, distinct from
+ * "not present"); bumps `row_version`. No-ops when nothing is set.
+ */
 export function updateTicketFields(
   db: Database.Database,
   ticketId: string,
@@ -286,6 +304,18 @@ export function updateTicketFields(
   if (fields.body !== undefined) {
     sets.push("body = ?");
     params.push(fields.body);
+  }
+  if (fields.worktreePath !== undefined) {
+    sets.push("worktree_path = ?");
+    params.push(fields.worktreePath);
+  }
+  if (fields.branch !== undefined) {
+    sets.push("branch = ?");
+    params.push(fields.branch);
+  }
+  if (fields.baseBranch !== undefined) {
+    sets.push("base_branch = ?");
+    params.push(fields.baseBranch);
   }
   if (sets.length === 0) return;
   sets.push("row_version = row_version + 1", "updated_at = ?");

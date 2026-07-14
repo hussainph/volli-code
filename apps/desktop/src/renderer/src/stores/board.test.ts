@@ -28,6 +28,9 @@ function ticket(overrides: Partial<Ticket> & { status: TicketStatus }): Ticket {
     usesWorktree: overrides.usesWorktree ?? true,
     harnessId: overrides.harnessId ?? "claude-code",
     order: overrides.order ?? 0,
+    worktreePath: overrides.worktreePath ?? null,
+    branch: overrides.branch ?? null,
+    baseBranch: overrides.baseBranch ?? null,
     createdAt: overrides.createdAt ?? 0,
     updatedAt: overrides.updatedAt ?? 0,
   };

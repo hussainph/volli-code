@@ -323,6 +323,9 @@ describe("boot", () => {
       usesWorktree: true,
       harnessId: "claude-code",
       order: 0,
+      worktreePath: null,
+      branch: null,
+      baseBranch: null,
       createdAt: 0,
       updatedAt: 0,
     };

@@ -8,7 +8,10 @@ import type { DirEntry } from "./fs-entries";
 import type { Label } from "./label";
 import type { LegacyProject } from "./legacy-import";
 import type { Project } from "./project-identity";
+import type { SessionRecord } from "./session";
 import type { ArchivedTicket, Ticket } from "./ticket";
+import type { TicketComment } from "./ticket-comment";
+import type { TicketEvent } from "./ticket-events";
 
 /** Channel names for the preload's `contextBridge` API. */
 export type VolliIpcChannel =
@@ -39,6 +42,13 @@ export type VolliIpcChannel =
   | "volli:ticket-unarchive"
   | "volli:ticket-delete"
   | "volli:ticket-list-archived"
+  | "volli:ticket-events"
+  | "volli:comment-list"
+  | "volli:comment-create"
+  | "volli:comment-update"
+  | "volli:comment-remove"
+  | "volli:session-list"
+  | "volli:session-list-for-ticket"
   | "volli:label-set-color"
   | "volli:app-state-set";
 
@@ -139,3 +149,15 @@ export type ArchivedTicketsResult = Result<{ tickets: ArchivedTicket[] }>;
 export type LabelResult = Result<{ label: Label }>;
 
 export type AppStateSetResult = Result;
+
+/** A ticket's full event history, chronological — returned by `ticket-events` (the Activity feed read). */
+export type TicketEventsResult = Result<{ events: TicketEvent[] }>;
+
+/** A single comment, returned by a mutation that affects only that one comment — create, update. */
+export type TicketCommentResult = Result<{ comment: TicketComment }>;
+
+/** A ticket's comments, chronological — returned by `comment-list` (the work-log read). */
+export type TicketCommentsResult = Result<{ comments: TicketComment[] }>;
+
+/** A project's or a ticket's durable session records, newest first — returned by `session-list`/`session-list-for-ticket`. */
+export type SessionsResult = Result<{ sessions: SessionRecord[] }>;

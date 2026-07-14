@@ -19,9 +19,13 @@ import type {
   ProjectMutationResult,
   Result,
   RevealResult,
+  SessionsResult,
   TerminalDataEvent,
   TerminalExitEvent,
   TerminalIoResult,
+  TicketCommentResult,
+  TicketCommentsResult,
+  TicketEventsResult,
   TicketPriority,
   TicketResult,
   TicketsResult,
@@ -80,7 +84,15 @@ const api = {
     /** Resolves with just the mutated ticket (patched into the list by id), not the whole project. */
     setPriority: (input: { ticketId: string; priority: TicketPriority }): Promise<TicketResult> =>
       ipcRenderer.invoke("volli:ticket-set-priority" satisfies VolliIpcChannel, input),
-    update: (input: { ticketId: string; title?: string; body?: string }): Promise<TicketResult> =>
+    update: (input: {
+      ticketId: string;
+      title?: string;
+      body?: string;
+      /** First-class worktree identity (migration 003); `null` explicitly clears the field. */
+      worktreePath?: string | null;
+      branch?: string | null;
+      baseBranch?: string | null;
+    }): Promise<TicketResult> =>
       ipcRenderer.invoke("volli:ticket-update" satisfies VolliIpcChannel, input),
     /** Replaces a ticket's labels by name; unknown names are created (`color: null`) per project. Resolves with just that ticket. */
     setLabels: (input: { ticketId: string; labels: string[] }): Promise<TicketResult> =>
@@ -97,6 +109,35 @@ const api = {
     /** The project's archived tickets, newest first — loaded on demand for the Archive view. */
     listArchived: (projectId: string): Promise<ArchivedTicketsResult> =>
       ipcRenderer.invoke("volli:ticket-list-archived" satisfies VolliIpcChannel, projectId),
+    /** A ticket's full event history, chronological — backs the Activity feed. */
+    events: (input: { ticketId: string }): Promise<TicketEventsResult> =>
+      ipcRenderer.invoke("volli:ticket-events" satisfies VolliIpcChannel, input),
+  },
+  comments: {
+    /** A ticket's comments, chronological — the work-log feed. */
+    list: (input: { ticketId: string }): Promise<TicketCommentsResult> =>
+      ipcRenderer.invoke("volli:comment-list" satisfies VolliIpcChannel, input),
+    /** Posts a comment as the human user; also records a `commented` event in the same transaction. */
+    create: (input: {
+      ticketId: string;
+      body: string;
+      sessionId?: string | null;
+    }): Promise<TicketCommentResult> =>
+      ipcRenderer.invoke("volli:comment-create" satisfies VolliIpcChannel, input),
+    /** Edits a comment's body; touches `updatedAt` only, no event. */
+    update: (input: { commentId: string; body: string }): Promise<TicketCommentResult> =>
+      ipcRenderer.invoke("volli:comment-update" satisfies VolliIpcChannel, input),
+    /** Hard-deletes a comment; no event. */
+    remove: (input: { commentId: string }): Promise<Result> =>
+      ipcRenderer.invoke("volli:comment-remove" satisfies VolliIpcChannel, input),
+  },
+  sessions: {
+    /** Every durable session record in a project (ticket-scoped and project-scoped scratch), newest first. */
+    list: (input: { projectId: string }): Promise<SessionsResult> =>
+      ipcRenderer.invoke("volli:session-list" satisfies VolliIpcChannel, input),
+    /** A ticket's durable session records, newest first — backs the right-rail linked-sessions list. */
+    listForTicket: (input: { ticketId: string }): Promise<SessionsResult> =>
+      ipcRenderer.invoke("volli:session-list-for-ticket" satisfies VolliIpcChannel, input),
   },
   labels: {
     setColor: (input: { labelId: string; color: string | null }): Promise<LabelResult> =>
