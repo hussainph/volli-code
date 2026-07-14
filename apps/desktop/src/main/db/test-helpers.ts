@@ -108,7 +108,6 @@ export function testTicket(projectId: string, overrides: Partial<Ticket> = {}): 
     priority: overrides.priority,
     labels: overrides.labels,
     usesWorktree: overrides.usesWorktree,
-    harnessId: overrides.harnessId,
     worktreePath: overrides.worktreePath,
     branch: overrides.branch,
     baseBranch: overrides.baseBranch,

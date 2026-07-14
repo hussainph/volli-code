@@ -158,6 +158,18 @@ ALTER TABLE tickets ADD COLUMN branch TEXT;
 ALTER TABLE tickets ADD COLUMN base_branch TEXT;
 `;
 
+/**
+ * Migration 004: harness identity moves to sessions only. A ticket is no
+ * longer itself bound to a single agent harness — `sessions.harness_id`
+ * (added in migration 003) already records which harness drove each session,
+ * and that's the only place harness identity belongs now. Drops the
+ * now-unused `tickets.harness_id` column (SQLite's `ALTER TABLE ... DROP
+ * COLUMN` is supported by the bundled better-sqlite3/SQLite build).
+ */
+const MIGRATION_004_DROP_TICKET_HARNESS = `
+ALTER TABLE tickets DROP COLUMN harness_id;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -165,6 +177,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 3,
     name: "ticket detail: sessions, comments, worktree identity",
     sql: MIGRATION_003_TICKET_DETAIL,
+  },
+  {
+    version: 4,
+    name: "drop tickets.harness_id — harness identity lives on sessions only",
+    sql: MIGRATION_004_DROP_TICKET_HARNESS,
   },
 ];
 

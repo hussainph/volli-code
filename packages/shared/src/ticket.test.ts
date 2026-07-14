@@ -6,7 +6,6 @@ import {
   TICKET_PRIORITY_LABELS,
   HARNESS_IDS,
   HARNESS_LABELS,
-  DEFAULT_HARNESS_ID,
   harnessLabel,
   displayTicketId,
   createTicket,
@@ -77,10 +76,6 @@ describe("HARNESS_LABELS", () => {
     for (const harness of HARNESS_IDS) {
       expect(HARNESS_LABELS[harness]).toBeTypeOf("string");
     }
-  });
-
-  it("defaults to claude-code", () => {
-    expect(DEFAULT_HARNESS_ID).toBe("claude-code");
   });
 });
 
@@ -183,19 +178,6 @@ describe("createTicket", () => {
     expect(ticket.usesWorktree).toBe(true);
   });
 
-  it("defaults harnessId to DEFAULT_HARNESS_ID", () => {
-    const ticket = createTicket({
-      id: "id-1",
-      projectId: "proj-1",
-      ticketNumber: 1,
-      title: "Title",
-      status: "todo",
-      order: 0,
-      now: 0,
-    });
-    expect(ticket.harnessId).toBe(DEFAULT_HARNESS_ID);
-  });
-
   it("defaults worktreePath, branch, and baseBranch to null", () => {
     const ticket = createTicket({
       id: "id-1",
@@ -224,7 +206,6 @@ describe("createTicket", () => {
       priority: "high",
       labels: ["bug", "urgent"],
       usesWorktree: false,
-      harnessId: "custom-harness",
       worktreePath: "/repo/.worktrees/VC-1",
       branch: "volli/VC-1-title",
       baseBranch: "main",
@@ -233,7 +214,6 @@ describe("createTicket", () => {
     expect(ticket.priority).toBe("high");
     expect(ticket.labels).toEqual(["bug", "urgent"]);
     expect(ticket.usesWorktree).toBe(false);
-    expect(ticket.harnessId).toBe("custom-harness");
     expect(ticket.worktreePath).toBe("/repo/.worktrees/VC-1");
     expect(ticket.branch).toBe("volli/VC-1-title");
     expect(ticket.baseBranch).toBe("main");

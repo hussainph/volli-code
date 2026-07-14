@@ -150,7 +150,6 @@ interface BoardState {
   setSearch(projectId: string, search: string): void;
   togglePriority(projectId: string, priority: TicketPriority): void;
   toggleLabel(projectId: string, label: string): void;
-  toggleHarness(projectId: string, harnessId: string): void;
   clearFilter(projectId: string): void;
   selectTicket(projectId: string, ticketId: string | null): void;
   forget(projectId: string): void;
@@ -521,12 +520,6 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
 
       toggleLabel(projectId, label) {
         patchFilter(projectId, (current) => ({ labels: toggleValue(current.labels, label) }));
-      },
-
-      toggleHarness(projectId, harnessId) {
-        patchFilter(projectId, (current) => ({
-          harnessIds: toggleValue(current.harnessIds, harnessId),
-        }));
       },
 
       // Drops the project's filter record entirely rather than writing back

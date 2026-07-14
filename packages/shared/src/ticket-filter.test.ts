@@ -17,7 +17,6 @@ function ticket(overrides: {
   title: string;
   priority?: "low" | "medium" | "high";
   labels?: string[];
-  harnessId?: string;
 }): Ticket {
   return createTicket({
     id: displayTicketId(PREFIX, overrides.ticketNumber),
@@ -29,7 +28,6 @@ function ticket(overrides: {
     now: 0,
     priority: overrides.priority,
     labels: overrides.labels,
-    harnessId: overrides.harnessId,
   });
 }
 
@@ -56,10 +54,6 @@ describe("isFilterActive", () => {
 
   it("is active when labels is non-empty", () => {
     expect(isFilterActive({ ...EMPTY_TICKET_FILTER, labels: ["bug"] })).toBe(true);
-  });
-
-  it("is active when harnessIds is non-empty", () => {
-    expect(isFilterActive({ ...EMPTY_TICKET_FILTER, harnessIds: ["codex"] })).toBe(true);
   });
 });
 
@@ -102,23 +96,12 @@ describe("matchesFilter", () => {
     expect(matchesFilter(t, { ...EMPTY_TICKET_FILTER, labels: ["chore"] }, PREFIX)).toBe(false);
   });
 
-  it("matches when harnessIds includes the ticket's harness", () => {
-    const t = ticket({ ticketNumber: 1, title: "T", harnessId: "codex" });
-    expect(
-      matchesFilter(t, { ...EMPTY_TICKET_FILTER, harnessIds: ["codex", "opencode"] }, PREFIX),
-    ).toBe(true);
-    expect(matchesFilter(t, { ...EMPTY_TICKET_FILTER, harnessIds: ["opencode"] }, PREFIX)).toBe(
-      false,
-    );
-  });
-
   it("ANDs facets together", () => {
     const t = ticket({ ticketNumber: 1, title: "MCP Server", priority: "high", labels: ["bug"] });
     const filter: TicketFilter = {
       search: "mcp",
       priorities: ["high"],
       labels: ["bug"],
-      harnessIds: [],
     };
     expect(matchesFilter(t, filter, PREFIX)).toBe(true);
     expect(matchesFilter(t, { ...filter, priorities: ["low"] }, PREFIX)).toBe(false);

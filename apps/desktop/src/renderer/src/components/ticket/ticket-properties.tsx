@@ -2,7 +2,6 @@ import * as React from "react";
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import {
   errorMessage,
-  harnessLabel,
   TICKET_PRIORITIES,
   TICKET_PRIORITY_LABELS,
   TICKET_STATUS_LABELS,
@@ -207,9 +206,8 @@ function WorktreePathField({ path }: { path: string | null }) {
 }
 
 /**
- * The right rail's Properties block: status, priority, labels, a read-only harness display, and
- * worktree identity (branch/baseBranch inline-editable, worktreePath read-only), then
- * created/updated timestamps.
+ * The right rail's Properties block: status, priority, labels, and worktree identity
+ * (branch/baseBranch inline-editable, worktreePath read-only), then created/updated timestamps.
  */
 export function TicketProperties({ projectId, ticket }: { projectId: string; ticket: Ticket }) {
   return (
@@ -225,10 +223,6 @@ export function TicketProperties({ projectId, ticket }: { projectId: string; tic
       <div className="flex flex-col gap-1.5">
         <PropertyLabel>Labels</PropertyLabel>
         <TicketLabelEditor projectId={projectId} ticket={ticket} />
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <PropertyLabel>Harness</PropertyLabel>
-        <p className="px-2 py-1 text-xs text-foreground">{harnessLabel(ticket.harnessId)}</p>
       </div>
       <div className="flex flex-col gap-3 border-t border-border pt-4">
         <div className="flex flex-col gap-1.5">

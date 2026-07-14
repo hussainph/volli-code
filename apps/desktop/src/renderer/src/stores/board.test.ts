@@ -27,7 +27,6 @@ function ticket(overrides: Partial<Ticket> & { status: TicketStatus }): Ticket {
     priority: overrides.priority ?? "medium",
     labels: overrides.labels ?? [],
     usesWorktree: overrides.usesWorktree ?? true,
-    harnessId: overrides.harnessId ?? "claude-code",
     order: overrides.order ?? 0,
     worktreePath: overrides.worktreePath ?? null,
     branch: overrides.branch ?? null,
@@ -1014,18 +1013,6 @@ describe("toggleLabel", () => {
 
     store.getState().toggleLabel("p1", "terminal");
     expect(store.getState().filterByProject.p1!.labels).toEqual([]);
-  });
-});
-
-describe("toggleHarness", () => {
-  it("adds then removes a harness id from the facet", () => {
-    const store = createBoardStore(fakeGateway());
-
-    store.getState().toggleHarness("p1", "codex");
-    expect(store.getState().filterByProject.p1!.harnessIds).toEqual(["codex"]);
-
-    store.getState().toggleHarness("p1", "codex");
-    expect(store.getState().filterByProject.p1!.harnessIds).toEqual([]);
   });
 });
 

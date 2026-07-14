@@ -62,7 +62,7 @@ describe("migrate — fresh install", () => {
     const db = openRawDb(dbPath);
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(3);
+    expect(db.pragma("user_version", { simple: true })).toBe(4);
     db.close();
   });
 
@@ -82,6 +82,16 @@ describe("migrate — fresh install", () => {
     db.close();
   });
 
+  it("drops tickets.harness_id (migration 004) while leaving sessions.harness_id intact", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+
+    expect(columnNames(db, "tickets")).not.toContain("harness_id");
+    expect(columnNames(db, "sessions")).toContain("harness_id");
+    db.close();
+  });
+
   it("skips the pre-migration backup copy on a brand-new database", () => {
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
@@ -92,14 +102,14 @@ describe("migrate — fresh install", () => {
   });
 });
 
-describe("migrate — 002 to 003 upgrade path", () => {
-  it("migrates an existing populated db to v3 without touching its rows", () => {
+describe("migrate — 002 to 004 upgrade path", () => {
+  it("migrates an existing populated db to the latest version without touching its rows", () => {
     const dbPath = tempDbPath();
     const db = buildV2DbWithRows(dbPath);
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(3);
+    expect(db.pragma("user_version", { simple: true })).toBe(4);
     const project = db.prepare("SELECT * FROM projects WHERE id = 'p1'").get() as {
       name: string;
     };
@@ -123,6 +133,16 @@ describe("migrate — 002 to 003 upgrade path", () => {
     db.close();
   });
 
+  it("drops the pre-existing tickets.harness_id column on upgrade", () => {
+    const dbPath = tempDbPath();
+    const db = buildV2DbWithRows(dbPath);
+
+    migrate(db, dbPath);
+
+    expect(columnNames(db, "tickets")).not.toContain("harness_id");
+    db.close();
+  });
+
   it("checkpoints and copies a backup of the pre-migration db before altering it", () => {
     const dbPath = tempDbPath();
     const db = buildV2DbWithRows(dbPath);
@@ -139,9 +159,9 @@ describe("migrate — 002 to 003 upgrade path", () => {
     migrate(db, dbPath);
     migrate(db, dbPath); // second call: nothing pending
 
-    expect(db.pragma("user_version", { simple: true })).toBe(3);
-    // No v3-backup should exist — the second migrate() call had nothing to apply.
-    expect(existsSync(`${dbPath}.backup-v3`)).toBe(false);
+    expect(db.pragma("user_version", { simple: true })).toBe(4);
+    // No v4-backup should exist — the second migrate() call had nothing to apply.
+    expect(existsSync(`${dbPath}.backup-v4`)).toBe(false);
     db.close();
   });
 });

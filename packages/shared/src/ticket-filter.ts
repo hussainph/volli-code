@@ -1,6 +1,6 @@
 /**
  * Board search/filter: a single filter value combining a free-text search
- * with facets (priority, labels, harness). Facets are ANDed together; values
+ * with facets (priority, labels). Facets are ANDed together; values
  * within a facet are ORed (an empty facet matches everything).
  */
 
@@ -14,8 +14,6 @@ export interface TicketFilter {
   priorities: readonly TicketPriority[];
   /** Empty means "all labels"; multiple labels match within the facet with OR. */
   labels: readonly string[];
-  /** Empty means "all harnesses". */
-  harnessIds: readonly string[];
 }
 
 /** The filter that matches every ticket and does nothing. */
@@ -23,17 +21,11 @@ export const EMPTY_TICKET_FILTER: TicketFilter = {
   search: "",
   priorities: [],
   labels: [],
-  harnessIds: [],
 };
 
 /** Whether `filter` narrows the ticket list at all. */
 export function isFilterActive(filter: TicketFilter): boolean {
-  return (
-    filter.search.trim() !== "" ||
-    filter.priorities.length > 0 ||
-    filter.labels.length > 0 ||
-    filter.harnessIds.length > 0
-  );
+  return filter.search.trim() !== "" || filter.priorities.length > 0 || filter.labels.length > 0;
 }
 
 /**
@@ -60,11 +52,6 @@ function matchesLabels(ticket: Ticket, labels: readonly string[]): boolean {
   return ticket.labels.some((label) => labels.includes(label));
 }
 
-function matchesHarness(ticket: Ticket, harnessIds: readonly string[]): boolean {
-  if (harnessIds.length === 0) return true;
-  return harnessIds.includes(ticket.harnessId);
-}
-
 /**
  * Whether `ticket` satisfies every facet of `filter` (facets AND together).
  * `ticketPrefix` is the owning project's ticket prefix, used only to resolve
@@ -74,8 +61,7 @@ export function matchesFilter(ticket: Ticket, filter: TicketFilter, ticketPrefix
   return (
     matchesSearch(ticket, filter.search, ticketPrefix) &&
     matchesPriority(ticket, filter.priorities) &&
-    matchesLabels(ticket, filter.labels) &&
-    matchesHarness(ticket, filter.harnessIds)
+    matchesLabels(ticket, filter.labels)
   );
 }
 
