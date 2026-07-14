@@ -8,19 +8,22 @@
  * everything a workspace remembers lives and dies together: `forget` stays a
  * single delete no matter how many fields the record grows.
  *
- * Persistence is FIELD-SELECTIVE: `boardView` and `boardSort` survive relaunch
- * (they're deliberate view preferences a user sets once per project), while
- * `nav` and `expandedDirs` stay session-only — nav resetting to Board on
- * relaunch is a settled decision (see ui.ts's history) and now applies per
- * workspace. The partialize below prunes each record down to the persisted
- * pair; merge rehydrates them back over `DEFAULT_WORKSPACE_UI`, sanitizing
- * stale values so old localStorage can never smuggle in an invalid view/sort.
+ * Persistence is FIELD-SELECTIVE: `boardView`, `boardSort`, and `openTicketId`
+ * survive relaunch (they're deliberate per-project state — a view preference,
+ * or the ticket-detail-mvp decision that the open ticket persists across
+ * restart, decision #3), while `nav` and `expandedDirs` stay session-only —
+ * nav resetting to Board on relaunch is a settled decision (see ui.ts's
+ * history) and now applies per workspace. The partialize below prunes each
+ * record down to the persisted trio; merge rehydrates them back over
+ * `DEFAULT_WORKSPACE_UI`, sanitizing stale values so old localStorage can
+ * never smuggle in an invalid view/sort/ticket id.
  */
 import { DEFAULT_TICKET_SORT, TICKET_SORT_KEYS, type TicketSort } from "@volli/shared";
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
 import { appStateStorage } from "@renderer/lib/app-state-storage";
+import { useBoardStore } from "@renderer/stores/board";
 
 /** The per-workspace nav pages (NAV_ITEMS). Settings is app-wide chrome — see stores/ui.ts. */
 export type NavKey = "board" | "sessions" | "files";
@@ -36,6 +39,11 @@ export interface WorkspaceUiState {
   boardView: BoardView;
   /** Column ordering shared by both views; "manual" is the drag-reorder mode. Persisted. */
   boardSort: TicketSort;
+  /**
+   * The ticket open in the full-page detail view (ticket-detail-mvp decision
+   * #1/#3); `null` on the plain board. Persisted — survives restart.
+   */
+  openTicketId: string | null;
 }
 
 export const DEFAULT_WORKSPACE_UI: WorkspaceUiState = {
@@ -43,6 +51,7 @@ export const DEFAULT_WORKSPACE_UI: WorkspaceUiState = {
   expandedDirs: [],
   boardView: "board",
   boardSort: DEFAULT_TICKET_SORT,
+  openTicketId: null,
 };
 
 interface WorkspaceState {
@@ -51,12 +60,21 @@ interface WorkspaceState {
   setDirExpanded(projectId: string, dirPath: string, expanded: boolean): void;
   setBoardView(projectId: string, view: BoardView): void;
   setBoardSort(projectId: string, sort: TicketSort): void;
+  /**
+   * Opens `ticketId`'s full-page detail view for `projectId` (rendered in
+   * place of the board — see components/ticket/ticket-detail.tsx) and selects
+   * the same ticket in the board store, so returning to the board shows the
+   * card already selected (ticket-detail-mvp decision #1).
+   */
+  openTicket(projectId: string, ticketId: string): void;
+  /** Closes the detail view, returning to the plain board. Leaves the board's selection as-is. */
+  closeTicket(projectId: string): void;
   /** Drop a removed project's record so re-adding it starts fresh. */
   forget(projectId: string): void;
 }
 
 /** The slice of a workspace record that survives relaunch. */
-type PersistedWorkspaceUi = Pick<WorkspaceUiState, "boardView" | "boardSort">;
+type PersistedWorkspaceUi = Pick<WorkspaceUiState, "boardView" | "boardSort" | "openTicketId">;
 
 interface PersistedWorkspaceState {
   byProject: Record<string, PersistedWorkspaceUi>;
@@ -81,21 +99,27 @@ function sanitizePersistedUi(persisted: Partial<PersistedWorkspaceUi>): Persiste
     sort !== null &&
     TICKET_SORT_KEYS.includes(sort.key) &&
     (sort.direction === "asc" || sort.direction === "desc");
+  const openTicketId = persisted.openTicketId;
   return {
     boardView: view,
     // Rebuild rather than spread so stray keys in old JSON never enter state.
     boardSort: sortValid
       ? { key: sort.key, direction: sort.direction }
       : DEFAULT_WORKSPACE_UI.boardSort,
+    openTicketId:
+      typeof openTicketId === "string" || openTicketId === null
+        ? openTicketId
+        : DEFAULT_WORKSPACE_UI.openTicketId,
   };
 }
 
-/** Whether a record's persisted pair still matches the defaults (by value). */
+/** Whether a record's persisted trio still matches the defaults (by value). */
 function isDefaultPersistedUi(ui: WorkspaceUiState): boolean {
   return (
     ui.boardView === DEFAULT_WORKSPACE_UI.boardView &&
     ui.boardSort.key === DEFAULT_TICKET_SORT.key &&
-    ui.boardSort.direction === DEFAULT_TICKET_SORT.direction
+    ui.boardSort.direction === DEFAULT_TICKET_SORT.direction &&
+    ui.openTicketId === DEFAULT_WORKSPACE_UI.openTicketId
   );
 }
 
@@ -144,6 +168,20 @@ export function createWorkspaceStore(storage?: StateStorage) {
           set((state) => patchWorkspace(state, projectId, { boardSort: sort }));
         },
 
+        openTicket(projectId, ticketId) {
+          set((state) => patchWorkspace(state, projectId, { openTicketId: ticketId }));
+          // Cross-store orchestration lives here (same precedent as
+          // projects.ts's removeProject touching board/workspace directly):
+          // opening a ticket always selects its card too, so returning to the
+          // board — breadcrumb click, Escape, restart-then-close — shows it
+          // selected rather than landing on a blank board.
+          useBoardStore.getState().selectTicket(projectId, ticketId);
+        },
+
+        closeTicket(projectId) {
+          set((state) => patchWorkspace(state, projectId, { openTicketId: null }));
+        },
+
         forget(projectId) {
           set((state) => {
             if (!(projectId in state.byProject)) return state;
@@ -158,16 +196,17 @@ export function createWorkspaceStore(storage?: StateStorage) {
         version: 1,
         storage: createJSONStorage(() => storage ?? appStateStorage),
         skipHydration: storage === undefined,
-        // Persist ONLY the view prefs per record (see module doc); records
-        // that still match the defaults are dropped entirely so the stored
-        // map never accretes entries for projects that were merely visited.
+        // Persist ONLY the view prefs + open ticket per record (see module
+        // doc); records that still match the defaults are dropped entirely so
+        // the stored map never accretes entries for projects that were merely
+        // visited.
         partialize: (state): PersistedWorkspaceState => ({
           byProject: Object.fromEntries(
             Object.entries(state.byProject)
               .filter(([, ui]) => !isDefaultPersistedUi(ui))
               .map(([projectId, ui]) => [
                 projectId,
-                { boardView: ui.boardView, boardSort: ui.boardSort },
+                { boardView: ui.boardView, boardSort: ui.boardSort, openTicketId: ui.openTicketId },
               ]),
           ),
         }),

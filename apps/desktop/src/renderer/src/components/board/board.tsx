@@ -151,6 +151,13 @@ export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPr
     (ticketId: string | null) => selectTicket(projectId, ticketId),
     [selectTicket, projectId],
   );
+  // Double-click open (ticket-detail-mvp step 3): `openTicket` is a stable
+  // zustand action reference, same stability contract as `selectTicket` above.
+  const openTicket = useWorkspaceStore((state) => state.openTicket);
+  const handleOpen = React.useCallback(
+    (ticketId: string) => openTicket(projectId, ticketId),
+    [openTicket, projectId],
+  );
   // Stable (the column passes its own status back) so columns aren't handed a
   // fresh closure every board render.
   const handleComposerClose = React.useCallback(
@@ -240,6 +247,7 @@ export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPr
             dragActive={drag !== null}
             selectedId={selectedId}
             onSelect={handleSelect}
+            onOpen={handleOpen}
           />
         ) : (
           <div
@@ -263,6 +271,7 @@ export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPr
                 ticketPrefix={ticketPrefix}
                 selectedId={selectedId}
                 onSelect={handleSelect}
+                onOpen={handleOpen}
                 composerInitiallyOpen={expandedEmptyStatus === status}
                 onComposerClose={handleComposerClose}
                 animateEnter={boardMounted.current}

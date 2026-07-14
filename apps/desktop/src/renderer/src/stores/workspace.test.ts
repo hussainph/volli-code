@@ -1,5 +1,6 @@
 import { DEFAULT_TICKET_SORT } from "@volli/shared";
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it } from "vite-plus/test";
+import { useBoardStore } from "./board";
 import { createWorkspaceStore, DEFAULT_WORKSPACE_UI } from "./workspace";
 
 function createMemoryStorage() {
@@ -121,6 +122,66 @@ describe("setBoardSort", () => {
   });
 });
 
+describe("openTicket", () => {
+  // openTicket also selects the ticket in the REAL board-store singleton (see
+  // workspace.ts's module doc: cross-store orchestration lives in the action,
+  // same precedent as projects.ts's removeProject) — reset it so a write here
+  // never leaks into another test.
+  afterEach(() => {
+    useBoardStore.setState({ selectedByProject: {} });
+  });
+
+  it("sets the project's openTicketId", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicket("project-a", "ticket-1");
+
+    expect(store.getState().byProject["project-a"]?.openTicketId).toBe("ticket-1");
+  });
+
+  it("selects the same ticket in the board store", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicket("project-a", "ticket-1");
+
+    expect(useBoardStore.getState().selectedByProject["project-a"]).toBe("ticket-1");
+  });
+
+  it("tracks the open ticket independently per project", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicket("project-a", "ticket-1");
+    store.getState().openTicket("project-b", "ticket-2");
+
+    expect(store.getState().byProject["project-a"]?.openTicketId).toBe("ticket-1");
+    expect(store.getState().byProject["project-b"]?.openTicketId).toBe("ticket-2");
+  });
+
+  it("leaves nav, boardView, and boardSort untouched", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().setNav("project-a", "files");
+    store.getState().setBoardView("project-a", "list");
+    store.getState().openTicket("project-a", "ticket-1");
+
+    expect(store.getState().byProject["project-a"]?.nav).toBe("files");
+    expect(store.getState().byProject["project-a"]?.boardView).toBe("list");
+  });
+});
+
+describe("closeTicket", () => {
+  it("clears the project's openTicketId", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicket("project-a", "ticket-1");
+    store.getState().closeTicket("project-a");
+
+    expect(store.getState().byProject["project-a"]?.openTicketId).toBeNull();
+  });
+
+  it("is safe to call on a project with no record yet", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().closeTicket("never-opened");
+
+    expect(store.getState().byProject["never-opened"]?.openTicketId ?? null).toBeNull();
+  });
+});
+
 describe("forget", () => {
   it("drops the project's record so a re-add starts at the defaults", () => {
     const store = createWorkspaceStore(createMemoryStorage());
@@ -136,6 +197,7 @@ describe("forget", () => {
       expandedDirs: [],
       boardView: "board",
       boardSort: DEFAULT_TICKET_SORT,
+      openTicketId: null,
     });
   });
 
@@ -153,7 +215,7 @@ describe("forget", () => {
 });
 
 describe("persistence", () => {
-  it("persists only non-default boardView/boardSort pairs under 'volli:workspace'", () => {
+  it("persists only non-default boardView/boardSort/openTicketId records under 'volli:workspace'", () => {
     const storage = createMemoryStorage();
     const store = createWorkspaceStore(storage);
     store.getState().setBoardView("project-a", "list");
@@ -168,23 +230,38 @@ describe("persistence", () => {
     expect(Object.keys(parsed.state.byProject["project-a"]!).toSorted()).toEqual([
       "boardSort",
       "boardView",
+      "openTicketId",
     ]);
   });
 
-  it("rehydrates view + sort while nav and expandedDirs reset to the defaults", () => {
+  it("rehydrates view + sort + open ticket while nav and expandedDirs reset to the defaults", () => {
     const storage = createMemoryStorage();
     const store = createWorkspaceStore(storage);
     store.getState().setBoardView("project-a", "list");
     store.getState().setBoardSort("project-a", { key: "priority", direction: "desc" });
     store.getState().setNav("project-a", "files");
     store.getState().setDirExpanded("project-a", "/a/src", true);
+    useBoardStore.setState({ selectedByProject: {} }); // openTicket's board-store side effect, reset afterward
+    store.getState().openTicket("project-a", "ticket-1");
+    useBoardStore.setState({ selectedByProject: {} });
 
     const rehydrated = createWorkspaceStore(storage);
     const ui = rehydrated.getState().byProject["project-a"];
     expect(ui?.boardView).toBe("list");
     expect(ui?.boardSort).toEqual({ key: "priority", direction: "desc" });
+    expect(ui?.openTicketId).toBe("ticket-1");
     expect(ui?.nav).toBe("board");
     expect(ui?.expandedDirs).toEqual([]);
+  });
+
+  it("restores the open ticket across a restart (openTicket → reload)", () => {
+    const storage = createMemoryStorage();
+    const store = createWorkspaceStore(storage);
+    store.getState().openTicket("project-a", "ticket-1");
+    useBoardStore.setState({ selectedByProject: {} });
+
+    const rehydrated = createWorkspaceStore(storage);
+    expect(rehydrated.getState().byProject["project-a"]?.openTicketId).toBe("ticket-1");
   });
 
   it("sanitizes stale persisted values back to the defaults", () => {
@@ -205,6 +282,20 @@ describe("persistence", () => {
     const ui = store.getState().byProject["project-a"];
     expect(ui?.boardView).toBe("board");
     expect(ui?.boardSort).toEqual(DEFAULT_TICKET_SORT);
+  });
+
+  it("sanitizes a wrong-type persisted openTicketId back to null", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:workspace",
+      JSON.stringify({
+        state: { byProject: { "project-a": { openTicketId: 42 } } },
+        version: 1,
+      }),
+    );
+
+    const store = createWorkspaceStore(storage);
+    expect(store.getState().byProject["project-a"]?.openTicketId).toBeNull();
   });
 
   it("a forgotten project's persisted prefs do not survive the next write", () => {
@@ -239,6 +330,7 @@ describe("rehydration sanitization (corrupt JSON)", () => {
     const store = createWorkspaceStore(storage);
     expect(store.getState().byProject["project-a"]?.boardView).toBe("list");
     expect(store.getState().byProject["project-a"]?.boardSort).toEqual(DEFAULT_TICKET_SORT);
+    expect(store.getState().byProject["project-a"]?.openTicketId).toBeNull();
     expect(store.getState().byProject["project-b"]).toEqual(DEFAULT_WORKSPACE_UI);
   });
 

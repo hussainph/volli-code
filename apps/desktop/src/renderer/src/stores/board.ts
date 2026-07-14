@@ -46,6 +46,15 @@ export interface BoardGateway {
     toIndex: number;
   }): Promise<TicketsResult>;
   setTicketPriority(input: { ticketId: string; priority: TicketPriority }): Promise<TicketResult>;
+  updateTicket(input: {
+    ticketId: string;
+    title?: string;
+    body?: string;
+    worktreePath?: string | null;
+    branch?: string | null;
+    baseBranch?: string | null;
+  }): Promise<TicketResult>;
+  setLabels(input: { ticketId: string; labels: string[] }): Promise<TicketResult>;
   archiveTicket(input: { ticketId: string }): Promise<Result>;
   unarchiveTicket(input: { ticketId: string }): Promise<TicketResult>;
   deleteTicket(input: { ticketId: string }): Promise<Result>;
@@ -56,6 +65,8 @@ const defaultGateway: BoardGateway = {
   createTicket: (input) => window.api.tickets.create(input),
   moveTicket: (input) => window.api.tickets.move(input),
   setTicketPriority: (input) => window.api.tickets.setPriority(input),
+  updateTicket: (input) => window.api.tickets.update(input),
+  setLabels: (input) => window.api.tickets.setLabels(input),
   archiveTicket: (input) => window.api.tickets.archive(input),
   unarchiveTicket: (input) => window.api.tickets.unarchive(input),
   deleteTicket: (input) => window.api.tickets.delete(input),
@@ -101,6 +112,28 @@ interface BoardState {
     options?: { priority?: TicketPriority },
   ): Promise<Ticket | null>;
   setTicketPriority(projectId: string, ticketId: string, priority: TicketPriority): Promise<void>;
+  /**
+   * Patches a ticket's title/body/worktree-identity fields via `api.tickets.update`
+   * (ticket-detail-mvp step 3). Ticket-scoped, not project-scoped — the ticket's
+   * project is located by scanning `ticketsByProject` for it, so callers (the
+   * properties rail's branch/baseBranch fields today; step 4's title/body
+   * autosave next) only need the ticket's id. Optimistic; reverts to the
+   * pre-patch ticket on failure. A no-op (no IPC) for an unknown ticket id.
+   */
+  updateTicket(input: {
+    ticketId: string;
+    title?: string;
+    body?: string;
+    worktreePath?: string | null;
+    branch?: string | null;
+    baseBranch?: string | null;
+  }): Promise<void>;
+  /**
+   * Replaces a ticket's labels wholesale via `api.tickets.setLabels`. Same
+   * ticket-scoped shape as {@link BoardState.updateTicket}. Optimistic;
+   * reverts to the pre-edit label set on failure.
+   */
+  setLabels(ticketId: string, labels: string[]): Promise<void>;
   /**
    * Fetches the project's archived tickets into `archivedByProject` (the
    * Archive view calls this on open). Resolves `false` when the fetch failed
@@ -189,6 +222,24 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
       const slice: Ticket[] | undefined = byProject[projectId];
       if (!slice) return;
       set({ ticketsByProject: { ...byProject, [projectId]: update(slice) } });
+    }
+
+    /**
+     * Locates `ticketId` across every project's slice — the lookup behind
+     * {@link BoardState.updateTicket}/{@link BoardState.setLabels}, whose
+     * signatures (deliberately) take no `projectId`: both are ticket-scoped
+     * mutations reachable from a context (the ticket detail view) that already
+     * has the ticket in hand, not the project id. `undefined` for an unknown
+     * ticket id.
+     */
+    function findTicketProject(
+      ticketId: string,
+    ): { projectId: string; ticket: Ticket } | undefined {
+      for (const [projectId, tickets] of Object.entries(get().ticketsByProject)) {
+        const ticket = tickets.find((candidate) => candidate.id === ticketId);
+        if (ticket) return { projectId, ticket };
+      }
+      return undefined;
     }
 
     /**
@@ -283,6 +334,60 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         const result = await writeThrough(
           "update priority",
           (): Promise<TicketResult> => gateway.setTicketPriority({ ticketId, priority }),
+        );
+        if (!result) {
+          patch(original);
+          return;
+        }
+        patch(result.ticket);
+      },
+
+      async updateTicket(input) {
+        const { ticketId, ...changes } = input;
+        const found = findTicketProject(ticketId);
+        if (!found) return; // unknown ticket id — nothing to update
+        const { projectId, ticket: original } = found;
+
+        const patch = (ticket: Ticket) =>
+          reconcileSlice(projectId, (slice) =>
+            slice.map((existing) => (existing.id === ticket.id ? ticket : existing)),
+          );
+        // Merge only the fields the caller actually supplied — `undefined`
+        // means "leave as-is", matching `api.tickets.update`'s own semantics.
+        patch({
+          ...original,
+          ...(changes.title !== undefined ? { title: changes.title } : {}),
+          ...(changes.body !== undefined ? { body: changes.body } : {}),
+          ...(changes.worktreePath !== undefined ? { worktreePath: changes.worktreePath } : {}),
+          ...(changes.branch !== undefined ? { branch: changes.branch } : {}),
+          ...(changes.baseBranch !== undefined ? { baseBranch: changes.baseBranch } : {}),
+        });
+
+        const result = await writeThrough(
+          "update ticket",
+          (): Promise<TicketResult> => gateway.updateTicket(input),
+        );
+        if (!result) {
+          patch(original);
+          return;
+        }
+        patch(result.ticket);
+      },
+
+      async setLabels(ticketId, labels) {
+        const found = findTicketProject(ticketId);
+        if (!found) return; // unknown ticket id — nothing to update
+        const { projectId, ticket: original } = found;
+
+        const patch = (ticket: Ticket) =>
+          reconcileSlice(projectId, (slice) =>
+            slice.map((existing) => (existing.id === ticket.id ? ticket : existing)),
+          );
+        patch({ ...original, labels });
+
+        const result = await writeThrough(
+          "update labels",
+          (): Promise<TicketResult> => gateway.setLabels({ ticketId, labels }),
         );
         if (!result) {
           patch(original);

@@ -17,6 +17,8 @@ interface BoardColumnProps {
   ticketPrefix: string;
   selectedId: string | null;
   onSelect(ticketId: string): void;
+  /** Double-click opens the ticket's full-page detail view (ticket-detail-mvp step 3). */
+  onOpen(ticketId: string): void;
   composerInitiallyOpen: boolean;
   onComposerClose(status: TicketStatus): void;
   /** Play the enter transition — true for columns appearing on an already-mounted board. */
@@ -31,6 +33,7 @@ export function BoardColumn({
   ticketPrefix,
   selectedId,
   onSelect,
+  onOpen,
   composerInitiallyOpen,
   onComposerClose,
   animateEnter,
@@ -77,6 +80,7 @@ export function BoardColumn({
               ticketPrefix={ticketPrefix}
               selected={ticket.id === selectedId}
               onSelect={onSelect}
+              onOpen={onOpen}
             />
           ))}
         </div>
