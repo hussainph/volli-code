@@ -126,14 +126,17 @@ export function ArtifactViewer({
     if (conflictRef.current !== null) return;
     const next = draftRef.current;
     if (next === syncedRef.current) return;
+    // No mounted guard before persisting: the unmount/file-switch flush relies
+    // on this write completing after the component is gone. Only React state
+    // (the banner) and the list refetch are gated on being mounted.
     const disk = await readFile();
-    if (!mountedRef.current) return;
     if (!disk.ok) {
       toast.error(`Could not save ${entry.name}: ${disk.error}`);
       return;
     }
     if (disk.content !== syncedRef.current) {
-      setConflict(disk.content);
+      if (mountedRef.current) setConflict(disk.content);
+      else toast.error(`${entry.name} changed on disk — your last edits were not saved.`);
       return;
     }
     const result = await window.api.artifacts.write({
@@ -143,13 +146,12 @@ export function ArtifactViewer({
       name: entry.name,
       content: next,
     });
-    if (!mountedRef.current) return;
     if (!result.ok) {
       toast.error(`Could not save ${entry.name}: ${result.error}`);
       return;
     }
     syncedRef.current = next;
-    onSaved?.();
+    if (mountedRef.current) onSaved?.();
   }, [projectId, ticketId, entry.tier, entry.name, readFile, onSaved]);
 
   const commitRef = React.useRef(commit);

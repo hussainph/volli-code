@@ -36,8 +36,12 @@ export function BoardPage() {
   if (project === null) return null;
 
   if (openTicketId !== null && ticket !== undefined) {
+    // Keyed so a ticket→ticket jump (nav history) remounts the detail: pending
+    // body/artifact autosaves flush on unmount to the ticket that authored
+    // them, never into the next ticket's editors.
     return (
       <TicketDetail
+        key={ticket.id}
         projectId={project.id}
         projectPath={project.path}
         ticketPrefix={project.ticketPrefix}
