@@ -1,7 +1,8 @@
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import Database from "better-sqlite3";
+import type Database from "better-sqlite3";
+import { openRawDb } from "./test-helpers";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { MIGRATIONS, migrate } from "./migrations";
 
@@ -37,7 +38,7 @@ function indexExists(db: Database.Database, index: string): boolean {
 
 /** Hand-builds a v2 database (migrations 1+2 only) with rows already in it, mirroring a real pre-003 install. */
 function buildV2DbWithRows(dbPath: string): Database.Database {
-  const db = new Database(dbPath);
+  const db = openRawDb(dbPath);
   db.pragma("foreign_keys = ON");
   for (const migration of MIGRATIONS.filter((m) => m.version <= 2)) {
     db.exec(migration.sql);
@@ -58,7 +59,7 @@ function buildV2DbWithRows(dbPath: string): Database.Database {
 describe("migrate — fresh install", () => {
   it("applies every migration and lands on the latest user_version", () => {
     const dbPath = tempDbPath();
-    const db = new Database(dbPath);
+    const db = openRawDb(dbPath);
     migrate(db, dbPath);
 
     expect(db.pragma("user_version", { simple: true })).toBe(3);
@@ -67,7 +68,7 @@ describe("migrate — fresh install", () => {
 
   it("creates the migration-003 tables, indexes, and ticket columns", () => {
     const dbPath = tempDbPath();
-    const db = new Database(dbPath);
+    const db = openRawDb(dbPath);
     migrate(db, dbPath);
 
     expect(tableExists(db, "sessions")).toBe(true);
@@ -83,7 +84,7 @@ describe("migrate — fresh install", () => {
 
   it("skips the pre-migration backup copy on a brand-new database", () => {
     const dbPath = tempDbPath();
-    const db = new Database(dbPath);
+    const db = openRawDb(dbPath);
     migrate(db, dbPath);
 
     expect(existsSync(`${dbPath}.backup-v0`)).toBe(false);
@@ -134,7 +135,7 @@ describe("migrate — 002 to 003 upgrade path", () => {
 
   it("is a no-op when the db is already at the latest version", () => {
     const dbPath = tempDbPath();
-    const db = new Database(dbPath);
+    const db = openRawDb(dbPath);
     migrate(db, dbPath);
     migrate(db, dbPath); // second call: nothing pending
 

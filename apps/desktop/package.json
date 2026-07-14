@@ -5,7 +5,8 @@
   "type": "module",
   "main": "dist-electron/main.cjs",
   "scripts": {
-    "postinstall": "pnpm run rebuild:native",
+    "postinstall": "pnpm run rebuild:native && pnpm run cache:node-sqlite",
+    "cache:node-sqlite": "node scripts/cache-node-sqlite.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.node.json --composite false && tsc --noEmit -p tsconfig.web.json --composite false",
     "test": "vp test run",
     "start": "node scripts/start-electron.mjs",

@@ -7,13 +7,50 @@
  * file, so `vite.config.ts`'s main-project test include (every "*.test.ts"
  * under src/main) never treats it as a suite — it's imported BY the suites below.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import Database from "better-sqlite3";
 import { createSessionRecord, createTicket } from "@volli/shared";
 import type { Project, SessionRecord, Ticket } from "@volli/shared";
 import { migrate } from "./migrations";
+
+const requireFromHere = createRequire(import.meta.url);
+
+/**
+ * Under plain Node (vitest), the installed better-sqlite3 binary is
+ * Electron-ABI (`rebuild:native` bakes it for the app), so tests must load the
+ * Node-ABI copy cached by `scripts/cache-node-sqlite.mjs` (run on postinstall).
+ * Under Electron the default binding is already correct.
+ */
+function nodeAbiBindingPath(): string | null {
+  if (process.versions.electron) return null;
+  const pkgJsonPath = requireFromHere.resolve("better-sqlite3/package.json");
+  const { version } = JSON.parse(readFileSync(pkgJsonPath, "utf8")) as { version: string };
+  const binding = join(
+    dirname(pkgJsonPath),
+    "prebuilds",
+    `better_sqlite3-v${version}-node-v${process.versions.modules}.node`,
+  );
+  if (!existsSync(binding)) {
+    throw new Error(
+      `Node-ABI better-sqlite3 binding missing at ${binding} — ` +
+        "run `pnpm -C apps/desktop run cache:node-sqlite`.",
+    );
+  }
+  return binding;
+}
+
+/**
+ * Constructs a raw better-sqlite3 handle with the ABI-correct binding and no
+ * further setup. Test code must use this (or {@link openTestDb}) instead of
+ * `new Database(...)` so suites run under both plain Node and Electron.
+ */
+export function openRawDb(dbPath: string): Database.Database {
+  const nativeBinding = nodeAbiBindingPath();
+  return nativeBinding === null ? new Database(dbPath) : new Database(dbPath, { nativeBinding });
+}
 
 export interface TestDb {
   db: Database.Database;
@@ -26,7 +63,7 @@ export interface TestDb {
 export function openTestDb(): TestDb {
   const dir = mkdtempSync(join(tmpdir(), "volli-db-test-"));
   const dbPath = join(dir, "volli.db");
-  const db = new Database(dbPath);
+  const db = openRawDb(dbPath);
   db.pragma("foreign_keys = ON");
   migrate(db, dbPath);
   return {
