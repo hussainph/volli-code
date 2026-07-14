@@ -67,19 +67,52 @@ function makeTempProjectDir(): string {
   return dir;
 }
 
-/** One captured `fs.watch(dir, cb)` call: `cb` can be fired manually, `watcher.close` asserted on. */
+/** A captured watcher double: `close` is asserted on, `emitError` fires the 'error' handler openWatcher attaches. */
+interface FakeWatcher {
+  close: ReturnType<typeof vi.fn>;
+  on: ReturnType<typeof vi.fn>;
+  emitError: (error: unknown) => void;
+}
+
+function makeFakeWatcher(): FakeWatcher {
+  const errorHandlers: ((error: unknown) => void)[] = [];
+  return {
+    close: vi.fn(),
+    on: vi.fn((event: string, handler: (error: unknown) => void) => {
+      if (event === "error") errorHandlers.push(handler);
+    }),
+    emitError: (error: unknown) => {
+      for (const handler of errorHandlers) handler(error);
+    },
+  };
+}
+
+/** One captured `fs.watch(dir, cb)` call: `cb` can be fired manually, `watcher.close`/errors asserted on. */
 interface WatchCall {
   dir: string;
   cb: (eventType: string, filename: string | null) => void;
-  watcher: { close: ReturnType<typeof vi.fn> };
+  watcher: FakeWatcher;
 }
 let watchCalls: WatchCall[] = [];
+
+/**
+ * Polls `predicate` until it holds (or the timeout elapses), so a test can await
+ * the settling of a fire-and-forget re-arm without a flaky fixed sleep — the
+ * re-arm's real-fs ensure* can run long under full-suite CPU contention.
+ */
+async function waitUntil(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > timeoutMs) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
 
 beforeEach(() => {
   watchCalls = [];
   watchMock.mockReset();
   watchMock.mockImplementation((dir: string, cb: WatchCall["cb"]) => {
-    const watcher = { close: vi.fn() };
+    const watcher = makeFakeWatcher();
     watchCalls.push({ dir, cb, watcher });
     return watcher;
   });
@@ -394,7 +427,7 @@ describe("symlink-escape guards", () => {
     expect(result.error).toContain("escapes");
   });
 
-  it("rejects reading a file that is itself a symlink escaping the artifacts directory", async () => {
+  it("rejects reading a file that is itself a symlink (rejected outright, before target resolution)", async () => {
     const project = makeTempProjectDir();
     await ensureTicketDir(project, "VC-1");
     const ticketArtifacts = join(project, ".volli", "tickets", "VC-1", "artifacts");
@@ -407,7 +440,39 @@ describe("symlink-escape guards", () => {
     const result = await readArtifactText(project, "ticket", "VC-1", "link.md");
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.error).toContain("escapes");
+    expect(result.error).toContain("symlink");
+  });
+
+  it("rejects reading through a DANGLING symlink named like an artifact (no silent escape)", async () => {
+    const project = makeTempProjectDir();
+    await ensureTicketDir(project, "VC-1");
+    const ticketArtifacts = join(project, ".volli", "tickets", "VC-1", "artifacts");
+    // Points nowhere: previously realpath() threw and the path was treated as
+    // "safe", letting a writeFile follow it out of .volli.
+    symlinkSync(
+      join(project, "nonexistent-target.md"),
+      join(ticketArtifacts, "dangling.md"),
+      "file",
+    );
+
+    const result = await readArtifactText(project, "ticket", "VC-1", "dangling.md");
+    expect(result).toEqual({ ok: false, error: "Artifact is a symlink" });
+  });
+
+  it("createArtifact refuses to write through a pre-existing symlink at the target name", async () => {
+    const project = makeTempProjectDir();
+    await ensureTicketDir(project, "VC-1");
+    const ticketArtifacts = join(project, ".volli", "tickets", "VC-1", "artifacts");
+    const outside = mkdtempSync(join(tmpdir(), "volli-fs-outside-"));
+    tempDirs.push(outside);
+    const outsideFile = join(outside, "target.md");
+    writeFileSync(outsideFile, "untouched", "utf8");
+    symlinkSync(outsideFile, join(ticketArtifacts, "notes.md"), "file");
+
+    const result = await createArtifact(project, "VC-1", "notes");
+    expect(result).toEqual({ ok: false, error: "Artifact is a symlink" });
+    // The symlink was NOT followed — the outside file is untouched.
+    expect(readFileSync(outsideFile, "utf8")).toBe("untouched");
   });
 });
 
@@ -600,7 +665,7 @@ describe("ArtifactWatchManager", () => {
     // Project-tier watcher installs fine; the ticket-tier one throws.
     watchMock
       .mockImplementationOnce((dir: string, cb: WatchCall["cb"]) => {
-        const watcher = { close: vi.fn() };
+        const watcher = makeFakeWatcher();
         watchCalls.push({ dir, cb, watcher });
         return watcher;
       })
@@ -645,6 +710,92 @@ describe("ArtifactWatchManager", () => {
   it("unsubscribing an unknown pair does not throw", () => {
     const manager = new ArtifactWatchManager();
     expect(() => manager.unsubscribe(makeWebContents() as never, "nope")).not.toThrow();
+  });
+
+  it("returns ok:false and drops the pending entry when ensure* throws, so a retry isn't poisoned", async () => {
+    // A project path whose ancestor is a FILE — the recursive mkdir inside
+    // ensure* fails with ENOTDIR.
+    const fileParent = mkdtempSync(join(tmpdir(), "volli-fs-file-"));
+    tempDirs.push(fileParent);
+    const filePath = join(fileParent, "not-a-dir");
+    writeFileSync(filePath, "x", "utf8");
+    const badProject = join(filePath, "project");
+
+    const manager = new ArtifactWatchManager();
+    const webContents = makeWebContents();
+
+    const first = await manager.subscribe(webContents as never, badProject, "p", "t", "VC-1");
+    expect(first.ok).toBe(false);
+    expect(watchMock).not.toHaveBeenCalled();
+    // Not poisoned: a second attempt re-runs ensure* (and fails the same way)
+    // rather than short-circuiting to a bogus { ok: true } with no watchers.
+    const second = await manager.subscribe(webContents as never, badProject, "p", "t", "VC-1");
+    expect(second.ok).toBe(false);
+  });
+
+  it("re-arms both watchers on a watcher 'error' (never crashes the process) and refetches", async () => {
+    const project = makeTempProjectDir();
+    const manager = new ArtifactWatchManager(0);
+    const webContents = makeWebContents();
+    await manager.subscribe(webContents as never, project, "proj-1", "ticket-1", "VC-1");
+    expect(watchMock).toHaveBeenCalledTimes(2);
+    const [projectWatcher, ticketWatcher] = [watchCalls[0], watchCalls[1]];
+
+    // An async fs.watch fault would otherwise be an unhandled EventEmitter
+    // 'error' that crashes main. Here it tears down + rebuilds the watchers.
+    projectWatcher?.watcher.emitError(new Error("kqueue fd pressure"));
+    await waitUntil(() => webContents.send.mock.calls.length > 0);
+
+    expect(projectWatcher?.watcher.close).toHaveBeenCalledTimes(1);
+    expect(ticketWatcher?.watcher.close).toHaveBeenCalledTimes(1);
+    // Two fresh watchers wired for the same key.
+    expect(watchMock).toHaveBeenCalledTimes(4);
+    // The tree may have changed under us, so the renderer is nudged to refetch.
+    expect(webContents.send).toHaveBeenCalledWith("volli:artifacts-changed", {
+      projectId: "proj-1",
+      ticketId: "ticket-1",
+    } satisfies ArtifactsChangedEvent);
+  });
+
+  it("re-arms onto the new inode when the watched dir was deleted and recreated", async () => {
+    const project = makeTempProjectDir();
+    const manager = new ArtifactWatchManager(0);
+    const webContents = makeWebContents();
+    await manager.subscribe(webContents as never, project, "proj-1", "ticket-1", "VC-1");
+    const ticketDir = join(project, ".volli", "tickets", "VC-1", "artifacts");
+
+    // `rm -rf` the watched dir; fs.watch would keep watching the dead inode.
+    rmSync(ticketDir, { recursive: true, force: true });
+    // The ticket-tier watcher fires for the now-missing dir → re-arm.
+    watchCalls[1]?.cb("rename", null);
+    await waitUntil(() => existsSync(ticketDir) && watchMock.mock.calls.length >= 4);
+
+    // The dir was recreated (ensure* during re-arm) and a fresh pair wired.
+    expect(existsSync(ticketDir)).toBe(true);
+    expect(watchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("falls back to teardown + one final broadcast when a re-arm cannot re-install watchers", async () => {
+    const project = makeTempProjectDir();
+    const manager = new ArtifactWatchManager(0);
+    const webContents = makeWebContents();
+    await manager.subscribe(webContents as never, project, "proj-1", "ticket-1", "VC-1");
+
+    // Make the re-arm's re-wire fail: the next fs.watch throws.
+    watchMock.mockImplementation(() => {
+      throw new Error("EMFILE");
+    });
+    watchCalls[0]?.watcher.emitError(new Error("boom"));
+    await waitUntil(() => webContents.send.mock.calls.length > 0);
+
+    // Honest fallback: the subscription is torn down and the renderer gets one
+    // final refetch nudge rather than trusting a watch that's gone.
+    expect(webContents.send).toHaveBeenCalledWith("volli:artifacts-changed", {
+      projectId: "proj-1",
+      ticketId: "ticket-1",
+    } satisfies ArtifactsChangedEvent);
+    // Torn down: a subsequent unsubscribe is a harmless no-op (no double close).
+    expect(() => manager.unsubscribe(webContents as never, "ticket-1")).not.toThrow();
   });
 });
 

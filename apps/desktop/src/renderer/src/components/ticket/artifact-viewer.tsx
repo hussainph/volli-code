@@ -6,7 +6,7 @@ import { toast } from "sonner";
 
 import { MarkdownLiveEditor } from "@renderer/components/editor/markdown-live-editor";
 import { Button } from "@renderer/components/ui/button";
-import { createDebouncer, type Debouncer } from "@renderer/lib/debounce";
+import { useDebouncedCallback } from "@renderer/lib/use-debounced-callback";
 
 const AUTOSAVE_IDLE_MS = 1500;
 
@@ -154,19 +154,10 @@ export function ArtifactViewer({
     if (mountedRef.current) onSaved?.();
   }, [projectId, ticketId, entry.tier, entry.name, readFile, onSaved]);
 
-  const commitRef = React.useRef(commit);
-  React.useEffect(() => {
-    commitRef.current = commit;
-  }, [commit]);
-
-  const debouncerRef = React.useRef<Debouncer | null>(null);
-  if (debouncerRef.current === null) {
-    debouncerRef.current = createDebouncer(() => void commitRef.current(), AUTOSAVE_IDLE_MS);
-  }
-  const debouncer = debouncerRef.current;
-
-  // Flush a pending save on unmount (file-switch remounts, ticket close, etc.).
-  React.useEffect(() => () => debouncer.flush(), [debouncer]);
+  // Autosave debouncer; flushes its pending save on unmount (file-switch
+  // remounts, ticket close, etc.). The hook owns the latest-callback ref, so it
+  // always runs the current `commit` (bound to this entry).
+  const debouncer = useDebouncedCallback(() => void commit(), AUTOSAVE_IDLE_MS);
 
   // Background fs-watch change. Skip the first run — the load effect covers the
   // initial fetch; this only reacts to LATER bumps.

@@ -103,6 +103,13 @@ describe("isValidNewArtifactName", () => {
   it("rejects a name with a separator", () => {
     expect(isValidNewArtifactName("sub/notes")).toBe(false);
   });
+
+  it.each([[".notes"], [".md"], ["  .hidden  "], ["."], [".."]])(
+    "rejects a leading-dot name %s (it would be created but then hidden by the tier listing)",
+    (raw) => {
+      expect(isValidNewArtifactName(raw)).toBe(false);
+    },
+  );
 });
 
 describe("withMarkdownExtension", () => {

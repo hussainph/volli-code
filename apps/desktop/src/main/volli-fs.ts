@@ -7,7 +7,7 @@
  * IPC wiring at the bottom. Every mutation returns a typed `Result` rather
  * than throwing across the IPC boundary — same convention as data-ipc.ts.
  */
-import { promises as fsp, watch as fsWatch } from "node:fs";
+import { existsSync, promises as fsp, watch as fsWatch } from "node:fs";
 import { join, sep } from "node:path";
 import { ipcMain, shell } from "electron";
 import type { WebContents } from "electron";
@@ -47,6 +47,19 @@ import { getProjectById } from "./db/projects-repo";
 import { getTicketRow } from "./db/tickets-repo";
 
 // ---- low-level fs helpers --------------------------------------------------
+
+/** The `code` of a Node `ErrnoException`-shaped value, or undefined. */
+function errnoCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" ? code : undefined;
+}
+
+/** True when a directory-read failure means "no such tier" (empty), not a real fault. */
+function isMissingDirError(error: unknown): boolean {
+  const code = errnoCode(error);
+  return code === "ENOENT" || code === "ENOTDIR";
+}
 
 async function pathExists(path: string): Promise<boolean> {
   try {
@@ -124,11 +137,30 @@ async function assertDirWithinVolli(
   return { ok: true };
 }
 
-/** Same escape guard as {@link assertDirWithinVolli}, one level down: an existing file's realpath must stay inside `dir`'s realpath. A file that doesn't exist yet (nothing to escape via) passes. */
+/**
+ * Same escape guard as {@link assertDirWithinVolli}, one level down: an
+ * existing file's realpath must stay inside `dir`'s realpath. A file that
+ * doesn't exist yet (nothing to escape via) passes.
+ *
+ * A path that is itself a symlink is rejected outright, regardless of target:
+ * lstat (which does NOT dereference) runs first, so even a *dangling* symlink
+ * named like an artifact is caught here — previously its failed realpath was
+ * treated as "safe", letting writeFile follow the link and write outside
+ * `.volli`. A genuinely nonexistent path (lstat ENOENT) still passes.
+ */
 async function assertFileWithinDir(
   dir: string,
   filePath: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const link = await fsp.lstat(filePath);
+    if (link.isSymbolicLink()) {
+      return { ok: false, error: "Artifact is a symlink" };
+    }
+  } catch {
+    // Nothing at this path yet (ENOENT) — a brand-new file, nothing to escape via.
+    return { ok: true };
+  }
   let fileReal: string;
   try {
     fileReal = await fsp.realpath(filePath);
@@ -166,32 +198,43 @@ async function resolveSafeEntry(
 
 // ---- listing ----------------------------------------------------------------
 
-/** Files only (dirents, so symlinks are excluded — same stance as list-directory's IPC handler), skipping dotfiles. Never creates `dir`; a missing directory is an empty tier, not an error. */
+/**
+ * Files only (dirents, so symlinks are excluded — same stance as
+ * list-directory's IPC handler), skipping dotfiles. Never creates `dir`; a
+ * MISSING directory (ENOENT/ENOTDIR) is an empty tier. Any other readdir
+ * failure (EACCES/EIO) is re-thrown rather than masked as "empty" — the IPC
+ * handler wraps it into `{ ok: false, error }` so the UI surfaces it
+ * (CLAUDE.md: never silently swallow errors). Per-entry stats run in parallel.
+ */
 async function listTierEntries(dir: string, tier: ArtifactTier): Promise<ArtifactEntry[]> {
   let dirents: import("node:fs").Dirent[];
   try {
     dirents = await fsp.readdir(dir, { withFileTypes: true });
-  } catch {
-    return [];
+  } catch (error) {
+    if (isMissingDirError(error)) return [];
+    throw error;
   }
-  const entries: ArtifactEntry[] = [];
-  for (const dirent of dirents) {
-    if (dirent.name.startsWith(".")) continue;
-    if (!dirent.isFile()) continue;
-    try {
-      const stat = await fsp.stat(join(dir, dirent.name));
-      entries.push({
-        name: dirent.name,
-        relPath: dirent.name,
-        tier,
-        size: stat.size,
-        mtime: stat.mtimeMs,
-        kind: classifyArtifactKind(dirent.name),
-      });
-    } catch {
-      // Raced away between readdir and stat (deleted mid-listing) — skip it.
-    }
-  }
+  const stated = await Promise.all(
+    dirents.map(async (dirent): Promise<ArtifactEntry | null> => {
+      if (dirent.name.startsWith(".")) return null;
+      if (!dirent.isFile()) return null;
+      try {
+        const stat = await fsp.stat(join(dir, dirent.name));
+        return {
+          name: dirent.name,
+          relPath: dirent.name,
+          tier,
+          size: stat.size,
+          mtime: stat.mtimeMs,
+          kind: classifyArtifactKind(dirent.name),
+        };
+      } catch {
+        // Raced away between readdir and stat (deleted mid-listing) — skip it.
+        return null;
+      }
+    }),
+  );
+  const entries = stated.filter((entry): entry is ArtifactEntry => entry !== null);
   entries.sort(compareArtifactEntries);
   return entries;
 }
@@ -269,7 +312,15 @@ export async function writeArtifactText(
   }
 }
 
-/** Creates a new, minimally-templated `.md` artifact in the ticket tier. `rawName` is validated (no separators/`..`/empty) then forced to a `.md` extension; a name collision fails rather than silently overwriting. */
+/**
+ * Creates a new, minimally-templated `.md` artifact in the ticket tier.
+ * `rawName` is validated (no separators/`..`/empty/leading-dot) then forced to
+ * a `.md` extension. The sandbox guards run through the shared
+ * {@link resolveSafeEntry} (dir + file realpath/symlink checks live once), and
+ * the write uses the `wx` (`O_EXCL`) flag: a name collision — even one an agent
+ * created concurrently — fails with EEXIST rather than silently overwriting,
+ * and O_EXCL additionally refuses to follow a dangling symlink.
+ */
 export async function createArtifact(
   projectPath: string,
   displayId: string,
@@ -277,21 +328,21 @@ export async function createArtifact(
 ): Promise<ArtifactCreateResult> {
   if (!isValidNewArtifactName(rawName)) return { ok: false, error: "Invalid artifact name" };
   const name = withMarkdownExtension(rawName.trim());
-  if (!isSafeArtifactEntryName(name)) return { ok: false, error: "Invalid artifact name" };
 
   await ensureTicketDir(projectPath, displayId);
-  const dir = ticketArtifactsDir(projectPath, displayId);
-  const dirCheck = await assertDirWithinVolli(projectPath, dir);
-  if (!dirCheck.ok) return dirCheck;
+  const resolved = await resolveSafeEntry(projectPath, "ticket", displayId, name);
+  if (!resolved.ok) return resolved;
 
-  const filePath = join(dir, name);
-  if (await pathExists(filePath)) {
+  // Friendly fast path for the common collision; the `wx` flag below is the
+  // real, race-free guard (closes the TOCTOU window between this check and the
+  // write, where an agent could create the same file).
+  if (await pathExists(resolved.filePath)) {
     return { ok: false, error: `An artifact named "${name}" already exists` };
   }
   try {
     const content = `# ${artifactBaseName(name)}\n\n`;
-    await fsp.writeFile(filePath, content, "utf8");
-    const stat = await fsp.stat(filePath);
+    await fsp.writeFile(resolved.filePath, content, { encoding: "utf8", flag: "wx" });
+    const stat = await fsp.stat(resolved.filePath);
     return {
       ok: true,
       entry: {
@@ -304,11 +355,22 @@ export async function createArtifact(
       },
     };
   } catch (error) {
+    if (errnoCode(error) === "EEXIST") {
+      return { ok: false, error: `An artifact named "${name}" already exists` };
+    }
     return { ok: false, error: errorMessage(error) };
   }
 }
 
-/** Moves a ticket-tier artifact up to the project tier via rename. A name collision at the destination fails with a typed error — never a silent overwrite. */
+/**
+ * Moves a ticket-tier artifact up to the project tier. Both endpoints run
+ * through the shared {@link resolveSafeEntry} sandbox guard (the checks live
+ * once, not re-implemented inline). The move is a hardlink + unlink rather than
+ * `fsp.rename`: rename silently REPLACES an existing destination, clobbering a
+ * project-tier artifact created concurrently; `fsp.link` is atomic and fails
+ * with EEXIST if the destination exists (no-replace on the same volume), so a
+ * collision always surfaces as a typed error — never a silent overwrite.
+ */
 export async function promoteArtifact(
   projectPath: string,
   displayId: string,
@@ -316,26 +378,21 @@ export async function promoteArtifact(
 ): Promise<ArtifactPromoteResult> {
   if (!isSafeArtifactEntryName(name)) return { ok: false, error: "Invalid artifact name" };
 
-  const sourceDir = ticketArtifactsDir(projectPath, displayId);
-  const sourcePath = join(sourceDir, name);
+  const sourcePath = join(ticketArtifactsDir(projectPath, displayId), name);
   if (!(await pathExists(sourcePath))) {
     return { ok: false, error: `"${name}" was not found in the ticket's artifacts` };
   }
-  const sourceDirCheck = await assertDirWithinVolli(projectPath, sourceDir);
-  if (!sourceDirCheck.ok) return sourceDirCheck;
-  const sourceFileCheck = await assertFileWithinDir(sourceDir, sourcePath);
-  if (!sourceFileCheck.ok) return sourceFileCheck;
+  const source = await resolveSafeEntry(projectPath, "ticket", displayId, name);
+  if (!source.ok) return source;
 
   await ensureProjectArtifactsDir(projectPath);
-  const destDir = projectArtifactsDir(projectPath);
-  const destPath = join(destDir, name);
-  if (await pathExists(destPath)) {
-    return { ok: false, error: `An artifact named "${name}" already exists at the project level` };
-  }
+  const dest = await resolveSafeEntry(projectPath, "project", displayId, name);
+  if (!dest.ok) return dest;
 
   try {
-    await fsp.rename(sourcePath, destPath);
-    const stat = await fsp.stat(destPath);
+    await fsp.link(source.filePath, dest.filePath);
+    await fsp.unlink(source.filePath);
+    const stat = await fsp.stat(dest.filePath);
     return {
       ok: true,
       entry: {
@@ -348,6 +405,12 @@ export async function promoteArtifact(
       },
     };
   } catch (error) {
+    if (errnoCode(error) === "EEXIST") {
+      return {
+        ok: false,
+        error: `An artifact named "${name}" already exists at the project level`,
+      };
+    }
     return { ok: false, error: errorMessage(error) };
   }
 }
@@ -373,10 +436,17 @@ const WATCH_DEBOUNCE_MS = 250;
 
 interface WatchSubscription {
   webContents: WebContents;
+  /** Everything a re-arm needs to rebuild the two watchers for this key. */
+  projectPath: string;
+  projectId: string;
+  ticketId: string;
+  displayId: string;
   projectWatcher: ReturnType<typeof fsWatch> | null;
   ticketWatcher: ReturnType<typeof fsWatch> | null;
   debounceTimer: NodeJS.Timeout | null;
   onDestroyed: () => void;
+  /** Guards against overlapping re-arms (both watchers can fault together). */
+  reArming: boolean;
 }
 
 /**
@@ -414,15 +484,30 @@ export class ArtifactWatchManager {
     // and abort.
     const sub: WatchSubscription = {
       webContents,
+      projectPath,
+      projectId,
+      ticketId,
+      displayId,
       projectWatcher: null,
       ticketWatcher: null,
       debounceTimer: null,
       onDestroyed: () => this.teardown(key),
+      reArming: false,
     };
     this.subs.set(key, sub);
 
-    await ensureProjectArtifactsDir(projectPath);
-    await ensureTicketDir(projectPath, displayId);
+    try {
+      await ensureProjectArtifactsDir(projectPath);
+      await ensureTicketDir(projectPath, displayId);
+    } catch (error) {
+      // ensure* threw (e.g. EACCES). Drop our pending reservation — but only if
+      // it is still ours (an unsubscribe during the await may have replaced it,
+      // in which case teardown already cleaned up) — so a retry isn't poisoned
+      // by a stale entry that short-circuits `this.subs.has(key)` above with
+      // zero watchers installed. Surface the failure (CLAUDE.md).
+      if (this.subs.get(key) === sub) this.subs.delete(key);
+      return { ok: false, error: errorMessage(error) };
+    }
 
     // If an unsubscribe/teardown removed (or replaced) our pending entry during
     // the awaits, abort — teardown already cleaned up, nothing to wire.
@@ -435,21 +520,8 @@ export class ArtifactWatchManager {
       return { ok: true };
     }
 
-    const scheduleBroadcast = (): void => {
-      if (sub.debounceTimer !== null) clearTimeout(sub.debounceTimer);
-      sub.debounceTimer = setTimeout(() => {
-        sub.debounceTimer = null;
-        if (webContents.isDestroyed()) return;
-        const payload: ArtifactsChangedEvent = { projectId, ticketId };
-        webContents.send("volli:artifacts-changed" satisfies VolliIpcEvent, payload);
-      }, this.debounceMs);
-    };
-
     try {
-      sub.projectWatcher = fsWatch(projectArtifactsDir(projectPath), () => scheduleBroadcast());
-      sub.ticketWatcher = fsWatch(ticketArtifactsDir(projectPath, displayId), () =>
-        scheduleBroadcast(),
-      );
+      this.wireWatchers(key, sub);
     } catch (error) {
       // A watcher failed to install. Surface it rather than silently swallowing
       // (CLAUDE.md) and leaving the tab believing live updates are on: close any
@@ -462,6 +534,96 @@ export class ArtifactWatchManager {
 
     webContents.once("destroyed", sub.onDestroyed);
     return { ok: true };
+  }
+
+  /** Debounced, window-scoped `volli:artifacts-changed` broadcast for `sub`. */
+  private scheduleBroadcast(sub: WatchSubscription): void {
+    if (sub.debounceTimer !== null) clearTimeout(sub.debounceTimer);
+    sub.debounceTimer = setTimeout(() => {
+      sub.debounceTimer = null;
+      if (sub.webContents.isDestroyed()) return;
+      const payload: ArtifactsChangedEvent = { projectId: sub.projectId, ticketId: sub.ticketId };
+      sub.webContents.send("volli:artifacts-changed" satisfies VolliIpcEvent, payload);
+    }, this.debounceMs);
+  }
+
+  /** (Re)creates both tier watchers for an already-registered `sub`; assumes the dirs exist. */
+  private wireWatchers(key: string, sub: WatchSubscription): void {
+    sub.projectWatcher = this.openWatcher(key, sub, projectArtifactsDir(sub.projectPath));
+    sub.ticketWatcher = this.openWatcher(
+      key,
+      sub,
+      ticketArtifactsDir(sub.projectPath, sub.displayId),
+    );
+  }
+
+  private openWatcher(
+    key: string,
+    sub: WatchSubscription,
+    dir: string,
+  ): ReturnType<typeof fsWatch> {
+    const watcher = fsWatch(dir, () => {
+      // fs.watch stays bound to the ORIGINAL inode after a `rm -rf .volli &&
+      // mkdir -p ...`: if the watched dir no longer exists, the events we're
+      // getting are for a dead directory — re-arm onto the freshly-created one.
+      // A normal change just broadcasts.
+      if (!existsSync(dir)) {
+        void this.reArm(key, sub);
+        return;
+      }
+      this.scheduleBroadcast(sub);
+    });
+    // An async watch failure (volume ejected, kqueue fd pressure) surfaces as an
+    // EventEmitter 'error'; UNHANDLED, it would crash the whole main process.
+    // The fd is dead, so re-arm; a failed re-arm falls back to teardown + one
+    // final broadcast (see reArm).
+    watcher.on("error", () => {
+      void this.reArm(key, sub);
+    });
+    return watcher;
+  }
+
+  /**
+   * Rebuilds a subscription's watchers in place after the watched tree changed
+   * underneath them (deleted-and-recreated dir) or a watcher faulted. Single
+   * attempt — no retry loop. On success it broadcasts once so the renderer
+   * refetches the post-recreate list; on failure it tears the subscription down
+   * and sends one final broadcast, the honest tradeoff being: we lose live
+   * updates but never leave the tab believing they're still flowing, and we
+   * never crash (CLAUDE.md).
+   */
+  private async reArm(key: string, sub: WatchSubscription): Promise<void> {
+    if (sub.reArming) return;
+    if (this.subs.get(key) !== sub) return; // torn down while the event was queued
+    sub.reArming = true;
+
+    // Close the dead watchers but keep the subscription (and its destroyed
+    // listener) registered so a concurrent teardown still finds it.
+    sub.projectWatcher?.close();
+    sub.ticketWatcher?.close();
+    sub.projectWatcher = null;
+    sub.ticketWatcher = null;
+
+    try {
+      await ensureProjectArtifactsDir(sub.projectPath);
+      await ensureTicketDir(sub.projectPath, sub.displayId);
+      // The subscription may have been torn down (or the window closed) during
+      // the awaits — bail without re-wiring anything nothing would tear down.
+      if (this.subs.get(key) !== sub || sub.webContents.isDestroyed()) return;
+      this.wireWatchers(key, sub);
+      sub.reArming = false;
+      // The tree changed under us; nudge the renderer to refetch.
+      this.scheduleBroadcast(sub);
+    } catch {
+      // Re-arm failed: we can no longer honestly claim live updates. Tear down
+      // and send one final broadcast so the renderer refetches a
+      // stale-but-correct list rather than trusting a watch that's gone.
+      this.teardown(key);
+      if (!sub.webContents.isDestroyed()) {
+        const payload: ArtifactsChangedEvent = { projectId: sub.projectId, ticketId: sub.ticketId };
+        sub.webContents.send("volli:artifacts-changed" satisfies VolliIpcEvent, payload);
+      }
+    }
   }
 
   unsubscribe(webContents: WebContents, ticketId: string): void {

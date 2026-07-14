@@ -53,11 +53,22 @@ function abandon(sessionId: string): void {
 }
 
 /**
- * Boot a new session as a fresh tab under `scope`. Resolves with its sessionId,
- * or null on failure / if the owner is no longer tracked. The tab title is the
- * one main seeded on the durable record, so the live tab and the DB agree.
+ * The shared boot pipeline behind {@link createTerminalSession} and
+ * {@link createTerminalSplit}: the two differ only in how the booted PTY LANDS
+ * (a fresh tab vs a split sibling) and in the failure wording, so every race
+ * guard — the per-owner starting flag, the tracked-project check, the engine
+ * pre-create, the stale-owner revalidation after the await, `abandon()` when it
+ * can't land, and the `finally` that clears `starting` — lives here exactly
+ * once. `land` performs the surface-specific placement against FRESH store
+ * state and returns whether it landed (false ⇒ the tab/source pane vanished
+ * mid-flight, so abandon the orphaned PTY). `verb` fills `Could not ${verb}:`.
+ * Resolves the booted sessionId, or null on any guard/failure.
  */
-export async function createTerminalSession(scope: SessionScope): Promise<string | null> {
+async function bootSession(
+  scope: SessionScope,
+  verb: string,
+  land: (sessionId: string, title: string) => boolean,
+): Promise<string | null> {
   const store = useSessionsStore.getState();
   const id = ownerKey(scope);
   if (store.starting[id]) return null;
@@ -68,24 +79,39 @@ export async function createTerminalSession(scope: SessionScope): Promise<string
   try {
     const result = await window.api.terminal.create(createRequest(scope, project.path));
     if (!result.ok) {
-      toast.error(`Could not start session: ${result.error}`);
+      toast.error(`Could not ${verb}: ${result.error}`);
       return null;
     }
     getOrCreateEngine(result.sessionId);
-    // The owner may have been removed while create was in flight; adding the tab
-    // would resurrect a session record with a PTY no UI can reach.
-    if (trackedProject(scope.projectId) === undefined) {
+    // The owner may have been removed while create was in flight; landing the
+    // tab would resurrect a session record with a PTY no UI can reach. `land`
+    // does any further revalidation (a split's source pane must still exist).
+    if (
+      trackedProject(scope.projectId) === undefined ||
+      !land(result.sessionId, result.session.title)
+    ) {
       abandon(result.sessionId);
       return null;
     }
-    useSessionsStore.getState().addSession(scope, result.sessionId, result.session.title);
     return result.sessionId;
   } catch (error) {
-    toast.error(`Could not start session: ${errorMessage(error)}`);
+    toast.error(`Could not ${verb}: ${errorMessage(error)}`);
     return null;
   } finally {
     useSessionsStore.getState().setStarting(id, false);
   }
+}
+
+/**
+ * Boot a new session as a fresh tab under `scope`. Resolves with its sessionId,
+ * or null on failure / if the owner is no longer tracked. The tab title is the
+ * one main seeded on the durable record, so the live tab and the DB agree.
+ */
+export async function createTerminalSession(scope: SessionScope): Promise<string | null> {
+  return bootSession(scope, "start session", (sessionId, title) => {
+    useSessionsStore.getState().addSession(scope, sessionId, title);
+    return true;
+  });
 }
 
 /** Boot a fresh PTY as a split sibling of `sourcePaneId` inside `tabId`. */
@@ -95,35 +121,13 @@ export async function createTerminalSplit(
   sourcePaneId: string,
   direction: TerminalSplitDirection,
 ): Promise<void> {
-  const store = useSessionsStore.getState();
   const id = ownerKey(scope);
-  if (store.starting[id]) return;
-  const project = trackedProject(scope.projectId);
-  if (project === undefined) return;
-
-  store.setStarting(id, true);
-  try {
-    const result = await window.api.terminal.create(createRequest(scope, project.path));
-    if (!result.ok) {
-      toast.error(`Could not split terminal: ${result.error}`);
-      return;
-    }
-    getOrCreateEngine(result.sessionId);
+  await bootSession(scope, "split terminal", (sessionId) => {
     const tab = useSessionsStore
       .getState()
       .byOwner[id]?.tabs.find((candidate) => candidate.sessionId === tabId);
-    if (
-      trackedProject(scope.projectId) === undefined ||
-      tab === undefined ||
-      findSessionPane(tab.layout, sourcePaneId) === null
-    ) {
-      abandon(result.sessionId);
-      return;
-    }
-    useSessionsStore.getState().addSplit(id, tabId, sourcePaneId, result.sessionId, direction);
-  } catch (error) {
-    toast.error(`Could not split terminal: ${errorMessage(error)}`);
-  } finally {
-    useSessionsStore.getState().setStarting(id, false);
-  }
+    if (tab === undefined || findSessionPane(tab.layout, sourcePaneId) === null) return false;
+    useSessionsStore.getState().addSplit(id, tabId, sourcePaneId, sessionId, direction);
+    return true;
+  });
 }

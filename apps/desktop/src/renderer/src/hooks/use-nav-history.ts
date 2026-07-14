@@ -26,6 +26,7 @@ import {
   isNavBackKeyEvent,
   isNavForwardKeyEvent,
   isRailToggleKeyEvent,
+  sameSnapshot,
   type NavKeyEvent,
   type NavSnapshot,
 } from "@renderer/lib/nav-history";
@@ -63,14 +64,7 @@ function currentSnapshot(): NavSnapshot {
 function recordCurrentLocation(): void {
   if (applying) return;
   const snapshot = currentSnapshot();
-  if (
-    lastSnapshot !== null &&
-    lastSnapshot.projectId === snapshot.projectId &&
-    lastSnapshot.nav === snapshot.nav &&
-    lastSnapshot.openTicketId === snapshot.openTicketId
-  ) {
-    return;
-  }
+  if (sameSnapshot(lastSnapshot, snapshot)) return;
   lastSnapshot = snapshot;
   useWorkspaceStore.getState().recordNav(snapshot);
 }

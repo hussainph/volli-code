@@ -71,6 +71,24 @@ export function killProjectSessions(projectId: string): void {
   killOwnerSessions(projectId);
 }
 
+/**
+ * Tear down every TICKET session whose scope belongs to `projectId`, keyed off
+ * the sessions store rather than the board's live ticket list — so archived
+ * tickets (whose ids `ticketsByProject` no longer holds) don't leak a PTY when
+ * their project is removed. Each ticket owner's tabs all share the ticket's
+ * scope, so one tab's scope identifies the whole container's project.
+ */
+export function killProjectTicketSessions(projectId: string): void {
+  const owners = Object.entries(useSessionsStore.getState().byOwner)
+    .filter(([, container]) =>
+      container.tabs.some(
+        (tab) => tab.scope.kind === "ticket" && tab.scope.projectId === projectId,
+      ),
+    )
+    .map(([ownerId]) => ownerId);
+  for (const ownerId of owners) killOwnerSessions(ownerId);
+}
+
 /** Dispose every engine + kill every live PTY under an owner, then forget it. */
 function killOwnerSessions(ownerId: string): void {
   const tabs = useSessionsStore.getState().byOwner[ownerId]?.tabs ?? [];
@@ -84,31 +102,59 @@ function killOwnerSessions(ownerId: string): void {
 }
 
 /**
- * Rename a session everywhere: optimistically retitle the live tab, persist the
- * new title, and roll the live title back with a toast if the write fails
- * (CLAUDE.md: never silently swallow a failed mutation). No-ops on a blank or
- * unchanged title. Works for both scratch and ticket sessions.
+ * Rename a session everywhere and persist it — the canonical rename path for
+ * BOTH live and ended sessions (CLAUDE.md: never silently swallow a failed
+ * mutation). Panels should route ALL renames here, including ended (no live
+ * tab) session rows, instead of duplicating the trim/no-op/persist/toast rules.
+ *
+ * - LIVE tab: optimistically retitle it, persist, and roll the live title back
+ *   with a toast if the write fails — UNLESS a newer rename changed the title
+ *   in the meantime (rolling back would resurrect a stale title the newer
+ *   rename replaced).
+ * - ENDED session (no live tab): nothing to retitle, so persist directly with
+ *   the same trim guard and failure toast.
+ *
+ * No-ops on a blank (or, for a live tab, unchanged) title. Resolves `true` when
+ * the title was persisted, `false` on a no-op or failed write — callers holding
+ * a durable-record copy (the ticket Sessions panel) can refetch on `false`.
  */
-export function renameTerminalSession(sessionId: string, title: string): void {
+export async function renameTerminalSession(sessionId: string, title: string): Promise<boolean> {
   const trimmed = title.trim();
+  if (trimmed.length === 0) return false;
+
   const found = findTabBySessionId(useSessionsStore.getState().byOwner, sessionId);
-  if (found === null) return;
+  if (found === null) {
+    // Ended session: no live tab to retitle — persist directly so the durable
+    // record still updates and failures still surface.
+    return persistRename(sessionId, trimmed);
+  }
+
   const previous = found.tab.title;
-  if (trimmed.length === 0 || trimmed === previous) return;
+  if (trimmed === previous) return false;
 
   useSessionsStore.getState().renameSession(sessionId, trimmed);
-  window.api.sessions
-    .rename({ sessionId, title: trimmed })
-    .then((result) => {
-      if (!result.ok) {
-        useSessionsStore.getState().renameSession(sessionId, previous);
-        toast.error(`Rename failed: ${result.error}`);
-      }
-    })
-    .catch((error: unknown) => {
-      useSessionsStore.getState().renameSession(sessionId, previous);
-      toast.error(`Rename failed: ${errorMessage(error)}`);
-    });
+  const ok = await persistRename(sessionId, trimmed);
+  if (!ok) {
+    // Roll back to `previous` ONLY if this call's optimistic title is still what
+    // the store holds; a newer rename that landed mid-flight already replaced
+    // it, and clobbering that with our stale `previous` would undo it.
+    const current = findTabBySessionId(useSessionsStore.getState().byOwner, sessionId)?.tab.title;
+    if (current === trimmed) useSessionsStore.getState().renameSession(sessionId, previous);
+  }
+  return ok;
+}
+
+/** Persist a rename via main; toast on failure. Resolves whether it stuck. */
+async function persistRename(sessionId: string, title: string): Promise<boolean> {
+  try {
+    const result = await window.api.sessions.rename({ sessionId, title });
+    if (result.ok) return true;
+    toast.error(`Rename failed: ${result.error}`);
+    return false;
+  } catch (error) {
+    toast.error(`Rename failed: ${errorMessage(error)}`);
+    return false;
+  }
 }
 
 /** An exited tab has no PTY left in main — killing it would only toast an error. */

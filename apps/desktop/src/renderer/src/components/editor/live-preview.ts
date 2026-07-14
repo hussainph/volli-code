@@ -1,5 +1,11 @@
 import { syntaxTree } from "@codemirror/language";
-import type { Extension, Range } from "@codemirror/state";
+import {
+  type EditorState,
+  EditorSelection,
+  type Extension,
+  type Range,
+  type TransactionSpec,
+} from "@codemirror/state";
 import {
   Decoration,
   type DecorationSet,
@@ -256,26 +262,61 @@ function buildDecorations(view: EditorView): DecorationSet {
 }
 
 /**
- * Wrap or unwrap each selection range with `mark` (e.g. `**` for bold). If the
- * text immediately flanking the selection already IS the mark, the pair is
- * stripped (toggle off); otherwise it is inserted.
+ * Build the transaction that wraps or unwraps each selection range with `mark`
+ * (e.g. `**` for bold). If the text immediately flanking a range already IS the
+ * mark, that pair is stripped (toggle off); otherwise the marks are inserted.
+ *
+ * The selection is mapped explicitly so the caret lands sensibly: an EMPTY range
+ * (a bare cursor) is placed BETWEEN the two inserted marks (`**|**`), so typing
+ * lands inside them rather than after both; a non-empty range stays wrapped
+ * around the same text (`**|selected|**`). Stripping mirrors this, shifting the
+ * caret/selection back by the removed leading mark. Pure (takes/returns state,
+ * no view) so the caret behaviour is unit-testable with a bare `EditorState`.
  */
-function toggleWrap(view: EditorView, mark: string): boolean {
-  const { state } = view;
-  const changes: { from: number; to: number; insert: string }[] = [];
-  for (const range of state.selection.ranges) {
-    const before = state.sliceDoc(Math.max(0, range.from - mark.length), range.from);
-    const after = state.sliceDoc(range.to, Math.min(state.doc.length, range.to + mark.length));
+export function wrapTransaction(state: EditorState, mark: string): TransactionSpec {
+  const m = mark.length;
+  // `changeByRange` composes the per-range edits and remaps each returned range
+  // across the OTHER ranges' changes, so the coordinate math below only has to
+  // be right for a single range in isolation.
+  return state.changeByRange((range) => {
+    const before = state.sliceDoc(Math.max(0, range.from - m), range.from);
+    const after = state.sliceDoc(range.to, Math.min(state.doc.length, range.to + m));
     if (before === mark && after === mark) {
-      changes.push({ from: range.from - mark.length, to: range.from, insert: "" });
-      changes.push({ from: range.to, to: range.to + mark.length, insert: "" });
-    } else {
-      changes.push({ from: range.from, to: range.from, insert: mark });
-      changes.push({ from: range.to, to: range.to, insert: mark });
+      // Strip the flanking pair; both ends shift left by the removed leading mark.
+      return {
+        changes: [
+          { from: range.from - m, to: range.from },
+          { from: range.to, to: range.to + m },
+        ],
+        range: EditorSelection.range(range.from - m, range.to - m),
+      };
     }
-  }
-  view.dispatch(state.update({ changes }));
+    // Insert the pair; both ends shift right by the leading mark, which — for an
+    // empty range — leaves the caret BETWEEN the two inserted marks.
+    return {
+      changes: [
+        { from: range.from, insert: mark },
+        { from: range.to, insert: mark },
+      ],
+      range: EditorSelection.range(range.from + m, range.to + m),
+    };
+  });
+}
+
+/** Apply {@link wrapTransaction} to the live view. */
+function toggleWrap(view: EditorView, mark: string): boolean {
+  view.dispatch(view.state.update(wrapTransaction(view.state, mark)));
   return true;
+}
+
+/**
+ * Whether a mousedown on a collapsed link should open it externally: only a
+ * plain PRIMARY (left) click. Right-click (button 2) and middle-click (button 1)
+ * — and the macOS ctrl-click context-menu chord — fall through to default
+ * behaviour instead of navigating.
+ */
+export function shouldOpenLink(event: { button: number; ctrlKey: boolean }): boolean {
+  return event.button === 0 && !event.ctrlKey;
 }
 
 /** ⌘B / ⌘I emphasis toggles + Escape-to-blur (the caller keeps its own key handling). */
@@ -413,6 +454,9 @@ export function markdownLivePreview(): Extension {
           const target = event.target as HTMLElement | null;
           const link = target?.closest<HTMLElement>("[data-md-href]");
           if (!link) return false;
+          // Only a plain left-click opens; right/middle-click (and the macOS
+          // ctrl-click context-menu chord) fall through to default handling.
+          if (!shouldOpenLink(event)) return false;
           // A collapsed link only carries `data-md-href` while the caret is
           // outside it, so a hit here always means "open", never "edit".
           event.preventDefault();

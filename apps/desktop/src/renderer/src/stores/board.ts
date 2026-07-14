@@ -29,6 +29,8 @@ import {
 } from "@volli/shared";
 import { create } from "zustand";
 
+import { killTicketSessions } from "@renderer/terminal/session-lifecycle";
+
 import { writeThrough } from "./mutate";
 
 /** The subset of the preload API the board store needs — narrow and fake-able for tests. */
@@ -257,6 +259,56 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
       set({ archivedByProject: { ...byProject, [projectId]: update(slice) } });
     }
 
+    /**
+     * The shared optimistic-patch pipeline behind {@link BoardState.updateTicket}
+     * and {@link BoardState.setLabels} — both are ticket-scoped field edits with
+     * the identical skeleton. Optimistically merges `optimisticFields` into the
+     * ticket, runs the write, and on success patches the authoritative ticket in
+     * by id. On FAILURE it reverts only the keys THIS call touched back to their
+     * pre-mutation values (merged onto the ticket read FRESH from state) — not a
+     * whole-ticket snapshot, which would clobber a field a concurrent successful
+     * edit committed while this write was in flight (e.g. a title save failing
+     * after a body save succeeded must not resurrect the old body). A no-op (no
+     * IPC) for an unknown ticket id.
+     */
+    async function optimisticTicketPatch(
+      ticketId: string,
+      optimisticFields: Partial<Ticket>,
+      verb: string,
+      call: () => Promise<TicketResult>,
+    ): Promise<void> {
+      const found = findTicketProject(ticketId);
+      if (!found) return; // unknown ticket id — nothing to update
+      const { projectId, ticket: original } = found;
+
+      const patchById = (ticket: Ticket) =>
+        reconcileSlice(projectId, (slice) =>
+          slice.map((existing) => (existing.id === ticket.id ? ticket : existing)),
+        );
+
+      // The pre-mutation values of exactly the keys we're about to change — the
+      // field-scoped revert set, captured before the optimistic write.
+      const revertFields: Partial<Ticket> = {};
+      for (const key of Object.keys(optimisticFields) as (keyof Ticket)[]) {
+        (revertFields as Record<keyof Ticket, unknown>)[key] = original[key];
+      }
+
+      patchById({ ...original, ...optimisticFields });
+
+      const result = await writeThrough(verb, call);
+      if (!result) {
+        // Field-scoped revert onto the FRESH ticket: restore only our keys,
+        // leaving any field a concurrent edit changed in between intact.
+        reconcileSlice(projectId, (slice) =>
+          slice.map((existing) =>
+            existing.id === ticketId ? { ...existing, ...revertFields } : existing,
+          ),
+        );
+        return;
+      }
+      patchById(result.ticket);
+    }
+
     return {
       ticketsByProject: {},
       labelsByProject: {},
@@ -343,56 +395,25 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
 
       async updateTicket(input) {
         const { ticketId, ...changes } = input;
-        const found = findTicketProject(ticketId);
-        if (!found) return; // unknown ticket id — nothing to update
-        const { projectId, ticket: original } = found;
+        // Only the fields the caller actually supplied — `undefined` means
+        // "leave as-is", matching `api.tickets.update`'s own semantics.
+        const optimisticFields: Partial<Ticket> = {};
+        if (changes.title !== undefined) optimisticFields.title = changes.title;
+        if (changes.body !== undefined) optimisticFields.body = changes.body;
+        if (changes.worktreePath !== undefined)
+          optimisticFields.worktreePath = changes.worktreePath;
+        if (changes.branch !== undefined) optimisticFields.branch = changes.branch;
+        if (changes.baseBranch !== undefined) optimisticFields.baseBranch = changes.baseBranch;
 
-        const patch = (ticket: Ticket) =>
-          reconcileSlice(projectId, (slice) =>
-            slice.map((existing) => (existing.id === ticket.id ? ticket : existing)),
-          );
-        // Merge only the fields the caller actually supplied — `undefined`
-        // means "leave as-is", matching `api.tickets.update`'s own semantics.
-        patch({
-          ...original,
-          ...(changes.title !== undefined ? { title: changes.title } : {}),
-          ...(changes.body !== undefined ? { body: changes.body } : {}),
-          ...(changes.worktreePath !== undefined ? { worktreePath: changes.worktreePath } : {}),
-          ...(changes.branch !== undefined ? { branch: changes.branch } : {}),
-          ...(changes.baseBranch !== undefined ? { baseBranch: changes.baseBranch } : {}),
-        });
-
-        const result = await writeThrough(
-          "update ticket",
-          (): Promise<TicketResult> => gateway.updateTicket(input),
+        await optimisticTicketPatch(ticketId, optimisticFields, "update ticket", () =>
+          gateway.updateTicket(input),
         );
-        if (!result) {
-          patch(original);
-          return;
-        }
-        patch(result.ticket);
       },
 
       async setLabels(ticketId, labels) {
-        const found = findTicketProject(ticketId);
-        if (!found) return; // unknown ticket id — nothing to update
-        const { projectId, ticket: original } = found;
-
-        const patch = (ticket: Ticket) =>
-          reconcileSlice(projectId, (slice) =>
-            slice.map((existing) => (existing.id === ticket.id ? ticket : existing)),
-          );
-        patch({ ...original, labels });
-
-        const result = await writeThrough(
-          "update labels",
-          (): Promise<TicketResult> => gateway.setLabels({ ticketId, labels }),
+        await optimisticTicketPatch(ticketId, { labels }, "update labels", () =>
+          gateway.setLabels({ ticketId, labels }),
         );
-        if (!result) {
-          patch(original);
-          return;
-        }
-        patch(result.ticket);
       },
 
       async loadArchived(projectId) {
@@ -427,6 +448,12 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
           reconcileSlice(projectId, (slice) => restoreAt(slice, target, index));
           return;
         }
+        // The ticket is archived now, so its live terminal sessions must die —
+        // an archived ticket has no surface to reach them, and nothing else
+        // tears them down (killTicketSessions was only reachable via project
+        // removal, which skips archived tickets). Do it on SUCCESS only: a
+        // failed archive left the ticket live, so its sessions must survive.
+        killTicketSessions(ticketId);
         // Success — drop it from the board slice AGAIN: a move IPC in flight
         // when the archive committed returns an authoritative list snapshotted
         // while this ticket was still live, and mergeAuthoritative would have
@@ -503,6 +530,10 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
           reconcileArchived(projectId, (slice) => restoreAt(slice, target, index));
           return;
         }
+        // Any live terminal sessions the ticket still owns must die with it —
+        // belt-and-suspenders alongside archiveTicket's own teardown (a ticket
+        // reachable here should already be sessionless, but never leak a PTY).
+        killTicketSessions(ticketId);
         // Success — drop it AGAIN: an in-flight `loadArchived` refetch can have
         // re-listed it (see unarchiveTicket); the later response wins.
         reconcileArchived(projectId, (slice) => slice.filter((ticket) => ticket.id !== ticketId));

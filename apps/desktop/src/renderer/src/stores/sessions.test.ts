@@ -29,9 +29,9 @@ describe("sessionActivityState", () => {
 });
 
 describe("addSession", () => {
-  it("appends a scratch tab titled from the counter, stamps its scope, and activates it", () => {
+  it("appends a scratch tab with the given title, stamps its scope, and activates it", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1");
+    store.getState().addSession(P, "s1", "Terminal 1");
 
     const container = store.getState().byOwner["p"];
     expect(container?.tabs).toEqual([
@@ -44,7 +44,6 @@ describe("addSession", () => {
       },
     ]);
     expect(container?.activeSessionId).toBe("s1");
-    expect(container?.nextTabNumber).toBe(2);
     expect(store.getState().sessionOwner["s1"]).toBe("p");
   });
 
@@ -62,34 +61,21 @@ describe("addSession", () => {
     expect(store.getState().sessionOwner["s1"]).toBe("t1");
   });
 
-  it("keeps insertion order, numbers scratch titles monotonically, and activates each", () => {
+  it("keeps insertion order across appended tabs and activates each", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1");
-    store.getState().addSession(P, "s2");
-    store.getState().addSession(P, "s3");
+    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s2", "Terminal 2");
+    store.getState().addSession(P, "s3", "Terminal 3");
 
     const container = store.getState().byOwner["p"];
     expect(container?.tabs.map((t) => t.title)).toEqual(["Terminal 1", "Terminal 2", "Terminal 3"]);
     expect(container?.activeSessionId).toBe("s3");
   });
 
-  it("never reuses a closed tab's number — no duplicate titles", () => {
+  it("scopes sessions per owner", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1");
-    store.getState().addSession(P, "s2");
-    store.getState().closeSession("p", "s1");
-    store.getState().addSession(P, "s3");
-
-    expect(store.getState().byOwner["p"]?.tabs.map((t) => t.title)).toEqual([
-      "Terminal 2",
-      "Terminal 3",
-    ]);
-  });
-
-  it("scopes sessions and numbering per owner", () => {
-    const store = createSessionsStore();
-    store.getState().addSession(scratchScope("a"), "a1");
-    store.getState().addSession(scratchScope("b"), "b1");
+    store.getState().addSession(scratchScope("a"), "a1", "Terminal 1");
+    store.getState().addSession(scratchScope("b"), "b1", "Terminal 1");
 
     expect(store.getState().byOwner["a"]?.tabs.map((t) => t.sessionId)).toEqual(["a1"]);
     expect(store.getState().byOwner["b"]?.tabs[0]?.title).toBe("Terminal 1");
@@ -97,9 +83,9 @@ describe("addSession", () => {
 
   it("ignores a duplicate sessionId in the same owner", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1");
+    store.getState().addSession(P, "s1", "Terminal 1");
     const before = store.getState().byOwner;
-    store.getState().addSession(P, "s1");
+    store.getState().addSession(P, "s1", "Terminal 1");
 
     expect(store.getState().byOwner).toBe(before);
   });
@@ -108,8 +94,8 @@ describe("addSession", () => {
 describe("setActiveSession", () => {
   it("activates an existing session", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1");
-    store.getState().addSession(P, "s2");
+    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s2", "Terminal 2");
 
     store.getState().setActiveSession("p", "s1");
     expect(store.getState().byOwner["p"]?.activeSessionId).toBe("s1");
@@ -117,7 +103,7 @@ describe("setActiveSession", () => {
 
   it("is a no-op for an unknown owner or session", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1");
+    store.getState().addSession(P, "s1", "Terminal 1");
     const before = store.getState().byOwner;
 
     store.getState().setActiveSession("missing", "s1");
@@ -129,7 +115,7 @@ describe("setActiveSession", () => {
 describe("split panes", () => {
   it("inserts a fresh session leaf beside the focused pane, activates it, and indexes it", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1");
+    store.getState().addSession(P, "s1", "Terminal 1");
 
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
 
@@ -147,7 +133,7 @@ describe("split panes", () => {
 
   it("supports nested splits without duplicating or replacing sibling leaves", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1");
+    store.getState().addSession(P, "s1", "Terminal 1");
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
     store.getState().addSplit("p", "s1", "s1", "s3", "horizontal");
 
@@ -167,7 +153,7 @@ describe("split panes", () => {
 
   it("splits a pane that lives in the second child of an existing split", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1");
+    store.getState().addSession(P, "s1", "Terminal 1");
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
 
     // s2 is the SECOND child of the split — this recurses past an unchanged
@@ -194,7 +180,7 @@ describe("split panes", () => {
 
   it("rebuilds a split when removing a deep pane collapses its nested first subtree but leaves the second sibling intact", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1");
+    store.getState().addSession(P, "s1", "Terminal 1");
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
     store.getState().addSplit("p", "s1", "s1", "s3", "horizontal");
     // layout: split(s2, vertical){ first: split(s3, horizontal){first: s1, second: s3}, second: s2 }
@@ -214,7 +200,7 @@ describe("split panes", () => {
 
   it("leaves a nested split subtree untouched (same reference) when the split target lives outside it entirely", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1");
+    store.getState().addSession(P, "s1", "Terminal 1");
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
     store.getState().addSplit("p", "s1", "s1", "s3", "horizontal");
     // layout: split(s2, vertical){ first: split(s3, horizontal){first: s1, second: s3}, second: s2 }
@@ -232,7 +218,7 @@ describe("split panes", () => {
 
   it("rebuilds a split when removing a deep pane collapses its nested second subtree but leaves the first sibling intact", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1");
+    store.getState().addSession(P, "s1", "Terminal 1");
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
     store.getState().addSplit("p", "s1", "s2", "s3", "horizontal");
     // layout: split(s2, vertical){ first: s1, second: split(s3, horizontal){first: s2, second: s3} }
@@ -252,7 +238,7 @@ describe("split panes", () => {
 
   it("ignores unknown owners, tabs, source panes, and duplicate pane ids", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1");
+    store.getState().addSession(P, "s1", "Terminal 1");
     const before = store.getState().byOwner;
 
     store.getState().addSplit("missing", "s1", "s1", "s2", "vertical");
@@ -265,21 +251,53 @@ describe("split panes", () => {
 
   it("closes one leaf, collapses its parent split, focuses a neighbor, and drops its index", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1");
+    store.getState().addSession(P, "s1", "Terminal 1");
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
 
-    store.getState().closePane("p", "s1", "s1");
+    // Close the NON-root leaf s2: its index is dropped and the tab collapses onto
+    // the root pane s1 (root-pane retention is covered separately below).
+    store.getState().closePane("p", "s1", "s2");
 
     const tab = store.getState().byOwner["p"]!.tabs[0]!;
-    expect(tab.layout).toEqual({ kind: "pane", sessionId: "s2", exitCode: null });
-    expect(tab.activePaneId).toBe("s2");
+    expect(tab.layout).toEqual({ kind: "pane", sessionId: "s1", exitCode: null });
+    expect(tab.activePaneId).toBe("s1");
+    expect(store.getState().sessionOwner["s2"]).toBeUndefined();
+    expect(store.getState().sessionOwner["s1"]).toBe("p");
+  });
+
+  it("keeps the tab-root routing entry (dropping only its output stamp) when the root pane closes, so rename still lands", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
+    store.getState().bumpOutput("s1", 1000);
+
+    // Close the ROOT pane (sessionId === tabId). The tab keeps s1 as its stable
+    // identity, so its routing entry must survive — otherwise a later rename
+    // would silently no-op while the DB write still lands (titles diverge).
+    store.getState().closePane("p", "s1", "s1");
+
+    expect(store.getState().sessionOwner["s1"]).toBe("p"); // retained for routing
+    expect(store.getState().lastOutputAt["s1"]).toBeUndefined(); // per-pane stamp dropped
+
+    store.getState().renameSession("s1", "Renamed");
+    expect(store.getState().byOwner["p"]?.tabs[0]?.title).toBe("Renamed");
+  });
+
+  it("clears the retained tab-root routing entry when the whole tab later closes", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
+    store.getState().closePane("p", "s1", "s1"); // root pane gone; sessionOwner[s1] retained
+
+    store.getState().closeSession("p", "s1");
+
     expect(store.getState().sessionOwner["s1"]).toBeUndefined();
-    expect(store.getState().sessionOwner["s2"]).toBe("p");
+    expect(store.getState().sessionOwner["s2"]).toBeUndefined();
   });
 
   it("collapses a nested split while leaving the sibling subtree intact", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1");
+    store.getState().addSession(P, "s1", "Terminal 1");
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
     store.getState().addSplit("p", "s1", "s1", "s3", "horizontal");
 
@@ -291,7 +309,7 @@ describe("split panes", () => {
 
   it("ignores invalid pane-close targets and refuses to remove a tab's only leaf", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1");
+    store.getState().addSession(P, "s1", "Terminal 1");
     const before = store.getState().byOwner;
 
     store.getState().closePane("missing", "s1", "s1");
@@ -304,7 +322,7 @@ describe("split panes", () => {
 
   it("updates only the targeted split ratio and clamps unsafe extremes", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1");
+    store.getState().addSession(P, "s1", "Terminal 1");
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
 
     store.getState().setSplitRatio("p", "s1", "s2", 0.99);
@@ -314,7 +332,7 @@ describe("split panes", () => {
 
   it("updates a nested split and ignores unknown split/owner/tab ids", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1");
+    store.getState().addSession(P, "s1", "Terminal 1");
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
     store.getState().addSplit("p", "s1", "s1", "s3", "horizontal");
 
@@ -334,7 +352,7 @@ describe("split panes", () => {
 describe("setActivePane", () => {
   it("focuses a pane inside a split tree", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1");
+    store.getState().addSession(P, "s1", "Terminal 1");
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
 
     store.getState().setActivePane("p", "s1", "s1");
@@ -344,7 +362,7 @@ describe("setActivePane", () => {
 
   it("is a no-op for the active pane or unknown owner, tab, and pane", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1");
+    store.getState().addSession(P, "s1", "Terminal 1");
     const before = store.getState().byOwner;
 
     store.getState().setActivePane("p", "s1", "s1");
@@ -359,9 +377,9 @@ describe("setActivePane", () => {
 describe("closeSession", () => {
   it("removes the tab, selects the neighbor, and clears its indexes", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1");
-    store.getState().addSession(P, "s2");
-    store.getState().addSession(P, "s3");
+    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s2", "Terminal 2");
+    store.getState().addSession(P, "s3", "Terminal 3");
     store.getState().setActiveSession("p", "s2");
     store.getState().bumpOutput("s2", 1000);
 
@@ -374,9 +392,21 @@ describe("closeSession", () => {
     expect(store.getState().lastOutputAt["s2"]).toBeUndefined();
   });
 
+  it("leaves the active tab untouched when a different (non-active) tab is closed", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s2", "Terminal 2"); // s2 becomes active
+
+    store.getState().closeSession("p", "s1"); // close the NON-active tab
+
+    const container = store.getState().byOwner["p"];
+    expect(container?.tabs.map((t) => t.sessionId)).toEqual(["s2"]);
+    expect(container?.activeSessionId).toBe("s2");
+  });
+
   it("sets activeSessionId to null when closing the only tab", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1");
+    store.getState().addSession(P, "s1", "Terminal 1");
 
     store.getState().closeSession("p", "s1");
 
@@ -387,7 +417,7 @@ describe("closeSession", () => {
 
   it("is a no-op for an unknown owner or session", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1");
+    store.getState().addSession(P, "s1", "Terminal 1");
     const before = store.getState().byOwner;
 
     store.getState().closeSession("missing", "s1");
@@ -399,7 +429,7 @@ describe("closeSession", () => {
 describe("renameSession", () => {
   it("retitles the tab identified by its root sessionId", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1");
+    store.getState().addSession(P, "s1", "Terminal 1");
 
     store.getState().renameSession("s1", "Deploy");
 
@@ -431,7 +461,7 @@ describe("renameSession", () => {
 describe("markExited", () => {
   it("records the exit code on the matching tab, routing across owners", () => {
     const store = createSessionsStore();
-    store.getState().addSession(scratchScope("a"), "a1");
+    store.getState().addSession(scratchScope("a"), "a1", "Terminal 1");
     store.getState().addSession(ticketScope("proj", "t1"), "b1", "Session 1");
 
     store.getState().markExited("b1", 130);
@@ -446,7 +476,7 @@ describe("markExited", () => {
 
   it("records an exit on a nested split leaf without changing its sibling", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1");
+    store.getState().addSession(P, "s1", "Terminal 1");
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
     store.getState().addSplit("p", "s1", "s1", "s3", "horizontal");
 
@@ -460,7 +490,7 @@ describe("markExited", () => {
 
   it("is a no-op for an unknown session", () => {
     const store = createSessionsStore();
-    store.getState().addSession(scratchScope("a"), "a1");
+    store.getState().addSession(scratchScope("a"), "a1", "Terminal 1");
     const before = store.getState().byOwner;
 
     store.getState().markExited("ghost", 0);
@@ -479,7 +509,7 @@ describe("markExited", () => {
 
   it("is a no-op when the routing index outlives the pane it points to (defensive)", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1");
+    store.getState().addSession(P, "s1", "Terminal 1");
     // s1's own routing index is intact, but "ghost" is (incorrectly) routed to
     // the same owner without any pane in its tabs to match.
     store.setState((state) => ({ sessionOwner: { ...state.sessionOwner, ghost: "p" } }));
@@ -494,14 +524,14 @@ describe("markExited", () => {
 describe("bumpOutput", () => {
   it("records the timestamp for a tracked session", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1");
+    store.getState().addSession(P, "s1", "Terminal 1");
     store.getState().bumpOutput("s1", 5000);
     expect(store.getState().lastOutputAt["s1"]).toBe(5000);
   });
 
   it("throttles to one write per second", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1");
+    store.getState().addSession(P, "s1", "Terminal 1");
     store.getState().bumpOutput("s1", 5000);
     store.getState().bumpOutput("s1", 5500); // within 1s — ignored
     expect(store.getState().lastOutputAt["s1"]).toBe(5000);
@@ -511,7 +541,7 @@ describe("bumpOutput", () => {
 
   it("ignores an untracked session, and a post-close chunk is free", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1");
+    store.getState().addSession(P, "s1", "Terminal 1");
     store.getState().bumpOutput("scratch", 5000);
     expect(store.getState().lastOutputAt["scratch"]).toBeUndefined();
 
@@ -546,11 +576,11 @@ describe("setStarting", () => {
 describe("forgetOwner", () => {
   it("drops the container, its sessions' indexes, and its starting flag", () => {
     const store = createSessionsStore();
-    store.getState().addSession(scratchScope("a"), "a1");
-    store.getState().addSession(scratchScope("a"), "a2");
+    store.getState().addSession(scratchScope("a"), "a1", "Terminal 1");
+    store.getState().addSession(scratchScope("a"), "a2", "Terminal 2");
     store.getState().bumpOutput("a1", 1000);
     store.getState().setStarting("a", true);
-    store.getState().addSession(scratchScope("b"), "b1");
+    store.getState().addSession(scratchScope("b"), "b1", "Terminal 1");
 
     store.getState().forgetOwner("a");
 
@@ -570,7 +600,7 @@ describe("forgetOwner", () => {
 
   it("is a no-op for an owner with no sessions and no starting flag", () => {
     const store = createSessionsStore();
-    store.getState().addSession(scratchScope("a"), "a1");
+    store.getState().addSession(scratchScope("a"), "a1", "Terminal 1");
     const before = store.getState().byOwner;
     store.getState().forgetOwner("never-added");
     expect(store.getState().byOwner).toBe(before);
@@ -580,7 +610,7 @@ describe("forgetOwner", () => {
 describe("findTabBySessionId", () => {
   it("finds the owner + tab for a root session id across owners", () => {
     const store = createSessionsStore();
-    store.getState().addSession(scratchScope("a"), "a1");
+    store.getState().addSession(scratchScope("a"), "a1", "Terminal 1");
     store.getState().addSession(ticketScope("proj", "t1"), "b1", "Session 1");
 
     expect(findTabBySessionId(store.getState().byOwner, "b1")?.ownerId).toBe("t1");

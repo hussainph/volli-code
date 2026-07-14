@@ -19,7 +19,7 @@ import {
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
 import { cn } from "@renderer/lib/utils";
-import { findSessionPane, sessionActivityState, useSessionsStore } from "@renderer/stores/sessions";
+import { sessionActivityState, sessionPanes, useSessionsStore } from "@renderer/stores/sessions";
 import { renameTerminalSession } from "@renderer/terminal/session-lifecycle";
 
 const STATUS_LABEL: Record<SessionActivityState, string> = {
@@ -150,14 +150,22 @@ export function TicketSessionsPanel({
 }) {
   const liveTabs = useSessionsStore((state) => state.byOwner[ticketId]?.tabs);
   const lastOutputAt = useSessionsStore((state) => state.lastOutputAt);
+  const setActivePane = useSessionsStore((state) => state.setActivePane);
   const [records, setRecords] = React.useState<SessionRecord[]>([]);
   const [now, setNow] = React.useState(() => Date.now());
   const [editingId, setEditingId] = React.useState<string | null>(null);
 
   const tabs = liveTabs ?? [];
-  // Signature of the currently-open sessions — refetch the durable list on any
-  // change (a create or a close), so the two views stay in sync.
-  const liveSignature = tabs.map((tab) => tab.sessionId).join(",");
+  // Signature of every currently-open PANE (not just tab roots) — refetch the
+  // durable list on any change (create, split, or close), since each split pane
+  // has its own durable record that must appear/fold alongside the tab roots.
+  const liveSignature = tabs
+    .map((tab) =>
+      sessionPanes(tab.layout)
+        .map((pane) => pane.sessionId)
+        .join("/"),
+    )
+    .join(",");
   const hasLive = tabs.length > 0;
 
   const refresh = React.useCallback(async () => {
@@ -184,22 +192,32 @@ export function TicketSessionsPanel({
     return () => clearInterval(id);
   }, [hasLive]);
 
-  // sessionId → { exitCode, title } for the open tabs this run.
-  const liveById = new Map(
-    tabs.map((tab) => [
-      tab.sessionId,
-      { exitCode: findSessionPane(tab.layout, tab.sessionId)?.exitCode ?? null, title: tab.title },
-    ]),
-  );
+  // paneSessionId → its live state, for EVERY pane of every open tab (not just
+  // tab roots): each split pane has its own durable record, so without this a
+  // live split pane would render as an inert "Exited" row. `tabTitle` is the
+  // live tab title (used for the root pane's optimistic rename); non-root panes
+  // fall back to their own durable record title. `tabId` is the tab's root id.
+  const liveById = new Map<string, { exitCode: number | null; tabTitle: string; tabId: string }>();
+  for (const tab of tabs) {
+    for (const pane of sessionPanes(tab.layout)) {
+      liveById.set(pane.sessionId, {
+        exitCode: pane.exitCode,
+        tabTitle: tab.title,
+        tabId: tab.sessionId,
+      });
+    }
+  }
 
-  // Renaming a live session goes through the shared optimistic-persist path; an
-  // ended one has no live tab, so persist directly and reconcile the local list.
-  const commitRename = (record: SessionRecord, isOpen: boolean, next: string) => {
+  // Renaming the root pane of a live tab goes through the shared optimistic-
+  // persist path (so its tab strip updates too); a non-root live pane or an
+  // ended session has no live tab title to keep in sync, so persist directly and
+  // reconcile the local list.
+  const commitRename = (record: SessionRecord, isRoot: boolean, next: string) => {
     setEditingId(null);
     const trimmed = next.trim();
     if (trimmed.length === 0 || trimmed === record.title) return;
     setRecords((rows) => rows.map((r) => (r.id === record.id ? { ...r, title: trimmed } : r)));
-    if (isOpen) {
+    if (isRoot) {
       renameTerminalSession(record.id, trimmed);
       return;
     }
@@ -220,12 +238,16 @@ export function TicketSessionsPanel({
   const rows = records.map((record) => {
     const live = liveById.get(record.id);
     const isOpen = live !== undefined;
-    const exited = isOpen ? live.exitCode !== null : true;
+    const isRoot = live !== undefined && live.tabId === record.id;
+    // Status derives from THIS pane's own exit code + output, not the tab root's.
+    const exited = live !== undefined ? live.exitCode !== null : true;
     const status: SessionActivityState = isOpen
       ? sessionActivityState(lastOutputAt[record.id] ?? null, exited, now)
       : "exited";
-    // Prefer the live tab title so an optimistic rename shows before the refetch.
-    return { record, title: live?.title ?? record.title, isOpen, status };
+    // Root pane rows prefer the live tab title (optimistic rename shows before
+    // the refetch); non-root pane rows show their own durable record title.
+    const title = isRoot ? live.tabTitle : record.title;
+    return { record, title, isOpen, isRoot, tabId: live?.tabId, status };
   });
 
   return (
@@ -251,7 +273,7 @@ export function TicketSessionsPanel({
         </div>
       ) : (
         <ul className="flex flex-col gap-1">
-          {rows.map(({ record, title, isOpen, status }) => (
+          {rows.map(({ record, title, isOpen, isRoot, tabId, status }) => (
             <SessionRow
               key={record.id}
               record={record}
@@ -259,9 +281,15 @@ export function TicketSessionsPanel({
               status={status}
               isOpen={isOpen}
               editing={editingId === record.id}
-              onActivate={() => onActivateSession(record.id)}
+              // Activating any live pane row selects its TAB and focuses that
+              // specific pane within the split (tabId is defined whenever isOpen).
+              onActivate={() => {
+                if (tabId === undefined) return;
+                onActivateSession(tabId);
+                setActivePane(ticketId, tabId, record.id);
+              }}
               onStartRename={() => setEditingId(record.id)}
-              onCommitRename={(next) => commitRename(record, isOpen, next)}
+              onCommitRename={(next) => commitRename(record, isRoot, next)}
               onCancelRename={() => setEditingId(null)}
             />
           ))}

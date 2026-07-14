@@ -170,6 +170,39 @@ describe("volli:ticket-update — worktree identity", () => {
     const result = invoke<TicketResult>("volli:ticket-update", { ticketId: ticket.id, branch: 42 });
     expect(result).toEqual({ ok: false, error: "Invalid ticket update" });
   });
+
+  it("rejects a syntactically-invalid branch name without persisting it", () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    const result = invoke<TicketResult>("volli:ticket-update", {
+      ticketId: ticket.id,
+      branch: "bad..branch",
+    });
+    expect(result).toEqual({ ok: false, error: "Invalid branch name" });
+    const after = invoke<TicketResult>("volli:ticket-update", { ticketId: ticket.id, title: "t" });
+    expect(after.ok && after.ticket.branch).toBeNull();
+  });
+
+  it("rejects a syntactically-invalid base branch name", () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    const result = invoke<TicketResult>("volli:ticket-update", {
+      ticketId: ticket.id,
+      baseBranch: "-nope",
+    });
+    expect(result).toEqual({ ok: false, error: "Invalid base branch name" });
+  });
+
+  it("allows clearing the branch fields with an explicit null", () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    const result = invoke<TicketResult>("volli:ticket-update", {
+      ticketId: ticket.id,
+      branch: null,
+      baseBranch: null,
+    });
+    expect(result.ok).toBe(true);
+  });
 });
 
 describe("volli:ticket-events", () => {

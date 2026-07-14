@@ -82,8 +82,6 @@ export interface SessionTab {
 export interface SessionContainer {
   tabs: SessionTab[];
   activeSessionId: string | null;
-  /** Monotonic title counter for scratch `Terminal N` — closed tab numbers are never reused. */
-  nextTabNumber: number;
 }
 
 /** Output within this window reads as `working`; quiet-but-live reads as `idle`. */
@@ -116,8 +114,13 @@ interface SessionsState {
   lastOutputAt: Record<string, number>;
   /** Owner ids with a terminal-create (tab or split leaf) in flight — disables their "New session". */
   starting: Record<string, true>;
-  /** Adds a fresh single-pane tab. `title` is supplied for ticket sessions (main's `Session N`); scratch generates `Terminal N`. */
-  addSession(scope: SessionScope, sessionId: string, title?: string): void;
+  /**
+   * Adds a fresh single-pane tab titled `title`. Main seeds every tab title on
+   * the durable record (`Session N` for ticket sessions, `Terminal N` for
+   * scratch) and the sole product caller always forwards it, so the title is
+   * required here — no store-side fallback counter.
+   */
+  addSession(scope: SessionScope, sessionId: string, title: string): void;
   /** Insert a fresh PTY/engine as a sibling of sourcePaneId. */
   addSplit(
     ownerId: string,
@@ -139,7 +142,7 @@ interface SessionsState {
   forgetOwner(ownerId: string): void;
 }
 
-const EMPTY_CONTAINER: SessionContainer = { tabs: [], activeSessionId: null, nextTabNumber: 1 };
+const EMPTY_CONTAINER: SessionContainer = { tabs: [], activeSessionId: null };
 
 export function sessionPanes(layout: SessionLayout): SessionPane[] {
   return layout.kind === "pane"
@@ -224,6 +227,12 @@ function forgetTabIndexes(
     delete sessionOwner[pane.sessionId];
     delete lastOutputAt[pane.sessionId];
   }
+  // Also clear the tab-root routing entry: `closePane` deliberately RETAINS
+  // `sessionOwner[tab.sessionId]` when the root pane is closed (the id stays the
+  // tab's stable identity for rename/routing), so the root id may no longer be
+  // among the current panes above — drop it explicitly on tab teardown.
+  delete sessionOwner[tab.sessionId];
+  delete lastOutputAt[tab.sessionId];
 }
 
 /** Factory so tests get isolated instances. */
@@ -243,7 +252,7 @@ export function createSessionsStore() {
         }
         const tab: SessionTab = {
           sessionId,
-          title: title ?? `Terminal ${current.nextTabNumber}`,
+          title,
           scope,
           layout: { kind: "pane", sessionId, exitCode: null },
           activePaneId: sessionId,
@@ -251,11 +260,7 @@ export function createSessionsStore() {
         return {
           byOwner: {
             ...state.byOwner,
-            [id]: {
-              tabs: [...current.tabs, tab],
-              activeSessionId: sessionId,
-              nextTabNumber: current.nextTabNumber + 1,
-            },
+            [id]: { tabs: [...current.tabs, tab], activeSessionId: sessionId },
           },
           sessionOwner: { ...state.sessionOwner, [sessionId]: id },
         };
@@ -327,8 +332,17 @@ export function createSessionsStore() {
         tabs[tabIndex] = { ...tab, layout, activePaneId };
         const sessionOwner = { ...state.sessionOwner };
         const lastOutputAt = { ...state.lastOutputAt };
-        delete sessionOwner[sessionId];
+        // `lastOutputAt` is keyed per-pane, so the closed pane's entry always
+        // goes — it can no longer produce output.
         delete lastOutputAt[sessionId];
+        // `sessionOwner` routes rename/exit lookups. Asymmetry: when the closed
+        // pane IS the tab root (sessionId === tabId), the tab keeps that id as
+        // its stable identity — rename/routing still resolve through it — so we
+        // must NOT drop its routing entry here, or a later rename would silently
+        // no-op while the DB write lands (UI/SQLite titles diverge). Only a
+        // non-root pane's entry is dropped now; the retained root entry is
+        // cleared by `forgetTabIndexes` when the whole tab closes.
+        if (sessionId !== tabId) delete sessionOwner[sessionId];
         return {
           byOwner: { ...state.byOwner, [ownerId]: { ...current, tabs } },
           sessionOwner,

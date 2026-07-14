@@ -119,6 +119,9 @@ function PriorityField({ projectId, ticket }: { projectId: string; ticket: Ticke
  * unchanged); Escape reverts without writing. An empty commit passes `null` — clearing the field —
  * rather than `""`, matching the domain's null-until-a-worktree-exists convention. Displays an
  * em-dash when `value` is null and not being edited.
+ *
+ * Like InlineRename, a `done` guard makes commit/cancel one-shot so Enter (which commits and then
+ * blurs) can't double-fire the commit; it resets when a fresh edit starts.
  */
 function InlineTextField({
   value,
@@ -129,13 +132,23 @@ function InlineTextField({
 }) {
   const [editing, setEditing] = React.useState(false);
   const [draft, setDraft] = React.useState(value ?? "");
+  // Guard against blur firing after an Enter/Escape already resolved the edit.
+  const done = React.useRef(false);
 
   function commit() {
+    if (done.current) return;
+    done.current = true;
     setEditing(false);
     const trimmed = draft.trim();
     const next = trimmed === "" ? null : trimmed;
     if (next === value) return;
     onCommit(next);
+  }
+
+  function cancel() {
+    if (done.current) return;
+    done.current = true;
+    setEditing(false);
   }
 
   if (editing) {
@@ -151,7 +164,7 @@ function InlineTextField({
             commit();
           } else if (event.key === "Escape") {
             event.preventDefault();
-            setEditing(false);
+            cancel();
           }
         }}
         className="h-7 font-mono text-xs"
@@ -163,6 +176,7 @@ function InlineTextField({
     <button
       type="button"
       onClick={() => {
+        done.current = false;
         setDraft(value ?? "");
         setEditing(true);
       }}
@@ -170,6 +184,19 @@ function InlineTextField({
     >
       {value ?? <span className="text-muted-foreground">—</span>}
     </button>
+  );
+}
+
+/**
+ * A committed worktree-identity string shown read-only (branch/baseBranch are settable ONCE — user
+ * decision — so once non-empty they can't be re-edited here). Same mono/size treatment as the
+ * InlineTextField's resting state, minus the click-to-edit affordance.
+ */
+function ReadonlyIdentity({ value }: { value: string }) {
+  return (
+    <span className="block w-full truncate px-2 py-1 font-mono text-xs text-foreground">
+      {value}
+    </span>
   );
 }
 
@@ -224,24 +251,38 @@ export function TicketProperties({ projectId, ticket }: { projectId: string; tic
         <PropertyLabel>Labels</PropertyLabel>
         <TicketLabelEditor projectId={projectId} ticket={ticket} />
       </div>
+      {/* Branch and base branch are settable ONCE (user decision): while unset they take an
+          inline edit; once a non-empty value is committed they render read-only. The empty→null
+          commit mapping still applies to that initial set. Validation of the entered value happens
+          in main (data-ipc) — added by another agent. */}
       <div className="flex flex-col gap-3 border-t border-border pt-4">
         <div className="flex flex-col gap-1.5">
           <PropertyLabel>Branch</PropertyLabel>
-          <InlineTextField
-            value={ticket.branch}
-            onCommit={(next) =>
-              void useBoardStore.getState().updateTicket({ ticketId: ticket.id, branch: next })
-            }
-          />
+          {ticket.branch ? (
+            <ReadonlyIdentity value={ticket.branch} />
+          ) : (
+            <InlineTextField
+              value={ticket.branch}
+              onCommit={(next) =>
+                void useBoardStore.getState().updateTicket({ ticketId: ticket.id, branch: next })
+              }
+            />
+          )}
         </div>
         <div className="flex flex-col gap-1.5">
           <PropertyLabel>Base branch</PropertyLabel>
-          <InlineTextField
-            value={ticket.baseBranch}
-            onCommit={(next) =>
-              void useBoardStore.getState().updateTicket({ ticketId: ticket.id, baseBranch: next })
-            }
-          />
+          {ticket.baseBranch ? (
+            <ReadonlyIdentity value={ticket.baseBranch} />
+          ) : (
+            <InlineTextField
+              value={ticket.baseBranch}
+              onCommit={(next) =>
+                void useBoardStore
+                  .getState()
+                  .updateTicket({ ticketId: ticket.id, baseBranch: next })
+              }
+            />
+          )}
         </div>
         <div className="flex flex-col gap-1.5">
           <PropertyLabel>Worktree</PropertyLabel>

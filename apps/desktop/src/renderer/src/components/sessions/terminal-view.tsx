@@ -15,12 +15,6 @@ interface TerminalViewProps {
   visible: boolean;
   active: boolean;
   onActivate(): void;
-  /**
-   * Liveness probe read fresh on every forwarded event. Defaults to the unified
-   * sessions store (works for scratch and ticket sessions alike); callers may
-   * override. Must be stable (memoize at the call site).
-   */
-  getLive?: () => boolean;
 }
 
 /**
@@ -41,22 +35,20 @@ export function TerminalView({
   visible,
   active,
   onActivate,
-  getLive,
 }: TerminalViewProps) {
   const containerRef = React.useRef<HTMLDivElement>(null);
 
   // Read liveness fresh on every event — main forgets the session on PTY exit,
   // so forwarding for an exited tab would only toast "Unknown terminal session"
   // at the user. A stale closure over the tab would keep forwarding forever.
-  // The default probe reads the unified store by owner; scratch and ticket
-  // sessions share the same model, so no per-surface override is needed.
+  // Reads the unified store by owner; scratch and ticket sessions share the same
+  // model, so no per-surface override is needed.
   const isLive = React.useCallback(() => {
-    if (getLive !== undefined) return getLive();
     const tab = useSessionsStore
       .getState()
       .byOwner[ownerId]?.tabs.find((candidate) => candidate.sessionId === tabId);
     return tab !== undefined && findSessionPane(tab.layout, sessionId)?.exitCode === null;
-  }, [getLive, ownerId, tabId, sessionId]);
+  }, [ownerId, tabId, sessionId]);
 
   React.useEffect(() => {
     const container = containerRef.current;

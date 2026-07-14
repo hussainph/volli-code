@@ -272,7 +272,7 @@ describe("removeProject", () => {
     const only = project({ id: "only", path: "/a" });
     const { store } = freshStore();
     store.getState().hydrate([only], only.id);
-    useSessionsStore.getState().addSession(scratchScope(only.id), "s1");
+    useSessionsStore.getState().addSession(scratchScope(only.id), "s1", "Terminal 1");
 
     await store.getState().removeProject(only.id);
 

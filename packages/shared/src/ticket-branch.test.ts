@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vite-plus/test";
-import { slugify, ticketBranchName } from "./ticket-branch";
+import { isValidBranchName, slugify, ticketBranchName } from "./ticket-branch";
 
 describe("slugify", () => {
   it("slugifies a basic title", () => {
@@ -41,5 +41,39 @@ describe("ticketBranchName", () => {
 
   it("omits the separator when the title has no slug characters", () => {
     expect(ticketBranchName("VC-3", "!!! @@@ ###")).toBe("volli/VC-3");
+  });
+});
+
+describe("isValidBranchName", () => {
+  it.each([["volli/VC-12-mcp-server"], ["main"], ["feature/thing"], ["release-1.2.3"], ["a"]])(
+    "accepts the valid ref %s",
+    (name) => {
+      expect(isValidBranchName(name)).toBe(true);
+    },
+  );
+
+  it.each([
+    ["", "empty"],
+    ["@", "the single @"],
+    ["-leading", "a leading dash"],
+    ["/leading", "a leading slash"],
+    ["trailing/", "a trailing slash"],
+    ["trailing.", "a trailing dot"],
+    ["a..b", "a double dot"],
+    ["a@{b", "an @{ sequence"],
+    ["foo.lock", "a .lock suffix"],
+    ["foo.lock/bar", "a .lock component"],
+    ["has space", "a space"],
+    ["ctrl\x01char", "a control character"],
+    [`del${String.fromCharCode(0x7f)}char`, "a DEL character"],
+    ["tilde~x", "a reserved ~"],
+    ["caret^x", "a reserved ^"],
+    ["colon:x", "a reserved :"],
+    ["q?x", "a reserved ?"],
+    ["star*x", "a reserved *"],
+    ["brk[x", "a reserved ["],
+    ["back\\x", "a reserved backslash"],
+  ])("rejects %s (%s)", (name) => {
+    expect(isValidBranchName(name)).toBe(false);
   });
 });

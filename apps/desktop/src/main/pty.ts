@@ -1,6 +1,7 @@
 import { app, ipcMain } from "electron";
 import type { WebContents } from "electron";
 import { randomUUID } from "node:crypto";
+import { stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import type Database from "better-sqlite3";
 import {
@@ -212,6 +213,23 @@ export class PtyManager {
       // agent can write artifacts the instant its shell is live. A window
       // closing during this await is caught by the post-spawn destroyed check.
       if (scope.ticketDir !== null) {
+        // Guard against resurrecting a moved/deleted project root: the
+        // ensureTicketDir call below runs a recursive mkdir that would happily
+        // recreate a vanished repo as an empty directory chain, handing the
+        // user a plausible-looking shell in a bogus empty "repo". Stat the root
+        // first and fail loudly if it isn't an existing directory.
+        let rootStat: Awaited<ReturnType<typeof stat>> | null;
+        try {
+          rootStat = await stat(scope.ticketDir.projectPath);
+        } catch {
+          rootStat = null;
+        }
+        if (rootStat === null || !rootStat.isDirectory()) {
+          return {
+            ok: false,
+            error: `Project folder no longer exists at ${scope.ticketDir.projectPath}`,
+          };
+        }
         await ensureTicketDir(scope.ticketDir.projectPath, scope.ticketDir.displayId);
       }
       const { file, args } = resolveShell(process.env);

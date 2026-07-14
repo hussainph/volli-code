@@ -10,6 +10,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
 import { type BoardGateway, createBoardStore } from "./board";
+import { ticketScope, useSessionsStore } from "./sessions";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
@@ -595,6 +596,39 @@ describe("updateTicket", () => {
 
     expect("p1" in store.getState().ticketsByProject).toBe(false);
   });
+
+  it("reverts only the failed field, keeping a value a concurrent save committed mid-flight", async () => {
+    const a = ticket({
+      id: "a",
+      projectId: "p1",
+      status: "backlog",
+      title: "Old",
+      body: "old body",
+    });
+    // A sibling in the same slice — the field-scoped revert must leave it be.
+    const b = ticket({ id: "b", projectId: "p1", status: "backlog", order: 1 });
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a, b] }, {});
+    // A concurrent body save commits (in SQLite and the store) while this title
+    // write is in flight; then the title write fails. The revert must restore
+    // ONLY the title — a whole-ticket snapshot revert would resurrect the old body.
+    vi.mocked(gateway.updateTicket).mockImplementation(async () => {
+      const fresh = store.getState().ticketsByProject.p1!;
+      store.setState({
+        ticketsByProject: {
+          p1: fresh.map((t) => (t.id === "a" ? Object.assign({}, t, { body: "new body" }) : t)),
+        },
+      });
+      return { ok: false, error: "conflict" };
+    });
+
+    await store.getState().updateTicket({ ticketId: "a", title: "New" });
+
+    const patched = store.getState().ticketsByProject.p1![0]!;
+    expect(patched.title).toBe("Old"); // failed field reverted
+    expect(patched.body).toBe("new body"); // concurrent commit preserved
+  });
 });
 
 describe("setLabels", () => {
@@ -657,6 +691,36 @@ describe("setLabels", () => {
 
     expect(store.getState().ticketsByProject.p1?.[0]?.labels).toEqual(["bug"]);
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not update labels: ipc gone");
+  });
+
+  it("reverts only the labels on failure, keeping a title a concurrent save committed mid-flight", async () => {
+    const a = ticket({
+      id: "a",
+      projectId: "p1",
+      status: "backlog",
+      title: "Old",
+      labels: ["bug"],
+    });
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a] }, {});
+    // A concurrent title save commits while this labels write is in flight; then
+    // labels fails. Field-scoped revert must restore only labels, keeping "New".
+    vi.mocked(gateway.setLabels).mockImplementation(async () => {
+      const fresh = store.getState().ticketsByProject.p1!;
+      store.setState({
+        ticketsByProject: {
+          p1: fresh.map((t) => (t.id === "a" ? Object.assign({}, t, { title: "New" }) : t)),
+        },
+      });
+      return { ok: false, error: "conflict" };
+    });
+
+    await store.getState().setLabels("a", ["bug", "urgent"]);
+
+    const patched = store.getState().ticketsByProject.p1![0]!;
+    expect(patched.labels).toEqual(["bug"]); // reverted (field-scoped)
+    expect(patched.title).toBe("New"); // concurrent commit preserved
   });
 });
 
@@ -961,6 +1025,59 @@ describe("deleteArchivedTicket", () => {
     await store.getState().deleteArchivedTicket("p1", "does-not-exist");
 
     expect(gateway.deleteTicket).not.toHaveBeenCalled();
+  });
+});
+
+const resetSessions = () =>
+  useSessionsStore.setState({ byOwner: {}, sessionOwner: {}, lastOutputAt: {}, starting: {} });
+
+describe("archive/delete session teardown", () => {
+  it("kills the ticket's live sessions when the archive succeeds", async () => {
+    const kill = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("window", { api: { terminal: { kill } } });
+    resetSessions();
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [ticket({ id: "tk", status: "doing" })] }, {});
+    useSessionsStore.getState().addSession(ticketScope("p1", "tk"), "s1", "Session 1");
+
+    await store.getState().archiveTicket("p1", "tk");
+
+    expect(kill).toHaveBeenCalledWith("s1");
+    expect(useSessionsStore.getState().byOwner["tk"]).toBeUndefined();
+  });
+
+  it("does NOT kill the ticket's sessions when the archive fails (the ticket is still live)", async () => {
+    const kill = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("window", { api: { terminal: { kill } } });
+    resetSessions();
+    const gateway = fakeGateway({
+      archiveTicket: vi.fn<BoardGateway["archiveTicket"]>(async () => ({
+        ok: false,
+        error: "conflict",
+      })),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [ticket({ id: "tk", status: "doing" })] }, {});
+    useSessionsStore.getState().addSession(ticketScope("p1", "tk"), "s1", "Session 1");
+
+    await store.getState().archiveTicket("p1", "tk");
+
+    expect(kill).not.toHaveBeenCalled();
+    expect(useSessionsStore.getState().byOwner["tk"]?.tabs).toHaveLength(1);
+  });
+
+  it("kills the ticket's live sessions when the archived ticket is permanently deleted", async () => {
+    const kill = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("window", { api: { terminal: { kill } } });
+    resetSessions();
+    const store = createBoardStore(fakeGateway());
+    store.setState({ archivedByProject: { p1: [archivedTicket({ id: "tk", status: "done" })] } });
+    useSessionsStore.getState().addSession(ticketScope("p1", "tk"), "s1", "Session 1");
+
+    await store.getState().deleteArchivedTicket("p1", "tk");
+
+    expect(kill).toHaveBeenCalledWith("s1");
+    expect(useSessionsStore.getState().byOwner["tk"]).toBeUndefined();
   });
 });
 

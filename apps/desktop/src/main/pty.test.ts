@@ -671,6 +671,50 @@ describe("ticket sessions", () => {
     expect(ended[0]?.payload).toEqual({ kind: "session_ended", sessionId: result.sessionId });
   });
 
+  it("fails with a surfaced error (never resurrecting the root) when the project folder is gone", async () => {
+    // A project whose root path is within a registered root but does not exist
+    // on disk (moved/deleted repo). ensureTicketDir must NOT recreate it.
+    const gonePath = join(root, "gone-repo");
+    insertProject(testDb.db, testProject({ id: "p-gone", path: gonePath, ticketPrefix: "GO" }));
+    insertTicket(testDb.db, testTicket("p-gone", { id: "tk-gone", ticketNumber: 1 }));
+    syncProjectRoots([root]);
+
+    const result = await invokeCreate(makeWebContents(), {
+      workspaceId: "p-gone",
+      cwd: gonePath,
+      cols: 80,
+      rows: 24,
+      ticket: { ticketId: "tk-gone" },
+    });
+    expect(result).toEqual({
+      ok: false,
+      error: `Project folder no longer exists at ${gonePath}`,
+    });
+    expect(spawn).not.toHaveBeenCalled();
+    await expect(fs.stat(gonePath)).rejects.toThrow();
+  });
+
+  it("fails when the project root path is a file, not a directory", async () => {
+    const filePath = join(root, "root-is-a-file");
+    await fs.writeFile(filePath, "not a dir", "utf8");
+    insertProject(testDb.db, testProject({ id: "p-file", path: filePath, ticketPrefix: "FI" }));
+    insertTicket(testDb.db, testTicket("p-file", { id: "tk-file", ticketNumber: 1 }));
+    syncProjectRoots([root]);
+
+    const result = await invokeCreate(makeWebContents(), {
+      workspaceId: "p-file",
+      cwd: filePath,
+      cols: 80,
+      rows: 24,
+      ticket: { ticketId: "tk-file" },
+    });
+    expect(result).toEqual({
+      ok: false,
+      error: `Project folder no longer exists at ${filePath}`,
+    });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it("rejects a ticket request naming an unknown ticket without spawning", async () => {
     const result = await invokeCreate(makeWebContents(), {
       workspaceId: "w",

@@ -1,8 +1,10 @@
 import { app, BrowserWindow, session, shell } from "electron";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { errorMessage, ticketBranchName } from "@volli/shared";
 import type { VolliIpcEvent } from "@volli/shared";
+import { isInternalNavigationTarget } from "./navigation";
 import type { DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { openVolliDb } from "./db";
@@ -25,25 +27,43 @@ app.setName("Volli Code");
 
 const isDev = !app.isPackaged;
 
+// Dev gets its OWN userData directory. dev and packaged otherwise share one
+// (app.setName above unifies them so the SQLite db survives across launches) —
+// but that shared dir means a `pnpm dev` boot's endLiveSessions sweep marks the
+// PACKAGED app's still-live sessions as ended (and vice versa), two instances
+// corrupting each other's session rows. Skipped when an explicit
+// `--user-data-dir` was passed (e2e/tests already isolate their profile that
+// way, and assert getPath("userData") equals it); VOLLI_DB_PATH still wins for
+// the db path regardless.
+if (isDev && !app.commandLine.hasSwitch("user-data-dir")) {
+  app.setPath("userData", `${app.getPath("userData")}-dev`);
+}
+
+// The packaged renderer entry — loaded by createWindow's loadFile below and,
+// mirrored here, the sole allowed in-window file:// document in prod.
+const PACKAGED_RENDERER_ENTRY = join(__dirname, "../dist/index.html");
+
 // Navigation hardening (Electron footgun). Markdown in ticket bodies, comments,
 // and agent-written artifacts now renders real <a href> links, so a click would
 // otherwise navigate the whole BrowserWindow away from the app — or a
 // window.open would punch out an uncontrolled child window.
 //
-// `isInternalNavigation` mirrors the window-load logic in createWindow: the only
-// allowed in-window destinations are the dev-server origin in dev and the
-// packaged file:// document in prod. Everything else is external.
+// The only allowed in-window destinations are the dev-server origin in dev and
+// the EXACT packaged index.html document in prod (compared by pathname, so any
+// OTHER local file — e.g. an .html dragged onto the window — is external even
+// though it's also file://). Everything else is external. See navigation.ts.
 function isInternalNavigation(target: string): boolean {
-  let url: URL;
-  try {
-    url = new URL(target);
-  } catch {
-    return false;
+  const devUrl = isDev ? process.env["ELECTRON_RENDERER_URL"] : undefined;
+  if (devUrl) {
+    return isInternalNavigationTarget(target, {
+      devOrigin: new URL(devUrl).origin,
+      packagedPathname: null,
+    });
   }
-  if (isDev && process.env["ELECTRON_RENDERER_URL"]) {
-    return url.origin === new URL(process.env["ELECTRON_RENDERER_URL"]).origin;
-  }
-  return url.protocol === "file:";
+  return isInternalNavigationTarget(target, {
+    devOrigin: null,
+    packagedPathname: pathToFileURL(PACKAGED_RENDERER_ENTRY).pathname,
+  });
 }
 
 /** Sends an http(s) URL to the user's default browser; ignores anything else. */
@@ -130,7 +150,7 @@ function createWindow(): void {
   if (isDev && process.env["ELECTRON_RENDERER_URL"]) {
     mainWindow.loadURL(process.env["ELECTRON_RENDERER_URL"]);
   } else {
-    mainWindow.loadFile(join(__dirname, "../dist/index.html"));
+    mainWindow.loadFile(PACKAGED_RENDERER_ENTRY);
   }
 }
 

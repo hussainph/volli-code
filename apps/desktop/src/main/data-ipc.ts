@@ -7,6 +7,7 @@ import {
   errorMessage,
   isTicketPriority,
   isTicketStatus,
+  isValidBranchName,
   LEGACY_BACKUP_APP_STATE_KEY,
   moveTicket,
   PROJECT_COLORS,
@@ -624,6 +625,16 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
     (_event, input: unknown): TicketResult => {
       if (!isTicketUpdateInput(input)) {
         return { ok: false, error: "Invalid ticket update" };
+      }
+      // Write-time git ref-name validation: the worktree branch fields are
+      // persisted verbatim, so reject anything that isn't a legal branch name
+      // (a `null` clears the field and is always allowed) before it reaches the
+      // db — surfaced to the renderer as a typed error it can toast.
+      if (typeof input.branch === "string" && !isValidBranchName(input.branch)) {
+        return { ok: false, error: "Invalid branch name" };
+      }
+      if (typeof input.baseBranch === "string" && !isValidBranchName(input.baseBranch)) {
+        return { ok: false, error: "Invalid base branch name" };
       }
       try {
         const now = Date.now();

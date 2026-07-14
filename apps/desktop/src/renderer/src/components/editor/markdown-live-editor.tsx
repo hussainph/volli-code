@@ -58,6 +58,14 @@ export function MarkdownLiveEditor({
   const placeholderRef = React.useRef(placeholder ?? "");
   const ariaLabelRef = React.useRef(ariaLabel ?? "");
 
+  // An external `value` change that arrived while the editor was focused and so
+  // could not be applied without stomping the caret; adopted on blur if the
+  // buffer is still untouched (see the sync effect and blur handler below).
+  const pendingValueRef = React.useRef<string | null>(null);
+  // The last value we programmatically wrote into the doc — the baseline for
+  // "did the user type since we deferred?": buffer === this ⇒ untouched.
+  const lastSyncedRef = React.useRef(value);
+
   React.useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
@@ -78,6 +86,25 @@ export function MarkdownLiveEditor({
         EditorView.domEventHandlers({
           blur: () => {
             onBlurRef.current?.();
+            // Adopt an external value that was deferred while focused — but only
+            // if the user hasn't edited the buffer since (buffer still equals the
+            // last value we synced). If they typed, leave the buffer: the host's
+            // conflict handling owns the divergence.
+            const pending = pendingValueRef.current;
+            pendingValueRef.current = null;
+            if (pending !== null) {
+              const current = viewRef.current?.state.doc.toString();
+              if (
+                current !== undefined &&
+                current === lastSyncedRef.current &&
+                current !== pending
+              ) {
+                viewRef.current?.dispatch({
+                  changes: { from: 0, to: current.length, insert: pending },
+                });
+                lastSyncedRef.current = pending;
+              }
+            }
             return false;
           },
         }),
@@ -96,13 +123,21 @@ export function MarkdownLiveEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // External value → doc sync, but never while focused (would stomp typing).
+  // External value → doc sync. While focused we can't stomp the caret, so we
+  // remember the pending value and the blur handler adopts it if the buffer is
+  // still untouched; while unfocused we apply it immediately.
   React.useEffect(() => {
     const view = viewRef.current;
-    if (!view || view.hasFocus) return;
+    if (!view) return;
     const current = view.state.doc.toString();
+    if (view.hasFocus) {
+      if (current !== value) pendingValueRef.current = value;
+      return;
+    }
     if (current === value) return;
     view.dispatch({ changes: { from: 0, to: current.length, insert: value } });
+    lastSyncedRef.current = value;
+    pendingValueRef.current = null;
   }, [value]);
 
   return <div ref={hostRef} className={className} />;

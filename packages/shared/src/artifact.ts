@@ -81,11 +81,17 @@ export function isSafeArtifactEntryName(name: string): boolean {
 /**
  * Whether `rawName` is a valid *base* name for a brand-new artifact (the
  * `.create` name-prompt input, before {@link withMarkdownExtension} forces
- * the `.md` suffix): trims to non-empty and passes the same separator/`..`
- * safety check as an existing entry name.
+ * the `.md` suffix): trims to non-empty, passes the same separator/`..`
+ * safety check as an existing entry name, and — unlike an already-on-disk
+ * entry name — additionally rejects a leading-dot name. A dotfile artifact
+ * (e.g. `.notes` → `.notes.md`, or the literal `.md`) would be created but
+ * then skipped by the tier listing (which hides dotfiles), so it would vanish
+ * from the UI the moment it appeared; refusing it at creation avoids that.
  */
 export function isValidNewArtifactName(rawName: string): boolean {
-  return isSafeArtifactEntryName(rawName.trim());
+  const trimmed = rawName.trim();
+  if (trimmed.startsWith(".")) return false;
+  return isSafeArtifactEntryName(trimmed);
 }
 
 /** Forces a trimmed name to end in `.md` (case-insensitively already-`.md` names pass through unchanged). */
