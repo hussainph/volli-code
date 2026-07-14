@@ -50,6 +50,9 @@ export function TicketTitle({ ticket }: { ticket: Ticket }) {
     }
   }
 
+  // Seamless flip (ticket-detail live-preview pass): the input carries the exact
+  // h1 typography with no border, background, or accent ring — the caret is the
+  // only cue that you're editing, so nothing shifts when you click in.
   if (editing) {
     return (
       <input
@@ -59,7 +62,7 @@ export function TicketTitle({ ticket }: { ticket: Ticket }) {
         onBlur={commit}
         onKeyDown={handleKeyDown}
         aria-label="Ticket title"
-        className="w-full rounded-md border border-input bg-transparent text-2xl font-semibold tracking-tight text-foreground outline-none focus-visible:border-ring"
+        className="w-full bg-transparent text-2xl font-semibold tracking-tight text-foreground outline-none"
       />
     );
   }
@@ -75,7 +78,7 @@ export function TicketTitle({ ticket }: { ticket: Ticket }) {
           enterEdit();
         }
       }}
-      className="cursor-text rounded-md text-2xl font-semibold tracking-tight text-foreground outline-none transition-colors duration-150 ease-out focus-visible:ring-2 focus-visible:ring-ring/40"
+      className="cursor-text text-2xl font-semibold tracking-tight text-foreground outline-none"
     >
       {ticket.title}
     </h1>

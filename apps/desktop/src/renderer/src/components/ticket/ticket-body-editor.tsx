@@ -1,34 +1,41 @@
 import * as React from "react";
 import type { Ticket } from "@volli/shared";
 
-import { Markdown } from "@renderer/components/ticket/markdown";
+import { MarkdownLiveEditor } from "@renderer/components/editor/markdown-live-editor";
 import { createDebouncer, type Debouncer } from "@renderer/lib/debounce";
-import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
 
 const AUTOSAVE_IDLE_MS = 1500;
 
 /**
- * The Doc tab's body: Notion-like click-to-edit (ticket-detail-mvp decision #9).
- * The rendered markdown view flips to a plain monospace textarea on click, on
- * Enter/`e` while the body region is focused; the textarea auto-grows
- * (`field-sizing`), autosaves ~1.5s after the last keystroke via the board
- * store's `updateTicket({ body })`, and flushes that pending save immediately on
- * blur, on unmount, and whenever it flips back to the rendered view. ⌘-Enter or
- * blur returns to the rendered view; Escape leaves edit mode too but
- * `stopPropagation`s so the detail shell's Escape-to-close never fires. A failed
- * save is surfaced by the store's own toast path.
+ * The Doc tab's body: an always-mounted Obsidian-style live-preview editor
+ * (see components/editor). The markdown buffer IS the document — syntax renders
+ * in place and there's no read/edit flip. Edits autosave ~1.5s after the last
+ * keystroke via the board store's `updateTicket({ body })`, and the pending save
+ * flushes immediately on blur and on unmount so the last ~1.5s of typing is
+ * never lost. `lastSavedRef` guards a redundant IPC/event when nothing changed
+ * since the previous write; a failed save surfaces via the store's own toast.
+ * Escape blurs the editor (handled inside the editor keymap) and — because the
+ * focused `.cm-content` is contenteditable, which the detail shell's
+ * Escape-to-close guard already exempts — never closes the view; once unfocused,
+ * Escape bubbles and closes as usual.
  */
 export function TicketBodyEditor({ ticket }: { ticket: Ticket }) {
   const updateTicket = useBoardStore((state) => state.updateTicket);
 
-  const [editing, setEditing] = React.useState(false);
-  const [draft, setDraft] = React.useState(ticket.body);
-  const draftRef = React.useRef(draft);
+  const draftRef = React.useRef(ticket.body);
   // The value last written through — guards a redundant IPC/event when a
-  // debounced save and a blur-flush both fire with nothing changed since.
+  // debounced save and a blur-flush both fire with nothing changed since, and
+  // when a background refresh resets the buffer to content already on disk.
   const lastSavedRef = React.useRef(ticket.body);
-  const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+
+  // Track external body changes (agent edits, store rehydrate) as the new
+  // "saved" baseline. When the editor is unfocused it adopts the new value and
+  // the resulting programmatic edit must not echo a redundant write — this
+  // keeps `lastSavedRef` aligned with what's already persisted.
+  React.useEffect(() => {
+    lastSavedRef.current = ticket.body;
+  }, [ticket.body]);
 
   const save = React.useCallback(() => {
     const next = draftRef.current;
@@ -54,91 +61,19 @@ export function TicketBodyEditor({ ticket }: { ticket: Ticket }) {
   // is closed) — never lose the last ~1.5s of typing.
   React.useEffect(() => () => debouncer.flush(), [debouncer]);
 
-  // Move the caret to the end when entering edit mode.
-  React.useEffect(() => {
-    if (!editing) return;
-    const el = textareaRef.current;
-    if (!el) return;
-    el.focus();
-    el.setSelectionRange(el.value.length, el.value.length);
-  }, [editing]);
-
-  function enterEdit() {
-    const seed = ticket.body;
-    setDraft(seed);
-    draftRef.current = seed;
-    lastSavedRef.current = seed;
-    setEditing(true);
-  }
-
-  function exitEdit() {
-    debouncer.flush();
-    setEditing(false);
-  }
-
-  function handleChange(event: React.ChangeEvent<HTMLTextAreaElement>) {
-    const next = event.target.value;
-    setDraft(next);
+  function handleChange(next: string) {
     draftRef.current = next; // immediate, so a flush right after has the latest
     debouncer.schedule();
   }
 
-  function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-      event.preventDefault();
-      exitEdit();
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation(); // the shell's Escape-to-close must not fire
-      exitEdit();
-    }
-  }
-
-  if (editing) {
-    return (
-      <textarea
-        ref={textareaRef}
-        value={draft}
-        onChange={handleChange}
-        onBlur={exitEdit}
-        onKeyDown={handleKeyDown}
-        spellCheck={false}
-        aria-label="Ticket description"
-        className="min-h-32 w-full resize-none rounded-md border border-input bg-transparent px-3 py-2 font-mono text-sm leading-6 text-foreground outline-none [field-sizing:content] focus-visible:border-ring"
-      />
-    );
-  }
-
-  if (ticket.body.trim() === "") {
-    return (
-      <button
-        type="button"
-        onClick={enterEdit}
-        className="w-full rounded-md px-3 py-2 text-left text-sm text-muted-foreground transition-colors duration-150 ease-out hover:bg-accent/50"
-      >
-        Add description…
-      </button>
-    );
-  }
-
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      aria-label="Edit description"
-      onClick={enterEdit}
-      onKeyDown={(event) => {
-        if (event.key === "e" || event.key === "Enter") {
-          event.preventDefault();
-          enterEdit();
-        }
-      }}
-      className={cn(
-        "cursor-text rounded-md px-3 py-2 outline-none transition-colors duration-150 ease-out",
-        "hover:bg-accent/30 focus-visible:ring-2 focus-visible:ring-ring/40",
-      )}
-    >
-      <Markdown source={ticket.body} />
-    </div>
+    <MarkdownLiveEditor
+      value={ticket.body}
+      onChange={handleChange}
+      onBlur={() => debouncer.flush()}
+      placeholder="Add description…"
+      ariaLabel="Ticket description"
+      className="min-h-32 rounded-md px-3 py-2"
+    />
   );
 }
