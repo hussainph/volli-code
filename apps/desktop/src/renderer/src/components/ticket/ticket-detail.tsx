@@ -162,7 +162,7 @@ export function TicketDetail({
               scroll in-flow; the plane overlays them, shown only for a session tab. */}
           <div className="relative mt-4 flex min-h-0 flex-1 flex-col">
             {activeTab.kind === "doc" || activeTab.kind === "artifacts" ? (
-              <div className="min-h-0 flex-1 overflow-y-auto">
+              <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
                 {activeTab.kind === "doc" ? (
                   <TicketDocTab ticket={ticket} />
                 ) : (
