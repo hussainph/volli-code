@@ -10,6 +10,7 @@ import { TicketSessionPlane } from "@renderer/components/ticket/ticket-session-p
 import { TicketSessionsPanel } from "@renderer/components/ticket/ticket-sessions-panel";
 import { TicketTabStrip, type TicketTabDescriptor } from "@renderer/components/ticket/ticket-tabs";
 import { TicketTitle } from "@renderer/components/ticket/ticket-title";
+import { isEscapeExempt } from "@renderer/lib/escape-guard";
 import { useTicketSessionsStore } from "@renderer/stores/ticket-sessions";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { closeTicketSession } from "@renderer/terminal/session-lifecycle";
@@ -109,15 +110,7 @@ export function TicketDetail({
   React.useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape" || event.defaultPrevented) return;
-      const target = event.target;
-      if (
-        target instanceof Element &&
-        target.closest(
-          "input, textarea, [contenteditable], [role=menu], [role=dialog], [role=alertdialog]",
-        ) !== null
-      ) {
-        return;
-      }
+      if (isEscapeExempt(event.target)) return;
       handleClose();
     }
     window.addEventListener("keydown", handleKeyDown);

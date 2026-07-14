@@ -54,6 +54,17 @@ export const HARNESS_LABELS: Record<HarnessId, string> = {
 
 export const DEFAULT_HARNESS_ID: HarnessId = "claude-code";
 
+/**
+ * Human-readable label for a harness id: the {@link HARNESS_LABELS} entry for a
+ * first-class {@link HarnessId}, otherwise the raw id verbatim (`Ticket.harnessId`
+ * is a plain string precisely so custom, non-first-class harnesses round-trip).
+ */
+export function harnessLabel(harnessId: string): string {
+  return (HARNESS_IDS as readonly string[]).includes(harnessId)
+    ? HARNESS_LABELS[harnessId as HarnessId]
+    : harnessId;
+}
+
 /** A board card and, once it reaches Doing, a terminal workspace. */
 export interface Ticket {
   /**

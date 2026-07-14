@@ -593,22 +593,53 @@ describe("ArtifactWatchManager", () => {
     expect(watchMock).not.toHaveBeenCalled();
   });
 
-  it("logs a warning and keeps the other watcher when one fs.watch call throws", async () => {
+  it("returns ok:false and closes the partial watcher when a fs.watch call throws", async () => {
     const project = makeTempProjectDir();
     const manager = new ArtifactWatchManager();
     const webContents = makeWebContents();
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    watchMock.mockImplementationOnce(() => {
-      throw new Error("EMFILE");
-    });
+    // Project-tier watcher installs fine; the ticket-tier one throws.
+    watchMock
+      .mockImplementationOnce((dir: string, cb: WatchCall["cb"]) => {
+        const watcher = { close: vi.fn() };
+        watchCalls.push({ dir, cb, watcher });
+        return watcher;
+      })
+      .mockImplementationOnce(() => {
+        throw new Error("EMFILE");
+      });
 
-    await expect(
-      manager.subscribe(webContents as never, project, "proj-1", "ticket-1", "VC-1"),
-    ).resolves.toBeUndefined();
+    const result = await manager.subscribe(
+      webContents as never,
+      project,
+      "proj-1",
+      "ticket-1",
+      "VC-1",
+    );
 
-    expect(watchMock).toHaveBeenCalledTimes(2);
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("[volli-fs] could not watch"));
-    warnSpy.mockRestore();
+    // Surfaced as a typed failure (never a silent swallow), and the watcher we
+    // already installed was closed — no partial watch is left behind.
+    expect(result).toEqual({ ok: false, error: "EMFILE" });
+    expect(watchCalls[0]?.watcher.close).toHaveBeenCalledTimes(1);
+    // Fully deregistered: the destroyed listener was never attached.
+    expect(webContents.once).not.toHaveBeenCalled();
+  });
+
+  it("a subscribe interrupted by an unsubscribe mid-await wires zero live watchers", async () => {
+    const project = makeTempProjectDir();
+    const manager = new ArtifactWatchManager();
+    const webContents = makeWebContents();
+
+    // Start the async subscribe but DON'T await it: it runs synchronously up to
+    // the first `await ensure*`, reserving the key, then suspends. Unsubscribe
+    // before the awaits resolve — the pending reservation lets it cancel.
+    const pending = manager.subscribe(webContents as never, project, "proj-1", "ticket-1", "VC-1");
+    manager.unsubscribe(webContents as never, "ticket-1");
+    await expect(pending).resolves.toEqual({ ok: true });
+
+    // No watcher was ever installed, so a later change can't broadcast — the
+    // race that would strand an untearable watcher is closed.
+    expect(watchMock).not.toHaveBeenCalled();
+    expect(webContents.send).not.toHaveBeenCalled();
   });
 
   it("unsubscribing an unknown pair does not throw", () => {

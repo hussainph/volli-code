@@ -42,6 +42,13 @@ interface TicketSessionsState {
   byTicket: Record<string, TicketSessions>;
   /** sessionId → last PTY-output time (ms); only ticket-owned sessions are tracked. */
   lastOutputAt: Record<string, number>;
+  /**
+   * sessionId → owning ticketId, maintained on create/close/forget. Lets the
+   * per-chunk {@link TicketSessionsState.bumpOutput} hot path do an O(1)
+   * ownership check (and cheap scratch-session early-out) instead of scanning
+   * every ticket's every tab on each chunk.
+   */
+  sessionTicket: Record<string, string>;
   /** Tickets with a terminal-create in flight (disables the rail's New session). */
   startingTickets: Record<string, true>;
   addSession(ticketId: string, sessionId: string, title: string): void;
@@ -55,18 +62,12 @@ interface TicketSessionsState {
 
 const EMPTY_TICKET: TicketSessions = { tabs: [], activeSessionId: null };
 
-/** Whether any ticket owns a tab for `sessionId` — bounds output tracking to ticket sessions. */
-function ownsSession(byTicket: Record<string, TicketSessions>, sessionId: string): boolean {
-  return Object.values(byTicket).some((sessions) =>
-    sessions.tabs.some((tab) => findSessionPane(tab.layout, sessionId) !== null),
-  );
-}
-
 /** Factory so tests get isolated instances. */
 export function createTicketSessionsStore() {
   return create<TicketSessionsState>()((set) => ({
     byTicket: {},
     lastOutputAt: {},
+    sessionTicket: {},
     startingTickets: {},
 
     addSession(ticketId, sessionId, title) {
@@ -86,6 +87,7 @@ export function createTicketSessionsStore() {
             ...state.byTicket,
             [ticketId]: { tabs: [...current.tabs, tab], activeSessionId: sessionId },
           },
+          sessionTicket: { ...state.sessionTicket, [sessionId]: ticketId },
         };
       });
     },
@@ -116,9 +118,12 @@ export function createTicketSessionsStore() {
         }
         const lastOutputAt = { ...state.lastOutputAt };
         delete lastOutputAt[sessionId];
+        const sessionTicket = { ...state.sessionTicket };
+        delete sessionTicket[sessionId];
         return {
           byTicket: { ...state.byTicket, [ticketId]: { tabs, activeSessionId } },
           lastOutputAt,
+          sessionTicket,
         };
       });
     },
@@ -138,8 +143,11 @@ export function createTicketSessionsStore() {
 
     bumpOutput(sessionId, now) {
       set((state) => {
-        // Scratch PTYs share the same output stream but aren't ticket sessions.
-        if (!ownsSession(state.byTicket, sessionId)) return state;
+        // Hot path: runs for EVERY chunk of EVERY live session (scratch PTYs
+        // included, since they share the output stream). Do the O(1) ownership
+        // lookup FIRST so a scratch chunk early-returns for free; only then the
+        // ≥1s throttle, and only then an actual state write.
+        if (!(sessionId in state.sessionTicket)) return state;
         const last = state.lastOutputAt[sessionId] ?? 0;
         if (now - last < OUTPUT_THROTTLE_MS) return state;
         return { lastOutputAt: { ...state.lastOutputAt, [sessionId]: now } };
@@ -164,8 +172,12 @@ export function createTicketSessionsStore() {
         const byTicket = { ...state.byTicket };
         delete byTicket[ticketId];
         const lastOutputAt = { ...state.lastOutputAt };
-        for (const tab of current.tabs) delete lastOutputAt[tab.sessionId];
-        return { byTicket, lastOutputAt };
+        const sessionTicket = { ...state.sessionTicket };
+        for (const tab of current.tabs) {
+          delete lastOutputAt[tab.sessionId];
+          delete sessionTicket[tab.sessionId];
+        }
+        return { byTicket, lastOutputAt, sessionTicket };
       });
     },
   }));

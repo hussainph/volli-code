@@ -7,6 +7,7 @@ import {
   HARNESS_IDS,
   HARNESS_LABELS,
   DEFAULT_HARNESS_ID,
+  harnessLabel,
   displayTicketId,
   createTicket,
   isTicketStatus,
@@ -80,6 +81,20 @@ describe("HARNESS_LABELS", () => {
 
   it("defaults to claude-code", () => {
     expect(DEFAULT_HARNESS_ID).toBe("claude-code");
+  });
+});
+
+describe("harnessLabel", () => {
+  it("labels every first-class harness from HARNESS_LABELS", () => {
+    for (const harness of HARNESS_IDS) {
+      expect(harnessLabel(harness)).toBe(HARNESS_LABELS[harness]);
+    }
+    expect(harnessLabel("claude-code")).toBe("Claude Code");
+  });
+
+  it("returns a custom, non-first-class harness id verbatim", () => {
+    expect(harnessLabel("my-custom-harness")).toBe("my-custom-harness");
+    expect(harnessLabel("")).toBe("");
   });
 });
 

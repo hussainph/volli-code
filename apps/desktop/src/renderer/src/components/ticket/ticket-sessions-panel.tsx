@@ -3,9 +3,7 @@ import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import {
   errorMessage,
-  HARNESS_IDS,
-  HARNESS_LABELS,
-  type HarnessId,
+  harnessLabel,
   type SessionActivityState,
   type SessionRecord,
 } from "@volli/shared";
@@ -15,13 +13,6 @@ import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
 import { findSessionPane } from "@renderer/stores/sessions";
 import { sessionActivityState, useTicketSessionsStore } from "@renderer/stores/ticket-sessions";
-
-/** `HARNESS_LABELS[id]` for a first-class harness; the raw id for a custom one. */
-function harnessLabel(harnessId: string): string {
-  return (HARNESS_IDS as readonly string[]).includes(harnessId)
-    ? HARNESS_LABELS[harnessId as HarnessId]
-    : harnessId;
-}
 
 const STATUS_LABEL: Record<SessionActivityState, string> = {
   working: "Working",

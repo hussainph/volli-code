@@ -1,4 +1,4 @@
-import { app, BrowserWindow, session } from "electron";
+import { app, BrowserWindow, session, shell } from "electron";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { errorMessage, ticketBranchName } from "@volli/shared";
@@ -24,6 +24,34 @@ import { registerArtifactIpcHandlers } from "./volli-fs";
 app.setName("Volli Code");
 
 const isDev = !app.isPackaged;
+
+// Navigation hardening (Electron footgun). Markdown in ticket bodies, comments,
+// and agent-written artifacts now renders real <a href> links, so a click would
+// otherwise navigate the whole BrowserWindow away from the app — or a
+// window.open would punch out an uncontrolled child window.
+//
+// `isInternalNavigation` mirrors the window-load logic in createWindow: the only
+// allowed in-window destinations are the dev-server origin in dev and the
+// packaged file:// document in prod. Everything else is external.
+function isInternalNavigation(target: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(target);
+  } catch {
+    return false;
+  }
+  if (isDev && process.env["ELECTRON_RENDERER_URL"]) {
+    return url.origin === new URL(process.env["ELECTRON_RENDERER_URL"]).origin;
+  }
+  return url.protocol === "file:";
+}
+
+/** Sends an http(s) URL to the user's default browser; ignores anything else. */
+function openExternal(target: string): void {
+  if (target.startsWith("http:") || target.startsWith("https:")) {
+    void shell.openExternal(target);
+  }
+}
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -80,6 +108,20 @@ function createWindow(): void {
   mainWindow.on("leave-full-screen", () => {
     mainWindow.setTitle(preFullScreenTitle);
     mainWindow.webContents.send("volli:fullscreen-changed" satisfies VolliIpcEvent, false);
+  });
+
+  // Navigation hardening (see isInternalNavigation/openExternal above): deny
+  // every new-window request, opening http(s) targets in the user's browser;
+  // prevent every in-window navigation away from the app's own entry, sending
+  // http(s) targets to the browser instead.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    openExternal(url);
+    return { action: "deny" };
+  });
+  mainWindow.webContents.on("will-navigate", (event, target) => {
+    if (isInternalNavigation(target)) return;
+    event.preventDefault();
+    openExternal(target);
   });
 
   // In dev, scripts/dev.mjs injects ELECTRON_RENDERER_URL and runs the Vite dev

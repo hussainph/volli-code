@@ -107,6 +107,11 @@ export function ArtifactViewer({
   }, [refreshSignal]);
 
   async function handleSave() {
+    // Never write until the content has actually loaded: `draft` starts "" and
+    // is only seeded once the async read resolves, so a Save fired during the
+    // load window would blank the file (worst on a just-created artifact opened
+    // straight into edit mode). The Save affordance is gated the same way below.
+    if (state.status !== "text") return;
     setSaving(true);
     const result = await window.api.artifacts.write({
       projectId,
@@ -153,7 +158,7 @@ export function ArtifactViewer({
               <PencilSimpleIcon />
             </Button>
           )}
-          {entry.kind === "markdown" && editing && (
+          {entry.kind === "markdown" && editing && state.status === "text" && (
             <Button size="sm" onClick={() => void handleSave()} disabled={saving}>
               <FloppyDiskIcon />
               Save

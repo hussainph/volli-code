@@ -188,6 +188,27 @@ describe("bumpOutput", () => {
     store.getState().bumpOutput("scratch", 5000);
     expect(store.getState().lastOutputAt["scratch"]).toBeUndefined();
   });
+
+  it("indexes a session on create and drops it on close, so post-close chunks are free", () => {
+    const store = createTicketSessionsStore();
+    store.getState().addSession("t1", "s1", "Session 1");
+    expect(store.getState().sessionTicket["s1"]).toBe("t1");
+
+    store.getState().closeSession("t1", "s1");
+    expect(store.getState().sessionTicket["s1"]).toBeUndefined();
+
+    // A chunk arriving after close is no longer owned — an untracked no-op.
+    store.getState().bumpOutput("s1", 9999);
+    expect(store.getState().lastOutputAt["s1"]).toBeUndefined();
+  });
+
+  it("drops every session from the index on forgetTicket", () => {
+    const store = createTicketSessionsStore();
+    store.getState().addSession("t1", "s1", "Session 1");
+    store.getState().addSession("t1", "s2", "Session 2");
+    store.getState().forgetTicket("t1");
+    expect(store.getState().sessionTicket).toEqual({});
+  });
 });
 
 describe("setStarting", () => {

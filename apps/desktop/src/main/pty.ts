@@ -27,6 +27,7 @@ import {
   countProjectScratchSessions,
   countTicketSessions,
   endSession,
+  getSessionTicketId,
   getTicketSessionContext,
   insertSession,
 } from "./db/sessions-repo";
@@ -292,17 +293,39 @@ export class PtyManager {
         // Flush buffered output first so the renderer never sees the exit
         // event ahead of the shell's final bytes.
         this.flush(sessionId);
-        // Close out the durable record (and, for a ticket session, record
-        // `session_ended`) — runs whether the shell exited on its own or was
-        // killed, so the row never lingers as falsely-live.
+        // Close out the durable record (and, for a still-linked ticket session,
+        // record `session_ended`) — runs whether the shell exited on its own or
+        // was killed, so the row never lingers as falsely-live.
         const endedAt = Date.now();
-        const end = db.transaction(() => {
-          endSession(db, sessionId, endedAt);
-          if (record.ticketId !== null) {
-            recordTicketEvent(db, record.ticketId, { kind: "session_ended", sessionId }, endedAt);
+        try {
+          const end = db.transaction(() => {
+            endSession(db, sessionId, endedAt);
+            // Resolve the ticket link from the CURRENT row, never the stale
+            // in-memory `record.ticketId`: `sessions.ticket_id` is ON DELETE SET
+            // NULL, so a ticket (or its project) deleted while the session lived
+            // leaves this null. Recording `session_ended` off the stale capture
+            // would then violate the ticket_events FK, roll the whole
+            // transaction back, and strand the row as falsely-live.
+            const ticketId = getSessionTicketId(db, sessionId);
+            if (ticketId !== null) {
+              recordTicketEvent(db, ticketId, { kind: "session_ended", sessionId }, endedAt);
+            }
+          });
+          end();
+        } catch (error) {
+          // Nothing about closing out the record may prevent the renderer's exit
+          // notification or the manager's own cleanup below. Log it, then make a
+          // best-effort bare endSession outside the transaction so the row isn't
+          // stranded as falsely-live (endLiveSessions sweeps any residue on the
+          // next boot).
+          console.error(`[volli] failed to close out session ${sessionId}: ${errorMessage(error)}`);
+          try {
+            endSession(db, sessionId, endedAt);
+          } catch {
+            // Even the bare end failed (e.g. the db is gone) — leave it to the
+            // boot-time endLiveSessions sweep.
           }
-        });
-        end();
+        }
         if (!webContents.isDestroyed()) {
           const payload: TerminalExitEvent = { sessionId, exitCode };
           webContents.send("volli:terminal-exit" satisfies VolliIpcEvent, payload);

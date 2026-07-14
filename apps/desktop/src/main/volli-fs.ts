@@ -403,16 +403,15 @@ export class ArtifactWatchManager {
     projectId: string,
     ticketId: string,
     displayId: string,
-  ): Promise<void> {
+  ): Promise<Result> {
     const key = this.keyFor(webContents, ticketId);
-    if (this.subs.has(key)) return;
+    if (this.subs.has(key)) return { ok: true };
 
-    await ensureProjectArtifactsDir(projectPath);
-    await ensureTicketDir(projectPath, displayId);
-    // The window can close during the awaited ensure* calls above — same race
-    // pty.ts's create() guards against.
-    if (webContents.isDestroyed()) return;
-
+    // Reserve the key with a pending entry BEFORE the awaited ensure* calls: an
+    // unsubscribe (or a window teardown) arriving during those awaits would
+    // otherwise be a silent no-op, and we'd then install watchers nothing ever
+    // tears down. `teardown` drops this pending marker too; we detect that below
+    // and abort.
     const sub: WatchSubscription = {
       webContents,
       projectWatcher: null,
@@ -420,6 +419,21 @@ export class ArtifactWatchManager {
       debounceTimer: null,
       onDestroyed: () => this.teardown(key),
     };
+    this.subs.set(key, sub);
+
+    await ensureProjectArtifactsDir(projectPath);
+    await ensureTicketDir(projectPath, displayId);
+
+    // If an unsubscribe/teardown removed (or replaced) our pending entry during
+    // the awaits, abort — teardown already cleaned up, nothing to wire.
+    if (this.subs.get(key) !== sub) return { ok: true };
+    // The window can close during the awaited ensure* calls above — same race
+    // pty.ts's create() guards against. Drop our own pending marker (the
+    // destroyed listener isn't attached yet) and bail.
+    if (webContents.isDestroyed()) {
+      this.subs.delete(key);
+      return { ok: true };
+    }
 
     const scheduleBroadcast = (): void => {
       if (sub.debounceTimer !== null) clearTimeout(sub.debounceTimer);
@@ -433,19 +447,21 @@ export class ArtifactWatchManager {
 
     try {
       sub.projectWatcher = fsWatch(projectArtifactsDir(projectPath), () => scheduleBroadcast());
-    } catch (error) {
-      console.warn(`[volli-fs] could not watch project artifacts dir: ${errorMessage(error)}`);
-    }
-    try {
       sub.ticketWatcher = fsWatch(ticketArtifactsDir(projectPath, displayId), () =>
         scheduleBroadcast(),
       );
     } catch (error) {
-      console.warn(`[volli-fs] could not watch ticket artifacts dir: ${errorMessage(error)}`);
+      // A watcher failed to install. Surface it rather than silently swallowing
+      // (CLAUDE.md) and leaving the tab believing live updates are on: close any
+      // watcher we already opened, deregister, and report a typed failure.
+      sub.projectWatcher?.close();
+      sub.ticketWatcher?.close();
+      this.subs.delete(key);
+      return { ok: false, error: errorMessage(error) };
     }
 
     webContents.once("destroyed", sub.onDestroyed);
-    this.subs.set(key, sub);
+    return { ok: true };
   }
 
   unsubscribe(webContents: WebContents, ticketId: string): void {
@@ -713,14 +729,13 @@ export function registerArtifactIpcHandlers(handle: DbHandle): ArtifactWatchMana
       try {
         const ctx = resolveTicketContext(db, input.projectId, input.ticketId);
         if (!ctx.ok) return { ok: false, error: ctx.error };
-        await manager.subscribe(
+        return await manager.subscribe(
           event.sender,
           ctx.value.project.path,
           input.projectId,
           input.ticketId,
           ctx.value.displayId,
         );
-        return { ok: true };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }

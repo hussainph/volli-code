@@ -45,7 +45,16 @@ export function TicketArtifactsTab({
 
   React.useEffect(() => {
     void fetchList();
-    void window.api.artifacts.subscribe({ projectId, ticketId });
+    // Surface a watcher-setup failure instead of silently discarding it: the
+    // tab still works (the initial fetch above ran), but the list won't refresh
+    // live, so tell the user once, non-blocking.
+    void window.api.artifacts.subscribe({ projectId, ticketId }).then((result) => {
+      if (!result.ok) {
+        toast.error(
+          "Live artifact updates unavailable. New artifacts may not appear until you reopen this tab.",
+        );
+      }
+    });
     const unsubscribeListener = window.api.artifacts.onChanged((event) => {
       if (event.projectId !== projectId || event.ticketId !== ticketId) return;
       setRefreshSignal((n) => n + 1);

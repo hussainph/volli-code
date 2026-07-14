@@ -298,6 +298,23 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
     }
   }, [ticketId]);
 
+  // Comment edits and deletes record no ticket_event (per the comments-repo
+  // contract), so they only need the comments re-read — not the whole event log
+  // alongside it. Only a NEW comment (which the composer path handles) refetches
+  // both.
+  const refetchComments = React.useCallback(async () => {
+    try {
+      const cm = await window.api.comments.list({ ticketId });
+      if (!cm.ok) {
+        toast.error(`Could not load activity: ${cm.error}`);
+        return;
+      }
+      setComments(cm.comments);
+    } catch (error) {
+      toast.error(`Could not load activity: ${errorMessage(error)}`);
+    }
+  }, [ticketId]);
+
   React.useEffect(() => {
     void refetch();
   }, [refetch]);
@@ -347,7 +364,11 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
             item.kind === "event" ? (
               <EventRow key={item.id} event={item.event} />
             ) : (
-              <CommentBlock key={item.id} comment={item.comment} onChanged={() => void refetch()} />
+              <CommentBlock
+                key={item.id}
+                comment={item.comment}
+                onChanged={() => void refetchComments()}
+              />
             ),
           )}
         </ul>

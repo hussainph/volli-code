@@ -2,13 +2,11 @@ import * as React from "react";
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import {
   errorMessage,
-  HARNESS_IDS,
-  HARNESS_LABELS,
+  harnessLabel,
   TICKET_PRIORITIES,
   TICKET_PRIORITY_LABELS,
   TICKET_STATUS_LABELS,
   TICKET_STATUSES,
-  type HarnessId,
   type Ticket,
   type TicketPriority,
   type TicketStatus,
@@ -37,14 +35,6 @@ function formatTimestamp(epochMs: number): string {
     hour: "numeric",
     minute: "2-digit",
   });
-}
-
-/** `HARNESS_LABELS[harnessId]` for a first-class harness; the raw id verbatim for a custom one
- * (`Ticket.harnessId` is a plain string precisely so custom harnesses can be stored). */
-function harnessLabel(harnessId: string): string {
-  return (HARNESS_IDS as readonly string[]).includes(harnessId)
-    ? HARNESS_LABELS[harnessId as HarnessId]
-    : harnessId;
 }
 
 function PropertyLabel({ children }: { children: React.ReactNode }) {

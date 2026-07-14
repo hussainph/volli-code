@@ -52,7 +52,7 @@ import { listTicketEvents } from "./db/events-repo";
 import { insertProject } from "./db/projects-repo";
 import { listSessions, listTicketSessions } from "./db/sessions-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "./db/test-helpers";
-import { insertTicket } from "./db/tickets-repo";
+import { deleteTicket, insertTicket } from "./db/tickets-repo";
 import { syncProjectRoots } from "./project-roots";
 
 /** A node-pty double whose onData/onExit callbacks can be fired on demand. */
@@ -680,6 +680,56 @@ describe("ticket sessions", () => {
     });
     expect(result).toEqual({ ok: false, error: "Unknown ticket" });
     expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("survives its ticket being deleted before exit: ends the row, records no event, still notifies + forgets", async () => {
+    const sender = makeWebContents();
+    const { result, pty } = await createTicketSession("tk1", sender);
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+
+    // Ticket deleted while the session is live → sessions.ticket_id is SET NULL
+    // and the ticket's events are cascade-deleted. The stale in-memory ticketId
+    // must NOT be used to record session_ended (that would violate the FK and
+    // roll back the whole close-out, stranding the row as falsely-live).
+    deleteTicket(testDb.db, "tk1");
+
+    expect(() => pty.emitExit(0)).not.toThrow();
+
+    const row = listSessions(testDb.db, "w").find((session) => session.id === result.sessionId);
+    expect(row?.endedAt).not.toBeNull();
+    expect(listTicketEvents(testDb.db, "tk1")).toEqual([]);
+    expect(sender.send).toHaveBeenCalledWith("volli:terminal-exit", {
+      sessionId: result.sessionId,
+      exitCode: 0,
+    });
+    // Forgotten from the live map.
+    expect(invokeKill(result.sessionId)).toEqual({
+      ok: false,
+      error: "Unknown terminal session",
+    });
+  });
+
+  it("does not throw and still notifies + forgets when the whole close-out fails", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const sender = makeWebContents();
+    const { result, pty } = await createTicketSession("tk1", sender);
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+
+    // Close the db so the close-out transaction AND the catch's bare endSession
+    // both throw. The exit path must swallow it and still notify + forget.
+    testDb.db.close();
+
+    expect(() => pty.emitExit(0)).not.toThrow();
+    expect(sender.send).toHaveBeenCalledWith("volli:terminal-exit", {
+      sessionId: result.sessionId,
+      exitCode: 0,
+    });
+    expect(invokeKill(result.sessionId)).toEqual({
+      ok: false,
+      error: "Unknown terminal session",
+    });
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 });
 

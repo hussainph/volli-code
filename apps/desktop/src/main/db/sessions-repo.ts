@@ -72,6 +72,22 @@ export function endLiveSessions(db: Database.Database, now: number): number {
   return prepared(db, "UPDATE sessions SET ended_at = ? WHERE ended_at IS NULL").run(now).changes;
 }
 
+/**
+ * The ticket a session is CURRENTLY linked to (its live `ticket_id`), or `null`
+ * when it's a scratch session, its ticket was deleted (the FK is ON DELETE SET
+ * NULL), or the row no longer exists (its project was cascade-deleted). The PTY
+ * exit path reads this instead of a stale in-memory capture, so a
+ * `session_ended` event is only ever recorded against a ticket row that still
+ * exists — never violating the `ticket_events` FK.
+ */
+export function getSessionTicketId(db: Database.Database, sessionId: string): string | null {
+  const row = prepared<[string], { ticket_id: string | null }>(
+    db,
+    "SELECT ticket_id FROM sessions WHERE id = ?",
+  ).get(sessionId);
+  return row?.ticket_id ?? null;
+}
+
 /** Count of a ticket's sessions (live + ended) — seeds the per-ticket `Session N` title. */
 export function countTicketSessions(db: Database.Database, ticketId: string): number {
   const row = prepared<[string], { count: number }>(

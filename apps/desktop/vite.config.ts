@@ -73,6 +73,7 @@ export default defineConfig({
         "src/lib/new-ticket-shortcut.ts",
         "src/lib/relative-time.ts",
         "src/lib/debounce.ts",
+        "src/lib/escape-guard.ts",
         "src/terminal/css-color.ts",
         "src/terminal/appearance-model.ts",
         "src/terminal/option-as-alt.ts",
