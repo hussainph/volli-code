@@ -1,15 +1,14 @@
+import { Markdown } from "./markdown";
+
 /**
  * Rendered view of a markdown artifact's content (ticket-detail-mvp decision
- * #17). A THIN wrapper — ONE component, ONE place — deliberately plain
- * preformatted text for the MVP: the parallel Doc-tab/`<Markdown/>` work
- * (step 4) replaces the body below post-merge, with no change needed at
- * either call site (`ticket-doc-tab.tsx`'s body, this tab's viewer).
- * TODO(step-4-merge): render via Markdown component
+ * #17) — the same sanitized typeset rendering as the ticket body, so `.volli`
+ * artifacts read like documents, not source dumps.
  */
 export function ArtifactContent({ content }: { content: string }) {
   return (
-    <pre className="min-h-24 flex-1 overflow-auto rounded-md border border-border bg-muted/30 p-3 font-mono text-xs whitespace-pre-wrap text-foreground">
-      {content}
-    </pre>
+    <div className="min-h-24 flex-1 overflow-auto rounded-md border border-border bg-muted/30 p-4">
+      <Markdown source={content} />
+    </div>
   );
 }
