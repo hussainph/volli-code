@@ -27,6 +27,7 @@ import type {
   ProjectMutationResult,
   Result,
   SessionsResult,
+  SessionRenameResult,
   Ticket,
   TicketCommentResult,
   TicketCommentsResult,
@@ -64,7 +65,7 @@ import {
   nextSortOrder,
   reorderProjects,
 } from "./db/projects-repo";
-import { listSessions, listTicketSessions } from "./db/sessions-repo";
+import { listSessions, listTicketSessions, updateTitle } from "./db/sessions-repo";
 import {
   archiveTicket,
   bumpTicketVersion,
@@ -111,6 +112,7 @@ const DATA_CHANNELS: readonly VolliIpcChannel[] = [
   "volli:comment-remove",
   "volli:session-list",
   "volli:session-list-for-ticket",
+  "volli:session-rename",
   "volli:label-set-color",
   "volli:app-state-set",
 ];
@@ -299,6 +301,22 @@ interface CommentIdInput {
 function isCommentIdInput(value: unknown): value is CommentIdInput {
   if (typeof value !== "object" || value === null) return false;
   return typeof (value as Record<string, unknown>)["commentId"] === "string";
+}
+
+interface SessionRenameInput {
+  sessionId: string;
+  title: string;
+}
+
+/** `{ sessionId, title }` with a non-blank title — the rename handler trims before persisting. */
+function isSessionRenameInput(value: unknown): value is SessionRenameInput {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate["sessionId"] === "string" &&
+    typeof candidate["title"] === "string" &&
+    candidate["title"].trim().length > 0
+  );
 }
 
 interface ProjectIdInput {
@@ -916,6 +934,22 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
       }
       try {
         return { ok: true, sessions: listTicketSessions(db, input.ticketId) };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:session-rename" satisfies VolliIpcChannel,
+    (_event, input: unknown): SessionRenameResult => {
+      if (!isSessionRenameInput(input)) {
+        return { ok: false, error: "Invalid session title" };
+      }
+      try {
+        const changed = updateTitle(db, input.sessionId, input.title.trim());
+        if (changed === 0) return { ok: false, error: "Unknown session" };
+        return { ok: true };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }

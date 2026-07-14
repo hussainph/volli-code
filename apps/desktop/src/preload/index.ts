@@ -26,6 +26,7 @@ import type {
   ProjectMutationResult,
   Result,
   RevealResult,
+  SessionRenameResult,
   SessionsResult,
   TerminalDataEvent,
   TerminalExitEvent,
@@ -145,6 +146,9 @@ const api = {
     /** A ticket's durable session records, newest first — backs the right-rail linked-sessions list. */
     listForTicket: (input: { ticketId: string }): Promise<SessionsResult> =>
       ipcRenderer.invoke("volli:session-list-for-ticket" satisfies VolliIpcChannel, input),
+    /** Renames a session (scratch or ticket-scoped); the title is trimmed and must be non-empty in main. */
+    rename: (input: { sessionId: string; title: string }): Promise<SessionRenameResult> =>
+      ipcRenderer.invoke("volli:session-rename" satisfies VolliIpcChannel, input),
   },
   labels: {
     setColor: (input: { labelId: string; color: string | null }): Promise<LabelResult> =>

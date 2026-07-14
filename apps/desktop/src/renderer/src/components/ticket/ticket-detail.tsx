@@ -1,8 +1,8 @@
 import * as React from "react";
 import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
-import { displayTicketId, errorMessage, type Ticket } from "@volli/shared";
-import { toast } from "sonner";
+import { displayTicketId, type Ticket } from "@volli/shared";
 
+import { createTerminalSession } from "@renderer/components/sessions/session-create";
 import { TicketArtifactsTab } from "@renderer/components/ticket/ticket-artifacts-tab";
 import { TicketDocTab } from "@renderer/components/ticket/ticket-doc-tab";
 import { TicketProperties } from "@renderer/components/ticket/ticket-properties";
@@ -11,14 +11,9 @@ import { TicketSessionsPanel } from "@renderer/components/ticket/ticket-sessions
 import { TicketTabStrip, type TicketTabDescriptor } from "@renderer/components/ticket/ticket-tabs";
 import { TicketTitle } from "@renderer/components/ticket/ticket-title";
 import { isEscapeExempt } from "@renderer/lib/escape-guard";
-import { useTicketSessionsStore } from "@renderer/stores/ticket-sessions";
+import { ticketScope, useSessionsStore } from "@renderer/stores/sessions";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { closeTicketSession } from "@renderer/terminal/session-lifecycle";
-import { getOrCreateEngine } from "@renderer/terminal/registry";
-
-/** Initial PTY grid; restty re-measures and resizes the shell within a frame. */
-const INITIAL_COLS = 80;
-const INITIAL_ROWS = 24;
 
 /**
  * The Doc/Artifacts tabs always present (decision #6, default tab on open is
@@ -41,18 +36,18 @@ const BASE_TABS: readonly TicketTabDescriptor[] = [
  */
 export function TicketDetail({
   projectId,
-  projectPath,
   ticketPrefix,
   ticket,
 }: {
   projectId: string;
+  /** Kept in the props contract for board-page; the PTY cwd now resolves in main. */
   projectPath: string;
   ticketPrefix: string;
   ticket: Ticket;
 }) {
   const closeTicket = useWorkspaceStore((state) => state.closeTicket);
-  const sessionTabs = useTicketSessionsStore((state) => state.byTicket[ticket.id]?.tabs);
-  const creating = useTicketSessionsStore((state) => state.startingTickets[ticket.id] ?? false);
+  const sessionTabs = useSessionsStore((state) => state.byOwner[ticket.id]?.tabs);
+  const creating = useSessionsStore((state) => state.starting[ticket.id] ?? false);
 
   // BASE_TABS + one session-kind descriptor per live session; routing below is
   // keyed off `kind`, not id, so the plane and content branch generically.
@@ -70,34 +65,13 @@ export function TicketDetail({
   const handleClose = React.useCallback(() => closeTicket(projectId), [closeTicket, projectId]);
 
   // Boots a ticket-scoped PTY (env-injected VOLLI_TICKET/VOLLI_TICKET_DIR in
-  // main, decision #16), registers its tab, and switches to it. The engine
-  // exists BEFORE the tab so output arriving between the create reply and the
-  // view's mount is buffered, not dropped.
+  // main, decision #16) as a resident tab, then switches to it. The terminal is
+  // hosted by the always-mounted sessions layer, so it survives leaving the
+  // detail; only the tab selection is local here.
   const createSession = React.useCallback(async () => {
-    const store = useTicketSessionsStore.getState();
-    if (store.startingTickets[ticket.id]) return;
-    store.setStarting(ticket.id, true);
-    try {
-      const result = await window.api.terminal.create({
-        workspaceId: projectId,
-        cwd: projectPath,
-        cols: INITIAL_COLS,
-        rows: INITIAL_ROWS,
-        ticket: { ticketId: ticket.id },
-      });
-      if (!result.ok) {
-        toast.error(`Could not start session: ${result.error}`);
-        return;
-      }
-      getOrCreateEngine(result.sessionId);
-      store.addSession(ticket.id, result.sessionId, result.session.title);
-      setActiveTabId(result.sessionId);
-    } catch (error) {
-      toast.error(`Could not start session: ${errorMessage(error)}`);
-    } finally {
-      store.setStarting(ticket.id, false);
-    }
-  }, [projectId, projectPath, ticket.id]);
+    const sessionId = await createTerminalSession(ticketScope(projectId, ticket.id));
+    if (sessionId !== null) setActiveTabId(sessionId);
+  }, [projectId, ticket.id]);
 
   // Escape closes the detail view and returns to the board — but only when
   // focus isn't inside an input/textarea/contenteditable or an open menu/

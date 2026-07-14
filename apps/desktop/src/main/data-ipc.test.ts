@@ -1,5 +1,6 @@
 import type {
   Result,
+  SessionRenameResult,
   SessionsResult,
   Ticket,
   TicketCommentResult,
@@ -290,6 +291,35 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
   });
 });
 
+describe("volli:session-rename", () => {
+  it("renames a session and persists the trimmed title", () => {
+    const projectId = createProject();
+    insertSession(ctx.db, testSession(projectId, null, { id: "s1", title: "Session 1" }));
+
+    const result = invoke<SessionRenameResult>("volli:session-rename", {
+      sessionId: "s1",
+      title: "  Renamed  ",
+    });
+    expect(result).toEqual({ ok: true });
+
+    const list = invoke<SessionsResult>("volli:session-list", { projectId });
+    expect(list.ok && list.sessions[0]?.title).toBe("Renamed");
+  });
+
+  it("rejects a blank title", () => {
+    expect(
+      invoke<SessionRenameResult>("volli:session-rename", { sessionId: "s1", title: "   " }),
+    ).toEqual({ ok: false, error: "Invalid session title" });
+  });
+
+  it("reports an unknown session", () => {
+    createProject();
+    expect(
+      invoke<SessionRenameResult>("volli:session-rename", { sessionId: "ghost", title: "X" }),
+    ).toEqual({ ok: false, error: "Unknown session" });
+  });
+});
+
 describe("degraded db handle", () => {
   it("every new channel resolves with the degraded error instead of throwing", () => {
     handlers.clear();
@@ -304,6 +334,12 @@ describe("degraded db handle", () => {
       error: "db is down",
     });
     expect(invoke<SessionsResult>("volli:session-list", { projectId: "x" })).toEqual({
+      ok: false,
+      error: "db is down",
+    });
+    expect(
+      invoke<SessionRenameResult>("volli:session-rename", { sessionId: "x", title: "Y" }),
+    ).toEqual({
       ok: false,
       error: "db is down",
     });

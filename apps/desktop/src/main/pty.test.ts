@@ -603,7 +603,7 @@ async function createTicketSession(ticketId: string, sender = makeWebContents())
 
 describe("ticket sessions", () => {
   beforeEach(() => {
-    insertTicket(testDb.db, testTicket("w", { id: "tk1", ticketNumber: 12, harnessId: "codex" }));
+    insertTicket(testDb.db, testTicket("w", { id: "tk1", ticketNumber: 12 }));
   });
 
   it("persists a ticket-scoped record, records session_started, and injects ticket env", async () => {
@@ -622,12 +622,13 @@ describe("ticket sessions", () => {
     // ensureTicketDir ran up front so an agent can write artifacts immediately.
     await expect(fs.stat(`${root}/.volli/tickets/VC-12/artifacts`)).resolves.toBeDefined();
 
-    // Durable record: ticket-scoped, the ticket's harness, per-ticket title.
+    // Durable record: ticket-scoped, the default harness (harness is no longer a
+    // ticket property — migration 004), per-ticket title.
     expect(result.session).toMatchObject({
       id: result.sessionId,
       projectId: "w",
       ticketId: "tk1",
-      harnessId: "codex",
+      harnessId: "claude-code",
       title: "Session 1",
       endedAt: null,
     });
@@ -644,7 +645,7 @@ describe("ticket sessions", () => {
       kind: "session_started",
       sessionId: result.sessionId,
       title: "Session 1",
-      harnessId: "codex",
+      harnessId: "claude-code",
     });
   });
 

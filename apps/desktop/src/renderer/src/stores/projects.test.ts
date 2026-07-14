@@ -3,8 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { toast } from "sonner";
 import { useBoardStore } from "./board";
 import { PROJECTS_UI_APP_STATE_KEY, type ProjectsGateway, createProjectsStore } from "./projects";
-import { useSessionsStore } from "./sessions";
-import { useTicketSessionsStore } from "./ticket-sessions";
+import { scratchScope, ticketScope, useSessionsStore } from "./sessions";
 import { useWorkspaceStore } from "./workspace";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
@@ -24,8 +23,7 @@ beforeEach(() => {
   });
   useBoardStore.setState({ ticketsByProject: {}, labelsByProject: {} });
   useWorkspaceStore.setState({ byProject: {} });
-  useSessionsStore.setState({ byProject: {}, startingProjects: {} });
-  useTicketSessionsStore.setState({ byTicket: {}, lastOutputAt: {}, startingTickets: {} });
+  useSessionsStore.setState({ byOwner: {}, sessionOwner: {}, lastOutputAt: {}, starting: {} });
 });
 
 afterEach(() => {
@@ -274,11 +272,11 @@ describe("removeProject", () => {
     const only = project({ id: "only", path: "/a" });
     const { store } = freshStore();
     store.getState().hydrate([only], only.id);
-    useSessionsStore.getState().addSession(only.id, "s1");
+    useSessionsStore.getState().addSession(scratchScope(only.id), "s1");
 
     await store.getState().removeProject(only.id);
 
-    expect(useSessionsStore.getState().byProject[only.id]).toBeUndefined();
+    expect(useSessionsStore.getState().byOwner[only.id]).toBeUndefined();
     expect(kill).toHaveBeenCalledWith("s1");
   });
 
@@ -297,11 +295,11 @@ describe("removeProject", () => {
       ticketsByProject: { only: [{ id: "tk1" } as Ticket] },
       labelsByProject: {},
     });
-    useTicketSessionsStore.getState().addSession("tk1", "ts1", "Session 1");
+    useSessionsStore.getState().addSession(ticketScope(only.id, "tk1"), "ts1", "Session 1");
 
     await store.getState().removeProject(only.id);
 
-    expect(useTicketSessionsStore.getState().byTicket["tk1"]).toBeUndefined();
+    expect(useSessionsStore.getState().byOwner["tk1"]).toBeUndefined();
     expect(kill).toHaveBeenCalledWith("ts1");
   });
 

@@ -50,6 +50,7 @@ export type VolliIpcChannel =
   | "volli:comment-remove"
   | "volli:session-list"
   | "volli:session-list-for-ticket"
+  | "volli:session-rename"
   | "volli:label-set-color"
   | "volli:app-state-set"
   | "volli:artifact-list"
@@ -174,6 +175,9 @@ export type TicketCommentsResult = Result<{ comments: TicketComment[] }>;
 
 /** A project's or a ticket's durable session records, newest first — returned by `session-list`/`session-list-for-ticket`. */
 export type SessionsResult = Result<{ sessions: SessionRecord[] }>;
+
+/** Ack for a session title rename (`session-rename`); the caller already holds the new title optimistically. */
+export type SessionRenameResult = Result;
 
 // ---- artifacts (.volli filesystem, ticket-detail-mvp decisions #13-17) --
 

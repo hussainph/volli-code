@@ -10,6 +10,7 @@ import {
   listSessions,
   listTicketSessions,
   setHarnessSessionId,
+  updateTitle,
 } from "./sessions-repo";
 import { openTestDb, testProject, testSession, testTicket } from "./test-helpers";
 import type { TestDb } from "./test-helpers";
@@ -117,6 +118,23 @@ describe("endSession", () => {
   });
 });
 
+describe("updateTitle", () => {
+  it("renames a session and reports one row changed", () => {
+    const { projectId } = setup();
+    const session = testSession(projectId, null, { title: "Session 1" });
+    insertSession(ctx.db, session);
+
+    expect(updateTitle(ctx.db, session.id, "Renamed")).toBe(1);
+    expect(listSessions(ctx.db, projectId)[0]?.title).toBe("Renamed");
+  });
+
+  it("reports zero rows changed for an unknown session", () => {
+    const { projectId } = setup();
+    expect(updateTitle(ctx.db, "ghost", "Nope")).toBe(0);
+    expect(listSessions(ctx.db, projectId)).toEqual([]);
+  });
+});
+
 describe("setHarnessSessionId", () => {
   it("fills in the harness resume/session UUID", () => {
     const { projectId } = setup();
@@ -174,11 +192,11 @@ describe("session counts", () => {
 });
 
 describe("getTicketSessionContext", () => {
-  it("resolves a ticket to its project path, prefix, number, and harness", () => {
+  it("resolves a ticket to its project path, prefix, and number", () => {
     ctx = openTestDb();
     const project = testProject({ path: "/repo/app", ticketPrefix: "APP" });
     insertProject(ctx.db, project);
-    const ticket = testTicket(project.id, { ticketNumber: 7, harnessId: "opencode" });
+    const ticket = testTicket(project.id, { ticketNumber: 7 });
     insertTicket(ctx.db, ticket);
 
     expect(getTicketSessionContext(ctx.db, ticket.id)).toEqual({
@@ -186,7 +204,6 @@ describe("getTicketSessionContext", () => {
       projectPath: "/repo/app",
       ticketPrefix: "APP",
       ticketNumber: 7,
-      harnessId: "opencode",
     });
   });
 

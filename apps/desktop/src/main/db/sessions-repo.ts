@@ -117,7 +117,6 @@ export interface TicketSessionContext {
   projectPath: string;
   ticketPrefix: string;
   ticketNumber: number;
-  harnessId: string;
 }
 
 export function getTicketSessionContext(
@@ -129,12 +128,20 @@ export function getTicketSessionContext(
     `SELECT t.project_id     AS projectId,
             p.path           AS projectPath,
             p.ticket_prefix  AS ticketPrefix,
-            t.ticket_number  AS ticketNumber,
-            t.harness_id     AS harnessId
+            t.ticket_number  AS ticketNumber
        FROM tickets t
        JOIN projects p ON p.id = t.project_id
       WHERE t.id = ?`,
   ).get(ticketId);
+}
+
+/**
+ * Renames a session (both scratch and ticket-scoped). `title` must already be
+ * trimmed and non-empty — the IPC handler enforces that before calling. Returns
+ * the number of rows changed so the caller can detect an unknown session id.
+ */
+export function updateTitle(db: Database.Database, sessionId: string, title: string): number {
+  return prepared(db, "UPDATE sessions SET title = ? WHERE id = ?").run(title, sessionId).changes;
 }
 
 /** Fills in the harness's own resume/session UUID once the harness reports it (hooks/the volli CLI). */
