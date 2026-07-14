@@ -63,7 +63,9 @@ export function TicketDetail({
       const target = event.target;
       if (
         target instanceof Element &&
-        target.closest("input, textarea, [contenteditable], [role=menu], [role=dialog]") !== null
+        target.closest(
+          "input, textarea, [contenteditable], [role=menu], [role=dialog], [role=alertdialog]",
+        ) !== null
       ) {
         return;
       }
@@ -94,7 +96,7 @@ export function TicketDetail({
             activeTab.kind === "doc" ? (
               <TicketDocTab ticket={ticket} />
             ) : activeTab.kind === "artifacts" ? (
-              <TicketArtifactsTab />
+              <TicketArtifactsTab projectId={projectId} ticketId={ticket.id} />
             ) : null /* step 6: a "session" tab renders that session's terminal pane */
           }
         </div>

@@ -493,6 +493,27 @@ describe("updateTicket", () => {
     expect(store.getState().ticketsByProject.p1?.[0]?.branch).toBeNull();
   });
 
+  it("optimistically patches body and worktree-identity fields together", () => {
+    const a = ticket({ id: "a", projectId: "p1", status: "backlog", body: "old body" });
+    const gateway = fakeGateway({
+      updateTicket: vi.fn<BoardGateway["updateTicket"]>(() => new Promise<TicketResult>(() => {})),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a] }, {});
+
+    void store.getState().updateTicket({
+      ticketId: "a",
+      body: "fresh body",
+      worktreePath: "/tmp/wt",
+      baseBranch: "main",
+    });
+
+    const patched = store.getState().ticketsByProject.p1?.[0];
+    expect(patched?.body).toBe("fresh body");
+    expect(patched?.worktreePath).toBe("/tmp/wt");
+    expect(patched?.baseBranch).toBe("main");
+  });
+
   it("leaves fields the caller didn't pass untouched in the optimistic patch", () => {
     const a = ticket({
       id: "a",
