@@ -19,14 +19,63 @@ import {
   USER_ACTOR,
   type TicketComment,
   type TicketEvent,
+  type TicketEventKind,
   type TicketEventPayload,
   type WorktreeIdentity,
 } from "@volli/shared";
 
-/** One entry in the merged feed: either a property-change one-liner or a comment block. */
+/**
+ * Consecutive events merge into one bunch row; a bunch only breaks at a comment
+ * or when consecutive events are separated by a quiet gap longer than this.
+ */
+export const BUNCH_GAP_MS = 60 * 60 * 1000;
+
+/**
+ * Which event kind fronts a bunch, highest signal first. The bunch's visible
+ * one-liner is its highest-priority event (ties → the latest occurrence).
+ * `commented` never appears (dropped before bunching — its comment renders
+ * instead). Exported so the labelling contract is pinned by unit tests.
+ */
+export const EVENT_KIND_PRIORITY: readonly TicketEventKind[] = [
+  "status_changed",
+  "session_started",
+  "session_ended",
+  "created",
+  "retitled",
+  "priority_changed",
+  "labels_changed",
+  "worktree_changed",
+  "archived",
+  "unarchived",
+  "body_edited",
+];
+
+/**
+ * One entry in the merged feed: a comment block, or a bunch of consecutive
+ * events rendered as one row. A bunch's `label` is its highest-priority event
+ * (see `EVENT_KIND_PRIORITY`), its `at` is its latest event's timestamp, and
+ * `events` holds the whole run chronologically (label included) for the
+ * expanded view.
+ */
 export type FeedItem =
-  | { kind: "event"; id: string; at: number; event: TicketEvent }
-  | { kind: "comment"; id: string; at: number; comment: TicketComment };
+  | { kind: "comment"; id: string; at: number; comment: TicketComment }
+  | { kind: "bunch"; id: string; at: number; label: TicketEvent; events: TicketEvent[] };
+
+/**
+ * The event that fronts a bunch: the highest-priority kind present, and among
+ * same-kind ties the LATEST occurrence. `events` must be non-empty and
+ * chronological (as `buildActivityFeed` produces).
+ */
+export function pickBunchLabel(events: readonly TicketEvent[]): TicketEvent {
+  for (const kind of EVENT_KIND_PRIORITY) {
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i]!.payload.kind === kind) return events[i]!;
+    }
+  }
+  // Unreachable for real bunches (`commented` is filtered before bunching),
+  // but degrade to the latest event rather than throwing.
+  return events[events.length - 1]!;
+}
 
 const AGENT_PREFIX = "agent:";
 
@@ -99,23 +148,60 @@ export function describeEvent(payload: TicketEventPayload): string | null {
   }
 }
 
+/** A merged, not-yet-grouped feed entry (chronologically sorted before grouping). */
+type MergedEntry =
+  | { at: number; kind: "event"; event: TicketEvent }
+  | { at: number; kind: "comment"; comment: TicketComment };
+
 /**
- * Merges events and comments into one chronological (oldest-first) feed.
- * `commented` events are dropped (their comment renders instead). Sorts by
- * timestamp; ties keep input order (events before comments), so the result is
- * deterministic for a given DB read.
+ * Merges events and comments into one chronological (oldest-first) feed, then
+ * bunches it: ALL consecutive events (any kind) merge into a single `bunch`
+ * item, breaking only at a comment or at a quiet gap of more than
+ * `BUNCH_GAP_MS` between consecutive events. `commented` events are dropped
+ * (their comment renders instead). Sorts by timestamp; ties keep input order
+ * (events before comments), so the result is deterministic for a given DB read.
  */
 export function buildActivityFeed(
   events: readonly TicketEvent[],
   comments: readonly TicketComment[],
 ): FeedItem[] {
-  const items: FeedItem[] = [];
+  const merged: MergedEntry[] = [];
   for (const event of events) {
     if (event.payload.kind === "commented") continue;
-    items.push({ kind: "event", id: event.id, at: event.createdAt, event });
+    merged.push({ at: event.createdAt, kind: "event", event });
   }
   for (const comment of comments) {
-    items.push({ kind: "comment", id: comment.id, at: comment.createdAt, comment });
+    merged.push({ at: comment.createdAt, kind: "comment", comment });
   }
-  return items.toSorted((a, b) => a.at - b.at);
+  const sorted = merged.toSorted((a, b) => a.at - b.at);
+
+  const feed: FeedItem[] = [];
+  let bunch: TicketEvent[] = []; // the open run of consecutive events, chronological
+
+  function flushBunch() {
+    if (bunch.length === 0) return;
+    const latest = bunch[bunch.length - 1]!;
+    feed.push({
+      kind: "bunch",
+      id: `bunch:${bunch[0]!.id}`,
+      at: latest.createdAt,
+      label: pickBunchLabel(bunch),
+      events: bunch,
+    });
+    bunch = [];
+  }
+
+  for (const entry of sorted) {
+    if (entry.kind === "comment") {
+      flushBunch();
+      feed.push({ kind: "comment", id: entry.comment.id, at: entry.at, comment: entry.comment });
+      continue;
+    }
+    const last = bunch[bunch.length - 1];
+    if (last !== undefined && entry.at - last.createdAt > BUNCH_GAP_MS) flushBunch();
+    bunch.push(entry.event);
+  }
+  flushBunch();
+
+  return feed;
 }

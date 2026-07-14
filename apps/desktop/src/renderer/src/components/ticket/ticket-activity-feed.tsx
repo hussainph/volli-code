@@ -2,6 +2,7 @@ import * as React from "react";
 import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
 import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
 import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
+import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { FlagIcon } from "@phosphor-icons/react/dist/csr/Flag";
 import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
@@ -64,16 +65,79 @@ const EVENT_ICON: Record<TicketEventKind, PhosphorIcon> = {
   worktree_changed: GitBranchIcon,
 };
 
-/** A muted, single-line property-change entry: icon + human sentence + relative time. */
-function EventRow({ event }: { event: TicketEvent }) {
+/** The single muted line for one property-change event: icon + sentence + time. */
+function EventLine({ event, muted = false }: { event: TicketEvent; muted?: boolean }) {
   const Icon = EVENT_ICON[event.payload.kind];
   const sentence = describeEvent(event.payload);
   if (sentence === null) return null; // defensive: `commented` is filtered upstream
   return (
-    <li className="flex items-center gap-2 px-1 text-xs text-muted-foreground">
-      <Icon weight="fill" className="size-3.5 shrink-0" />
+    <div
+      className={cn(
+        "flex items-center gap-2 px-1 text-xs",
+        muted ? "text-muted-foreground/70" : "text-muted-foreground",
+      )}
+    >
+      <Icon weight="fill" className={cn("shrink-0", muted ? "size-3" : "size-3.5")} />
       <span className="min-w-0 truncate">{sentence}</span>
       <span className="shrink-0 text-muted-foreground/70">· {relativeTime(event.createdAt)}</span>
+    </div>
+  );
+}
+
+/** The expanded bunch: the whole run, threaded, as de-emphasised one-liners. */
+function BunchEventList({ events }: { events: readonly TicketEvent[] }) {
+  return (
+    <ul className="mt-1 ml-2 flex flex-col gap-1 border-l border-border/70 pl-2.5">
+      {events.map((event) => (
+        <li key={event.id}>
+          <EventLine event={event} muted />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * One bunch of consecutive events as a single feed row: the highest-priority
+ * event's icon + sentence front the row, and (for multi-event bunches) a quiet
+ * "+N more ⌄" affordance BEFORE the timestamp expands the whole run in place
+ * (local, collapsible state). A single-event bunch is just a plain row.
+ */
+function BunchRow({
+  label,
+  at,
+  events,
+}: {
+  label: TicketEvent;
+  at: number;
+  events: TicketEvent[];
+}) {
+  const [expanded, setExpanded] = React.useState(false);
+  const sentence = describeEvent(label.payload);
+  if (sentence === null) return null; // defensive: `commented` is filtered upstream
+  const Icon = EVENT_ICON[label.payload.kind];
+  const hidden = events.length - 1;
+  return (
+    <li className="flex flex-col">
+      <div className="flex items-center gap-2 px-1 text-xs text-muted-foreground">
+        <Icon weight="fill" className="size-3.5 shrink-0" />
+        <span className="min-w-0 truncate">{sentence}</span>
+        {hidden > 0 ? (
+          <button
+            type="button"
+            onClick={() => setExpanded((value) => !value)}
+            aria-expanded={expanded}
+            className="flex shrink-0 items-center gap-0.5 rounded-sm text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+          >
+            {expanded ? "less" : `+${hidden} more`}
+            <CaretDownIcon
+              className={cn("size-3 shrink-0 transition-transform", expanded && "rotate-180")}
+            />
+          </button>
+        ) : null}
+        <span className="shrink-0 text-muted-foreground/70">· {relativeTime(at)}</span>
+      </div>
+      {expanded && hidden > 0 ? <BunchEventList events={events} /> : null}
     </li>
   );
 }
@@ -266,9 +330,10 @@ function Composer({ onSubmit }: { onSubmit: (body: string) => Promise<boolean> }
 /**
  * The Doc tab's Activity feed (ticket-detail-mvp step 4): fetches the ticket's
  * event log + comments on open, merges them into one chronological stream
- * (property changes as muted one-liners, comments as full typeset blocks), and
- * hosts the composer. Every comment mutation refetches both so the feed stays
- * authoritative; optimistic appends keep it responsive in between.
+ * (consecutive events bunched into single expandable rows, comments as full
+ * typeset blocks), and hosts the composer. Every comment mutation refetches
+ * both so the feed stays authoritative; optimistic appends keep it responsive
+ * in between.
  */
 export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
   const ticketId = ticket.id;
@@ -361,8 +426,8 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
       ) : (
         <ul className="flex flex-col gap-2.5">
           {feed.map((item) =>
-            item.kind === "event" ? (
-              <EventRow key={item.id} event={item.event} />
+            item.kind === "bunch" ? (
+              <BunchRow key={item.id} label={item.label} at={item.at} events={item.events} />
             ) : (
               <CommentBlock
                 key={item.id}
