@@ -551,6 +551,23 @@ describe("archiveTicket", () => {
 
     expect(store.getState().ticketsByProject.p1!.map((t) => t.id)).toEqual(["b"]);
   });
+
+  it("does not duplicate the card when a concurrent mutation already restored it before a failed archive", async () => {
+    const a = ticket({ id: "a", status: "doing" });
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a] }, {});
+    // A concurrent authoritative merge put `a` back before the failure lands —
+    // the revert must be a no-op, not a second copy.
+    vi.mocked(gateway.archiveTicket).mockImplementation(async () => {
+      store.setState({ ticketsByProject: { p1: [a] } });
+      return { ok: false, error: "conflict" };
+    });
+
+    await store.getState().archiveTicket("p1", "a");
+
+    expect(store.getState().ticketsByProject.p1!.map((t) => t.id)).toEqual(["a"]);
+  });
 });
 
 describe("unarchiveTicket", () => {
@@ -616,7 +633,9 @@ describe("unarchiveTicket", () => {
     const revived = ticket({ id: "a", status: "done" });
     const gateway = fakeGateway();
     const store = createBoardStore(gateway);
-    store.getState().hydrate({ p1: [] }, {});
+    // The board already holds the revived ticket (e.g. the same race healed a
+    // moment earlier) — the success append must dedupe, not double it.
+    store.getState().hydrate({ p1: [revived] }, {});
     store.setState({ archivedByProject: { p1: [archived] } });
     // A loadArchived refetch snapshotted before the unarchive committed lands
     // between the optimistic drop and the ack, wholesale-setting the stale list.
@@ -628,7 +647,7 @@ describe("unarchiveTicket", () => {
     await store.getState().unarchiveTicket("p1", "a");
 
     expect(store.getState().archivedByProject.p1).toEqual([]);
-    expect(store.getState().ticketsByProject.p1).toContain(revived);
+    expect(store.getState().ticketsByProject.p1!.map((t) => t.id)).toEqual(["a"]);
   });
 
   it("is a no-op for a ticket not in the loaded Archive slice (no IPC call)", async () => {
@@ -639,6 +658,25 @@ describe("unarchiveTicket", () => {
     await store.getState().unarchiveTicket("p1", "does-not-exist");
 
     expect(gateway.unarchiveTicket).not.toHaveBeenCalled();
+  });
+
+  it("does not resurrect an Archive slice forgotten while the unarchive was in flight", async () => {
+    let settle!: (result: { ok: false; error: string }) => void;
+    const gateway = fakeGateway({
+      unarchiveTicket: vi.fn<BoardGateway["unarchiveTicket"]>(
+        () => new Promise((resolve) => (settle = resolve)),
+      ),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [] }, {});
+    store.setState({ archivedByProject: { p1: [archivedTicket({ id: "a", status: "done" })] } });
+
+    const pending = store.getState().unarchiveTicket("p1", "a");
+    store.getState().forget("p1"); // project removed mid-flight
+    settle({ ok: false, error: "conflict" });
+    await pending;
+
+    expect("p1" in store.getState().archivedByProject).toBe(false);
   });
 });
 
@@ -684,6 +722,21 @@ describe("deleteArchivedTicket", () => {
 
     await store.getState().deleteArchivedTicket("p1", "does-not-exist");
 
+    expect(gateway.deleteTicket).not.toHaveBeenCalled();
+  });
+});
+
+describe("archive lifecycle on a project with no loaded state", () => {
+  it("archive/unarchive/delete all no-op without an IPC call", async () => {
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+
+    await store.getState().archiveTicket("nope", "a");
+    await store.getState().unarchiveTicket("nope", "a");
+    await store.getState().deleteArchivedTicket("nope", "a");
+
+    expect(gateway.archiveTicket).not.toHaveBeenCalled();
+    expect(gateway.unarchiveTicket).not.toHaveBeenCalled();
     expect(gateway.deleteTicket).not.toHaveBeenCalled();
   });
 });
@@ -934,5 +987,52 @@ describe("createBoardStore() with the default gateway", () => {
     await store.getState().setTicketPriority("p1", "a", "high");
 
     expect(setPriority).toHaveBeenCalledWith({ ticketId: "a", priority: "high" });
+  });
+
+  it("archiveTicket calls window.api.tickets.archive", async () => {
+    const archive = vi.fn(async () => ({ ok: true as const }));
+    vi.stubGlobal("window", { api: { tickets: { archive } } });
+    const store = createBoardStore();
+    store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing" })] }, {});
+
+    await store.getState().archiveTicket("p1", "a");
+
+    expect(archive).toHaveBeenCalledWith({ ticketId: "a" });
+  });
+
+  it("unarchiveTicket calls window.api.tickets.unarchive", async () => {
+    const unarchive = vi.fn(async () => ({
+      ok: true as const,
+      ticket: ticket({ id: "a", status: "done" }),
+    }));
+    vi.stubGlobal("window", { api: { tickets: { unarchive } } });
+    const store = createBoardStore();
+    store.getState().hydrate({ p1: [] }, {});
+    store.setState({ archivedByProject: { p1: [archivedTicket({ id: "a", status: "done" })] } });
+
+    await store.getState().unarchiveTicket("p1", "a");
+
+    expect(unarchive).toHaveBeenCalledWith({ ticketId: "a" });
+  });
+
+  it("deleteArchivedTicket calls window.api.tickets.delete", async () => {
+    const del = vi.fn(async () => ({ ok: true as const }));
+    vi.stubGlobal("window", { api: { tickets: { delete: del } } });
+    const store = createBoardStore();
+    store.setState({ archivedByProject: { p1: [archivedTicket({ id: "a", status: "done" })] } });
+
+    await store.getState().deleteArchivedTicket("p1", "a");
+
+    expect(del).toHaveBeenCalledWith({ ticketId: "a" });
+  });
+
+  it("loadArchived calls window.api.tickets.listArchived", async () => {
+    const listArchived = vi.fn(async () => ({ ok: true as const, tickets: [] }));
+    vi.stubGlobal("window", { api: { tickets: { listArchived } } });
+    const store = createBoardStore();
+
+    await store.getState().loadArchived("p1");
+
+    expect(listArchived).toHaveBeenCalledWith("p1");
   });
 });
