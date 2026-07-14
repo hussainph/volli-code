@@ -18,8 +18,9 @@
  *      hydrates at boot) and assert they render.
  *   C. The board UI a user touches — collapsed-column rail, search, the
  *      priority + label facets, cross-column and pill drag-and-drop, the
- *      column composer, the non-destructive context menu, the Ordering
- *      dropdown, the board/list view toggle (list-view add + drag parity),
+ *      column composer, the non-destructive context menu, priority mutation
+ *      reconcile + persistence, the Ordering dropdown, the board/list view
+ *      toggle (list-view add + drag parity),
  *      the sidebar's Active Sessions, the chrome-static UI zoom (uiScale now
  *      read back from SQLite `app_state`, not localStorage), and the global
  *      New-ticket dialog ("c" hotkey, chrome-search guard, header button).
@@ -670,6 +671,7 @@ async function main() {
       );
       const destructive = await page.getByRole("menuitem", { name: "Delete", exact: true }).count();
       await page.keyboard.press("Escape");
+      await page.keyboard.press("Escape");
       const ok =
         rootCount === 3 &&
         rootRowsWithIcons === rootCount &&
@@ -683,6 +685,45 @@ async function main() {
         detail: `root=${rootRowsWithIcons}/${rootCount} move=${moveRowsWithIcons}/${moveCount} priority=${priorityRowsWithIcons}/${priorityCount} delete=${destructive}`,
       };
     });
+
+    // === 11.5. Priority mutation reconciles immediately and survives reload =
+    await attempt(
+      11.5,
+      "Priority context action: indicator updates immediately and survives reload",
+      async () => {
+        const before = await cardById(page, "VC-12")
+          .locator('[role="img"][aria-label^="Priority:"]')
+          .getAttribute("aria-label");
+
+        await cardById(page, "VC-12").click({ button: "right" });
+        await sleep(300);
+        await page.getByRole("menuitem", { name: "Priority", exact: true }).hover();
+        await page.getByRole("menuitem", { name: "High", exact: true }).click();
+        await sleep(400);
+
+        const afterMutation = await cardById(page, "VC-12")
+          .getByRole("img", { name: "Priority: High", exact: true })
+          .count();
+
+        await page.reload();
+        await page.waitForLoadState("domcontentloaded");
+        await sleep(1500);
+        await goToBoard(page);
+
+        const afterReload = await cardById(page, "VC-12")
+          .getByRole("img", { name: "Priority: High", exact: true })
+          .count();
+        const ok =
+          before !== null &&
+          before !== "Priority: High" &&
+          afterMutation === 1 &&
+          afterReload === 1;
+        return {
+          ok,
+          detail: `before=${JSON.stringify(before)} highAfterMutation=${afterMutation} highAfterReload=${afterReload}`,
+        };
+      },
+    );
 
     // Board state entering the second-generation surface checks: Backlog 3
     // [VC-3, VC-4, VC-12], Todo 3 [VC-5, VC-6, VC-7], Doing 3, Needs Review 2,
