@@ -14,6 +14,7 @@ import {
   useSessionsStore,
   type SessionPane,
 } from "../stores/sessions";
+import { useTicketSessionsStore } from "../stores/ticket-sessions";
 import { disposeEngine } from "./registry";
 
 /** Close one tab and every independent pane session it owns. */
@@ -45,6 +46,31 @@ export function closeTerminalPane(projectId: string, tabId: string, sessionId: s
   useSessionsStore.getState().closePane(projectId, tabId, sessionId);
   disposeEngine(sessionId);
   killIfLive(pane);
+}
+
+/** Close one ticket-session tab and kill its PTY — kill-on-close, matching the sessions surface. */
+export function closeTicketSession(ticketId: string, sessionId: string): void {
+  const tab = useTicketSessionsStore
+    .getState()
+    .byTicket[ticketId]?.tabs.find((candidate) => candidate.sessionId === sessionId);
+  useTicketSessionsStore.getState().closeSession(ticketId, sessionId);
+  if (tab === undefined) return;
+  for (const pane of sessionPanes(tab.layout)) {
+    disposeEngine(pane.sessionId);
+    killIfLive(pane);
+  }
+}
+
+/** Tear down every ticket session of a ticket (e.g. its project was removed). */
+export function killTicketSessions(ticketId: string): void {
+  const tabs = useTicketSessionsStore.getState().byTicket[ticketId]?.tabs ?? [];
+  for (const tab of tabs) {
+    for (const pane of sessionPanes(tab.layout)) {
+      disposeEngine(pane.sessionId);
+      killIfLive(pane);
+    }
+  }
+  useTicketSessionsStore.getState().forgetTicket(ticketId);
 }
 
 /** Tear down every session of a removed project, whether or not views are mounted. */

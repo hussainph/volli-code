@@ -21,7 +21,7 @@ import {
 import { toast } from "sonner";
 import { create } from "zustand";
 
-import { killProjectSessions } from "@renderer/terminal/session-lifecycle";
+import { killProjectSessions, killTicketSessions } from "@renderer/terminal/session-lifecycle";
 
 import { useBoardStore } from "./board";
 import { writeThrough } from "./mutate";
@@ -133,6 +133,11 @@ export function createProjectsStore(gateway: ProjectsGateway = defaultGateway) {
       // each live PTY and disposes its engine explicitly — teardown does
       // NOT depend on a terminal view being mounted — then drops the
       // project's session record.
+      // Ticket sessions are keyed by ticketId, so tear them down from the
+      // project's live tickets BEFORE the board forgets them (and their ids).
+      for (const ticket of useBoardStore.getState().ticketsByProject[id] ?? []) {
+        killTicketSessions(ticket.id);
+      }
       useWorkspaceStore.getState().forget(id);
       useBoardStore.getState().forget(id);
       killProjectSessions(id);

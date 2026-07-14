@@ -13,6 +13,7 @@ import {
   useSessionsStore,
   type TerminalSplitDirection,
 } from "@renderer/stores/sessions";
+import { useTicketSessionsStore } from "@renderer/stores/ticket-sessions";
 import { cn } from "@renderer/lib/utils";
 import { disposeEngine, getEngine, getOrCreateEngine } from "@renderer/terminal/registry";
 import { adjacentPaneId, type TerminalFocusDirection } from "@renderer/terminal/pane-navigation";
@@ -54,19 +55,23 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
   // hold zero sessions without the effect respawning one.
   const autoOpenedRef = React.useRef(new Set<string>());
 
-  // The single subscription to the shared PTY streams: fan output out to the
-  // matching engine (lookup ONLY — creating here would leak engines for events
-  // racing a close), and record exits on whichever tab owns the session. Every
-  // chunk is acked regardless: main's flow-control bookkeeping must not starve
-  // when no engine exists.
+  // The single subscription to the shared PTY streams (this layer is always
+  // mounted, so it owns the app-wide fan-out for BOTH project scratch sessions
+  // and ticket sessions): fan output out to the matching engine (lookup ONLY —
+  // creating here would leak engines for events racing a close), bump the
+  // owning ticket session's activity, and record exits on whichever store owns
+  // the session (each self-scopes; a miss is a harmless no-op). Every chunk is
+  // acked exactly once here: main's flow-control bookkeeping must not starve.
   React.useEffect(() => {
     const offData = window.api.terminal.onData((event) => {
       getEngine(event.sessionId)?.write(event.data);
       window.api.terminal.ack(event.sessionId, event.data.length);
+      useTicketSessionsStore.getState().bumpOutput(event.sessionId, Date.now());
     });
-    const offExit = window.api.terminal.onExit((event) =>
-      markExited(event.sessionId, event.exitCode),
-    );
+    const offExit = window.api.terminal.onExit((event) => {
+      markExited(event.sessionId, event.exitCode);
+      useTicketSessionsStore.getState().markExited(event.sessionId, event.exitCode);
+    });
     return () => {
       offData();
       offExit();

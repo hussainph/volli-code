@@ -1,7 +1,12 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
-import type { CreateTerminalSessionResult, TerminalIoResult, VolliIpcChannel } from "@volli/shared";
+import type {
+  CreateTerminalSessionResult,
+  Project,
+  TerminalIoResult,
+  VolliIpcChannel,
+} from "@volli/shared";
 import {
   afterAll,
   afterEach,
@@ -43,6 +48,11 @@ vi.mock("electron", () => ({
 vi.mock("node-pty", () => ({ spawn }));
 
 import { registerTerminalIpcHandlers } from "./pty";
+import { listTicketEvents } from "./db/events-repo";
+import { insertProject } from "./db/projects-repo";
+import { listSessions, listTicketSessions } from "./db/sessions-repo";
+import { openTestDb, testProject, testTicket, type TestDb } from "./db/test-helpers";
+import { insertTicket } from "./db/tickets-repo";
 import { syncProjectRoots } from "./project-roots";
 
 /** A node-pty double whose onData/onExit callbacks can be fired on demand. */
@@ -129,6 +139,8 @@ const flushBatchWindow = () => vi.advanceTimersByTime(8);
 let root: string;
 let outside: string;
 let manager: ReturnType<typeof registerTerminalIpcHandlers>;
+let testDb: TestDb;
+let project: Project;
 
 /** Spawns a session and returns its id plus the fake pty backing it. */
 async function createSession(sender = makeWebContents()) {
@@ -156,13 +168,20 @@ afterAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Every session persists a durable record, so the manager needs a real,
+  // migrated db. The workspace ("w") must be a real project row (FK), rooted at
+  // `root` so scratch cwds and resolved ticket cwds land inside the synced root.
+  testDb = openTestDb();
+  project = testProject({ id: "w", path: root, ticketPrefix: "VC" });
+  insertProject(testDb.db, project);
   // Fresh manager + handlers each test (Map overwrites); reset roots.
-  manager = registerTerminalIpcHandlers();
+  manager = registerTerminalIpcHandlers({ ok: true, db: testDb.db });
   syncProjectRoots([root]);
 });
 
 afterEach(() => {
   vi.useRealTimers();
+  testDb.cleanup();
 });
 
 describe("volli:terminal-create", () => {
@@ -285,6 +304,9 @@ describe("volli:terminal-create", () => {
     ["a non-string workspaceId", { workspaceId: 1, cwd: "/x", cols: 80, rows: 24 }],
     ["a non-number cols", { workspaceId: "w", cwd: "/x", cols: "80", rows: 24 }],
     ["a non-number rows", { workspaceId: "w", cwd: "/x", cols: 80, rows: "24" }],
+    ["a non-object ticket", { workspaceId: "w", cwd: "/x", cols: 80, rows: 24, ticket: 42 }],
+    ["a null ticket", { workspaceId: "w", cwd: "/x", cols: 80, rows: 24, ticket: null }],
+    ["a ticket without ticketId", { workspaceId: "w", cwd: "/x", cols: 80, rows: 24, ticket: {} }],
   ])("rejects %s request without spawning", async (_label, req) => {
     const result = await invokeCreate(makeWebContents(), req);
     expect(result).toEqual({ ok: false, error: "Invalid terminal request" });
@@ -552,5 +574,163 @@ describe("lifecycle teardown", () => {
     pty.emitExit(0);
     expect(sender.removeListener).not.toHaveBeenCalled();
     expect(invokeKill(sessionId)).toEqual({ ok: false, error: "Unknown terminal session" });
+  });
+});
+
+/** The env captured by the most recent spawn call. */
+function lastSpawnEnv(): Record<string, string> {
+  const [, , options] = spawn.mock.calls.at(-1) as [
+    string,
+    string[],
+    { env: Record<string, string> },
+  ];
+  return options.env;
+}
+
+/** Spawns a ticket session for `ticketId` and returns its result + fake pty. */
+async function createTicketSession(ticketId: string, sender = makeWebContents()) {
+  const pty = makeFakePty();
+  spawn.mockReturnValueOnce(pty);
+  const result = await invokeCreate(sender, {
+    workspaceId: "w",
+    cwd: root,
+    cols: 80,
+    rows: 24,
+    ticket: { ticketId },
+  });
+  return { result, pty };
+}
+
+describe("ticket sessions", () => {
+  beforeEach(() => {
+    insertTicket(testDb.db, testTicket("w", { id: "tk1", ticketNumber: 12, harnessId: "codex" }));
+  });
+
+  it("persists a ticket-scoped record, records session_started, and injects ticket env", async () => {
+    const { result } = await createTicketSession("tk1");
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+
+    // VOLLI_TICKET / VOLLI_TICKET_DIR always point at the MAIN repo's .volli;
+    // ticket sessions run at the project root; TERM is still forced.
+    const env = lastSpawnEnv();
+    expect(env["VOLLI_TICKET"]).toBe("VC-12");
+    expect(env["VOLLI_TICKET_DIR"]).toBe(`${root}/.volli/tickets/VC-12`);
+    expect(env["TERM"]).toBe("xterm-256color");
+    const [, , options] = spawn.mock.calls[0] as [string, string[], { cwd: string }];
+    expect(options.cwd).toBe(root);
+
+    // ensureTicketDir ran up front so an agent can write artifacts immediately.
+    await expect(fs.stat(`${root}/.volli/tickets/VC-12/artifacts`)).resolves.toBeDefined();
+
+    // Durable record: ticket-scoped, the ticket's harness, per-ticket title.
+    expect(result.session).toMatchObject({
+      id: result.sessionId,
+      projectId: "w",
+      ticketId: "tk1",
+      harnessId: "codex",
+      title: "Session 1",
+      endedAt: null,
+    });
+    const rows = listTicketSessions(testDb.db, "tk1");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ id: result.sessionId, ticketId: "tk1", title: "Session 1" });
+
+    // session_started event in the same transaction.
+    const started = listTicketEvents(testDb.db, "tk1").filter(
+      (event) => event.payload.kind === "session_started",
+    );
+    expect(started).toHaveLength(1);
+    expect(started[0]?.payload).toEqual({
+      kind: "session_started",
+      sessionId: result.sessionId,
+      title: "Session 1",
+      harnessId: "codex",
+    });
+  });
+
+  it("numbers ticket session titles per-ticket from the existing count", async () => {
+    const first = await createTicketSession("tk1");
+    const second = await createTicketSession("tk1");
+    if (!first.result.ok || !second.result.ok) throw new Error("expected two sessions");
+    expect(first.result.session.title).toBe("Session 1");
+    expect(second.result.session.title).toBe("Session 2");
+  });
+
+  it("ends the record and records session_ended when a ticket session exits", async () => {
+    const { result, pty } = await createTicketSession("tk1");
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+
+    pty.emitExit(0);
+
+    expect(listTicketSessions(testDb.db, "tk1")[0]?.endedAt).not.toBeNull();
+    const ended = listTicketEvents(testDb.db, "tk1").filter(
+      (event) => event.payload.kind === "session_ended",
+    );
+    expect(ended).toHaveLength(1);
+    expect(ended[0]?.payload).toEqual({ kind: "session_ended", sessionId: result.sessionId });
+  });
+
+  it("rejects a ticket request naming an unknown ticket without spawning", async () => {
+    const result = await invokeCreate(makeWebContents(), {
+      workspaceId: "w",
+      cwd: root,
+      cols: 80,
+      rows: 24,
+      ticket: { ticketId: "ghost" },
+    });
+    expect(result).toEqual({ ok: false, error: "Unknown ticket" });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+});
+
+describe("scratch session persistence", () => {
+  it("persists a project-scoped record with ticketId null and no ticket env", async () => {
+    const { sessionId } = await createSession();
+
+    expect(lastSpawnEnv()["VOLLI_TICKET"]).toBeUndefined();
+
+    const rows = listSessions(testDb.db, "w");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      id: sessionId,
+      ticketId: null,
+      harnessId: "claude-code",
+      title: "Terminal 1",
+      endedAt: null,
+    });
+  });
+
+  it("ends a scratch record on exit without recording any ticket event", async () => {
+    const { sessionId, pty } = await createSession();
+    pty.emitExit(0);
+    const row = listSessions(testDb.db, "w").find((session) => session.id === sessionId);
+    expect(row?.endedAt).not.toBeNull();
+  });
+
+  it("kills the pty and errors when persistence fails (workspace is not a real project)", async () => {
+    const pty = makeFakePty();
+    spawn.mockReturnValueOnce(pty);
+    const result = await invokeCreate(makeWebContents(), {
+      workspaceId: "ghost", // no project row → the session insert violates its FK
+      cwd: root,
+      cols: 80,
+      rows: 24,
+    });
+    expect(result.ok).toBe(false);
+    expect(pty.kill).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("degraded database", () => {
+  it("reports the db-open error and never spawns when the database is unavailable", async () => {
+    registerTerminalIpcHandlers({ ok: false, error: "disk full" });
+    const result = await invokeCreate(makeWebContents(), {
+      workspaceId: "w",
+      cwd: root,
+      cols: 80,
+      rows: 24,
+    });
+    expect(result).toEqual({ ok: false, error: "disk full" });
+    expect(spawn).not.toHaveBeenCalled();
   });
 });

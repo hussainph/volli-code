@@ -2,17 +2,36 @@ import { app, ipcMain } from "electron";
 import type { WebContents } from "electron";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
-import { errorMessage, resolveShell } from "@volli/shared";
+import type Database from "better-sqlite3";
+import {
+  createSessionRecord,
+  DEFAULT_HARNESS_ID,
+  displayTicketId,
+  errorMessage,
+  resolveShell,
+  ticketSessionEnv,
+} from "@volli/shared";
 import type {
   CreateTerminalSessionRequest,
   CreateTerminalSessionResult,
+  HarnessId,
   TerminalDataEvent,
   TerminalExitEvent,
   TerminalIoResult,
   VolliIpcChannel,
   VolliIpcEvent,
 } from "@volli/shared";
+import type { DbHandle } from "./data-ipc";
+import { recordTicketEvent } from "./db/events-repo";
+import {
+  countProjectScratchSessions,
+  countTicketSessions,
+  endSession,
+  getTicketSessionContext,
+  insertSession,
+} from "./db/sessions-repo";
 import { isPathWithinRoots } from "./project-roots";
+import { ensureTicketDir } from "./volli-fs";
 
 // Structural subset of node-pty we depend on — declared here so nothing in
 // this module needs a value import of node-pty (whose native binary is built
@@ -74,6 +93,19 @@ interface Session {
   paused: boolean;
 }
 
+/** The db-resolved shape a PTY is spawned + persisted from (ticket or scratch). */
+interface SessionScope {
+  projectId: string;
+  ticketId: string | null;
+  harnessId: HarnessId;
+  cwd: string;
+  /** Extra env layered over the inherited environment (ticket vars, or none). */
+  env: Record<string, string>;
+  title: string;
+  /** Ticket sessions only: ensure this `.volli` dir before spawn. */
+  ticketDir: { projectPath: string; displayId: string } | null;
+}
+
 /**
  * Owns every live PTY, keyed by an opaque session id. Sessions are scoped to
  * the window that created them: output events go only to that window, and a
@@ -85,6 +117,17 @@ export class PtyManager {
   private readonly sessions = new Map<string, Session>();
 
   /**
+   * @param db      the app database, or `null` when it failed to open. Every
+   *                session persists a durable record, so with no db `create`
+   *                fails outright (surfacing {@link dbError}).
+   * @param dbError the open failure to report when `db` is `null`.
+   */
+  constructor(
+    private readonly db: Database.Database | null,
+    private readonly dbError: string,
+  ) {}
+
+  /**
    * Lazy dynamic import of node-pty. Isolated in a method so tests can
    * `vi.mock("node-pty")` and so the native module is touched only when a
    * session is actually created.
@@ -93,11 +136,61 @@ export class PtyManager {
     return import("node-pty") as unknown as Promise<NodePty>;
   }
 
+  /**
+   * Resolves a request to its session scope from the db: a ticket session
+   * (VOLLI_TICKET env, MAIN-repo-root cwd, the ticket's harness, `Session N`
+   * title) or a project-scoped scratch session (default harness, `Terminal N`).
+   * The only failure is a ticket request naming a ticket that does not exist.
+   */
+  private resolveScope(
+    db: Database.Database,
+    request: CreateTerminalSessionRequest,
+  ): { ok: true; scope: SessionScope } | { ok: false; error: string } {
+    if (request.ticket !== undefined) {
+      const ctx = getTicketSessionContext(db, request.ticket.ticketId);
+      if (ctx === undefined) return { ok: false, error: "Unknown ticket" };
+      const displayId = displayTicketId(ctx.ticketPrefix, ctx.ticketNumber);
+      return {
+        ok: true,
+        scope: {
+          projectId: ctx.projectId,
+          ticketId: request.ticket.ticketId,
+          harnessId: ctx.harnessId as HarnessId,
+          // Ticket sessions run at the MAIN repo root — worktree automation is
+          // future work, and VOLLI_TICKET_DIR always points at the main .volli.
+          cwd: ctx.projectPath,
+          env: ticketSessionEnv(ctx.projectPath, displayId),
+          title: `Session ${countTicketSessions(db, request.ticket.ticketId) + 1}`,
+          ticketDir: { projectPath: ctx.projectPath, displayId },
+        },
+      };
+    }
+    return {
+      ok: true,
+      scope: {
+        projectId: request.workspaceId,
+        ticketId: null,
+        harnessId: DEFAULT_HARNESS_ID,
+        cwd: request.cwd,
+        env: {},
+        title: `Terminal ${countProjectScratchSessions(db, request.workspaceId) + 1}`,
+        ticketDir: null,
+      },
+    };
+  }
+
   async create(
     webContents: WebContents,
     request: CreateTerminalSessionRequest,
   ): Promise<CreateTerminalSessionResult> {
-    const cwd = resolve(request.cwd);
+    const db = this.db;
+    if (db === null) return { ok: false, error: this.dbError };
+
+    const resolved = this.resolveScope(db, request);
+    if (!resolved.ok) return resolved;
+    const scope = resolved.scope;
+
+    const cwd = resolve(scope.cwd);
     // Same defense-in-depth stance as the filesystem handlers: never spawn a
     // shell rooted outside a registered project.
     if (!isPathWithinRoots(cwd)) {
@@ -112,22 +205,66 @@ export class PtyManager {
       if (webContents.isDestroyed()) {
         return { ok: false, error: "Window was closed before the terminal could start" };
       }
+      // Ticket sessions: ensure the ticket's `.volli` dir exists up front so an
+      // agent can write artifacts the instant its shell is live. A window
+      // closing during this await is caught by the post-spawn destroyed check.
+      if (scope.ticketDir !== null) {
+        await ensureTicketDir(scope.ticketDir.projectPath, scope.ticketDir.displayId);
+      }
       const { file, args } = resolveShell(process.env);
       const sessionId = randomUUID();
+      const now = Date.now();
       const pty = nodePty.spawn(file, args, {
         name: "xterm-256color",
         cwd,
         cols: request.cols,
         rows: request.rows,
-        // Inherit the user's environment; force TERM so the terminal
-        // emulator negotiates 256-color regardless of the parent's TERM.
-        env: { ...process.env, TERM: "xterm-256color" } as Record<string, string>,
+        // Inherit the user's environment; force TERM so the terminal emulator
+        // negotiates 256-color regardless of the parent's TERM; layer the ticket
+        // env (VOLLI_TICKET/VOLLI_TICKET_DIR) on top for ticket sessions.
+        env: { ...process.env, TERM: "xterm-256color", ...scope.env } as Record<string, string>,
       });
       // Same race, other side of the spawn: never register against a window
       // whose `destroyed` event already fired.
       if (webContents.isDestroyed()) {
         pty.kill();
         return { ok: false, error: "Window was closed before the terminal could start" };
+      }
+
+      // Persist the durable trace before wiring the session in; a ticket session
+      // also records `session_started` in the same transaction. A persist
+      // failure (e.g. workspaceId isn't a real project) must not leave an orphan
+      // shell — kill it and surface the error.
+      const record = createSessionRecord({
+        id: sessionId,
+        projectId: scope.projectId,
+        ticketId: scope.ticketId,
+        harnessId: scope.harnessId,
+        title: scope.title,
+        cwd,
+        now,
+      });
+      try {
+        const persist = db.transaction(() => {
+          insertSession(db, record);
+          if (record.ticketId !== null) {
+            recordTicketEvent(
+              db,
+              record.ticketId,
+              {
+                kind: "session_started",
+                sessionId: record.id,
+                title: record.title,
+                harnessId: record.harnessId,
+              },
+              now,
+            );
+          }
+        });
+        persist();
+      } catch (error) {
+        pty.kill();
+        return { ok: false, error: errorMessage(error) };
       }
 
       const onDestroyed = (): void => {
@@ -155,6 +292,17 @@ export class PtyManager {
         // Flush buffered output first so the renderer never sees the exit
         // event ahead of the shell's final bytes.
         this.flush(sessionId);
+        // Close out the durable record (and, for a ticket session, record
+        // `session_ended`) — runs whether the shell exited on its own or was
+        // killed, so the row never lingers as falsely-live.
+        const endedAt = Date.now();
+        const end = db.transaction(() => {
+          endSession(db, sessionId, endedAt);
+          if (record.ticketId !== null) {
+            recordTicketEvent(db, record.ticketId, { kind: "session_ended", sessionId }, endedAt);
+          }
+        });
+        end();
         if (!webContents.isDestroyed()) {
           const payload: TerminalExitEvent = { sessionId, exitCode };
           webContents.send("volli:terminal-exit" satisfies VolliIpcEvent, payload);
@@ -162,7 +310,7 @@ export class PtyManager {
         this.forget(sessionId);
       });
 
-      return { ok: true, sessionId };
+      return { ok: true, sessionId, session: record };
     } catch (error) {
       return { ok: false, error: errorMessage(error) };
     }
@@ -306,6 +454,13 @@ export class PtyManager {
 
 // ---- IPC wiring ------------------------------------------------------------
 
+/** `undefined` (scratch session) or a `{ ticketId: string }` object (ticket session). */
+function isOptionalTicket(value: unknown): value is { ticketId: string } | undefined {
+  if (value === undefined) return true;
+  if (typeof value !== "object" || value === null) return false;
+  return typeof (value as Record<string, unknown>)["ticketId"] === "string";
+}
+
 function isCreateRequest(value: unknown): value is CreateTerminalSessionRequest {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
@@ -313,7 +468,8 @@ function isCreateRequest(value: unknown): value is CreateTerminalSessionRequest 
     typeof candidate["workspaceId"] === "string" &&
     typeof candidate["cwd"] === "string" &&
     typeof candidate["cols"] === "number" &&
-    typeof candidate["rows"] === "number"
+    typeof candidate["rows"] === "number" &&
+    isOptionalTicket(candidate["ticket"])
   );
 }
 
@@ -323,8 +479,11 @@ function isCreateRequest(value: unknown): value is CreateTerminalSessionRequest 
  * at runtime — renderer-supplied types are never trusted — and returns a
  * typed result rather than throwing across the IPC boundary.
  */
-export function registerTerminalIpcHandlers(): PtyManager {
-  const manager = new PtyManager();
+export function registerTerminalIpcHandlers(handle: DbHandle): PtyManager {
+  // Every session persists a durable record, so the manager needs the db. When
+  // it failed to open, `create` reports the open error (write/kill/etc. operate
+  // on the — necessarily empty — live map and stay harmless no-ops).
+  const manager = handle.ok ? new PtyManager(handle.db, "") : new PtyManager(null, handle.error);
 
   ipcMain.handle(
     "volli:terminal-create" satisfies VolliIpcChannel,

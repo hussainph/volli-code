@@ -1,19 +1,28 @@
 import * as React from "react";
 import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
-import { displayTicketId, type Ticket } from "@volli/shared";
+import { displayTicketId, errorMessage, type Ticket } from "@volli/shared";
+import { toast } from "sonner";
 
 import { TicketArtifactsTab } from "@renderer/components/ticket/ticket-artifacts-tab";
 import { TicketDocTab } from "@renderer/components/ticket/ticket-doc-tab";
 import { TicketProperties } from "@renderer/components/ticket/ticket-properties";
+import { TicketSessionPlane } from "@renderer/components/ticket/ticket-session-plane";
 import { TicketSessionsPanel } from "@renderer/components/ticket/ticket-sessions-panel";
 import { TicketTabStrip, type TicketTabDescriptor } from "@renderer/components/ticket/ticket-tabs";
 import { TicketTitle } from "@renderer/components/ticket/ticket-title";
+import { useTicketSessionsStore } from "@renderer/stores/ticket-sessions";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { closeTicketSession } from "@renderer/terminal/session-lifecycle";
+import { getOrCreateEngine } from "@renderer/terminal/registry";
+
+/** Initial PTY grid; restty re-measures and resizes the shell within a frame. */
+const INITIAL_COLS = 80;
+const INITIAL_ROWS = 24;
 
 /**
  * The Doc/Artifacts tabs always present (decision #6, default tab on open is
- * Doc); step 6 appends one `"session"`-kind descriptor per linked session to
- * this array — see ticket-tabs.tsx's module doc for the data-driven contract.
+ * Doc); one `"session"`-kind descriptor is appended per linked live session —
+ * see ticket-tabs.tsx's module doc for the data-driven contract.
  */
 const BASE_TABS: readonly TicketTabDescriptor[] = [
   { id: "doc", kind: "doc", label: "Doc" },
@@ -26,28 +35,68 @@ const BASE_TABS: readonly TicketTabDescriptor[] = [
  * the global sessions layer and sidebar stay mounted around it (they live
  * higher up the tree, in main-content.tsx/app-shell.tsx). Layout: main column
  * (title → tab plane) + a right rail (properties → sessions), matching
- * decision #4.
+ * decision #4. The tab plane hosts the ticket's live terminals; those stay
+ * resident (engines outlive the view via the module registry, decision #8).
  */
 export function TicketDetail({
   projectId,
+  projectPath,
   ticketPrefix,
   ticket,
 }: {
   projectId: string;
+  projectPath: string;
   ticketPrefix: string;
   ticket: Ticket;
 }) {
   const closeTicket = useWorkspaceStore((state) => state.closeTicket);
-  // `tabs` is BASE_TABS today; step 6 appends one session-kind descriptor per
-  // linked session here (e.g. `[...BASE_TABS, ...sessionTabs]`) — the routing
-  // below is already keyed off `kind`, not tab id, so that extension needs no
-  // change here beyond a new `kind === "session"` branch.
-  const tabs = BASE_TABS;
+  const sessionTabs = useTicketSessionsStore((state) => state.byTicket[ticket.id]?.tabs);
+  const creating = useTicketSessionsStore((state) => state.startingTickets[ticket.id] ?? false);
+
+  // BASE_TABS + one session-kind descriptor per live session; routing below is
+  // keyed off `kind`, not id, so the plane and content branch generically.
+  const tabs: TicketTabDescriptor[] = [
+    ...BASE_TABS,
+    ...(sessionTabs ?? []).map(
+      (tab): TicketTabDescriptor => ({ id: tab.sessionId, kind: "session", label: tab.title }),
+    ),
+  ];
   const [activeTabId, setActiveTabId] = React.useState<string>(tabs[0]!.id);
+  // A closed session tab (or one that never existed) falls back to Doc.
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0]!;
   const displayId = displayTicketId(ticketPrefix, ticket.ticketNumber);
 
   const handleClose = React.useCallback(() => closeTicket(projectId), [closeTicket, projectId]);
+
+  // Boots a ticket-scoped PTY (env-injected VOLLI_TICKET/VOLLI_TICKET_DIR in
+  // main, decision #16), registers its tab, and switches to it. The engine
+  // exists BEFORE the tab so output arriving between the create reply and the
+  // view's mount is buffered, not dropped.
+  const createSession = React.useCallback(async () => {
+    const store = useTicketSessionsStore.getState();
+    if (store.startingTickets[ticket.id]) return;
+    store.setStarting(ticket.id, true);
+    try {
+      const result = await window.api.terminal.create({
+        workspaceId: projectId,
+        cwd: projectPath,
+        cols: INITIAL_COLS,
+        rows: INITIAL_ROWS,
+        ticket: { ticketId: ticket.id },
+      });
+      if (!result.ok) {
+        toast.error(`Could not start session: ${result.error}`);
+        return;
+      }
+      getOrCreateEngine(result.sessionId);
+      store.addSession(ticket.id, result.sessionId, result.session.title);
+      setActiveTabId(result.sessionId);
+    } catch (error) {
+      toast.error(`Could not start session: ${errorMessage(error)}`);
+    } finally {
+      store.setStarting(ticket.id, false);
+    }
+  }, [projectId, projectPath, ticket.id]);
 
   // Escape closes the detail view and returns to the board — but only when
   // focus isn't inside an input/textarea/contenteditable or an open menu/
@@ -89,20 +138,40 @@ export function TicketDetail({
         <span className="font-mono text-xs text-muted-foreground">{displayId}</span>
       </header>
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-6 pb-6">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-6 pb-6">
           <TicketTitle ticket={ticket} />
-          <TicketTabStrip tabs={tabs} activeTabId={activeTab.id} onSelectTab={setActiveTabId} />
-          {
-            activeTab.kind === "doc" ? (
-              <TicketDocTab ticket={ticket} />
-            ) : activeTab.kind === "artifacts" ? (
-              <TicketArtifactsTab projectId={projectId} ticketId={ticket.id} />
-            ) : null /* step 6: a "session" tab renders that session's terminal pane */
-          }
+          <TicketTabStrip
+            tabs={tabs}
+            activeTabId={activeTab.id}
+            onSelectTab={setActiveTabId}
+            onCloseSessionTab={(sessionId) => closeTicketSession(ticket.id, sessionId)}
+          />
+          {/* Positioning context for the resident terminal plane: Doc/Artifacts
+              scroll in-flow; the plane overlays them, shown only for a session tab. */}
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            {activeTab.kind === "doc" || activeTab.kind === "artifacts" ? (
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                {activeTab.kind === "doc" ? (
+                  <TicketDocTab ticket={ticket} />
+                ) : (
+                  <TicketArtifactsTab projectId={projectId} ticketId={ticket.id} />
+                )}
+              </div>
+            ) : null}
+            <TicketSessionPlane
+              ticketId={ticket.id}
+              activeSessionId={activeTab.kind === "session" ? activeTab.id : null}
+            />
+          </div>
         </div>
         <aside className="flex w-[300px] shrink-0 flex-col gap-6 overflow-y-auto border-l border-sidebar-border bg-sidebar px-4 py-5">
           <TicketProperties projectId={projectId} ticket={ticket} />
-          <TicketSessionsPanel />
+          <TicketSessionsPanel
+            ticketId={ticket.id}
+            creating={creating}
+            onNewSession={() => void createSession()}
+            onActivateSession={setActiveTabId}
+          />
         </aside>
       </div>
     </div>

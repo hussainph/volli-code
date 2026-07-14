@@ -37,7 +37,12 @@ export function BoardPage() {
 
   if (openTicketId !== null && ticket !== undefined) {
     return (
-      <TicketDetail projectId={project.id} ticketPrefix={project.ticketPrefix} ticket={ticket} />
+      <TicketDetail
+        projectId={project.id}
+        projectPath={project.path}
+        ticketPrefix={project.ticketPrefix}
+        ticket={ticket}
+      />
     );
   }
 

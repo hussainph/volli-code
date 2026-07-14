@@ -14,6 +14,12 @@ interface TerminalViewProps {
   visible: boolean;
   active: boolean;
   onActivate(): void;
+  /**
+   * Liveness probe read fresh on every forwarded event. Defaults to the project
+   * sessions store; the ticket tab plane passes a ticket-store probe so its PTYs
+   * forward keystrokes/resizes too. Must be stable (memoize at the call site).
+   */
+  getLive?: () => boolean;
 }
 
 /**
@@ -34,25 +40,28 @@ export function TerminalView({
   visible,
   active,
   onActivate,
+  getLive,
 }: TerminalViewProps) {
   const containerRef = React.useRef<HTMLDivElement>(null);
+
+  // Read liveness fresh on every event — main forgets the session on PTY exit,
+  // so forwarding for an exited tab would only toast "Unknown terminal session"
+  // at the user. A stale closure over the tab would keep forwarding forever.
+  // The ticket tab plane passes `getLive` (the ticket store's probe); the
+  // sessions surface leaves it undefined and falls back to the project store.
+  const isLive = React.useCallback(() => {
+    if (getLive !== undefined) return getLive();
+    const tab = useSessionsStore
+      .getState()
+      .byProject[projectId]?.tabs.find((candidate) => candidate.sessionId === tabId);
+    return tab !== undefined && findSessionPane(tab.layout, sessionId)?.exitCode === null;
+  }, [getLive, projectId, tabId, sessionId]);
 
   React.useEffect(() => {
     const container = containerRef.current;
     if (container === null) return;
 
     const engine = getOrCreateEngine(sessionId);
-
-    // Read liveness fresh on every event — main forgets the session on PTY
-    // exit, so forwarding for an exited tab would only toast "Unknown
-    // terminal session" at the user. A stale closure over the tab would
-    // keep forwarding forever.
-    const isLive = () => {
-      const tab = useSessionsStore
-        .getState()
-        .byProject[projectId]?.tabs.find((candidate) => candidate.sessionId === tabId);
-      return tab !== undefined && findSessionPane(tab.layout, sessionId)?.exitCode === null;
-    };
 
     // Keystrokes → PTY.
     const offData = engine.onData((data) => {
@@ -92,7 +101,7 @@ export function TerminalView({
       offData();
       offResize();
     };
-  }, [projectId, tabId, sessionId]);
+  }, [sessionId, isLive]);
 
   // Hidden terminals pause rendering; a GPU canvas measures as zero while
   // hidden, so reveal must unpause and refit. Focus is handled separately so

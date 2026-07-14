@@ -63,6 +63,64 @@ export function endSession(db: Database.Database, sessionId: string, endedAt: nu
   prepared(db, "UPDATE sessions SET ended_at = ? WHERE id = ?").run(endedAt, sessionId);
 }
 
+/**
+ * Boot recovery: a PTY never survives an app relaunch, so any row still marked
+ * live (`ended_at IS NULL`) is stale — stamp `ended_at = now` so the table
+ * never accumulates phantom "live" sessions. Returns the number of rows swept.
+ */
+export function endLiveSessions(db: Database.Database, now: number): number {
+  return prepared(db, "UPDATE sessions SET ended_at = ? WHERE ended_at IS NULL").run(now).changes;
+}
+
+/** Count of a ticket's sessions (live + ended) — seeds the per-ticket `Session N` title. */
+export function countTicketSessions(db: Database.Database, ticketId: string): number {
+  const row = prepared<[string], { count: number }>(
+    db,
+    "SELECT COUNT(*) AS count FROM sessions WHERE ticket_id = ?",
+  ).get(ticketId);
+  return row?.count ?? 0;
+}
+
+/** Count of a project's scratch sessions (`ticket_id IS NULL`) — seeds the `Terminal N` title. */
+export function countProjectScratchSessions(db: Database.Database, projectId: string): number {
+  const row = prepared<[string], { count: number }>(
+    db,
+    "SELECT COUNT(*) AS count FROM sessions WHERE project_id = ? AND ticket_id IS NULL",
+  ).get(projectId);
+  return row?.count ?? 0;
+}
+
+/**
+ * Everything main needs to boot a ticket-scoped PTY, resolved from the db in
+ * one JOIN so a live ticket always yields exactly one row (the FK guarantees
+ * its project exists) — collapsing "unknown ticket" to a single missing-row
+ * case for the caller. `undefined` when the ticket does not exist.
+ */
+export interface TicketSessionContext {
+  projectId: string;
+  projectPath: string;
+  ticketPrefix: string;
+  ticketNumber: number;
+  harnessId: string;
+}
+
+export function getTicketSessionContext(
+  db: Database.Database,
+  ticketId: string,
+): TicketSessionContext | undefined {
+  return prepared<[string], TicketSessionContext>(
+    db,
+    `SELECT t.project_id     AS projectId,
+            p.path           AS projectPath,
+            p.ticket_prefix  AS ticketPrefix,
+            t.ticket_number  AS ticketNumber,
+            t.harness_id     AS harnessId
+       FROM tickets t
+       JOIN projects p ON p.id = t.project_id
+      WHERE t.id = ?`,
+  ).get(ticketId);
+}
+
 /** Fills in the harness's own resume/session UUID once the harness reports it (hooks/the volli CLI). */
 export function setHarnessSessionId(
   db: Database.Database,

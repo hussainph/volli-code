@@ -2,8 +2,15 @@ import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { useSessionsStore } from "../stores/sessions";
+import { useTicketSessionsStore } from "../stores/ticket-sessions";
 import { disposeEngine } from "./registry";
-import { closeTerminalPane, closeTerminalSession, killProjectSessions } from "./session-lifecycle";
+import {
+  closeTerminalPane,
+  closeTerminalSession,
+  closeTicketSession,
+  killProjectSessions,
+  killTicketSessions,
+} from "./session-lifecycle";
 
 // The registry constructs real GPU-backed engines; the lifecycle contract under
 // test is only that it disposes through the registry, so stub the seam.
@@ -20,6 +27,7 @@ beforeEach(() => {
   killMock.mockResolvedValue({ ok: true });
   vi.stubGlobal("window", { api: { terminal: { kill: killMock } } });
   useSessionsStore.setState({ byProject: {} });
+  useTicketSessionsStore.setState({ byTicket: {}, lastOutputAt: {}, startingTickets: {} });
 });
 
 afterEach(() => {
@@ -150,6 +158,57 @@ describe("killProjectSessions", () => {
 
   it("is a no-op for a project with no sessions", () => {
     killProjectSessions("never-added");
+
+    expect(killMock).not.toHaveBeenCalled();
+    expect(vi.mocked(disposeEngine)).not.toHaveBeenCalled();
+  });
+});
+
+describe("closeTicketSession", () => {
+  it("drops the ticket tab, disposes its engine, and kills its live PTY", () => {
+    useTicketSessionsStore.getState().addSession("t1", "s1", "Session 1");
+
+    closeTicketSession("t1", "s1");
+
+    expect(useTicketSessionsStore.getState().byTicket["t1"]?.tabs).toEqual([]);
+    expect(vi.mocked(disposeEngine)).toHaveBeenCalledWith("s1");
+    expect(killMock).toHaveBeenCalledWith("s1");
+  });
+
+  it("does not kill an already-exited ticket session", () => {
+    useTicketSessionsStore.getState().addSession("t1", "s1", "Session 1");
+    useTicketSessionsStore.getState().markExited("s1", 0);
+
+    closeTicketSession("t1", "s1");
+
+    expect(vi.mocked(disposeEngine)).toHaveBeenCalledWith("s1");
+    expect(killMock).not.toHaveBeenCalled();
+  });
+
+  it("does not kill for an unknown ticket session", () => {
+    closeTicketSession("t1", "ghost");
+
+    expect(killMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("killTicketSessions", () => {
+  it("kills every live session of a ticket, disposes engines, and forgets the ticket", () => {
+    useTicketSessionsStore.getState().addSession("t1", "s1", "Session 1");
+    useTicketSessionsStore.getState().addSession("t1", "s2", "Session 2");
+    useTicketSessionsStore.getState().markExited("s1", 130);
+
+    killTicketSessions("t1");
+
+    expect(killMock).toHaveBeenCalledTimes(1);
+    expect(killMock).toHaveBeenCalledWith("s2");
+    expect(vi.mocked(disposeEngine)).toHaveBeenCalledWith("s1");
+    expect(vi.mocked(disposeEngine)).toHaveBeenCalledWith("s2");
+    expect(useTicketSessionsStore.getState().byTicket["t1"]).toBeUndefined();
+  });
+
+  it("is a no-op for a ticket with no sessions", () => {
+    killTicketSessions("never-added");
 
     expect(killMock).not.toHaveBeenCalled();
     expect(vi.mocked(disposeEngine)).not.toHaveBeenCalled();

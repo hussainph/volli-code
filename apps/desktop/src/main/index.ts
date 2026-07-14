@@ -6,6 +6,7 @@ import type { VolliIpcEvent } from "@volli/shared";
 import type { DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { openVolliDb } from "./db";
+import { endLiveSessions } from "./db/sessions-repo";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
 import { registerAppMenu } from "./menu";
@@ -124,8 +125,6 @@ app.whenReady().then(() => {
   // renderer-driven CSS zoom (see menu.ts for the rationale).
   registerAppMenu();
   registerIpcHandlers();
-  // Boots the PTY multiplexer and its before-quit teardown (kills all PTYs).
-  registerTerminalIpcHandlers();
   // Ghostty config read + live-reload watch, feeding restty's appearance.
   registerGhosttyConfigIpc();
 
@@ -146,10 +145,23 @@ app.whenReady().then(() => {
     dbHandle = { ok: false, error: errorMessage(error) };
     console.error("[volli] failed to open database:", dbHandle.error);
   }
+  // Boot recovery: no PTY survives a relaunch, so close out any session row
+  // still marked live before the renderer lists them — the table must never
+  // accumulate phantom "live" sessions.
+  if (dbHandle.ok) {
+    try {
+      endLiveSessions(dbHandle.db, Date.now());
+    } catch (error) {
+      console.error("[volli] failed to sweep stale sessions:", errorMessage(error));
+    }
+  }
   registerDataIpcHandlers(dbHandle);
   // `.volli` artifacts fs plumbing (list/read/write/create/promote/watch);
   // same degraded-DB stance as registerDataIpcHandlers.
   registerArtifactIpcHandlers(dbHandle);
+  // Boots the PTY multiplexer (persists a durable record per session) and its
+  // before-quit teardown (kills all PTYs); needs the db, so it registers here.
+  registerTerminalIpcHandlers(dbHandle);
 
   createWindow();
 
