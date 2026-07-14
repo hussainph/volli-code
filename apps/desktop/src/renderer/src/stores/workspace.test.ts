@@ -1,7 +1,7 @@
 import { DEFAULT_TICKET_SORT } from "@volli/shared";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { useBoardStore } from "./board";
-import { createWorkspaceStore, DEFAULT_WORKSPACE_UI } from "./workspace";
+import { createWorkspaceStore, DEFAULT_WORKSPACE_UI, type NavKey } from "./workspace";
 
 function createMemoryStorage() {
   const data = new Map<string, string>();
@@ -366,6 +366,62 @@ describe("rehydration sanitization (corrupt JSON)", () => {
     expect(store.getState().byProject["project-a"]?.boardSort).toEqual({
       key: "title",
       direction: "asc",
+    });
+  });
+});
+
+describe("navHistory", () => {
+  const snap = (
+    projectId: string | null,
+    nav: NavKey = "board",
+    openTicketId: string | null = null,
+  ) => ({
+    projectId,
+    nav,
+    openTicketId,
+  });
+
+  it("starts empty", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    expect(store.getState().navHistory).toEqual({ back: [], current: null, forward: [] });
+  });
+
+  it("records organic navigations and steps back/forward over them", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().recordNav(snap("a"));
+    store.getState().recordNav(snap("a", "sessions"));
+    store.getState().recordNav(snap("b"));
+
+    expect(store.getState().stepNavBack()).toEqual(snap("a", "sessions"));
+    expect(store.getState().stepNavBack()).toEqual(snap("a"));
+    expect(store.getState().stepNavBack()).toBeNull();
+    expect(store.getState().stepNavForward()).toEqual(snap("a", "sessions"));
+  });
+
+  it("dedupes a consecutive identical snapshot without notifying", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().recordNav(snap("a"));
+    const before = store.getState().navHistory;
+    store.getState().recordNav(snap("a"));
+    expect(store.getState().navHistory).toBe(before);
+  });
+
+  it("is never persisted (in-memory only)", () => {
+    const storage = createMemoryStorage();
+    const store = createWorkspaceStore(storage);
+    store.getState().recordNav(snap("a"));
+    store.getState().recordNav(snap("b"));
+
+    const parsed = JSON.parse(storage.getItem("volli:workspace") ?? "{}") as {
+      state?: Record<string, unknown>;
+    };
+    expect(parsed.state?.navHistory).toBeUndefined();
+
+    // And a fresh (rehydrated) store starts with empty history.
+    expect(createWorkspaceStore(storage).getState().navHistory).toEqual({
+      back: [],
+      current: null,
+      forward: [],
     });
   });
 });

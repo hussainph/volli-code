@@ -23,6 +23,14 @@ import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
 import { appStateStorage } from "@renderer/lib/app-state-storage";
+import {
+  EMPTY_NAV_HISTORY,
+  goBack,
+  goForward,
+  recordNav,
+  type NavHistory,
+  type NavSnapshot,
+} from "@renderer/lib/nav-history";
 import { useBoardStore } from "@renderer/stores/board";
 
 /** The per-workspace nav pages (NAV_ITEMS). Settings is app-wide chrome — see stores/ui.ts. */
@@ -56,6 +64,12 @@ export const DEFAULT_WORKSPACE_UI: WorkspaceUiState = {
 
 interface WorkspaceState {
   byProject: Record<string, WorkspaceUiState>;
+  /**
+   * Slack-style workspace navigation history (the chrome-bar ←/→ buttons and
+   * ⌘[ / ⌘]). In-memory only — deliberately excluded from `partialize`, so it
+   * starts empty on every relaunch and never reaches persisted storage.
+   */
+  navHistory: NavHistory;
   setNav(projectId: string, nav: NavKey): void;
   setDirExpanded(projectId: string, dirPath: string, expanded: boolean): void;
   setBoardView(projectId: string, view: BoardView): void;
@@ -71,6 +85,23 @@ interface WorkspaceState {
   closeTicket(projectId: string): void;
   /** Drop a removed project's record so re-adding it starts fresh. */
   forget(projectId: string): void;
+  /**
+   * Record an organic navigation to `snapshot` (the choke point fed by
+   * hooks/use-nav-history.ts). Deduped against the current location; a snapshot
+   * equal to the current one is a no-op. Applying a history step must NOT call
+   * this (that's what would clobber the forward stack) — the wiring suppresses
+   * recording while it applies.
+   */
+  recordNav(snapshot: NavSnapshot): void;
+  /**
+   * Advance the history one step back/forward and return the snapshot the
+   * caller must apply to the live stores, or `null` when that stack is empty.
+   * The store only owns the stacks; applying the snapshot (project switch + nav
+   * + open/close ticket) lives in the wiring to avoid a projects-store import
+   * cycle here.
+   */
+  stepNavBack(): NavSnapshot | null;
+  stepNavForward(): NavSnapshot | null;
 }
 
 /** The slice of a workspace record that survives relaunch. */
@@ -141,8 +172,9 @@ function patchWorkspace(
 export function createWorkspaceStore(storage?: StateStorage) {
   return create<WorkspaceState>()(
     persist(
-      (set) => ({
+      (set, get) => ({
         byProject: {},
+        navHistory: EMPTY_NAV_HISTORY,
 
         setNav(projectId, nav) {
           set((state) => patchWorkspace(state, projectId, { nav }));
@@ -189,6 +221,29 @@ export function createWorkspaceStore(storage?: StateStorage) {
             delete byProject[projectId];
             return { byProject };
           });
+        },
+
+        recordNav(snapshot) {
+          set((state) => {
+            const navHistory = recordNav(state.navHistory, snapshot);
+            // recordNav returns the SAME reference when the snapshot is a
+            // duplicate — bail so we don't notify subscribers for a no-op.
+            return navHistory === state.navHistory ? state : { navHistory };
+          });
+        },
+
+        stepNavBack() {
+          const step = goBack(get().navHistory);
+          if (step === null) return null;
+          set({ navHistory: step.history });
+          return step.snapshot;
+        },
+
+        stepNavForward() {
+          const step = goForward(get().navHistory);
+          if (step === null) return null;
+          set({ navHistory: step.history });
+          return step.snapshot;
         },
       }),
       {
