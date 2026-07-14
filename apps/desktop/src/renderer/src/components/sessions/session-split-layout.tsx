@@ -1,4 +1,10 @@
 import * as React from "react";
+import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
+import { ColumnsPlusRightIcon } from "@phosphor-icons/react/dist/csr/ColumnsPlusRight";
+import { MinusCircleIcon } from "@phosphor-icons/react/dist/csr/MinusCircle";
+import { PlusCircleIcon } from "@phosphor-icons/react/dist/csr/PlusCircle";
+import { RowsPlusBottomIcon } from "@phosphor-icons/react/dist/csr/RowsPlusBottom";
+import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
 
 import { TerminalView } from "@renderer/components/sessions/terminal-view";
 import {
@@ -95,29 +101,48 @@ function SplitNode(props: SplitNodeProps) {
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
-          <ContextMenuItem onSelect={() => props.onSplit(layout.sessionId, "vertical")}>
+          <ContextMenuItem
+            icon={ColumnsPlusRightIcon}
+            onSelect={() => props.onSplit(layout.sessionId, "vertical")}
+          >
             Split Right
             <ContextMenuShortcut>⌘D</ContextMenuShortcut>
           </ContextMenuItem>
-          <ContextMenuItem onSelect={() => props.onSplit(layout.sessionId, "horizontal")}>
+          <ContextMenuItem
+            icon={RowsPlusBottomIcon}
+            onSelect={() => props.onSplit(layout.sessionId, "horizontal")}
+          >
             Split Down
             <ContextMenuShortcut>⇧⌘D</ContextMenuShortcut>
           </ContextMenuItem>
           <ContextMenuSeparator />
-          <ContextMenuItem onSelect={() => getEngine(layout.sessionId)?.adjustFontSize(1)}>
+          <ContextMenuItem
+            icon={PlusCircleIcon}
+            onSelect={() => getEngine(layout.sessionId)?.adjustFontSize(1)}
+          >
             Increase Font Size
             <ContextMenuShortcut>⌘+</ContextMenuShortcut>
           </ContextMenuItem>
-          <ContextMenuItem onSelect={() => getEngine(layout.sessionId)?.adjustFontSize(-1)}>
+          <ContextMenuItem
+            icon={MinusCircleIcon}
+            onSelect={() => getEngine(layout.sessionId)?.adjustFontSize(-1)}
+          >
             Decrease Font Size
             <ContextMenuShortcut>⌘−</ContextMenuShortcut>
           </ContextMenuItem>
-          <ContextMenuItem onSelect={() => getEngine(layout.sessionId)?.resetFontSize()}>
+          <ContextMenuItem
+            icon={ArrowCounterClockwiseIcon}
+            onSelect={() => getEngine(layout.sessionId)?.resetFontSize()}
+          >
             Reset Font Size
             <ContextMenuShortcut>⌘0</ContextMenuShortcut>
           </ContextMenuItem>
           <ContextMenuSeparator />
-          <ContextMenuItem variant="destructive" onSelect={() => props.onClose(layout.sessionId)}>
+          <ContextMenuItem
+            icon={XCircleIcon}
+            variant="destructive"
+            onSelect={() => props.onClose(layout.sessionId)}
+          >
             Close Pane
           </ContextMenuItem>
         </ContextMenuContent>

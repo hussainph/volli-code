@@ -1,5 +1,15 @@
 import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
+import { ArrowsLeftRightIcon } from "@phosphor-icons/react/dist/csr/ArrowsLeftRight";
+import { CellSignalHighIcon } from "@phosphor-icons/react/dist/csr/CellSignalHigh";
+import { CellSignalLowIcon } from "@phosphor-icons/react/dist/csr/CellSignalLow";
+import { CellSignalMediumIcon } from "@phosphor-icons/react/dist/csr/CellSignalMedium";
 import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
+import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
+import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
+import { FlagIcon } from "@phosphor-icons/react/dist/csr/Flag";
+import { ListChecksIcon } from "@phosphor-icons/react/dist/csr/ListChecks";
+import { PlayCircleIcon } from "@phosphor-icons/react/dist/csr/PlayCircle";
+import { TrayIcon } from "@phosphor-icons/react/dist/csr/Tray";
 import {
   TICKET_PRIORITIES,
   TICKET_PRIORITY_LABELS,
@@ -8,7 +18,6 @@ import {
   type Ticket,
 } from "@volli/shared";
 
-import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -20,6 +29,20 @@ import {
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
 import { useBoardStore } from "@renderer/stores/board";
+
+const STATUS_ICON = {
+  backlog: TrayIcon,
+  todo: ListChecksIcon,
+  doing: PlayCircleIcon,
+  needs_review: EyeIcon,
+  done: CheckCircleIcon,
+} as const;
+
+const PRIORITY_ICON = {
+  low: CellSignalLowIcon,
+  medium: CellSignalMediumIcon,
+  high: CellSignalHighIcon,
+} as const;
 
 /**
  * The non-destructive ticket context menu (Move to · Priority), shared by the
@@ -50,11 +73,12 @@ export function TicketContextMenu({
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
       <ContextMenuContent>
         <ContextMenuSub>
-          <ContextMenuSubTrigger>Move to</ContextMenuSubTrigger>
+          <ContextMenuSubTrigger icon={ArrowsLeftRightIcon}>Move to</ContextMenuSubTrigger>
           <ContextMenuSubContent>
             {TICKET_STATUSES.filter((status) => status !== ticket.status).map((status) => (
               <ContextMenuItem
                 key={status}
+                icon={STATUS_ICON[status]}
                 onSelect={() =>
                   useBoardStore
                     .getState()
@@ -67,31 +91,29 @@ export function TicketContextMenu({
           </ContextMenuSubContent>
         </ContextMenuSub>
         <ContextMenuSub>
-          <ContextMenuSubTrigger>Priority</ContextMenuSubTrigger>
+          <ContextMenuSubTrigger icon={FlagIcon}>Priority</ContextMenuSubTrigger>
           <ContextMenuSubContent>
             {TICKET_PRIORITIES.map((priority) => (
               <ContextMenuItem
                 key={priority}
+                icon={PRIORITY_ICON[priority]}
                 onSelect={() =>
                   useBoardStore.getState().setTicketPriority(projectId, ticket.id, priority)
                 }
               >
-                <span className="flex size-3.5 items-center justify-center">
-                  {priority === ticket.priority ? (
-                    <CheckIcon weight="bold" className="size-3.5" />
-                  ) : null}
-                </span>
-                <PriorityIndicator priority={priority} />
                 {TICKET_PRIORITY_LABELS[priority]}
+                {priority === ticket.priority ? (
+                  <CheckIcon weight="bold" className="ml-auto size-3.5" />
+                ) : null}
               </ContextMenuItem>
             ))}
           </ContextMenuSubContent>
         </ContextMenuSub>
         <ContextMenuSeparator />
         <ContextMenuItem
+          icon={ArchiveIcon}
           onSelect={() => useBoardStore.getState().archiveTicket(projectId, ticket.id)}
         >
-          <ArchiveIcon className="size-3.5" />
           Archive
         </ContextMenuItem>
       </ContextMenuContent>
