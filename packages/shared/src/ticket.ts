@@ -82,6 +82,17 @@ export interface Ticket {
   harnessId: string;
   /** Position within its status column. */
   order: number;
+  /**
+   * First-class worktree identity (vision anchor: worktrees are pure code
+   * isolation, and their identity belongs on the ticket immediately even
+   * though *creation* automation lands later). `null` until a worktree
+   * exists for this ticket. Absolute path to the checkout.
+   */
+  worktreePath: string | null;
+  /** The branch checked out in {@link worktreePath}, e.g. `volli/VC-12-mcp-server`. `null` until a worktree exists. */
+  branch: string | null;
+  /** The branch {@link branch} was created from. `null` until a worktree exists. */
+  baseBranch: string | null;
   /** Epoch milliseconds. */
   createdAt: number;
   /** Epoch milliseconds. */
@@ -131,6 +142,12 @@ export interface CreateTicketInput {
   usesWorktree?: boolean;
   /** Defaults to {@link DEFAULT_HARNESS_ID}. */
   harnessId?: string;
+  /** Defaults to `null` — no worktree exists yet. */
+  worktreePath?: string | null;
+  /** Defaults to `null` — no worktree exists yet. */
+  branch?: string | null;
+  /** Defaults to `null` — no worktree exists yet. */
+  baseBranch?: string | null;
 }
 
 /** Creates a {@link Ticket}. Pure and deterministic — the caller supplies `id` and `now`. */
@@ -147,6 +164,9 @@ export function createTicket(input: CreateTicketInput): Ticket {
     usesWorktree: input.usesWorktree ?? true,
     harnessId: input.harnessId ?? DEFAULT_HARNESS_ID,
     order: input.order,
+    worktreePath: input.worktreePath ?? null,
+    branch: input.branch ?? null,
+    baseBranch: input.baseBranch ?? null,
     createdAt: input.now,
     updatedAt: input.now,
   };

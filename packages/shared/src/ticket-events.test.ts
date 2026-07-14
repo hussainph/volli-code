@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { TICKET_EVENT_KINDS } from "./ticket-events";
-import type { TicketEvent, TicketEventKind, TicketEventPayload } from "./ticket-events";
+import type {
+  TicketEvent,
+  TicketEventKind,
+  TicketEventPayload,
+  WorktreeIdentity,
+} from "./ticket-events";
 
 describe("TICKET_EVENT_KINDS", () => {
   it("lists every event kind", () => {
@@ -14,6 +19,10 @@ describe("TICKET_EVENT_KINDS", () => {
       "labels_changed",
       "archived",
       "unarchived",
+      "commented",
+      "session_started",
+      "session_ended",
+      "worktree_changed",
     ]);
   });
 
@@ -25,6 +34,12 @@ describe("TICKET_EVENT_KINDS", () => {
 
 describe("TicketEventPayload", () => {
   it("has one payload shape per event kind, in TICKET_EVENT_KINDS order", () => {
+    const worktreeA: WorktreeIdentity = { worktreePath: null, branch: null, baseBranch: null };
+    const worktreeB: WorktreeIdentity = {
+      worktreePath: "/repo/.worktrees/VC-12",
+      branch: "volli/VC-12-mcp-server",
+      baseBranch: "main",
+    };
     const payloads: TicketEventPayload[] = [
       { kind: "created", status: "backlog", title: "T" },
       { kind: "status_changed", from: "backlog", to: "todo" },
@@ -34,6 +49,10 @@ describe("TicketEventPayload", () => {
       { kind: "labels_changed", added: ["bug"], removed: ["chore"] },
       { kind: "archived" },
       { kind: "unarchived" },
+      { kind: "commented", commentId: "comment-1" },
+      { kind: "session_started", sessionId: "session-1", title: "Fix bug", harnessId: "codex" },
+      { kind: "session_ended", sessionId: "session-1" },
+      { kind: "worktree_changed", from: worktreeA, to: worktreeB },
     ];
     expect(payloads.map((p) => p.kind)).toEqual(TICKET_EVENT_KINDS);
   });

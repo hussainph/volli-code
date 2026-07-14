@@ -5,7 +5,7 @@
  * arrive with the volli CLI.
  */
 
-import type { TicketPriority, TicketStatus } from "./ticket";
+import type { HarnessId, TicketPriority, TicketStatus } from "./ticket";
 
 export const TICKET_EVENT_KINDS = [
   "created",
@@ -21,9 +21,30 @@ export const TICKET_EVENT_KINDS = [
   // vanish together in the FK cascade.
   "archived",
   "unarchived",
+  // Sessions & comments (ticket-detail-mvp #18/#22): a comment's body lives
+  // in `ticket_comments` (`ticket-comment.ts`) — this event only makes it
+  // discoverable from the event log without duplicating it. Session events
+  // are recorded from main on PTY boot/exit.
+  "commented",
+  "session_started",
+  "session_ended",
+  // Worktree identity (ticket-detail-mvp #14 vision anchor): settable now,
+  // automated later — `from`/`to` snapshot the ticket's worktree identity
+  // fields (`ticket.ts`) around the change.
+  "worktree_changed",
 ] as const;
 
 export type TicketEventKind = (typeof TICKET_EVENT_KINDS)[number];
+
+/**
+ * A ticket's worktree identity, as snapshotted by `worktree_changed`. Mirrors
+ * the `Ticket.worktreePath`/`branch`/`baseBranch` fields (`ticket.ts`).
+ */
+export interface WorktreeIdentity {
+  worktreePath: string | null;
+  branch: string | null;
+  baseBranch: string | null;
+}
 
 export type TicketEventPayload =
   | { kind: "created"; status: TicketStatus; title: string }
@@ -33,7 +54,11 @@ export type TicketEventPayload =
   | { kind: "body_edited" }
   | { kind: "labels_changed"; added: string[]; removed: string[] }
   | { kind: "archived" }
-  | { kind: "unarchived" };
+  | { kind: "unarchived" }
+  | { kind: "commented"; commentId: string }
+  | { kind: "session_started"; sessionId: string; title: string; harnessId: HarnessId }
+  | { kind: "session_ended"; sessionId: string }
+  | { kind: "worktree_changed"; from: WorktreeIdentity; to: WorktreeIdentity };
 
 export interface TicketEvent {
   id: string;
