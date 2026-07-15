@@ -137,6 +137,18 @@ export function createProjectsStore(gateway: ProjectsGateway = defaultGateway) {
       );
       if (!result) return;
 
+      // Seed the board's ticket/label slices before anything else touches
+      // them — bootstrap seeds every project's slice wholesale (see
+      // lib/boot.ts / data-ipc.ts's buildBootstrapPayload), but a project
+      // created mid-session bypasses that entirely, and every ticket mutation
+      // reconciles through a guard that refuses to write into a missing slice.
+      // Without this, the new project's first ticket would land in SQLite but
+      // never reach the board. `seedProject` no-ops when the slice already
+      // exists, so the `created: false` existing-project branch below (which
+      // may already have a live slice from this same renderer) is never
+      // clobbered.
+      useBoardStore.getState().seedProject(result.project.id);
+
       // Re-read FRESH after the await, then: `created: false` means an existing
       // project at that path was selected rather than inserted; append it
       // defensively only if this renderer doesn't already have it (a fresh

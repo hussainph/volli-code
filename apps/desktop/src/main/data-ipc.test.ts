@@ -7,6 +7,7 @@ import type {
   TicketCommentsResult,
   TicketEventsResult,
   TicketResult,
+  TicketsResult,
   VolliIpcChannel,
 } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -69,6 +70,36 @@ function createTicket(projectId: string): Ticket {
   if (!result.ok) throw new Error(result.error);
   return result.ticket;
 }
+
+function archiveTicket(ticketId: string): void {
+  const result = invoke<Result>("volli:ticket-archive", { ticketId });
+  if (!result.ok) throw new Error(result.error);
+}
+
+describe("volli:ticket-create — ticket numbers never recycle across a hard delete (#35)", () => {
+  it("skips a hard-deleted ticket's number instead of reusing it", () => {
+    const projectId = createProject();
+
+    const one = createTicket(projectId);
+    const two = createTicket(projectId);
+    const three = createTicket(projectId);
+    expect([one.ticketNumber, two.ticketNumber, three.ticketNumber]).toEqual([1, 2, 3]);
+
+    // Archive then hard-delete the highest-numbered ticket — the real
+    // delete-from-archive path (`volli:ticket-delete` only permits deleting an
+    // already-archived ticket).
+    const archived = invoke<Result>("volli:ticket-archive", { ticketId: three.id });
+    expect(archived.ok).toBe(true);
+    const deleted = invoke<Result>("volli:ticket-delete", { ticketId: three.id });
+    expect(deleted.ok).toBe(true);
+
+    // Before the fix, MAX(ticket_number)+1 over the remaining rows would
+    // reissue 3 here, colliding with the deleted ticket's retained worktree
+    // branch. The counter must instead keep moving forward.
+    const four = createTicket(projectId);
+    expect(four.ticketNumber).toBe(4);
+  });
+});
 
 describe("volli:ticket-update — worktree identity", () => {
   it("records one worktree_changed event when all three fields change together", () => {
@@ -202,6 +233,64 @@ describe("volli:ticket-update — worktree identity", () => {
       baseBranch: null,
     });
     expect(result.ok).toBe(true);
+  });
+});
+
+describe("archived-ticket guards — ticket-update/set-priority/set-labels/move", () => {
+  it("volli:ticket-update rejects a mutation against an archived ticket", () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    archiveTicket(ticket.id);
+
+    const result = invoke<TicketResult>("volli:ticket-update", {
+      ticketId: ticket.id,
+      title: "New title",
+    });
+    expect(result).toEqual({ ok: false, error: "Cannot update an archived ticket" });
+  });
+
+  it("volli:ticket-set-priority rejects a mutation against an archived ticket", () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    archiveTicket(ticket.id);
+
+    const result = invoke<TicketResult>("volli:ticket-set-priority", {
+      ticketId: ticket.id,
+      priority: "high",
+    });
+    expect(result).toEqual({
+      ok: false,
+      error: "Cannot change the priority of an archived ticket",
+    });
+  });
+
+  it("volli:ticket-set-labels rejects a mutation against an archived ticket", () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    archiveTicket(ticket.id);
+
+    const result = invoke<TicketResult>("volli:ticket-set-labels", {
+      ticketId: ticket.id,
+      labels: ["bug"],
+    });
+    expect(result).toEqual({
+      ok: false,
+      error: "Cannot change the labels of an archived ticket",
+    });
+  });
+
+  it("volli:ticket-move now errors instead of silently no-opping against an archived ticket", () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    archiveTicket(ticket.id);
+
+    const result = invoke<TicketsResult>("volli:ticket-move", {
+      projectId,
+      ticketId: ticket.id,
+      toStatus: "todo",
+      toIndex: 0,
+    });
+    expect(result).toEqual({ ok: false, error: "Cannot move an archived ticket" });
   });
 });
 

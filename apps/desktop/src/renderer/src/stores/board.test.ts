@@ -115,6 +115,67 @@ describe("hydrate", () => {
   });
 });
 
+describe("seedProject", () => {
+  it("seeds empty ticket/label slices for a project with none yet", () => {
+    const store = createBoardStore(fakeGateway());
+
+    store.getState().seedProject("p1");
+
+    expect(store.getState().ticketsByProject.p1).toEqual([]);
+    expect(store.getState().labelsByProject.p1).toEqual([]);
+  });
+
+  it("is a no-op — never clobbers an existing ticket slice", () => {
+    const store = createBoardStore(fakeGateway());
+    const tickets = [ticket({ id: "t1", status: "backlog" })];
+    store.getState().hydrate({ p1: tickets }, {});
+
+    store.getState().seedProject("p1");
+
+    expect(store.getState().ticketsByProject.p1).toBe(tickets);
+  });
+
+  it("lets a subsequent addTicket land on a project created after boot", async () => {
+    // Without this seed, a project created mid-session never gets a
+    // ticketsByProject entry, so addTicket's success append silently drops
+    // via reconcileSlice's missing-slice guard until relaunch.
+    const created = ticket({ id: "new-1", projectId: "p1", status: "backlog", title: "New" });
+    const gateway = fakeGateway({
+      createTicket: vi.fn<BoardGateway["createTicket"]>(async () => ({
+        ok: true,
+        ticket: created,
+      })),
+    });
+    const store = createBoardStore(gateway);
+
+    store.getState().seedProject("p1"); // what addProject now does on success
+
+    const result = await store.getState().addTicket("p1", "backlog", "New");
+
+    expect(result).toBe(created);
+    expect(store.getState().ticketsByProject.p1).toEqual([created]);
+  });
+
+  it("lets a subsequent unarchiveTicket land on a project created after boot", async () => {
+    // Same as above, for unarchiveTicket's board append.
+    const revived = ticket({ id: "a", projectId: "p1", status: "done" });
+    const gateway = fakeGateway({
+      unarchiveTicket: vi.fn<BoardGateway["unarchiveTicket"]>(async () => ({
+        ok: true,
+        ticket: revived,
+      })),
+    });
+    const store = createBoardStore(gateway);
+
+    store.getState().seedProject("p1"); // what addProject now does on success
+    store.setState({ archivedByProject: { p1: [archivedTicket({ id: "a", status: "done" })] } });
+
+    await store.getState().unarchiveTicket("p1", "a");
+
+    expect(store.getState().ticketsByProject.p1).toEqual([revived]);
+  });
+});
+
 describe("addTicket", () => {
   it("is a no-op (no IPC call) when the trimmed title is empty", async () => {
     const gateway = fakeGateway();
@@ -734,6 +795,7 @@ describe("loadArchived", () => {
       })),
     });
     const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [] }, {}); // the project is live — bootstrap/seedProject already ran
 
     const ok = await store.getState().loadArchived("p1");
 
@@ -756,6 +818,26 @@ describe("loadArchived", () => {
     expect(ok).toBe(false);
     expect(store.getState().archivedByProject.p1).toBeUndefined();
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not load archive: db locked");
+  });
+
+  it("does not resurrect an Archive slice for a project forgotten while the fetch was in flight", async () => {
+    const archived = [archivedTicket({ id: "a", status: "done" })];
+    let resolveList!: (result: { ok: true; tickets: typeof archived }) => void;
+    const gateway = fakeGateway({
+      listArchived: vi.fn<BoardGateway["listArchived"]>(
+        () => new Promise((resolve) => (resolveList = resolve)),
+      ),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [] }, {});
+
+    const pending = store.getState().loadArchived("p1");
+    store.getState().forget("p1"); // project removed mid-flight
+    resolveList({ ok: true, tickets: archived });
+    const ok = await pending;
+
+    expect(ok).toBe(false);
+    expect(store.getState().archivedByProject.p1).toBeUndefined();
   });
 });
 

@@ -7,7 +7,13 @@
  * sequence for a table with no `WITHOUT ROWID` clause).
  */
 import type Database from "better-sqlite3";
-import type { ArchivedTicket, Ticket, TicketPriority, TicketStatus } from "@volli/shared";
+import {
+  isTicketStatus,
+  type ArchivedTicket,
+  type Ticket,
+  type TicketPriority,
+  type TicketStatus,
+} from "@volli/shared";
 import { prepared } from "./prepared";
 
 export interface TicketRow {
@@ -29,6 +35,25 @@ export interface TicketRow {
   worktree_path: string | null;
   branch: string | null;
   base_branch: string | null;
+}
+
+/**
+ * Whether `row.status` is one of the known {@link TicketStatus} values —
+ * the guard every row→domain read path in this module runs before
+ * `mapTicket` trusts the `as TicketStatus` cast. The migration-001 `CHECK`
+ * constraint keeps this true for ordinary writes, but it doesn't cover a
+ * future enum-rename migration that skips rewriting existing rows, or an
+ * external writer (the planned `volli` CLI) hitting a stale schema. Without
+ * this guard an unknown status reaches the renderer's `groupTicketsByStatus`,
+ * which has no fallback bucket for it and throws on every board render —
+ * so a row that fails this check is dropped rather than mapped, with one
+ * `console.warn` identifying the ticket id and the bad status for
+ * visibility at the dev level.
+ */
+function hasKnownStatus(row: TicketRow): boolean {
+  if (isTicketStatus(row.status)) return true;
+  console.warn(`[volli] dropping ticket ${row.id} with unknown status "${row.status}"`);
+  return false;
 }
 
 function mapTicket(row: TicketRow, labels: string[]): Ticket {
@@ -132,7 +157,7 @@ export function listTicketsByProject(db: Database.Database, projectId: string): 
     "SELECT * FROM tickets WHERE project_id = ? AND archived_at IS NULL ORDER BY status, position",
   ).all(projectId);
   const labelsByTicket = labelNamesByTicket(db, projectId, "live");
-  return rows.map((row) => mapTicket(row, labelsByTicket.get(row.id) ?? []));
+  return rows.filter(hasKnownStatus).map((row) => mapTicket(row, labelsByTicket.get(row.id) ?? []));
 }
 
 /**
@@ -148,7 +173,7 @@ export function listAllTickets(db: Database.Database): Ticket[] {
     "SELECT * FROM tickets WHERE archived_at IS NULL ORDER BY project_id, status, position",
   ).all();
   const labelsByTicket = labelNamesByTicketAll(db);
-  return rows.map((row) => mapTicket(row, labelsByTicket.get(row.id) ?? []));
+  return rows.filter(hasKnownStatus).map((row) => mapTicket(row, labelsByTicket.get(row.id) ?? []));
 }
 
 /**
@@ -161,14 +186,15 @@ export function listArchivedTicketsByProject(
   db: Database.Database,
   projectId: string,
 ): ArchivedTicket[] {
-  // The WHERE clause guarantees `archived_at` is non-null, encoded in the row
-  // type — the same trust-the-SQL convention as mapTicket's `status` cast.
+  // The WHERE clause guarantees `archived_at` is non-null — trusted via the
+  // row type, unlike `status`, which still runs through `hasKnownStatus`
+  // below rather than being cast blind.
   const rows = prepared<[string], TicketRow & { archived_at: number }>(
     db,
     "SELECT * FROM tickets WHERE project_id = ? AND archived_at IS NOT NULL ORDER BY archived_at DESC",
   ).all(projectId);
   const labelsByTicket = labelNamesByTicket(db, projectId, "archived");
-  return rows.map((row): ArchivedTicket => {
+  return rows.filter(hasKnownStatus).map((row): ArchivedTicket => {
     // `mapTicket` returns a fresh object, so mutating it in place (rather than
     // spreading a copy per row) is safe and lint-clean.
     const ticket = mapTicket(row, labelsByTicket.get(row.id) ?? []);
@@ -180,11 +206,14 @@ export function listArchivedTicketsByProject(
  * One ticket by id, labels attached — the single-row analog of
  * `listTicketsByProject`. Lets a mutation IPC handler return just the changed
  * ticket instead of re-reading the whole project list. `undefined` when no row
- * matches.
+ * matches — and, deliberately, the same `undefined` when the row exists but
+ * fails {@link hasKnownStatus}: mutation handlers already treat "no ticket"
+ * as an `Unknown ticket` error surfaced to the renderer, so a corrupt row
+ * rides that same path instead of a new failure mode.
  */
 export function getTicket(db: Database.Database, ticketId: string): Ticket | undefined {
   const row = getTicketRow(db, ticketId);
-  if (!row) return undefined;
+  if (!row || !hasKnownStatus(row)) return undefined;
   return mapTicket(row, getTicketLabelNames(db, ticketId));
 }
 
@@ -193,12 +222,49 @@ export function getTicketRow(db: Database.Database, ticketId: string): TicketRow
   return prepared<[string], TicketRow>(db, "SELECT * FROM tickets WHERE id = ?").get(ticketId);
 }
 
+/**
+ * Allocates the next display ticket number for a project and durably bumps
+ * `projects.next_ticket_number` (migration 005) in the same call — the
+ * counter only ever moves forward, so once a number is handed out it can
+ * never be handed out again, even after the ticket that used it is
+ * hard-deleted from the archive (the bug this counter replaces: plain
+ * `MAX(ticket_number) + 1` over the *remaining* rows let a delete free up
+ * the highest number for reuse, colliding with the deleted ticket's
+ * still-live worktree branch).
+ *
+ * Belt-and-braces: the allocated number is `MAX(counter, MAX(ticket_number) +
+ * 1)`, not just the counter, so a stale or corrupt counter (e.g. a hand-built
+ * fixture, or a row that predates this migration's backfill) can never
+ * allocate a number that collides with a live ticket row — the live rows'
+ * own max always wins if the counter somehow fell behind them.
+ *
+ * Self-contained in its own transaction so the read-then-write is atomic
+ * even when called standalone; better-sqlite3 nests this as a SAVEPOINT when
+ * invoked from inside the caller's own transaction (as `volli:ticket-create`
+ * does), so it composes with the ticket INSERT it's paired with.
+ */
 export function nextTicketNumberForProject(db: Database.Database, projectId: string): number {
-  const row = prepared<[string], { max: number | null }>(
-    db,
-    "SELECT MAX(ticket_number) as max FROM tickets WHERE project_id = ?",
-  ).get(projectId);
-  return (row?.max ?? 0) + 1;
+  const allocate = db.transaction((): number => {
+    const project = prepared<[string], { next_ticket_number: number }>(
+      db,
+      "SELECT next_ticket_number FROM projects WHERE id = ?",
+    ).get(projectId);
+    if (!project) throw new Error(`Unknown project: ${projectId}`);
+
+    const maxRow = prepared<[string], { max: number | null }>(
+      db,
+      "SELECT MAX(ticket_number) as max FROM tickets WHERE project_id = ?",
+    ).get(projectId);
+    const floor = (maxRow?.max ?? 0) + 1;
+    const allocated = Math.max(project.next_ticket_number, floor);
+
+    prepared(db, "UPDATE projects SET next_ticket_number = ? WHERE id = ?").run(
+      allocated + 1,
+      projectId,
+    );
+    return allocated;
+  });
+  return allocate();
 }
 
 /**
