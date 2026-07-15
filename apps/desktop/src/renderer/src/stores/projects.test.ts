@@ -64,6 +64,26 @@ function freshStore(gateway: ProjectsGateway = fakeGateway()) {
   return { store: createProjectsStore(gateway), gateway };
 }
 
+/** A minimal, deterministic ticket for board-store gateway stubs. */
+function ticket(overrides: Partial<Ticket> & { id: string; projectId: string }): Ticket {
+  return {
+    ticketNumber: 1,
+    title: "Ticket",
+    body: "",
+    status: "backlog",
+    priority: "medium",
+    labels: [],
+    usesWorktree: true,
+    order: 0,
+    worktreePath: null,
+    branch: null,
+    baseBranch: null,
+    createdAt: 0,
+    updatedAt: 0,
+    ...overrides,
+  };
+}
+
 describe("addProject", () => {
   it("appends the gateway's created project and selects it", async () => {
     const { store } = freshStore();
@@ -74,6 +94,39 @@ describe("addProject", () => {
     expect(a).toBeDefined();
     expect(a!.path).toBe("/a");
     expect(store.getState().selectedProjectId).toBe(a!.id);
+  });
+
+  it("seeds the board's ticket/label slices for the new project", async () => {
+    const { store } = freshStore();
+
+    await store.getState().addProject({ path: "/a", defaultName: "A" });
+
+    const [a] = store.getState().projects;
+    expect(useBoardStore.getState().ticketsByProject[a!.id]).toEqual([]);
+    expect(useBoardStore.getState().labelsByProject[a!.id]).toEqual([]);
+  });
+
+  it("lets a ticket created right after addProject land on the board", async () => {
+    // Without the board seed above, addTicket's success append silently drops
+    // via reconcileSlice's missing-slice guard — the ticket lands in SQLite
+    // but never appears on the board until relaunch.
+    const created = ticket({ id: "new-1", projectId: "id-/a", status: "backlog" });
+    vi.stubGlobal("window", {
+      api: {
+        terminal: { kill: vi.fn().mockResolvedValue({ ok: true }) },
+        appState: { set: vi.fn().mockResolvedValue({ ok: true }) },
+        tickets: { create: vi.fn().mockResolvedValue({ ok: true, ticket: created }) },
+      },
+    });
+    const { store } = freshStore();
+
+    await store.getState().addProject({ path: "/a", defaultName: "A" });
+    const [a] = store.getState().projects;
+
+    const result = await useBoardStore.getState().addTicket(a!.id, "backlog", "New ticket");
+
+    expect(result).toEqual(created);
+    expect(useBoardStore.getState().ticketsByProject[a!.id]).toContainEqual(created);
   });
 
   it("selects the existing project instead of appending a duplicate when created is false", async () => {
@@ -92,6 +145,28 @@ describe("addProject", () => {
 
     expect(store.getState().projects).toEqual([existing]);
     expect(store.getState().selectedProjectId).toBe(existing.id);
+  });
+
+  it("never clobbers a live board slice when created is false for an already-known project", async () => {
+    const existing = project({ id: "existing-id", path: "/repo", name: "Repo" });
+    const gateway = fakeGateway({
+      create: vi.fn<ProjectsGateway["create"]>(async () => ({
+        ok: true,
+        created: false,
+        project: existing,
+      })),
+    });
+    const { store } = freshStore(gateway);
+    store.getState().hydrate([existing], null);
+    const liveTickets = [{ id: "t1" } as Ticket];
+    useBoardStore.setState({
+      ticketsByProject: { [existing.id]: liveTickets },
+      labelsByProject: {},
+    });
+
+    await store.getState().addProject({ path: "/repo", defaultName: "Repo Renamed" });
+
+    expect(useBoardStore.getState().ticketsByProject[existing.id]).toBe(liveTickets);
   });
 
   it("appends the existing project defensively when created:false but it isn't in local state yet", async () => {

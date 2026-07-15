@@ -193,12 +193,49 @@ export function getTicketRow(db: Database.Database, ticketId: string): TicketRow
   return prepared<[string], TicketRow>(db, "SELECT * FROM tickets WHERE id = ?").get(ticketId);
 }
 
+/**
+ * Allocates the next display ticket number for a project and durably bumps
+ * `projects.next_ticket_number` (migration 005) in the same call — the
+ * counter only ever moves forward, so once a number is handed out it can
+ * never be handed out again, even after the ticket that used it is
+ * hard-deleted from the archive (the bug this counter replaces: plain
+ * `MAX(ticket_number) + 1` over the *remaining* rows let a delete free up
+ * the highest number for reuse, colliding with the deleted ticket's
+ * still-live worktree branch).
+ *
+ * Belt-and-braces: the allocated number is `MAX(counter, MAX(ticket_number) +
+ * 1)`, not just the counter, so a stale or corrupt counter (e.g. a hand-built
+ * fixture, or a row that predates this migration's backfill) can never
+ * allocate a number that collides with a live ticket row — the live rows'
+ * own max always wins if the counter somehow fell behind them.
+ *
+ * Self-contained in its own transaction so the read-then-write is atomic
+ * even when called standalone; better-sqlite3 nests this as a SAVEPOINT when
+ * invoked from inside the caller's own transaction (as `volli:ticket-create`
+ * does), so it composes with the ticket INSERT it's paired with.
+ */
 export function nextTicketNumberForProject(db: Database.Database, projectId: string): number {
-  const row = prepared<[string], { max: number | null }>(
-    db,
-    "SELECT MAX(ticket_number) as max FROM tickets WHERE project_id = ?",
-  ).get(projectId);
-  return (row?.max ?? 0) + 1;
+  const allocate = db.transaction((): number => {
+    const project = prepared<[string], { next_ticket_number: number }>(
+      db,
+      "SELECT next_ticket_number FROM projects WHERE id = ?",
+    ).get(projectId);
+    if (!project) throw new Error(`Unknown project: ${projectId}`);
+
+    const maxRow = prepared<[string], { max: number | null }>(
+      db,
+      "SELECT MAX(ticket_number) as max FROM tickets WHERE project_id = ?",
+    ).get(projectId);
+    const floor = (maxRow?.max ?? 0) + 1;
+    const allocated = Math.max(project.next_ticket_number, floor);
+
+    prepared(db, "UPDATE projects SET next_ticket_number = ? WHERE id = ?").run(
+      allocated + 1,
+      projectId,
+    );
+    return allocated;
+  });
+  return allocate();
 }
 
 /**
