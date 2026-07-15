@@ -7,6 +7,7 @@ import type {
   TicketCommentsResult,
   TicketEventsResult,
   TicketResult,
+  TicketsResult,
   VolliIpcChannel,
 } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -68,6 +69,11 @@ function createTicket(projectId: string): Ticket {
   });
   if (!result.ok) throw new Error(result.error);
   return result.ticket;
+}
+
+function archiveTicket(ticketId: string): void {
+  const result = invoke<Result>("volli:ticket-archive", { ticketId });
+  if (!result.ok) throw new Error(result.error);
 }
 
 describe("volli:ticket-create — ticket numbers never recycle across a hard delete (#35)", () => {
@@ -227,6 +233,64 @@ describe("volli:ticket-update — worktree identity", () => {
       baseBranch: null,
     });
     expect(result.ok).toBe(true);
+  });
+});
+
+describe("archived-ticket guards — ticket-update/set-priority/set-labels/move", () => {
+  it("volli:ticket-update rejects a mutation against an archived ticket", () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    archiveTicket(ticket.id);
+
+    const result = invoke<TicketResult>("volli:ticket-update", {
+      ticketId: ticket.id,
+      title: "New title",
+    });
+    expect(result).toEqual({ ok: false, error: "Cannot update an archived ticket" });
+  });
+
+  it("volli:ticket-set-priority rejects a mutation against an archived ticket", () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    archiveTicket(ticket.id);
+
+    const result = invoke<TicketResult>("volli:ticket-set-priority", {
+      ticketId: ticket.id,
+      priority: "high",
+    });
+    expect(result).toEqual({
+      ok: false,
+      error: "Cannot change the priority of an archived ticket",
+    });
+  });
+
+  it("volli:ticket-set-labels rejects a mutation against an archived ticket", () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    archiveTicket(ticket.id);
+
+    const result = invoke<TicketResult>("volli:ticket-set-labels", {
+      ticketId: ticket.id,
+      labels: ["bug"],
+    });
+    expect(result).toEqual({
+      ok: false,
+      error: "Cannot change the labels of an archived ticket",
+    });
+  });
+
+  it("volli:ticket-move now errors instead of silently no-opping against an archived ticket", () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    archiveTicket(ticket.id);
+
+    const result = invoke<TicketsResult>("volli:ticket-move", {
+      projectId,
+      ticketId: ticket.id,
+      toStatus: "todo",
+      toIndex: 0,
+    });
+    expect(result).toEqual({ ok: false, error: "Cannot move an archived ticket" });
   });
 });
 
