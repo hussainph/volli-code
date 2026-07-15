@@ -33,6 +33,37 @@ import { useWorkspaceStore } from "./workspace";
 /** The `app_state` key `selectedProjectId` is persisted under — also read by lib/boot.ts. */
 export const PROJECTS_UI_APP_STATE_KEY = "volli:projects-ui";
 
+/** The shape persisted under {@link PROJECTS_UI_APP_STATE_KEY}. */
+interface ProjectsUiState {
+  selectedProjectId: string | null;
+}
+
+/**
+ * The single encode/decode pair for the {@link PROJECTS_UI_APP_STATE_KEY}
+ * payload — both writers (`persistSelection` below, `buildLegacyImportRequest`
+ * in lib/boot.ts) and the one reader (`resolveSelectedProjectId`, also
+ * lib/boot.ts) route through these so the shape can only ever change in one
+ * place. `decode` is total: anything that isn't exactly `{ selectedProjectId:
+ * string }` — missing, unparseable, wrong shape, non-string field — decodes to
+ * `null`, matching what an absent selection means.
+ */
+export function encodeProjectsUiState(selectedProjectId: string | null): string {
+  const state: ProjectsUiState = { selectedProjectId };
+  return JSON.stringify(state);
+}
+
+export function decodeProjectsUiState(raw: string | undefined): string | null {
+  if (raw === undefined) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const selectedProjectId = (parsed as Record<string, unknown>).selectedProjectId;
+    return typeof selectedProjectId === "string" ? selectedProjectId : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The subset of the preload API the projects store needs — narrow and fake-able for tests. */
 export interface ProjectsGateway {
   create(input: { path: string; name: string }): Promise<ProjectCreateResult>;
@@ -47,7 +78,7 @@ const defaultGateway: ProjectsGateway = {
   remove: (id) => window.api.projects.remove(id),
   reorder: (orderedIds) => window.api.projects.reorder(orderedIds),
   setSelection: (selectedProjectId) =>
-    window.api.appState.set(PROJECTS_UI_APP_STATE_KEY, JSON.stringify({ selectedProjectId })),
+    window.api.appState.set(PROJECTS_UI_APP_STATE_KEY, encodeProjectsUiState(selectedProjectId)),
 };
 
 interface ProjectsState {

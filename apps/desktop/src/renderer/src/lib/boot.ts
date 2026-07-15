@@ -15,7 +15,12 @@ import {
 
 import { seedAppStateCache } from "@renderer/lib/app-state-storage";
 import { setBootNotice } from "@renderer/lib/boot-notice";
-import { PROJECTS_UI_APP_STATE_KEY, useProjectsStore } from "@renderer/stores/projects";
+import {
+  PROJECTS_UI_APP_STATE_KEY,
+  decodeProjectsUiState,
+  encodeProjectsUiState,
+  useProjectsStore,
+} from "@renderer/stores/projects";
 import { useBoardStore } from "@renderer/stores/board";
 import { useUiStore } from "@renderer/stores/ui";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
@@ -45,19 +50,6 @@ export interface BootStorage {
 }
 
 export type BootResult = { ok: true } | { ok: false; error: string };
-
-/** Parses the `"volli:projects-ui"` app_state JSON; defensive against a corrupt/missing value. */
-function parseSelectedProjectId(raw: string | undefined): string | null {
-  if (raw === undefined) return null;
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (typeof parsed !== "object" || parsed === null) return null;
-    const selectedProjectId = (parsed as Record<string, unknown>).selectedProjectId;
-    return typeof selectedProjectId === "string" ? selectedProjectId : null;
-  } catch {
-    return null;
-  }
-}
 
 /** Unwraps a zustand-persist envelope (`{state,version}`) into its `state`, or `undefined` for anything else. */
 function unwrapPersistEnvelope(raw: string): unknown {
@@ -132,9 +124,9 @@ function buildLegacyImportRequest(
   const sourceUnreadable = hadProjectData && projects.length === 0;
 
   const appState: Record<string, string> = {
-    [PROJECTS_UI_APP_STATE_KEY]: JSON.stringify({
-      selectedProjectId: typeof legacySelectedId === "string" ? legacySelectedId : null,
-    }),
+    [PROJECTS_UI_APP_STATE_KEY]: encodeProjectsUiState(
+      typeof legacySelectedId === "string" ? legacySelectedId : null,
+    ),
   };
   if (rawUi !== null) appState[LEGACY_UI_KEY] = rawUi;
   if (rawWorkspace !== null) appState[LEGACY_WORKSPACE_KEY] = rawWorkspace;
@@ -153,7 +145,7 @@ function resolveSelectedProjectId(
   appState: Record<string, string>,
   projects: BootstrapPayload["projects"],
 ): string | null {
-  const id = parseSelectedProjectId(appState[PROJECTS_UI_APP_STATE_KEY]);
+  const id = decodeProjectsUiState(appState[PROJECTS_UI_APP_STATE_KEY]);
   return id !== null && projects.some((project) => project.id === id) ? id : null;
 }
 
