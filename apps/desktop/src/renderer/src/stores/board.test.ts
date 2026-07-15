@@ -4,11 +4,13 @@ import {
   type Label,
   type Ticket,
   type TicketPriority,
+  type TicketResult,
   type TicketStatus,
 } from "@volli/shared";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
 import { type BoardGateway, createBoardStore } from "./board";
+import { ticketScope, useSessionsStore } from "./sessions";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
@@ -26,8 +28,10 @@ function ticket(overrides: Partial<Ticket> & { status: TicketStatus }): Ticket {
     priority: overrides.priority ?? "medium",
     labels: overrides.labels ?? [],
     usesWorktree: overrides.usesWorktree ?? true,
-    harnessId: overrides.harnessId ?? "claude-code",
     order: overrides.order ?? 0,
+    worktreePath: overrides.worktreePath ?? null,
+    branch: overrides.branch ?? null,
+    baseBranch: overrides.baseBranch ?? null,
     createdAt: overrides.createdAt ?? 0,
     updatedAt: overrides.updatedAt ?? 0,
   };
@@ -56,6 +60,22 @@ function fakeGateway(overrides: Partial<BoardGateway> = {}): BoardGateway {
     ok: true,
     ticket: ticket({ id: input.ticketId, status: "backlog", priority: input.priority }),
   }));
+  const updateTicket = vi.fn<BoardGateway["updateTicket"]>(async (input) => ({
+    ok: true,
+    ticket: ticket({
+      id: input.ticketId,
+      status: "backlog",
+      title: input.title,
+      body: input.body,
+      worktreePath: input.worktreePath,
+      branch: input.branch,
+      baseBranch: input.baseBranch,
+    }),
+  }));
+  const setLabels = vi.fn<BoardGateway["setLabels"]>(async (input) => ({
+    ok: true,
+    ticket: ticket({ id: input.ticketId, status: "backlog", labels: input.labels }),
+  }));
   const archiveTicket = vi.fn<BoardGateway["archiveTicket"]>(async () => ({ ok: true }));
   const unarchiveTicket = vi.fn<BoardGateway["unarchiveTicket"]>(async (input) => ({
     ok: true,
@@ -67,6 +87,8 @@ function fakeGateway(overrides: Partial<BoardGateway> = {}): BoardGateway {
     createTicket,
     moveTicket,
     setTicketPriority,
+    updateTicket,
+    setLabels,
     archiveTicket,
     unarchiveTicket,
     deleteTicket,
@@ -422,6 +444,286 @@ describe("setTicketPriority", () => {
   });
 });
 
+describe("updateTicket", () => {
+  it("locates the ticket's project without being told it, optimistically patches only the given fields, then reconciles with the gateway's ticket", async () => {
+    const a = ticket({
+      id: "a",
+      projectId: "p1",
+      status: "backlog",
+      title: "Old",
+      body: "old body",
+    });
+    const b = ticket({ id: "b", projectId: "p1", status: "backlog", order: 1 });
+    const authoritative = { ...a, branch: "volli/VC-1-thing", updatedAt: 999 };
+    const gateway = fakeGateway({
+      updateTicket: vi.fn<BoardGateway["updateTicket"]>(async () => ({
+        ok: true,
+        ticket: authoritative,
+      })),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a, b] }, {});
+
+    await store.getState().updateTicket({ ticketId: "a", branch: "volli/VC-1-thing" });
+
+    expect(gateway.updateTicket).toHaveBeenCalledWith({
+      ticketId: "a",
+      branch: "volli/VC-1-thing",
+    });
+    const result = store.getState().ticketsByProject.p1!;
+    expect(result).toContainEqual(authoritative);
+    // The sibling card is untouched — same reference, not clobbered by a
+    // wholesale slice replace.
+    expect(result.find((t) => t.id === "b")).toBe(b);
+  });
+
+  it("optimistically clears a field when explicitly passed null", () => {
+    const a = ticket({ id: "a", projectId: "p1", status: "backlog", branch: "volli/VC-1-thing" });
+    const gateway = fakeGateway({
+      // Never resolves — these tests inspect only the synchronous optimistic
+      // patch, which runs before the gateway call's `await` (same trick as
+      // `setTicketPriority`'s own pre-await `set()`).
+      updateTicket: vi.fn<BoardGateway["updateTicket"]>(() => new Promise<TicketResult>(() => {})),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a] }, {});
+
+    void store.getState().updateTicket({ ticketId: "a", branch: null });
+
+    expect(store.getState().ticketsByProject.p1?.[0]?.branch).toBeNull();
+  });
+
+  it("optimistically patches body and worktree-identity fields together", () => {
+    const a = ticket({ id: "a", projectId: "p1", status: "backlog", body: "old body" });
+    const gateway = fakeGateway({
+      updateTicket: vi.fn<BoardGateway["updateTicket"]>(() => new Promise<TicketResult>(() => {})),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a] }, {});
+
+    void store.getState().updateTicket({
+      ticketId: "a",
+      body: "fresh body",
+      worktreePath: "/tmp/wt",
+      baseBranch: "main",
+    });
+
+    const patched = store.getState().ticketsByProject.p1?.[0];
+    expect(patched?.body).toBe("fresh body");
+    expect(patched?.worktreePath).toBe("/tmp/wt");
+    expect(patched?.baseBranch).toBe("main");
+  });
+
+  it("leaves fields the caller didn't pass untouched in the optimistic patch", () => {
+    const a = ticket({
+      id: "a",
+      projectId: "p1",
+      status: "backlog",
+      title: "Old",
+      body: "keep me",
+    });
+    const gateway = fakeGateway({
+      updateTicket: vi.fn<BoardGateway["updateTicket"]>(() => new Promise<TicketResult>(() => {})),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a] }, {});
+
+    void store.getState().updateTicket({ ticketId: "a", title: "New" });
+
+    const patched = store.getState().ticketsByProject.p1?.[0];
+    expect(patched?.title).toBe("New");
+    expect(patched?.body).toBe("keep me");
+  });
+
+  it("is a no-op (no IPC call) for an unknown ticket id", async () => {
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [ticket({ id: "a", status: "backlog" })] }, {});
+
+    await store.getState().updateTicket({ ticketId: "does-not-exist", title: "New" });
+
+    expect(gateway.updateTicket).not.toHaveBeenCalled();
+  });
+
+  it("reverts to the original ticket and toasts on a typed failure", async () => {
+    const a = ticket({ id: "a", projectId: "p1", status: "backlog", title: "Old" });
+    const gateway = fakeGateway({
+      updateTicket: vi.fn<BoardGateway["updateTicket"]>(async () => ({
+        ok: false,
+        error: "conflict",
+      })),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a] }, {});
+
+    await store.getState().updateTicket({ ticketId: "a", title: "New" });
+
+    expect(store.getState().ticketsByProject.p1?.[0]).toEqual(a);
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not update ticket: conflict");
+  });
+
+  it("reverts to the original ticket and toasts when the gateway call rejects", async () => {
+    const a = ticket({ id: "a", projectId: "p1", status: "backlog", title: "Old" });
+    const gateway = fakeGateway({
+      updateTicket: vi.fn<BoardGateway["updateTicket"]>(async () => {
+        throw new Error("ipc gone");
+      }),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a] }, {});
+
+    await store.getState().updateTicket({ ticketId: "a", title: "New" });
+
+    expect(store.getState().ticketsByProject.p1?.[0]).toEqual(a);
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not update ticket: ipc gone");
+  });
+
+  it("does not resurrect a project slice forgotten while the update IPC was in flight", async () => {
+    let resolveUpdate!: (result: { ok: true; ticket: Ticket }) => void;
+    const a = ticket({ id: "a", projectId: "p1", status: "backlog" });
+    const gateway = fakeGateway({
+      updateTicket: vi.fn<BoardGateway["updateTicket"]>(
+        () => new Promise((resolve) => (resolveUpdate = resolve)),
+      ),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a] }, {});
+
+    const pending = store.getState().updateTicket({ ticketId: "a", title: "New" });
+    store.getState().forget("p1"); // project removed mid-flight
+    resolveUpdate({ ok: true, ticket: { ...a, title: "New" } });
+    await pending;
+
+    expect("p1" in store.getState().ticketsByProject).toBe(false);
+  });
+
+  it("reverts only the failed field, keeping a value a concurrent save committed mid-flight", async () => {
+    const a = ticket({
+      id: "a",
+      projectId: "p1",
+      status: "backlog",
+      title: "Old",
+      body: "old body",
+    });
+    // A sibling in the same slice — the field-scoped revert must leave it be.
+    const b = ticket({ id: "b", projectId: "p1", status: "backlog", order: 1 });
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a, b] }, {});
+    // A concurrent body save commits (in SQLite and the store) while this title
+    // write is in flight; then the title write fails. The revert must restore
+    // ONLY the title — a whole-ticket snapshot revert would resurrect the old body.
+    vi.mocked(gateway.updateTicket).mockImplementation(async () => {
+      const fresh = store.getState().ticketsByProject.p1!;
+      store.setState({
+        ticketsByProject: {
+          p1: fresh.map((t) => (t.id === "a" ? Object.assign({}, t, { body: "new body" }) : t)),
+        },
+      });
+      return { ok: false, error: "conflict" };
+    });
+
+    await store.getState().updateTicket({ ticketId: "a", title: "New" });
+
+    const patched = store.getState().ticketsByProject.p1![0]!;
+    expect(patched.title).toBe("Old"); // failed field reverted
+    expect(patched.body).toBe("new body"); // concurrent commit preserved
+  });
+});
+
+describe("setLabels", () => {
+  it("locates the ticket's project without being told it, optimistically replaces the label set, then reconciles with the gateway's ticket", async () => {
+    const a = ticket({ id: "a", projectId: "p1", status: "backlog", labels: ["bug"] });
+    const b = ticket({ id: "b", projectId: "p1", status: "backlog", order: 1 });
+    const authoritative = { ...a, labels: ["bug", "urgent"], updatedAt: 999 };
+    const gateway = fakeGateway({
+      setLabels: vi.fn<BoardGateway["setLabels"]>(async () => ({
+        ok: true,
+        ticket: authoritative,
+      })),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a, b] }, {});
+
+    await store.getState().setLabels("a", ["bug", "urgent"]);
+
+    expect(gateway.setLabels).toHaveBeenCalledWith({ ticketId: "a", labels: ["bug", "urgent"] });
+    const result = store.getState().ticketsByProject.p1!;
+    expect(result).toContainEqual(authoritative);
+    expect(result.find((t) => t.id === "b")).toBe(b);
+  });
+
+  it("is a no-op (no IPC call) for an unknown ticket id", async () => {
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [ticket({ id: "a", status: "backlog" })] }, {});
+
+    await store.getState().setLabels("does-not-exist", ["bug"]);
+
+    expect(gateway.setLabels).not.toHaveBeenCalled();
+  });
+
+  it("reverts to the original labels and toasts on a typed failure", async () => {
+    const a = ticket({ id: "a", projectId: "p1", status: "backlog", labels: ["bug"] });
+    const gateway = fakeGateway({
+      setLabels: vi.fn<BoardGateway["setLabels"]>(async () => ({ ok: false, error: "conflict" })),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a] }, {});
+
+    await store.getState().setLabels("a", ["bug", "urgent"]);
+
+    expect(store.getState().ticketsByProject.p1?.[0]?.labels).toEqual(["bug"]);
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not update labels: conflict");
+  });
+
+  it("reverts to the original labels and toasts when the gateway call rejects", async () => {
+    const a = ticket({ id: "a", projectId: "p1", status: "backlog", labels: ["bug"] });
+    const gateway = fakeGateway({
+      setLabels: vi.fn<BoardGateway["setLabels"]>(async () => {
+        throw new Error("ipc gone");
+      }),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a] }, {});
+
+    await store.getState().setLabels("a", ["bug", "urgent"]);
+
+    expect(store.getState().ticketsByProject.p1?.[0]?.labels).toEqual(["bug"]);
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not update labels: ipc gone");
+  });
+
+  it("reverts only the labels on failure, keeping a title a concurrent save committed mid-flight", async () => {
+    const a = ticket({
+      id: "a",
+      projectId: "p1",
+      status: "backlog",
+      title: "Old",
+      labels: ["bug"],
+    });
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a] }, {});
+    // A concurrent title save commits while this labels write is in flight; then
+    // labels fails. Field-scoped revert must restore only labels, keeping "New".
+    vi.mocked(gateway.setLabels).mockImplementation(async () => {
+      const fresh = store.getState().ticketsByProject.p1!;
+      store.setState({
+        ticketsByProject: {
+          p1: fresh.map((t) => (t.id === "a" ? Object.assign({}, t, { title: "New" }) : t)),
+        },
+      });
+      return { ok: false, error: "conflict" };
+    });
+
+    await store.getState().setLabels("a", ["bug", "urgent"]);
+
+    const patched = store.getState().ticketsByProject.p1![0]!;
+    expect(patched.labels).toEqual(["bug"]); // reverted (field-scoped)
+    expect(patched.title).toBe("New"); // concurrent commit preserved
+  });
+});
+
 describe("loadArchived", () => {
   it("fetches the project's archived tickets into archivedByProject", async () => {
     const archived = [archivedTicket({ id: "a", status: "done", archivedAt: 5 })];
@@ -726,6 +1028,59 @@ describe("deleteArchivedTicket", () => {
   });
 });
 
+const resetSessions = () =>
+  useSessionsStore.setState({ byOwner: {}, sessionOwner: {}, lastOutputAt: {}, starting: {} });
+
+describe("archive/delete session teardown", () => {
+  it("kills the ticket's live sessions when the archive succeeds", async () => {
+    const kill = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("window", { api: { terminal: { kill } } });
+    resetSessions();
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [ticket({ id: "tk", status: "doing" })] }, {});
+    useSessionsStore.getState().addSession(ticketScope("p1", "tk"), "s1", "Session 1");
+
+    await store.getState().archiveTicket("p1", "tk");
+
+    expect(kill).toHaveBeenCalledWith("s1");
+    expect(useSessionsStore.getState().byOwner["tk"]).toBeUndefined();
+  });
+
+  it("does NOT kill the ticket's sessions when the archive fails (the ticket is still live)", async () => {
+    const kill = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("window", { api: { terminal: { kill } } });
+    resetSessions();
+    const gateway = fakeGateway({
+      archiveTicket: vi.fn<BoardGateway["archiveTicket"]>(async () => ({
+        ok: false,
+        error: "conflict",
+      })),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [ticket({ id: "tk", status: "doing" })] }, {});
+    useSessionsStore.getState().addSession(ticketScope("p1", "tk"), "s1", "Session 1");
+
+    await store.getState().archiveTicket("p1", "tk");
+
+    expect(kill).not.toHaveBeenCalled();
+    expect(useSessionsStore.getState().byOwner["tk"]?.tabs).toHaveLength(1);
+  });
+
+  it("kills the ticket's live sessions when the archived ticket is permanently deleted", async () => {
+    const kill = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("window", { api: { terminal: { kill } } });
+    resetSessions();
+    const store = createBoardStore(fakeGateway());
+    store.setState({ archivedByProject: { p1: [archivedTicket({ id: "tk", status: "done" })] } });
+    useSessionsStore.getState().addSession(ticketScope("p1", "tk"), "s1", "Session 1");
+
+    await store.getState().deleteArchivedTicket("p1", "tk");
+
+    expect(kill).toHaveBeenCalledWith("s1");
+    expect(useSessionsStore.getState().byOwner["tk"]).toBeUndefined();
+  });
+});
+
 describe("archive lifecycle on a project with no loaded state", () => {
   it("archive/unarchive/delete all no-op without an IPC call", async () => {
     const gateway = fakeGateway();
@@ -775,18 +1130,6 @@ describe("toggleLabel", () => {
 
     store.getState().toggleLabel("p1", "terminal");
     expect(store.getState().filterByProject.p1!.labels).toEqual([]);
-  });
-});
-
-describe("toggleHarness", () => {
-  it("adds then removes a harness id from the facet", () => {
-    const store = createBoardStore(fakeGateway());
-
-    store.getState().toggleHarness("p1", "codex");
-    expect(store.getState().filterByProject.p1!.harnessIds).toEqual(["codex"]);
-
-    store.getState().toggleHarness("p1", "codex");
-    expect(store.getState().filterByProject.p1!.harnessIds).toEqual([]);
   });
 });
 
@@ -987,6 +1330,36 @@ describe("createBoardStore() with the default gateway", () => {
     await store.getState().setTicketPriority("p1", "a", "high");
 
     expect(setPriority).toHaveBeenCalledWith({ ticketId: "a", priority: "high" });
+  });
+
+  it("updateTicket calls window.api.tickets.update", async () => {
+    const update = vi.fn(async () => ({
+      ok: true as const,
+      ticket: ticket({ id: "a", status: "backlog", branch: "volli/VC-1-thing" }),
+    }));
+    vi.stubGlobal("window", { api: { tickets: { update } } });
+    const store = createBoardStore();
+    const a = ticket({ id: "a", projectId: "p1", status: "backlog" });
+    store.getState().hydrate({ p1: [a] }, {});
+
+    await store.getState().updateTicket({ ticketId: "a", branch: "volli/VC-1-thing" });
+
+    expect(update).toHaveBeenCalledWith({ ticketId: "a", branch: "volli/VC-1-thing" });
+  });
+
+  it("setLabels calls window.api.tickets.setLabels", async () => {
+    const setLabels = vi.fn(async () => ({
+      ok: true as const,
+      ticket: ticket({ id: "a", status: "backlog", labels: ["bug"] }),
+    }));
+    vi.stubGlobal("window", { api: { tickets: { setLabels } } });
+    const store = createBoardStore();
+    const a = ticket({ id: "a", projectId: "p1", status: "backlog" });
+    store.getState().hydrate({ p1: [a] }, {});
+
+    await store.getState().setLabels("a", ["bug"]);
+
+    expect(setLabels).toHaveBeenCalledWith({ ticketId: "a", labels: ["bug"] });
   });
 
   it("archiveTicket calls window.api.tickets.archive", async () => {

@@ -1,9 +1,9 @@
-import type { Project } from "@volli/shared";
+import type { Project, Ticket } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
 import { useBoardStore } from "./board";
 import { PROJECTS_UI_APP_STATE_KEY, type ProjectsGateway, createProjectsStore } from "./projects";
-import { useSessionsStore } from "./sessions";
+import { scratchScope, ticketScope, useSessionsStore } from "./sessions";
 import { useWorkspaceStore } from "./workspace";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
@@ -23,7 +23,7 @@ beforeEach(() => {
   });
   useBoardStore.setState({ ticketsByProject: {}, labelsByProject: {} });
   useWorkspaceStore.setState({ byProject: {} });
-  useSessionsStore.setState({ byProject: {}, startingProjects: {} });
+  useSessionsStore.setState({ byOwner: {}, sessionOwner: {}, lastOutputAt: {}, starting: {} });
 });
 
 afterEach(() => {
@@ -272,12 +272,35 @@ describe("removeProject", () => {
     const only = project({ id: "only", path: "/a" });
     const { store } = freshStore();
     store.getState().hydrate([only], only.id);
-    useSessionsStore.getState().addSession(only.id, "s1");
+    useSessionsStore.getState().addSession(scratchScope(only.id), "s1", "Terminal 1");
 
     await store.getState().removeProject(only.id);
 
-    expect(useSessionsStore.getState().byProject[only.id]).toBeUndefined();
+    expect(useSessionsStore.getState().byOwner[only.id]).toBeUndefined();
     expect(kill).toHaveBeenCalledWith("s1");
+  });
+
+  it("kills the removed project's ticket-scoped sessions too", async () => {
+    const kill = vi
+      .fn<(sessionId: string) => Promise<{ ok: boolean }>>()
+      .mockResolvedValue({ ok: true });
+    vi.stubGlobal("window", {
+      api: { terminal: { kill }, appState: { set: vi.fn().mockResolvedValue({ ok: true }) } },
+    });
+    const only = project({ id: "only", path: "/a" });
+    const { store } = freshStore();
+    store.getState().hydrate([only], only.id);
+    // A live ticket of the project, with a ticket-scoped terminal session.
+    useBoardStore.setState({
+      ticketsByProject: { only: [{ id: "tk1" } as Ticket] },
+      labelsByProject: {},
+    });
+    useSessionsStore.getState().addSession(ticketScope(only.id, "tk1"), "ts1", "Session 1");
+
+    await store.getState().removeProject(only.id);
+
+    expect(useSessionsStore.getState().byOwner["tk1"]).toBeUndefined();
+    expect(kill).toHaveBeenCalledWith("ts1");
   });
 
   it("is a no-op (no IPC call) for an unknown id", async () => {

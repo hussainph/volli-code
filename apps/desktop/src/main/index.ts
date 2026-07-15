@@ -1,15 +1,19 @@
-import { app, BrowserWindow, session } from "electron";
+import { app, BrowserWindow, session, shell } from "electron";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { errorMessage, ticketBranchName } from "@volli/shared";
 import type { VolliIpcEvent } from "@volli/shared";
+import { isInternalNavigationTarget } from "./navigation";
 import type { DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { openVolliDb } from "./db";
+import { endLiveSessions } from "./db/sessions-repo";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
 import { registerAppMenu } from "./menu";
 import { registerTerminalIpcHandlers } from "./pty";
+import { registerArtifactIpcHandlers } from "./volli-fs";
 
 // Fixes dev and the packaged app to one shared Electron `userData` dir (by
 // default they diverge: packaged apps use the productName, dev falls back to
@@ -22,6 +26,52 @@ import { registerTerminalIpcHandlers } from "./pty";
 app.setName("Volli Code");
 
 const isDev = !app.isPackaged;
+
+// Dev gets its OWN userData directory. dev and packaged otherwise share one
+// (app.setName above unifies them so the SQLite db survives across launches) —
+// but that shared dir means a `pnpm dev` boot's endLiveSessions sweep marks the
+// PACKAGED app's still-live sessions as ended (and vice versa), two instances
+// corrupting each other's session rows. Skipped when an explicit
+// `--user-data-dir` was passed (e2e/tests already isolate their profile that
+// way, and assert getPath("userData") equals it); VOLLI_DB_PATH still wins for
+// the db path regardless.
+if (isDev && !app.commandLine.hasSwitch("user-data-dir")) {
+  app.setPath("userData", `${app.getPath("userData")}-dev`);
+}
+
+// The packaged renderer entry — loaded by createWindow's loadFile below and,
+// mirrored here, the sole allowed in-window file:// document in prod.
+const PACKAGED_RENDERER_ENTRY = join(__dirname, "../dist/index.html");
+
+// Navigation hardening (Electron footgun). Markdown in ticket bodies, comments,
+// and agent-written artifacts now renders real <a href> links, so a click would
+// otherwise navigate the whole BrowserWindow away from the app — or a
+// window.open would punch out an uncontrolled child window.
+//
+// The only allowed in-window destinations are the dev-server origin in dev and
+// the EXACT packaged index.html document in prod (compared by pathname, so any
+// OTHER local file — e.g. an .html dragged onto the window — is external even
+// though it's also file://). Everything else is external. See navigation.ts.
+function isInternalNavigation(target: string): boolean {
+  const devUrl = isDev ? process.env["ELECTRON_RENDERER_URL"] : undefined;
+  if (devUrl) {
+    return isInternalNavigationTarget(target, {
+      devOrigin: new URL(devUrl).origin,
+      packagedPathname: null,
+    });
+  }
+  return isInternalNavigationTarget(target, {
+    devOrigin: null,
+    packagedPathname: pathToFileURL(PACKAGED_RENDERER_ENTRY).pathname,
+  });
+}
+
+/** Sends an http(s) URL to the user's default browser; ignores anything else. */
+function openExternal(target: string): void {
+  if (target.startsWith("http:") || target.startsWith("https:")) {
+    void shell.openExternal(target);
+  }
+}
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -80,13 +130,27 @@ function createWindow(): void {
     mainWindow.webContents.send("volli:fullscreen-changed" satisfies VolliIpcEvent, false);
   });
 
+  // Navigation hardening (see isInternalNavigation/openExternal above): deny
+  // every new-window request, opening http(s) targets in the user's browser;
+  // prevent every in-window navigation away from the app's own entry, sending
+  // http(s) targets to the browser instead.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    openExternal(url);
+    return { action: "deny" };
+  });
+  mainWindow.webContents.on("will-navigate", (event, target) => {
+    if (isInternalNavigation(target)) return;
+    event.preventDefault();
+    openExternal(target);
+  });
+
   // In dev, scripts/dev.mjs injects ELECTRON_RENDERER_URL and runs the Vite dev
   // server there for HMR. In production, load the built renderer from disk.
   // DevTools is not auto-opened — toggle it with ⌥⌘I when needed.
   if (isDev && process.env["ELECTRON_RENDERER_URL"]) {
     mainWindow.loadURL(process.env["ELECTRON_RENDERER_URL"]);
   } else {
-    mainWindow.loadFile(join(__dirname, "../dist/index.html"));
+    mainWindow.loadFile(PACKAGED_RENDERER_ENTRY);
   }
 }
 
@@ -123,8 +187,6 @@ app.whenReady().then(() => {
   // renderer-driven CSS zoom (see menu.ts for the rationale).
   registerAppMenu();
   registerIpcHandlers();
-  // Boots the PTY multiplexer and its before-quit teardown (kills all PTYs).
-  registerTerminalIpcHandlers();
   // Ghostty config read + live-reload watch, feeding restty's appearance.
   registerGhosttyConfigIpc();
 
@@ -145,7 +207,23 @@ app.whenReady().then(() => {
     dbHandle = { ok: false, error: errorMessage(error) };
     console.error("[volli] failed to open database:", dbHandle.error);
   }
+  // Boot recovery: no PTY survives a relaunch, so close out any session row
+  // still marked live before the renderer lists them — the table must never
+  // accumulate phantom "live" sessions.
+  if (dbHandle.ok) {
+    try {
+      endLiveSessions(dbHandle.db, Date.now());
+    } catch (error) {
+      console.error("[volli] failed to sweep stale sessions:", errorMessage(error));
+    }
+  }
   registerDataIpcHandlers(dbHandle);
+  // `.volli` artifacts fs plumbing (list/read/write/create/promote/watch);
+  // same degraded-DB stance as registerDataIpcHandlers.
+  registerArtifactIpcHandlers(dbHandle);
+  // Boots the PTY multiplexer (persists a durable record per session) and its
+  // before-quit teardown (kills all PTYs); needs the db, so it registers here.
+  registerTerminalIpcHandlers(dbHandle);
 
   createWindow();
 

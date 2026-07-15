@@ -1,0 +1,211 @@
+/*
+ * Typeset — the rendered-markdown stylesheet for the ticket Doc tab and
+ * comment bodies (ticket-detail-mvp decision #9). This is our own copy of the
+ * shadcn/typeset CSS file: a single stylesheet, no package or config layer,
+ * imported after Tailwind (see main.tsx). It follows shadcn/typeset's public
+ * contract exactly — one `.typeset` wrapper class whose look is driven by six
+ * custom properties (`--typeset-font-body/heading/mono`, `--typeset-size`,
+ * `--typeset-leading`, `--typeset-flow`) — with the element rules authored
+ * against that contract and the font/color variables mapped to Volli's tokens
+ * (globals.css) rather than shadcn's Geist defaults. The upstream builder's
+ * generated file is not published to the registry as a fetchable item, so this
+ * is hand-written to the documented contract. Dark-only, like the rest of the
+ * app.
+ *
+ * Vertical rhythm uses the "flow" pattern: adjacent flow elements are spaced by
+ * `--typeset-flow` via the owl selector, so paragraphs, lists, and blocks share
+ * one rhythm knob.
+ */
+
+.typeset {
+  --typeset-font-body: var(--font-sans);
+  --typeset-font-heading: var(--font-sans);
+  --typeset-font-mono: var(--font-mono);
+  --typeset-size: 0.875rem;
+  --typeset-leading: 1.7;
+  --typeset-flow: 1em;
+
+  font-family: var(--typeset-font-body);
+  font-size: var(--typeset-size);
+  line-height: var(--typeset-leading);
+  color: var(--foreground);
+  overflow-wrap: break-word;
+}
+
+/* Flow: space between adjacent block elements — the single rhythm control. */
+.typeset > * + * {
+  margin-top: var(--typeset-flow);
+}
+
+/* Collapse the top margin so a rendered block sits flush with its container. */
+.typeset > :first-child {
+  margin-top: 0;
+}
+
+.typeset h1,
+.typeset h2,
+.typeset h3,
+.typeset h4,
+.typeset h5,
+.typeset h6 {
+  font-family: var(--typeset-font-heading);
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  color: var(--foreground);
+}
+
+/* Headings get extra breathing room above (but not the very first element). */
+.typeset > h1 + *,
+.typeset > h2 + *,
+.typeset > h3 + *,
+.typeset > h4 + *,
+.typeset > h5 + *,
+.typeset > h6 + * {
+  margin-top: 0.5em;
+}
+
+.typeset > * + h1,
+.typeset > * + h2,
+.typeset > * + h3,
+.typeset > * + h4,
+.typeset > * + h5,
+.typeset > * + h6 {
+  margin-top: 1.6em;
+}
+
+.typeset h1 {
+  font-size: 1.6em;
+}
+.typeset h2 {
+  font-size: 1.35em;
+}
+.typeset h3 {
+  font-size: 1.15em;
+}
+.typeset h4 {
+  font-size: 1em;
+}
+.typeset h5,
+.typeset h6 {
+  font-size: 0.9em;
+  color: var(--muted-foreground);
+}
+
+.typeset a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+.typeset a:hover {
+  text-decoration-thickness: 2px;
+}
+
+.typeset strong {
+  font-weight: 600;
+  color: var(--foreground);
+}
+.typeset em {
+  font-style: italic;
+}
+.typeset del {
+  color: var(--muted-foreground);
+  text-decoration: line-through;
+}
+
+.typeset ul,
+.typeset ol {
+  padding-left: 1.5em;
+}
+.typeset ul {
+  list-style: disc;
+}
+.typeset ol {
+  list-style: decimal;
+}
+.typeset li {
+  margin-top: 0.35em;
+}
+.typeset li::marker {
+  color: var(--muted-foreground);
+}
+/* Nested lists share the flow rhythm without a full gap. */
+.typeset li > ul,
+.typeset li > ol {
+  margin-top: 0.35em;
+}
+
+/* GFM task lists: a checkbox flush with its text, no bullet. */
+.typeset ul:has(> li > input[type="checkbox"]) {
+  list-style: none;
+  padding-left: 0.25em;
+}
+.typeset li > input[type="checkbox"] {
+  margin-right: 0.5em;
+  accent-color: var(--primary);
+  vertical-align: middle;
+}
+
+.typeset code {
+  font-family: var(--typeset-font-mono);
+  font-size: 0.9em;
+  padding: 0.1em 0.35em;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--muted);
+}
+
+.typeset pre {
+  font-family: var(--typeset-font-mono);
+  font-size: 0.9em;
+  line-height: 1.6;
+  padding: 0.9em 1em;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  overflow-x: auto;
+}
+/* Inside a code block, strip the inline-code chrome. */
+.typeset pre code {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: inherit;
+}
+
+.typeset blockquote {
+  padding-left: 1em;
+  border-left: 3px solid var(--border-strong);
+  color: var(--muted-foreground);
+}
+
+.typeset hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.typeset img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-md);
+}
+
+.typeset table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.95em;
+}
+.typeset th,
+.typeset td {
+  padding: 0.4em 0.75em;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+.typeset th {
+  font-weight: 600;
+  background: var(--muted);
+}

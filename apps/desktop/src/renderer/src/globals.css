@@ -135,6 +135,40 @@
   }
 }
 
+/* Scrollbars (#49): one global overlay-style treatment instead of Chromium's
+ * stock bars — thin, trackless, a token-colored pill thumb inset by a
+ * transparent border (background-clip keeps the pill off the container edge).
+ * Progressive reveal approximates macOS overlay behavior without JS: near
+ * invisible at rest, visible while the scroll container is hovered, bright
+ * while the thumb itself is grabbed. Chromium-only app, so the -webkit
+ * pseudo-elements are authoritative (no scrollbar-width/color needed). */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+*::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+*::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 9999px;
+  background-color: var(--border);
+  background-clip: content-box;
+}
+*:hover::-webkit-scrollbar-thumb {
+  background-color: var(--border-strong);
+}
+*::-webkit-scrollbar-thumb:hover,
+*::-webkit-scrollbar-thumb:active {
+  background-color: var(--muted-foreground);
+}
+
 /* Electron hiddenInset chrome: window-drag regions. Interactive children of a
  * drag region must opt out with .app-region-no-drag or they swallow clicks. */
 .app-region-drag {

@@ -52,7 +52,24 @@ export const HARNESS_LABELS: Record<HarnessId, string> = {
   opencode: "Opencode",
 };
 
+/**
+ * Default harness for a freshly-started session. Ticket-side default lookup
+ * removed with `Ticket.harnessId` — this is session-scoped only now (see
+ * `apps/desktop/src/main/pty.ts`'s scratch/ticket-session boot paths).
+ */
 export const DEFAULT_HARNESS_ID: HarnessId = "claude-code";
+
+/**
+ * Human-readable label for a harness id: the {@link HARNESS_LABELS} entry for a
+ * first-class {@link HarnessId}, otherwise the raw id verbatim (session-scoped
+ * harness ids are plain strings precisely so custom, non-first-class harnesses
+ * round-trip).
+ */
+export function harnessLabel(harnessId: string): string {
+  return (HARNESS_IDS as readonly string[]).includes(harnessId)
+    ? HARNESS_LABELS[harnessId as HarnessId]
+    : harnessId;
+}
 
 /** A board card and, once it reaches Doing, a terminal workspace. */
 export interface Ticket {
@@ -75,13 +92,19 @@ export interface Ticket {
   labels: string[];
   /** Whether this ticket boots its agent in an isolated git worktree. Default `true`. */
   usesWorktree: boolean;
-  /**
-   * The agent harness to launch. A plain string rather than {@link HarnessId}
-   * so custom, non-first-class harnesses can be stored once that lands.
-   */
-  harnessId: string;
   /** Position within its status column. */
   order: number;
+  /**
+   * First-class worktree identity (vision anchor: worktrees are pure code
+   * isolation, and their identity belongs on the ticket immediately even
+   * though *creation* automation lands later). `null` until a worktree
+   * exists for this ticket. Absolute path to the checkout.
+   */
+  worktreePath: string | null;
+  /** The branch checked out in {@link worktreePath}, e.g. `volli/VC-12-mcp-server`. `null` until a worktree exists. */
+  branch: string | null;
+  /** The branch {@link branch} was created from. `null` until a worktree exists. */
+  baseBranch: string | null;
   /** Epoch milliseconds. */
   createdAt: number;
   /** Epoch milliseconds. */
@@ -129,8 +152,12 @@ export interface CreateTicketInput {
   labels?: string[];
   /** Defaults to `true`. */
   usesWorktree?: boolean;
-  /** Defaults to {@link DEFAULT_HARNESS_ID}. */
-  harnessId?: string;
+  /** Defaults to `null` — no worktree exists yet. */
+  worktreePath?: string | null;
+  /** Defaults to `null` — no worktree exists yet. */
+  branch?: string | null;
+  /** Defaults to `null` — no worktree exists yet. */
+  baseBranch?: string | null;
 }
 
 /** Creates a {@link Ticket}. Pure and deterministic — the caller supplies `id` and `now`. */
@@ -145,8 +172,10 @@ export function createTicket(input: CreateTicketInput): Ticket {
     priority: input.priority ?? "medium",
     labels: input.labels ?? [],
     usesWorktree: input.usesWorktree ?? true,
-    harnessId: input.harnessId ?? DEFAULT_HARNESS_ID,
     order: input.order,
+    worktreePath: input.worktreePath ?? null,
+    branch: input.branch ?? null,
+    baseBranch: input.baseBranch ?? null,
     createdAt: input.now,
     updatedAt: input.now,
   };

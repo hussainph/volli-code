@@ -127,17 +127,70 @@ describe("setNewTicketOpen", () => {
 });
 
 describe("persistence", () => {
-  it("persists sidebarWidth + uiScale — settingsOpen resets each launch", () => {
+  it("persists sidebarWidth + uiScale + railCollapsed + detailsExpanded — settingsOpen resets each launch", () => {
     const storage = createMemoryStorage();
     const store = createUiStore(storage);
     store.getState().setSettingsOpen(true);
     store.getState().setSidebarWidth(500);
     store.getState().stepUiScale(1);
+    store.getState().toggleRailCollapsed();
+    store.getState().toggleDetailsExpanded();
 
     const persisted = JSON.parse(storage.getItem("volli:ui")!) as {
       state: Record<string, unknown>;
     };
-    expect(persisted.state).toEqual({ sidebarWidth: 500, uiScale: UI_SCALE_STEPS[3] });
+    expect(persisted.state).toEqual({
+      sidebarWidth: 500,
+      uiScale: UI_SCALE_STEPS[3],
+      railCollapsed: true,
+      detailsExpanded: true,
+    });
+  });
+
+  it("rehydrates railCollapsed from storage; corrupt/missing values default to expanded", async () => {
+    const storage = createMemoryStorage();
+    createUiStore(storage).getState().setRailCollapsed(true);
+    const reloaded = createUiStore(storage);
+    await reloaded.persist.rehydrate();
+    expect(reloaded.getState().railCollapsed).toBe(true);
+
+    // A non-boolean persisted value falls back to the safe, visible default.
+    const corrupt = createMemoryStorage();
+    corrupt.setItem(
+      "volli:ui",
+      JSON.stringify({
+        state: { sidebarWidth: 320, uiScale: 1, railCollapsed: "yes" },
+        version: 1,
+      }),
+    );
+    expect(createUiStore(corrupt).getState().railCollapsed).toBe(false);
+  });
+
+  it("rehydrates detailsExpanded from storage; corrupt/missing values default to collapsed", async () => {
+    const storage = createMemoryStorage();
+    createUiStore(storage).getState().setDetailsExpanded(true);
+    const reloaded = createUiStore(storage);
+    await reloaded.persist.rehydrate();
+    expect(reloaded.getState().detailsExpanded).toBe(true);
+
+    // A missing key (older persisted state) folds to the collapsed default.
+    const missing = createMemoryStorage();
+    missing.setItem(
+      "volli:ui",
+      JSON.stringify({ state: { sidebarWidth: 320, uiScale: 1 }, version: 1 }),
+    );
+    expect(createUiStore(missing).getState().detailsExpanded).toBe(false);
+
+    // A non-boolean persisted value falls back to the safe, collapsed default.
+    const corrupt = createMemoryStorage();
+    corrupt.setItem(
+      "volli:ui",
+      JSON.stringify({
+        state: { sidebarWidth: 320, uiScale: 1, detailsExpanded: "yes" },
+        version: 1,
+      }),
+    );
+    expect(createUiStore(corrupt).getState().detailsExpanded).toBe(false);
   });
 
   it("rehydrates sidebarWidth from storage into a fresh store", async () => {

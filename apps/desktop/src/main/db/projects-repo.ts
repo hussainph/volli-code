@@ -48,6 +48,12 @@ export function findProjectByPath(db: Database.Database, path: string): Project 
   return row ? mapProject(row) : undefined;
 }
 
+/** One project by id — used by the artifacts IPC handlers to resolve a ticket's project path. */
+export function getProjectById(db: Database.Database, id: string): Project | undefined {
+  const row = prepared<[string], ProjectRow>(db, "SELECT * FROM projects WHERE id = ?").get(id);
+  return row ? mapProject(row) : undefined;
+}
+
 /** The `sortOrder` one past the current max (`-1` when the table is empty, so this returns `0`). */
 export function nextSortOrder(db: Database.Database): number {
   const row = prepared<[], { max: number | null }>(

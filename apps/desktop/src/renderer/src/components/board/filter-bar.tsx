@@ -2,8 +2,6 @@ import * as React from "react";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import {
   distinctLabels,
-  HARNESS_IDS,
-  HARNESS_LABELS,
   isFilterActive,
   TICKET_PRIORITIES,
   TICKET_PRIORITY_LABELS,
@@ -25,11 +23,6 @@ const PRIORITY_OPTIONS = TICKET_PRIORITIES.map((priority) => ({
   value: priority,
   label: TICKET_PRIORITY_LABELS[priority],
   icon: <PriorityIndicator priority={priority} />,
-}));
-
-const HARNESS_OPTIONS = HARNESS_IDS.map((harnessId) => ({
-  value: harnessId,
-  label: HARNESS_LABELS[harnessId],
 }));
 
 interface FilterBarProps {
@@ -82,12 +75,6 @@ export function FilterBar({ projectId, tickets, filter, className }: FilterBarPr
           onToggle={(value) => useBoardStore.getState().toggleLabel(projectId, value)}
         />
       ) : null}
-      <FilterChip
-        label="Harness"
-        options={HARNESS_OPTIONS}
-        selected={filter.harnessIds}
-        onToggle={(value) => useBoardStore.getState().toggleHarness(projectId, value)}
-      />
       {isFilterActive(filter) ? (
         <Button
           variant="ghost"

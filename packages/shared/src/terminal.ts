@@ -3,6 +3,7 @@
 // `import type` from here (pack keeps main/preload dependency-disjoint), so
 // nothing in this module may pull in Node/Electron/DOM at runtime.
 
+import type { SessionRecord } from "./session";
 import type { GhosttyTerminalPrefs } from "./ghostty-config";
 
 /** Renderer → main request to boot a PTY session inside a workspace. */
@@ -13,16 +14,27 @@ export interface CreateTerminalSessionRequest {
   cwd: string;
   cols: number;
   rows: number;
+  /**
+   * When present, the session is ticket-scoped: main resolves the ticket and
+   * its project from the db (never trusting anything else from the renderer),
+   * runs the PTY at the project root with `VOLLI_TICKET`/`VOLLI_TICKET_DIR`
+   * injected, and persists a ticket-scoped {@link SessionRecord}. Absent = a
+   * project-scoped scratch session (`ticketId` null).
+   */
+  ticket?: { ticketId: string };
 }
 
 /**
  * Result of a create request. Like every IPC result it travels as a typed
  * discriminated union rather than a thrown error — `ipcMain.handle`
  * rejections serialize into useless strings and every failure must be
- * surfaceable in the UI.
+ * surfaceable in the UI. `sessionId` is the live-PTY handle (also the renderer
+ * engine-registry key); `session` is the durable {@link SessionRecord} main
+ * persisted for it — its `id` equals `sessionId`, and it carries the
+ * main-derived title (`Session N`/`Terminal N`) the renderer labels the tab with.
  */
 export type CreateTerminalSessionResult =
-  | { ok: true; sessionId: string }
+  | { ok: true; sessionId: string; session: SessionRecord }
   | { ok: false; error: string };
 
 /** Result of a fire-and-forget write/resize/kill against an existing session. */

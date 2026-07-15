@@ -1,12 +1,20 @@
 import * as React from "react";
+import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
+import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
+import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 
+import { Button } from "@renderer/components/ui/button";
 import { SidebarTrigger } from "@renderer/components/ui/sidebar";
 import { useFullScreen } from "@renderer/hooks/use-fullscreen";
+import { navBack, navForward } from "@renderer/hooks/use-nav-history";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { cn } from "@renderer/lib/utils";
+import { canGoBack, canGoForward } from "@renderer/lib/nav-history";
 import { useBoardStore } from "@renderer/stores/board";
+import { useUiStore } from "@renderer/stores/ui";
+import { useWorkspaceStore } from "@renderer/stores/workspace";
 
 /**
  * Full-width window chrome band — the ONLY drag-region owner for window
@@ -37,10 +45,89 @@ export function ChromeBar() {
           half their ~13px diameter), just below the band's 20px flex center —
           nudge the trigger down to meet them. */}
       <SidebarTrigger className="app-region-no-drag translate-y-px" />
+      <NavHistoryButtons />
       <UniversalSearchPill />
       {/* The content-area tab strip (if any) lives below in MainContent, not here. */}
       <div className="flex-1" />
+      <RightRailToggle />
     </div>
+  );
+}
+
+/**
+ * Slack-style ←/→ workspace navigation. Reads the back/forward stack depth from
+ * the workspace store's in-memory history; each button is disabled (muted,
+ * non-interactive) when its stack is empty. `navBack` / `navForward` apply the
+ * step to the live stores — see hooks/use-nav-history.ts.
+ */
+function NavHistoryButtons() {
+  const backEnabled = useWorkspaceStore((state) => canGoBack(state.navHistory));
+  const forwardEnabled = useWorkspaceStore((state) => canGoForward(state.navHistory));
+
+  return (
+    <div className="app-region-no-drag flex translate-y-px items-center">
+      <Button
+        variant="ghost"
+        size="icon"
+        className="size-7"
+        disabled={!backEnabled}
+        onClick={() => navBack()}
+        aria-label="Back"
+        title="Back (⌘[)"
+      >
+        <CaretLeftIcon weight="bold" />
+        <span className="sr-only">Back</span>
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="size-7"
+        disabled={!forwardEnabled}
+        onClick={() => navForward()}
+        aria-label="Forward"
+        title="Forward (⌘])"
+      >
+        <CaretRightIcon weight="bold" />
+        <span className="sr-only">Forward</span>
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * VS-Code secondary-sidebar toggle: a mirrored sidebar icon pinned at the
+ * chrome band's RIGHT edge that collapses the ticket-detail right rail (⌥⌘B).
+ * Shown only when the selected project has a ticket open in the detail view —
+ * the rail only exists there. The layout agent consumes `railCollapsed` from
+ * the ui store to actually hide/show the rail.
+ */
+function RightRailToggle() {
+  const project = useSelectedProject();
+  const projectId = project?.id ?? null;
+  const hasOpenTicket = useWorkspaceStore((state) =>
+    projectId === null ? false : state.byProject[projectId]?.openTicketId != null,
+  );
+  const railCollapsed = useUiStore((state) => state.railCollapsed);
+  const toggleRailCollapsed = useUiStore((state) => state.toggleRailCollapsed);
+
+  if (!hasOpenTicket) return null;
+
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      // scale-x-[-1] mirrors the left-sidebar glyph so it reads as the RIGHT
+      // panel (VS Code's secondary-sidebar convention). mr-1 keeps it off the
+      // window's right edge.
+      className="app-region-no-drag mr-1 size-7 translate-y-px"
+      aria-pressed={railCollapsed}
+      onClick={() => toggleRailCollapsed()}
+      aria-label={railCollapsed ? "Show details rail" : "Hide details rail"}
+      title={`${railCollapsed ? "Show" : "Hide"} details (⌥⌘B)`}
+    >
+      <SidebarSimpleIcon weight="fill" className="scale-x-[-1]" />
+      <span className="sr-only">Toggle details rail</span>
+    </Button>
   );
 }
 

@@ -5,6 +5,13 @@ import { contextBridge, ipcRenderer } from "electron";
 import type {
   AppStateSetResult,
   ArchivedTicketsResult,
+  ArtifactCreateResult,
+  ArtifactListResult,
+  ArtifactPromoteResult,
+  ArtifactReadImageResult,
+  ArtifactReadResult,
+  ArtifactsChangedEvent,
+  ArtifactTier,
   BootstrapResult,
   CreateTerminalSessionRequest,
   CreateTerminalSessionResult,
@@ -19,9 +26,14 @@ import type {
   ProjectMutationResult,
   Result,
   RevealResult,
+  SessionRenameResult,
+  SessionsResult,
   TerminalDataEvent,
   TerminalExitEvent,
   TerminalIoResult,
+  TicketCommentResult,
+  TicketCommentsResult,
+  TicketEventsResult,
   TicketPriority,
   TicketResult,
   TicketsResult,
@@ -80,7 +92,15 @@ const api = {
     /** Resolves with just the mutated ticket (patched into the list by id), not the whole project. */
     setPriority: (input: { ticketId: string; priority: TicketPriority }): Promise<TicketResult> =>
       ipcRenderer.invoke("volli:ticket-set-priority" satisfies VolliIpcChannel, input),
-    update: (input: { ticketId: string; title?: string; body?: string }): Promise<TicketResult> =>
+    update: (input: {
+      ticketId: string;
+      title?: string;
+      body?: string;
+      /** First-class worktree identity (migration 003); `null` explicitly clears the field. */
+      worktreePath?: string | null;
+      branch?: string | null;
+      baseBranch?: string | null;
+    }): Promise<TicketResult> =>
       ipcRenderer.invoke("volli:ticket-update" satisfies VolliIpcChannel, input),
     /** Replaces a ticket's labels by name; unknown names are created (`color: null`) per project. Resolves with just that ticket. */
     setLabels: (input: { ticketId: string; labels: string[] }): Promise<TicketResult> =>
@@ -97,10 +117,106 @@ const api = {
     /** The project's archived tickets, newest first — loaded on demand for the Archive view. */
     listArchived: (projectId: string): Promise<ArchivedTicketsResult> =>
       ipcRenderer.invoke("volli:ticket-list-archived" satisfies VolliIpcChannel, projectId),
+    /** A ticket's full event history, chronological — backs the Activity feed. */
+    events: (input: { ticketId: string }): Promise<TicketEventsResult> =>
+      ipcRenderer.invoke("volli:ticket-events" satisfies VolliIpcChannel, input),
+  },
+  comments: {
+    /** A ticket's comments, chronological — the work-log feed. */
+    list: (input: { ticketId: string }): Promise<TicketCommentsResult> =>
+      ipcRenderer.invoke("volli:comment-list" satisfies VolliIpcChannel, input),
+    /** Posts a comment as the human user; also records a `commented` event in the same transaction. */
+    create: (input: {
+      ticketId: string;
+      body: string;
+      sessionId?: string | null;
+    }): Promise<TicketCommentResult> =>
+      ipcRenderer.invoke("volli:comment-create" satisfies VolliIpcChannel, input),
+    /** Edits a comment's body; touches `updatedAt` only, no event. */
+    update: (input: { commentId: string; body: string }): Promise<TicketCommentResult> =>
+      ipcRenderer.invoke("volli:comment-update" satisfies VolliIpcChannel, input),
+    /** Hard-deletes a comment; no event. */
+    remove: (input: { commentId: string }): Promise<Result> =>
+      ipcRenderer.invoke("volli:comment-remove" satisfies VolliIpcChannel, input),
+  },
+  sessions: {
+    /** Every durable session record in a project (ticket-scoped and project-scoped scratch), newest first. */
+    list: (input: { projectId: string }): Promise<SessionsResult> =>
+      ipcRenderer.invoke("volli:session-list" satisfies VolliIpcChannel, input),
+    /** A ticket's durable session records, newest first — backs the right-rail linked-sessions list. */
+    listForTicket: (input: { ticketId: string }): Promise<SessionsResult> =>
+      ipcRenderer.invoke("volli:session-list-for-ticket" satisfies VolliIpcChannel, input),
+    /** Renames a session (scratch or ticket-scoped); the title is trimmed and must be non-empty in main. */
+    rename: (input: { sessionId: string; title: string }): Promise<SessionRenameResult> =>
+      ipcRenderer.invoke("volli:session-rename" satisfies VolliIpcChannel, input),
   },
   labels: {
     setColor: (input: { labelId: string; color: string | null }): Promise<LabelResult> =>
       ipcRenderer.invoke("volli:label-set-color" satisfies VolliIpcChannel, input),
+  },
+  artifacts: {
+    /** Both artifact tiers for a ticket (ticket resolved to its display id in main via the db). */
+    list: (input: { projectId: string; ticketId: string }): Promise<ArtifactListResult> =>
+      ipcRenderer.invoke("volli:artifact-list" satisfies VolliIpcChannel, input),
+    /** A markdown artifact's raw utf8 content. */
+    read: (input: {
+      projectId: string;
+      ticketId: string;
+      tier: ArtifactTier;
+      name: string;
+    }): Promise<ArtifactReadResult> =>
+      ipcRenderer.invoke("volli:artifact-read" satisfies VolliIpcChannel, input),
+    /** An image artifact's content as an inline `data:` URI (base64) — the CSP-safe `<img>` path. */
+    readImage: (input: {
+      projectId: string;
+      ticketId: string;
+      tier: ArtifactTier;
+      name: string;
+    }): Promise<ArtifactReadImageResult> =>
+      ipcRenderer.invoke("volli:artifact-read-image" satisfies VolliIpcChannel, input),
+    /** Writes markdown content; creates the tier's directory chain on demand. */
+    write: (input: {
+      projectId: string;
+      ticketId: string;
+      tier: ArtifactTier;
+      name: string;
+      content: string;
+    }): Promise<Result> =>
+      ipcRenderer.invoke("volli:artifact-write" satisfies VolliIpcChannel, input),
+    /** Creates a new, minimally-templated `.md` artifact in the ticket tier; `name` is forced to `.md`. */
+    create: (input: {
+      projectId: string;
+      ticketId: string;
+      name: string;
+    }): Promise<ArtifactCreateResult> =>
+      ipcRenderer.invoke("volli:artifact-create" satisfies VolliIpcChannel, input),
+    /** Moves a ticket-tier artifact up to the project tier; fails on a name collision (no silent overwrite). */
+    promote: (input: {
+      projectId: string;
+      ticketId: string;
+      name: string;
+    }): Promise<ArtifactPromoteResult> =>
+      ipcRenderer.invoke("volli:artifact-promote" satisfies VolliIpcChannel, input),
+    /** Reveals a tier's artifacts directory in Finder (creating it first if needed). */
+    revealDir: (input: {
+      projectId: string;
+      ticketId: string;
+      tier: ArtifactTier;
+    }): Promise<RevealResult> =>
+      ipcRenderer.invoke("volli:artifact-reveal-dir" satisfies VolliIpcChannel, input),
+    /** Subscribes main's `fs.watch` on both of a ticket's artifact-tier directories; pair with `unsubscribe` on unmount. */
+    subscribe: (input: { projectId: string; ticketId: string }): Promise<Result> =>
+      ipcRenderer.invoke("volli:artifact-subscribe" satisfies VolliIpcChannel, input),
+    unsubscribe: (input: { projectId: string; ticketId: string }): Promise<Result> =>
+      ipcRenderer.invoke("volli:artifact-unsubscribe" satisfies VolliIpcChannel, input),
+    /** Subscribes to debounced artifact-directory change events; returns the unsubscribe function. */
+    onChanged: (callback: (event: ArtifactsChangedEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: ArtifactsChangedEvent) =>
+        callback(payload);
+      ipcRenderer.on("volli:artifacts-changed" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:artifacts-changed" satisfies VolliIpcEvent, listener);
+    },
   },
   appState: {
     /** Upserts one `app_state` key — the async write-through the ui/workspace persist stores' storage adapter uses. */

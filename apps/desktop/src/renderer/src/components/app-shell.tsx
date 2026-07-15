@@ -10,6 +10,7 @@ import { SidebarResizeHandle } from "@renderer/components/sidebar/sidebar-resize
 import { Sidebar, SidebarInset, SidebarProvider } from "@renderer/components/ui/sidebar";
 import { Toaster } from "@renderer/components/ui/sonner";
 import { takeBootNotice } from "@renderer/lib/boot-notice";
+import { useNavHistory } from "@renderer/hooks/use-nav-history";
 import { useNewTicketShortcut } from "@renderer/hooks/use-new-ticket-shortcut";
 import { useProjectShortcuts } from "@renderer/hooks/use-project-shortcuts";
 import { errorMessage } from "@volli/shared";
@@ -29,6 +30,7 @@ import { useUiStore } from "@renderer/stores/ui";
 export function AppShell() {
   useProjectShortcuts();
   useNewTicketShortcut();
+  useNavHistory();
   useProjectRootsSync();
   useZoomCommands();
   useBootNotice();

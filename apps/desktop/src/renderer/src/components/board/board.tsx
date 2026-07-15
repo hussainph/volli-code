@@ -32,6 +32,7 @@ import { BoardListView, TicketRowContent } from "@renderer/components/board/boar
 import { CollapsedColumnRail } from "@renderer/components/board/collapsed-column-rail";
 import { TicketCardContent } from "@renderer/components/board/ticket-card";
 import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
+import { isEscapeExempt } from "@renderer/lib/escape-guard";
 import { useBoardStore } from "@renderer/stores/board";
 import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
 
@@ -95,15 +96,9 @@ export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPr
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       // An Escape aimed at a focused control — the add-card composer, the ⌘K
-      // search pill, an open context menu — is that control's dismissal, not a
-      // board deselect; it still bubbles to window, so filter it out here.
-      const target = event.target;
-      if (
-        target instanceof Element &&
-        target.closest("input, textarea, [contenteditable], [role=menu], [role=dialog]") !== null
-      ) {
-        return;
-      }
+      // search pill, an open context menu/dialog — is that control's dismissal,
+      // not a board deselect; it still bubbles to window, so filter it out here.
+      if (isEscapeExempt(event.target)) return;
       selectTicket(projectId, null);
     }
     window.addEventListener("keydown", handleKeyDown);
@@ -150,6 +145,13 @@ export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPr
   const handleSelect = React.useCallback(
     (ticketId: string | null) => selectTicket(projectId, ticketId),
     [selectTicket, projectId],
+  );
+  // Double-click open (ticket-detail-mvp step 3): `openTicket` is a stable
+  // zustand action reference, same stability contract as `selectTicket` above.
+  const openTicket = useWorkspaceStore((state) => state.openTicket);
+  const handleOpen = React.useCallback(
+    (ticketId: string) => openTicket(projectId, ticketId),
+    [openTicket, projectId],
   );
   // Stable (the column passes its own status back) so columns aren't handed a
   // fresh closure every board render.
@@ -240,6 +242,7 @@ export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPr
             dragActive={drag !== null}
             selectedId={selectedId}
             onSelect={handleSelect}
+            onOpen={handleOpen}
           />
         ) : (
           <div
@@ -263,6 +266,7 @@ export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPr
                 ticketPrefix={ticketPrefix}
                 selectedId={selectedId}
                 onSelect={handleSelect}
+                onOpen={handleOpen}
                 composerInitiallyOpen={expandedEmptyStatus === status}
                 onComposerClose={handleComposerClose}
                 animateEnter={boardMounted.current}

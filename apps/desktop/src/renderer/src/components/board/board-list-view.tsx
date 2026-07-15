@@ -69,12 +69,15 @@ const SortableTicketRow = React.memo(function SortableTicketRow({
   ticketPrefix,
   selected,
   onSelect,
+  onOpen,
 }: {
   ticket: Ticket;
   projectId: string;
   ticketPrefix: string;
   selected: boolean;
   onSelect(ticketId: string): void;
+  /** Double-click opens the ticket's full-page detail view (ticket-detail-mvp step 3). */
+  onOpen(ticketId: string): void;
 }) {
   // The e2e-facing handle mirrors what's visible on screen — the DISPLAY id,
   // not the drag/sort identity (still the opaque `ticket.id` UUID, unchanged
@@ -85,6 +88,7 @@ const SortableTicketRow = React.memo(function SortableTicketRow({
       ticket={ticket}
       projectId={projectId}
       onSelect={onSelect}
+      onOpen={onOpen}
       dataAttributes={{ "data-ticket-row": "true", "data-ticket-id": displayId }}
     >
       <TicketRowContent ticket={ticket} ticketPrefix={ticketPrefix} selected={selected} />
@@ -106,6 +110,7 @@ function ListSection({
   ticketPrefix,
   selectedId,
   onSelect,
+  onOpen,
   dragActive,
 }: {
   status: TicketStatus;
@@ -114,6 +119,8 @@ function ListSection({
   ticketPrefix: string;
   selectedId: string | null;
   onSelect(ticketId: string): void;
+  /** Double-click opens the ticket's full-page detail view (ticket-detail-mvp step 3). */
+  onOpen(ticketId: string): void;
   dragActive: boolean;
 }) {
   const { setNodeRef } = useDroppable({ id: columnDroppableId(status) });
@@ -139,6 +146,7 @@ function ListSection({
               ticketPrefix={ticketPrefix}
               selected={ticket.id === selectedId}
               onSelect={onSelect}
+              onOpen={onOpen}
             />
           ))}
         </div>
@@ -225,6 +233,8 @@ interface BoardListViewProps {
   dragActive: boolean;
   selectedId: string | null;
   onSelect(ticketId: string): void;
+  /** Double-click opens the ticket's full-page detail view (ticket-detail-mvp step 3). */
+  onOpen(ticketId: string): void;
 }
 
 /**
@@ -243,6 +253,7 @@ export function BoardListView({
   dragActive,
   selectedId,
   onSelect,
+  onOpen,
 }: BoardListViewProps) {
   if (shownStatuses.length === 0 && emptyDropStatuses.length === 0) {
     return (
@@ -265,6 +276,7 @@ export function BoardListView({
               ticketPrefix={ticketPrefix}
               selectedId={selectedId}
               onSelect={onSelect}
+              onOpen={onOpen}
               dragActive={dragActive}
             />
           );

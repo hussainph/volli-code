@@ -1,6 +1,8 @@
+export * from "./artifact";
 export * from "./board";
 export * from "./ticket";
 export * from "./ticket-branch";
+export * from "./ticket-comment";
 export * from "./ticket-events";
 export * from "./ticket-filter";
 export * from "./ticket-sort";
@@ -12,4 +14,6 @@ export * from "./fs-entries";
 export * from "./errors";
 export * from "./terminal";
 export * from "./ghostty-config";
+export * from "./session";
+export * from "./volli-dir";
 export type * from "./ipc";

@@ -7,10 +7,11 @@ import { cn } from "@renderer/lib/utils";
 import { getEngine, getOrCreateEngine } from "@renderer/terminal/registry";
 
 interface TerminalViewProps {
-  projectId: string;
+  /** The unified store owner key (projectId for scratch, ticketId for ticket). */
+  ownerId: string;
   tabId: string;
   sessionId: string;
-  /** Visible = inside the active tab of the selected project. */
+  /** Visible = inside the active tab of the selected surface. */
   visible: boolean;
   active: boolean;
   onActivate(): void;
@@ -28,7 +29,7 @@ interface TerminalViewProps {
  * re-parents idempotently and onData/onResize replace the prior callback.
  */
 export function TerminalView({
-  projectId,
+  ownerId,
   tabId,
   sessionId,
   visible,
@@ -37,22 +38,23 @@ export function TerminalView({
 }: TerminalViewProps) {
   const containerRef = React.useRef<HTMLDivElement>(null);
 
+  // Read liveness fresh on every event — main forgets the session on PTY exit,
+  // so forwarding for an exited tab would only toast "Unknown terminal session"
+  // at the user. A stale closure over the tab would keep forwarding forever.
+  // Reads the unified store by owner; scratch and ticket sessions share the same
+  // model, so no per-surface override is needed.
+  const isLive = React.useCallback(() => {
+    const tab = useSessionsStore
+      .getState()
+      .byOwner[ownerId]?.tabs.find((candidate) => candidate.sessionId === tabId);
+    return tab !== undefined && findSessionPane(tab.layout, sessionId)?.exitCode === null;
+  }, [ownerId, tabId, sessionId]);
+
   React.useEffect(() => {
     const container = containerRef.current;
     if (container === null) return;
 
     const engine = getOrCreateEngine(sessionId);
-
-    // Read liveness fresh on every event — main forgets the session on PTY
-    // exit, so forwarding for an exited tab would only toast "Unknown
-    // terminal session" at the user. A stale closure over the tab would
-    // keep forwarding forever.
-    const isLive = () => {
-      const tab = useSessionsStore
-        .getState()
-        .byProject[projectId]?.tabs.find((candidate) => candidate.sessionId === tabId);
-      return tab !== undefined && findSessionPane(tab.layout, sessionId)?.exitCode === null;
-    };
 
     // Keystrokes → PTY.
     const offData = engine.onData((data) => {
@@ -92,7 +94,7 @@ export function TerminalView({
       offData();
       offResize();
     };
-  }, [projectId, tabId, sessionId]);
+  }, [sessionId, isLive]);
 
   // Hidden terminals pause rendering; a GPU canvas measures as zero while
   // hidden, so reveal must unpause and refit. Focus is handled separately so

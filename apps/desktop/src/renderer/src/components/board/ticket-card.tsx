@@ -71,12 +71,21 @@ export function SortableTicketShell({
   ticket,
   projectId,
   onSelect,
+  onOpen,
   dataAttributes,
   children,
 }: {
   ticket: Ticket;
   projectId: string;
   onSelect(ticketId: string): void;
+  /**
+   * Double-click opens the ticket's full-page detail view (ticket-detail-mvp
+   * step 3). Safe alongside dnd-kit: the board's `distance: 4` activation
+   * constraint (board.tsx) already keeps a near-zero-travel gesture — a plain
+   * click OR a double-click — from engaging the drag, the same guard that lets
+   * `onSelect` below coexist with dragging today.
+   */
+  onOpen?(ticketId: string): void;
   dataAttributes?: Record<string, string>;
   children: React.ReactNode;
 }) {
@@ -93,6 +102,7 @@ export function SortableTicketShell({
         style={{ transform: CSS.Transform.toString(transform), transition }}
         className={cn(isDragging && "opacity-40")}
         onClick={() => onSelect(ticket.id)}
+        onDoubleClick={onOpen ? () => onOpen(ticket.id) : undefined}
         {...dataAttributes}
         {...attributes}
         {...listeners}
@@ -109,14 +119,17 @@ interface TicketCardProps {
   ticketPrefix: string;
   selected: boolean;
   onSelect(ticketId: string): void;
+  /** Double-click opens the ticket's full-page detail view (ticket-detail-mvp step 3). */
+  onOpen(ticketId: string): void;
 }
 
 /**
  * Sortable wrapper: the in-column card. Dims while its drag overlay is out.
  * Memoized — every card in every column would otherwise re-render on each
  * board render (drag-over events, selection changes, filter keystrokes);
- * `onSelect` is a stable id-taking callback from the board for that reason,
- * and `ticketPrefix` is a plain string from the board for the same reason.
+ * `onSelect`/`onOpen` are stable id-taking callbacks from the board for that
+ * reason, and `ticketPrefix` is a plain string from the board for the same
+ * reason.
  */
 export const TicketCard = React.memo(function TicketCard({
   ticket,
@@ -124,9 +137,10 @@ export const TicketCard = React.memo(function TicketCard({
   ticketPrefix,
   selected,
   onSelect,
+  onOpen,
 }: TicketCardProps) {
   return (
-    <SortableTicketShell ticket={ticket} projectId={projectId} onSelect={onSelect}>
+    <SortableTicketShell ticket={ticket} projectId={projectId} onSelect={onSelect} onOpen={onOpen}>
       <TicketCardContent ticket={ticket} ticketPrefix={ticketPrefix} selected={selected} />
     </SortableTicketShell>
   );

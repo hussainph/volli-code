@@ -107,9 +107,82 @@ CREATE INDEX tickets_archived ON tickets(project_id, archived_at)
   WHERE archived_at IS NOT NULL;
 `;
 
+/**
+ * Migration 003: the ticket-detail MVP (docs/plans/ticket-detail-mvp.md,
+ * decisions #14/#18/#22). Three additions, all additive/nullable — no
+ * existing column is touched:
+ *  - `sessions`: a durable trace + resume seed for a terminal session,
+ *    distinct from its live in-memory PTY state. `ticket_id NULL` means a
+ *    project-scoped scratch session (no board involvement); `ON DELETE
+ *    CASCADE` off `project_id` and `ON DELETE SET NULL` off `ticket_id` mean
+ *    a session outlives an archived-then-deleted ticket, purely as
+ *    project-level history.
+ *  - `ticket_comments`: the ticket's work log (content), kept separate from
+ *    the append-only `ticket_events` audit trail; a comment also fires a
+ *    `commented` event so it's discoverable from the event log without
+ *    duplicating its body there. `session_id ON DELETE SET NULL` keeps an
+ *    agent-posted comment after its session record is gone.
+ *  - `tickets.worktree_path/branch/base_branch`: first-class worktree
+ *    identity (vision anchor: worktrees are pure code isolation, settable
+ *    now even though creation automation lands later). All three start
+ *    `NULL` on every existing row.
+ */
+const MIGRATION_003_TICKET_DETAIL = `
+CREATE TABLE sessions (
+  id                 TEXT PRIMARY KEY,
+  project_id         TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  ticket_id          TEXT REFERENCES tickets(id) ON DELETE SET NULL,
+  harness_id         TEXT NOT NULL,
+  harness_session_id TEXT,
+  title              TEXT NOT NULL,
+  cwd                TEXT NOT NULL,
+  created_at         INTEGER NOT NULL,
+  ended_at           INTEGER
+);
+CREATE INDEX sessions_ticket ON sessions(ticket_id, created_at);
+CREATE INDEX sessions_project ON sessions(project_id, created_at);
+
+CREATE TABLE ticket_comments (
+  id         TEXT PRIMARY KEY,
+  ticket_id  TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+  actor      TEXT NOT NULL,
+  body       TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX ticket_comments_ticket ON ticket_comments(ticket_id, created_at);
+
+ALTER TABLE tickets ADD COLUMN worktree_path TEXT;
+ALTER TABLE tickets ADD COLUMN branch TEXT;
+ALTER TABLE tickets ADD COLUMN base_branch TEXT;
+`;
+
+/**
+ * Migration 004: harness identity moves to sessions only. A ticket is no
+ * longer itself bound to a single agent harness — `sessions.harness_id`
+ * (added in migration 003) already records which harness drove each session,
+ * and that's the only place harness identity belongs now. Drops the
+ * now-unused `tickets.harness_id` column (SQLite's `ALTER TABLE ... DROP
+ * COLUMN` is supported by the bundled better-sqlite3/SQLite build).
+ */
+const MIGRATION_004_DROP_TICKET_HARNESS = `
+ALTER TABLE tickets DROP COLUMN harness_id;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
+  {
+    version: 3,
+    name: "ticket detail: sessions, comments, worktree identity",
+    sql: MIGRATION_003_TICKET_DETAIL,
+  },
+  {
+    version: 4,
+    name: "drop tickets.harness_id — harness identity lives on sessions only",
+    sql: MIGRATION_004_DROP_TICKET_HARNESS,
+  },
 ];
 
 /** Applies every migration whose `version` is greater than the db's current `user_version`, in order. */

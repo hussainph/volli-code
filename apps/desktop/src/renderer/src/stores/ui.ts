@@ -10,6 +10,16 @@
  * header button + the "c" hotkey) is app-wide chrome, not per-workspace
  * state, so it never follows a project into persisted storage.
  *
+ * `railCollapsed` — the ticket-detail right rail's collapsed state (the
+ * chrome-bar ⌥⌘B toggle, VS-Code secondary-sidebar style) — persists app-wide
+ * like the sidebar width: it's a global chrome preference, not per-workspace,
+ * so every ticket you open honors the same choice.
+ *
+ * `detailsExpanded` — whether the right rail's bottom "Details" section (status/
+ * priority/labels/worktree) is open. Sessions dominate the rail; Details is a
+ * collapsed-by-default drawer pinned beneath them, and its open/closed choice
+ * persists app-wide by the same reasoning as `railCollapsed`.
+ *
  * Per-workspace UI state (the active nav page) lives in stores/workspace.ts.
  */
 import { create } from "zustand";
@@ -80,14 +90,25 @@ interface UiState {
   settingsOpen: boolean;
   /** Session-only — never persisted; see module doc. */
   newTicketOpen: boolean;
+  /** Ticket-detail right rail collapsed? Persisted app-wide (see module doc). */
+  railCollapsed: boolean;
+  /** Ticket-detail rail "Details" drawer expanded? Persisted app-wide (see module doc). */
+  detailsExpanded: boolean;
   setSidebarWidth(width: number): void;
   stepUiScale(delta: 1 | -1): void;
   resetUiScale(): void;
   setSettingsOpen(open: boolean): void;
   setNewTicketOpen(open: boolean): void;
+  toggleRailCollapsed(): void;
+  setRailCollapsed(collapsed: boolean): void;
+  toggleDetailsExpanded(): void;
+  setDetailsExpanded(expanded: boolean): void;
 }
 
-type PersistedUiState = Pick<UiState, "sidebarWidth" | "uiScale">;
+type PersistedUiState = Pick<
+  UiState,
+  "sidebarWidth" | "uiScale" | "railCollapsed" | "detailsExpanded"
+>;
 
 /**
  * Factory so tests can supply an in-memory storage instead of the real
@@ -106,11 +127,17 @@ export function createUiStore(storage?: StateStorage) {
         uiScale: UI_SCALE_DEFAULT,
         settingsOpen: false,
         newTicketOpen: false,
+        railCollapsed: false,
+        detailsExpanded: false,
         setSidebarWidth: (width) => set({ sidebarWidth: clampSidebarWidth(width) }),
         stepUiScale: (delta) => set((state) => ({ uiScale: steppedScale(state.uiScale, delta) })),
         resetUiScale: () => set({ uiScale: UI_SCALE_DEFAULT }),
         setSettingsOpen: (open) => set({ settingsOpen: open }),
         setNewTicketOpen: (open) => set({ newTicketOpen: open }),
+        toggleRailCollapsed: () => set((state) => ({ railCollapsed: !state.railCollapsed })),
+        setRailCollapsed: (collapsed) => set({ railCollapsed: collapsed }),
+        toggleDetailsExpanded: () => set((state) => ({ detailsExpanded: !state.detailsExpanded })),
+        setDetailsExpanded: (expanded) => set({ detailsExpanded: expanded }),
       }),
       {
         name: "volli:ui",
@@ -121,6 +148,8 @@ export function createUiStore(storage?: StateStorage) {
         partialize: (state): PersistedUiState => ({
           sidebarWidth: state.sidebarWidth,
           uiScale: state.uiScale,
+          railCollapsed: state.railCollapsed,
+          detailsExpanded: state.detailsExpanded,
         }),
         // Rehydrated values come from JSON a past build wrote — sanitize
         // rather than trust (see sanitizeUiScale; a raw `zoom: 0` bricks the UI).
@@ -133,6 +162,11 @@ export function createUiStore(storage?: StateStorage) {
             ...current,
             sidebarWidth: sanitizeSidebarWidth(stored.sidebarWidth),
             uiScale: sanitizeUiScale(stored.uiScale),
+            // Any non-`true` persisted value (missing key, corrupt JSON) means
+            // the rail stays expanded — the safe, visible default.
+            railCollapsed: stored.railCollapsed === true,
+            // Details drawer defaults closed; only an explicit `true` opens it.
+            detailsExpanded: stored.detailsExpanded === true,
           };
         },
       },

@@ -7,10 +7,12 @@ import {
   errorMessage,
   isTicketPriority,
   isTicketStatus,
+  isValidBranchName,
   LEGACY_BACKUP_APP_STATE_KEY,
   moveTicket,
   PROJECT_COLORS,
   sanitizeLegacyProjects,
+  USER_ACTOR,
 } from "@volli/shared";
 import type {
   AppStateSetResult,
@@ -25,15 +27,28 @@ import type {
   ProjectCreateResult,
   ProjectMutationResult,
   Result,
+  SessionsResult,
+  SessionRenameResult,
   Ticket,
+  TicketCommentResult,
+  TicketCommentsResult,
+  TicketEventsResult,
   TicketPriority,
   TicketResult,
   TicketsResult,
   TicketStatus,
   VolliIpcChannel,
+  WorktreeIdentity,
 } from "@volli/shared";
 import { getAllAppState, setAppState } from "./db/app-state-repo";
-import { recordTicketEvent } from "./db/events-repo";
+import {
+  createComment,
+  deleteComment,
+  getComment,
+  listComments,
+  updateComment,
+} from "./db/comments-repo";
+import { listTicketEvents, recordTicketEvent } from "./db/events-repo";
 import {
   addTicketLabel,
   findLabelByName,
@@ -51,6 +66,7 @@ import {
   nextSortOrder,
   reorderProjects,
 } from "./db/projects-repo";
+import { listSessions, listTicketSessions, updateTitle } from "./db/sessions-repo";
 import {
   archiveTicket,
   bumpTicketVersion,
@@ -69,7 +85,7 @@ import {
   updateTicketPositionStatus,
   updateTicketPriority,
 } from "./db/tickets-repo";
-import type { TicketFieldUpdate } from "./db/tickets-repo";
+import type { TicketFieldUpdate, TicketRow } from "./db/tickets-repo";
 
 /** The result of the main-process open+migrate attempt (`src/main/index.ts`), fed into {@link registerDataIpcHandlers}. */
 export type DbHandle = { ok: true; db: Database.Database } | { ok: false; error: string };
@@ -90,6 +106,14 @@ const DATA_CHANNELS: readonly VolliIpcChannel[] = [
   "volli:ticket-unarchive",
   "volli:ticket-delete",
   "volli:ticket-list-archived",
+  "volli:ticket-events",
+  "volli:comment-list",
+  "volli:comment-create",
+  "volli:comment-update",
+  "volli:comment-remove",
+  "volli:session-list",
+  "volli:session-list-for-ticket",
+  "volli:session-rename",
   "volli:label-set-color",
   "volli:app-state-set",
 ];
@@ -187,6 +211,15 @@ interface TicketUpdateInput {
   ticketId: string;
   title?: string;
   body?: string;
+  /** First-class worktree identity (migration 003); `null` explicitly clears the field, `undefined` leaves it untouched. */
+  worktreePath?: string | null;
+  branch?: string | null;
+  baseBranch?: string | null;
+}
+
+/** `undefined` (untouched), `null` (clear), or a `string` (set) — the worktree-identity field shape. */
+function isOptionalNullableString(value: unknown): value is string | null | undefined {
+  return value === undefined || value === null || typeof value === "string";
 }
 
 function isTicketUpdateInput(value: unknown): value is TicketUpdateInput {
@@ -195,8 +228,16 @@ function isTicketUpdateInput(value: unknown): value is TicketUpdateInput {
   return (
     typeof candidate["ticketId"] === "string" &&
     (candidate["title"] === undefined || typeof candidate["title"] === "string") &&
-    (candidate["body"] === undefined || typeof candidate["body"] === "string")
+    (candidate["body"] === undefined || typeof candidate["body"] === "string") &&
+    isOptionalNullableString(candidate["worktreePath"]) &&
+    isOptionalNullableString(candidate["branch"]) &&
+    isOptionalNullableString(candidate["baseBranch"])
   );
+}
+
+/** The worktree-identity snapshot off a raw ticket row — used to build `worktree_changed`'s `from`/`to`. */
+function rowWorktreeIdentity(row: TicketRow): WorktreeIdentity {
+  return { worktreePath: row.worktree_path, branch: row.branch, baseBranch: row.base_branch };
 }
 
 interface TicketSetLabelsInput {
@@ -218,6 +259,74 @@ interface TicketIdInput {
 function isTicketIdInput(value: unknown): value is TicketIdInput {
   if (typeof value !== "object" || value === null) return false;
   return typeof (value as Record<string, unknown>)["ticketId"] === "string";
+}
+
+interface CommentCreateInput {
+  ticketId: string;
+  body: string;
+  sessionId?: string | null;
+}
+
+function isCommentCreateInput(value: unknown): value is CommentCreateInput {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate["ticketId"] === "string" &&
+    typeof candidate["body"] === "string" &&
+    candidate["body"].trim().length > 0 &&
+    (candidate["sessionId"] === undefined ||
+      candidate["sessionId"] === null ||
+      typeof candidate["sessionId"] === "string")
+  );
+}
+
+interface CommentUpdateInput {
+  commentId: string;
+  body: string;
+}
+
+function isCommentUpdateInput(value: unknown): value is CommentUpdateInput {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate["commentId"] === "string" &&
+    typeof candidate["body"] === "string" &&
+    candidate["body"].trim().length > 0
+  );
+}
+
+interface CommentIdInput {
+  commentId: string;
+}
+
+function isCommentIdInput(value: unknown): value is CommentIdInput {
+  if (typeof value !== "object" || value === null) return false;
+  return typeof (value as Record<string, unknown>)["commentId"] === "string";
+}
+
+interface SessionRenameInput {
+  sessionId: string;
+  title: string;
+}
+
+/** `{ sessionId, title }` with a non-blank title — the rename handler trims before persisting. */
+function isSessionRenameInput(value: unknown): value is SessionRenameInput {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate["sessionId"] === "string" &&
+    typeof candidate["title"] === "string" &&
+    candidate["title"].trim().length > 0
+  );
+}
+
+interface ProjectIdInput {
+  projectId: string;
+}
+
+function isProjectIdInput(value: unknown): value is ProjectIdInput {
+  if (typeof value !== "object" || value === null) return false;
+  return typeof (value as Record<string, unknown>)["projectId"] === "string";
 }
 
 interface LabelSetColorInput {
@@ -517,6 +626,16 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
       if (!isTicketUpdateInput(input)) {
         return { ok: false, error: "Invalid ticket update" };
       }
+      // Write-time git ref-name validation: the worktree branch fields are
+      // persisted verbatim, so reject anything that isn't a legal branch name
+      // (a `null` clears the field and is always allowed) before it reaches the
+      // db — surfaced to the renderer as a typed error it can toast.
+      if (typeof input.branch === "string" && !isValidBranchName(input.branch)) {
+        return { ok: false, error: "Invalid branch name" };
+      }
+      if (typeof input.baseBranch === "string" && !isValidBranchName(input.baseBranch)) {
+        return { ok: false, error: "Invalid base branch name" };
+      }
       try {
         const now = Date.now();
         const run = db.transaction((): Ticket => {
@@ -526,8 +645,23 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
           const fields: TicketFieldUpdate = {};
           if (input.title !== undefined && input.title !== row.title) fields.title = input.title;
           if (input.body !== undefined && input.body !== row.body) fields.body = input.body;
+          if (input.worktreePath !== undefined && input.worktreePath !== row.worktree_path) {
+            fields.worktreePath = input.worktreePath;
+          }
+          if (input.branch !== undefined && input.branch !== row.branch) {
+            fields.branch = input.branch;
+          }
+          if (input.baseBranch !== undefined && input.baseBranch !== row.base_branch) {
+            fields.baseBranch = input.baseBranch;
+          }
 
-          if (fields.title !== undefined || fields.body !== undefined) {
+          const worktreeTouched =
+            fields.worktreePath !== undefined ||
+            fields.branch !== undefined ||
+            fields.baseBranch !== undefined;
+
+          if (fields.title !== undefined || fields.body !== undefined || worktreeTouched) {
+            const from = rowWorktreeIdentity(row);
             updateTicketFields(db, input.ticketId, fields, now);
             if (fields.title !== undefined) {
               recordTicketEvent(
@@ -539,6 +673,17 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
             }
             if (fields.body !== undefined) {
               recordTicketEvent(db, input.ticketId, { kind: "body_edited" }, now);
+            }
+            // ONE worktree_changed event per update call, even when more than
+            // one of the three identity fields changed together.
+            if (worktreeTouched) {
+              const to: WorktreeIdentity = {
+                worktreePath:
+                  fields.worktreePath !== undefined ? fields.worktreePath : from.worktreePath,
+                branch: fields.branch !== undefined ? fields.branch : from.branch,
+                baseBranch: fields.baseBranch !== undefined ? fields.baseBranch : from.baseBranch,
+              };
+              recordTicketEvent(db, input.ticketId, { kind: "worktree_changed", from, to }, now);
             }
           }
           const ticket = getTicket(db, input.ticketId);
@@ -681,6 +826,141 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
       }
       try {
         return { ok: true, tickets: listArchivedTicketsByProject(db, projectId) };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:ticket-events" satisfies VolliIpcChannel,
+    (_event, input: unknown): TicketEventsResult => {
+      if (!isTicketIdInput(input)) {
+        return { ok: false, error: "Invalid ticket" };
+      }
+      try {
+        return { ok: true, events: listTicketEvents(db, input.ticketId) };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:comment-list" satisfies VolliIpcChannel,
+    (_event, input: unknown): TicketCommentsResult => {
+      if (!isTicketIdInput(input)) {
+        return { ok: false, error: "Invalid ticket" };
+      }
+      try {
+        return { ok: true, comments: listComments(db, input.ticketId) };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:comment-create" satisfies VolliIpcChannel,
+    (_event, input: unknown): TicketCommentResult => {
+      if (!isCommentCreateInput(input)) {
+        return { ok: false, error: "Invalid comment" };
+      }
+      try {
+        const comment = createComment(
+          db,
+          {
+            ticketId: input.ticketId,
+            body: input.body,
+            // UI-originated: every comment posted through this renderer-facing
+            // channel is authored by the user. Agent-posted session summaries
+            // arrive later via the volli CLI, a different (not-yet-built) path.
+            actor: USER_ACTOR,
+            sessionId: input.sessionId,
+          },
+          Date.now(),
+        );
+        return { ok: true, comment };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:comment-update" satisfies VolliIpcChannel,
+    (_event, input: unknown): TicketCommentResult => {
+      if (!isCommentUpdateInput(input)) {
+        return { ok: false, error: "Invalid comment update" };
+      }
+      try {
+        const comment = updateComment(
+          db,
+          { commentId: input.commentId, body: input.body },
+          Date.now(),
+        );
+        if (!comment) return { ok: false, error: "Unknown comment" };
+        return { ok: true, comment };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:comment-remove" satisfies VolliIpcChannel,
+    (_event, input: unknown): Result => {
+      if (!isCommentIdInput(input)) {
+        return { ok: false, error: "Invalid comment" };
+      }
+      try {
+        if (!getComment(db, input.commentId)) return { ok: false, error: "Unknown comment" };
+        deleteComment(db, input.commentId);
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:session-list" satisfies VolliIpcChannel,
+    (_event, input: unknown): SessionsResult => {
+      if (!isProjectIdInput(input)) {
+        return { ok: false, error: "Invalid project" };
+      }
+      try {
+        return { ok: true, sessions: listSessions(db, input.projectId) };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:session-list-for-ticket" satisfies VolliIpcChannel,
+    (_event, input: unknown): SessionsResult => {
+      if (!isTicketIdInput(input)) {
+        return { ok: false, error: "Invalid ticket" };
+      }
+      try {
+        return { ok: true, sessions: listTicketSessions(db, input.ticketId) };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:session-rename" satisfies VolliIpcChannel,
+    (_event, input: unknown): SessionRenameResult => {
+      if (!isSessionRenameInput(input)) {
+        return { ok: false, error: "Invalid session title" };
+      }
+      try {
+        const changed = updateTitle(db, input.sessionId, input.title.trim());
+        if (changed === 0) return { ok: false, error: "Unknown session" };
+        return { ok: true };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }

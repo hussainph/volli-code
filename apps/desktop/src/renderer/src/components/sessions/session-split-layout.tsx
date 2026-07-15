@@ -21,7 +21,8 @@ import { sessionPanes } from "@renderer/stores/sessions";
 import { getEngine } from "@renderer/terminal/registry";
 
 interface SessionSplitLayoutProps {
-  projectId: string;
+  /** The unified store owner key (projectId for scratch, ticketId for ticket). */
+  ownerId: string;
   tab: SessionTab;
   visible: boolean;
   onActivate(sessionId: string): void;
@@ -32,7 +33,7 @@ interface SessionSplitLayoutProps {
 
 /** Recursive app-owned split tree. Each leaf is one TerminalView/engine/PTY. */
 export function SessionSplitLayout({
-  projectId,
+  ownerId,
   tab,
   visible,
   onActivate,
@@ -44,7 +45,7 @@ export function SessionSplitLayout({
   return (
     <div className={cn("absolute inset-0 min-h-0 min-w-0", !visible && "hidden")}>
       <SplitNode
-        projectId={projectId}
+        ownerId={ownerId}
         tabId={tab.sessionId}
         layout={tab.layout}
         visible={visible}
@@ -60,7 +61,7 @@ export function SessionSplitLayout({
 }
 
 interface SplitNodeProps {
-  projectId: string;
+  ownerId: string;
   tabId: string;
   layout: SessionLayout;
   visible: boolean;
@@ -82,6 +83,7 @@ function SplitNode(props: SplitNodeProps) {
           <div
             data-terminal-pane-id={layout.sessionId}
             data-terminal-tab-id={props.tabId}
+            data-terminal-owner-id={props.ownerId}
             className={cn(
               "relative h-full min-h-0 w-full min-w-0 overflow-hidden bg-background",
               props.isSplit &&
@@ -91,7 +93,7 @@ function SplitNode(props: SplitNodeProps) {
             onContextMenu={() => props.onActivate(layout.sessionId)}
           >
             <TerminalView
-              projectId={props.projectId}
+              ownerId={props.ownerId}
               tabId={props.tabId}
               sessionId={layout.sessionId}
               visible={props.visible}
