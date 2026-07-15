@@ -54,6 +54,18 @@ export function sameSnapshot(a: NavSnapshot | null, b: NavSnapshot | null): bool
 }
 
 /**
+ * The semantic parent of a full-page ticket detail is the selected project's
+ * plain Board. This is derivable even when the detail was restored from
+ * persisted state and the deliberately in-memory history starts empty.
+ */
+export function ticketParentSnapshot(snapshot: NavSnapshot): NavSnapshot | null {
+  if (snapshot.projectId === null || snapshot.nav !== "board" || snapshot.openTicketId === null) {
+    return null;
+  }
+  return { projectId: snapshot.projectId, nav: "board", openTicketId: null };
+}
+
+/**
  * Record an organic navigation to `next`. Dedupes against the current location
  * (returns the SAME reference so callers can skip a store update), pushes the
  * old current onto the back stack (capped), and clears the forward stack.

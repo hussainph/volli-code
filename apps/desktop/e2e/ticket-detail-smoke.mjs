@@ -7,7 +7,8 @@
  *   1. Open/close   — double-click a card opens the detail; the top is a full-
  *      width Chrome-style tab strip whose Doc tab is labeled with the display id
  *      (e.g. "VC-1") + Artifacts; there is NO breadcrumb. Escape returns to the
- *      board; re-open works.
+ *      board; re-open works; clicking the already-active Board nav item also
+ *      exits the detail instead of leaving the ticket stranded open.
  *   2. Title edit   — click-to-edit the heading, Enter commits + renders, and
  *      the board card shows the new title after Escape-back.
  *   3. Body editor  — an always-mounted CodeMirror 6 live-preview editor
@@ -44,7 +45,8 @@
  *  13. Restart      — relaunch against the SAME app-data dir: the ticket detail
  *      reopens (persisted openTicketId), the edited title/body + surviving
  *      comment are intact, the rail is STILL collapsed (persisted), and the
- *      renamed session is listed as exited.
+ *      renamed session is listed as exited. Back still returns to the board
+ *      even though the in-memory history intentionally starts fresh.
  *
  * The terminal is a WebGPU/WebGL2 canvas — its text is NOT in the DOM — so shell
  * behaviour is asserted through SIDE EFFECTS (keystrokes → a file the shell
@@ -390,7 +392,7 @@ async function main() {
     // ===================================================================
     await attempt(
       1,
-      "Open/close: double-click opens detail (Doc tab = display id + Artifacts, no breadcrumb); Escape returns; re-open works",
+      "Open/close: double-click opens detail (Doc tab = display id + Artifacts, no breadcrumb); Escape and Board nav return; re-open works",
       async () => {
         await openTicketViaCard(page);
         const docTabId = (await docTab(page).textContent())?.trim();
@@ -411,15 +413,22 @@ async function main() {
         await openTicketViaCard(page);
         const reopened = await detailOpen(page);
 
+        // Ticket detail is a child location of Board, so clicking the
+        // already-active Board item must still close the detail.
+        await page.getByRole("button", { name: "Board", exact: true }).click();
+        const boardViaNav = await waitUntil("board after Board nav click", () => boardOpen(page));
+        await openTicketViaCard(page);
+
         const ok =
           docTabId === DISPLAY_ID &&
           hasArtifactsTab &&
           titleVisible &&
           noBreadcrumbHeader &&
-          reopened;
+          reopened &&
+          !!boardViaNav;
         return {
           ok,
-          detail: `docTab=${JSON.stringify(docTabId)} artifacts=${hasArtifactsTab} title=${titleVisible} noBreadcrumb=${noBreadcrumbHeader} reopened=${reopened}`,
+          detail: `docTab=${JSON.stringify(docTabId)} artifacts=${hasArtifactsTab} title=${titleVisible} noBreadcrumb=${noBreadcrumbHeader} reopened=${reopened} boardNav=${!!boardViaNav}`,
         };
       },
     );
@@ -1017,7 +1026,7 @@ async function main() {
 
     await attempt(
       13,
-      "Restart: detail reopens (persisted openTicketId); title/body + comment intact; rail STILL collapsed (persisted); renamed session listed as exited",
+      "Restart: detail reopens (persisted openTicketId); data + collapsed rail survive; Back returns to Board with fresh history",
       async () => {
         await waitUntil("detail view to reopen after relaunch", () => detailOpen(page), {
           timeout: 20000,
@@ -1057,16 +1066,27 @@ async function main() {
           return row && exited;
         });
 
+        // Navigation history is deliberately in-memory, so a relaunch has no
+        // prior board snapshot. The chrome Back action still needs a semantic
+        // fallback from persisted ticket detail to its parent Board.
+        const back = page.getByRole("button", { name: "Back", exact: true });
+        const backEnabledAfterRestart = !(await back.isDisabled());
+        if (backEnabledAfterRestart) await back.click();
+        const boardViaRestartBack = backEnabledAfterRestart
+          ? await waitUntil("board after Back from restarted detail", () => boardOpen(page))
+          : false;
+
         const ok =
           docTabId === DISPLAY_ID &&
           titleOk &&
           !!bodyOk &&
           railCollapsedPersisted &&
           !!commentOk &&
-          !!sessionOk;
+          !!sessionOk &&
+          !!boardViaRestartBack;
         return {
           ok,
-          detail: `docTab=${JSON.stringify(docTabId)} title=${titleOk} body=${!!bodyOk} railCollapsed=${railCollapsedPersisted} comment=${!!commentOk} session=${!!sessionOk}`,
+          detail: `docTab=${JSON.stringify(docTabId)} title=${titleOk} body=${!!bodyOk} railCollapsed=${railCollapsedPersisted} comment=${!!commentOk} session=${!!sessionOk} restartBack=${!!boardViaRestartBack}`,
         };
       },
     );

@@ -13,6 +13,7 @@ import {
   NAV_HISTORY_CAP,
   recordNav,
   sameSnapshot,
+  ticketParentSnapshot,
   type NavHistory,
   type NavKeyEvent,
   type NavSnapshot,
@@ -43,6 +44,18 @@ describe("sameSnapshot", () => {
     expect(sameSnapshot(null, null)).toBe(true);
     expect(sameSnapshot(null, snap("a"))).toBe(false);
     expect(sameSnapshot(snap("a"), null)).toBe(false);
+  });
+});
+
+describe("ticketParentSnapshot", () => {
+  it("maps a ticket detail location to its plain Board parent", () => {
+    expect(ticketParentSnapshot(snap("a", "board", "t1"))).toEqual(snap("a"));
+  });
+
+  it("does not invent a parent for top-level or project-less locations", () => {
+    expect(ticketParentSnapshot(snap("a"))).toBeNull();
+    expect(ticketParentSnapshot(snap("a", "files", "t1"))).toBeNull();
+    expect(ticketParentSnapshot(snap(null, "board", "t1"))).toBeNull();
   });
 });
 
