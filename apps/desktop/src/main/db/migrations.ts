@@ -170,6 +170,33 @@ const MIGRATION_004_DROP_TICKET_HARNESS = `
 ALTER TABLE tickets DROP COLUMN harness_id;
 `;
 
+/**
+ * Migration 005: a durable per-project ticket-number counter (found during
+ * PR #34 review — commit 83a7298 introduced real hard-delete from the
+ * archive). `nextTicketNumberForProject` used to be `MAX(ticket_number) + 1`
+ * over the table's *remaining* rows, so deleting a project's highest-numbered
+ * ticket freed its number: the next ticket created reused a dead ticket's
+ * display id, and its worktree branch `volli/<PREFIX>-<n>-<slug>` could
+ * collide with the deleted ticket's still-live worktree (worktrees are
+ * archived, never deleted). `projects.next_ticket_number` fixes this — an
+ * ever-increasing counter that only ever moves forward, bumped atomically
+ * with every ticket insert, so a hard-delete can no longer roll it back.
+ * `DEFAULT 1` covers every project created after this migration (its INSERT
+ * never sets the column); the backfill below seeds it for every existing
+ * project from its current tickets, so an upgrade never hands out a number
+ * already used by a live, archived, or since-deleted row.
+ */
+const MIGRATION_005_TICKET_NUMBER_COUNTER = `
+ALTER TABLE projects ADD COLUMN next_ticket_number INTEGER NOT NULL DEFAULT 1;
+
+UPDATE projects
+   SET next_ticket_number = (
+     SELECT COALESCE(MAX(t.ticket_number), 0) + 1
+       FROM tickets t
+      WHERE t.project_id = projects.id
+   );
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -182,6 +209,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 4,
     name: "drop tickets.harness_id — harness identity lives on sessions only",
     sql: MIGRATION_004_DROP_TICKET_HARNESS,
+  },
+  {
+    version: 5,
+    name: "projects.next_ticket_number — monotonic ticket-number counter",
+    sql: MIGRATION_005_TICKET_NUMBER_COUNTER,
   },
 ];
 
