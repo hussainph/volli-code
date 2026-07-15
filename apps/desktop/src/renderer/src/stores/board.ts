@@ -19,6 +19,7 @@ import {
   type ArchivedTicket,
   type ArchivedTicketsResult,
   type Label,
+  type LabelResult,
   type Result,
   type Ticket,
   type TicketFilter,
@@ -57,6 +58,7 @@ export interface BoardGateway {
     baseBranch?: string | null;
   }): Promise<TicketResult>;
   setLabels(input: { ticketId: string; labels: string[] }): Promise<TicketResult>;
+  setLabelColor(input: { labelId: string; color: string | null }): Promise<LabelResult>;
   archiveTicket(input: { ticketId: string }): Promise<Result>;
   unarchiveTicket(input: { ticketId: string }): Promise<TicketResult>;
   deleteTicket(input: { ticketId: string }): Promise<Result>;
@@ -69,6 +71,7 @@ const defaultGateway: BoardGateway = {
   setTicketPriority: (input) => window.api.tickets.setPriority(input),
   updateTicket: (input) => window.api.tickets.update(input),
   setLabels: (input) => window.api.tickets.setLabels(input),
+  setLabelColor: (input) => window.api.labels.setColor(input),
   archiveTicket: (input) => window.api.tickets.archive(input),
   unarchiveTicket: (input) => window.api.tickets.unarchive(input),
   deleteTicket: (input) => window.api.tickets.delete(input),
@@ -136,6 +139,14 @@ interface BoardState {
    * reverts to the pre-edit label set on failure.
    */
   setLabels(ticketId: string, labels: string[]): Promise<void>;
+  /**
+   * Sets (or clears, via `color: null`) a project label's stored color via
+   * `api.labels.setColor` — a stored color always wins over the hash
+   * fallback (`labelColor`/`resolveLabelColor`), so this is what a picked
+   * swatch persists. Optimistic; reverts to the pre-edit color on failure. A
+   * no-op (no IPC) for an unknown project/label id or an unchanged color.
+   */
+  setLabelColor(projectId: string, labelId: string, color: string | null): Promise<void>;
   /**
    * Fetches the project's archived tickets into `archivedByProject` (the
    * Archive view calls this on open). Resolves `false` when the fetch failed
@@ -257,6 +268,20 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
       const slice: ArchivedTicket[] | undefined = byProject[projectId];
       if (!slice) return;
       set({ archivedByProject: { ...byProject, [projectId]: update(slice) } });
+    }
+
+    /**
+     * The label-slice analog of {@link reconcileSlice}/{@link reconcileArchived}:
+     * applies `update` to the project's label list read FRESH from state,
+     * guarding a slice `forget` dropped while a color IPC was in flight —
+     * never resurrect label data the store isn't holding. The reconcile path
+     * behind {@link BoardState.setLabelColor}'s success and revert.
+     */
+    function reconcileLabels(projectId: string, update: (slice: Label[]) => Label[]): void {
+      const byProject = get().labelsByProject;
+      const slice: Label[] | undefined = byProject[projectId];
+      if (!slice) return;
+      set({ labelsByProject: { ...byProject, [projectId]: update(slice) } });
     }
 
     /**
@@ -414,6 +439,28 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         await optimisticTicketPatch(ticketId, { labels }, "update labels", () =>
           gateway.setLabels({ ticketId, labels }),
         );
+      },
+
+      async setLabelColor(projectId, labelId, color) {
+        const previous = get().labelsByProject[projectId] ?? [];
+        const original = previous.find((label) => label.id === labelId);
+        if (!original || original.color === color) return; // unknown id or unchanged color
+
+        const patch = (label: Label) =>
+          reconcileLabels(projectId, (slice) =>
+            slice.map((existing) => (existing.id === label.id ? label : existing)),
+          );
+        patch({ ...original, color });
+
+        const result = await writeThrough(
+          "update label color",
+          (): Promise<LabelResult> => gateway.setLabelColor({ labelId, color }),
+        );
+        if (!result) {
+          patch(original);
+          return;
+        }
+        patch(result.label);
       },
 
       async loadArchived(projectId) {

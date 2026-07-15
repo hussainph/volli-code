@@ -76,6 +76,10 @@ function fakeGateway(overrides: Partial<BoardGateway> = {}): BoardGateway {
     ok: true,
     ticket: ticket({ id: input.ticketId, status: "backlog", labels: input.labels }),
   }));
+  const setLabelColor = vi.fn<BoardGateway["setLabelColor"]>(async (input) => ({
+    ok: true,
+    label: { id: input.labelId, projectId: "p1", name: "bug", color: input.color },
+  }));
   const archiveTicket = vi.fn<BoardGateway["archiveTicket"]>(async () => ({ ok: true }));
   const unarchiveTicket = vi.fn<BoardGateway["unarchiveTicket"]>(async (input) => ({
     ok: true,
@@ -89,6 +93,7 @@ function fakeGateway(overrides: Partial<BoardGateway> = {}): BoardGateway {
     setTicketPriority,
     updateTicket,
     setLabels,
+    setLabelColor,
     archiveTicket,
     unarchiveTicket,
     deleteTicket,
@@ -721,6 +726,131 @@ describe("setLabels", () => {
     const patched = store.getState().ticketsByProject.p1![0]!;
     expect(patched.labels).toEqual(["bug"]); // reverted (field-scoped)
     expect(patched.title).toBe("New"); // concurrent commit preserved
+  });
+});
+
+describe("setLabelColor", () => {
+  it("optimistically sets the label's color, then patches in the gateway's returned label by id", async () => {
+    const bug: Label = { id: "l1", projectId: "p1", name: "bug", color: null };
+    const urgent: Label = { id: "l2", projectId: "p1", name: "urgent", color: null };
+    const authoritative: Label = { id: "l1", projectId: "p1", name: "bug", color: "#123456" };
+    const gateway = fakeGateway({
+      setLabelColor: vi.fn<BoardGateway["setLabelColor"]>(async () => ({
+        ok: true,
+        label: authoritative,
+      })),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({}, { p1: [bug, urgent] });
+
+    await store.getState().setLabelColor("p1", "l1", "#123456");
+
+    expect(gateway.setLabelColor).toHaveBeenCalledWith({ labelId: "l1", color: "#123456" });
+    const labels = store.getState().labelsByProject.p1!;
+    expect(labels).toContainEqual(authoritative);
+    // The sibling label is untouched (same reference — not clobbered by a
+    // wholesale slice replace).
+    expect(labels.find((label) => label.id === "l2")).toBe(urgent);
+  });
+
+  it("clears a stored color back to the hash default via color: null", async () => {
+    const bug: Label = { id: "l1", projectId: "p1", name: "bug", color: "#123456" };
+    const gateway = fakeGateway({
+      setLabelColor: vi.fn<BoardGateway["setLabelColor"]>(async () => ({
+        ok: true,
+        label: { ...bug, color: null },
+      })),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({}, { p1: [bug] });
+
+    await store.getState().setLabelColor("p1", "l1", null);
+
+    expect(gateway.setLabelColor).toHaveBeenCalledWith({ labelId: "l1", color: null });
+    expect(store.getState().labelsByProject.p1?.[0]?.color).toBeNull();
+  });
+
+  it("is a no-op (no IPC call) for an unknown project id", async () => {
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({}, { p1: [{ id: "l1", projectId: "p1", name: "bug", color: null }] });
+
+    await store.getState().setLabelColor("does-not-exist", "l1", "#123456");
+
+    expect(gateway.setLabelColor).not.toHaveBeenCalled();
+  });
+
+  it("is a no-op (no IPC call) for an unknown label id", async () => {
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({}, { p1: [{ id: "l1", projectId: "p1", name: "bug", color: null }] });
+
+    await store.getState().setLabelColor("p1", "does-not-exist", "#123456");
+
+    expect(gateway.setLabelColor).not.toHaveBeenCalled();
+  });
+
+  it("is a no-op (no IPC call) when the color is unchanged", async () => {
+    const bug: Label = { id: "l1", projectId: "p1", name: "bug", color: "#123456" };
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({}, { p1: [bug] });
+
+    await store.getState().setLabelColor("p1", "l1", "#123456");
+
+    expect(gateway.setLabelColor).not.toHaveBeenCalled();
+  });
+
+  it("reverts to the original color and toasts on a typed failure", async () => {
+    const bug: Label = { id: "l1", projectId: "p1", name: "bug", color: null };
+    const gateway = fakeGateway({
+      setLabelColor: vi.fn<BoardGateway["setLabelColor"]>(async () => ({
+        ok: false,
+        error: "conflict",
+      })),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({}, { p1: [bug] });
+
+    await store.getState().setLabelColor("p1", "l1", "#123456");
+
+    expect(store.getState().labelsByProject.p1).toEqual([bug]);
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not update label color: conflict");
+  });
+
+  it("reverts to the original color and toasts when the gateway call rejects", async () => {
+    const bug: Label = { id: "l1", projectId: "p1", name: "bug", color: null };
+    const gateway = fakeGateway({
+      setLabelColor: vi.fn<BoardGateway["setLabelColor"]>(async () => {
+        throw new Error("ipc gone");
+      }),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({}, { p1: [bug] });
+
+    await store.getState().setLabelColor("p1", "l1", "#123456");
+
+    expect(store.getState().labelsByProject.p1).toEqual([bug]);
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not update label color: ipc gone");
+  });
+
+  it("does not resurrect a label slice forgotten while the color IPC is in flight", async () => {
+    let resolveColor!: (result: { ok: true; label: Label }) => void;
+    const bug: Label = { id: "l1", projectId: "p1", name: "bug", color: null };
+    const gateway = fakeGateway({
+      setLabelColor: vi.fn<BoardGateway["setLabelColor"]>(
+        () => new Promise((resolve) => (resolveColor = resolve)),
+      ),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [] }, { p1: [bug] });
+
+    const pending = store.getState().setLabelColor("p1", "l1", "#123456");
+    store.getState().forget("p1"); // project removed mid-flight
+    resolveColor({ ok: true, label: { ...bug, color: "#123456" } });
+    await pending;
+
+    expect("p1" in store.getState().labelsByProject).toBe(false);
   });
 });
 
@@ -1360,6 +1490,20 @@ describe("createBoardStore() with the default gateway", () => {
     await store.getState().setLabels("a", ["bug"]);
 
     expect(setLabels).toHaveBeenCalledWith({ ticketId: "a", labels: ["bug"] });
+  });
+
+  it("setLabelColor calls window.api.labels.setColor", async () => {
+    const setColor = vi.fn(async () => ({
+      ok: true as const,
+      label: { id: "l1", projectId: "p1", name: "bug", color: "#123456" },
+    }));
+    vi.stubGlobal("window", { api: { labels: { setColor } } });
+    const store = createBoardStore();
+    store.getState().hydrate({}, { p1: [{ id: "l1", projectId: "p1", name: "bug", color: null }] });
+
+    await store.getState().setLabelColor("p1", "l1", "#123456");
+
+    expect(setColor).toHaveBeenCalledWith({ labelId: "l1", color: "#123456" });
   });
 
   it("archiveTicket calls window.api.tickets.archive", async () => {
