@@ -94,6 +94,18 @@ interface BoardState {
     ticketsByProject: Record<string, Ticket[]>,
     labelsByProject: Record<string, Label[]>,
   ): void;
+  /**
+   * Seeds empty `ticketsByProject`/`labelsByProject` slices for a project that
+   * didn't exist at boot — mirroring the wholesale seed `hydrate` does from
+   * the bootstrap payload (see lib/boot.ts), for the one path that bypasses
+   * it: a project created mid-session. Every ticket mutation reconciles
+   * through a guard that refuses to write into a missing slice (never
+   * resurrect a forgotten project's data), so without this seed a freshly
+   * created project's first ticket would land in SQLite but never reach the
+   * board. A no-op when the slice already exists, so calling this for a
+   * project this renderer already knows about never clobbers its live data.
+   */
+  seedProject(projectId: string): void;
   moveTicket(
     projectId: string,
     ticketId: string,
@@ -140,7 +152,10 @@ interface BoardState {
    * Fetches the project's archived tickets into `archivedByProject` (the
    * Archive view calls this on open). Resolves `false` when the fetch failed
    * (already toasted) so the view can show a retry state instead of an
-   * indefinite "Loading…".
+   * indefinite "Loading…", and also when the project was forgotten while the
+   * fetch was in flight — `projectId in ticketsByProject` is the liveness
+   * signal (seeded by `hydrate`/`seedProject`, dropped by `forget`), so a
+   * project removed mid-fetch can't have its Archive slice resurrected.
    */
   loadArchived(projectId: string): Promise<boolean>;
   /** Archives a ticket: optimistically removes it from the board, reverting (and toasting) on failure. */
@@ -320,6 +335,15 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         set({ ticketsByProject, labelsByProject });
       },
 
+      seedProject(projectId) {
+        const { ticketsByProject, labelsByProject } = get();
+        if (projectId in ticketsByProject) return; // already live — never clobber
+        set({
+          ticketsByProject: { ...ticketsByProject, [projectId]: [] },
+          labelsByProject: { ...labelsByProject, [projectId]: [] },
+        });
+      },
+
       async addTicket(projectId, status, title, options) {
         const trimmed = title.trim();
         if (trimmed === "") return null;
@@ -422,6 +446,13 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
           (): Promise<ArchivedTicketsResult> => gateway.listArchived(projectId),
         );
         if (!result) return false;
+        // The project may have been forgotten (removed) while the fetch was in
+        // flight — `ticketsByProject` is the liveness signal now that every
+        // project's slice is seeded on creation (see `seedProject`) and
+        // dropped by `forget`, so this guards the same "never resurrect a
+        // forgotten project's data" invariant `reconcileSlice`/`reconcileArchived`
+        // enforce for mutations.
+        if (!(projectId in get().ticketsByProject)) return false;
         // Wholesale-set this ONE project's archived slice from the authoritative
         // fetch — the Archive view is a fresh read each open, so a snapshot
         // replace (not a merge) is exactly right here.
