@@ -17,6 +17,13 @@ interface ProjectRow {
   row_version: number;
   created_at: number;
   updated_at: number;
+  /**
+   * The next display number `nextTicketNumberForProject` (tickets-repo) will
+   * hand out (migration 005) — a db-internal allocation detail, deliberately
+   * NOT surfaced on the domain `Project` type; `mapProject` below doesn't
+   * read it.
+   */
+  next_ticket_number: number;
 }
 
 function mapProject(row: ProjectRow): Project {

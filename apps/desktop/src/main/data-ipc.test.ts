@@ -70,6 +70,31 @@ function createTicket(projectId: string): Ticket {
   return result.ticket;
 }
 
+describe("volli:ticket-create — ticket numbers never recycle across a hard delete (#35)", () => {
+  it("skips a hard-deleted ticket's number instead of reusing it", () => {
+    const projectId = createProject();
+
+    const one = createTicket(projectId);
+    const two = createTicket(projectId);
+    const three = createTicket(projectId);
+    expect([one.ticketNumber, two.ticketNumber, three.ticketNumber]).toEqual([1, 2, 3]);
+
+    // Archive then hard-delete the highest-numbered ticket — the real
+    // delete-from-archive path (`volli:ticket-delete` only permits deleting an
+    // already-archived ticket).
+    const archived = invoke<Result>("volli:ticket-archive", { ticketId: three.id });
+    expect(archived.ok).toBe(true);
+    const deleted = invoke<Result>("volli:ticket-delete", { ticketId: three.id });
+    expect(deleted.ok).toBe(true);
+
+    // Before the fix, MAX(ticket_number)+1 over the remaining rows would
+    // reissue 3 here, colliding with the deleted ticket's retained worktree
+    // branch. The counter must instead keep moving forward.
+    const four = createTicket(projectId);
+    expect(four.ticketNumber).toBe(4);
+  });
+});
+
 describe("volli:ticket-update — worktree identity", () => {
   it("records one worktree_changed event when all three fields change together", () => {
     const projectId = createProject();
