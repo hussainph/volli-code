@@ -62,7 +62,8 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
   // mounted, so it owns the app-wide fan-out for BOTH scratch and ticket
   // sessions): fan output to the matching engine (lookup ONLY — creating here
   // would leak engines for events racing a close), bump the session's activity,
-  // and record exits. Every chunk is acked exactly once here: main's
+  // record exits, and mirror the warm-park tier's park/wake/pin pushes (decision
+  // #31) into the store. Every chunk is acked exactly once here: main's
   // flow-control bookkeeping must not starve.
   React.useEffect(() => {
     const offData = window.api.terminal.onData((event) => {
@@ -73,9 +74,13 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
     const offExit = window.api.terminal.onExit((event) => {
       markExited(event.sessionId, event.exitCode);
     });
+    const offParkState = window.api.terminal.onParkState((event) => {
+      useSessionsStore.getState().setParkState(event.sessionId, event.parked, event.keepAwake);
+    });
     return () => {
       offData();
       offExit();
+      offParkState();
     };
   }, [markExited]);
 

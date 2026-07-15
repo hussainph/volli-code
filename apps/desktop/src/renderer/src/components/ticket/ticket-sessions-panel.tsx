@@ -37,6 +37,7 @@ function StatusChip({ status }: { status: SessionActivityState }) {
         "shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium",
         status === "working" && "border-primary/50 bg-primary/10 text-primary",
         status === "idle" && "border-border bg-muted/40 text-muted-foreground",
+        status === "parked" && "border-border bg-muted/20 text-muted-foreground/80",
         status === "exited" && "border-border/60 text-muted-foreground/70",
       )}
     >
@@ -151,6 +152,7 @@ export function TicketSessionsPanel({
 }) {
   const liveTabs = useSessionsStore((state) => state.byOwner[ticketId]?.tabs);
   const lastOutputAt = useSessionsStore((state) => state.lastOutputAt);
+  const parkState = useSessionsStore((state) => state.parkState);
   const setActivePane = useSessionsStore((state) => state.setActivePane);
   const [records, setRecords] = React.useState<SessionRecord[]>([]);
   const [now, setNow] = React.useState(() => Date.now());
@@ -242,8 +244,9 @@ export function TicketSessionsPanel({
     const isRoot = live !== undefined && live.tabId === record.id;
     // Status derives from THIS pane's own exit code + output, not the tab root's.
     const exited = live !== undefined ? live.exitCode !== null : true;
+    const parked = parkState[record.id]?.parked ?? false;
     const status: SessionActivityState = isOpen
-      ? sessionActivityState(lastOutputAt[record.id] ?? null, exited, now)
+      ? sessionActivityState(lastOutputAt[record.id] ?? null, exited, now, parked)
       : "exited";
     // Root pane rows prefer the live tab title (optimistic rename shows before
     // the refetch); non-root pane rows show their own durable record title.

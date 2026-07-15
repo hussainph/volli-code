@@ -112,6 +112,15 @@ export function TerminalView({
     if (visible && active) getOrCreateEngine(sessionId).focus();
   }, [visible, active, sessionId]);
 
+  // Reports on-screen visibility to main (issue #51 warm-park tier): a pane
+  // coming on screen both auto-wakes a parked session and tells main "never
+  // auto-park what's on screen"; going off-screen (including this view's own
+  // unmount) clears the guard so the idle-park sweep can consider it again.
+  React.useEffect(() => {
+    window.api.terminal.setVisible(sessionId, visible);
+    return () => window.api.terminal.setVisible(sessionId, false);
+  }, [sessionId, visible]);
+
   return (
     <div
       ref={containerRef}
