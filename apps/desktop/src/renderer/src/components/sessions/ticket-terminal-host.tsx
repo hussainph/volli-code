@@ -1,8 +1,10 @@
 import * as React from "react";
 
+import { ConfirmCloseDialog } from "@renderer/components/sessions/confirm-close-dialog";
 import { SessionSplitLayout } from "@renderer/components/sessions/session-split-layout";
 import { createTerminalSplit } from "@renderer/components/sessions/session-create";
 import { useSessionsStore, type SessionContainer } from "@renderer/stores/sessions";
+import { useCloseGuard } from "@renderer/terminal/close-guard";
 import { closeTerminalPane } from "@renderer/terminal/session-lifecycle";
 
 /**
@@ -82,6 +84,7 @@ export function TicketTerminalOverlay({
   const target = React.useSyncExternalStore(subscribeViewport, getViewportSnapshot);
   const setActivePane = useSessionsStore((state) => state.setActivePane);
   const setSplitRatio = useSessionsStore((state) => state.setSplitRatio);
+  const closeGuard = useCloseGuard();
 
   return (
     <>
@@ -102,7 +105,11 @@ export function TicketTerminalOverlay({
                     onSplit={(sessionId, direction) =>
                       void createTerminalSplit(scope, tab.sessionId, sessionId, direction)
                     }
-                    onClose={(sessionId) => closeTerminalPane(ownerId, tab.sessionId, sessionId)}
+                    onClose={(sessionId) =>
+                      closeGuard.guard([sessionId], () =>
+                        closeTerminalPane(ownerId, tab.sessionId, sessionId),
+                      )
+                    }
                     onResize={(splitId, ratio) =>
                       setSplitRatio(ownerId, tab.sessionId, splitId, ratio)
                     }
@@ -112,6 +119,12 @@ export function TicketTerminalOverlay({
             );
           }),
       )}
+
+      <ConfirmCloseDialog
+        pending={closeGuard.pending}
+        onConfirm={closeGuard.confirm}
+        onCancel={closeGuard.cancel}
+      />
     </>
   );
 }

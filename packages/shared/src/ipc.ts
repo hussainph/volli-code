@@ -25,6 +25,7 @@ export type VolliIpcChannel =
   | "volli:terminal-write"
   | "volli:terminal-resize"
   | "volli:terminal-kill"
+  | "volli:terminal-busy"
   // Send-based (ipcRenderer.send, not invoke): a fire-and-forget flow-control
   // ack needs no reply, and awaiting one per data event would defeat it.
   | "volli:terminal-ack"

@@ -1,8 +1,8 @@
-import { app, ipcMain } from "electron";
-import type { WebContents } from "electron";
+import { app, dialog, ipcMain } from "electron";
+import type { BrowserWindow, WebContents } from "electron";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import type Database from "better-sqlite3";
 import {
   createSessionRecord,
@@ -16,6 +16,7 @@ import type {
   CreateTerminalSessionRequest,
   CreateTerminalSessionResult,
   HarnessId,
+  TerminalBusyResult,
   TerminalDataEvent,
   TerminalExitEvent,
   TerminalIoResult,
@@ -41,6 +42,10 @@ import { ensureTicketDir } from "./volli-fs";
 interface PtyProcess {
   onData(listener: (data: string) => void): void;
   onExit(listener: (event: { exitCode: number; signal?: number }) => void): void;
+  /** Foreground-process title, read from the kernel (tcgetpgrp) on access —
+   *  the shell's own name at an idle prompt, the running command's otherwise.
+   *  The same signal iTerm/VS Code use for busy state. */
+  readonly process: string;
   write(data: string): void;
   resize(cols: number, rows: number): void;
   kill(): void;
@@ -82,6 +87,8 @@ interface Session {
   pty: PtyProcess;
   /** The workspace this session is scoped to (future `volli` CLI/notifications consumer). */
   workspaceId: string;
+  /** Basename of the spawned shell (`zsh`) — the foreground title that means "idle at a prompt". */
+  shellName: string;
   /** The window that created the session; where its output events are sent. */
   webContents: WebContents;
   /** The `destroyed` listener we attached, so we can detach it on cleanup. */
@@ -296,6 +303,7 @@ export class PtyManager {
       this.sessions.set(sessionId, {
         pty,
         workspaceId: request.workspaceId,
+        shellName: basename(file),
         webContents,
         onDestroyed,
         pendingChunks: [],
@@ -424,6 +432,43 @@ export class PtyManager {
     return this.sessions.get(sessionId)?.workspaceId;
   }
 
+  /**
+   * Foreground-process probe for one session, backing the renderer's
+   * confirm-before-close gates. An unknown (already exited or forgotten)
+   * session reports `busy: false` — there is no PTY left for a close to
+   * destroy, so gating it would only add friction.
+   */
+  busy(sessionId: string): TerminalBusyResult {
+    const session = this.sessions.get(sessionId);
+    if (session === undefined) return { ok: true, busy: false, process: null };
+    try {
+      const process = foregroundProcess(session);
+      return { ok: true, busy: process !== null, process };
+    } catch (error) {
+      return { ok: false, error: errorMessage(error) };
+    }
+  }
+
+  /**
+   * Every live session with a foreground process beyond its shell, optionally
+   * scoped to one window's sessions — the quit/window-close gates' input. A
+   * probe that throws is skipped: an unreadable pty must never block
+   * enumerating the rest.
+   */
+  busySessions(owner?: WebContents): Array<{ sessionId: string; process: string }> {
+    const busy: Array<{ sessionId: string; process: string }> = [];
+    for (const [sessionId, session] of this.sessions) {
+      if (owner !== undefined && session.webContents !== owner) continue;
+      try {
+        const process = foregroundProcess(session);
+        if (process !== null) busy.push({ sessionId, process });
+      } catch {
+        // Skipped — see doc comment.
+      }
+    }
+    return busy;
+  }
+
   write(sessionId: string, data: string): TerminalIoResult {
     const session = this.sessions.get(sessionId);
     if (session === undefined) {
@@ -493,6 +538,51 @@ export class PtyManager {
     }
     this.sessions.delete(sessionId);
   }
+}
+
+/**
+ * The session's foreground process name, or null when the shell itself sits
+ * at its prompt. node-pty's `process` getter reads the pty's foreground
+ * process group from the kernel; a login shell reports itself as "-zsh", so
+ * the leading dash is stripped and paths reduced to a basename before
+ * comparing against the spawned shell. Errs busy-side: anything that isn't
+ * the shell (including a nested shell of a different flavor) counts.
+ */
+function foregroundProcess(session: Session): string | null {
+  const title = session.pty.process;
+  const name = basename(title.startsWith("-") ? title.slice(1) : title);
+  if (name.length === 0 || name === session.shellName) return null;
+  return name;
+}
+
+/**
+ * Native modal confirm for a destructive close over `busy` sessions; resolves
+ * true when the user chose to proceed. Native (not the renderer AlertDialog)
+ * because its callers — before-quit and the window `close` event — run while
+ * the renderer may already be tearing down, and both need a synchronous
+ * verdict to preventDefault against.
+ */
+export function confirmDestructiveClose(
+  busy: Array<{ process: string }>,
+  options: { message: string; confirmLabel: string; window?: BrowserWindow },
+): boolean {
+  const processes = Array.from(new Set(busy.map((entry) => entry.process))).join(", ");
+  const dialogOptions = {
+    type: "warning" as const,
+    buttons: [options.confirmLabel, "Cancel"],
+    defaultId: 1,
+    cancelId: 1,
+    message: options.message,
+    detail:
+      busy.length === 1
+        ? `A terminal is still running “${processes}”. Closing will end it.`
+        : `${busy.length} terminals are still running (${processes}). Closing will end them.`,
+  };
+  const choice =
+    options.window === undefined
+      ? dialog.showMessageBoxSync(dialogOptions)
+      : dialog.showMessageBoxSync(options.window, dialogOptions);
+  return choice === 0;
 }
 
 // ---- IPC wiring ------------------------------------------------------------
@@ -568,6 +658,16 @@ export function registerTerminalIpcHandlers(handle: DbHandle): PtyManager {
     },
   );
 
+  ipcMain.handle(
+    "volli:terminal-busy" satisfies VolliIpcChannel,
+    (_event, sessionId: unknown): TerminalBusyResult => {
+      if (typeof sessionId !== "string") {
+        return { ok: false, error: "Invalid terminal busy query" };
+      }
+      return manager.busy(sessionId);
+    },
+  );
+
   // Fire-and-forget (ipcRenderer.send) — an ack has no result to return, and
   // round-tripping one invoke per data event would defeat the flow control.
   ipcMain.on("volli:terminal-ack" satisfies VolliIpcChannel, (event, ...args: unknown[]): void => {
@@ -577,8 +677,22 @@ export function registerTerminalIpcHandlers(handle: DbHandle): PtyManager {
     manager.ack(event.sender, sessionId, chars);
   });
 
-  // Kill every PTY on quit so no orphaned shells outlive the app.
-  app.on("before-quit", () => {
+  // Kill every PTY on quit so no orphaned shells outlive the app — but a
+  // foreground process still running somewhere (a coding agent, a build) must
+  // never die to a reflexive ⌘Q: confirm first. Idle shells never block quit.
+  let quitConfirmed = false;
+  app.on("before-quit", (event) => {
+    if (!quitConfirmed) {
+      const busy = manager.busySessions();
+      if (busy.length > 0) {
+        event.preventDefault();
+        if (confirmDestructiveClose(busy, { message: "Quit Volli?", confirmLabel: "Quit" })) {
+          quitConfirmed = true;
+          app.quit();
+        }
+        return;
+      }
+    }
     manager.killAll();
   });
 

@@ -3,6 +3,7 @@ import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
 import { displayTicketId, type Ticket } from "@volli/shared";
 
 import { ContentColumn } from "@renderer/components/layout/content-column";
+import { ConfirmCloseDialog } from "@renderer/components/sessions/confirm-close-dialog";
 import { createTerminalSession } from "@renderer/components/sessions/session-create";
 import { TicketArtifactsTab } from "@renderer/components/ticket/ticket-artifacts-tab";
 import { TicketDocTab } from "@renderer/components/ticket/ticket-doc-tab";
@@ -13,9 +14,10 @@ import { TicketTabStrip, type TicketTabDescriptor } from "@renderer/components/t
 import { TicketTitle } from "@renderer/components/ticket/ticket-title";
 import { isEscapeExempt } from "@renderer/lib/escape-guard";
 import { cn } from "@renderer/lib/utils";
-import { ticketScope, useSessionsStore } from "@renderer/stores/sessions";
+import { sessionPanes, ticketScope, useSessionsStore } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useCloseGuard } from "@renderer/terminal/close-guard";
 import { closeTicketSession, renameTerminalSession } from "@renderer/terminal/session-lifecycle";
 
 /**
@@ -95,6 +97,7 @@ export function TicketDetail({
   const sessionTabs = useSessionsStore((state) => state.byOwner[ticket.id]?.tabs);
   const creating = useSessionsStore((state) => state.starting[ticket.id] ?? false);
   const railCollapsed = useUiStore((state) => state.railCollapsed);
+  const closeGuard = useCloseGuard();
 
   const displayId = displayTicketId(ticketPrefix, ticket.ticketNumber);
 
@@ -105,7 +108,11 @@ export function TicketDetail({
     { id: "doc", kind: "doc", label: displayId },
     ARTIFACTS_TAB,
     ...(sessionTabs ?? []).map(
-      (tab): TicketTabDescriptor => ({ id: tab.sessionId, kind: "session", label: tab.title }),
+      (tab): TicketTabDescriptor => ({
+        id: tab.sessionId,
+        kind: "session",
+        label: tab.title,
+      }),
     ),
   ];
   const [activeTabId, setActiveTabId] = React.useState<string>(tabs[0]!.id);
@@ -143,73 +150,88 @@ export function TicketDetail({
   }, [handleClose]);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {/* One full-width tab row above both the main column and the rail (the
+    <>
+      <div className="flex min-h-0 flex-1 flex-col">
+        {/* One full-width tab row above both the main column and the rail (the
           browser-window metaphor). The active tab fuses with the content plane
           in the main column below it. */}
-      <TicketTabStrip
-        tabs={tabs}
-        activeTabId={activeTab.id}
-        creating={creating}
-        onSelectTab={setActiveTabId}
-        onCloseSessionTab={(sessionId) => closeTicketSession(ticket.id, sessionId)}
-        onRenameSessionTab={(sessionId, title) => renameTerminalSession(sessionId, title)}
-        onNewSession={() => void createSession()}
-      />
-      <div className="flex min-h-0 flex-1 overflow-hidden">
-        {/* No horizontal padding here: Tier A children (title, Doc tab) center
+        <TicketTabStrip
+          tabs={tabs}
+          activeTabId={activeTab.id}
+          creating={creating}
+          onSelectTab={setActiveTabId}
+          onCloseSessionTab={(sessionId) => {
+            const tab = sessionTabs?.find((candidate) => candidate.sessionId === sessionId);
+            const liveIds = tab
+              ? sessionPanes(tab.layout)
+                  .filter((pane) => pane.exitCode === null)
+                  .map((pane) => pane.sessionId)
+              : [sessionId];
+            closeGuard.guard(liveIds, () => closeTicketSession(ticket.id, sessionId));
+          }}
+          onRenameSessionTab={(sessionId, title) => renameTerminalSession(sessionId, title)}
+          onNewSession={() => void createSession()}
+        />
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          {/* No horizontal padding here: Tier A children (title, Doc tab) center
             themselves on the measure via <ContentColumn>; Tier B planes
             (artifacts, terminals) own their edges (DESIGN.md tier model).
             Session tabs are pure workbench: no title, no top air — the tab strip
             already names the ticket, and the terminal gets every pixel. */}
-        <div
-          className={cn(
-            "flex min-h-0 flex-1 flex-col overflow-hidden",
-            activeTab.kind !== "session" && "pt-8",
-          )}
-        >
-          {activeTab.kind !== "session" && (
-            <ContentColumn>
-              <TicketTitle ticket={ticket} />
-            </ContentColumn>
-          )}
-          {/* Positioning context for the resident terminal plane: Doc/Artifacts
-              scroll in-flow; the plane overlays them, shown only for a session tab. */}
           <div
             className={cn(
-              "relative flex min-h-0 flex-1 flex-col",
-              activeTab.kind !== "session" && "mt-3",
+              "flex min-h-0 flex-1 flex-col overflow-hidden",
+              activeTab.kind !== "session" && "pt-8",
             )}
           >
-            {activeTab.kind === "doc" || activeTab.kind === "artifacts" ? (
-              <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
-                {activeTab.kind === "doc" ? (
-                  <TicketDocTab ticket={ticket} />
-                ) : (
-                  <TicketArtifactsTab projectId={projectId} ticketId={ticket.id} />
-                )}
-              </div>
-            ) : null}
-            <TicketSessionPlane
-              ticketId={ticket.id}
-              activeSessionId={activeTab.kind === "session" ? activeTab.id : null}
-            />
-          </div>
-        </div>
-        {railCollapsed ? null : (
-          <aside className="flex w-[300px] shrink-0 flex-col border-l border-sidebar-border bg-sidebar">
-            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
-              <TicketSessionsPanel
+            {activeTab.kind !== "session" && (
+              <ContentColumn>
+                <TicketTitle ticket={ticket} />
+              </ContentColumn>
+            )}
+            {/* Positioning context for the resident terminal plane: Doc/Artifacts
+              scroll in-flow; the plane overlays them, shown only for a session tab. */}
+            <div
+              className={cn(
+                "relative flex min-h-0 flex-1 flex-col",
+                activeTab.kind !== "session" && "mt-3",
+              )}
+            >
+              {activeTab.kind === "doc" || activeTab.kind === "artifacts" ? (
+                <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+                  {activeTab.kind === "doc" ? (
+                    <TicketDocTab ticket={ticket} />
+                  ) : (
+                    <TicketArtifactsTab projectId={projectId} ticketId={ticket.id} />
+                  )}
+                </div>
+              ) : null}
+              <TicketSessionPlane
                 ticketId={ticket.id}
-                creating={creating}
-                onNewSession={() => void createSession()}
-                onActivateSession={setActiveTabId}
+                activeSessionId={activeTab.kind === "session" ? activeTab.id : null}
               />
             </div>
-            <TicketDetailsDrawer projectId={projectId} ticket={ticket} />
-          </aside>
-        )}
+          </div>
+          {railCollapsed ? null : (
+            <aside className="flex w-[300px] shrink-0 flex-col border-l border-sidebar-border bg-sidebar">
+              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
+                <TicketSessionsPanel
+                  ticketId={ticket.id}
+                  creating={creating}
+                  onNewSession={() => void createSession()}
+                  onActivateSession={setActiveTabId}
+                />
+              </div>
+              <TicketDetailsDrawer projectId={projectId} ticket={ticket} />
+            </aside>
+          )}
+        </div>
       </div>
-    </div>
+      <ConfirmCloseDialog
+        pending={closeGuard.pending}
+        onConfirm={closeGuard.confirm}
+        onCancel={closeGuard.cancel}
+      />
+    </>
   );
 }
