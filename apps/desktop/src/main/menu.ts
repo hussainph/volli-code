@@ -1,5 +1,9 @@
-import { BrowserWindow, Menu, type MenuItemConstructorOptions } from "electron";
+import { app, BrowserWindow, dialog, Menu, type MenuItemConstructorOptions } from "electron";
+import { writeFile } from "node:fs/promises";
+import { errorMessage } from "@volli/shared";
 import type { UiZoomCommand, VolliIpcEvent } from "@volli/shared";
+import type { DbHandle } from "./data-ipc";
+import { buildExportDocument, defaultExportFilename, serializeExportDocument } from "./db/export";
 
 /**
  * Installs the application menu. Everything is the standard macOS template
@@ -22,10 +26,57 @@ function sendZoom(cmd: UiZoomCommand): void {
   );
 }
 
-export function registerAppMenu(): void {
+/**
+ * File > Export Database as JSON…: prompts for a save location, then writes
+ * a full `buildExportDocument` dump there. A degraded db (open/migrate
+ * failed at boot — the same `DbHandle` the data/artifact IPC handlers
+ * degrade against) surfaces immediately rather than opening a dialog for a
+ * write that can never happen. Every failure — a degraded db or a write
+ * error — goes through `dialog.showErrorBox`, never swallowed (CLAUDE.md).
+ */
+async function handleExportDatabase(dbHandle: DbHandle): Promise<void> {
+  if (!dbHandle.ok) {
+    dialog.showErrorBox("Export Failed", `The database is unavailable: ${dbHandle.error}`);
+    return;
+  }
+  const now = new Date();
+  const win = BrowserWindow.getFocusedWindow();
+  const saveDialogOptions: Electron.SaveDialogOptions = {
+    defaultPath: defaultExportFilename(now),
+    filters: [{ name: "JSON", extensions: ["json"] }],
+  };
+  const result = win
+    ? await dialog.showSaveDialog(win, saveDialogOptions)
+    : await dialog.showSaveDialog(saveDialogOptions);
+  if (result.canceled || !result.filePath) return;
+
+  try {
+    const document = buildExportDocument(dbHandle.db, {
+      appVersion: app.getVersion(),
+      now: now.getTime(),
+    });
+    await writeFile(result.filePath, serializeExportDocument(document), "utf8");
+  } catch (error) {
+    dialog.showErrorBox("Export Failed", errorMessage(error));
+  }
+}
+
+export function registerAppMenu(dbHandle: DbHandle): void {
   const template: MenuItemConstructorOptions[] = [
     { role: "appMenu" },
-    { role: "fileMenu" },
+    {
+      label: "File",
+      submenu: [
+        {
+          label: "Export Database as JSON…",
+          click: () => {
+            void handleExportDatabase(dbHandle);
+          },
+        },
+        { type: "separator" },
+        { role: "close" },
+      ],
+    },
     { role: "editMenu" },
     {
       label: "View",

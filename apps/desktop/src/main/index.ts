@@ -183,9 +183,6 @@ app.whenReady().then(() => {
     allowedPermissions.has(permission),
   );
 
-  // Standard macOS menu, but with the View-menu zoom roles replaced by
-  // renderer-driven CSS zoom (see menu.ts for the rationale).
-  registerAppMenu();
   registerIpcHandlers();
   // Ghostty config read + live-reload watch, feeding restty's appearance.
   registerGhosttyConfigIpc();
@@ -217,6 +214,11 @@ app.whenReady().then(() => {
       console.error("[volli] failed to sweep stale sessions:", errorMessage(error));
     }
   }
+  // Standard macOS menu, but with the View-menu zoom roles replaced by
+  // renderer-driven CSS zoom (see menu.ts for the rationale). Registered here
+  // (rather than up with the other pre-window setup) because File > Export
+  // Database needs `dbHandle`, which doesn't exist yet at that point.
+  registerAppMenu(dbHandle);
   registerDataIpcHandlers(dbHandle);
   // `.volli` artifacts fs plumbing (list/read/write/create/promote/watch);
   // same degraded-DB stance as registerDataIpcHandlers.
