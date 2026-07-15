@@ -83,6 +83,7 @@ export default defineConfig({
         "**/src/main/project-roots.ts",
         "**/src/main/pty.ts",
         "**/src/main/ghostty-config.ts",
+        "**/src/main/db/export.ts",
       ],
       // Global bar only — vitest applies global thresholds to every included
       // file even when per-glob entries exist, so partial carve-outs can't
