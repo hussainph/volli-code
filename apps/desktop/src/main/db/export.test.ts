@@ -31,7 +31,7 @@ describe("buildExportDocument — empty db", () => {
     expect(document.format).toBe("volli-export");
     expect(document.appVersion).toBe("1.2.3");
     expect(document.exportedAt).toBe(new Date(1_700_000_000_000).toISOString());
-    expect(document.schemaVersion).toBe(4);
+    expect(document.schemaVersion).toBe(5);
     expect(document.projects).toEqual([]);
     expect(document.tickets).toEqual([]);
     expect(document.labels).toEqual([]);
