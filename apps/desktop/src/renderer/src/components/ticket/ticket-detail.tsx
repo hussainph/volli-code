@@ -159,14 +159,28 @@ export function TicketDetail({
       <div className="flex min-h-0 flex-1 overflow-hidden">
         {/* No horizontal padding here: Tier A children (title, Doc tab) center
             themselves on the measure via <ContentColumn>; Tier B planes
-            (artifacts, terminals) own their edges (DESIGN.md tier model). */}
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden pt-8">
-          <ContentColumn>
-            <TicketTitle ticket={ticket} />
-          </ContentColumn>
+            (artifacts, terminals) own their edges (DESIGN.md tier model).
+            Session tabs are pure workbench: no title, no top air — the tab strip
+            already names the ticket, and the terminal gets every pixel. */}
+        <div
+          className={cn(
+            "flex min-h-0 flex-1 flex-col overflow-hidden",
+            activeTab.kind !== "session" && "pt-8",
+          )}
+        >
+          {activeTab.kind !== "session" && (
+            <ContentColumn>
+              <TicketTitle ticket={ticket} />
+            </ContentColumn>
+          )}
           {/* Positioning context for the resident terminal plane: Doc/Artifacts
               scroll in-flow; the plane overlays them, shown only for a session tab. */}
-          <div className="relative mt-3 flex min-h-0 flex-1 flex-col">
+          <div
+            className={cn(
+              "relative flex min-h-0 flex-1 flex-col",
+              activeTab.kind !== "session" && "mt-3",
+            )}
+          >
             {activeTab.kind === "doc" || activeTab.kind === "artifacts" ? (
               <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
                 {activeTab.kind === "doc" ? (
