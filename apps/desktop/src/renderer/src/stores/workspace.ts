@@ -70,6 +70,7 @@ interface WorkspaceState {
    * starts empty on every relaunch and never reaches persisted storage.
    */
   navHistory: NavHistory;
+  /** Select a top-level page. Selecting Board exits any open ticket detail. */
   setNav(projectId: string, nav: NavKey): void;
   setDirExpanded(projectId: string, dirPath: string, expanded: boolean): void;
   setBoardView(projectId: string, view: BoardView): void;
@@ -177,7 +178,16 @@ export function createWorkspaceStore(storage?: StateStorage) {
         navHistory: EMPTY_NAV_HISTORY,
 
         setNav(projectId, nav) {
-          set((state) => patchWorkspace(state, projectId, { nav }));
+          // Ticket detail is a child of Board, not a separate top-level nav
+          // key. A deliberate Board selection must therefore mean the plain
+          // board even when `nav` is already "board".
+          set((state) =>
+            patchWorkspace(
+              state,
+              projectId,
+              nav === "board" ? { nav, openTicketId: null } : { nav },
+            ),
+          );
         },
 
         setDirExpanded(projectId, dirPath, expanded) {
