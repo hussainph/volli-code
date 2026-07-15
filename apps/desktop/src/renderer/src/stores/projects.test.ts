@@ -2,7 +2,13 @@ import type { Project, Ticket } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
 import { useBoardStore } from "./board";
-import { PROJECTS_UI_APP_STATE_KEY, type ProjectsGateway, createProjectsStore } from "./projects";
+import {
+  PROJECTS_UI_APP_STATE_KEY,
+  type ProjectsGateway,
+  createProjectsStore,
+  decodeProjectsUiState,
+  encodeProjectsUiState,
+} from "./projects";
 import { scratchScope, ticketScope, useSessionsStore } from "./sessions";
 import { useWorkspaceStore } from "./workspace";
 
@@ -63,6 +69,43 @@ function fakeGateway(overrides: Partial<ProjectsGateway> = {}): ProjectsGateway 
 function freshStore(gateway: ProjectsGateway = fakeGateway()) {
   return { store: createProjectsStore(gateway), gateway };
 }
+
+describe("encodeProjectsUiState / decodeProjectsUiState", () => {
+  it("round-trips a selected id", () => {
+    expect(decodeProjectsUiState(encodeProjectsUiState("p1"))).toBe("p1");
+  });
+
+  it("round-trips null", () => {
+    expect(decodeProjectsUiState(encodeProjectsUiState(null))).toBeNull();
+  });
+
+  it("emits the byte-compatible shape existing databases already hold", () => {
+    expect(encodeProjectsUiState("p1")).toBe(JSON.stringify({ selectedProjectId: "p1" }));
+    expect(encodeProjectsUiState(null)).toBe(JSON.stringify({ selectedProjectId: null }));
+  });
+
+  it("decodes undefined (key absent) to null", () => {
+    expect(decodeProjectsUiState(undefined)).toBeNull();
+  });
+
+  it("decodes malformed JSON to null", () => {
+    expect(decodeProjectsUiState("{not json")).toBeNull();
+  });
+
+  it("decodes valid JSON that isn't an object (array, primitive, null) to null", () => {
+    expect(decodeProjectsUiState("[1,2,3]")).toBeNull();
+    expect(decodeProjectsUiState('"just a string"')).toBeNull();
+    expect(decodeProjectsUiState("null")).toBeNull();
+  });
+
+  it("decodes an object missing selectedProjectId to null", () => {
+    expect(decodeProjectsUiState("{}")).toBeNull();
+  });
+
+  it("decodes a non-string selectedProjectId to null", () => {
+    expect(decodeProjectsUiState(JSON.stringify({ selectedProjectId: 42 }))).toBeNull();
+  });
+});
 
 /** A minimal, deterministic ticket for board-store gateway stubs. */
 function ticket(overrides: Partial<Ticket> & { id: string; projectId: string }): Ticket {
