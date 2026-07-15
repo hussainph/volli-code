@@ -52,6 +52,18 @@ export interface TerminalExitEvent {
   exitCode: number;
 }
 
+/**
+ * main → renderer: a session's warm-park state changed (issue #51 warm tier).
+ * Pushed on every park, wake, and keep-awake pin change so the UI can show the
+ * parked badge and reflect the pin. `parked` is the SIGSTOP state; `keepAwake`
+ * is the user's exclusion pin.
+ */
+export interface TerminalParkStateEvent {
+  sessionId: string;
+  parked: boolean;
+  keepAwake: boolean;
+}
+
 /** main → renderer: everything the renderer needs to map the user's Ghostty config onto restty. */
 export interface GhosttyAppearancePayload {
   prefs: GhosttyTerminalPrefs;

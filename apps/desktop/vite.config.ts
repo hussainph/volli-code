@@ -82,6 +82,7 @@ export default defineConfig({
         "**/src/main/navigation.ts",
         "**/src/main/project-roots.ts",
         "**/src/main/pty.ts",
+        "**/src/main/park.ts",
         "**/src/main/ghostty-config.ts",
         "**/src/main/db/export.ts",
       ],

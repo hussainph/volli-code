@@ -3,8 +3,8 @@ import { createSessionRecord, isSessionActivityState, SESSION_ACTIVITY_STATES } 
 import type { SessionActivityState, SessionRecord } from "./session";
 
 describe("SESSION_ACTIVITY_STATES", () => {
-  it("lists working, idle, exited in order", () => {
-    expect(SESSION_ACTIVITY_STATES).toEqual(["working", "idle", "exited"]);
+  it("lists working, idle, parked, exited in order", () => {
+    expect(SESSION_ACTIVITY_STATES).toEqual(["working", "idle", "parked", "exited"]);
   });
 });
 

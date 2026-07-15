@@ -25,9 +25,16 @@ export type VolliIpcChannel =
   | "volli:terminal-write"
   | "volli:terminal-resize"
   | "volli:terminal-kill"
+  | "volli:terminal-park"
+  | "volli:terminal-wake"
+  | "volli:terminal-keep-awake"
   // Send-based (ipcRenderer.send, not invoke): a fire-and-forget flow-control
   // ack needs no reply, and awaiting one per data event would defeat it.
   | "volli:terminal-ack"
+  // Send-based (ipcRenderer.send, not invoke): visibility flips on every board
+  // ⇄ session nav, needs no reply, and round-tripping an invoke per flip would
+  // add latency to navigation for nothing.
+  | "volli:terminal-set-visible"
   | "volli:ghostty-config-get"
   | "volli:data-bootstrap"
   | "volli:legacy-import"
@@ -68,6 +75,7 @@ export type VolliIpcEvent =
   | "volli:fullscreen-changed"
   | "volli:terminal-data"
   | "volli:terminal-exit"
+  | "volli:terminal-park-state"
   | "volli:ghostty-config-changed"
   // Fired by the native View menu's zoom items. The renderer applies CSS zoom
   // to the content row (below the chrome band) rather than letting Electron

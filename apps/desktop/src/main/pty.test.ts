@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
+import type { WebContents } from "electron";
 import type {
   CreateTerminalSessionResult,
   Project,
@@ -47,7 +48,8 @@ vi.mock("electron", () => ({
 // Electron-ABI native binary, which never loads under plain-Node vitest.
 vi.mock("node-pty", () => ({ spawn }));
 
-import { registerTerminalIpcHandlers } from "./pty";
+import { PtyManager, registerTerminalIpcHandlers } from "./pty";
+import type { ParkConfig, ProcessInspector } from "./park";
 import { listTicketEvents } from "./db/events-repo";
 import { insertProject } from "./db/projects-repo";
 import { listSessions, listTicketSessions } from "./db/sessions-repo";
@@ -55,11 +57,19 @@ import { openTestDb, testProject, testTicket, type TestDb } from "./db/test-help
 import { deleteTicket, insertTicket } from "./db/tickets-repo";
 import { syncProjectRoots } from "./project-roots";
 
+let ptyPidSeq = 1000;
+/** A distinct fake pid per session, so park-tree assertions can't collide. */
+function nextPid(): number {
+  ptyPidSeq += 1;
+  return ptyPidSeq;
+}
+
 /** A node-pty double whose onData/onExit callbacks can be fired on demand. */
-function makeFakePty() {
+function makeFakePty(pid = nextPid()) {
   let dataCb: ((data: string) => void) | undefined;
   let exitCb: ((event: { exitCode: number }) => void) | undefined;
   return {
+    pid,
     onData: (cb: (data: string) => void) => {
       dataCb = cb;
     },
@@ -96,6 +106,9 @@ function makeWebContents() {
 }
 
 type WebContentsDouble = ReturnType<typeof makeWebContents>;
+
+/** Casts a WebContents double for the direct manager methods that take one. */
+const asWc = (double: WebContentsDouble): WebContents => double as unknown as WebContents;
 
 const invokeCreate = (sender: WebContentsDouble, req: unknown) =>
   (handlers.get("volli:terminal-create" satisfies VolliIpcChannel) as (...a: unknown[]) => unknown)(
@@ -136,6 +149,9 @@ const sendAck = (sender: unknown, sessionId: unknown, chars: unknown) =>
 /** Runs the pending batch timer so buffered output flushes (fake timers on). */
 const flushBatchWindow = () => vi.advanceTimersByTime(8);
 
+/** A `now` comfortably past the warm-park idle threshold from a fresh session. */
+const idleNow = () => Date.now() + 10_000;
+
 let root: string;
 let outside: string;
 let manager: ReturnType<typeof registerTerminalIpcHandlers>;
@@ -156,12 +172,21 @@ async function createSession(sender = makeWebContents()) {
   return { sessionId: result.sessionId, pty, sender };
 }
 
+let priorParkDisable: string | undefined;
+
 beforeAll(async () => {
+  // The suite's registerTerminalIpcHandlers-built managers must not start a
+  // real warm-park sweep against the real inspector; disable parking for them.
+  // The dedicated "warm park" block constructs managers with explicit config.
+  priorParkDisable = process.env["VOLLI_PARK_DISABLE"];
+  process.env["VOLLI_PARK_DISABLE"] = "1";
   root = await fs.realpath(await fs.mkdtemp(join(os.tmpdir(), "volli-pty-")));
   outside = await fs.realpath(await fs.mkdtemp(join(os.tmpdir(), "volli-pty-outside-")));
 });
 
 afterAll(async () => {
+  if (priorParkDisable === undefined) delete process.env["VOLLI_PARK_DISABLE"];
+  else process.env["VOLLI_PARK_DISABLE"] = priorParkDisable;
   await fs.rm(root, { recursive: true, force: true });
   await fs.rm(outside, { recursive: true, force: true });
 });
@@ -827,5 +852,498 @@ describe("degraded database", () => {
     });
     expect(result).toEqual({ ok: false, error: "disk full" });
     expect(spawn).not.toHaveBeenCalled();
+  });
+});
+
+// ---- warm park (issue #51) ------------------------------------------------
+
+/** A fake ProcessInspector: no `ps`/`pgrep`/`lsof` spawning, no real signals. */
+function makeInspector() {
+  const descendants = vi.fn(async (_pid: number): Promise<number[]> => []);
+  const cpuPercents = vi.fn(async (_pids: readonly number[]) => new Map<number, number>());
+  const listeningPids = vi.fn(async (_pids: readonly number[]) => new Set<number>());
+  const signal = vi.fn((_pid: number, _sig: "SIGSTOP" | "SIGCONT"): boolean => true);
+  const inspector: ProcessInspector = { descendants, cpuPercents, listeningPids, signal };
+  return { inspector, descendants, cpuPercents, listeningPids, signal };
+}
+
+const ENABLED_CONFIG: ParkConfig = {
+  idleThresholdMs: 1000,
+  sweepIntervalMs: 1000,
+  cpuBusyPercent: 0.5,
+  quietSamplesRequired: 2,
+  enabled: true,
+};
+
+describe("warm park", () => {
+  let parts: ReturnType<typeof makeInspector>;
+  let parkManager: PtyManager;
+
+  beforeEach(() => {
+    parts = makeInspector();
+    parkManager = new PtyManager(testDb.db, "", parts.inspector, ENABLED_CONFIG);
+  });
+
+  /** Spawns a session on `parkManager` and returns its id, fake pty, and window. */
+  async function createParkSession(pid?: number) {
+    const pty = makeFakePty(pid);
+    spawn.mockReturnValueOnce(pty);
+    const sender = makeWebContents();
+    const result = await parkManager.create(asWc(sender), {
+      workspaceId: "w",
+      cwd: root,
+      cols: 80,
+      rows: 24,
+    });
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+    return { sessionId: result.sessionId, pty, sender };
+  }
+
+  /** Pids sent a given signal, in call order. */
+  const signalledWith = (sig: "SIGSTOP" | "SIGCONT"): number[] =>
+    parts.signal.mock.calls.filter((call) => call[1] === sig).map((call) => call[0]);
+  const stopCalls = () => signalledWith("SIGSTOP");
+  const contCalls = () => signalledWith("SIGCONT");
+
+  describe("park", () => {
+    it("stops parent first, then descendants, and re-collects a newly spawned child", async () => {
+      const { sessionId, pty } = await createParkSession();
+      parts.descendants
+        .mockResolvedValueOnce([200]) // initial collect
+        .mockResolvedValueOnce([200, 300]) // round 0: 300 appeared
+        .mockResolvedValueOnce([200, 300]); // round 1: stable → break
+      expect(await parkManager.park(sessionId, { manual: true })).toEqual({ ok: true });
+      expect(stopCalls()).toEqual([pty.pid, 200, 300]);
+    });
+
+    it("bounds the re-collect loop at three rounds", async () => {
+      const { sessionId, pty } = await createParkSession();
+      parts.descendants
+        .mockResolvedValueOnce([200])
+        .mockResolvedValueOnce([200, 300])
+        .mockResolvedValueOnce([200, 300, 400])
+        .mockResolvedValueOnce([200, 300, 400, 500]);
+      await parkManager.park(sessionId, { manual: true });
+      expect(stopCalls()).toEqual([pty.pid, 200, 300, 400, 500]);
+    });
+
+    it("pushes a park-state event on park", async () => {
+      const { sessionId, sender } = await createParkSession();
+      await parkManager.park(sessionId, { manual: true });
+      expect(sender.send).toHaveBeenCalledWith("volli:terminal-park-state", {
+        sessionId,
+        parked: true,
+        keepAwake: false,
+      });
+    });
+
+    it("skips the park-state push when the window is destroyed", async () => {
+      const { sessionId, sender } = await createParkSession();
+      sender.destroyed = true;
+      await parkManager.park(sessionId, { manual: true });
+      expect(sender.send).not.toHaveBeenCalled();
+    });
+
+    it("is a no-op on an already-parked session", async () => {
+      const { sessionId } = await createParkSession();
+      await parkManager.park(sessionId, { manual: true });
+      parts.signal.mockClear();
+      expect(await parkManager.park(sessionId, { manual: true })).toEqual({ ok: true });
+      expect(parts.signal).not.toHaveBeenCalled();
+    });
+
+    it("auto-park refuses a visible session", async () => {
+      const { sessionId, sender } = await createParkSession();
+      parkManager.setVisible(asWc(sender), sessionId, true);
+      expect(await parkManager.park(sessionId, { manual: false })).toEqual({
+        ok: false,
+        error: "Session is visible or kept awake",
+      });
+    });
+
+    it("auto-park refuses a kept-awake session", async () => {
+      const { sessionId } = await createParkSession();
+      parkManager.setKeepAwake(sessionId, true);
+      expect(await parkManager.park(sessionId, { manual: false })).toEqual({
+        ok: false,
+        error: "Session is visible or kept awake",
+      });
+    });
+
+    it("manual park bypasses the visible and keep-awake guards", async () => {
+      const { sessionId, sender, pty } = await createParkSession();
+      parkManager.setVisible(asWc(sender), sessionId, true);
+      parkManager.setKeepAwake(sessionId, true);
+      expect(await parkManager.park(sessionId, { manual: true })).toEqual({ ok: true });
+      expect(stopCalls()).toEqual([pty.pid]);
+    });
+
+    it("errors on an unknown session", async () => {
+      expect(await parkManager.park("nope", { manual: true })).toEqual({
+        ok: false,
+        error: "Unknown terminal session",
+      });
+    });
+
+    it("refuses even a manual park when parking is disabled", async () => {
+      const disabled = new PtyManager(testDb.db, "", parts.inspector, {
+        ...ENABLED_CONFIG,
+        enabled: false,
+      });
+      const pty = makeFakePty();
+      spawn.mockReturnValueOnce(pty);
+      const sender = makeWebContents();
+      const created = await disabled.create(asWc(sender), {
+        workspaceId: "w",
+        cwd: root,
+        cols: 80,
+        rows: 24,
+      });
+      if (!created.ok) throw new Error(created.error);
+      expect(await disabled.park(created.sessionId, { manual: true })).toEqual({
+        ok: false,
+        error: "Session parking is disabled",
+      });
+      expect(parts.signal).not.toHaveBeenCalled();
+    });
+
+    it("bails without stopping anything when the session is killed during the initial collect", async () => {
+      const { sessionId } = await createParkSession();
+      parts.descendants.mockImplementationOnce(async () => {
+        parkManager.kill(sessionId);
+        return [200];
+      });
+      expect(await parkManager.park(sessionId, { manual: true })).toEqual({
+        ok: false,
+        error: "Session ended while parking",
+      });
+      expect(stopCalls()).toEqual([]);
+    });
+
+    it("continues the already-stopped tree when the session is killed during a rescan", async () => {
+      const { sessionId, pty } = await createParkSession();
+      parts.descendants
+        .mockResolvedValueOnce([200]) // initial collect
+        .mockImplementationOnce(async () => {
+          // Kill lands between the stop pass and the rescan: park must CONT
+          // what it stopped so the kill's pending SIGHUP can act on the tree.
+          parkManager.kill(sessionId);
+          return [200];
+        });
+      expect(await parkManager.park(sessionId, { manual: true })).toEqual({
+        ok: false,
+        error: "Session ended while parking",
+      });
+      expect(stopCalls()).toEqual([pty.pid, 200]);
+      expect(contCalls()).toEqual([200, pty.pid]);
+    });
+  });
+
+  describe("wake", () => {
+    it("continues the tree in reverse of the stop order", async () => {
+      const { sessionId, pty } = await createParkSession();
+      parts.descendants.mockResolvedValueOnce([200, 300]).mockResolvedValueOnce([200, 300]);
+      await parkManager.park(sessionId, { manual: true });
+      expect(stopCalls()).toEqual([pty.pid, 200, 300]);
+      expect(parkManager.wake(sessionId)).toEqual({ ok: true });
+      expect(contCalls()).toEqual([300, 200, pty.pid]);
+    });
+
+    it("pushes a park-state event on wake", async () => {
+      const { sessionId, sender } = await createParkSession();
+      await parkManager.park(sessionId, { manual: true });
+      sender.send.mockClear();
+      parkManager.wake(sessionId);
+      expect(sender.send).toHaveBeenCalledWith("volli:terminal-park-state", {
+        sessionId,
+        parked: false,
+        keepAwake: false,
+      });
+    });
+
+    it("is a no-op on a running session", async () => {
+      const { sessionId } = await createParkSession();
+      expect(parkManager.wake(sessionId)).toEqual({ ok: true });
+      expect(parts.signal).not.toHaveBeenCalled();
+    });
+
+    it("errors on an unknown session", () => {
+      expect(parkManager.wake("nope")).toEqual({ ok: false, error: "Unknown terminal session" });
+    });
+  });
+
+  describe("write / resize / kill interaction", () => {
+    it("wakes a parked session before writing to it", async () => {
+      const { sessionId, pty } = await createParkSession();
+      await parkManager.park(sessionId, { manual: true });
+      expect(pty.write).not.toHaveBeenCalled();
+      expect(parkManager.write(sessionId, "ls\r")).toEqual({ ok: true });
+      expect(contCalls()).toEqual([pty.pid]);
+      expect(pty.write).toHaveBeenCalledWith("ls\r");
+    });
+
+    it("does not wake a parked session on resize", async () => {
+      const { sessionId, pty } = await createParkSession();
+      await parkManager.park(sessionId, { manual: true });
+      expect(parkManager.resize(sessionId, 100, 40)).toEqual({ ok: true });
+      expect(contCalls()).toEqual([]);
+      expect(pty.resize).toHaveBeenCalledWith(100, 40);
+    });
+
+    it("continues a parked session before killing it", async () => {
+      const { sessionId, pty } = await createParkSession();
+      await parkManager.park(sessionId, { manual: true });
+      expect(parkManager.kill(sessionId)).toEqual({ ok: true });
+      expect(contCalls()).toEqual([pty.pid]);
+      expect(pty.kill).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("setVisible", () => {
+    it("ignores a flip from a non-owning sender", async () => {
+      const { sessionId } = await createParkSession();
+      parkManager.setVisible(asWc(makeWebContents()), sessionId, true);
+      // Visibility stayed false, so auto-park still proceeds.
+      expect(await parkManager.park(sessionId, { manual: false })).toEqual({ ok: true });
+    });
+
+    it("wakes a parked session when its pane becomes visible", async () => {
+      const { sessionId, sender, pty } = await createParkSession();
+      await parkManager.park(sessionId, { manual: true });
+      parkManager.setVisible(asWc(sender), sessionId, true);
+      expect(contCalls()).toEqual([pty.pid]);
+    });
+
+    it("does not wake when a pane is hidden", async () => {
+      const { sessionId, sender } = await createParkSession();
+      await parkManager.park(sessionId, { manual: true });
+      parkManager.setVisible(asWc(sender), sessionId, false);
+      expect(contCalls()).toEqual([]);
+    });
+
+    it("ignores an unknown session", () => {
+      expect(() => parkManager.setVisible(asWc(makeWebContents()), "nope", true)).not.toThrow();
+    });
+  });
+
+  describe("setKeepAwake", () => {
+    it("pushes a park-state event reflecting the pin", async () => {
+      const { sessionId, sender } = await createParkSession();
+      parkManager.setKeepAwake(sessionId, true);
+      expect(sender.send).toHaveBeenCalledWith("volli:terminal-park-state", {
+        sessionId,
+        parked: false,
+        keepAwake: true,
+      });
+    });
+
+    it("wakes an already-parked session when pinned", async () => {
+      const { sessionId, pty } = await createParkSession();
+      await parkManager.park(sessionId, { manual: true });
+      expect(parkManager.setKeepAwake(sessionId, true)).toEqual({ ok: true });
+      expect(contCalls()).toEqual([pty.pid]);
+    });
+
+    it("clearing the pin never wakes", async () => {
+      const { sessionId } = await createParkSession();
+      await parkManager.park(sessionId, { manual: true });
+      parts.signal.mockClear();
+      parkManager.setKeepAwake(sessionId, false);
+      expect(parts.signal).not.toHaveBeenCalled();
+    });
+
+    it("errors on an unknown session", () => {
+      expect(parkManager.setKeepAwake("nope", true)).toEqual({
+        ok: false,
+        error: "Unknown terminal session",
+      });
+    });
+  });
+
+  describe("sweep", () => {
+    it("does nothing when parking is disabled", async () => {
+      const disabled = new PtyManager(testDb.db, "", parts.inspector, {
+        ...ENABLED_CONFIG,
+        enabled: false,
+      });
+      const pty = makeFakePty();
+      spawn.mockReturnValueOnce(pty);
+      await disabled.create(asWc(makeWebContents()), {
+        workspaceId: "w",
+        cwd: root,
+        cols: 80,
+        rows: 24,
+      });
+      await disabled.sweep(idleNow());
+      expect(parts.descendants).not.toHaveBeenCalled();
+    });
+
+    it("skips a visible session at stage 1", async () => {
+      const { sessionId, sender } = await createParkSession();
+      parkManager.setVisible(asWc(sender), sessionId, true);
+      await parkManager.sweep(idleNow());
+      expect(stopCalls()).toEqual([]);
+      expect(parts.descendants).not.toHaveBeenCalled();
+    });
+
+    it("skips a recently-active session at stage 1", async () => {
+      await createParkSession();
+      await parkManager.sweep(Date.now()); // within the idle threshold
+      expect(stopCalls()).toEqual([]);
+    });
+
+    it("requires two consecutive CPU-quiet sweeps, and a busy sweep resets the streak", async () => {
+      const { pty } = await createParkSession();
+      await parkManager.sweep(idleNow()); // quiet sample 1
+      expect(stopCalls()).toEqual([]);
+      parts.cpuPercents.mockResolvedValueOnce(new Map([[pty.pid, 5]])); // busy
+      await parkManager.sweep(idleNow()); // streak reset to 0
+      expect(stopCalls()).toEqual([]);
+      await parkManager.sweep(idleNow()); // quiet sample 1
+      expect(stopCalls()).toEqual([]);
+      await parkManager.sweep(idleNow()); // quiet sample 2 → park
+      expect(stopCalls()).toEqual([pty.pid]);
+    });
+
+    it("never parks a tree holding a LISTEN socket, but retries once it clears", async () => {
+      const { pty } = await createParkSession();
+      parts.listeningPids.mockResolvedValue(new Set([pty.pid]));
+      await parkManager.sweep(idleNow()); // sample 1
+      await parkManager.sweep(idleNow()); // sample 2 → stage 3 → listener → skip
+      expect(stopCalls()).toEqual([]);
+      parts.listeningPids.mockResolvedValue(new Set());
+      await parkManager.sweep(idleNow()); // listener gone → park
+      expect(stopCalls()).toEqual([pty.pid]);
+    });
+
+    it("skips the overlapping tick while a slow sweep is still running", async () => {
+      // Assigned synchronously when the first sweep calls descendants, before we
+      // release it below.
+      let release!: (pids: number[]) => void;
+      parts.descendants.mockImplementationOnce(
+        () =>
+          new Promise<number[]>((resolve) => {
+            release = resolve;
+          }),
+      );
+      await createParkSession();
+      const first = parkManager.sweep(idleNow()); // suspends at descendants
+      await parkManager.sweep(idleNow()); // sweeping flag set → returns at once
+      expect(parts.descendants).toHaveBeenCalledTimes(1);
+      release([]);
+      await first;
+    });
+
+    it("runs on its interval via startParkSweep and halts on stopParkSweep", async () => {
+      const manager2 = new PtyManager(testDb.db, "", parts.inspector, {
+        ...ENABLED_CONFIG,
+        idleThresholdMs: 0,
+        quietSamplesRequired: 1,
+      });
+      const pty = makeFakePty();
+      spawn.mockReturnValueOnce(pty);
+      const created = await manager2.create(asWc(makeWebContents()), {
+        workspaceId: "w",
+        cwd: root,
+        cols: 80,
+        rows: 24,
+      });
+      if (!created.ok) throw new Error("expected session");
+      vi.useFakeTimers();
+      manager2.startParkSweep();
+      manager2.startParkSweep(); // idempotent: hits the already-running guard
+      await vi.advanceTimersByTimeAsync(ENABLED_CONFIG.sweepIntervalMs);
+      expect(stopCalls()).toEqual([pty.pid]);
+      manager2.stopParkSweep();
+      parts.signal.mockClear();
+      await vi.advanceTimersByTimeAsync(ENABLED_CONFIG.sweepIntervalMs * 5);
+      expect(parts.signal).not.toHaveBeenCalled();
+    });
+
+    it("startParkSweep is inert when disabled, and stopParkSweep tolerates no timer", () => {
+      const disabled = new PtyManager(testDb.db, "", parts.inspector, {
+        ...ENABLED_CONFIG,
+        enabled: false,
+      });
+      expect(() => {
+        disabled.startParkSweep();
+        disabled.stopParkSweep();
+      }).not.toThrow();
+    });
+  });
+});
+
+// The park/wake/keep-awake/set-visible IPC handlers validate their args and
+// forward to the manager. Valid-arg paths use an unknown session id so the
+// manager short-circuits before any (real) process inspection.
+const invokePark = (sessionId: unknown) =>
+  (handlers.get("volli:terminal-park" satisfies VolliIpcChannel) as (...a: unknown[]) => unknown)(
+    { sender: {} },
+    sessionId,
+  ) as Promise<TerminalIoResult>;
+
+const invokeWake = (sessionId: unknown) =>
+  (handlers.get("volli:terminal-wake" satisfies VolliIpcChannel) as (...a: unknown[]) => unknown)(
+    { sender: {} },
+    sessionId,
+  ) as TerminalIoResult;
+
+const invokeKeepAwake = (sessionId: unknown, keepAwake: unknown) =>
+  (
+    handlers.get("volli:terminal-keep-awake" satisfies VolliIpcChannel) as (
+      ...a: unknown[]
+    ) => unknown
+  )({ sender: {} }, sessionId, keepAwake) as TerminalIoResult;
+
+const sendSetVisible = (sender: unknown, sessionId: unknown, visible: unknown) =>
+  (
+    listeners.get("volli:terminal-set-visible" satisfies VolliIpcChannel) as (
+      ...a: unknown[]
+    ) => unknown
+  )({ sender }, sessionId, visible);
+
+describe("park/wake/keep-awake/set-visible IPC", () => {
+  it("park rejects a non-string session id", async () => {
+    expect(await invokePark(42)).toEqual({ ok: false, error: "Invalid terminal park" });
+  });
+
+  it("park forwards a valid id to the manager", async () => {
+    // The suite runs under VOLLI_PARK_DISABLE, so the registered manager's
+    // park refuses before the unknown-session lookup — proving the handler
+    // forwarded the id into the manager either way.
+    expect(await invokePark("nope")).toEqual({ ok: false, error: "Session parking is disabled" });
+  });
+
+  it("wake rejects a non-string session id", () => {
+    expect(invokeWake(42)).toEqual({ ok: false, error: "Invalid terminal wake" });
+  });
+
+  it("wake forwards a valid id to the manager", () => {
+    expect(invokeWake("nope")).toEqual({ ok: false, error: "Unknown terminal session" });
+  });
+
+  it.each([
+    ["a non-string session id", 42, true],
+    ["a non-boolean flag", "id", "yes"],
+  ])("keep-awake rejects %s", (_label, sessionId, keepAwake) => {
+    expect(invokeKeepAwake(sessionId, keepAwake)).toEqual({
+      ok: false,
+      error: "Invalid terminal keep-awake",
+    });
+  });
+
+  it("keep-awake forwards valid args to the manager", () => {
+    expect(invokeKeepAwake("nope", true)).toEqual({ ok: false, error: "Unknown terminal session" });
+  });
+
+  it.each([
+    ["a non-string session id", 42, true],
+    ["a non-boolean flag", "id", "yes"],
+  ])("set-visible ignores %s", (_label, sessionId, visible) => {
+    expect(() => sendSetVisible({}, sessionId, visible)).not.toThrow();
+  });
+
+  it("set-visible forwards valid args to the manager", () => {
+    expect(() => sendSetVisible({}, "nope", true)).not.toThrow();
   });
 });

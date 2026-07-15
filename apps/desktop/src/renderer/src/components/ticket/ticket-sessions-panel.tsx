@@ -25,6 +25,7 @@ import { renameTerminalSession } from "@renderer/terminal/session-lifecycle";
 const STATUS_LABEL: Record<SessionActivityState, string> = {
   working: "Working",
   idle: "Idle",
+  parked: "Parked",
   exited: "Exited",
 };
 

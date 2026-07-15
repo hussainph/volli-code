@@ -31,6 +31,7 @@ import type {
   TerminalDataEvent,
   TerminalExitEvent,
   TerminalIoResult,
+  TerminalParkStateEvent,
   TicketCommentResult,
   TicketCommentsResult,
   TicketEventsResult,
@@ -263,6 +264,31 @@ const api = {
     /** Flow-control ack: fire-and-forget count of consumed output chars. */
     ack: (sessionId: string, chars: number): void => {
       ipcRenderer.send("volli:terminal-ack" satisfies VolliIpcChannel, sessionId, chars);
+    },
+    /** Parks a session (SIGSTOP its tree) on user request; bypasses the auto-park guards. */
+    park: (sessionId: string): Promise<TerminalIoResult> =>
+      ipcRenderer.invoke("volli:terminal-park" satisfies VolliIpcChannel, sessionId),
+    /** Wakes a parked session (SIGCONT its tree). */
+    wake: (sessionId: string): Promise<TerminalIoResult> =>
+      ipcRenderer.invoke("volli:terminal-wake" satisfies VolliIpcChannel, sessionId),
+    /** Pins/unpins a session against auto-park; waking it if already parked. */
+    setKeepAwake: (sessionId: string, keepAwake: boolean): Promise<TerminalIoResult> =>
+      ipcRenderer.invoke(
+        "volli:terminal-keep-awake" satisfies VolliIpcChannel,
+        sessionId,
+        keepAwake,
+      ),
+    /** Reports pane visibility: fire-and-forget, since it flips on every nav. */
+    setVisible: (sessionId: string, visible: boolean): void => {
+      ipcRenderer.send("volli:terminal-set-visible" satisfies VolliIpcChannel, sessionId, visible);
+    },
+    /** Subscribes to park/wake/pin state pushes; returns the unsubscribe function. */
+    onParkState: (callback: (event: TerminalParkStateEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: TerminalParkStateEvent) =>
+        callback(payload);
+      ipcRenderer.on("volli:terminal-park-state" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:terminal-park-state" satisfies VolliIpcEvent, listener);
     },
     /** Subscribes to PTY output; returns the unsubscribe function. */
     onData: (callback: (event: TerminalDataEvent) => void): (() => void) => {

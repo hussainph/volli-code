@@ -15,5 +15,6 @@ export * from "./errors";
 export * from "./terminal";
 export * from "./ghostty-config";
 export * from "./session";
+export * from "./park";
 export * from "./volli-dir";
 export type * from "./ipc";

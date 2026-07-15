@@ -25,8 +25,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
 const require = createRequire(import.meta.url);
 const pty = require("node-pty");
@@ -73,7 +72,7 @@ function treePids(rootPid) {
 }
 
 function signalTree(rootPid, signal) {
-  const pids = signal === "SIGCONT" ? treePids(rootPid).reverse() : treePids(rootPid);
+  const pids = signal === "SIGCONT" ? treePids(rootPid).toReversed() : treePids(rootPid);
   for (const pid of pids) {
     try {
       process.kill(pid, signal);
@@ -84,6 +83,14 @@ function signalTree(rootPid, signal) {
   return pids.length;
 }
 
+/** Parses top's K/M/G/B-suffixed memory cells into MB. */
+const toMB = (s) => {
+  const m = /^([\d.]+)([KMGB])[+-]?$/.exec(s);
+  if (!m) return 0;
+  const v = Number(m[1]);
+  return m[2] === "G" ? v * 1024 : m[2] === "K" ? v / 1024 : m[2] === "B" ? v / (1024 * 1024) : v;
+};
+
 /** Per-pid { rssMB, cmprsMB, state } via one `top -l 1` pass. */
 function topSnapshot(pids) {
   const want = new Set(pids);
@@ -93,12 +100,6 @@ function topSnapshot(pids) {
     ["-l", "1", "-stats", "pid,state,mem,cmprs,command", "-o", "pid", "-n", "2000"],
     { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 },
   );
-  const toMB = (s) => {
-    const m = /^([\d.]+)([KMGB])[+-]?$/.exec(s);
-    if (!m) return 0;
-    const v = Number(m[1]);
-    return m[2] === "G" ? v * 1024 : m[2] === "K" ? v / 1024 : m[2] === "B" ? v / (1024 * 1024) : v;
-  };
   for (const line of raw.split("\n")) {
     const m = /^\s*(\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(.*)$/.exec(line);
     if (!m) continue;
@@ -172,6 +173,8 @@ class Session {
 
 // ---- measurement over the whole fleet ------------------------------------------
 
+const sum = (rowsSel, key) => rowsSel.reduce((a, r) => a + r[key], 0);
+
 function fleetSnapshot(label, sessions, stoppedSet, snapshots) {
   const trees = new Map(sessions.map((s) => [s.index, treePids(s.pid)]));
   const top = topSnapshot([...trees.values()].flat());
@@ -197,7 +200,6 @@ function fleetSnapshot(label, sessions, stoppedSet, snapshots) {
       states: [...new Set(states)].join(","),
     });
   }
-  const sum = (rowsSel, key) => rowsSel.reduce((a, r) => a + r[key], 0);
   const parked = rows.filter((r) => r.parked);
   const running = rows.filter((r) => !r.parked);
   const snap = { label, vm: vmStat(), rows };

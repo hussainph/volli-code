@@ -31,11 +31,13 @@ export interface SessionRecord {
 
 /**
  * PTY-derived activity vocabulary (ticket-detail-mvp decision #5): "working"
- * (output within ~10s) / "idle" (running, quiet) / "exited". The renderer
- * derives working/idle from output recency today; hook-driven states (e.g.
- * waiting-for-input) reuse this vocabulary later without changing it.
+ * (output within ~10s) / "idle" (running, quiet) / "parked" (idle and
+ * SIGSTOP'd for the warm tier, issue #51 — CONT'd back to "idle"/"working" on
+ * wake) / "exited". The renderer derives working/idle from output recency
+ * today; hook-driven states (e.g. waiting-for-input) reuse this vocabulary
+ * later without changing it.
  */
-export const SESSION_ACTIVITY_STATES = ["working", "idle", "exited"] as const;
+export const SESSION_ACTIVITY_STATES = ["working", "idle", "parked", "exited"] as const;
 
 export type SessionActivityState = (typeof SESSION_ACTIVITY_STATES)[number];
 
