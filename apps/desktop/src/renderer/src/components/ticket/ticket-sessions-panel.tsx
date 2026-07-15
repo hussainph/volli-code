@@ -33,7 +33,7 @@ function StatusChip({ status }: { status: SessionActivityState }) {
   return (
     <span
       className={cn(
-        "shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium",
+        "shrink-0 rounded-full border px-1.5 py-0.5 text-label font-medium",
         status === "working" && "border-primary/50 bg-primary/10 text-primary",
         status === "idle" && "border-border bg-muted/40 text-muted-foreground",
         status === "exited" && "border-border/60 text-muted-foreground/70",
@@ -84,7 +84,7 @@ function SessionRow({
     <>
       <span className="flex min-w-0 flex-1 flex-col">
         {titleNode}
-        <span className="truncate text-[11px] text-muted-foreground">
+        <span className="truncate text-label text-muted-foreground">
           {harnessLabel(record.harnessId)}
         </span>
       </span>
@@ -253,9 +253,7 @@ export function TicketSessionsPanel({
   return (
     <section className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
-        <h2 className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-          Sessions
-        </h2>
+        <h2 className="text-label font-medium text-muted-foreground uppercase">Sessions</h2>
         <Button
           size="icon-xs"
           variant="ghost"

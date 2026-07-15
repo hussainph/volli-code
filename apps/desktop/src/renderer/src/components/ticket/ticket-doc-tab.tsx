@@ -1,5 +1,6 @@
 import type { Ticket } from "@volli/shared";
 
+import { ContentColumn } from "@renderer/components/layout/content-column";
 import { TicketActivityFeed } from "@renderer/components/ticket/ticket-activity-feed";
 import { TicketBodyEditor } from "@renderer/components/ticket/ticket-body-editor";
 
@@ -10,9 +11,9 @@ import { TicketBodyEditor } from "@renderer/components/ticket/ticket-body-editor
  */
 export function TicketDocTab({ ticket }: { ticket: Ticket }) {
   return (
-    <div className="flex flex-col gap-6 py-4">
+    <ContentColumn className="flex flex-col gap-8 pt-3 pb-16">
       <TicketBodyEditor ticket={ticket} />
       <TicketActivityFeed ticket={ticket} />
-    </div>
+    </ContentColumn>
   );
 }

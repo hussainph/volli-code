@@ -17,7 +17,7 @@ function BootErrorPanel({ error }: { error: string }) {
   return (
     <div className="flex h-svh w-full flex-col items-center justify-center gap-2 bg-background text-center">
       <WarningCircleIcon weight="fill" className="size-8 text-muted-foreground" />
-      <h2 className="text-lg font-semibold text-foreground">Volli couldn't load its data</h2>
+      <h2 className="text-heading font-semibold text-foreground">Volli couldn't load its data</h2>
       <p className="max-w-md text-sm text-muted-foreground">{error}</p>
     </div>
   );

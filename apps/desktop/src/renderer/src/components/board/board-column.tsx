@@ -59,9 +59,7 @@ export function BoardColumn({
       )}
     >
       <div className="flex items-center gap-2 px-3 pt-2.5 pb-2">
-        <span className="text-[13px] font-medium text-foreground">
-          {TICKET_STATUS_LABELS[status]}
-        </span>
+        <span className="text-ui font-medium text-foreground">{TICKET_STATUS_LABELS[status]}</span>
         <span className="font-mono text-xs text-muted-foreground">{tickets.length}</span>
       </div>
       <SortableContext

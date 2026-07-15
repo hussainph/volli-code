@@ -95,6 +95,27 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+  /* Type scale (docs/DESIGN.md) — six steps: label 11 · meta 12 (= text-xs) ·
+   * ui 13 · body 14 (= text-sm) · heading 18 · title 24. Named tokens below
+   * cover the steps Tailwind's stock scale lacks; meta/body ride on the stock
+   * utilities. Each step carries its paired line-height (and tracking where
+   * the size demands it) so components never pick these per-surface. */
+  --text-label: 0.6875rem;
+  --text-label--line-height: 1rem;
+  --text-label--letter-spacing: 0.05em;
+  --text-ui: 0.8125rem;
+  --text-ui--line-height: 1.25rem;
+  --text-heading: 1.125rem;
+  --text-heading--line-height: 1.625rem;
+  --text-heading--letter-spacing: -0.01em;
+  --text-title: 1.5rem;
+  --text-title--line-height: 1.875rem;
+  --text-title--letter-spacing: -0.02em;
+  /* Layout language (docs/DESIGN.md): the canonical reading measure (Tier A
+   * surfaces center on it via <ContentColumn>) and the unified page gutter
+   * every surface aligns its edges to. */
+  --container-content: 45rem;
+  --spacing-gutter: 1.5rem;
 }
 
 @layer base {

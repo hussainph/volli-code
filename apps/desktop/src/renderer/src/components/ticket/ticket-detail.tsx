@@ -2,6 +2,7 @@ import * as React from "react";
 import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
 import { displayTicketId, type Ticket } from "@volli/shared";
 
+import { ContentColumn } from "@renderer/components/layout/content-column";
 import { createTerminalSession } from "@renderer/components/sessions/session-create";
 import { TicketArtifactsTab } from "@renderer/components/ticket/ticket-artifacts-tab";
 import { TicketDocTab } from "@renderer/components/ticket/ticket-doc-tab";
@@ -33,7 +34,7 @@ function TicketDetailsDrawer({ projectId, ticket }: { projectId: string; ticket:
         type="button"
         onClick={toggle}
         aria-expanded={expanded}
-        className="flex w-full items-center justify-between px-4 py-3 text-[11px] font-medium tracking-wide text-muted-foreground uppercase transition-colors duration-150 ease-out hover:text-foreground"
+        className="flex w-full items-center justify-between px-4 py-3 text-label font-medium text-muted-foreground uppercase transition-colors duration-150 ease-out hover:text-foreground"
       >
         Details
         <CaretRightIcon
@@ -156,11 +157,16 @@ export function TicketDetail({
         onNewSession={() => void createSession()}
       />
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-6 pt-4 pb-6">
-          <TicketTitle ticket={ticket} />
+        {/* No horizontal padding here: Tier A children (title, Doc tab) center
+            themselves on the measure via <ContentColumn>; Tier B planes
+            (artifacts, terminals) own their edges (DESIGN.md tier model). */}
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden pt-8">
+          <ContentColumn>
+            <TicketTitle ticket={ticket} />
+          </ContentColumn>
           {/* Positioning context for the resident terminal plane: Doc/Artifacts
               scroll in-flow; the plane overlays them, shown only for a session tab. */}
-          <div className="relative mt-4 flex min-h-0 flex-1 flex-col">
+          <div className="relative mt-3 flex min-h-0 flex-1 flex-col">
             {activeTab.kind === "doc" || activeTab.kind === "artifacts" ? (
               <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
                 {activeTab.kind === "doc" ? (

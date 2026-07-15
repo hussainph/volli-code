@@ -121,7 +121,7 @@ export function TicketArtifactsTab({
   }
 
   return (
-    <div className="flex min-h-0 flex-1 gap-6 py-4">
+    <div className="flex min-h-0 flex-1 gap-6 px-gutter py-4">
       <div className="flex w-72 shrink-0 flex-col gap-5 overflow-y-auto">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-medium text-foreground">Artifacts</h2>

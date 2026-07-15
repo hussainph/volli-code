@@ -79,7 +79,7 @@ export function AppShell() {
           missing from this TS lib's CSSProperties, hence the same cast style
           used for the CSS custom properties above. */}
       <div
-        className="flex min-h-0 flex-1 contain-layout"
+        className="flex min-h-0 flex-1 bg-rail contain-layout"
         style={{ zoom: uiScale } as React.CSSProperties}
       >
         <Sidebar
@@ -104,7 +104,12 @@ export function AppShell() {
           </Sidebar>
           <SidebarResizeHandle onResizingChange={setResizing} />
         </Sidebar>
-        <SidebarInset>
+        {/* The framed content surface (docs/DESIGN.md, amends the flat
+            chrome-band treatment): every page — sessions layer included —
+            renders inside this one card, floating on the rail-dark backdrop
+            with a hairline border. overflow-hidden clips full-bleed children
+            (tab strips, terminals) to the rounded corners. */}
+        <SidebarInset className="m-2 overflow-hidden rounded-xl border border-border">
           <MainContent />
         </SidebarInset>
       </div>
