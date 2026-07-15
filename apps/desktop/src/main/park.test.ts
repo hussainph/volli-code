@@ -1,6 +1,7 @@
 import type { execFile } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
+  PARK_BREATHE_WINDOW_MS,
   PARK_CPU_BUSY_PERCENT,
   PARK_IDLE_THRESHOLD_MS,
   PARK_QUIET_SAMPLES_REQUIRED,
@@ -188,6 +189,7 @@ describe("parkConfigFromEnv", () => {
       sweepIntervalMs: PARK_SWEEP_INTERVAL_MS,
       cpuBusyPercent: PARK_CPU_BUSY_PERCENT,
       quietSamplesRequired: PARK_QUIET_SAMPLES_REQUIRED,
+      breatheWindowMs: PARK_BREATHE_WINDOW_MS,
       enabled: true,
     });
   });
@@ -210,11 +212,12 @@ describe("parkConfigFromEnv", () => {
 
   it("applies positive-int env overrides", () => {
     const config = parkConfigFromEnv(
-      { VOLLI_PARK_IDLE_MS: "1000", VOLLI_PARK_SWEEP_MS: "2000" },
+      { VOLLI_PARK_IDLE_MS: "1000", VOLLI_PARK_SWEEP_MS: "2000", VOLLI_PARK_BREATHE_MS: "50" },
       "darwin",
     );
     expect(config.idleThresholdMs).toBe(1000);
     expect(config.sweepIntervalMs).toBe(2000);
+    expect(config.breatheWindowMs).toBe(50);
   });
 
   it.each([
@@ -224,10 +227,11 @@ describe("parkConfigFromEnv", () => {
     ["float", "1.5"],
   ])("falls back to the default for a %s override", (_label, value) => {
     const config = parkConfigFromEnv(
-      { VOLLI_PARK_IDLE_MS: value, VOLLI_PARK_SWEEP_MS: value },
+      { VOLLI_PARK_IDLE_MS: value, VOLLI_PARK_SWEEP_MS: value, VOLLI_PARK_BREATHE_MS: value },
       "darwin",
     );
     expect(config.idleThresholdMs).toBe(PARK_IDLE_THRESHOLD_MS);
     expect(config.sweepIntervalMs).toBe(PARK_SWEEP_INTERVAL_MS);
+    expect(config.breatheWindowMs).toBe(PARK_BREATHE_WINDOW_MS);
   });
 });

@@ -151,6 +151,8 @@ const flushBatchWindow = () => vi.advanceTimersByTime(8);
 
 /** A `now` comfortably past the warm-park idle threshold from a fresh session. */
 const idleNow = () => Date.now() + 10_000;
+/** Real-time pause; mid-window actions land inside the 5ms breathe window. */
+const tick = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
 
 let root: string;
 let outside: string;
@@ -872,6 +874,7 @@ const ENABLED_CONFIG: ParkConfig = {
   sweepIntervalMs: 1000,
   cpuBusyPercent: 0.5,
   quietSamplesRequired: 2,
+  breatheWindowMs: 5,
   enabled: true,
 };
 
@@ -950,6 +953,15 @@ describe("warm park", () => {
       parts.signal.mockClear();
       expect(await parkManager.park(sessionId, { manual: true })).toEqual({ ok: true });
       expect(parts.signal).not.toHaveBeenCalled();
+    });
+
+    it("an auto park request on an already-parked session stays auto (still breathes)", async () => {
+      const { sessionId, pty } = await createParkSession();
+      await parkManager.park(sessionId, { manual: false });
+      parts.signal.mockClear();
+      expect(await parkManager.park(sessionId, { manual: false })).toEqual({ ok: true });
+      await parkManager.sweep(idleNow()); // not upgraded to manual: the duty cycle touches it
+      expect(contCalls()).toEqual([pty.pid]);
     });
 
     it("auto-park refuses a visible session", async () => {
@@ -1269,6 +1281,130 @@ describe("warm park", () => {
         disabled.startParkSweep();
         disabled.stopParkSweep();
       }).not.toThrow();
+    });
+  });
+
+  describe("breathe", () => {
+    /** Spawns a hidden session, auto-parks it, and clears signal/send history. */
+    async function createAutoParked() {
+      const created = await createParkSession();
+      await parkManager.park(created.sessionId, { manual: false });
+      parts.signal.mockClear();
+      created.sender.send.mockClear();
+      return created;
+    }
+
+    it("re-freezes a session whose breathe window stays quiet", async () => {
+      const { sessionId, pty } = await createAutoParked();
+      await parkManager.sweep(idleNow());
+      expect(contCalls()).toEqual([pty.pid]);
+      expect(stopCalls()).toEqual([pty.pid]);
+      // Still parked: an explicit wake CONTs the re-frozen tree.
+      parts.signal.mockClear();
+      parkManager.wake(sessionId);
+      expect(contCalls()).toEqual([pty.pid]);
+    });
+
+    it("wakes on output during the window instead of re-freezing", async () => {
+      const { sessionId, pty, sender } = await createAutoParked();
+      const sweepDone = parkManager.sweep(idleNow());
+      await tick(1);
+      pty.emitData("tick");
+      await sweepDone;
+      expect(stopCalls()).toEqual([]);
+      expect(sender.send).toHaveBeenCalledWith("volli:terminal-park-state", {
+        sessionId,
+        parked: false,
+        keepAwake: false,
+      });
+    });
+
+    it("wakes when the tree shows CPU after the window", async () => {
+      const { sessionId, pty, sender } = await createAutoParked();
+      parts.cpuPercents.mockResolvedValue(new Map([[pty.pid, 5]]));
+      await parkManager.sweep(idleNow());
+      expect(stopCalls()).toEqual([]);
+      expect(sender.send).toHaveBeenCalledWith("volli:terminal-park-state", {
+        sessionId,
+        parked: false,
+        keepAwake: false,
+      });
+    });
+
+    it("wakes when the tree forked a new child during the window", async () => {
+      const { sessionId, sender } = await createAutoParked();
+      parts.descendants.mockResolvedValue([999]);
+      await parkManager.sweep(idleNow());
+      expect(stopCalls()).toEqual([]);
+      expect(sender.send).toHaveBeenCalledWith("volli:terminal-park-state", {
+        sessionId,
+        parked: false,
+        keepAwake: false,
+      });
+    });
+
+    it("wakes when a listener appeared in the tree", async () => {
+      const { pty, sender, sessionId } = await createAutoParked();
+      parts.listeningPids.mockResolvedValue(new Set([pty.pid]));
+      await parkManager.sweep(idleNow());
+      expect(stopCalls()).toEqual([]);
+      expect(sender.send).toHaveBeenCalledWith("volli:terminal-park-state", {
+        sessionId,
+        parked: false,
+        keepAwake: false,
+      });
+    });
+
+    it("never breathes a manually parked session", async () => {
+      const { sessionId } = await createParkSession();
+      await parkManager.park(sessionId, { manual: true });
+      parts.signal.mockClear();
+      await parkManager.sweep(idleNow());
+      expect(contCalls()).toEqual([]);
+      expect(stopCalls()).toEqual([]);
+    });
+
+    it("a Park Now landing mid-window beats a busy verdict and stays manual", async () => {
+      const { sessionId, pty } = await createAutoParked();
+      parts.cpuPercents.mockResolvedValue(new Map([[pty.pid, 5]])); // would wake
+      const sweepDone = parkManager.sweep(idleNow());
+      await tick(1);
+      expect(await parkManager.park(sessionId, { manual: true })).toEqual({ ok: true });
+      await sweepDone;
+      expect(stopCalls()).toEqual([pty.pid]); // re-frozen despite the busy tree
+      parts.signal.mockClear();
+      await parkManager.sweep(idleNow()); // now exempt from the duty cycle
+      expect(contCalls()).toEqual([]);
+    });
+
+    it("leaves a session alone when it is killed during the window", async () => {
+      const { sessionId, pty } = await createAutoParked();
+      const sweepDone = parkManager.sweep(idleNow());
+      await tick(1);
+      parkManager.kill(sessionId); // CONT-before-kill wakes it first
+      pty.emitExit(0); // the tree dies inside the window
+      await sweepDone;
+      expect(stopCalls()).toEqual([]);
+      expect(pty.kill).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves a session running when explicitly woken during the window", async () => {
+      const { sessionId } = await createAutoParked();
+      const sweepDone = parkManager.sweep(idleNow());
+      await tick(1);
+      expect(parkManager.wake(sessionId)).toEqual({ ok: true });
+      await sweepDone;
+      expect(stopCalls()).toEqual([]);
+    });
+
+    it("skips a session woken during the sampling awaits", async () => {
+      const { sessionId } = await createAutoParked();
+      parts.cpuPercents.mockImplementationOnce(async () => {
+        parkManager.wake(sessionId);
+        return new Map<number, number>();
+      });
+      await parkManager.sweep(idleNow());
+      expect(stopCalls()).toEqual([]);
     });
   });
 });

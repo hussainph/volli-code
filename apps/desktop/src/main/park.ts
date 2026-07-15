@@ -11,6 +11,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import {
+  PARK_BREATHE_WINDOW_MS,
   PARK_CPU_BUSY_PERCENT,
   PARK_IDLE_THRESHOLD_MS,
   PARK_QUIET_SAMPLES_REQUIRED,
@@ -127,6 +128,8 @@ export interface ParkConfig {
   sweepIntervalMs: number;
   cpuBusyPercent: number;
   quietSamplesRequired: number;
+  /** How long each parked session runs per sweep before the re-freeze verdict. */
+  breatheWindowMs: number;
   enabled: boolean;
 }
 
@@ -139,7 +142,7 @@ function positiveIntFromEnv(value: string | undefined, fallback: number): number
 
 /**
  * Builds the park config from the environment. `VOLLI_PARK_IDLE_MS` /
- * `VOLLI_PARK_SWEEP_MS` override the timings (positive-int strings only);
+ * `VOLLI_PARK_SWEEP_MS` / `VOLLI_PARK_BREATHE_MS` override the timings (positive-int strings only);
  * `VOLLI_PARK_DISABLE=1` force-disables it. Parking is enabled only on
  * darwin/linux (SIGSTOP/SIGCONT semantics) and never when disabled. Pure.
  */
@@ -148,6 +151,7 @@ export function parkConfigFromEnv(env: NodeJS.ProcessEnv, platform: NodeJS.Platf
   return {
     idleThresholdMs: positiveIntFromEnv(env["VOLLI_PARK_IDLE_MS"], PARK_IDLE_THRESHOLD_MS),
     sweepIntervalMs: positiveIntFromEnv(env["VOLLI_PARK_SWEEP_MS"], PARK_SWEEP_INTERVAL_MS),
+    breatheWindowMs: positiveIntFromEnv(env["VOLLI_PARK_BREATHE_MS"], PARK_BREATHE_WINDOW_MS),
     cpuBusyPercent: PARK_CPU_BUSY_PERCENT,
     quietSamplesRequired: PARK_QUIET_SAMPLES_REQUIRED,
     enabled: platformSupports && env["VOLLI_PARK_DISABLE"] !== "1",

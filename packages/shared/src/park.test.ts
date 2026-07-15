@@ -1,11 +1,14 @@
 import { describe, it, expect } from "vite-plus/test";
 import {
+  breatheShouldWake,
   isParkCandidate,
   treeIsCpuQuiet,
+  PARK_BREATHE_WINDOW_MS,
   PARK_IDLE_THRESHOLD_MS,
   PARK_SWEEP_INTERVAL_MS,
   PARK_CPU_BUSY_PERCENT,
   PARK_QUIET_SAMPLES_REQUIRED,
+  type BreatheObservation,
   type ParkCandidateState,
 } from "./park";
 
@@ -22,6 +25,38 @@ describe("park constants", () => {
     expect(PARK_SWEEP_INTERVAL_MS).toBe(60_000);
     expect(PARK_CPU_BUSY_PERCENT).toBe(0.5);
     expect(PARK_QUIET_SAMPLES_REQUIRED).toBe(2);
+    expect(PARK_BREATHE_WINDOW_MS).toBe(1_000);
+  });
+});
+
+// A quiet breathe: nothing the window could surface, so the session re-freezes.
+const quietBreathe: BreatheObservation = {
+  activityAtStart: 100,
+  activityAtEnd: 100,
+  cpuQuiet: true,
+  treeGrew: false,
+  hasListener: false,
+};
+
+describe("breatheShouldWake", () => {
+  it("re-freezes a session whose window surfaced nothing", () => {
+    expect(breatheShouldWake(quietBreathe)).toBe(false);
+  });
+
+  it("wakes on output or input during the window", () => {
+    expect(breatheShouldWake({ ...quietBreathe, activityAtEnd: 101 })).toBe(true);
+  });
+
+  it("wakes on tree CPU above the busy threshold", () => {
+    expect(breatheShouldWake({ ...quietBreathe, cpuQuiet: false })).toBe(true);
+  });
+
+  it("wakes when the tree forked a new child", () => {
+    expect(breatheShouldWake({ ...quietBreathe, treeGrew: true })).toBe(true);
+  });
+
+  it("wakes when a listener appeared in the tree", () => {
+    expect(breatheShouldWake({ ...quietBreathe, hasListener: true })).toBe(true);
   });
 });
 

@@ -11,6 +11,9 @@
  *   4. A hidden idle session holding a TCP LISTEN socket (dev-server stand-in:
  *      `nc -l`) is never parked.
  *   5. The tab strip shows the parked badge while parked.
+ *   6. Breathe duty cycle: a background timer pending in a parked tree still
+ *      fires (one sweep late at worst), the session wakes on its output, and
+ *      re-parks once the work is done — no silent failure while frozen.
  *
  *   Run:
  *     pnpm -C apps/desktop run build
@@ -38,9 +41,12 @@ const ELECTRON = join(
 );
 
 // Shrunk timers: idle after 3s, sweep every 1s → auto-park lands ~5s after the
-// last activity (threshold + two quiet CPU samples).
+// last activity (threshold + two quiet CPU samples). The breathe window is
+// shrunk too so parked shells spend most of each sweep in state T and the
+// state checks stay deterministic.
 const PARK_IDLE_MS = 3000;
 const PARK_SWEEP_MS = 1000;
+const PARK_BREATHE_MS = 300;
 const PARK_SETTLE_MS = PARK_IDLE_MS + 4 * PARK_SWEEP_MS + 2000;
 
 const SCRATCH =
@@ -150,6 +156,7 @@ async function main() {
     VOLLI_DB_PATH: join(dbDir, "volli.db"),
     VOLLI_PARK_IDLE_MS: String(PARK_IDLE_MS),
     VOLLI_PARK_SWEEP_MS: String(PARK_SWEEP_MS),
+    VOLLI_PARK_BREATHE_MS: String(PARK_BREATHE_MS),
   };
   for (const key of Object.keys(env)) {
     if (key.startsWith("CLAUDECODE") || key.startsWith("CLAUDE_CODE")) delete env[key];
@@ -256,6 +263,40 @@ async function main() {
       "visible session remained unparked throughout",
       processState(pid1) !== "T",
       `state=${processState(pid1)}`,
+    );
+
+    // === 6: breathe — a background timer fires while parked ===================
+    // Tab 1 (visible) starts a 12s background timer, then goes hidden: it
+    // parks with the timer pending, the timer expires inside the frozen tree,
+    // and the next breathe window lets it run — the no-silent-failure
+    // guarantee for watchers/timers/pollers that hold no listener.
+    const marker4 = join(SCRATCH, "breathe.txt");
+    await focusTerminal(page);
+    await page.keyboard.type(`(sleep 12 && echo done > ${marker4}) &`);
+    await page.keyboard.press("Enter");
+    await page.getByText("Terminal 2", { exact: true }).click(); // hide tab 1
+    const parkedAgain = await waitForState(pid1, "stopped", PARK_SETTLE_MS + 5000);
+    check(
+      "hidden session with a pending background timer parks (state T)",
+      parkedAgain === "T",
+      `state=${parkedAgain}`,
+    );
+    let breatheDone = false;
+    const breatheStart = Date.now();
+    while (Date.now() - breatheStart < 25000 && !breatheDone) {
+      breatheDone = await fs
+        .readFile(marker4, "utf8")
+        .then((t) => t.includes("done"))
+        .catch(() => false);
+      await sleep(300);
+    }
+    check("background timer fired while parked (breathe duty cycle)", breatheDone);
+    // Its output woke the session; once quiet again the sweep re-freezes it.
+    const refrozen = await waitForState(pid1, "stopped", PARK_SETTLE_MS + 5000);
+    check(
+      "session re-parks after the breathed work completes",
+      refrozen === "T",
+      `state=${refrozen}`,
     );
   } finally {
     await app.close();
