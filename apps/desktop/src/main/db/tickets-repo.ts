@@ -7,7 +7,13 @@
  * sequence for a table with no `WITHOUT ROWID` clause).
  */
 import type Database from "better-sqlite3";
-import type { ArchivedTicket, Ticket, TicketPriority, TicketStatus } from "@volli/shared";
+import {
+  isTicketStatus,
+  type ArchivedTicket,
+  type Ticket,
+  type TicketPriority,
+  type TicketStatus,
+} from "@volli/shared";
 import { prepared } from "./prepared";
 
 export interface TicketRow {
@@ -29,6 +35,25 @@ export interface TicketRow {
   worktree_path: string | null;
   branch: string | null;
   base_branch: string | null;
+}
+
+/**
+ * Whether `row.status` is one of the known {@link TicketStatus} values —
+ * the guard every row→domain read path in this module runs before
+ * `mapTicket` trusts the `as TicketStatus` cast. The migration-001 `CHECK`
+ * constraint keeps this true for ordinary writes, but it doesn't cover a
+ * future enum-rename migration that skips rewriting existing rows, or an
+ * external writer (the planned `volli` CLI) hitting a stale schema. Without
+ * this guard an unknown status reaches the renderer's `groupTicketsByStatus`,
+ * which has no fallback bucket for it and throws on every board render —
+ * so a row that fails this check is dropped rather than mapped, with one
+ * `console.warn` identifying the ticket id and the bad status for
+ * visibility at the dev level.
+ */
+function hasKnownStatus(row: TicketRow): boolean {
+  if (isTicketStatus(row.status)) return true;
+  console.warn(`[volli] dropping ticket ${row.id} with unknown status "${row.status}"`);
+  return false;
 }
 
 function mapTicket(row: TicketRow, labels: string[]): Ticket {
@@ -132,7 +157,7 @@ export function listTicketsByProject(db: Database.Database, projectId: string): 
     "SELECT * FROM tickets WHERE project_id = ? AND archived_at IS NULL ORDER BY status, position",
   ).all(projectId);
   const labelsByTicket = labelNamesByTicket(db, projectId, "live");
-  return rows.map((row) => mapTicket(row, labelsByTicket.get(row.id) ?? []));
+  return rows.filter(hasKnownStatus).map((row) => mapTicket(row, labelsByTicket.get(row.id) ?? []));
 }
 
 /**
@@ -148,7 +173,7 @@ export function listAllTickets(db: Database.Database): Ticket[] {
     "SELECT * FROM tickets WHERE archived_at IS NULL ORDER BY project_id, status, position",
   ).all();
   const labelsByTicket = labelNamesByTicketAll(db);
-  return rows.map((row) => mapTicket(row, labelsByTicket.get(row.id) ?? []));
+  return rows.filter(hasKnownStatus).map((row) => mapTicket(row, labelsByTicket.get(row.id) ?? []));
 }
 
 /**
@@ -161,14 +186,15 @@ export function listArchivedTicketsByProject(
   db: Database.Database,
   projectId: string,
 ): ArchivedTicket[] {
-  // The WHERE clause guarantees `archived_at` is non-null, encoded in the row
-  // type — the same trust-the-SQL convention as mapTicket's `status` cast.
+  // The WHERE clause guarantees `archived_at` is non-null — trusted via the
+  // row type, unlike `status`, which still runs through `hasKnownStatus`
+  // below rather than being cast blind.
   const rows = prepared<[string], TicketRow & { archived_at: number }>(
     db,
     "SELECT * FROM tickets WHERE project_id = ? AND archived_at IS NOT NULL ORDER BY archived_at DESC",
   ).all(projectId);
   const labelsByTicket = labelNamesByTicket(db, projectId, "archived");
-  return rows.map((row): ArchivedTicket => {
+  return rows.filter(hasKnownStatus).map((row): ArchivedTicket => {
     // `mapTicket` returns a fresh object, so mutating it in place (rather than
     // spreading a copy per row) is safe and lint-clean.
     const ticket = mapTicket(row, labelsByTicket.get(row.id) ?? []);
@@ -180,11 +206,14 @@ export function listArchivedTicketsByProject(
  * One ticket by id, labels attached — the single-row analog of
  * `listTicketsByProject`. Lets a mutation IPC handler return just the changed
  * ticket instead of re-reading the whole project list. `undefined` when no row
- * matches.
+ * matches — and, deliberately, the same `undefined` when the row exists but
+ * fails {@link hasKnownStatus}: mutation handlers already treat "no ticket"
+ * as an `Unknown ticket` error surfaced to the renderer, so a corrupt row
+ * rides that same path instead of a new failure mode.
  */
 export function getTicket(db: Database.Database, ticketId: string): Ticket | undefined {
   const row = getTicketRow(db, ticketId);
-  if (!row) return undefined;
+  if (!row || !hasKnownStatus(row)) return undefined;
   return mapTicket(row, getTicketLabelNames(db, ticketId));
 }
 
