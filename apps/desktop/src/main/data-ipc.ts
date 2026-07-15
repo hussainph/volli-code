@@ -343,6 +343,31 @@ function isLabelSetColorInput(value: unknown): value is LabelSetColorInput {
   );
 }
 
+// ---- archive-lifecycle guard ---------------------------------------------
+
+/**
+ * Fetches a ticket row and enforces the archive lifecycle for every handler
+ * that mutates a LIVE ticket's fields (update/priority/labels/move): an
+ * archived ticket is meant to sit untouched in cold storage (CONCEPT #16/#92),
+ * so mutating it here — via a stray IPC call, or eventually the `volli` CLI
+ * acting on a bare ticket id — would corrupt that invariant just as surely as
+ * the delete guard's "only archived tickets can be deleted" prevents the
+ * opposite mistake. Throws "Unknown ticket" for a missing row (matching every
+ * handler's existing not-found message) or `Cannot ${action} an archived
+ * ticket` for an archived one; both propagate through the handler's catch into
+ * the renderer's `{ ok: false, error }` envelope, which `writeThrough` toasts
+ * as `Could not <verb>: <error>`. The archive/unarchive/delete handlers are
+ * the lifecycle transitions themselves and do NOT go through this guard.
+ */
+function requireLiveTicket(db: Database.Database, ticketId: string, action: string): TicketRow {
+  const row = getTicketRow(db, ticketId);
+  if (!row) throw new Error("Unknown ticket");
+  if (row.archived_at !== null) {
+    throw new Error(`Cannot ${action} an archived ticket`);
+  }
+  return row;
+}
+
 // ---- bootstrap payload --------------------------------------------------
 
 function buildBootstrapPayload(db: Database.Database): BootstrapPayload {
@@ -547,6 +572,7 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
       try {
         const now = Date.now();
         const run = db.transaction((): Ticket[] => {
+          requireLiveTicket(db, input.ticketId, "move");
           const before = listTicketsByProject(db, input.projectId);
           const beforeById = new Map(before.map((ticket) => [ticket.id, ticket]));
           const after = moveTicket(before, input.ticketId, input.toStatus, input.toIndex, now);
@@ -594,8 +620,7 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
       try {
         const now = Date.now();
         const run = db.transaction((): Ticket => {
-          const row = getTicketRow(db, input.ticketId);
-          if (!row) throw new Error("Unknown ticket");
+          const row = requireLiveTicket(db, input.ticketId, "change the priority of");
           if (row.priority !== input.priority) {
             updateTicketPriority(db, input.ticketId, input.priority, now);
             recordTicketEvent(
@@ -639,8 +664,7 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
       try {
         const now = Date.now();
         const run = db.transaction((): Ticket => {
-          const row = getTicketRow(db, input.ticketId);
-          if (!row) throw new Error("Unknown ticket");
+          const row = requireLiveTicket(db, input.ticketId, "update");
 
           const fields: TicketFieldUpdate = {};
           if (input.title !== undefined && input.title !== row.title) fields.title = input.title;
@@ -706,8 +730,7 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
       try {
         const now = Date.now();
         const run = db.transaction((): Ticket => {
-          const row = getTicketRow(db, input.ticketId);
-          if (!row) throw new Error("Unknown ticket");
+          const row = requireLiveTicket(db, input.ticketId, "change the labels of");
 
           const current = getTicketLabelNames(db, input.ticketId);
           const requested = input.labels;

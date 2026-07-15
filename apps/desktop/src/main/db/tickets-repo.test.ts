@@ -4,12 +4,14 @@ import { openTestDb, testProject, testTicket } from "./test-helpers";
 import type { TestDb } from "./test-helpers";
 import {
   archiveTicket,
+  deleteTicket,
   getTicket,
   getTicketRow,
   insertTicket,
   listAllTickets,
   listArchivedTicketsByProject,
   listTicketsByProject,
+  nextTicketNumberForProject,
   updateTicketFields,
 } from "./tickets-repo";
 
@@ -241,5 +243,62 @@ describe("unknown-status rows are dropped at the hydrate boundary (#29)", () => 
     insertTicket(ctx.db, ticket);
 
     expect(getTicket(ctx.db, ticket.id)?.id).toBe(ticket.id);
+  });
+});
+
+describe("nextTicketNumberForProject — monotonic counter (migration 005)", () => {
+  it("starts a fresh project at 1 and increments on each allocation", () => {
+    const { projectId } = setup();
+
+    expect(nextTicketNumberForProject(ctx.db, projectId)).toBe(1);
+    expect(nextTicketNumberForProject(ctx.db, projectId)).toBe(2);
+    expect(nextTicketNumberForProject(ctx.db, projectId)).toBe(3);
+  });
+
+  it("never reuses a number after the ticket that used it is hard-deleted", () => {
+    const { projectId } = setup();
+
+    const one = nextTicketNumberForProject(ctx.db, projectId);
+    const two = nextTicketNumberForProject(ctx.db, projectId);
+    const three = nextTicketNumberForProject(ctx.db, projectId);
+    const ticketThree = testTicket(projectId, { ticketNumber: three });
+    insertTicket(ctx.db, testTicket(projectId, { ticketNumber: one }));
+    insertTicket(ctx.db, testTicket(projectId, { ticketNumber: two }));
+    insertTicket(ctx.db, ticketThree);
+
+    // Hard-delete the highest-numbered ticket — the exact scenario from
+    // issue #35: with the old MAX(ticket_number)+1 logic, this would free
+    // number 3 for reuse by the very next created ticket.
+    deleteTicket(ctx.db, ticketThree.id);
+
+    expect(nextTicketNumberForProject(ctx.db, projectId)).toBe(4);
+  });
+
+  it("keeps counters independent per project", () => {
+    ctx = openTestDb();
+    const projectA = testProject();
+    const projectB = testProject();
+    insertProject(ctx.db, projectA);
+    insertProject(ctx.db, projectB);
+
+    expect(nextTicketNumberForProject(ctx.db, projectA.id)).toBe(1);
+    expect(nextTicketNumberForProject(ctx.db, projectA.id)).toBe(2);
+    expect(nextTicketNumberForProject(ctx.db, projectB.id)).toBe(1);
+  });
+
+  it("falls back to MAX(ticket_number) + 1 when the counter has fallen behind a live row", () => {
+    const { projectId } = setup();
+    // Simulate a stale/corrupt counter — lower than a ticket_number already
+    // on a live row — and confirm the belt-and-braces guard wins: the
+    // allocated number can never collide with that row.
+    ctx.db.prepare("UPDATE projects SET next_ticket_number = 1 WHERE id = ?").run(projectId);
+    insertTicket(ctx.db, testTicket(projectId, { ticketNumber: 5 }));
+
+    expect(nextTicketNumberForProject(ctx.db, projectId)).toBe(6);
+  });
+
+  it("throws for an unknown project id", () => {
+    ctx = openTestDb();
+    expect(() => nextTicketNumberForProject(ctx.db, "no-such-project")).toThrow(/Unknown project/);
   });
 });
