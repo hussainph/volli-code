@@ -13,9 +13,13 @@ import { takeBootNotice } from "@renderer/lib/boot-notice";
 import { useNavHistory } from "@renderer/hooks/use-nav-history";
 import { useNewTicketShortcut } from "@renderer/hooks/use-new-ticket-shortcut";
 import { useProjectShortcuts } from "@renderer/hooks/use-project-shortcuts";
+import { cn } from "@renderer/lib/utils";
 import { errorMessage } from "@volli/shared";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
+
+const WORKSPACE_RAIL_WIDTH = 60;
+const COLLAPSED_NAV_WIDTH = 48;
 
 /**
  * Window shell, sidebar-09 composition: a collapsible two-pane sidebar (60px
@@ -35,8 +39,10 @@ export function AppShell() {
   useZoomCommands();
   useBootNotice();
   const sidebarWidth = useUiStore((state) => state.sidebarWidth);
+  const workspaceRailHidden = useUiStore((state) => state.workspaceRailHidden);
   const uiScale = useUiStore((state) => state.uiScale);
   const [resizing, setResizing] = React.useState(false);
+  const workspaceRailWidth = workspaceRailHidden ? 0 : WORKSPACE_RAIL_WIDTH;
 
   return (
     <SidebarProvider
@@ -44,12 +50,15 @@ export function AppShell() {
       data-resizing={resizing || undefined}
       style={
         {
-          "--sidebar-width": `${sidebarWidth}px`,
-          // Collapsed = rail + 48px nav icon strip.
-          "--sidebar-width-icon": "108px",
+          // `sidebarWidth` stores the full two-tier width. When the workspace
+          // rail is hidden, subtract its 60px instead of letting the primary
+          // sidebar expand into that space — the canvas genuinely gains it.
+          "--sidebar-width": `${sidebarWidth - (WORKSPACE_RAIL_WIDTH - workspaceRailWidth)}px`,
+          // Collapsed = optional workspace rail + 48px nav icon strip.
+          "--sidebar-width-icon": `${COLLAPSED_NAV_WIDTH + workspaceRailWidth}px`,
           // 60px: a ring-2/offset-3 selected tile (36px + 10) keeps 7px of
           // air to each rail edge.
-          "--rail-width": "60px",
+          "--rail-width": `${workspaceRailWidth}px`,
         } as React.CSSProperties
       }
     >
@@ -77,7 +86,17 @@ export function AppShell() {
           collapsible="icon"
           className="h-full overflow-hidden *:data-[sidebar=sidebar]:flex-row"
         >
-          <Sidebar collapsible="none" className="w-(--rail-width) shrink-0 bg-rail">
+          <Sidebar
+            collapsible="none"
+            data-workspace-rail
+            aria-hidden={workspaceRailHidden}
+            inert={workspaceRailHidden}
+            className={cn(
+              "w-(--rail-width) shrink-0 overflow-hidden bg-rail transition-[width,opacity] duration-[180ms] ease-swift",
+              "group-data-[resizing]/sidebar-wrapper:transition-none group-data-[motion=instant]/sidebar-wrapper:transition-none",
+              workspaceRailHidden && "opacity-0",
+            )}
+          >
             <ProjectRail />
           </Sidebar>
           <Sidebar collapsible="none" className="min-w-0 flex-1">
