@@ -34,6 +34,18 @@ describe("setNav", () => {
 
     expect(store.getState().byProject["project-a"]?.nav).toBe("files");
   });
+
+  it("shows the plain board when Board is selected from an open ticket", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicket("project-a", "ticket-1");
+
+    store.getState().setNav("project-a", "board");
+
+    expect(store.getState().byProject["project-a"]).toMatchObject({
+      nav: "board",
+      openTicketId: null,
+    });
+  });
 });
 
 describe("setDirExpanded", () => {

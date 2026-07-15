@@ -27,6 +27,7 @@ import {
   isNavForwardKeyEvent,
   isRailToggleKeyEvent,
   sameSnapshot,
+  ticketParentSnapshot,
   type NavKeyEvent,
   type NavSnapshot,
 } from "@renderer/lib/nav-history";
@@ -65,8 +66,22 @@ function recordCurrentLocation(): void {
   if (applying) return;
   const snapshot = currentSnapshot();
   if (sameSnapshot(lastSnapshot, snapshot)) return;
+
+  const previous = lastSnapshot;
+  // Update before writing the history store: Zustand subscriptions are
+  // synchronous, and each recordNav write re-enters this callback. The nested
+  // call must see the live snapshot as already handled.
   lastSnapshot = snapshot;
-  useWorkspaceStore.getState().recordNav(snapshot);
+  const workspace = useWorkspaceStore.getState();
+
+  // `openTicketId` persists across relaunch but nav history intentionally does
+  // not. If the first observed location is a restored ticket detail, rebuild
+  // its deterministic Board parent so Back/Forward retain browser semantics.
+  // The same guard covers any detail reached before the recorder observed its
+  // board without duplicating the normal board → ticket path.
+  const parent = ticketParentSnapshot(snapshot);
+  if (parent !== null && !sameSnapshot(previous, parent)) workspace.recordNav(parent);
+  workspace.recordNav(snapshot);
 }
 
 /**
