@@ -10,6 +10,10 @@
  * header button + the "c" hotkey) is app-wide chrome, not per-workspace
  * state, so it never follows a project into persisted storage.
  *
+ * `workspaceRailHidden` — whether the Slack-style project/workspace switcher
+ * is visible — persists app-wide. Hiding it returns its full width to the
+ * active workspace while project keyboard shortcuts remain available.
+ *
  * `railCollapsed` — the ticket-detail right rail's collapsed state (the
  * chrome-bar ⌥⌘B toggle, VS-Code secondary-sidebar style) — persists app-wide
  * like the sidebar width: it's a global chrome preference, not per-workspace,
@@ -90,6 +94,8 @@ interface UiState {
   settingsOpen: boolean;
   /** Session-only — never persisted; see module doc. */
   newTicketOpen: boolean;
+  /** Project/workspace switcher rail hidden? Persisted app-wide (see module doc). */
+  workspaceRailHidden: boolean;
   /** Ticket-detail right rail collapsed? Persisted app-wide (see module doc). */
   railCollapsed: boolean;
   /** Ticket-detail rail "Details" drawer expanded? Persisted app-wide (see module doc). */
@@ -99,6 +105,8 @@ interface UiState {
   resetUiScale(): void;
   setSettingsOpen(open: boolean): void;
   setNewTicketOpen(open: boolean): void;
+  toggleWorkspaceRailHidden(): void;
+  setWorkspaceRailHidden(hidden: boolean): void;
   toggleRailCollapsed(): void;
   setRailCollapsed(collapsed: boolean): void;
   toggleDetailsExpanded(): void;
@@ -107,7 +115,7 @@ interface UiState {
 
 type PersistedUiState = Pick<
   UiState,
-  "sidebarWidth" | "uiScale" | "railCollapsed" | "detailsExpanded"
+  "sidebarWidth" | "uiScale" | "workspaceRailHidden" | "railCollapsed" | "detailsExpanded"
 >;
 
 /**
@@ -127,6 +135,7 @@ export function createUiStore(storage?: StateStorage) {
         uiScale: UI_SCALE_DEFAULT,
         settingsOpen: false,
         newTicketOpen: false,
+        workspaceRailHidden: false,
         railCollapsed: false,
         detailsExpanded: false,
         setSidebarWidth: (width) => set({ sidebarWidth: clampSidebarWidth(width) }),
@@ -134,6 +143,9 @@ export function createUiStore(storage?: StateStorage) {
         resetUiScale: () => set({ uiScale: UI_SCALE_DEFAULT }),
         setSettingsOpen: (open) => set({ settingsOpen: open }),
         setNewTicketOpen: (open) => set({ newTicketOpen: open }),
+        toggleWorkspaceRailHidden: () =>
+          set((state) => ({ workspaceRailHidden: !state.workspaceRailHidden })),
+        setWorkspaceRailHidden: (hidden) => set({ workspaceRailHidden: hidden }),
         toggleRailCollapsed: () => set((state) => ({ railCollapsed: !state.railCollapsed })),
         setRailCollapsed: (collapsed) => set({ railCollapsed: collapsed }),
         toggleDetailsExpanded: () => set((state) => ({ detailsExpanded: !state.detailsExpanded })),
@@ -148,6 +160,7 @@ export function createUiStore(storage?: StateStorage) {
         partialize: (state): PersistedUiState => ({
           sidebarWidth: state.sidebarWidth,
           uiScale: state.uiScale,
+          workspaceRailHidden: state.workspaceRailHidden,
           railCollapsed: state.railCollapsed,
           detailsExpanded: state.detailsExpanded,
         }),
@@ -162,6 +175,9 @@ export function createUiStore(storage?: StateStorage) {
             ...current,
             sidebarWidth: sanitizeSidebarWidth(stored.sidebarWidth),
             uiScale: sanitizeUiScale(stored.uiScale),
+            // Missing/corrupt state from an older build keeps the switcher
+            // visible so projects never become unexpectedly undiscoverable.
+            workspaceRailHidden: stored.workspaceRailHidden === true,
             // Any non-`true` persisted value (missing key, corrupt JSON) means
             // the rail stays expanded — the safe, visible default.
             railCollapsed: stored.railCollapsed === true,

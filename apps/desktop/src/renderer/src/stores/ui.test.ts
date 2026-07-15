@@ -127,12 +127,13 @@ describe("setNewTicketOpen", () => {
 });
 
 describe("persistence", () => {
-  it("persists sidebarWidth + uiScale + railCollapsed + detailsExpanded — settingsOpen resets each launch", () => {
+  it("persists sidebarWidth + uiScale + workspaceRailHidden + railCollapsed + detailsExpanded — settingsOpen resets each launch", () => {
     const storage = createMemoryStorage();
     const store = createUiStore(storage);
     store.getState().setSettingsOpen(true);
     store.getState().setSidebarWidth(500);
     store.getState().stepUiScale(1);
+    store.getState().toggleWorkspaceRailHidden();
     store.getState().toggleRailCollapsed();
     store.getState().toggleDetailsExpanded();
 
@@ -142,9 +143,36 @@ describe("persistence", () => {
     expect(persisted.state).toEqual({
       sidebarWidth: 500,
       uiScale: UI_SCALE_STEPS[3],
+      workspaceRailHidden: true,
       railCollapsed: true,
       detailsExpanded: true,
     });
+  });
+
+  it("rehydrates workspaceRailHidden from storage; corrupt/missing values default to visible", async () => {
+    const storage = createMemoryStorage();
+    createUiStore(storage).getState().setWorkspaceRailHidden(true);
+    const reloaded = createUiStore(storage);
+    await reloaded.persist.rehydrate();
+    expect(reloaded.getState().workspaceRailHidden).toBe(true);
+
+    // Older state has no key and keeps the workspace switcher visible.
+    const missing = createMemoryStorage();
+    missing.setItem(
+      "volli:ui",
+      JSON.stringify({ state: { sidebarWidth: 320, uiScale: 1 }, version: 1 }),
+    );
+    expect(createUiStore(missing).getState().workspaceRailHidden).toBe(false);
+
+    const corrupt = createMemoryStorage();
+    corrupt.setItem(
+      "volli:ui",
+      JSON.stringify({
+        state: { sidebarWidth: 320, uiScale: 1, workspaceRailHidden: "yes" },
+        version: 1,
+      }),
+    );
+    expect(createUiStore(corrupt).getState().workspaceRailHidden).toBe(false);
   });
 
   it("rehydrates railCollapsed from storage; corrupt/missing values default to expanded", async () => {

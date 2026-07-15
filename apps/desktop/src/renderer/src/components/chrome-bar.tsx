@@ -2,6 +2,7 @@ import * as React from "react";
 import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
 import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
+import { SidebarIcon } from "@phosphor-icons/react/dist/csr/Sidebar";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 
@@ -44,13 +45,44 @@ export function ChromeBar() {
       {/* translate-y-px: the lights' optical center lands at ~20.5px (y:14 +
           half their ~13px diameter), just below the band's 20px flex center —
           nudge the trigger down to meet them. */}
-      <SidebarTrigger className="app-region-no-drag translate-y-px" />
+      <div className="app-region-no-drag flex translate-y-px items-center">
+        <WorkspaceRailToggle />
+        <SidebarTrigger
+          aria-label="Toggle navigation sidebar"
+          title="Toggle navigation sidebar (⌘B)"
+        />
+      </div>
       <NavHistoryButtons />
       <UniversalSearchPill />
       {/* The content-area tab strip (if any) lives below in MainContent, not here. */}
       <div className="flex-1" />
       <RightRailToggle />
     </div>
+  );
+}
+
+/**
+ * Visibility control for the outer Slack-style project/workspace switcher.
+ * It sits immediately before the primary nav's existing SidebarTrigger so the
+ * controls follow the same outside-to-inside order as the panes they affect.
+ */
+function WorkspaceRailToggle() {
+  const workspaceRailHidden = useUiStore((state) => state.workspaceRailHidden);
+  const toggleWorkspaceRailHidden = useUiStore((state) => state.toggleWorkspaceRailHidden);
+
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="size-7"
+      aria-pressed={workspaceRailHidden}
+      onClick={() => toggleWorkspaceRailHidden()}
+      aria-label={workspaceRailHidden ? "Show workspace switcher" : "Hide workspace switcher"}
+      title={`${workspaceRailHidden ? "Show" : "Hide"} workspace switcher`}
+    >
+      <SidebarIcon weight="fill" />
+      <span className="sr-only">Toggle workspace switcher</span>
+    </Button>
   );
 }
 

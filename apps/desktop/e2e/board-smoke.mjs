@@ -23,7 +23,8 @@
  *      toggle (list-view add + drag parity),
  *      the sidebar's Active Sessions, the chrome-static UI zoom (uiScale now
  *      read back from SQLite `app_state`, not localStorage), and the global
- *      New-ticket dialog ("c" hotkey, chrome-search guard, header button).
+ *      New-ticket dialog ("c" hotkey, chrome-search guard, header button),
+ *      plus the persisted workspace-switcher visibility toggle.
  *   D. DURABILITY — capture the full board state, `electronApp.close()`, then
  *      relaunch a fresh Electron process against the SAME `VOLLI_DB_PATH` and
  *      assert the board survived (SQLite, not localStorage — the relaunch's
@@ -1009,6 +1010,53 @@ async function main() {
       return { ok, detail: `open=${openCount} closedAfterEscape=${closedCount}` };
     });
 
+    // === 21. Workspace switcher visibility returns all 60px to the canvas ===
+    await attempt(
+      21,
+      "Workspace switcher toggle returns its full 60px to the canvas and persists across reload",
+      async () => {
+        const workspaceRail = page.locator("[data-workspace-rail]");
+        const mainCanvas = page.locator('[data-slot="sidebar-inset"]');
+        const railBefore = await workspaceRail.boundingBox();
+        const canvasBefore = await mainCanvas.boundingBox();
+        if (!railBefore || !canvasBefore) throw new Error("workspace rail or main canvas missing");
+
+        await page.getByRole("button", { name: "Hide workspace switcher" }).click();
+        await sleep(400);
+        const railHidden = await workspaceRail.boundingBox();
+        const canvasExpanded = await mainCanvas.boundingBox();
+        if (!railHidden || !canvasExpanded)
+          throw new Error("hidden rail or expanded canvas missing");
+
+        // Reload exercises the real app_state bridge, not just the live Zustand state.
+        await page.reload();
+        await page.waitForLoadState("domcontentloaded");
+        await sleep(1500);
+        await goToBoard(page);
+        const hiddenPersisted = await page.locator("[data-workspace-rail]").boundingBox();
+        const showToggle = page.getByRole("button", { name: "Show workspace switcher" });
+        const persisted = hiddenPersisted !== null && hiddenPersisted.width < 1;
+
+        await showToggle.click();
+        await sleep(400);
+        const railRestored = await page.locator("[data-workspace-rail]").boundingBox();
+        const canvasRestored = await page.locator('[data-slot="sidebar-inset"]').boundingBox();
+        if (!railRestored || !canvasRestored) throw new Error("restored layout missing");
+
+        const railWasSixty = Math.abs(railBefore.width - 60) < 1;
+        const railReachedZero = railHidden.width < 1;
+        const canvasGainedSixty = Math.abs(canvasBefore.x - canvasExpanded.x - 60) < 1;
+        const restored =
+          Math.abs(railRestored.width - railBefore.width) < 1 &&
+          Math.abs(canvasRestored.x - canvasBefore.x) < 1;
+        const ok = railWasSixty && railReachedZero && canvasGainedSixty && persisted && restored;
+        return {
+          ok,
+          detail: `rail=${railBefore.width}->${railHidden.width}->${railRestored.width} canvasX=${canvasBefore.x}->${canvasExpanded.x}->${canvasRestored.x} persisted=${persisted}`,
+        };
+      },
+    );
+
     // ===================================================================
     // PHASE D — DURABILITY: the board survives a full Electron relaunch
     // ===================================================================
@@ -1030,7 +1078,7 @@ async function main() {
     await goToBoard(page);
 
     await attempt(
-      21,
+      22,
       "Durability: full board state survives an Electron close+relaunch from SQLite; no volli:* localStorage",
       async () => {
         const postRelaunchState = await boardStateByColumn(page);
@@ -1061,7 +1109,7 @@ async function main() {
   // mkdirSync(dirname) throws ENOTDIR, dbHandle is { ok:false }, bootstrap
   // fails, and main.tsx renders the BootErrorPanel instead of the app.
   await attempt(
-    22,
+    23,
     'Boot-failure: an unwritable VOLLI_DB_PATH renders the "Volli couldn\'t load its data" panel',
     async () => {
       const notADir = join(SCRATCH, "not-a-dir");
