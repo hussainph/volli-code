@@ -65,9 +65,7 @@ function EmptyProjectsState() {
         <div className="mb-5 flex size-11 items-center justify-center rounded-xl border border-border bg-card/70 shadow-sm">
           <FolderPlusIcon className="size-5 text-muted-foreground" weight="regular" />
         </div>
-        <h1 className="text-[2rem] font-semibold leading-tight tracking-[-0.035em]">
-          Add your first project
-        </h1>
+        <h1 className="text-title font-semibold">Add your first project</h1>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
           Choose a local codebase to start planning work.
         </p>

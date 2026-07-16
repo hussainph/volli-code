@@ -28,6 +28,7 @@ export type VolliIpcChannel =
   | "volli:terminal-park"
   | "volli:terminal-wake"
   | "volli:terminal-keep-awake"
+  | "volli:terminal-busy"
   // Send-based (ipcRenderer.send, not invoke): a fire-and-forget flow-control
   // ack needs no reply, and awaiting one per data event would defeat it.
   | "volli:terminal-ack"

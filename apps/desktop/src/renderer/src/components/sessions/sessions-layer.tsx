@@ -1,6 +1,7 @@
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import * as React from "react";
 
+import { ConfirmCloseDialog } from "@renderer/components/sessions/confirm-close-dialog";
 import { SessionTabs } from "@renderer/components/sessions/session-tabs";
 import { SessionSplitLayout } from "@renderer/components/sessions/session-split-layout";
 import { TicketTerminalOverlay } from "@renderer/components/sessions/ticket-terminal-host";
@@ -12,10 +13,12 @@ import { Button } from "@renderer/components/ui/button";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import {
   scratchScope,
+  sessionPanes,
   useSessionsStore,
   type TerminalSplitDirection,
 } from "@renderer/stores/sessions";
 import { cn } from "@renderer/lib/utils";
+import { useCloseGuard } from "@renderer/terminal/close-guard";
 import { getEngine } from "@renderer/terminal/registry";
 import { adjacentPaneId, type TerminalFocusDirection } from "@renderer/terminal/pane-navigation";
 import {
@@ -51,6 +54,9 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
   const setSplitRatio = useSessionsStore((state) => state.setSplitRatio);
   const markExited = useSessionsStore((state) => state.markExited);
   const selected = useSelectedProject();
+  // One guard for both scratch close surfaces (tab close + pane close): a busy
+  // terminal interposes a confirm before the actual PTY teardown runs.
+  const closeGuard = useCloseGuard();
 
   // Projects that already got their one auto-opened scratch session. Marked at
   // attempt time and never cleared — a failure's retry surface is the empty
@@ -182,7 +188,15 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
             tabs={scratch?.tabs ?? []}
             activeSessionId={scratch?.activeSessionId ?? null}
             onSelect={(sessionId) => setActiveSession(selected.id, sessionId)}
-            onClose={(sessionId) => closeTerminalSession(selected.id, sessionId)}
+            onClose={(sessionId) => {
+              const tab = scratch?.tabs.find((candidate) => candidate.sessionId === sessionId);
+              const liveIds = tab
+                ? sessionPanes(tab.layout)
+                    .filter((pane) => pane.exitCode === null)
+                    .map((pane) => pane.sessionId)
+                : [sessionId];
+              closeGuard.guard(liveIds, () => closeTerminalSession(selected.id, sessionId));
+            }}
             onRename={renameTerminalSession}
             onNew={() => createScratch(selected)}
             creating={creatingSelected}
@@ -209,7 +223,11 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
                   onSplit={(sessionId, direction) =>
                     void createTerminalSplit(tab.scope, tab.sessionId, sessionId, direction)
                   }
-                  onClose={(sessionId) => closeTerminalPane(ownerId, tab.sessionId, sessionId)}
+                  onClose={(sessionId) =>
+                    closeGuard.guard([sessionId], () =>
+                      closeTerminalPane(ownerId, tab.sessionId, sessionId),
+                    )
+                  }
                   onResize={(splitId, ratio) =>
                     setSplitRatio(ownerId, tab.sessionId, splitId, ratio)
                   }
@@ -234,6 +252,12 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
       {/* Resident host for ticket-session terminals — positioned over the ticket
           detail's plane, shown independently of the scratch surface's visibility. */}
       <TicketTerminalOverlay byOwner={byOwner} onShortcut={handleTerminalShortcut} />
+
+      <ConfirmCloseDialog
+        pending={closeGuard.pending}
+        onConfirm={closeGuard.confirm}
+        onCancel={closeGuard.cancel}
+      />
     </>
   );
 }

@@ -1,10 +1,11 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
-import type { WebContents } from "electron";
+import type { BrowserWindow, WebContents } from "electron";
 import type {
   CreateTerminalSessionResult,
   Project,
+  TerminalBusyResult,
   TerminalIoResult,
   VolliIpcChannel,
 } from "@volli/shared";
@@ -21,11 +22,13 @@ import {
 
 // Hoisted above module evaluation, like ipc.test.ts, so the electron/node-pty
 // mock factories can capture into them.
-const { handlers, listeners, appHandlers, spawn } = vi.hoisted(() => ({
+const { handlers, listeners, appHandlers, spawn, showMessageBoxSync, appQuit } = vi.hoisted(() => ({
   handlers: new Map<string, (...args: never[]) => unknown>(),
   listeners: new Map<string, (...args: never[]) => unknown>(),
-  appHandlers: new Map<string, () => void>(),
+  appHandlers: new Map<string, (event: { preventDefault: () => void }) => void>(),
   spawn: vi.fn(),
+  showMessageBoxSync: vi.fn(),
+  appQuit: vi.fn(),
 }));
 
 vi.mock("electron", () => ({
@@ -38,9 +41,13 @@ vi.mock("electron", () => ({
     },
   },
   app: {
-    on(event: string, handler: () => void) {
+    on(event: string, handler: (event: { preventDefault: () => void }) => void) {
       appHandlers.set(event, handler);
     },
+    quit: appQuit,
+  },
+  dialog: {
+    showMessageBoxSync,
   },
 }));
 
@@ -48,7 +55,7 @@ vi.mock("electron", () => ({
 // Electron-ABI native binary, which never loads under plain-Node vitest.
 vi.mock("node-pty", () => ({ spawn }));
 
-import { PtyManager, registerTerminalIpcHandlers } from "./pty";
+import { confirmDestructiveClose, PtyManager, registerTerminalIpcHandlers } from "./pty";
 import type { ParkConfig, ProcessInspector } from "./park";
 import { listTicketEvents } from "./db/events-repo";
 import { insertProject } from "./db/projects-repo";
@@ -76,6 +83,10 @@ function makeFakePty(pid = nextPid()) {
     onExit: (cb: (event: { exitCode: number }) => void) => {
       exitCb = cb;
     },
+    // Foreground-process title `busy()` reads. A plain settable property, not
+    // a getter — most tests never touch it; busy-probe tests assign it
+    // directly, and use Object.defineProperty to make it throw.
+    process: "",
     write: vi.fn(),
     resize: vi.fn(),
     kill: vi.fn(),
@@ -136,6 +147,18 @@ const invokeKill = (sessionId: unknown) =>
     { sender: {} },
     sessionId,
   ) as TerminalIoResult;
+
+const invokeBusy = (sessionId: unknown) =>
+  (handlers.get("volli:terminal-busy" satisfies VolliIpcChannel) as (...a: unknown[]) => unknown)(
+    { sender: {} },
+    sessionId,
+  ) as TerminalBusyResult;
+
+/** Casts a WebContents double to the real type for calls typed against it directly (not through IPC). */
+const asWebContents = (sender: WebContentsDouble) => sender as unknown as WebContents;
+
+/** A `before-quit` event double with a spyable `preventDefault`. */
+const makeQuitEvent = () => ({ preventDefault: vi.fn() });
 
 // The ack channel is send-based (ipcMain.on), not invoke-based; it returns
 // nothing and identifies the caller only by the event's sender.
@@ -208,6 +231,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
   testDb.cleanup();
 });
 
@@ -349,6 +373,81 @@ describe("PtyManager.workspaceIdFor", () => {
 
   it("returns undefined for an unknown session", () => {
     expect(manager.workspaceIdFor("nope")).toBeUndefined();
+  });
+});
+
+describe("PtyManager.busy", () => {
+  it("reports not busy for an unknown session", () => {
+    expect(manager.busy("nope")).toEqual({ ok: true, busy: false, process: null });
+  });
+
+  it.each([
+    ["the bare shell name", "zsh"],
+    ["a login shell's leading dash", "-zsh"],
+    ["the full spawned path (basename)", "/bin/zsh"],
+  ])("treats %s as idle", async (_label, title) => {
+    vi.stubEnv("SHELL", "/bin/zsh");
+    const { sessionId, pty } = await createSession();
+    pty.process = title;
+    expect(manager.busy(sessionId)).toEqual({ ok: true, busy: false, process: null });
+  });
+
+  it.each([
+    ["the bare process name", "claude", "claude"],
+    ["a login-shell-style dash prefix", "-claude", "claude"],
+  ])("reports busy for %s", async (_label, title, expectedProcess) => {
+    vi.stubEnv("SHELL", "/bin/zsh");
+    const { sessionId, pty } = await createSession();
+    pty.process = title;
+    expect(manager.busy(sessionId)).toEqual({ ok: true, busy: true, process: expectedProcess });
+  });
+
+  it("returns a typed error instead of throwing when the process getter throws", async () => {
+    const { sessionId, pty } = await createSession();
+    Object.defineProperty(pty, "process", {
+      configurable: true,
+      get() {
+        throw new Error("ECHILD");
+      },
+    });
+    expect(manager.busy(sessionId)).toEqual({ ok: false, error: "ECHILD" });
+  });
+});
+
+describe("PtyManager.busySessions", () => {
+  it("returns only sessions with a foreground process beyond their shell", async () => {
+    vi.stubEnv("SHELL", "/bin/zsh");
+    await createSession(); // idle — contributes no entry below.
+    const busy = await createSession();
+    busy.pty.process = "claude";
+    expect(manager.busySessions()).toEqual([{ sessionId: busy.sessionId, process: "claude" }]);
+  });
+
+  it("filters to one webContents' sessions when an owner is passed", async () => {
+    vi.stubEnv("SHELL", "/bin/zsh");
+    const senderA = makeWebContents();
+    const senderB = makeWebContents();
+    const a = await createSession(senderA);
+    const b = await createSession(senderB);
+    a.pty.process = "claude";
+    b.pty.process = "vim";
+    expect(manager.busySessions(asWebContents(senderA))).toEqual([
+      { sessionId: a.sessionId, process: "claude" },
+    ]);
+  });
+
+  it("skips a session whose probe throws, without blocking enumeration of the rest", async () => {
+    vi.stubEnv("SHELL", "/bin/zsh");
+    const throwing = await createSession();
+    const busy = await createSession();
+    Object.defineProperty(throwing.pty, "process", {
+      configurable: true,
+      get() {
+        throw new Error("EIO");
+      },
+    });
+    busy.pty.process = "claude";
+    expect(manager.busySessions()).toEqual([{ sessionId: busy.sessionId, process: "claude" }]);
   });
 });
 
@@ -576,15 +675,105 @@ describe("volli:terminal-kill", () => {
   });
 });
 
+describe("volli:terminal-busy", () => {
+  it("rejects a non-string session id", () => {
+    expect(invokeBusy(42)).toEqual({ ok: false, error: "Invalid terminal busy query" });
+  });
+
+  it("reports not busy for an unknown session", () => {
+    expect(invokeBusy("nope")).toEqual({ ok: true, busy: false, process: null });
+  });
+
+  it("routes a valid session id to the manager", async () => {
+    vi.stubEnv("SHELL", "/bin/zsh");
+    const { sessionId, pty } = await createSession();
+    pty.process = "claude";
+    expect(invokeBusy(sessionId)).toEqual({ ok: true, busy: true, process: "claude" });
+  });
+});
+
+describe("confirmDestructiveClose", () => {
+  it("returns true when the user picks the confirm button (choice 0)", () => {
+    showMessageBoxSync.mockReturnValueOnce(0);
+    const confirmed = confirmDestructiveClose([{ process: "claude" }], {
+      message: "Quit Volli?",
+      confirmLabel: "Quit",
+    });
+    expect(confirmed).toBe(true);
+  });
+
+  it("returns false for any other choice (Cancel)", () => {
+    showMessageBoxSync.mockReturnValueOnce(1);
+    const confirmed = confirmDestructiveClose([{ process: "claude" }], {
+      message: "Quit Volli?",
+      confirmLabel: "Quit",
+    });
+    expect(confirmed).toBe(false);
+  });
+
+  it('passes [confirmLabel, "Cancel"] as buttons with Cancel as default/cancel id', () => {
+    showMessageBoxSync.mockReturnValueOnce(1);
+    confirmDestructiveClose([{ process: "claude" }], {
+      message: "Quit Volli?",
+      confirmLabel: "Quit",
+    });
+    const [options] = showMessageBoxSync.mock.calls[0] as [
+      { buttons: string[]; defaultId: number; cancelId: number },
+    ];
+    expect(options.buttons).toEqual(["Quit", "Cancel"]);
+    expect(options.defaultId).toBe(1);
+    expect(options.cancelId).toBe(1);
+  });
+
+  it("details a single running process in the singular", () => {
+    showMessageBoxSync.mockReturnValueOnce(1);
+    confirmDestructiveClose([{ process: "claude" }], {
+      message: "Quit Volli?",
+      confirmLabel: "Quit",
+    });
+    const [options] = showMessageBoxSync.mock.calls[0] as [{ detail: string }];
+    expect(options.detail).toBe("A terminal is still running “claude”. Closing will end it.");
+  });
+
+  it("details multiple running processes in the plural, deduped", () => {
+    showMessageBoxSync.mockReturnValueOnce(1);
+    confirmDestructiveClose([{ process: "claude" }, { process: "claude" }, { process: "vim" }], {
+      message: "Quit Volli?",
+      confirmLabel: "Quit",
+    });
+    const [options] = showMessageBoxSync.mock.calls[0] as [{ detail: string }];
+    expect(options.detail).toBe(
+      "3 terminals are still running (claude, vim). Closing will end them.",
+    );
+  });
+
+  it("passes the window through to showMessageBoxSync when provided", () => {
+    showMessageBoxSync.mockReturnValueOnce(1);
+    const window = {} as unknown as BrowserWindow;
+    confirmDestructiveClose([{ process: "claude" }], {
+      message: "Quit Volli?",
+      confirmLabel: "Quit",
+      window,
+    });
+    expect(showMessageBoxSync).toHaveBeenCalledWith(
+      window,
+      expect.objectContaining({ message: "Quit Volli?" }),
+    );
+  });
+});
+
 describe("lifecycle teardown", () => {
-  it("kills every live session on before-quit", async () => {
+  it("kills every live session on before-quit when nothing is busy, without a dialog", async () => {
     const a = await createSession();
     const b = await createSession();
-    appHandlers.get("before-quit")?.();
+    const event = makeQuitEvent();
+    appHandlers.get("before-quit")?.(event);
     expect(a.pty.kill).toHaveBeenCalledTimes(1);
     expect(b.pty.kill).toHaveBeenCalledTimes(1);
     expect(invokeKill(a.sessionId)).toEqual({ ok: false, error: "Unknown terminal session" });
     expect(invokeKill(b.sessionId)).toEqual({ ok: false, error: "Unknown terminal session" });
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(showMessageBoxSync).not.toHaveBeenCalled();
   });
 
   it("kills a session when its owning window is destroyed", async () => {
@@ -601,6 +790,42 @@ describe("lifecycle teardown", () => {
     pty.emitExit(0);
     expect(sender.removeListener).not.toHaveBeenCalled();
     expect(invokeKill(sessionId)).toEqual({ ok: false, error: "Unknown terminal session" });
+  });
+});
+
+describe("before-quit gate", () => {
+  it("prevents quit, shows a dialog, and kills nothing when the user cancels", async () => {
+    vi.stubEnv("SHELL", "/bin/zsh");
+    showMessageBoxSync.mockReturnValueOnce(1); // Cancel
+    const { pty } = await createSession();
+    pty.process = "claude";
+    const event = makeQuitEvent();
+    appHandlers.get("before-quit")?.(event);
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    expect(showMessageBoxSync).toHaveBeenCalledTimes(1);
+    expect(pty.kill).not.toHaveBeenCalled();
+    expect(appQuit).not.toHaveBeenCalled();
+  });
+
+  it("confirms, quits, and a subsequent confirmed pass kills everything without re-prompting", async () => {
+    vi.stubEnv("SHELL", "/bin/zsh");
+    showMessageBoxSync.mockReturnValueOnce(0); // Quit
+    const { pty } = await createSession();
+    pty.process = "claude";
+
+    const firstEvent = makeQuitEvent();
+    appHandlers.get("before-quit")?.(firstEvent);
+    expect(firstEvent.preventDefault).toHaveBeenCalledTimes(1);
+    expect(appQuit).toHaveBeenCalledTimes(1);
+    expect(pty.kill).not.toHaveBeenCalled();
+
+    // app.quit() re-fires before-quit for real; this confirmed pass must kill
+    // outright, with no second prompt.
+    const secondEvent = makeQuitEvent();
+    appHandlers.get("before-quit")?.(secondEvent);
+    expect(showMessageBoxSync).toHaveBeenCalledTimes(1);
+    expect(pty.kill).toHaveBeenCalledTimes(1);
+    expect(secondEvent.preventDefault).not.toHaveBeenCalled();
   });
 });
 

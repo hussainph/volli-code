@@ -26,7 +26,7 @@ export function CollapsedColumnRail({
 
   return (
     <div className="flex w-44 flex-none flex-col gap-1.5">
-      <span className="text-[11px] uppercase tracking-wide text-muted-foreground/70">Empty</span>
+      <span className="text-label uppercase text-muted-foreground/70">Empty</span>
       {statuses.map((status) => (
         <CollapsedColumnTarget
           key={status}
@@ -72,7 +72,7 @@ function CollapsedColumnTarget({
       )}
     >
       <span>{TICKET_STATUS_LABELS[status]}</span>
-      <span className="font-mono text-[11px]">0</span>
+      <span className="font-mono text-label">0</span>
     </button>
   );
 }

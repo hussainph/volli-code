@@ -79,9 +79,7 @@ export function ArtifactSection({
   return (
     <section className="flex flex-col gap-1.5">
       <div className="flex items-center justify-between">
-        <h3 className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-          {title}
-        </h3>
+        <h3 className="text-label font-medium text-muted-foreground uppercase">{title}</h3>
         <Button
           variant="ghost"
           size="icon-xs"

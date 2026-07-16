@@ -148,7 +148,7 @@ function AuthorChip({ actor }: { actor: string }) {
   return (
     <span
       className={cn(
-        "inline-flex size-5 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold",
+        "inline-flex size-5 shrink-0 items-center justify-center rounded-full text-label font-semibold",
         isAgentActor(actor) ? "bg-primary/15 text-primary" : "bg-accent text-accent-foreground",
       )}
       aria-hidden
@@ -416,10 +416,8 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
   const feed = buildActivityFeed(events, comments);
 
   return (
-    <section className="flex flex-col gap-4 border-t border-border pt-5">
-      <h3 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-        Activity
-      </h3>
+    <section className="flex flex-col gap-4 border-t border-border pt-6">
+      <h3 className="text-label font-medium text-muted-foreground uppercase">Activity</h3>
 
       {loaded && feed.length === 0 ? (
         <p className="px-1 text-sm text-muted-foreground">No activity yet.</p>

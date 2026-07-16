@@ -93,7 +93,7 @@ const OUTPUT_THROTTLE_MS = 1_000;
  * Honest PTY-derived session status (ticket-detail-mvp decision #5): `working`
  * when output landed within ~10s, `idle` when live but quiet, `parked` when the
  * warm-park tier has SIGSTOP'd the session's process tree to reclaim memory
- * (decision #31), `exited` once the shell is gone. `exited` wins over
+ * (decision #32), `exited` once the shell is gone. `exited` wins over
  * everything else (a parked pane can't come back exited, but the check order
  * keeps the derivation defensive); `parked` then wins over working/idle. Pure
  * so the derivation is unit-tested independent of the clock; hook-driven states
@@ -119,7 +119,7 @@ interface SessionsState {
   /** sessionId → last PTY-output time (ms) — feeds the working/idle derivation for all sessions. */
   lastOutputAt: Record<string, number>;
   /**
-   * sessionId → warm-park state (decision #31): `parked` mirrors main's SIGSTOP
+   * sessionId → warm-park state (decision #32): `parked` mirrors main's SIGSTOP
    * on the session's process tree, `keepAwake` mirrors the user's exclusion pin
    * against auto-park. Pushed by `onParkState` on every park/wake/pin change.
    */

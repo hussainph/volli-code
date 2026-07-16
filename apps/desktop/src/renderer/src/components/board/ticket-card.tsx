@@ -39,7 +39,7 @@ export function TicketCardContent({
       )}
     >
       <div className="flex items-center justify-between gap-2">
-        <span className="font-mono text-[11px] text-muted-foreground">{displayId}</span>
+        <span className="font-mono text-label text-muted-foreground">{displayId}</span>
         <PriorityIndicator priority={ticket.priority} />
       </div>
       <p className="text-sm font-medium leading-snug text-foreground line-clamp-2">

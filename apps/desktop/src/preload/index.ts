@@ -28,6 +28,7 @@ import type {
   RevealResult,
   SessionRenameResult,
   SessionsResult,
+  TerminalBusyResult,
   TerminalDataEvent,
   TerminalExitEvent,
   TerminalIoResult,
@@ -261,6 +262,9 @@ const api = {
     /** Kills a session's PTY. */
     kill: (sessionId: string): Promise<TerminalIoResult> =>
       ipcRenderer.invoke("volli:terminal-kill" satisfies VolliIpcChannel, sessionId),
+    /** Foreground-process probe: is the session running something beyond its shell? */
+    busy: (sessionId: string): Promise<TerminalBusyResult> =>
+      ipcRenderer.invoke("volli:terminal-busy" satisfies VolliIpcChannel, sessionId),
     /** Flow-control ack: fire-and-forget count of consumed output chars. */
     ack: (sessionId: string, chars: number): void => {
       ipcRenderer.send("volli:terminal-ack" satisfies VolliIpcChannel, sessionId, chars);

@@ -37,11 +37,7 @@ function formatTimestamp(epochMs: number): string {
 }
 
 function PropertyLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-      {children}
-    </span>
-  );
+  return <span className="text-label font-medium text-muted-foreground uppercase">{children}</span>;
 }
 
 /** Status picker: same chip/dropdown idiom as the new-ticket dialog's `StatusPicker`, wired to the
@@ -289,7 +285,7 @@ export function TicketProperties({ projectId, ticket }: { projectId: string; tic
           <WorktreePathField path={ticket.worktreePath} />
         </div>
       </div>
-      <div className="flex flex-col gap-0.5 border-t border-border pt-3 text-[11px] text-muted-foreground">
+      <div className="flex flex-col gap-0.5 border-t border-border pt-3 text-label text-muted-foreground">
         <span>Created {formatTimestamp(ticket.createdAt)}</span>
         <span>Updated {formatTimestamp(ticket.updatedAt)}</span>
       </div>

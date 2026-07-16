@@ -1,5 +1,5 @@
 /**
- * Live end-to-end smoke for the SIGSTOP warm-park tier (decision #31, issue
+ * Live end-to-end smoke for the SIGSTOP warm-park tier (decision #32, issue
  * #51). NOT wired into `vp test` — run standalone against the built app.
  *
  * Question under test: does the real app park exactly the right sessions and

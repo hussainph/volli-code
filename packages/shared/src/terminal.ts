@@ -40,6 +40,19 @@ export type CreateTerminalSessionResult =
 /** Result of a fire-and-forget write/resize/kill against an existing session. */
 export type TerminalIoResult = { ok: true } | { ok: false; error: string };
 
+/**
+ * Result of a foreground-process probe against a session (`terminal-busy`).
+ * `busy` is true when the pty's foreground process differs from the shell it
+ * was spawned with — a coding agent, a build, a nested REPL: anything a
+ * destructive close would kill mid-flight. `process` is that process's name
+ * (for confirmation copy); null when the shell sits idle at its prompt. An
+ * unknown or already-exited session reports `busy: false` — there is nothing
+ * left for a close to destroy.
+ */
+export type TerminalBusyResult =
+  | { ok: true; busy: boolean; process: string | null }
+  | { ok: false; error: string };
+
 /** main → renderer: a chunk of raw PTY output for one session. */
 export interface TerminalDataEvent {
   sessionId: string;

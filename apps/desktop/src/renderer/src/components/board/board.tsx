@@ -246,7 +246,7 @@ export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPr
           />
         ) : (
           <div
-            className="flex min-h-0 flex-1 items-start gap-3 overflow-x-auto px-4 pb-4"
+            className="flex min-h-0 flex-1 items-start gap-3 overflow-x-auto px-gutter pb-4"
             onClick={(event) => {
               if (event.target === event.currentTarget) handleSelect(null);
             }}

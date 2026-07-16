@@ -59,7 +59,7 @@ export function ActiveSessions({ project }: ActiveSessionsProps) {
 
   return (
     <SidebarGroup>
-      <SidebarGroupLabel className="whitespace-nowrap text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
+      <SidebarGroupLabel className="whitespace-nowrap text-label font-semibold text-muted-foreground uppercase">
         Active Sessions
       </SidebarGroupLabel>
       <SidebarMenu>
