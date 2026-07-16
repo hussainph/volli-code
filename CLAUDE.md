@@ -33,6 +33,7 @@ App data lives under Electron's `userData` dir (a fresh start, not the Swift app
 - `pnpm dev` — full dev loop (renderer HMR + main/preload watch + Electron auto-relaunch). `pnpm run build` then `pnpm start` runs the built app.
 - `vp run -r typecheck` · `vp run -r test`; `vp check` (= `vp fmt` + `vp lint`) — the quality stack.
 - `act pull_request --container-architecture linux/amd64` — run CI locally before submitting a PR.
+- Ensure all PRs pass CI/CD checks before shipping.
 - `vp install` / `pnpm install` for deps — Electron's binary is fetched lazily on first `require("electron")`; `pnpm run ensure:electron` (`apps/desktop`) prefetches it. `vp` is the global toolchain CLI; Node/pnpm are pinned in the root `package.json`.
 
 ## Settled stack (rationale in CONCEPT.md — don't reach for alternatives)
