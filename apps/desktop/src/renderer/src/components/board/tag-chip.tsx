@@ -8,7 +8,7 @@ import { tagColor } from "@volli/shared";
  */
 export function TagChip({ tag, color }: { tag: string; color?: string }) {
   return (
-    <span className="inline-flex items-center gap-1 rounded-full border border-border px-1.5 py-px text-[11px] leading-4 text-muted-foreground">
+    <span className="inline-flex items-center gap-1 rounded-full border border-border px-1.5 py-px text-label leading-4 text-muted-foreground">
       <span
         aria-hidden
         className="size-1.5 shrink-0 rounded-full"

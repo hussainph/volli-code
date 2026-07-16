@@ -40,12 +40,12 @@ export function TicketRowContent({
   return (
     <div
       className={cn(
-        "flex h-9 cursor-default select-none items-center gap-3 border-b border-border/40 px-4",
+        "flex h-9 cursor-default select-none items-center gap-3 border-b border-border/40 px-gutter",
         selected ? "bg-primary/10" : "hover:bg-muted/40",
       )}
     >
       <PriorityIndicator priority={ticket.priority} />
-      <span className="w-14 shrink-0 font-mono text-[11px] text-muted-foreground">{displayId}</span>
+      <span className="w-14 shrink-0 font-mono text-label text-muted-foreground">{displayId}</span>
       <span className="truncate text-sm text-foreground">{ticket.title}</span>
       {ticket.labels.length > 0 ? (
         <div className="ml-auto hidden shrink-0 items-center gap-1 sm:flex">
@@ -127,10 +127,8 @@ function ListSection({
 
   return (
     <section data-list-section data-status={status}>
-      <div className="sticky top-0 z-10 flex items-center gap-2 bg-muted/40 px-4 py-1.5 backdrop-blur-sm">
-        <span className="text-[13px] font-medium text-foreground">
-          {TICKET_STATUS_LABELS[status]}
-        </span>
+      <div className="sticky top-0 z-10 flex items-center gap-2 bg-muted/40 px-gutter py-1.5 backdrop-blur-sm">
+        <span className="text-ui font-medium text-foreground">{TICKET_STATUS_LABELS[status]}</span>
         <span className="font-mono text-xs text-muted-foreground">{tickets.length}</span>
       </div>
       <SortableContext
@@ -171,7 +169,7 @@ function SectionComposer({ projectId, status }: { projectId: string; status: Tic
       <button
         type="button"
         onClick={composer.openComposer}
-        className="flex h-8 w-full items-center gap-1.5 px-4 text-xs text-muted-foreground transition-colors duration-150 ease-out hover:text-foreground"
+        className="flex h-8 w-full items-center gap-1.5 px-gutter text-xs text-muted-foreground transition-colors duration-150 ease-out hover:text-foreground"
       >
         <PlusIcon className="size-3.5" />
         New
@@ -180,7 +178,7 @@ function SectionComposer({ projectId, status }: { projectId: string; status: Tic
   }
 
   return (
-    <div className="flex h-9 items-center border-b border-border/40 bg-card px-4">
+    <div className="flex h-9 items-center border-b border-border/40 bg-card px-gutter">
       <input
         ref={composer.inputRef}
         autoFocus
@@ -208,11 +206,11 @@ function EmptyDropRow({ status }: { status: TicketStatus }) {
     <div
       ref={setNodeRef}
       className={cn(
-        "flex h-9 items-center gap-2 border-b border-border/40 px-4 transition-colors duration-150 ease-out",
+        "flex h-9 items-center gap-2 border-b border-border/40 px-gutter transition-colors duration-150 ease-out",
         isOver ? "bg-accent ring-1 ring-inset ring-primary/60" : "bg-muted/20",
       )}
     >
-      <span className="text-[13px] font-medium text-muted-foreground">
+      <span className="text-ui font-medium text-muted-foreground">
         {TICKET_STATUS_LABELS[status]}
       </span>
       <span className="font-mono text-xs text-muted-foreground">0</span>

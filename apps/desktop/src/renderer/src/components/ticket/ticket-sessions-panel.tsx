@@ -28,17 +28,20 @@ const STATUS_LABEL: Record<SessionActivityState, string> = {
   exited: "Exited",
 };
 
-/** Honest PTY-derived status: accent when working, muted when idle, dim outline when exited. */
+/** Honest PTY-derived status, kept quiet: a small colored dot + label-size muted
+ * text (the sidebar's ACTIVE SESSIONS dot treatment) — pill chrome read too loud
+ * in the 300px rail. */
 function StatusChip({ status }: { status: SessionActivityState }) {
   return (
-    <span
-      className={cn(
-        "shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium",
-        status === "working" && "border-primary/50 bg-primary/10 text-primary",
-        status === "idle" && "border-border bg-muted/40 text-muted-foreground",
-        status === "exited" && "border-border/60 text-muted-foreground/70",
-      )}
-    >
+    <span className="flex shrink-0 items-center gap-1.5 text-label text-muted-foreground">
+      <span
+        className={cn(
+          "size-1.5 rounded-full",
+          status === "working" && "bg-emerald-500",
+          status === "idle" && "bg-muted-foreground/50",
+          status === "exited" && "bg-muted-foreground/25",
+        )}
+      />
       {STATUS_LABEL[status]}
     </span>
   );
@@ -84,7 +87,7 @@ function SessionRow({
     <>
       <span className="flex min-w-0 flex-1 flex-col">
         {titleNode}
-        <span className="truncate text-[11px] text-muted-foreground">
+        <span className="truncate text-label text-muted-foreground">
           {harnessLabel(record.harnessId)}
         </span>
       </span>
@@ -99,14 +102,14 @@ function SessionRow({
       <button
         type="button"
         onClick={onActivate}
-        className="flex w-full items-center gap-2 rounded-md border border-border/60 px-2 py-1.5 text-left transition-colors hover:bg-accent"
+        className="flex w-full items-center gap-2 rounded-md border border-border/60 px-2 py-1 text-left transition-colors hover:bg-accent"
       >
         {content}
       </button>
     ) : (
       <div
         className={cn(
-          "flex w-full items-center gap-2 rounded-md border px-2 py-1.5",
+          "flex w-full items-center gap-2 rounded-md border px-2 py-1",
           isOpen ? "border-border/60" : "border-transparent opacity-60",
         )}
       >
@@ -253,9 +256,7 @@ export function TicketSessionsPanel({
   return (
     <section className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
-        <h2 className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-          Sessions
-        </h2>
+        <h2 className="text-label font-medium text-muted-foreground uppercase">Sessions</h2>
         <Button
           size="icon-xs"
           variant="ghost"

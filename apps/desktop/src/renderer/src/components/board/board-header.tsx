@@ -14,6 +14,7 @@ import {
 
 import { ArchiveDialog } from "@renderer/components/board/archive-dialog";
 import { FilterBar } from "@renderer/components/board/filter-bar";
+import { PageHeader } from "@renderer/components/layout/page-header";
 import { Button } from "@renderer/components/ui/button";
 import {
   DropdownMenu,
@@ -135,7 +136,7 @@ export function BoardHeader({ projectId, ticketCount, tickets, filter }: BoardHe
   const [archiveOpen, setArchiveOpen] = React.useState(false);
 
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 px-4 pt-3 pb-3">
+    <PageHeader>
       <h2 className="shrink-0 text-sm font-semibold">Board</h2>
       <span className="shrink-0 font-mono text-xs text-muted-foreground">{ticketCount}</span>
       <FilterBar projectId={projectId} tickets={tickets} filter={filter} className="ml-4" />
@@ -170,6 +171,6 @@ export function BoardHeader({ projectId, ticketCount, tickets, filter }: BoardHe
           New ticket
         </Button>
       </div>
-    </div>
+    </PageHeader>
   );
 }

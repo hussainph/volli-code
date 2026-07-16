@@ -18,6 +18,7 @@ import {
   type Ticket,
 } from "@volli/shared";
 
+import { ConfirmCloseDialog } from "@renderer/components/sessions/confirm-close-dialog";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -29,6 +30,8 @@ import {
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
 import { useBoardStore } from "@renderer/stores/board";
+import { sessionPanes, useSessionsStore } from "@renderer/stores/sessions";
+import { useCloseGuard } from "@renderer/terminal/close-guard";
 
 const STATUS_ICON = {
   backlog: TrayIcon,
@@ -68,55 +71,81 @@ export function TicketContextMenu({
   projectId: string;
   children: React.ReactNode;
 }) {
+  // Archiving kills the ticket's live sessions (stores/board.ts), so gate it
+  // behind a confirm when any is busy. The dialog is a SIBLING of the menu — the
+  // menu unmounts on item select, but this component (and its guard state)
+  // survives, so the confirm can open after the menu is gone.
+  const closeGuard = useCloseGuard();
+
+  const requestArchive = () => {
+    const container = useSessionsStore.getState().byOwner[ticket.id];
+    const liveIds = (container?.tabs ?? []).flatMap((tab) =>
+      sessionPanes(tab.layout)
+        .filter((pane) => pane.exitCode === null)
+        .map((pane) => pane.sessionId),
+    );
+    closeGuard.guard(
+      liveIds,
+      () => void useBoardStore.getState().archiveTicket(projectId, ticket.id),
+    );
+  };
+
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-      <ContextMenuContent>
-        <ContextMenuSub>
-          <ContextMenuSubTrigger icon={ArrowsLeftRightIcon}>Move to</ContextMenuSubTrigger>
-          <ContextMenuSubContent>
-            {TICKET_STATUSES.filter((status) => status !== ticket.status).map((status) => (
-              <ContextMenuItem
-                key={status}
-                icon={STATUS_ICON[status]}
-                onSelect={() =>
-                  useBoardStore
-                    .getState()
-                    .moveTicket(projectId, ticket.id, status, Number.MAX_SAFE_INTEGER)
-                }
-              >
-                {TICKET_STATUS_LABELS[status]}
-              </ContextMenuItem>
-            ))}
-          </ContextMenuSubContent>
-        </ContextMenuSub>
-        <ContextMenuSub>
-          <ContextMenuSubTrigger icon={FlagIcon}>Priority</ContextMenuSubTrigger>
-          <ContextMenuSubContent>
-            {TICKET_PRIORITIES.map((priority) => (
-              <ContextMenuItem
-                key={priority}
-                icon={PRIORITY_ICON[priority]}
-                onSelect={() =>
-                  useBoardStore.getState().setTicketPriority(projectId, ticket.id, priority)
-                }
-              >
-                {TICKET_PRIORITY_LABELS[priority]}
-                {priority === ticket.priority ? (
-                  <CheckIcon weight="bold" className="ml-auto size-3.5" />
-                ) : null}
-              </ContextMenuItem>
-            ))}
-          </ContextMenuSubContent>
-        </ContextMenuSub>
-        <ContextMenuSeparator />
-        <ContextMenuItem
-          icon={ArchiveIcon}
-          onSelect={() => useBoardStore.getState().archiveTicket(projectId, ticket.id)}
-        >
-          Archive
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
+    <>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuSub>
+            <ContextMenuSubTrigger icon={ArrowsLeftRightIcon}>Move to</ContextMenuSubTrigger>
+            <ContextMenuSubContent>
+              {TICKET_STATUSES.filter((status) => status !== ticket.status).map((status) => (
+                <ContextMenuItem
+                  key={status}
+                  icon={STATUS_ICON[status]}
+                  onSelect={() =>
+                    useBoardStore
+                      .getState()
+                      .moveTicket(projectId, ticket.id, status, Number.MAX_SAFE_INTEGER)
+                  }
+                >
+                  {TICKET_STATUS_LABELS[status]}
+                </ContextMenuItem>
+              ))}
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+          <ContextMenuSub>
+            <ContextMenuSubTrigger icon={FlagIcon}>Priority</ContextMenuSubTrigger>
+            <ContextMenuSubContent>
+              {TICKET_PRIORITIES.map((priority) => (
+                <ContextMenuItem
+                  key={priority}
+                  icon={PRIORITY_ICON[priority]}
+                  onSelect={() =>
+                    useBoardStore.getState().setTicketPriority(projectId, ticket.id, priority)
+                  }
+                >
+                  {TICKET_PRIORITY_LABELS[priority]}
+                  {priority === ticket.priority ? (
+                    <CheckIcon weight="bold" className="ml-auto size-3.5" />
+                  ) : null}
+                </ContextMenuItem>
+              ))}
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+          <ContextMenuSeparator />
+          <ContextMenuItem icon={ArchiveIcon} onSelect={requestArchive}>
+            Archive
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+      <ConfirmCloseDialog
+        pending={closeGuard.pending}
+        onConfirm={closeGuard.confirm}
+        onCancel={closeGuard.cancel}
+        title="Archive ticket?"
+        confirmLabel="Archive Anyway"
+        verb="Archiving"
+      />
+    </>
   );
 }

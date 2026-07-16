@@ -27,10 +27,10 @@ board open (`ensureSeeded`). Delete that file with the SQLite ticket layer.
 
 ```
 Board (flex min-h-0 flex-1 flex-col)
-├─ BoardHeader   px-4 py-3 — title · count · FilterBar
-└─ canvas        flex min-h-0 flex-1 items-start gap-3 overflow-x-auto px-4 pb-4
+├─ BoardHeader   <PageHeader> (px-gutter py-3, DESIGN.md) — title · count · FilterBar
+└─ canvas        flex min-h-0 flex-1 items-start gap-3 overflow-x-auto px-gutter pb-4
    ├─ BoardColumn ×shown   w-72 flex-none max-h-full min-h-0 flex-col rounded-lg bg-muted/40
-   │  ├─ header  px-3 pt-2.5 pb-2 — label (13px medium) · count (mono xs muted)
+   │  ├─ header  px-3 pt-2.5 pb-2 — label (text-ui medium) · count (mono xs muted)
    │  ├─ body    flex-1 min-h-0 overflow-y-auto px-2 pb-2 gap-2   ← the ONLY vertical scroller
    │  └─ footer  + New ghost button ⇄ inline composer
    └─ CollapsedColumnRail  w-44 flex-none — "Empty" caption + pills
@@ -43,7 +43,7 @@ columns hug their content and long ones scroll internally.
 
 ## Card anatomy (user decision: Linear-standard)
 
-Row 1: ticket id (`font-mono text-[11px] text-muted-foreground`) ·
+Row 1: ticket id (`font-mono text-label text-muted-foreground`) ·
 `PriorityIndicator` right-aligned. Row 2: title (`text-sm font-medium
 leading-snug line-clamp-2`). Row 3 (when tags exist): `TagChip` row.
 Surface: `rounded-lg border border-border bg-card px-3 py-2.5`, hover

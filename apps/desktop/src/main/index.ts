@@ -12,7 +12,8 @@ import { endLiveSessions } from "./db/sessions-repo";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
 import { registerAppMenu } from "./menu";
-import { registerTerminalIpcHandlers } from "./pty";
+import { confirmDestructiveClose, registerTerminalIpcHandlers } from "./pty";
+import type { PtyManager } from "./pty";
 import { registerArtifactIpcHandlers } from "./volli-fs";
 
 // Fixes dev and the packaged app to one shared Electron `userData` dir (by
@@ -73,7 +74,7 @@ function openExternal(target: string): void {
   }
 }
 
-function createWindow(): void {
+function createWindow(ptyManager: PtyManager): void {
   const mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -102,6 +103,29 @@ function createWindow(): void {
 
   mainWindow.on("ready-to-show", () => {
     mainWindow.show();
+  });
+
+  // Destructive-close gate, window edition (the before-quit gate in pty.ts is
+  // its ⌘Q sibling): closing the window tears down every PTY it owns via their
+  // webContents `destroyed` listeners, so a window with a foreground process
+  // still running must confirm first. Idle shells close silently. During an
+  // already-confirmed quit this never re-prompts — before-quit's killAll has
+  // emptied the manager, so busySessions comes back empty.
+  let closeConfirmed = false;
+  mainWindow.on("close", (event) => {
+    if (closeConfirmed) return;
+    const busy = ptyManager.busySessions(mainWindow.webContents);
+    if (busy.length === 0) return;
+    event.preventDefault();
+    const proceed = confirmDestructiveClose(busy, {
+      message: "Close this window?",
+      confirmLabel: "Close Window",
+      window: mainWindow,
+    });
+    if (proceed) {
+      closeConfirmed = true;
+      mainWindow.close();
+    }
   });
 
   // Neutralize any per-origin zoom Electron persisted before UI zoom moved to
@@ -224,16 +248,18 @@ app.whenReady().then(() => {
   // same degraded-DB stance as registerDataIpcHandlers.
   registerArtifactIpcHandlers(dbHandle);
   // Boots the PTY multiplexer (persists a durable record per session) and its
-  // before-quit teardown (kills all PTYs); needs the db, so it registers here.
-  registerTerminalIpcHandlers(dbHandle);
+  // before-quit teardown (kills all PTYs, gated on busy sessions); needs the
+  // db, so it registers here. The returned manager feeds each window's own
+  // destructive-close gate.
+  const ptyManager = registerTerminalIpcHandlers(dbHandle);
 
-  createWindow();
+  createWindow(ptyManager);
 
   app.on("activate", () => {
     // On macOS it's common to re-create a window when the dock icon is
     // clicked and there are no other windows open.
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
+      createWindow(ptyManager);
     }
   });
 });

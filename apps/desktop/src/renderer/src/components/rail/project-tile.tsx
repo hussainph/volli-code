@@ -78,7 +78,7 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
               <div className="flex items-center gap-1.5">
                 <span className="font-bold">{project.name}</span>
                 {index < 9 && (
-                  <kbd className="rounded-sm bg-background/20 px-1 py-px font-sans text-[10px] font-bold tracking-wide">
+                  <kbd className="rounded-sm bg-background/20 px-1 py-px font-sans text-label font-bold">
                     ⌘{index + 1}
                   </kbd>
                 )}

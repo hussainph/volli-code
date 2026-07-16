@@ -62,7 +62,7 @@ export function TicketTitle({ ticket }: { ticket: Ticket }) {
         onBlur={commit}
         onKeyDown={handleKeyDown}
         aria-label="Ticket title"
-        className="w-full bg-transparent text-2xl font-semibold tracking-tight text-foreground outline-none"
+        className="w-full bg-transparent text-title font-semibold text-foreground outline-none"
       />
     );
   }
@@ -78,7 +78,7 @@ export function TicketTitle({ ticket }: { ticket: Ticket }) {
           enterEdit();
         }
       }}
-      className="cursor-text text-2xl font-semibold tracking-tight text-foreground outline-none"
+      className="cursor-text text-title font-semibold text-foreground outline-none"
     >
       {ticket.title}
     </h1>

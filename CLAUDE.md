@@ -23,6 +23,7 @@ App data lives under Electron's `userData` dir (a fresh start, not the Swift app
 - Changes go through a branch + commit + PR flow — never commit directly to `main`.
 - Surface every failed mutation to the user (alert/toast); never silently swallow errors — the Swift app's top systemic defect.
 - Design tokens live in one canonical module: `apps/desktop/src/renderer/src/globals.css` (shadcn-style CSS variables; dark-only for now, `class="dark"` pinned in index.html). TS-consumable domain colors (project-tile palette) live in `@volli/shared`. Accent: ember orange `#E8652A`; frosted/dark two-tier sidebar.
+- **Spacing/width/type follow `docs/DESIGN.md`** (decision #31): six-step type scale (`text-label`/`text-ui`/`text-heading`/`text-title` + stock `text-xs`/`text-sm`) — no arbitrary `text-[Npx]` sizes; Tier A reading surfaces wrap in `<ContentColumn>` (720px centered measure), Tier B workbench surfaces stay fluid but align edges to the `gutter` token; main content is the framed floating card in `app-shell.tsx`.
 - Every context-menu action has a neighboring Phosphor icon. Pass it through the shared context-menu primitive, which renders action icons with `weight="fill"`; new context-menu actions use the same filled Phosphor treatment.
 - Live terminals must never be unmounted incidentally (e.g. by selecting a card) — session state model-resident, views lazy.
 - Strict TypeScript; no `any` at module boundaries.

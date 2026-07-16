@@ -112,7 +112,9 @@ export function TicketBodyEditor({ ticket }: { ticket: Ticket }) {
         onBlur={() => debouncer.flush()}
         placeholder="Add description…"
         ariaLabel="Ticket description"
-        className="min-h-32 rounded-md px-3 py-2"
+        // -mx-3 bleeds the hover block into the gutter (Notion-style) so the
+        // body TEXT left-aligns with the title on the column edge.
+        className="-mx-3 min-h-32 rounded-md px-3 py-2"
       />
     </div>
   );
