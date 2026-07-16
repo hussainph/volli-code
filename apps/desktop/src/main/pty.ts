@@ -973,11 +973,17 @@ function foregroundProcess(session: Session): string | null {
  * because its callers — before-quit and the window `close` event — run while
  * the renderer may already be tearing down, and both need a synchronous
  * verdict to preventDefault against.
+ *
+ * `VOLLI_SKIP_CLOSE_CONFIRM=1` answers "proceed" without showing the dialog —
+ * the automation seam for the e2e smokes, whose sessions deliberately run
+ * foreground work and which have no way to answer a native modal (a mid-run
+ * failure would otherwise hang teardown forever).
  */
 export function confirmDestructiveClose(
   busy: Array<{ process: string }>,
   options: { message: string; confirmLabel: string; window?: BrowserWindow },
 ): boolean {
+  if (process.env["VOLLI_SKIP_CLOSE_CONFIRM"] === "1") return true;
   const processes = Array.from(new Set(busy.map((entry) => entry.process))).join(", ");
   const dialogOptions = {
     type: "warning" as const,
@@ -1134,18 +1140,19 @@ export function registerTerminalIpcHandlers(handle: DbHandle): PtyManager {
   // Kill every PTY on quit so no orphaned shells outlive the app — but a
   // foreground process still running somewhere (a coding agent, a build) must
   // never die to a reflexive ⌘Q: confirm first. Idle shells never block quit.
-  let quitConfirmed = false;
+  // The dialog is synchronous, so the verdict lands inside the event: quit is
+  // prevented only on Cancel, and a confirm falls through to killAll with the
+  // original quit still in flight. (Never preventDefault-then-app.quit():
+  // Electron swallows a quit re-issued from inside before-quit, leaving a
+  // confirmed quit doing nothing.)
   app.on("before-quit", (event) => {
-    if (!quitConfirmed) {
-      const busy = manager.busySessions();
-      if (busy.length > 0) {
-        event.preventDefault();
-        if (confirmDestructiveClose(busy, { message: "Quit Volli?", confirmLabel: "Quit" })) {
-          quitConfirmed = true;
-          app.quit();
-        }
-        return;
-      }
+    const busy = manager.busySessions();
+    if (
+      busy.length > 0 &&
+      !confirmDestructiveClose(busy, { message: "Quit Volli?", confirmLabel: "Quit" })
+    ) {
+      event.preventDefault();
+      return;
     }
     manager.killAll();
   });

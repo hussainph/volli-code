@@ -760,6 +760,20 @@ describe("confirmDestructiveClose", () => {
       expect.objectContaining({ message: "Quit Volli?" }),
     );
   });
+
+  it("proceeds without a dialog under VOLLI_SKIP_CLOSE_CONFIRM (e2e automation seam)", () => {
+    vi.stubEnv("VOLLI_SKIP_CLOSE_CONFIRM", "1");
+    try {
+      const confirmed = confirmDestructiveClose([{ process: "claude" }], {
+        message: "Quit Volli?",
+        confirmLabel: "Quit",
+      });
+      expect(confirmed).toBe(true);
+      expect(showMessageBoxSync).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });
 
 describe("lifecycle teardown", () => {
@@ -807,25 +821,20 @@ describe("before-quit gate", () => {
     expect(appQuit).not.toHaveBeenCalled();
   });
 
-  it("confirms, quits, and a subsequent confirmed pass kills everything without re-prompting", async () => {
+  it("confirms and kills everything in the same pass — the original quit stays in flight", async () => {
     vi.stubEnv("SHELL", "/bin/zsh");
     showMessageBoxSync.mockReturnValueOnce(0); // Quit
     const { pty } = await createSession();
     pty.process = "claude";
 
-    const firstEvent = makeQuitEvent();
-    appHandlers.get("before-quit")?.(firstEvent);
-    expect(firstEvent.preventDefault).toHaveBeenCalledTimes(1);
-    expect(appQuit).toHaveBeenCalledTimes(1);
-    expect(pty.kill).not.toHaveBeenCalled();
-
-    // app.quit() re-fires before-quit for real; this confirmed pass must kill
-    // outright, with no second prompt.
-    const secondEvent = makeQuitEvent();
-    appHandlers.get("before-quit")?.(secondEvent);
+    const event = makeQuitEvent();
+    appHandlers.get("before-quit")?.(event);
     expect(showMessageBoxSync).toHaveBeenCalledTimes(1);
+    // The quit must neither be prevented nor re-issued: a quit re-called from
+    // inside before-quit is swallowed by Electron and the app never exits.
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(appQuit).not.toHaveBeenCalled();
     expect(pty.kill).toHaveBeenCalledTimes(1);
-    expect(secondEvent.preventDefault).not.toHaveBeenCalled();
   });
 });
 
@@ -1711,6 +1720,46 @@ describe("warm park", () => {
         expect(stopCalls()).toEqual([]); // nothing re-frozen
         // CONT'd for the window, then CONT'd again by the fail-open wake.
         expect(contCalls()).toEqual([pty.pid, pty.pid]);
+        expect(sender.send).toHaveBeenCalledWith("volli:terminal-park-state", {
+          sessionId,
+          parked: false,
+          keepAwake: false,
+        });
+        expect(consoleError).toHaveBeenCalledOnce();
+      } finally {
+        consoleError.mockRestore();
+      }
+    });
+
+    it("leaves a session killed during a failing breathe to the kill path", async () => {
+      const { sessionId, pty } = await createAutoParked();
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        parts.descendants.mockImplementationOnce(async () => {
+          parkManager.kill(sessionId); // dies mid-inspection
+          throw new Error("pgrep died");
+        });
+        await expect(parkManager.sweep(idleNow())).resolves.toBeUndefined();
+        // kill() already woke and forgot it — the fail-open pass must not touch it.
+        expect(pty.kill).toHaveBeenCalledTimes(1);
+        expect(stopCalls()).toEqual([]);
+      } finally {
+        consoleError.mockRestore();
+      }
+    });
+
+    it("syncs the badge when the re-freeze itself dies mid-park", async () => {
+      const { sessionId, pty, sender } = await createAutoParked();
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        parts.descendants
+          .mockResolvedValueOnce([]) // breathe's tree walk: quiet verdict
+          .mockResolvedValueOnce([]) // re-freeze park(): initial collect
+          .mockRejectedValueOnce(new Error("pgrep died")); // park's rescan round
+        await expect(parkManager.sweep(idleNow())).resolves.toBeUndefined();
+        // The aborted park CONT'd its own SIGSTOPs — nothing left frozen…
+        expect(contCalls()).toEqual([pty.pid, pty.pid]);
+        // …and the badge reflects the awake reality despite the failure.
         expect(sender.send).toHaveBeenCalledWith("volli:terminal-park-state", {
           sessionId,
           parked: false,

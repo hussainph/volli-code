@@ -189,7 +189,13 @@ async function main() {
 
   const dbDir = await fs.mkdtemp(join(os.tmpdir(), "volli-memory-smoke-db-"));
   // Strip Claude Code session vars so the nested `claude` instances boot clean.
-  const env = { ...process.env, VOLLI_DB_PATH: join(dbDir, "volli.db") };
+  // Skip the busy-session quit confirm: the idle claudes count as foreground
+  // work, and teardown's app.close() can't answer a native modal.
+  const env = {
+    ...process.env,
+    VOLLI_DB_PATH: join(dbDir, "volli.db"),
+    VOLLI_SKIP_CLOSE_CONFIRM: "1",
+  };
   for (const key of Object.keys(env)) {
     if (key.startsWith("CLAUDECODE") || key.startsWith("CLAUDE_CODE")) delete env[key];
   }

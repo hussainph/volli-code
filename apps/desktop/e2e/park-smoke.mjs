@@ -157,6 +157,9 @@ async function main() {
     VOLLI_PARK_IDLE_MS: String(PARK_IDLE_MS),
     VOLLI_PARK_SWEEP_MS: String(PARK_SWEEP_MS),
     VOLLI_PARK_BREATHE_MS: String(PARK_BREATHE_MS),
+    // The nc/timer sessions run foreground work; without this, teardown's
+    // app.close() would hang forever on the busy-session quit confirm.
+    VOLLI_SKIP_CLOSE_CONFIRM: "1",
   };
   for (const key of Object.keys(env)) {
     if (key.startsWith("CLAUDECODE") || key.startsWith("CLAUDE_CODE")) delete env[key];
