@@ -1,29 +1,75 @@
-# Volli Code (Electron)
+# Volli Code
 
-Kanban planning + terminal-agent execution in one desktop app: every ticket is both a unit of planning and a live terminal workspace. Electron + React + TypeScript rewrite of the native Swift original (`../volli-swift`).
+**Where tickets become terminal workspaces.**
 
-- Product concept, decision log, roadmap: [`docs/CONCEPT.md`](docs/CONCEPT.md)
-- What the Swift original had built (parity target): [`docs/SWIFT-REFERENCE.md`](docs/SWIFT-REFERENCE.md)
-- Agent operating manual: [`CLAUDE.md`](CLAUDE.md)
+Volli Code brings kanban planning and coding agents into one local-first macOS app. Each ticket carries the brief, branch, worktree, terminal sessions, and history of the work.
 
-## Prerequisites
+> [!NOTE]
+> Volli Code is under active development. The tracker, SQLite persistence, ticket detail, and embedded terminal are working; the automatic ticket → worktree → agent lifecycle is being built now.
 
-- **Node** `^24.13` (`engines` in `package.json`) — install/manage it yourself; corepack does not handle Node.
-- **pnpm 11** — run `corepack enable` to activate the pinned version (`packageManager` in `package.json`).
-- Optionally the global **Vite+ (`vp`)** CLI, which wraps pnpm plus the build and quality toolchain: `curl -fsSL https://vite.plus | bash`.
+![Volli Code kanban board](docs/assets/volli-code-board.png)
 
-## Develop
+## One loop from plan to pull request
 
+Most agent workflows split context between a tracker and a pile of terminals. The tracker does not know what the agents are doing, and the terminal does not know what the plan is.
+
+Volli Code is built around a simpler loop:
+
+1. Write the ticket — its description and attachments become the agent's brief.
+2. Move it to **Doing** — Volli creates an isolated worktree and starts the coding agent you choose.
+3. Follow the board — agent activity moves the ticket between **Doing** and **Needs Review**.
+4. Review and ship — the branch, terminal history, and pull request stay attached to the ticket.
+
+## Built for agent-driven work
+
+### The ticket is the workspace
+
+Planning and execution live together. Open a ticket to see its specification, live terminal sessions, comments, and full activity history.
+
+### The board reflects reality
+
+Volli's fixed workflow — **Backlog**, **Todo**, **Doing**, **Needs Review**, and **Done** — shows whose turn it is. Native notifications bring you back when an agent needs attention.
+
+### Parallel work stays isolated
+
+Each ticket gets its own git worktree and `volli/<ticket>-<slug>` branch by default, so multiple agents can work across projects without colliding.
+
+### Local-first by design
+
+Projects, tickets, preferences, and the event log live in SQLite on your Mac. Session transcripts stay as indexed local files. No account or cloud service is required.
+
+Volli Code is designed for Claude Code, Codex, OpenCode, and other CLI coding agents.
+
+## Why Volli Code?
+
+Coding agents now do long stretches of real engineering work, but the tools around them still treat planning and execution as separate jobs. That leaves the human syncing tickets, branches, terminal sessions, and review state by hand.
+
+Volli Code makes the ticket the durable unit of work. The board organizes the plan, the terminal executes it, and the event history records what happened — all in one place.
+
+## Development
+
+Volli Code currently targets macOS and requires Node `^24.13` and pnpm 11.
+
+```bash
+pnpm install
+pnpm dev
 ```
-pnpm install   # or: vp install
-pnpm dev       # renderer HMR + Electron, auto-relaunch on main/preload changes
+
+Build and run the production bundle locally:
+
+```bash
+pnpm run build
+pnpm start
 ```
 
-First run downloads the ~100MB Electron binary (Electron ≥43 no longer fetches it on install); it is cached afterward.
+Run the quality checks:
 
-## Build
+```bash
+vp run -r typecheck
+vp run -r test
+vp check
+```
 
-```
-pnpm run build   # renderer → apps/desktop/dist, main/preload → apps/desktop/dist-electron
-pnpm start       # run the built app
-```
+Read the [product concept and decision log](docs/CONCEPT.md) for the full vision, or the [Swift reference](docs/SWIFT-REFERENCE.md) for the original app's parity target.
+
+Volli Code is an Electron, React, and TypeScript rewrite of the native Swift original.

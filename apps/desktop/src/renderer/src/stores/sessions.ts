@@ -91,16 +91,22 @@ const OUTPUT_THROTTLE_MS = 1_000;
 
 /**
  * Honest PTY-derived session status (ticket-detail-mvp decision #5): `working`
- * when output landed within ~10s, `idle` when live but quiet, `exited` once the
- * shell is gone. Pure so the derivation is unit-tested independent of the clock;
- * hook-driven states (waiting-for-input, …) reuse this vocabulary later.
+ * when output landed within ~10s, `idle` when live but quiet, `parked` when the
+ * warm-park tier has SIGSTOP'd the session's process tree to reclaim memory
+ * (decision #32), `exited` once the shell is gone. `exited` wins over
+ * everything else (a parked pane can't come back exited, but the check order
+ * keeps the derivation defensive); `parked` then wins over working/idle. Pure
+ * so the derivation is unit-tested independent of the clock; hook-driven states
+ * (waiting-for-input, …) reuse this vocabulary later.
  */
 export function sessionActivityState(
   lastOutputAt: number | null,
   exited: boolean,
   now: number,
+  parked: boolean,
 ): SessionActivityState {
   if (exited) return "exited";
+  if (parked) return "parked";
   if (lastOutputAt !== null && now - lastOutputAt <= WORKING_WINDOW_MS) return "working";
   return "idle";
 }
@@ -112,6 +118,12 @@ interface SessionsState {
   sessionOwner: Record<string, string>;
   /** sessionId → last PTY-output time (ms) — feeds the working/idle derivation for all sessions. */
   lastOutputAt: Record<string, number>;
+  /**
+   * sessionId → warm-park state (decision #32): `parked` mirrors main's SIGSTOP
+   * on the session's process tree, `keepAwake` mirrors the user's exclusion pin
+   * against auto-park. Pushed by `onParkState` on every park/wake/pin change.
+   */
+  parkState: Record<string, { parked: boolean; keepAwake: boolean }>;
   /** Owner ids with a terminal-create (tab or split leaf) in flight — disables their "New session". */
   starting: Record<string, true>;
   /**
@@ -138,6 +150,8 @@ interface SessionsState {
   renameSession(sessionId: string, title: string): void;
   markExited(sessionId: string, exitCode: number): void;
   bumpOutput(sessionId: string, now: number): void;
+  /** Records a warm-park push from main; sourced from `window.api.terminal.onParkState`. */
+  setParkState(sessionId: string, parked: boolean, keepAwake: boolean): void;
   setStarting(ownerId: string, starting: boolean): void;
   forgetOwner(ownerId: string): void;
 }
@@ -217,15 +231,17 @@ function updateExitCode(layout: SessionLayout, sessionId: string, exitCode: numb
   return first === layout.first && second === layout.second ? layout : { ...layout, first, second };
 }
 
-/** Drop every one of a tab's pane sessions from the routing + activity indexes. */
+/** Drop every one of a tab's pane sessions from the routing + activity + park indexes. */
 function forgetTabIndexes(
   sessionOwner: Record<string, string>,
   lastOutputAt: Record<string, number>,
+  parkState: Record<string, { parked: boolean; keepAwake: boolean }>,
   tab: SessionTab,
 ): void {
   for (const pane of sessionPanes(tab.layout)) {
     delete sessionOwner[pane.sessionId];
     delete lastOutputAt[pane.sessionId];
+    delete parkState[pane.sessionId];
   }
   // Also clear the tab-root routing entry: `closePane` deliberately RETAINS
   // `sessionOwner[tab.sessionId]` when the root pane is closed (the id stays the
@@ -233,6 +249,7 @@ function forgetTabIndexes(
   // among the current panes above — drop it explicitly on tab teardown.
   delete sessionOwner[tab.sessionId];
   delete lastOutputAt[tab.sessionId];
+  delete parkState[tab.sessionId];
 }
 
 /** Factory so tests get isolated instances. */
@@ -241,6 +258,7 @@ export function createSessionsStore() {
     byOwner: {},
     sessionOwner: {},
     lastOutputAt: {},
+    parkState: {},
     starting: {},
 
     addSession(scope, sessionId, title) {
@@ -302,11 +320,13 @@ export function createSessionsStore() {
         }
         const sessionOwner = { ...state.sessionOwner };
         const lastOutputAt = { ...state.lastOutputAt };
-        forgetTabIndexes(sessionOwner, lastOutputAt, removed);
+        const parkState = { ...state.parkState };
+        forgetTabIndexes(sessionOwner, lastOutputAt, parkState, removed);
         return {
           byOwner: { ...state.byOwner, [ownerId]: { ...current, tabs, activeSessionId } },
           sessionOwner,
           lastOutputAt,
+          parkState,
         };
       });
     },
@@ -332,9 +352,11 @@ export function createSessionsStore() {
         tabs[tabIndex] = { ...tab, layout, activePaneId };
         const sessionOwner = { ...state.sessionOwner };
         const lastOutputAt = { ...state.lastOutputAt };
-        // `lastOutputAt` is keyed per-pane, so the closed pane's entry always
-        // goes — it can no longer produce output.
+        const parkState = { ...state.parkState };
+        // `lastOutputAt`/`parkState` are keyed per-pane, so the closed pane's
+        // entries always go — it can no longer produce output or be parked.
         delete lastOutputAt[sessionId];
+        delete parkState[sessionId];
         // `sessionOwner` routes rename/exit lookups. Asymmetry: when the closed
         // pane IS the tab root (sessionId === tabId), the tab keeps that id as
         // its stable identity — rename/routing still resolve through it — so we
@@ -347,6 +369,7 @@ export function createSessionsStore() {
           byOwner: { ...state.byOwner, [ownerId]: { ...current, tabs } },
           sessionOwner,
           lastOutputAt,
+          parkState,
         };
       });
     },
@@ -437,6 +460,20 @@ export function createSessionsStore() {
       });
     },
 
+    setParkState(sessionId, parked, keepAwake) {
+      set((state) => {
+        // A late push for a closed session must not resurrect its entry:
+        // kill() wakes a parked tree before killing it, and that wake's
+        // park-state event lands after the renderer already forgot the id.
+        if (!(sessionId in state.sessionOwner)) return state;
+        const current = state.parkState[sessionId];
+        if (current !== undefined && current.parked === parked && current.keepAwake === keepAwake) {
+          return state;
+        }
+        return { parkState: { ...state.parkState, [sessionId]: { parked, keepAwake } } };
+      });
+    },
+
     setStarting(ownerId, starting) {
       set((state) => {
         const isStarting = ownerId in state.starting;
@@ -459,10 +496,11 @@ export function createSessionsStore() {
         delete starting[ownerId];
         const sessionOwner = { ...state.sessionOwner };
         const lastOutputAt = { ...state.lastOutputAt };
+        const parkState = { ...state.parkState };
         for (const tab of current?.tabs ?? []) {
-          forgetTabIndexes(sessionOwner, lastOutputAt, tab);
+          forgetTabIndexes(sessionOwner, lastOutputAt, parkState, tab);
         }
-        return { byOwner, starting, sessionOwner, lastOutputAt };
+        return { byOwner, starting, sessionOwner, lastOutputAt, parkState };
       });
     },
   }));

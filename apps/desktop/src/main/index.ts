@@ -1,5 +1,5 @@
 import { app, BrowserWindow, session, shell } from "electron";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { errorMessage, ticketBranchName } from "@volli/shared";
@@ -184,6 +184,17 @@ app.whenReady().then(() => {
     // into main.cjs via deps.alwaysBundle rather than leaving an unresolved
     // runtime require(). Gated to dev so it never prints on a production boot.
     console.log("[volli] shared wiring OK:", ticketBranchName("VC-0", "monorepo migration"));
+  }
+
+  // Dock icon for unpackaged boots. A packaged .app gets its icon from the
+  // bundle's icon.icns (build/icon.icns, baked from build/icon-source.svg; the
+  // Icon Composer master lives in the local design workspace outside the
+  // repo); `pnpm dev` would otherwise show Electron's stock icon.
+  if (isDev && process.platform === "darwin") {
+    const dockIcon = join(app.getAppPath(), "build", "dock-icon.png");
+    if (existsSync(dockIcon)) {
+      app.dock?.setIcon(dockIcon);
+    }
   }
 
   // Renderer permission policy. Electron's default with NO handler installed

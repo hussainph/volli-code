@@ -12,19 +12,25 @@ import {
 const P = scratchScope("p");
 
 describe("sessionActivityState", () => {
-  it("is exited whenever the shell has exited, regardless of recency", () => {
-    expect(sessionActivityState(1000, true, 1000)).toBe("exited");
-    expect(sessionActivityState(null, true, 5000)).toBe("exited");
+  it("is exited whenever the shell has exited, regardless of recency or park state", () => {
+    expect(sessionActivityState(1000, true, 1000, false)).toBe("exited");
+    expect(sessionActivityState(null, true, 5000, false)).toBe("exited");
+    expect(sessionActivityState(1000, true, 1000, true)).toBe("exited"); // exited beats parked
+  });
+
+  it("is parked when parked and live, regardless of recent output", () => {
+    expect(sessionActivityState(null, false, 1000, true)).toBe("parked");
+    expect(sessionActivityState(1000, false, 1000, true)).toBe("parked"); // parked beats working
   });
 
   it("is working when output landed within the 10s window", () => {
-    expect(sessionActivityState(1000, false, 1000)).toBe("working");
-    expect(sessionActivityState(1000, false, 11_000)).toBe("working"); // exactly 10s
+    expect(sessionActivityState(1000, false, 1000, false)).toBe("working");
+    expect(sessionActivityState(1000, false, 11_000, false)).toBe("working"); // exactly 10s
   });
 
   it("is idle when live but quiet past the window, or when there was no output", () => {
-    expect(sessionActivityState(1000, false, 11_001)).toBe("idle");
-    expect(sessionActivityState(null, false, 50_000)).toBe("idle");
+    expect(sessionActivityState(1000, false, 11_001, false)).toBe("idle");
+    expect(sessionActivityState(null, false, 50_000, false)).toBe("idle");
   });
 });
 
@@ -253,6 +259,7 @@ describe("split panes", () => {
     const store = createSessionsStore();
     store.getState().addSession(P, "s1", "Terminal 1");
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
+    store.getState().setParkState("s2", true, false);
 
     // Close the NON-root leaf s2: its index is dropped and the tab collapses onto
     // the root pane s1 (root-pane retention is covered separately below).
@@ -263,13 +270,15 @@ describe("split panes", () => {
     expect(tab.activePaneId).toBe("s1");
     expect(store.getState().sessionOwner["s2"]).toBeUndefined();
     expect(store.getState().sessionOwner["s1"]).toBe("p");
+    expect(store.getState().parkState["s2"]).toBeUndefined();
   });
 
-  it("keeps the tab-root routing entry (dropping only its output stamp) when the root pane closes, so rename still lands", () => {
+  it("keeps the tab-root routing entry (dropping only its output/park stamps) when the root pane closes, so rename still lands", () => {
     const store = createSessionsStore();
     store.getState().addSession(P, "s1", "Terminal 1");
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
     store.getState().bumpOutput("s1", 1000);
+    store.getState().setParkState("s1", true, false);
 
     // Close the ROOT pane (sessionId === tabId). The tab keeps s1 as its stable
     // identity, so its routing entry must survive — otherwise a later rename
@@ -278,6 +287,7 @@ describe("split panes", () => {
 
     expect(store.getState().sessionOwner["s1"]).toBe("p"); // retained for routing
     expect(store.getState().lastOutputAt["s1"]).toBeUndefined(); // per-pane stamp dropped
+    expect(store.getState().parkState["s1"]).toBeUndefined(); // per-pane park stamp dropped
 
     store.getState().renameSession("s1", "Renamed");
     expect(store.getState().byOwner["p"]?.tabs[0]?.title).toBe("Renamed");
@@ -287,12 +297,14 @@ describe("split panes", () => {
     const store = createSessionsStore();
     store.getState().addSession(P, "s1", "Terminal 1");
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
+    store.getState().setParkState("s1", true, false);
     store.getState().closePane("p", "s1", "s1"); // root pane gone; sessionOwner[s1] retained
 
     store.getState().closeSession("p", "s1");
 
     expect(store.getState().sessionOwner["s1"]).toBeUndefined();
     expect(store.getState().sessionOwner["s2"]).toBeUndefined();
+    expect(store.getState().parkState["s1"]).toBeUndefined();
   });
 
   it("collapses a nested split while leaving the sibling subtree intact", () => {
@@ -382,6 +394,7 @@ describe("closeSession", () => {
     store.getState().addSession(P, "s3", "Terminal 3");
     store.getState().setActiveSession("p", "s2");
     store.getState().bumpOutput("s2", 1000);
+    store.getState().setParkState("s2", true, true);
 
     store.getState().closeSession("p", "s2");
 
@@ -390,6 +403,7 @@ describe("closeSession", () => {
     expect(container?.activeSessionId).toBe("s3");
     expect(store.getState().sessionOwner["s2"]).toBeUndefined();
     expect(store.getState().lastOutputAt["s2"]).toBeUndefined();
+    expect(store.getState().parkState["s2"]).toBeUndefined();
   });
 
   it("leaves the active tab untouched when a different (non-active) tab is closed", () => {
@@ -551,6 +565,60 @@ describe("bumpOutput", () => {
   });
 });
 
+describe("setParkState", () => {
+  it("records park+keepAwake for a previously untracked session", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", "Terminal 1");
+
+    store.getState().setParkState("s1", true, false);
+
+    expect(store.getState().parkState["s1"]).toEqual({ parked: true, keepAwake: false });
+  });
+
+  it("updates an existing entry when either field changes", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().setParkState("s1", true, false);
+
+    store.getState().setParkState("s1", true, true); // pinned while still parked
+
+    expect(store.getState().parkState["s1"]).toEqual({ parked: true, keepAwake: true });
+  });
+
+  it("is a no-op when park state is unchanged", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().setParkState("s1", true, false);
+    const before = store.getState().parkState;
+
+    store.getState().setParkState("s1", true, false);
+
+    expect(store.getState().parkState).toBe(before);
+  });
+
+  it("ignores a push for a session the store no longer tracks", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().setParkState("s1", true, false);
+    store.getState().closeSession("p", "s1");
+
+    // kill() wakes a parked tree before killing it; that wake's park-state
+    // event lands after the close already dropped the entry. It must not
+    // resurrect a permanent orphan.
+    store.getState().setParkState("s1", false, false);
+
+    expect(store.getState().parkState["s1"]).toBeUndefined();
+  });
+
+  it("ignores a push for a session it never tracked", () => {
+    const store = createSessionsStore();
+
+    store.getState().setParkState("ghost", true, false);
+
+    expect(store.getState().parkState["ghost"]).toBeUndefined();
+  });
+});
+
 describe("setStarting", () => {
   it("toggles an owner's in-flight flag and no-ops on a repeat", () => {
     const store = createSessionsStore();
@@ -579,6 +647,7 @@ describe("forgetOwner", () => {
     store.getState().addSession(scratchScope("a"), "a1", "Terminal 1");
     store.getState().addSession(scratchScope("a"), "a2", "Terminal 2");
     store.getState().bumpOutput("a1", 1000);
+    store.getState().setParkState("a1", true, false);
     store.getState().setStarting("a", true);
     store.getState().addSession(scratchScope("b"), "b1", "Terminal 1");
 
@@ -588,6 +657,7 @@ describe("forgetOwner", () => {
     expect(store.getState().byOwner["b"]?.tabs.map((t) => t.sessionId)).toEqual(["b1"]);
     expect(store.getState().sessionOwner["a1"]).toBeUndefined();
     expect(store.getState().lastOutputAt["a1"]).toBeUndefined();
+    expect(store.getState().parkState["a1"]).toBeUndefined();
     expect(store.getState().starting["a"]).toBeUndefined();
   });
 

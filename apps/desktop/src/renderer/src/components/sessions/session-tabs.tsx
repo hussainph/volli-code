@@ -1,7 +1,13 @@
 import * as React from "react";
+import { MoonIcon } from "@phosphor-icons/react/dist/csr/Moon";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
+import { PushPinSlashIcon } from "@phosphor-icons/react/dist/csr/PushPinSlash";
+import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import { errorMessage, type TerminalIoResult } from "@volli/shared";
+import { toast } from "sonner";
 
 import { InlineRename } from "@renderer/components/sessions/inline-rename";
 import { Button } from "@renderer/components/ui/button";
@@ -13,7 +19,30 @@ import {
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
 import { cn } from "@renderer/lib/utils";
-import { sessionPanes, type SessionTab } from "@renderer/stores/sessions";
+import { sessionPanes, useSessionsStore, type SessionTab } from "@renderer/stores/sessions";
+
+/**
+ * Runs a park/wake/pin mutation against every LIVE pane of a tab (issue #51
+ * warm-park tier) and surfaces any failure — CLAUDE.md's "never silently
+ * swallow errors" applies to these fire-and-forget context-menu actions the
+ * same as any other mutation.
+ */
+function runOnLivePanes(
+  tab: SessionTab,
+  action: (paneId: string) => Promise<TerminalIoResult>,
+  failureLabel: string,
+): void {
+  for (const pane of sessionPanes(tab.layout)) {
+    if (pane.exitCode !== null) continue;
+    action(pane.sessionId)
+      .then((result) => {
+        if (!result.ok) toast.error(`${failureLabel} failed: ${result.error}`);
+      })
+      .catch((error: unknown) => {
+        toast.error(`${failureLabel} failed: ${errorMessage(error)}`);
+      });
+  }
+}
 
 interface SessionTabsProps {
   tabs: SessionTab[];
@@ -41,6 +70,7 @@ export function SessionTabs({
   creating,
 }: SessionTabsProps) {
   const [editingId, setEditingId] = React.useState<string | null>(null);
+  const parkState = useSessionsStore((state) => state.parkState);
 
   return (
     <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border bg-rail px-2">
@@ -51,6 +81,13 @@ export function SessionTabs({
           const exited = panes.every((pane) => pane.exitCode !== null);
           const exitCode = panes.find((pane) => pane.exitCode !== null)?.exitCode ?? null;
           const editing = editingId === tab.sessionId;
+          const livePanes = panes.filter((pane) => pane.exitCode === null);
+          // Fully parked: every LIVE pane is parked (vacuously true with no
+          // live panes, but the badge/menu below always gate on `!exited` too,
+          // so an exited tab never shows the moon badge or "Park Now").
+          const parked = livePanes.every((pane) => parkState[pane.sessionId]?.parked ?? false);
+          const keptAwake = livePanes.some((pane) => parkState[pane.sessionId]?.keepAwake ?? false);
+          const showParkControls = livePanes.length > 0;
           return (
             <ContextMenu key={tab.sessionId}>
               <ContextMenuTrigger asChild>
@@ -76,18 +113,46 @@ export function SessionTabs({
                   ) : (
                     <button
                       type="button"
-                      onClick={() => onSelect(tab.sessionId)}
+                      onClick={() => {
+                        onSelect(tab.sessionId);
+                        // Clicking the ALREADY-active tab changes no visibility
+                        // state, so the visibility effect never re-fires — the
+                        // promised wake-on-click must be explicit. Idempotent
+                        // for the select-a-different-tab case (visibility
+                        // wiring wakes it too; the second wake is a no-op).
+                        if (parked && !exited) {
+                          runOnLivePanes(tab, (paneId) => window.api.terminal.wake(paneId), "Wake");
+                        }
+                      }}
                       onDoubleClick={() => setEditingId(tab.sessionId)}
                       className="flex min-w-0 items-center gap-1.5"
-                      // Active tab gets an ember dot; exited tabs read as muted.
-                      title={exited ? `Exited (${exitCode})` : tab.title}
+                      // Active tab gets an ember dot; exited tabs read as muted;
+                      // a parked (and live) tab explains itself on hover.
+                      title={
+                        exited
+                          ? `Exited (${exitCode})`
+                          : parked
+                            ? "Parked — memory reclaimed; wakes on click or keypress"
+                            : tab.title
+                      }
                     >
-                      <span
-                        className={cn(
-                          "size-1.5 shrink-0 rounded-full",
-                          exited ? "bg-muted-foreground" : active ? "bg-primary" : "bg-transparent",
-                        )}
-                      />
+                      {parked && !exited ? (
+                        <MoonIcon
+                          weight="fill"
+                          className="size-2.5 shrink-0 text-muted-foreground"
+                        />
+                      ) : (
+                        <span
+                          className={cn(
+                            "size-1.5 shrink-0 rounded-full",
+                            exited
+                              ? "bg-muted-foreground"
+                              : active
+                                ? "bg-primary"
+                                : "bg-transparent",
+                          )}
+                        />
+                      )}
                       <span className={cn("max-w-40 truncate", exited && "line-through")}>
                         {tab.title}
                       </span>
@@ -110,6 +175,43 @@ export function SessionTabs({
                 >
                   Rename
                 </ContextMenuItem>
+                {showParkControls && (
+                  <>
+                    <ContextMenuSeparator />
+                    {!parked && (
+                      <ContextMenuItem
+                        icon={MoonIcon}
+                        onSelect={() =>
+                          runOnLivePanes(tab, (paneId) => window.api.terminal.park(paneId), "Park")
+                        }
+                      >
+                        Park Now
+                      </ContextMenuItem>
+                    )}
+                    {parked && (
+                      <ContextMenuItem
+                        icon={SunIcon}
+                        onSelect={() =>
+                          runOnLivePanes(tab, (paneId) => window.api.terminal.wake(paneId), "Wake")
+                        }
+                      >
+                        Wake
+                      </ContextMenuItem>
+                    )}
+                    <ContextMenuItem
+                      icon={keptAwake ? PushPinSlashIcon : PushPinIcon}
+                      onSelect={() =>
+                        runOnLivePanes(
+                          tab,
+                          (paneId) => window.api.terminal.setKeepAwake(paneId, !keptAwake),
+                          keptAwake ? "Allow Parking" : "Keep Awake",
+                        )
+                      }
+                    >
+                      {keptAwake ? "Allow Parking" : "Keep Awake"}
+                    </ContextMenuItem>
+                  </>
+                )}
                 <ContextMenuSeparator />
                 <ContextMenuItem
                   icon={XIcon}

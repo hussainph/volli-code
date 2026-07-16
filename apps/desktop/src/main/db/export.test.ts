@@ -9,6 +9,7 @@ import {
   serializeExportDocument,
 } from "./export";
 import { addTicketLabel, getOrCreateLabel } from "./labels-repo";
+import { MIGRATIONS } from "./migrations";
 import { insertProject } from "./projects-repo";
 import { insertSession } from "./sessions-repo";
 import { openTestDb, testProject, testSession, testTicket } from "./test-helpers";
@@ -31,7 +32,9 @@ describe("buildExportDocument — empty db", () => {
     expect(document.format).toBe("volli-export");
     expect(document.appVersion).toBe("1.2.3");
     expect(document.exportedAt).toBe(new Date(1_700_000_000_000).toISOString());
-    expect(document.schemaVersion).toBe(5);
+    // A fresh test db is fully migrated, so the exported version is the last
+    // migration's — derived, not hardcoded, so a new migration can't stale this.
+    expect(document.schemaVersion).toBe(MIGRATIONS[MIGRATIONS.length - 1]?.version);
     expect(document.projects).toEqual([]);
     expect(document.tickets).toEqual([]);
     expect(document.labels).toEqual([]);

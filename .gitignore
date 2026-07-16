@@ -13,5 +13,7 @@ coverage/
 *.tsbuildinfo
 docs/ROADMAP.md
 .claude/settings.local.json
+.claude/worktrees/
+.claude/scheduled_tasks.lock
 vite.config.ts.timestamp-*.mjs
 volli.db*
