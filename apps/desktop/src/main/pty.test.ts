@@ -1207,6 +1207,49 @@ describe("warm park", () => {
       });
     });
 
+    it("auto-park refuses, before any SIGSTOP, a session whose PTY output landed mid-collect", async () => {
+      const { sessionId, pty } = await createParkSession();
+      parts.descendants.mockImplementationOnce(async () => {
+        await tick(2); // let the ms clock advance past the entry baseline
+        pty.emitData("resumed work");
+        return [200];
+      });
+      expect(await parkManager.park(sessionId, { manual: false })).toEqual({
+        ok: false,
+        error: "Session became active while parking",
+      });
+      expect(stopCalls()).toEqual([]);
+    });
+
+    it("CONTs the half-stopped tree when buffered output drains during a rescan round", async () => {
+      const { sessionId, pty } = await createParkSession();
+      parts.descendants
+        .mockResolvedValueOnce([200]) // initial collect: quiet
+        .mockImplementationOnce(async () => {
+          await tick(2);
+          pty.emitData("late buffered bytes"); // drains after the SIGSTOPs
+          return [200];
+        });
+      expect(await parkManager.park(sessionId, { manual: false })).toEqual({
+        ok: false,
+        error: "Session became active while parking",
+      });
+      expect(stopCalls()).toEqual([pty.pid, 200]);
+      expect(contCalls()).toEqual([200, pty.pid]); // reverse stop order
+    });
+
+    it("CONTs the stopped tree and propagates when a rescan round itself fails", async () => {
+      const { sessionId, pty } = await createParkSession();
+      parts.descendants
+        .mockResolvedValueOnce([200])
+        .mockRejectedValueOnce(new Error("pgrep unavailable"));
+      await expect(parkManager.park(sessionId, { manual: true })).rejects.toThrow(
+        "pgrep unavailable",
+      );
+      expect(stopCalls()).toEqual([pty.pid, 200]);
+      expect(contCalls()).toEqual([200, pty.pid]); // no frozen-tree leak
+    });
+
     it("manual park bypasses the visible and keep-awake guards", async () => {
       const { sessionId, sender, pty } = await createParkSession();
       parkManager.setVisible(asWc(sender), sessionId, true);
@@ -1453,6 +1496,33 @@ describe("warm park", () => {
       expect(stopCalls()).toEqual([pty.pid]);
     });
 
+    it("never parks a session whose PTY produced output during the sweep's async stages", async () => {
+      const { pty } = await createParkSession();
+      await parkManager.sweep(idleNow()); // quiet sample 1
+      // Output lands during the final listener check — after eligibility was
+      // judged, before park() runs. The stage-1 activity baseline must catch it.
+      parts.listeningPids.mockImplementationOnce(async () => {
+        await tick(2);
+        pty.emitData("resumed work");
+        return new Set<number>();
+      });
+      await parkManager.sweep(idleNow()); // quiet sample 2 → park attempt
+      expect(stopCalls()).toEqual([]);
+    });
+
+    it("logs and parks nothing when inspection fails — never an unhandled rejection", async () => {
+      await createParkSession();
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        parts.cpuPercents.mockRejectedValue(new Error("ps unavailable"));
+        await expect(parkManager.sweep(idleNow())).resolves.toBeUndefined();
+        expect(stopCalls()).toEqual([]);
+        expect(consoleError).toHaveBeenCalledOnce();
+      } finally {
+        consoleError.mockRestore();
+      }
+    });
+
     it("skips the overlapping tick while a slow sweep is still running", async () => {
       // Assigned synchronously when the first sweep calls descendants, before we
       // release it below.
@@ -1630,6 +1700,44 @@ describe("warm park", () => {
       });
       await parkManager.sweep(idleNow());
       expect(stopCalls()).toEqual([]);
+    });
+
+    it("fails open — wakes instead of re-freezing — when inspection dies mid-breathe", async () => {
+      const { sessionId, pty, sender } = await createAutoParked();
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        parts.descendants.mockRejectedValueOnce(new Error("pgrep unavailable"));
+        await expect(parkManager.sweep(idleNow())).resolves.toBeUndefined();
+        expect(stopCalls()).toEqual([]); // nothing re-frozen
+        // CONT'd for the window, then CONT'd again by the fail-open wake.
+        expect(contCalls()).toEqual([pty.pid, pty.pid]);
+        expect(sender.send).toHaveBeenCalledWith("volli:terminal-park-state", {
+          sessionId,
+          parked: false,
+          keepAwake: false,
+        });
+        expect(consoleError).toHaveBeenCalledOnce();
+      } finally {
+        consoleError.mockRestore();
+      }
+    });
+
+    it("stays awake and syncs the badge when late activity refuses the re-freeze", async () => {
+      const { sessionId, pty, sender } = await createAutoParked();
+      parts.descendants
+        .mockResolvedValueOnce([]) // breathe's tree walk: quiet verdict
+        .mockImplementationOnce(async () => {
+          await tick(2);
+          pty.emitData("late output"); // lands inside the re-freeze park()
+          return [];
+        });
+      await parkManager.sweep(idleNow());
+      expect(stopCalls()).toEqual([]);
+      expect(sender.send).toHaveBeenCalledWith("volli:terminal-park-state", {
+        sessionId,
+        parked: false,
+        keepAwake: false,
+      });
     });
   });
 });

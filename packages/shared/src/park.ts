@@ -88,18 +88,21 @@ export function breatheShouldWake(obs: BreatheObservation): boolean {
 }
 
 /**
- * True when every pid in the tree is below `busyPercent`. A pid missing from
- * `cpuByPid` counts as quiet — it exited between listing and sampling, which is
- * exactly the state we want to park.
+ * True when the tree's AGGREGATE CPU is below `busyPercent`. The sum (not a
+ * per-pid test) is what honors the hard safety rule for multi-process
+ * workloads: N children each just under the threshold are still a working
+ * tree. A pid missing from `cpuByPid` contributes 0 — it exited between
+ * listing and sampling, which is exactly the state we want to park.
  */
 export function treeIsCpuQuiet(
   cpuByPid: ReadonlyMap<number, number>,
   pids: readonly number[],
   busyPercent: number,
 ): boolean {
+  let totalCpu = 0;
   for (const pid of pids) {
-    const cpu = cpuByPid.get(pid);
-    if (cpu !== undefined && cpu >= busyPercent) return false;
+    totalCpu += cpuByPid.get(pid) ?? 0;
+    if (totalCpu >= busyPercent) return false;
   }
   return true;
 }

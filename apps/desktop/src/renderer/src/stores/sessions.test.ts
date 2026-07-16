@@ -595,6 +595,28 @@ describe("setParkState", () => {
 
     expect(store.getState().parkState).toBe(before);
   });
+
+  it("ignores a push for a session the store no longer tracks", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().setParkState("s1", true, false);
+    store.getState().closeSession("p", "s1");
+
+    // kill() wakes a parked tree before killing it; that wake's park-state
+    // event lands after the close already dropped the entry. It must not
+    // resurrect a permanent orphan.
+    store.getState().setParkState("s1", false, false);
+
+    expect(store.getState().parkState["s1"]).toBeUndefined();
+  });
+
+  it("ignores a push for a session it never tracked", () => {
+    const store = createSessionsStore();
+
+    store.getState().setParkState("ghost", true, false);
+
+    expect(store.getState().parkState["ghost"]).toBeUndefined();
+  });
 });
 
 describe("setStarting", () => {

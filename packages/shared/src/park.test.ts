@@ -87,18 +87,28 @@ describe("isParkCandidate", () => {
 });
 
 describe("treeIsCpuQuiet", () => {
-  it("is quiet when every pid is below the busy percent", () => {
+  it("is quiet when the tree's aggregate CPU is below the busy percent", () => {
     const cpu = new Map([
       [1, 0.1],
-      [2, 0.4],
+      [2, 0.3],
     ]);
     expect(treeIsCpuQuiet(cpu, [1, 2], PARK_CPU_BUSY_PERCENT)).toBe(true);
   });
 
-  it("is busy when any pid is at or above the busy percent", () => {
+  it("is busy when any single pid is at or above the busy percent", () => {
     const cpu = new Map([
       [1, 0.1],
       [2, 0.5],
+    ]);
+    expect(treeIsCpuQuiet(cpu, [1, 2], PARK_CPU_BUSY_PERCENT)).toBe(false);
+  });
+
+  it("is busy when the AGGREGATE reaches the threshold even though every pid is under it", () => {
+    // The hard safety rule is tree-wide: two children at 0.3% each are a
+    // working tree (0.6% total), not a quiet one.
+    const cpu = new Map([
+      [1, 0.3],
+      [2, 0.3],
     ]);
     expect(treeIsCpuQuiet(cpu, [1, 2], PARK_CPU_BUSY_PERCENT)).toBe(false);
   });

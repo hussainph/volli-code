@@ -462,6 +462,10 @@ export function createSessionsStore() {
 
     setParkState(sessionId, parked, keepAwake) {
       set((state) => {
+        // A late push for a closed session must not resurrect its entry:
+        // kill() wakes a parked tree before killing it, and that wake's
+        // park-state event lands after the renderer already forgot the id.
+        if (!(sessionId in state.sessionOwner)) return state;
         const current = state.parkState[sessionId];
         if (current !== undefined && current.parked === parked && current.keepAwake === keepAwake) {
           return state;

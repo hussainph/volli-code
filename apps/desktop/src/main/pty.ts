@@ -500,8 +500,17 @@ export class PtyManager {
    * rule (the sweep already gated on idle + CPU-quiet + no LISTEN socket).
    * Manual park bypasses those guards. Stops parent FIRST then descendants, then
    * re-collects to catch any child that spawned mid-stop (bounded to 3 rounds).
+   *
+   * `activityBaseline` is the `lastActivityAt` the caller's eligibility verdict
+   * was based on. The verdict is a snapshot — PTY output or input can land
+   * during the sweep's async inspection stages (or ours below) — so an auto
+   * park re-checks it before every SIGSTOP round and refuses if the session
+   * resumed work. Defaults to the session's activity at entry.
    */
-  async park(sessionId: string, opts: { manual: boolean }): Promise<TerminalIoResult> {
+  async park(
+    sessionId: string,
+    opts: { manual: boolean; activityBaseline?: number },
+  ): Promise<TerminalIoResult> {
     if (!this.parkConfig.enabled) {
       // Refusing (rather than silently "succeeding") keeps a manual Park Now
       // honest on platforms without SIGSTOP or under VOLLI_PARK_DISABLE.
@@ -515,9 +524,19 @@ export class PtyManager {
       if (opts.manual) session.parkedManually = true;
       return { ok: true };
     }
-    if (!opts.manual && (session.visible || session.keepAwake)) {
-      return { ok: false, error: "Session is visible or kept awake" };
-    }
+    const activityBaseline = opts.activityBaseline ?? session.lastActivityAt;
+    // The auto-park guards, re-checked after every await below (not just at
+    // entry): visibility/pin flips and fresh activity can all land while the
+    // inspector calls are in flight, and a session that resumed work must
+    // never be frozen — the hard safety rule.
+    const autoParkBlocked = (): string | null => {
+      if (opts.manual) return null;
+      if (session.visible || session.keepAwake) return "Session is visible or kept awake";
+      if (session.lastActivityAt > activityBaseline) return "Session became active while parking";
+      return null;
+    };
+    const entryBlock = autoParkBlocked();
+    if (entryBlock !== null) return { ok: false, error: entryBlock };
     // The session can be killed (or its window destroyed) across any of the
     // awaits below. kill()'s CONT-before-kill runs off `parkedPids`, which is
     // only assigned at the end — so a kill landing mid-park would SIGHUP an
@@ -530,6 +549,8 @@ export class PtyManager {
     const rootPid = session.pty.pid;
     const initial = await this.inspector.descendants(rootPid);
     if (!stillParking()) return { ok: false, error: "Session ended while parking" };
+    const preStopBlock = autoParkBlocked();
+    if (preStopBlock !== null) return { ok: false, error: preStopBlock };
     // Flush pending output before freezing — the renderer must not be left
     // waiting on bytes the stopped shell can no longer push.
     this.flush(sessionId);
@@ -537,16 +558,29 @@ export class PtyManager {
     // descendants in listed order.
     const stopOrder = [rootPid, ...initial];
     const stopped = new Set<number>(stopOrder);
+    const abortPark = (error: string): TerminalIoResult => {
+      for (const pid of stopOrder.toReversed()) this.inspector.signal(pid, "SIGCONT");
+      return { ok: false, error };
+    };
     for (const pid of stopOrder) this.inspector.signal(pid, "SIGSTOP");
     // A child may have spawned between listing and its parent's stop; re-scan and
     // stop any newcomer until the tree is stable (bounded so a fork bomb can't
     // spin the sweep forever).
     for (let round = 0; round < 3; round += 1) {
-      const rescan = await this.inspector.descendants(rootPid);
-      if (!stillParking()) {
-        for (const pid of stopOrder.toReversed()) this.inspector.signal(pid, "SIGCONT");
-        return { ok: false, error: "Session ended while parking" };
+      let rescan: number[];
+      try {
+        rescan = await this.inspector.descendants(rootPid);
+      } catch (error) {
+        // A failed rescan must never leak a half-stopped tree: CONT what we
+        // stopped, then let the failure propagate to the caller's logging.
+        abortPark("");
+        throw error;
       }
+      if (!stillParking()) return abortPark("Session ended while parking");
+      // Output buffered before the SIGSTOP can still drain during the rescan
+      // awaits — a session that just showed work must not be left frozen.
+      const midStopBlock = autoParkBlocked();
+      if (midStopBlock !== null) return abortPark(midStopBlock);
       const fresh = rescan.filter((pid) => !stopped.has(pid));
       if (fresh.length === 0) break;
       for (const pid of fresh) {
@@ -636,43 +670,64 @@ export class PtyManager {
     // is no longer ours to touch.
     const stillBreathing = (id: string, session: Session): boolean =>
       this.sessions.get(id) === session && session.parkedPids !== null;
-    const trees: Array<{
-      id: string;
-      session: Session;
-      activityAtStart: number;
-      pids: number[];
-    }> = [];
-    for (const { id, session, activityAtStart } of breathing) {
-      if (!stillBreathing(id, session)) continue;
-      const pids = [session.pty.pid, ...(await this.inspector.descendants(session.pty.pid))];
-      trees.push({ id, session, activityAtStart, pids });
-    }
-    if (trees.length === 0) return;
-    const union = new Set<number>();
-    for (const { pids } of trees) for (const pid of pids) union.add(pid);
-    const cpuByPid = await this.inspector.cpuPercents([...union]);
-    const listeners = await this.inspector.listeningPids([...union]);
-
-    for (const { id, session, activityAtStart, pids } of trees) {
-      // Re-check after the sampling awaits — a kill or wake may have landed.
-      if (!stillBreathing(id, session)) continue;
-      const stopped = new Set(session.parkedPids);
-      const shouldWake = breatheShouldWake({
-        activityAtStart,
-        activityAtEnd: session.lastActivityAt,
-        cpuQuiet: treeIsCpuQuiet(cpuByPid, pids, this.parkConfig.cpuBusyPercent),
-        treeGrew: pids.some((pid) => !stopped.has(pid)),
-        hasListener: pids.some((pid) => listeners.has(pid)),
-      });
-      // A Park Now that landed mid-window wins over the verdict: re-freeze,
-      // preserving the manual exemption.
-      if (shouldWake && !session.parkedManually) {
-        this.wake(id);
-      } else {
-        const manual = session.parkedManually;
-        session.parkedPids = null;
-        await this.park(id, { manual });
+    try {
+      const trees: Array<{
+        id: string;
+        session: Session;
+        activityAtStart: number;
+        pids: number[];
+      }> = [];
+      for (const { id, session, activityAtStart } of breathing) {
+        if (!stillBreathing(id, session)) continue;
+        const pids = [session.pty.pid, ...(await this.inspector.descendants(session.pty.pid))];
+        trees.push({ id, session, activityAtStart, pids });
       }
+      if (trees.length === 0) return;
+      const union = new Set<number>();
+      for (const { pids } of trees) for (const pid of pids) union.add(pid);
+      const cpuByPid = await this.inspector.cpuPercents([...union]);
+      const listeners = await this.inspector.listeningPids([...union]);
+
+      for (const { id, session, activityAtStart, pids } of trees) {
+        // Re-check after the sampling awaits — a kill or wake may have landed.
+        if (!stillBreathing(id, session)) continue;
+        const stopped = new Set(session.parkedPids);
+        const shouldWake = breatheShouldWake({
+          activityAtStart,
+          activityAtEnd: session.lastActivityAt,
+          cpuQuiet: treeIsCpuQuiet(cpuByPid, pids, this.parkConfig.cpuBusyPercent),
+          treeGrew: pids.some((pid) => !stopped.has(pid)),
+          hasListener: pids.some((pid) => listeners.has(pid)),
+        });
+        // A Park Now that landed mid-window wins over the verdict: re-freeze,
+        // preserving the manual exemption.
+        if (shouldWake && !session.parkedManually) {
+          this.wake(id);
+        } else {
+          const manual = session.parkedManually;
+          session.parkedPids = null;
+          const refrozen = await this.park(id, { manual, activityBaseline: activityAtStart });
+          if (!refrozen.ok && this.sessions.get(id) === session && session.parkedPids === null) {
+            // The re-freeze was refused — activity or a pin/visibility flip
+            // landed mid-park. The session stays awake; sync the renderer's
+            // badge (nothing else pushes on this path) and make it re-earn
+            // its quiet streak from scratch.
+            session.quietCpuSamples = 0;
+            this.pushParkState(session, id);
+          }
+        }
+      }
+    } catch (error) {
+      // Inspection failed mid-cycle: these trees were just CONT'd and we can
+      // no longer judge them. Fail open — waking every one still marked parked
+      // beats re-freezing unjudged, possibly-working sessions. A session whose
+      // re-freeze threw mid-park is already CONT'd and unmarked; it just needs
+      // its renderer badge synced.
+      for (const { id, session } of breathing) {
+        if (stillBreathing(id, session)) this.wake(id);
+        else if (this.sessions.get(id) === session) this.pushParkState(session, id);
+      }
+      throw error;
     }
   }
 
@@ -693,8 +748,11 @@ export class PtyManager {
     this.sweeping = true;
     try {
       await this.breathe();
-      // Stage 1: cheap eligibility. A session that fails it loses its quiet streak.
-      const candidates: Array<{ id: string; session: Session }> = [];
+      // Stage 1: cheap eligibility. A session that fails it loses its quiet
+      // streak. `activityAt` snapshots the idle clock the verdict is based on —
+      // stage 4's park() refuses any session whose clock advanced past it
+      // while stages 2–3 were in flight.
+      const candidates: Array<{ id: string; session: Session; activityAt: number }> = [];
       for (const [id, session] of this.sessions) {
         const eligible = isParkCandidate(
           {
@@ -706,26 +764,31 @@ export class PtyManager {
           now,
           this.parkConfig.idleThresholdMs,
         );
-        if (eligible) candidates.push({ id, session });
+        if (eligible) candidates.push({ id, session, activityAt: session.lastActivityAt });
         else session.quietCpuSamples = 0;
       }
       if (candidates.length === 0) return;
 
       // Stage 2: one CPU sample across the union of every candidate's tree.
-      const withTrees: Array<{ id: string; session: Session; pids: number[] }> = [];
+      const withTrees: Array<{
+        id: string;
+        session: Session;
+        activityAt: number;
+        pids: number[];
+      }> = [];
       const cpuUnion = new Set<number>();
-      for (const { id, session } of candidates) {
+      for (const { id, session, activityAt } of candidates) {
         const pids = [session.pty.pid, ...(await this.inspector.descendants(session.pty.pid))];
-        withTrees.push({ id, session, pids });
+        withTrees.push({ id, session, activityAt, pids });
         for (const pid of pids) cpuUnion.add(pid);
       }
       const cpuByPid = await this.inspector.cpuPercents([...cpuUnion]);
-      const quietEnough: Array<{ id: string; pids: number[] }> = [];
-      for (const { id, session, pids } of withTrees) {
+      const quietEnough: Array<{ id: string; activityAt: number; pids: number[] }> = [];
+      for (const { id, session, activityAt, pids } of withTrees) {
         if (treeIsCpuQuiet(cpuByPid, pids, this.parkConfig.cpuBusyPercent)) {
           session.quietCpuSamples += 1;
           if (session.quietCpuSamples >= this.parkConfig.quietSamplesRequired) {
-            quietEnough.push({ id, pids });
+            quietEnough.push({ id, activityAt, pids });
           }
         } else {
           session.quietCpuSamples = 0;
@@ -738,10 +801,15 @@ export class PtyManager {
       const listenUnion = new Set<number>();
       for (const { pids } of quietEnough) for (const pid of pids) listenUnion.add(pid);
       const listeners = await this.inspector.listeningPids([...listenUnion]);
-      for (const { id, pids } of quietEnough) {
+      for (const { id, activityAt, pids } of quietEnough) {
         if (pids.some((pid) => listeners.has(pid))) continue;
-        await this.park(id, { manual: false });
+        await this.park(id, { manual: false, activityBaseline: activityAt });
       }
+    } catch (error) {
+      // Inspection is best-effort: a failed pgrep/ps/lsof degrades to "nothing
+      // parks this sweep" (breathe already woke anything it couldn't judge) —
+      // never an unhandled rejection, never a session left wrongly frozen.
+      console.error("[park] sweep failed; no sessions parked this sweep:", error);
     } finally {
       this.sweeping = false;
     }

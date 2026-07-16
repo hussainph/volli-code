@@ -113,7 +113,17 @@ export function SessionTabs({
                   ) : (
                     <button
                       type="button"
-                      onClick={() => onSelect(tab.sessionId)}
+                      onClick={() => {
+                        onSelect(tab.sessionId);
+                        // Clicking the ALREADY-active tab changes no visibility
+                        // state, so the visibility effect never re-fires — the
+                        // promised wake-on-click must be explicit. Idempotent
+                        // for the select-a-different-tab case (visibility
+                        // wiring wakes it too; the second wake is a no-op).
+                        if (parked && !exited) {
+                          runOnLivePanes(tab, (paneId) => window.api.terminal.wake(paneId), "Wake");
+                        }
+                      }}
                       onDoubleClick={() => setEditingId(tab.sessionId)}
                       className="flex min-w-0 items-center gap-1.5"
                       // Active tab gets an ember dot; exited tabs read as muted;
