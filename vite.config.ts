@@ -13,6 +13,9 @@ const toolingIgnorePatterns = [
   // Curated prose — mechanical reflow of the decision-log tables is noise.
   "docs",
   "CLAUDE.md",
+  // Vendored third-party agent skills (npx skills add) — reformatting would
+  // drift them from their skills-lock.json content hashes.
+  ".agents",
 ];
 
 export default defineConfig({
