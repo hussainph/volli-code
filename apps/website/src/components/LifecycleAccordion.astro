@@ -1,29 +1,36 @@
 ---
+import FeatureGlyph from "./FeatureGlyph.astro";
+
 const items = [
   {
     title: "Program every phase",
     description:
       "Run your own prompts and automations as work enters each phase, from planning and worktree setup through review and delivery.",
+    illustration: "phases" as const,
   },
   {
     title: "Let agents work the plan",
     description:
       "Any agent can use the Volli CLI to create tickets, break work into subtasks, and schedule what should run next.",
+    illustration: "agents" as const,
   },
   {
     title: "Keep context with the work",
     description:
       "Each ticket carries its brief, scratchpad, branch, live TUI, review state, and history.",
+    illustration: "context" as const,
   },
   {
     title: "Run in parallel, stay oriented",
     description:
       "Execute many isolated tasks at once while Volli shows what is running, blocked, or waiting for review.",
+    illustration: "parallel" as const,
   },
   {
     title: "Bring any CLI agent",
     description:
       "Use Claude Code, Codex, OpenCode, or a custom harness without rebuilding the workflow around it.",
+    illustration: "harnesses" as const,
   },
 ];
 ---
@@ -53,6 +60,7 @@ const items = [
         >
           <div class="accordion-panel-inner">
             <p>{item.description}</p>
+            <FeatureGlyph kind={item.illustration} />
           </div>
         </div>
       </section>
@@ -61,7 +69,84 @@ const items = [
 </div>
 
 <script>
+  import { gsap } from "gsap";
+
   const accordions = document.querySelectorAll<HTMLElement>("[data-accordion]");
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+  const playGlyph = (item: HTMLElement) => {
+    const glyph = item.querySelector<SVGElement>("[data-feature-glyph]");
+    if (!glyph) return;
+
+    const nodes = glyph.querySelectorAll("[data-glyph-node]");
+    const lines = glyph.querySelectorAll("[data-glyph-line]");
+    const sources = glyph.querySelectorAll("[data-glyph-source]");
+    const runners = glyph.querySelectorAll("[data-glyph-runner]");
+    const core = glyph.querySelector("[data-glyph-core]");
+    const destination = glyph.querySelector("[data-glyph-destination]");
+    const orbit = glyph.querySelector("[data-context-orbit]");
+
+    gsap.killTweensOf([nodes, lines, sources, runners, core, destination, orbit]);
+
+    if (reducedMotion.matches) {
+      gsap.set([nodes, lines, sources, runners, core, destination, orbit], {
+        clearProps: "all",
+        autoAlpha: 1,
+      });
+      return;
+    }
+
+    const kind = glyph.dataset.featureGlyph;
+    const timeline = gsap.timeline({ defaults: { ease: "power3.out" } });
+
+    if (kind === "phases") {
+      gsap.set(lines, { autoAlpha: 0.3, scaleX: 0, transformOrigin: "left center" });
+      gsap.set(nodes, { autoAlpha: 0.22, scale: 0.68, transformOrigin: "center" });
+      timeline
+        .to(lines, { scaleX: 1, duration: 0.42 })
+        .to(nodes, { autoAlpha: 1, scale: 1, duration: 0.28, stagger: 0.07 }, 0.06);
+      return;
+    }
+
+    if (kind === "agents") {
+      gsap.set(lines, { autoAlpha: 0.25 });
+      gsap.set(sources, { autoAlpha: 0, x: -12 });
+      gsap.set(core, { autoAlpha: 0.3, scale: 0.76, transformOrigin: "center" });
+      gsap.set(destination, { autoAlpha: 0.25, scale: 0.75, transformOrigin: "center" });
+      timeline
+        .to(sources, { autoAlpha: 1, x: 0, duration: 0.3, stagger: 0.08 })
+        .to(core, { autoAlpha: 1, scale: 1, duration: 0.3 }, 0.16)
+        .to(destination, { autoAlpha: 1, scale: 1, duration: 0.28 }, 0.32);
+      return;
+    }
+
+    if (kind === "context") {
+      gsap.set(core, { autoAlpha: 0.35, scale: 0.82, transformOrigin: "center" });
+      gsap.set(orbit, { autoAlpha: 0, scale: 0.8, rotate: -12, transformOrigin: "84px 29px" });
+      timeline
+        .to(core, { autoAlpha: 1, scale: 1, duration: 0.28 })
+        .to(orbit, { autoAlpha: 1, scale: 1, rotate: 0, duration: 0.48 }, 0.08);
+      return;
+    }
+
+    if (kind === "parallel") {
+      gsap.set(lines, { autoAlpha: 0.32, scaleX: 0.24, transformOrigin: "left center" });
+      gsap.set(runners, { autoAlpha: 0, x: 0 });
+      timeline
+        .to(lines, { scaleX: 1, duration: 0.36, stagger: 0.05 })
+        .to(runners, { autoAlpha: 1, duration: 0.12, stagger: 0.06 }, 0.08)
+        .to(runners, { x: 95, duration: 0.62, stagger: 0.08, ease: "power2.inOut" }, 0.18);
+      return;
+    }
+
+    gsap.set(lines, { autoAlpha: 0.25 });
+    gsap.set(sources, { autoAlpha: 0, x: -10 });
+    gsap.set(destination, { autoAlpha: 0.28, scale: 0.72, transformOrigin: "center" });
+    timeline
+      .to(sources, { autoAlpha: 1, x: 0, duration: 0.28, stagger: 0.07 })
+      .to(sources, { x: 42, duration: 0.38, stagger: 0.05, ease: "power2.inOut" }, 0.2)
+      .to(destination, { autoAlpha: 1, scale: 1, duration: 0.3 }, 0.34);
+  };
 
   accordions.forEach((accordion) => {
     const triggers = Array.from(
@@ -74,6 +159,7 @@ const items = [
         const isOpen = trigger === nextTrigger;
         trigger.setAttribute("aria-expanded", String(isOpen));
         item?.classList.toggle("is-open", isOpen);
+        if (isOpen && item) playGlyph(item);
       });
     };
 
@@ -93,5 +179,8 @@ const items = [
         }
       });
     });
+
+    const initialItem = accordion.querySelector<HTMLElement>(".accordion-item.is-open");
+    if (initialItem) playGlyph(initialItem);
   });
 </script>

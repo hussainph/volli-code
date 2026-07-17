@@ -1,6 +1,8 @@
 ---
 import "@fontsource-variable/mona-sans/wght.css";
+import MorphingText from "../components/MorphingText";
 import LifecycleAccordion from "../components/LifecycleAccordion.astro";
+import VolliDemo from "../components/VolliDemo";
 import "../styles/global.css";
 
 const repositoryUrl = "https://github.com/hussainph/volli-code";
@@ -23,18 +25,7 @@ const downloadUrl = `${repositoryUrl}/releases/latest`;
   <body>
     <main id="top">
       <section class="hero-shell" aria-label="Volli product demo">
-        <div class="hero-placeholder">
-          <div class="hero-brand">
-            <img src="/volli-icon-dark.png" alt="" width="42" height="42" />
-            <span>Volli</span>
-          </div>
-
-          <span class="play-mark" aria-hidden="true">
-            <svg viewBox="0 0 24 24" width="20" height="20">
-              <path d="M8.25 5.4v13.2L18.6 12 8.25 5.4Z" fill="currentColor" />
-            </svg>
-          </span>
-        </div>
+        <VolliDemo client:load />
       </section>
 
       <section class="statement-section">
@@ -44,7 +35,20 @@ const downloadUrl = `${repositoryUrl}/releases/latest`;
           </div>
 
           <div class="statement-copy">
-            <h1><span>The ticket is</span> the workspace.</h1>
+            <h1 class="statement-headline">
+              <span class="headline-lead">The ticket is</span>
+              <MorphingText
+                client:load
+                texts={[
+                  "the plan",
+                  "a scratchpad",
+                  "an agent workspace",
+                  "an isolated worktree",
+                  "the review surface",
+                  "the project history",
+                ]}
+              />
+            </h1>
 
             <div class="body-copy">
               <p>

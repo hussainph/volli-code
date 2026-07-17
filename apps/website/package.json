@@ -11,11 +11,18 @@
     "preview": "ASTRO_TELEMETRY_DISABLED=1 astro preview"
   },
   "dependencies": {
+    "@astrojs/react": "^6.0.1",
     "@fontsource-variable/mona-sans": "5.2.8",
-    "astro": "7.1.1"
+    "@paper-design/shaders-react": "0.0.77",
+    "astro": "7.1.1",
+    "gsap": "^3.15.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
   },
   "devDependencies": {
     "@astrojs/check": "0.9.9",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
     "typescript": "6.0.3",
     "wrangler": "4.112.0"
   }
