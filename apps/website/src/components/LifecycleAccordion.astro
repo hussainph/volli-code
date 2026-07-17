@@ -4,36 +4,26 @@ const items = [
     title: "Program every phase",
     description:
       "Run your own prompts and automations as work enters each phase, from planning and worktree setup through review and delivery.",
-    eyebrow: "On enter",
-    meta: "prompt → automation → agent",
   },
   {
     title: "Let agents work the plan",
     description:
       "Any agent can use the Volli CLI to create tickets, break work into subtasks, and schedule what should run next.",
-    eyebrow: "Agent native",
-    meta: "plan → delegate → schedule",
   },
   {
     title: "Keep context with the work",
     description:
       "Each ticket carries its brief, scratchpad, branch, live TUI, review state, and history.",
-    eyebrow: "Ticket workspace",
-    meta: "brief → session → history",
   },
   {
     title: "Run in parallel, stay oriented",
     description:
       "Execute many isolated tasks at once while Volli shows what is running, blocked, or waiting for review.",
-    eyebrow: "Parallel by default",
-    meta: "isolated → visible → reviewable",
   },
   {
     title: "Bring any CLI agent",
     description:
       "Use Claude Code, Codex, OpenCode, or a custom harness without rebuilding the workflow around it.",
-    eyebrow: "Provider agnostic",
-    meta: "one plan → any harness",
   },
 ];
 ---
@@ -63,10 +53,6 @@ const items = [
         >
           <div class="accordion-panel-inner">
             <p>{item.description}</p>
-            <div class="accordion-meta" aria-hidden="true">
-              <span>{item.eyebrow}</span>
-              <span>{item.meta}</span>
-            </div>
           </div>
         </div>
       </section>

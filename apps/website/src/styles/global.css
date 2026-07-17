@@ -99,20 +99,8 @@ a:focus-visible {
   filter: drop-shadow(0 4px 12px rgb(0 0 0 / 30%));
 }
 
-.demo-placeholder {
-  z-index: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 16px;
-  color: rgb(245 245 247 / 55%);
-  font-size: 12px;
-  font-weight: 580;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
 .play-mark {
+  z-index: 1;
   display: grid;
   width: 64px;
   height: 64px;
@@ -126,18 +114,6 @@ a:focus-visible {
 
 .play-mark svg {
   transform: translateX(1px);
-}
-
-.hero-note {
-  position: absolute;
-  right: 28px;
-  bottom: 28px;
-  z-index: 1;
-  color: rgb(245 245 247 / 38%);
-  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .statement-section {
@@ -264,18 +240,6 @@ a:focus-visible {
   font-size: 15px;
   font-weight: 380;
   line-height: 1.55;
-}
-
-.accordion-meta {
-  display: flex;
-  margin: 0 24px 24px 38px;
-  justify-content: space-between;
-  gap: 16px;
-  color: #6f554a;
-  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
-  font-size: 9px;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
 }
 
 .statement-copy h1 {
@@ -477,17 +441,6 @@ footer nav a:hover {
     height: 36px;
   }
 
-  .demo-label {
-    max-width: 220px;
-    text-align: center;
-  }
-
-  .hero-note {
-    right: auto;
-    bottom: 20px;
-    left: 20px;
-  }
-
   .statement-section {
     padding: 84px 20px 80px;
   }
@@ -518,15 +471,8 @@ footer nav a:hover {
     grid-template-columns: 34px minmax(0, 1fr) 18px;
   }
 
-  .accordion-panel p,
-  .accordion-meta {
+  .accordion-panel p {
     margin-left: 34px;
-  }
-
-  .accordion-meta {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 6px;
   }
 
   footer {
