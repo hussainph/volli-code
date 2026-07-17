@@ -220,7 +220,11 @@ function buildChipDecorations(
   resolves: (relPath: string) => boolean,
 ): DecorationSet {
   const { state } = view;
-  const selection: SelRange[] = state.selection.ranges.map((r) => ({ from: r.from, to: r.to }));
+  // Same focus rule as the live-preview layer: a blurred editor's selection is
+  // invisible, so it must not keep the caret line's raw `@path` revealed.
+  const selection: SelRange[] = view.hasFocus
+    ? state.selection.ranges.map((r) => ({ from: r.from, to: r.to }))
+    : [];
   const decos: { from: number; to: number; deco: Decoration }[] = [];
 
   for (const ref of refs) {
@@ -244,7 +248,7 @@ function buildChipDecorations(
   );
 }
 
-/** The chip decoration plugin — rebuilds on doc/selection/viewport changes and on `bumpFileIndex`. */
+/** The chip decoration plugin — rebuilds on doc/selection/viewport/focus changes and on `bumpFileIndex`. */
 function fileChipsPlugin(config: FileRefsConfig): Extension {
   return ViewPlugin.fromClass(
     class {
@@ -283,7 +287,13 @@ function fileChipsPlugin(config: FileRefsConfig): Extension {
         if (update.docChanged || indexChanged) {
           this.refs = parseFileRefs(update.state.doc.toString());
         }
-        if (update.docChanged || update.viewportChanged || update.selectionSet || indexChanged) {
+        if (
+          update.docChanged ||
+          update.viewportChanged ||
+          update.selectionSet ||
+          update.focusChanged ||
+          indexChanged
+        ) {
           this.decorations = buildChipDecorations(update.view, this.refs, (p) => this.resolves(p));
         }
       }
