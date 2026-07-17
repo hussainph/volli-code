@@ -39,6 +39,18 @@ export type NavKey = "board" | "sessions" | "files";
 /** Kanban columns vs. Linear-style grouped list — same data, filter, selection. */
 export type BoardView = "board" | "list";
 
+/**
+ * A ticket's open `@file` tabs and its active tab (global-artifacts decision
+ * #5). `files` is the ordered list of open relPaths; `active` is the active tab
+ * id — `"doc"`, a `file:<relPath>`, or a session id (sessions rehydrate
+ * separately, so a persisted session id that no longer exists falls back to Doc
+ * in ticket-detail).
+ */
+export interface TicketTabsState {
+  files: string[];
+  active: string;
+}
+
 export interface WorkspaceUiState {
   nav: NavKey;
   /** Absolute paths of expanded file-tree directories (collapsed = absent). */
@@ -52,6 +64,8 @@ export interface WorkspaceUiState {
    * #1/#3); `null` on the plain board. Persisted — survives restart.
    */
   openTicketId: string | null;
+  /** Open file tabs + active tab, per ticket (global-artifacts decision #5). Persisted. */
+  ticketTabs: Record<string, TicketTabsState>;
 }
 
 export const DEFAULT_WORKSPACE_UI: WorkspaceUiState = {
@@ -60,7 +74,16 @@ export const DEFAULT_WORKSPACE_UI: WorkspaceUiState = {
   boardView: "board",
   boardSort: DEFAULT_TICKET_SORT,
   openTicketId: null,
+  ticketTabs: {},
 };
+
+/** The active-tab id of the always-present Doc tab — the fallback when a file/session tab closes. */
+const DOC_TAB_ID = "doc";
+
+/** A file tab's id from its relPath (`file:<relPath>`) — the persisted `active` form. */
+function fileTabId(relPath: string): string {
+  return `file:${relPath}`;
+}
 
 interface WorkspaceState {
   byProject: Record<string, WorkspaceUiState>;
@@ -84,6 +107,20 @@ interface WorkspaceState {
   openTicket(projectId: string, ticketId: string): void;
   /** Closes the detail view, returning to the plain board. Leaves the board's selection as-is. */
   closeTicket(projectId: string): void;
+  /**
+   * Opens a `file` tab for `relPath` in `ticketId`'s tab strip (appends it if
+   * not already open) and makes it the active tab (global-artifacts decision
+   * #5). Idempotent on the file list; re-opening an already-open file just
+   * re-activates it.
+   */
+  openTicketFile(projectId: string, ticketId: string, relPath: string): void;
+  /**
+   * Closes `relPath`'s file tab; if it was the active tab, falls back to Doc.
+   * Prunes the ticket's record entirely once nothing but Doc remains.
+   */
+  closeTicketFile(projectId: string, ticketId: string, relPath: string): void;
+  /** Sets the active tab for `ticketId` (`"doc"`, a `file:<relPath>`, or a session id). */
+  setTicketActiveTab(projectId: string, ticketId: string, tabId: string): void;
   /** Drop a removed project's record so re-adding it starts fresh. */
   forget(projectId: string): void;
   /**
@@ -106,7 +143,10 @@ interface WorkspaceState {
 }
 
 /** The slice of a workspace record that survives relaunch. */
-type PersistedWorkspaceUi = Pick<WorkspaceUiState, "boardView" | "boardSort" | "openTicketId">;
+type PersistedWorkspaceUi = Pick<
+  WorkspaceUiState,
+  "boardView" | "boardSort" | "openTicketId" | "ticketTabs"
+>;
 
 interface PersistedWorkspaceState {
   byProject: Record<string, PersistedWorkspaceUi>;
@@ -117,6 +157,29 @@ interface PersistedWorkspaceState {
  * validate rather than trust, falling back per-field to the defaults so a
  * renamed sort key or view can never render an impossible state.
  */
+/**
+ * Validate a rehydrated `ticketTabs` map: keep only records whose `files` is a
+ * string[] and `active` a string, and prune anything carrying nothing worth
+ * restoring (no open files and Doc active) so the map never accretes empty
+ * entries. A persisted `active` that's a session id is preserved — ticket-detail
+ * falls back to Doc when it matches no live tab.
+ */
+function sanitizeTicketTabs(raw: unknown): Record<string, TicketTabsState> {
+  if (typeof raw !== "object" || raw === null) return {};
+  const out: Record<string, TicketTabsState> = {};
+  for (const [ticketId, value] of Object.entries(raw)) {
+    if (typeof value !== "object" || value === null) continue;
+    const record = value as { files?: unknown; active?: unknown };
+    const files = Array.isArray(record.files)
+      ? record.files.filter((file): file is string => typeof file === "string")
+      : [];
+    const active = typeof record.active === "string" ? record.active : DOC_TAB_ID;
+    if (files.length === 0 && active === DOC_TAB_ID) continue;
+    out[ticketId] = { files, active };
+  }
+  return out;
+}
+
 function sanitizePersistedUi(persisted: Partial<PersistedWorkspaceUi>): PersistedWorkspaceUi {
   const view: BoardView =
     persisted.boardView === "board" || persisted.boardView === "list"
@@ -142,16 +205,18 @@ function sanitizePersistedUi(persisted: Partial<PersistedWorkspaceUi>): Persiste
       typeof openTicketId === "string" || openTicketId === null
         ? openTicketId
         : DEFAULT_WORKSPACE_UI.openTicketId,
+    ticketTabs: sanitizeTicketTabs(persisted.ticketTabs),
   };
 }
 
-/** Whether a record's persisted trio still matches the defaults (by value). */
+/** Whether a record's persisted fields still match the defaults (by value) — such records are dropped. */
 function isDefaultPersistedUi(ui: WorkspaceUiState): boolean {
   return (
     ui.boardView === DEFAULT_WORKSPACE_UI.boardView &&
     ui.boardSort.key === DEFAULT_TICKET_SORT.key &&
     ui.boardSort.direction === DEFAULT_TICKET_SORT.direction &&
-    ui.openTicketId === DEFAULT_WORKSPACE_UI.openTicketId
+    ui.openTicketId === DEFAULT_WORKSPACE_UI.openTicketId &&
+    Object.keys(ui.ticketTabs).length === 0
   );
 }
 
@@ -224,6 +289,49 @@ export function createWorkspaceStore(storage?: StateStorage) {
           set((state) => patchWorkspace(state, projectId, { openTicketId: null }));
         },
 
+        openTicketFile(projectId, ticketId, relPath) {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const existing = current.ticketTabs[ticketId] ?? { files: [], active: DOC_TAB_ID };
+            const files = existing.files.includes(relPath)
+              ? existing.files
+              : [...existing.files, relPath];
+            return patchWorkspace(state, projectId, {
+              ticketTabs: {
+                ...current.ticketTabs,
+                [ticketId]: { files, active: fileTabId(relPath) },
+              },
+            });
+          });
+        },
+
+        closeTicketFile(projectId, ticketId, relPath) {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const existing = current.ticketTabs[ticketId];
+            if (existing === undefined) return state;
+            const files = existing.files.filter((file) => file !== relPath);
+            // Closing the active file tab lands back on Doc; other closes keep
+            // the current selection (which may itself be Doc or a session tab).
+            const active = existing.active === fileTabId(relPath) ? DOC_TAB_ID : existing.active;
+            const nextTabs = { ...current.ticketTabs };
+            if (files.length === 0 && active === DOC_TAB_ID) delete nextTabs[ticketId];
+            else nextTabs[ticketId] = { files, active };
+            return patchWorkspace(state, projectId, { ticketTabs: nextTabs });
+          });
+        },
+
+        setTicketActiveTab(projectId, ticketId, tabId) {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const existing = current.ticketTabs[ticketId] ?? { files: [], active: DOC_TAB_ID };
+            if (existing.active === tabId) return state; // no-op keeps empty records from forming
+            return patchWorkspace(state, projectId, {
+              ticketTabs: { ...current.ticketTabs, [ticketId]: { ...existing, active: tabId } },
+            });
+          });
+        },
+
         forget(projectId) {
           set((state) => {
             if (!(projectId in state.byProject)) return state;
@@ -271,7 +379,12 @@ export function createWorkspaceStore(storage?: StateStorage) {
               .filter(([, ui]) => !isDefaultPersistedUi(ui))
               .map(([projectId, ui]) => [
                 projectId,
-                { boardView: ui.boardView, boardSort: ui.boardSort, openTicketId: ui.openTicketId },
+                {
+                  boardView: ui.boardView,
+                  boardSort: ui.boardSort,
+                  openTicketId: ui.openTicketId,
+                  ticketTabs: ui.ticketTabs,
+                },
               ]),
           ),
         }),

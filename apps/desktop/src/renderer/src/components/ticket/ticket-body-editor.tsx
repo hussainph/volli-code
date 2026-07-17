@@ -2,7 +2,10 @@ import * as React from "react";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import type { Ticket } from "@volli/shared";
 
-import { MarkdownLiveEditor } from "@renderer/components/editor/markdown-live-editor";
+import {
+  MarkdownLiveEditor,
+  type MarkdownFileRefs,
+} from "@renderer/components/editor/markdown-live-editor";
 import { Button } from "@renderer/components/ui/button";
 import { useDebouncedCallback } from "@renderer/lib/use-debounced-callback";
 import { useBoardStore } from "@renderer/stores/board";
@@ -23,13 +26,19 @@ const AUTOSAVE_IDLE_MS = 1500;
  * Escape bubbles and closes as usual.
  *
  * Because agents (and other views) edit the same body, autosave is
- * conflict-guarded exactly like the ArtifactViewer: an external `ticket.body`
+ * conflict-guarded exactly like the FileView: an external `ticket.body`
  * change is adopted silently only when there is NO unsaved draft; if the user
  * has an unsaved edit and the body changed underneath it, that's a conflict —
  * autosave pauses (so the stale draft can't clobber the external edit), a
  * non-destructive banner appears, and Reload adopts the external value.
  */
-export function TicketBodyEditor({ ticket }: { ticket: Ticket }) {
+export function TicketBodyEditor({
+  ticket,
+  fileRefs,
+}: {
+  ticket: Ticket;
+  fileRefs?: MarkdownFileRefs;
+}) {
   const updateTicket = useBoardStore((state) => state.updateTicket);
 
   // The value that seeds / resets the editor doc; changing it re-syncs the
@@ -112,6 +121,7 @@ export function TicketBodyEditor({ ticket }: { ticket: Ticket }) {
         onBlur={() => debouncer.flush()}
         placeholder="Add description…"
         ariaLabel="Ticket description"
+        fileRefs={fileRefs}
         // -mx-3 bleeds the hover block into the gutter (Notion-style) so the
         // body TEXT left-aligns with the title on the column edge.
         className="-mx-3 min-h-32 rounded-md px-3 py-2"

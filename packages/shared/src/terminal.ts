@@ -17,7 +17,7 @@ export interface CreateTerminalSessionRequest {
   /**
    * When present, the session is ticket-scoped: main resolves the ticket and
    * its project from the db (never trusting anything else from the renderer),
-   * runs the PTY at the project root with `VOLLI_TICKET`/`VOLLI_TICKET_DIR`
+   * runs the PTY at the project root with `VOLLI_TICKET`/`VOLLI_ARTIFACTS_DIR`
    * injected, and persists a ticket-scoped {@link SessionRecord}. Absent = a
    * project-scoped scratch session (`ticketId` null).
    */

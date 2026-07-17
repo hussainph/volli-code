@@ -1,0 +1,400 @@
+import * as React from "react";
+import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
+import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
+import { EditorState } from "@codemirror/state";
+import { EditorView, lineNumbers } from "@codemirror/view";
+import { errorMessage, type FileSource } from "@volli/shared";
+import { toast } from "sonner";
+
+import { ContentColumn } from "@renderer/components/layout/content-column";
+import {
+  MarkdownLiveEditor,
+  type MarkdownFileRefs,
+} from "@renderer/components/editor/markdown-live-editor";
+import { Button } from "@renderer/components/ui/button";
+import { useDebouncedCallback } from "@renderer/lib/use-debounced-callback";
+
+const AUTOSAVE_IDLE_MS = 1500;
+
+interface FileViewProps {
+  projectId: string;
+  /** When present, repo paths resolve to this ticket's live worktree copy (decision #6). */
+  ticketId?: string;
+  relPath: string;
+  /** `@file` wiring so an open markdown file can itself reference other files. */
+  fileRefs?: MarkdownFileRefs;
+  /** Reports the resolved source (with the file's relPath) so the tab can show a worktree badge. */
+  onSource?(relPath: string, source: FileSource): void;
+}
+
+type LoadState =
+  | { status: "loading" }
+  | { status: "error"; error: string }
+  | { status: "markdown" }
+  | { status: "code"; text: string; truncated: boolean }
+  | { status: "image"; dataUrl: string }
+  | { status: "binary" };
+
+/** The basename of a `/`-separated relPath — the human label for toasts/headers. */
+function baseNameOf(relPath: string): string {
+  const slash = relPath.lastIndexOf("/");
+  return slash === -1 ? relPath : relPath.slice(slash + 1);
+}
+
+/** A read-only monospace CodeMirror peek (decision #7: no grammar highlighting in v1). */
+function ReadOnlyCode({ text }: { text: string }) {
+  const hostRef = React.useRef<HTMLDivElement>(null);
+  const viewRef = React.useRef<EditorView | null>(null);
+  const initialRef = React.useRef(text);
+
+  React.useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const state = EditorState.create({
+      doc: initialRef.current,
+      extensions: [
+        lineNumbers(),
+        EditorView.lineWrapping,
+        EditorState.readOnly.of(true),
+        EditorView.editable.of(false),
+        readOnlyTheme,
+      ],
+    });
+    const view = new EditorView({ state, parent: host });
+    viewRef.current = view;
+    return () => {
+      view.destroy();
+      viewRef.current = null;
+    };
+    // Mount once; later text (fs-watch re-read) flows through the sync effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Adopt an external change silently — a read-only view has no user edits to
+  // protect, so it always reflects the newest disk content.
+  React.useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    const current = view.state.doc.toString();
+    if (current === text) return;
+    view.dispatch({ changes: { from: 0, to: current.length, insert: text } });
+  }, [text]);
+
+  return <div ref={hostRef} className="h-full" />;
+}
+
+const readOnlyTheme = EditorView.theme(
+  {
+    "&": {
+      color: "var(--foreground)",
+      fontFamily: "var(--font-mono)",
+      fontSize: "0.8125rem",
+      backgroundColor: "transparent",
+      height: "100%",
+    },
+    ".cm-scroller": { fontFamily: "var(--font-mono)", lineHeight: "1.6" },
+    ".cm-gutters": {
+      backgroundColor: "transparent",
+      color: "var(--muted-foreground)",
+      border: "none",
+    },
+    ".cm-content": { caretColor: "transparent" },
+  },
+  { dark: true },
+);
+
+/**
+ * A `file` tab's content pane (global-artifacts decision #7), generalized from
+ * the old ArtifactViewer onto `api.files`. Markdown opens in the always-mounted
+ * live-preview editor with 1.5s debounced autosave, conflict-guarded by the
+ * on-disk mtime: each write carries the last-seen mtime as `expectedMtime`, and
+ * a rejected write (agent edit underneath) raises a non-destructive "Changed on
+ * disk" banner rather than overwriting. Everything else is read-only — code/text
+ * in a monospace CodeMirror, images inline, binary/oversize a Reveal-in-Finder
+ * stub. Re-reads on the tab's `api.files.onChanged` subscription: read-only
+ * views adopt silently, the markdown editor keeps the dirty/focus-aware logic.
+ *
+ * Mount with `key={relPath}` so switching files remounts it fresh.
+ */
+export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: FileViewProps) {
+  const [state, setState] = React.useState<LoadState>({ status: "loading" });
+  const [docValue, setDocValue] = React.useState("");
+  // Disk content+mtime captured when a conflict is detected. The mtime rides
+  // along so Reload can restore BOTH baselines together — advancing the content
+  // baseline without its mtime would wedge every later write on a stale
+  // `expectedMtime`. `null` = no conflict, autosave live.
+  const [conflict, setConflict] = React.useState<{ text: string; mtime: number } | null>(null);
+
+  const draftRef = React.useRef(""); // current editor content
+  const syncedRef = React.useRef(""); // last content loaded or saved (disk baseline)
+  const syncedMtimeRef = React.useRef(0); // mtime of that baseline — the write conflict guard
+  const conflictRef = React.useRef<{ text: string; mtime: number } | null>(null);
+  const focusedRef = React.useRef(false);
+  const mountedRef = React.useRef(true);
+  const name = baseNameOf(relPath);
+
+  React.useEffect(() => {
+    conflictRef.current = conflict;
+  }, [conflict]);
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const readFile = React.useCallback(
+    () => window.api.files.read({ projectId, ticketId, relPath }),
+    [projectId, ticketId, relPath],
+  );
+
+  const load = React.useCallback(async () => {
+    const result = await readFile();
+    if (!mountedRef.current) return;
+    if (!result.ok) {
+      setState({ status: "error", error: result.error });
+      return;
+    }
+    onSource?.(relPath, result.source);
+    const { content } = result;
+    if (content.type === "image") {
+      setState({ status: "image", dataUrl: content.dataUrl });
+    } else if (content.type === "binary") {
+      setState({ status: "binary" });
+    } else if (result.kind === "markdown" && !content.truncated) {
+      syncedRef.current = content.text;
+      syncedMtimeRef.current = result.mtime;
+      draftRef.current = content.text;
+      setDocValue(content.text);
+      setState({ status: "markdown" });
+    } else {
+      // Non-markdown, or a markdown file past the 1 MiB read cap — editing the
+      // latter would autosave back only the truncated prefix, so it stays
+      // read-only.
+      syncedMtimeRef.current = result.mtime;
+      setState({ status: "code", text: content.text, truncated: content.truncated });
+    }
+  }, [readFile, onSource, relPath]);
+
+  React.useEffect(() => {
+    void load();
+  }, [load]);
+
+  // Guarded autosave: never write while paused by a conflict or when nothing
+  // changed. A rejected write (or drifted mtime) means an agent edited the file
+  // underneath us — re-read to distinguish a real conflict from a hard error,
+  // and raise the banner rather than clobbering their edit.
+  const commit = React.useCallback(async () => {
+    if (conflictRef.current !== null) return;
+    const next = draftRef.current;
+    if (next === syncedRef.current) return;
+    // Up to two attempts: a write rejected by a stale mtime baseline whose disk
+    // content still matches ours (an agent rewrote identical bytes, or touched
+    // the file) is a no-op drift — adopt the fresh mtime and retry once so the
+    // edit lands. A genuine content divergence raises the conflict banner.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const result = await window.api.files.write({
+        projectId,
+        ticketId,
+        relPath,
+        content: next,
+        expectedMtime: syncedMtimeRef.current,
+      });
+      if (result.ok) {
+        syncedRef.current = next;
+        syncedMtimeRef.current = result.mtime;
+        return;
+      }
+      const disk = await readFile();
+      if (!(disk.ok && disk.content.type === "text")) {
+        toast.error(`Could not save ${name}: ${result.error}`);
+        return;
+      }
+      if (disk.content.text !== syncedRef.current) {
+        if (mountedRef.current) setConflict({ text: disk.content.text, mtime: disk.mtime });
+        else toast.error(`${name} changed on disk — your last edits were not saved.`);
+        return;
+      }
+      // Same content, drifted mtime — adopt it and retry the write.
+      syncedMtimeRef.current = disk.mtime;
+    }
+    // Both attempts hit an mtime drift with identical content (rapid external
+    // touches) — give up quietly this cycle; the next edit reschedules a save.
+    toast.error(`Could not save ${name}: the file is being modified externally.`);
+  }, [projectId, ticketId, relPath, readFile, name]);
+
+  const debouncer = useDebouncedCallback(() => void commit(), AUTOSAVE_IDLE_MS);
+
+  // fs-watch subscription for this tab's lifetime. `onChanged` fires debounced;
+  // read-only views adopt silently, the markdown editor stays dirty/focus-aware.
+  React.useEffect(() => {
+    void window.api.files.watch({ projectId, ticketId, relPath }).then((result) => {
+      if (!result.ok) {
+        toast.error(
+          `Live updates for ${name} are unavailable — it may not refresh until you reopen it.`,
+        );
+      }
+    });
+    const unsubscribe = window.api.files.onChanged((event) => {
+      if (event.projectId !== projectId || event.relPath !== relPath) return;
+      void (async () => {
+        const disk = await readFile();
+        if (!mountedRef.current || !disk.ok) return;
+        onSource?.(relPath, disk.source);
+        if (disk.content.type === "image") {
+          setState({ status: "image", dataUrl: disk.content.dataUrl });
+          return;
+        }
+        if (disk.content.type === "binary") {
+          setState({ status: "binary" });
+          return;
+        }
+        // Read-only text (non-markdown, or truncated markdown): swap it in
+        // unconditionally — nothing to protect.
+        if (disk.kind !== "markdown" || disk.content.truncated) {
+          syncedMtimeRef.current = disk.mtime;
+          setState({ status: "code", text: disk.content.text, truncated: disk.content.truncated });
+          return;
+        }
+        // Markdown: no real change vs baseline (also the echo of our own write).
+        if (disk.content.text === syncedRef.current) return;
+        const dirty = draftRef.current !== syncedRef.current;
+        if (!dirty && !focusedRef.current && conflictRef.current === null) {
+          syncedRef.current = disk.content.text;
+          syncedMtimeRef.current = disk.mtime;
+          draftRef.current = disk.content.text;
+          setDocValue(disk.content.text);
+        } else {
+          setConflict({ text: disk.content.text, mtime: disk.mtime });
+        }
+      })();
+    });
+    return () => {
+      unsubscribe();
+      void window.api.files.unwatch({ projectId, ticketId, relPath });
+    };
+  }, [projectId, ticketId, relPath, readFile, name, onSource]);
+
+  function handleChange(next: string) {
+    draftRef.current = next;
+    if (conflictRef.current !== null) return; // paused until reload
+    debouncer.schedule();
+  }
+
+  function reload() {
+    const disk = conflictRef.current;
+    if (disk === null) return;
+    debouncer.cancel();
+    // Restore both baselines from the captured disk snapshot — content AND its
+    // mtime — so the next write's `expectedMtime` matches disk and isn't wedged.
+    syncedRef.current = disk.text;
+    syncedMtimeRef.current = disk.mtime;
+    draftRef.current = disk.text;
+    setDocValue(disk.text); // editor is unfocused (the button took focus) → doc resets
+    setConflict(null);
+  }
+
+  async function handleReveal() {
+    try {
+      const result = await window.api.files.reveal({ projectId, ticketId, relPath });
+      if (!result.ok) toast.error(`Could not reveal in Finder: ${result.error}`);
+    } catch (error) {
+      toast.error(`Could not reveal in Finder: ${errorMessage(error)}`);
+    }
+  }
+
+  const revealButton = (
+    <Button
+      variant="ghost"
+      size="icon-xs"
+      aria-label="Reveal in Finder"
+      onClick={() => void handleReveal()}
+    >
+      <FolderOpenIcon />
+    </Button>
+  );
+
+  if (state.status === "loading") {
+    return <p className="px-gutter py-4 text-xs text-muted-foreground">Loading…</p>;
+  }
+  if (state.status === "error") {
+    return <p className="px-gutter py-4 text-xs text-destructive">{state.error}</p>;
+  }
+
+  // Markdown → Tier A reading measure; everything else is workbench-fluid.
+  if (state.status === "markdown") {
+    return (
+      <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+        <ContentColumn className="flex flex-col gap-2 py-6">
+          {conflict !== null && (
+            <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+              <span>Changed on disk — autosave paused to avoid overwriting.</span>
+              <Button size="sm" variant="secondary" onClick={reload}>
+                <ArrowClockwiseIcon />
+                Reload
+              </Button>
+            </div>
+          )}
+          <div
+            className="min-h-64"
+            onFocus={() => {
+              focusedRef.current = true;
+            }}
+            onBlur={() => {
+              focusedRef.current = false;
+            }}
+          >
+            <MarkdownLiveEditor
+              value={docValue}
+              onChange={handleChange}
+              onBlur={() => debouncer.flush()}
+              ariaLabel={`${name} contents`}
+              className="min-h-full"
+              fileRefs={fileRefs}
+            />
+          </div>
+        </ContentColumn>
+      </div>
+    );
+  }
+
+  if (state.status === "code") {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col gap-2 px-gutter py-4">
+        {state.truncated && (
+          <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+            <span>Showing the first 1 MiB — reveal in Finder for the full file.</span>
+            {revealButton}
+          </div>
+        )}
+        <div className="min-h-0 flex-1 overflow-auto rounded-md border border-border bg-muted/30">
+          <ReadOnlyCode text={state.text} />
+        </div>
+      </div>
+    );
+  }
+
+  if (state.status === "image") {
+    return (
+      <div className="min-h-0 flex-1 overflow-auto px-gutter py-4">
+        <img
+          src={state.dataUrl}
+          alt={name}
+          className="max-w-full self-start rounded-md border border-border object-contain"
+        />
+      </div>
+    );
+  }
+
+  // binary
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-3 py-16 text-center">
+      <FolderOpenIcon weight="fill" className="size-6 text-muted-foreground" />
+      <p className="text-sm text-muted-foreground">{name} can&apos;t be previewed here.</p>
+      <Button size="sm" variant="secondary" onClick={() => void handleReveal()}>
+        <FolderOpenIcon />
+        Reveal in Finder
+      </Button>
+    </div>
+  );
+}

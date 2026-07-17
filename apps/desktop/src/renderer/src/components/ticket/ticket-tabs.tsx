@@ -1,14 +1,15 @@
 /**
  * The ticket detail's tab strip (ticket-detail-mvp decision #6, restyled to the
  * Chrome-browser metaphor): a full-width row at the very top of the detail view
- * — `<TicketId> | Artifacts | <session tabs…> | +` — spanning above both the
+ * — `<TicketId> | <file tabs…> | <session tabs…> | +` — spanning above both the
  * main column and the right rail. The active tab is a raised surface on the
  * content background with rounded top corners so it reads as physically
  * connected to the content below; inactive tabs are flat on the recessed rail
  * band. Data-driven by design: `TicketTabDescriptor` is the one shape a tab
- * needs, so ticket-detail.tsx appends one `"session"`-kind descriptor per linked
- * terminal (id = session id). Content routing stays with the caller, keyed off
- * each tab's `kind`; session tabs alone are closable and renameable.
+ * needs, so ticket-detail.tsx appends one `"file"`-kind descriptor per open
+ * `@file` ref and one `"session"`-kind descriptor per linked terminal. Content
+ * routing stays with the caller, keyed off each tab's `kind`; file and session
+ * tabs are closable, session tabs alone are renameable.
  */
 import * as React from "react";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
@@ -25,13 +26,17 @@ import {
 } from "@renderer/components/ui/context-menu";
 import { cn } from "@renderer/lib/utils";
 
-export type TicketTabKind = "doc" | "artifacts" | "session";
+export type TicketTabKind = "doc" | "session" | "file";
 
 export interface TicketTabDescriptor {
-  /** Stable tab identity — a session tab's id is its session id. */
+  /** Stable tab identity — a session tab's id is its session id; a file tab's is `file:<relPath>`. */
   id: string;
   kind: TicketTabKind;
   label: string;
+  /** The project-relative path a `"file"`-kind tab opens (absent for other kinds). */
+  relPath?: string;
+  /** A `"file"` tab whose file resolved from the ticket's worktree copy shows a subtle badge (decision #6). */
+  badge?: "worktree";
 }
 
 interface TicketTabStripProps {
@@ -40,9 +45,9 @@ interface TicketTabStripProps {
   /** Disables the "+" button while a session is booting. */
   creating: boolean;
   onSelectTab(tabId: string): void;
-  /** Closes a session tab (kill-on-close). Only session tabs render the close affordance. */
-  onCloseSessionTab(tabId: string): void;
-  /** Commits a session-tab rename (double-click / context menu). Ignored for Doc/Artifacts. */
+  /** Closes a session tab (kill-on-close) or a file tab. Doc has no close affordance. */
+  onCloseTab(tab: TicketTabDescriptor): void;
+  /** Commits a session-tab rename (double-click / context menu). Ignored for Doc/file tabs. */
   onRenameSessionTab(tabId: string, title: string): void;
   /** Boots a new session tab — the same path as the rail's New-session button. */
   onNewSession(): void;
@@ -75,12 +80,13 @@ function TicketTab({
   onCancelRename(): void;
 }) {
   const isSession = tab.kind === "session";
+  const closable = tab.kind === "session" || tab.kind === "file";
 
   const inner = (
     <div
       className={cn(
         "group relative flex h-[34px] shrink-0 items-center rounded-t-lg text-sm transition-colors duration-150 ease-out",
-        isSession ? "pr-1 pl-3" : "px-3.5",
+        closable ? "pr-1 pl-3" : "px-3.5",
         active
           ? // -mb-px pulls the active tab 1px past the strip's bottom border so
             // its content-colored fill covers that seam — the tab reads as
@@ -89,6 +95,15 @@ function TicketTab({
           : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
       )}
     >
+      {tab.badge === "worktree" ? (
+        // A quiet dot marking a file resolved from the ticket's worktree copy
+        // rather than the main checkout (decision #6).
+        <span
+          aria-label="Worktree copy"
+          title="Worktree copy"
+          className="mr-1.5 size-1.5 shrink-0 rounded-full bg-primary"
+        />
+      ) : null}
       {editing ? (
         <InlineRename
           value={tab.label}
@@ -109,7 +124,7 @@ function TicketTab({
           {tab.label}
         </button>
       )}
-      {isSession && !editing ? (
+      {closable && !editing ? (
         <button
           type="button"
           aria-label={`Close ${tab.label}`}
@@ -122,7 +137,7 @@ function TicketTab({
     </div>
   );
 
-  // Doc/Artifacts tabs have no rename affordance, so they skip the context menu.
+  // Only session tabs rename, so Doc and file tabs skip the context menu.
   if (!isSession) return inner;
 
   return (
@@ -143,7 +158,7 @@ export function TicketTabStrip({
   activeTabId,
   creating,
   onSelectTab,
-  onCloseSessionTab,
+  onCloseTab,
   onRenameSessionTab,
   onNewSession,
 }: TicketTabStripProps) {
@@ -161,7 +176,7 @@ export function TicketTabStrip({
           active={tab.id === activeTabId}
           editing={editingId === tab.id}
           onSelect={() => onSelectTab(tab.id)}
-          onClose={() => onCloseSessionTab(tab.id)}
+          onClose={() => onCloseTab(tab)}
           onStartRename={() => setEditingId(tab.id)}
           onCommitRename={(next) => {
             setEditingId(null);

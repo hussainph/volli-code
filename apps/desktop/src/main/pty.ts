@@ -11,6 +11,7 @@ import {
   displayTicketId,
   errorMessage,
   isParkCandidate,
+  projectSessionEnv,
   resolveShell,
   ticketSessionEnv,
   treeIsCpuQuiet,
@@ -39,8 +40,9 @@ import {
   getTicketSessionContext,
   insertSession,
 } from "./db/sessions-repo";
+import { getProjectById } from "./db/projects-repo";
 import { isPathWithinRoots } from "./project-roots";
-import { ensureTicketDir } from "./volli-fs";
+import { ensureProjectArtifactsDir } from "./volli-fs";
 
 // Structural subset of node-pty we depend on — declared here so nothing in
 // this module needs a value import of node-pty (whose native binary is built
@@ -139,11 +141,15 @@ interface SessionScope {
   ticketId: string | null;
   harnessId: HarnessId;
   cwd: string;
-  /** Extra env layered over the inherited environment (ticket vars, or none). */
+  /** Extra env layered over the inherited environment (VOLLI_TICKET/VOLLI_ARTIFACTS_DIR, or just the artifacts dir). */
   env: Record<string, string>;
   title: string;
-  /** Ticket sessions only: ensure this `.volli` dir before spawn. */
-  ticketDir: { projectPath: string; displayId: string } | null;
+  /**
+   * The MAIN-repo path whose `.volli/artifacts` to ensure before spawn (so an
+   * agent can write artifacts the instant its shell is live), or `null` when the
+   * project can't be resolved. Also the root-exists guard's stat target.
+   */
+  artifactsRoot: string | null;
 }
 
 /**
@@ -210,14 +216,18 @@ export class PtyManager {
           // session boots the default harness, same as a scratch session.
           harnessId: DEFAULT_HARNESS_ID,
           // Ticket sessions run at the MAIN repo root — worktree automation is
-          // future work, and VOLLI_TICKET_DIR always points at the main .volli.
+          // future work, and VOLLI_ARTIFACTS_DIR always points at the main .volli.
           cwd: ctx.projectPath,
           env: ticketSessionEnv(ctx.projectPath, displayId),
           title: `Session ${countTicketSessions(db, request.ticket.ticketId) + 1}`,
-          ticketDir: { projectPath: ctx.projectPath, displayId },
+          artifactsRoot: ctx.projectPath,
         },
       };
     }
+    // Scratch session: resolve the project's MAIN path so VOLLI_ARTIFACTS_DIR is
+    // injected the same way a ticket session gets it (decision #9). A project
+    // that can't be resolved still spawns (no artifacts env) rather than failing.
+    const project = getProjectById(db, request.workspaceId);
     return {
       ok: true,
       scope: {
@@ -225,9 +235,9 @@ export class PtyManager {
         ticketId: null,
         harnessId: DEFAULT_HARNESS_ID,
         cwd: request.cwd,
-        env: {},
+        env: project ? projectSessionEnv(project.path) : {},
         title: `Terminal ${countProjectScratchSessions(db, request.workspaceId) + 1}`,
-        ticketDir: null,
+        artifactsRoot: project?.path ?? null,
       },
     };
   }
@@ -258,28 +268,29 @@ export class PtyManager {
       if (webContents.isDestroyed()) {
         return { ok: false, error: "Window was closed before the terminal could start" };
       }
-      // Ticket sessions: ensure the ticket's `.volli` dir exists up front so an
-      // agent can write artifacts the instant its shell is live. A window
-      // closing during this await is caught by the post-spawn destroyed check.
-      if (scope.ticketDir !== null) {
+      // Ensure the project's `.volli/artifacts` dir exists up front so an agent
+      // can write artifacts the instant its shell is live (decision #9). A
+      // window closing during this await is caught by the post-spawn destroyed
+      // check.
+      if (scope.artifactsRoot !== null) {
         // Guard against resurrecting a moved/deleted project root: the
-        // ensureTicketDir call below runs a recursive mkdir that would happily
-        // recreate a vanished repo as an empty directory chain, handing the
-        // user a plausible-looking shell in a bogus empty "repo". Stat the root
-        // first and fail loudly if it isn't an existing directory.
+        // ensureProjectArtifactsDir call below runs a recursive mkdir that would
+        // happily recreate a vanished repo as an empty directory chain, handing
+        // the user a plausible-looking shell in a bogus empty "repo". Stat the
+        // root first and fail loudly if it isn't an existing directory.
         let rootStat: Awaited<ReturnType<typeof stat>> | null;
         try {
-          rootStat = await stat(scope.ticketDir.projectPath);
+          rootStat = await stat(scope.artifactsRoot);
         } catch {
           rootStat = null;
         }
         if (rootStat === null || !rootStat.isDirectory()) {
           return {
             ok: false,
-            error: `Project folder no longer exists at ${scope.ticketDir.projectPath}`,
+            error: `Project folder no longer exists at ${scope.artifactsRoot}`,
           };
         }
-        await ensureTicketDir(scope.ticketDir.projectPath, scope.ticketDir.displayId);
+        await ensureProjectArtifactsDir(scope.artifactsRoot);
       }
       const { file, args } = resolveShell(process.env);
       const sessionId = randomUUID();
@@ -291,7 +302,8 @@ export class PtyManager {
         rows: request.rows,
         // Inherit the user's environment; force TERM so the terminal emulator
         // negotiates 256-color regardless of the parent's TERM; layer the ticket
-        // env (VOLLI_TICKET/VOLLI_TICKET_DIR) on top for ticket sessions.
+        // env (VOLLI_TICKET/VOLLI_ARTIFACTS_DIR) on top for ticket sessions,
+        // or just VOLLI_ARTIFACTS_DIR for scratch sessions.
         env: { ...process.env, TERM: "xterm-256color", ...scope.env } as Record<string, string>,
       });
       // Same race, other side of the spawn: never register against a window

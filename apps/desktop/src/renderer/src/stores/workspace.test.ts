@@ -194,6 +194,185 @@ describe("closeTicket", () => {
   });
 });
 
+describe("ticket file tabs", () => {
+  it("openTicketFile appends the file and makes it active", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicketFile("project-a", "ticket-1", "docs/plan.md");
+
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
+      files: ["docs/plan.md"],
+      active: "file:docs/plan.md",
+    });
+  });
+
+  it("opening the same file twice keeps one entry but re-activates it", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicketFile("project-a", "ticket-1", "a.md");
+    store.getState().openTicketFile("project-a", "ticket-1", "b.md");
+    store.getState().openTicketFile("project-a", "ticket-1", "a.md");
+
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
+      files: ["a.md", "b.md"],
+      active: "file:a.md",
+    });
+  });
+
+  it("tracks open files independently per ticket and per project", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicketFile("project-a", "ticket-1", "a.md");
+    store.getState().openTicketFile("project-a", "ticket-2", "b.md");
+    store.getState().openTicketFile("project-b", "ticket-1", "c.md");
+
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.files).toEqual([
+      "a.md",
+    ]);
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-2"]?.files).toEqual([
+      "b.md",
+    ]);
+    expect(store.getState().byProject["project-b"]?.ticketTabs["ticket-1"]?.files).toEqual([
+      "c.md",
+    ]);
+  });
+
+  it("closeTicketFile removes the file and falls back to Doc when it was active", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicketFile("project-a", "ticket-1", "a.md");
+    store.getState().openTicketFile("project-a", "ticket-1", "b.md");
+    store.getState().closeTicketFile("project-a", "ticket-1", "b.md"); // b was active
+
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
+      files: ["a.md"],
+      active: "doc",
+    });
+  });
+
+  it("closeTicketFile keeps the active tab when a non-active file closes", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicketFile("project-a", "ticket-1", "a.md");
+    store.getState().openTicketFile("project-a", "ticket-1", "b.md"); // b active
+    store.getState().closeTicketFile("project-a", "ticket-1", "a.md");
+
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
+      files: ["b.md"],
+      active: "file:b.md",
+    });
+  });
+
+  it("closing the last file with Doc active prunes the ticket record", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicketFile("project-a", "ticket-1", "a.md");
+    store.getState().closeTicketFile("project-a", "ticket-1", "a.md");
+
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toBeUndefined();
+  });
+
+  it("closeTicketFile is a no-op for a ticket with no record", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    const before = store.getState().byProject;
+    store.getState().closeTicketFile("project-a", "ticket-1", "a.md");
+    expect(store.getState().byProject).toBe(before);
+  });
+
+  it("setTicketActiveTab switches the active tab, including to a session id", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicketFile("project-a", "ticket-1", "a.md");
+    store.getState().setTicketActiveTab("project-a", "ticket-1", "session-9");
+
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
+      files: ["a.md"],
+      active: "session-9",
+    });
+  });
+
+  it("setTicketActiveTab to Doc on an empty ticket creates no record", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().setTicketActiveTab("project-a", "ticket-1", "doc");
+
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toBeUndefined();
+  });
+
+  it("leaves board view/sort/open ticket untouched", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().setBoardView("project-a", "list");
+    store.getState().openTicketFile("project-a", "ticket-1", "a.md");
+
+    expect(store.getState().byProject["project-a"]?.boardView).toBe("list");
+    expect(store.getState().byProject["project-a"]?.boardSort).toBe(DEFAULT_TICKET_SORT);
+  });
+});
+
+describe("ticket file tab persistence", () => {
+  it("persists ticketTabs and rehydrates them", () => {
+    const storage = createMemoryStorage();
+    const store = createWorkspaceStore(storage);
+    store.getState().openTicketFile("project-a", "ticket-1", "docs/plan.md");
+    store.getState().setTicketActiveTab("project-a", "ticket-1", "session-9");
+
+    const rehydrated = createWorkspaceStore(storage);
+    expect(rehydrated.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
+      files: ["docs/plan.md"],
+      active: "session-9",
+    });
+  });
+
+  it("persists a record that carries only open files (default board view)", () => {
+    const storage = createMemoryStorage();
+    const store = createWorkspaceStore(storage);
+    store.getState().openTicketFile("project-a", "ticket-1", "a.md");
+
+    const parsed = JSON.parse(storage.getItem("volli:workspace")!) as {
+      state: { byProject: Record<string, Record<string, unknown>> };
+    };
+    expect(Object.keys(parsed.state.byProject)).toEqual(["project-a"]);
+    expect(parsed.state.byProject["project-a"]).toHaveProperty("ticketTabs");
+  });
+
+  it("sanitizes non-string files and prunes empty ticket records on rehydrate", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:workspace",
+      JSON.stringify({
+        state: {
+          byProject: {
+            "project-a": {
+              ticketTabs: {
+                "ticket-1": { files: ["ok.md", 42, null], active: "file:ok.md" },
+                "ticket-2": { files: [], active: "doc" }, // nothing worth keeping
+                "ticket-3": { files: "bad", active: 7 }, // wrong types
+                "ticket-4": null, // corrupt write: record is not an object at all
+                "ticket-5": "junk",
+              },
+            },
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    const store = createWorkspaceStore(storage);
+    const tabs = store.getState().byProject["project-a"]?.ticketTabs;
+    expect(tabs?.["ticket-1"]).toEqual({ files: ["ok.md"], active: "file:ok.md" });
+    expect(tabs?.["ticket-2"]).toBeUndefined();
+    expect(tabs?.["ticket-3"]).toBeUndefined();
+    expect(tabs?.["ticket-4"]).toBeUndefined();
+    expect(tabs?.["ticket-5"]).toBeUndefined();
+  });
+
+  it("defaults ticketTabs to an empty map for a record without one", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:workspace",
+      JSON.stringify({
+        state: { byProject: { "project-a": { boardView: "list" } } },
+        version: 1,
+      }),
+    );
+
+    const store = createWorkspaceStore(storage);
+    expect(store.getState().byProject["project-a"]?.ticketTabs).toEqual({});
+  });
+});
+
 describe("forget", () => {
   it("drops the project's record so a re-add starts at the defaults", () => {
     const store = createWorkspaceStore(createMemoryStorage());
@@ -210,6 +389,7 @@ describe("forget", () => {
       boardView: "board",
       boardSort: DEFAULT_TICKET_SORT,
       openTicketId: null,
+      ticketTabs: {},
     });
   });
 
@@ -243,6 +423,7 @@ describe("persistence", () => {
       "boardSort",
       "boardView",
       "openTicketId",
+      "ticketTabs",
     ]);
   });
 

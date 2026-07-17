@@ -14,7 +14,7 @@ import { registerIpcHandlers } from "./ipc";
 import { registerAppMenu } from "./menu";
 import { confirmDestructiveClose, registerTerminalIpcHandlers } from "./pty";
 import type { PtyManager } from "./pty";
-import { registerArtifactIpcHandlers } from "./volli-fs";
+import { registerFileIpcHandlers } from "./volli-fs";
 
 // Fixes dev and the packaged app to one shared Electron `userData` dir (by
 // default they diverge: packaged apps use the productName, dev falls back to
@@ -255,9 +255,10 @@ app.whenReady().then(() => {
   // Database needs `dbHandle`, which doesn't exist yet at that point.
   registerAppMenu(dbHandle);
   registerDataIpcHandlers(dbHandle);
-  // `.volli` artifacts fs plumbing (list/read/write/create/promote/watch);
-  // same degraded-DB stance as registerDataIpcHandlers.
-  registerArtifactIpcHandlers(dbHandle);
+  // Global-artifacts + @file fs plumbing (file index/read/write, artifact
+  // create, reveal, per-tab watch); same degraded-DB stance as
+  // registerDataIpcHandlers.
+  registerFileIpcHandlers(dbHandle);
   // Boots the PTY multiplexer (persists a durable record per session) and its
   // before-quit teardown (kills all PTYs, gated on busy sessions); needs the
   // db, so it registers here. The returned manager feeds each window's own

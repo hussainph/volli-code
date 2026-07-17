@@ -1,4 +1,4 @@
-export * from "./artifact";
+export * from "./file-ref";
 export * from "./board";
 export * from "./ticket";
 export * from "./ticket-branch";
