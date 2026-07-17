@@ -1,5 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -219,6 +227,30 @@ describe("buildFileIndex", () => {
     ]);
   });
 
+  it("caps the index and reports truncated, keeping artifacts (pushed first) and stopping early", async () => {
+    const project = makeGitRepoDir();
+    await writeFile(join(project, "a.md"), "a", "utf8");
+    await writeFile(join(project, "b.md"), "b", "utf8");
+    await writeFile(join(project, "c.md"), "c", "utf8");
+    await createArtifact(project, "art"); // → .volli/artifacts/art.md (force-included, first)
+
+    // A cap of 2 forces truncation: the artifact survives (pushed first), one
+    // repo file fills the rest, the remainder is skipped without materializing.
+    const { files, truncated } = await buildFileIndex(project, 2);
+    expect(truncated).toBe(true);
+    expect(files).toHaveLength(2);
+    expect(files.some((f) => f.relPath === ".volli/artifacts/art.md" && f.artifact)).toBe(true);
+  });
+
+  it("reports truncated:false when the entry count exactly equals the cap", async () => {
+    const project = makeGitRepoDir();
+    await writeFile(join(project, "a.md"), "a", "utf8");
+    await writeFile(join(project, "b.md"), "b", "utf8");
+    const { files, truncated } = await buildFileIndex(project, 2);
+    expect(truncated).toBe(false);
+    expect(files).toHaveLength(2);
+  });
+
   it("falls back to a bounded walk when git is unavailable, skipping .git/node_modules/.volli", async () => {
     const project = makeTempProjectDir(); // NOT a git repo → git ls-files fails
     await writeFile(join(project, "a.md"), "a", "utf8");
@@ -270,6 +302,26 @@ describe("readFile", () => {
     const project = makeTempProjectDir();
     await writeFile(join(project, "big.md"), "a".repeat(1024 * 1024 + 10), "utf8");
     const result = await readFsFile(project, null, "big.md");
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.content.type !== "text") throw new Error("expected text");
+    expect(result.content.truncated).toBe(true);
+    expect(result.content.text.length).toBe(1024 * 1024);
+  });
+
+  it("reads a file exactly at the 1 MiB cap in full, not truncated", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "exact.md"), "a".repeat(1024 * 1024), "utf8");
+    const result = await readFsFile(project, null, "exact.md");
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.content.type !== "text") throw new Error("expected text");
+    expect(result.content.truncated).toBe(false);
+    expect(result.content.text.length).toBe(1024 * 1024);
+  });
+
+  it("reads a file one byte over the cap as truncated to exactly the cap", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "over.md"), "a".repeat(1024 * 1024 + 1), "utf8");
+    const result = await readFsFile(project, null, "over.md");
     expect(result.ok).toBe(true);
     if (!result.ok || result.content.type !== "text") throw new Error("expected text");
     expect(result.content.truncated).toBe(true);
@@ -382,6 +434,27 @@ describe("writeFile", () => {
     expect(await readFile(join(project, "notes.md"), "utf8")).toBe("on disk");
   });
 
+  it("self-heals a deleted .volli/ before writing an artifact (recreates the dir + gitignore)", async () => {
+    const project = makeTempProjectDir();
+    await createArtifact(project, "notes"); // → .volli/artifacts/notes.md
+    // `git clean -xdf` removes `.volli` (it self-gitignores) out from under the tab.
+    rmSync(join(project, ".volli"), { recursive: true, force: true });
+
+    const result = await writeFsFile(project, null, ".volli/artifacts/notes.md", "# recovered");
+    expect(result.ok).toBe(true);
+    expect(existsSync(join(project, ".volli", ".gitignore"))).toBe(true);
+    expect(await readFile(join(project, ".volli", "artifacts", "notes.md"), "utf8")).toBe(
+      "# recovered",
+    );
+  });
+
+  it("does not create parent dirs for a non-.volli path (never mkdirs arbitrary repo paths)", async () => {
+    const project = makeTempProjectDir();
+    const result = await writeFsFile(project, null, "missing/dir/file.md", "x");
+    expect(result.ok).toBe(false);
+    expect(existsSync(join(project, "missing"))).toBe(false);
+  });
+
   it("writes to the worktree copy for a non-.volli path when a worktree root is given", async () => {
     const main = makeTempProjectDir();
     const worktree = makeTempProjectDir();
@@ -472,6 +545,7 @@ async function watchFile(
     "main",
     project,
     relPath,
+    project,
   );
 }
 
@@ -593,7 +667,7 @@ describe("FileWatchManager", () => {
     } satisfies FileChangedEvent);
   });
 
-  it("tears down + sends one final broadcast when the watched dir has vanished on re-arm", async () => {
+  it("retries a vanished non-.volli watch dir, then tears down + sends one final broadcast", async () => {
     const project = makeTempProjectDir();
     const manager = new FileWatchManager(0);
     const webContents = makeWebContents();
@@ -608,10 +682,19 @@ describe("FileWatchManager", () => {
       "main",
       sub,
       "notes.md",
+      project,
     );
 
     rmSync(sub, { recursive: true, force: true });
+    vi.useFakeTimers();
     watchCalls[0]?.watcher.emitError(new Error("boom"));
+
+    // A non-.volli dir is never mkdir'd; the manager retries (~1s apart) in case
+    // it is mid-regeneration before giving up — no broadcast until exhausted.
+    expect(webContents.send).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1000);
+    expect(webContents.send).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1000);
 
     expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
       projectId: "proj-1",
@@ -622,6 +705,72 @@ describe("FileWatchManager", () => {
     expect(() =>
       manager.unwatch(webContents as never, "proj-1", "ticket-1", "sub/notes.md"),
     ).not.toThrow();
+  });
+
+  it("re-homes onto a recreated non-.volli dir when it reappears within the retry window", async () => {
+    const project = makeTempProjectDir();
+    const manager = new FileWatchManager(0);
+    const webContents = makeWebContents();
+    const sub = join(project, "sub");
+    await mkdir(sub);
+    await writeFile(join(sub, "notes.md"), "x", "utf8");
+    manager.watch(
+      webContents as never,
+      "proj-1",
+      "ticket-1",
+      "sub/notes.md",
+      "main",
+      sub,
+      "notes.md",
+      project,
+    );
+    expect(watchMock).toHaveBeenCalledTimes(1);
+
+    rmSync(sub, { recursive: true, force: true });
+    vi.useFakeTimers();
+    watchCalls[0]?.watcher.emitError(new Error("boom"));
+
+    // The build regenerates the dir before the retries run out: the watch re-homes.
+    mkdirSync(sub);
+    vi.advanceTimersByTime(1000);
+    expect(watchMock).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(1);
+    expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
+      projectId: "proj-1",
+      relPath: "sub/notes.md",
+      source: "main",
+    } satisfies FileChangedEvent);
+  });
+
+  it("recreates a wiped .volli watch dir and re-arms instead of tearing down", async () => {
+    const project = makeTempProjectDir();
+    const manager = new FileWatchManager(0);
+    const webContents = makeWebContents();
+    await ensureProjectArtifactsDir(project);
+    const artifactsDir = join(project, ".volli", "artifacts");
+    await writeFile(join(artifactsDir, "notes.md"), "x", "utf8");
+    manager.watch(
+      webContents as never,
+      "proj-1",
+      "ticket-1",
+      ".volli/artifacts/notes.md",
+      "main",
+      artifactsDir,
+      "notes.md",
+      project,
+    );
+    expect(watchMock).toHaveBeenCalledTimes(1);
+
+    // An agent runs `rm -rf .volli && mkdir -p .volli/artifacts`; the watcher faults.
+    rmSync(join(project, ".volli"), { recursive: true, force: true });
+    watchCalls[0]?.watcher.emitError(new Error("boom"));
+
+    // The manager recreates .volli/artifacts (with its self-gitignore) and rewires.
+    await vi.waitFor(() => {
+      expect(existsSync(join(project, ".volli", "artifacts"))).toBe(true);
+      expect(existsSync(join(project, ".volli", ".gitignore"))).toBe(true);
+      expect(watchMock).toHaveBeenCalledTimes(2);
+    });
   });
 });
 

@@ -1,6 +1,12 @@
 import * as React from "react";
 import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
-import { displayTicketId, errorMessage, type FileSource, type Ticket } from "@volli/shared";
+import {
+  baseNameOf,
+  displayTicketId,
+  errorMessage,
+  type FileSource,
+  type Ticket,
+} from "@volli/shared";
 
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import type { MarkdownFileRefs } from "@renderer/components/editor/markdown-live-editor";
@@ -22,11 +28,9 @@ import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { useCloseGuard } from "@renderer/terminal/close-guard";
 import { closeTicketSession, renameTerminalSession } from "@renderer/terminal/session-lifecycle";
 
-/** The basename of a `/`-separated relPath — a file tab's label. */
-function baseNameOf(relPath: string): string {
-  const slash = relPath.lastIndexOf("/");
-  return slash === -1 ? relPath : relPath.slice(slash + 1);
-}
+/** The always-present Doc tab's id — the fallback every persisted/live tab id
+ * resets to once it no longer names a renderable tab (doc/file/session). */
+const DOC_TAB_ID = "doc";
 
 /**
  * The right rail's bottom "Details" drawer (status/priority/labels/worktree).
@@ -104,7 +108,7 @@ export function TicketDetail({
   const displayId = displayTicketId(ticketPrefix, ticket.ticketNumber);
 
   const openFiles = ticketTabsState?.files ?? [];
-  const activeTabId = ticketTabsState?.active ?? "doc";
+  const activeTabId = ticketTabsState?.active ?? DOC_TAB_ID;
 
   // The per-tab worktree badge is driven by each file's resolved source, which
   // only the FileView knows after reading — it reports back via `onSource`.
@@ -150,7 +154,7 @@ export function TicketDetail({
   // below is keyed off `kind`, not id, so the plane and content branch
   // generically.
   const tabs: TicketTabDescriptor[] = [
-    { id: "doc", kind: "doc", label: displayId },
+    { id: DOC_TAB_ID, kind: "doc", label: displayId },
     ...openFiles.map(
       (relPath): TicketTabDescriptor => ({
         id: `file:${relPath}`,
@@ -170,6 +174,21 @@ export function TicketDetail({
   ];
   // A closed session tab, or a persisted active id with no live tab, falls back to Doc.
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0]!;
+  const activeTabIsRenderable = activeTab.id === activeTabId;
+
+  // The fallback above is purely visual — it renders Doc without writing the
+  // store, so a persisted `active` naming a session that's since closed (or
+  // one restored from a previous launch, which never repopulates: sessions
+  // don't survive an app restart) stays wedged in workspace.ts forever
+  // (`sanitizeTicketTabs` keeps any record whose `active !== "doc"`). Reset it
+  // to Doc for real once we're sure it's actually stale rather than just not
+  // hydrated yet — `creating` covers the one in-flight window where a new
+  // session tab has been asked for but hasn't landed in the sessions store,
+  // so `tabs` doesn't include it yet even though it's about to.
+  React.useEffect(() => {
+    if (creating || activeTabIsRenderable) return;
+    setTicketActiveTab(projectId, ticket.id, DOC_TAB_ID);
+  }, [creating, activeTabIsRenderable, setTicketActiveTab, projectId, ticket.id]);
 
   const handleClose = React.useCallback(() => closeTicket(projectId), [closeTicket, projectId]);
 
@@ -214,7 +233,18 @@ export function TicketDetail({
           onSelectTab={setActiveTab}
           onCloseTab={(tab) => {
             if (tab.kind === "file" && tab.relPath !== undefined) {
-              closeTicketFile(projectId, ticket.id, tab.relPath);
+              const relPath = tab.relPath;
+              closeTicketFile(projectId, ticket.id, relPath);
+              // Otherwise a reopened tab can briefly show the last-known
+              // worktree/main badge from before the close, until the new
+              // FileView's own read reports back — the record is keyed by
+              // relPath only and never pruned on its own.
+              setFileSources((prev) => {
+                if (!(relPath in prev)) return prev;
+                const next = { ...prev };
+                delete next[relPath];
+                return next;
+              });
               return;
             }
             const sessionId = tab.id;

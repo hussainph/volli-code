@@ -2,9 +2,12 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   artifactBaseName,
+  baseNameOf,
   classifyFileKind,
+  dirNameOf,
   imageMimeType,
   isArtifactRelPath,
+  isExpressibleRefPath,
   isSafeArtifactEntryName,
   isSafeRelPath,
   isValidNewArtifactName,
@@ -85,6 +88,52 @@ describe("isArtifactRelPath", () => {
     expect(isArtifactRelPath(".volli/tickets/VC-1/notes.md")).toBe(false);
     // A sibling that merely shares the prefix string is not under the dir.
     expect(isArtifactRelPath(".volli/artifacts-old.md")).toBe(false);
+  });
+});
+
+describe("baseNameOf", () => {
+  it("returns the segment after the last slash", () => {
+    expect(baseNameOf("src/components/notes.md")).toBe("notes.md");
+  });
+
+  it("returns the whole string when there is no separator", () => {
+    expect(baseNameOf("notes.md")).toBe("notes.md");
+  });
+});
+
+describe("dirNameOf", () => {
+  it("returns the directory portion of a nested path", () => {
+    expect(dirNameOf("src/components/notes.md")).toBe("src/components");
+  });
+
+  it("returns an empty string at the repo root (no separator)", () => {
+    expect(dirNameOf("notes.md")).toBe("");
+  });
+});
+
+describe("isExpressibleRefPath", () => {
+  it.each([["src/main.ts"], ["notes.md"], ["src/lib"], [".volli/artifacts/plan.md"]])(
+    "accepts the expressible path %j",
+    (relPath) => {
+      expect(isExpressibleRefPath(relPath)).toBe(true);
+    },
+  );
+
+  it.each([
+    [""], // empty is never expressible
+    ["my notes.md"], // a space truncates the run
+    ["src/pages/[slug].tsx"], // `[`/`]` are outside the path char class
+    ["src/a+b.ts"], // `+` is outside the path char class
+    ["plan.md."], // a trailing dot would be clipped by the parser
+    ["Makefile"], // no `/` or `.` — indistinguishable from a bare @mention
+  ])("rejects the unexpressible path %j", (relPath) => {
+    expect(isExpressibleRefPath(relPath)).toBe(false);
+  });
+
+  it("agrees with parseFileRefs: an expressible path round-trips unchanged", () => {
+    const relPath = "src/components/notes.md";
+    expect(isExpressibleRefPath(relPath)).toBe(true);
+    expect(parseFileRefs(`@${relPath}`).map((r) => r.path)).toEqual([relPath]);
   });
 });
 

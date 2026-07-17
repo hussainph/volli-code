@@ -178,13 +178,15 @@ export function MarkdownLiveEditor({
   }, [value]);
 
   // A fresh index (version bump) can change which `@` tokens resolve; nudge the
-  // chip plugin to rebuild without touching the document. No-op when file refs
-  // aren't enabled.
+  // chip plugin to rebuild without touching the document. Keyed on indexVersion
+  // alone — depending on the whole fileRefs object would refire on any callback
+  // identity churn; enabled-ness and callbacks are read through fileRefsRef.
+  // No-op when file refs aren't enabled.
   React.useEffect(() => {
     const view = viewRef.current;
-    if (!view || fileRefs === undefined) return;
+    if (!view || fileRefsRef.current === undefined) return;
     view.dispatch({ effects: bumpFileIndex.of(null) });
-  }, [fileRefs?.indexVersion, fileRefs]);
+  }, [fileRefs?.indexVersion]);
 
   return <div ref={hostRef} className={className} />;
 }

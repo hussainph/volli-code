@@ -3,7 +3,7 @@ import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { EditorState } from "@codemirror/state";
 import { EditorView, lineNumbers } from "@codemirror/view";
-import { errorMessage, type FileSource } from "@volli/shared";
+import { baseNameOf, errorMessage, type FileSource } from "@volli/shared";
 import { toast } from "sonner";
 
 import { ContentColumn } from "@renderer/components/layout/content-column";
@@ -34,12 +34,6 @@ type LoadState =
   | { status: "code"; text: string; truncated: boolean }
   | { status: "image"; dataUrl: string }
   | { status: "binary" };
-
-/** The basename of a `/`-separated relPath — the human label for toasts/headers. */
-function baseNameOf(relPath: string): string {
-  const slash = relPath.lastIndexOf("/");
-  return slash === -1 ? relPath : relPath.slice(slash + 1);
-}
 
 /** A read-only monospace CodeMirror peek (decision #7: no grammar highlighting in v1). */
 function ReadOnlyCode({ text }: { text: string }) {
@@ -131,11 +125,18 @@ export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: F
   const conflictRef = React.useRef<{ text: string; mtime: number } | null>(null);
   const focusedRef = React.useRef(false);
   const mountedRef = React.useRef(true);
+  // Mirrors `state` for the fs-watch subscription (set up once, so it can't
+  // read the current `state` off a render closure) — only its `.status` is
+  // read, to decide whether a conflict banner (markdown-only) can even render.
+  const stateRef = React.useRef<LoadState>(state);
   const name = baseNameOf(relPath);
 
   React.useEffect(() => {
     conflictRef.current = conflict;
   }, [conflict]);
+  React.useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
   React.useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -210,6 +211,29 @@ export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: F
         toast.error(`Could not save ${name}: ${result.error}`);
         return;
       }
+      if (disk.kind !== "markdown" || disk.content.truncated) {
+        // The file grew past the 1 MiB read cap (or stopped being markdown)
+        // underneath us — that re-read is a truncated/foreign prefix, not a
+        // valid editable baseline. Offering it as a Reload target would
+        // autosave the prefix back and destroy everything past the cap, so
+        // don't raise the conflict banner: drop into the read-only 'code'
+        // state instead, matching the load and onChanged paths.
+        // `debouncer` is declared below but stable for the component's whole
+        // lifetime (see use-debounced-callback.ts), so it's safe to close
+        // over here despite the declaration order — deliberately left out of
+        // the deps array below rather than reordering the two.
+        debouncer.cancel();
+        syncedMtimeRef.current = disk.mtime;
+        if (mountedRef.current) {
+          setState({ status: "code", text: disk.content.text, truncated: disk.content.truncated });
+          toast.error(
+            `${name} changed on disk and grew past the editable 1 MiB cap (or is no longer markdown) — editing stopped.`,
+          );
+        } else {
+          toast.error(`${name} changed on disk — your last edits were not saved.`);
+        }
+        return;
+      }
       if (disk.content.text !== syncedRef.current) {
         if (mountedRef.current) setConflict({ text: disk.content.text, mtime: disk.mtime });
         else toast.error(`${name} changed on disk — your last edits were not saved.`);
@@ -221,6 +245,10 @@ export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: F
     // Both attempts hit an mtime drift with identical content (rapid external
     // touches) — give up quietly this cycle; the next edit reschedules a save.
     toast.error(`Could not save ${name}: the file is being modified externally.`);
+    // `debouncer` is referenced above but declared after this callback (see
+    // note there) — deliberately omitted from deps; its identity never
+    // changes for the component's lifetime.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, ticketId, relPath, readFile, name]);
 
   const debouncer = useDebouncedCallback(() => void commit(), AUTOSAVE_IDLE_MS);
@@ -239,7 +267,23 @@ export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: F
       if (event.projectId !== projectId || event.relPath !== relPath) return;
       void (async () => {
         const disk = await readFile();
-        if (!mountedRef.current || !disk.ok) return;
+        if (!mountedRef.current) return;
+        if (!disk.ok) {
+          // The file was deleted (or is now unreadable) under an open tab. A
+          // dirty markdown draft (unsaved user work) is worth protecting — a
+          // read error can't destroy a buffer that isn't visible anywhere
+          // else, so just toast and leave the editor up. Anything else (a
+          // clean markdown tab, or a tab that was never editable to begin
+          // with) transitions to the read-only 'error' view so the deletion
+          // is actually visible instead of rendering stale content forever.
+          const dirty = draftRef.current !== syncedRef.current;
+          if (stateRef.current.status === "markdown" && dirty) {
+            toast.error(`${name} changed on disk (now unreadable) — your unsaved edits were kept.`);
+          } else {
+            setState({ status: "error", error: disk.error });
+          }
+          return;
+        }
         onSource?.(relPath, disk.source);
         if (disk.content.type === "image") {
           setState({ status: "image", dataUrl: disk.content.dataUrl });
@@ -256,14 +300,38 @@ export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: F
           setState({ status: "code", text: disk.content.text, truncated: disk.content.truncated });
           return;
         }
-        // Markdown: no real change vs baseline (also the echo of our own write).
-        if (disk.content.text === syncedRef.current) return;
+        // Markdown, no real change vs the content baseline (also the echo of
+        // our own write) — still land on the editor if the tab was showing
+        // 'error'/'code' (recovering from a prior deletion/truncation), even
+        // though there's nothing to adopt content-wise.
+        if (disk.content.text === syncedRef.current) {
+          if (stateRef.current.status !== "markdown") {
+            syncedMtimeRef.current = disk.mtime;
+            draftRef.current = disk.content.text;
+            setDocValue(disk.content.text);
+            setState({ status: "markdown" });
+          }
+          return;
+        }
         const dirty = draftRef.current !== syncedRef.current;
-        if (!dirty && !focusedRef.current && conflictRef.current === null) {
+        // A conflict banner only means something over a live editor. A tab
+        // that wasn't already 'markdown' has no editor and nothing to
+        // protect — draftRef/syncedRef only ever diverge while editing, so
+        // `dirty` is always false coming from 'error'/'code' — but guard on
+        // status explicitly anyway so a stale conflict flag from a state this
+        // tab has since left can't wedge it: always take the full-transition
+        // adopt path in that case rather than raising a banner that can't
+        // render outside 'markdown'.
+        if (
+          stateRef.current.status !== "markdown" ||
+          (!dirty && !focusedRef.current && conflictRef.current === null)
+        ) {
           syncedRef.current = disk.content.text;
           syncedMtimeRef.current = disk.mtime;
           draftRef.current = disk.content.text;
           setDocValue(disk.content.text);
+          setState({ status: "markdown" });
+          if (conflictRef.current !== null) setConflict(null);
         } else {
           setConflict({ text: disk.content.text, mtime: disk.mtime });
         }

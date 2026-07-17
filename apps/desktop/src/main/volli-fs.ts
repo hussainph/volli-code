@@ -267,20 +267,30 @@ async function walkFiles(
  */
 export async function buildFileIndex(
   projectPath: string,
+  indexCap: number = INDEX_CAP,
 ): Promise<{ files: IndexedFile[]; truncated: boolean }> {
   const gitFiles = await gitListFiles(projectPath);
   const repoRelPaths =
     gitFiles ??
-    (await walkFiles(projectPath, { skipDirNames: FALLBACK_SKIP_DIRS, limit: INDEX_CAP }));
+    (await walkFiles(projectPath, { skipDirNames: FALLBACK_SKIP_DIRS, limit: indexCap }));
   const artifactRelPaths = await walkFiles(projectArtifactsDir(projectPath), {
     relPrefix: VOLLI_ARTIFACTS_REL_DIR,
-    limit: INDEX_CAP,
+    limit: indexCap,
   });
 
   const seen = new Set<string>();
   const files: IndexedFile[] = [];
+  let truncated = false;
+  // Stop classifying/deduping once the cap is hit: `git ls-files` is unbounded
+  // (a 500k-file monorepo), and materializing entries only to slice them away
+  // burns main-process CPU. A distinct path skipped at the cap sets `truncated`;
+  // a duplicate never does (it is already in the index), keeping the flag exact.
   const push = (relPath: string, artifact: boolean): void => {
     if (seen.has(relPath)) return;
+    if (files.length >= indexCap) {
+      truncated = true;
+      return;
+    }
     seen.add(relPath);
     files.push({ relPath, kind: classifyFileKind(relPath), artifact });
   };
@@ -289,22 +299,45 @@ export async function buildFileIndex(
   // git normally excludes `.volli` (gitignored), but guard the flag anyway.
   for (const rel of repoRelPaths) push(rel, isArtifactRelPath(rel));
 
-  const truncated = files.length > INDEX_CAP;
-  return { files: truncated ? files.slice(0, INDEX_CAP) : files, truncated };
+  return { files, truncated };
 }
 
 // ---- read / write / create / reveal ------------------------------------------
 
-/** Reads up to `cap` bytes; `truncated` is true when the file is larger. */
+/**
+ * Reads up to `cap` bytes, LOOPING until EOF or `cap + 1` bytes are in hand —
+ * a single `read()` can return a legitimate short count (NFS/FUSE), and
+ * inferring truncation from one call would silently drop the file's tail and
+ * report `truncated: false`, which the renderer would then baseline autosave on
+ * and write back (data loss). `truncated` is true only when a real `cap + 1`th
+ * byte exists. `hintSize` is the caller's stat `size` (may be stale): it sizes
+ * the initial allocation (`min(hintSize, cap) + 1`) but never bounds the loop,
+ * which keeps reading — growing the buffer if the file outgrew its stat — up to
+ * the `cap + 1` ceiling.
+ */
 async function readCapped(
   filePath: string,
   cap: number,
+  hintSize: number,
 ): Promise<{ buf: Buffer; truncated: boolean }> {
+  const limit = cap + 1; // one past the cap: the +1th byte's existence proves truncation
   const handle = await fsp.open(filePath, "r");
   try {
-    const buffer = Buffer.alloc(cap + 1);
-    const { bytesRead } = await handle.read(buffer, 0, cap + 1, 0);
-    return { buf: buffer.subarray(0, Math.min(bytesRead, cap)), truncated: bytesRead > cap };
+    let buffer = Buffer.alloc(Math.min(Math.max(hintSize, 0), cap) + 1);
+    let total = 0;
+    for (;;) {
+      if (total >= buffer.length) {
+        // The file outgrew its stat hint: grow the buffer toward the ceiling.
+        const grown = Buffer.alloc(Math.min(buffer.length * 2, limit));
+        buffer.copy(grown);
+        buffer = grown;
+      }
+      const { bytesRead } = await handle.read(buffer, total, buffer.length - total, total);
+      if (bytesRead === 0) break; // EOF
+      total += bytesRead;
+      if (total >= limit) break; // read one past the cap — enough to flag truncation
+    }
+    return { buf: buffer.subarray(0, Math.min(total, cap)), truncated: total > cap };
   } finally {
     await handle.close();
   }
@@ -321,7 +354,7 @@ async function readContent(filePath: string, relPath: string, size: number): Pro
     }
     return { type: "binary" };
   }
-  const { buf, truncated } = await readCapped(filePath, TEXT_CAP_BYTES);
+  const { buf, truncated } = await readCapped(filePath, TEXT_CAP_BYTES, size);
   // NUL-sniff: a byte-zero anywhere in the sampled prefix means binary.
   if (buf.includes(0)) return { type: "binary" };
   return { type: "text", text: buf.toString("utf8"), truncated };
@@ -367,6 +400,23 @@ export async function writeFile(
 ): Promise<FileWriteResult> {
   if (classifyFileKind(relPath) !== "markdown") {
     return { ok: false, error: "Only markdown files can be edited" };
+  }
+  // Self-heal a vanished `.volli/` before resolving (the old `writeArtifact`'s
+  // `ensureTierDir`): `.volli` self-gitignores, so `git clean -xdf` deletes it
+  // out from under an open artifact tab. Without this, every autosave fails
+  // "File was not found" forever (`resolveSafePath` has no parent dir to
+  // realpath-check) and the user's buffered edits are stranded. Only `.volli/**`
+  // is ever recreated — never an arbitrary repo path.
+  if (isVolliRelPath(relPath)) {
+    try {
+      if (isArtifactRelPath(relPath)) {
+        await ensureProjectArtifactsDir(projectPath);
+      } else {
+        await ensureVolliDir(projectPath);
+      }
+    } catch (error) {
+      return { ok: false, error: errorMessage(error) };
+    }
   }
   const resolved = await resolveSafePath(projectPath, worktreeRoot, relPath);
   if (!resolved.ok) return resolved;
@@ -457,6 +507,8 @@ const WATCH_DEBOUNCE_MS = 250;
 interface FileWatchSubscription {
   webContents: WebContents;
   projectId: string;
+  /** The project's MAIN checkout path — used to recreate a wiped `.volli` watch dir on re-arm. */
+  projectPath: string;
   relPath: string;
   source: FileSource;
   /** The watched directory (the file's parent) and the file's basename to filter dir events by. */
@@ -467,6 +519,8 @@ interface FileWatchSubscription {
   onDestroyed: () => void;
   /** Guards against overlapping re-arms. */
   reArming: boolean;
+  /** Pending bounded-retry timer for a missing watch dir (cleared on teardown). */
+  retryTimer: NodeJS.Timeout | null;
 }
 
 /**
@@ -491,7 +545,7 @@ export class FileWatchManager {
     return `${webContents.id}:${projectId}:${ticketId ?? ""}:${relPath}`;
   }
 
-  /** Idempotent: watching an already-watched tab is a no-op. `dir`/`base`/`source` come from the caller's resolution. */
+  /** Idempotent: watching an already-watched tab is a no-op. `dir`/`base`/`source`/`projectPath` come from the caller's resolution. */
   watch(
     webContents: WebContents,
     projectId: string,
@@ -500,6 +554,7 @@ export class FileWatchManager {
     source: FileSource,
     dir: string,
     base: string,
+    projectPath: string,
   ): Result {
     const key = this.keyFor(webContents, projectId, ticketId, relPath);
     if (this.subs.has(key)) return { ok: true };
@@ -508,6 +563,7 @@ export class FileWatchManager {
     const sub: FileWatchSubscription = {
       webContents,
       projectId,
+      projectPath,
       relPath,
       source,
       dir,
@@ -516,6 +572,7 @@ export class FileWatchManager {
       debounceTimer: null,
       onDestroyed: () => this.teardown(key),
       reArming: false,
+      retryTimer: null,
     };
     this.subs.set(key, sub);
     try {
@@ -565,10 +622,12 @@ export class FileWatchManager {
 
   /**
    * Rebuilds the watcher in place after the watched dir changed underneath it
-   * (deleted-and-recreated) or the watcher faulted. Single attempt: on success
-   * it broadcasts once (the tree may have changed); if the dir is gone it tears
-   * the subscription down and sends one final broadcast — we lose live updates
-   * but never leave the tab believing they still flow, and never crash.
+   * (deleted-and-recreated) or the watcher faulted. When the dir is still there
+   * it rewires synchronously and broadcasts once (the tree may have changed).
+   * When the dir is momentarily GONE it does NOT tear down permanently — an
+   * agent's `rm -rf .volli && mkdir -p .volli/artifacts`, or a build wiping and
+   * regenerating a dir, would otherwise leave the tab silently stale for life:
+   * see {@link attemptReArm}. Never crashes main.
    */
   private reArm(key: string, sub: FileWatchSubscription): void {
     if (sub.reArming) return;
@@ -576,27 +635,85 @@ export class FileWatchManager {
     sub.reArming = true;
     sub.watcher?.close();
     sub.watcher = null;
+    this.attemptReArm(key, sub, 0);
+  }
 
-    if (!existsSync(sub.dir)) {
-      this.teardown(key);
-      if (!sub.webContents.isDestroyed()) {
-        const payload: FileChangedEvent = {
-          projectId: sub.projectId,
-          relPath: sub.relPath,
-          source: sub.source,
-        };
-        sub.webContents.send("volli:file-changed" satisfies VolliIpcEvent, payload);
-      }
-      return;
-    }
+  /** Whether the watched dir lives inside the project's `.volli` tree (ours to recreate). */
+  private isUnderVolliTree(sub: FileWatchSubscription): boolean {
+    const root = volliDir(sub.projectPath);
+    return sub.dir === root || sub.dir.startsWith(root + sep);
+  }
+
+  /** Recreates a wiped `.volli` watch dir (best-effort). `attemptReArm` re-checks existence after. */
+  private async ensureVolliWatchDir(sub: FileWatchSubscription): Promise<void> {
     try {
-      this.wireWatcher(key, sub);
+      const artifactsDir = projectArtifactsDir(sub.projectPath);
+      if (sub.dir === artifactsDir || sub.dir.startsWith(artifactsDir + sep)) {
+        await ensureProjectArtifactsDir(sub.projectPath);
+      } else {
+        await ensureVolliDir(sub.projectPath);
+      }
+      // The watched dir may be deeper than the ensure helpers create.
+      await fsp.mkdir(sub.dir, { recursive: true });
     } catch {
-      this.teardown(key);
+      // Best-effort: finishReArm re-checks existsSync and falls into retry/teardown.
+    }
+  }
+
+  /**
+   * One re-arm attempt. For a `.volli/**` dir we own, recreate it first (agent
+   * wiped it, or `git clean`); an arbitrary dir is never mkdir'd. Then hand off
+   * to {@link finishReArm}, which rewires if the dir is now present or schedules
+   * a bounded retry otherwise. The `.volli` recreation is async, so this path is
+   * NOT synchronous for `.volli` dirs; the plain-fault path (dir still present)
+   * stays synchronous, matching the watcher-error re-arm contract.
+   */
+  private attemptReArm(key: string, sub: FileWatchSubscription, attempt: number): void {
+    if (this.subs.get(key) !== sub) return; // torn down while the retry was queued
+    if (!existsSync(sub.dir) && this.isUnderVolliTree(sub)) {
+      void this.ensureVolliWatchDir(sub).finally(() => this.finishReArm(key, sub, attempt));
       return;
     }
-    sub.reArming = false;
-    this.scheduleBroadcast(sub);
+    this.finishReArm(key, sub, attempt);
+  }
+
+  private readonly reArmRetryMax = 3;
+  private readonly reArmRetryDelayMs = 1000;
+
+  /**
+   * Rewires when the watch dir is present; otherwise schedules a bounded retry
+   * (dir may be mid-regeneration) and, once exhausted, tears down with one final
+   * broadcast so the tab refetches rather than believing updates still flow.
+   */
+  private finishReArm(key: string, sub: FileWatchSubscription, attempt: number): void {
+    if (this.subs.get(key) !== sub) return; // torn down while queued
+    if (existsSync(sub.dir)) {
+      try {
+        this.wireWatcher(key, sub);
+      } catch {
+        this.teardown(key);
+        return;
+      }
+      sub.reArming = false;
+      this.scheduleBroadcast(sub);
+      return;
+    }
+    if (attempt + 1 < this.reArmRetryMax) {
+      sub.retryTimer = setTimeout(() => {
+        sub.retryTimer = null;
+        this.attemptReArm(key, sub, attempt + 1);
+      }, this.reArmRetryDelayMs);
+      return;
+    }
+    this.teardown(key);
+    if (!sub.webContents.isDestroyed()) {
+      const payload: FileChangedEvent = {
+        projectId: sub.projectId,
+        relPath: sub.relPath,
+        source: sub.source,
+      };
+      sub.webContents.send("volli:file-changed" satisfies VolliIpcEvent, payload);
+    }
   }
 
   unwatch(
@@ -613,6 +730,7 @@ export class FileWatchManager {
     if (sub === undefined) return;
     sub.watcher?.close();
     if (sub.debounceTimer !== null) clearTimeout(sub.debounceTimer);
+    if (sub.retryTimer !== null) clearTimeout(sub.retryTimer);
     if (!sub.webContents.isDestroyed()) {
       sub.webContents.removeListener("destroyed", sub.onDestroyed);
     }
@@ -831,6 +949,7 @@ export function registerFileIpcHandlers(handle: DbHandle): FileWatchManager {
           source,
           dirname(filePath),
           basename(filePath),
+          scope.projectPath,
         );
       } catch (error) {
         return { ok: false, error: errorMessage(error) };

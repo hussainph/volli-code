@@ -34,10 +34,15 @@ import {
   WidgetType,
 } from "@codemirror/view";
 import {
+  baseNameOf,
+  dirNameOf,
+  type FileRef,
   type IndexedFile,
+  isExpressibleRefPath,
   isValidNewArtifactName,
   parseFileRefs,
   scoreFileMatch,
+  VOLLI_ARTIFACTS_REL_DIR,
   withMarkdownExtension,
 } from "@volli/shared";
 import { toast } from "sonner";
@@ -73,18 +78,6 @@ const MAX_PICKER_RESULTS = 50;
  */
 export const bumpFileIndex = StateEffect.define<null>();
 
-/** The basename of a `/`-separated relPath (or the whole string when there's no separator). */
-function baseNameOf(relPath: string): string {
-  const slash = relPath.lastIndexOf("/");
-  return slash === -1 ? relPath : relPath.slice(slash + 1);
-}
-
-/** The directory portion of a relPath (empty at the repo root) — the picker's dim detail line. */
-function dirNameOf(relPath: string): string {
-  const slash = relPath.lastIndexOf("/");
-  return slash === -1 ? "" : relPath.slice(0, slash);
-}
-
 // ---- @ autocomplete -----------------------------------------------------------
 
 /**
@@ -111,6 +104,10 @@ function fileCompletionSource(config: FileRefsConfig): CompletionSource {
     const index = config.getIndex();
 
     const ranked = index
+      // Drop paths the v1 ref grammar can't express (spaces, `[slug]`, `+`, …):
+      // inserting `@${relPath}` for one would silently degrade to plain text
+      // since parseFileRefs wouldn't consume it back. See isExpressibleRefPath.
+      .filter((file) => isExpressibleRefPath(file.relPath))
       .map((file) => ({ file, score: scoreFileMatch(query, file.relPath) }))
       .filter((entry): entry is { file: IndexedFile; score: number } => entry.score !== null)
       .toSorted((a, b) => b.score - a.score)
@@ -131,7 +128,13 @@ function fileCompletionSource(config: FileRefsConfig): CompletionSource {
       },
     }));
 
-    const exactMatch = index.some((file) => file.relPath === query);
+    // The created artifact's relPath is deterministic (the artifacts dir + the
+    // `.md`-forced name), so we can both detect an existing match by that full
+    // relPath — a bare-name compare would never hit (index holds relPaths), so
+    // the create row stayed pinned even when the artifact existed and selecting
+    // it EEXISTed — and insert the ref synchronously below.
+    const createdRelPath = `${VOLLI_ARTIFACTS_REL_DIR}/${withMarkdownExtension(query.trim())}`;
+    const exactMatch = index.some((file) => file.relPath === createdRelPath);
     if (isValidNewArtifactName(query) && !exactMatch) {
       const displayName = withMarkdownExtension(query.trim());
       options.push({
@@ -140,17 +143,24 @@ function fileCompletionSource(config: FileRefsConfig): CompletionSource {
         // Keep it pinned regardless of the fuzzy order above.
         boost: 99,
         apply: (view: EditorView, _completion: Completion, from: number, to: number) => {
+          // Insert the `@ref` synchronously with the still-valid from/to range:
+          // the created path is deterministic, so we don't need the IPC result
+          // to know it. Dispatching after the await would use stale offsets that
+          // a concurrent edit could have invalidated (mangled text / RangeError).
+          const insert = `@${createdRelPath}`;
+          view.dispatch({
+            changes: { from, to, insert },
+            selection: { anchor: from + insert.length },
+          });
+          // Then fire the create; on success open the tab, on failure toast and
+          // leave the inserted text — it degrades to a plain unresolved ref (the
+          // chip won't render since the file doesn't exist).
           void (async () => {
             const result = await config.createArtifact(query.trim());
             if (!result.ok) {
               toast.error(`Could not create artifact: ${result.error}`);
               return;
             }
-            const insert = `@${result.relPath}`;
-            view.dispatch({
-              changes: { from, to, insert },
-              selection: { anchor: from + insert.length },
-            });
             config.onOpenFile(result.relPath);
           })();
         },
@@ -198,15 +208,21 @@ class FileChipWidget extends WidgetType {
   }
 }
 
+/**
+ * Builds the chip decoration set from already-parsed `refs` (the caller caches
+ * them across selection/viewport-only updates so we don't re-parse the whole
+ * doc on every caret move or scroll). Only refs that resolve, are in view, and
+ * aren't touched by the caret become chips.
+ */
 function buildChipDecorations(
   view: EditorView,
+  refs: readonly FileRef[],
   resolves: (relPath: string) => boolean,
 ): DecorationSet {
   const { state } = view;
   const selection: SelRange[] = state.selection.ranges.map((r) => ({ from: r.from, to: r.to }));
   const decos: { from: number; to: number; deco: Decoration }[] = [];
 
-  const refs = parseFileRefs(state.doc.toString());
   for (const ref of refs) {
     // Only decorate refs that resolve against the current index (decision #4:
     // dangling refs degrade to plain text) and only while the caret is outside
@@ -234,20 +250,41 @@ function fileChipsPlugin(config: FileRefsConfig): Extension {
     class {
       decorations: DecorationSet;
 
+      // Parsed refs cached across selection/viewport-only updates: caret moves
+      // and scrolls re-filter these but never re-parse the doc.
+      private refs: readonly FileRef[];
+
+      // Resolution lookup cached by index-array identity: a fresh index array
+      // rebuilds the O(1) Set once, so `resolves` is a `.has` instead of a
+      // linear scan per ref per rebuild.
+      private resolveIndex: readonly IndexedFile[] | null = null;
+      private resolveSet: Set<string> = new Set();
+
       constructor(view: EditorView) {
-        this.decorations = buildChipDecorations(view, (p) => this.resolves(p));
+        this.refs = parseFileRefs(view.state.doc.toString());
+        this.decorations = buildChipDecorations(view, this.refs, (p) => this.resolves(p));
       }
 
       private resolves(relPath: string): boolean {
-        return config.getIndex().some((file) => file.relPath === relPath);
+        const index = config.getIndex();
+        if (index !== this.resolveIndex) {
+          this.resolveIndex = index;
+          this.resolveSet = new Set(index.map((file) => file.relPath));
+        }
+        return this.resolveSet.has(relPath);
       }
 
       update(update: ViewUpdate): void {
         const indexChanged = update.transactions.some((tr) =>
           tr.effects.some((effect) => effect.is(bumpFileIndex)),
         );
+        // Re-parse only when the text changed or a fresh index arrived; caret
+        // moves (selectionSet) and scrolls (viewportChanged) reuse the cache.
+        if (update.docChanged || indexChanged) {
+          this.refs = parseFileRefs(update.state.doc.toString());
+        }
         if (update.docChanged || update.viewportChanged || update.selectionSet || indexChanged) {
-          this.decorations = buildChipDecorations(update.view, (p) => this.resolves(p));
+          this.decorations = buildChipDecorations(update.view, this.refs, (p) => this.resolves(p));
         }
       }
     },

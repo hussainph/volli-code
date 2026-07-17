@@ -31,6 +31,10 @@ export function useFileIndex(projectId: string): FileIndexHandle {
   const indexRef = React.useRef<readonly IndexedFile[]>([]);
   const lastFetchRef = React.useRef(0);
   const inflightRef = React.useRef(false);
+  // A forceRefresh that arrived while a fetch was in flight. The inflight
+  // fetch's finally re-runs once (bypassing the cache) so a just-created
+  // artifact's chip resolves now, not after the stale fetch's ~10s cache window.
+  const pendingForceRef = React.useRef(false);
   const mountedRef = React.useRef(true);
   const [version, setVersion] = React.useState(0);
 
@@ -41,6 +45,9 @@ export function useFileIndex(projectId: string): FileIndexHandle {
     };
   }, []);
 
+  // Latest-callback ref so fetchIndex's finally can re-invoke the current
+  // fetchIndex without listing itself as a dependency (a circular dep).
+  const fetchIndexRef = React.useRef<(() => Promise<void>) | null>(null);
   const fetchIndex = React.useCallback(async () => {
     if (inflightRef.current) return;
     inflightRef.current = true;
@@ -58,8 +65,18 @@ export function useFileIndex(projectId: string): FileIndexHandle {
       if (mountedRef.current) toast.error(`Could not load the file index: ${errorMessage(error)}`);
     } finally {
       inflightRef.current = false;
+      // A forceRefresh landed while this fetch was in flight; run one more now
+      // so the freshly-created file shows up immediately instead of being lost
+      // behind the cache until the next uncached fetch.
+      if (pendingForceRef.current) {
+        pendingForceRef.current = false;
+        if (mountedRef.current) void fetchIndexRef.current?.();
+      }
     }
   }, [projectId]);
+  React.useEffect(() => {
+    fetchIndexRef.current = fetchIndex;
+  }, [fetchIndex]);
 
   const refresh = React.useCallback(() => {
     if (Date.now() - lastFetchRef.current < INDEX_CACHE_MS) return;
@@ -67,6 +84,13 @@ export function useFileIndex(projectId: string): FileIndexHandle {
   }, [fetchIndex]);
 
   const forceRefresh = React.useCallback(() => {
+    // If a fetch is already inflight it holds a pre-create index; don't let it
+    // stamp the cache and swallow this force. Defer to the inflight fetch's
+    // finally, which re-runs once we know the new file could be present.
+    if (inflightRef.current) {
+      pendingForceRef.current = true;
+      return;
+    }
     void fetchIndex();
   }, [fetchIndex]);
 

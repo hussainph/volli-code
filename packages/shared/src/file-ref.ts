@@ -41,9 +41,15 @@ const MARKDOWN_EXTENSIONS = new Set(["md", "markdown"]);
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg"]);
 
 /** The basename of a `/`-separated path (or the whole string when there's no separator). */
-function baseNameOf(pathOrName: string): string {
+export function baseNameOf(pathOrName: string): string {
   const slash = pathOrName.lastIndexOf("/");
   return slash === -1 ? pathOrName : pathOrName.slice(slash + 1);
+}
+
+/** The directory portion of a relPath — `""` at the repo root (no separator). */
+export function dirNameOf(relPath: string): string {
+  const slash = relPath.lastIndexOf("/");
+  return slash === -1 ? "" : relPath.slice(0, slash);
 }
 
 /**
@@ -139,6 +145,29 @@ export function parseFileRefs(markdown: string): FileRef[] {
     refs.push({ path, from: i - rawToken.length, to: i - rawToken.length + 1 + path.length });
   }
   return refs;
+}
+
+/**
+ * Whether inserting `@${relPath}` round-trips through {@link parseFileRefs}
+ * back to exactly `relPath` — the picker uses this to refuse paths the ref
+ * grammar can't express, which would otherwise be inserted verbatim and then
+ * silently degrade to plain text. Three conditions, mirroring the parser:
+ * every character is in the path char class `[A-Za-z0-9._/-]` (so a space,
+ * `[slug]`, or `+` truncates the run early), {@link stripTrailingPunctuation}
+ * is a no-op on it (a path ending in `.`/`,`/… would be clipped), and it holds
+ * at least one `/` or `.` (the parser needs one to tell a file ref from a bare
+ * `@mention`, so a repo-root extensionless file like `Makefile` is NOT
+ * expressible). Empty is never expressible. This is the accepted v1 grammar
+ * limitation — paths with spaces or shell-glob characters simply can't be `@`-
+ * referenced yet.
+ */
+export function isExpressibleRefPath(relPath: string): boolean {
+  if (relPath.length === 0) return false;
+  for (const ch of relPath) {
+    if (!isPathChar(ch)) return false;
+  }
+  if (stripTrailingPunctuation(relPath) !== relPath) return false;
+  return relPath.includes("/") || relPath.includes(".");
 }
 
 // ---- fuzzy ranking for the @ picker -------------------------------------------
