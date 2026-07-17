@@ -1,4 +1,5 @@
 node_modules/
+.astro/
 .pnpm-store/
 dist/
 .DS_Store
