@@ -15,10 +15,10 @@ import type { FileIndexHandle } from "@renderer/hooks/use-file-index";
 
 /**
  * The composer footer: the paperclip file-ref picker, a "Create more" toggle,
- * the secondary "Create" button, and the primary split action —
- * "Create & start · <harness>" (`data-testid="composer-kickoff"`, its harness
- * carried in the accessible name) plus a "Choose agent" caret that switches the
- * active harness.
+ * a quiet "Choose agent" picker showing the active harness, the secondary
+ * "Create" button, and the primary "Create & start" action
+ * (`data-testid="composer-kickoff"`, its harness carried in the accessible
+ * name).
  */
 export function ComposerFooter({
   fileIndex,
@@ -55,6 +55,30 @@ export function ComposerFooter({
       </label>
 
       <div className="ml-auto flex items-center gap-2">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            {/* Never disabled by an empty title — picking the agent is
+                independent of whether the ticket is ready to submit. */}
+            <Button
+              aria-label="Choose agent"
+              variant="ghost"
+              size="sm"
+              className="text-ui text-muted-foreground"
+            >
+              {harnessLabel(harnessId)}
+              <CaretDownIcon weight="bold" className="size-3" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {HARNESS_IDS.map((id) => (
+              <DropdownMenuItem key={id} onSelect={() => onHarnessChange(id)}>
+                {HARNESS_LABELS[id]}
+                {id === harnessId ? <CheckIcon weight="bold" className="ml-auto size-3.5" /> : null}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+
         <Button
           variant="secondary"
           size="sm"
@@ -65,42 +89,16 @@ export function ComposerFooter({
           Create
         </Button>
 
-        <div className="inline-flex">
-          <Button
-            data-testid="composer-kickoff"
-            aria-label={`Create & start · ${harnessLabel(harnessId)}`}
-            onClick={onKickoff}
-            disabled={disabled}
-            size="sm"
-            className="rounded-r-none text-ui"
-          >
-            Create &amp; start
-            <span className="opacity-75">· {harnessLabel(harnessId)}</span>
-          </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              {/* Never disabled by an empty title — picking the agent is
-                  independent of whether the ticket is ready to submit. */}
-              <Button
-                aria-label="Choose agent"
-                size="sm"
-                className="rounded-l-none border-l border-primary-foreground/25 px-2"
-              >
-                <CaretDownIcon weight="bold" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {HARNESS_IDS.map((id) => (
-                <DropdownMenuItem key={id} onSelect={() => onHarnessChange(id)}>
-                  {HARNESS_LABELS[id]}
-                  {id === harnessId ? (
-                    <CheckIcon weight="bold" className="ml-auto size-3.5" />
-                  ) : null}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
+        <Button
+          data-testid="composer-kickoff"
+          aria-label={`Create & start · ${harnessLabel(harnessId)}`}
+          onClick={onKickoff}
+          disabled={disabled}
+          size="sm"
+          className="text-ui"
+        >
+          Create &amp; start
+        </Button>
       </div>
     </div>
   );

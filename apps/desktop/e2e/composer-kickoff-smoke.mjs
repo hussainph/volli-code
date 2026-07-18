@@ -1,12 +1,13 @@
 /**
  * RED-phase acceptance smoke for the composer's "Create & start" agent kickoff.
  *
- * The kickoff split button (data-testid="composer-kickoff") is the composer's
+ * The kickoff button (data-testid="composer-kickoff") is the composer's
  * primary action. Its behaviour (per the ui/ticket-creation-fix spec):
- *   • main part accessible name starts with "Create & start" and carries the
- *     current harness label, e.g. "Create & start · Claude Code";
- *   • a sibling "Choose agent" caret opens a menu of Claude Code / Codex /
- *     Opencode that switches the active harness;
+ *   • accessible name starts with "Create & start" and carries the current
+ *     harness label, e.g. "Create & start · Claude Code";
+ *   • a neighboring "Choose agent" picker (visible label = active harness)
+ *     opens a menu of Claude Code / Codex / Opencode that switches the
+ *     active harness;
  *   • clicking it creates the ticket DIRECTLY in Doing (regardless of the Status
  *     chip), navigates into the ticket detail view, creates + focuses a terminal
  *     session tab, and AUTO-LAUNCHES the harness CLI inside that session's shell

@@ -12,8 +12,9 @@
  *     description editor (placeholder "Add description…");
  *   • a metadata chip row: Status ("Backlog"), Priority ("Medium"),
  *     Labels ("Labels"), and a Worktree toggle (role switch, default on);
- *   • a footer with a "Create more" switch, a secondary "Create" button, and the
- *     kickoff split button (data-testid="composer-kickoff").
+ *   • a footer with a "Create more" switch, a "Choose agent" harness picker,
+ *     a secondary "Create" button, and the primary kickoff button
+ *     (data-testid="composer-kickoff").
  *   • the dialog root carries data-testid="new-ticket-composer".
  *
  * This file drives the REAL built app through Playwright against a scratch
