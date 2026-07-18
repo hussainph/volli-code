@@ -65,6 +65,7 @@ const EVENT_ICON: Record<TicketEventKind, PhosphorIcon> = {
   session_started: TerminalIcon,
   session_ended: TerminalWindowIcon,
   worktree_changed: GitBranchIcon,
+  session_signal: FlagIcon,
 };
 
 /** The single muted line for one property-change event: icon + sentence + time. */
