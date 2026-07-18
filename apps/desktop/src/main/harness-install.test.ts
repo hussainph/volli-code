@@ -11,7 +11,6 @@ let root: string | undefined;
 
 afterEach(async () => {
   if (!root) return;
-  const { rm } = await import("node:fs/promises");
   await rm(root, { recursive: true, force: true });
   root = undefined;
 });

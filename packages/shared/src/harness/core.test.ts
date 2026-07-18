@@ -68,7 +68,9 @@ describe("managedWriteDecision", () => {
 
 describe("harnessAdapters", () => {
   it("covers every first-class harness with its own detection executable", () => {
-    expect(harnessAdapters.map((adapter) => adapter.id).sort()).toEqual([...HARNESS_IDS].sort());
+    expect(harnessAdapters.map((adapter) => adapter.id).toSorted()).toEqual(
+      [...HARNESS_IDS].toSorted(),
+    );
     expect(harnessAdapters.every((adapter) => adapter.detection.executable.length > 0)).toBe(true);
     const claude = harnessAdapters.find((adapter) => adapter.id === "claude-code");
     expect(claude?.detection.executable).toBe("claude");
