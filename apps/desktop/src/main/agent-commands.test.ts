@@ -590,11 +590,20 @@ describe("agent command service", () => {
       ctx: { cwd: "/repo/volli", env: {} },
     });
 
+    const byUuid = await service.execute({
+      v: 1,
+      cmd: "session.peek",
+      args: { id: sessionId, lines: 2 },
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+
     expect(peek).toEqual({
       v: 1,
       ok: true,
       data: { session: "abcdef12", status: "idle", output: "line one\nline two" },
     });
+    // Full UUIDs are not public session handles — only the short id resolves.
+    expect(byUuid).toMatchObject({ ok: false, error: { code: "SESSION_NOT_FOUND" } });
     expect(observed).toEqual([{ sessionId, lines: 2 }]);
     expect(notified).toEqual({ v: 1, ok: true, data: { notified: true } });
     expect(notifications).toEqual([{ title: "Agent", message: "Needs input" }]);

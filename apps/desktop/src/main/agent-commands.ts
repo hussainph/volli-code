@@ -296,9 +296,13 @@ function sessionForPublicId(
   if (typeof selector !== "string") {
     return { ok: false, response: failure("INVALID_REQUEST", "A session id is required.") };
   }
+  // Short ids are the only public session handles (decision 3): `session list`
+  // prints them and `session peek` addresses by them. Full UUIDs never cross
+  // the socket as an input — only requestActor's env `VOLLI_SESSION` uses them,
+  // and that's the door contract, resolved separately.
   const matches = projects
     .flatMap((project) => listSessions(db, project.id))
-    .filter((session) => session.id === selector || shortSessionId(session.id) === selector);
+    .filter((session) => shortSessionId(session.id) === selector);
   if (matches.length > 1) {
     return {
       ok: false,
