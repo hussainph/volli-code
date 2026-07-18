@@ -610,14 +610,44 @@ async function main() {
 
         let dropped = false;
         for (let dropAttempt = 1; dropAttempt <= 3 && !dropped; dropAttempt += 1) {
-          const cardBox = await page.locator("article").first().boundingBox();
-          const donePillBox = await donePill.boundingBox();
-          if (!cardBox || !donePillBox) throw new Error("card or Done pill not found");
+          const card = page.locator("article").first();
+          await card.scrollIntoViewIfNeeded();
+          const cardBox = await card.boundingBox();
+          if (!cardBox) throw new Error("source card not found");
 
-          await drag(page, cardBox, {
-            x: donePillBox.x + donePillBox.width / 2,
-            y: donePillBox.y + donePillBox.height / 2,
-          });
+          // On smaller hosted-runner displays the collapsed rail can begin
+          // outside the horizontal viewport. Activate the drag first (freezing
+          // the board topology), scroll the live droppable into view while the
+          // pointer is held, then wait until dnd-kit reports the actual isOver
+          // state before releasing.
+          await page.mouse.move(cardBox.x + cardBox.width / 2, cardBox.y + cardBox.height / 2);
+          await page.mouse.down();
+          let targetActive = false;
+          try {
+            await page.mouse.move(cardBox.x + cardBox.width / 2 + 30, cardBox.y + 40, {
+              steps: 8,
+            });
+            await donePill.scrollIntoViewIfNeeded();
+            const donePillBox = await donePill.boundingBox();
+            if (!donePillBox) throw new Error("Done pill not found");
+            await page.mouse.move(
+              donePillBox.x + donePillBox.width / 2,
+              donePillBox.y + donePillBox.height / 2,
+              { steps: 20 },
+            );
+            targetActive = await waitUntil(
+              `Done pill hover attempt ${dropAttempt}`,
+              () => donePill.evaluate((element) => element.className.includes("ring-primary")),
+              { timeout: 2500 },
+            )
+              .then(() => true)
+              .catch(() => false);
+          } finally {
+            await page.mouse.up();
+          }
+          await sleep(500);
+
+          if (!targetActive) continue;
           dropped = await waitUntil(
             `Done pill drop attempt ${dropAttempt}`,
             async () =>

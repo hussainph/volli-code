@@ -338,9 +338,32 @@ export async function columnHasCard(page, label, id) {
   );
 }
 
-/** Click the Board nav item if present, then settle — robust across reloads. */
+/**
+ * Return to a stable board view. Kickoff can write its harness probe before a
+ * pending detail transition finishes, so a fixed post-click delay can observe
+ * the board briefly and then lose it again. Require the board header to remain
+ * visible across a settle window and retry the nav click if a late transition
+ * wins the first race.
+ */
 export async function goToBoard(page) {
-  const boardNav = page.getByRole("button", { name: "Board", exact: true });
-  if (await boardNav.count()) await boardNav.first().click();
-  await sleep(400);
+  const boardReady = page.getByRole("button", { name: "New ticket", exact: true });
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    if (!(await boardReady.isVisible().catch(() => false))) {
+      const boardNav = page.getByRole("button", { name: "Board", exact: true });
+      if (await boardNav.count()) await boardNav.first().click();
+    }
+
+    const visible = await waitUntil(`board view attempt ${attempt}`, () => boardReady.isVisible(), {
+      timeout: 5000,
+    })
+      .then(() => true)
+      .catch(() => false);
+    if (!visible) continue;
+
+    await sleep(500);
+    if (await boardReady.isVisible().catch(() => false)) return;
+  }
+
+  throw new Error("board view did not become stable");
 }
