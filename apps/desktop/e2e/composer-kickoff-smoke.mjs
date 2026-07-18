@@ -143,7 +143,7 @@ async function main() {
     // === 1. Default kickoff: Doing + detail view + session tab + claude launched with title+body
     await attempt(
       1,
-      "Kickoff (default claude-code): ticket created in Doing, detail view opens with the title, a session tab is created, and the `claude` harness is auto-launched with the title+body prompt",
+      "Kickoff (default claude-code): ticket created in Doing, detail view opens with the session tab FOCUSED (terminal front and center), and the `claude` harness is auto-launched with the title+body prompt",
       async () => {
         await resetProbe();
         const opened = await openComposerViaHeader(page);
@@ -161,13 +161,26 @@ async function main() {
         await fillTitleAndBody(page, title, body);
         await kickoffButton(page).click();
 
-        // Detail view opens showing the title.
+        // Detail view opens with the booted session's tab FOCUSED — one-step
+        // kickoff lands the user in the terminal as the agent starts, not on
+        // the Doc tab with the session parked behind it.
         const detail = await waitUntil("detail view opens", () => detailOpen(page), {
           timeout: 8000,
         })
           .then(() => true)
           .catch(() => false);
-        const titleVisible = (await page.locator("h1", { hasText: title }).count()) >= 1;
+        const sessionFocused = await waitUntil(
+          "session tab is the active tab",
+          async () => {
+            const active = page.locator('[role="tab"][aria-selected="true"]');
+            if ((await active.count()) !== 1) return null;
+            const text = (await active.textContent()) ?? "";
+            return text.includes("Session") ? true : null;
+          },
+          { timeout: 8000 },
+        )
+          .then(() => true)
+          .catch(() => false);
         const sessionTab = (await page.getByRole("tab").count()) >= 2; // Doc + session
 
         // Harness launched: poll the probe for the claude fake + title AND body.
@@ -187,18 +200,30 @@ async function main() {
           .then(() => true)
           .catch(() => false);
 
-        // Ticket is in Doing (SQLite) and on the board's Doing column.
+        // Ticket is in Doing (SQLite) and on the board's Doing column. The Doc
+        // tab (labeled with the display id) proves the detail belongs to the
+        // ticket we just created — checked while still inside the detail view.
         const seeded = (await ticketsFor(page, projectId)).find((t) => t.title === title);
         const inDoingDb = seeded?.status === "doing";
-        await goToBoard(page);
         const displayId = seeded ? `${PROJECT.prefix}-${seeded.ticketNumber}` : "";
+        const docTab = seeded
+          ? (await page.getByRole("tab").filter({ hasText: displayId }).count()) >= 1
+          : false;
+        await goToBoard(page);
         const inDoingBoard = seeded ? await columnHasCard(page, "Doing", displayId) : false;
 
         const ok =
-          labelOk && detail && titleVisible && sessionTab && probe && inDoingDb && inDoingBoard;
+          labelOk &&
+          detail &&
+          sessionFocused &&
+          docTab &&
+          sessionTab &&
+          probe &&
+          inDoingDb &&
+          inDoingBoard;
         return {
           ok,
-          detail: `label=${JSON.stringify(kickoffLabel)} detail=${detail} title=${titleVisible} sessionTab=${sessionTab} probe=${probe} doingDb=${inDoingDb} doingBoard=${inDoingBoard}`,
+          detail: `label=${JSON.stringify(kickoffLabel)} detail=${detail} sessionFocused=${sessionFocused} docTab=${docTab} sessionTab=${sessionTab} probe=${probe} doingDb=${inDoingDb} doingBoard=${inDoingBoard}`,
         };
       },
     );

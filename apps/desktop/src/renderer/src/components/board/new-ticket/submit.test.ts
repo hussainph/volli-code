@@ -43,6 +43,7 @@ function fakeDeps(overrides: Partial<SubmitDeps> = {}): SubmitDeps {
     addTicket: vi.fn<SubmitDeps["addTicket"]>(async () => madeTicket()),
     startSession: vi.fn<SubmitDeps["startSession"]>(async () => "s1"),
     openTicket: vi.fn<SubmitDeps["openTicket"]>(),
+    focusSession: vi.fn<SubmitDeps["focusSession"]>(),
     persistHarness: vi.fn<SubmitDeps["persistHarness"]>(),
     toastSuccess: vi.fn<SubmitDeps["toastSuccess"]>(),
     ...overrides,
@@ -108,6 +109,8 @@ describe("runKickoff", () => {
       harnessId: "codex",
       prompt: "VC-42: A ticket\n\nthe body",
     });
+    // Landing surface is the terminal itself: the booted session's tab is focused.
+    expect(deps.focusSession).toHaveBeenCalledWith("p1", "tk", "s1");
   });
 
   it("boots in the background without navigating when Create-more is on", async () => {
@@ -119,6 +122,7 @@ describe("runKickoff", () => {
 
     expect(deps.startSession).toHaveBeenCalledWith("p1", "tk", expect.anything());
     expect(deps.openTicket).not.toHaveBeenCalled();
+    expect(deps.focusSession).not.toHaveBeenCalled();
   });
 
   it("still navigates (foreground) when the session boot fails, so the user can retry from the detail view", async () => {
@@ -134,6 +138,8 @@ describe("runKickoff", () => {
 
     expect(result).toEqual({ created: true });
     expect(deps.openTicket).toHaveBeenCalledWith("p1", "tk");
+    // No session to focus — Doc stays active as the retry surface.
+    expect(deps.focusSession).not.toHaveBeenCalled();
   });
 
   it("does nothing further when the ticket create fails", async () => {

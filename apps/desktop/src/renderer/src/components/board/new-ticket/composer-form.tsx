@@ -109,6 +109,8 @@ export function ComposerForm({
         createTerminalSession(ticketScope(projectId, ticketId), kickoff),
       openTicket: (projectId, ticketId) =>
         useWorkspaceStore.getState().openTicket(projectId, ticketId),
+      focusSession: (projectId, ticketId, sessionId) =>
+        useWorkspaceStore.getState().setTicketActiveTab(projectId, ticketId, sessionId),
       persistHarness: (harnessId) => useUiStore.getState().setLastHarnessId(harnessId),
       toastSuccess: (message) => toast.success(message),
     }),

@@ -11,9 +11,9 @@
  * - {@link runKickoff}: create the ticket DIRECTLY in Doing (regardless of the
  *   chip), then boot a terminal session that auto-launches the chosen harness
  *   with the ticket's composed prompt. With "Create more" off it navigates into
- *   the ticket detail (landing on the Doc tab, so the ticket's title/description
- *   are in view) with the agent session booted as a ready tab; with it on it
- *   boots the agent in the background and stays put.
+ *   the ticket detail and focuses the freshly booted session tab — the whole
+ *   point of one-step kickoff is landing in the terminal as the agent starts;
+ *   with it on it boots the agent in the background and stays put.
  *
  * Failure policy (CLAUDE.md: never silently swallow a failed mutation): the
  * ticket create toasts its own failure via the board store, and the session
@@ -60,6 +60,8 @@ export interface SubmitDeps {
     kickoff: { harnessId: HarnessId; prompt: string },
   ): Promise<string | null>;
   openTicket(projectId: string, ticketId: string): void;
+  /** Focus `sessionId`'s tab inside the ticket's detail view (tab ids are session ids). */
+  focusSession(projectId: string, ticketId: string, sessionId: string): void;
   persistHarness(harnessId: HarnessId): void;
   toastSuccess(message: string): void;
 }
@@ -87,9 +89,10 @@ export async function runPlainCreate(
 
 /**
  * Create the ticket in Doing (forced, regardless of the chip) and kick off the
- * chosen harness. `createMore` off → navigate into the detail view (Doc tab,
- * title in view) with the session booted as a ready tab; on → background boot,
- * no navigation. The caller resets/closes the form off `created`.
+ * chosen harness. `createMore` off → navigate into the detail view and focus
+ * the booted session's tab (the terminal, live, as the agent starts); on →
+ * background boot, no navigation. The caller resets/closes the form off
+ * `created`.
  */
 export async function runKickoff(
   fields: ComposerFields,
@@ -123,13 +126,15 @@ export async function runKickoff(
 
   // Foreground: navigate FIRST so that even if the session boot fails (it
   // toasts its own error), the user lands in the ticket detail and can retry.
-  // The detail opens on its Doc tab (title/description in view) and the session
-  // boots as a ready tab in the strip — we deliberately don't switch focus to
-  // it, so the landing view is the ticket itself, not a bare terminal.
+  // Once the session lands, focus its tab — "create & start" means landing in
+  // the terminal as the agent boots, not on the Doc tab with the session
+  // parked behind it. A failed boot (null) leaves Doc focused, which is the
+  // sane retry surface.
   deps.openTicket(fields.projectId, ticket.id);
-  await deps.startSession(fields.projectId, ticket.id, {
+  const sessionId = await deps.startSession(fields.projectId, ticket.id, {
     harnessId: opts.harnessId,
     prompt,
   });
+  if (sessionId !== null) deps.focusSession(fields.projectId, ticket.id, sessionId);
   return { created: true };
 }
