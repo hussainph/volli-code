@@ -14,6 +14,22 @@ function usage(message: string): CliParseResult {
   return { ok: false, code: "USAGE", message };
 }
 
+/**
+ * Reads the flag value at `argv[index + 1]`. A missing value or a value that
+ * looks like the *next* flag (starts with `--`) is rejected as a usage error
+ * instead of being silently swallowed as this flag's value — a bare `-` or a
+ * negative number (`-5`) is a valid value and passes through.
+ */
+function requireValue(
+  argv: readonly string[],
+  index: number,
+  token: string,
+): string | CliParseResult {
+  const value = argv[index + 1];
+  if (value === undefined || value.startsWith("--")) return usage(`${token} requires a value`);
+  return value;
+}
+
 /** Parses argv into the versioned command shape sent over the Volli socket. */
 export function parseCliArgs(argv: readonly string[]): CliParseResult {
   if (argv[0] === "identify") return parseNoArgCommand("identify", argv.slice(1));
@@ -81,8 +97,8 @@ export function parseCliArgs(argv: readonly string[]): CliParseResult {
       args["usesWorktree"] = false;
       continue;
     }
-    const value = argv[index + 1];
-    if (value === undefined) return usage(`${token} requires a value`);
+    const value = requireValue(argv, index, token);
+    if (typeof value !== "string") return value;
     index += 1;
     if (token === "--title") args["title"] = value;
     else if (token === "--project") args["project"] = value;
@@ -126,8 +142,8 @@ function parseKeyValueCommand(
     }
     const key = options[token];
     if (key === undefined) return usage(`Unknown option ${token}`);
-    const value = argv[index + 1];
-    if (value === undefined) return usage(`${token} requires a value`);
+    const value = requireValue(argv, index, token);
+    if (typeof value !== "string") return value;
     if (numericOptions.includes(token)) {
       const parsed = positiveInteger(value, token);
       if (typeof parsed !== "number") return parsed;
@@ -173,8 +189,8 @@ function parseTicketComment(argv: readonly string[]): CliParseResult {
       json = true;
       continue;
     }
-    const value = argv[index + 1];
-    if (value === undefined) return usage(`${token} requires a value`);
+    const value = requireValue(argv, index, token);
+    if (typeof value !== "string") return value;
     if (token === "-m" || token === "--message") args["message"] = value;
     else if (token === "--file") args["file"] = value;
     else return usage(`Unknown option ${token}`);
@@ -195,9 +211,9 @@ function parseSessionSignal(signal: "done" | "blocked", argv: readonly string[])
       json = true;
       continue;
     }
-    const value = argv[index + 1];
     if (token !== "--reason") return usage(`Unknown option ${token}`);
-    if (value === undefined) return usage("--reason requires a value");
+    const value = requireValue(argv, index, token);
+    if (typeof value !== "string") return value;
     args["reason"] = value;
     index += 1;
   }
@@ -213,8 +229,8 @@ function parseNotify(argv: readonly string[]): CliParseResult {
       json = true;
       continue;
     }
-    const value = argv[index + 1];
-    if (value === undefined) return usage(`${token} requires a value`);
+    const value = requireValue(argv, index, token);
+    if (typeof value !== "string") return value;
     if (token === "-m" || token === "--message") args["message"] = value;
     else if (token === "--title") args["title"] = value;
     else return usage(`Unknown option ${token}`);
@@ -248,9 +264,9 @@ function parseIdWithNumberOptions(
       continue;
     }
     const target = options[token];
-    const value = argv[index + 1];
     if (target === undefined) return usage(`Unknown option ${token}`);
-    if (value === undefined) return usage(`${token} requires a value`);
+    const value = requireValue(argv, index, token);
+    if (typeof value !== "string") return value;
     const parsed = positiveInteger(value, token);
     if (typeof parsed !== "number") return parsed;
     args[target] = parsed;
@@ -262,8 +278,10 @@ function parseIdWithNumberOptions(
 function parseTicketMove(argv: readonly string[]): CliParseResult {
   const id = argv[2];
   if (id === undefined || id.startsWith("--")) return usage("ticket move requires <id>");
-  if (argv[3] !== "--to" || argv[4] === undefined) return usage("ticket move requires --to");
-  const parsed = parseColumnToken(argv[4]);
+  if (argv[3] !== "--to") return usage("ticket move requires --to");
+  const to = requireValue(argv, 3, "--to");
+  if (typeof to !== "string") return to;
+  const parsed = parseColumnToken(to);
   if (!parsed.ok) return usage(parsed.message);
   const extras = argv.slice(5);
   const json = extras.length === 1 && extras[0] === "--json";
@@ -290,8 +308,8 @@ function parseTicketList(argv: readonly string[]): CliParseResult {
       json = true;
       continue;
     }
-    const value = argv[index + 1];
-    if (value === undefined) return usage(`${token} requires a value`);
+    const value = requireValue(argv, index, token);
+    if (typeof value !== "string") return value;
     index += 1;
     if (token === "--status") {
       const status = parseColumnToken(value);
@@ -326,7 +344,12 @@ function parseTicketUpdate(argv: readonly string[]): CliParseResult {
     if (token === "--edit") {
       const oldText = argv[index + 1];
       const newText = argv[index + 2];
-      if (oldText === undefined || newText === undefined) {
+      if (
+        oldText === undefined ||
+        oldText.startsWith("--") ||
+        newText === undefined ||
+        newText.startsWith("--")
+      ) {
         return usage("--edit requires <old> and <new>");
       }
       args["bodyMutation"] = { mode: "edit", oldText, newText };
@@ -334,8 +357,8 @@ function parseTicketUpdate(argv: readonly string[]): CliParseResult {
       index += 2;
       continue;
     }
-    const value = argv[index + 1];
-    if (value === undefined) return usage(`${token} requires a value`);
+    const value = requireValue(argv, index, token);
+    if (typeof value !== "string") return value;
     index += 1;
     if (token === "--priority") {
       if (!isTicketPriority(value)) return usage(`Unknown priority ${JSON.stringify(value)}`);

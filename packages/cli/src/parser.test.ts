@@ -178,6 +178,12 @@ describe("parseCliArgs", () => {
       ok: true,
       invocation: { command: "board", args: { project: "/work/volli" }, json: false },
     });
+    // A bare "-" and negative numbers are valid values, not flags — only a
+    // "--"-prefixed token is treated as the next option.
+    expect(parseCliArgs(["board", "--project", "-"])).toEqual({
+      ok: true,
+      invocation: { command: "board", args: { project: "-" }, json: false },
+    });
     expect(parseCliArgs(["ticket", "events", "VC-12", "--limit", "20"])).toEqual({
       ok: true,
       invocation: { command: "ticket.events", args: { id: "VC-12", limit: 20 }, json: false },
@@ -300,6 +306,18 @@ describe("parseCliArgs", () => {
     [["notify"], "notify requires -m"],
     [["notify", "--title"], "--title requires a value"],
     [["notify", "--bad", "x"], "Unknown option --bad"],
+    // A following flag must never be silently consumed as this flag's value.
+    [["board", "--project", "--json"], "--project requires a value"],
+    [["ticket", "show", "VC-1", "--events", "--comments", "3"], "--events requires a value"],
+    [["ticket", "comment", "VC-1", "-m", "--file"], "-m requires a value"],
+    [["notify", "-m", "--title", "x"], "-m requires a value"],
+    [["session", "done", "--reason", "--json"], "--reason requires a value"],
+    [["ticket", "move", "VC-1", "--to", "--json"], "--to requires a value"],
+    [
+      ["ticket", "update", "VC-1", "--edit", "old", "--priority"],
+      "--edit requires <old> and <new>",
+    ],
+    [["ticket", "update", "VC-1", "--edit", "--body", "new"], "--edit requires <old> and <new>"],
   ] as const)("rejects invalid argv %#", (argv, message) => {
     expect(parseCliArgs(argv)).toEqual({ ok: false, code: "USAGE", message });
   });
@@ -318,6 +336,9 @@ describe("parseCliArgs", () => {
     [["ticket", "list", "--status", "icebox"], 'Unknown column "icebox"'],
     [["ticket", "list", "--priority", "urgent"], 'Unknown priority "urgent"'],
     [["ticket", "list", "--limit", "0"], "--limit requires a positive integer"],
+    // A negative number is a valid value, not a flag — it reaches the positive-
+    // integer check and fails there, rather than being rejected as a swallowed flag.
+    [["ticket", "list", "--limit", "-5"], "--limit requires a positive integer"],
     [["ticket", "list", "--bad", "x"], "Unknown option --bad"],
     [["ticket", "update"], "ticket update requires <id>"],
     [["ticket", "update", "VC-1", "--edit", "old"], "--edit requires <old> and <new>"],
