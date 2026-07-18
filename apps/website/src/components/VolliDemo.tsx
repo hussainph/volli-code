@@ -136,9 +136,7 @@ const agentForTicket = (ticket: DemoTicket): Agent => {
 const phaseLabel = (phase: Phase) => PHASES.find((item) => item.key === phase)?.label ?? phase;
 
 export default function VolliDemo() {
-  const [tickets, setTickets] = useState<DemoTicket[]>(() =>
-    INITIAL_TICKETS.map((ticket) => ({ ...ticket })),
-  );
+  const [tickets, setTickets] = useState<DemoTicket[]>(() => [...INITIAL_TICKETS]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dropPhase, setDropPhase] = useState<Phase | null>(null);
@@ -228,7 +226,7 @@ export default function VolliDemo() {
   );
 
   useLayoutEffect(() => {
-    if (!selected) return;
+    if (!selectedId) return;
     const panel = previewRef.current;
     const overlay = overlayRef.current;
     if (!panel || !overlay) return;
@@ -274,7 +272,7 @@ export default function VolliDemo() {
     }
 
     window.requestAnimationFrame(() => panel.focus({ preventScroll: true }));
-  }, [compact, reducedMotion, selected]);
+  }, [compact, reducedMotion, selectedId]);
 
   useEffect(() => {
     if (!selected) return;
