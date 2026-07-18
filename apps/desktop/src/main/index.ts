@@ -1,4 +1,4 @@
-import { app, BrowserWindow, session, shell } from "electron";
+import { app, BrowserWindow, Notification, session, shell } from "electron";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -15,6 +15,9 @@ import { registerAppMenu } from "./menu";
 import { confirmDestructiveClose, registerTerminalIpcHandlers } from "./pty";
 import type { PtyManager } from "./pty";
 import { registerFileIpcHandlers } from "./volli-fs";
+import { createAgentCommandService } from "./agent-commands";
+import { ensureVolliCliShim, volliRuntimePaths } from "./agent-runtime";
+import { startAgentSocket, type AgentSocketServer } from "./agent-socket";
 
 // Fixes dev and the packaged app to one shared Electron `userData` dir (by
 // default they diverge: packaged apps use the productName, dev falls back to
@@ -27,6 +30,7 @@ import { registerFileIpcHandlers } from "./volli-fs";
 app.setName("Volli Code");
 
 const isDev = !app.isPackaged;
+let agentSocket: AgentSocketServer | undefined;
 
 // Dev gets its OWN userData directory. dev and packaged otherwise share one
 // (app.setName above unifies them so the SQLite db survives across launches) —
@@ -178,7 +182,7 @@ function createWindow(ptyManager: PtyManager): void {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (isDev) {
     // Dev smoke-check that vp pack bundled the workspace TS source (@volli/shared)
     // into main.cjs via deps.alwaysBundle rather than leaving an unresolved
@@ -263,7 +267,66 @@ app.whenReady().then(() => {
   // before-quit teardown (kills all PTYs, gated on busy sessions); needs the
   // db, so it registers here. The returned manager feeds each window's own
   // destructive-close gate.
-  const ptyManager = registerTerminalIpcHandlers(dbHandle);
+  const runtimePaths = volliRuntimePaths({
+    userDataPath: app.getPath("userData"),
+    appPath: app.getAppPath(),
+    resourcesPath: process.resourcesPath,
+    isPackaged: app.isPackaged,
+  });
+  try {
+    await ensureVolliCliShim({
+      binDir: runtimePaths.binDir,
+      electronPath: process.execPath,
+      bundlePath: runtimePaths.cliBundlePath,
+    });
+  } catch (error) {
+    console.error("[volli] failed to generate CLI shim:", errorMessage(error));
+  }
+  const ptyManager = registerTerminalIpcHandlers(dbHandle, runtimePaths);
+
+  const broadcastDataChanged = (): void => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send("volli:data-changed" satisfies VolliIpcEvent, {
+        entity: "tickets",
+      });
+    }
+  };
+  try {
+    const execute = dbHandle.ok
+      ? createAgentCommandService({
+          db: dbHandle.db,
+          appVersion: app.getVersion(),
+          observeSession: (sessionId, lines) => ptyManager.peek(sessionId, lines),
+          notify: (title, message) => new Notification({ title, body: message }).show(),
+        }).execute
+      : async () =>
+          ({
+            v: 1,
+            ok: false,
+            error: { code: "DB_UNAVAILABLE", message: dbHandle.error },
+          }) as const;
+    agentSocket = await startAgentSocket({
+      socketPath: runtimePaths.socketPath,
+      execute: async (request) => {
+        const response = await execute(request);
+        if (
+          response.ok &&
+          [
+            "ticket.create",
+            "ticket.update",
+            "ticket.move",
+            "ticket.comment",
+            "ticket.archive",
+          ].includes(request.cmd)
+        ) {
+          broadcastDataChanged();
+        }
+        return response;
+      },
+    });
+  } catch (error) {
+    console.error("[volli] failed to start agent socket:", errorMessage(error));
+  }
 
   createWindow(ptyManager);
 
@@ -282,4 +345,11 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit();
   }
+});
+
+app.on("before-quit", () => {
+  void agentSocket?.close().catch((error: unknown) => {
+    console.error("[volli] failed to close agent socket:", errorMessage(error));
+  });
+  agentSocket = undefined;
 });

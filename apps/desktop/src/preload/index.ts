@@ -9,6 +9,7 @@ import type {
   BootstrapResult,
   CreateTerminalSessionRequest,
   CreateTerminalSessionResult,
+  DataChangedEvent,
   FileChangedEvent,
   FileIndexResult,
   FileReadResult,
@@ -57,6 +58,14 @@ const api = {
     /** One-time localStorage → SQLite import; a no-op (returns current state) once the db is non-empty. */
     importLegacy: (req: LegacyImportRequest): Promise<LegacyImportResult> =>
       ipcRenderer.invoke("volli:legacy-import" satisfies VolliIpcChannel, req),
+    /** Subscribes to invalidations produced by socket-originated planning mutations. */
+    onChanged: (callback: (event: DataChangedEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: DataChangedEvent) =>
+        callback(payload);
+      ipcRenderer.on("volli:data-changed" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:data-changed" satisfies VolliIpcEvent, listener);
+    },
   },
   projects: {
     pickFolder: (): Promise<PickFolderResult> =>

@@ -225,7 +225,10 @@ beforeEach(() => {
   project = testProject({ id: "w", path: root, ticketPrefix: "VC" });
   insertProject(testDb.db, project);
   // Fresh manager + handlers each test (Map overwrites); reset roots.
-  manager = registerTerminalIpcHandlers({ ok: true, db: testDb.db });
+  manager = registerTerminalIpcHandlers(
+    { ok: true, db: testDb.db },
+    { socketPath: "/profile/volli.sock", binDir: "/profile/bin" },
+  );
   syncProjectRoots([root]);
 });
 
@@ -262,6 +265,17 @@ describe("volli:terminal-create", () => {
       sessionId,
       data: "hello world",
     });
+  });
+
+  it("keeps a bounded line-oriented observation tail for the agent session peek command", async () => {
+    const { sessionId, pty } = await createSession();
+    pty.emitData("line one\r\nline two\nline three");
+
+    expect(manager.peek(sessionId, 2)).toEqual({
+      status: "idle",
+      output: "line two\nline three",
+    });
+    expect(manager.peek("missing", 2)).toBeUndefined();
   });
 
   it("routes pty exit to the creating window's webContents with the session id", async () => {
@@ -918,6 +932,9 @@ describe("ticket sessions", () => {
     const env = lastSpawnEnv();
     expect(env["VOLLI_TICKET"]).toBe("VC-12");
     expect(env["VOLLI_ARTIFACTS_DIR"]).toBe(`${root}/.volli/artifacts`);
+    expect(env["VOLLI_SESSION"]).toBe(result.sessionId);
+    expect(env["VOLLI_SOCKET"]).toBe("/profile/volli.sock");
+    expect(env["PATH"]?.split(":")[0]).toBe("/profile/bin");
     expect(env["TERM"]).toBe("xterm-256color");
     const [, , options] = spawn.mock.calls[0] as [string, string[], { cwd: string }];
     expect(options.cwd).toBe(root);

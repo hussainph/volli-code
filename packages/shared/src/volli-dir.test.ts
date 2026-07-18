@@ -4,6 +4,7 @@ import {
   VOLLI_DIR_NAME,
   VOLLI_GITIGNORE_CONTENT,
   VOLLI_TICKET_ENV,
+  agentSessionEnv,
   projectArtifactsDir,
   projectSessionEnv,
   ticketSessionEnv,
@@ -68,5 +69,41 @@ describe("projectSessionEnv", () => {
     expect(projectSessionEnv("/Users/dev/project")).toEqual({
       VOLLI_ARTIFACTS_DIR: "/Users/dev/project/.volli/artifacts",
     });
+  });
+});
+
+describe("agentSessionEnv", () => {
+  it("adds the runtime socket/session contract and prepends the generated shim directory", () => {
+    expect(
+      agentSessionEnv(
+        { VOLLI_TICKET: "VC-12", VOLLI_ARTIFACTS_DIR: "/repo/.volli/artifacts" },
+        {
+          sessionId: "session-full-id",
+          socketPath: "/profile/volli.sock",
+          binDir: "/profile/bin",
+          inheritedPath: "/usr/bin:/bin",
+        },
+      ),
+    ).toEqual({
+      VOLLI_TICKET: "VC-12",
+      VOLLI_ARTIFACTS_DIR: "/repo/.volli/artifacts",
+      VOLLI_SESSION: "session-full-id",
+      VOLLI_SOCKET: "/profile/volli.sock",
+      PATH: "/profile/bin:/usr/bin:/bin",
+    });
+  });
+
+  it("does not leave a trailing PATH separator when the inherited PATH is empty", () => {
+    expect(
+      agentSessionEnv(
+        {},
+        {
+          sessionId: "session-full-id",
+          socketPath: "/profile/volli.sock",
+          binDir: "/profile/bin",
+          inheritedPath: "",
+        },
+      ).PATH,
+    ).toBe("/profile/bin");
   });
 });

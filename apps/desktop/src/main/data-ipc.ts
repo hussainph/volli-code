@@ -13,6 +13,7 @@ import {
   PROJECT_COLORS,
   sanitizeLegacyProjects,
   USER_ACTOR,
+  validateUniquePrefix,
 } from "@volli/shared";
 import type {
   AppStateSetResult,
@@ -487,11 +488,14 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
           return { ok: true, project: existing, created: false };
         }
         const now = Date.now();
+        const ticketPrefix = derivePrefix(input.name);
+        const prefixValidation = validateUniquePrefix(ticketPrefix, listProjects(db));
+        if (!prefixValidation.ok) return { ok: false, error: prefixValidation.error };
         const project: Project = {
           id: randomUUID(),
           name: input.name,
           path: input.path,
-          ticketPrefix: derivePrefix(input.name),
+          ticketPrefix,
           colorIndex: countProjects(db) % PROJECT_COLORS.length,
           sortOrder: nextSortOrder(db),
           createdAt: now,

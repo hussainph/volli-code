@@ -9,7 +9,8 @@ import { errorMessage } from "@volli/shared";
 import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
 
 import App from "./App";
-import { boot } from "./lib/boot";
+import { boot, refreshPlanningData } from "./lib/boot";
+import { toastError } from "./lib/toast";
 import { initTerminalAppearance } from "./terminal/appearance";
 
 /** Full-window failure panel — mirrors the app's empty-state styling (see files-page.tsx). */
@@ -51,6 +52,18 @@ async function main() {
       <App />
     </StrictMode>,
   );
+
+  window.api.data.onChanged(() => {
+    void refreshPlanningData()
+      .then((refreshResult) => {
+        if (!refreshResult.ok) {
+          toastError(`Could not refresh agent changes: ${refreshResult.error}`);
+        }
+      })
+      .catch((error: unknown) => {
+        toastError(`Could not refresh agent changes: ${errorMessage(error)}`);
+      });
+  });
 }
 
 void main();

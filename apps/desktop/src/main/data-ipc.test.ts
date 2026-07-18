@@ -77,6 +77,25 @@ function archiveTicket(ticketId: string): void {
   if (!result.ok) throw new Error(result.error);
 }
 
+describe("volli:project-create — workspace-unique ticket prefixes", () => {
+  it("surfaces the colliding project instead of creating an ambiguous display-id namespace", () => {
+    const first = invoke<{ ok: boolean; error?: string }>("volli:project-create", {
+      path: "/repo/volli",
+      name: "Volli Code",
+    });
+    const second = invoke<{ ok: boolean; error?: string }>("volli:project-create", {
+      path: "/repo/compiler",
+      name: "Visual Compiler",
+    });
+
+    expect(first.ok).toBe(true);
+    expect(second).toEqual({
+      ok: false,
+      error: 'Ticket prefix "VC" is already used by Volli Code.',
+    });
+  });
+});
+
 describe("volli:ticket-create — ticket numbers never recycle across a hard delete (#35)", () => {
   it("skips a hard-deleted ticket's number instead of reusing it", () => {
     const projectId = createProject();

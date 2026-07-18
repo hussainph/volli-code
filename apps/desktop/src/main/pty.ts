@@ -5,6 +5,7 @@ import { stat } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import type Database from "better-sqlite3";
 import {
+  agentSessionEnv,
   breatheShouldWake,
   buildHarnessCommand,
   createSessionRecord,
@@ -22,6 +23,7 @@ import type {
   CreateTerminalSessionRequest,
   CreateTerminalSessionResult,
   HarnessId,
+  SessionActivityState,
   TerminalBusyResult,
   TerminalDataEvent,
   TerminalExitEvent,
@@ -94,6 +96,7 @@ const FLOW_CONTROL_LOW_WATERMARK = 5_000;
 // or until the buffer is large enough that waiting just adds latency.
 const BATCH_WINDOW_MS = 8;
 const BATCH_MAX_CHARS = 256_000;
+const OBSERVATION_TAIL_MAX_CHARS = 256_000;
 
 interface Session {
   pty: PtyProcess;
@@ -112,6 +115,8 @@ interface Session {
   /** Chars sent to the renderer and not yet acked; drives pause/resume. */
   unackedChars: number;
   paused: boolean;
+  /** Recent raw output retained independently of renderer batching for read-only session peek. */
+  outputTail: string;
   /** Last PTY output OR user input, epoch ms — the warm-park idle clock. */
   lastActivityAt: number;
   /** Renderer-reported: the session's pane is currently on screen. */
@@ -191,6 +196,7 @@ export class PtyManager {
     private readonly dbError: string,
     private readonly inspector: ProcessInspector = createProcessInspector(),
     private readonly parkConfig: ParkConfig = parkConfigFromEnv(process.env, process.platform),
+    private readonly agentRuntime: AgentRuntimeEnvironment | null = null,
   ) {}
 
   /**
@@ -310,6 +316,14 @@ export class PtyManager {
       const { file, args } = resolveShell(process.env);
       const sessionId = randomUUID();
       const now = Date.now();
+      const sessionEnv = this.agentRuntime
+        ? agentSessionEnv(scope.env, {
+            sessionId,
+            socketPath: this.agentRuntime.socketPath,
+            binDir: this.agentRuntime.binDir,
+            inheritedPath: process.env["PATH"] ?? "",
+          })
+        : scope.env;
       const pty = nodePty.spawn(file, args, {
         name: "xterm-256color",
         cwd,
@@ -319,7 +333,7 @@ export class PtyManager {
         // negotiates 256-color regardless of the parent's TERM; layer the ticket
         // env (VOLLI_TICKET/VOLLI_ARTIFACTS_DIR) on top for ticket sessions,
         // or just VOLLI_ARTIFACTS_DIR for scratch sessions.
-        env: { ...process.env, TERM: "xterm-256color", ...scope.env } as Record<string, string>,
+        env: { ...process.env, TERM: "xterm-256color", ...sessionEnv } as Record<string, string>,
       });
       // Same race, other side of the spawn: never register against a window
       // whose `destroyed` event already fired.
@@ -380,6 +394,7 @@ export class PtyManager {
         flushTimer: null,
         unackedChars: 0,
         paused: false,
+        outputTail: "",
         lastActivityAt: now,
         visible: false,
         keepAwake: false,
@@ -459,6 +474,7 @@ export class PtyManager {
     if (session === undefined) return;
     // PTY output is activity: it keeps a busy session out of the idle window.
     session.lastActivityAt = Date.now();
+    session.outputTail = `${session.outputTail}${data}`.slice(-OBSERVATION_TAIL_MAX_CHARS);
     session.pendingChunks.push(data);
     session.pendingChars += data.length;
     if (session.pendingChars >= BATCH_MAX_CHARS) {
@@ -518,6 +534,27 @@ export class PtyManager {
   /** The workspace a live session was created for, or undefined if unknown. */
   workspaceIdFor(sessionId: string): string | undefined {
     return this.sessions.get(sessionId)?.workspaceId;
+  }
+
+  /** Read-only snapshot used by the CLI; it never writes to or controls the observed PTY. */
+  peek(
+    sessionId: string,
+    lines: number,
+  ): { status: SessionActivityState; output: string } | undefined {
+    const session = this.sessions.get(sessionId);
+    if (!session) return undefined;
+    const normalized = session.outputTail.replace(/\r\n?/g, "\n");
+    const output = normalized.split("\n").slice(-lines).join("\n");
+    let status: SessionActivityState = "idle";
+    if (session.parkedPids !== null) status = "parked";
+    else {
+      try {
+        if (foregroundProcess(session) !== null) status = "working";
+      } catch {
+        // A failed foreground-process probe still leaves the session observable.
+      }
+    }
+    return { status, output };
   }
 
   /** Pushes the session's current park/keep-awake state to its window (skipped if destroyed). */
@@ -1086,11 +1123,21 @@ function isCreateRequest(value: unknown): value is CreateTerminalSessionRequest 
  * at runtime — renderer-supplied types are never trusted — and returns a
  * typed result rather than throwing across the IPC boundary.
  */
-export function registerTerminalIpcHandlers(handle: DbHandle): PtyManager {
+export interface AgentRuntimeEnvironment {
+  socketPath: string;
+  binDir: string;
+}
+
+export function registerTerminalIpcHandlers(
+  handle: DbHandle,
+  agentRuntime: AgentRuntimeEnvironment | null = null,
+): PtyManager {
   // Every session persists a durable record, so the manager needs the db. When
   // it failed to open, `create` reports the open error (write/kill/etc. operate
   // on the — necessarily empty — live map and stay harmless no-ops).
-  const manager = handle.ok ? new PtyManager(handle.db, "") : new PtyManager(null, handle.error);
+  const manager = handle.ok
+    ? new PtyManager(handle.db, "", undefined, undefined, agentRuntime)
+    : new PtyManager(null, handle.error, undefined, undefined, agentRuntime);
 
   ipcMain.handle(
     "volli:terminal-create" satisfies VolliIpcChannel,

@@ -124,8 +124,15 @@ export default defineConfig({
 
   run: {
     tasks: {
-      dev: { command: "node scripts/dev.mjs", cache: false },
-      build: { command: "vp build && vp pack", cache: false },
+      dev: {
+        command: "vp run --filter @volli/cli build && node scripts/dev.mjs",
+        cache: false,
+      },
+      build: {
+        command:
+          "vp run --filter @volli/cli build && vp build && vp pack && node scripts/copy-cli.mjs",
+        cache: false,
+      },
     },
   },
 });
