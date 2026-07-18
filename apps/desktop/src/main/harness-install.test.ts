@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -58,9 +58,37 @@ describe("harness install executor", () => {
     expect(refreshed.conflicts[0]?.desiredContent.length).toBeGreaterThan(0);
     expect(await readFile(skillPath, "utf8")).toBe("my edited skill\n");
 
-    await uninstallHarnessPlan(plan, manifestPath);
-    await expect(readFile(skillPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    const cliPath = join(root, ".agents/skills/volli/cli.md");
+    const removal = await uninstallHarnessPlan(plan, manifestPath);
+    // The user-edited SKILL.md is preserved (install protected it as a conflict;
+    // uninstall must honor the same boundary), while pristine managed files go.
+    expect(removal.preserved).toContain(skillPath);
+    expect(removal.removed).toContain(cliPath);
+    expect(await readFile(skillPath, "utf8")).toBe("my edited skill\n");
+    await expect(readFile(cliPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     expect(await readFile(customPath, "utf8")).toBe("keep me");
+  });
+
+  it("removes an owned symlink but preserves one the user repointed", async () => {
+    root = await mkdtemp(join(tmpdir(), "volli-harness-test-"));
+    const manifestPath = join(root, ".agents/skills/volli/.volli-managed.json");
+    const claudeLink = join(root, ".claude/skills/volli");
+
+    const ownedPlan = buildHarnessInstallPlan({ home: root, detected: ["claude-code"] });
+    await applyHarnessInstallPlan(ownedPlan, manifestPath);
+    await rm(claudeLink, { force: true });
+    await symlink(join(root, "somewhere-else"), claudeLink, "dir");
+
+    const removal = await uninstallHarnessPlan(ownedPlan, manifestPath);
+    expect(removal.preserved).toContain(claudeLink);
+    expect((await lstat(claudeLink)).isSymbolicLink()).toBe(true);
+
+    // A pristine (still-ours) link is removed.
+    await rm(claudeLink, { force: true });
+    await applyHarnessInstallPlan(ownedPlan, manifestPath);
+    const second = await uninstallHarnessPlan(ownedPlan, manifestPath);
+    expect(second.removed).toContain(claudeLink);
+    await expect(lstat(claudeLink)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("guards a CRLF user-edited fenced block as a conflict instead of overwriting", async () => {

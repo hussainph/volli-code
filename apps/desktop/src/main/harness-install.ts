@@ -229,23 +229,67 @@ export async function applyHarnessInstallPlan(
   return result;
 }
 
-/** Removes exactly the plan's managed files, links, and fenced blocks; user custom files survive. */
+export interface HarnessUninstallResult {
+  /** Managed files, links, and fenced blocks actually removed. */
+  removed: string[];
+  /** Managed files left in place because the user had edited them (hash mismatch). */
+  preserved: string[];
+}
+
+/**
+ * Removes exactly the plan's managed files, links, and fenced blocks — but a
+ * managed file the user has since edited is preserved, not destroyed (install
+ * already protects such files as conflicts; uninstall must honor the same
+ * boundary). "Write" files are removed only when the on-disk hash still matches
+ * the manifest; symlinks only when the link still points at our target; fenced
+ * blocks are excised in place, leaving surrounding user content. `custom/` is
+ * never in a plan, so it is never touched.
+ */
 export async function uninstallHarnessPlan(
   plan: readonly InstallAction[],
   manifestPath: string,
-): Promise<void> {
+): Promise<HarnessUninstallResult> {
+  const manifest = await readManifest(manifestPath);
+  const result: HarnessUninstallResult = { removed: [], preserved: [] };
   for (const action of plan) {
-    if (action.kind === "fenced") {
+    if (action.kind === "write") {
+      const current = await textAt(action.path);
+      if (current === null) continue; // already gone
+      const recordedHash = manifest[action.path]?.hash ?? null;
+      if (recordedHash !== null && hash(current) === recordedHash) {
+        await rm(action.path, { force: true });
+        result.removed.push(action.path);
+      } else {
+        result.preserved.push(action.path); // user-edited or unverifiable — keep it
+      }
+    } else if (action.kind === "symlink") {
+      let target: string | null = null;
+      try {
+        const entry = await lstat(action.path);
+        if (entry.isSymbolicLink()) target = await readlink(action.path);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      if (target === action.target) {
+        await rm(action.path, { force: true });
+        result.removed.push(action.path);
+      } else if (target !== null) {
+        result.preserved.push(action.path); // repointed by the user — leave it
+      }
+      // absent → nothing to remove
+    } else {
       const current = await textAt(action.path);
       if (current === null) continue;
       const withoutBlock = current.replace(
         /\n?<!-- volli:begin v=\d+ -->[\s\S]*?<!-- volli:end -->\n?/,
         "\n",
       );
-      await writeFile(action.path, withoutBlock, "utf8");
-    } else {
-      await rm(action.path, { force: true });
+      if (withoutBlock !== current) {
+        await writeFile(action.path, withoutBlock, "utf8");
+        result.removed.push(action.path);
+      }
     }
   }
   await rm(manifestPath, { force: true });
+  return result;
 }
