@@ -288,6 +288,13 @@ app.whenReady().then(async () => {
     resourcesPath: process.resourcesPath,
     isPackaged: app.isPackaged,
   });
+  // Create the window first so first paint isn't blocked on shim generation or
+  // the socket bind; both start right after, still awaited inside whenReady with
+  // the same failure semantics (logged, non-fatal). registerTerminalIpcHandlers
+  // needs only runtimePaths (a pure join), so it can precede the window it feeds.
+  const ptyManager = registerTerminalIpcHandlers(dbHandle, runtimePaths);
+  const mainWindow = createWindow(ptyManager);
+
   let shimPath = join(runtimePaths.binDir, "volli");
   try {
     shimPath = await ensureVolliCliShim({
@@ -299,7 +306,6 @@ app.whenReady().then(async () => {
   } catch (error) {
     console.error("[volli] failed to generate CLI shim:", errorMessage(error));
   }
-  const ptyManager = registerTerminalIpcHandlers(dbHandle, runtimePaths);
 
   const installAgentTools = async (): Promise<void> => {
     try {
@@ -350,7 +356,6 @@ app.whenReady().then(async () => {
     console.error("[volli] failed to start agent socket:", errorMessage(error));
   }
 
-  const mainWindow = createWindow(ptyManager);
   if (dbHandle.ok) {
     const consentKey = "volli:agent-tools-consent";
     const stored = getAllAppState(dbHandle.db)[consentKey];
