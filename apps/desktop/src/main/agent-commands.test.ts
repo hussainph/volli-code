@@ -225,6 +225,48 @@ describe("agent command service", () => {
     }
   });
 
+  it("fires a native notification when a session moves a ticket into Doing", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    let id = 0;
+    let timestamp = 100;
+    const notifications: Array<{ title: string; message: string }> = [];
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => timestamp++,
+      newId: () => `ticket-${++id}`,
+      notify: (title, message) => notifications.push({ title, message }),
+    });
+    const exec = (cmd: AgentRequest["cmd"], args: Record<string, unknown>, session?: string) =>
+      service.execute({
+        v: 1,
+        cmd,
+        args,
+        ctx: { cwd: "/repo/volli", env: session ? { session, ticket: "VC-2" } : {} },
+      });
+    // VC-1 is the ticket being moved; VC-2 is the driving session's own ticket.
+    await exec("ticket.create", { title: "Worked ticket", status: "todo" });
+    await exec("ticket.create", { title: "Orchestrator ticket", status: "doing" });
+    const orchestrator = "abcdef12-3456-7890-abcd-ef1234567890";
+    insertSession(
+      ctx.db,
+      testSession("project-one", "ticket-2", { id: orchestrator, cwd: "/repo/volli" }),
+    );
+
+    // A user-attributed CLI move (no session env) is silent.
+    await exec("ticket.move", { id: "VC-1", to: "backlog" });
+    expect(notifications).toEqual([]);
+
+    // The same move from a session fires "via VC-2's session".
+    await exec("ticket.move", { id: "VC-1", to: "doing" }, orchestrator);
+
+    expect(notifications).toEqual([{ title: "VC-1 → Doing", message: "Moved via VC-2's session" }]);
+  });
+
   it("identifies the project, ticket, and short session from the injected environment", async () => {
     ctx = openTestDb();
     insertProject(

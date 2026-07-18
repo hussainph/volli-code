@@ -9,6 +9,7 @@ import {
   isHarnessId,
   resolveAgentContext,
   shortSessionId,
+  TICKET_STATUS_LABELS,
   TICKET_STATUSES,
 } from "@volli/shared";
 import type {
@@ -130,6 +131,23 @@ function projectForCreate(
         ok: false,
         response: failure("PROJECT_NOT_FOUND", "The resolved project no longer exists."),
       };
+}
+
+/**
+ * The display id of the ticket an actor's session is itself working, for the
+ * "via VC-9's session" attribution (decision 8). `null` when the actor has no
+ * session ticket (a scratch session) or it no longer resolves.
+ */
+function actorSessionTicketDisplay(
+  db: Database.Database,
+  projects: readonly Project[],
+  ticketId: string | null,
+): string | null {
+  if (ticketId === null) return null;
+  const ticket = getTicket(db, ticketId);
+  if (!ticket) return null;
+  const project = projects.find(({ id }) => id === ticket.projectId);
+  return project ? displayTicketId(project.ticketPrefix, ticket.ticketNumber) : null;
 }
 
 function agentTicket(ticket: Ticket, project: Project): Record<string, unknown> {
@@ -735,6 +753,25 @@ export function createAgentCommandService(
             { now: movedAt, actor: actor.actor },
           );
           const ticket = moved.find(({ id }) => id === resolved.ticket.id)!;
+          // Guardrail is visibility, not caps (decision 2): an agent- or
+          // automation-initiated entry into Doing fires a native notification.
+          // A plain CLI move (no session env → user actor, "the door not the
+          // keyboard") stays silent; same-column moves already returned above,
+          // so reaching here with to === "doing" means the prior status wasn't.
+          if (to === "doing" && actor.actor.kind !== "user") {
+            const movedDisplay = displayTicketId(
+              resolved.project.ticketPrefix,
+              resolved.ticket.ticketNumber,
+            );
+            let body: string;
+            if (actor.actor.kind === "automation") {
+              body = "Moved by automation";
+            } else {
+              const via = actorSessionTicketDisplay(options.db, projects, actor.actor.ticketId);
+              body = via ? `Moved via ${via}'s session` : "Moved via a session";
+            }
+            options.notify?.(`${movedDisplay} → ${TICKET_STATUS_LABELS[to]}`, body);
+          }
           return {
             v: 1,
             ok: true,
