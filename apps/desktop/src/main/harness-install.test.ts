@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
-import { buildHarnessInstallPlan } from "@volli/shared";
+import { buildHarnessInstallPlan, genericHarnessActions } from "@volli/shared";
 
 import { applyHarnessInstallPlan, uninstallHarnessPlan } from "./harness-install";
 
@@ -58,5 +58,21 @@ describe("harness install executor", () => {
     await uninstallHarnessPlan(plan, manifestPath);
     await expect(readFile(skillPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     expect(await readFile(customPath, "utf8")).toBe("keep me");
+  });
+
+  it("guards a CRLF user-edited fenced block as a conflict instead of overwriting", async () => {
+    root = await mkdtemp(join(tmpdir(), "volli-harness-test-"));
+    const instructionsPath = join(root, "AGENTS.md");
+    const manifestPath = join(root, ".volli-managed.json");
+    const plan = genericHarnessActions(instructionsPath);
+    await applyHarnessInstallPlan(plan, manifestPath);
+
+    // User rewrites the managed body and saves with Windows line endings.
+    const crlfEdited = "<!-- volli:begin v=1 -->\r\nmy hand edits\r\n<!-- volli:end -->\r\n";
+    await writeFile(instructionsPath, crlfEdited);
+
+    const refreshed = await applyHarnessInstallPlan(plan, manifestPath);
+    expect(refreshed.conflicts).toContain(instructionsPath);
+    expect(await readFile(instructionsPath, "utf8")).toBe(crlfEdited);
   });
 });

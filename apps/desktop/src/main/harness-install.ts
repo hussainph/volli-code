@@ -103,8 +103,13 @@ async function writeManagedSymlink(
 }
 
 function fencedBody(content: string): string | null {
-  const match = content.match(/<!-- volli:begin v=\d+ -->\n([\s\S]*?)\n<!-- volli:end -->/);
-  return match?.[1] ?? null;
+  // Tolerate CRLF and a missing newline adjacent to either marker: a strict
+  // `\n` requirement makes the body null on Windows-edited or trailing-newline-
+  // stripped files, which fails the guard open (null → "write" → silent
+  // overwrite of user edits). Normalize CRLF→LF so the same logical body hashes
+  // identically regardless of the file's line-ending convention.
+  const match = content.match(/<!-- volli:begin v=\d+ -->\r?\n?([\s\S]*?)\r?\n?<!-- volli:end -->/);
+  return match ? match[1].replace(/\r\n/g, "\n") : null;
 }
 
 async function writeManagedFence(
