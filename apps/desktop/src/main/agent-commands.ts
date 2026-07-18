@@ -3,6 +3,7 @@ import {
   applyTicketBodyMutation,
   composeTicketPrompt,
   displayTicketId,
+  errorMessage,
   isTicketPriority,
   isTicketStatus,
   isHarnessId,
@@ -662,7 +663,7 @@ export function createAgentCommandService(
             data: { ticket: agentTicket(run(), resolved.project) },
           };
         } catch (error) {
-          return failure("MUTATION_FAILED", error instanceof Error ? error.message : String(error));
+          return failure("MUTATION_FAILED", errorMessage(error));
         }
       }
       if (request.cmd === "ticket.archive") {
@@ -688,7 +689,7 @@ export function createAgentCommandService(
             },
           };
         } catch (error) {
-          return failure("MUTATION_FAILED", error instanceof Error ? error.message : String(error));
+          return failure("MUTATION_FAILED", errorMessage(error));
         }
       }
       if (request.cmd === "ticket.move") {
@@ -721,7 +722,7 @@ export function createAgentCommandService(
             data: { ticket: agentTicket(ticket, resolved.project) },
           };
         } catch (error) {
-          return failure("MUTATION_FAILED", error instanceof Error ? error.message : String(error));
+          return failure("MUTATION_FAILED", errorMessage(error));
         }
       }
       if (request.cmd === "ticket.comment") {
@@ -761,7 +762,7 @@ export function createAgentCommandService(
             },
           };
         } catch (error) {
-          return failure("MUTATION_FAILED", error instanceof Error ? error.message : String(error));
+          return failure("MUTATION_FAILED", errorMessage(error));
         }
       }
       if (request.cmd === "ticket.events") {
@@ -833,7 +834,7 @@ export function createAgentCommandService(
           data: { ticket: agentTicket(ticket, resolved.project) },
         };
       } catch (error) {
-        return failure("MUTATION_FAILED", error instanceof Error ? error.message : String(error));
+        return failure("MUTATION_FAILED", errorMessage(error));
       }
     },
   };

@@ -3,6 +3,7 @@ import { createServer, type Server, type Socket } from "node:net";
 
 import {
   AGENT_COMMANDS,
+  errorMessage,
   type AgentCommand,
   type AgentRequest,
   type AgentResponse,
@@ -92,7 +93,7 @@ function handleConnection(socket: Socket, execute: AgentSocketOptions["execute"]
           ok: false,
           error: {
             code: "MUTATION_FAILED",
-            message: error instanceof Error ? error.message : String(error),
+            message: errorMessage(error),
           },
         }),
       );
