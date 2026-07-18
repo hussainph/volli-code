@@ -58,6 +58,14 @@ export function insertSession(db: Database.Database, session: SessionRecord): vo
   });
 }
 
+/** Reads one durable session record by its internal id. */
+export function getSession(db: Database.Database, sessionId: string): SessionRecord | undefined {
+  const row = prepared<[string], SessionRow>(db, "SELECT * FROM sessions WHERE id = ?").get(
+    sessionId,
+  );
+  return row ? mapSession(row) : undefined;
+}
+
 /** Stamps `ended_at` — marks a session as no longer live. */
 export function endSession(db: Database.Database, sessionId: string, endedAt: number): void {
   prepared(db, "UPDATE sessions SET ended_at = ? WHERE id = ?").run(endedAt, sessionId);

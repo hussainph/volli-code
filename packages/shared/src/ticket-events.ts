@@ -60,10 +60,23 @@ export type TicketEventPayload =
   | { kind: "session_ended"; sessionId: string }
   | { kind: "worktree_changed"; from: WorktreeIdentity; to: WorktreeIdentity };
 
+export type TicketEventActorKind = "user" | "session" | "automation";
+
+export interface TicketEventActorContext {
+  sessionId: string;
+  ticketId: string | null;
+}
+
+export type TicketEventActor =
+  | { kind: "user" }
+  | ({ kind: "session" | "automation" } & TicketEventActorContext);
+
 export interface TicketEvent {
   id: string;
   ticketId: string;
-  actor: "user";
+  actor: TicketEventActorKind;
+  /** Present for session/automation actors; omitted by legacy callers constructing fixtures. */
+  actorContext?: TicketEventActorContext | null;
   /** Epoch milliseconds. */
   createdAt: number;
   payload: TicketEventPayload;

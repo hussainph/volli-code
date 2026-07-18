@@ -9,7 +9,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import type { TicketComment } from "@volli/shared";
+import type { TicketComment, TicketEventActor } from "@volli/shared";
 import { recordTicketEvent } from "./events-repo";
 import { prepared } from "./prepared";
 
@@ -59,6 +59,8 @@ export interface CreateCommentInput {
   actor: string;
   /** Links an agent-posted session summary back to its session; `null`/omitted for user comments. */
   sessionId?: string | null;
+  /** Audit-log attribution for the originating command. */
+  eventActor?: TicketEventActor;
 }
 
 /**
@@ -86,7 +88,13 @@ export function createComment(
       `INSERT INTO ticket_comments (id, ticket_id, session_id, actor, body, created_at, updated_at)
        VALUES (@id, @ticketId, @sessionId, @actor, @body, @createdAt, @updatedAt)`,
     ).run(comment);
-    recordTicketEvent(db, input.ticketId, { kind: "commented", commentId: comment.id }, now);
+    recordTicketEvent(
+      db,
+      input.ticketId,
+      { kind: "commented", commentId: comment.id },
+      now,
+      input.eventActor,
+    );
     return comment;
   });
   return run();
