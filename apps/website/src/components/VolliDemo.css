@@ -23,6 +23,7 @@
 }
 
 .demo-sunset-mesh {
+  overflow: hidden;
   background:
     radial-gradient(ellipse 72% 66% at 8% 104%, rgb(116 27 65 / 92%), transparent 69%),
     radial-gradient(ellipse 64% 74% at 51% 112%, rgb(232 101 42 / 95%), transparent 64%),
@@ -32,13 +33,48 @@
   filter: saturate(1.18) contrast(1.04);
 }
 
+.demo-sunset-mesh::before,
 .demo-sunset-mesh::after {
   position: absolute;
-  inset: 0;
-  background:
-    radial-gradient(circle at 71% 83%, rgb(255 209 154 / 26%), transparent 18%),
-    linear-gradient(180deg, rgb(255 255 255 / 5%), transparent 38%);
   content: "";
+  will-change: transform, opacity;
+}
+
+.demo-sunset-mesh::before {
+  inset: -28%;
+  background:
+    radial-gradient(circle at 20% 78%, rgb(138 25 76 / 82%), transparent 29%),
+    radial-gradient(circle at 58% 68%, rgb(232 101 42 / 88%), transparent 34%),
+    radial-gradient(circle at 84% 72%, rgb(255 180 103 / 76%), transparent 27%);
+  filter: blur(28px) saturate(1.28);
+  opacity: 0.82;
+  transform: translate3d(-4%, 3%, 0) rotate(-4deg) scale(1.04);
+  animation: sunset-mesh-drift 14s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite alternate;
+}
+
+.demo-sunset-mesh::after {
+  inset: -16%;
+  background:
+    radial-gradient(circle at 74% 78%, rgb(255 216 166 / 46%), transparent 19%),
+    radial-gradient(circle at 42% 96%, rgb(255 108 48 / 42%), transparent 25%);
+  mix-blend-mode: screen;
+  opacity: 0.46;
+  transform: translate3d(7%, 4%, 0) scale(1.02);
+  animation: sunset-flare-drift 11s cubic-bezier(0.45, 0.05, 0.55, 0.95) 1.5s infinite alternate;
+}
+
+@keyframes sunset-mesh-drift {
+  to {
+    opacity: 1;
+    transform: translate3d(5%, -4%, 0) rotate(5deg) scale(1.13);
+  }
+}
+
+@keyframes sunset-flare-drift {
+  to {
+    opacity: 0.76;
+    transform: translate3d(-7%, -3%, 0) scale(1.18);
+  }
 }
 
 .demo-grain {
@@ -1547,6 +1583,12 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .demo-sunset-mesh::before,
+  .demo-sunset-mesh::after {
+    animation: none;
+    transform: none;
+  }
+
   .demo-ticket,
   .demo-column,
   .demo-rail-button,

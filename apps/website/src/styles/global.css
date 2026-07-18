@@ -140,7 +140,7 @@ a:focus-visible {
 
 .accordion-title {
   font-size: clamp(19px, 1.53vw, 22px);
-  font-weight: 510;
+  font-weight: 430;
   letter-spacing: -0.035em;
 }
 
@@ -257,7 +257,7 @@ a:focus-visible {
   margin: 0 0 24px;
   color: var(--text);
   font-size: clamp(38px, 3.06vw, 44px);
-  font-weight: 530;
+  font-weight: 420;
   letter-spacing: -0.05em;
   line-height: 1.13;
 }
@@ -265,7 +265,7 @@ a:focus-visible {
 .headline-lead {
   display: block;
   color: var(--text);
-  font-weight: 530;
+  font-weight: 420;
 }
 
 .morphing-text {
@@ -273,6 +273,7 @@ a:focus-visible {
   display: block;
   min-height: 1.16em;
   color: var(--ember);
+  font-weight: 390;
   isolation: isolate;
   white-space: nowrap;
 }
