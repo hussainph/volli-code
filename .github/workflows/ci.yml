@@ -247,7 +247,10 @@ jobs:
     name: Extended desktop smoke (advisory)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     continue-on-error: true
-    runs-on: macos-15
+    # macos-26 is GitHub's current standard Apple Silicon image. Keep the
+    # blocking PR lane on macos-15 for compatibility and use this advisory lane
+    # to detect newer-OS drift without blocking routine changes.
+    runs-on: macos-26
     timeout-minutes: 35
     steps:
       - name: Checkout

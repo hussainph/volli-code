@@ -55,6 +55,8 @@ import { fileURLToPath } from "node:url";
 
 import { _electron } from "playwright-core";
 
+import { waitUntil } from "./lib/smoke-kit.mjs";
+
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const APP_DIR = join(REPO, "apps", "desktop");
 const ELECTRON = join(
@@ -601,16 +603,35 @@ async function main() {
       9,
       'Pill drop: dragging onto the "Done" pill expands it into a column and clears "Empty"',
       async () => {
-        const cardBox = await page.locator("article").first().boundingBox();
-        const donePillBox = await page.getByText("Done", { exact: true }).first().boundingBox();
-        if (!cardBox || !donePillBox) throw new Error("card or Done pill not found");
-        await drag(page, cardBox, {
-          x: donePillBox.x + donePillBox.width / 2,
-          y: donePillBox.y + donePillBox.height / 2,
-        });
+        const donePill = page
+          .getByRole("button")
+          .filter({ has: page.getByText("Done", { exact: true }) })
+          .first();
+
+        let dropped = false;
+        for (let dropAttempt = 1; dropAttempt <= 3 && !dropped; dropAttempt += 1) {
+          const cardBox = await page.locator("article").first().boundingBox();
+          const donePillBox = await donePill.boundingBox();
+          if (!cardBox || !donePillBox) throw new Error("card or Done pill not found");
+
+          await drag(page, cardBox, {
+            x: donePillBox.x + donePillBox.width / 2,
+            y: donePillBox.y + donePillBox.height / 2,
+          });
+          dropped = await waitUntil(
+            `Done pill drop attempt ${dropAttempt}`,
+            async () =>
+              (await columnCount(page, "Done")) === 1 &&
+              (await page.getByText("Empty", { exact: true }).count()) === 0,
+            { timeout: 2500 },
+          )
+            .then(() => true)
+            .catch(() => false);
+        }
+
         const doneCount = await columnCount(page, "Done");
         const emptyCaption = await page.getByText("Empty", { exact: true }).count();
-        const ok = doneCount === 1 && emptyCaption === 0;
+        const ok = dropped && doneCount === 1 && emptyCaption === 0;
         return { ok, detail: `doneCount=${doneCount} emptyCaption=${emptyCaption}` };
       },
     );

@@ -66,9 +66,15 @@ const kickoffButton = (page) => page.locator('[data-testid="composer-kickoff"]')
 const titleInput = (page) => composer(page).getByPlaceholder("Ticket title");
 
 async function openComposerViaHeader(page) {
-  await page.getByRole("button", { name: "New ticket", exact: true }).click();
-  await sleep(350);
-  return (await composer(page).count()) === 1;
+  try {
+    const trigger = page.getByRole("button", { name: "New ticket", exact: true });
+    await trigger.waitFor({ state: "visible", timeout: 12000 });
+    await trigger.click();
+    await composer(page).waitFor({ state: "visible", timeout: 5000 });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function closeAnyDialog(page) {
@@ -271,8 +277,22 @@ async function main() {
           .then(() => true)
           .catch(() => false);
 
-        const ok = labelHasCodex && probe;
-        return { ok, detail: `label=${JSON.stringify(label)} codexProbe=${probe}` };
+        // The fake harness writes its probe before the renderer necessarily
+        // completes detail navigation. Synchronize on that UI transition so
+        // the next check cannot race a late board -> detail change.
+        const detail = await waitUntil(
+          "detail view opens after Codex kickoff",
+          () => detailOpen(page),
+          { timeout: 12000 },
+        )
+          .then(() => true)
+          .catch(() => false);
+
+        const ok = labelHasCodex && probe && detail;
+        return {
+          ok,
+          detail: `label=${JSON.stringify(label)} codexProbe=${probe} detail=${detail}`,
+        };
       },
     );
 
