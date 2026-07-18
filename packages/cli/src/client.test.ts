@@ -134,4 +134,21 @@ describe("requestAgent", () => {
       },
     );
   });
+
+  it("classifies a post-connect socket error as a protocol failure, not app-unreachable", async () => {
+    await withSocketServer(
+      (socket) => {
+        // The server-side socket also emits "error" on a forced destroy; a
+        // no-op listener here keeps that local instead of surfacing as an
+        // unhandled test-run error — only the client side is under test.
+        socket.on("error", () => undefined);
+        socket.destroy(new Error("simulated ECONNRESET"));
+      },
+      async (socketPath) => {
+        await expect(requestAgent(socketPath, request, { timeoutMs: 500 })).rejects.toMatchObject({
+          code: "SOCKET_PROTOCOL",
+        });
+      },
+    );
+  });
 });

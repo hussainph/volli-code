@@ -1,8 +1,24 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { launchApp, materializeFileArguments } from "./runtime";
+import { launchApp, materializeFileArguments, requireLaunchSocketPath } from "./runtime";
 
 const readFromFile = async () => "from file";
+
+describe("requireLaunchSocketPath", () => {
+  it("passes through a set socket path", () => {
+    expect(requireLaunchSocketPath("/profiles/volli.sock")).toBe("/profiles/volli.sock");
+  });
+
+  it("reports app.launch outside a Volli shim as app-unreachable, not a generic failure", () => {
+    let thrown: unknown;
+    try {
+      requireLaunchSocketPath(undefined);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toMatchObject({ code: "APP_UNREACHABLE" });
+  });
+});
 
 describe("materializeFileArguments", () => {
   it("reads file-backed bodies in the client before the socket round-trip", async () => {

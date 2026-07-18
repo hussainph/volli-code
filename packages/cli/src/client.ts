@@ -46,6 +46,7 @@ export function requestAgent(
     socket.setEncoding("utf8");
     let buffer = "";
     let settled = false;
+    let connected = false;
     const finish = (action: () => void): void => {
       /* v8 ignore next -- competing socket events may finish the same request; the guard is defensive */
       if (settled) return;
@@ -58,7 +59,10 @@ export function requestAgent(
       finish(() => reject(new AgentClientError("TIMEOUT", "Timed out waiting for Volli.")));
     }, options.timeoutMs);
 
-    socket.once("connect", () => socket.end(`${JSON.stringify(request)}\n`));
+    socket.once("connect", () => {
+      connected = true;
+      socket.end(`${JSON.stringify(request)}\n`);
+    });
     socket.on("data", (chunk: string) => {
       buffer += chunk;
       if (buffer.length > MAX_RESPONSE_CHARS) {
@@ -77,12 +81,22 @@ export function requestAgent(
       }
     });
     socket.once("error", (error) => {
+      // A pre-connect failure (no listener, permission denied, ...) means the
+      // app itself is unreachable — the retryable exit-3 class. An error
+      // after "connect" fired (e.g. ECONNRESET mid-response) means the app
+      // was there but the exchange broke, which is a protocol-level failure,
+      // not an app-availability one.
       finish(() =>
         reject(
-          new AgentClientError(
-            "APP_UNREACHABLE",
-            `Volli is not reachable at ${socketPath}: ${error.message}`,
-          ),
+          connected
+            ? new AgentClientError(
+                "SOCKET_PROTOCOL",
+                `The connection to Volli broke: ${error.message}`,
+              )
+            : new AgentClientError(
+                "APP_UNREACHABLE",
+                `Volli is not reachable at ${socketPath}: ${error.message}`,
+              ),
         ),
       );
     });
