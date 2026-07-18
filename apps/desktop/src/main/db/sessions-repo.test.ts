@@ -34,7 +34,12 @@ function setup(): { projectId: string; ticketId: string } {
 describe("insertSession / listSessions", () => {
   it("round-trips a ticket-scoped session", () => {
     const { projectId, ticketId } = setup();
-    const session = testSession(projectId, ticketId, { title: "Fix the bug" });
+    const session = testSession(projectId, ticketId, {
+      title: "Fix the bug",
+      launchKind: "agent",
+      placement: "split",
+      harnessId: "codex",
+    });
     insertSession(ctx.db, session);
 
     expect(listSessions(ctx.db, projectId)).toEqual([session]);

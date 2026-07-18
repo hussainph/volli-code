@@ -128,6 +128,8 @@ export function testSession(
     projectId,
     ticketId,
     harnessId: overrides.harnessId ?? "claude-code",
+    launchKind: overrides.launchKind ?? "unknown",
+    placement: overrides.placement ?? "unknown",
     title: overrides.title ?? `Session ${n}`,
     cwd: overrides.cwd ?? "/repo",
     now: overrides.createdAt ?? 0,

@@ -1,0 +1,5 @@
+# Local CI via act (https://github.com/nektos/act) — `act pull_request`.
+# Without this mapping act silently SKIPS every ubuntu-24.04 job (exit 0),
+# which reads as a passing run that actually validated nothing.
+-P ubuntu-24.04=ghcr.io/catthehacker/ubuntu:act-24.04
+--container-architecture linux/amd64

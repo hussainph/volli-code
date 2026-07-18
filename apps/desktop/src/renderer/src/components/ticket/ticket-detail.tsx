@@ -1,5 +1,4 @@
 import * as React from "react";
-import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
 import {
   baseNameOf,
   displayTicketId,
@@ -13,6 +12,7 @@ import type { MarkdownFileRefs } from "@renderer/components/editor/markdown-live
 import { ConfirmCloseDialog } from "@renderer/components/sessions/confirm-close-dialog";
 import { createTerminalSession } from "@renderer/components/sessions/session-create";
 import { FileView } from "@renderer/components/ticket/file-view";
+import { RailDrawer } from "@renderer/components/ticket/rail-drawer";
 import { TicketDocTab } from "@renderer/components/ticket/ticket-doc-tab";
 import { TicketProperties } from "@renderer/components/ticket/ticket-properties";
 import { TicketSessionPlane } from "@renderer/components/ticket/ticket-session-plane";
@@ -35,36 +35,19 @@ const DOC_TAB_ID = "doc";
 /**
  * The right rail's bottom "Details" drawer (status/priority/labels/worktree).
  * Sessions dominate the rail; Details is collapsed by default and pinned
- * beneath them, its open/closed state persisted app-wide via `useUiStore`
- * (mirrors the `railCollapsed` chrome preference). A quiet header toggles it;
- * the caret rotates to point down when open.
+ * beneath them (below the sessions panel's own History drawer — the three
+ * stack as Sessions / History / Details), its open/closed state persisted
+ * app-wide via `useUiStore` (mirrors the `railCollapsed` chrome preference).
  */
 function TicketDetailsDrawer({ projectId, ticket }: { projectId: string; ticket: Ticket }) {
   const expanded = useUiStore((state) => state.detailsExpanded);
-  const toggle = useUiStore((state) => state.toggleDetailsExpanded);
+  const setExpanded = useUiStore((state) => state.setDetailsExpanded);
   return (
-    <div className="shrink-0 border-t border-sidebar-border">
-      <button
-        type="button"
-        onClick={toggle}
-        aria-expanded={expanded}
-        className="flex w-full items-center justify-between px-4 py-3 text-label font-medium text-muted-foreground uppercase transition-colors duration-150 ease-out hover:text-foreground"
-      >
-        Details
-        <CaretRightIcon
-          weight="bold"
-          className={cn(
-            "size-3 transition-transform duration-150 ease-out",
-            expanded && "rotate-90",
-          )}
-        />
-      </button>
-      {expanded ? (
-        <div className="max-h-80 overflow-y-auto px-4 pb-4">
-          <TicketProperties projectId={projectId} ticket={ticket} />
-        </div>
-      ) : null}
-    </div>
+    <RailDrawer label="Details" open={expanded} onOpenChange={setExpanded}>
+      <div className="max-h-80 overflow-y-auto px-4 pb-4">
+        <TicketProperties projectId={projectId} ticket={ticket} />
+      </div>
+    </RailDrawer>
   );
 }
 
@@ -310,14 +293,14 @@ export function TicketDetail({
             // w-[300px]: deliberately fixed, unlike the resizable left sidebar —
             // a resizable details rail is deferred (HIG audit finding 10).
             <aside className="flex w-[300px] shrink-0 flex-col border-l border-sidebar-border bg-sidebar">
-              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
-                <TicketSessionsPanel
-                  ticketId={ticket.id}
-                  creating={creating}
-                  onNewSession={() => void createSession()}
-                  onActivateSession={setActiveTab}
-                />
-              </div>
+              {/* The panel owns the scrollable working set AND the pinned History
+                drawer, so History and Details stack as RailDrawer siblings. */}
+              <TicketSessionsPanel
+                ticketId={ticket.id}
+                creating={creating}
+                onNewSession={() => void createSession()}
+                onActivateSession={setActiveTab}
+              />
               <TicketDetailsDrawer projectId={projectId} ticket={ticket} />
             </aside>
           )}

@@ -8,7 +8,7 @@
  * below, not by this repo.
  */
 import type Database from "better-sqlite3";
-import type { HarnessId, SessionRecord } from "@volli/shared";
+import type { HarnessId, SessionLaunchKind, SessionPlacement, SessionRecord } from "@volli/shared";
 import { prepared } from "./prepared";
 
 interface SessionRow {
@@ -17,6 +17,8 @@ interface SessionRow {
   ticket_id: string | null;
   harness_id: string;
   harness_session_id: string | null;
+  launch_kind: string;
+  placement: string;
   title: string;
   cwd: string;
   created_at: number;
@@ -30,6 +32,8 @@ function mapSession(row: SessionRow): SessionRecord {
     ticketId: row.ticket_id,
     harnessId: row.harness_id as HarnessId,
     harnessSessionId: row.harness_session_id,
+    launchKind: row.launch_kind as SessionLaunchKind,
+    placement: row.placement as SessionPlacement,
     title: row.title,
     cwd: row.cwd,
     createdAt: row.created_at,
@@ -42,15 +46,17 @@ export function insertSession(db: Database.Database, session: SessionRecord): vo
   prepared(
     db,
     `INSERT INTO sessions
-       (id, project_id, ticket_id, harness_id, harness_session_id, title, cwd, created_at, ended_at)
+       (id, project_id, ticket_id, harness_id, harness_session_id, launch_kind, placement, title, cwd, created_at, ended_at)
      VALUES
-       (@id, @projectId, @ticketId, @harnessId, @harnessSessionId, @title, @cwd, @createdAt, @endedAt)`,
+       (@id, @projectId, @ticketId, @harnessId, @harnessSessionId, @launchKind, @placement, @title, @cwd, @createdAt, @endedAt)`,
   ).run({
     id: session.id,
     projectId: session.projectId,
     ticketId: session.ticketId,
     harnessId: session.harnessId,
     harnessSessionId: session.harnessSessionId,
+    launchKind: session.launchKind,
+    placement: session.placement,
     title: session.title,
     cwd: session.cwd,
     createdAt: session.createdAt,

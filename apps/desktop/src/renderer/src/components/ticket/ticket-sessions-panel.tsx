@@ -1,13 +1,9 @@
 import * as React from "react";
+import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import {
-  errorMessage,
-  harnessLabel,
-  type SessionActivityState,
-  type SessionRecord,
-} from "@volli/shared";
+import { errorMessage, type SessionActivityState, type SessionRecord } from "@volli/shared";
 
 import { InlineRename } from "@renderer/components/sessions/inline-rename";
 import { Button } from "@renderer/components/ui/button";
@@ -17,6 +13,15 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
+import { Input } from "@renderer/components/ui/input";
+import { RailDrawer } from "@renderer/components/ticket/rail-drawer";
+import {
+  filterSessionHistory,
+  groupSessionRows,
+  sessionSourceLabel,
+  type TicketSessionRow,
+} from "@renderer/components/ticket/session-history";
+import { relativeTime } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { sessionActivityState, sessionPanes, useSessionsStore } from "@renderer/stores/sessions";
@@ -52,7 +57,7 @@ function StatusChip({ status }: { status: SessionActivityState }) {
 function SessionRow({
   record,
   title,
-  status,
+  trailing,
   isOpen,
   editing,
   onActivate,
@@ -63,7 +68,8 @@ function SessionRow({
   record: SessionRecord;
   /** The live tab title when open (so optimistic renames show), else the durable record title. */
   title: string;
-  status: SessionActivityState;
+  /** Right-edge metadata: live status for current rows, relative end time for history rows. */
+  trailing: React.ReactNode;
   isOpen: boolean;
   editing: boolean;
   onActivate(): void;
@@ -90,10 +96,10 @@ function SessionRow({
       <span className="flex min-w-0 flex-1 flex-col">
         {titleNode}
         <span className="truncate text-label text-muted-foreground">
-          {harnessLabel(record.harnessId)}
+          {sessionSourceLabel(record)}
         </span>
       </span>
-      <StatusChip status={status} />
+      {trailing}
     </>
   );
 
@@ -133,14 +139,71 @@ function SessionRow({
   );
 }
 
+function SessionList({
+  rows,
+  variant,
+  now,
+  ticketId,
+  editingId,
+  setEditingId,
+  setActivePane,
+  onActivateSession,
+  onCommitRename,
+}: {
+  rows: readonly TicketSessionRow[];
+  /** Current rows trail with live status; history rows trail with when they ended. */
+  variant: "current" | "history";
+  now: number;
+  ticketId: string;
+  editingId: string | null;
+  setEditingId(sessionId: string | null): void;
+  setActivePane(ownerId: string, tabId: string, paneId: string): void;
+  onActivateSession(sessionId: string): void;
+  onCommitRename(record: SessionRecord, isRoot: boolean, next: string): void;
+}) {
+  return (
+    <ul className="flex flex-col gap-1">
+      {rows.map(({ record, title, isOpen, isRoot, tabId, status }) => (
+        <SessionRow
+          key={record.id}
+          record={record}
+          title={title}
+          trailing={
+            variant === "current" ? (
+              <StatusChip status={status} />
+            ) : (
+              <span className="shrink-0 text-label text-muted-foreground/70">
+                {relativeTime(record.endedAt ?? record.createdAt, now)}
+              </span>
+            )
+          }
+          isOpen={isOpen}
+          editing={editingId === record.id}
+          // Exited-but-open panes live in History but still activate their tab
+          // and exact split pane; closed records remain inert until resume lands.
+          onActivate={() => {
+            if (tabId === undefined) return;
+            onActivateSession(tabId);
+            setActivePane(ticketId, tabId, record.id);
+          }}
+          onStartRename={() => setEditingId(record.id)}
+          onCommitRename={(next) => onCommitRename(record, isRoot, next)}
+          onCancelRename={() => setEditingId(null)}
+        />
+      ))}
+    </ul>
+  );
+}
+
 /**
- * Right-rail "Sessions" section: a "New session" button that boots a ticket-
- * scoped terminal (env-injected, hosted by the resident overlay above) and the
- * ticket's session rows — live sessions (from the unified store) plus past ones
- * (durable records via `api.sessions.listForTicket`), newest first. The durable
- * list is re-read whenever the live set changes so new sessions appear and
- * closed ones fold into the inert "past" rows. Rows rename inline (double-click)
- * or via the right-click menu.
+ * The right rail's session content: a scrollable "Sessions" working set (a
+ * "New session" button that boots a ticket-scoped terminal, plus one row per
+ * live session from the unified store) and a bottom-pinned History drawer (a
+ * `RailDrawer` sibling of Details) holding ended/closed durable records —
+ * searchable past 4 entries — so the working set stays unlabeled and flat.
+ * The durable list (`api.sessions.listForTicket`) is re-read whenever the live
+ * set changes so new sessions appear and closed ones fold into History. Rows
+ * rename inline (double-click) or via the right-click menu.
  */
 export function TicketSessionsPanel({
   ticketId,
@@ -160,6 +223,8 @@ export function TicketSessionsPanel({
   const [records, setRecords] = React.useState<SessionRecord[]>([]);
   const [now, setNow] = React.useState(() => Date.now());
   const [editingId, setEditingId] = React.useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = React.useState(false);
+  const [historyQuery, setHistoryQuery] = React.useState("");
 
   const tabs = liveTabs ?? [];
   // Signature of every currently-open PANE (not just tab roots) — refetch the
@@ -241,7 +306,7 @@ export function TicketSessionsPanel({
       });
   };
 
-  const rows = records.map((record) => {
+  const rows: TicketSessionRow[] = records.map((record) => {
     const live = liveById.get(record.id);
     const isOpen = live !== undefined;
     const isRoot = live !== undefined && live.tabId === record.id;
@@ -256,50 +321,84 @@ export function TicketSessionsPanel({
     const title = isRoot ? live.tabTitle : record.title;
     return { record, title, isOpen, isRoot, tabId: live?.tabId, status };
   });
+  const { current, history } = groupSessionRows(rows);
+  const filteredHistory = filterSessionHistory(history, historyQuery);
+
+  const listProps = {
+    ticketId,
+    editingId,
+    setEditingId,
+    setActivePane,
+    onActivateSession,
+    onCommitRename: commitRename,
+  };
 
   return (
-    <section className="flex flex-col gap-3">
-      <div className="flex items-center justify-between">
-        <h2 className="text-label font-medium text-muted-foreground uppercase">Sessions</h2>
-        <Button
-          size="icon-xs"
-          variant="ghost"
-          disabled={creating}
-          onClick={onNewSession}
-          aria-label="New session"
-        >
-          <PlusIcon />
-        </Button>
-      </div>
-      {rows.length === 0 ? (
-        <div className="flex flex-col items-center gap-1.5 rounded-md border border-dashed border-border py-6 text-center">
-          <TerminalWindowIcon weight="fill" className="size-4 text-muted-foreground" />
-          <p className="text-xs text-muted-foreground">No sessions yet</p>
+    <>
+      <section className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-label font-medium text-muted-foreground uppercase">Sessions</h2>
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              disabled={creating}
+              onClick={onNewSession}
+              aria-label="New session"
+            >
+              <PlusIcon />
+            </Button>
+          </div>
+          {current.length === 0 ? (
+            <div className="flex flex-col items-center gap-1.5 rounded-md border border-dashed border-border py-6 text-center">
+              <TerminalWindowIcon weight="fill" className="size-4 text-muted-foreground" />
+              <p className="text-xs text-muted-foreground">No active sessions</p>
+            </div>
+          ) : (
+            <SessionList rows={current} variant="current" now={now} {...listProps} />
+          )}
         </div>
-      ) : (
-        <ul className="flex flex-col gap-1">
-          {rows.map(({ record, title, isOpen, isRoot, tabId, status }) => (
-            <SessionRow
-              key={record.id}
-              record={record}
-              title={title}
-              status={status}
-              isOpen={isOpen}
-              editing={editingId === record.id}
-              // Activating any live pane row selects its TAB and focuses that
-              // specific pane within the split (tabId is defined whenever isOpen).
-              onActivate={() => {
-                if (tabId === undefined) return;
-                onActivateSession(tabId);
-                setActivePane(ticketId, tabId, record.id);
-              }}
-              onStartRename={() => setEditingId(record.id)}
-              onCommitRename={(next) => commitRename(record, isRoot, next)}
-              onCancelRename={() => setEditingId(null)}
-            />
-          ))}
-        </ul>
-      )}
-    </section>
+      </section>
+      {history.length > 0 ? (
+        <RailDrawer
+          label="History"
+          count={history.length}
+          open={historyOpen}
+          onOpenChange={(open) => {
+            setHistoryOpen(open);
+            if (!open) setHistoryQuery("");
+          }}
+          data-testid="session-history"
+        >
+          <div className="flex flex-col gap-1.5 px-4 pb-4">
+            {history.length > 4 ? (
+              <div className="relative">
+                <MagnifyingGlassIcon
+                  aria-hidden
+                  className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
+                />
+                <Input
+                  type="search"
+                  value={historyQuery}
+                  onChange={(event) => setHistoryQuery(event.target.value)}
+                  aria-label="Search session history"
+                  placeholder="Search history…"
+                  className="h-8 pl-8 text-xs md:text-xs"
+                />
+              </div>
+            ) : null}
+            {filteredHistory.length > 0 ? (
+              <div className="max-h-64 overflow-y-auto">
+                <SessionList rows={filteredHistory} variant="history" now={now} {...listProps} />
+              </div>
+            ) : (
+              <p className="rounded-md border border-dashed border-border py-4 text-center text-xs text-muted-foreground">
+                No matching sessions
+              </p>
+            )}
+          </div>
+        </RailDrawer>
+      ) : null}
+    </>
   );
 }

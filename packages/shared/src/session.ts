@@ -11,6 +11,33 @@
 
 import type { HarnessId } from "./ticket";
 
+/**
+ * What the initial PTY launch actually started. `unknown` is reserved for
+ * records created before this metadata existed: showing a generic Terminal is
+ * more honest than guessing that a historical bare shell was Claude Code.
+ */
+export const SESSION_LAUNCH_KINDS = ["agent", "shell", "unknown"] as const;
+
+export type SessionLaunchKind = (typeof SESSION_LAUNCH_KINDS)[number];
+
+/** Whether `value` is durable launch-kind metadata accepted across IPC/storage boundaries. */
+export function isSessionLaunchKind(value: unknown): value is SessionLaunchKind {
+  return typeof value === "string" && (SESSION_LAUNCH_KINDS as readonly string[]).includes(value);
+}
+
+/**
+ * Where the PTY first landed in Volli's app-owned layout. `unknown` is the
+ * migration value for historical records whose renderer layout was not stored.
+ */
+export const SESSION_PLACEMENTS = ["tab", "split", "unknown"] as const;
+
+export type SessionPlacement = (typeof SESSION_PLACEMENTS)[number];
+
+/** Whether `value` is durable session-placement metadata. */
+export function isSessionPlacement(value: unknown): value is SessionPlacement {
+  return typeof value === "string" && (SESSION_PLACEMENTS as readonly string[]).includes(value);
+}
+
 /** A durable session record: trace + resume seed for a terminal session. */
 export interface SessionRecord {
   id: string;
@@ -20,6 +47,10 @@ export interface SessionRecord {
   harnessId: HarnessId;
   /** The harness's own resume/session UUID; filled in later by hooks/the volli CLI. */
   harnessSessionId: string | null;
+  /** Whether this PTY launched an agent, a bare shell, or predates launch metadata. */
+  launchKind: SessionLaunchKind;
+  /** Whether the PTY first landed as a top-level tab, a split pane, or predates placement metadata. */
+  placement: SessionPlacement;
   title: string;
   /** Absolute working directory the session's PTY was booted in. */
   cwd: string;
@@ -60,6 +91,8 @@ export interface CreateSessionInput {
   /** Defaults to `null` (project-scoped scratch session). */
   ticketId?: string | null;
   harnessId: HarnessId;
+  launchKind: SessionLaunchKind;
+  placement: SessionPlacement;
   title: string;
   /** Absolute working directory the session's PTY was booted in. */
   cwd: string;
@@ -75,6 +108,8 @@ export function createSessionRecord(input: CreateSessionInput): SessionRecord {
     ticketId: input.ticketId ?? null,
     harnessId: input.harnessId,
     harnessSessionId: null,
+    launchKind: input.launchKind,
+    placement: input.placement,
     title: input.title,
     cwd: input.cwd,
     createdAt: input.now,

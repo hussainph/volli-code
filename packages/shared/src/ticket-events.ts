@@ -5,6 +5,7 @@
  * arrive with the volli CLI.
  */
 
+import type { SessionLaunchKind, SessionPlacement } from "./session";
 import type { HarnessId, TicketPriority, TicketStatus } from "./ticket";
 
 export const TICKET_EVENT_KINDS = [
@@ -58,7 +59,17 @@ export type TicketEventPayload =
   | { kind: "archived" }
   | { kind: "unarchived" }
   | { kind: "commented"; commentId: string }
-  | { kind: "session_started"; sessionId: string; title: string; harnessId: HarnessId }
+  | {
+      kind: "session_started";
+      sessionId: string;
+      title: string;
+      /** Optional for records written before migration 006. */
+      launchKind?: SessionLaunchKind;
+      /** Optional for records written before migration 006. */
+      placement?: SessionPlacement;
+      /** Present only when the session actually launched an agent harness. */
+      harnessId?: HarnessId;
+    }
   | { kind: "session_ended"; sessionId: string }
   | { kind: "worktree_changed"; from: WorktreeIdentity; to: WorktreeIdentity };
 

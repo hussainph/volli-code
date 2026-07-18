@@ -311,9 +311,9 @@ function Composer({ onSubmit }: { onSubmit: (body: string) => Promise<boolean> }
             void submit();
           }
         }}
-        placeholder="Add a comment…  (⌘↵ to send)"
+        placeholder="Add a comment…"
         aria-label="Add a comment"
-        className="min-h-16 w-full resize-none bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground [field-sizing:content]"
+        className="min-h-16 w-full resize-none bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/60 [field-sizing:content]"
       />
       <div className="flex justify-end">
         <Button
@@ -323,6 +323,7 @@ function Composer({ onSubmit }: { onSubmit: (body: string) => Promise<boolean> }
         >
           <PaperPlaneTiltIcon weight="fill" />
           Comment
+          <kbd className="text-label font-normal text-primary-foreground/70">⌘↵</kbd>
         </Button>
       </div>
     </div>

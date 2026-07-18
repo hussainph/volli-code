@@ -2,7 +2,11 @@ import { describe, it, expect } from "vite-plus/test";
 import {
   createSessionRecord,
   isSessionActivityState,
+  isSessionLaunchKind,
+  isSessionPlacement,
   SESSION_ACTIVITY_STATES,
+  SESSION_LAUNCH_KINDS,
+  SESSION_PLACEMENTS,
   shortSessionId,
 } from "./session";
 import type { SessionActivityState, SessionRecord } from "./session";
@@ -35,12 +39,30 @@ describe("isSessionActivityState", () => {
   });
 });
 
+describe("durable session metadata vocabularies", () => {
+  it("accepts the known launch kinds and rejects unknown values", () => {
+    expect(SESSION_LAUNCH_KINDS).toEqual(["agent", "shell", "unknown"]);
+    for (const kind of SESSION_LAUNCH_KINDS) expect(isSessionLaunchKind(kind)).toBe(true);
+    expect(isSessionLaunchKind("claude-code")).toBe(false);
+    expect(isSessionLaunchKind(null)).toBe(false);
+  });
+
+  it("accepts the known placements and rejects unknown values", () => {
+    expect(SESSION_PLACEMENTS).toEqual(["tab", "split", "unknown"]);
+    for (const placement of SESSION_PLACEMENTS) expect(isSessionPlacement(placement)).toBe(true);
+    expect(isSessionPlacement("pane")).toBe(false);
+    expect(isSessionPlacement(undefined)).toBe(false);
+  });
+});
+
 describe("createSessionRecord", () => {
   it("uses the supplied id verbatim and stamps createdAt from now", () => {
     const session = createSessionRecord({
       id: "session-1",
       projectId: "proj-1",
       harnessId: "claude-code",
+      launchKind: "agent",
+      placement: "tab",
       title: "Fix the bug",
       cwd: "/Users/dev/project",
       now: 1000,
@@ -48,6 +70,8 @@ describe("createSessionRecord", () => {
     expect(session.id).toBe("session-1");
     expect(session.projectId).toBe("proj-1");
     expect(session.harnessId).toBe("claude-code");
+    expect(session.launchKind).toBe("agent");
+    expect(session.placement).toBe("tab");
     expect(session.title).toBe("Fix the bug");
     expect(session.cwd).toBe("/Users/dev/project");
     expect(session.createdAt).toBe(1000);
@@ -58,6 +82,8 @@ describe("createSessionRecord", () => {
       id: "session-1",
       projectId: "proj-1",
       harnessId: "codex",
+      launchKind: "shell",
+      placement: "split",
       title: "Scratch",
       cwd: "/Users/dev/project",
       now: 0,
@@ -71,6 +97,8 @@ describe("createSessionRecord", () => {
       projectId: "proj-1",
       ticketId: "ticket-1",
       harnessId: "opencode",
+      launchKind: "agent",
+      placement: "tab",
       title: "Work",
       cwd: "/Users/dev/project",
       now: 0,
@@ -83,6 +111,8 @@ describe("createSessionRecord", () => {
       id: "session-1",
       projectId: "proj-1",
       harnessId: "claude-code",
+      launchKind: "unknown",
+      placement: "unknown",
       title: "Work",
       cwd: "/Users/dev/project",
       now: 0,
@@ -99,6 +129,8 @@ describe("SessionRecord", () => {
       projectId: "proj-1",
       ticketId: null,
       harnessId: "claude-code",
+      launchKind: "unknown",
+      placement: "unknown",
       harnessSessionId: null,
       title: "Scratch",
       cwd: "/Users/dev/project",
