@@ -166,16 +166,11 @@ const TICKET_CREATE_SPEC: CommandSpec = {
     "--base": { kind: "value", key: "base" },
     "--status": { kind: "value", key: "status", parse: columnValue },
   },
-  // TEMP: kept only to stay byte-identical with the pre-consolidation parser;
-  // a follow-up commit removes this client-side domain defaulting so the
-  // server's own defaulting (agent-commands.ts) is the single source.
-  defaults: { labels: [], usesWorktree: true },
   finalize: (args) => {
     if (typeof args["title"] !== "string") return "ticket create requires --title";
     if ("body" in args && "bodyFile" in args) {
       return "ticket create accepts only one of --body or --body-file";
     }
-    args["status"] ??= "backlog";
     return null;
   },
 };
