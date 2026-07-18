@@ -235,6 +235,56 @@ describe("renderCliSuccess", () => {
     }
   });
 
+  it("renders identify's healthy project object as a readable single line", () => {
+    expect(
+      renderCliSuccess(
+        "identify",
+        {
+          project: { name: "Volli Code", prefix: "VC", path: "/repo/volli" },
+          ticket: "VC-12",
+          session: "abcdef12",
+          worktreePath: "/repo/volli",
+          socket: "/Users/dev/Library/Application Support/Volli Code/volli.sock",
+          appVersion: "1.0.0",
+        },
+        { json: false, tty: false },
+      ),
+    ).toBe(
+      "project  Volli Code (VC)\n" +
+        "ticket  VC-12\n" +
+        "session  abcdef12\n" +
+        "worktreePath  /repo/volli\n" +
+        "socket  /Users/dev/Library/Application Support/Volli Code/volli.sock\n" +
+        "appVersion  1.0.0\n",
+    );
+  });
+
+  it("marks degraded identify output as distinguishable from a healthy read", () => {
+    expect(
+      renderCliSuccess(
+        "identify",
+        {
+          project: null,
+          ticket: null,
+          session: null,
+          worktreePath: "/repo/volli",
+          socket: null,
+          appVersion: null,
+          degraded: true,
+        },
+        { json: false, tty: false },
+      ),
+    ).toBe(
+      "project  -\n" +
+        "ticket  -\n" +
+        "session  -\n" +
+        "worktreePath  /repo/volli\n" +
+        "socket  -\n" +
+        "appVersion  -\n" +
+        "degraded  true\n",
+    );
+  });
+
   it("covers every usage exit-code spelling", () => {
     expect(exitCodeForError("USAGE")).toBe(2);
     expect(exitCodeForError("UNSUPPORTED_COMMAND")).toBe(2);

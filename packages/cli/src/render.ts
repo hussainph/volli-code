@@ -22,6 +22,14 @@ function titleCase(value: string): string {
   return value.length === 0 ? value : `${value[0]!.toUpperCase()}${value.slice(1)}`;
 }
 
+/** Renders `identify`'s project field: `name (prefix)`, consistent with project.list's leading columns. */
+function renderIdentifyProject(value: unknown): string {
+  if (isRecord(value) && typeof value["name"] === "string" && typeof value["prefix"] === "string") {
+    return `${value["name"]} (${value["prefix"]})`;
+  }
+  return "-";
+}
+
 function renderBoard(data: unknown): string | null {
   if (!isRecord(data) || !isRecord(data["project"]) || !isRecord(data["columns"])) return null;
   const project = data["project"];
@@ -157,10 +165,24 @@ function renderStableLines(command: string, data: unknown): string | null {
     return events?.map((event) => JSON.stringify(event)).join("\n") ?? null;
   }
   if (command === "identify") {
-    return ["project", "ticket", "session", "worktree", "worktreePath", "socket", "appVersion"]
+    const keys = [
+      "project",
+      "ticket",
+      "session",
+      "worktree",
+      "worktreePath",
+      "socket",
+      "appVersion",
+    ] as const;
+    const lines = keys
       .filter((key) => key in data)
-      .map((key) => `${key}  ${String(data[key] ?? "-")}`)
-      .join("\n");
+      .map((key) => {
+        if (key === "project") return `project  ${renderIdentifyProject(data["project"])}`;
+        const value = data[key];
+        return `${key}  ${value === null || value === undefined ? "-" : String(value)}`;
+      });
+    if (data["degraded"] === true) lines.push("degraded  true");
+    return lines.join("\n");
   }
   if (command === "session.done" || command === "session.blocked") {
     return `${String(data["session"])}  ${String(data["signal"])}`;
