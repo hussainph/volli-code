@@ -1,4 +1,4 @@
-import { AGENT_ERROR_CODES } from "@volli/shared";
+import { AGENT_ERROR_CODES, errorMessage } from "@volli/shared";
 import type { AgentCommand, AgentError, AgentRequest, AgentResponse } from "@volli/shared";
 
 import { AgentClientError } from "./client";
@@ -54,10 +54,7 @@ function helpText(topic: unknown): string {
 
 function clientError(error: unknown): AgentError {
   if (error instanceof AgentClientError) return { code: error.code, message: error.message };
-  return {
-    code: "MUTATION_FAILED",
-    message: error instanceof Error ? error.message : String(error),
-  };
+  return { code: "MUTATION_FAILED", message: errorMessage(error) };
 }
 
 function writeDegradedIdentify(json: boolean, dependencies: RunCliDependencies): void {

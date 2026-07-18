@@ -1,3 +1,5 @@
+import { errorMessage } from "@volli/shared";
+
 import type { CliInvocation } from "./parser";
 import { AgentClientError } from "./client";
 
@@ -75,8 +77,10 @@ export async function materializeFileArguments(
   try {
     text = await readText(path);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new AgentClientError("FILE_READ_FAILED", `Could not read ${path}: ${message}`);
+    throw new AgentClientError(
+      "FILE_READ_FAILED",
+      `Could not read ${path}: ${errorMessage(error)}`,
+    );
   }
 
   const args = { ...invocation.args };
