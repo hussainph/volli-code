@@ -189,6 +189,42 @@ describe("agent command service", () => {
     });
   });
 
+  it("treats a same-column move as an idempotent no-op, preserving order", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    let id = 0;
+    let timestamp = 100;
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => timestamp++,
+      newId: () => `ticket-${++id}`,
+    });
+    const execute = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
+      service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: {} } });
+    await execute("ticket.create", { title: "First", status: "todo" });
+    await execute("ticket.create", { title: "Second", status: "todo" });
+
+    // Re-moving VC-1 into the column it already occupies must NOT push it below VC-2.
+    const removed = await execute("ticket.move", { id: "VC-1", to: "todo" });
+    const board = await execute("board", {});
+    const events = await execute("ticket.events", { id: "VC-1", limit: 10 });
+
+    expect(removed).toMatchObject({ ok: true, data: { ticket: { id: "VC-1", status: "todo" } } });
+    expect(board).toMatchObject({
+      ok: true,
+      data: { columns: { todo: [{ id: "VC-1" }, { id: "VC-2" }] } },
+    });
+    // No status_changed event was written for the no-op move.
+    if (events.ok) {
+      const data = events.data as { events: { payload: { kind: string } }[] };
+      expect(data.events.some((event) => event.payload.kind === "status_changed")).toBe(false);
+    }
+  });
+
   it("identifies the project, ticket, and short session from the injected environment", async () => {
     ctx = openTestDb();
     insertProject(

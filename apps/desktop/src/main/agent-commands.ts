@@ -710,6 +710,16 @@ export function createAgentCommandService(
         if (!isTicketStatus(to)) {
           return failure("INVALID_REQUEST", "ticket move requires a valid destination column.");
         }
+        // A CLI move carries column semantics only (no drop index), so a move to
+        // the column the ticket already occupies is an idempotent no-op — never
+        // a reorder to the bottom, and no status event. Returned unchanged.
+        if (resolved.ticket.status === to) {
+          return {
+            v: 1,
+            ok: true,
+            data: { ticket: agentTicket(resolved.ticket, resolved.project) },
+          };
+        }
         try {
           const movedAt = now();
           const before = listTicketsByProject(options.db, resolved.project.id);
