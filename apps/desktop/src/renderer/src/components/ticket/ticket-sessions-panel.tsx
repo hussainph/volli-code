@@ -1,22 +1,32 @@
 import * as React from "react";
+import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
+import { ClockCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ClockCounterClockwise";
+import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import {
-  errorMessage,
-  harnessLabel,
-  type SessionActivityState,
-  type SessionRecord,
-} from "@volli/shared";
+import { errorMessage, type SessionActivityState, type SessionRecord } from "@volli/shared";
 
 import { InlineRename } from "@renderer/components/sessions/inline-rename";
 import { Button } from "@renderer/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@renderer/components/ui/collapsible";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
+import { Input } from "@renderer/components/ui/input";
+import {
+  filterSessionHistory,
+  groupSessionRows,
+  sessionSourceLabel,
+  type TicketSessionRow,
+} from "@renderer/components/ticket/session-history";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { sessionActivityState, sessionPanes, useSessionsStore } from "@renderer/stores/sessions";
@@ -90,7 +100,7 @@ function SessionRow({
       <span className="flex min-w-0 flex-1 flex-col">
         {titleNode}
         <span className="truncate text-label text-muted-foreground">
-          {harnessLabel(record.harnessId)}
+          {sessionSourceLabel(record)}
         </span>
       </span>
       <StatusChip status={status} />
@@ -133,14 +143,58 @@ function SessionRow({
   );
 }
 
+function SessionList({
+  rows,
+  ticketId,
+  editingId,
+  setEditingId,
+  setActivePane,
+  onActivateSession,
+  onCommitRename,
+}: {
+  rows: readonly TicketSessionRow[];
+  ticketId: string;
+  editingId: string | null;
+  setEditingId(sessionId: string | null): void;
+  setActivePane(ownerId: string, tabId: string, paneId: string): void;
+  onActivateSession(sessionId: string): void;
+  onCommitRename(record: SessionRecord, isRoot: boolean, next: string): void;
+}) {
+  return (
+    <ul className="flex flex-col gap-1">
+      {rows.map(({ record, title, isOpen, isRoot, tabId, status }) => (
+        <SessionRow
+          key={record.id}
+          record={record}
+          title={title}
+          status={status}
+          isOpen={isOpen}
+          editing={editingId === record.id}
+          // Exited-but-open panes live in History but still activate their tab
+          // and exact split pane; closed records remain inert until resume lands.
+          onActivate={() => {
+            if (tabId === undefined) return;
+            onActivateSession(tabId);
+            setActivePane(ticketId, tabId, record.id);
+          }}
+          onStartRename={() => setEditingId(record.id)}
+          onCommitRename={(next) => onCommitRename(record, isRoot, next)}
+          onCancelRename={() => setEditingId(null)}
+        />
+      ))}
+    </ul>
+  );
+}
+
 /**
  * Right-rail "Sessions" section: a "New session" button that boots a ticket-
  * scoped terminal (env-injected, hosted by the resident overlay above) and the
  * ticket's session rows — live sessions (from the unified store) plus past ones
- * (durable records via `api.sessions.listForTicket`), newest first. The durable
- * list is re-read whenever the live set changes so new sessions appear and
- * closed ones fold into the inert "past" rows. Rows rename inline (double-click)
- * or via the right-click menu.
+ * (durable records via `api.sessions.listForTicket`), newest first. The working
+ * set stays visible; exited/closed records move into collapsed searchable
+ * History. The durable list is re-read whenever the live set changes so new
+ * sessions appear and closed ones fold into history. Rows rename inline
+ * (double-click) or via the right-click menu.
  */
 export function TicketSessionsPanel({
   ticketId,
@@ -160,6 +214,8 @@ export function TicketSessionsPanel({
   const [records, setRecords] = React.useState<SessionRecord[]>([]);
   const [now, setNow] = React.useState(() => Date.now());
   const [editingId, setEditingId] = React.useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = React.useState(false);
+  const [historyQuery, setHistoryQuery] = React.useState("");
 
   const tabs = liveTabs ?? [];
   // Signature of every currently-open PANE (not just tab roots) — refetch the
@@ -241,7 +297,7 @@ export function TicketSessionsPanel({
       });
   };
 
-  const rows = records.map((record) => {
+  const rows: TicketSessionRow[] = records.map((record) => {
     const live = liveById.get(record.id);
     const isOpen = live !== undefined;
     const isRoot = live !== undefined && live.tabId === record.id;
@@ -256,6 +312,8 @@ export function TicketSessionsPanel({
     const title = isRoot ? live.tabTitle : record.title;
     return { record, title, isOpen, isRoot, tabId: live?.tabId, status };
   });
+  const { current, history } = groupSessionRows(rows);
+  const filteredHistory = filterSessionHistory(history, historyQuery);
 
   return (
     <section className="flex flex-col gap-3">
@@ -277,28 +335,91 @@ export function TicketSessionsPanel({
           <p className="text-xs text-muted-foreground">No sessions yet</p>
         </div>
       ) : (
-        <ul className="flex flex-col gap-1">
-          {rows.map(({ record, title, isOpen, isRoot, tabId, status }) => (
-            <SessionRow
-              key={record.id}
-              record={record}
-              title={title}
-              status={status}
-              isOpen={isOpen}
-              editing={editingId === record.id}
-              // Activating any live pane row selects its TAB and focuses that
-              // specific pane within the split (tabId is defined whenever isOpen).
-              onActivate={() => {
-                if (tabId === undefined) return;
-                onActivateSession(tabId);
-                setActivePane(ticketId, tabId, record.id);
+        <div className="flex flex-col gap-3">
+          {current.length > 0 ? (
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center justify-between px-0.5">
+                <h3 className="text-label font-medium text-muted-foreground uppercase">Current</h3>
+                <span className="text-label text-muted-foreground">{current.length}</span>
+              </div>
+              <SessionList
+                rows={current}
+                ticketId={ticketId}
+                editingId={editingId}
+                setEditingId={setEditingId}
+                setActivePane={setActivePane}
+                onActivateSession={onActivateSession}
+                onCommitRename={commitRename}
+              />
+            </div>
+          ) : (
+            <p className="px-0.5 text-xs text-muted-foreground">No current sessions</p>
+          )}
+
+          {history.length > 0 ? (
+            <Collapsible
+              open={historyOpen}
+              onOpenChange={(open) => {
+                setHistoryOpen(open);
+                if (!open) setHistoryQuery("");
               }}
-              onStartRename={() => setEditingId(record.id)}
-              onCommitRename={(next) => commitRename(record, isRoot, next)}
-              onCancelRename={() => setEditingId(null)}
-            />
-          ))}
-        </ul>
+              data-testid="session-history"
+            >
+              <CollapsibleTrigger asChild>
+                <button
+                  type="button"
+                  className="group flex w-full items-center gap-2 rounded-md px-1 py-1 text-left text-xs text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+                >
+                  <CaretRightIcon
+                    weight="bold"
+                    className={cn(
+                      "size-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none",
+                      historyOpen && "rotate-90",
+                    )}
+                  />
+                  <ClockCounterClockwiseIcon weight="fill" className="size-3.5 shrink-0" />
+                  <span className="font-medium">History</span>
+                  <span className="ml-auto text-label text-muted-foreground">{history.length}</span>
+                </button>
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <div className="mt-1.5 flex flex-col gap-1.5">
+                  {history.length > 4 ? (
+                    <div className="relative">
+                      <MagnifyingGlassIcon
+                        aria-hidden
+                        className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
+                      />
+                      <Input
+                        type="search"
+                        value={historyQuery}
+                        onChange={(event) => setHistoryQuery(event.target.value)}
+                        aria-label="Search session history"
+                        placeholder="Search history…"
+                        className="h-8 pl-8 text-xs md:text-xs"
+                      />
+                    </div>
+                  ) : null}
+                  {filteredHistory.length > 0 ? (
+                    <SessionList
+                      rows={filteredHistory}
+                      ticketId={ticketId}
+                      editingId={editingId}
+                      setEditingId={setEditingId}
+                      setActivePane={setActivePane}
+                      onActivateSession={onActivateSession}
+                      onCommitRename={commitRename}
+                    />
+                  ) : (
+                    <p className="rounded-md border border-dashed border-border py-4 text-center text-xs text-muted-foreground">
+                      No matching sessions
+                    </p>
+                  )}
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
+          ) : null}
+        </div>
       )}
     </section>
   );

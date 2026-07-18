@@ -26,7 +26,8 @@
  *      injection is proven with the file-probe pattern ($VOLLI_TICKET == display
  *      id, $VOLLI_ARTIFACTS_DIR == the project's `.volli/artifacts` path — the
  *      global-artifacts env contract; VOLLI_TICKET_DIR is gone); switching
- *      Doc ↔ session keeps the terminal alive; the rail shows a chip.
+ *      Doc ↔ session keeps the terminal alive; the rail shows a chip and the
+ *      truthful Shell source label (never the default Claude harness).
  *   6. Resident keep-alive — navigating ticket → board → ticket keeps the SAME
  *      terminal canvas DOM node mounted (marked node survives) and the shell
  *      alive (the overlay hosts terminals, the detail is only a view over it).
@@ -42,8 +43,9 @@
  *  11. Restart      — relaunch against the SAME app-data dir: the ticket detail
  *      reopens (persisted openTicketId), the edited title/body + surviving
  *      comment are intact, the rail is STILL collapsed (persisted), and the
- *      renamed session is listed as exited. Back still returns to the board
- *      even though the in-memory history intentionally starts fresh.
+ *      renamed session is tucked into collapsed History, then remains findable
+ *      when expanded with its Shell + Exited metadata. Back still returns to
+ *      the board even though the in-memory nav history starts fresh.
  *
  * The terminal is a WebGPU/WebGL2 canvas — its text is NOT in the DOM — so shell
  * behaviour is asserted through SIDE EFFECTS (keystrokes → a file the shell
@@ -602,7 +604,7 @@ async function main() {
     // ===================================================================
     await attempt(
       5,
-      "Ticket session: rail New session boots a PTY, env injection ($VOLLI_TICKET/$VOLLI_ARTIFACTS_DIR), keep-alive across tabs, rail chip",
+      "Ticket session: rail New session boots a PTY, env injection ($VOLLI_TICKET/$VOLLI_ARTIFACTS_DIR), keep-alive across tabs, truthful Shell metadata",
       async () => {
         await fs.rm(PROBE_ENV, { force: true });
         await fs.rm(PROBE_ALIVE, { force: true });
@@ -644,11 +646,13 @@ async function main() {
 
         const railRow = (await aside.getByText(SESSION_INITIAL, { exact: true }).count()) >= 1;
         const railChip = (await aside.getByText(/^(Working|Idle|Exited)$/).count()) >= 1;
+        const shellSource = (await aside.getByText("Shell", { exact: true }).count()) === 1;
+        const noFalseClaude = (await aside.getByText("Claude Code", { exact: true }).count()) === 0;
 
-        const ok = envOk && aliveOk && railRow && railChip;
+        const ok = envOk && aliveOk && railRow && railChip && shellSource && noFalseClaude;
         return {
           ok,
-          detail: `env=${JSON.stringify(envLines)} envOk=${envOk} alive=${aliveOk} railRow=${railRow} railChip=${railChip}`,
+          detail: `env=${JSON.stringify(envLines)} envOk=${envOk} alive=${aliveOk} railRow=${railRow} railChip=${railChip} shell=${shellSource} noClaude=${noFalseClaude}`,
         };
       },
     );
@@ -905,13 +909,23 @@ async function main() {
           return kept && deletedGone;
         });
 
-        // The prior (renamed) session is listed in the rail as exited.
-        const sessionOk = await waitUntil("prior renamed session listed as exited", async () => {
-          const row = (await aside.getByText(SESSION_RENAMED, { exact: true }).count()) >= 1;
-          const exited = (await aside.getByText("Exited", { exact: true }).count()) >= 1;
-          return row && exited;
-        });
-
+        // The prior session no longer clutters the working set: History is
+        // collapsed by default. Expanding it restores the renamed row and its
+        // truthful source/status metadata.
+        const historyButton = aside.getByRole("button", { name: /History/ });
+        const historyCollapsed =
+          (await historyButton.getAttribute("aria-expanded")) === "false" &&
+          (await aside.getByText(SESSION_RENAMED, { exact: true }).count()) === 0;
+        await historyButton.click();
+        const sessionOk = await waitUntil(
+          "prior renamed session expands from history",
+          async () => {
+            const row = (await aside.getByText(SESSION_RENAMED, { exact: true }).count()) >= 1;
+            const shell = (await aside.getByText("Shell", { exact: true }).count()) >= 1;
+            const exited = (await aside.getByText("Exited", { exact: true }).count()) >= 1;
+            return row && shell && exited;
+          },
+        );
         // Navigation history is deliberately in-memory, so a relaunch has no
         // prior board snapshot. The chrome Back action still needs a semantic
         // fallback from persisted ticket detail to its parent Board.
@@ -928,11 +942,12 @@ async function main() {
           !!bodyOk &&
           railCollapsedPersisted &&
           !!commentOk &&
+          historyCollapsed &&
           !!sessionOk &&
           !!boardViaRestartBack;
         return {
           ok,
-          detail: `docTab=${JSON.stringify(docTabId)} title=${titleOk} body=${!!bodyOk} railCollapsed=${railCollapsedPersisted} comment=${!!commentOk} session=${!!sessionOk} restartBack=${!!boardViaRestartBack}`,
+          detail: `docTab=${JSON.stringify(docTabId)} title=${titleOk} body=${!!bodyOk} railCollapsed=${railCollapsedPersisted} comment=${!!commentOk} historyCollapsed=${historyCollapsed} session=${!!sessionOk} restartBack=${!!boardViaRestartBack}`,
         };
       },
     );
