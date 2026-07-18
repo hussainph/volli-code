@@ -7,6 +7,7 @@ import {
   isTicketPriority,
   isTicketStatus,
   isHarnessId,
+  isValidBranchName,
   resolveAgentContext,
   shortSessionId,
   TICKET_STATUS_LABELS,
@@ -853,12 +854,14 @@ export function createAgentCommandService(
       const priority = request.args["priority"] ?? "medium";
       const labels = request.args["labels"] ?? [];
       const harness = request.args["harness"];
+      const base = request.args["base"];
       if (
         typeof title !== "string" ||
         title.trim().length === 0 ||
         !isTicketStatus(status) ||
         !isTicketPriority(priority) ||
         (harness !== undefined && !isHarnessId(harness)) ||
+        (base !== undefined && (typeof base !== "string" || !isValidBranchName(base))) ||
         !Array.isArray(labels) ||
         !labels.every((label) => typeof label === "string")
       ) {
@@ -884,10 +887,10 @@ export function createAgentCommandService(
                 ? request.args["usesWorktree"]
                 : true,
             preferredHarnessId: isHarnessId(harness) ? harness : undefined,
-            baseBranch:
-              typeof request.args["base"] === "string"
-                ? request.args["base"]
-                : (resolved.project.baseBranch ?? null),
+            // An explicit per-ticket override only (decision 11). `null` means
+            // "inherit the pinned project setting" — resolved late by worktree
+            // automation at use time, NOT stamped here from a snapshot.
+            baseBranch: typeof base === "string" ? base : null,
           },
           { now: createdAt, actor: actor.actor },
         );

@@ -70,6 +70,46 @@ describe("agent command service", () => {
     expect(JSON.stringify(response)).not.toContain("internal-uuid");
   });
 
+  it("rejects an invalid --base and never inherits the project base branch on create", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+        baseBranch: "develop",
+      }),
+    );
+    let id = 0;
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 100,
+      newId: () => `ticket-${++id}`,
+    });
+    const execute = (args: Record<string, unknown>) =>
+      service.execute({
+        v: 1,
+        cmd: "ticket.create",
+        args,
+        ctx: { cwd: "/repo/volli", env: {} },
+      });
+
+    // A malformed branch name is an INVALID_REQUEST, not a generic MUTATION_FAILED.
+    const invalid = await execute({ title: "Bad base", base: "no spaces allowed" });
+    expect(invalid).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+
+    // No --base: baseBranch stays null (inherit the project setting at use time),
+    // never stamped from the project's "develop".
+    const inherited = await execute({ title: "Inherits later" });
+    expect(inherited).toMatchObject({ ok: true, data: { ticket: { baseBranch: null } } });
+
+    // An explicit valid --base is the per-ticket override.
+    const explicit = await execute({ title: "Explicit base", base: "release/next" });
+    expect(explicit).toMatchObject({ ok: true, data: { ticket: { baseBranch: "release/next" } } });
+  });
+
   it("moves, comments on, and reads a created ticket through the board", async () => {
     ctx = openTestDb();
     insertProject(

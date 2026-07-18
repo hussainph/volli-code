@@ -74,6 +74,12 @@ export function createTicketCommand(
   input: CreateTicketCommandInput,
   context: TicketCommandContext,
 ): Ticket {
+  // An explicit base branch override is validated at the command layer so both
+  // doors (socket and IPC) share identical semantics — the socket door
+  // additionally pre-validates to surface INVALID_REQUEST instead of this.
+  if (typeof input.baseBranch === "string" && !isValidBranchName(input.baseBranch)) {
+    throw new Error("Invalid base branch name");
+  }
   return db.transaction((): Ticket => {
     const ticket = createTicket({
       id: input.id,
