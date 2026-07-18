@@ -43,8 +43,8 @@
  *  11. Restart      — relaunch against the SAME app-data dir: the ticket detail
  *      reopens (persisted openTicketId), the edited title/body + surviving
  *      comment are intact, the rail is STILL collapsed (persisted), and the
- *      renamed session is tucked into collapsed History, then remains findable
- *      when expanded with its Shell + Exited metadata. Back still returns to
+ *      renamed session is tucked into the collapsed History drawer, then remains
+ *      findable when expanded with its Shell + ended-ago metadata. Back returns to
  *      the board even though the in-memory nav history starts fresh.
  *
  * The terminal is a WebGPU/WebGL2 canvas — its text is NOT in the DOM — so shell
@@ -922,8 +922,10 @@ async function main() {
           async () => {
             const row = (await aside.getByText(SESSION_RENAMED, { exact: true }).count()) >= 1;
             const shell = (await aside.getByText("Shell", { exact: true }).count()) >= 1;
-            const exited = (await aside.getByText("Exited", { exact: true }).count()) >= 1;
-            return row && shell && exited;
+            // History rows trail with when the session ended, not a redundant
+            // "Exited" chip — the drawer itself already says these are past.
+            const endedAgo = (await aside.getByText(/^(just now|\d+[mhdw] ago)$/).count()) >= 1;
+            return row && shell && endedAgo;
           },
         );
         // Navigation history is deliberately in-memory, so a relaunch has no

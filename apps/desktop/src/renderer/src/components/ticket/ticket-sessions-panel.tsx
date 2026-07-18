@@ -1,6 +1,4 @@
 import * as React from "react";
-import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
-import { ClockCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ClockCounterClockwise";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
@@ -10,23 +8,20 @@ import { errorMessage, type SessionActivityState, type SessionRecord } from "@vo
 import { InlineRename } from "@renderer/components/sessions/inline-rename";
 import { Button } from "@renderer/components/ui/button";
 import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@renderer/components/ui/collapsible";
-import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
 import { Input } from "@renderer/components/ui/input";
+import { RailDrawer } from "@renderer/components/ticket/rail-drawer";
 import {
   filterSessionHistory,
   groupSessionRows,
   sessionSourceLabel,
   type TicketSessionRow,
 } from "@renderer/components/ticket/session-history";
+import { relativeTime } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { sessionActivityState, sessionPanes, useSessionsStore } from "@renderer/stores/sessions";
@@ -62,7 +57,7 @@ function StatusChip({ status }: { status: SessionActivityState }) {
 function SessionRow({
   record,
   title,
-  status,
+  trailing,
   isOpen,
   editing,
   onActivate,
@@ -73,7 +68,8 @@ function SessionRow({
   record: SessionRecord;
   /** The live tab title when open (so optimistic renames show), else the durable record title. */
   title: string;
-  status: SessionActivityState;
+  /** Right-edge metadata: live status for current rows, relative end time for history rows. */
+  trailing: React.ReactNode;
   isOpen: boolean;
   editing: boolean;
   onActivate(): void;
@@ -103,7 +99,7 @@ function SessionRow({
           {sessionSourceLabel(record)}
         </span>
       </span>
-      <StatusChip status={status} />
+      {trailing}
     </>
   );
 
@@ -145,6 +141,8 @@ function SessionRow({
 
 function SessionList({
   rows,
+  variant,
+  now,
   ticketId,
   editingId,
   setEditingId,
@@ -153,6 +151,9 @@ function SessionList({
   onCommitRename,
 }: {
   rows: readonly TicketSessionRow[];
+  /** Current rows trail with live status; history rows trail with when they ended. */
+  variant: "current" | "history";
+  now: number;
   ticketId: string;
   editingId: string | null;
   setEditingId(sessionId: string | null): void;
@@ -167,7 +168,15 @@ function SessionList({
           key={record.id}
           record={record}
           title={title}
-          status={status}
+          trailing={
+            variant === "current" ? (
+              <StatusChip status={status} />
+            ) : (
+              <span className="shrink-0 text-label text-muted-foreground/70">
+                {relativeTime(record.endedAt ?? record.createdAt, now)}
+              </span>
+            )
+          }
           isOpen={isOpen}
           editing={editingId === record.id}
           // Exited-but-open panes live in History but still activate their tab
@@ -187,14 +196,14 @@ function SessionList({
 }
 
 /**
- * Right-rail "Sessions" section: a "New session" button that boots a ticket-
- * scoped terminal (env-injected, hosted by the resident overlay above) and the
- * ticket's session rows — live sessions (from the unified store) plus past ones
- * (durable records via `api.sessions.listForTicket`), newest first. The working
- * set stays visible; exited/closed records move into collapsed searchable
- * History. The durable list is re-read whenever the live set changes so new
- * sessions appear and closed ones fold into history. Rows rename inline
- * (double-click) or via the right-click menu.
+ * The right rail's session content: a scrollable "Sessions" working set (a
+ * "New session" button that boots a ticket-scoped terminal, plus one row per
+ * live session from the unified store) and a bottom-pinned History drawer (a
+ * `RailDrawer` sibling of Details) holding ended/closed durable records —
+ * searchable past 4 entries — so the working set stays unlabeled and flat.
+ * The durable list (`api.sessions.listForTicket`) is re-read whenever the live
+ * set changes so new sessions appear and closed ones fold into History. Rows
+ * rename inline (double-click) or via the right-click menu.
  */
 export function TicketSessionsPanel({
   ticketId,
@@ -315,112 +324,81 @@ export function TicketSessionsPanel({
   const { current, history } = groupSessionRows(rows);
   const filteredHistory = filterSessionHistory(history, historyQuery);
 
+  const listProps = {
+    ticketId,
+    editingId,
+    setEditingId,
+    setActivePane,
+    onActivateSession,
+    onCommitRename: commitRename,
+  };
+
   return (
-    <section className="flex flex-col gap-3">
-      <div className="flex items-center justify-between">
-        <h2 className="text-label font-medium text-muted-foreground uppercase">Sessions</h2>
-        <Button
-          size="icon-xs"
-          variant="ghost"
-          disabled={creating}
-          onClick={onNewSession}
-          aria-label="New session"
-        >
-          <PlusIcon />
-        </Button>
-      </div>
-      {rows.length === 0 ? (
-        <div className="flex flex-col items-center gap-1.5 rounded-md border border-dashed border-border py-6 text-center">
-          <TerminalWindowIcon weight="fill" className="size-4 text-muted-foreground" />
-          <p className="text-xs text-muted-foreground">No sessions yet</p>
-        </div>
-      ) : (
+    <>
+      <section className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
         <div className="flex flex-col gap-3">
-          {current.length > 0 ? (
-            <div className="flex flex-col gap-1.5">
-              <div className="flex items-center justify-between px-0.5">
-                <h3 className="text-label font-medium text-muted-foreground uppercase">Current</h3>
-                <span className="text-label text-muted-foreground">{current.length}</span>
-              </div>
-              <SessionList
-                rows={current}
-                ticketId={ticketId}
-                editingId={editingId}
-                setEditingId={setEditingId}
-                setActivePane={setActivePane}
-                onActivateSession={onActivateSession}
-                onCommitRename={commitRename}
-              />
+          <div className="flex items-center justify-between">
+            <h2 className="text-label font-medium text-muted-foreground uppercase">Sessions</h2>
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              disabled={creating}
+              onClick={onNewSession}
+              aria-label="New session"
+            >
+              <PlusIcon />
+            </Button>
+          </div>
+          {current.length === 0 ? (
+            <div className="flex flex-col items-center gap-1.5 rounded-md border border-dashed border-border py-6 text-center">
+              <TerminalWindowIcon weight="fill" className="size-4 text-muted-foreground" />
+              <p className="text-xs text-muted-foreground">No active sessions</p>
             </div>
           ) : (
-            <p className="px-0.5 text-xs text-muted-foreground">No current sessions</p>
+            <SessionList rows={current} variant="current" now={now} {...listProps} />
           )}
-
-          {history.length > 0 ? (
-            <Collapsible
-              open={historyOpen}
-              onOpenChange={(open) => {
-                setHistoryOpen(open);
-                if (!open) setHistoryQuery("");
-              }}
-              data-testid="session-history"
-            >
-              <CollapsibleTrigger asChild>
-                <button
-                  type="button"
-                  className="group flex w-full items-center gap-2 rounded-md px-1 py-1 text-left text-xs text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
-                >
-                  <CaretRightIcon
-                    weight="bold"
-                    className={cn(
-                      "size-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none",
-                      historyOpen && "rotate-90",
-                    )}
-                  />
-                  <ClockCounterClockwiseIcon weight="fill" className="size-3.5 shrink-0" />
-                  <span className="font-medium">History</span>
-                  <span className="ml-auto text-label text-muted-foreground">{history.length}</span>
-                </button>
-              </CollapsibleTrigger>
-              <CollapsibleContent>
-                <div className="mt-1.5 flex flex-col gap-1.5">
-                  {history.length > 4 ? (
-                    <div className="relative">
-                      <MagnifyingGlassIcon
-                        aria-hidden
-                        className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
-                      />
-                      <Input
-                        type="search"
-                        value={historyQuery}
-                        onChange={(event) => setHistoryQuery(event.target.value)}
-                        aria-label="Search session history"
-                        placeholder="Search history…"
-                        className="h-8 pl-8 text-xs md:text-xs"
-                      />
-                    </div>
-                  ) : null}
-                  {filteredHistory.length > 0 ? (
-                    <SessionList
-                      rows={filteredHistory}
-                      ticketId={ticketId}
-                      editingId={editingId}
-                      setEditingId={setEditingId}
-                      setActivePane={setActivePane}
-                      onActivateSession={onActivateSession}
-                      onCommitRename={commitRename}
-                    />
-                  ) : (
-                    <p className="rounded-md border border-dashed border-border py-4 text-center text-xs text-muted-foreground">
-                      No matching sessions
-                    </p>
-                  )}
-                </div>
-              </CollapsibleContent>
-            </Collapsible>
-          ) : null}
         </div>
-      )}
-    </section>
+      </section>
+      {history.length > 0 ? (
+        <RailDrawer
+          label="History"
+          count={history.length}
+          open={historyOpen}
+          onOpenChange={(open) => {
+            setHistoryOpen(open);
+            if (!open) setHistoryQuery("");
+          }}
+          data-testid="session-history"
+        >
+          <div className="flex flex-col gap-1.5 px-4 pb-4">
+            {history.length > 4 ? (
+              <div className="relative">
+                <MagnifyingGlassIcon
+                  aria-hidden
+                  className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
+                />
+                <Input
+                  type="search"
+                  value={historyQuery}
+                  onChange={(event) => setHistoryQuery(event.target.value)}
+                  aria-label="Search session history"
+                  placeholder="Search history…"
+                  className="h-8 pl-8 text-xs md:text-xs"
+                />
+              </div>
+            ) : null}
+            {filteredHistory.length > 0 ? (
+              <div className="max-h-64 overflow-y-auto">
+                <SessionList rows={filteredHistory} variant="history" now={now} {...listProps} />
+              </div>
+            ) : (
+              <p className="rounded-md border border-dashed border-border py-4 text-center text-xs text-muted-foreground">
+                No matching sessions
+              </p>
+            )}
+          </div>
+        </RailDrawer>
+      ) : null}
+    </>
   );
 }
