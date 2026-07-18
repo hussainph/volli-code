@@ -6,9 +6,9 @@
  * only then registers the tab/split in the unified store. Every failure toasts —
  * a mutation is never silently swallowed (CLAUDE.md).
  */
-import { errorMessage } from "@volli/shared";
-import { toast } from "sonner";
+import { errorMessage, type HarnessId } from "@volli/shared";
 
+import { toastError } from "@renderer/lib/toast";
 import { useProjectsStore } from "@renderer/stores/projects";
 import {
   findSessionPane,
@@ -23,14 +23,26 @@ import { disposeEngine, getOrCreateEngine } from "@renderer/terminal/registry";
 const INITIAL_COLS = 80;
 const INITIAL_ROWS = 24;
 
+/**
+ * The agent-launch intent for a ticket session's initial shell: main runs the
+ * harness CLI with `prompt` as its opening argument (see `pty.ts`). Only
+ * meaningful for ticket scopes.
+ */
+export interface SessionKickoff {
+  harnessId: HarnessId;
+  prompt: string;
+}
+
 /** The main-process create request derived from a scope (ticket scopes carry env-injection intent). */
-function createRequest(scope: SessionScope, projectPath: string) {
+function createRequest(scope: SessionScope, projectPath: string, kickoff?: SessionKickoff) {
   return {
     workspaceId: scope.projectId,
     cwd: projectPath,
     cols: INITIAL_COLS,
     rows: INITIAL_ROWS,
-    ...(scope.kind === "ticket" ? { ticket: { ticketId: scope.ticketId } } : {}),
+    ...(scope.kind === "ticket"
+      ? { ticket: { ticketId: scope.ticketId, ...(kickoff ? { kickoff } : {}) } }
+      : {}),
   };
 }
 
@@ -45,10 +57,10 @@ function abandon(sessionId: string): void {
   window.api.terminal
     .kill(sessionId)
     .then((result) => {
-      if (!result.ok) toast.error(`Terminal close failed: ${result.error}`);
+      if (!result.ok) toastError(`Terminal close failed: ${result.error}`);
     })
     .catch((error: unknown) => {
-      toast.error(`Terminal close failed: ${errorMessage(error)}`);
+      toastError(`Terminal close failed: ${errorMessage(error)}`);
     });
 }
 
@@ -68,6 +80,7 @@ async function bootSession(
   scope: SessionScope,
   verb: string,
   land: (sessionId: string, title: string) => boolean,
+  kickoff?: SessionKickoff,
 ): Promise<string | null> {
   const store = useSessionsStore.getState();
   const id = ownerKey(scope);
@@ -77,9 +90,9 @@ async function bootSession(
 
   store.setStarting(id, true);
   try {
-    const result = await window.api.terminal.create(createRequest(scope, project.path));
+    const result = await window.api.terminal.create(createRequest(scope, project.path, kickoff));
     if (!result.ok) {
-      toast.error(`Could not ${verb}: ${result.error}`);
+      toastError(`Could not ${verb}: ${result.error}`);
       return null;
     }
     getOrCreateEngine(result.sessionId);
@@ -95,7 +108,7 @@ async function bootSession(
     }
     return result.sessionId;
   } catch (error) {
-    toast.error(`Could not ${verb}: ${errorMessage(error)}`);
+    toastError(`Could not ${verb}: ${errorMessage(error)}`);
     return null;
   } finally {
     useSessionsStore.getState().setStarting(id, false);
@@ -107,11 +120,19 @@ async function bootSession(
  * or null on failure / if the owner is no longer tracked. The tab title is the
  * one main seeded on the durable record, so the live tab and the DB agree.
  */
-export async function createTerminalSession(scope: SessionScope): Promise<string | null> {
-  return bootSession(scope, "start session", (sessionId, title) => {
-    useSessionsStore.getState().addSession(scope, sessionId, title);
-    return true;
-  });
+export async function createTerminalSession(
+  scope: SessionScope,
+  kickoff?: SessionKickoff,
+): Promise<string | null> {
+  return bootSession(
+    scope,
+    "start session",
+    (sessionId, title) => {
+      useSessionsStore.getState().addSession(scope, sessionId, title);
+      return true;
+    },
+    kickoff,
+  );
 }
 
 /** Boot a fresh PTY as a split sibling of `sourcePaneId` inside `tabId`. */

@@ -11,6 +11,7 @@ import {
   createTicket,
   isTicketStatus,
   isTicketPriority,
+  isHarnessId,
 } from "./ticket";
 
 describe("displayTicketId", () => {
@@ -90,6 +91,23 @@ describe("harnessLabel", () => {
   it("returns a custom, non-first-class harness id verbatim", () => {
     expect(harnessLabel("my-custom-harness")).toBe("my-custom-harness");
     expect(harnessLabel("")).toBe("");
+  });
+});
+
+describe("isHarnessId", () => {
+  it("accepts every first-class harness id", () => {
+    for (const harness of HARNESS_IDS) {
+      expect(isHarnessId(harness)).toBe(true);
+    }
+  });
+
+  it("rejects unknown strings and non-strings", () => {
+    expect(isHarnessId("my-custom-harness")).toBe(false);
+    expect(isHarnessId("")).toBe(false);
+    expect(isHarnessId(42)).toBe(false);
+    expect(isHarnessId(null)).toBe(false);
+    expect(isHarnessId(undefined)).toBe(false);
+    expect(isHarnessId({ harnessId: "codex" })).toBe(false);
   });
 });
 

@@ -11,8 +11,9 @@
  * failure via a toast (CLAUDE.md: never silently swallow a failed mutation).
  */
 import { errorMessage } from "@volli/shared";
-import { toast } from "sonner";
 import type { StateStorage } from "zustand/middleware";
+
+import { toastError } from "@renderer/lib/toast";
 
 const cache = new Map<string, string>();
 
@@ -33,10 +34,10 @@ function persist(key: string, value: string, failureVerb: string): void {
   window.api.appState
     .set(key, value)
     .then((result) => {
-      if (!result.ok) toast.error(`Could not ${failureVerb} "${key}": ${result.error}`);
+      if (!result.ok) toastError(`Could not ${failureVerb} "${key}": ${result.error}`);
     })
     .catch((error: unknown) => {
-      toast.error(`Could not ${failureVerb} "${key}": ${errorMessage(error)}`);
+      toastError(`Could not ${failureVerb} "${key}": ${errorMessage(error)}`);
     });
 }
 
@@ -89,8 +90,20 @@ if (typeof window !== "undefined") {
   window.addEventListener("beforeunload", flushPendingAppState);
 }
 
+/**
+ * The synchronous face of {@link appStateStorage}: zustand's `StateStorage`
+ * type allows Promise returns, but this cache-backed implementation is always
+ * sync — direct consumers (the composer's draft cache) depend on that, so it's
+ * part of the contract, not an implementation accident.
+ */
+export interface SyncStateStorage {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem(key: string): void;
+}
+
 /** The ui/workspace persist stores' storage adapter (see stores/ui.ts, stores/workspace.ts). */
-export const appStateStorage: StateStorage = {
+export const appStateStorage: StateStorage & SyncStateStorage = {
   getItem: (key) => cache.get(key) ?? null,
   setItem: (key, value) => {
     cache.set(key, value);

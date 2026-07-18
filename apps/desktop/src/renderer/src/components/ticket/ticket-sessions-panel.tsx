@@ -8,7 +8,6 @@ import {
   type SessionActivityState,
   type SessionRecord,
 } from "@volli/shared";
-import { toast } from "sonner";
 
 import { InlineRename } from "@renderer/components/sessions/inline-rename";
 import { Button } from "@renderer/components/ui/button";
@@ -18,6 +17,7 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
+import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { sessionActivityState, sessionPanes, useSessionsStore } from "@renderer/stores/sessions";
 import { renameTerminalSession } from "@renderer/terminal/session-lifecycle";
@@ -178,12 +178,12 @@ export function TicketSessionsPanel({
     try {
       const result = await window.api.sessions.listForTicket({ ticketId });
       if (!result.ok) {
-        toast.error(`Could not load sessions: ${result.error}`);
+        toastError(`Could not load sessions: ${result.error}`);
         return;
       }
       setRecords(result.sessions);
     } catch (error) {
-      toast.error(`Could not load sessions: ${errorMessage(error)}`);
+      toastError(`Could not load sessions: ${errorMessage(error)}`);
     }
   }, [ticketId]);
 
@@ -231,12 +231,12 @@ export function TicketSessionsPanel({
       .rename({ sessionId: record.id, title: trimmed })
       .then((result) => {
         if (!result.ok) {
-          toast.error(`Rename failed: ${result.error}`);
+          toastError(`Rename failed: ${result.error}`);
           void refresh();
         }
       })
       .catch((error: unknown) => {
-        toast.error(`Rename failed: ${errorMessage(error)}`);
+        toastError(`Rename failed: ${errorMessage(error)}`);
         void refresh();
       });
   };

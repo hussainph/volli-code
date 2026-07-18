@@ -55,6 +55,8 @@ import { fileURLToPath } from "node:url";
 
 import { _electron } from "playwright-core";
 
+import { waitUntil } from "./lib/smoke-kit.mjs";
+
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const APP_DIR = join(REPO, "apps", "desktop");
 const ELECTRON = join(
@@ -332,7 +334,9 @@ async function main() {
           (await state.count()) === 1 &&
           (await primaryAction.count()) === 1 &&
           (await primaryAction.locator("svg").count()) === 0 &&
-          headingSize >= 32 &&
+          // text-title (24px) — the app's largest step since the type-scale
+          // language landed (DESIGN.md); the old >=32 display size is gone.
+          headingSize >= 24 &&
           (await oldSidebarPrompt.count()) === 0 &&
           (await oldSidebarHeader.count()) === 0 &&
           texture.canvas !== "none" &&
@@ -599,16 +603,65 @@ async function main() {
       9,
       'Pill drop: dragging onto the "Done" pill expands it into a column and clears "Empty"',
       async () => {
-        const cardBox = await page.locator("article").first().boundingBox();
-        const donePillBox = await page.getByText("Done", { exact: true }).first().boundingBox();
-        if (!cardBox || !donePillBox) throw new Error("card or Done pill not found");
-        await drag(page, cardBox, {
-          x: donePillBox.x + donePillBox.width / 2,
-          y: donePillBox.y + donePillBox.height / 2,
-        });
+        const donePill = page
+          .getByRole("button")
+          .filter({ has: page.getByText("Done", { exact: true }) })
+          .first();
+
+        let dropped = false;
+        for (let dropAttempt = 1; dropAttempt <= 3 && !dropped; dropAttempt += 1) {
+          const card = page.locator("article").first();
+          await card.scrollIntoViewIfNeeded();
+          const cardBox = await card.boundingBox();
+          if (!cardBox) throw new Error("source card not found");
+
+          // On smaller hosted-runner displays the collapsed rail can begin
+          // outside the horizontal viewport. Activate the drag first (freezing
+          // the board topology), scroll the live droppable into view while the
+          // pointer is held, then wait until dnd-kit reports the actual isOver
+          // state before releasing.
+          await page.mouse.move(cardBox.x + cardBox.width / 2, cardBox.y + cardBox.height / 2);
+          await page.mouse.down();
+          let targetActive = false;
+          try {
+            await page.mouse.move(cardBox.x + cardBox.width / 2 + 30, cardBox.y + 40, {
+              steps: 8,
+            });
+            await donePill.scrollIntoViewIfNeeded();
+            const donePillBox = await donePill.boundingBox();
+            if (!donePillBox) throw new Error("Done pill not found");
+            await page.mouse.move(
+              donePillBox.x + donePillBox.width / 2,
+              donePillBox.y + donePillBox.height / 2,
+              { steps: 20 },
+            );
+            targetActive = await waitUntil(
+              `Done pill hover attempt ${dropAttempt}`,
+              () => donePill.evaluate((element) => element.className.includes("ring-primary")),
+              { timeout: 2500 },
+            )
+              .then(() => true)
+              .catch(() => false);
+          } finally {
+            await page.mouse.up();
+          }
+          await sleep(500);
+
+          if (!targetActive) continue;
+          dropped = await waitUntil(
+            `Done pill drop attempt ${dropAttempt}`,
+            async () =>
+              (await columnCount(page, "Done")) === 1 &&
+              (await page.getByText("Empty", { exact: true }).count()) === 0,
+            { timeout: 2500 },
+          )
+            .then(() => true)
+            .catch(() => false);
+        }
+
         const doneCount = await columnCount(page, "Done");
         const emptyCaption = await page.getByText("Empty", { exact: true }).count();
-        const ok = doneCount === 1 && emptyCaption === 0;
+        const ok = dropped && doneCount === 1 && emptyCaption === 0;
         return { ok, detail: `doneCount=${doneCount} emptyCaption=${emptyCaption}` };
       },
     );
@@ -953,21 +1006,26 @@ async function main() {
       },
     );
 
-    // === 18. Global create: plain "c" opens the New-ticket dialog; Enter creates
+    // === 18. Global create: plain "c" opens the New-ticket composer; ⌘+Enter creates
+    // (The Linear-style composer replaced the primitive dialog in the composer PR:
+    // its title placeholder has no ellipsis, and plain Enter moves focus to the
+    // body instead of submitting — ⌘/Ctrl+Enter is the create shortcut. The full
+    // composer contract lives in composer-basics-smoke.mjs; this check only keeps
+    // the board-level "c" → create → card lands wiring honest.)
     await attempt(
       18,
-      'Plain "c" hotkey opens the New-ticket dialog; typing a title + Enter creates VC-14 and closes it',
+      'Plain "c" hotkey opens the New-ticket composer; typing a title + ⌘Enter creates VC-14 and closes it',
       async () => {
         // Click neutral static text (the "Board" heading) so focus lands
         // somewhere that is definitely not a text-entry target, matching how
         // the hotkey is meant to fire "anywhere in the app".
         await page.getByRole("heading", { name: "Board", exact: true }).click();
         await page.keyboard.press("c");
-        await sleep(200);
+        await sleep(400);
         const dialogOpenCount = await page.getByRole("dialog").count();
         const title = "Global create dialog smoke card";
-        await page.getByPlaceholder("Ticket title…").fill(title);
-        await page.keyboard.press("Enter");
+        await page.getByPlaceholder("Ticket title").fill(title);
+        await page.keyboard.press("Meta+Enter");
         await sleep(400);
         const dialogClosedCount = await page.getByRole("dialog").count();
         const cardVisible = (await page.getByText(title, { exact: true }).count()) >= 1;

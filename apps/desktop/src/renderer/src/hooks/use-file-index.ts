@@ -11,7 +11,8 @@
  */
 import * as React from "react";
 import { errorMessage, type IndexedFile } from "@volli/shared";
-import { toast } from "sonner";
+
+import { toastError } from "@renderer/lib/toast";
 
 /** How long a fetched index is served without re-hitting main on a picker open. */
 const INDEX_CACHE_MS = 10_000;
@@ -55,14 +56,14 @@ export function useFileIndex(projectId: string): FileIndexHandle {
       const result = await window.api.files.index({ projectId });
       if (!mountedRef.current) return;
       if (!result.ok) {
-        toast.error(`Could not load the file index: ${result.error}`);
+        toastError(`Could not load the file index: ${result.error}`);
         return;
       }
       indexRef.current = result.files;
       lastFetchRef.current = Date.now();
       setVersion((n) => n + 1);
     } catch (error) {
-      if (mountedRef.current) toast.error(`Could not load the file index: ${errorMessage(error)}`);
+      if (mountedRef.current) toastError(`Could not load the file index: ${errorMessage(error)}`);
     } finally {
       inflightRef.current = false;
       // A forceRefresh landed while this fetch was in flight; run one more now

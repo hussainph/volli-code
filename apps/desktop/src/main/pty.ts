@@ -6,10 +6,12 @@ import { basename, resolve } from "node:path";
 import type Database from "better-sqlite3";
 import {
   breatheShouldWake,
+  buildHarnessCommand,
   createSessionRecord,
   DEFAULT_HARNESS_ID,
   displayTicketId,
   errorMessage,
+  isHarnessId,
   isParkCandidate,
   projectSessionEnv,
   resolveShell,
@@ -150,6 +152,13 @@ interface SessionScope {
    * project can't be resolved. Also the root-exists guard's stat target.
    */
   artifactsRoot: string | null;
+  /**
+   * The harness launch command line to feed the freshly-spawned shell (from a
+   * ticket request's `kickoff`), or `null` for a bare shell. Written into the
+   * PTY exactly once, only after the session is fully persisted, so a failed
+   * persist never leaves a harness running (see {@link PtyManager.create}).
+   */
+  launchCommand: string | null;
 }
 
 /**
@@ -207,20 +216,24 @@ export class PtyManager {
       const ctx = getTicketSessionContext(db, request.ticket.ticketId);
       if (ctx === undefined) return { ok: false, error: "Unknown ticket" };
       const displayId = displayTicketId(ctx.ticketPrefix, ctx.ticketNumber);
+      const kickoff = request.ticket.kickoff;
       return {
         ok: true,
         scope: {
           projectId: ctx.projectId,
           ticketId: request.ticket.ticketId,
-          // Harness is no longer a ticket property (migration 004); a ticket
+          // Harness is no longer a ticket property (migration 004). A kickoff
+          // request carries the harness to launch; without one, a ticket
           // session boots the default harness, same as a scratch session.
-          harnessId: DEFAULT_HARNESS_ID,
+          harnessId: kickoff?.harnessId ?? DEFAULT_HARNESS_ID,
           // Ticket sessions run at the MAIN repo root — worktree automation is
           // future work, and VOLLI_ARTIFACTS_DIR always points at the main .volli.
           cwd: ctx.projectPath,
           env: ticketSessionEnv(ctx.projectPath, displayId),
           title: `Session ${countTicketSessions(db, request.ticket.ticketId) + 1}`,
           artifactsRoot: ctx.projectPath,
+          launchCommand:
+            kickoff !== undefined ? buildHarnessCommand(kickoff.harnessId, kickoff.prompt) : null,
         },
       };
     }
@@ -238,6 +251,8 @@ export class PtyManager {
         env: project ? projectSessionEnv(project.path) : {},
         title: `Terminal ${countProjectScratchSessions(db, request.workspaceId) + 1}`,
         artifactsRoot: project?.path ?? null,
+        // Scratch sessions never auto-launch a harness — just a bare shell.
+        launchCommand: null,
       },
     };
   }
@@ -376,6 +391,17 @@ export class PtyManager {
       pty.onData((data) => {
         this.enqueueData(sessionId, data);
       });
+
+      // Kickoff: launch the harness now that the session is fully registered
+      // AND persisted — every rollback path above (persist failure, mid-spawn
+      // window destroy) has already returned, so nothing can undo the session
+      // here, and a failed persist can never leave an agent running. Written
+      // directly to the pty (never through this.write's park/wake logic — the
+      // session is brand new and running), exactly once. A CR submits the line,
+      // matching how write() feeds the pty.
+      if (scope.launchCommand !== null) {
+        pty.write(`${scope.launchCommand}\r`);
+      }
 
       pty.onExit(({ exitCode }) => {
         // Flush buffered output first so the renderer never sees the exit
@@ -1017,11 +1043,29 @@ export function confirmDestructiveClose(
 
 // ---- IPC wiring ------------------------------------------------------------
 
-/** `undefined` (scratch session) or a `{ ticketId: string }` object (ticket session). */
-function isOptionalTicket(value: unknown): value is { ticketId: string } | undefined {
+/**
+ * `undefined` (no auto-launch) or a well-formed `{ harnessId, prompt }` — a
+ * kickoff present with the wrong types is REJECTED (so the request fails
+ * loudly), never silently dropped.
+ */
+function isOptionalKickoff(
+  value: unknown,
+): value is { harnessId: HarnessId; prompt: string } | undefined {
   if (value === undefined) return true;
   if (typeof value !== "object" || value === null) return false;
-  return typeof (value as Record<string, unknown>)["ticketId"] === "string";
+  const candidate = value as Record<string, unknown>;
+  return isHarnessId(candidate["harnessId"]) && typeof candidate["prompt"] === "string";
+}
+
+/**
+ * `undefined` (scratch session) or a `{ ticketId: string; kickoff? }` object
+ * (ticket session). A malformed kickoff shape rejects the whole ticket.
+ */
+function isOptionalTicket(value: unknown): value is CreateTerminalSessionRequest["ticket"] {
+  if (value === undefined) return true;
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate["ticketId"] === "string" && isOptionalKickoff(candidate["kickoff"]);
 }
 
 function isCreateRequest(value: unknown): value is CreateTerminalSessionRequest {

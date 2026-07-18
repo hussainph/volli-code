@@ -80,7 +80,10 @@ describe("setItem", () => {
     appStateStorage.setItem("volli:ui", "{}");
     await settle();
 
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Could not save "volli:ui": disk full');
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Could not save "volli:ui": disk full', {
+      duration: 8000,
+      closeButton: true,
+    });
   });
 
   it("toasts when the bridge call rejects outright", async () => {
@@ -89,7 +92,10 @@ describe("setItem", () => {
     appStateStorage.setItem("volli:ui", "{}");
     await settle();
 
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Could not save "volli:ui": ipc gone');
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Could not save "volli:ui": ipc gone', {
+      duration: 8000,
+      closeButton: true,
+    });
   });
 });
 
@@ -126,6 +132,9 @@ describe("removeItem", () => {
     appStateStorage.removeItem("volli:ui");
     await settle();
 
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Could not clear "volli:ui": locked');
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Could not clear "volli:ui": locked', {
+      duration: 8000,
+      closeButton: true,
+    });
   });
 });

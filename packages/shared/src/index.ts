@@ -1,6 +1,7 @@
 export * from "./file-ref";
 export * from "./board";
 export * from "./ticket";
+export * from "./harness-command";
 export * from "./ticket-branch";
 export * from "./ticket-comment";
 export * from "./ticket-events";

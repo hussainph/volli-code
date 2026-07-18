@@ -45,7 +45,8 @@ import {
   VOLLI_ARTIFACTS_REL_DIR,
   withMarkdownExtension,
 } from "@volli/shared";
-import { toast } from "sonner";
+
+import { toastError } from "@renderer/lib/toast";
 
 import { selectionTouches, type SelRange } from "./reveal";
 
@@ -158,7 +159,7 @@ function fileCompletionSource(config: FileRefsConfig): CompletionSource {
           void (async () => {
             const result = await config.createArtifact(query.trim());
             if (!result.ok) {
-              toast.error(`Could not create artifact: ${result.error}`);
+              toastError(`Could not create artifact: ${result.error}`);
               return;
             }
             config.onOpenFile(result.relPath);

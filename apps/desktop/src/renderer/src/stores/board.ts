@@ -41,6 +41,12 @@ export interface BoardGateway {
     status: TicketStatus;
     title: string;
     priority?: TicketPriority;
+    /** Markdown; becomes the agent prompt on kickoff. Defaults to `""` in main. */
+    body?: string;
+    /** Label names; created per project (name-deduped, `color: null`). Defaults to `[]`. */
+    labels?: string[];
+    /** Whether the ticket boots its agent in an isolated worktree. Defaults to `true`. */
+    usesWorktree?: boolean;
   }): Promise<TicketResult>;
   moveTicket(input: {
     projectId: string;
@@ -126,7 +132,12 @@ interface BoardState {
     projectId: string,
     status: TicketStatus,
     title: string,
-    options?: { priority?: TicketPriority },
+    options?: {
+      priority?: TicketPriority;
+      body?: string;
+      labels?: string[];
+      usesWorktree?: boolean;
+    },
   ): Promise<Ticket | null>;
   setTicketPriority(projectId: string, ticketId: string, priority: TicketPriority): Promise<void>;
   /**
@@ -381,6 +392,9 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
               status,
               title: trimmed,
               priority: options?.priority,
+              body: options?.body,
+              labels: options?.labels,
+              usesWorktree: options?.usesWorktree,
             }),
         );
         if (!result) return null;

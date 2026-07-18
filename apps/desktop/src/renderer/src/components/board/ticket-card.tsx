@@ -95,6 +95,25 @@ export function SortableTicketShell({
     transition: reducedMotion ? null : SORT_TRANSITION,
   });
 
+  // Keyboard-open path (a11y): dnd-kit already makes the card focusable
+  // (role="button", tabIndex 0 via `attributes`), but its KeyboardSensor claims
+  // BOTH Space and Enter to start a drag, leaving no key to open the ticket. We
+  // compose over dnd-kit's own onKeyDown (in `listeners`): intercept Enter →
+  // open, and delegate everything else — so Space still starts a keyboard drag.
+  // Guarded by `isDragging` so Enter-to-drop during an active drag falls through
+  // to dnd-kit's document-level end handler unchanged. This lives on the card,
+  // not the sensor's `keyboardCodes`, because board.tsx (where the sensor is
+  // configured) is out of scope here; the outcome (Space drags, Enter opens) is
+  // the same. The `onKeyDown` prop sits AFTER `{...listeners}` so it wins.
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!isDragging && onOpen && event.key === "Enter") {
+      event.preventDefault();
+      onOpen(ticket.id);
+      return;
+    }
+    listeners?.onKeyDown?.(event);
+  };
+
   return (
     <TicketContextMenu ticket={ticket} projectId={projectId}>
       <div
@@ -106,6 +125,7 @@ export function SortableTicketShell({
         {...dataAttributes}
         {...attributes}
         {...listeners}
+        onKeyDown={handleKeyDown}
       >
         {children}
       </div>

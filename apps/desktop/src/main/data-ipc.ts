@@ -163,6 +163,12 @@ interface TicketCreateInput {
   status: TicketStatus;
   title: string;
   priority?: TicketPriority;
+  /** Markdown; defaults to `""`. Becomes the agent prompt on kickoff. */
+  body?: string;
+  /** Label names; defaults to `[]`. Persisted as shared, name-deduped label rows (the setLabels path). */
+  labels?: string[];
+  /** Whether the ticket boots its agent in an isolated worktree; defaults to `true`. */
+  usesWorktree?: boolean;
 }
 
 function isTicketCreateInput(value: unknown): value is TicketCreateInput {
@@ -173,7 +179,10 @@ function isTicketCreateInput(value: unknown): value is TicketCreateInput {
     typeof candidate["title"] === "string" &&
     candidate["title"].trim().length > 0 &&
     isTicketStatus(candidate["status"]) &&
-    (candidate["priority"] === undefined || isTicketPriority(candidate["priority"]))
+    (candidate["priority"] === undefined || isTicketPriority(candidate["priority"])) &&
+    (candidate["body"] === undefined || typeof candidate["body"] === "string") &&
+    (candidate["labels"] === undefined || isStringArray(candidate["labels"])) &&
+    (candidate["usesWorktree"] === undefined || typeof candidate["usesWorktree"] === "boolean")
   );
 }
 
@@ -546,6 +555,9 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
             order: position,
             now,
             priority: input.priority,
+            body: input.body,
+            labels: input.labels,
+            usesWorktree: input.usesWorktree,
           });
           insertTicket(db, ticket);
           recordTicketEvent(
@@ -554,7 +566,28 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
             { kind: "created", status: ticket.status, title: ticket.title },
             now,
           );
-          return ticket;
+          // `insertTicket` writes only the ticket row, not label junction rows.
+          // Persist labels the same way the setLabels path does — get-or-create
+          // one shared, name-deduped label per project, then a junction row
+          // (INSERT OR IGNORE collapses repeated names) — and record the same
+          // `labels_changed` event so the assignment shows in the activity feed.
+          if (ticket.labels.length > 0) {
+            for (const name of ticket.labels) {
+              const label = getOrCreateLabel(db, ticket.projectId, name, now);
+              addTicketLabel(db, ticket.id, label.id);
+            }
+            recordTicketEvent(
+              db,
+              ticket.id,
+              { kind: "labels_changed", added: ticket.labels, removed: [] },
+              now,
+            );
+          }
+          // Re-read so the returned ticket reflects the persisted, name-deduped,
+          // insertion-ordered labels (mirrors the setLabels handler's return).
+          const created = getTicket(db, ticket.id);
+          if (!created) throw new Error("Unknown ticket");
+          return created;
         });
         return { ok: true, ticket: run() };
       } catch (error) {

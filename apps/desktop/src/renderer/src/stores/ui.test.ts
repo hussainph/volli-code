@@ -146,7 +146,35 @@ describe("persistence", () => {
       workspaceRailHidden: true,
       railCollapsed: true,
       detailsExpanded: true,
+      lastHarnessId: "claude-code",
     });
+  });
+
+  it("persists lastHarnessId and rehydrates it; missing/unknown ids default to claude-code", async () => {
+    const storage = createMemoryStorage();
+    createUiStore(storage).getState().setLastHarnessId("codex");
+    const reloaded = createUiStore(storage);
+    await reloaded.persist.rehydrate();
+    expect(reloaded.getState().lastHarnessId).toBe("codex");
+
+    // Older state without the key defaults to the first-class harness.
+    const missing = createMemoryStorage();
+    missing.setItem(
+      "volli:ui",
+      JSON.stringify({ state: { sidebarWidth: 320, uiScale: 1 }, version: 1 }),
+    );
+    expect(createUiStore(missing).getState().lastHarnessId).toBe("claude-code");
+
+    // A since-removed / bogus harness id falls back to the default.
+    const corrupt = createMemoryStorage();
+    corrupt.setItem(
+      "volli:ui",
+      JSON.stringify({
+        state: { sidebarWidth: 320, uiScale: 1, lastHarnessId: "gpt-5" },
+        version: 1,
+      }),
+    );
+    expect(createUiStore(corrupt).getState().lastHarnessId).toBe("claude-code");
   });
 
   it("rehydrates workspaceRailHidden from storage; corrupt/missing values default to visible", async () => {

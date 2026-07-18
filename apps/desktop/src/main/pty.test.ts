@@ -358,6 +358,30 @@ describe("volli:terminal-create", () => {
     ["a non-object ticket", { workspaceId: "w", cwd: "/x", cols: 80, rows: 24, ticket: 42 }],
     ["a null ticket", { workspaceId: "w", cwd: "/x", cols: 80, rows: 24, ticket: null }],
     ["a ticket without ticketId", { workspaceId: "w", cwd: "/x", cols: 80, rows: 24, ticket: {} }],
+    [
+      "a non-object kickoff",
+      { workspaceId: "w", cwd: "/x", cols: 80, rows: 24, ticket: { ticketId: "t", kickoff: 42 } },
+    ],
+    [
+      "a kickoff with an unknown harnessId",
+      {
+        workspaceId: "w",
+        cwd: "/x",
+        cols: 80,
+        rows: 24,
+        ticket: { ticketId: "t", kickoff: { harnessId: "nope", prompt: "x" } },
+      },
+    ],
+    [
+      "a kickoff with a non-string prompt",
+      {
+        workspaceId: "w",
+        cwd: "/x",
+        cols: 80,
+        rows: 24,
+        ticket: { ticketId: "t", kickoff: { harnessId: "codex", prompt: 5 } },
+      },
+    ],
   ])("rejects %s request without spawning", async (_label, req) => {
     const result = await invokeCreate(makeWebContents(), req);
     expect(result).toEqual({ ok: false, error: "Invalid terminal request" });
@@ -862,6 +886,24 @@ async function createTicketSession(ticketId: string, sender = makeWebContents())
   return { result, pty };
 }
 
+/** Spawns a kickoff ticket session (auto-launch a harness) and returns its result + fake pty. */
+async function createKickoffSession(
+  ticketId: string,
+  kickoff: { harnessId: string; prompt: string },
+  sender = makeWebContents(),
+) {
+  const pty = makeFakePty();
+  spawn.mockReturnValueOnce(pty);
+  const result = await invokeCreate(sender, {
+    workspaceId: "w",
+    cwd: root,
+    cols: 80,
+    rows: 24,
+    ticket: { ticketId, kickoff },
+  });
+  return { result, pty };
+}
+
 describe("ticket sessions", () => {
   beforeEach(() => {
     insertTicket(testDb.db, testTicket("w", { id: "tk1", ticketNumber: 12 }));
@@ -1037,6 +1079,50 @@ describe("ticket sessions", () => {
     });
     expect(errorSpy).toHaveBeenCalled();
     errorSpy.mockRestore();
+  });
+
+  it("does not write to the pty when the ticket request carries no kickoff", async () => {
+    const { result, pty } = await createTicketSession("tk1");
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+    expect(pty.write).not.toHaveBeenCalled();
+    // No kickoff → the default harness is stamped on the record.
+    expect(result.session.harnessId).toBe("claude-code");
+  });
+
+  it("writes the built harness launch command + CR to the pty exactly once when kickoff is present", async () => {
+    const { result, pty } = await createKickoffSession("tk1", {
+      harnessId: "codex",
+      prompt: "run the tests",
+    });
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+    // The exact command line buildHarnessCommand produces, terminated by CR.
+    expect(pty.write).toHaveBeenCalledTimes(1);
+    expect(pty.write).toHaveBeenCalledWith("codex 'run the tests'\r");
+  });
+
+  it("passes the kickoff prompt through shell single-quoting so metacharacters stay inert", async () => {
+    const { result, pty } = await createKickoffSession("tk1", {
+      harnessId: "claude-code",
+      prompt: "it's `$X`",
+    });
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+    expect(pty.write).toHaveBeenCalledWith("claude 'it'\\''s `$X`'\r");
+  });
+
+  it("stamps the persisted SessionRecord harnessId from the kickoff harness", async () => {
+    const { result } = await createKickoffSession("tk1", {
+      harnessId: "opencode",
+      prompt: "go",
+    });
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+    expect(result.session.harnessId).toBe("opencode");
+    const rows = listTicketSessions(testDb.db, "tk1");
+    expect(rows[0]?.harnessId).toBe("opencode");
+    // session_started records the kickoff harness too.
+    const started = listTicketEvents(testDb.db, "tk1").find(
+      (event) => event.payload.kind === "session_started",
+    );
+    expect(started?.payload).toMatchObject({ harnessId: "opencode" });
   });
 });
 

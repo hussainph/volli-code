@@ -307,6 +307,8 @@ export function TicketDetail({
             </div>
           </div>
           {railCollapsed ? null : (
+            // w-[300px]: deliberately fixed, unlike the resizable left sidebar —
+            // a resizable details rail is deferred (HIG audit finding 10).
             <aside className="flex w-[300px] shrink-0 flex-col border-l border-sidebar-border bg-sidebar">
               <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
                 <TicketSessionsPanel

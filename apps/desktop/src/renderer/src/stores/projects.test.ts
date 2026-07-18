@@ -248,7 +248,10 @@ describe("addProject", () => {
     await store.getState().addProject({ path: "/a", defaultName: "A" });
 
     expect(store.getState().projects).toEqual([]);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not add project: disk full");
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not add project: disk full", {
+      duration: 8000,
+      closeButton: true,
+    });
   });
 
   it("does not persist a selection when creation fails", async () => {
@@ -274,7 +277,10 @@ describe("addProject", () => {
     await store.getState().addProject({ path: "/a", defaultName: "A" });
 
     expect(store.getState().projects).toEqual([]);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not add project: ipc gone");
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not add project: ipc gone", {
+      duration: 8000,
+      closeButton: true,
+    });
   });
 });
 
@@ -445,7 +451,10 @@ describe("removeProject", () => {
     await store.getState().removeProject(only.id);
 
     expect(store.getState().projects).toEqual([only]);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not remove project: locked");
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not remove project: locked", {
+      duration: 8000,
+      closeButton: true,
+    });
   });
 
   it("toasts when the gateway call rejects", async () => {
@@ -461,7 +470,10 @@ describe("removeProject", () => {
     await store.getState().removeProject(only.id);
 
     expect(store.getState().projects).toEqual([only]);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not remove project: ipc gone");
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not remove project: ipc gone", {
+      duration: 8000,
+      closeButton: true,
+    });
   });
 
   it("does not clobber a project added while the remove IPC was in flight", async () => {
@@ -573,7 +585,10 @@ describe("commitReorder", () => {
     await store.getState().commitReorder(previousOrder);
 
     expect(store.getState().projects).toEqual(previousOrder);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not save project order: conflict");
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not save project order: conflict", {
+      duration: 8000,
+      closeButton: true,
+    });
   });
 
   it("reverts to previousOrder and toasts when the gateway call rejects", async () => {
@@ -591,7 +606,10 @@ describe("commitReorder", () => {
     await store.getState().commitReorder(previousOrder);
 
     expect(store.getState().projects).toEqual(previousOrder);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not save project order: ipc gone");
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not save project order: ipc gone", {
+      duration: 8000,
+      closeButton: true,
+    });
   });
 
   it("restores the previous order on failure but keeps a project added mid-flight", async () => {
@@ -662,7 +680,10 @@ describe("select", () => {
     store.getState().select(only.id);
     await flush();
 
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not save selected project: locked");
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not save selected project: locked", {
+      duration: 8000,
+      closeButton: true,
+    });
   });
 
   it("toasts when the persistence call rejects", async () => {
@@ -680,6 +701,7 @@ describe("select", () => {
 
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
       "Could not save selected project: ipc gone",
+      { duration: 8000, closeButton: true },
     );
   });
 });

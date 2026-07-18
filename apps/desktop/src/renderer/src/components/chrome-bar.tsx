@@ -207,6 +207,8 @@ function UniversalSearchPill() {
   const disabled = projectId === null;
 
   return (
+    // h-[26px] w-[380px]: measured/deliberate chrome-band geometry (see the
+    // overlap math in the JSDoc above) — don't resize the pill itself.
     <div
       className={cn(
         "absolute left-1/2 top-1/2 flex h-[26px] w-[380px] max-w-[40vw] -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-md border border-border/60 bg-white/[0.06] px-2 transition-colors",
@@ -230,7 +232,7 @@ function UniversalSearchPill() {
         // "Search tickets…" exactly — the e2e smoke locates the input by this
         // placeholder. The project-less variant is never exercised by it.
         placeholder={disabled ? "Search" : "Search tickets…"}
-        className="min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
+        className="min-w-0 flex-1 bg-transparent text-ui text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
       />
       {search !== "" ? (
         <button

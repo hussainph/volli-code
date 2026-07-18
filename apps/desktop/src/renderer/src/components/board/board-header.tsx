@@ -112,7 +112,9 @@ function ViewToggle({ projectId }: { projectId: string }) {
       aria-pressed={view === value}
       onClick={() => setBoardView(projectId, value)}
       className={cn(
-        "flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 ease-out hover:text-foreground",
+        // Button-primitive idiom (ui/button.tsx): press/focus feedback for a
+        // hand-rolled control, segmented look unchanged at rest.
+        "flex size-6 items-center justify-center rounded-md text-muted-foreground outline-none transition-[color,transform,box-shadow] duration-150 ease-out hover:text-foreground active:scale-[0.97] motion-reduce:transform-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
         view === value && "bg-accent text-foreground",
       )}
     >
