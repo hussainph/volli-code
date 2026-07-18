@@ -17,17 +17,17 @@ describe("renderCliSuccess", () => {
             },
           ],
         },
-        { json: false, tty: false },
+        { json: false },
       ),
     ).toBe("VC-12  Doing  Fix login flow without truncating this title  [bug, security]\n");
   });
 
   it("keeps brief JSON parallel to raw prompt output and formats stable errors", () => {
     const data = { prompt: "# Fix auth\n\nUse the volli skill." };
-    expect(renderCliSuccess("ticket.brief", data, { json: false, tty: false })).toBe(
+    expect(renderCliSuccess("ticket.brief", data, { json: false })).toBe(
       "# Fix auth\n\nUse the volli skill.\n",
     );
-    expect(renderCliSuccess("ticket.brief", data, { json: true, tty: false })).toBe(
+    expect(renderCliSuccess("ticket.brief", data, { json: true })).toBe(
       '{"prompt":"# Fix auth\\n\\nUse the volli skill."}\n',
     );
     expect(
@@ -59,7 +59,7 @@ describe("renderCliSuccess", () => {
             done: [],
           },
         },
-        { json: false, tty: true },
+        { json: false },
       ),
     ).toBe("Volli Code (VC)\n\nDoing\nVC-1  High  Ship CLI  [feature]\n");
   });
@@ -69,27 +69,27 @@ describe("renderCliSuccess", () => {
       renderCliSuccess(
         "ticket.create",
         { ticket: { id: "VC-12", status: "backlog", title: "Ship CLI", labels: [] } },
-        { json: false, tty: false },
+        { json: false },
       ),
     ).toBe("VC-12  Backlog  Ship CLI\n");
     expect(
       renderCliSuccess(
         "project.list",
         { projects: [{ name: "Volli Code", prefix: "VC", path: "/repo", tickets: 4 }] },
-        { json: false, tty: false },
+        { json: false },
       ),
     ).toBe("VC  Volli Code  /repo  4 tickets\n");
     expect(
       renderCliSuccess(
         "session.peek",
         { session: "abcdef12", status: "idle", output: "line one\nline two" },
-        { json: false, tty: false },
+        { json: false },
       ),
     ).toBe("abcdef12  idle\nline one\nline two\n");
   });
 
   it("renders the remaining published stable text contracts", () => {
-    const options = { json: false, tty: false };
+    const options = { json: false };
     const ticket = {
       id: "VC-1",
       status: "doing",
@@ -176,7 +176,7 @@ describe("renderCliSuccess", () => {
   });
 
   it("keeps empty results stable and safely falls back for malformed response shapes", () => {
-    const options = { json: false, tty: false };
+    const options = { json: false };
     expect(renderCliSuccess("ticket.list", { tickets: [] }, options)).toBe("");
     expect(renderCliSuccess("project.list", { projects: [] }, options)).toBe("");
     expect(renderCliSuccess("label.list", { labels: [] }, options)).toBe("");
@@ -247,7 +247,7 @@ describe("renderCliSuccess", () => {
           socket: "/Users/dev/Library/Application Support/Volli Code/volli.sock",
           appVersion: "1.0.0",
         },
-        { json: false, tty: false },
+        { json: false },
       ),
     ).toBe(
       "project  Volli Code (VC)\n" +
@@ -272,7 +272,7 @@ describe("renderCliSuccess", () => {
           appVersion: null,
           degraded: true,
         },
-        { json: false, tty: false },
+        { json: false },
       ),
     ).toBe(
       "project  -\n" +

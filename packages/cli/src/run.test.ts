@@ -20,7 +20,6 @@ describe("runCli", () => {
       cwd: "/work/volli",
       stdout: (text) => stdout.push(text),
       stderr: (text) => stderr.push(text),
-      tty: false,
       readText: async () => "",
       request: async (socketPath, request) => {
         expect(socketPath).toBe("/profiles/volli.sock");
@@ -63,7 +62,6 @@ describe("runCli", () => {
       cwd: "/work/volli",
       stdout: (text) => stdout.push(text),
       stderr: (text) => stderr.push(text),
-      tty: false,
       readText: async () => "",
       request: async () => {
         throw new AgentClientError("APP_UNREACHABLE", "not running");
@@ -87,7 +85,6 @@ describe("runCli", () => {
       cwd: "/work/volli",
       stdout: (text) => stdout.push(text),
       stderr: () => undefined,
-      tty: false,
       readText: async () => "",
       request: async () => {
         requested = true;
@@ -111,7 +108,6 @@ describe("runCli", () => {
       cwd: "/work",
       stdout: (text: string) => output.push(text),
       stderr: (text: string) => errors.push(text),
-      tty: false,
       readText: async () => "",
       request: async () => ({ v: 1, ok: true, data: {} }) as const,
       launch: async () => ({ alreadyRunning: true }),
@@ -134,7 +130,6 @@ describe("runCli", () => {
       cwd: "/work",
       stdout: (text: string) => output.push(text),
       stderr: (text: string) => errors.push(text),
-      tty: false,
       readText: async () => "",
       request: async () => ({ v: 1, ok: true, data: {} }) as const,
       launch: async (timeout: number) => {
@@ -175,7 +170,6 @@ describe("runCli", () => {
       cwd: "/work",
       stdout: (text: string) => output.push(text),
       stderr: (text: string) => errors.push(text),
-      tty: false,
       readText: async () => "",
       request: async () => ({ v: 1, ok: true, data: {} }) as const,
       launch: async () => ({ alreadyRunning: true }),
@@ -194,7 +188,6 @@ describe("runCli", () => {
       cwd: "/work",
       stdout: (text: string) => output.push(text),
       stderr: (text: string) => errors.push(text),
-      tty: false,
       readText: async () => "",
       launch: async () => ({ alreadyRunning: true }),
     };
@@ -240,7 +233,6 @@ describe("runCli", () => {
         cwd: "/work",
         stdout: () => undefined,
         stderr: () => undefined,
-        tty: true,
         readText: async () => "",
         request: async (_socket, request) => {
           requests.push(request);
@@ -255,7 +247,6 @@ describe("runCli", () => {
       cwd: "/work",
       stdout: () => undefined,
       stderr: () => undefined,
-      tty: false,
       readText: async () => "",
       request: async (_socket, request) => {
         requests.push(request);

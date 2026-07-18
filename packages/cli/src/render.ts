@@ -1,10 +1,15 @@
 import { TICKET_STATUS_LABELS } from "@volli/shared";
 import type { AgentError, AgentErrorCode, TicketStatus } from "@volli/shared";
 
+/**
+ * v1 output contract (decision 6): output is identical on a TTY and on a
+ * pipe — plain, stable, uncolored — so the spec's non-TTY guarantees
+ * (untruncated, parseable, no color codes) hold universally rather than
+ * only when stdout isn't a terminal. A distinct TTY-pretty mode is
+ * deliberate future work, not a gap in this contract.
+ */
 export interface RenderOptions {
   json: boolean;
-  tty: boolean;
-  noColor?: boolean;
 }
 
 interface TicketListItem {
@@ -194,7 +199,10 @@ function renderStableLines(command: string, data: unknown): string | null {
   return null;
 }
 
-/** Renders server JSON directly or as the command's stable text contract. */
+/**
+ * Renders server JSON directly or as the command's stable text contract.
+ * See {@link RenderOptions} for the v1 TTY/pipe-identical output contract.
+ */
 export function renderCliSuccess(command: string, data: unknown, options: RenderOptions): string {
   if (options.json) return `${JSON.stringify(data)}\n`;
   if (command === "ticket.brief" && typeof data === "object" && data !== null) {

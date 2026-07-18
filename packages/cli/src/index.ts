@@ -44,7 +44,6 @@ async function main(): Promise<void> {
     cwd: process.cwd(),
     stdout: (text) => process.stdout.write(text),
     stderr: (text) => process.stderr.write(text),
-    tty: process.stdout.isTTY === true,
     readText: (path) => readFile(path, "utf8"),
     request: (path, request) => requestAgent(path, request, { timeoutMs: 10_000 }),
     launch: (timeoutMs) => {

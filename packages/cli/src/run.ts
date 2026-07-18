@@ -11,7 +11,6 @@ export interface RunCliDependencies {
   cwd: string;
   stdout(text: string): void;
   stderr(text: string): void;
-  tty: boolean;
   readText: ReadTextFile;
   request(socketPath: string, request: AgentRequest): Promise<AgentResponse>;
   launch(timeoutMs: number): Promise<{ alreadyRunning: boolean }>;
@@ -52,7 +51,7 @@ function writeDegradedIdentify(json: boolean, dependencies: RunCliDependencies):
         appVersion: null,
         degraded: true,
       },
-      { json, tty: dependencies.tty },
+      { json },
     ),
   );
 }
@@ -85,7 +84,7 @@ export async function runCli(
         renderCliSuccess(
           "app.launch",
           { launched: !result.alreadyRunning, alreadyRunning: result.alreadyRunning },
-          { json: parsed.invocation.json, tty: dependencies.tty },
+          { json: parsed.invocation.json },
         ),
       );
       return 0;
@@ -134,11 +133,7 @@ export async function runCli(
       return exitCodeForError(response.error.code);
     }
     dependencies.stdout(
-      renderCliSuccess(invocation.command, response.data, {
-        json: invocation.json,
-        tty: dependencies.tty,
-        noColor: dependencies.env["NO_COLOR"] !== undefined,
-      }),
+      renderCliSuccess(invocation.command, response.data, { json: invocation.json }),
     );
     return 0;
   } catch (error) {
