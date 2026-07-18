@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { ComposerBreadcrumb } from "@renderer/components/board/new-ticket/composer-breadcrumb";
 import { ComposerChips } from "@renderer/components/board/new-ticket/composer-chips";
 import { ComposerFooter } from "@renderer/components/board/new-ticket/composer-footer";
+import { clearDraft, loadDraft, saveDraft } from "@renderer/components/board/new-ticket/draft";
 import {
   type ComposerFields,
   runKickoff,
@@ -31,9 +32,12 @@ import { useWorkspaceStore } from "@renderer/stores/workspace";
  * create/kickoff footer. All the branching lives in the tested `submit.ts`
  * orchestration; this component only holds state and wires effectful callbacks.
  *
- * Mounted only while the dialog is open (Radix unmounts the content on close),
- * so every open starts blank — except `target`, which seeds from the currently
- * selected project and can be retargeted via the breadcrumb chip.
+ * Mounted only while the dialog is open (Radix unmounts the content on close).
+ * Field state seeds from the DRAFT CACHE (draft.ts) when one exists — an
+ * accidental Escape/overlay-click/quit mid-compose is non-destructive, Linear
+ * style — and from blank defaults otherwise (`target` then seeds from the
+ * currently selected project). Every field change re-saves the draft; a
+ * successful create clears it.
  */
 export function ComposerForm({
   initialProject,
@@ -49,15 +53,28 @@ export function ComposerForm({
   const projects = useProjectsStore((state) => state.projects);
   const lastHarnessId = useUiStore((state) => state.lastHarnessId);
 
-  const [target, setTarget] = React.useState<Project>(initialProject);
-  const [title, setTitle] = React.useState("");
-  const [body, setBody] = React.useState("");
-  const [status, setStatus] = React.useState<TicketStatus>("backlog");
-  const [priority, setPriority] = React.useState<TicketPriority>("medium");
-  const [labels, setLabels] = React.useState<string[]>([]);
-  const [usesWorktree, setUsesWorktree] = React.useState(true);
+  // Restore the draft once per mount (lazy initializer — never re-read on
+  // renders). The draft's target project is revalidated against the live
+  // project list; a since-removed project falls back to the selected one.
+  const [restored] = React.useState(() => loadDraft());
+  const [target, setTarget] = React.useState<Project>(
+    () => projects.find((candidate) => candidate.id === restored?.projectId) ?? initialProject,
+  );
+  const [title, setTitle] = React.useState(restored?.title ?? "");
+  const [body, setBody] = React.useState(restored?.body ?? "");
+  const [status, setStatus] = React.useState<TicketStatus>(restored?.status ?? "backlog");
+  const [priority, setPriority] = React.useState<TicketPriority>(restored?.priority ?? "medium");
+  const [labels, setLabels] = React.useState<string[]>(restored?.labels ?? []);
+  const [usesWorktree, setUsesWorktree] = React.useState(restored?.usesWorktree ?? true);
   const [createMore, setCreateMore] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
+
+  // Implicit save: every field change re-caches the draft (the storage layer
+  // debounces the SQLite write), so closing the dialog ANY way keeps the work.
+  // Content-empty state clears the slot instead (erasing = discarding).
+  React.useEffect(() => {
+    saveDraft({ projectId: target.id, status, priority, title, body, labels, usesWorktree });
+  }, [target.id, status, priority, title, body, labels, usesWorktree]);
 
   const titleRef = React.useRef<HTMLInputElement>(null);
   const editorRef = React.useRef<MarkdownLiveEditorHandle>(null);
@@ -131,6 +148,7 @@ export function ComposerForm({
     const result = await runPlainCreate(currentFields(), deps);
     setSubmitting(false);
     if (!result.created) return;
+    clearDraft(); // the create consumed the draft — next open starts blank
     if (createMore) resetForm();
     else onClose();
   }, [title, submitting, currentFields, deps, createMore, resetForm, onClose]);
@@ -144,6 +162,7 @@ export function ComposerForm({
     });
     setSubmitting(false);
     if (!result.created) return;
+    clearDraft(); // the kickoff consumed the draft — next open starts blank
     // Foreground kickoff already navigated into the detail view; either way the
     // composer is done — close it (Create-more resets in place instead).
     if (createMore) resetForm();
