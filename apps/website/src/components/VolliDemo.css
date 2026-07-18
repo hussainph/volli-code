@@ -2,44 +2,60 @@
   --demo-rail: 46px;
   --demo-nav: 38px;
   position: relative;
-  height: clamp(490px, 62vh, 590px);
-  min-height: 490px;
+  height: clamp(440px, 35vw, 500px);
+  min-height: 440px;
   overflow: hidden;
   border: 1px solid rgb(255 255 255 / 7%);
   border-radius: 24px;
-  background: #121212;
+  background: #180f15;
   box-shadow:
     0 1px 2px rgb(0 0 0 / 55%),
-    0 24px 80px rgb(0 0 0 / 46%);
+    0 24px 80px rgb(0 0 0 / 46%),
+    0 0 0 1px rgb(232 101 42 / 3%) inset;
   isolation: isolate;
 }
 
-.demo-shader,
-.demo-shader > div,
-.demo-shader canvas {
-  position: absolute !important;
+.demo-sunset-mesh,
+.demo-grain {
+  position: absolute;
   inset: 0;
-  width: 100% !important;
-  height: 100% !important;
+  pointer-events: none;
 }
 
-.demo-shader {
-  opacity: 0.72;
+.demo-sunset-mesh {
+  background:
+    radial-gradient(ellipse 72% 66% at 8% 104%, rgb(116 27 65 / 92%), transparent 69%),
+    radial-gradient(ellipse 64% 74% at 51% 112%, rgb(232 101 42 / 95%), transparent 64%),
+    radial-gradient(ellipse 46% 66% at 96% 94%, rgb(255 166 91 / 88%), transparent 64%),
+    radial-gradient(ellipse 58% 54% at 82% -8%, rgb(94 38 78 / 58%), transparent 72%),
+    linear-gradient(132deg, #18101e 0%, #2d1220 45%, #4a1b12 76%, #211116 100%);
+  filter: saturate(1.18) contrast(1.04);
 }
 
-.demo-glow {
+.demo-sunset-mesh::after {
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(circle at 84% 118%, rgb(232 101 42 / 32%), transparent 34%),
-    linear-gradient(180deg, rgb(255 255 255 / 3%), transparent 35%);
-  pointer-events: none;
+    radial-gradient(circle at 71% 83%, rgb(255 209 154 / 26%), transparent 18%),
+    linear-gradient(180deg, rgb(255 255 255 / 5%), transparent 38%);
+  content: "";
+}
+
+.demo-grain {
+  z-index: 1;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.92' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.86'/%3E%3C/svg%3E");
+  background-size: 180px 180px;
+  mix-blend-mode: soft-light;
+  opacity: 0.2;
 }
 
 .demo-app-frame {
   position: absolute;
-  inset: 22px;
+  top: 30px;
+  right: 30px;
+  left: 30px;
   z-index: 2;
+  aspect-ratio: 16 / 10;
   overflow: hidden;
   border: 1px solid rgb(255 255 255 / 10%);
   border-radius: 15px;
@@ -524,11 +540,11 @@
 
 .demo-preview {
   position: absolute;
-  top: 50%;
+  top: 30%;
   left: 50%;
   display: flex;
   width: min(88%, 920px);
-  height: min(84%, 470px);
+  height: min(84%, 420px);
   min-height: 350px;
   flex-direction: column;
   overflow: hidden;
@@ -799,6 +815,234 @@
   line-height: 1.65;
 }
 
+.demo-cli-screen {
+  display: flex;
+  padding: 0;
+  flex-direction: column;
+  background: #0b0b0c;
+  color: #c5c5c8;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.demo-cli-banner {
+  display: flex;
+  min-height: 49px;
+  padding: 9px 15px;
+  align-items: center;
+  gap: 9px;
+  border-bottom: 1px solid #29272b;
+  background: #111012;
+}
+
+.demo-cli-logo {
+  display: grid;
+  width: 27px;
+  height: 27px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid #53382e;
+  border-radius: 6px;
+  background: #251a17;
+  color: #ef8f60;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.demo-cli-banner > span:nth-child(2) {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.demo-cli-banner strong {
+  color: #f0edef;
+  font-size: 9.5px;
+  font-weight: 650;
+}
+
+.demo-cli-banner small,
+.demo-cli-context {
+  color: #78747b;
+  font-size: 7.5px;
+}
+
+.demo-cli-context {
+  margin-left: auto;
+}
+
+.demo-codex-banner {
+  min-height: 47px;
+  margin: 12px 15px 0;
+  border: 1px solid #343438;
+  border-radius: 5px;
+  background: #101113;
+}
+
+.demo-codex-banner .demo-cli-logo {
+  border-color: #34483e;
+  background: #142019;
+  color: #95c0aa;
+  font-size: 9px;
+}
+
+.demo-cli-prompt {
+  display: flex;
+  min-height: 42px;
+  padding: 11px 17px 10px;
+  align-items: flex-start;
+  gap: 9px;
+  border-bottom: 1px solid #252427;
+  color: #f2eef0;
+}
+
+.demo-cli-prompt > span {
+  color: #ed7f4a;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.demo-cli-prompt strong {
+  font-weight: 520;
+}
+
+.demo-codex-prompt {
+  min-height: 40px;
+  border-bottom: 0;
+}
+
+.demo-codex-prompt > span,
+.demo-codex-bullet {
+  color: #8ab79f;
+}
+
+.demo-cli-turn,
+.demo-codex-turn {
+  display: grid;
+  padding: 12px 17px 4px;
+  gap: 8px;
+}
+
+.demo-cli-line,
+.demo-cli-response {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  gap: 5px;
+}
+
+.demo-cli-line > span:last-child,
+.demo-cli-response > span:last-child {
+  min-width: 0;
+}
+
+.demo-claude-bullet {
+  color: #e67b49;
+}
+
+.demo-cli-tool strong,
+.demo-codex-turn strong {
+  color: #e6e3e5;
+  font-weight: 620;
+}
+
+.demo-cli-tool small,
+.demo-cli-line small,
+.demo-cli-response small {
+  display: block;
+  margin-top: 2px;
+  color: #77747a;
+  font-size: 8px;
+}
+
+.demo-cli-status {
+  display: flex;
+  margin: 6px 17px 0;
+  align-items: center;
+  gap: 7px;
+  color: #d5c5c0;
+}
+
+.demo-cli-status > span {
+  color: #e67b49;
+}
+
+.demo-cli-status small {
+  margin-left: 2px;
+  color: #716d73;
+}
+
+.demo-cli-response {
+  margin: 7px 17px 0;
+  padding: 9px 11px;
+  border-left: 2px solid #a65736;
+  background: #151113;
+}
+
+.demo-cli-response small {
+  color: #a87560;
+}
+
+.demo-codex-edit small {
+  color: #7eaa92;
+}
+
+.demo-codex-divider {
+  display: flex;
+  margin: 8px 17px 2px;
+  align-items: center;
+  gap: 10px;
+  color: #656269;
+  font-size: 7.5px;
+  white-space: nowrap;
+}
+
+.demo-codex-divider::before,
+.demo-codex-divider::after {
+  height: 1px;
+  flex: 1;
+  background: #29282b;
+  content: "";
+}
+
+.demo-codex-response {
+  border-left-color: #426d59;
+  background: #0f1512;
+}
+
+.demo-cli-composer {
+  display: flex;
+  min-height: 39px;
+  margin-top: auto;
+  padding: 10px 17px 8px;
+  align-items: flex-start;
+  gap: 8px;
+  border-top: 1px solid #302e32;
+  color: #ed7f4a;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.demo-codex-composer {
+  color: #8ab79f;
+}
+
+.demo-cli-cursor {
+  width: 5px;
+  height: 10px;
+  background: currentColor;
+  opacity: 0.72;
+}
+
+.demo-cli-footer {
+  display: flex;
+  min-height: 22px;
+  padding: 0 17px 7px;
+  align-items: center;
+  justify-content: space-between;
+  color: #666269;
+  font-size: 7px;
+}
+
 .demo-terminal-screen p {
   margin: 0 0 6px;
 }
@@ -1042,6 +1286,11 @@
 
   .demo-app-frame {
     inset: 16px;
+    aspect-ratio: auto;
+  }
+
+  .demo-preview {
+    top: 50%;
   }
 
   .demo-board-actions .demo-control:first-child {
@@ -1065,6 +1314,7 @@
 
   .demo-app-frame {
     inset: 9px;
+    aspect-ratio: auto;
     border-radius: 12px;
   }
 
@@ -1223,6 +1473,36 @@
     padding: 17px 16px;
     overflow: visible;
     font-size: 8.5px;
+  }
+
+  .demo-cli-screen {
+    min-height: 318px;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .demo-cli-context {
+    display: none;
+  }
+
+  .demo-codex-banner {
+    margin: 10px 12px 0;
+  }
+
+  .demo-cli-prompt,
+  .demo-cli-turn,
+  .demo-codex-turn,
+  .demo-cli-composer,
+  .demo-cli-footer {
+    padding-right: 13px;
+    padding-left: 13px;
+  }
+
+  .demo-cli-response,
+  .demo-cli-status,
+  .demo-codex-divider {
+    margin-right: 13px;
+    margin-left: 13px;
   }
 
   .demo-done-view {

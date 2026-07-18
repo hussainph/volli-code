@@ -1,4 +1,3 @@
-import { Dithering } from "@paper-design/shaders-react";
 import { gsap } from "gsap";
 import { Flip } from "gsap/Flip";
 import {
@@ -496,26 +495,8 @@ export default function VolliDemo() {
 
   return (
     <div className="volli-demo" ref={appRef}>
-      <div className="demo-shader" aria-hidden="true">
-        <Dithering
-          width="100%"
-          height="100%"
-          colorBack="#121212"
-          colorFront="#5c2b1c"
-          shape="warp"
-          type="4x4"
-          size={2.1}
-          speed={reducedMotion ? 0 : 0.075}
-          frame={6200}
-          scale={0.68}
-          offsetX={0.28}
-          offsetY={-0.12}
-          minPixelRatio={1}
-          maxPixelCount={1400 * 620}
-        />
-      </div>
-
-      <div className="demo-glow" aria-hidden="true" />
+      <div className="demo-sunset-mesh" aria-hidden="true" />
+      <div className="demo-grain" aria-hidden="true" />
 
       <div className="demo-app-frame">
         <header className="demo-chrome">
@@ -772,7 +753,7 @@ function TerminalPreview({ ticket, review }: { ticket: DemoTicket; review: boole
       <div className="demo-terminal-main">
         <div className="demo-terminal-heading">
           <span className={`demo-agent-mark ${agent === "Codex" ? "is-codex" : "is-claude"}`}>
-            {agent === "Codex" ? "C" : "A"}
+            {agent === "Codex" ? ">_" : "✳"}
           </span>
           <div>
             <h2 id="demo-preview-title">{ticket.title}</h2>
@@ -781,32 +762,11 @@ function TerminalPreview({ ticket, review }: { ticket: DemoTicket; review: boole
             </span>
           </div>
         </div>
-        <div className="demo-terminal-screen">
-          <p className="demo-terminal-command">
-            <span>›</span> {review ? "Review the completed implementation" : ticket.title}
-          </p>
-          <p>
-            <span className="demo-terminal-glyph">●</span> Read ticket brief and project
-            instructions
-          </p>
-          <p>
-            <span className="demo-terminal-glyph">●</span> Created isolated worktree and branch
-          </p>
-          <p>
-            <span className="demo-terminal-glyph">●</span> Updated lifecycle automation runner
-          </p>
-          <p className="demo-terminal-diff">3 files changed&nbsp;&nbsp; +184&nbsp;&nbsp; -27</p>
-          {review ? (
-            <div className="demo-agent-question">
-              The implementation is ready. Should I also migrate the existing project hooks to the
-              new configuration format?
-            </div>
-          ) : (
-            <p className="demo-terminal-working">
-              <span className="demo-working-dot" /> Running targeted tests
-            </p>
-          )}
-        </div>
+        {agent === "Claude Code" ? (
+          <ClaudeCodeScreen ticket={ticket} review={review} />
+        ) : (
+          <CodexScreen ticket={ticket} review={review} />
+        )}
       </div>
       <aside className="demo-session-rail">
         <div className="demo-session-heading">
@@ -834,6 +794,134 @@ function TerminalPreview({ ticket, review }: { ticket: DemoTicket; review: boole
           <strong>Isolated</strong>
         </div>
       </aside>
+    </div>
+  );
+}
+
+function ClaudeCodeScreen({ ticket, review }: { ticket: DemoTicket; review: boolean }) {
+  return (
+    <div className="demo-terminal-screen demo-cli-screen is-claude">
+      <div className="demo-cli-banner">
+        <span className="demo-cli-logo">✳</span>
+        <span>
+          <strong>Claude Code</strong>
+          <small>v2.1.212</small>
+        </span>
+        <span className="demo-cli-context">Sonnet 4.6 · volli/{ticket.code.toLowerCase()}</span>
+      </div>
+
+      <div className="demo-cli-prompt">
+        <span>❯</span>
+        <strong>
+          {review ? "Review the implementation and report anything blocking" : ticket.title}
+        </strong>
+      </div>
+
+      <div className="demo-cli-turn">
+        <div className="demo-cli-line">
+          <span className="demo-claude-bullet">⏺</span>
+          <span>I’ll trace the lifecycle path, make the change, then run the focused checks.</span>
+        </div>
+        <div className="demo-cli-line demo-cli-tool">
+          <span className="demo-claude-bullet">⏺</span>
+          <span>
+            <strong>Read</strong>(src/lifecycle/hook-runner.ts)
+            <small>⎿ Read 184 lines</small>
+          </span>
+        </div>
+        <div className="demo-cli-line demo-cli-tool">
+          <span className="demo-claude-bullet">⏺</span>
+          <span>
+            <strong>Edit</strong>(src/lifecycle/hook-runner.ts)
+            <small>⎿ Added phase-safe retry handling</small>
+          </span>
+        </div>
+      </div>
+
+      {review ? (
+        <div className="demo-cli-response">
+          <span className="demo-claude-bullet">⏺</span>
+          <span>
+            The implementation is ready. The focused tests pass and the worktree is clean.
+            <small>Waiting for your review</small>
+          </span>
+        </div>
+      ) : (
+        <div className="demo-cli-status">
+          <span>✻</span>
+          Running targeted tests… <small>esc to interrupt</small>
+        </div>
+      )}
+
+      <div className="demo-cli-composer" aria-hidden="true">
+        <span>❯</span>
+        <span className="demo-cli-cursor" />
+      </div>
+      <div className="demo-cli-footer">
+        <span>shift+tab to cycle mode</span>
+        <span>? for shortcuts</span>
+      </div>
+    </div>
+  );
+}
+
+function CodexScreen({ ticket, review }: { ticket: DemoTicket; review: boolean }) {
+  return (
+    <div className="demo-terminal-screen demo-cli-screen is-codex">
+      <div className="demo-cli-banner demo-codex-banner">
+        <span className="demo-cli-logo">&gt;_</span>
+        <span>
+          <strong>OpenAI Codex</strong>
+          <small>v0.144.5</small>
+        </span>
+        <span className="demo-cli-context">gpt-5.3-codex · xhigh</span>
+      </div>
+
+      <div className="demo-cli-prompt demo-codex-prompt">
+        <span>›</span>
+        <strong>{review ? "Review the completed implementation" : ticket.title}</strong>
+      </div>
+
+      <div className="demo-codex-turn">
+        <div className="demo-cli-line">
+          <span className="demo-codex-bullet">•</span>
+          <span>
+            <strong>Explored</strong>
+            <small>└ Read ticket brief and repository instructions</small>
+          </span>
+        </div>
+        <div className="demo-cli-line">
+          <span className="demo-codex-bullet">•</span>
+          <span>I’m updating the resume path and keeping the existing adapter seam intact.</span>
+        </div>
+        <div className="demo-cli-line demo-codex-edit">
+          <span className="demo-codex-bullet">•</span>
+          <span>
+            <strong>Edited</strong> src/sessions/resume.ts
+            <small>+46&nbsp;&nbsp; -8</small>
+          </span>
+        </div>
+      </div>
+
+      <div className="demo-codex-divider">
+        <span>{review ? "Worked for 2m 18s" : "Working · 1m 42s"}</span>
+      </div>
+
+      {review && (
+        <div className="demo-cli-response demo-codex-response">
+          <span className="demo-codex-bullet">•</span>
+          <span>Ready for review. Resume behavior is covered by the targeted regression test.</span>
+        </div>
+      )}
+
+      <div className="demo-cli-composer demo-codex-composer" aria-hidden="true">
+        <span>›</span>
+        <span className="demo-cli-cursor" />
+      </div>
+      <div className="demo-cli-footer">
+        <span>/model to change</span>
+        <span>82% context left</span>
+      </div>
     </div>
   );
 }
@@ -974,8 +1062,8 @@ function FolderIcon() {
 function SettingsIcon() {
   return (
     <SvgIcon>
-      <circle cx="12" cy="12" r="3" />
-      <path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6 7 7M17 17l1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4" />
+      <path d="M9.7 3.6 10.4 2h3.2l.7 1.6 1.7.7 1.6-.6 2.2 2.2-.6 1.6.7 1.7 1.6.7v3.2l-1.6.7-.7 1.7.6 1.6-2.2 2.2-1.6-.6-1.7.7-.7 1.6h-3.2l-.7-1.6-1.7-.7-1.6.6-2.2-2.2.6-1.6-.7-1.7-1.6-.7V9.9l1.6-.7.7-1.7-.6-1.6 2.2-2.2 1.6.6 1.7-.7Z" />
+      <circle cx="12" cy="11.5" r="3" />
     </SvgIcon>
   );
 }
