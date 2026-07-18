@@ -83,9 +83,12 @@ function LabelColorMenu({
  * The add affordance has two modes:
  * - default (`alwaysInput` false): a `+` button reveals the text input, which
  *   commits on Enter/blur and dismisses on Escape — the ticket-detail behavior.
- * - `alwaysInput`: the input is always shown (no `+` toggle) and commits on
- *   Enter without dismissing, so it can live inside a popover whose own Escape
- *   closes the popover rather than the field — the composer's Labels menu.
+ * - `alwaysInput`: popover mode (the composer's Labels menu) — a quiet
+ *   borderless input row sits on top (command-menu style, no focus ring; the
+ *   popover autofocuses it, so a ring would flash on every open), selected
+ *   chips wrap in a hairline-separated section below, and Enter commits
+ *   without dismissing. Escape is left to bubble so it closes the popover
+ *   rather than the field.
  *
  * Label-color edits still write straight through the board store (project
  * scoped, and only offered for labels that already have a project row), which
@@ -126,49 +129,74 @@ export function LabelEditorCore({
 
   const showInput = alwaysInput || adding;
 
-  return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      {value.map((label) => {
-        const row = projectLabels?.find((candidate) => candidate.name === label);
-        const color = resolveLabelColor(projectLabels, label);
-        return (
-          <span key={label} className="group/chip inline-flex items-center">
-            {row ? (
-              <LabelColorMenu
-                labelId={row.id}
-                effectiveColor={color}
-                storedColor={row.color}
-                onPick={pickColor}
-              >
-                <TagChip tag={label} color={color} />
-              </LabelColorMenu>
-            ) : (
-              <TagChip tag={label} color={color} />
-            )}
-            <button
-              type="button"
-              aria-label={`Remove ${label}`}
-              onClick={() => remove(label)}
-              className="-ml-1.5 flex size-4 items-center justify-center rounded-full text-muted-foreground opacity-0 transition-opacity duration-150 ease-out group-hover/chip:opacity-100 hover:text-foreground"
-            >
-              <XIcon className="size-2.5" />
-            </button>
-          </span>
-        );
-      })}
-      {showInput ? (
+  const chips = value.map((label) => {
+    const row = projectLabels?.find((candidate) => candidate.name === label);
+    const color = resolveLabelColor(projectLabels, label);
+    return (
+      <span key={label} className="group/chip inline-flex items-center">
+        {row ? (
+          <LabelColorMenu
+            labelId={row.id}
+            effectiveColor={color}
+            storedColor={row.color}
+            onPick={pickColor}
+          >
+            <TagChip tag={label} color={color} />
+          </LabelColorMenu>
+        ) : (
+          <TagChip tag={label} color={color} />
+        )}
+        <button
+          type="button"
+          aria-label={`Remove ${label}`}
+          onClick={() => remove(label)}
+          className="-ml-1.5 flex size-4 items-center justify-center rounded-full text-muted-foreground opacity-0 transition-opacity duration-150 ease-out group-hover/chip:opacity-100 hover:text-foreground"
+        >
+          <XIcon className="size-2.5" />
+        </button>
+      </span>
+    );
+  });
+
+  if (alwaysInput) {
+    return (
+      <div className="flex flex-col">
         <Input
-          autoFocus={!alwaysInput}
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
-          onBlur={alwaysInput ? undefined : commitAdd}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               event.preventDefault();
               commitAdd();
-            } else if (event.key === "Escape" && !alwaysInput) {
-              // In the popover variant, let Escape bubble so the popover closes;
-              // inline, Escape just abandons the add.
+            }
+          }}
+          placeholder={addPlaceholder}
+          className="h-8 w-full rounded-none border-0 bg-transparent px-3 text-sm shadow-none focus-visible:ring-0 dark:bg-transparent"
+        />
+        {value.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-1.5 border-t border-border p-2">
+            {chips}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {chips}
+      {showInput ? (
+        <Input
+          autoFocus
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={commitAdd}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              commitAdd();
+            } else if (event.key === "Escape") {
+              // Escape just abandons the inline add.
               event.preventDefault();
               setDraft("");
               setAdding(false);

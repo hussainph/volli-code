@@ -53,7 +53,7 @@ export function ComposerLabels({
           )}
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-64 p-2">
+      <PopoverContent align="start" className="w-64 p-0">
         <LabelEditorCore
           projectId={projectId}
           value={value}
@@ -62,7 +62,7 @@ export function ComposerLabels({
           alwaysInput
         />
         {unselected.length > 0 ? (
-          <div className="mt-2 flex flex-wrap gap-1 border-t border-border pt-2">
+          <div className="flex flex-wrap gap-1 border-t border-border p-2">
             {unselected.map((label) => (
               <button
                 key={label.id}
