@@ -6,15 +6,13 @@ import type {
   AppStateSetResult,
   ArchivedTicketsResult,
   ArtifactCreateResult,
-  ArtifactListResult,
-  ArtifactPromoteResult,
-  ArtifactReadImageResult,
-  ArtifactReadResult,
-  ArtifactsChangedEvent,
-  ArtifactTier,
   BootstrapResult,
   CreateTerminalSessionRequest,
   CreateTerminalSessionResult,
+  FileChangedEvent,
+  FileIndexResult,
+  FileReadResult,
+  FileWriteResult,
   GhosttyAppearancePayload,
   GhosttyConfigResult,
   LabelResult,
@@ -156,68 +154,44 @@ const api = {
     setColor: (input: { labelId: string; color: string | null }): Promise<LabelResult> =>
       ipcRenderer.invoke("volli:label-set-color" satisfies VolliIpcChannel, input),
   },
-  artifacts: {
-    /** Both artifact tiers for a ticket (ticket resolved to its display id in main via the db). */
-    list: (input: { projectId: string; ticketId: string }): Promise<ArtifactListResult> =>
-      ipcRenderer.invoke("volli:artifact-list" satisfies VolliIpcChannel, input),
-    /** A markdown artifact's raw utf8 content. */
+  files: {
+    /** The whole-project file index the `@` picker ranks over (git-listed + `.volli/artifacts/`). Fetched fresh per picker open. */
+    index: (input: { projectId: string }): Promise<FileIndexResult> =>
+      ipcRenderer.invoke("volli:file-index" satisfies VolliIpcChannel, input),
+    /** Reads any repo/artifact file worktree-awarely: text (capped), image (data URI), or binary stub. */
     read: (input: {
       projectId: string;
-      ticketId: string;
-      tier: ArtifactTier;
-      name: string;
-    }): Promise<ArtifactReadResult> =>
-      ipcRenderer.invoke("volli:artifact-read" satisfies VolliIpcChannel, input),
-    /** An image artifact's content as an inline `data:` URI (base64) — the CSP-safe `<img>` path. */
-    readImage: (input: {
-      projectId: string;
-      ticketId: string;
-      tier: ArtifactTier;
-      name: string;
-    }): Promise<ArtifactReadImageResult> =>
-      ipcRenderer.invoke("volli:artifact-read-image" satisfies VolliIpcChannel, input),
-    /** Writes markdown content; creates the tier's directory chain on demand. */
+      ticketId?: string;
+      relPath: string;
+    }): Promise<FileReadResult> =>
+      ipcRenderer.invoke("volli:file-read" satisfies VolliIpcChannel, input),
+    /** Writes markdown content; markdown-only, `expectedMtime` conflict-guarded. Resolves with the fresh mtime. */
     write: (input: {
       projectId: string;
-      ticketId: string;
-      tier: ArtifactTier;
-      name: string;
+      ticketId?: string;
+      relPath: string;
       content: string;
-    }): Promise<Result> =>
-      ipcRenderer.invoke("volli:artifact-write" satisfies VolliIpcChannel, input),
-    /** Creates a new, minimally-templated `.md` artifact in the ticket tier; `name` is forced to `.md`. */
-    create: (input: {
-      projectId: string;
-      ticketId: string;
-      name: string;
-    }): Promise<ArtifactCreateResult> =>
+      expectedMtime?: number;
+    }): Promise<FileWriteResult> =>
+      ipcRenderer.invoke("volli:file-write" satisfies VolliIpcChannel, input),
+    /** Creates a new, minimally-templated `.md` in `.volli/artifacts/`; `name` is forced to `.md`. Resolves with its `@ref`-able relPath. */
+    createArtifact: (input: { projectId: string; name: string }): Promise<ArtifactCreateResult> =>
       ipcRenderer.invoke("volli:artifact-create" satisfies VolliIpcChannel, input),
-    /** Moves a ticket-tier artifact up to the project tier; fails on a name collision (no silent overwrite). */
-    promote: (input: {
-      projectId: string;
-      ticketId: string;
-      name: string;
-    }): Promise<ArtifactPromoteResult> =>
-      ipcRenderer.invoke("volli:artifact-promote" satisfies VolliIpcChannel, input),
-    /** Reveals a tier's artifacts directory in Finder (creating it first if needed). */
-    revealDir: (input: {
-      projectId: string;
-      ticketId: string;
-      tier: ArtifactTier;
-    }): Promise<RevealResult> =>
-      ipcRenderer.invoke("volli:artifact-reveal-dir" satisfies VolliIpcChannel, input),
-    /** Subscribes main's `fs.watch` on both of a ticket's artifact-tier directories; pair with `unsubscribe` on unmount. */
-    subscribe: (input: { projectId: string; ticketId: string }): Promise<Result> =>
-      ipcRenderer.invoke("volli:artifact-subscribe" satisfies VolliIpcChannel, input),
-    unsubscribe: (input: { projectId: string; ticketId: string }): Promise<Result> =>
-      ipcRenderer.invoke("volli:artifact-unsubscribe" satisfies VolliIpcChannel, input),
-    /** Subscribes to debounced artifact-directory change events; returns the unsubscribe function. */
-    onChanged: (callback: (event: ArtifactsChangedEvent) => void): (() => void) => {
-      const listener = (_event: Electron.IpcRendererEvent, payload: ArtifactsChangedEvent) =>
+    /** Reveals the resolved file in Finder. */
+    reveal: (input: { projectId: string; ticketId?: string; relPath: string }): Promise<Result> =>
+      ipcRenderer.invoke("volli:file-reveal" satisfies VolliIpcChannel, input),
+    /** Watches one open file tab (debounced main→renderer change events); pair with `unwatch` on unmount. */
+    watch: (input: { projectId: string; ticketId?: string; relPath: string }): Promise<Result> =>
+      ipcRenderer.invoke("volli:file-watch" satisfies VolliIpcChannel, input),
+    unwatch: (input: { projectId: string; ticketId?: string; relPath: string }): Promise<Result> =>
+      ipcRenderer.invoke("volli:file-unwatch" satisfies VolliIpcChannel, input),
+    /** Subscribes to debounced per-file change events; returns the unsubscribe function. */
+    onChanged: (callback: (event: FileChangedEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: FileChangedEvent) =>
         callback(payload);
-      ipcRenderer.on("volli:artifacts-changed" satisfies VolliIpcEvent, listener);
+      ipcRenderer.on("volli:file-changed" satisfies VolliIpcEvent, listener);
       return () =>
-        ipcRenderer.removeListener("volli:artifacts-changed" satisfies VolliIpcEvent, listener);
+        ipcRenderer.removeListener("volli:file-changed" satisfies VolliIpcEvent, listener);
     },
   },
   appState: {

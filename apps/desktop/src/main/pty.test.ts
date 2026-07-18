@@ -871,17 +871,18 @@ describe("ticket sessions", () => {
     const { result } = await createTicketSession("tk1");
     if (!result.ok) throw new Error(`expected session, got ${result.error}`);
 
-    // VOLLI_TICKET / VOLLI_TICKET_DIR always point at the MAIN repo's .volli;
+    // VOLLI_TICKET / VOLLI_ARTIFACTS_DIR always point at the MAIN repo's .volli;
     // ticket sessions run at the project root; TERM is still forced.
     const env = lastSpawnEnv();
     expect(env["VOLLI_TICKET"]).toBe("VC-12");
-    expect(env["VOLLI_TICKET_DIR"]).toBe(`${root}/.volli/tickets/VC-12`);
+    expect(env["VOLLI_ARTIFACTS_DIR"]).toBe(`${root}/.volli/artifacts`);
     expect(env["TERM"]).toBe("xterm-256color");
     const [, , options] = spawn.mock.calls[0] as [string, string[], { cwd: string }];
     expect(options.cwd).toBe(root);
 
-    // ensureTicketDir ran up front so an agent can write artifacts immediately.
-    await expect(fs.stat(`${root}/.volli/tickets/VC-12/artifacts`)).resolves.toBeDefined();
+    // The project's .volli/artifacts dir was ensured up front so an agent can
+    // write artifacts immediately.
+    await expect(fs.stat(`${root}/.volli/artifacts`)).resolves.toBeDefined();
 
     // Durable record: ticket-scoped, the default harness (harness is no longer a
     // ticket property — migration 004), per-ticket title.
@@ -934,7 +935,7 @@ describe("ticket sessions", () => {
 
   it("fails with a surfaced error (never resurrecting the root) when the project folder is gone", async () => {
     // A project whose root path is within a registered root but does not exist
-    // on disk (moved/deleted repo). ensureTicketDir must NOT recreate it.
+    // on disk (moved/deleted repo). ensureProjectArtifactsDir must NOT recreate it.
     const gonePath = join(root, "gone-repo");
     insertProject(testDb.db, testProject({ id: "p-gone", path: gonePath, ticketPrefix: "GO" }));
     insertTicket(testDb.db, testTicket("p-gone", { id: "tk-gone", ticketNumber: 1 }));
@@ -1040,10 +1041,14 @@ describe("ticket sessions", () => {
 });
 
 describe("scratch session persistence", () => {
-  it("persists a project-scoped record with ticketId null and no ticket env", async () => {
+  it("persists a project-scoped record with ticketId null, no VOLLI_TICKET, but the artifacts env", async () => {
     const { sessionId } = await createSession();
 
-    expect(lastSpawnEnv()["VOLLI_TICKET"]).toBeUndefined();
+    // Scratch sessions get no VOLLI_TICKET, but DO get VOLLI_ARTIFACTS_DIR
+    // (decision #9) pointing at the project's main-repo .volli/artifacts.
+    const env = lastSpawnEnv();
+    expect(env["VOLLI_TICKET"]).toBeUndefined();
+    expect(env["VOLLI_ARTIFACTS_DIR"]).toBe(`${root}/.volli/artifacts`);
 
     const rows = listSessions(testDb.db, "w");
     expect(rows).toHaveLength(1);

@@ -34,14 +34,16 @@ Worktrees are **pure code isolation** for parallelizing dozens of tickets. Creat
 12. Inline title editing (click-to-edit heading), `retitled` event (exists).
 
 ### Artifacts & `.volli`
+
+> **Partially superseded 2026-07-17** by [`global-artifacts.md`](global-artifacts.md) (CONCEPT decision #33): the ticket tier, promote flow, Artifacts tab, and `VOLLI_TICKET_DIR` are gone — one project-level `.volli/artifacts/` dir, referenced from ticket docs via plain-text `@relative/path` refs that open as file tabs. #13 (filesystem-as-truth) and #15 (self-gitignore) stand.
 13. **Filesystem-as-truth, no artifacts DB table.** `.volli` is plain md/html-first — human- and agent-readable/renderable outside Volli (respects the `.claude`/`.agents` meta).
-14. **Two tiers**:
+14. *(superseded — see note above)* **Two tiers**:
     - `<project>/.volli/artifacts/` — project-level artifacts
     - `<project>/.volli/tickets/<DISPLAY-ID>/artifacts/` — ticket-scoped
     Two-way relationship: **promote** ticket artifact → project level; **reference** project artifacts from a ticket (both directions surfaced in the Artifacts tab).
 15. `.volli` is **self-gitignored** (`.volli/.gitignore` containing `*`) — never touch the user's root `.gitignore`.
-16. Ticket-linked sessions get env vars injected at PTY creation: `VOLLI_TICKET=<DISPLAY-ID>`, `VOLLI_TICKET_DIR=<project>/.volli/tickets/<DISPLAY-ID>`. **Always the main repo's `.volli`** — never derived from cwd (future worktrees are separate checkouts that won't contain gitignored `.volli`).
-17. Artifacts tab: `.md` gets the same typeset-render/click-to-edit treatment as the body; images render inline; other files = name + reveal-in-Finder. `fs.watch` (or refresh-on-focus) keeps the list live while agents write.
+16. *(superseded — see note above; `VOLLI_ARTIFACTS_DIR` replaces `VOLLI_TICKET_DIR`)* Ticket-linked sessions get env vars injected at PTY creation: `VOLLI_TICKET=<DISPLAY-ID>`, `VOLLI_TICKET_DIR=<project>/.volli/tickets/<DISPLAY-ID>`. **Always the main repo's `.volli`** — never derived from cwd (future worktrees are separate checkouts that won't contain gitignored `.volli`).
+17. *(superseded — see note above; the viewer/editor treatment lives on in file tabs)* Artifacts tab: `.md` gets the same typeset-render/click-to-edit treatment as the body; images render inline; other files = name + reveal-in-Finder. `fs.watch` (or refresh-on-focus) keeps the list live while agents write.
 
 ### Sessions
 18. **Real `sessions` table now** (not deferred): durable trace + resume seed. Scope bifurcated by nullable `ticket_id` (NULL = project-scoped scratch session). `harness_session_id` column reserved for claude/codex session UUIDs → future `--resume` support via hooks/volli CLI.

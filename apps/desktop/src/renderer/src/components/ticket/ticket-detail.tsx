@@ -1,17 +1,25 @@
 import * as React from "react";
 import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
-import { displayTicketId, type Ticket } from "@volli/shared";
+import {
+  baseNameOf,
+  displayTicketId,
+  errorMessage,
+  type FileSource,
+  type Ticket,
+} from "@volli/shared";
 
 import { ContentColumn } from "@renderer/components/layout/content-column";
+import type { MarkdownFileRefs } from "@renderer/components/editor/markdown-live-editor";
 import { ConfirmCloseDialog } from "@renderer/components/sessions/confirm-close-dialog";
 import { createTerminalSession } from "@renderer/components/sessions/session-create";
-import { TicketArtifactsTab } from "@renderer/components/ticket/ticket-artifacts-tab";
+import { FileView } from "@renderer/components/ticket/file-view";
 import { TicketDocTab } from "@renderer/components/ticket/ticket-doc-tab";
 import { TicketProperties } from "@renderer/components/ticket/ticket-properties";
 import { TicketSessionPlane } from "@renderer/components/ticket/ticket-session-plane";
 import { TicketSessionsPanel } from "@renderer/components/ticket/ticket-sessions-panel";
 import { TicketTabStrip, type TicketTabDescriptor } from "@renderer/components/ticket/ticket-tabs";
 import { TicketTitle } from "@renderer/components/ticket/ticket-title";
+import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { isEscapeExempt } from "@renderer/lib/escape-guard";
 import { cn } from "@renderer/lib/utils";
 import { sessionPanes, ticketScope, useSessionsStore } from "@renderer/stores/sessions";
@@ -19,6 +27,10 @@ import { useUiStore } from "@renderer/stores/ui";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { useCloseGuard } from "@renderer/terminal/close-guard";
 import { closeTicketSession, renameTerminalSession } from "@renderer/terminal/session-lifecycle";
+
+/** The always-present Doc tab's id — the fallback every persisted/live tab id
+ * resets to once it no longer names a renderable tab (doc/file/session). */
+const DOC_TAB_ID = "doc";
 
 /**
  * The right rail's bottom "Details" drawer (status/priority/labels/worktree).
@@ -57,18 +69,6 @@ function TicketDetailsDrawer({ projectId, ticket }: { projectId: string; ticket:
 }
 
 /**
- * The Doc/Artifacts tabs always present (decision #6, default tab on open is
- * Doc — its label is the ticket's own display id, e.g. "VC-12"); one
- * `"session"`-kind descriptor is appended per linked live session — see
- * ticket-tabs.tsx's module doc for the data-driven contract.
- */
-const ARTIFACTS_TAB: TicketTabDescriptor = {
-  id: "artifacts",
-  kind: "artifacts",
-  label: "Artifacts",
-};
-
-/**
  * The full-page ticket detail view (ticket-detail-mvp decision #1), rendered
  * by board-page.tsx in place of the board's content when a ticket is open —
  * the global sessions layer and sidebar stay mounted around it (they live
@@ -94,6 +94,12 @@ export function TicketDetail({
   ticket: Ticket;
 }) {
   const closeTicket = useWorkspaceStore((state) => state.closeTicket);
+  const openTicketFile = useWorkspaceStore((state) => state.openTicketFile);
+  const closeTicketFile = useWorkspaceStore((state) => state.closeTicketFile);
+  const setTicketActiveTab = useWorkspaceStore((state) => state.setTicketActiveTab);
+  const ticketTabsState = useWorkspaceStore(
+    (state) => state.byProject[projectId]?.ticketTabs?.[ticket.id],
+  );
   const sessionTabs = useSessionsStore((state) => state.byOwner[ticket.id]?.tabs);
   const creating = useSessionsStore((state) => state.starting[ticket.id] ?? false);
   const railCollapsed = useUiStore((state) => state.railCollapsed);
@@ -101,12 +107,63 @@ export function TicketDetail({
 
   const displayId = displayTicketId(ticketPrefix, ticket.ticketNumber);
 
-  // Doc (labeled with the ticket id) + Artifacts + one session-kind descriptor
-  // per live session; routing below is keyed off `kind`, not id, so the plane
-  // and content branch generically.
+  const openFiles = ticketTabsState?.files ?? [];
+  const activeTabId = ticketTabsState?.active ?? DOC_TAB_ID;
+
+  // The per-tab worktree badge is driven by each file's resolved source, which
+  // only the FileView knows after reading — it reports back via `onSource`.
+  const [fileSources, setFileSources] = React.useState<Record<string, FileSource>>({});
+  const reportFileSource = React.useCallback((relPath: string, source: FileSource) => {
+    setFileSources((prev) => (prev[relPath] === source ? prev : { ...prev, [relPath]: source }));
+  }, []);
+
+  const setActiveTab = React.useCallback(
+    (tabId: string) => setTicketActiveTab(projectId, ticket.id, tabId),
+    [setTicketActiveTab, projectId, ticket.id],
+  );
+
+  // The `@file` index + create/open wiring, shared by the Doc body editor and
+  // every open markdown file tab so any of them can reference (and create) files.
+  const fileIndex = useFileIndex(projectId);
+  const openFile = React.useCallback(
+    (relPath: string) => openTicketFile(projectId, ticket.id, relPath),
+    [openTicketFile, projectId, ticket.id],
+  );
+  const fileRefs = React.useMemo<MarkdownFileRefs>(
+    () => ({
+      getIndex: fileIndex.getIndex,
+      refreshIndex: fileIndex.refresh,
+      indexVersion: fileIndex.version,
+      onOpenFile: openFile,
+      createArtifact: async (name) => {
+        try {
+          const result = await window.api.files.createArtifact({ projectId, name });
+          // A new artifact must show up in the index so its chip resolves at once.
+          if (result.ok) fileIndex.forceRefresh();
+          return result;
+        } catch (error) {
+          return { ok: false, error: errorMessage(error) };
+        }
+      },
+    }),
+    [fileIndex, openFile, projectId],
+  );
+
+  // Doc (labeled with the ticket id) + one `"file"`-kind descriptor per open
+  // `@file` ref + one `"session"`-kind descriptor per live session; routing
+  // below is keyed off `kind`, not id, so the plane and content branch
+  // generically.
   const tabs: TicketTabDescriptor[] = [
-    { id: "doc", kind: "doc", label: displayId },
-    ARTIFACTS_TAB,
+    { id: DOC_TAB_ID, kind: "doc", label: displayId },
+    ...openFiles.map(
+      (relPath): TicketTabDescriptor => ({
+        id: `file:${relPath}`,
+        kind: "file",
+        label: baseNameOf(relPath),
+        relPath,
+        badge: fileSources[relPath] === "worktree" ? "worktree" : undefined,
+      }),
+    ),
     ...(sessionTabs ?? []).map(
       (tab): TicketTabDescriptor => ({
         id: tab.sessionId,
@@ -115,21 +172,35 @@ export function TicketDetail({
       }),
     ),
   ];
-  const [activeTabId, setActiveTabId] = React.useState<string>(tabs[0]!.id);
-  // A closed session tab (or one that never existed) falls back to Doc.
+  // A closed session tab, or a persisted active id with no live tab, falls back to Doc.
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0]!;
+  const activeTabIsRenderable = activeTab.id === activeTabId;
+
+  // The fallback above is purely visual — it renders Doc without writing the
+  // store, so a persisted `active` naming a session that's since closed (or
+  // one restored from a previous launch, which never repopulates: sessions
+  // don't survive an app restart) stays wedged in workspace.ts forever
+  // (`sanitizeTicketTabs` keeps any record whose `active !== "doc"`). Reset it
+  // to Doc for real once we're sure it's actually stale rather than just not
+  // hydrated yet — `creating` covers the one in-flight window where a new
+  // session tab has been asked for but hasn't landed in the sessions store,
+  // so `tabs` doesn't include it yet even though it's about to.
+  React.useEffect(() => {
+    if (creating || activeTabIsRenderable) return;
+    setTicketActiveTab(projectId, ticket.id, DOC_TAB_ID);
+  }, [creating, activeTabIsRenderable, setTicketActiveTab, projectId, ticket.id]);
 
   const handleClose = React.useCallback(() => closeTicket(projectId), [closeTicket, projectId]);
 
-  // Boots a ticket-scoped PTY (env-injected VOLLI_TICKET/VOLLI_TICKET_DIR in
-  // main, decision #16) as a resident tab, then switches to it. The terminal is
-  // hosted by the always-mounted sessions layer, so it survives leaving the
-  // detail; only the tab selection is local here. Shared by the tab strip's "+"
-  // and the rail's New-session button so both take the exact same path.
+  // Boots a ticket-scoped PTY (env-injected VOLLI_TICKET/VOLLI_ARTIFACTS_DIR in
+  // main) as a resident tab, then switches to it. The terminal is hosted by the
+  // always-mounted sessions layer, so it survives leaving the detail; only the
+  // tab selection is stored here. Shared by the tab strip's "+" and the rail's
+  // New-session button so both take the exact same path.
   const createSession = React.useCallback(async () => {
     const sessionId = await createTerminalSession(ticketScope(projectId, ticket.id));
-    if (sessionId !== null) setActiveTabId(sessionId);
-  }, [projectId, ticket.id]);
+    if (sessionId !== null) setActiveTab(sessionId);
+  }, [projectId, ticket.id, setActiveTab]);
 
   // Escape closes the detail view and returns to the board — but only when
   // focus isn't inside an input/textarea/contenteditable or an open menu/
@@ -159,11 +230,27 @@ export function TicketDetail({
           tabs={tabs}
           activeTabId={activeTab.id}
           creating={creating}
-          onSelectTab={setActiveTabId}
-          onCloseSessionTab={(sessionId) => {
-            const tab = sessionTabs?.find((candidate) => candidate.sessionId === sessionId);
-            const liveIds = tab
-              ? sessionPanes(tab.layout)
+          onSelectTab={setActiveTab}
+          onCloseTab={(tab) => {
+            if (tab.kind === "file" && tab.relPath !== undefined) {
+              const relPath = tab.relPath;
+              closeTicketFile(projectId, ticket.id, relPath);
+              // Otherwise a reopened tab can briefly show the last-known
+              // worktree/main badge from before the close, until the new
+              // FileView's own read reports back — the record is keyed by
+              // relPath only and never pruned on its own.
+              setFileSources((prev) => {
+                if (!(relPath in prev)) return prev;
+                const next = { ...prev };
+                delete next[relPath];
+                return next;
+              });
+              return;
+            }
+            const sessionId = tab.id;
+            const sessionTab = sessionTabs?.find((candidate) => candidate.sessionId === sessionId);
+            const liveIds = sessionTab
+              ? sessionPanes(sessionTab.layout)
                   .filter((pane) => pane.exitCode === null)
                   .map((pane) => pane.sessionId)
               : [sessionId];
@@ -173,38 +260,45 @@ export function TicketDetail({
           onNewSession={() => void createSession()}
         />
         <div className="flex min-h-0 flex-1 overflow-hidden">
-          {/* No horizontal padding here: Tier A children (title, Doc tab) center
-            themselves on the measure via <ContentColumn>; Tier B planes
-            (artifacts, terminals) own their edges (DESIGN.md tier model).
-            Session tabs are pure workbench: no title, no top air — the tab strip
-            already names the ticket, and the terminal gets every pixel. */}
+          {/* No horizontal padding here: the Doc tab centers its title/body on
+            the measure via <ContentColumn>; file views own their edges and pick
+            their own tier (markdown reads on the measure, code/binary go fluid);
+            terminals get every pixel. Only the Doc tab shows the ticket title +
+            top air — file and session tabs are workbench surfaces the tab strip
+            already names. */}
           <div
             className={cn(
               "flex min-h-0 flex-1 flex-col overflow-hidden",
-              activeTab.kind !== "session" && "pt-8",
+              activeTab.kind === "doc" && "pt-8",
             )}
           >
-            {activeTab.kind !== "session" && (
+            {activeTab.kind === "doc" && (
               <ContentColumn>
                 <TicketTitle ticket={ticket} />
               </ContentColumn>
             )}
-            {/* Positioning context for the resident terminal plane: Doc/Artifacts
+            {/* Positioning context for the resident terminal plane: Doc/file tabs
               scroll in-flow; the plane overlays them, shown only for a session tab. */}
             <div
               className={cn(
                 "relative flex min-h-0 flex-1 flex-col",
-                activeTab.kind !== "session" && "mt-3",
+                activeTab.kind === "doc" && "mt-3",
               )}
             >
-              {activeTab.kind === "doc" || activeTab.kind === "artifacts" ? (
+              {activeTab.kind === "doc" ? (
                 <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
-                  {activeTab.kind === "doc" ? (
-                    <TicketDocTab ticket={ticket} />
-                  ) : (
-                    <TicketArtifactsTab projectId={projectId} ticketId={ticket.id} />
-                  )}
+                  <TicketDocTab ticket={ticket} fileRefs={fileRefs} />
                 </div>
+              ) : null}
+              {activeTab.kind === "file" && activeTab.relPath !== undefined ? (
+                <FileView
+                  key={activeTab.relPath}
+                  projectId={projectId}
+                  ticketId={ticket.id}
+                  relPath={activeTab.relPath}
+                  fileRefs={fileRefs}
+                  onSource={reportFileSource}
+                />
               ) : null}
               <TicketSessionPlane
                 ticketId={ticket.id}
@@ -219,7 +313,7 @@ export function TicketDetail({
                   ticketId={ticket.id}
                   creating={creating}
                   onNewSession={() => void createSession()}
-                  onActivateSession={setActiveTabId}
+                  onActivateSession={setActiveTab}
                 />
               </div>
               <TicketDetailsDrawer projectId={projectId} ticket={ticket} />

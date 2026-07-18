@@ -36,7 +36,11 @@ const HEADING_RE = /^ATXHeading([1-6])$/;
 function buildDecorations(view: EditorView): DecorationSet {
   const { state } = view;
   const { doc } = state;
-  const selection: SelRange[] = state.selection.ranges.map((r) => ({ from: r.from, to: r.to }));
+  // A blurred editor reveals nothing: its selection is invisible, so leaving
+  // the caret line's raw delimiters on screen reads as a rendering glitch.
+  const selection: SelRange[] = view.hasFocus
+    ? state.selection.ranges.map((r) => ({ from: r.from, to: r.to }))
+    : [];
   const decos: Range<Decoration>[] = [];
 
   const push = (deco: Decoration, from: number, to: number): void => {
@@ -436,13 +440,33 @@ export function markdownLivePreview(): Extension {
     class {
       decorations: DecorationSet;
 
+      // The tree the current decorations were built from. Markdown parses
+      // incrementally in idle time, and the "more of the doc is now parsed"
+      // notification is a transaction that changes ONLY the language state —
+      // no doc/selection/viewport flags — so it must be detected by comparing
+      // trees, or everything past the parse frontier keeps its raw syntax
+      // until the next keystroke/click (mirrors @codemirror/language's own
+      // TreeHighlighter).
+      private tree: ReturnType<typeof syntaxTree>;
+
       constructor(view: EditorView) {
+        this.tree = syntaxTree(view.state);
         this.decorations = buildDecorations(view);
       }
 
       update(update: ViewUpdate): void {
-        // Reveal depends on the selection, so rebuild on selection changes too.
-        if (update.docChanged || update.viewportChanged || update.selectionSet) {
+        // Reveal depends on the selection AND on focus (a blurred editor
+        // reveals nothing), so rebuild on both — plus whenever the background
+        // parse has advanced the syntax tree.
+        const tree = syntaxTree(update.state);
+        if (
+          update.docChanged ||
+          update.viewportChanged ||
+          update.selectionSet ||
+          update.focusChanged ||
+          tree !== this.tree
+        ) {
+          this.tree = tree;
           this.decorations = buildDecorations(update.view);
         }
       }

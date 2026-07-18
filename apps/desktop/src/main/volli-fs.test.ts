@@ -1,23 +1,28 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ArtifactsChangedEvent, VolliIpcChannel } from "@volli/shared";
+import type { FileChangedEvent, VolliIpcChannel } from "@volli/shared";
 import { VOLLI_GITIGNORE_CONTENT } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 // Hoisted above module evaluation, like pty.test.ts/data-ipc.test.ts, so the
 // mock factories can capture into them. `electron` is fully mocked (never
 // resolvable under plain-Node vitest). `node:fs` is PARTIALLY mocked: every
-// real export (mkdtempSync/realpath/…) passes through unchanged via
-// `importOriginal` — only `watch` is replaced, so the ArtifactWatchManager
-// suite below fires watch callbacks deterministically under
-// `vi.useFakeTimers()` instead of racing a real fs.watch/OS debounce
-// (ghostty-config.test.ts's `watchMock` is the same idea — real fs.watch
-// timing proved flaky here even with a short debounce). Every other suite in
-// this file (ensure*/list/read/write/create/promote/symlink-escape) runs
-// against real directories, real symlinks, and real disk I/O, untouched by
-// this mock.
+// real export passes through unchanged via `importOriginal` — only `watch` is
+// replaced, so the FileWatchManager suite fires watch callbacks deterministically
+// under `vi.useFakeTimers()` instead of racing a real fs.watch/OS debounce.
+// Every other suite runs against real directories, real symlinks, and real disk
+// I/O (and real `git`), untouched by this mock.
 const { handlers, showItemInFolderMock, watchMock } = vi.hoisted(() => ({
   handlers: new Map<string, (...args: never[]) => unknown>(),
   showItemInFolderMock: vi.fn(),
@@ -39,17 +44,15 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 import {
-  ArtifactWatchManager,
+  buildFileIndex,
   createArtifact,
-  ensureTicketDir,
+  ensureProjectArtifactsDir,
   ensureVolliDir,
-  listArtifacts,
-  promoteArtifact,
-  readArtifactImage,
-  readArtifactText,
-  registerArtifactIpcHandlers,
-  revealArtifactsDir,
-  writeArtifactText,
+  FileWatchManager,
+  readFile as readFsFile,
+  registerFileIpcHandlers,
+  revealFile,
+  writeFile as writeFsFile,
 } from "./volli-fs";
 import { insertProject } from "./db/projects-repo";
 import { openTestDb, testProject, testTicket } from "./db/test-helpers";
@@ -60,14 +63,19 @@ import { insertTicket } from "./db/tickets-repo";
 
 const tempDirs: string[] = [];
 
-/** A real, throwaway project directory — every fs op under test runs against real disk. */
 function makeTempProjectDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "volli-fs-test-"));
   tempDirs.push(dir);
   return dir;
 }
 
-/** A captured watcher double: `close` is asserted on, `emitError` fires the 'error' handler openWatcher attaches. */
+/** A real git repo temp dir (so `git ls-files` in buildFileIndex has something to list). */
+function makeGitRepoDir(): string {
+  const dir = makeTempProjectDir();
+  execFileSync("git", ["init", "-q"], { cwd: dir });
+  return dir;
+}
+
 interface FakeWatcher {
   close: ReturnType<typeof vi.fn>;
   on: ReturnType<typeof vi.fn>;
@@ -87,26 +95,12 @@ function makeFakeWatcher(): FakeWatcher {
   };
 }
 
-/** One captured `fs.watch(dir, cb)` call: `cb` can be fired manually, `watcher.close`/errors asserted on. */
 interface WatchCall {
   dir: string;
   cb: (eventType: string, filename: string | null) => void;
   watcher: FakeWatcher;
 }
 let watchCalls: WatchCall[] = [];
-
-/**
- * Polls `predicate` until it holds (or the timeout elapses), so a test can await
- * the settling of a fire-and-forget re-arm without a flaky fixed sleep — the
- * re-arm's real-fs ensure* can run long under full-suite CPU contention.
- */
-async function waitUntil(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
-  const start = Date.now();
-  while (!predicate()) {
-    if (Date.now() - start > timeoutMs) return;
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-}
 
 beforeEach(() => {
   watchCalls = [];
@@ -127,7 +121,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-/** A WebContents double keyed by `id` (ArtifactWatchManager's subscription key) — same shape as pty.test.ts's double, plus `id`. */
+/** A WebContents double keyed by `id` (the FileWatchManager subscription key). */
 function makeWebContents(id = 1) {
   const eventListeners = new Map<string, () => void>();
   return {
@@ -147,7 +141,7 @@ function makeWebContents(id = 1) {
   };
 }
 
-// ---- ensureVolliDir / ensureTicketDir ----------------------------------------
+// ---- ensure* -----------------------------------------------------------------
 
 describe("ensureVolliDir", () => {
   it("creates .volli/ and .volli/.gitignore with the self-gitignore content", async () => {
@@ -159,647 +153,628 @@ describe("ensureVolliDir", () => {
     );
   });
 
-  it("never touches the project's root .gitignore", async () => {
+  it("never touches the project's root .gitignore and is idempotent", async () => {
     const project = makeTempProjectDir();
     writeFileSync(join(project, ".gitignore"), "node_modules\n", "utf8");
     await ensureVolliDir(project);
-    expect(readFileSync(join(project, ".gitignore"), "utf8")).toBe("node_modules\n");
-  });
-
-  it("is idempotent: a second call does not clobber an existing .volli/.gitignore", async () => {
-    const project = makeTempProjectDir();
-    await ensureVolliDir(project);
     writeFileSync(join(project, ".volli", ".gitignore"), "custom\n", "utf8");
     await ensureVolliDir(project);
+    expect(readFileSync(join(project, ".gitignore"), "utf8")).toBe("node_modules\n");
     expect(readFileSync(join(project, ".volli", ".gitignore"), "utf8")).toBe("custom\n");
   });
 });
 
-describe("ensureTicketDir", () => {
-  it("creates the full tickets/<id>/artifacts chain plus the .volli self-gitignore", async () => {
+describe("ensureProjectArtifactsDir", () => {
+  it("creates .volli/artifacts plus the .volli self-gitignore", async () => {
     const project = makeTempProjectDir();
-    await ensureTicketDir(project, "VC-1");
-    expect(existsSync(join(project, ".volli", "tickets", "VC-1", "artifacts"))).toBe(true);
+    await ensureProjectArtifactsDir(project);
+    expect(existsSync(join(project, ".volli", "artifacts"))).toBe(true);
     expect(existsSync(join(project, ".volli", ".gitignore"))).toBe(true);
   });
+});
 
-  it("is idempotent", async () => {
-    const project = makeTempProjectDir();
-    await ensureTicketDir(project, "VC-1");
-    await expect(ensureTicketDir(project, "VC-1")).resolves.toBeUndefined();
+// ---- buildFileIndex ----------------------------------------------------------
+
+describe("buildFileIndex", () => {
+  it("lists git-tracked/untracked repo files plus force-included artifacts (classified, artifact-flagged)", async () => {
+    const project = makeGitRepoDir();
+    await writeFile(join(project, "README.md"), "# hi", "utf8");
+    await mkdir(join(project, "src"));
+    await writeFile(join(project, "src", "main.ts"), "export {}", "utf8");
+    await createArtifact(project, "notes"); // → .volli/artifacts/notes.md
+
+    const { files, truncated } = await buildFileIndex(project);
+    expect(truncated).toBe(false);
+    const byPath = new Map(files.map((f) => [f.relPath, f]));
+
+    expect(byPath.get("README.md")).toEqual({
+      relPath: "README.md",
+      kind: "markdown",
+      artifact: false,
+    });
+    expect(byPath.get("src/main.ts")).toEqual({
+      relPath: "src/main.ts",
+      kind: "other",
+      artifact: false,
+    });
+    expect(byPath.get(".volli/artifacts/notes.md")).toEqual({
+      relPath: ".volli/artifacts/notes.md",
+      kind: "markdown",
+      artifact: true,
+    });
+  });
+
+  it("respects .gitignore (ignored files never enter the index)", async () => {
+    const project = makeGitRepoDir();
+    await writeFile(join(project, ".gitignore"), "secret.txt\n", "utf8");
+    await writeFile(join(project, "secret.txt"), "nope", "utf8");
+    await writeFile(join(project, "keep.md"), "# keep", "utf8");
+
+    const { files } = await buildFileIndex(project);
+    const paths = files.map((f) => f.relPath);
+    expect(paths).toContain("keep.md");
+    expect(paths).not.toContain("secret.txt");
+  });
+
+  it("does not surface the gitignored .volli dir as ordinary repo files (only the artifact walk includes it)", async () => {
+    const project = makeGitRepoDir();
+    await createArtifact(project, "a");
+    const { files } = await buildFileIndex(project);
+    // Exactly one .volli entry — the artifact — flagged as such.
+    const volliEntries = files.filter((f) => f.relPath.startsWith(".volli/"));
+    expect(volliEntries).toEqual([
+      { relPath: ".volli/artifacts/a.md", kind: "markdown", artifact: true },
+    ]);
+  });
+
+  it("caps the index and reports truncated, keeping artifacts (pushed first) and stopping early", async () => {
+    const project = makeGitRepoDir();
+    await writeFile(join(project, "a.md"), "a", "utf8");
+    await writeFile(join(project, "b.md"), "b", "utf8");
+    await writeFile(join(project, "c.md"), "c", "utf8");
+    await createArtifact(project, "art"); // → .volli/artifacts/art.md (force-included, first)
+
+    // A cap of 2 forces truncation: the artifact survives (pushed first), one
+    // repo file fills the rest, the remainder is skipped without materializing.
+    const { files, truncated } = await buildFileIndex(project, 2);
+    expect(truncated).toBe(true);
+    expect(files).toHaveLength(2);
+    expect(files.some((f) => f.relPath === ".volli/artifacts/art.md" && f.artifact)).toBe(true);
+  });
+
+  it("reports truncated:false when the entry count exactly equals the cap", async () => {
+    const project = makeGitRepoDir();
+    await writeFile(join(project, "a.md"), "a", "utf8");
+    await writeFile(join(project, "b.md"), "b", "utf8");
+    const { files, truncated } = await buildFileIndex(project, 2);
+    expect(truncated).toBe(false);
+    expect(files).toHaveLength(2);
+  });
+
+  it("falls back to a bounded walk when git is unavailable, skipping .git/node_modules/.volli", async () => {
+    const project = makeTempProjectDir(); // NOT a git repo → git ls-files fails
+    await writeFile(join(project, "a.md"), "a", "utf8");
+    await mkdir(join(project, "node_modules", "pkg"), { recursive: true });
+    await writeFile(join(project, "node_modules", "pkg", "index.js"), "x", "utf8");
+    await mkdir(join(project, ".git"));
+    await writeFile(join(project, ".git", "HEAD"), "ref", "utf8");
+    await createArtifact(project, "walked");
+
+    const { files } = await buildFileIndex(project);
+    const paths = files.map((f) => f.relPath);
+    expect(paths).toContain("a.md");
+    expect(paths).toContain(".volli/artifacts/walked.md");
+    expect(paths.some((p) => p.startsWith("node_modules/"))).toBe(false);
+    expect(paths.some((p) => p.startsWith(".git/"))).toBe(false);
   });
 });
 
-// ---- listArtifacts ------------------------------------------------------------
+// ---- readFile ----------------------------------------------------------------
 
-describe("listArtifacts", () => {
-  it("returns an empty list without creating any directory when neither tier exists", async () => {
+describe("readFile", () => {
+  it("reads utf8 text (markdown), reporting source main and not truncated", async () => {
     const project = makeTempProjectDir();
-    const entries = await listArtifacts(project, "VC-1");
-    expect(entries).toEqual([]);
-    expect(existsSync(join(project, ".volli"))).toBe(false);
+    await writeFile(join(project, "README.md"), "# Hello", "utf8");
+    const result = await readFsFile(project, null, "README.md");
+    expect(result).toEqual({
+      ok: true,
+      source: "main",
+      kind: "markdown",
+      size: 7,
+      mtime: expect.any(Number) as unknown as number,
+      content: { type: "text", text: "# Hello", truncated: false },
+    });
   });
 
-  it("lists both tiers, classifies kind by extension, and skips dotfiles and subdirectories", async () => {
+  it("reads any text file (code) read-only, kind 'other'", async () => {
     const project = makeTempProjectDir();
-    await ensureTicketDir(project, "VC-1");
-    const ticketDir = join(project, ".volli", "tickets", "VC-1", "artifacts");
-    await writeFile(join(ticketDir, "notes.md"), "# hi", "utf8");
-    await writeFile(join(ticketDir, ".hidden.md"), "nope", "utf8");
-    await mkdir(join(ticketDir, "subdir"));
-
-    const projectArtifacts = join(project, ".volli", "artifacts");
-    await mkdir(projectArtifacts, { recursive: true });
-    await writeFile(join(projectArtifacts, "diagram.png"), "binary", "utf8");
-    await writeFile(join(projectArtifacts, "raw.json"), "{}", "utf8");
-
-    const entries = await listArtifacts(project, "VC-1");
-    expect(entries).toHaveLength(3);
-
-    const ticketEntry = entries.find((e) => e.name === "notes.md");
-    expect(ticketEntry).toMatchObject({ tier: "ticket", kind: "markdown", relPath: "notes.md" });
-    expect(ticketEntry?.size).toBeGreaterThan(0);
-
-    const image = entries.find((e) => e.name === "diagram.png");
-    expect(image).toMatchObject({ tier: "project", kind: "image" });
-
-    const other = entries.find((e) => e.name === "raw.json");
-    expect(other).toMatchObject({ tier: "project", kind: "other" });
-
-    expect(entries.some((e) => e.name === ".hidden.md")).toBe(false);
-    expect(entries.some((e) => e.name === "subdir")).toBe(false);
+    await writeFile(join(project, "index.ts"), "export {}", "utf8");
+    const result = await readFsFile(project, null, "index.ts");
+    expect(result.ok && result.kind).toBe("other");
+    expect(result.ok && result.content).toEqual({
+      type: "text",
+      text: "export {}",
+      truncated: false,
+    });
   });
 
-  it("sorts each tier case-insensitively", async () => {
+  it("truncates text past the 1 MiB cap", async () => {
     const project = makeTempProjectDir();
-    await ensureTicketDir(project, "VC-1");
-    const ticketDir = join(project, ".volli", "tickets", "VC-1", "artifacts");
-    await writeFile(join(ticketDir, "banana.md"), "b", "utf8");
-    await writeFile(join(ticketDir, "Apple.md"), "a", "utf8");
-
-    const entries = await listArtifacts(project, "VC-1");
-    expect(entries.map((e) => e.name)).toEqual(["Apple.md", "banana.md"]);
-  });
-});
-
-// ---- read / write --------------------------------------------------------------
-
-describe("readArtifactText / writeArtifactText", () => {
-  it("round-trips markdown content, creating the ticket-tier chain on demand", async () => {
-    const project = makeTempProjectDir();
-    const write = await writeArtifactText(project, "ticket", "VC-1", "notes.md", "# Hello");
-    expect(write).toEqual({ ok: true });
-
-    const read = await readArtifactText(project, "ticket", "VC-1", "notes.md");
-    expect(read).toEqual({ ok: true, content: "# Hello" });
+    await writeFile(join(project, "big.md"), "a".repeat(1024 * 1024 + 10), "utf8");
+    const result = await readFsFile(project, null, "big.md");
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.content.type !== "text") throw new Error("expected text");
+    expect(result.content.truncated).toBe(true);
+    expect(result.content.text.length).toBe(1024 * 1024);
   });
 
-  it("round-trips through the project tier too", async () => {
+  it("reads a file exactly at the 1 MiB cap in full, not truncated", async () => {
     const project = makeTempProjectDir();
-    await writeArtifactText(project, "project", "VC-1", "shared.md", "shared content");
-    const read = await readArtifactText(project, "project", "VC-1", "shared.md");
-    expect(read).toEqual({ ok: true, content: "shared content" });
+    await writeFile(join(project, "exact.md"), "a".repeat(1024 * 1024), "utf8");
+    const result = await readFsFile(project, null, "exact.md");
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.content.type !== "text") throw new Error("expected text");
+    expect(result.content.truncated).toBe(false);
+    expect(result.content.text.length).toBe(1024 * 1024);
   });
 
-  it("rejects writing a non-markdown name", async () => {
+  it("reads a file one byte over the cap as truncated to exactly the cap", async () => {
     const project = makeTempProjectDir();
-    const result = await writeArtifactText(project, "ticket", "VC-1", "notes.txt", "hi");
-    expect(result).toEqual({ ok: false, error: expect.stringContaining("markdown") as unknown });
+    await writeFile(join(project, "over.md"), "a".repeat(1024 * 1024 + 1), "utf8");
+    const result = await readFsFile(project, null, "over.md");
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.content.type !== "text") throw new Error("expected text");
+    expect(result.content.truncated).toBe(true);
+    expect(result.content.text.length).toBe(1024 * 1024);
   });
 
-  it("returns a typed error reading a file that does not exist", async () => {
+  it("returns an image as an inline data URI", async () => {
     const project = makeTempProjectDir();
-    await ensureTicketDir(project, "VC-1");
-    const result = await readArtifactText(project, "ticket", "VC-1", "missing.md");
-    expect(result.ok).toBe(false);
+    await writeFile(join(project, "logo.png"), Buffer.from([1, 2, 3]));
+    const result = await readFsFile(project, null, "logo.png");
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.content.type !== "image") throw new Error("expected image");
+    expect(result.content.dataUrl.startsWith("data:image/png;base64,")).toBe(true);
   });
 
-  it.each([["../../etc/passwd"], ["/etc/passwd"], [".."], ["."], [""]])(
-    "rejects an unsafe name %s on read",
-    async (name) => {
+  it("classifies a NUL-containing file as binary", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "data.bin"), Buffer.from([0x41, 0x00, 0x42]));
+    const result = await readFsFile(project, null, "data.bin");
+    expect(result.ok && result.content).toEqual({ type: "binary" });
+  });
+
+  it("resolves a non-.volli path to the worktree copy when a worktree root is given (source: worktree)", async () => {
+    const main = makeTempProjectDir();
+    const worktree = makeTempProjectDir();
+    await writeFile(join(main, "file.md"), "main copy", "utf8");
+    await writeFile(join(worktree, "file.md"), "worktree copy", "utf8");
+    const result = await readFsFile(main, worktree, "file.md");
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.content.type !== "text") throw new Error("expected text");
+    expect(result.source).toBe("worktree");
+    expect(result.content.text).toBe("worktree copy");
+  });
+
+  it("always resolves a .volli path to the main checkout even when a worktree root is given", async () => {
+    const main = makeTempProjectDir();
+    const worktree = makeTempProjectDir();
+    await createArtifact(main, "shared"); // main .volli/artifacts/shared.md
+    const result = await readFsFile(main, worktree, ".volli/artifacts/shared.md");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.source).toBe("main");
+  });
+
+  it.each([["../../etc/passwd"], ["/etc/passwd"], [".."], [""], ["a/../b.md"]])(
+    "rejects the unsafe relPath %j",
+    async (relPath) => {
       const project = makeTempProjectDir();
-      const result = await readArtifactText(project, "ticket", "VC-1", name);
-      expect(result).toEqual({ ok: false, error: "Invalid artifact name" });
+      const result = await readFsFile(project, null, relPath);
+      expect(result).toEqual({ ok: false, error: "Invalid file path" });
     },
   );
 
-  it("rejects an unsafe name on write", async () => {
+  it("rejects reading a file that is itself a symlink", async () => {
     const project = makeTempProjectDir();
-    const result = await writeArtifactText(project, "ticket", "VC-1", "../escape.md", "x");
-    expect(result).toEqual({ ok: false, error: "Invalid artifact name" });
+    const outside = makeTempProjectDir();
+    writeFileSync(join(outside, "secret"), "top secret", "utf8");
+    symlinkSync(join(outside, "secret"), join(project, "link.md"), "file");
+    const result = await readFsFile(project, null, "link.md");
+    expect(result).toEqual({ ok: false, error: "Path is a symlink" });
+  });
+
+  it("rejects reading through a directory symlink that escapes the root", async () => {
+    const project = makeTempProjectDir();
+    const outside = makeTempProjectDir();
+    writeFileSync(join(outside, "secret.md"), "top secret", "utf8");
+    symlinkSync(outside, join(project, "escape"), "dir");
+    const result = await readFsFile(project, null, "escape/secret.md");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("escapes");
   });
 });
 
-describe("readArtifactImage", () => {
-  it("returns a base64 data: URI for a recognized image extension", async () => {
-    const project = makeTempProjectDir();
-    await ensureTicketDir(project, "VC-1");
-    const dir = join(project, ".volli", "tickets", "VC-1", "artifacts");
-    await writeFile(join(dir, "photo.png"), Buffer.from([1, 2, 3]));
+// ---- writeFile ---------------------------------------------------------------
 
-    const result = await readArtifactImage(project, "ticket", "VC-1", "photo.png");
+describe("writeFile", () => {
+  it("round-trips markdown content and returns the fresh mtime", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "notes.md"), "old", "utf8");
+    const result = await writeFsFile(project, null, "notes.md", "# New");
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.dataUrl.startsWith("data:image/png;base64,")).toBe(true);
+    expect(typeof result.mtime).toBe("number");
+    expect(await readFile(join(project, "notes.md"), "utf8")).toBe("# New");
   });
 
-  it("rejects a non-image name", async () => {
+  it("rejects a non-markdown file", async () => {
     const project = makeTempProjectDir();
-    const result = await readArtifactImage(project, "ticket", "VC-1", "notes.md");
-    expect(result).toEqual({ ok: false, error: "Not an image artifact" });
+    await writeFile(join(project, "code.ts"), "x", "utf8");
+    const result = await writeFsFile(project, null, "code.ts", "y");
+    expect(result).toEqual({ ok: false, error: "Only markdown files can be edited" });
+  });
+
+  it("passes the expectedMtime guard when it matches the current mtime", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "notes.md"), "old", "utf8");
+    const current = (await stat(join(project, "notes.md"))).mtimeMs;
+    const result = await writeFsFile(project, null, "notes.md", "new", current);
+    expect(result.ok).toBe(true);
+  });
+
+  it("fails the expectedMtime guard on a mismatch, without clobbering", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "notes.md"), "on disk", "utf8");
+    const result = await writeFsFile(project, null, "notes.md", "mine", 12345);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("changed on disk");
+    expect(await readFile(join(project, "notes.md"), "utf8")).toBe("on disk");
+  });
+
+  it("self-heals a deleted .volli/ before writing an artifact (recreates the dir + gitignore)", async () => {
+    const project = makeTempProjectDir();
+    await createArtifact(project, "notes"); // → .volli/artifacts/notes.md
+    // `git clean -xdf` removes `.volli` (it self-gitignores) out from under the tab.
+    rmSync(join(project, ".volli"), { recursive: true, force: true });
+
+    const result = await writeFsFile(project, null, ".volli/artifacts/notes.md", "# recovered");
+    expect(result.ok).toBe(true);
+    expect(existsSync(join(project, ".volli", ".gitignore"))).toBe(true);
+    expect(await readFile(join(project, ".volli", "artifacts", "notes.md"), "utf8")).toBe(
+      "# recovered",
+    );
+  });
+
+  it("does not create parent dirs for a non-.volli path (never mkdirs arbitrary repo paths)", async () => {
+    const project = makeTempProjectDir();
+    const result = await writeFsFile(project, null, "missing/dir/file.md", "x");
+    expect(result.ok).toBe(false);
+    expect(existsSync(join(project, "missing"))).toBe(false);
+  });
+
+  it("writes to the worktree copy for a non-.volli path when a worktree root is given", async () => {
+    const main = makeTempProjectDir();
+    const worktree = makeTempProjectDir();
+    await writeFile(join(main, "file.md"), "main", "utf8");
+    await writeFile(join(worktree, "file.md"), "worktree", "utf8");
+    await writeFsFile(main, worktree, "file.md", "edited");
+    expect(await readFile(join(worktree, "file.md"), "utf8")).toBe("edited");
+    expect(await readFile(join(main, "file.md"), "utf8")).toBe("main");
   });
 });
 
-// ---- create ----------------------------------------------------------------
+// ---- createArtifact ----------------------------------------------------------
 
 describe("createArtifact", () => {
-  it("creates a new templated .md in the ticket tier, forcing the extension", async () => {
+  it("creates a templated .md in .volli/artifacts, forcing the extension, and returns its relPath", async () => {
     const project = makeTempProjectDir();
-    const result = await createArtifact(project, "VC-1", "Design Notes");
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.entry).toMatchObject({
-      name: "Design Notes.md",
-      tier: "ticket",
-      kind: "markdown",
-    });
-
-    const content = await readFile(
-      join(project, ".volli", "tickets", "VC-1", "artifacts", "Design Notes.md"),
-      "utf8",
-    );
+    const result = await createArtifact(project, "Design Notes");
+    expect(result).toEqual({ ok: true, relPath: ".volli/artifacts/Design Notes.md" });
+    const content = await readFile(join(project, ".volli", "artifacts", "Design Notes.md"), "utf8");
     expect(content).toContain("# Design Notes");
   });
 
   it("leaves an already-.md name untouched", async () => {
     const project = makeTempProjectDir();
-    const result = await createArtifact(project, "VC-1", "notes.md");
-    expect(result.ok && result.entry.name).toBe("notes.md");
+    const result = await createArtifact(project, "notes.md");
+    expect(result).toEqual({ ok: true, relPath: ".volli/artifacts/notes.md" });
   });
 
-  it.each([[""], ["   "], [".."], ["sub/notes"]])("rejects an invalid raw name %s", async (raw) => {
-    const project = makeTempProjectDir();
-    const result = await createArtifact(project, "VC-1", raw);
-    expect(result).toEqual({ ok: false, error: "Invalid artifact name" });
-  });
+  it.each([[""], ["   "], [".."], ["sub/notes"], [".hidden"]])(
+    "rejects an invalid raw name %j",
+    async (raw) => {
+      const project = makeTempProjectDir();
+      const result = await createArtifact(project, raw);
+      expect(result).toEqual({ ok: false, error: "Invalid artifact name" });
+    },
+  );
 
-  it("fails with a typed error on a name collision, without overwriting the original", async () => {
+  it("fails on a name collision without overwriting the original", async () => {
     const project = makeTempProjectDir();
-    await createArtifact(project, "VC-1", "notes");
-    const filePath = join(project, ".volli", "tickets", "VC-1", "artifacts", "notes.md");
+    await createArtifact(project, "notes");
+    const filePath = join(project, ".volli", "artifacts", "notes.md");
     await writeFile(filePath, "original", "utf8");
-
-    const result = await createArtifact(project, "VC-1", "notes");
+    const result = await createArtifact(project, "notes");
     expect(result.ok).toBe(false);
     expect(await readFile(filePath, "utf8")).toBe("original");
   });
-});
 
-// ---- promote -----------------------------------------------------------------
-
-describe("promoteArtifact", () => {
-  it("moves a ticket-tier artifact up to the project tier", async () => {
+  it("refuses to write through a pre-existing symlink at the target name (no follow)", async () => {
     const project = makeTempProjectDir();
-    await writeArtifactText(project, "ticket", "VC-1", "notes.md", "content");
-
-    const result = await promoteArtifact(project, "VC-1", "notes.md");
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.entry).toMatchObject({ name: "notes.md", tier: "project" });
-
-    expect(existsSync(join(project, ".volli", "tickets", "VC-1", "artifacts", "notes.md"))).toBe(
-      false,
-    );
-    expect(await readFile(join(project, ".volli", "artifacts", "notes.md"), "utf8")).toBe(
-      "content",
-    );
-  });
-
-  it("fails with a typed error when the ticket-tier artifact does not exist", async () => {
-    const project = makeTempProjectDir();
-    const result = await promoteArtifact(project, "VC-1", "missing.md");
-    expect(result).toEqual({
-      ok: false,
-      error: `"missing.md" was not found in the ticket's artifacts`,
-    });
-  });
-
-  it("fails with a typed error on a project-tier name collision, leaving the source untouched", async () => {
-    const project = makeTempProjectDir();
-    await writeArtifactText(project, "ticket", "VC-1", "notes.md", "ticket content");
-    await writeArtifactText(project, "project", "VC-1", "notes.md", "project content");
-
-    const result = await promoteArtifact(project, "VC-1", "notes.md");
-    expect(result.ok).toBe(false);
-
-    expect(
-      await readFile(join(project, ".volli", "tickets", "VC-1", "artifacts", "notes.md"), "utf8"),
-    ).toBe("ticket content");
-    expect(await readFile(join(project, ".volli", "artifacts", "notes.md"), "utf8")).toBe(
-      "project content",
-    );
-  });
-
-  it("rejects an unsafe name", async () => {
-    const project = makeTempProjectDir();
-    const result = await promoteArtifact(project, "VC-1", "..");
-    expect(result).toEqual({ ok: false, error: "Invalid artifact name" });
-  });
-});
-
-// ---- path-safety: symlink escapes ----------------------------------------------
-
-describe("symlink-escape guards", () => {
-  it("rejects reading through a ticket artifacts directory that has been swapped for a symlink escaping .volli", async () => {
-    const project = makeTempProjectDir();
-    await ensureTicketDir(project, "VC-1");
-    const ticketArtifacts = join(project, ".volli", "tickets", "VC-1", "artifacts");
-    rmSync(ticketArtifacts, { recursive: true });
-
-    const outside = mkdtempSync(join(tmpdir(), "volli-fs-outside-"));
-    tempDirs.push(outside);
-    writeFileSync(join(outside, "secret.md"), "top secret", "utf8");
-    symlinkSync(outside, ticketArtifacts, "dir");
-
-    const result = await readArtifactText(project, "ticket", "VC-1", "secret.md");
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.error).toContain("escapes");
-  });
-
-  it("rejects reading a file that is itself a symlink (rejected outright, before target resolution)", async () => {
-    const project = makeTempProjectDir();
-    await ensureTicketDir(project, "VC-1");
-    const ticketArtifacts = join(project, ".volli", "tickets", "VC-1", "artifacts");
-
-    const outsideFile = join(mkdtempSync(join(tmpdir(), "volli-fs-outside-")), "secret.md");
-    tempDirs.push(join(outsideFile, ".."));
-    writeFileSync(outsideFile, "top secret", "utf8");
-    symlinkSync(outsideFile, join(ticketArtifacts, "link.md"), "file");
-
-    const result = await readArtifactText(project, "ticket", "VC-1", "link.md");
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.error).toContain("symlink");
-  });
-
-  it("rejects reading through a DANGLING symlink named like an artifact (no silent escape)", async () => {
-    const project = makeTempProjectDir();
-    await ensureTicketDir(project, "VC-1");
-    const ticketArtifacts = join(project, ".volli", "tickets", "VC-1", "artifacts");
-    // Points nowhere: previously realpath() threw and the path was treated as
-    // "safe", letting a writeFile follow it out of .volli.
-    symlinkSync(
-      join(project, "nonexistent-target.md"),
-      join(ticketArtifacts, "dangling.md"),
-      "file",
-    );
-
-    const result = await readArtifactText(project, "ticket", "VC-1", "dangling.md");
-    expect(result).toEqual({ ok: false, error: "Artifact is a symlink" });
-  });
-
-  it("createArtifact refuses to write through a pre-existing symlink at the target name", async () => {
-    const project = makeTempProjectDir();
-    await ensureTicketDir(project, "VC-1");
-    const ticketArtifacts = join(project, ".volli", "tickets", "VC-1", "artifacts");
-    const outside = mkdtempSync(join(tmpdir(), "volli-fs-outside-"));
-    tempDirs.push(outside);
+    await ensureProjectArtifactsDir(project);
+    const outside = makeTempProjectDir();
     const outsideFile = join(outside, "target.md");
     writeFileSync(outsideFile, "untouched", "utf8");
-    symlinkSync(outsideFile, join(ticketArtifacts, "notes.md"), "file");
-
-    const result = await createArtifact(project, "VC-1", "notes");
-    expect(result).toEqual({ ok: false, error: "Artifact is a symlink" });
-    // The symlink was NOT followed — the outside file is untouched.
+    symlinkSync(outsideFile, join(project, ".volli", "artifacts", "notes.md"), "file");
+    const result = await createArtifact(project, "notes");
+    expect(result.ok).toBe(false);
     expect(readFileSync(outsideFile, "utf8")).toBe("untouched");
   });
 });
 
-// ---- revealArtifactsDir ---------------------------------------------------------
+// ---- revealFile --------------------------------------------------------------
 
-describe("revealArtifactsDir", () => {
-  it("ensures the directory exists, then reveals it via shell.showItemInFolder", async () => {
+describe("revealFile", () => {
+  it("reveals the resolved file via shell.showItemInFolder", async () => {
     const project = makeTempProjectDir();
-    const result = await revealArtifactsDir(project, "ticket", "VC-1");
+    await writeFile(join(project, "notes.md"), "x", "utf8");
+    const result = await revealFile(project, null, "notes.md");
     expect(result).toEqual({ ok: true });
-    const dir = join(project, ".volli", "tickets", "VC-1", "artifacts");
-    expect(existsSync(dir)).toBe(true);
-    expect(showItemInFolderMock).toHaveBeenCalledWith(dir);
-  });
-
-  it("reveals the project tier", async () => {
-    const project = makeTempProjectDir();
-    const result = await revealArtifactsDir(project, "project", "VC-1");
-    expect(result).toEqual({ ok: true });
-    expect(showItemInFolderMock).toHaveBeenCalledWith(join(project, ".volli", "artifacts"));
+    expect(showItemInFolderMock).toHaveBeenCalledWith(join(project, "notes.md"));
   });
 });
 
-// ---- ArtifactWatchManager --------------------------------------------------------
+// ---- FileWatchManager --------------------------------------------------------
 
-describe("ArtifactWatchManager", () => {
-  it("ensures both tier directories exist on subscribe", async () => {
+/** Subscribes the manager to a real (existing) directory + basename. */
+async function watchFile(
+  manager: FileWatchManager,
+  webContents: ReturnType<typeof makeWebContents>,
+  project: string,
+  relPath = "notes.md",
+) {
+  await writeFile(join(project, relPath), "x", "utf8");
+  return manager.watch(
+    webContents as never,
+    "proj-1",
+    "ticket-1",
+    relPath,
+    "main",
+    project,
+    relPath,
+    project,
+  );
+}
+
+describe("FileWatchManager", () => {
+  it("watches the file's parent directory", async () => {
     const project = makeTempProjectDir();
-    const manager = new ArtifactWatchManager();
-    const webContents = makeWebContents();
-
-    await manager.subscribe(webContents as never, project, "proj-1", "ticket-1", "VC-1");
-
-    expect(existsSync(join(project, ".volli", "artifacts"))).toBe(true);
-    expect(existsSync(join(project, ".volli", "tickets", "VC-1", "artifacts"))).toBe(true);
+    const manager = new FileWatchManager();
+    await watchFile(manager, makeWebContents(), project);
+    expect(watchCalls.map((c) => c.dir)).toEqual([project]);
   });
 
-  it("watches both tier directories", async () => {
+  it("broadcasts a debounced volli:file-changed for an event on the watched basename", async () => {
     const project = makeTempProjectDir();
-    const manager = new ArtifactWatchManager();
+    const manager = new FileWatchManager(250);
     const webContents = makeWebContents();
-
-    await manager.subscribe(webContents as never, project, "proj-1", "ticket-1", "VC-1");
-
-    expect(watchCalls.map((c) => c.dir)).toEqual([
-      join(project, ".volli", "artifacts"),
-      join(project, ".volli", "tickets", "VC-1", "artifacts"),
-    ]);
-  });
-
-  it("broadcasts a debounced volli:artifacts-changed event when a watcher fires", async () => {
-    const project = makeTempProjectDir();
-    const manager = new ArtifactWatchManager(250);
-    const webContents = makeWebContents();
-    await manager.subscribe(webContents as never, project, "proj-1", "ticket-1", "VC-1");
+    await watchFile(manager, webContents, project);
 
     vi.useFakeTimers();
-    watchCalls[1]?.cb("change", "notes.md");
+    watchCalls[0]?.cb("change", "notes.md");
     vi.advanceTimersByTime(250);
 
-    expect(webContents.send).toHaveBeenCalledWith("volli:artifacts-changed", {
+    expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
       projectId: "proj-1",
-      ticketId: "ticket-1",
-    } satisfies ArtifactsChangedEvent);
+      relPath: "notes.md",
+      source: "main",
+    } satisfies FileChangedEvent);
   });
 
-  it("does not broadcast before the debounce window elapses", async () => {
+  it("ignores an event for a different basename in the same directory", async () => {
     const project = makeTempProjectDir();
-    const manager = new ArtifactWatchManager(250);
+    const manager = new FileWatchManager(250);
     const webContents = makeWebContents();
-    await manager.subscribe(webContents as never, project, "proj-1", "ticket-1", "VC-1");
+    await watchFile(manager, webContents, project);
 
     vi.useFakeTimers();
-    watchCalls[1]?.cb("change", "notes.md");
-    vi.advanceTimersByTime(200);
+    watchCalls[0]?.cb("change", "other.md");
+    vi.advanceTimersByTime(250);
 
     expect(webContents.send).not.toHaveBeenCalled();
   });
 
-  it("collapses a burst across both watched dirs into a single broadcast", async () => {
+  it("broadcasts conservatively when the platform reports a null filename", async () => {
     const project = makeTempProjectDir();
-    const manager = new ArtifactWatchManager(250);
+    const manager = new FileWatchManager(250);
     const webContents = makeWebContents();
-    await manager.subscribe(webContents as never, project, "proj-1", "ticket-1", "VC-1");
+    await watchFile(manager, webContents, project);
 
     vi.useFakeTimers();
-    watchCalls[0]?.cb("change", "a.md"); // project-tier watcher
-    vi.advanceTimersByTime(100);
-    watchCalls[1]?.cb("change", "b.md"); // ticket-tier watcher — resets the shared debounce timer
-    vi.advanceTimersByTime(100);
-    expect(webContents.send).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(150);
+    watchCalls[0]?.cb("rename", null);
+    vi.advanceTimersByTime(250);
 
     expect(webContents.send).toHaveBeenCalledTimes(1);
   });
 
-  it("does not broadcast to a webContents destroyed before the debounce timer fires", async () => {
+  it("does not broadcast before the debounce window elapses", async () => {
     const project = makeTempProjectDir();
-    const manager = new ArtifactWatchManager(250);
+    const manager = new FileWatchManager(250);
     const webContents = makeWebContents();
-    await manager.subscribe(webContents as never, project, "proj-1", "ticket-1", "VC-1");
+    await watchFile(manager, webContents, project);
 
     vi.useFakeTimers();
-    watchCalls[1]?.cb("change", "notes.md");
-    webContents.destroyed = true;
-    vi.advanceTimersByTime(250);
-
+    watchCalls[0]?.cb("change", "notes.md");
+    vi.advanceTimersByTime(200);
     expect(webContents.send).not.toHaveBeenCalled();
   });
 
-  it("clears any pending debounce timer on unsubscribe — no late broadcast", async () => {
+  it("closes the watcher and clears the pending timer on unwatch — no late broadcast", async () => {
     const project = makeTempProjectDir();
-    const manager = new ArtifactWatchManager(250);
+    const manager = new FileWatchManager(250);
     const webContents = makeWebContents();
-    await manager.subscribe(webContents as never, project, "proj-1", "ticket-1", "VC-1");
+    await watchFile(manager, webContents, project);
 
     vi.useFakeTimers();
-    watchCalls[1]?.cb("change", "notes.md");
-    manager.unsubscribe(webContents as never, "ticket-1");
+    watchCalls[0]?.cb("change", "notes.md");
+    manager.unwatch(webContents as never, "proj-1", "ticket-1", "notes.md");
     vi.advanceTimersByTime(1000);
 
+    expect(watchCalls[0]?.watcher.close).toHaveBeenCalledTimes(1);
     expect(webContents.send).not.toHaveBeenCalled();
   });
 
-  it("closes both watchers on unsubscribe", async () => {
+  it("tears down when the owning webContents is destroyed", async () => {
     const project = makeTempProjectDir();
-    const manager = new ArtifactWatchManager();
+    const manager = new FileWatchManager(250);
     const webContents = makeWebContents();
-    await manager.subscribe(webContents as never, project, "proj-1", "ticket-1", "VC-1");
+    await watchFile(manager, webContents, project);
 
-    manager.unsubscribe(webContents as never, "ticket-1");
-
-    expect(watchCalls[0]?.watcher.close).toHaveBeenCalledTimes(1);
-    expect(watchCalls[1]?.watcher.close).toHaveBeenCalledTimes(1);
-  });
-
-  it("tears down watchers and clears the pending timer when the owning webContents is destroyed", async () => {
-    const project = makeTempProjectDir();
-    const manager = new ArtifactWatchManager(250);
-    const webContents = makeWebContents();
-    await manager.subscribe(webContents as never, project, "proj-1", "ticket-1", "VC-1");
-
-    vi.useFakeTimers();
-    watchCalls[1]?.cb("change", "notes.md");
     webContents.fireDestroyed();
-
     expect(watchCalls[0]?.watcher.close).toHaveBeenCalledTimes(1);
-    expect(watchCalls[1]?.watcher.close).toHaveBeenCalledTimes(1);
-
-    vi.advanceTimersByTime(1000);
-    expect(webContents.send).not.toHaveBeenCalled();
   });
 
-  it("subscribing twice for the same (webContents, ticketId) wires only one pair of watchers", async () => {
+  it("watching the same tab twice wires only one watcher", async () => {
     const project = makeTempProjectDir();
-    const manager = new ArtifactWatchManager();
+    const manager = new FileWatchManager();
     const webContents = makeWebContents();
-    await manager.subscribe(webContents as never, project, "proj-1", "ticket-1", "VC-1");
-    await manager.subscribe(webContents as never, project, "proj-1", "ticket-1", "VC-1");
+    await watchFile(manager, webContents, project);
+    await watchFile(manager, webContents, project);
+    expect(watchMock).toHaveBeenCalledTimes(1);
+  });
 
+  it("re-arms the watcher on a watcher 'error' (never crashes) and nudges a refetch", async () => {
+    const project = makeTempProjectDir();
+    const manager = new FileWatchManager(0);
+    const webContents = makeWebContents();
+    await watchFile(manager, webContents, project);
+    expect(watchMock).toHaveBeenCalledTimes(1);
+
+    vi.useFakeTimers();
+    watchCalls[0]?.watcher.emitError(new Error("kqueue fd pressure"));
+    // Close + rewire happen synchronously; the refetch nudge is debounced.
+    expect(watchCalls[0]?.watcher.close).toHaveBeenCalledTimes(1);
     expect(watchMock).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(0);
+
+    expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
+      projectId: "proj-1",
+      relPath: "notes.md",
+      source: "main",
+    } satisfies FileChangedEvent);
   });
 
-  it("wires an independent pair of watchers per distinct (webContents, ticketId)", async () => {
+  it("retries a vanished non-.volli watch dir, then tears down + sends one final broadcast", async () => {
     const project = makeTempProjectDir();
-    const manager = new ArtifactWatchManager();
-    const webContentsA = makeWebContents(1);
-    const webContentsB = makeWebContents(2);
-    await manager.subscribe(webContentsA as never, project, "proj-1", "ticket-1", "VC-1");
-    await manager.subscribe(webContentsB as never, project, "proj-1", "ticket-2", "VC-2");
-
-    expect(watchMock).toHaveBeenCalledTimes(4);
-  });
-
-  it("bails without wiring watchers once ensure* resolves against an already-destroyed webContents", async () => {
-    const project = makeTempProjectDir();
-    const manager = new ArtifactWatchManager();
+    const manager = new FileWatchManager(0);
     const webContents = makeWebContents();
-    webContents.destroyed = true;
-
-    await manager.subscribe(webContents as never, project, "proj-1", "ticket-1", "VC-1");
-
-    expect(watchMock).not.toHaveBeenCalled();
-  });
-
-  it("returns ok:false and closes the partial watcher when a fs.watch call throws", async () => {
-    const project = makeTempProjectDir();
-    const manager = new ArtifactWatchManager();
-    const webContents = makeWebContents();
-    // Project-tier watcher installs fine; the ticket-tier one throws.
-    watchMock
-      .mockImplementationOnce((dir: string, cb: WatchCall["cb"]) => {
-        const watcher = makeFakeWatcher();
-        watchCalls.push({ dir, cb, watcher });
-        return watcher;
-      })
-      .mockImplementationOnce(() => {
-        throw new Error("EMFILE");
-      });
-
-    const result = await manager.subscribe(
+    const sub = join(project, "sub");
+    await mkdir(sub);
+    await writeFile(join(sub, "notes.md"), "x", "utf8");
+    manager.watch(
       webContents as never,
-      project,
       "proj-1",
       "ticket-1",
-      "VC-1",
+      "sub/notes.md",
+      "main",
+      sub,
+      "notes.md",
+      project,
     );
 
-    // Surfaced as a typed failure (never a silent swallow), and the watcher we
-    // already installed was closed — no partial watch is left behind.
-    expect(result).toEqual({ ok: false, error: "EMFILE" });
-    expect(watchCalls[0]?.watcher.close).toHaveBeenCalledTimes(1);
-    // Fully deregistered: the destroyed listener was never attached.
-    expect(webContents.once).not.toHaveBeenCalled();
-  });
-
-  it("a subscribe interrupted by an unsubscribe mid-await wires zero live watchers", async () => {
-    const project = makeTempProjectDir();
-    const manager = new ArtifactWatchManager();
-    const webContents = makeWebContents();
-
-    // Start the async subscribe but DON'T await it: it runs synchronously up to
-    // the first `await ensure*`, reserving the key, then suspends. Unsubscribe
-    // before the awaits resolve — the pending reservation lets it cancel.
-    const pending = manager.subscribe(webContents as never, project, "proj-1", "ticket-1", "VC-1");
-    manager.unsubscribe(webContents as never, "ticket-1");
-    await expect(pending).resolves.toEqual({ ok: true });
-
-    // No watcher was ever installed, so a later change can't broadcast — the
-    // race that would strand an untearable watcher is closed.
-    expect(watchMock).not.toHaveBeenCalled();
-    expect(webContents.send).not.toHaveBeenCalled();
-  });
-
-  it("unsubscribing an unknown pair does not throw", () => {
-    const manager = new ArtifactWatchManager();
-    expect(() => manager.unsubscribe(makeWebContents() as never, "nope")).not.toThrow();
-  });
-
-  it("returns ok:false and drops the pending entry when ensure* throws, so a retry isn't poisoned", async () => {
-    // A project path whose ancestor is a FILE — the recursive mkdir inside
-    // ensure* fails with ENOTDIR.
-    const fileParent = mkdtempSync(join(tmpdir(), "volli-fs-file-"));
-    tempDirs.push(fileParent);
-    const filePath = join(fileParent, "not-a-dir");
-    writeFileSync(filePath, "x", "utf8");
-    const badProject = join(filePath, "project");
-
-    const manager = new ArtifactWatchManager();
-    const webContents = makeWebContents();
-
-    const first = await manager.subscribe(webContents as never, badProject, "p", "t", "VC-1");
-    expect(first.ok).toBe(false);
-    expect(watchMock).not.toHaveBeenCalled();
-    // Not poisoned: a second attempt re-runs ensure* (and fails the same way)
-    // rather than short-circuiting to a bogus { ok: true } with no watchers.
-    const second = await manager.subscribe(webContents as never, badProject, "p", "t", "VC-1");
-    expect(second.ok).toBe(false);
-  });
-
-  it("re-arms both watchers on a watcher 'error' (never crashes the process) and refetches", async () => {
-    const project = makeTempProjectDir();
-    const manager = new ArtifactWatchManager(0);
-    const webContents = makeWebContents();
-    await manager.subscribe(webContents as never, project, "proj-1", "ticket-1", "VC-1");
-    expect(watchMock).toHaveBeenCalledTimes(2);
-    const [projectWatcher, ticketWatcher] = [watchCalls[0], watchCalls[1]];
-
-    // An async fs.watch fault would otherwise be an unhandled EventEmitter
-    // 'error' that crashes main. Here it tears down + rebuilds the watchers.
-    projectWatcher?.watcher.emitError(new Error("kqueue fd pressure"));
-    await waitUntil(() => webContents.send.mock.calls.length > 0);
-
-    expect(projectWatcher?.watcher.close).toHaveBeenCalledTimes(1);
-    expect(ticketWatcher?.watcher.close).toHaveBeenCalledTimes(1);
-    // Two fresh watchers wired for the same key.
-    expect(watchMock).toHaveBeenCalledTimes(4);
-    // The tree may have changed under us, so the renderer is nudged to refetch.
-    expect(webContents.send).toHaveBeenCalledWith("volli:artifacts-changed", {
-      projectId: "proj-1",
-      ticketId: "ticket-1",
-    } satisfies ArtifactsChangedEvent);
-  });
-
-  it("re-arms onto the new inode when the watched dir was deleted and recreated", async () => {
-    const project = makeTempProjectDir();
-    const manager = new ArtifactWatchManager(0);
-    const webContents = makeWebContents();
-    await manager.subscribe(webContents as never, project, "proj-1", "ticket-1", "VC-1");
-    const ticketDir = join(project, ".volli", "tickets", "VC-1", "artifacts");
-
-    // `rm -rf` the watched dir; fs.watch would keep watching the dead inode.
-    rmSync(ticketDir, { recursive: true, force: true });
-    // The ticket-tier watcher fires for the now-missing dir → re-arm.
-    watchCalls[1]?.cb("rename", null);
-    await waitUntil(() => existsSync(ticketDir) && watchMock.mock.calls.length >= 4);
-
-    // The dir was recreated (ensure* during re-arm) and a fresh pair wired.
-    expect(existsSync(ticketDir)).toBe(true);
-    expect(watchMock).toHaveBeenCalledTimes(4);
-  });
-
-  it("falls back to teardown + one final broadcast when a re-arm cannot re-install watchers", async () => {
-    const project = makeTempProjectDir();
-    const manager = new ArtifactWatchManager(0);
-    const webContents = makeWebContents();
-    await manager.subscribe(webContents as never, project, "proj-1", "ticket-1", "VC-1");
-
-    // Make the re-arm's re-wire fail: the next fs.watch throws.
-    watchMock.mockImplementation(() => {
-      throw new Error("EMFILE");
-    });
+    rmSync(sub, { recursive: true, force: true });
+    vi.useFakeTimers();
     watchCalls[0]?.watcher.emitError(new Error("boom"));
-    await waitUntil(() => webContents.send.mock.calls.length > 0);
 
-    // Honest fallback: the subscription is torn down and the renderer gets one
-    // final refetch nudge rather than trusting a watch that's gone.
-    expect(webContents.send).toHaveBeenCalledWith("volli:artifacts-changed", {
+    // A non-.volli dir is never mkdir'd; the manager retries (~1s apart) in case
+    // it is mid-regeneration before giving up — no broadcast until exhausted.
+    expect(webContents.send).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1000);
+    expect(webContents.send).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1000);
+
+    expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
       projectId: "proj-1",
-      ticketId: "ticket-1",
-    } satisfies ArtifactsChangedEvent);
-    // Torn down: a subsequent unsubscribe is a harmless no-op (no double close).
-    expect(() => manager.unsubscribe(webContents as never, "ticket-1")).not.toThrow();
+      relPath: "sub/notes.md",
+      source: "main",
+    } satisfies FileChangedEvent);
+    // Torn down: a subsequent unwatch is a harmless no-op.
+    expect(() =>
+      manager.unwatch(webContents as never, "proj-1", "ticket-1", "sub/notes.md"),
+    ).not.toThrow();
+  });
+
+  it("re-homes onto a recreated non-.volli dir when it reappears within the retry window", async () => {
+    const project = makeTempProjectDir();
+    const manager = new FileWatchManager(0);
+    const webContents = makeWebContents();
+    const sub = join(project, "sub");
+    await mkdir(sub);
+    await writeFile(join(sub, "notes.md"), "x", "utf8");
+    manager.watch(
+      webContents as never,
+      "proj-1",
+      "ticket-1",
+      "sub/notes.md",
+      "main",
+      sub,
+      "notes.md",
+      project,
+    );
+    expect(watchMock).toHaveBeenCalledTimes(1);
+
+    rmSync(sub, { recursive: true, force: true });
+    vi.useFakeTimers();
+    watchCalls[0]?.watcher.emitError(new Error("boom"));
+
+    // The build regenerates the dir before the retries run out: the watch re-homes.
+    mkdirSync(sub);
+    vi.advanceTimersByTime(1000);
+    expect(watchMock).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(1);
+    expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
+      projectId: "proj-1",
+      relPath: "sub/notes.md",
+      source: "main",
+    } satisfies FileChangedEvent);
+  });
+
+  it("recreates a wiped .volli watch dir and re-arms instead of tearing down", async () => {
+    const project = makeTempProjectDir();
+    const manager = new FileWatchManager(0);
+    const webContents = makeWebContents();
+    await ensureProjectArtifactsDir(project);
+    const artifactsDir = join(project, ".volli", "artifacts");
+    await writeFile(join(artifactsDir, "notes.md"), "x", "utf8");
+    manager.watch(
+      webContents as never,
+      "proj-1",
+      "ticket-1",
+      ".volli/artifacts/notes.md",
+      "main",
+      artifactsDir,
+      "notes.md",
+      project,
+    );
+    expect(watchMock).toHaveBeenCalledTimes(1);
+
+    // An agent runs `rm -rf .volli && mkdir -p .volli/artifacts`; the watcher faults.
+    rmSync(join(project, ".volli"), { recursive: true, force: true });
+    watchCalls[0]?.watcher.emitError(new Error("boom"));
+
+    // The manager recreates .volli/artifacts (with its self-gitignore) and rewires.
+    await vi.waitFor(() => {
+      expect(existsSync(join(project, ".volli", "artifacts"))).toBe(true);
+      expect(existsSync(join(project, ".volli", ".gitignore"))).toBe(true);
+      expect(watchMock).toHaveBeenCalledTimes(2);
+    });
   });
 });
 
-// ---- IPC handler integration (real db + real temp project dirs) -----------------
+// ---- IPC handler integration (real db + real temp project dirs) --------------
 
 function setupDbAndHandlers(): {
   ctx: TestDb;
@@ -808,12 +783,12 @@ function setupDbAndHandlers(): {
   projectPath: string;
 } {
   const ctx = openTestDb();
-  const projectPath = makeTempProjectDir();
+  const projectPath = makeGitRepoDir();
   const project = testProject({ path: projectPath });
   insertProject(ctx.db, project);
   const ticket = testTicket(project.id, { ticketNumber: 7 });
   insertTicket(ctx.db, ticket);
-  registerArtifactIpcHandlers({ ok: true, db: ctx.db });
+  registerFileIpcHandlers({ ok: true, db: ctx.db });
   return { ctx, projectId: project.id, ticketId: ticket.id, projectPath };
 }
 
@@ -823,7 +798,7 @@ function invoke<T>(channel: VolliIpcChannel, sender: unknown, ...args: unknown[]
   return (handler as (...callArgs: unknown[]) => T)({ sender }, ...args);
 }
 
-describe("registerArtifactIpcHandlers", () => {
+describe("registerFileIpcHandlers", () => {
   let ctx: TestDb | null = null;
 
   afterEach(() => {
@@ -831,134 +806,132 @@ describe("registerArtifactIpcHandlers", () => {
     ctx = null;
   });
 
-  it("round-trips create → write → read → list → promote through the IPC surface", async () => {
+  it("round-trips artifact-create → file-write → file-read → file-index", async () => {
     const setup = setupDbAndHandlers();
     ctx = setup.ctx;
 
-    const created = await invoke<{ ok: true; entry: { name: string } } | { ok: false }>(
+    const created = await invoke<{ ok: true; relPath: string } | { ok: false }>(
       "volli:artifact-create",
       {},
-      { projectId: setup.projectId, ticketId: setup.ticketId, name: "notes" },
+      { projectId: setup.projectId, name: "notes" },
     );
-    expect(created.ok).toBe(true);
+    expect(created).toEqual({ ok: true, relPath: ".volli/artifacts/notes.md" });
 
-    const written = await invoke<{ ok: boolean }>(
-      "volli:artifact-write",
+    const written = await invoke<{ ok: true; mtime: number } | { ok: false }>(
+      "volli:file-write",
       {},
-      {
-        projectId: setup.projectId,
-        ticketId: setup.ticketId,
-        tier: "ticket",
-        name: "notes.md",
-        content: "updated",
-      },
+      { projectId: setup.projectId, relPath: ".volli/artifacts/notes.md", content: "updated" },
     );
-    expect(written).toEqual({ ok: true });
+    expect(written.ok).toBe(true);
 
-    const read = await invoke<{ ok: true; content: string } | { ok: false }>(
-      "volli:artifact-read",
-      {},
-      { projectId: setup.projectId, ticketId: setup.ticketId, tier: "ticket", name: "notes.md" },
-    );
-    expect(read).toEqual({ ok: true, content: "updated" });
-
-    const listed = await invoke<
-      { ok: true; entries: { name: string; tier: string }[] } | { ok: false }
-    >("volli:artifact-list", {}, { projectId: setup.projectId, ticketId: setup.ticketId });
-    expect(listed.ok).toBe(true);
-    if (listed.ok) {
-      expect(listed.entries).toEqual([
-        expect.objectContaining({ name: "notes.md", tier: "ticket" }),
-      ]);
+    const read = await invoke<
+      { ok: true; content: { type: string; text?: string }; source: string } | { ok: false }
+    >("volli:file-read", {}, { projectId: setup.projectId, relPath: ".volli/artifacts/notes.md" });
+    expect(read.ok).toBe(true);
+    if (read.ok) {
+      expect(read.source).toBe("main");
+      expect(read.content).toEqual({ type: "text", text: "updated", truncated: false });
     }
 
-    const promoted = await invoke<{ ok: true; entry: { tier: string } } | { ok: false }>(
-      "volli:artifact-promote",
+    const index = await invoke<{ ok: true; files: { relPath: string }[] } | { ok: false }>(
+      "volli:file-index",
       {},
-      { projectId: setup.projectId, ticketId: setup.ticketId, name: "notes.md" },
+      { projectId: setup.projectId },
     );
-    expect(promoted).toEqual({
-      ok: true,
-      entry: expect.objectContaining({ tier: "project" }) as unknown,
-    });
+    expect(index.ok).toBe(true);
+    if (index.ok) {
+      expect(index.files.some((f) => f.relPath === ".volli/artifacts/notes.md")).toBe(true);
+    }
   });
 
-  it("reveals a tier's directory via the IPC channel", async () => {
+  it("reveals a file via the IPC channel", async () => {
     const setup = setupDbAndHandlers();
     ctx = setup.ctx;
+    await invoke("volli:artifact-create", {}, { projectId: setup.projectId, name: "r" });
     const result = await invoke<{ ok: boolean }>(
-      "volli:artifact-reveal-dir",
+      "volli:file-reveal",
       {},
-      { projectId: setup.projectId, ticketId: setup.ticketId, tier: "ticket" },
+      { projectId: setup.projectId, relPath: ".volli/artifacts/r.md" },
     );
     expect(result).toEqual({ ok: true });
     expect(showItemInFolderMock).toHaveBeenCalled();
   });
 
-  it("subscribes and broadcasts to the invoking webContents, then unsubscribes cleanly", async () => {
+  it("watches and unwatches a file through the IPC channels", async () => {
     const setup = setupDbAndHandlers();
     ctx = setup.ctx;
+    await invoke("volli:artifact-create", {}, { projectId: setup.projectId, name: "w" });
     const webContents = makeWebContents();
 
-    const subscribed = await invoke<{ ok: boolean }>("volli:artifact-subscribe", webContents, {
+    const watched = await invoke<{ ok: boolean }>("volli:file-watch", webContents, {
       projectId: setup.projectId,
-      ticketId: setup.ticketId,
+      relPath: ".volli/artifacts/w.md",
     });
-    expect(subscribed).toEqual({ ok: true });
+    expect(watched).toEqual({ ok: true });
 
-    const unsubscribed = invoke<{ ok: boolean }>("volli:artifact-unsubscribe", webContents, {
+    const unwatched = invoke<{ ok: boolean }>("volli:file-unwatch", webContents, {
       projectId: setup.projectId,
-      ticketId: setup.ticketId,
+      relPath: ".volli/artifacts/w.md",
     });
-    expect(unsubscribed).toEqual({ ok: true });
+    expect(unwatched).toEqual({ ok: true });
+  });
+
+  it("accepts a ticketId and resolves to main today (no worktree infra populates worktree_path)", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    await invoke("volli:artifact-create", {}, { projectId: setup.projectId, name: "t" });
+    const read = await invoke<{ ok: true; source: string } | { ok: false }>(
+      "volli:file-read",
+      {},
+      { projectId: setup.projectId, ticketId: setup.ticketId, relPath: ".volli/artifacts/t.md" },
+    );
+    expect(read.ok && read.source).toBe("main");
   });
 
   it.each([
-    "volli:artifact-list",
-    "volli:artifact-read",
-    "volli:artifact-read-image",
-    "volli:artifact-write",
+    "volli:file-index",
+    "volli:file-read",
+    "volli:file-write",
     "volli:artifact-create",
-    "volli:artifact-promote",
-    "volli:artifact-reveal-dir",
-    "volli:artifact-subscribe",
-    "volli:artifact-unsubscribe",
+    "volli:file-reveal",
+    "volli:file-watch",
+    "volli:file-unwatch",
   ] satisfies VolliIpcChannel[])("rejects a malformed %s payload", async (channel) => {
     const setup = setupDbAndHandlers();
     ctx = setup.ctx;
-    const result = await invoke<{ ok: boolean; error?: string }>(channel, {}, { nonsense: true });
+    const result = await invoke<{ ok: boolean }>(channel, {}, { nonsense: true });
     expect(result.ok).toBe(false);
   });
 
-  it("rejects an unknown ticket id", async () => {
+  it("rejects an unknown project", async () => {
     const setup = setupDbAndHandlers();
     ctx = setup.ctx;
     const result = await invoke<{ ok: boolean; error?: string }>(
-      "volli:artifact-list",
+      "volli:file-index",
       {},
-      { projectId: setup.projectId, ticketId: "not-a-real-ticket" },
+      { projectId: "nope" },
+    );
+    expect(result).toEqual({ ok: false, error: "Unknown project" });
+  });
+
+  it("rejects a ticket that does not belong to the project", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const result = await invoke<{ ok: boolean; error?: string }>(
+      "volli:file-read",
+      {},
+      { projectId: setup.projectId, ticketId: "not-this-projects-ticket", relPath: "x.md" },
     );
     expect(result).toEqual({ ok: false, error: "Unknown ticket" });
   });
 
-  it("rejects a ticket/project id mismatch", async () => {
-    const setup = setupDbAndHandlers();
-    ctx = setup.ctx;
-    const result = await invoke<{ ok: boolean; error?: string }>(
-      "volli:artifact-list",
-      {},
-      { projectId: "some-other-project", ticketId: setup.ticketId },
-    );
-    expect(result).toEqual({ ok: false, error: "Ticket does not belong to project" });
-  });
-
   it("degrades every channel to a typed error when the db failed to open", async () => {
     handlers.clear();
-    registerArtifactIpcHandlers({ ok: false, error: "disk full" });
+    registerFileIpcHandlers({ ok: false, error: "disk full" });
     const result = await invoke<{ ok: boolean; error?: string }>(
-      "volli:artifact-list",
+      "volli:file-index",
       {},
-      { projectId: "p", ticketId: "t" },
+      { projectId: "p" },
     );
     expect(result).toEqual({ ok: false, error: "disk full" });
   });

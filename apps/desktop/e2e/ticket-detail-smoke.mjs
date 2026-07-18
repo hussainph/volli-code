@@ -6,9 +6,11 @@
  *
  *   1. Open/close   — double-click a card opens the detail; the top is a full-
  *      width Chrome-style tab strip whose Doc tab is labeled with the display id
- *      (e.g. "VC-1") + Artifacts; there is NO breadcrumb. Escape returns to the
- *      board; re-open works; clicking the already-active Board nav item also
- *      exits the detail instead of leaving the ticket stranded open.
+ *      (e.g. "VC-1"); there is NO breadcrumb and NO Artifacts tab (the global-
+ *      artifacts rework, CONCEPT #33 — `@file` refs are covered by
+ *      global-artifacts-smoke.mjs). Escape returns to the board; re-open works;
+ *      clicking the already-active Board nav item also exits the detail instead
+ *      of leaving the ticket stranded open.
  *   2. Title edit   — click-to-edit the heading, Enter commits + renders, and
  *      the board card shows the new title after Escape-back.
  *   3. Body editor  — an always-mounted CodeMirror 6 live-preview editor
@@ -20,29 +22,24 @@
  *      highest-signal event ("created the ticket") with a "+N more" caret BEFORE
  *      the timestamp; expanding reveals the indented `renamed to "…"` one-liner.
  *      Comments still post (⌘↵) as "You", edit inline, and delete via confirm.
- *   5. Artifacts    — a `.md` file dropped on disk appears, renders in the SAME
- *      live editor (no Save button), edits AUTOSAVE back to disk, and promotes
- *      (the file physically moves to the project tier); `.volli/.gitignore` is `*`.
- *   6. Conflict     — editing an artifact whose file changed on disk mid-edit
- *      raises the non-destructive "Changed on disk" banner (autosave re-reads
- *      before writing) instead of clobbering the external change.
- *   7. Ticket session — the rail's "New session" boots a ticket-scoped PTY; env
+ *   5. Ticket session — the rail's "New session" boots a ticket-scoped PTY; env
  *      injection is proven with the file-probe pattern ($VOLLI_TICKET == display
- *      id, $VOLLI_TICKET_DIR == the ticket's `.volli/tickets/<ID>` path);
- *      switching Doc ↔ session keeps the terminal alive; the rail shows a chip.
- *   8. Resident keep-alive — navigating ticket → board → ticket keeps the SAME
+ *      id, $VOLLI_ARTIFACTS_DIR == the project's `.volli/artifacts` path — the
+ *      global-artifacts env contract; VOLLI_TICKET_DIR is gone); switching
+ *      Doc ↔ session keeps the terminal alive; the rail shows a chip.
+ *   6. Resident keep-alive — navigating ticket → board → ticket keeps the SAME
  *      terminal canvas DOM node mounted (marked node survives) and the shell
  *      alive (the overlay hosts terminals, the detail is only a view over it).
- *   9. Session rename — double-click the session tab, type, Enter; the new title
+ *   7. Session rename — double-click the session tab, type, Enter; the new title
  *      shows on both the tab and the rail row.
- *  10. Rail + Details — the right rail is sessions-first with a collapsed-by-
+ *   8. Rail + Details — the right rail is sessions-first with a collapsed-by-
  *      default "Details" drawer holding status/priority/labels; NO harness row
  *      anywhere, and the board filter bar has NO Harness chip.
- *  11. Nav history — the chrome bar's ←/→ buttons (and ⌘[ / ⌘]) traverse
+ *   9. Nav history — the chrome bar's ←/→ buttons (and ⌘[ / ⌘]) traverse
  *      ticket open/close snapshots.
- *  12. Rail toggle — the chrome bar's mirrored rail button and ⌥⌘B hide/show the
+ *  10. Rail toggle — the chrome bar's mirrored rail button and ⌥⌘B hide/show the
  *      rail; the collapsed state persists (checked at restart).
- *  13. Restart      — relaunch against the SAME app-data dir: the ticket detail
+ *  11. Restart      — relaunch against the SAME app-data dir: the ticket detail
  *      reopens (persisted openTicketId), the edited title/body + surviving
  *      comment are intact, the rail is STILL collapsed (persisted), and the
  *      renamed session is listed as exited. Back still returns to the board
@@ -100,14 +97,10 @@ const PROJECT_SEED_ID = "ticket-detail-project";
 const TICKET_PREFIX = "VC";
 const DISPLAY_ID = `${TICKET_PREFIX}-1`;
 
-// On-disk `.volli` locations the artifact + session flows assert against.
+// What main injects as VOLLI_ARTIFACTS_DIR (projectArtifactsDir(projectPath) —
+// the global-artifacts env contract; there is no per-ticket dir anymore).
 const VOLLI_DIR = join(PROJECT_DIR, ".volli");
-const TICKET_ARTIFACTS_DIR = join(VOLLI_DIR, "tickets", DISPLAY_ID, "artifacts");
-const PROJECT_ARTIFACTS_DIR = join(VOLLI_DIR, "artifacts");
-const GITIGNORE_PATH = join(VOLLI_DIR, ".gitignore");
-// What main injects as VOLLI_TICKET_DIR (ticketDir(projectPath, displayId) — the
-// ticket dir itself, NOT its artifacts subdir).
-const EXPECTED_TICKET_DIR = join(VOLLI_DIR, "tickets", DISPLAY_ID);
+const EXPECTED_ARTIFACTS_DIR = join(VOLLI_DIR, "artifacts");
 
 const PROBE_ENV = join(SCRATCH, "probe-env.txt");
 const PROBE_ALIVE = join(SCRATCH, "probe-alive.txt");
@@ -123,13 +116,6 @@ const BODY_HEADING = "Hello World";
 const BODY_CODE = "text `code` here";
 const EXPECTED_BODY = `${BODY_INTRO}\n\n# ${BODY_HEADING}\n\n${BODY_CODE}`;
 
-const ARTIFACT_NAME = "probe.md";
-const ARTIFACT_MARKDOWN =
-  "Artifact intro line\n\n# Probe Artifact\n\n- one\n- two\n\nInline `x` code.\n";
-const ARTIFACT_EDITED = "# Probe Edited\n\nUpdated artifact body with a `token`.\n";
-const CONFLICT_NAME = "conflict.md";
-const CONFLICT_INITIAL = "# Conflict Probe\n\nOriginal on-disk body.\n";
-const CONFLICT_EXTERNAL = "# Conflict Probe\n\nAn AGENT rewrote this on disk.\n";
 const COMMENT_ONE = "First work log note";
 const COMMENT_ONE_EDITED = "Edited work log note";
 const COMMENT_TWO = "Second note to delete";
@@ -185,15 +171,6 @@ async function readFileSafe(path) {
     return await fs.readFile(path, "utf8");
   } catch {
     return null;
-  }
-}
-
-async function pathExists(path) {
-  try {
-    await fs.access(path);
-    return true;
-  } catch {
-    return false;
   }
 }
 
@@ -392,12 +369,13 @@ async function main() {
     // ===================================================================
     await attempt(
       1,
-      "Open/close: double-click opens detail (Doc tab = display id + Artifacts, no breadcrumb); Escape and Board nav return; re-open works",
+      "Open/close: double-click opens detail (Doc tab = display id, no Artifacts tab, no breadcrumb); Escape and Board nav return; re-open works",
       async () => {
         await openTicketViaCard(page);
         const docTabId = (await docTab(page).textContent())?.trim();
-        const hasArtifactsTab =
-          (await page.getByRole("tab", { name: "Artifacts", exact: true }).count()) === 1;
+        // The global-artifacts rework removed the Artifacts tab entirely.
+        const noArtifactsTab =
+          (await page.getByRole("tab", { name: "Artifacts", exact: true }).count()) === 0;
         const titleVisible = (await page.locator("h1", { hasText: INITIAL_TITLE }).count()) === 1;
         // The retired breadcrumb was a <header> carrying the display-id mono span;
         // the round-2 UX replaces it with the tablist, so no such header exists.
@@ -421,14 +399,14 @@ async function main() {
 
         const ok =
           docTabId === DISPLAY_ID &&
-          hasArtifactsTab &&
+          noArtifactsTab &&
           titleVisible &&
           noBreadcrumbHeader &&
           reopened &&
           !!boardViaNav;
         return {
           ok,
-          detail: `docTab=${JSON.stringify(docTabId)} artifacts=${hasArtifactsTab} title=${titleVisible} noBreadcrumb=${noBreadcrumbHeader} reopened=${reopened} boardNav=${!!boardViaNav}`,
+          detail: `docTab=${JSON.stringify(docTabId)} noArtifactsTab=${noArtifactsTab} title=${titleVisible} noBreadcrumb=${noBreadcrumbHeader} reopened=${reopened} boardNav=${!!boardViaNav}`,
         };
       },
     );
@@ -620,143 +598,11 @@ async function main() {
     );
 
     // ===================================================================
-    // 5. ARTIFACTS — render in live editor, autosave to disk, promote
+    // 5. TICKET SESSION (create + env injection + keep-alive + rail chip)
     // ===================================================================
     await attempt(
       5,
-      "Artifacts: disk file appears, renders markdown in the live editor, edit autosaves to disk (no Save button), Promote moves tiers; .volli/.gitignore is *",
-      async () => {
-        await fs.mkdir(TICKET_ARTIFACTS_DIR, { recursive: true });
-        await fs.writeFile(join(TICKET_ARTIFACTS_DIR, ARTIFACT_NAME), ARTIFACT_MARKDOWN, "utf8");
-
-        await page.getByRole("tab", { name: "Artifacts", exact: true }).click();
-
-        const ticketSection = page
-          .locator("section")
-          .filter({ has: page.getByRole("heading", { name: "Ticket artifacts" }) });
-        const projectSection = page
-          .locator("section")
-          .filter({ has: page.getByRole("heading", { name: "Project artifacts" }) });
-
-        await waitUntil(
-          "artifact row to appear in Ticket tier",
-          async () => (await ticketSection.getByText(ARTIFACT_NAME, { exact: true }).count()) >= 1,
-        );
-
-        const gitignore = await waitUntil("`.volli/.gitignore` on disk", () =>
-          readFileSafe(GITIGNORE_PATH),
-        );
-
-        // Select → renders in the SAME CM6 live editor (h1/bullets/inline code),
-        // not a raw textarea and not a static viewer.
-        await ticketSection.getByText(ARTIFACT_NAME, { exact: true }).click();
-        const rendered = await waitUntil("artifact markdown render", async () => {
-          const h1 = await page.locator(".cm-md-h1").count();
-          const bullets = await page.locator(".cm-md-bullet").count();
-          const code = await page.locator(".cm-md-code").count();
-          return h1 >= 1 && bullets >= 2 && code >= 1 ? { h1, bullets, code } : null;
-        });
-
-        // Edit: select-all + retype, then blur → autosave (no Save button) writes disk.
-        const noSaveButton =
-          (await page.getByRole("button", { name: "Save", exact: true }).count()) === 0;
-        await page.locator(".cm-content").click();
-        await page.keyboard.press("Meta+a");
-        await page.keyboard.type(ARTIFACT_EDITED);
-        // Blur onto the tab's "Artifacts" heading to flush the debounced save.
-        await page.getByRole("heading", { name: "Artifacts", exact: true }).click();
-        const savedContent = await waitUntil("edited artifact on disk", async () => {
-          const text = await readFileSafe(join(TICKET_ARTIFACTS_DIR, ARTIFACT_NAME));
-          return text === ARTIFACT_EDITED ? text : null;
-        });
-
-        // Promote → the file physically moves to the project tier (hover-revealed button).
-        const row = ticketSection
-          .locator("div")
-          .filter({ has: page.getByText(ARTIFACT_NAME, { exact: true }) })
-          .first();
-        await row.hover();
-        await ticketSection.getByRole("button", { name: "Promote to project" }).first().click();
-        await waitUntil("artifact promoted on disk (moved tiers)", async () => {
-          const inProject = await pathExists(join(PROJECT_ARTIFACTS_DIR, ARTIFACT_NAME));
-          const goneFromTicket = !(await pathExists(join(TICKET_ARTIFACTS_DIR, ARTIFACT_NAME)));
-          return inProject && goneFromTicket;
-        });
-        await waitUntil("promoted artifact under Project artifacts in UI", async () => {
-          const inProjectUi =
-            (await projectSection.getByText(ARTIFACT_NAME, { exact: true }).count()) >= 1;
-          const goneFromTicketUi =
-            (await ticketSection.getByText(ARTIFACT_NAME, { exact: true }).count()) === 0;
-          return inProjectUi && goneFromTicketUi;
-        });
-
-        const ok =
-          rendered.h1 >= 1 &&
-          rendered.bullets >= 2 &&
-          rendered.code >= 1 &&
-          gitignore === "*\n" &&
-          noSaveButton &&
-          savedContent === ARTIFACT_EDITED;
-        return {
-          ok,
-          detail: `render=${JSON.stringify(rendered)} gitignore=${JSON.stringify(gitignore)} noSave=${noSaveButton} saved=${savedContent === ARTIFACT_EDITED}`,
-        };
-      },
-    );
-
-    // ===================================================================
-    // 6. ARTIFACT CONFLICT — "Changed on disk" guard
-    // ===================================================================
-    await attempt(
-      6,
-      "Artifact conflict: an external mid-edit disk change raises the non-destructive 'Changed on disk' banner instead of clobbering it",
-      async () => {
-        // A fresh ticket-tier artifact to edit.
-        await fs.writeFile(join(TICKET_ARTIFACTS_DIR, CONFLICT_NAME), CONFLICT_INITIAL, "utf8");
-        const ticketSection = page
-          .locator("section")
-          .filter({ has: page.getByRole("heading", { name: "Ticket artifacts" }) });
-        await waitUntil("conflict artifact row", async () => {
-          if ((await ticketSection.getByText(CONFLICT_NAME, { exact: true }).count()) >= 1)
-            return true;
-          // Nudge a refetch by reopening the tab if the watcher lagged.
-          await page.getByRole("tab", { name: DISPLAY_ID, exact: true }).click();
-          await page.getByRole("tab", { name: "Artifacts", exact: true }).click();
-          return false;
-        });
-        await ticketSection.getByText(CONFLICT_NAME, { exact: true }).click();
-        await waitUntil(
-          "conflict artifact loaded in editor",
-          async () => (await page.locator(".cm-editor").count()) >= 1,
-        );
-
-        // Start an edit (dirties the buffer + schedules the debounced save)…
-        await page.locator(".cm-content").click();
-        await page.keyboard.type(" mid-edit change");
-        // …then an "agent" rewrites the same file on disk before the save lands.
-        await fs.writeFile(join(TICKET_ARTIFACTS_DIR, CONFLICT_NAME), CONFLICT_EXTERNAL, "utf8");
-
-        // The guarded autosave re-reads disk, sees the drift, and raises the banner
-        // rather than overwriting — and disk keeps the external content.
-        const bannerShown = await waitUntil(
-          "changed-on-disk banner",
-          async () => (await page.getByText(/Changed on disk/i).count()) >= 1,
-          { timeout: 8000 },
-        );
-        const diskPreserved =
-          (await readFileSafe(join(TICKET_ARTIFACTS_DIR, CONFLICT_NAME))) === CONFLICT_EXTERNAL;
-
-        const ok = !!bannerShown && diskPreserved;
-        return { ok, detail: `banner=${!!bannerShown} diskPreserved=${diskPreserved}` };
-      },
-    );
-
-    // ===================================================================
-    // 7. TICKET SESSION (create + env injection + keep-alive + rail chip)
-    // ===================================================================
-    await attempt(
-      7,
-      "Ticket session: rail New session boots a PTY, env injection ($VOLLI_TICKET/$VOLLI_TICKET_DIR), keep-alive across tabs, rail chip",
+      "Ticket session: rail New session boots a PTY, env injection ($VOLLI_TICKET/$VOLLI_ARTIFACTS_DIR), keep-alive across tabs, rail chip",
       async () => {
         await fs.rm(PROBE_ENV, { force: true });
         await fs.rm(PROBE_ALIVE, { force: true });
@@ -771,7 +617,7 @@ async function main() {
         await focusTerminal(page);
         await runInTerminal(
           page,
-          `echo "$VOLLI_TICKET" > ${PROBE_ENV}; echo "$VOLLI_TICKET_DIR" >> ${PROBE_ENV}`,
+          `echo "$VOLLI_TICKET" > ${PROBE_ENV}; echo "$VOLLI_ARTIFACTS_DIR" >> ${PROBE_ENV}`,
         );
         const envLines = await waitUntil("env probe file", async () => {
           const text = await readFileSafe(PROBE_ENV);
@@ -782,7 +628,7 @@ async function main() {
             .filter((l) => l.length > 0);
           return lines.length >= 2 ? lines : null;
         });
-        const envOk = envLines[0] === DISPLAY_ID && envLines[1] === EXPECTED_TICKET_DIR;
+        const envOk = envLines[0] === DISPLAY_ID && envLines[1] === EXPECTED_ARTIFACTS_DIR;
 
         // Keep-alive across tabs: switch to Doc and back, type again.
         await docTab(page).click();
@@ -808,10 +654,10 @@ async function main() {
     );
 
     // ===================================================================
-    // 8. RESIDENT KEEP-ALIVE — terminal survives ticket → board → ticket
+    // 6. RESIDENT KEEP-ALIVE — terminal survives ticket → board → ticket
     // ===================================================================
     await attempt(
-      8,
+      6,
       "Resident keep-alive: the terminal canvas node + shell survive navigating ticket → board → ticket (overlay-hosted, not detail-owned)",
       async () => {
         await fs.rm(PROBE_NAV, { force: true });
@@ -861,10 +707,10 @@ async function main() {
     );
 
     // ===================================================================
-    // 9. SESSION RENAME (double-click tab → tab + rail update)
+    // 7. SESSION RENAME (double-click tab → tab + rail update)
     // ===================================================================
     await attempt(
-      9,
+      7,
       "Session rename: double-click the session tab, type, Enter; the new title shows on the tab and the rail row",
       async () => {
         const sessionTab = page.getByRole("tab", { name: SESSION_INITIAL, exact: true });
@@ -892,10 +738,10 @@ async function main() {
     );
 
     // ===================================================================
-    // 10. RAIL IS SESSIONS-FIRST — Details drawer + no harness anywhere
+    // 8. RAIL IS SESSIONS-FIRST — Details drawer + no harness anywhere
     // ===================================================================
     await attempt(
-      10,
+      8,
       "Rail: sessions-first with a collapsed-by-default Details drawer (status/priority/labels); no Harness row anywhere; board filter bar has no Harness chip",
       async () => {
         const aside = page.locator("aside");
@@ -937,10 +783,10 @@ async function main() {
     );
 
     // ===================================================================
-    // 11. NAV HISTORY (←/→ buttons + ⌘[ / ⌘])
+    // 9. NAV HISTORY (←/→ buttons + ⌘[ / ⌘])
     // ===================================================================
     await attempt(
-      11,
+      9,
       "Nav history: chrome ← returns to Board, → reopens the ticket; ⌘[ / ⌘] do the same",
       async () => {
         if (!(await detailOpen(page))) await openTicketViaCard(page);
@@ -970,10 +816,10 @@ async function main() {
     );
 
     // ===================================================================
-    // 12. RAIL TOGGLE (button + ⌥⌘B) — leave collapsed for restart
+    // 10. RAIL TOGGLE (button + ⌥⌘B) — leave collapsed for restart
     // ===================================================================
     await attempt(
-      12,
+      10,
       "Rail toggle: the chrome rail button and ⌥⌘B hide/show the right rail; left collapsed for the restart-persistence check",
       async () => {
         if (!(await detailOpen(page))) await openTicketViaCard(page);
@@ -1007,7 +853,7 @@ async function main() {
     );
 
     // ===================================================================
-    // 13. RESTART PERSISTENCE
+    // 11. RESTART PERSISTENCE
     // ===================================================================
     // Make sure the open-ticket write reached app_state before we close.
     await waitUntil("openTicketId to persist to app_state", async () => {
@@ -1025,7 +871,7 @@ async function main() {
     await page.waitForLoadState("domcontentloaded");
 
     await attempt(
-      13,
+      11,
       "Restart: detail reopens (persisted openTicketId); data + collapsed rail survive; Back returns to Board with fresh history",
       async () => {
         await waitUntil("detail view to reopen after relaunch", () => detailOpen(page), {

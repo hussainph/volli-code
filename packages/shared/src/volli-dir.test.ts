@@ -1,12 +1,11 @@
 import { describe, it, expect } from "vite-plus/test";
 import {
+  VOLLI_ARTIFACTS_DIR_ENV,
   VOLLI_DIR_NAME,
   VOLLI_GITIGNORE_CONTENT,
-  VOLLI_TICKET_DIR_ENV,
   VOLLI_TICKET_ENV,
   projectArtifactsDir,
-  ticketArtifactsDir,
-  ticketDir,
+  projectSessionEnv,
   ticketSessionEnv,
   volliDir,
 } from "./volli-dir";
@@ -33,22 +32,6 @@ describe("projectArtifactsDir", () => {
   });
 });
 
-describe("ticketDir", () => {
-  it("nests the ticket's dir under .volli/tickets/<displayId>", () => {
-    expect(ticketDir("/Users/dev/project", "VC-12")).toBe(
-      "/Users/dev/project/.volli/tickets/VC-12",
-    );
-  });
-});
-
-describe("ticketArtifactsDir", () => {
-  it("nests artifacts under the ticket's dir", () => {
-    expect(ticketArtifactsDir("/Users/dev/project", "VC-12")).toBe(
-      "/Users/dev/project/.volli/tickets/VC-12/artifacts",
-    );
-  });
-});
-
 describe("VOLLI_GITIGNORE_CONTENT", () => {
   it("ignores everything under .volli", () => {
     expect(VOLLI_GITIGNORE_CONTENT).toBe("*\n");
@@ -56,26 +39,34 @@ describe("VOLLI_GITIGNORE_CONTENT", () => {
 });
 
 describe("env var names", () => {
-  it("names VOLLI_TICKET_ENV and VOLLI_TICKET_DIR_ENV", () => {
+  it("names VOLLI_TICKET_ENV and VOLLI_ARTIFACTS_DIR_ENV", () => {
     expect(VOLLI_TICKET_ENV).toBe("VOLLI_TICKET");
-    expect(VOLLI_TICKET_DIR_ENV).toBe("VOLLI_TICKET_DIR");
+    expect(VOLLI_ARTIFACTS_DIR_ENV).toBe("VOLLI_ARTIFACTS_DIR");
   });
 });
 
 describe("ticketSessionEnv", () => {
-  it("builds the env map for a ticket-linked session", () => {
+  it("builds the env map for a ticket-linked session (display id + main-repo artifacts dir)", () => {
     expect(ticketSessionEnv("/Users/dev/project", "VC-12")).toEqual({
       VOLLI_TICKET: "VC-12",
-      VOLLI_TICKET_DIR: "/Users/dev/project/.volli/tickets/VC-12",
+      VOLLI_ARTIFACTS_DIR: "/Users/dev/project/.volli/artifacts",
     });
   });
 
-  it("always derives VOLLI_TICKET_DIR from the given projectPath, not a worktree cwd", () => {
+  it("always derives VOLLI_ARTIFACTS_DIR from the given projectPath, not a worktree cwd", () => {
     // The caller is responsible for always passing the main repo's path here
-    // — this function has no way to distinguish a worktree path from the
-    // main checkout, which is exactly why the main process must inject it
-    // rather than deriving it from `cwd` at PTY-spawn time.
+    // — this function has no way to distinguish a worktree path from the main
+    // checkout, which is exactly why the main process must inject it rather
+    // than deriving it from `cwd` at PTY-spawn time.
     const env = ticketSessionEnv("/Users/dev/project/.worktrees/VC-12", "VC-12");
-    expect(env.VOLLI_TICKET_DIR).toBe("/Users/dev/project/.worktrees/VC-12/.volli/tickets/VC-12");
+    expect(env.VOLLI_ARTIFACTS_DIR).toBe("/Users/dev/project/.worktrees/VC-12/.volli/artifacts");
+  });
+});
+
+describe("projectSessionEnv", () => {
+  it("builds the env map for a project-scoped scratch session (just the artifacts dir)", () => {
+    expect(projectSessionEnv("/Users/dev/project")).toEqual({
+      VOLLI_ARTIFACTS_DIR: "/Users/dev/project/.volli/artifacts",
+    });
   });
 });

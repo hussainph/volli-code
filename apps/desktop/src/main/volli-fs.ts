@@ -1,42 +1,50 @@
 /**
- * All Node fs work for the `.volli` per-project artifacts convention
- * (ticket-detail-mvp decisions #13-17): ensuring/self-gitignoring `.volli`,
- * listing both artifact tiers, read/write/create/promote, and a debounced
- * `fs.watch` broadcast. Mirrors pty.ts/ghostty-config.ts's shape: pure fs
- * helpers exported for direct testing against real temp dirs, thin Electron
- * IPC wiring at the bottom. Every mutation returns a typed `Result` rather
- * than throwing across the IPC boundary — same convention as data-ipc.ts.
+ * All Node fs work for the global-artifacts + `@file` rework
+ * (docs/plans/global-artifacts.md): the whole-project file index (git
+ * ls-files, gitignore-respecting, `.volli/artifacts/` force-included),
+ * worktree-aware read/write/reveal of any repo file, the single project-scoped
+ * `.volli/artifacts/` create flow, and a per-open-tab debounced file watch.
+ * Mirrors pty.ts/ghostty-config.ts's shape: pure fs helpers exported for direct
+ * testing against real temp dirs, thin Electron IPC wiring at the bottom. Every
+ * op returns a typed `Result` rather than throwing across the IPC boundary —
+ * same convention as data-ipc.ts.
+ *
+ * Two-layer path safety: the pure {@link isSafeRelPath} check (reject
+ * `..`/absolute/backslash/empty-segment) plus a `realpath` containment check
+ * inside the resolved root ({@link assertWithinRoot}) — guarding a symlink
+ * swapped in for a directory (or the target file itself).
  */
 import { existsSync, promises as fsp, watch as fsWatch } from "node:fs";
-import { join, sep } from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { basename, dirname, join, sep } from "node:path";
 import { ipcMain, shell } from "electron";
 import type { WebContents } from "electron";
 import type Database from "better-sqlite3";
 import {
   artifactBaseName,
-  artifactImageMimeType,
-  classifyArtifactKind,
-  compareArtifactEntries,
-  displayTicketId,
+  classifyFileKind,
   errorMessage,
-  isSafeArtifactEntryName,
+  imageMimeType,
+  isArtifactRelPath,
+  isSafeRelPath,
   isValidNewArtifactName,
   projectArtifactsDir,
-  ticketArtifactsDir,
-  volliDir,
+  VOLLI_ARTIFACTS_REL_DIR,
   VOLLI_GITIGNORE_CONTENT,
+  volliDir,
   withMarkdownExtension,
 } from "@volli/shared";
 import type {
   ArtifactCreateResult,
-  ArtifactEntry,
-  ArtifactListResult,
-  ArtifactPromoteResult,
-  ArtifactReadImageResult,
-  ArtifactReadResult,
-  ArtifactsChangedEvent,
-  ArtifactTier,
-  Project,
+  FileChangedEvent,
+  FileContent,
+  FileIndexResult,
+  FileKind,
+  FileReadResult,
+  FileSource,
+  FileWriteResult,
+  IndexedFile,
   Result,
   RevealResult,
   VolliIpcChannel,
@@ -45,20 +53,26 @@ import type {
 import type { DbHandle } from "./data-ipc";
 import { getProjectById } from "./db/projects-repo";
 import { getTicketRow } from "./db/tickets-repo";
+import type { TicketRow } from "./db/tickets-repo";
 
-// ---- low-level fs helpers --------------------------------------------------
+const execFileAsync = promisify(execFile);
+
+/** Text-read cap (decision #7): utf8 files past this are truncated + flagged. */
+const TEXT_CAP_BYTES = 1024 * 1024;
+/** Images past this are treated as binary (a data-URI that large is not worth inlining). */
+const IMAGE_CAP_BYTES = 10 * 1024 * 1024;
+/** File-index entry cap (~20k, decision on `truncated`). */
+const INDEX_CAP = 20_000;
+/** Directory names never descended into by the fallback walk (and the git list already excludes `.volli`). */
+const FALLBACK_SKIP_DIRS = new Set([".git", "node_modules", ".volli"]);
+
+// ---- low-level fs helpers ----------------------------------------------------
 
 /** The `code` of a Node `ErrnoException`-shaped value, or undefined. */
 function errnoCode(error: unknown): string | undefined {
   if (typeof error !== "object" || error === null) return undefined;
   const code = (error as { code?: unknown }).code;
   return typeof code === "string" ? code : undefined;
-}
-
-/** True when a directory-read failure means "no such tier" (empty), not a real fault. */
-function isMissingDirError(error: unknown): boolean {
-  const code = errnoCode(error);
-  return code === "ENOENT" || code === "ENOTDIR";
 }
 
 async function pathExists(path: string): Promise<boolean> {
@@ -86,274 +100,382 @@ export async function ensureProjectArtifactsDir(projectPath: string): Promise<vo
   await fsp.mkdir(projectArtifactsDir(projectPath), { recursive: true });
 }
 
-/** Ensures `.volli/tickets/<displayId>/artifacts/` (and its parent chain + self-gitignore). */
-export async function ensureTicketDir(projectPath: string, displayId: string): Promise<void> {
-  await ensureVolliDir(projectPath);
-  await fsp.mkdir(ticketArtifactsDir(projectPath, displayId), { recursive: true });
-}
+// ---- resolution + path safety ------------------------------------------------
 
-function tierDir(projectPath: string, tier: ArtifactTier, displayId: string): string {
-  return tier === "project"
-    ? projectArtifactsDir(projectPath)
-    : ticketArtifactsDir(projectPath, displayId);
-}
-
-async function ensureTierDir(
-  projectPath: string,
-  tier: ArtifactTier,
-  displayId: string,
-): Promise<void> {
-  if (tier === "project") await ensureProjectArtifactsDir(projectPath);
-  else await ensureTicketDir(projectPath, displayId);
+/** Whether a project-relative path is (or is under) `.volli/` — always resolved against the MAIN checkout. */
+function isVolliRelPath(relPath: string): boolean {
+  return relPath === ".volli" || relPath.startsWith(".volli/");
 }
 
 /**
- * Verifies `dir`'s realpath is still inside the project's `.volli` realpath —
- * the second path-safety layer beyond {@link isSafeArtifactEntryName}: a
- * symlink swapped in for the artifacts directory itself (or an ancestor)
- * would otherwise let a name-safe request resolve outside the sandbox.
- * Fails closed: either path failing to resolve (missing directory) is
- * reported as "not found", not silently ignored.
+ * The resolved root + source for a relPath (decision #6): `.volli/**` always
+ * resolves to the MAIN checkout; any other path resolves to the ticket's live
+ * worktree when one is given, else the main checkout.
  */
-async function assertDirWithinVolli(
+function resolveRootFor(
   projectPath: string,
-  dir: string,
+  worktreeRoot: string | null,
+  relPath: string,
+): { root: string; source: FileSource } {
+  if (worktreeRoot !== null && !isVolliRelPath(relPath)) {
+    return { root: worktreeRoot, source: "worktree" };
+  }
+  return { root: projectPath, source: "main" };
+}
+
+/**
+ * SEAM (global-artifacts decision #6): a ticket's live worktree root, or `null`
+ * to resolve against the main checkout. Reads the first-class `worktree_path`
+ * column (migration 003) and confirms the directory exists on disk. No infra
+ * populates `worktree_path` yet — worktree creation is future work (see the
+ * cwd comment in pty.ts) — so in practice this ALWAYS returns null today and
+ * every repo path resolves to the main checkout. When worktree automation
+ * lands and begins writing `worktree_path`, resolution starts honoring it here
+ * with no other change to this module.
+ */
+async function worktreeRootFromRow(row: TicketRow): Promise<string | null> {
+  const worktreePath = row.worktree_path;
+  if (worktreePath === null) return null;
+  try {
+    return (await fsp.stat(worktreePath)).isDirectory() ? worktreePath : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Verifies `filePath` stays inside `root` after symlink resolution — the second
+ * path-safety layer beyond {@link isSafeRelPath}. A target that is itself a
+ * symlink is rejected outright (before its target is followed); a nonexistent
+ * target (a brand-new artifact) is verified via its parent directory instead.
+ * Fails closed: a missing root is reported, not ignored.
+ */
+async function assertWithinRoot(
+  root: string,
+  filePath: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   let rootReal: string;
   try {
-    rootReal = await fsp.realpath(volliDir(projectPath));
+    rootReal = await fsp.realpath(root);
   } catch {
-    return { ok: false, error: "The project's .volli directory was not found" };
+    return { ok: false, error: "Project folder was not found" };
   }
-  let dirReal: string;
+  // A symlink target is rejected before following it (matches the old artifacts
+  // guard): even a dangling one named like a file is caught here.
   try {
-    dirReal = await fsp.realpath(dir);
-  } catch {
-    return { ok: false, error: "Artifacts directory was not found" };
-  }
-  if (dirReal !== rootReal && !dirReal.startsWith(rootReal + sep)) {
-    return { ok: false, error: "Resolved path escapes the project's .volli directory" };
-  }
-  return { ok: true };
-}
-
-/**
- * Same escape guard as {@link assertDirWithinVolli}, one level down: an
- * existing file's realpath must stay inside `dir`'s realpath. A file that
- * doesn't exist yet (nothing to escape via) passes.
- *
- * A path that is itself a symlink is rejected outright, regardless of target:
- * lstat (which does NOT dereference) runs first, so even a *dangling* symlink
- * named like an artifact is caught here — previously its failed realpath was
- * treated as "safe", letting writeFile follow the link and write outside
- * `.volli`. A genuinely nonexistent path (lstat ENOENT) still passes.
- */
-async function assertFileWithinDir(
-  dir: string,
-  filePath: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  try {
-    const link = await fsp.lstat(filePath);
-    if (link.isSymbolicLink()) {
-      return { ok: false, error: "Artifact is a symlink" };
+    if ((await fsp.lstat(filePath)).isSymbolicLink()) {
+      return { ok: false, error: "Path is a symlink" };
     }
   } catch {
-    // Nothing at this path yet (ENOENT) — a brand-new file, nothing to escape via.
-    return { ok: true };
+    // Nothing at this path yet (ENOENT) — a brand-new file; fall through.
   }
-  let fileReal: string;
+  let real: string;
   try {
-    fileReal = await fsp.realpath(filePath);
+    real = await fsp.realpath(filePath);
   } catch {
-    return { ok: true };
+    // Nonexistent target: verify its parent directory stays within the root.
+    try {
+      real = await fsp.realpath(dirname(filePath));
+    } catch {
+      return { ok: false, error: "File was not found" };
+    }
   }
-  let dirReal: string;
-  try {
-    dirReal = await fsp.realpath(dir);
-  } catch {
-    return { ok: false, error: "Artifacts directory was not found" };
-  }
-  if (fileReal !== dirReal && !fileReal.startsWith(dirReal + sep)) {
-    return { ok: false, error: "Resolved path escapes the artifacts directory" };
+  if (real !== rootReal && !real.startsWith(rootReal + sep)) {
+    return { ok: false, error: "Resolved path escapes the project root" };
   }
   return { ok: true };
 }
 
-/** Validates `name`, then resolves + realpath-guards its full path within `tier`'s (already-existing) artifacts directory. */
-async function resolveSafeEntry(
-  projectPath: string,
-  tier: ArtifactTier,
-  displayId: string,
-  name: string,
-): Promise<{ ok: true; dir: string; filePath: string } | { ok: false; error: string }> {
-  if (!isSafeArtifactEntryName(name)) return { ok: false, error: "Invalid artifact name" };
-  const dir = tierDir(projectPath, tier, displayId);
-  const dirCheck = await assertDirWithinVolli(projectPath, dir);
-  if (!dirCheck.ok) return dirCheck;
-  const filePath = join(dir, name);
-  const fileCheck = await assertFileWithinDir(dir, filePath);
-  if (!fileCheck.ok) return fileCheck;
-  return { ok: true, dir, filePath };
+interface ResolvedFile {
+  root: string;
+  source: FileSource;
+  filePath: string;
 }
 
-// ---- listing ----------------------------------------------------------------
+/** Runs both path-safety layers, returning the resolved absolute path + its source, or a typed error. */
+async function resolveSafePath(
+  projectPath: string,
+  worktreeRoot: string | null,
+  relPath: string,
+): Promise<{ ok: true; value: ResolvedFile } | { ok: false; error: string }> {
+  if (!isSafeRelPath(relPath)) return { ok: false, error: "Invalid file path" };
+  const { root, source } = resolveRootFor(projectPath, worktreeRoot, relPath);
+  const filePath = join(root, relPath);
+  const check = await assertWithinRoot(root, filePath);
+  if (!check.ok) return check;
+  return { ok: true, value: { root, source, filePath } };
+}
+
+// ---- file index --------------------------------------------------------------
+
+/** `git ls-files --cached --others --exclude-standard`, gitignore-respecting; `null` when git isn't usable (not a repo, no git). */
+async function gitListFiles(projectPath: string): Promise<string[] | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      "git",
+      ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+      { cwd: projectPath, maxBuffer: 64 * 1024 * 1024 },
+    );
+    return stdout.split("\0").filter((entry) => entry.length > 0);
+  } catch {
+    return null;
+  }
+}
 
 /**
- * Files only (dirents, so symlinks are excluded — same stance as
- * list-directory's IPC handler), skipping dotfiles. Never creates `dir`; a
- * MISSING directory (ENOENT/ENOTDIR) is an empty tier. Any other readdir
- * failure (EACCES/EIO) is re-thrown rather than masked as "empty" — the IPC
- * handler wraps it into `{ ok: false, error }` so the UI surfaces it
- * (CLAUDE.md: never silently swallow errors). Per-entry stats run in parallel.
+ * Recursively lists FILE paths under `baseDir` (relative, `/`-joined, prefixed
+ * with `relPrefix`), skipping `skipDirNames` and symlinks, bounded to `limit`
+ * entries. A directory that can't be read is skipped rather than throwing —
+ * the index is best-effort.
  */
-async function listTierEntries(dir: string, tier: ArtifactTier): Promise<ArtifactEntry[]> {
-  let dirents: import("node:fs").Dirent[];
-  try {
-    dirents = await fsp.readdir(dir, { withFileTypes: true });
-  } catch (error) {
-    if (isMissingDirError(error)) return [];
-    throw error;
-  }
-  const stated = await Promise.all(
-    dirents.map(async (dirent): Promise<ArtifactEntry | null> => {
-      if (dirent.name.startsWith(".")) return null;
-      if (!dirent.isFile()) return null;
-      try {
-        const stat = await fsp.stat(join(dir, dirent.name));
-        return {
-          name: dirent.name,
-          relPath: dirent.name,
-          tier,
-          size: stat.size,
-          mtime: stat.mtimeMs,
-          kind: classifyArtifactKind(dirent.name),
-        };
-      } catch {
-        // Raced away between readdir and stat (deleted mid-listing) — skip it.
-        return null;
+async function walkFiles(
+  baseDir: string,
+  opts: { skipDirNames?: Set<string>; relPrefix?: string; limit: number },
+): Promise<string[]> {
+  const skip = opts.skipDirNames ?? new Set<string>();
+  const results: string[] = [];
+  async function recur(dir: string, rel: string): Promise<void> {
+    if (results.length >= opts.limit) return;
+    let dirents: import("node:fs").Dirent[];
+    try {
+      dirents = await fsp.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const dirent of dirents) {
+      if (results.length >= opts.limit) return;
+      if (dirent.isSymbolicLink()) continue;
+      const childRel = rel === "" ? dirent.name : `${rel}/${dirent.name}`;
+      if (dirent.isDirectory()) {
+        if (skip.has(dirent.name)) continue;
+        await recur(join(dir, dirent.name), childRel);
+      } else if (dirent.isFile()) {
+        results.push(childRel);
       }
-    }),
-  );
-  const entries = stated.filter((entry): entry is ArtifactEntry => entry !== null);
-  entries.sort(compareArtifactEntries);
-  return entries;
+    }
+  }
+  await recur(baseDir, opts.relPrefix ?? "");
+  return results;
 }
 
-/** Both tiers for a ticket, ticket-tier entries first. Listing never creates directories — an absent tier is simply empty. */
-export async function listArtifacts(
+/**
+ * The whole-project file index the `@` picker ranks over (decision #3): the
+ * git file list (gitignore-respecting; fallback to a bounded walk when git
+ * isn't usable) plus a force-included walk of `.volli/artifacts/`
+ * (`artifact: true`). Capped at ~20k entries — artifacts come first so they
+ * survive truncation.
+ */
+export async function buildFileIndex(
   projectPath: string,
-  displayId: string,
-): Promise<ArtifactEntry[]> {
-  const [ticketEntries, projectEntries] = await Promise.all([
-    listTierEntries(ticketArtifactsDir(projectPath, displayId), "ticket"),
-    listTierEntries(projectArtifactsDir(projectPath), "project"),
-  ]);
-  return [...ticketEntries, ...projectEntries];
+  indexCap: number = INDEX_CAP,
+): Promise<{ files: IndexedFile[]; truncated: boolean }> {
+  const gitFiles = await gitListFiles(projectPath);
+  const repoRelPaths =
+    gitFiles ??
+    (await walkFiles(projectPath, { skipDirNames: FALLBACK_SKIP_DIRS, limit: indexCap }));
+  const artifactRelPaths = await walkFiles(projectArtifactsDir(projectPath), {
+    relPrefix: VOLLI_ARTIFACTS_REL_DIR,
+    limit: indexCap,
+  });
+
+  const seen = new Set<string>();
+  const files: IndexedFile[] = [];
+  let truncated = false;
+  // Stop classifying/deduping once the cap is hit: `git ls-files` is unbounded
+  // (a 500k-file monorepo), and materializing entries only to slice them away
+  // burns main-process CPU. A distinct path skipped at the cap sets `truncated`;
+  // a duplicate never does (it is already in the index), keeping the flag exact.
+  const push = (relPath: string, artifact: boolean): void => {
+    if (seen.has(relPath)) return;
+    if (files.length >= indexCap) {
+      truncated = true;
+      return;
+    }
+    seen.add(relPath);
+    files.push({ relPath, kind: classifyFileKind(relPath), artifact });
+  };
+  // Artifacts first (force-included, ranked first, survive the cap).
+  for (const rel of artifactRelPaths) push(rel, true);
+  // git normally excludes `.volli` (gitignored), but guard the flag anyway.
+  for (const rel of repoRelPaths) push(rel, isArtifactRelPath(rel));
+
+  return { files, truncated };
 }
 
-// ---- read / write / create / promote ----------------------------------------
+// ---- read / write / create / reveal ------------------------------------------
 
-/** Markdown-or-not content read as utf8 text (the Doc/Artifacts-tab viewer path). */
-export async function readArtifactText(
-  projectPath: string,
-  tier: ArtifactTier,
-  displayId: string,
-  name: string,
-): Promise<ArtifactReadResult> {
-  const resolved = await resolveSafeEntry(projectPath, tier, displayId, name);
-  if (!resolved.ok) return resolved;
+/**
+ * Reads up to `cap` bytes, LOOPING until EOF or `cap + 1` bytes are in hand —
+ * a single `read()` can return a legitimate short count (NFS/FUSE), and
+ * inferring truncation from one call would silently drop the file's tail and
+ * report `truncated: false`, which the renderer would then baseline autosave on
+ * and write back (data loss). `truncated` is true only when a real `cap + 1`th
+ * byte exists. `hintSize` is the caller's stat `size` (may be stale): it sizes
+ * the initial allocation (`min(hintSize, cap) + 1`) but never bounds the loop,
+ * which keeps reading — growing the buffer if the file outgrew its stat — up to
+ * the `cap + 1` ceiling.
+ */
+async function readCapped(
+  filePath: string,
+  cap: number,
+  hintSize: number,
+): Promise<{ buf: Buffer; truncated: boolean }> {
+  const limit = cap + 1; // one past the cap: the +1th byte's existence proves truncation
+  const handle = await fsp.open(filePath, "r");
   try {
-    const content = await fsp.readFile(resolved.filePath, "utf8");
-    return { ok: true, content };
-  } catch (error) {
-    return { ok: false, error: errorMessage(error) };
+    let buffer = Buffer.alloc(Math.min(Math.max(hintSize, 0), cap) + 1);
+    let total = 0;
+    for (;;) {
+      if (total >= buffer.length) {
+        // The file outgrew its stat hint: grow the buffer toward the ceiling.
+        const grown = Buffer.alloc(Math.min(buffer.length * 2, limit));
+        buffer.copy(grown);
+        buffer = grown;
+      }
+      const { bytesRead } = await handle.read(buffer, total, buffer.length - total, total);
+      if (bytesRead === 0) break; // EOF
+      total += bytesRead;
+      if (total >= limit) break; // read one past the cap — enough to flag truncation
+    }
+    return { buf: buffer.subarray(0, Math.min(total, cap)), truncated: total > cap };
+  } finally {
+    await handle.close();
   }
 }
 
-/** An image artifact's content as an inline `data:` URI (base64) — the CSP-safe path for `<img>` rendering. */
-export async function readArtifactImage(
-  projectPath: string,
-  tier: ArtifactTier,
-  displayId: string,
-  name: string,
-): Promise<ArtifactReadImageResult> {
-  const mime = artifactImageMimeType(name);
-  if (mime === null) return { ok: false, error: "Not an image artifact" };
-  const resolved = await resolveSafeEntry(projectPath, tier, displayId, name);
-  if (!resolved.ok) return resolved;
-  try {
-    const buffer = await fsp.readFile(resolved.filePath);
-    return { ok: true, dataUrl: `data:${mime};base64,${buffer.toString("base64")}` };
-  } catch (error) {
-    return { ok: false, error: errorMessage(error) };
+/** Reads a resolved file into a render-ready {@link FileContent}: text (utf8, capped), image (data URI), or binary. */
+async function readContent(filePath: string, relPath: string, size: number): Promise<FileContent> {
+  const kind = classifyFileKind(relPath);
+  if (kind === "image") {
+    const mime = imageMimeType(relPath);
+    if (mime !== null && size <= IMAGE_CAP_BYTES) {
+      const buffer = await fsp.readFile(filePath);
+      return { type: "image", dataUrl: `data:${mime};base64,${buffer.toString("base64")}` };
+    }
+    return { type: "binary" };
   }
+  const { buf, truncated } = await readCapped(filePath, TEXT_CAP_BYTES, size);
+  // NUL-sniff: a byte-zero anywhere in the sampled prefix means binary.
+  if (buf.includes(0)) return { type: "binary" };
+  return { type: "text", text: buf.toString("utf8"), truncated };
 }
 
-/** Writes markdown content (utf8); creates the tier's directory chain on demand. Rejects a non-markdown `name`. */
-export async function writeArtifactText(
+/**
+ * Reads any resolved repo/artifact file worktree-awarely (decision #6/#7):
+ * markdown/code/text as utf8 (1 MiB cap + `truncated`), images as an inline
+ * `data:` URI, and NUL-sniffed or oversize content as `binary` (stub tab).
+ */
+export async function readFile(
   projectPath: string,
-  tier: ArtifactTier,
-  displayId: string,
-  name: string,
-  content: string,
-): Promise<Result> {
-  if (!isSafeArtifactEntryName(name)) return { ok: false, error: "Invalid artifact name" };
-  if (classifyArtifactKind(name) !== "markdown") {
-    return { ok: false, error: "Only markdown artifacts can be edited" };
-  }
-  await ensureTierDir(projectPath, tier, displayId);
-  const resolved = await resolveSafeEntry(projectPath, tier, displayId, name);
+  worktreeRoot: string | null,
+  relPath: string,
+): Promise<FileReadResult> {
+  const resolved = await resolveSafePath(projectPath, worktreeRoot, relPath);
   if (!resolved.ok) return resolved;
+  const { source, filePath } = resolved.value;
   try {
-    await fsp.writeFile(resolved.filePath, content, "utf8");
-    return { ok: true };
+    const stat = await fsp.stat(filePath);
+    if (!stat.isFile()) return { ok: false, error: "Not a file" };
+    const kind: FileKind = classifyFileKind(relPath);
+    const content = await readContent(filePath, relPath, stat.size);
+    return { ok: true, source, kind, size: stat.size, mtime: stat.mtimeMs, content };
   } catch (error) {
     return { ok: false, error: errorMessage(error) };
   }
 }
 
 /**
- * Creates a new, minimally-templated `.md` artifact in the ticket tier.
- * `rawName` is validated (no separators/`..`/empty/leading-dot) then forced to
- * a `.md` extension. The sandbox guards run through the shared
- * {@link resolveSafeEntry} (dir + file realpath/symlink checks live once), and
- * the write uses the `wx` (`O_EXCL`) flag: a name collision — even one an agent
- * created concurrently — fails with EEXIST rather than silently overwriting,
- * and O_EXCL additionally refuses to follow a dangling symlink.
+ * Writes markdown content (utf8) to a resolved file (decision #7): markdown-only
+ * (main enforces the extension), same worktree-aware resolution as read, and an
+ * `expectedMtime` conflict guard — a mismatch (or a vanished file) is a typed
+ * error rather than a silent clobber. Resolves with the fresh on-disk mtime so
+ * the renderer can rebase its conflict guard.
+ */
+export async function writeFile(
+  projectPath: string,
+  worktreeRoot: string | null,
+  relPath: string,
+  content: string,
+  expectedMtime?: number,
+): Promise<FileWriteResult> {
+  if (classifyFileKind(relPath) !== "markdown") {
+    return { ok: false, error: "Only markdown files can be edited" };
+  }
+  // Self-heal a vanished `.volli/` before resolving (the old `writeArtifact`'s
+  // `ensureTierDir`): `.volli` self-gitignores, so `git clean -xdf` deletes it
+  // out from under an open artifact tab. Without this, every autosave fails
+  // "File was not found" forever (`resolveSafePath` has no parent dir to
+  // realpath-check) and the user's buffered edits are stranded. Only `.volli/**`
+  // is ever recreated — never an arbitrary repo path.
+  if (isVolliRelPath(relPath)) {
+    try {
+      if (isArtifactRelPath(relPath)) {
+        await ensureProjectArtifactsDir(projectPath);
+      } else {
+        await ensureVolliDir(projectPath);
+      }
+    } catch (error) {
+      return { ok: false, error: errorMessage(error) };
+    }
+  }
+  const resolved = await resolveSafePath(projectPath, worktreeRoot, relPath);
+  if (!resolved.ok) return resolved;
+  const { filePath } = resolved.value;
+  try {
+    if (expectedMtime !== undefined) {
+      let currentMtime: number;
+      try {
+        currentMtime = (await fsp.stat(filePath)).mtimeMs;
+      } catch {
+        return { ok: false, error: "File no longer exists on disk" };
+      }
+      if (currentMtime !== expectedMtime) {
+        return { ok: false, error: "File changed on disk since it was opened" };
+      }
+    }
+    await fsp.writeFile(filePath, content, "utf8");
+    const stat = await fsp.stat(filePath);
+    return { ok: true, mtime: stat.mtimeMs };
+  } catch (error) {
+    return { ok: false, error: errorMessage(error) };
+  }
+}
+
+/**
+ * Creates a new, minimally-templated `.md` artifact in the project's single
+ * `.volli/artifacts/` tier (decision #8). `rawName` is validated
+ * (no separators/`..`/empty/leading-dot) then forced to `.md`. The `wx`
+ * (`O_EXCL`) flag makes a name collision — even one an agent created
+ * concurrently — fail with EEXIST rather than silently overwriting, and refuses
+ * to follow a pre-existing symlink at the target name. Resolves with the
+ * project-relative path (`.volli/artifacts/<name>.md`), insertable directly as
+ * an `@ref`.
  */
 export async function createArtifact(
   projectPath: string,
-  displayId: string,
   rawName: string,
 ): Promise<ArtifactCreateResult> {
   if (!isValidNewArtifactName(rawName)) return { ok: false, error: "Invalid artifact name" };
   const name = withMarkdownExtension(rawName.trim());
+  const relPath = `${VOLLI_ARTIFACTS_REL_DIR}/${name}`;
 
-  await ensureTicketDir(projectPath, displayId);
-  const resolved = await resolveSafeEntry(projectPath, "ticket", displayId, name);
+  await ensureProjectArtifactsDir(projectPath);
+  const resolved = await resolveSafePath(projectPath, null, relPath);
   if (!resolved.ok) return resolved;
+  const { filePath } = resolved.value;
 
   // Friendly fast path for the common collision; the `wx` flag below is the
-  // real, race-free guard (closes the TOCTOU window between this check and the
-  // write, where an agent could create the same file).
-  if (await pathExists(resolved.filePath)) {
+  // real, race-free guard (closes the TOCTOU window where an agent could create
+  // the same file between this check and the write).
+  if (await pathExists(filePath)) {
     return { ok: false, error: `An artifact named "${name}" already exists` };
   }
   try {
-    const content = `# ${artifactBaseName(name)}\n\n`;
-    await fsp.writeFile(resolved.filePath, content, { encoding: "utf8", flag: "wx" });
-    const stat = await fsp.stat(resolved.filePath);
-    return {
-      ok: true,
-      entry: {
-        name,
-        relPath: name,
-        tier: "ticket",
-        size: stat.size,
-        mtime: stat.mtimeMs,
-        kind: "markdown",
-      },
-    };
+    await fsp.writeFile(filePath, `# ${artifactBaseName(name)}\n\n`, {
+      encoding: "utf8",
+      flag: "wx",
+    });
+    return { ok: true, relPath };
   } catch (error) {
     if (errnoCode(error) === "EEXIST") {
       return { ok: false, error: `An artifact named "${name}" already exists` };
@@ -362,280 +484,253 @@ export async function createArtifact(
   }
 }
 
-/**
- * Moves a ticket-tier artifact up to the project tier. Both endpoints run
- * through the shared {@link resolveSafeEntry} sandbox guard (the checks live
- * once, not re-implemented inline). The move is a hardlink + unlink rather than
- * `fsp.rename`: rename silently REPLACES an existing destination, clobbering a
- * project-tier artifact created concurrently; `fsp.link` is atomic and fails
- * with EEXIST if the destination exists (no-replace on the same volume), so a
- * collision always surfaces as a typed error — never a silent overwrite.
- */
-export async function promoteArtifact(
+/** Reveals a resolved file in Finder — same `shell.showItemInFolder` call as `volli:reveal-in-finder`, server-resolved so the renderer never sends an absolute path. */
+export async function revealFile(
   projectPath: string,
-  displayId: string,
-  name: string,
-): Promise<ArtifactPromoteResult> {
-  if (!isSafeArtifactEntryName(name)) return { ok: false, error: "Invalid artifact name" };
-
-  const sourcePath = join(ticketArtifactsDir(projectPath, displayId), name);
-  if (!(await pathExists(sourcePath))) {
-    return { ok: false, error: `"${name}" was not found in the ticket's artifacts` };
-  }
-  const source = await resolveSafeEntry(projectPath, "ticket", displayId, name);
-  if (!source.ok) return source;
-
-  await ensureProjectArtifactsDir(projectPath);
-  const dest = await resolveSafeEntry(projectPath, "project", displayId, name);
-  if (!dest.ok) return dest;
-
-  try {
-    await fsp.link(source.filePath, dest.filePath);
-    await fsp.unlink(source.filePath);
-    const stat = await fsp.stat(dest.filePath);
-    return {
-      ok: true,
-      entry: {
-        name,
-        relPath: name,
-        tier: "project",
-        size: stat.size,
-        mtime: stat.mtimeMs,
-        kind: classifyArtifactKind(name),
-      },
-    };
-  } catch (error) {
-    if (errnoCode(error) === "EEXIST") {
-      return {
-        ok: false,
-        error: `An artifact named "${name}" already exists at the project level`,
-      };
-    }
-    return { ok: false, error: errorMessage(error) };
-  }
-}
-
-/** Reveals a tier's artifacts directory in Finder (creating it first if needed) — same `shell.showItemInFolder` call as `volli:reveal-in-finder`, just server-resolved so the renderer never sends an absolute path. */
-export async function revealArtifactsDir(
-  projectPath: string,
-  tier: ArtifactTier,
-  displayId: string,
+  worktreeRoot: string | null,
+  relPath: string,
 ): Promise<RevealResult> {
+  const resolved = await resolveSafePath(projectPath, worktreeRoot, relPath);
+  if (!resolved.ok) return resolved;
   try {
-    await ensureTierDir(projectPath, tier, displayId);
-    shell.showItemInFolder(tierDir(projectPath, tier, displayId));
+    shell.showItemInFolder(resolved.value.filePath);
     return { ok: true };
   } catch (error) {
     return { ok: false, error: errorMessage(error) };
   }
 }
 
-// ---- live watch --------------------------------------------------------------
+// ---- live watch (per open file tab) ------------------------------------------
 
 const WATCH_DEBOUNCE_MS = 250;
 
-interface WatchSubscription {
+interface FileWatchSubscription {
   webContents: WebContents;
-  /** Everything a re-arm needs to rebuild the two watchers for this key. */
-  projectPath: string;
   projectId: string;
-  ticketId: string;
-  displayId: string;
-  projectWatcher: ReturnType<typeof fsWatch> | null;
-  ticketWatcher: ReturnType<typeof fsWatch> | null;
+  /** The project's MAIN checkout path — used to recreate a wiped `.volli` watch dir on re-arm. */
+  projectPath: string;
+  relPath: string;
+  source: FileSource;
+  /** The watched directory (the file's parent) and the file's basename to filter dir events by. */
+  dir: string;
+  base: string;
+  watcher: ReturnType<typeof fsWatch> | null;
   debounceTimer: NodeJS.Timeout | null;
   onDestroyed: () => void;
-  /** Guards against overlapping re-arms (both watchers can fault together). */
+  /** Guards against overlapping re-arms. */
   reArming: boolean;
+  /** Pending bounded-retry timer for a missing watch dir (cleared on teardown). */
+  retryTimer: NodeJS.Timeout | null;
 }
 
 /**
- * Watches a subscribed ticket's two artifact-tier directories and broadcasts
- * a debounced `volli:artifacts-changed` event to the subscribing window only
- * (window-scoped, same stance as PtyManager) — never to every window, since
- * artifacts are per-project. One subscription per `(webContents, ticketId)`
- * pair; a window teardown tears down every subscription it owns, mirroring
- * pty.ts's `destroyed`-listener cleanup.
+ * Watches one open file tab and broadcasts a debounced `volli:file-changed`
+ * event to the subscribing window only (window-scoped, same stance as
+ * PtyManager). Watches the file's PARENT directory and filters events by
+ * basename so an atomic replace (temp-write + rename, how most editors save)
+ * still fires — reusing the ArtifactWatchManager re-arm/debounce pattern.
+ * One subscription per `(webContents, projectId, ticketId, relPath)`.
  */
-export class ArtifactWatchManager {
-  private readonly subs = new Map<string, WatchSubscription>();
+export class FileWatchManager {
+  private readonly subs = new Map<string, FileWatchSubscription>();
 
   constructor(private readonly debounceMs: number = WATCH_DEBOUNCE_MS) {}
 
-  private keyFor(webContents: WebContents, ticketId: string): string {
-    return `${webContents.id}:${ticketId}`;
+  private keyFor(
+    webContents: WebContents,
+    projectId: string,
+    ticketId: string | null,
+    relPath: string,
+  ): string {
+    return `${webContents.id}:${projectId}:${ticketId ?? ""}:${relPath}`;
   }
 
-  /** Idempotent: subscribing an already-subscribed `(webContents, ticketId)` pair is a no-op. */
-  async subscribe(
+  /** Idempotent: watching an already-watched tab is a no-op. `dir`/`base`/`source`/`projectPath` come from the caller's resolution. */
+  watch(
     webContents: WebContents,
-    projectPath: string,
     projectId: string,
-    ticketId: string,
-    displayId: string,
-  ): Promise<Result> {
-    const key = this.keyFor(webContents, ticketId);
+    ticketId: string | null,
+    relPath: string,
+    source: FileSource,
+    dir: string,
+    base: string,
+    projectPath: string,
+  ): Result {
+    const key = this.keyFor(webContents, projectId, ticketId, relPath);
     if (this.subs.has(key)) return { ok: true };
+    if (webContents.isDestroyed()) return { ok: true };
 
-    // Reserve the key with a pending entry BEFORE the awaited ensure* calls: an
-    // unsubscribe (or a window teardown) arriving during those awaits would
-    // otherwise be a silent no-op, and we'd then install watchers nothing ever
-    // tears down. `teardown` drops this pending marker too; we detect that below
-    // and abort.
-    const sub: WatchSubscription = {
+    const sub: FileWatchSubscription = {
       webContents,
-      projectPath,
       projectId,
-      ticketId,
-      displayId,
-      projectWatcher: null,
-      ticketWatcher: null,
+      projectPath,
+      relPath,
+      source,
+      dir,
+      base,
+      watcher: null,
       debounceTimer: null,
       onDestroyed: () => this.teardown(key),
       reArming: false,
+      retryTimer: null,
     };
     this.subs.set(key, sub);
-
     try {
-      await ensureProjectArtifactsDir(projectPath);
-      await ensureTicketDir(projectPath, displayId);
+      this.wireWatcher(key, sub);
     } catch (error) {
-      // ensure* threw (e.g. EACCES). Drop our pending reservation — but only if
-      // it is still ours (an unsubscribe during the await may have replaced it,
-      // in which case teardown already cleaned up) — so a retry isn't poisoned
-      // by a stale entry that short-circuits `this.subs.has(key)` above with
-      // zero watchers installed. Surface the failure (CLAUDE.md).
-      if (this.subs.get(key) === sub) this.subs.delete(key);
-      return { ok: false, error: errorMessage(error) };
-    }
-
-    // If an unsubscribe/teardown removed (or replaced) our pending entry during
-    // the awaits, abort — teardown already cleaned up, nothing to wire.
-    if (this.subs.get(key) !== sub) return { ok: true };
-    // The window can close during the awaited ensure* calls above — same race
-    // pty.ts's create() guards against. Drop our own pending marker (the
-    // destroyed listener isn't attached yet) and bail.
-    if (webContents.isDestroyed()) {
-      this.subs.delete(key);
-      return { ok: true };
-    }
-
-    try {
-      this.wireWatchers(key, sub);
-    } catch (error) {
-      // A watcher failed to install. Surface it rather than silently swallowing
-      // (CLAUDE.md) and leaving the tab believing live updates are on: close any
-      // watcher we already opened, deregister, and report a typed failure.
-      sub.projectWatcher?.close();
-      sub.ticketWatcher?.close();
+      // Surface the install failure rather than leaving the tab believing live
+      // updates are on (CLAUDE.md): deregister and report a typed error.
+      sub.watcher?.close();
       this.subs.delete(key);
       return { ok: false, error: errorMessage(error) };
     }
-
     webContents.once("destroyed", sub.onDestroyed);
     return { ok: true };
   }
 
-  /** Debounced, window-scoped `volli:artifacts-changed` broadcast for `sub`. */
-  private scheduleBroadcast(sub: WatchSubscription): void {
+  private scheduleBroadcast(sub: FileWatchSubscription): void {
     if (sub.debounceTimer !== null) clearTimeout(sub.debounceTimer);
     sub.debounceTimer = setTimeout(() => {
       sub.debounceTimer = null;
       if (sub.webContents.isDestroyed()) return;
-      const payload: ArtifactsChangedEvent = { projectId: sub.projectId, ticketId: sub.ticketId };
-      sub.webContents.send("volli:artifacts-changed" satisfies VolliIpcEvent, payload);
+      const payload: FileChangedEvent = {
+        projectId: sub.projectId,
+        relPath: sub.relPath,
+        source: sub.source,
+      };
+      sub.webContents.send("volli:file-changed" satisfies VolliIpcEvent, payload);
     }, this.debounceMs);
   }
 
-  /** (Re)creates both tier watchers for an already-registered `sub`; assumes the dirs exist. */
-  private wireWatchers(key: string, sub: WatchSubscription): void {
-    sub.projectWatcher = this.openWatcher(key, sub, projectArtifactsDir(sub.projectPath));
-    sub.ticketWatcher = this.openWatcher(
-      key,
-      sub,
-      ticketArtifactsDir(sub.projectPath, sub.displayId),
-    );
-  }
-
-  private openWatcher(
-    key: string,
-    sub: WatchSubscription,
-    dir: string,
-  ): ReturnType<typeof fsWatch> {
-    const watcher = fsWatch(dir, () => {
-      // fs.watch stays bound to the ORIGINAL inode after a `rm -rf .volli &&
-      // mkdir -p ...`: if the watched dir no longer exists, the events we're
-      // getting are for a dead directory — re-arm onto the freshly-created one.
-      // A normal change just broadcasts.
-      if (!existsSync(dir)) {
-        void this.reArm(key, sub);
+  private wireWatcher(key: string, sub: FileWatchSubscription): void {
+    sub.watcher = fsWatch(sub.dir, (_eventType, filename) => {
+      // The watched dir was deleted-and-recreated: re-arm onto the new inode.
+      if (!existsSync(sub.dir)) {
+        this.reArm(key, sub);
         return;
       }
-      this.scheduleBroadcast(sub);
+      // fs.watch reports the basename (or null on some platforms/coalesced
+      // events); a null filename can't be filtered, so broadcast conservatively.
+      if (filename === null || filename === sub.base) this.scheduleBroadcast(sub);
     });
-    // An async watch failure (volume ejected, kqueue fd pressure) surfaces as an
-    // EventEmitter 'error'; UNHANDLED, it would crash the whole main process.
-    // The fd is dead, so re-arm; a failed re-arm falls back to teardown + one
-    // final broadcast (see reArm).
-    watcher.on("error", () => {
-      void this.reArm(key, sub);
+    // An async watch fault (volume ejected, fd pressure) surfaces as an
+    // EventEmitter 'error'; UNHANDLED it would crash main. Re-arm instead.
+    sub.watcher.on("error", () => {
+      this.reArm(key, sub);
     });
-    return watcher;
   }
 
   /**
-   * Rebuilds a subscription's watchers in place after the watched tree changed
-   * underneath them (deleted-and-recreated dir) or a watcher faulted. Single
-   * attempt — no retry loop. On success it broadcasts once so the renderer
-   * refetches the post-recreate list; on failure it tears the subscription down
-   * and sends one final broadcast, the honest tradeoff being: we lose live
-   * updates but never leave the tab believing they're still flowing, and we
-   * never crash (CLAUDE.md).
+   * Rebuilds the watcher in place after the watched dir changed underneath it
+   * (deleted-and-recreated) or the watcher faulted. When the dir is still there
+   * it rewires synchronously and broadcasts once (the tree may have changed).
+   * When the dir is momentarily GONE it does NOT tear down permanently — an
+   * agent's `rm -rf .volli && mkdir -p .volli/artifacts`, or a build wiping and
+   * regenerating a dir, would otherwise leave the tab silently stale for life:
+   * see {@link attemptReArm}. Never crashes main.
    */
-  private async reArm(key: string, sub: WatchSubscription): Promise<void> {
+  private reArm(key: string, sub: FileWatchSubscription): void {
     if (sub.reArming) return;
     if (this.subs.get(key) !== sub) return; // torn down while the event was queued
     sub.reArming = true;
+    sub.watcher?.close();
+    sub.watcher = null;
+    this.attemptReArm(key, sub, 0);
+  }
 
-    // Close the dead watchers but keep the subscription (and its destroyed
-    // listener) registered so a concurrent teardown still finds it.
-    sub.projectWatcher?.close();
-    sub.ticketWatcher?.close();
-    sub.projectWatcher = null;
-    sub.ticketWatcher = null;
+  /** Whether the watched dir lives inside the project's `.volli` tree (ours to recreate). */
+  private isUnderVolliTree(sub: FileWatchSubscription): boolean {
+    const root = volliDir(sub.projectPath);
+    return sub.dir === root || sub.dir.startsWith(root + sep);
+  }
 
+  /** Recreates a wiped `.volli` watch dir (best-effort). `attemptReArm` re-checks existence after. */
+  private async ensureVolliWatchDir(sub: FileWatchSubscription): Promise<void> {
     try {
-      await ensureProjectArtifactsDir(sub.projectPath);
-      await ensureTicketDir(sub.projectPath, sub.displayId);
-      // The subscription may have been torn down (or the window closed) during
-      // the awaits — bail without re-wiring anything nothing would tear down.
-      if (this.subs.get(key) !== sub || sub.webContents.isDestroyed()) return;
-      this.wireWatchers(key, sub);
-      sub.reArming = false;
-      // The tree changed under us; nudge the renderer to refetch.
-      this.scheduleBroadcast(sub);
-    } catch {
-      // Re-arm failed: we can no longer honestly claim live updates. Tear down
-      // and send one final broadcast so the renderer refetches a
-      // stale-but-correct list rather than trusting a watch that's gone.
-      this.teardown(key);
-      if (!sub.webContents.isDestroyed()) {
-        const payload: ArtifactsChangedEvent = { projectId: sub.projectId, ticketId: sub.ticketId };
-        sub.webContents.send("volli:artifacts-changed" satisfies VolliIpcEvent, payload);
+      const artifactsDir = projectArtifactsDir(sub.projectPath);
+      if (sub.dir === artifactsDir || sub.dir.startsWith(artifactsDir + sep)) {
+        await ensureProjectArtifactsDir(sub.projectPath);
+      } else {
+        await ensureVolliDir(sub.projectPath);
       }
+      // The watched dir may be deeper than the ensure helpers create.
+      await fsp.mkdir(sub.dir, { recursive: true });
+    } catch {
+      // Best-effort: finishReArm re-checks existsSync and falls into retry/teardown.
     }
   }
 
-  unsubscribe(webContents: WebContents, ticketId: string): void {
-    this.teardown(this.keyFor(webContents, ticketId));
+  /**
+   * One re-arm attempt. For a `.volli/**` dir we own, recreate it first (agent
+   * wiped it, or `git clean`); an arbitrary dir is never mkdir'd. Then hand off
+   * to {@link finishReArm}, which rewires if the dir is now present or schedules
+   * a bounded retry otherwise. The `.volli` recreation is async, so this path is
+   * NOT synchronous for `.volli` dirs; the plain-fault path (dir still present)
+   * stays synchronous, matching the watcher-error re-arm contract.
+   */
+  private attemptReArm(key: string, sub: FileWatchSubscription, attempt: number): void {
+    if (this.subs.get(key) !== sub) return; // torn down while the retry was queued
+    if (!existsSync(sub.dir) && this.isUnderVolliTree(sub)) {
+      void this.ensureVolliWatchDir(sub).finally(() => this.finishReArm(key, sub, attempt));
+      return;
+    }
+    this.finishReArm(key, sub, attempt);
+  }
+
+  private readonly reArmRetryMax = 3;
+  private readonly reArmRetryDelayMs = 1000;
+
+  /**
+   * Rewires when the watch dir is present; otherwise schedules a bounded retry
+   * (dir may be mid-regeneration) and, once exhausted, tears down with one final
+   * broadcast so the tab refetches rather than believing updates still flow.
+   */
+  private finishReArm(key: string, sub: FileWatchSubscription, attempt: number): void {
+    if (this.subs.get(key) !== sub) return; // torn down while queued
+    if (existsSync(sub.dir)) {
+      try {
+        this.wireWatcher(key, sub);
+      } catch {
+        this.teardown(key);
+        return;
+      }
+      sub.reArming = false;
+      this.scheduleBroadcast(sub);
+      return;
+    }
+    if (attempt + 1 < this.reArmRetryMax) {
+      sub.retryTimer = setTimeout(() => {
+        sub.retryTimer = null;
+        this.attemptReArm(key, sub, attempt + 1);
+      }, this.reArmRetryDelayMs);
+      return;
+    }
+    this.teardown(key);
+    if (!sub.webContents.isDestroyed()) {
+      const payload: FileChangedEvent = {
+        projectId: sub.projectId,
+        relPath: sub.relPath,
+        source: sub.source,
+      };
+      sub.webContents.send("volli:file-changed" satisfies VolliIpcEvent, payload);
+    }
+  }
+
+  unwatch(
+    webContents: WebContents,
+    projectId: string,
+    ticketId: string | null,
+    relPath: string,
+  ): void {
+    this.teardown(this.keyFor(webContents, projectId, ticketId, relPath));
   }
 
   private teardown(key: string): void {
     const sub = this.subs.get(key);
     if (sub === undefined) return;
-    sub.projectWatcher?.close();
-    sub.ticketWatcher?.close();
+    sub.watcher?.close();
     if (sub.debounceTimer !== null) clearTimeout(sub.debounceTimer);
+    if (sub.retryTimer !== null) clearTimeout(sub.retryTimer);
     if (!sub.webContents.isDestroyed()) {
       sub.webContents.removeListener("destroyed", sub.onDestroyed);
     }
@@ -643,125 +738,111 @@ export class ArtifactWatchManager {
   }
 }
 
-// ---- IPC wiring ---------------------------------------------------------------
+// ---- IPC wiring --------------------------------------------------------------
 
-const ARTIFACT_CHANNELS: readonly VolliIpcChannel[] = [
-  "volli:artifact-list",
-  "volli:artifact-read",
-  "volli:artifact-read-image",
-  "volli:artifact-write",
+const FILE_CHANNELS: readonly VolliIpcChannel[] = [
+  "volli:file-index",
+  "volli:file-read",
+  "volli:file-write",
   "volli:artifact-create",
-  "volli:artifact-promote",
-  "volli:artifact-reveal-dir",
-  "volli:artifact-subscribe",
-  "volli:artifact-unsubscribe",
+  "volli:file-reveal",
+  "volli:file-watch",
+  "volli:file-unwatch",
 ];
 
-interface ArtifactScopeInput {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+interface ProjectScopeInput {
   projectId: string;
-  ticketId: string;
+}
+function isProjectScopeInput(value: unknown): value is ProjectScopeInput {
+  return isRecord(value) && typeof value["projectId"] === "string";
 }
 
-function isArtifactScopeInput(value: unknown): value is ArtifactScopeInput {
-  if (typeof value !== "object" || value === null) return false;
-  const candidate = value as Record<string, unknown>;
-  return typeof candidate["projectId"] === "string" && typeof candidate["ticketId"] === "string";
+interface FilePathInput {
+  projectId: string;
+  ticketId?: string;
+  relPath: string;
+}
+function isFilePathInput(value: unknown): value is FilePathInput {
+  if (!isRecord(value)) return false;
+  if (typeof value["projectId"] !== "string" || typeof value["relPath"] !== "string") return false;
+  return value["ticketId"] === undefined || typeof value["ticketId"] === "string";
 }
 
-function isArtifactTier(value: unknown): value is ArtifactTier {
-  return value === "project" || value === "ticket";
-}
-
-interface ArtifactEntryInput extends ArtifactScopeInput {
-  tier: ArtifactTier;
-  name: string;
-}
-
-function isArtifactEntryInput(value: unknown): value is ArtifactEntryInput {
-  if (typeof value !== "object" || value === null) return false;
-  const candidate = value as Record<string, unknown>;
-  return (
-    typeof candidate["projectId"] === "string" &&
-    typeof candidate["ticketId"] === "string" &&
-    isArtifactTier(candidate["tier"]) &&
-    typeof candidate["name"] === "string"
-  );
-}
-
-interface ArtifactWriteInput extends ArtifactEntryInput {
+interface FileWriteInput extends FilePathInput {
   content: string;
+  expectedMtime?: number;
+}
+function isFileWriteInput(value: unknown): value is FileWriteInput {
+  if (!isFilePathInput(value)) return false;
+  const candidate = value as unknown as Record<string, unknown>;
+  if (typeof candidate["content"] !== "string") return false;
+  return candidate["expectedMtime"] === undefined || typeof candidate["expectedMtime"] === "number";
 }
 
-function isArtifactWriteInput(value: unknown): value is ArtifactWriteInput {
-  if (!isArtifactEntryInput(value)) return false;
-  return typeof (value as unknown as Record<string, unknown>)["content"] === "string";
-}
-
-interface ArtifactNameInput extends ArtifactScopeInput {
+interface ArtifactNameInput {
+  projectId: string;
   name: string;
 }
-
 function isArtifactNameInput(value: unknown): value is ArtifactNameInput {
-  if (typeof value !== "object" || value === null) return false;
-  const candidate = value as Record<string, unknown>;
   return (
-    typeof candidate["projectId"] === "string" &&
-    typeof candidate["ticketId"] === "string" &&
-    typeof candidate["name"] === "string"
+    isRecord(value) && typeof value["projectId"] === "string" && typeof value["name"] === "string"
   );
 }
 
-interface ArtifactTierScopeInput extends ArtifactScopeInput {
-  tier: ArtifactTier;
-}
-
-function isArtifactTierScopeInput(value: unknown): value is ArtifactTierScopeInput {
-  if (typeof value !== "object" || value === null) return false;
-  const candidate = value as Record<string, unknown>;
-  return (
-    typeof candidate["projectId"] === "string" &&
-    typeof candidate["ticketId"] === "string" &&
-    isArtifactTier(candidate["tier"])
-  );
-}
-
-interface TicketContext {
-  project: Project;
-  displayId: string;
-}
-
-/** Resolves `ticketId` → its project + display id, checked against the caller-supplied `projectId` (defense-in-depth — a mismatched pair is rejected rather than trusted). */
-function resolveTicketContext(
+/** The main-repo path for a project id, or a typed error. */
+function resolveProjectPath(
   db: Database.Database,
   projectId: string,
-  ticketId: string,
-): { ok: true; value: TicketContext } | { ok: false; error: string } {
-  const row = getTicketRow(db, ticketId);
-  if (!row) return { ok: false, error: "Unknown ticket" };
-  if (row.project_id !== projectId) {
-    return { ok: false, error: "Ticket does not belong to project" };
-  }
+): { ok: true; projectPath: string } | { ok: false; error: string } {
   const project = getProjectById(db, projectId);
   if (!project) return { ok: false, error: "Unknown project" };
+  return { ok: true, projectPath: project.path };
+}
+
+/**
+ * The main-repo path plus the ticket's worktree root (the seam) for a file
+ * request. `ticketId` is optional; when given it's checked against `projectId`
+ * (defense-in-depth — a mismatched pair is rejected, not trusted).
+ */
+async function resolveFileScope(
+  db: Database.Database,
+  projectId: string,
+  ticketId: string | undefined,
+): Promise<
+  { ok: true; projectPath: string; worktreeRoot: string | null } | { ok: false; error: string }
+> {
+  const project = resolveProjectPath(db, projectId);
+  if (!project.ok) return project;
+  if (ticketId === undefined)
+    return { ok: true, projectPath: project.projectPath, worktreeRoot: null };
+  const row = getTicketRow(db, ticketId);
+  if (!row) return { ok: false, error: "Unknown ticket" };
+  if (row.project_id !== projectId)
+    return { ok: false, error: "Ticket does not belong to project" };
   return {
     ok: true,
-    value: { project, displayId: displayTicketId(project.ticketPrefix, row.ticket_number) },
+    projectPath: project.projectPath,
+    worktreeRoot: await worktreeRootFromRow(row),
   };
 }
 
 /**
- * Registers every `volli:artifact-*` handler. When the db failed to open,
- * every channel resolves with a typed `{ ok: false, error }` instead — same
- * degraded-DB stance as `registerDataIpcHandlers`. Returns the watch manager
- * so the caller can (optionally) hold a reference; watchers are otherwise
- * self-cleaning on window `destroyed`/explicit unsubscribe.
+ * Registers every `volli:file-*` / `volli:artifact-create` handler. When the db
+ * failed to open, every channel resolves with a typed `{ ok: false, error }`
+ * instead — same degraded-DB stance as `registerDataIpcHandlers`. Returns the
+ * watch manager; watchers are otherwise self-cleaning on window
+ * `destroyed`/explicit unwatch.
  */
-export function registerArtifactIpcHandlers(handle: DbHandle): ArtifactWatchManager {
-  const manager = new ArtifactWatchManager();
+export function registerFileIpcHandlers(handle: DbHandle): FileWatchManager {
+  const manager = new FileWatchManager();
 
   if (!handle.ok) {
     const error = handle.error;
-    for (const channel of ARTIFACT_CHANNELS) {
+    for (const channel of FILE_CHANNELS) {
       ipcMain.handle(channel, () => ({ ok: false, error }));
     }
     return manager;
@@ -770,14 +851,14 @@ export function registerArtifactIpcHandlers(handle: DbHandle): ArtifactWatchMana
   const db = handle.db;
 
   ipcMain.handle(
-    "volli:artifact-list" satisfies VolliIpcChannel,
-    async (_event, input: unknown): Promise<ArtifactListResult> => {
-      if (!isArtifactScopeInput(input)) return { ok: false, error: "Invalid request" };
+    "volli:file-index" satisfies VolliIpcChannel,
+    async (_event, input: unknown): Promise<FileIndexResult> => {
+      if (!isProjectScopeInput(input)) return { ok: false, error: "Invalid request" };
       try {
-        const ctx = resolveTicketContext(db, input.projectId, input.ticketId);
-        if (!ctx.ok) return { ok: false, error: ctx.error };
-        const entries = await listArtifacts(ctx.value.project.path, ctx.value.displayId);
-        return { ok: true, entries };
+        const project = resolveProjectPath(db, input.projectId);
+        if (!project.ok) return project;
+        const { files, truncated } = await buildFileIndex(project.projectPath);
+        return { ok: true, files, truncated };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }
@@ -785,18 +866,13 @@ export function registerArtifactIpcHandlers(handle: DbHandle): ArtifactWatchMana
   );
 
   ipcMain.handle(
-    "volli:artifact-read" satisfies VolliIpcChannel,
-    async (_event, input: unknown): Promise<ArtifactReadResult> => {
-      if (!isArtifactEntryInput(input)) return { ok: false, error: "Invalid request" };
+    "volli:file-read" satisfies VolliIpcChannel,
+    async (_event, input: unknown): Promise<FileReadResult> => {
+      if (!isFilePathInput(input)) return { ok: false, error: "Invalid request" };
       try {
-        const ctx = resolveTicketContext(db, input.projectId, input.ticketId);
-        if (!ctx.ok) return { ok: false, error: ctx.error };
-        return await readArtifactText(
-          ctx.value.project.path,
-          input.tier,
-          ctx.value.displayId,
-          input.name,
-        );
+        const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+        if (!scope.ok) return scope;
+        return await readFile(scope.projectPath, scope.worktreeRoot, input.relPath);
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }
@@ -804,37 +880,18 @@ export function registerArtifactIpcHandlers(handle: DbHandle): ArtifactWatchMana
   );
 
   ipcMain.handle(
-    "volli:artifact-read-image" satisfies VolliIpcChannel,
-    async (_event, input: unknown): Promise<ArtifactReadImageResult> => {
-      if (!isArtifactEntryInput(input)) return { ok: false, error: "Invalid request" };
+    "volli:file-write" satisfies VolliIpcChannel,
+    async (_event, input: unknown): Promise<FileWriteResult> => {
+      if (!isFileWriteInput(input)) return { ok: false, error: "Invalid request" };
       try {
-        const ctx = resolveTicketContext(db, input.projectId, input.ticketId);
-        if (!ctx.ok) return { ok: false, error: ctx.error };
-        return await readArtifactImage(
-          ctx.value.project.path,
-          input.tier,
-          ctx.value.displayId,
-          input.name,
-        );
-      } catch (error) {
-        return { ok: false, error: errorMessage(error) };
-      }
-    },
-  );
-
-  ipcMain.handle(
-    "volli:artifact-write" satisfies VolliIpcChannel,
-    async (_event, input: unknown): Promise<Result> => {
-      if (!isArtifactWriteInput(input)) return { ok: false, error: "Invalid request" };
-      try {
-        const ctx = resolveTicketContext(db, input.projectId, input.ticketId);
-        if (!ctx.ok) return { ok: false, error: ctx.error };
-        return await writeArtifactText(
-          ctx.value.project.path,
-          input.tier,
-          ctx.value.displayId,
-          input.name,
+        const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+        if (!scope.ok) return scope;
+        return await writeFile(
+          scope.projectPath,
+          scope.worktreeRoot,
+          input.relPath,
           input.content,
+          input.expectedMtime,
         );
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
@@ -847,9 +904,9 @@ export function registerArtifactIpcHandlers(handle: DbHandle): ArtifactWatchMana
     async (_event, input: unknown): Promise<ArtifactCreateResult> => {
       if (!isArtifactNameInput(input)) return { ok: false, error: "Invalid request" };
       try {
-        const ctx = resolveTicketContext(db, input.projectId, input.ticketId);
-        if (!ctx.ok) return { ok: false, error: ctx.error };
-        return await createArtifact(ctx.value.project.path, ctx.value.displayId, input.name);
+        const project = resolveProjectPath(db, input.projectId);
+        if (!project.ok) return project;
+        return await createArtifact(project.projectPath, input.name);
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }
@@ -857,27 +914,13 @@ export function registerArtifactIpcHandlers(handle: DbHandle): ArtifactWatchMana
   );
 
   ipcMain.handle(
-    "volli:artifact-promote" satisfies VolliIpcChannel,
-    async (_event, input: unknown): Promise<ArtifactPromoteResult> => {
-      if (!isArtifactNameInput(input)) return { ok: false, error: "Invalid request" };
-      try {
-        const ctx = resolveTicketContext(db, input.projectId, input.ticketId);
-        if (!ctx.ok) return { ok: false, error: ctx.error };
-        return await promoteArtifact(ctx.value.project.path, ctx.value.displayId, input.name);
-      } catch (error) {
-        return { ok: false, error: errorMessage(error) };
-      }
-    },
-  );
-
-  ipcMain.handle(
-    "volli:artifact-reveal-dir" satisfies VolliIpcChannel,
+    "volli:file-reveal" satisfies VolliIpcChannel,
     async (_event, input: unknown): Promise<RevealResult> => {
-      if (!isArtifactTierScopeInput(input)) return { ok: false, error: "Invalid request" };
+      if (!isFilePathInput(input)) return { ok: false, error: "Invalid request" };
       try {
-        const ctx = resolveTicketContext(db, input.projectId, input.ticketId);
-        if (!ctx.ok) return { ok: false, error: ctx.error };
-        return await revealArtifactsDir(ctx.value.project.path, input.tier, ctx.value.displayId);
+        const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+        if (!scope.ok) return scope;
+        return await revealFile(scope.projectPath, scope.worktreeRoot, input.relPath);
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }
@@ -885,18 +928,28 @@ export function registerArtifactIpcHandlers(handle: DbHandle): ArtifactWatchMana
   );
 
   ipcMain.handle(
-    "volli:artifact-subscribe" satisfies VolliIpcChannel,
+    "volli:file-watch" satisfies VolliIpcChannel,
     async (event, input: unknown): Promise<Result> => {
-      if (!isArtifactScopeInput(input)) return { ok: false, error: "Invalid request" };
+      if (!isFilePathInput(input)) return { ok: false, error: "Invalid request" };
       try {
-        const ctx = resolveTicketContext(db, input.projectId, input.ticketId);
-        if (!ctx.ok) return { ok: false, error: ctx.error };
-        return await manager.subscribe(
+        const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+        if (!scope.ok) return scope;
+        const resolved = await resolveSafePath(
+          scope.projectPath,
+          scope.worktreeRoot,
+          input.relPath,
+        );
+        if (!resolved.ok) return resolved;
+        const { source, filePath } = resolved.value;
+        return manager.watch(
           event.sender,
-          ctx.value.project.path,
           input.projectId,
-          input.ticketId,
-          ctx.value.displayId,
+          input.ticketId ?? null,
+          input.relPath,
+          source,
+          dirname(filePath),
+          basename(filePath),
+          scope.projectPath,
         );
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
@@ -905,10 +958,10 @@ export function registerArtifactIpcHandlers(handle: DbHandle): ArtifactWatchMana
   );
 
   ipcMain.handle(
-    "volli:artifact-unsubscribe" satisfies VolliIpcChannel,
+    "volli:file-unwatch" satisfies VolliIpcChannel,
     (event, input: unknown): Result => {
-      if (!isArtifactScopeInput(input)) return { ok: false, error: "Invalid request" };
-      manager.unsubscribe(event.sender, input.ticketId);
+      if (!isFilePathInput(input)) return { ok: false, error: "Invalid request" };
+      manager.unwatch(event.sender, input.projectId, input.ticketId ?? null, input.relPath);
       return { ok: true };
     },
   );

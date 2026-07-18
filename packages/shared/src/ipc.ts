@@ -4,7 +4,7 @@
 // runtime export here is fine for main, but preload must never import it at
 // runtime.
 
-import type { ArtifactEntry } from "./artifact";
+import type { FileKind, FileSource, IndexedFile } from "./file-ref";
 import type { DirEntry } from "./fs-entries";
 import type { Label } from "./label";
 import type { LegacyProject } from "./legacy-import";
@@ -61,15 +61,14 @@ export type VolliIpcChannel =
   | "volli:session-rename"
   | "volli:label-set-color"
   | "volli:app-state-set"
-  | "volli:artifact-list"
-  | "volli:artifact-read"
-  | "volli:artifact-read-image"
-  | "volli:artifact-write"
+  // Global artifacts + @file refs (docs/plans/global-artifacts.md).
+  | "volli:file-index"
+  | "volli:file-read"
+  | "volli:file-write"
   | "volli:artifact-create"
-  | "volli:artifact-promote"
-  | "volli:artifact-reveal-dir"
-  | "volli:artifact-subscribe"
-  | "volli:artifact-unsubscribe";
+  | "volli:file-reveal"
+  | "volli:file-watch"
+  | "volli:file-unwatch";
 
 /** Channel names for main→renderer push events (`webContents.send`). */
 export type VolliIpcEvent =
@@ -82,9 +81,9 @@ export type VolliIpcEvent =
   // to the content row (below the chrome band) rather than letting Electron
   // scale the whole page — see menu.ts for why the zoom roles are replaced.
   | "volli:ui-zoom-command"
-  // Debounced fs.watch broadcast (~250ms) for a subscribed ticket's two
-  // artifact-tier directories — see volli-fs.ts's ArtifactWatchManager.
-  | "volli:artifacts-changed";
+  // Debounced fs.watch broadcast (~250ms) for a single watched file tab —
+  // see volli-fs.ts's FileWatchManager.
+  | "volli:file-changed";
 
 /** Direction of a `volli:ui-zoom-command` event: step in/out one rung, or reset. */
 export type UiZoomCommand = "in" | "out" | "reset";
@@ -188,25 +187,51 @@ export type SessionsResult = Result<{ sessions: SessionRecord[] }>;
 /** Ack for a session title rename (`session-rename`); the caller already holds the new title optimistically. */
 export type SessionRenameResult = Result;
 
-// ---- artifacts (.volli filesystem, ticket-detail-mvp decisions #13-17) --
+// ---- global artifacts + @file refs (docs/plans/global-artifacts.md) --------
 
-/** Both artifact tiers for a ticket, flat (tier discriminates) — returned by `artifact-list`. */
-export type ArtifactListResult = Result<{ entries: ArtifactEntry[] }>;
+/**
+ * The whole-project file index the `@` picker ranks over — returned by
+ * `volli:file-index`. Built fresh on each picker open from `git ls-files`
+ * (gitignore-respecting) plus a walk of `.volli/artifacts/`; `truncated` is set
+ * when the ~20k entry cap was hit.
+ */
+export type FileIndexResult = Result<{ files: IndexedFile[]; truncated: boolean }>;
 
-/** A markdown artifact's raw utf8 content — returned by `artifact-read`. */
-export type ArtifactReadResult = Result<{ content: string }>;
+/**
+ * A read file's content, discriminated by how the renderer must render it:
+ * `text` (utf8, `truncated` when the ~1 MiB cap was hit), `image` (inline
+ * `data:` URI), or `binary` (NUL-sniffed or oversize — stub + reveal only).
+ */
+export type FileContent =
+  | { type: "text"; text: string; truncated: boolean }
+  | { type: "image"; dataUrl: string }
+  | { type: "binary" };
 
-/** An image artifact's content as an inline `data:` URI — returned by `artifact-read-image`. */
-export type ArtifactReadImageResult = Result<{ dataUrl: string }>;
+/**
+ * A resolved file read — returned by `volli:file-read`. `source` says which
+ * checkout it came from (drives the worktree tab badge); `size`/`mtime` are the
+ * on-disk stats; `content` carries the render-ready payload.
+ */
+export type FileReadResult = Result<{
+  source: FileSource;
+  kind: FileKind;
+  size: number;
+  mtime: number;
+  content: FileContent;
+}>;
 
-/** A newly-created ticket-tier artifact's listing row — returned by `artifact-create`. */
-export type ArtifactCreateResult = Result<{ entry: ArtifactEntry }>;
+/** The post-write mtime (the renderer's fresh conflict-guard baseline) — returned by `volli:file-write`. */
+export type FileWriteResult = Result<{ mtime: number }>;
 
-/** The promoted artifact's project-tier listing row — returned by `artifact-promote`. */
-export type ArtifactPromoteResult = Result<{ entry: ArtifactEntry }>;
+/**
+ * A newly-created artifact's project-relative path (`.volli/artifacts/<name>.md`),
+ * insertable directly as an `@ref` — returned by `volli:artifact-create`.
+ */
+export type ArtifactCreateResult = Result<{ relPath: string }>;
 
-/** The `{projectId, ticketId}` a `volli:artifacts-changed` push event fired for. */
-export interface ArtifactsChangedEvent {
+/** The single watched file a `volli:file-changed` push event fired for. */
+export interface FileChangedEvent {
   projectId: string;
-  ticketId: string;
+  relPath: string;
+  source: FileSource;
 }

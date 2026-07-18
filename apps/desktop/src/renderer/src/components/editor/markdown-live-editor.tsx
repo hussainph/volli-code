@@ -4,7 +4,16 @@ import { markdown, markdownKeymap, markdownLanguage } from "@codemirror/lang-mar
 import { EditorState } from "@codemirror/state";
 import { EditorView, keymap, placeholder as cmPlaceholder } from "@codemirror/view";
 
+import { bumpFileIndex, type FileRefsConfig, fileRefsExtension } from "./file-refs";
 import { markdownFormatKeymap, markdownLivePreview } from "./live-preview";
+
+/**
+ * The `@file` wiring for the editor: the {@link FileRefsConfig} the chip/picker
+ * extension needs, plus an `indexVersion` counter the host bumps whenever a
+ * fresh index arrives — a change to it forces a chip rebuild without remounting
+ * the editor.
+ */
+export type MarkdownFileRefs = FileRefsConfig & { indexVersion: number };
 
 export interface MarkdownLiveEditorProps {
   /** The markdown buffer. External changes reset the doc only while unfocused. */
@@ -17,6 +26,12 @@ export interface MarkdownLiveEditorProps {
   onBlur?(): void;
   /** Accessible name for the editable region. */
   ariaLabel?: string;
+  /**
+   * When supplied, enables the `@file` picker + chip decoration (global
+   * artifacts). Absent, the editor behaves exactly as before — the extension is
+   * simply not added.
+   */
+  fileRefs?: MarkdownFileRefs;
 }
 
 /**
@@ -38,6 +53,7 @@ export function MarkdownLiveEditor({
   className,
   onBlur,
   ariaLabel,
+  fileRefs,
 }: MarkdownLiveEditorProps) {
   const hostRef = React.useRef<HTMLDivElement>(null);
   const viewRef = React.useRef<EditorView | null>(null);
@@ -51,6 +67,15 @@ export function MarkdownLiveEditor({
   React.useEffect(() => {
     onBlurRef.current = onBlur;
   }, [onBlur]);
+
+  // The `@file` config behind a ref so the mount-once extension always reads the
+  // latest callbacks/index without remounting. Captured once for whether the
+  // extension is installed (its presence is stable per editor instance).
+  const fileRefsRef = React.useRef(fileRefs);
+  React.useEffect(() => {
+    fileRefsRef.current = fileRefs;
+  }, [fileRefs]);
+  const fileRefsEnabledRef = React.useRef(fileRefs !== undefined);
 
   // Seed the initial doc without making `value` a dependency of the mount
   // effect (later changes flow through the sync effect below).
@@ -70,6 +95,17 @@ export function MarkdownLiveEditor({
     const host = hostRef.current;
     if (!host) return;
 
+    // A stable config that delegates to the latest fileRefs (via the ref), so
+    // the extension is built once at mount yet always sees current callbacks.
+    const stableFileRefs: FileRefsConfig = {
+      getIndex: () => fileRefsRef.current?.getIndex() ?? [],
+      refreshIndex: () => fileRefsRef.current?.refreshIndex(),
+      onOpenFile: (relPath) => fileRefsRef.current?.onOpenFile(relPath),
+      createArtifact: (name) =>
+        fileRefsRef.current?.createArtifact(name) ??
+        Promise.resolve({ ok: false as const, error: "File references unavailable" }),
+    };
+
     const state = EditorState.create({
       doc: initialDocRef.current,
       extensions: [
@@ -78,6 +114,7 @@ export function MarkdownLiveEditor({
         EditorView.lineWrapping,
         markdown({ base: markdownLanguage }),
         markdownLivePreview(),
+        ...(fileRefsEnabledRef.current ? [fileRefsExtension(stableFileRefs)] : []),
         cmPlaceholder(placeholderRef.current),
         EditorView.contentAttributes.of({ "aria-label": ariaLabelRef.current }),
         EditorView.updateListener.of((update) => {
@@ -139,6 +176,17 @@ export function MarkdownLiveEditor({
     lastSyncedRef.current = value;
     pendingValueRef.current = null;
   }, [value]);
+
+  // A fresh index (version bump) can change which `@` tokens resolve; nudge the
+  // chip plugin to rebuild without touching the document. Keyed on indexVersion
+  // alone — depending on the whole fileRefs object would refire on any callback
+  // identity churn; enabled-ness and callbacks are read through fileRefsRef.
+  // No-op when file refs aren't enabled.
+  React.useEffect(() => {
+    const view = viewRef.current;
+    if (!view || fileRefsRef.current === undefined) return;
+    view.dispatch({ effects: bumpFileIndex.of(null) });
+  }, [fileRefs?.indexVersion]);
 
   return <div ref={hostRef} className={className} />;
 }
