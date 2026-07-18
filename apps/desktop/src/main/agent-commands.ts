@@ -145,6 +145,9 @@ function agentTicket(ticket: Ticket, project: Project): Record<string, unknown> 
     harness: ticket.preferredHarnessId,
     branch: ticket.branch,
     baseBranch: ticket.baseBranch,
+    // Reserved for the loop milestone's reason badge (the Needs Review signal);
+    // always null today, so the --json shape stays stable when it lands.
+    badge: null,
     createdAt: ticket.createdAt,
     updatedAt: ticket.updatedAt,
   };

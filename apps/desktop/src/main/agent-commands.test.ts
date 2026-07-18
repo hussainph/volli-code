@@ -61,6 +61,7 @@ describe("agent command service", () => {
           harness: "codex",
           branch: null,
           baseBranch: null,
+          badge: null,
           createdAt: 100,
           updatedAt: 100,
         },
