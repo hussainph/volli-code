@@ -172,6 +172,8 @@ describe("buildExportDocument — populated db", () => {
         ticketId: liveTicket.id,
         harnessId: session.harnessId,
         harnessSessionId: null,
+        launchKind: session.launchKind,
+        placement: session.placement,
         title: session.title,
         cwd: session.cwd,
         createdAt: 30,

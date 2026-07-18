@@ -197,6 +197,22 @@ UPDATE projects
    );
 `;
 
+/**
+ * Migration 006: truthful session-history metadata. Before this migration a
+ * bare shell (including every split) inherited `claude-code` as its
+ * `harness_id`, so the ticket rail presented every terminal as Claude Code.
+ * `launch_kind` separates agent launches from shells; `placement` records the
+ * renderer intent (top-level tab or split). Existing rows are deliberately
+ * `unknown` for both fields because their original launch/layout intent cannot
+ * be reconstructed safely from the old columns.
+ */
+const MIGRATION_006_SESSION_METADATA = `
+ALTER TABLE sessions ADD COLUMN launch_kind TEXT NOT NULL DEFAULT 'unknown'
+  CHECK (launch_kind IN ('agent','shell','unknown'));
+ALTER TABLE sessions ADD COLUMN placement TEXT NOT NULL DEFAULT 'unknown'
+  CHECK (placement IN ('tab','split','unknown'));
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -214,6 +230,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 5,
     name: "projects.next_ticket_number — monotonic ticket-number counter",
     sql: MIGRATION_005_TICKET_NUMBER_COUNTER,
+  },
+  {
+    version: 6,
+    name: "sessions launch-kind and placement metadata",
+    sql: MIGRATION_006_SESSION_METADATA,
   },
 ];
 

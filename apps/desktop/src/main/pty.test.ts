@@ -926,13 +926,16 @@ describe("ticket sessions", () => {
     // write artifacts immediately.
     await expect(fs.stat(`${root}/.volli/artifacts`)).resolves.toBeDefined();
 
-    // Durable record: ticket-scoped, the default harness (harness is no longer a
-    // ticket property — migration 004), per-ticket title.
+    // Durable record: ticket-scoped bare shell in a top-level tab. The default
+    // harness remains an internal compatibility field, but launchKind prevents
+    // the UI/audit layer from presenting it as Claude Code.
     expect(result.session).toMatchObject({
       id: result.sessionId,
       projectId: "w",
       ticketId: "tk1",
       harnessId: "claude-code",
+      launchKind: "shell",
+      placement: "tab",
       title: "Session 1",
       endedAt: null,
     });
@@ -949,7 +952,28 @@ describe("ticket sessions", () => {
       kind: "session_started",
       sessionId: result.sessionId,
       title: "Session 1",
-      harnessId: "claude-code",
+      launchKind: "shell",
+      placement: "tab",
+    });
+  });
+
+  it("persists split placement for a pane created inside an existing tab", async () => {
+    const pty = makeFakePty();
+    spawn.mockReturnValueOnce(pty);
+    const result = await invokeCreate(makeWebContents(), {
+      workspaceId: "w",
+      cwd: root,
+      cols: 80,
+      rows: 24,
+      placement: "split",
+      ticket: { ticketId: "tk1" },
+    });
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+
+    expect(result.session).toMatchObject({ launchKind: "shell", placement: "split" });
+    expect(listTicketSessions(testDb.db, "tk1")[0]).toMatchObject({
+      launchKind: "shell",
+      placement: "split",
     });
   });
 
@@ -1085,8 +1109,10 @@ describe("ticket sessions", () => {
     const { result, pty } = await createTicketSession("tk1");
     if (!result.ok) throw new Error(`expected session, got ${result.error}`);
     expect(pty.write).not.toHaveBeenCalled();
-    // No kickoff → the default harness is stamped on the record.
+    // No kickoff → a bare shell is recorded; the default harness field is not
+    // treated as user-facing source metadata.
     expect(result.session.harnessId).toBe("claude-code");
+    expect(result.session.launchKind).toBe("shell");
   });
 
   it("writes the built harness launch command + CR to the pty exactly once when kickoff is present", async () => {
@@ -1116,13 +1142,19 @@ describe("ticket sessions", () => {
     });
     if (!result.ok) throw new Error(`expected session, got ${result.error}`);
     expect(result.session.harnessId).toBe("opencode");
+    expect(result.session.launchKind).toBe("agent");
+    expect(result.session.placement).toBe("tab");
     const rows = listTicketSessions(testDb.db, "tk1");
     expect(rows[0]?.harnessId).toBe("opencode");
     // session_started records the kickoff harness too.
     const started = listTicketEvents(testDb.db, "tk1").find(
       (event) => event.payload.kind === "session_started",
     );
-    expect(started?.payload).toMatchObject({ harnessId: "opencode" });
+    expect(started?.payload).toMatchObject({
+      harnessId: "opencode",
+      launchKind: "agent",
+      placement: "tab",
+    });
   });
 });
 
@@ -1142,6 +1174,8 @@ describe("scratch session persistence", () => {
       id: sessionId,
       ticketId: null,
       harnessId: "claude-code",
+      launchKind: "shell",
+      placement: "tab",
       title: "Terminal 1",
       endedAt: null,
     });
