@@ -87,16 +87,28 @@ export const COLUMN_TOKENS = [
 
 export type ColumnToken = (typeof COLUMN_TOKENS)[number];
 
+/**
+ * The single source of truth mapping each public column token to its domain
+ * status. `review` is the friendly alias for `needs-review`. {@link COLUMN_TOKENS}
+ * derives the accepted vocabulary from these keys, and {@link parseColumnToken}
+ * reads its answer here — one vocabulary, no parallel list.
+ */
+const COLUMN_TOKEN_STATUS: Record<ColumnToken, TicketStatus> = {
+  backlog: "backlog",
+  todo: "todo",
+  doing: "doing",
+  "needs-review": "needs_review",
+  review: "needs_review",
+  done: "done",
+};
+
 export type ColumnTokenResult =
   | { ok: true; status: TicketStatus }
   | { ok: false; code: "INVALID_COLUMN"; message: string };
 
 export function parseColumnToken(value: string): ColumnTokenResult {
-  if (value === "review" || value === "needs-review") {
-    return { ok: true, status: "needs_review" };
-  }
-  if (value === "backlog" || value === "todo" || value === "doing" || value === "done") {
-    return { ok: true, status: value };
+  if ((COLUMN_TOKENS as readonly string[]).includes(value)) {
+    return { ok: true, status: COLUMN_TOKEN_STATUS[value as ColumnToken] };
   }
   return {
     ok: false,
