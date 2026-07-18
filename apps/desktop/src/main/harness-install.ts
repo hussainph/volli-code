@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 import { lstat, mkdir, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
-import { managedWriteDecision, mergeFencedSection, type InstallAction } from "@volli/shared";
+import {
+  managedWriteDecision,
+  mergeFencedSection,
+  type InstallAction,
+  type ManagedWriteDecision,
+} from "@volli/shared";
 
 interface ManifestEntry {
   kind: InstallAction["kind"];
@@ -41,65 +46,109 @@ async function readManifest(path: string): Promise<InstallManifest> {
   }
 }
 
-async function writeManagedFile(
+/**
+ * One managed-write engine shared by every action kind. Each kind supplies only
+ * the two things that differ: how to read the current on-disk state (as a hash
+ * plus its diffable content) and how to apply the change. The choreography —
+ * decision, conflict short-circuit, skip/written bookkeeping, and manifest
+ * recording — lives here once.
+ *
+ * The manifest entry is recorded only *after* `apply` resolves, so a failed
+ * write never persists a hash that falsely claims the file matches the plan.
+ */
+interface ManagedKindOps {
+  readCurrent(): Promise<{ hash: string | null; content: string }>;
+  desiredHash: string;
+  desiredContent: string;
+  /** Applies the change; returns `true` if it wrote, `false` if it was a no-op. */
+  apply(decision: ManagedWriteDecision): Promise<boolean>;
+}
+
+async function applyManagedAction(
+  path: string,
+  manifestKind: InstallAction["kind"],
+  ops: ManagedKindOps,
+  manifest: InstallManifest,
+  result: HarnessInstallResult,
+): Promise<void> {
+  const current = await ops.readCurrent();
+  const decision = managedWriteDecision({
+    currentHash: current.hash,
+    recordedHash: manifest[path]?.hash ?? null,
+    desiredHash: ops.desiredHash,
+  });
+  if (decision === "conflict") {
+    result.conflicts.push(path);
+    return;
+  }
+  const wrote = await ops.apply(decision);
+  manifest[path] = { kind: manifestKind, hash: ops.desiredHash };
+  if (wrote) result.written.push(path);
+  else result.skipped.push(path);
+}
+
+function writeManagedFile(
   action: Extract<InstallAction, { kind: "write" }>,
   manifest: InstallManifest,
   result: HarnessInstallResult,
 ): Promise<void> {
-  const current = await textAt(action.path);
-  const desiredHash = hash(action.content);
-  const decision = managedWriteDecision({
-    currentHash: current === null ? null : hash(current),
-    recordedHash: manifest[action.path]?.hash ?? null,
-    desiredHash,
-  });
-  if (decision === "conflict") {
-    result.conflicts.push(action.path);
-    return;
-  }
-  manifest[action.path] = { kind: action.kind, hash: desiredHash };
-  if (decision === "skip") {
-    result.skipped.push(action.path);
-    return;
-  }
-  await mkdir(dirname(action.path), { recursive: true });
-  await writeFile(action.path, action.content, "utf8");
-  result.written.push(action.path);
+  return applyManagedAction(
+    action.path,
+    action.kind,
+    {
+      async readCurrent() {
+        const current = await textAt(action.path);
+        return { hash: current === null ? null : hash(current), content: current ?? "" };
+      },
+      desiredHash: hash(action.content),
+      desiredContent: action.content,
+      async apply(decision) {
+        if (decision === "skip") return false;
+        await mkdir(dirname(action.path), { recursive: true });
+        await writeFile(action.path, action.content, "utf8");
+        return true;
+      },
+    },
+    manifest,
+    result,
+  );
 }
 
-async function writeManagedSymlink(
+function writeManagedSymlink(
   action: Extract<InstallAction, { kind: "symlink" }>,
   manifest: InstallManifest,
   result: HarnessInstallResult,
 ): Promise<void> {
-  const desiredHash = hash(action.target);
-  let currentHash: string | null = null;
-  try {
-    const entry = await lstat(action.path);
-    currentHash = entry.isSymbolicLink()
-      ? hash(await readlink(action.path))
-      : hash("not-a-symlink");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-  const decision = managedWriteDecision({
-    currentHash,
-    recordedHash: manifest[action.path]?.hash ?? null,
-    desiredHash,
-  });
-  if (decision === "conflict") {
-    result.conflicts.push(action.path);
-    return;
-  }
-  manifest[action.path] = { kind: action.kind, hash: desiredHash };
-  if (decision === "skip") {
-    result.skipped.push(action.path);
-    return;
-  }
-  await mkdir(dirname(action.path), { recursive: true });
-  await rm(action.path, { force: true });
-  await symlink(action.target, action.path, "dir");
-  result.written.push(action.path);
+  return applyManagedAction(
+    action.path,
+    action.kind,
+    {
+      async readCurrent() {
+        try {
+          const entry = await lstat(action.path);
+          if (entry.isSymbolicLink()) {
+            const target = await readlink(action.path);
+            return { hash: hash(target), content: target };
+          }
+          return { hash: hash("not-a-symlink"), content: "not-a-symlink" };
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          return { hash: null, content: "" };
+        }
+      },
+      desiredHash: hash(action.target),
+      desiredContent: action.target,
+      async apply(decision) {
+        if (decision === "skip") return false;
+        await mkdir(dirname(action.path), { recursive: true });
+        await rm(action.path, { force: true });
+        await symlink(action.target, action.path, "dir");
+        return true;
+      },
+    },
+    manifest,
+    result,
+  );
 }
 
 function fencedBody(content: string): string | null {
@@ -119,25 +168,31 @@ async function writeManagedFence(
 ): Promise<void> {
   const current = (await textAt(action.path)) ?? "";
   const currentBody = fencedBody(current);
-  const desiredHash = hash(action.content);
-  const decision = managedWriteDecision({
-    currentHash: currentBody === null ? null : hash(currentBody),
-    recordedHash: manifest[action.path]?.hash ?? null,
-    desiredHash,
-  });
-  if (decision === "conflict") {
-    result.conflicts.push(action.path);
-    return;
-  }
-  manifest[action.path] = { kind: action.kind, hash: desiredHash };
   const merged = mergeFencedSection(current, action.content, action.version);
-  if (decision === "skip" && !merged.changed) {
-    result.skipped.push(action.path);
-    return;
-  }
-  await mkdir(dirname(action.path), { recursive: true });
-  await writeFile(action.path, merged.content, "utf8");
-  result.written.push(action.path);
+  await applyManagedAction(
+    action.path,
+    action.kind,
+    {
+      readCurrent() {
+        return Promise.resolve({
+          hash: currentBody === null ? null : hash(currentBody),
+          content: currentBody ?? "",
+        });
+      },
+      desiredHash: hash(action.content),
+      desiredContent: action.content,
+      async apply(decision) {
+        // Body hash can match (skip) while the surrounding file still needs the
+        // version marker refreshed, so re-check merged.changed before no-op.
+        if (decision === "skip" && !merged.changed) return false;
+        await mkdir(dirname(action.path), { recursive: true });
+        await writeFile(action.path, merged.content, "utf8");
+        return true;
+      },
+    },
+    manifest,
+    result,
+  );
 }
 
 /** Applies a declarative adapter plan with per-managed-file hash protection. */
