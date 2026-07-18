@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 
 import {
   buildHarnessInstallPlan,
+  harnessAdapters,
   HARNESS_IDS,
   shellSingleQuote,
   type HarnessId,
@@ -19,28 +20,28 @@ import {
 } from "./harness-install";
 
 const execFileAsync = promisify(execFile);
-const harnessExecutables: ReadonlyArray<{ id: HarnessId; executable: string }> = [
-  { id: "claude-code", executable: "claude" },
-  { id: "codex", executable: "codex" },
-  { id: "opencode", executable: "opencode" },
-];
 
-/** Finds first-class harness executables without invoking a shell or the harness itself. */
+/**
+ * Finds first-class harness executables without invoking a shell or the harness
+ * itself. Iterates the adapter registry so each harness's detection rule lives
+ * in its own adapter module (spec decision 13) — adding a harness needs no edit
+ * here.
+ */
 export async function detectInstalledHarnesses(pathValue: string): Promise<HarnessId[]> {
   const directories = pathValue.split(":").filter(Boolean);
   const detected: HarnessId[] = [];
-  for (const harness of harnessExecutables) {
+  for (const adapter of harnessAdapters) {
     let found = false;
     for (const directory of directories) {
       try {
-        await access(join(directory, harness.executable), constants.X_OK);
+        await access(join(directory, adapter.detection.executable), constants.X_OK);
         found = true;
         break;
       } catch {
         // Keep searching the remaining PATH entries.
       }
     }
-    if (found) detected.push(harness.id);
+    if (found) detected.push(adapter.id);
   }
   return detected;
 }

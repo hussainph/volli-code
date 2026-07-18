@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildHarnessInstallPlan, managedWriteDecision, mergeFencedSection } from "./core";
+import { HARNESS_IDS } from "../ticket";
+import {
+  buildHarnessInstallPlan,
+  harnessAdapters,
+  managedWriteDecision,
+  mergeFencedSection,
+} from "./core";
 import { genericHarnessActions } from "./generic";
 
 describe("mergeFencedSection", () => {
@@ -57,6 +63,15 @@ describe("managedWriteDecision", () => {
     expect(
       managedWriteDecision({ currentHash: null, recordedHash: null, desiredHash: "new" }),
     ).toBe("write");
+  });
+});
+
+describe("harnessAdapters", () => {
+  it("covers every first-class harness with its own detection executable", () => {
+    expect(harnessAdapters.map((adapter) => adapter.id).sort()).toEqual([...HARNESS_IDS].sort());
+    expect(harnessAdapters.every((adapter) => adapter.detection.executable.length > 0)).toBe(true);
+    const claude = harnessAdapters.find((adapter) => adapter.id === "claude-code");
+    expect(claude?.detection.executable).toBe("claude");
   });
 });
 

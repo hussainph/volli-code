@@ -15,6 +15,9 @@ export function getHarnessAdapter(id: HarnessId): HarnessAdapter {
   return adapters[id];
 }
 
+/** Every first-class harness adapter, for registry-driven iteration (detection, etc.). */
+export const harnessAdapters: readonly HarnessAdapter[] = Object.values(adapters);
+
 export function mergeFencedSection(
   current: string,
   managedBody: string,

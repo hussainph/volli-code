@@ -4,6 +4,7 @@ export const claudeCodeAdapter: HarnessAdapter = {
   id: "claude-code",
   command: "claude",
   promptFlag: null,
+  detection: { executable: "claude" },
   installActions(home, canonicalSkillPath) {
     return [
       {

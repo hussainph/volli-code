@@ -5,6 +5,7 @@ export const opencodeAdapter: HarnessAdapter = {
   id: "opencode",
   command: "opencode",
   promptFlag: "--prompt",
+  detection: { executable: "opencode" },
   installActions(home) {
     return [
       {
