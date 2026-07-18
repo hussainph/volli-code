@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Notification, session, shell } from "electron";
+import { app, BrowserWindow, dialog, Notification, session, shell } from "electron";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -18,6 +18,13 @@ import { registerFileIpcHandlers } from "./volli-fs";
 import { createAgentCommandService } from "./agent-commands";
 import { ensureVolliCliShim, volliRuntimePaths } from "./agent-runtime";
 import { startAgentSocket, type AgentSocketServer } from "./agent-socket";
+import {
+  installDetectedHarnessSkills,
+  installGlobalCliLink,
+  runAgentToolsConsent,
+  type AgentToolsConsentStatus,
+} from "./agent-tools";
+import { getAllAppState, setAppState } from "./db/app-state-repo";
 
 // Fixes dev and the packaged app to one shared Electron `userData` dir (by
 // default they diverge: packaged apps use the productName, dev falls back to
@@ -31,6 +38,14 @@ app.setName("Volli Code");
 
 const isDev = !app.isPackaged;
 let agentSocket: AgentSocketServer | undefined;
+
+function broadcastDataChanged(): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send("volli:data-changed" satisfies VolliIpcEvent, {
+      entity: "tickets",
+    });
+  }
+}
 
 // Dev gets its OWN userData directory. dev and packaged otherwise share one
 // (app.setName above unifies them so the SQLite db survives across launches) —
@@ -78,7 +93,7 @@ function openExternal(target: string): void {
   }
 }
 
-function createWindow(ptyManager: PtyManager): void {
+function createWindow(ptyManager: PtyManager): BrowserWindow {
   const mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -180,6 +195,7 @@ function createWindow(ptyManager: PtyManager): void {
   } else {
     mainWindow.loadFile(PACKAGED_RENDERER_ENTRY);
   }
+  return mainWindow;
 }
 
 app.whenReady().then(async () => {
@@ -257,7 +273,6 @@ app.whenReady().then(async () => {
   // renderer-driven CSS zoom (see menu.ts for the rationale). Registered here
   // (rather than up with the other pre-window setup) because File > Export
   // Database needs `dbHandle`, which doesn't exist yet at that point.
-  registerAppMenu(dbHandle);
   registerDataIpcHandlers(dbHandle);
   // Global-artifacts + @file fs plumbing (file index/read/write, artifact
   // create, reveal, per-tab watch); same degraded-DB stance as
@@ -273,24 +288,40 @@ app.whenReady().then(async () => {
     resourcesPath: process.resourcesPath,
     isPackaged: app.isPackaged,
   });
+  let shimPath = join(runtimePaths.binDir, "volli");
   try {
-    await ensureVolliCliShim({
+    shimPath = await ensureVolliCliShim({
       binDir: runtimePaths.binDir,
       electronPath: process.execPath,
       bundlePath: runtimePaths.cliBundlePath,
+      socketPath: runtimePaths.socketPath,
     });
   } catch (error) {
     console.error("[volli] failed to generate CLI shim:", errorMessage(error));
   }
   const ptyManager = registerTerminalIpcHandlers(dbHandle, runtimePaths);
 
-  const broadcastDataChanged = (): void => {
-    for (const window of BrowserWindow.getAllWindows()) {
-      window.webContents.send("volli:data-changed" satisfies VolliIpcEvent, {
-        entity: "tickets",
+  const installAgentTools = async (): Promise<void> => {
+    try {
+      const result = await installDetectedHarnessSkills({
+        home: app.getPath("home"),
+        pathValue: process.env["PATH"] ?? "",
       });
+      await installGlobalCliLink(shimPath);
+      if (result.conflicts.length > 0) {
+        await dialog.showMessageBox({
+          type: "warning",
+          message: "Some Volli skill files were edited and were not overwritten.",
+          detail: result.conflicts.join("\n"),
+        });
+      }
+    } catch (error) {
+      dialog.showErrorBox("Agent Tools Installation Failed", errorMessage(error));
+      throw error;
     }
   };
+  registerAppMenu(dbHandle, { installAgentTools });
+
   try {
     const execute = dbHandle.ok
       ? createAgentCommandService({
@@ -328,7 +359,36 @@ app.whenReady().then(async () => {
     console.error("[volli] failed to start agent socket:", errorMessage(error));
   }
 
-  createWindow(ptyManager);
+  const mainWindow = createWindow(ptyManager);
+  if (dbHandle.ok) {
+    const consentKey = "volli:agent-tools-consent";
+    const stored = getAllAppState(dbHandle.db)[consentKey];
+    const current: AgentToolsConsentStatus | null =
+      stored === '"installed"' ? "installed" : stored === '"deferred"' ? "deferred" : null;
+    try {
+      await runAgentToolsConsent({
+        current,
+        prompt: async () => {
+          const choice = await dialog.showMessageBox(mainWindow, {
+            type: "question",
+            message: "Install the Volli CLI and agent skills?",
+            detail:
+              "Volli will expose its CLI in /usr/local/bin and install the bundled skill only for detected agent harnesses. You can do this later from the File menu.",
+            buttons: ["Install", "Not Now"],
+            defaultId: 0,
+            cancelId: 1,
+          });
+          return choice.response === 0 ? "install" : "defer";
+        },
+        install: installAgentTools,
+        persist: async (status) => {
+          setAppState(dbHandle.db, consentKey, JSON.stringify(status), Date.now());
+        },
+      });
+    } catch {
+      // installAgentTools already surfaced the actionable failure.
+    }
+  }
 
   app.on("activate", () => {
     // On macOS it's common to re-create a window when the dock icon is

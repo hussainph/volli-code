@@ -61,12 +61,28 @@ async function handleExportDatabase(dbHandle: DbHandle): Promise<void> {
   }
 }
 
-export function registerAppMenu(dbHandle: DbHandle): void {
+export function registerAppMenu(
+  dbHandle: DbHandle,
+  options: { installAgentTools?: () => Promise<void> } = {},
+): void {
   const template: MenuItemConstructorOptions[] = [
     { role: "appMenu" },
     {
       label: "File",
       submenu: [
+        ...(options.installAgentTools
+          ? [
+              {
+                label: "Install Volli CLI & Agent Skills…",
+                click: () => {
+                  void options.installAgentTools?.().catch(() => {
+                    // The installer itself surfaces an error box.
+                  });
+                },
+              } satisfies MenuItemConstructorOptions,
+              { type: "separator" as const },
+            ]
+          : []),
         {
           label: "Export Database as JSON…",
           click: () => {

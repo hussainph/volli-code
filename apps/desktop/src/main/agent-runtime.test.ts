@@ -21,12 +21,14 @@ describe("ensureVolliCliShim", () => {
       binDir: join(root, "bin"),
       electronPath: "/Applications/Volli Code.app/Contents/MacOS/Volli Code",
       bundlePath: "/tmp/owner's build/volli.cjs",
+      socketPath: "/Users/dev/Library/Application Support/Volli Code/volli.sock",
     });
 
     expect(shimPath).toBe(join(root, "bin", "volli"));
     expect(await readFile(shimPath, "utf8")).toBe(
       "#!/bin/sh\n" +
         "export ELECTRON_RUN_AS_NODE=1\n" +
+        "export VOLLI_SOCKET='/Users/dev/Library/Application Support/Volli Code/volli.sock'\n" +
         "exec '/Applications/Volli Code.app/Contents/MacOS/Volli Code' '/tmp/owner'\\''s build/volli.cjs' \"$@\"\n",
     );
     expect((await stat(shimPath)).mode & 0o777).toBe(0o755);

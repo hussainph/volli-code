@@ -7,6 +7,7 @@ export interface VolliCliShimInput {
   binDir: string;
   electronPath: string;
   bundlePath: string;
+  socketPath: string;
 }
 
 /** Regenerates the userData-local `volli` launcher so it always matches this app build. */
@@ -17,6 +18,7 @@ export async function ensureVolliCliShim(input: VolliCliShimInput): Promise<stri
   const content =
     "#!/bin/sh\n" +
     "export ELECTRON_RUN_AS_NODE=1\n" +
+    `export VOLLI_SOCKET=${shellSingleQuote(input.socketPath)}\n` +
     `exec ${shellSingleQuote(input.electronPath)} ${shellSingleQuote(input.bundlePath)} "$@"\n`;
   await writeFile(temporaryPath, content, { encoding: "utf8", mode: 0o755 });
   await chmod(temporaryPath, 0o755);
