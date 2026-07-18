@@ -21,23 +21,23 @@ catalog:
   "@types/react": ^19.2.17
   "@types/react-dom": ^19.2.3
   typescript: ~7.0.2
-  vite: npm:@voidzero-dev/vite-plus-core@0.2.4
-  vite-plus: 0.2.4
+  vite: npm:@voidzero-dev/vite-plus-core@0.2.5
+  vite-plus: 0.2.5
   # Must match the vitest bundled in vite-plus (vp fails fast on version
   # skew) — bump in lockstep with the vite-plus pin above.
   "@vitest/coverage-v8": 4.1.10
 
 minimumReleaseAgeExclude:
-  - "@voidzero-dev/vite-plus-core@0.2.4"
-  - "@voidzero-dev/vite-plus-darwin-arm64@0.2.4"
-  - "@voidzero-dev/vite-plus-darwin-x64@0.2.4"
-  - "@voidzero-dev/vite-plus-linux-arm64-gnu@0.2.4"
-  - "@voidzero-dev/vite-plus-linux-arm64-musl@0.2.4"
-  - "@voidzero-dev/vite-plus-linux-x64-gnu@0.2.4"
-  - "@voidzero-dev/vite-plus-linux-x64-musl@0.2.4"
-  - "@voidzero-dev/vite-plus-win32-arm64-msvc@0.2.4"
-  - "@voidzero-dev/vite-plus-win32-x64-msvc@0.2.4"
-  - vite-plus@0.2.4
+  - "@voidzero-dev/vite-plus-core@0.2.5"
+  - "@voidzero-dev/vite-plus-darwin-arm64@0.2.5"
+  - "@voidzero-dev/vite-plus-darwin-x64@0.2.5"
+  - "@voidzero-dev/vite-plus-linux-arm64-gnu@0.2.5"
+  - "@voidzero-dev/vite-plus-linux-arm64-musl@0.2.5"
+  - "@voidzero-dev/vite-plus-linux-x64-gnu@0.2.5"
+  - "@voidzero-dev/vite-plus-linux-x64-musl@0.2.5"
+  - "@voidzero-dev/vite-plus-win32-arm64-msvc@0.2.5"
+  - "@voidzero-dev/vite-plus-win32-x64-msvc@0.2.5"
+  - vite-plus@0.2.5
   - "@typescript/typescript-aix-ppc64@7.0.2"
   - "@typescript/typescript-darwin-arm64@7.0.2"
   - "@typescript/typescript-darwin-x64@7.0.2"
