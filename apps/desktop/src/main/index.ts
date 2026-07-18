@@ -456,6 +456,26 @@ app.whenReady().then(async () => {
     const stored = getAllAppState(dbHandle.db)[consentKey];
     const current: AgentToolsConsentStatus | null =
       stored === '"installed"' ? "installed" : stored === '"deferred"' ? "deferred" : null;
+    if (current === "installed") {
+      // App-update refresh (spec decision 12): re-run the hash-guarded,
+      // idempotent skill installer so managed files track the shipped version —
+      // byte-identical files skip, user-edited ones conflict and are preserved.
+      // The one-time /usr/local/bin symlink is deliberately NOT re-run here: the
+      // shim it points at is already regenerated every boot, and re-linking would
+      // resurface an admin prompt. Fully non-blocking and swallowed (logged) so a
+      // failed refresh never blocks boot or spams dialogs; only a genuine
+      // conflict warns.
+      void installDetectedHarnessSkills({
+        home: app.getPath("home"),
+        pathValue: process.env["PATH"] ?? "",
+      })
+        .then(async (result) => {
+          if (result.conflicts.length > 0) await showSkillConflictWarning(result.conflicts);
+        })
+        .catch((error: unknown) => {
+          console.error("[volli] agent skill refresh failed:", errorMessage(error));
+        });
+    }
     try {
       await runAgentToolsConsent({
         current,
