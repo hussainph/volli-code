@@ -77,6 +77,10 @@ describe("loadDraft validation", () => {
     ["bad priority", JSON.stringify({ version: 1, draft: { ...draft(), priority: 5 } })],
     ["non-string label", JSON.stringify({ version: 1, draft: { ...draft(), labels: [1] } })],
     ["missing field", JSON.stringify({ version: 1, draft: { title: "x" } })],
+    [
+      "valid but content-empty draft",
+      JSON.stringify({ version: 1, draft: draft({ title: " ", body: "", labels: [] }) }),
+    ],
   ])("returns null for %s", (_name, raw) => {
     const storage = fakeStorage();
     storage.setItem(KEY, raw);
