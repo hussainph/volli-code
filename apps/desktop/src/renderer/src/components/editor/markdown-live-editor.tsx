@@ -15,6 +15,24 @@ import { markdownFormatKeymap, markdownLivePreview } from "./live-preview";
  */
 export type MarkdownFileRefs = FileRefsConfig & { indexVersion: number };
 
+/**
+ * Imperative handle a host can grab via `ref` to drive the editor from outside
+ * React state: move focus into the editable region, or splice text in at the
+ * caret (the New-ticket composer uses this for "Enter in title → focus body"
+ * and the paperclip file-ref insert). Optional — callers that don't pass a
+ * `ref` are unaffected.
+ */
+export interface MarkdownLiveEditorHandle {
+  focus(): void;
+  /**
+   * Insert `text` at the current selection, replacing any selected range, then
+   * focus the editor. A single space is prepended when the character before the
+   * caret is a non-whitespace, non-`(` byte, so an inserted `@ref` lands on a
+   * ref boundary `parseFileRefs` will recognise rather than gluing onto a word.
+   */
+  insertAtCursor(text: string): void;
+}
+
 export interface MarkdownLiveEditorProps {
   /** The markdown buffer. External changes reset the doc only while unfocused. */
   value: string;
@@ -45,18 +63,39 @@ export interface MarkdownLiveEditorProps {
  * a background refresh (an agent editing the same file, a store rehydrate)
  * never stomps the user mid-keystroke.
  */
-export function MarkdownLiveEditor({
-  value,
-  onChange,
-  placeholder,
-  autoFocus,
-  className,
-  onBlur,
-  ariaLabel,
-  fileRefs,
-}: MarkdownLiveEditorProps) {
+export const MarkdownLiveEditor = React.forwardRef<
+  MarkdownLiveEditorHandle,
+  MarkdownLiveEditorProps
+>(function MarkdownLiveEditor(
+  { value, onChange, placeholder, autoFocus, className, onBlur, ariaLabel, fileRefs },
+  ref,
+) {
   const hostRef = React.useRef<HTMLDivElement>(null);
   const viewRef = React.useRef<EditorView | null>(null);
+
+  React.useImperativeHandle(
+    ref,
+    (): MarkdownLiveEditorHandle => ({
+      focus() {
+        viewRef.current?.focus();
+      },
+      insertAtCursor(text) {
+        const view = viewRef.current;
+        if (!view) return;
+        const sel = view.state.selection.main;
+        const before = sel.from === 0 ? "" : view.state.sliceDoc(sel.from - 1, sel.from);
+        const needsSpace = before !== "" && !/\s/.test(before) && before !== "(";
+        const insert = (needsSpace ? " " : "") + text;
+        view.dispatch({
+          changes: { from: sel.from, to: sel.to, insert },
+          selection: { anchor: sel.from + insert.length },
+          scrollIntoView: true,
+        });
+        view.focus();
+      },
+    }),
+    [],
+  );
 
   // Latest-callback refs so the one-shot mount effect never goes stale.
   const onChangeRef = React.useRef(onChange);
@@ -189,4 +228,4 @@ export function MarkdownLiveEditor({
   }, [fileRefs?.indexVersion]);
 
   return <div ref={hostRef} className={className} />;
-}
+});
