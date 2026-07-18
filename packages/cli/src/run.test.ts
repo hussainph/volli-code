@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { AGENT_ERROR_CODES } from "@volli/shared";
 import type { AgentRequest } from "@volli/shared";
 
 import { runCli } from "./run";
@@ -95,9 +96,35 @@ describe("runCli", () => {
 
     expect(exitCode).toBe(0);
     expect(requested).toBe(false);
-    expect(stdout).toEqual([
-      '{"help":"Exit codes: 0 ok; 1 failure; 2 usage; 3 app unreachable."}\n',
-    ]);
+    expect(stdout).toHaveLength(1);
+    const { help } = JSON.parse(stdout[0]!) as { help: string };
+    expect(help).toContain("0 ok; 1 failure; 2 usage; 3 app unreachable");
+    for (const code of AGENT_ERROR_CODES) expect(help).toContain(code);
+  });
+
+  it("documents every published error code's exit class in volli help exit-codes", async () => {
+    const output: string[] = [];
+    await runCli(["help", "exit-codes"], {
+      env: {},
+      cwd: "/work",
+      stdout: (text) => output.push(text),
+      stderr: () => undefined,
+      readText: async () => "",
+      request: async () => ({ v: 1, ok: true, data: {} }) as const,
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    const text = output.join("");
+    // A stable machine-matchable code (decision 6) paired with its exit
+    // class — spot-check one of each class so the table format itself is
+    // covered, not just the vocabulary's presence.
+    expect(text).toContain("USAGE");
+    expect(text).toContain("2 usage");
+    expect(text).toContain("APP_UNREACHABLE");
+    expect(text).toContain("3 app unreachable");
+    expect(text).toContain("BODY_MATCH_FAILED");
+    expect(text).toContain("1 failure");
+    for (const code of AGENT_ERROR_CODES) expect(text).toContain(code);
   });
 
   it("renders every local help topic and reports parser usage failures", async () => {

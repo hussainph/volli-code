@@ -1,3 +1,4 @@
+import { AGENT_ERROR_CODES } from "@volli/shared";
 import type { AgentCommand, AgentError, AgentRequest, AgentResponse } from "@volli/shared";
 
 import { AgentClientError } from "./client";
@@ -16,10 +17,31 @@ export interface RunCliDependencies {
   launch(timeoutMs: number): Promise<{ alreadyRunning: boolean }>;
 }
 
+const EXIT_CLASS_LABEL = {
+  1: "1 failure",
+  2: "2 usage",
+  3: "3 app unreachable (retryable)",
+} as const;
+
+/**
+ * The fixed error-code vocabulary (decision 6), rendered from
+ * {@link AGENT_ERROR_CODES} so `volli help exit-codes` can never drift from
+ * the codes agent-commands.ts actually emits.
+ */
+function exitCodesHelpText(): string {
+  const width = Math.max(...AGENT_ERROR_CODES.map((code) => code.length));
+  const rows = AGENT_ERROR_CODES.map(
+    (code) => `  ${code.padEnd(width)}  ${EXIT_CLASS_LABEL[exitCodeForError(code)]}`,
+  );
+  return (
+    "Exit codes: 0 ok; 1 failure; 2 usage; 3 app unreachable (retryable).\n\n" +
+    "Error codes:\n" +
+    `${rows.join("\n")}\n`
+  );
+}
+
 function helpText(topic: unknown): string {
-  if (topic === "exit-codes") {
-    return "Exit codes: 0 ok; 1 failure; 2 usage; 3 app unreachable.\n";
-  }
+  if (topic === "exit-codes") return exitCodesHelpText();
   if (topic === "json") return "Pass --json to any command for stable structured output.\n";
   if (topic === "addressing") {
     return "Context: explicit flags, then VOLLI_SESSION/VOLLI_TICKET, then cwd. Volli never guesses.\n";
