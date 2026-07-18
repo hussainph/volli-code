@@ -63,6 +63,15 @@ function failure(code: AgentErrorCode, message: string): AgentResponse {
   return { v: 1, ok: false, error: { code, message } };
 }
 
+/**
+ * A CLI count option (`--events`/`--comments`/`--limit`/`--lines`) is honored
+ * only when it's a positive integer; 0, negatives, and NaN fall back to the
+ * command's default — never `slice(-0)`, which would return the whole history.
+ */
+function positiveIntOr(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
 function projectForCreate(
   db: Database.Database,
   projects: readonly Project[],
@@ -440,13 +449,7 @@ export function createAgentCommandService(
       if (request.cmd === "session.peek") {
         const resolved = sessionForPublicId(options.db, projects, request.args["id"]);
         if (!resolved.ok) return resolved.response;
-        const requestedLines = request.args["lines"];
-        const lines =
-          typeof requestedLines === "number" &&
-          Number.isInteger(requestedLines) &&
-          requestedLines > 0
-            ? requestedLines
-            : 60;
+        const lines = positiveIntOr(request.args["lines"], 60);
         const observation = options.observeSession?.(resolved.session.id, lines);
         if (!observation) {
           return failure(
@@ -548,9 +551,8 @@ export function createAgentCommandService(
       if (request.cmd === "ticket.show") {
         const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
         if (!resolved.ok) return resolved.response;
-        const eventLimit = typeof request.args["events"] === "number" ? request.args["events"] : 5;
-        const commentLimit =
-          typeof request.args["comments"] === "number" ? request.args["comments"] : 5;
+        const eventLimit = positiveIntOr(request.args["events"], 5);
+        const commentLimit = positiveIntOr(request.args["comments"], 5);
         const displayId = displayTicketId(
           resolved.project.ticketPrefix,
           resolved.ticket.ticketNumber,
@@ -768,13 +770,7 @@ export function createAgentCommandService(
       if (request.cmd === "ticket.events") {
         const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
         if (!resolved.ok) return resolved.response;
-        const requestedLimit = request.args["limit"];
-        const limit =
-          typeof requestedLimit === "number" &&
-          Number.isInteger(requestedLimit) &&
-          requestedLimit > 0
-            ? requestedLimit
-            : 50;
+        const limit = positiveIntOr(request.args["limit"], 50);
         const events = listTicketEvents(options.db, resolved.ticket.id)
           .slice(-limit)
           .map((event) => publicEvent(options.db, projects, event));

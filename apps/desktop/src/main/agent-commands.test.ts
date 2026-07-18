@@ -321,6 +321,41 @@ describe("agent command service", () => {
     );
   });
 
+  it("clamps non-positive ticket.show limits to their defaults instead of slicing the whole history", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    let timestamp = 100;
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => timestamp++,
+      newId: () => "ticket-one",
+    });
+    const execute = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
+      service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: {} } });
+    await execute("ticket.create", { title: "Ship CLI" });
+    for (const priority of ["high", "low", "medium", "high", "low", "medium"] as const) {
+      await execute("ticket.update", {
+        id: "VC-1",
+        priority,
+        addLabels: [],
+        removeLabels: [],
+      });
+    }
+
+    // `--events 0` must fall back to the default of 5 (not `slice(-0)` = all).
+    const shown = await execute("ticket.show", { id: "VC-1", events: 0, comments: -3 });
+
+    expect(shown.ok).toBe(true);
+    if (shown.ok) {
+      const data = shown.data as { events: unknown[] };
+      expect(data.events).toHaveLength(5);
+    }
+  });
+
   it("updates body fields and labels atomically with exact-match edit guards", async () => {
     ctx = openTestDb();
     insertProject(
