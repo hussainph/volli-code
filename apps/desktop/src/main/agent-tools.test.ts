@@ -4,7 +4,11 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { detectInstalledHarnesses, runAgentToolsConsent } from "./agent-tools";
+import {
+  detectInstalledHarnesses,
+  globalCliLinkShellCommand,
+  runAgentToolsConsent,
+} from "./agent-tools";
 
 let root: string | undefined;
 
@@ -26,6 +30,16 @@ describe("detectInstalledHarnesses", () => {
     await chmod(join(bin, "opencode"), 0o755);
 
     expect(await detectInstalledHarnesses(bin)).toEqual(["codex", "opencode"]);
+  });
+});
+
+describe("globalCliLinkShellCommand", () => {
+  it("creates /usr/local/bin before linking so fresh macOS never fails permanently", () => {
+    const command = globalCliLinkShellCommand("/Users/me/Library/App/bin/volli");
+    expect(command).toBe(
+      "/bin/mkdir -p /usr/local/bin && ln -sf '/Users/me/Library/App/bin/volli' /usr/local/bin/volli",
+    );
+    expect(command.indexOf("/bin/mkdir")).toBeLessThan(command.indexOf("ln -sf"));
   });
 });
 

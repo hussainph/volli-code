@@ -309,22 +309,38 @@ app.whenReady().then(async () => {
   }
 
   const installAgentTools = async (): Promise<void> => {
+    // Each step names itself in any thrown error so the failure dialog says what
+    // broke (skill files vs. the /usr/local/bin symlink) rather than a bare
+    // osascript/fs message. A throw leaves consent un-persisted on purpose, so a
+    // transient failure re-offers next boot instead of latching a broken state.
+    let result;
     try {
-      const result = await installDetectedHarnessSkills({
+      result = await installDetectedHarnessSkills({
         home: app.getPath("home"),
         pathValue: process.env["PATH"] ?? "",
       });
-      await installGlobalCliLink(shimPath);
-      if (result.conflicts.length > 0) {
-        await dialog.showMessageBox({
-          type: "warning",
-          message: "Some Volli skill files were edited and were not overwritten.",
-          detail: result.conflicts.join("\n"),
-        });
-      }
     } catch (error) {
-      dialog.showErrorBox("Agent Tools Installation Failed", errorMessage(error));
+      dialog.showErrorBox(
+        "Agent Tools Installation Failed",
+        `Installing the agent skill pack failed: ${errorMessage(error)}`,
+      );
       throw error;
+    }
+    try {
+      await installGlobalCliLink(shimPath);
+    } catch (error) {
+      dialog.showErrorBox(
+        "Agent Tools Installation Failed",
+        `Linking the volli CLI into /usr/local/bin failed: ${errorMessage(error)}`,
+      );
+      throw error;
+    }
+    if (result.conflicts.length > 0) {
+      await dialog.showMessageBox({
+        type: "warning",
+        message: "Some Volli skill files were edited and were not overwritten.",
+        detail: result.conflicts.join("\n"),
+      });
     }
   };
   registerAppMenu(dbHandle, { installAgentTools });

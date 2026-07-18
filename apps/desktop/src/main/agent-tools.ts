@@ -69,11 +69,20 @@ function appleScriptString(value: string): string {
   return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
 }
 
+/**
+ * The elevated shell command that links the generated shim to `/usr/local/bin`.
+ * Fresh macOS (no Homebrew / Command Line Tools) ships without `/usr/local/bin`,
+ * so `ln` alone fails permanently; `mkdir -p` runs first in the same elevated
+ * shell so both happen under a single administrator prompt.
+ */
+export function globalCliLinkShellCommand(shimPath: string): string {
+  return `/bin/mkdir -p /usr/local/bin && ln -sf ${shellSingleQuote(shimPath)} /usr/local/bin/volli`;
+}
+
 /** Uses the standard macOS administrator prompt to expose the generated shim outside Volli. */
 export async function installGlobalCliLink(shimPath: string): Promise<void> {
-  const command = `ln -sf ${shellSingleQuote(shimPath)} /usr/local/bin/volli`;
   await execFileAsync("/usr/bin/osascript", [
     "-e",
-    `do shell script ${appleScriptString(command)} with administrator privileges`,
+    `do shell script ${appleScriptString(globalCliLinkShellCommand(shimPath))} with administrator privileges`,
   ]);
 }
