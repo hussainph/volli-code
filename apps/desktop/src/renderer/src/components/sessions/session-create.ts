@@ -34,12 +34,18 @@ export interface SessionKickoff {
 }
 
 /** The main-process create request derived from a scope (ticket scopes carry env-injection intent). */
-function createRequest(scope: SessionScope, projectPath: string, kickoff?: SessionKickoff) {
+function createRequest(
+  scope: SessionScope,
+  projectPath: string,
+  placement: "tab" | "split",
+  kickoff?: SessionKickoff,
+) {
   return {
     workspaceId: scope.projectId,
     cwd: projectPath,
     cols: INITIAL_COLS,
     rows: INITIAL_ROWS,
+    placement,
     ...(scope.kind === "ticket"
       ? { ticket: { ticketId: scope.ticketId, ...(kickoff ? { kickoff } : {}) } }
       : {}),
@@ -78,6 +84,7 @@ function abandon(sessionId: string): void {
  */
 async function bootSession(
   scope: SessionScope,
+  placement: "tab" | "split",
   verb: string,
   land: (sessionId: string, title: string) => boolean,
   kickoff?: SessionKickoff,
@@ -90,7 +97,9 @@ async function bootSession(
 
   store.setStarting(id, true);
   try {
-    const result = await window.api.terminal.create(createRequest(scope, project.path, kickoff));
+    const result = await window.api.terminal.create(
+      createRequest(scope, project.path, placement, kickoff),
+    );
     if (!result.ok) {
       toastError(`Could not ${verb}: ${result.error}`);
       return null;
@@ -126,6 +135,7 @@ export async function createTerminalSession(
 ): Promise<string | null> {
   return bootSession(
     scope,
+    "tab",
     "start session",
     (sessionId, title) => {
       useSessionsStore.getState().addSession(scope, sessionId, title);
@@ -143,7 +153,7 @@ export async function createTerminalSplit(
   direction: TerminalSplitDirection,
 ): Promise<void> {
   const id = ownerKey(scope);
-  await bootSession(scope, "split terminal", (sessionId) => {
+  await bootSession(scope, "split", "split terminal", (sessionId) => {
     const tab = useSessionsStore
       .getState()
       .byOwner[id]?.tabs.find((candidate) => candidate.sessionId === tabId);

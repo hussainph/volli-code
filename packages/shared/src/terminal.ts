@@ -15,6 +15,8 @@ export interface CreateTerminalSessionRequest {
   cwd: string;
   cols: number;
   rows: number;
+  /** App-owned layout intent. Omitted callers predate split metadata and land as a tab. */
+  placement?: "tab" | "split";
   /**
    * When present, the session is ticket-scoped: main resolves the ticket and
    * its project from the db (never trusting anything else from the renderer),

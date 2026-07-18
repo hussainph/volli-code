@@ -142,6 +142,10 @@ interface SessionScope {
   projectId: string;
   ticketId: string | null;
   harnessId: HarnessId;
+  /** Truthful initial launch: a harness command was written, or this is a bare shell. */
+  launchKind: "agent" | "shell";
+  /** App-owned layout intent supplied by the renderer. */
+  placement: "tab" | "split";
   cwd: string;
   /** Extra env layered over the inherited environment (VOLLI_TICKET/VOLLI_ARTIFACTS_DIR, or just the artifacts dir). */
   env: Record<string, string>;
@@ -212,6 +216,9 @@ export class PtyManager {
     db: Database.Database,
     request: CreateTerminalSessionRequest,
   ): { ok: true; scope: SessionScope } | { ok: false; error: string } {
+    // Presentation metadata is non-security-sensitive, but still normalize the
+    // IPC value so an untyped caller cannot persist arbitrary vocabulary.
+    const placement = request.placement === "split" ? "split" : "tab";
     if (request.ticket !== undefined) {
       const ctx = getTicketSessionContext(db, request.ticket.ticketId);
       if (ctx === undefined) return { ok: false, error: "Unknown ticket" };
@@ -226,6 +233,8 @@ export class PtyManager {
           // request carries the harness to launch; without one, a ticket
           // session boots the default harness, same as a scratch session.
           harnessId: kickoff?.harnessId ?? DEFAULT_HARNESS_ID,
+          launchKind: kickoff === undefined ? "shell" : "agent",
+          placement,
           // Ticket sessions run at the MAIN repo root — worktree automation is
           // future work, and VOLLI_ARTIFACTS_DIR always points at the main .volli.
           cwd: ctx.projectPath,
@@ -247,6 +256,8 @@ export class PtyManager {
         projectId: request.workspaceId,
         ticketId: null,
         harnessId: DEFAULT_HARNESS_ID,
+        launchKind: "shell",
+        placement,
         cwd: request.cwd,
         env: project ? projectSessionEnv(project.path) : {},
         title: `Terminal ${countProjectScratchSessions(db, request.workspaceId) + 1}`,
@@ -337,6 +348,8 @@ export class PtyManager {
         projectId: scope.projectId,
         ticketId: scope.ticketId,
         harnessId: scope.harnessId,
+        launchKind: scope.launchKind,
+        placement: scope.placement,
         title: scope.title,
         cwd,
         now,
@@ -352,7 +365,9 @@ export class PtyManager {
                 kind: "session_started",
                 sessionId: record.id,
                 title: record.title,
-                harnessId: record.harnessId,
+                launchKind: record.launchKind,
+                placement: record.placement,
+                ...(record.launchKind === "agent" ? { harnessId: record.harnessId } : {}),
               },
               now,
             );

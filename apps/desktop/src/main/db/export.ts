@@ -88,6 +88,8 @@ export interface ExportSession {
   ticketId: string | null;
   harnessId: string;
   harnessSessionId: string | null;
+  launchKind: string;
+  placement: string;
   title: string;
   cwd: string;
   createdAt: number;
@@ -279,6 +281,8 @@ interface SessionRow {
   ticket_id: string | null;
   harness_id: string;
   harness_session_id: string | null;
+  launch_kind: string;
+  placement: string;
   title: string;
   cwd: string;
   created_at: number;
@@ -293,6 +297,8 @@ function exportSessions(db: Database.Database): ExportSession[] {
     ticketId: row.ticket_id,
     harnessId: row.harness_id,
     harnessSessionId: row.harness_session_id,
+    launchKind: row.launch_kind,
+    placement: row.placement,
     title: row.title,
     cwd: row.cwd,
     createdAt: row.created_at,
