@@ -441,6 +441,19 @@ export function createAgentCommandService(
             ? undefined
             : ticketForDisplayId(options.db, projects, ticketSelector);
         if (ticketResolution && !ticketResolution.ok) return ticketResolution.response;
+        // An explicit --project alongside --ticket must agree: never silently
+        // let the ticket's project win over what the caller explicitly asked
+        // for. When both are present and disagree, refuse and name both.
+        if (request.args["project"] !== undefined && ticketResolution?.ok) {
+          const selected = projectForCreate(options.db, projects, request);
+          if (!selected.ok) return selected.response;
+          if (selected.project.id !== ticketResolution.project.id) {
+            return failure(
+              "CONTEXT_MISMATCH",
+              `Ticket ${String(ticketSelector)} belongs to project ${ticketResolution.project.name}, not the requested project ${selected.project.name}.`,
+            );
+          }
+        }
         const resolvedProject = ticketResolution?.ok
           ? ticketResolution.project
           : projectForCreate(options.db, projects, request);

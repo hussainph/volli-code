@@ -636,6 +636,46 @@ describe("agent command service", () => {
     );
   });
 
+  it("refuses session.list when an explicit --project contradicts the --ticket", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-a", name: "Alpha", path: "/repo/alpha", ticketPrefix: "AL" }),
+    );
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-b", name: "Beta", path: "/repo/beta", ticketPrefix: "BT" }),
+    );
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 100,
+      newId: () => "ticket-a",
+    });
+    await service.execute({
+      v: 1,
+      cmd: "ticket.create",
+      args: { title: "In Alpha", project: "/repo/alpha" },
+      ctx: { cwd: "/outside", env: {} },
+    });
+
+    const mismatch = await service.execute({
+      v: 1,
+      cmd: "session.list",
+      args: { ticket: "AL-1", project: "/repo/beta" },
+      ctx: { cwd: "/outside", env: {} },
+    });
+
+    expect(mismatch).toMatchObject({
+      ok: false,
+      error: { code: "CONTEXT_MISMATCH" },
+    });
+    if (!mismatch.ok) {
+      expect(mismatch.error.message).toContain("Alpha");
+      expect(mismatch.error.message).toContain("Beta");
+    }
+  });
+
   it("observes sessions by short id and delegates native notifications", async () => {
     ctx = openTestDb();
     insertProject(
