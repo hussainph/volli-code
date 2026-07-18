@@ -32,6 +32,15 @@ describe("mergeFencedSection", () => {
       content: first.content,
     });
   });
+
+  it("inserts a managed body containing $& / $$ verbatim", () => {
+    const body = "Cost is $$5 and $& stays literal.";
+    const appended = mergeFencedSection("# rules\n", body, 1);
+    expect(appended.content).toContain(`<!-- volli:begin v=1 -->\n${body}\n<!-- volli:end -->`);
+
+    const replaced = mergeFencedSection(appended.content, body, 1);
+    expect(replaced).toEqual({ changed: false, content: appended.content });
+  });
 });
 
 describe("managedWriteDecision", () => {

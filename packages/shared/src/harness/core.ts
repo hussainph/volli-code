@@ -23,8 +23,10 @@ export function mergeFencedSection(
   const block = `<!-- volli:begin v=${version} -->\n${managedBody}\n<!-- volli:end -->`;
   const managedPattern = /<!-- volli:begin v=\d+ -->[\s\S]*?<!-- volli:end -->/;
   const unmanaged = current.replace(/\n+$/, "");
+  // Function-form replacement so `$$`, `$&`, `$1`, … inside the managed body are
+  // inserted literally instead of being interpreted as replacement patterns.
   const content = managedPattern.test(current)
-    ? current.replace(managedPattern, block)
+    ? current.replace(managedPattern, () => block)
     : `${unmanaged.length > 0 ? `${unmanaged}\n\n` : ""}${block}\n`;
   return { content, changed: content !== current };
 }
