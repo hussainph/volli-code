@@ -302,6 +302,7 @@ app.whenReady().then(async () => {
       electronPath: process.execPath,
       bundlePath: runtimePaths.cliBundlePath,
       socketPath: runtimePaths.socketPath,
+      appEntry: app.isPackaged ? null : join(app.getAppPath(), "dist-electron/main.cjs"),
     });
   } catch (error) {
     console.error("[volli] failed to generate CLI shim:", errorMessage(error));
