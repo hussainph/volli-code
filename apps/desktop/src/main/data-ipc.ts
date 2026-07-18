@@ -41,7 +41,7 @@ import type {
 } from "@volli/shared";
 import { getAllAppState, setAppState } from "./db/app-state-repo";
 import { deleteComment, getComment, listComments, updateComment } from "./db/comments-repo";
-import { listTicketEvents, recordTicketEvent } from "./db/events-repo";
+import { listTicketEvents } from "./db/events-repo";
 import { listAllLabels, setLabelColor } from "./db/labels-repo";
 import {
   countProjects,
@@ -54,22 +54,16 @@ import {
   updateProjectBaseBranch,
 } from "./db/projects-repo";
 import { listSessions, listTicketSessions, updateTitle } from "./db/sessions-repo";
-import {
-  deleteTicket,
-  getTicket,
-  getTicketRow,
-  listAllTickets,
-  listArchivedTicketsByProject,
-  nextPositionInStatus,
-  unarchiveTicket,
-} from "./db/tickets-repo";
+import { listAllTickets, listArchivedTicketsByProject } from "./db/tickets-repo";
 import {
   archiveTicketCommand,
   createTicketCommand,
   createTicketCommentCommand,
+  deleteTicketCommand,
   moveTicketCommand,
   setTicketLabelsCommand,
   setTicketPriorityCommand,
+  unarchiveTicketCommand,
   updateTicketFieldsCommand,
 } from "./ticket-commands";
 import { detectProjectBaseBranch } from "./project-base-branch";
@@ -651,22 +645,11 @@ export function registerDataIpcHandlers(
         return { ok: false, error: "Invalid ticket" };
       }
       try {
-        const now = Date.now();
-        const run = db.transaction((): Ticket => {
-          const row = getTicketRow(db, input.ticketId);
-          if (!row) throw new Error("Unknown ticket");
-          if (row.archived_at !== null) {
-            // Append at the live end of its retained column — MAX+1 runs while
-            // this ticket is still archived, so its own row can't contribute.
-            const position = nextPositionInStatus(db, row.project_id, row.status as TicketStatus);
-            unarchiveTicket(db, input.ticketId, position, now);
-            recordTicketEvent(db, input.ticketId, { kind: "unarchived" }, now);
-          }
-          const ticket = getTicket(db, input.ticketId);
-          if (!ticket) throw new Error("Unknown ticket");
-          return ticket;
+        const ticket = unarchiveTicketCommand(db, input.ticketId, {
+          now: Date.now(),
+          actor: { kind: "user" },
         });
-        return { ok: true, ticket: run() };
+        return { ok: true, ticket };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }
@@ -680,19 +663,7 @@ export function registerDataIpcHandlers(
         return { ok: false, error: "Invalid ticket" };
       }
       try {
-        const run = db.transaction((): void => {
-          const row = getTicketRow(db, input.ticketId);
-          if (!row) throw new Error("Unknown ticket");
-          // The only destructive act, and only from the Archive: a live board
-          // ticket is archived, never hard-deleted (CONCEPT #16/#92). Guarding
-          // here — not just in the UI — keeps a stray call from nuking a live
-          // ticket's history. The FK cascades take its labels + events with it.
-          if (row.archived_at === null) {
-            throw new Error("Only archived tickets can be deleted");
-          }
-          deleteTicket(db, input.ticketId);
-        });
-        run();
+        deleteTicketCommand(db, input.ticketId);
         return { ok: true };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };

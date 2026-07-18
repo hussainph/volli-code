@@ -22,6 +22,7 @@ import {
 import {
   archiveTicket,
   bumpTicketVersion,
+  deleteTicket,
   getTicket,
   getTicketLabelNames,
   getTicketRow,
@@ -29,6 +30,7 @@ import {
   listTicketsByProject,
   nextPositionInStatus,
   nextTicketNumberForProject,
+  unarchiveTicket,
   updateTicketFields,
   updateTicketPositionStatus,
   updateTicketPriority,
@@ -327,5 +329,44 @@ export function archiveTicketCommand(
     if (row.archived_at !== null) return;
     archiveTicket(db, ticketId, context.now);
     recordTicketEvent(db, ticketId, { kind: "archived" }, context.now, context.actor);
+  })();
+}
+
+export function unarchiveTicketCommand(
+  db: Database.Database,
+  ticketId: string,
+  context: TicketCommandContext,
+): Ticket {
+  return db.transaction((): Ticket => {
+    const row = getTicketRow(db, ticketId);
+    if (!row) throw new Error("Unknown ticket");
+    if (row.archived_at !== null) {
+      // Append at the live end of its retained column — MAX+1 runs while this
+      // ticket is still archived, so its own row can't contribute.
+      const position = nextPositionInStatus(db, row.project_id, row.status as TicketStatus);
+      unarchiveTicket(db, ticketId, position, context.now);
+      recordTicketEvent(db, ticketId, { kind: "unarchived" }, context.now, context.actor);
+    }
+    const ticket = getTicket(db, ticketId);
+    if (!ticket) throw new Error("Unknown ticket");
+    return ticket;
+  })();
+}
+
+/**
+ * Hard-deletes an archived ticket — the one destructive act, Archive-only
+ * (CONCEPT #16/#92), never exposed over the agent socket (spec decision 1).
+ * Guarding here (not just in the UI) keeps a stray call from nuking a live
+ * ticket's history. Records no event: the row and its events vanish together
+ * in the FK cascade, so there is no actor to attribute.
+ */
+export function deleteTicketCommand(db: Database.Database, ticketId: string): void {
+  db.transaction((): void => {
+    const row = getTicketRow(db, ticketId);
+    if (!row) throw new Error("Unknown ticket");
+    if (row.archived_at === null) {
+      throw new Error("Only archived tickets can be deleted");
+    }
+    deleteTicket(db, ticketId);
   })();
 }
