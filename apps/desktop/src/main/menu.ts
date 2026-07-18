@@ -63,26 +63,42 @@ async function handleExportDatabase(dbHandle: DbHandle): Promise<void> {
 
 export function registerAppMenu(
   dbHandle: DbHandle,
-  options: { installAgentTools?: () => Promise<void> } = {},
+  options: {
+    installAgentTools?: () => Promise<void>;
+    uninstallAgentTools?: () => Promise<void>;
+  } = {},
 ): void {
+  const agentToolsItems: MenuItemConstructorOptions[] = [];
+  if (options.installAgentTools) {
+    agentToolsItems.push({
+      label: "Install Volli CLI & Agent Skills…",
+      click: () => {
+        void options.installAgentTools?.().catch(() => {
+          // The installer itself surfaces an error box.
+        });
+      },
+    });
+  }
+  if (options.uninstallAgentTools) {
+    agentToolsItems.push({
+      label: "Remove Volli CLI & Agent Skills…",
+      click: () => {
+        void options.uninstallAgentTools?.().catch(() => {
+          // The uninstaller itself surfaces an error box.
+        });
+      },
+    });
+  }
+  if (agentToolsItems.length > 0) {
+    agentToolsItems.push({ type: "separator" });
+  }
+
   const template: MenuItemConstructorOptions[] = [
     { role: "appMenu" },
     {
       label: "File",
       submenu: [
-        ...(options.installAgentTools
-          ? [
-              {
-                label: "Install Volli CLI & Agent Skills…",
-                click: () => {
-                  void options.installAgentTools?.().catch(() => {
-                    // The installer itself surfaces an error box.
-                  });
-                },
-              } satisfies MenuItemConstructorOptions,
-              { type: "separator" as const },
-            ]
-          : []),
+        ...agentToolsItems,
         {
           label: "Export Database as JSON…",
           click: () => {

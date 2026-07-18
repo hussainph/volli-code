@@ -27,7 +27,9 @@ import { startAgentSocket, type AgentSocketServer } from "./agent-socket";
 import {
   installDetectedHarnessSkills,
   installGlobalCliLink,
+  removeGlobalCliLinkIfOurs,
   runAgentToolsConsent,
+  uninstallAllHarnessSkills,
   type AgentToolsConsentStatus,
 } from "./agent-tools";
 import { getAllAppState, setAppState } from "./db/app-state-repo";
@@ -314,6 +316,8 @@ app.whenReady().then(async () => {
     console.error("[volli] failed to generate CLI shim:", errorMessage(error));
   }
 
+  const agentToolsConsentKey = "volli:agent-tools-consent";
+
   // Renders hand-edited managed files that were preserved (never overwritten)
   // as path + a readable unified diff in the dialog detail (spec decision 12:
   // "warn + diff"). Shared by install, the on-update refresh, and uninstall.
@@ -362,7 +366,62 @@ app.whenReady().then(async () => {
       await showSkillConflictWarning(result.conflicts);
     }
   };
-  registerAppMenu(dbHandle, { installAgentTools });
+
+  // Menu action: confirm, remove every harness's managed files (hand-edited
+  // ones survive via the uninstall hash guard), drop the /usr/local/bin link
+  // only if it still points at our shim, then reset consent to null so the
+  // first-launch offer returns. Every failure surfaces its own dialog.
+  const uninstallAgentTools = async (): Promise<void> => {
+    const confirm = await dialog.showMessageBox(mainWindow, {
+      type: "warning",
+      message: "Remove the Volli CLI and agent skills?",
+      detail:
+        "This removes the bundled skill pack and the /usr/local/bin/volli link. Files you edited yourself are left in place.",
+      buttons: ["Remove", "Cancel"],
+      defaultId: 1,
+      cancelId: 1,
+    });
+    if (confirm.response !== 0) return;
+
+    let removal;
+    try {
+      removal = await uninstallAllHarnessSkills({ home: app.getPath("home") });
+    } catch (error) {
+      dialog.showErrorBox(
+        "Agent Tools Removal Failed",
+        `Removing the agent skill pack failed: ${errorMessage(error)}`,
+      );
+      return;
+    }
+    try {
+      await removeGlobalCliLinkIfOurs(shimPath);
+    } catch (error) {
+      dialog.showErrorBox(
+        "Agent Tools Removal Failed",
+        `Removing the /usr/local/bin/volli link failed: ${errorMessage(error)}`,
+      );
+      return;
+    }
+    if (dbHandle.ok) {
+      try {
+        setAppState(dbHandle.db, agentToolsConsentKey, JSON.stringify(null), Date.now());
+      } catch (error) {
+        dialog.showErrorBox("Agent Tools Removal Failed", errorMessage(error));
+        return;
+      }
+    }
+    const preservedNote =
+      removal.preserved.length > 0
+        ? `\n\nLeft in place because you edited them:\n${removal.preserved.join("\n")}`
+        : "";
+    await dialog.showMessageBox(mainWindow, {
+      type: "info",
+      message: "Volli CLI and agent skills removed.",
+      detail: `Removed ${removal.removed.length} managed item(s).${preservedNote}`,
+    });
+  };
+
+  registerAppMenu(dbHandle, { installAgentTools, uninstallAgentTools });
 
   try {
     const execute = dbHandle.ok
@@ -393,7 +452,7 @@ app.whenReady().then(async () => {
   }
 
   if (dbHandle.ok) {
-    const consentKey = "volli:agent-tools-consent";
+    const consentKey = agentToolsConsentKey;
     const stored = getAllAppState(dbHandle.db)[consentKey];
     const current: AgentToolsConsentStatus | null =
       stored === '"installed"' ? "installed" : stored === '"deferred"' ? "deferred" : null;

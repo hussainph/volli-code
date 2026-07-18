@@ -1,13 +1,16 @@
-import { chmod, mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { buildHarnessInstallPlan, HARNESS_IDS } from "@volli/shared";
 
+import { applyHarnessInstallPlan } from "./harness-install";
 import {
   detectInstalledHarnesses,
   globalCliLinkShellCommand,
   runAgentToolsConsent,
+  uninstallAllHarnessSkills,
 } from "./agent-tools";
 
 let root: string | undefined;
@@ -40,6 +43,22 @@ describe("globalCliLinkShellCommand", () => {
       "/bin/mkdir -p /usr/local/bin && ln -sf '/Users/me/Library/App/bin/volli' /usr/local/bin/volli",
     );
     expect(command.indexOf("/bin/mkdir")).toBeLessThan(command.indexOf("ln -sf"));
+  });
+});
+
+describe("uninstallAllHarnessSkills", () => {
+  it("removes the skill pack for every first-class harness", async () => {
+    root = await mkdtemp(join(tmpdir(), "volli-uninstall-test-"));
+    const plan = buildHarnessInstallPlan({ home: root, detected: HARNESS_IDS });
+    const manifestPath = join(root, ".agents/skills/volli/.volli-managed.json");
+    await applyHarnessInstallPlan(plan, manifestPath);
+    const skill = join(root, ".agents/skills/volli/SKILL.md");
+    expect((await stat(skill)).isFile()).toBe(true);
+
+    const removal = await uninstallAllHarnessSkills({ home: root });
+    expect(removal.removed).toContain(skill);
+    expect(removal.preserved).toEqual([]);
+    await expect(readFile(skill, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
 

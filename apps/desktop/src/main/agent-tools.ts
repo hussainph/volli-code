@@ -1,12 +1,22 @@
 import { execFile } from "node:child_process";
 import { constants } from "node:fs";
-import { access } from "node:fs/promises";
+import { access, readlink } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
-import { buildHarnessInstallPlan, shellSingleQuote, type HarnessId } from "@volli/shared";
+import {
+  buildHarnessInstallPlan,
+  HARNESS_IDS,
+  shellSingleQuote,
+  type HarnessId,
+} from "@volli/shared";
 
-import { applyHarnessInstallPlan, type HarnessInstallResult } from "./harness-install";
+import {
+  applyHarnessInstallPlan,
+  uninstallHarnessPlan,
+  type HarnessInstallResult,
+  type HarnessUninstallResult,
+} from "./harness-install";
 
 const execFileAsync = promisify(execFile);
 const harnessExecutables: ReadonlyArray<{ id: HarnessId; executable: string }> = [
@@ -54,6 +64,10 @@ export async function runAgentToolsConsent(input: {
   return "deferred";
 }
 
+function managedManifestPath(home: string): string {
+  return join(home, ".agents/skills/volli/.volli-managed.json");
+}
+
 /** Installs or refreshes the skill pack for currently detected harnesses. */
 export async function installDetectedHarnessSkills(input: {
   home: string;
@@ -61,8 +75,20 @@ export async function installDetectedHarnessSkills(input: {
 }): Promise<HarnessInstallResult> {
   const detected = await detectInstalledHarnesses(input.pathValue);
   const plan = buildHarnessInstallPlan({ home: input.home, detected });
-  const manifestPath = join(input.home, ".agents/skills/volli/.volli-managed.json");
-  return applyHarnessInstallPlan(plan, manifestPath);
+  return applyHarnessInstallPlan(plan, managedManifestPath(input.home));
+}
+
+/**
+ * Removes the skill pack for every first-class harness. Detection is irrelevant
+ * to removal — a harness the user has since uninstalled may still have Volli
+ * files on disk — so the plan spans all {@link HARNESS_IDS}. Per-file hash
+ * guards inside {@link uninstallHarnessPlan} keep hand-edited files.
+ */
+export async function uninstallAllHarnessSkills(input: {
+  home: string;
+}): Promise<HarnessUninstallResult> {
+  const plan = buildHarnessInstallPlan({ home: input.home, detected: HARNESS_IDS });
+  return uninstallHarnessPlan(plan, managedManifestPath(input.home));
 }
 
 function appleScriptString(value: string): string {
@@ -85,4 +111,29 @@ export async function installGlobalCliLink(shimPath: string): Promise<void> {
     "-e",
     `do shell script ${appleScriptString(globalCliLinkShellCommand(shimPath))} with administrator privileges`,
   ]);
+}
+
+/**
+ * Removes `/usr/local/bin/volli` iff it is a symlink pointing at our own shim.
+ * The ownership check (`readlink`) is a cheap, non-admin syscall done first, so
+ * the administrator prompt only ever appears for a link we actually created —
+ * never for a same-named link the user set up for something else, nor a plain
+ * file. Returns whether the link was removed.
+ */
+export async function removeGlobalCliLinkIfOurs(shimPath: string): Promise<boolean> {
+  let target: string;
+  try {
+    target = await readlink("/usr/local/bin/volli");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // ENOENT: nothing there. EINVAL: exists but not a symlink → not ours.
+    if (code === "ENOENT" || code === "EINVAL") return false;
+    throw error;
+  }
+  if (target !== shimPath) return false;
+  await execFileAsync("/usr/bin/osascript", [
+    "-e",
+    `do shell script ${appleScriptString("rm -f /usr/local/bin/volli")} with administrator privileges`,
+  ]);
+  return true;
 }
