@@ -1,5 +1,81 @@
 import type { TicketStatus } from "./ticket";
 
+export const AGENT_COMMANDS = [
+  "identify",
+  "board",
+  "ticket.list",
+  "ticket.show",
+  "ticket.events",
+  "ticket.create",
+  "ticket.update",
+  "ticket.move",
+  "ticket.comment",
+  "ticket.archive",
+  "ticket.brief",
+  "project.list",
+  "label.list",
+  "session.list",
+  "session.peek",
+  "session.done",
+  "session.blocked",
+  "notify",
+] as const;
+
+export type AgentCommand = (typeof AGENT_COMMANDS)[number];
+
+export const AGENT_ERROR_CODES = [
+  "USAGE",
+  "INVALID_REQUEST",
+  "UNSUPPORTED_COMMAND",
+  "APP_UNREACHABLE",
+  "DB_UNAVAILABLE",
+  "PROJECT_REQUIRED",
+  "PROJECT_NOT_FOUND",
+  "AMBIGUOUS_PROJECT",
+  "TICKET_NOT_FOUND",
+  "AMBIGUOUS_TICKET",
+  "SESSION_NOT_FOUND",
+  "AMBIGUOUS_CONTEXT",
+  "CONTEXT_REQUIRED",
+  "CONTEXT_MISMATCH",
+  "BODY_MATCH_FAILED",
+  "INVALID_COLUMN",
+  "INVALID_PRIORITY",
+  "ARCHIVED_TICKET",
+  "PREFIX_CONFLICT",
+  "FILE_READ_FAILED",
+  "MUTATION_FAILED",
+  "SOCKET_PROTOCOL",
+  "TIMEOUT",
+] as const;
+
+export type AgentErrorCode = (typeof AGENT_ERROR_CODES)[number];
+
+export interface AgentRequestContext {
+  cwd: string;
+  env: {
+    session?: string;
+    ticket?: string;
+    socket?: string;
+  };
+}
+
+export interface AgentRequest {
+  v: 1;
+  cmd: AgentCommand;
+  args: Record<string, unknown>;
+  ctx: AgentRequestContext;
+}
+
+export interface AgentError {
+  code: AgentErrorCode;
+  message: string;
+}
+
+export type AgentResponse =
+  | { v: 1; ok: true; data: unknown }
+  | { v: 1; ok: false; error: AgentError };
+
 export const COLUMN_TOKENS = [
   "backlog",
   "todo",

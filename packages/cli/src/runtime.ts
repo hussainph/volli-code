@@ -1,0 +1,73 @@
+import type { CliInvocation } from "./parser";
+import { AgentClientError } from "./client";
+
+export type ReadTextFile = (path: string) => Promise<string>;
+
+export interface LaunchAppOptions {
+  socketPath: string;
+  executable: string;
+  appEntry: string | undefined;
+  timeoutMs: number;
+  env: NodeJS.ProcessEnv;
+}
+
+export interface LaunchAppDependencies {
+  probe(socketPath: string): Promise<void>;
+  spawnDetached(executable: string, args: string[], env: NodeJS.ProcessEnv): void;
+  delay(ms: number): Promise<void>;
+  now(): number;
+}
+
+/** Explicitly launches the app and closes the boot race by waiting for its socket. */
+export async function launchApp(
+  options: LaunchAppOptions,
+  dependencies: LaunchAppDependencies,
+): Promise<{ alreadyRunning: boolean }> {
+  try {
+    await dependencies.probe(options.socketPath);
+    return { alreadyRunning: true };
+  } catch {
+    // Explicit launch is the recovery path for an unreachable app.
+  }
+
+  const env: NodeJS.ProcessEnv = { ...options.env, VOLLI_LAUNCHED_BY_CLI: "1" };
+  delete env.ELECTRON_RUN_AS_NODE;
+  dependencies.spawnDetached(options.executable, options.appEntry ? [options.appEntry] : [], env);
+
+  const deadline = dependencies.now() + options.timeoutMs;
+  while (dependencies.now() < deadline) {
+    try {
+      await dependencies.probe(options.socketPath);
+      return { alreadyRunning: false };
+    } catch {
+      await dependencies.delay(50);
+    }
+  }
+  throw new AgentClientError("TIMEOUT", "Volli launched but its socket did not become ready.");
+}
+
+/** Materializes --body-file/--file locally; the app never receives arbitrary client paths. */
+export async function materializeFileArguments(
+  invocation: CliInvocation,
+  readText: ReadTextFile,
+): Promise<CliInvocation> {
+  const path = invocation.args["bodyFile"] ?? invocation.args["file"];
+  if (typeof path !== "string") return invocation;
+
+  let text: string;
+  try {
+    text = await readText(path);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new AgentClientError("FILE_READ_FAILED", `Could not read ${path}: ${message}`);
+  }
+
+  const args = { ...invocation.args };
+  delete args["bodyFile"];
+  delete args["file"];
+  if (invocation.command === "ticket.create") args["body"] = text;
+  else if (invocation.command === "ticket.update") {
+    args["bodyMutation"] = { mode: "replace", body: text };
+  } else if (invocation.command === "ticket.comment") args["message"] = text;
+  return { ...invocation, args };
+}

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { applyTicketBodyMutation, parseColumnToken, resolveAgentContext } from "./agent-surface";
+import {
+  AGENT_ERROR_CODES,
+  applyTicketBodyMutation,
+  parseColumnToken,
+  resolveAgentContext,
+} from "./agent-surface";
 
 describe("resolveAgentContext", () => {
   it("uses an explicit project path before cwd inference", () => {
@@ -168,5 +173,15 @@ describe("parseColumnToken", () => {
   it("normalizes both public review spellings to the domain status", () => {
     expect(parseColumnToken("needs-review")).toEqual({ ok: true, status: "needs_review" });
     expect(parseColumnToken("review")).toEqual({ ok: true, status: "needs_review" });
+  });
+});
+
+describe("agent error vocabulary", () => {
+  it("publishes stable codes for usage, resolution, mutation, and infrastructure failures", () => {
+    expect(AGENT_ERROR_CODES).toContain("TICKET_NOT_FOUND");
+    expect(AGENT_ERROR_CODES).toContain("AMBIGUOUS_PROJECT");
+    expect(AGENT_ERROR_CODES).toContain("BODY_MATCH_FAILED");
+    expect(AGENT_ERROR_CODES).toContain("APP_UNREACHABLE");
+    expect(AGENT_ERROR_CODES).toContain("DB_UNAVAILABLE");
   });
 });
