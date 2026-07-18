@@ -29,12 +29,7 @@ import { listComments } from "./db/comments-repo";
 import { listAllLabels } from "./db/labels-repo";
 import { listProjects } from "./db/projects-repo";
 import { getSession, listSessions } from "./db/sessions-repo";
-import {
-  getTicket,
-  listAllTickets,
-  listArchivedTicketsByProject,
-  listTicketsByProject,
-} from "./db/tickets-repo";
+import { getTicket, listArchivedTicketsByProject, listTicketsByProject } from "./db/tickets-repo";
 import {
   archiveTicketCommand,
   createTicketCommand,
@@ -74,12 +69,72 @@ function positiveIntOr(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
+type ProjectResolution = { ok: true; project: Project } | { ok: false; response: AgentResponse };
+
+function finalizeContext(
+  projects: readonly Project[],
+  result: ReturnType<typeof resolveAgentContext>,
+): ProjectResolution {
+  if (!result.ok) {
+    return { ok: false, response: failure(result.code as AgentErrorCode, result.message) };
+  }
+  const project = projects.find(({ id }) => id === result.context.projectId);
+  return project
+    ? { ok: true, project }
+    : {
+        ok: false,
+        response: failure("PROJECT_NOT_FOUND", "The resolved project no longer exists."),
+      };
+}
+
+/**
+ * Resolves the project for a read/create request along the context ladder, doing
+ * work proportional to the request: an explicit `--project` or a Volli session
+ * env resolves from project metadata alone (no ticket/session scan). Only the
+ * env-ticket and cwd rungs build the ticket index (display ids + worktree
+ * paths); sessions are never scanned here — `VOLLI_SESSION` is resolved directly.
+ */
 function projectForCreate(
   db: Database.Database,
   projects: readonly Project[],
   request: AgentRequest,
-): { ok: true; project: Project } | { ok: false; response: AgentResponse } {
+): ProjectResolution {
   const selector = request.args["project"];
+  if (typeof selector === "string") {
+    return finalizeContext(
+      projects,
+      resolveAgentContext({
+        explicit: { project: selector },
+        env: {},
+        cwd: request.ctx.cwd,
+        projects: projects.map(({ id, name, path, ticketPrefix }) => ({
+          id,
+          name,
+          path,
+          ticketPrefix,
+        })),
+        tickets: [],
+        sessions: [],
+      }),
+    );
+  }
+  const envSession = request.ctx.env.session;
+  if (envSession !== undefined) {
+    const session = getSession(db, envSession);
+    if (!session) {
+      return {
+        ok: false,
+        response: failure("SESSION_NOT_FOUND", `No session matches ${envSession}`),
+      };
+    }
+    const project = projects.find(({ id }) => id === session.projectId);
+    return project
+      ? { ok: true, project }
+      : {
+          ok: false,
+          response: failure("PROJECT_NOT_FOUND", "The resolved project no longer exists."),
+        };
+  }
   const projectById = new Map(projects.map((project) => [project.id, project]));
   const allTickets = projects.flatMap((project) => [
     ...listTicketsByProject(db, project.id),
@@ -93,45 +148,28 @@ function projectForCreate(
         : [];
     }),
   );
-  const result = resolveAgentContext({
-    explicit: typeof selector === "string" ? { project: selector } : {},
-    env: {
-      VOLLI_SESSION: request.ctx.env.session,
-      VOLLI_TICKET: request.ctx.env.ticket,
-      VOLLI_SOCKET: request.ctx.env.socket,
-    },
-    cwd: request.ctx.cwd,
-    projects: projects.map((project) => ({
-      ...project,
-      worktreePaths: allTickets
-        .filter((ticket) => ticket.projectId === project.id && ticket.worktreePath !== null)
-        .map((ticket) => ticket.worktreePath!),
-    })),
-    tickets: allTickets.map((ticket) => ({
-      displayId: ticketDisplayById.get(ticket.id)!,
-      projectId: ticket.projectId,
-    })),
-    sessions: projects.flatMap((project) =>
-      listSessions(db, project.id).map((session) => ({
-        id: session.id,
-        projectId: session.projectId,
-        ticketDisplayId: session.ticketId
-          ? (ticketDisplayById.get(session.ticketId) ?? null)
-          : null,
+  return finalizeContext(
+    projects,
+    resolveAgentContext({
+      explicit: {},
+      env: {
+        VOLLI_TICKET: request.ctx.env.ticket,
+        VOLLI_SOCKET: request.ctx.env.socket,
+      },
+      cwd: request.ctx.cwd,
+      projects: projects.map((project) => ({
+        ...project,
+        worktreePaths: allTickets
+          .filter((ticket) => ticket.projectId === project.id && ticket.worktreePath !== null)
+          .map((ticket) => ticket.worktreePath!),
       })),
-    ),
-  });
-  if (!result.ok) {
-    const code = result.code as AgentErrorCode;
-    return { ok: false, response: failure(code, result.message) };
-  }
-  const project = projects.find(({ id }) => id === result.context.projectId);
-  return project
-    ? { ok: true, project }
-    : {
-        ok: false,
-        response: failure("PROJECT_NOT_FOUND", "The resolved project no longer exists."),
-      };
+      tickets: allTickets.map((ticket) => ({
+        displayId: ticketDisplayById.get(ticket.id)!,
+        projectId: ticket.projectId,
+      })),
+      sessions: [],
+    }),
+  );
 }
 
 /**
@@ -180,39 +218,36 @@ function ticketForDisplayId(
   if (typeof displayId !== "string") {
     return { ok: false, response: failure("INVALID_REQUEST", "A ticket display id is required.") };
   }
-  const projectById = new Map(projects.map((project) => [project.id, project]));
-  const matches = listAllTickets(db)
-    .map((ticket) => ({ ticket, project: projectById.get(ticket.projectId) }))
-    .filter(
-      (entry): entry is { ticket: Ticket; project: Project } =>
-        entry.project !== undefined &&
-        displayTicketId(entry.project.ticketPrefix, entry.ticket.ticketNumber) === displayId,
+  const ambiguous = (): { ok: false; response: AgentResponse } => ({
+    ok: false,
+    response: failure(
+      "AMBIGUOUS_TICKET",
+      `Ticket ${displayId} matches multiple projects. Make project prefixes unique in Settings.`,
+    ),
+  });
+  // Parse `PREFIX-NUMBER` and query only the project(s) whose prefix matches, so
+  // work is proportional to the request rather than scanning every ticket in the
+  // DB. Prefixes may still collide in legacy DBs, hence the candidate list.
+  const parsed = /^(.+)-(\d+)$/.exec(displayId);
+  const ticketNumber = parsed ? Number(parsed[2]) : Number.NaN;
+  const candidates = parsed ? projects.filter((p) => p.ticketPrefix === parsed[1]) : [];
+
+  const liveMatches = candidates.flatMap((project) => {
+    const ticket = listTicketsByProject(db, project.id).find(
+      (candidate) => candidate.ticketNumber === ticketNumber,
     );
-  if (matches.length > 1) {
-    return {
-      ok: false,
-      response: failure(
-        "AMBIGUOUS_TICKET",
-        `Ticket ${displayId} matches multiple projects. Make project prefixes unique in Settings.`,
-      ),
-    };
-  }
-  const match = matches[0];
+    return ticket ? [{ ticket, project }] : [];
+  });
+  if (liveMatches.length > 1) return ambiguous();
+  const match = liveMatches[0];
   if (match) return { ok: true, ...match };
-  const archivedMatches = projects.flatMap((project) =>
+
+  const archivedMatches = candidates.flatMap((project) =>
     listArchivedTicketsByProject(db, project.id)
-      .filter((ticket) => displayTicketId(project.ticketPrefix, ticket.ticketNumber) === displayId)
+      .filter((ticket) => ticket.ticketNumber === ticketNumber)
       .map((ticket) => ({ ticket, project })),
   );
-  if (archivedMatches.length > 1) {
-    return {
-      ok: false,
-      response: failure(
-        "AMBIGUOUS_TICKET",
-        `Ticket ${displayId} matches multiple projects. Make project prefixes unique in Settings.`,
-      ),
-    };
-  }
+  if (archivedMatches.length > 1) return ambiguous();
   return archivedMatches.length === 1
     ? {
         ok: false,
