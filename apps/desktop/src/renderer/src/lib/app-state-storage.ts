@@ -11,8 +11,9 @@
  * failure via a toast (CLAUDE.md: never silently swallow a failed mutation).
  */
 import { errorMessage } from "@volli/shared";
-import { toast } from "sonner";
 import type { StateStorage } from "zustand/middleware";
+
+import { toastError } from "@renderer/lib/toast";
 
 const cache = new Map<string, string>();
 
@@ -33,10 +34,10 @@ function persist(key: string, value: string, failureVerb: string): void {
   window.api.appState
     .set(key, value)
     .then((result) => {
-      if (!result.ok) toast.error(`Could not ${failureVerb} "${key}": ${result.error}`);
+      if (!result.ok) toastError(`Could not ${failureVerb} "${key}": ${result.error}`);
     })
     .catch((error: unknown) => {
-      toast.error(`Could not ${failureVerb} "${key}": ${errorMessage(error)}`);
+      toastError(`Could not ${failureVerb} "${key}": ${errorMessage(error)}`);
     });
 }
 

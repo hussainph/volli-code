@@ -10,7 +10,6 @@ import {
   type TicketPriority,
   type TicketStatus,
 } from "@volli/shared";
-import { toast } from "sonner";
 
 import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
 import { TicketLabelEditor } from "@renderer/components/ticket/ticket-label-editor";
@@ -23,6 +22,7 @@ import {
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
 import { Input } from "@renderer/components/ui/input";
+import { toastError } from "@renderer/lib/toast";
 import { useBoardStore } from "@renderer/stores/board";
 
 /** "Jul 14, 2026, 3:04 PM" — a compact created/updated stamp. */
@@ -203,9 +203,9 @@ function WorktreePathField({ path }: { path: string | null }) {
     if (!path) return;
     try {
       const result = await window.api.fs.revealInFinder(path);
-      if (!result.ok) toast.error(`Could not reveal in Finder: ${result.error}`);
+      if (!result.ok) toastError(`Could not reveal in Finder: ${result.error}`);
     } catch (error) {
-      toast.error(`Could not reveal in Finder: ${errorMessage(error)}`);
+      toastError(`Could not reveal in Finder: ${errorMessage(error)}`);
     }
   }
 

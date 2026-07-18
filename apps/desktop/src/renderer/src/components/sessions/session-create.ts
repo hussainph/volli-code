@@ -7,8 +7,8 @@
  * a mutation is never silently swallowed (CLAUDE.md).
  */
 import { errorMessage, type HarnessId } from "@volli/shared";
-import { toast } from "sonner";
 
+import { toastError } from "@renderer/lib/toast";
 import { useProjectsStore } from "@renderer/stores/projects";
 import {
   findSessionPane,
@@ -57,10 +57,10 @@ function abandon(sessionId: string): void {
   window.api.terminal
     .kill(sessionId)
     .then((result) => {
-      if (!result.ok) toast.error(`Terminal close failed: ${result.error}`);
+      if (!result.ok) toastError(`Terminal close failed: ${result.error}`);
     })
     .catch((error: unknown) => {
-      toast.error(`Terminal close failed: ${errorMessage(error)}`);
+      toastError(`Terminal close failed: ${errorMessage(error)}`);
     });
 }
 
@@ -92,7 +92,7 @@ async function bootSession(
   try {
     const result = await window.api.terminal.create(createRequest(scope, project.path, kickoff));
     if (!result.ok) {
-      toast.error(`Could not ${verb}: ${result.error}`);
+      toastError(`Could not ${verb}: ${result.error}`);
       return null;
     }
     getOrCreateEngine(result.sessionId);
@@ -108,7 +108,7 @@ async function bootSession(
     }
     return result.sessionId;
   } catch (error) {
-    toast.error(`Could not ${verb}: ${errorMessage(error)}`);
+    toastError(`Could not ${verb}: ${errorMessage(error)}`);
     return null;
   } finally {
     useSessionsStore.getState().setStarting(id, false);

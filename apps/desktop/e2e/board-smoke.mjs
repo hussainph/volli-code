@@ -332,7 +332,9 @@ async function main() {
           (await state.count()) === 1 &&
           (await primaryAction.count()) === 1 &&
           (await primaryAction.locator("svg").count()) === 0 &&
-          headingSize >= 32 &&
+          // text-title (24px) — the app's largest step since the type-scale
+          // language landed (DESIGN.md); the old >=32 display size is gone.
+          headingSize >= 24 &&
           (await oldSidebarPrompt.count()) === 0 &&
           (await oldSidebarHeader.count()) === 0 &&
           texture.canvas !== "none" &&
@@ -953,21 +955,26 @@ async function main() {
       },
     );
 
-    // === 18. Global create: plain "c" opens the New-ticket dialog; Enter creates
+    // === 18. Global create: plain "c" opens the New-ticket composer; ⌘+Enter creates
+    // (The Linear-style composer replaced the primitive dialog in the composer PR:
+    // its title placeholder has no ellipsis, and plain Enter moves focus to the
+    // body instead of submitting — ⌘/Ctrl+Enter is the create shortcut. The full
+    // composer contract lives in composer-basics-smoke.mjs; this check only keeps
+    // the board-level "c" → create → card lands wiring honest.)
     await attempt(
       18,
-      'Plain "c" hotkey opens the New-ticket dialog; typing a title + Enter creates VC-14 and closes it',
+      'Plain "c" hotkey opens the New-ticket composer; typing a title + ⌘Enter creates VC-14 and closes it',
       async () => {
         // Click neutral static text (the "Board" heading) so focus lands
         // somewhere that is definitely not a text-entry target, matching how
         // the hotkey is meant to fire "anywhere in the app".
         await page.getByRole("heading", { name: "Board", exact: true }).click();
         await page.keyboard.press("c");
-        await sleep(200);
+        await sleep(400);
         const dialogOpenCount = await page.getByRole("dialog").count();
         const title = "Global create dialog smoke card";
-        await page.getByPlaceholder("Ticket title…").fill(title);
-        await page.keyboard.press("Enter");
+        await page.getByPlaceholder("Ticket title").fill(title);
+        await page.keyboard.press("Meta+Enter");
         await sleep(400);
         const dialogClosedCount = await page.getByRole("dialog").count();
         const cardVisible = (await page.getByText(title, { exact: true }).count()) >= 1;

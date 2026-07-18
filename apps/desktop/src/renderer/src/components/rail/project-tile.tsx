@@ -4,7 +4,6 @@ import { CSS } from "@dnd-kit/utilities";
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import { MinusCircleIcon } from "@phosphor-icons/react/dist/csr/MinusCircle";
 import { errorMessage, monogram, projectColor, type Project } from "@volli/shared";
-import { toast } from "sonner";
 
 import { RemoveProjectDialog } from "@renderer/components/rail/remove-project-dialog";
 import {
@@ -14,6 +13,7 @@ import {
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
+import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { useProjectsStore } from "@renderer/stores/projects";
 
@@ -36,9 +36,9 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
   async function revealInFinder() {
     try {
       const result = await window.api.fs.revealInFinder(project.path);
-      if (!result.ok) toast.error(`Could not reveal in Finder: ${result.error}`);
+      if (!result.ok) toastError(`Could not reveal in Finder: ${result.error}`);
     } catch (error) {
-      toast.error(`Could not reveal in Finder: ${errorMessage(error)}`);
+      toastError(`Could not reveal in Finder: ${errorMessage(error)}`);
     }
   }
 

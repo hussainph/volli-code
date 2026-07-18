@@ -1,8 +1,8 @@
 import { errorMessage } from "@volli/shared";
 import * as React from "react";
-import { toast } from "sonner";
 
 import { findSessionPane, useSessionsStore } from "@renderer/stores/sessions";
+import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { getEngine, getOrCreateEngine } from "@renderer/terminal/registry";
 
@@ -62,10 +62,10 @@ export function TerminalView({
       window.api.terminal
         .write(sessionId, data)
         .then((result) => {
-          if (!result.ok) toast.error(`Terminal write failed: ${result.error}`);
+          if (!result.ok) toastError(`Terminal write failed: ${result.error}`);
         })
         .catch((error: unknown) => {
-          toast.error(`Terminal write failed: ${errorMessage(error)}`);
+          toastError(`Terminal write failed: ${errorMessage(error)}`);
         });
     });
 
@@ -75,10 +75,10 @@ export function TerminalView({
       window.api.terminal
         .resize(sessionId, cols, rows)
         .then((result) => {
-          if (!result.ok) toast.error(`Terminal resize failed: ${result.error}`);
+          if (!result.ok) toastError(`Terminal resize failed: ${result.error}`);
         })
         .catch((error: unknown) => {
-          toast.error(`Terminal resize failed: ${errorMessage(error)}`);
+          toastError(`Terminal resize failed: ${errorMessage(error)}`);
         });
     });
 

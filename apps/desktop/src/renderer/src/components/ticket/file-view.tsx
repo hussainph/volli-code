@@ -4,7 +4,6 @@ import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwis
 import { EditorState } from "@codemirror/state";
 import { EditorView, lineNumbers } from "@codemirror/view";
 import { baseNameOf, errorMessage, type FileSource } from "@volli/shared";
-import { toast } from "sonner";
 
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import {
@@ -12,6 +11,7 @@ import {
   type MarkdownFileRefs,
 } from "@renderer/components/editor/markdown-live-editor";
 import { Button } from "@renderer/components/ui/button";
+import { toastError } from "@renderer/lib/toast";
 import { useDebouncedCallback } from "@renderer/lib/use-debounced-callback";
 
 const AUTOSAVE_IDLE_MS = 1500;
@@ -208,7 +208,7 @@ export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: F
       }
       const disk = await readFile();
       if (!(disk.ok && disk.content.type === "text")) {
-        toast.error(`Could not save ${name}: ${result.error}`);
+        toastError(`Could not save ${name}: ${result.error}`);
         return;
       }
       if (disk.kind !== "markdown" || disk.content.truncated) {
@@ -226,17 +226,17 @@ export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: F
         syncedMtimeRef.current = disk.mtime;
         if (mountedRef.current) {
           setState({ status: "code", text: disk.content.text, truncated: disk.content.truncated });
-          toast.error(
+          toastError(
             `${name} changed on disk and grew past the editable 1 MiB cap (or is no longer markdown) — editing stopped.`,
           );
         } else {
-          toast.error(`${name} changed on disk — your last edits were not saved.`);
+          toastError(`${name} changed on disk — your last edits were not saved.`);
         }
         return;
       }
       if (disk.content.text !== syncedRef.current) {
         if (mountedRef.current) setConflict({ text: disk.content.text, mtime: disk.mtime });
-        else toast.error(`${name} changed on disk — your last edits were not saved.`);
+        else toastError(`${name} changed on disk — your last edits were not saved.`);
         return;
       }
       // Same content, drifted mtime — adopt it and retry the write.
@@ -244,7 +244,7 @@ export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: F
     }
     // Both attempts hit an mtime drift with identical content (rapid external
     // touches) — give up quietly this cycle; the next edit reschedules a save.
-    toast.error(`Could not save ${name}: the file is being modified externally.`);
+    toastError(`Could not save ${name}: the file is being modified externally.`);
     // `debouncer` is referenced above but declared after this callback (see
     // note there) — deliberately omitted from deps; its identity never
     // changes for the component's lifetime.
@@ -258,7 +258,7 @@ export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: F
   React.useEffect(() => {
     void window.api.files.watch({ projectId, ticketId, relPath }).then((result) => {
       if (!result.ok) {
-        toast.error(
+        toastError(
           `Live updates for ${name} are unavailable — it may not refresh until you reopen it.`,
         );
       }
@@ -278,7 +278,7 @@ export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: F
           // is actually visible instead of rendering stale content forever.
           const dirty = draftRef.current !== syncedRef.current;
           if (stateRef.current.status === "markdown" && dirty) {
-            toast.error(`${name} changed on disk (now unreadable) — your unsaved edits were kept.`);
+            toastError(`${name} changed on disk (now unreadable) — your unsaved edits were kept.`);
           } else {
             setState({ status: "error", error: disk.error });
           }
@@ -365,9 +365,9 @@ export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: F
   async function handleReveal() {
     try {
       const result = await window.api.files.reveal({ projectId, ticketId, relPath });
-      if (!result.ok) toast.error(`Could not reveal in Finder: ${result.error}`);
+      if (!result.ok) toastError(`Could not reveal in Finder: ${result.error}`);
     } catch (error) {
-      toast.error(`Could not reveal in Finder: ${errorMessage(error)}`);
+      toastError(`Could not reveal in Finder: ${errorMessage(error)}`);
     }
   }
 

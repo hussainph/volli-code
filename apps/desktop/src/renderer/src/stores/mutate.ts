@@ -12,7 +12,8 @@
  * mid-flight would have invalidated (a dropped project, a resurrected slice).
  */
 import { errorMessage } from "@volli/shared";
-import { toast } from "sonner";
+
+import { toastError } from "@renderer/lib/toast";
 
 type Ok = { ok: true };
 type Err = { ok: false; error: string };
@@ -30,11 +31,11 @@ export async function writeThrough<R extends Ok | Err>(
   try {
     result = await call();
   } catch (error) {
-    toast.error(`Could not ${verb}: ${errorMessage(error)}`);
+    toastError(`Could not ${verb}: ${errorMessage(error)}`);
     return null;
   }
   if (!result.ok) {
-    toast.error(`Could not ${verb}: ${result.error}`);
+    toastError(`Could not ${verb}: ${result.error}`);
     return null;
   }
   return result as Extract<R, Ok>;

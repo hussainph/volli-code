@@ -88,7 +88,10 @@ describe("closeTerminalSession", () => {
     closeTerminalSession("p", "s1");
     await flush();
 
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Terminal close failed: boom");
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Terminal close failed: boom", {
+      duration: 8000,
+      closeButton: true,
+    });
   });
 
   it("toasts when the kill invocation rejects", async () => {
@@ -98,7 +101,10 @@ describe("closeTerminalSession", () => {
     closeTerminalSession("p", "s1");
     await flush();
 
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Terminal close failed: ipc down");
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Terminal close failed: ipc down", {
+      duration: 8000,
+      closeButton: true,
+    });
   });
 });
 
@@ -242,7 +248,10 @@ describe("renameTerminalSession", () => {
     await flush();
 
     expect(useSessionsStore.getState().byOwner["p"]?.tabs[0]?.title).toBe("Terminal 1");
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Rename failed: nope");
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Rename failed: nope", {
+      duration: 8000,
+      closeButton: true,
+    });
   });
 
   it("rolls the title back and toasts when the persist invocation rejects", async () => {
@@ -253,7 +262,10 @@ describe("renameTerminalSession", () => {
     await flush();
 
     expect(useSessionsStore.getState().byOwner["p"]?.tabs[0]?.title).toBe("Terminal 1");
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Rename failed: ipc down");
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Rename failed: ipc down", {
+      duration: 8000,
+      closeButton: true,
+    });
   });
 
   it("is a no-op for a blank or unchanged title, and never calls main", async () => {
@@ -281,7 +293,10 @@ describe("renameTerminalSession", () => {
 
     expect(await first).toBe(false);
     expect(useSessionsStore.getState().byOwner["p"]?.tabs[0]?.title).toBe("B");
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Rename failed: stale");
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Rename failed: stale", {
+      duration: 8000,
+      closeButton: true,
+    });
   });
 
   it("persists directly for an ended session (no live tab) and resolves true", async () => {
@@ -299,7 +314,10 @@ describe("renameTerminalSession", () => {
     renameMock.mockResolvedValue({ ok: false, error: "gone" });
 
     expect(await renameTerminalSession("ended", "New")).toBe(false);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Rename failed: gone");
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Rename failed: gone", {
+      duration: 8000,
+      closeButton: true,
+    });
   });
 });
 

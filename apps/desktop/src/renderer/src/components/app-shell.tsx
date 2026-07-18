@@ -1,5 +1,4 @@
 import * as React from "react";
-import { toast } from "sonner";
 
 import { ChromeBar } from "@renderer/components/chrome-bar";
 import { NewTicketDialog } from "@renderer/components/board/new-ticket-dialog";
@@ -10,6 +9,7 @@ import { SidebarResizeHandle } from "@renderer/components/sidebar/sidebar-resize
 import { Sidebar, SidebarInset, SidebarProvider } from "@renderer/components/ui/sidebar";
 import { Toaster } from "@renderer/components/ui/sonner";
 import { takeBootNotice } from "@renderer/lib/boot-notice";
+import { toastError } from "@renderer/lib/toast";
 import { useNavHistory } from "@renderer/hooks/use-nav-history";
 import { useNewTicketShortcut } from "@renderer/hooks/use-new-ticket-shortcut";
 import { useProjectShortcuts } from "@renderer/hooks/use-project-shortcuts";
@@ -146,7 +146,7 @@ function useZoomCommands() {
 function useBootNotice() {
   React.useEffect(() => {
     const notice = takeBootNotice();
-    if (notice !== null) toast.error(notice, { duration: 8000 });
+    if (notice !== null) toastError(notice);
   }, []);
 }
 
@@ -166,7 +166,7 @@ function useProjectRootsSync() {
   React.useEffect(() => {
     const paths = useProjectsStore.getState().projects.map((project) => project.path);
     window.api.projects.syncRoots(paths).catch((error: unknown) => {
-      toast.error(`Could not sync project roots: ${errorMessage(error)}`);
+      toastError(`Could not sync project roots: ${errorMessage(error)}`);
     });
   }, [rootsKey]);
 }

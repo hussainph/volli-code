@@ -18,9 +18,9 @@ import {
   type ProjectCreateResult,
   type ProjectMutationResult,
 } from "@volli/shared";
-import { toast } from "sonner";
 import { create } from "zustand";
 
+import { toastError } from "@renderer/lib/toast";
 import {
   killProjectSessions,
   killProjectTicketSessions,
@@ -115,10 +115,10 @@ export function createProjectsStore(gateway: ProjectsGateway = defaultGateway) {
     gateway
       .setSelection(selectedProjectId)
       .then((result) => {
-        if (!result.ok) toast.error(`Could not save selected project: ${result.error}`);
+        if (!result.ok) toastError(`Could not save selected project: ${result.error}`);
       })
       .catch((error: unknown) => {
-        toast.error(`Could not save selected project: ${errorMessage(error)}`);
+        toastError(`Could not save selected project: ${errorMessage(error)}`);
       });
   }
 

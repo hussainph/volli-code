@@ -23,7 +23,6 @@ import {
   type TicketEvent,
   type TicketEventKind,
 } from "@volli/shared";
-import { toast } from "sonner";
 
 import {
   AlertDialog,
@@ -44,6 +43,7 @@ import {
 } from "@renderer/components/ticket/activity";
 import { Markdown } from "@renderer/components/ticket/markdown";
 import { relativeTime } from "@renderer/lib/relative-time";
+import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { writeThrough } from "@renderer/stores/mutate";
 
@@ -348,18 +348,18 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
         window.api.comments.list({ ticketId }),
       ]);
       if (!ev.ok) {
-        toast.error(`Could not load activity: ${ev.error}`);
+        toastError(`Could not load activity: ${ev.error}`);
         return;
       }
       if (!cm.ok) {
-        toast.error(`Could not load activity: ${cm.error}`);
+        toastError(`Could not load activity: ${cm.error}`);
         return;
       }
       setEvents(ev.events);
       setComments(cm.comments);
       setLoaded(true);
     } catch (error) {
-      toast.error(`Could not load activity: ${errorMessage(error)}`);
+      toastError(`Could not load activity: ${errorMessage(error)}`);
     }
   }, [ticketId]);
 
@@ -371,12 +371,12 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
     try {
       const cm = await window.api.comments.list({ ticketId });
       if (!cm.ok) {
-        toast.error(`Could not load activity: ${cm.error}`);
+        toastError(`Could not load activity: ${cm.error}`);
         return;
       }
       setComments(cm.comments);
     } catch (error) {
-      toast.error(`Could not load activity: ${errorMessage(error)}`);
+      toastError(`Could not load activity: ${errorMessage(error)}`);
     }
   }, [ticketId]);
 

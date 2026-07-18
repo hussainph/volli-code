@@ -10,8 +10,8 @@
  * kept as named entry points so `stores/projects.ts` keeps its stable API).
  */
 import { errorMessage } from "@volli/shared";
-import { toast } from "sonner";
 
+import { toastError } from "@renderer/lib/toast";
 import {
   findSessionPane,
   findTabBySessionId,
@@ -149,10 +149,10 @@ async function persistRename(sessionId: string, title: string): Promise<boolean>
   try {
     const result = await window.api.sessions.rename({ sessionId, title });
     if (result.ok) return true;
-    toast.error(`Rename failed: ${result.error}`);
+    toastError(`Rename failed: ${result.error}`);
     return false;
   } catch (error) {
-    toast.error(`Rename failed: ${errorMessage(error)}`);
+    toastError(`Rename failed: ${errorMessage(error)}`);
     return false;
   }
 }
@@ -163,9 +163,9 @@ function killIfLive(pane: SessionPane): void {
   window.api.terminal
     .kill(pane.sessionId)
     .then((result) => {
-      if (!result.ok) toast.error(`Terminal close failed: ${result.error}`);
+      if (!result.ok) toastError(`Terminal close failed: ${result.error}`);
     })
     .catch((error: unknown) => {
-      toast.error(`Terminal close failed: ${errorMessage(error)}`);
+      toastError(`Terminal close failed: ${errorMessage(error)}`);
     });
 }

@@ -26,6 +26,28 @@ import {
 } from "@renderer/components/ui/context-menu";
 import { cn } from "@renderer/lib/utils";
 
+/**
+ * Roving-tabindex arrow navigation across a strip's `role="tab"` children.
+ * Scoped to the enclosing `role="tablist"` so both tab strips share one
+ * behavior without a ref registry — the tabs are found live in the DOM.
+ */
+function moveTabFocus(from: HTMLElement, to: "prev" | "next" | "first" | "last") {
+  const tablist = from.closest('[role="tablist"]');
+  if (!tablist) return;
+  const tabs = Array.from(tablist.querySelectorAll<HTMLElement>('[role="tab"]'));
+  const i = tabs.indexOf(from);
+  if (i === -1) return;
+  const target =
+    to === "first"
+      ? tabs[0]
+      : to === "last"
+        ? tabs[tabs.length - 1]
+        : to === "next"
+          ? tabs[(i + 1) % tabs.length]
+          : tabs[(i - 1 + tabs.length) % tabs.length];
+  target?.focus();
+}
+
 export type TicketTabKind = "doc" | "session" | "file";
 
 export interface TicketTabDescriptor {
@@ -83,9 +105,47 @@ function TicketTab({
   const closable = tab.kind === "session" || tab.kind === "file";
 
   const inner = (
+    // The tab itself is the focusable role="tab" — the direct child of the
+    // tablist (valid ARIA). Roving tabindex + arrow keys move focus; click,
+    // Enter, and Space activate. h-8 (not an arbitrary 34px): the tab carries
+    // no borders of its own, so nothing pins it to a 32+2 alignment.
     <div
+      role="tab"
+      // Explicit name: without it the tab's accessible name is computed from
+      // the whole subtree — label + the close button's "Close <label>" — which
+      // reads doubled to AT (and breaks exact-name lookups).
+      aria-label={tab.label}
+      aria-selected={active}
+      tabIndex={active ? 0 : -1}
+      onClick={onSelect}
+      onDoubleClick={isSession ? onStartRename : undefined}
+      onKeyDown={(event) => {
+        switch (event.key) {
+          case "ArrowRight":
+            event.preventDefault();
+            moveTabFocus(event.currentTarget, "next");
+            break;
+          case "ArrowLeft":
+            event.preventDefault();
+            moveTabFocus(event.currentTarget, "prev");
+            break;
+          case "Home":
+            event.preventDefault();
+            moveTabFocus(event.currentTarget, "first");
+            break;
+          case "End":
+            event.preventDefault();
+            moveTabFocus(event.currentTarget, "last");
+            break;
+          case "Enter":
+          case " ":
+            event.preventDefault();
+            onSelect();
+            break;
+        }
+      }}
       className={cn(
-        "group relative flex h-[34px] shrink-0 items-center rounded-t-lg text-sm transition-colors duration-150 ease-out",
+        "group relative flex h-8 shrink-0 items-center rounded-t-lg text-sm outline-none transition-[color,background-color,box-shadow,transform] duration-150 ease-out active:scale-[0.97] motion-reduce:transform-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
         closable ? "pr-1 pl-3" : "px-3.5",
         active
           ? // -mb-px pulls the active tab 1px past the strip's bottom border so
@@ -113,23 +173,20 @@ function TicketTab({
           onCancel={onCancelRename}
         />
       ) : (
-        <button
-          type="button"
-          role="tab"
-          aria-selected={active}
-          onClick={onSelect}
-          onDoubleClick={isSession ? onStartRename : undefined}
-          className="max-w-40 truncate font-medium"
-        >
-          {tab.label}
-        </button>
+        // The clickable/selectable target is the tab div (role="tab") above,
+        // so the label is a plain span — no nested interactive control.
+        <span className="max-w-40 truncate font-medium">{tab.label}</span>
       )}
       {closable && !editing ? (
         <button
           type="button"
           aria-label={`Close ${tab.label}`}
-          onClick={onClose}
-          className="ml-1.5 flex size-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-border hover:text-foreground"
+          // Stop the click from bubbling to the tab's own onClick (select).
+          onClick={(event) => {
+            event.stopPropagation();
+            onClose();
+          }}
+          className="ml-1.5 flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground opacity-0 outline-none transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-border hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50"
         >
           <XIcon className="size-3" />
         </button>

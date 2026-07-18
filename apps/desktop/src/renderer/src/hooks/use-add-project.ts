@@ -1,7 +1,7 @@
 import * as React from "react";
 import { errorMessage } from "@volli/shared";
-import { toast } from "sonner";
 
+import { toastError } from "@renderer/lib/toast";
 import { useProjectsStore } from "@renderer/stores/projects";
 
 /**
@@ -19,7 +19,7 @@ export function useAddProject(): () => Promise<void> {
       if (!result.canceled)
         await addProject({ path: result.path, defaultName: result.defaultName });
     } catch (error) {
-      toast.error(`Could not open folder picker: ${errorMessage(error)}`);
+      toastError(`Could not open folder picker: ${errorMessage(error)}`);
     }
   }, [addProject]);
 }
