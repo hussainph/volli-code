@@ -1,0 +1,99 @@
+---
+type GlyphKind = "phases" | "agents" | "context" | "parallel" | "harnesses";
+
+interface Props {
+  kind: GlyphKind;
+}
+
+const { kind } = Astro.props;
+---
+
+<svg
+  class="feature-glyph"
+  data-feature-glyph={kind}
+  viewBox="0 0 168 58"
+  role="img"
+  aria-label=""
+  aria-hidden="true"
+>
+  {
+    kind === "phases" && (
+      <>
+        <path class="glyph-line" data-glyph-line d="M18 29h132" />
+        {[18, 51, 84, 117, 150].map((x, index) => (
+          <g class="glyph-node" data-glyph-node>
+            <circle class="glyph-node-ring" cx={x} cy="29" r="7" />
+            <circle class:list={["glyph-node-core", { "is-ember": index === 2 }]} cx={x} cy="29" r="2.5" />
+          </g>
+        ))}
+      </>
+    )
+  }
+
+  {
+    kind === "agents" && (
+      <>
+        <path class="glyph-line" data-glyph-line d="M22 14c30 0 32 15 62 15M22 29h62M22 44c30 0 32-15 62-15M84 29h60" />
+        {[14, 29, 44].map((y) => (
+          <circle class="glyph-source" data-glyph-source cx="22" cy={y} r="3.5" />
+        ))}
+        <rect class="glyph-ticket" data-glyph-core x="76" y="20" width="16" height="18" rx="4" />
+        <circle class="glyph-destination" data-glyph-destination cx="144" cy="29" r="5" />
+      </>
+    )
+  }
+
+  {
+    kind === "context" && (
+      <>
+        <rect class="glyph-ticket" data-glyph-core x="71" y="17" width="26" height="24" rx="5" />
+        <path class="glyph-ticket-line" d="M77 24h14M77 29h10M77 34h12" />
+        <g data-context-orbit>
+          <circle class="glyph-context-dot" cx="35" cy="15" r="3.5" />
+          <circle class="glyph-context-dot" cx="132" cy="16" r="3.5" />
+          <circle class="glyph-context-dot is-ember" cx="132" cy="43" r="3.5" />
+          <circle class="glyph-context-dot" cx="35" cy="43" r="3.5" />
+        </g>
+        <path class="glyph-line glyph-line-dashed" d="M39 17 70 25M128 18 98 25M128 41 98 34M39 41 70 34" />
+      </>
+    )
+  }
+
+  {
+    kind === "parallel" && (
+      <>
+        {[15, 29, 43].map((y, index) => (
+          <g>
+            <path class="glyph-line" data-glyph-line d={`M22 ${y}h124`} />
+            <circle
+              class:list={["glyph-runner", { "is-ember": index === 1 }]}
+              data-glyph-runner
+              cx="34"
+              cy={y}
+              r="3.5"
+            />
+          </g>
+        ))}
+      </>
+    )
+  }
+
+  {
+    kind === "harnesses" && (
+      <>
+        <path class="glyph-line" data-glyph-line d="M25 14h38l24 15h54M25 29h116M25 44h38l24-15" />
+        {[14, 29, 44].map((y, index) => (
+          <circle
+            class:list={["glyph-source", { "is-ember": index === 1 }]}
+            data-glyph-source
+            cx="25"
+            cy={y}
+            r="3.5"
+          />
+        ))}
+        <circle class="glyph-destination" data-glyph-destination cx="143" cy="29" r="6" />
+        <circle class="glyph-destination-core" cx="143" cy="29" r="2.5" />
+      </>
+    )
+  }
+</svg>
