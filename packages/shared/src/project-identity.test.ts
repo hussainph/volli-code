@@ -3,6 +3,7 @@ import {
   monogram,
   derivePrefix,
   isValidPrefix,
+  validateUniquePrefix,
   projectColor,
   PROJECT_COLORS,
 } from "./project-identity";
@@ -98,6 +99,20 @@ describe("isValidPrefix", () => {
 
   it("rejects non-alphanumeric characters", () => {
     expect(isValidPrefix("AB!")).toBe(false);
+  });
+});
+
+describe("validateUniquePrefix", () => {
+  it("names the existing project when a prefix collides", () => {
+    expect(
+      validateUniquePrefix("VC", [
+        { id: "one", name: "Volli Code", ticketPrefix: "VC" },
+        { id: "two", name: "Website", ticketPrefix: "WEB" },
+      ]),
+    ).toEqual({
+      ok: false,
+      error: 'Ticket prefix "VC" is already used by Volli Code.',
+    });
   });
 });
 

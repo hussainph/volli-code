@@ -2,6 +2,7 @@ export * from "./file-ref";
 export * from "./board";
 export * from "./ticket";
 export * from "./harness-command";
+export * from "./agent-surface";
 export * from "./ticket-branch";
 export * from "./ticket-comment";
 export * from "./ticket-events";

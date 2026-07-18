@@ -1,0 +1,239 @@
+import type { TicketStatus } from "./ticket";
+
+export const COLUMN_TOKENS = [
+  "backlog",
+  "todo",
+  "doing",
+  "needs-review",
+  "review",
+  "done",
+] as const;
+
+export type ColumnToken = (typeof COLUMN_TOKENS)[number];
+
+export type ColumnTokenResult =
+  | { ok: true; status: TicketStatus }
+  | { ok: false; code: "INVALID_COLUMN"; message: string };
+
+export function parseColumnToken(value: string): ColumnTokenResult {
+  if (value === "review" || value === "needs-review") {
+    return { ok: true, status: "needs_review" };
+  }
+  if (value === "backlog" || value === "todo" || value === "doing" || value === "done") {
+    return { ok: true, status: value };
+  }
+  return {
+    ok: false,
+    code: "INVALID_COLUMN",
+    message: `Unknown column ${JSON.stringify(value)}`,
+  };
+}
+
+export interface AgentSurfaceProject {
+  id: string;
+  name: string;
+  path: string;
+  ticketPrefix: string;
+  worktreePaths?: readonly string[];
+}
+
+export interface AgentSurfaceTicketRef {
+  displayId: string;
+  projectId: string;
+}
+
+export interface AgentSurfaceSessionRef {
+  id: string;
+  projectId: string;
+  ticketDisplayId: string | null;
+}
+
+export interface AgentContextInput {
+  explicit: { project?: string; ticket?: string; session?: string; socket?: string };
+  env: Readonly<Record<string, string | undefined>>;
+  cwd: string;
+  projects: readonly AgentSurfaceProject[];
+  tickets: readonly AgentSurfaceTicketRef[];
+  sessions: readonly AgentSurfaceSessionRef[];
+}
+
+export interface ResolvedAgentContext {
+  projectId: string;
+  ticketDisplayId: string | null;
+  sessionId: string | null;
+  socketPath: string | null;
+  source: "flag" | "env" | "cwd";
+}
+
+export type AgentContextResolution =
+  | { ok: true; context: ResolvedAgentContext }
+  | { ok: false; code: string; message: string };
+
+export type TicketBodyMutation =
+  | { mode: "replace"; body: string }
+  | { mode: "append"; text: string }
+  | { mode: "edit"; oldText: string; newText: string };
+
+export type TicketBodyMutationResult =
+  | { ok: true; body: string }
+  | { ok: false; code: "BODY_MATCH_FAILED"; message: string };
+
+/** Applies edit-shaped ticket body updates without allowing a stale read to clobber new content. */
+export function applyTicketBodyMutation(
+  current: string,
+  mutation: TicketBodyMutation,
+): TicketBodyMutationResult {
+  if (mutation.mode === "edit") {
+    const first = mutation.oldText.length === 0 ? -1 : current.indexOf(mutation.oldText);
+    const second =
+      first === -1 ? -1 : current.indexOf(mutation.oldText, first + mutation.oldText.length);
+    if (first === -1 || second !== -1) {
+      return {
+        ok: false,
+        code: "BODY_MATCH_FAILED",
+        message: `Body edit expected exactly one match for ${JSON.stringify(mutation.oldText)}.`,
+      };
+    }
+    return {
+      ok: true,
+      body: `${current.slice(0, first)}${mutation.newText}${current.slice(first + mutation.oldText.length)}`,
+    };
+  }
+  if (mutation.mode === "replace") return { ok: true, body: mutation.body };
+  return { ok: true, body: `${current}${current.length === 0 ? "" : "\n\n"}${mutation.text}` };
+}
+
+function pathContains(root: string, candidate: string): boolean {
+  const normalized = root.endsWith("/") ? root.slice(0, -1) : root;
+  return candidate === normalized || candidate.startsWith(`${normalized}/`);
+}
+
+/** Resolves CLI context without guessing; explicit selectors are the highest-priority source. */
+export function resolveAgentContext(input: AgentContextInput): AgentContextResolution {
+  if (input.explicit.project !== undefined) {
+    const selector = input.explicit.project;
+    const pathMatch = input.projects.find(({ path }) => path === selector);
+    const candidates = pathMatch
+      ? [pathMatch]
+      : input.projects.filter(
+          ({ name, ticketPrefix }) => name === selector || ticketPrefix === selector,
+        );
+    if (candidates.length > 1) {
+      const rendered = candidates
+        .map(({ name, ticketPrefix, path }) => `${name} (${ticketPrefix}, ${path})`)
+        .join("; ");
+      return {
+        ok: false,
+        code: "AMBIGUOUS_PROJECT",
+        message: `Project "${selector}" is ambiguous: ${rendered}. Use its path.`,
+      };
+    }
+    const project = candidates[0];
+    if (project === undefined) {
+      return {
+        ok: false,
+        code: "PROJECT_NOT_FOUND",
+        message: `No project matches ${selector}`,
+      };
+    }
+    return {
+      ok: true,
+      context: {
+        projectId: project.id,
+        ticketDisplayId: null,
+        sessionId: null,
+        socketPath: input.explicit.socket ?? null,
+        source: "flag",
+      },
+    };
+  }
+
+  const envSessionId = input.env["VOLLI_SESSION"];
+  if (envSessionId !== undefined) {
+    const session = input.sessions.find(({ id }) => id === envSessionId);
+    if (session === undefined) {
+      return {
+        ok: false,
+        code: "SESSION_NOT_FOUND",
+        message: `No session matches ${envSessionId}`,
+      };
+    }
+    return {
+      ok: true,
+      context: {
+        projectId: session.projectId,
+        ticketDisplayId: session.ticketDisplayId,
+        sessionId: session.id,
+        socketPath: input.env["VOLLI_SOCKET"] ?? null,
+        source: "env",
+      },
+    };
+  }
+
+  const envTicketId = input.env["VOLLI_TICKET"];
+  if (envTicketId !== undefined) {
+    const matches = input.tickets.filter(({ displayId }) => displayId === envTicketId);
+    if (matches.length > 1) {
+      const candidates = matches
+        .map(({ projectId }) => input.projects.find(({ id }) => id === projectId))
+        .filter((project): project is AgentSurfaceProject => project !== undefined)
+        .map(({ name, ticketPrefix, path }) => `${name} (${ticketPrefix}, ${path})`)
+        .join("; ");
+      return {
+        ok: false,
+        code: "AMBIGUOUS_TICKET",
+        message: `Ticket ${envTicketId} is ambiguous: ${candidates}. Make project prefixes unique in Settings.`,
+      };
+    }
+    const ticket = matches[0];
+    if (ticket === undefined) {
+      return {
+        ok: false,
+        code: "TICKET_NOT_FOUND",
+        message: `No ticket matches ${envTicketId}`,
+      };
+    }
+    return {
+      ok: true,
+      context: {
+        projectId: ticket.projectId,
+        ticketDisplayId: ticket.displayId,
+        sessionId: null,
+        socketPath: input.env["VOLLI_SOCKET"] ?? null,
+        source: "env",
+      },
+    };
+  }
+
+  const cwdMatches = input.projects.filter((project) =>
+    [project.path, ...(project.worktreePaths ?? [])].some((root) => pathContains(root, input.cwd)),
+  );
+  if (cwdMatches.length === 1) {
+    return {
+      ok: true,
+      context: {
+        projectId: cwdMatches[0]!.id,
+        ticketDisplayId: null,
+        sessionId: null,
+        socketPath: input.env["VOLLI_SOCKET"] ?? null,
+        source: "cwd",
+      },
+    };
+  }
+  if (cwdMatches.length > 1) {
+    const candidates = cwdMatches
+      .map(({ name, ticketPrefix, path }) => `${name} (${ticketPrefix}, ${path})`)
+      .join("; ");
+    return {
+      ok: false,
+      code: "AMBIGUOUS_CONTEXT",
+      message: `Cwd ${input.cwd} matches multiple projects: ${candidates}`,
+    };
+  }
+
+  return {
+    ok: false,
+    code: "CONTEXT_REQUIRED",
+    message: "Provide a project flag, Volli environment, or a registered project cwd",
+  };
+}

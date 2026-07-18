@@ -85,6 +85,28 @@ export function isValidPrefix(s: string): boolean {
   return /^[A-Z][A-Z0-9]{0,4}$/.test(s);
 }
 
+export type PrefixValidationResult = { ok: true } | { ok: false; error: string };
+
+/** Validates the workspace-global ticket-prefix invariant with a human-readable collision. */
+export function validateUniquePrefix(
+  prefix: string,
+  projects: readonly Pick<Project, "id" | "name" | "ticketPrefix">[],
+  excludingProjectId?: string,
+): PrefixValidationResult {
+  if (!isValidPrefix(prefix)) {
+    return {
+      ok: false,
+      error: "Ticket prefixes must be 1–5 uppercase letters or digits and start with a letter.",
+    };
+  }
+  const collision = projects.find(
+    (project) => project.id !== excludingProjectId && project.ticketPrefix === prefix,
+  );
+  return collision
+    ? { ok: false, error: `Ticket prefix "${prefix}" is already used by ${collision.name}.` }
+    : { ok: true };
+}
+
 /**
  * Palette assigned round-robin (`projects.length % PROJECT_COLORS.length`)
  * when a project is created. Order is data: index 0 is the ember accent.
