@@ -1,4 +1,5 @@
 import type {
+  BootstrapResult,
   Result,
   SessionRenameResult,
   SessionsResult,
@@ -98,6 +99,125 @@ describe("volli:ticket-create — ticket numbers never recycle across a hard del
     // branch. The counter must instead keep moving forward.
     const four = createTicket(projectId);
     expect(four.ticketNumber).toBe(4);
+  });
+});
+
+describe("volli:ticket-create — body, labels, usesWorktree", () => {
+  it("persists and hydrates body, labels, and usesWorktree", () => {
+    const projectId = createProject();
+    const result = invoke<TicketResult>("volli:ticket-create", {
+      projectId,
+      status: "todo",
+      title: "With extras",
+      body: "# Heading\n\nDo the thing.",
+      labels: ["bug", "ui"],
+      usesWorktree: false,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.ticket.body).toBe("# Heading\n\nDo the thing.");
+    expect(result.ticket.labels).toEqual(["bug", "ui"]);
+    expect(result.ticket.usesWorktree).toBe(false);
+
+    // Hydrates identically through the boot bootstrap snapshot.
+    const boot = invoke<BootstrapResult>("volli:data-bootstrap");
+    if (!boot.ok) throw new Error(boot.error);
+    const hydrated = boot.data.ticketsByProject[projectId]?.find((t) => t.id === result.ticket.id);
+    expect(hydrated?.body).toBe("# Heading\n\nDo the thing.");
+    expect(hydrated?.labels).toEqual(["bug", "ui"]);
+    expect(hydrated?.usesWorktree).toBe(false);
+  });
+
+  it("defaults body/labels/usesWorktree when omitted (backward-compatible)", () => {
+    const projectId = createProject();
+    const result = invoke<TicketResult>("volli:ticket-create", {
+      projectId,
+      status: "backlog",
+      title: "Minimal",
+    });
+    if (!result.ok) throw new Error(result.error);
+    expect(result.ticket.body).toBe("");
+    expect(result.ticket.labels).toEqual([]);
+    expect(result.ticket.usesWorktree).toBe(true);
+    // No labels ⇒ no labels_changed event, only `created`.
+    const events = invoke<TicketEventsResult>("volli:ticket-events", {
+      ticketId: result.ticket.id,
+    });
+    if (!events.ok) throw new Error(events.error);
+    expect(events.events.map((e) => e.payload.kind)).toEqual(["created"]);
+  });
+
+  it("produces the same shared, name-deduped label rows the setLabels path would", () => {
+    const projectId = createProject();
+    // One ticket gets labels at creation; another gets the same labels via setLabels.
+    invoke<TicketResult>("volli:ticket-create", {
+      projectId,
+      status: "todo",
+      title: "Created with labels",
+      labels: ["bug", "ui"],
+    });
+    const other = createTicket(projectId);
+    invoke<TicketResult>("volli:ticket-set-labels", { ticketId: other.id, labels: ["bug", "ui"] });
+
+    const boot = invoke<BootstrapResult>("volli:data-bootstrap");
+    if (!boot.ok) throw new Error(boot.error);
+    const labels = boot.data.labelsByProject[projectId] ?? [];
+    // Exactly two rows (bug, ui), color null, shared across both tickets — no dupes.
+    expect(labels.map((l) => l.name).toSorted()).toEqual(["bug", "ui"]);
+    expect(labels.every((l) => l.color === null)).toBe(true);
+  });
+
+  it("records a labels_changed event after created when labels are supplied", () => {
+    const projectId = createProject();
+    const result = invoke<TicketResult>("volli:ticket-create", {
+      projectId,
+      status: "todo",
+      title: "A",
+      labels: ["bug"],
+    });
+    if (!result.ok) throw new Error(result.error);
+    const events = invoke<TicketEventsResult>("volli:ticket-events", {
+      ticketId: result.ticket.id,
+    });
+    if (!events.ok) throw new Error(events.error);
+    expect(events.events.map((e) => e.payload.kind)).toEqual(["created", "labels_changed"]);
+    expect(events.events[1]?.payload).toEqual({
+      kind: "labels_changed",
+      added: ["bug"],
+      removed: [],
+    });
+  });
+
+  it("dedupes repeated label names into a single junction row like setLabels", () => {
+    const projectId = createProject();
+    const result = invoke<TicketResult>("volli:ticket-create", {
+      projectId,
+      status: "todo",
+      title: "A",
+      labels: ["bug", "bug"],
+    });
+    if (!result.ok) throw new Error(result.error);
+    expect(result.ticket.labels).toEqual(["bug"]);
+    const boot = invoke<BootstrapResult>("volli:data-bootstrap");
+    if (!boot.ok) throw new Error(boot.error);
+    const labels = boot.data.labelsByProject[projectId] ?? [];
+    expect(labels.map((l) => l.name)).toEqual(["bug"]);
+  });
+
+  it.each([
+    ["a non-string body", { body: 5 }],
+    ["a labels array with a non-string element", { labels: ["ok", 3] }],
+    ["a non-array labels", { labels: "bug" }],
+    ["a non-boolean usesWorktree", { usesWorktree: "yes" }],
+  ])("rejects %s", (_label, extra) => {
+    const projectId = createProject();
+    const result = invoke<TicketResult>("volli:ticket-create", {
+      projectId,
+      status: "todo",
+      title: "A",
+      ...extra,
+    });
+    expect(result).toEqual({ ok: false, error: "Invalid ticket" });
   });
 });
 

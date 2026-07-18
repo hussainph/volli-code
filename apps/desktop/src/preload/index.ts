@@ -79,6 +79,12 @@ const api = {
       status: TicketStatus;
       title: string;
       priority?: TicketPriority;
+      /** Markdown; defaults to `""`. Becomes the agent prompt on kickoff. */
+      body?: string;
+      /** Label names; defaults to `[]`. Created (`color: null`) per project, name-deduped. */
+      labels?: string[];
+      /** Whether the ticket boots its agent in an isolated worktree; defaults to `true`. */
+      usesWorktree?: boolean;
     }): Promise<TicketResult> =>
       ipcRenderer.invoke("volli:ticket-create" satisfies VolliIpcChannel, input),
     /** Runs the shared board move + persists it; resolves with the project's full authoritative ticket list. */

@@ -4,6 +4,7 @@
 // nothing in this module may pull in Node/Electron/DOM at runtime.
 
 import type { SessionRecord } from "./session";
+import type { HarnessId } from "./ticket";
 import type { GhosttyTerminalPrefs } from "./ghostty-config";
 
 /** Renderer → main request to boot a PTY session inside a workspace. */
@@ -20,8 +21,14 @@ export interface CreateTerminalSessionRequest {
    * runs the PTY at the project root with `VOLLI_TICKET`/`VOLLI_ARTIFACTS_DIR`
    * injected, and persists a ticket-scoped {@link SessionRecord}. Absent = a
    * project-scoped scratch session (`ticketId` null).
+   *
+   * `kickoff`, when present, makes main auto-launch the harness CLI inside the
+   * freshly-spawned shell with `prompt` as its initial prompt argument (the
+   * built command line is written into the PTY exactly once, after the session
+   * is fully persisted), and stamps the session record's `harnessId`
+   * accordingly. Absent = a bare shell with no agent launched.
    */
-  ticket?: { ticketId: string };
+  ticket?: { ticketId: string; kickoff?: { harnessId: HarnessId; prompt: string } };
 }
 
 /**
