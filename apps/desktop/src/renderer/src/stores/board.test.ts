@@ -53,6 +53,9 @@ function fakeGateway(overrides: Partial<BoardGateway> = {}): BoardGateway {
       status: input.status,
       title: input.title,
       priority: input.priority,
+      body: input.body,
+      labels: input.labels,
+      usesWorktree: input.usesWorktree,
     }),
   }));
   const moveTicket = vi.fn<BoardGateway["moveTicket"]>(async () => ({ ok: true, tickets: [] }));
@@ -200,6 +203,28 @@ describe("addTicket", () => {
     await store.getState().addTicket("p1", "backlog", "  Padded  ");
 
     expect(gateway.createTicket).toHaveBeenCalledWith(expect.objectContaining({ title: "Padded" }));
+  });
+
+  it("forwards body, labels, and usesWorktree options to the gateway", async () => {
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+
+    await store.getState().addTicket("p1", "todo", "New", {
+      priority: "high",
+      body: "## Body",
+      labels: ["bug", "urgent"],
+      usesWorktree: false,
+    });
+
+    expect(gateway.createTicket).toHaveBeenCalledWith({
+      projectId: "p1",
+      status: "todo",
+      title: "New",
+      priority: "high",
+      body: "## Body",
+      labels: ["bug", "urgent"],
+      usesWorktree: false,
+    });
   });
 
   it("appends the gateway's created ticket and returns it", async () => {

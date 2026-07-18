@@ -26,6 +26,7 @@
  *
  * Per-workspace UI state (the active nav page) lives in stores/workspace.ts.
  */
+import { DEFAULT_HARNESS_ID, type HarnessId, isHarnessId } from "@volli/shared";
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
@@ -100,6 +101,13 @@ interface UiState {
   railCollapsed: boolean;
   /** Ticket-detail rail "Details" drawer expanded? Persisted app-wide (see module doc). */
   detailsExpanded: boolean;
+  /**
+   * The harness the New-ticket composer's "Create & start" last kicked off with.
+   * Persisted app-wide (like the chrome preferences above) so the primary action
+   * remembers your agent across restarts; sanitized through {@link isHarnessId}
+   * on rehydrate, defaulting to {@link DEFAULT_HARNESS_ID}.
+   */
+  lastHarnessId: HarnessId;
   setSidebarWidth(width: number): void;
   stepUiScale(delta: 1 | -1): void;
   resetUiScale(): void;
@@ -111,11 +119,17 @@ interface UiState {
   setRailCollapsed(collapsed: boolean): void;
   toggleDetailsExpanded(): void;
   setDetailsExpanded(expanded: boolean): void;
+  setLastHarnessId(harnessId: HarnessId): void;
 }
 
 type PersistedUiState = Pick<
   UiState,
-  "sidebarWidth" | "uiScale" | "workspaceRailHidden" | "railCollapsed" | "detailsExpanded"
+  | "sidebarWidth"
+  | "uiScale"
+  | "workspaceRailHidden"
+  | "railCollapsed"
+  | "detailsExpanded"
+  | "lastHarnessId"
 >;
 
 /**
@@ -138,6 +152,7 @@ export function createUiStore(storage?: StateStorage) {
         workspaceRailHidden: false,
         railCollapsed: false,
         detailsExpanded: false,
+        lastHarnessId: DEFAULT_HARNESS_ID,
         setSidebarWidth: (width) => set({ sidebarWidth: clampSidebarWidth(width) }),
         stepUiScale: (delta) => set((state) => ({ uiScale: steppedScale(state.uiScale, delta) })),
         resetUiScale: () => set({ uiScale: UI_SCALE_DEFAULT }),
@@ -150,6 +165,7 @@ export function createUiStore(storage?: StateStorage) {
         setRailCollapsed: (collapsed) => set({ railCollapsed: collapsed }),
         toggleDetailsExpanded: () => set((state) => ({ detailsExpanded: !state.detailsExpanded })),
         setDetailsExpanded: (expanded) => set({ detailsExpanded: expanded }),
+        setLastHarnessId: (harnessId) => set({ lastHarnessId: harnessId }),
       }),
       {
         name: "volli:ui",
@@ -163,6 +179,7 @@ export function createUiStore(storage?: StateStorage) {
           workspaceRailHidden: state.workspaceRailHidden,
           railCollapsed: state.railCollapsed,
           detailsExpanded: state.detailsExpanded,
+          lastHarnessId: state.lastHarnessId,
         }),
         // Rehydrated values come from JSON a past build wrote — sanitize
         // rather than trust (see sanitizeUiScale; a raw `zoom: 0` bricks the UI).
@@ -183,6 +200,11 @@ export function createUiStore(storage?: StateStorage) {
             railCollapsed: stored.railCollapsed === true,
             // Details drawer defaults closed; only an explicit `true` opens it.
             detailsExpanded: stored.detailsExpanded === true,
+            // A missing/unknown persisted harness (older build, corrupt JSON,
+            // or a since-removed custom id) falls back to the first-class default.
+            lastHarnessId: isHarnessId(stored.lastHarnessId)
+              ? stored.lastHarnessId
+              : DEFAULT_HARNESS_ID,
           };
         },
       },
