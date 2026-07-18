@@ -52,7 +52,10 @@ describe("harness install executor", () => {
     await writeFile(customPath, "keep me");
 
     const refreshed = await applyHarnessInstallPlan(plan, manifestPath);
-    expect(refreshed.conflicts).toEqual([skillPath]);
+    expect(refreshed.conflicts).toHaveLength(1);
+    expect(refreshed.conflicts[0]?.path).toBe(skillPath);
+    expect(refreshed.conflicts[0]?.currentContent).toBe("my edited skill\n");
+    expect(refreshed.conflicts[0]?.desiredContent.length).toBeGreaterThan(0);
     expect(await readFile(skillPath, "utf8")).toBe("my edited skill\n");
 
     await uninstallHarnessPlan(plan, manifestPath);
@@ -72,7 +75,8 @@ describe("harness install executor", () => {
     await writeFile(instructionsPath, crlfEdited);
 
     const refreshed = await applyHarnessInstallPlan(plan, manifestPath);
-    expect(refreshed.conflicts).toContain(instructionsPath);
+    expect(refreshed.conflicts.map((conflict) => conflict.path)).toContain(instructionsPath);
+    expect(refreshed.conflicts[0]?.currentContent).toBe("my hand edits");
     expect(await readFile(instructionsPath, "utf8")).toBe(crlfEdited);
   });
 });

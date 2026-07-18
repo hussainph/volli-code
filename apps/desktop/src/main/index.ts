@@ -2,8 +2,14 @@ import { app, BrowserWindow, dialog, Notification, session, shell } from "electr
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { errorMessage, MUTATING_AGENT_COMMANDS, ticketBranchName } from "@volli/shared";
+import {
+  diffManagedContent,
+  errorMessage,
+  MUTATING_AGENT_COMMANDS,
+  ticketBranchName,
+} from "@volli/shared";
 import type { VolliIpcEvent } from "@volli/shared";
+import type { ManagedConflict } from "./harness-install";
 import { isInternalNavigationTarget } from "./navigation";
 import type { DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
@@ -308,6 +314,23 @@ app.whenReady().then(async () => {
     console.error("[volli] failed to generate CLI shim:", errorMessage(error));
   }
 
+  // Renders hand-edited managed files that were preserved (never overwritten)
+  // as path + a readable unified diff in the dialog detail (spec decision 12:
+  // "warn + diff"). Shared by install, the on-update refresh, and uninstall.
+  const showSkillConflictWarning = async (conflicts: readonly ManagedConflict[]): Promise<void> => {
+    const detail = conflicts
+      .map(
+        (conflict) =>
+          `${conflict.path}\n${diffManagedContent(conflict.currentContent, conflict.desiredContent)}`,
+      )
+      .join("\n\n");
+    await dialog.showMessageBox(mainWindow, {
+      type: "warning",
+      message: "Some Volli skill files were edited and were left untouched.",
+      detail,
+    });
+  };
+
   const installAgentTools = async (): Promise<void> => {
     // Each step names itself in any thrown error so the failure dialog says what
     // broke (skill files vs. the /usr/local/bin symlink) rather than a bare
@@ -336,11 +359,7 @@ app.whenReady().then(async () => {
       throw error;
     }
     if (result.conflicts.length > 0) {
-      await dialog.showMessageBox({
-        type: "warning",
-        message: "Some Volli skill files were edited and were not overwritten.",
-        detail: result.conflicts.join("\n"),
-      });
+      await showSkillConflictWarning(result.conflicts);
     }
   };
   registerAppMenu(dbHandle, { installAgentTools });

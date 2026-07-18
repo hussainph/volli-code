@@ -16,10 +16,23 @@ interface ManifestEntry {
 
 type InstallManifest = Record<string, ManifestEntry>;
 
+/**
+ * A managed file left untouched because it no longer matches what the installer
+ * recorded (the user hand-edited it). Carries enough to render a readable diff
+ * in the warning dialog (spec decision 12: "warn + diff"). `currentContent` /
+ * `desiredContent` are the diffable forms — file text for writes, the fenced
+ * body for fences, the link target for symlinks.
+ */
+export interface ManagedConflict {
+  path: string;
+  currentContent: string;
+  desiredContent: string;
+}
+
 export interface HarnessInstallResult {
   written: string[];
   skipped: string[];
-  conflicts: string[];
+  conflicts: ManagedConflict[];
 }
 
 function hash(content: string): string {
@@ -78,7 +91,11 @@ async function applyManagedAction(
     desiredHash: ops.desiredHash,
   });
   if (decision === "conflict") {
-    result.conflicts.push(path);
+    result.conflicts.push({
+      path,
+      currentContent: current.content,
+      desiredContent: ops.desiredContent,
+    });
     return;
   }
   const wrote = await ops.apply(decision);
