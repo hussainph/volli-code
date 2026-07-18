@@ -55,7 +55,13 @@ export function ComposerFooter({
       </label>
 
       <div className="ml-auto flex items-center gap-2">
-        <Button variant="secondary" onClick={onCreate} disabled={disabled}>
+        <Button
+          variant="secondary"
+          size="sm"
+          className="text-ui"
+          onClick={onCreate}
+          disabled={disabled}
+        >
           Create
         </Button>
 
@@ -65,7 +71,8 @@ export function ComposerFooter({
             aria-label={`Create & start · ${harnessLabel(harnessId)}`}
             onClick={onKickoff}
             disabled={disabled}
-            className="rounded-r-none"
+            size="sm"
+            className="rounded-r-none text-ui"
           >
             Create &amp; start
             <span className="opacity-75">· {harnessLabel(harnessId)}</span>
@@ -76,6 +83,7 @@ export function ComposerFooter({
                   independent of whether the ticket is ready to submit. */}
               <Button
                 aria-label="Choose agent"
+                size="sm"
                 className="rounded-l-none border-l border-primary-foreground/25 px-2"
               >
                 <CaretDownIcon weight="bold" />

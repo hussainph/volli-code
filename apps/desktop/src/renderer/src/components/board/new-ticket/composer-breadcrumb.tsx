@@ -45,10 +45,10 @@ export function ComposerBreadcrumb({
           <button
             type="button"
             data-testid="composer-project-chip"
-            className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-sm font-medium text-foreground transition-colors duration-150 ease-out outline-none hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            className="flex min-w-0 max-w-64 items-center gap-1.5 rounded-md px-1.5 py-1 text-ui font-medium text-foreground transition-colors duration-150 ease-out outline-none hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50"
           >
             <ProjectMonogram project={target} />
-            {target.name}
+            <span className="truncate">{target.name}</span>
             <CaretDownIcon weight="bold" className="size-3 text-muted-foreground" />
           </button>
         </DropdownMenuTrigger>
@@ -56,7 +56,7 @@ export function ComposerBreadcrumb({
           {projects.map((project) => (
             <DropdownMenuItem key={project.id} onSelect={() => onRetarget(project)}>
               <ProjectMonogram project={project} />
-              {project.name}
+              <span className="truncate">{project.name}</span>
               {project.id === target.id ? (
                 <CheckIcon weight="bold" className="ml-auto size-3.5" />
               ) : null}
@@ -66,12 +66,12 @@ export function ComposerBreadcrumb({
       </DropdownMenu>
 
       <CaretRightIcon weight="bold" className="size-3 shrink-0 text-muted-foreground/60" />
-      <span className="text-sm text-muted-foreground">New ticket</span>
+      <span className="shrink-0 text-ui text-muted-foreground">New ticket</span>
 
-      <div className="ml-auto flex items-center gap-0.5">
+      <div className="ml-auto flex shrink-0 items-center gap-0.5">
         <Button
           variant="ghost"
-          size="icon-sm"
+          size="icon-xs"
           aria-label={expanded ? "Collapse" : "Expand"}
           onClick={onToggleExpand}
           className="text-muted-foreground hover:text-foreground"
@@ -80,7 +80,7 @@ export function ComposerBreadcrumb({
         </Button>
         <Button
           variant="ghost"
-          size="icon-sm"
+          size="icon-xs"
           aria-label="Close"
           onClick={onClose}
           className="text-muted-foreground hover:text-foreground"

@@ -13,7 +13,7 @@ export function ProjectMonogram({ project, className }: { project: Project; clas
     <span
       aria-hidden
       className={cn(
-        "flex size-4 shrink-0 items-center justify-center rounded-[4px] text-label font-semibold text-white",
+        "flex size-5 shrink-0 items-center justify-center rounded-[5px] text-label font-semibold tracking-normal text-white",
         className,
       )}
       style={{ backgroundColor: projectColor(project.colorIndex) }}

@@ -185,7 +185,7 @@ export function ComposerForm({
 
   return (
     <div onKeyDownCapture={handleKeyDownCapture} className="flex flex-col">
-      <div className="border-b border-border px-4 py-2.5">
+      <div className="border-b border-border px-4 py-2">
         <ComposerBreadcrumb
           projects={projects}
           target={target}
@@ -196,7 +196,7 @@ export function ComposerForm({
         />
       </div>
 
-      <div className="flex flex-col gap-3 px-4 pt-4 pb-3">
+      <div className="flex flex-col gap-2 px-4 pt-3 pb-3">
         <input
           ref={titleRef}
           autoFocus
@@ -222,7 +222,7 @@ export function ComposerForm({
           fileRefs={fileRefs}
           className={cn(
             "overflow-y-auto text-sm [&_.cm-content]:px-0 [&_.cm-editor]:bg-transparent [&_.cm-editor]:outline-none [&_.cm-focused]:outline-none",
-            expanded ? "max-h-[50vh] min-h-[280px]" : "min-h-[120px]",
+            expanded ? "max-h-[50vh] min-h-[280px]" : "max-h-[40vh] min-h-[140px]",
           )}
         />
       </div>
@@ -241,7 +241,7 @@ export function ComposerForm({
         />
       </div>
 
-      <div className="border-t border-border px-4 py-3">
+      <div className="border-t border-border px-4 py-2.5">
         <ComposerFooter
           fileIndex={fileIndex}
           onInsertRef={(relPath) => editorRef.current?.insertAtCursor(`@${relPath}`)}
