@@ -10,6 +10,7 @@ import { NotePencilIcon } from "@phosphor-icons/react/dist/csr/NotePencil";
 import { PaperPlaneTiltIcon } from "@phosphor-icons/react/dist/csr/PaperPlaneTilt";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { PlusCircleIcon } from "@phosphor-icons/react/dist/csr/PlusCircle";
+import { RobotIcon } from "@phosphor-icons/react/dist/csr/Robot";
 import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
 import { TerminalIcon } from "@phosphor-icons/react/dist/csr/Terminal";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
@@ -54,6 +55,7 @@ const EVENT_ICON: Record<TicketEventKind, PhosphorIcon> = {
   created: PlusCircleIcon,
   status_changed: ArrowRightIcon,
   priority_changed: FlagIcon,
+  harness_changed: RobotIcon,
   retitled: PencilSimpleIcon,
   body_edited: NotePencilIcon,
   labels_changed: TagIcon,

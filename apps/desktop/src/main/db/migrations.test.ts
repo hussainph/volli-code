@@ -98,7 +98,7 @@ describe("migrate — fresh install", () => {
     const db = openRawDb(dbPath);
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(5);
+    expect(db.pragma("user_version", { simple: true })).toBe(6);
     db.close();
   });
 
@@ -124,6 +124,7 @@ describe("migrate — fresh install", () => {
     migrate(db, dbPath);
 
     expect(columnNames(db, "tickets")).not.toContain("harness_id");
+    expect(columnNames(db, "tickets")).toContain("preferred_harness_id");
     expect(columnNames(db, "sessions")).toContain("harness_id");
     db.close();
   });
@@ -162,7 +163,7 @@ describe("migrate — 002 to 004 upgrade path", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(5);
+    expect(db.pragma("user_version", { simple: true })).toBe(6);
     const project = db.prepare("SELECT * FROM projects WHERE id = 'p1'").get() as {
       name: string;
     };
@@ -212,9 +213,9 @@ describe("migrate — 002 to 004 upgrade path", () => {
     migrate(db, dbPath);
     migrate(db, dbPath); // second call: nothing pending
 
-    expect(db.pragma("user_version", { simple: true })).toBe(5);
-    // No v5-backup should exist — the second migrate() call had nothing to apply.
-    expect(existsSync(`${dbPath}.backup-v5`)).toBe(false);
+    expect(db.pragma("user_version", { simple: true })).toBe(6);
+    // No v6-backup should exist — the second migrate() call had nothing to apply.
+    expect(existsSync(`${dbPath}.backup-v6`)).toBe(false);
     db.close();
   });
 });
@@ -226,7 +227,7 @@ describe("migrate — 004 to 005 upgrade path (ticket-number counter backfill)",
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(5);
+    expect(db.pragma("user_version", { simple: true })).toBe(6);
     const projects = db
       .prepare("SELECT id, next_ticket_number FROM projects ORDER BY id")
       .all() as { id: string; next_ticket_number: number }[];

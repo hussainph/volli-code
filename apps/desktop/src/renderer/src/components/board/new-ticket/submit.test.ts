@@ -28,6 +28,7 @@ function madeTicket(overrides: Partial<Ticket> = {}): Ticket {
     priority: "medium",
     labels: [],
     usesWorktree: true,
+    preferredHarnessId: "claude-code",
     order: 0,
     worktreePath: null,
     branch: null,

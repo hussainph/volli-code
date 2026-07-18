@@ -2,14 +2,12 @@ import { randomUUID } from "node:crypto";
 import { ipcMain } from "electron";
 import type Database from "better-sqlite3";
 import {
-  createTicket,
   derivePrefix,
   errorMessage,
   isTicketPriority,
   isTicketStatus,
   isValidBranchName,
   LEGACY_BACKUP_APP_STATE_KEY,
-  moveTicket,
   PROJECT_COLORS,
   sanitizeLegacyProjects,
   USER_ACTOR,
@@ -27,6 +25,7 @@ import type {
   Project,
   ProjectCreateResult,
   ProjectMutationResult,
+  ProjectUpdateResult,
   Result,
   SessionsResult,
   SessionRenameResult,
@@ -39,25 +38,11 @@ import type {
   TicketsResult,
   TicketStatus,
   VolliIpcChannel,
-  WorktreeIdentity,
 } from "@volli/shared";
 import { getAllAppState, setAppState } from "./db/app-state-repo";
-import {
-  createComment,
-  deleteComment,
-  getComment,
-  listComments,
-  updateComment,
-} from "./db/comments-repo";
+import { deleteComment, getComment, listComments, updateComment } from "./db/comments-repo";
 import { listTicketEvents, recordTicketEvent } from "./db/events-repo";
-import {
-  addTicketLabel,
-  findLabelByName,
-  getOrCreateLabel,
-  listAllLabels,
-  removeTicketLabel,
-  setLabelColor,
-} from "./db/labels-repo";
+import { listAllLabels, setLabelColor } from "./db/labels-repo";
 import {
   countProjects,
   deleteProject,
@@ -66,27 +51,28 @@ import {
   listProjects,
   nextSortOrder,
   reorderProjects,
+  updateProjectBaseBranch,
 } from "./db/projects-repo";
 import { listSessions, listTicketSessions, updateTitle } from "./db/sessions-repo";
 import {
-  archiveTicket,
-  bumpTicketVersion,
   deleteTicket,
   getTicket,
-  getTicketLabelNames,
   getTicketRow,
-  insertTicket,
   listAllTickets,
   listArchivedTicketsByProject,
-  listTicketsByProject,
   nextPositionInStatus,
-  nextTicketNumberForProject,
   unarchiveTicket,
-  updateTicketFields,
-  updateTicketPositionStatus,
-  updateTicketPriority,
 } from "./db/tickets-repo";
-import type { TicketFieldUpdate, TicketRow } from "./db/tickets-repo";
+import {
+  archiveTicketCommand,
+  createTicketCommand,
+  createTicketCommentCommand,
+  moveTicketCommand,
+  setTicketLabelsCommand,
+  setTicketPriorityCommand,
+  updateTicketFieldsCommand,
+} from "./ticket-commands";
+import { detectProjectBaseBranch } from "./project-base-branch";
 
 /** The result of the main-process open+migrate attempt (`src/main/index.ts`), fed into {@link registerDataIpcHandlers}. */
 export type DbHandle = { ok: true; db: Database.Database } | { ok: false; error: string };
@@ -96,6 +82,7 @@ const DATA_CHANNELS: readonly VolliIpcChannel[] = [
   "volli:data-bootstrap",
   "volli:legacy-import",
   "volli:project-create",
+  "volli:project-update",
   "volli:project-remove",
   "volli:project-reorder",
   "volli:ticket-create",
@@ -245,11 +232,6 @@ function isTicketUpdateInput(value: unknown): value is TicketUpdateInput {
   );
 }
 
-/** The worktree-identity snapshot off a raw ticket row — used to build `worktree_changed`'s `from`/`to`. */
-function rowWorktreeIdentity(row: TicketRow): WorktreeIdentity {
-  return { worktreePath: row.worktree_path, branch: row.branch, baseBranch: row.base_branch };
-}
-
 interface TicketSetLabelsInput {
   ticketId: string;
   labels: string[];
@@ -353,31 +335,6 @@ function isLabelSetColorInput(value: unknown): value is LabelSetColorInput {
   );
 }
 
-// ---- archive-lifecycle guard ---------------------------------------------
-
-/**
- * Fetches a ticket row and enforces the archive lifecycle for every handler
- * that mutates a LIVE ticket's fields (update/priority/labels/move): an
- * archived ticket is meant to sit untouched in cold storage (CONCEPT #16/#92),
- * so mutating it here — via a stray IPC call, or eventually the `volli` CLI
- * acting on a bare ticket id — would corrupt that invariant just as surely as
- * the delete guard's "only archived tickets can be deleted" prevents the
- * opposite mistake. Throws "Unknown ticket" for a missing row (matching every
- * handler's existing not-found message) or `Cannot ${action} an archived
- * ticket` for an archived one; both propagate through the handler's catch into
- * the renderer's `{ ok: false, error }` envelope, which `writeThrough` toasts
- * as `Could not <verb>: <error>`. The archive/unarchive/delete handlers are
- * the lifecycle transitions themselves and do NOT go through this guard.
- */
-function requireLiveTicket(db: Database.Database, ticketId: string, action: string): TicketRow {
-  const row = getTicketRow(db, ticketId);
-  if (!row) throw new Error("Unknown ticket");
-  if (row.archived_at !== null) {
-    throw new Error(`Cannot ${action} an archived ticket`);
-  }
-  return row;
-}
-
 // ---- bootstrap payload --------------------------------------------------
 
 function buildBootstrapPayload(db: Database.Database): BootstrapPayload {
@@ -410,7 +367,10 @@ function buildBootstrapPayload(db: Database.Database): BootstrapPayload {
  * renderer surfaces the error itself. Failures never throw across the IPC
  * boundary either way — every handler below catches and converts.
  */
-export function registerDataIpcHandlers(handle: DbHandle): void {
+export function registerDataIpcHandlers(
+  handle: DbHandle,
+  options: { detectBaseBranch?: (projectPath: string) => string | null } = {},
+): void {
   if (!handle.ok) {
     const error = handle.error;
     for (const channel of DATA_CHANNELS) {
@@ -496,6 +456,7 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
           name: input.name,
           path: input.path,
           ticketPrefix,
+          baseBranch: (options.detectBaseBranch ?? detectProjectBaseBranch)(input.path),
           colorIndex: countProjects(db) % PROJECT_COLORS.length,
           sortOrder: nextSortOrder(db),
           createdAt: now,
@@ -525,6 +486,31 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
   );
 
   ipcMain.handle(
+    "volli:project-update" satisfies VolliIpcChannel,
+    (_event, input: unknown): ProjectUpdateResult => {
+      if (
+        typeof input !== "object" ||
+        input === null ||
+        typeof (input as Record<string, unknown>)["id"] !== "string" ||
+        !(
+          (input as Record<string, unknown>)["baseBranch"] === null ||
+          (typeof (input as Record<string, unknown>)["baseBranch"] === "string" &&
+            isValidBranchName((input as Record<string, unknown>)["baseBranch"] as string))
+        )
+      ) {
+        return { ok: false, error: "Invalid project base branch" };
+      }
+      const candidate = input as { id: string; baseBranch: string | null };
+      try {
+        const project = updateProjectBaseBranch(db, candidate.id, candidate.baseBranch, Date.now());
+        return project ? { ok: true, project } : { ok: false, error: "Unknown project" };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
     "volli:project-reorder" satisfies VolliIpcChannel,
     (_event, orderedIds: unknown): ProjectMutationResult => {
       if (!isStringArray(orderedIds)) {
@@ -547,53 +533,23 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
       }
       try {
         const now = Date.now();
-        const run = db.transaction((): Ticket => {
-          const ticketNumber = nextTicketNumberForProject(db, input.projectId);
-          const position = nextPositionInStatus(db, input.projectId, input.status);
-          const ticket = createTicket({
-            id: randomUUID(),
-            projectId: input.projectId,
-            ticketNumber,
-            title: input.title,
-            status: input.status,
-            order: position,
-            now,
-            priority: input.priority,
-            body: input.body,
-            labels: input.labels,
-            usesWorktree: input.usesWorktree,
-          });
-          insertTicket(db, ticket);
-          recordTicketEvent(
+        return {
+          ok: true,
+          ticket: createTicketCommand(
             db,
-            ticket.id,
-            { kind: "created", status: ticket.status, title: ticket.title },
-            now,
-          );
-          // `insertTicket` writes only the ticket row, not label junction rows.
-          // Persist labels the same way the setLabels path does — get-or-create
-          // one shared, name-deduped label per project, then a junction row
-          // (INSERT OR IGNORE collapses repeated names) — and record the same
-          // `labels_changed` event so the assignment shows in the activity feed.
-          if (ticket.labels.length > 0) {
-            for (const name of ticket.labels) {
-              const label = getOrCreateLabel(db, ticket.projectId, name, now);
-              addTicketLabel(db, ticket.id, label.id);
-            }
-            recordTicketEvent(
-              db,
-              ticket.id,
-              { kind: "labels_changed", added: ticket.labels, removed: [] },
-              now,
-            );
-          }
-          // Re-read so the returned ticket reflects the persisted, name-deduped,
-          // insertion-ordered labels (mirrors the setLabels handler's return).
-          const created = getTicket(db, ticket.id);
-          if (!created) throw new Error("Unknown ticket");
-          return created;
-        });
-        return { ok: true, ticket: run() };
+            {
+              id: randomUUID(),
+              projectId: input.projectId,
+              title: input.title,
+              status: input.status,
+              priority: input.priority,
+              body: input.body,
+              labels: input.labels,
+              usesWorktree: input.usesWorktree,
+            },
+            { now, actor: { kind: "user" } },
+          ),
+        };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }
@@ -608,40 +564,10 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
       }
       try {
         const now = Date.now();
-        const run = db.transaction((): Ticket[] => {
-          requireLiveTicket(db, input.ticketId, "move");
-          const before = listTicketsByProject(db, input.projectId);
-          const beforeById = new Map(before.map((ticket) => [ticket.id, ticket]));
-          const after = moveTicket(before, input.ticketId, input.toStatus, input.toIndex, now);
-
-          if (after !== before) {
-            for (const ticket of after) {
-              const prior = beforeById.get(ticket.id);
-              if (!prior) continue;
-              if (prior.status !== ticket.status || prior.order !== ticket.order) {
-                updateTicketPositionStatus(
-                  db,
-                  ticket.id,
-                  ticket.status,
-                  ticket.order,
-                  ticket.updatedAt,
-                );
-              }
-            }
-            const movedBefore = beforeById.get(input.ticketId);
-            const movedAfter = after.find((ticket) => ticket.id === input.ticketId);
-            if (movedBefore && movedAfter && movedBefore.status !== movedAfter.status) {
-              recordTicketEvent(
-                db,
-                input.ticketId,
-                { kind: "status_changed", from: movedBefore.status, to: movedAfter.status },
-                now,
-              );
-            }
-          }
-          return after;
-        });
-        return { ok: true, tickets: run() };
+        return {
+          ok: true,
+          tickets: moveTicketCommand(db, input, { now, actor: { kind: "user" } }),
+        };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }
@@ -656,26 +582,10 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
       }
       try {
         const now = Date.now();
-        const run = db.transaction((): Ticket => {
-          const row = requireLiveTicket(db, input.ticketId, "change the priority of");
-          if (row.priority !== input.priority) {
-            updateTicketPriority(db, input.ticketId, input.priority, now);
-            recordTicketEvent(
-              db,
-              input.ticketId,
-              {
-                kind: "priority_changed",
-                from: row.priority as TicketPriority,
-                to: input.priority,
-              },
-              now,
-            );
-          }
-          const ticket = getTicket(db, input.ticketId);
-          if (!ticket) throw new Error("Unknown ticket");
-          return ticket;
-        });
-        return { ok: true, ticket: run() };
+        return {
+          ok: true,
+          ticket: setTicketPriorityCommand(db, input, { now, actor: { kind: "user" } }),
+        };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }
@@ -688,70 +598,12 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
       if (!isTicketUpdateInput(input)) {
         return { ok: false, error: "Invalid ticket update" };
       }
-      // Write-time git ref-name validation: the worktree branch fields are
-      // persisted verbatim, so reject anything that isn't a legal branch name
-      // (a `null` clears the field and is always allowed) before it reaches the
-      // db — surfaced to the renderer as a typed error it can toast.
-      if (typeof input.branch === "string" && !isValidBranchName(input.branch)) {
-        return { ok: false, error: "Invalid branch name" };
-      }
-      if (typeof input.baseBranch === "string" && !isValidBranchName(input.baseBranch)) {
-        return { ok: false, error: "Invalid base branch name" };
-      }
       try {
         const now = Date.now();
-        const run = db.transaction((): Ticket => {
-          const row = requireLiveTicket(db, input.ticketId, "update");
-
-          const fields: TicketFieldUpdate = {};
-          if (input.title !== undefined && input.title !== row.title) fields.title = input.title;
-          if (input.body !== undefined && input.body !== row.body) fields.body = input.body;
-          if (input.worktreePath !== undefined && input.worktreePath !== row.worktree_path) {
-            fields.worktreePath = input.worktreePath;
-          }
-          if (input.branch !== undefined && input.branch !== row.branch) {
-            fields.branch = input.branch;
-          }
-          if (input.baseBranch !== undefined && input.baseBranch !== row.base_branch) {
-            fields.baseBranch = input.baseBranch;
-          }
-
-          const worktreeTouched =
-            fields.worktreePath !== undefined ||
-            fields.branch !== undefined ||
-            fields.baseBranch !== undefined;
-
-          if (fields.title !== undefined || fields.body !== undefined || worktreeTouched) {
-            const from = rowWorktreeIdentity(row);
-            updateTicketFields(db, input.ticketId, fields, now);
-            if (fields.title !== undefined) {
-              recordTicketEvent(
-                db,
-                input.ticketId,
-                { kind: "retitled", from: row.title, to: fields.title },
-                now,
-              );
-            }
-            if (fields.body !== undefined) {
-              recordTicketEvent(db, input.ticketId, { kind: "body_edited" }, now);
-            }
-            // ONE worktree_changed event per update call, even when more than
-            // one of the three identity fields changed together.
-            if (worktreeTouched) {
-              const to: WorktreeIdentity = {
-                worktreePath:
-                  fields.worktreePath !== undefined ? fields.worktreePath : from.worktreePath,
-                branch: fields.branch !== undefined ? fields.branch : from.branch,
-                baseBranch: fields.baseBranch !== undefined ? fields.baseBranch : from.baseBranch,
-              };
-              recordTicketEvent(db, input.ticketId, { kind: "worktree_changed", from, to }, now);
-            }
-          }
-          const ticket = getTicket(db, input.ticketId);
-          if (!ticket) throw new Error("Unknown ticket");
-          return ticket;
-        });
-        return { ok: true, ticket: run() };
+        return {
+          ok: true,
+          ticket: updateTicketFieldsCommand(db, input, { now, actor: { kind: "user" } }),
+        };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }
@@ -766,31 +618,10 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
       }
       try {
         const now = Date.now();
-        const run = db.transaction((): Ticket => {
-          const row = requireLiveTicket(db, input.ticketId, "change the labels of");
-
-          const current = getTicketLabelNames(db, input.ticketId);
-          const requested = input.labels;
-          const added = requested.filter((name) => !current.includes(name));
-          const removed = current.filter((name) => !requested.includes(name));
-
-          if (added.length > 0 || removed.length > 0) {
-            for (const name of added) {
-              const label = getOrCreateLabel(db, row.project_id, name, now);
-              addTicketLabel(db, input.ticketId, label.id);
-            }
-            for (const name of removed) {
-              const label = findLabelByName(db, row.project_id, name);
-              if (label) removeTicketLabel(db, input.ticketId, label.id);
-            }
-            bumpTicketVersion(db, input.ticketId, now);
-            recordTicketEvent(db, input.ticketId, { kind: "labels_changed", added, removed }, now);
-          }
-          const ticket = getTicket(db, input.ticketId);
-          if (!ticket) throw new Error("Unknown ticket");
-          return ticket;
-        });
-        return { ok: true, ticket: run() };
+        return {
+          ok: true,
+          ticket: setTicketLabelsCommand(db, input, { now, actor: { kind: "user" } }),
+        };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }
@@ -805,16 +636,7 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
       }
       try {
         const now = Date.now();
-        const run = db.transaction((): void => {
-          const row = getTicketRow(db, input.ticketId);
-          if (!row) throw new Error("Unknown ticket");
-          // Idempotent: re-archiving an already-archived ticket records nothing.
-          if (row.archived_at === null) {
-            archiveTicket(db, input.ticketId, now);
-            recordTicketEvent(db, input.ticketId, { kind: "archived" }, now);
-          }
-        });
-        run();
+        archiveTicketCommand(db, input.ticketId, { now, actor: { kind: "user" } });
         return { ok: true };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
@@ -927,7 +749,7 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
         return { ok: false, error: "Invalid comment" };
       }
       try {
-        const comment = createComment(
+        const comment = createTicketCommentCommand(
           db,
           {
             ticketId: input.ticketId,
@@ -935,10 +757,10 @@ export function registerDataIpcHandlers(handle: DbHandle): void {
             // UI-originated: every comment posted through this renderer-facing
             // channel is authored by the user. Agent-posted session summaries
             // arrive later via the volli CLI, a different (not-yet-built) path.
-            actor: USER_ACTOR,
+            commentActor: USER_ACTOR,
             sessionId: input.sessionId,
           },
-          Date.now(),
+          { now: Date.now(), actor: { kind: "user" } },
         );
         return { ok: true, comment };
       } catch (error) {

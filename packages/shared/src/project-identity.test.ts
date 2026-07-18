@@ -103,6 +103,13 @@ describe("isValidPrefix", () => {
 });
 
 describe("validateUniquePrefix", () => {
+  it("rejects invalid syntax before checking collisions", () => {
+    expect(validateUniquePrefix("bad", [])).toEqual({
+      ok: false,
+      error: "Ticket prefixes must be 1–5 uppercase letters or digits and start with a letter.",
+    });
+  });
+
   it("names the existing project when a prefix collides", () => {
     expect(
       validateUniquePrefix("VC", [
@@ -113,6 +120,12 @@ describe("validateUniquePrefix", () => {
       ok: false,
       error: 'Ticket prefix "VC" is already used by Volli Code.',
     });
+  });
+
+  it("allows a unique prefix and excludes the project being edited", () => {
+    const projects = [{ id: "one", name: "Volli Code", ticketPrefix: "VC" }];
+    expect(validateUniquePrefix("NEW", projects)).toEqual({ ok: true });
+    expect(validateUniquePrefix("VC", projects, "one")).toEqual({ ok: true });
   });
 });
 

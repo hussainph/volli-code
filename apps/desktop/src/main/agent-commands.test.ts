@@ -33,7 +33,13 @@ describe("agent command service", () => {
     const request: AgentRequest = {
       v: 1,
       cmd: "ticket.create",
-      args: { project: "/repo/volli", title: "Ship CLI", status: "backlog", labels: [] },
+      args: {
+        project: "/repo/volli",
+        title: "Ship CLI",
+        status: "backlog",
+        labels: [],
+        harness: "codex",
+      },
       ctx: { cwd: "/outside", env: {} },
     };
 
@@ -52,6 +58,7 @@ describe("agent command service", () => {
           priority: "medium",
           labels: [],
           usesWorktree: true,
+          harness: "codex",
           branch: null,
           baseBranch: null,
           createdAt: 100,
@@ -140,7 +147,7 @@ describe("agent command service", () => {
         args,
         ctx: {
           cwd: "/repo/volli",
-          env: { ...(session ? { session, ticket: "VC-1" } : {}) },
+          env: session ? { session, ticket: "VC-1" } : {},
         },
       });
 
@@ -154,6 +161,7 @@ describe("agent command service", () => {
     await request("ticket.comment", { id: "VC-1", message: "Working" }, sessionId);
 
     const events = await request("ticket.events", { id: "VC-1", limit: 10 });
+    const board = await request("board", {}, sessionId);
     expect(events).toMatchObject({
       ok: true,
       data: {
@@ -174,6 +182,10 @@ describe("agent command service", () => {
     });
     expect(JSON.stringify(events)).not.toContain(sessionId);
     expect(JSON.stringify(events)).not.toContain("ticket-one");
+    expect(board).toMatchObject({
+      ok: true,
+      data: { project: { prefix: "VC" }, columns: { doing: [{ id: "VC-1" }] } },
+    });
   });
 
   it("identifies the project, ticket, and short session from the injected environment", async () => {
@@ -225,13 +237,33 @@ describe("agent command service", () => {
         project: { name: "Volli Code", prefix: "VC", path: "/repo/volli" },
         ticket: "VC-1",
         session: "abcdef12",
-        worktree: "/tmp/worktrees/VC-1",
+        worktreePath: "/tmp/worktrees/VC-1",
         socket: "/tmp/volli.sock",
         appVersion: "1.2.3",
       },
     });
     expect(JSON.stringify(response)).not.toContain("project-one");
     expect(JSON.stringify(response)).not.toContain(sessionId);
+
+    expect(
+      await service.execute({
+        v: 1,
+        cmd: "identify",
+        args: {},
+        ctx: { cwd: "/repo/volli/packages/shared", env: { socket: "/tmp/volli.sock" } },
+      }),
+    ).toEqual({
+      v: 1,
+      ok: true,
+      data: {
+        project: { name: "Volli Code", prefix: "VC", path: "/repo/volli" },
+        ticket: null,
+        session: null,
+        worktreePath: "/repo/volli/packages/shared",
+        socket: "/tmp/volli.sock",
+        appVersion: "1.2.3",
+      },
+    });
   });
 
   it("lists filtered tickets and shows recent public history without internal ids", async () => {
@@ -315,6 +347,7 @@ describe("agent command service", () => {
       title: "Ship CLI",
       priority: "high",
       base: "release/next",
+      harness: "opencode",
       bodyMutation: { mode: "edit", oldText: "Old section", newText: "New section" },
       addLabels: ["ready"],
       removeLabels: ["draft"],
@@ -337,6 +370,7 @@ describe("agent command service", () => {
           body: "New section\n\nKeep this",
           priority: "high",
           labels: ["feature", "ready"],
+          harness: "opencode",
           baseBranch: "release/next",
         },
       },

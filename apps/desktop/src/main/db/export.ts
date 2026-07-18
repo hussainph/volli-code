@@ -26,6 +26,7 @@ export interface ExportProject {
   name: string;
   path: string;
   ticketPrefix: string;
+  baseBranch: string | null;
   colorIndex: number;
   sortOrder: number;
   rowVersion: number;
@@ -43,6 +44,7 @@ export interface ExportTicket {
   body: string;
   status: string;
   priority: string;
+  preferredHarnessId: string;
   usesWorktree: boolean;
   position: number;
   worktreePath: string | null;
@@ -139,6 +141,7 @@ interface ProjectRow {
   name: string;
   path: string;
   ticket_prefix: string;
+  base_branch: string | null;
   color_index: number;
   sort_order: number;
   row_version: number;
@@ -153,6 +156,7 @@ function exportProjects(db: Database.Database): ExportProject[] {
     name: row.name,
     path: row.path,
     ticketPrefix: row.ticket_prefix,
+    baseBranch: row.base_branch,
     colorIndex: row.color_index,
     sortOrder: row.sort_order,
     rowVersion: row.row_version,
@@ -169,6 +173,7 @@ interface TicketRow {
   body: string;
   status: string;
   priority: string;
+  preferred_harness_id: string;
   uses_worktree: number;
   position: number;
   worktree_path: string | null;
@@ -203,6 +208,7 @@ function exportTickets(
       body: row.body,
       status: row.status,
       priority: row.priority,
+      preferredHarnessId: row.preferred_harness_id,
       usesWorktree: row.uses_worktree !== 0,
       position: row.position,
       worktreePath: row.worktree_path,

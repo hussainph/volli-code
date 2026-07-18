@@ -23,6 +23,7 @@ import type {
   PickFolderResult,
   ProjectCreateResult,
   ProjectMutationResult,
+  ProjectUpdateResult,
   Result,
   RevealResult,
   SessionRenameResult,
@@ -46,6 +47,9 @@ import type {
 
 // Minimal typed API surface exposed to the renderer.
 const api = {
+  app: {
+    launchedByCli: process.env["VOLLI_LAUNCHED_BY_CLI"] === "1",
+  },
   versions: {
     electron: process.versions.electron,
     chrome: process.versions.chrome,
@@ -75,6 +79,9 @@ const api = {
     /** Creates a project row, or (`created: false`) returns the existing one already tracked at `path`. */
     create: (input: { path: string; name: string }): Promise<ProjectCreateResult> =>
       ipcRenderer.invoke("volli:project-create" satisfies VolliIpcChannel, input),
+    /** Updates the project's pinned automation base branch. */
+    update: (input: { id: string; baseBranch: string | null }): Promise<ProjectUpdateResult> =>
+      ipcRenderer.invoke("volli:project-update" satisfies VolliIpcChannel, input),
     /** Deletes a project; cascades its tickets/labels/events in SQLite. */
     remove: (id: string): Promise<ProjectMutationResult> =>
       ipcRenderer.invoke("volli:project-remove" satisfies VolliIpcChannel, id),

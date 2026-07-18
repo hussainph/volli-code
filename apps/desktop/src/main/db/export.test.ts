@@ -58,13 +58,14 @@ describe("buildExportDocument — empty db", () => {
 describe("buildExportDocument — populated db", () => {
   it("dumps every table, camelCased, with the ticket displayId reused from displayTicketId", () => {
     ctx = openTestDb();
-    const project = testProject({ id: "proj-1", ticketPrefix: "VC" });
+    const project = testProject({ id: "proj-1", ticketPrefix: "VC", baseBranch: "main" });
     insertProject(ctx.db, project);
 
     const liveTicket = testTicket(project.id, {
       id: "ticket-live",
       ticketNumber: 12,
       title: "Live ticket",
+      preferredHarnessId: "codex",
       createdAt: 10,
     });
     insertTicket(ctx.db, liveTicket);
@@ -110,6 +111,7 @@ describe("buildExportDocument — populated db", () => {
         name: project.name,
         path: project.path,
         ticketPrefix: "VC",
+        baseBranch: "main",
         colorIndex: project.colorIndex,
         sortOrder: project.sortOrder,
         rowVersion: 1,
@@ -131,6 +133,7 @@ describe("buildExportDocument — populated db", () => {
       id: "ticket-live",
       displayId: "VC-12",
       title: "Live ticket",
+      preferredHarnessId: "codex",
       archivedAt: null,
       usesWorktree: true,
     });

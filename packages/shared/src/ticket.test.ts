@@ -209,6 +209,7 @@ describe("createTicket", () => {
     expect(ticket.worktreePath).toBeNull();
     expect(ticket.branch).toBeNull();
     expect(ticket.baseBranch).toBeNull();
+    expect(ticket.preferredHarnessId).toBe("claude-code");
   });
 
   it("honors explicit overrides for all optional fields", () => {

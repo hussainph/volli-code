@@ -43,6 +43,7 @@ export const EVENT_KIND_PRIORITY: readonly TicketEventKind[] = [
   "created",
   "retitled",
   "priority_changed",
+  "harness_changed",
   "labels_changed",
   "worktree_changed",
   "archived",
@@ -130,6 +131,8 @@ export function describeEvent(payload: TicketEventPayload): string | null {
       return `moved ${TICKET_STATUS_LABELS[payload.from]} → ${TICKET_STATUS_LABELS[payload.to]}`;
     case "priority_changed":
       return `changed priority ${TICKET_PRIORITY_LABELS[payload.from]} → ${TICKET_PRIORITY_LABELS[payload.to]}`;
+    case "harness_changed":
+      return `changed harness ${harnessLabel(payload.from)} → ${harnessLabel(payload.to)}`;
     case "retitled":
       return `renamed to "${payload.to}"`;
     case "body_edited":

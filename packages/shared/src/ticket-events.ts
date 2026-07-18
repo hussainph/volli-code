@@ -11,6 +11,7 @@ export const TICKET_EVENT_KINDS = [
   "created",
   "status_changed",
   "priority_changed",
+  "harness_changed",
   "retitled",
   "body_edited",
   "labels_changed",
@@ -50,6 +51,7 @@ export type TicketEventPayload =
   | { kind: "created"; status: TicketStatus; title: string }
   | { kind: "status_changed"; from: TicketStatus; to: TicketStatus }
   | { kind: "priority_changed"; from: TicketPriority; to: TicketPriority }
+  | { kind: "harness_changed"; from: HarnessId; to: HarnessId }
   | { kind: "retitled"; from: string; to: string }
   | { kind: "body_edited" }
   | { kind: "labels_changed"; added: string[]; removed: string[] }

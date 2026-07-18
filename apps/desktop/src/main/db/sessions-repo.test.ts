@@ -204,6 +204,7 @@ describe("getTicketSessionContext", () => {
       projectPath: "/repo/app",
       ticketPrefix: "APP",
       ticketNumber: 7,
+      preferredHarnessId: "claude-code",
     });
   });
 

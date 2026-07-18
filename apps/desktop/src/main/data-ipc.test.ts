@@ -1,5 +1,6 @@
 import type {
   BootstrapResult,
+  ProjectCreateResult,
   Result,
   SessionRenameResult,
   SessionsResult,
@@ -78,6 +79,21 @@ function archiveTicket(ticketId: string): void {
 }
 
 describe("volli:project-create — workspace-unique ticket prefixes", () => {
+  it("pins the repository's detected base branch when a project is added", () => {
+    handlers.clear();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { detectBaseBranch: (path) => (path === "/repo/volli" ? "trunk" : null) },
+    );
+
+    const result = invoke<ProjectCreateResult>("volli:project-create", {
+      path: "/repo/volli",
+      name: "Volli Code",
+    });
+
+    expect(result).toMatchObject({ ok: true, project: { baseBranch: "trunk" } });
+  });
+
   it("surfaces the colliding project instead of creating an ambiguous display-id namespace", () => {
     const first = invoke<{ ok: boolean; error?: string }>("volli:project-create", {
       path: "/repo/volli",
@@ -92,6 +108,29 @@ describe("volli:project-create — workspace-unique ticket prefixes", () => {
     expect(second).toEqual({
       ok: false,
       error: 'Ticket prefix "VC" is already used by Volli Code.',
+    });
+  });
+});
+
+describe("volli:project-update — pinned base branch", () => {
+  it("persists an editable base branch and returns the updated project", () => {
+    const projectId = createProject();
+
+    const result = invoke<{ ok: boolean; project?: { baseBranch: string | null } }>(
+      "volli:project-update",
+      { id: projectId, baseBranch: "release/next" },
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: true,
+        project: expect.objectContaining({ baseBranch: "release/next" }),
+      }),
+    );
+    const bootstrap = invoke<BootstrapResult>("volli:data-bootstrap");
+    expect(bootstrap).toMatchObject({
+      ok: true,
+      data: { projects: [{ id: projectId, baseBranch: "release/next" }] },
     });
   });
 });

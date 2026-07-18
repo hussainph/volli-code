@@ -142,6 +142,118 @@ describe("resolveAgentContext", () => {
       },
     });
   });
+
+  it("reports unknown explicit, session, and ticket selectors", () => {
+    const base = {
+      explicit: {},
+      env: {},
+      cwd: "/elsewhere",
+      projects: [{ id: "p1", name: "One", path: "/work/one", ticketPrefix: "ONE" }],
+      tickets: [],
+      sessions: [],
+    };
+    expect(resolveAgentContext({ ...base, explicit: { project: "missing" } })).toMatchObject({
+      ok: false,
+      code: "PROJECT_NOT_FOUND",
+    });
+    expect(resolveAgentContext({ ...base, env: { VOLLI_SESSION: "missing" } })).toMatchObject({
+      ok: false,
+      code: "SESSION_NOT_FOUND",
+    });
+    expect(resolveAgentContext({ ...base, env: { VOLLI_TICKET: "ONE-9" } })).toMatchObject({
+      ok: false,
+      code: "TICKET_NOT_FOUND",
+    });
+  });
+
+  it("resolves unique prefix and ticket selectors with their source metadata", () => {
+    const projects = [{ id: "p1", name: "One", path: "/work/one", ticketPrefix: "ONE" }];
+    expect(
+      resolveAgentContext({
+        explicit: { project: "ONE", socket: "/explicit.sock" },
+        env: {},
+        cwd: "/elsewhere",
+        projects,
+        tickets: [],
+        sessions: [],
+      }),
+    ).toMatchObject({
+      ok: true,
+      context: { projectId: "p1", socketPath: "/explicit.sock", source: "flag" },
+    });
+    expect(
+      resolveAgentContext({
+        explicit: {},
+        env: { VOLLI_TICKET: "ONE-9" },
+        cwd: "/elsewhere",
+        projects,
+        tickets: [{ displayId: "ONE-9", projectId: "p1" }],
+        sessions: [],
+      }),
+    ).toMatchObject({
+      ok: true,
+      context: { projectId: "p1", ticketDisplayId: "ONE-9", source: "env" },
+    });
+    expect(
+      resolveAgentContext({
+        explicit: {},
+        env: { VOLLI_SESSION: "session-1" },
+        cwd: "/elsewhere",
+        projects,
+        tickets: [],
+        sessions: [{ id: "session-1", projectId: "p1", ticketDisplayId: null }],
+      }),
+    ).toMatchObject({
+      ok: true,
+      context: { projectId: "p1", sessionId: "session-1", socketPath: null, source: "env" },
+    });
+  });
+
+  it("reports ambiguous and absent cwd context without guessing", () => {
+    const projects = [
+      { id: "p1", name: "Root", path: "/work", ticketPrefix: "ROOT" },
+      {
+        id: "p2",
+        name: "Nested",
+        path: "/other",
+        ticketPrefix: "NEST",
+        worktreePaths: ["/work/nested"],
+      },
+    ];
+    expect(
+      resolveAgentContext({
+        explicit: {},
+        env: {},
+        cwd: "/work/nested/src",
+        projects,
+        tickets: [],
+        sessions: [],
+      }),
+    ).toMatchObject({ ok: false, code: "AMBIGUOUS_CONTEXT" });
+    expect(
+      resolveAgentContext({
+        explicit: {},
+        env: {},
+        cwd: "/nowhere",
+        projects,
+        tickets: [],
+        sessions: [],
+      }),
+    ).toMatchObject({ ok: false, code: "CONTEXT_REQUIRED" });
+  });
+
+  it("matches the exact root when a registered project path has a trailing slash", () => {
+    expect(
+      resolveAgentContext({
+        explicit: {},
+        env: {},
+        cwd: "/work/one",
+        projects: [{ id: "p1", name: "One", path: "/work/one/", ticketPrefix: "ONE" }],
+        tickets: [],
+        sessions: [],
+      }),
+    ).toMatchObject({ ok: true, context: { projectId: "p1", source: "cwd" } });
+  });
 });
 
 describe("applyTicketBodyMutation", () => {
@@ -167,12 +279,41 @@ describe("applyTicketBodyMutation", () => {
       message: `Body edit expected exactly one match for ${JSON.stringify(oldText)}.`,
     });
   });
+
+  it("replaces and appends bodies, including an initially empty body", () => {
+    expect(applyTicketBodyMutation("old", { mode: "replace", body: "new" })).toEqual({
+      ok: true,
+      body: "new",
+    });
+    expect(applyTicketBodyMutation("", { mode: "append", text: "first" })).toEqual({
+      ok: true,
+      body: "first",
+    });
+    expect(applyTicketBodyMutation("first", { mode: "append", text: "second" })).toEqual({
+      ok: true,
+      body: "first\n\nsecond",
+    });
+    expect(
+      applyTicketBodyMutation("body", { mode: "edit", oldText: "", newText: "x" }),
+    ).toMatchObject({ ok: false, code: "BODY_MATCH_FAILED" });
+  });
 });
 
 describe("parseColumnToken", () => {
   it("normalizes both public review spellings to the domain status", () => {
     expect(parseColumnToken("needs-review")).toEqual({ ok: true, status: "needs_review" });
     expect(parseColumnToken("review")).toEqual({ ok: true, status: "needs_review" });
+  });
+
+  it("accepts each direct column token and rejects unknown tokens", () => {
+    for (const status of ["backlog", "todo", "doing", "done"] as const) {
+      expect(parseColumnToken(status)).toEqual({ ok: true, status });
+    }
+    expect(parseColumnToken("icebox")).toEqual({
+      ok: false,
+      code: "INVALID_COLUMN",
+      message: 'Unknown column "icebox"',
+    });
   });
 });
 

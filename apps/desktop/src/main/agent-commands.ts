@@ -1,12 +1,11 @@
 import type Database from "better-sqlite3";
 import {
-  createTicket,
   applyTicketBodyMutation,
   composeTicketPrompt,
   displayTicketId,
   isTicketPriority,
   isTicketStatus,
-  moveTicket as moveTicketDomain,
+  isHarnessId,
   resolveAgentContext,
   shortSessionId,
   TICKET_STATUSES,
@@ -22,31 +21,26 @@ import type {
   Ticket,
 } from "@volli/shared";
 
-import { listTicketEvents, recordTicketEvent } from "./db/events-repo";
-import { createComment, listComments } from "./db/comments-repo";
-import {
-  addTicketLabel,
-  findLabelByName,
-  getOrCreateLabel,
-  listAllLabels,
-  removeTicketLabel,
-} from "./db/labels-repo";
+import { listTicketEvents } from "./db/events-repo";
+import { listComments } from "./db/comments-repo";
+import { listAllLabels } from "./db/labels-repo";
 import { listProjects } from "./db/projects-repo";
 import { getSession, listSessions } from "./db/sessions-repo";
 import {
   getTicket,
-  archiveTicket,
-  bumpTicketVersion,
-  insertTicket,
   listAllTickets,
   listArchivedTicketsByProject,
   listTicketsByProject,
-  nextPositionInStatus,
-  nextTicketNumberForProject,
-  updateTicketPositionStatus,
-  updateTicketFields,
-  updateTicketPriority,
 } from "./db/tickets-repo";
+import {
+  archiveTicketCommand,
+  createTicketCommand,
+  createTicketCommentCommand,
+  moveTicketCommand,
+  setTicketLabelsCommand,
+  setTicketPriorityCommand,
+  updateTicketFieldsCommand,
+} from "./ticket-commands";
 
 export interface AgentCommandServiceOptions {
   db: Database.Database;
@@ -70,10 +64,24 @@ function failure(code: AgentErrorCode, message: string): AgentResponse {
 }
 
 function projectForCreate(
+  db: Database.Database,
   projects: readonly Project[],
   request: AgentRequest,
 ): { ok: true; project: Project } | { ok: false; response: AgentResponse } {
   const selector = request.args["project"];
+  const projectById = new Map(projects.map((project) => [project.id, project]));
+  const allTickets = projects.flatMap((project) => [
+    ...listTicketsByProject(db, project.id),
+    ...listArchivedTicketsByProject(db, project.id),
+  ]);
+  const ticketDisplayById = new Map(
+    allTickets.flatMap((ticket) => {
+      const project = projectById.get(ticket.projectId);
+      return project
+        ? [[ticket.id, displayTicketId(project.ticketPrefix, ticket.ticketNumber)] as const]
+        : [];
+    }),
+  );
   const result = resolveAgentContext({
     explicit: typeof selector === "string" ? { project: selector } : {},
     env: {
@@ -82,9 +90,25 @@ function projectForCreate(
       VOLLI_SOCKET: request.ctx.env.socket,
     },
     cwd: request.ctx.cwd,
-    projects,
-    tickets: [],
-    sessions: [],
+    projects: projects.map((project) => ({
+      ...project,
+      worktreePaths: allTickets
+        .filter((ticket) => ticket.projectId === project.id && ticket.worktreePath !== null)
+        .map((ticket) => ticket.worktreePath!),
+    })),
+    tickets: allTickets.map((ticket) => ({
+      displayId: ticketDisplayById.get(ticket.id)!,
+      projectId: ticket.projectId,
+    })),
+    sessions: projects.flatMap((project) =>
+      listSessions(db, project.id).map((session) => ({
+        id: session.id,
+        projectId: session.projectId,
+        ticketDisplayId: session.ticketId
+          ? (ticketDisplayById.get(session.ticketId) ?? null)
+          : null,
+      })),
+    ),
   });
   if (!result.ok) {
     const code = result.code as AgentErrorCode;
@@ -109,6 +133,7 @@ function agentTicket(ticket: Ticket, project: Project): Record<string, unknown> 
     priority: ticket.priority,
     labels: ticket.labels,
     usesWorktree: ticket.usesWorktree,
+    harness: ticket.preferredHarnessId,
     branch: ticket.branch,
     baseBranch: ticket.baseBranch,
     createdAt: ticket.createdAt,
@@ -307,15 +332,42 @@ export function createAgentCommandService(
               project: { name: project.name, prefix: project.ticketPrefix, path: project.path },
               ticket: ticket ? displayTicketId(project.ticketPrefix, ticket.ticketNumber) : null,
               session: shortSessionId(session.id),
-              worktree: session.cwd,
+              worktreePath: session.cwd,
               socket: request.ctx.env.socket ?? null,
               appVersion: options.appVersion,
             },
           };
         }
+        const ticketSelector = request.ctx.env.ticket;
+        const ticket = ticketSelector
+          ? ticketForDisplayId(options.db, projects, ticketSelector)
+          : undefined;
+        if (ticket && !ticket.ok) return ticket.response;
+        const resolved = ticket?.ok
+          ? { ok: true as const, project: ticket.project }
+          : projectForCreate(options.db, projects, request);
+        if (!resolved.ok) return resolved.response;
+        return {
+          v: 1,
+          ok: true,
+          data: {
+            project: {
+              name: resolved.project.name,
+              prefix: resolved.project.ticketPrefix,
+              path: resolved.project.path,
+            },
+            ticket: ticket?.ok
+              ? displayTicketId(ticket.project.ticketPrefix, ticket.ticket.ticketNumber)
+              : null,
+            session: null,
+            worktreePath: request.ctx.cwd,
+            socket: request.ctx.env.socket ?? null,
+            appVersion: options.appVersion,
+          },
+        };
       }
       if (request.cmd === "board") {
-        const resolved = projectForCreate(projects, request);
+        const resolved = projectForCreate(options.db, projects, request);
         return resolved.ok
           ? { v: 1, ok: true, data: boardData(options.db, resolved.project) }
           : resolved.response;
@@ -336,7 +388,7 @@ export function createAgentCommandService(
         };
       }
       if (request.cmd === "label.list") {
-        const resolved = projectForCreate(projects, request);
+        const resolved = projectForCreate(options.db, projects, request);
         if (!resolved.ok) return resolved.response;
         const projectTickets = listTicketsByProject(options.db, resolved.project.id);
         const labels = listAllLabels(options.db)
@@ -357,7 +409,7 @@ export function createAgentCommandService(
         if (ticketResolution && !ticketResolution.ok) return ticketResolution.response;
         const resolvedProject = ticketResolution?.ok
           ? ticketResolution.project
-          : projectForCreate(projects, request);
+          : projectForCreate(options.db, projects, request);
         if (!("id" in resolvedProject)) {
           if (!resolvedProject.ok) return resolvedProject.response;
         }
@@ -450,7 +502,7 @@ export function createAgentCommandService(
         };
       }
       if (request.cmd === "ticket.list") {
-        const resolved = projectForCreate(projects, request);
+        const resolved = projectForCreate(options.db, projects, request);
         if (!resolved.ok) return resolved.response;
         const status = request.args["status"];
         const priority = request.args["priority"];
@@ -530,6 +582,7 @@ export function createAgentCommandService(
         const title = request.args["title"];
         const priority = request.args["priority"];
         const base = request.args["base"];
+        const harness = request.args["harness"];
         const mutation = request.args["bodyMutation"];
         const addLabels = request.args["addLabels"] ?? [];
         const removeLabels = request.args["removeLabels"] ?? [];
@@ -537,6 +590,7 @@ export function createAgentCommandService(
           (title !== undefined && (typeof title !== "string" || title.trim().length === 0)) ||
           (priority !== undefined && !isTicketPriority(priority)) ||
           (base !== undefined && typeof base !== "string") ||
+          (harness !== undefined && !isHarnessId(harness)) ||
           (mutation !== undefined && !isBodyMutation(mutation)) ||
           !Array.isArray(addLabels) ||
           !addLabels.every((label) => typeof label === "string") ||
@@ -554,91 +608,34 @@ export function createAgentCommandService(
         try {
           const updatedAt = now();
           const run = options.db.transaction((): Ticket => {
-            const fields: Parameters<typeof updateTicketFields>[2] = {};
-            if (typeof title === "string" && title.trim() !== resolved.ticket.title) {
-              fields.title = title.trim();
-            }
-            if (nextBody?.ok && nextBody.body !== resolved.ticket.body) {
-              fields.body = nextBody.body;
-            }
-            if (typeof base === "string" && base !== resolved.ticket.baseBranch) {
-              fields.baseBranch = base;
-            }
-            updateTicketFields(options.db, resolved.ticket.id, fields, updatedAt);
-            if (fields.title !== undefined) {
-              recordTicketEvent(
-                options.db,
-                resolved.ticket.id,
-                { kind: "retitled", from: resolved.ticket.title, to: fields.title },
-                updatedAt,
-                actor.actor,
-              );
-            }
-            if (fields.body !== undefined) {
-              recordTicketEvent(
-                options.db,
-                resolved.ticket.id,
-                { kind: "body_edited" },
-                updatedAt,
-                actor.actor,
-              );
-            }
-            if (fields.baseBranch !== undefined) {
-              recordTicketEvent(
-                options.db,
-                resolved.ticket.id,
-                {
-                  kind: "worktree_changed",
-                  from: {
-                    worktreePath: resolved.ticket.worktreePath,
-                    branch: resolved.ticket.branch,
-                    baseBranch: resolved.ticket.baseBranch,
-                  },
-                  to: {
-                    worktreePath: resolved.ticket.worktreePath,
-                    branch: resolved.ticket.branch,
-                    baseBranch: fields.baseBranch,
-                  },
-                },
-                updatedAt,
-                actor.actor,
-              );
-            }
+            let ticket = updateTicketFieldsCommand(
+              options.db,
+              {
+                ticketId: resolved.ticket.id,
+                ...(typeof title === "string" ? { title: title.trim() } : {}),
+                ...(nextBody?.ok ? { body: nextBody.body } : {}),
+                ...(typeof base === "string" ? { baseBranch: base } : {}),
+                ...(isHarnessId(harness) ? { preferredHarnessId: harness } : {}),
+              },
+              { now: updatedAt, actor: actor.actor },
+            );
             if (priority !== undefined && priority !== resolved.ticket.priority) {
-              updateTicketPriority(options.db, resolved.ticket.id, priority, updatedAt);
-              recordTicketEvent(
+              ticket = setTicketPriorityCommand(
                 options.db,
-                resolved.ticket.id,
-                { kind: "priority_changed", from: resolved.ticket.priority, to: priority },
-                updatedAt,
-                actor.actor,
+                { ticketId: resolved.ticket.id, priority },
+                { now: updatedAt, actor: actor.actor },
               );
             }
             const currentLabels = resolved.ticket.labels;
             const requestedLabels = currentLabels
               .filter((label) => !removeLabels.includes(label))
               .concat(addLabels.filter((label) => !currentLabels.includes(label)));
-            const added = requestedLabels.filter((label) => !currentLabels.includes(label));
-            const removed = currentLabels.filter((label) => !requestedLabels.includes(label));
-            if (added.length > 0 || removed.length > 0) {
-              for (const name of added) {
-                const label = getOrCreateLabel(options.db, resolved.project.id, name, updatedAt);
-                addTicketLabel(options.db, resolved.ticket.id, label.id);
-              }
-              for (const name of removed) {
-                const label = findLabelByName(options.db, resolved.project.id, name);
-                if (label) removeTicketLabel(options.db, resolved.ticket.id, label.id);
-              }
-              bumpTicketVersion(options.db, resolved.ticket.id, updatedAt);
-              recordTicketEvent(
-                options.db,
-                resolved.ticket.id,
-                { kind: "labels_changed", added, removed },
-                updatedAt,
-                actor.actor,
-              );
-            }
-            return getTicket(options.db, resolved.ticket.id)!;
+            ticket = setTicketLabelsCommand(
+              options.db,
+              { ticketId: resolved.ticket.id, labels: requestedLabels },
+              { now: updatedAt, actor: actor.actor },
+            );
+            return ticket;
           });
           return {
             v: 1,
@@ -656,16 +653,10 @@ export function createAgentCommandService(
         if (!actor.ok) return actor.response;
         try {
           const archivedAt = now();
-          options.db.transaction(() => {
-            archiveTicket(options.db, resolved.ticket.id, archivedAt);
-            recordTicketEvent(
-              options.db,
-              resolved.ticket.id,
-              { kind: "archived" },
-              archivedAt,
-              actor.actor,
-            );
-          })();
+          archiveTicketCommand(options.db, resolved.ticket.id, {
+            now: archivedAt,
+            actor: actor.actor,
+          });
           return {
             v: 1,
             ok: true,
@@ -692,41 +683,23 @@ export function createAgentCommandService(
         }
         try {
           const movedAt = now();
-          const run = options.db.transaction((): Ticket => {
-            const before = listTicketsByProject(options.db, resolved.project.id);
-            const beforeById = new Map(before.map((ticket) => [ticket.id, ticket]));
-            const toIndex = before.filter((ticket) => ticket.status === to).length;
-            const after = moveTicketDomain(before, resolved.ticket.id, to, toIndex, movedAt);
-            for (const ticket of after) {
-              const prior = beforeById.get(ticket.id);
-              if (
-                prior !== undefined &&
-                (prior.status !== ticket.status || prior.order !== ticket.order)
-              ) {
-                updateTicketPositionStatus(
-                  options.db,
-                  ticket.id,
-                  ticket.status,
-                  ticket.order,
-                  ticket.updatedAt,
-                );
-              }
-            }
-            if (resolved.ticket.status !== to) {
-              recordTicketEvent(
-                options.db,
-                resolved.ticket.id,
-                { kind: "status_changed", from: resolved.ticket.status, to },
-                movedAt,
-                actor.actor,
-              );
-            }
-            return getTicket(options.db, resolved.ticket.id)!;
-          });
+          const before = listTicketsByProject(options.db, resolved.project.id);
+          const toIndex = before.filter((ticket) => ticket.status === to).length;
+          const moved = moveTicketCommand(
+            options.db,
+            {
+              projectId: resolved.project.id,
+              ticketId: resolved.ticket.id,
+              toStatus: to,
+              toIndex,
+            },
+            { now: movedAt, actor: actor.actor },
+          );
+          const ticket = moved.find(({ id }) => id === resolved.ticket.id)!;
           return {
             v: 1,
             ok: true,
-            data: { ticket: agentTicket(run(), resolved.project) },
+            data: { ticket: agentTicket(ticket, resolved.project) },
           };
         } catch (error) {
           return failure("MUTATION_FAILED", error instanceof Error ? error.message : String(error));
@@ -742,16 +715,15 @@ export function createAgentCommandService(
           return failure("INVALID_REQUEST", "ticket comment requires a message.");
         }
         try {
-          const comment = createComment(
+          const comment = createTicketCommentCommand(
             options.db,
             {
               ticketId: resolved.ticket.id,
               body: message,
-              actor: request.ctx.env.session ? "session" : "user",
+              commentActor: request.ctx.env.session ? "session" : "user",
               sessionId: request.ctx.env.session ?? null,
-              eventActor: actor.actor,
             },
-            now(),
+            { now: now(), actor: actor.actor },
           );
           return {
             v: 1,
@@ -764,7 +736,7 @@ export function createAgentCommandService(
                 ),
                 body: comment.body,
                 actor: comment.actor,
-                session: comment.sessionId,
+                session: comment.sessionId ? shortSessionId(comment.sessionId) : null,
                 createdAt: comment.createdAt,
               },
             },
@@ -791,17 +763,19 @@ export function createAgentCommandService(
       if (request.cmd !== "ticket.create") {
         return failure("UNSUPPORTED_COMMAND", `Unsupported command ${request.cmd}`);
       }
-      const resolved = projectForCreate(projects, request);
+      const resolved = projectForCreate(options.db, projects, request);
       if (!resolved.ok) return resolved.response;
       const title = request.args["title"];
       const status = request.args["status"] ?? "backlog";
       const priority = request.args["priority"] ?? "medium";
       const labels = request.args["labels"] ?? [];
+      const harness = request.args["harness"];
       if (
         typeof title !== "string" ||
         title.trim().length === 0 ||
         !isTicketStatus(status) ||
         !isTicketPriority(priority) ||
+        (harness !== undefined && !isHarnessId(harness)) ||
         !Array.isArray(labels) ||
         !labels.every((label) => typeof label === "string")
       ) {
@@ -810,11 +784,13 @@ export function createAgentCommandService(
 
       try {
         const createdAt = now();
-        const run = options.db.transaction((): Ticket => {
-          const ticket = createTicket({
+        const actor = requestActor(options.db, request);
+        if (!actor.ok) return actor.response;
+        const ticket = createTicketCommand(
+          options.db,
+          {
             id: newId(),
             projectId: resolved.project.id,
-            ticketNumber: nextTicketNumberForProject(options.db, resolved.project.id),
             title: title.trim(),
             body: typeof request.args["body"] === "string" ? request.args["body"] : "",
             status,
@@ -824,32 +800,14 @@ export function createAgentCommandService(
               typeof request.args["usesWorktree"] === "boolean"
                 ? request.args["usesWorktree"]
                 : true,
-            order: nextPositionInStatus(options.db, resolved.project.id, status),
-            baseBranch: typeof request.args["base"] === "string" ? request.args["base"] : null,
-            now: createdAt,
-          });
-          insertTicket(options.db, ticket);
-          recordTicketEvent(
-            options.db,
-            ticket.id,
-            { kind: "created", status: ticket.status, title: ticket.title },
-            createdAt,
-          );
-          for (const name of labels) {
-            const label = getOrCreateLabel(options.db, ticket.projectId, name, createdAt);
-            addTicketLabel(options.db, ticket.id, label.id);
-          }
-          if (labels.length > 0) {
-            recordTicketEvent(
-              options.db,
-              ticket.id,
-              { kind: "labels_changed", added: labels, removed: [] },
-              createdAt,
-            );
-          }
-          return getTicket(options.db, ticket.id)!;
-        });
-        const ticket = run();
+            preferredHarnessId: isHarnessId(harness) ? harness : undefined,
+            baseBranch:
+              typeof request.args["base"] === "string"
+                ? request.args["base"]
+                : (resolved.project.baseBranch ?? null),
+          },
+          { now: createdAt, actor: actor.actor },
+        );
         return {
           v: 1,
           ok: true,

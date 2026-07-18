@@ -197,6 +197,18 @@ UPDATE projects
    );
 `;
 
+/**
+ * Migration 006: execution preferences from the agent-surface contract. The
+ * preferred harness is distinct from durable session identity: it chooses a
+ * future kickoff default, while each actual run still records its harness on
+ * `sessions`. A nullable project base branch pins automation independently of
+ * whichever branch the root checkout happens to have active.
+ */
+const MIGRATION_006_EXECUTION_PREFERENCES = `
+ALTER TABLE tickets ADD COLUMN preferred_harness_id TEXT NOT NULL DEFAULT 'claude-code';
+ALTER TABLE projects ADD COLUMN base_branch TEXT;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -214,6 +226,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 5,
     name: "projects.next_ticket_number — monotonic ticket-number counter",
     sql: MIGRATION_005_TICKET_NUMBER_COUNTER,
+  },
+  {
+    version: 6,
+    name: "ticket harness and project base-branch execution preferences",
+    sql: MIGRATION_006_EXECUTION_PREFERENCES,
   },
 ];
 

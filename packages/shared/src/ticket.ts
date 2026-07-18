@@ -97,6 +97,8 @@ export interface Ticket {
   labels: string[];
   /** Whether this ticket boots its agent in an isolated git worktree. Default `true`. */
   usesWorktree: boolean;
+  /** Harness to use when a future automatic kickoff does not explicitly override it. */
+  preferredHarnessId: HarnessId;
   /** Position within its status column. */
   order: number;
   /**
@@ -157,6 +159,8 @@ export interface CreateTicketInput {
   labels?: string[];
   /** Defaults to `true`. */
   usesWorktree?: boolean;
+  /** Defaults to {@link DEFAULT_HARNESS_ID}. */
+  preferredHarnessId?: HarnessId;
   /** Defaults to `null` — no worktree exists yet. */
   worktreePath?: string | null;
   /** Defaults to `null` — no worktree exists yet. */
@@ -177,6 +181,7 @@ export function createTicket(input: CreateTicketInput): Ticket {
     priority: input.priority ?? "medium",
     labels: input.labels ?? [],
     usesWorktree: input.usesWorktree ?? true,
+    preferredHarnessId: input.preferredHarnessId ?? DEFAULT_HARNESS_ID,
     order: input.order,
     worktreePath: input.worktreePath ?? null,
     branch: input.branch ?? null,

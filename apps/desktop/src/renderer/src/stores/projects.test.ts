@@ -60,9 +60,13 @@ function fakeGateway(overrides: Partial<ProjectsGateway> = {}): ProjectsGateway 
     project: project({ id: `id-${input.path}`, path: input.path, name: input.name }),
   }));
   const remove = vi.fn<ProjectsGateway["remove"]>(async () => ({ ok: true }));
+  const update = vi.fn<ProjectsGateway["update"]>(async ({ id, baseBranch }) => ({
+    ok: true,
+    project: project({ id, path: "/repo", baseBranch }),
+  }));
   const reorder = vi.fn<ProjectsGateway["reorder"]>(async () => ({ ok: true }));
   const setSelection = vi.fn<ProjectsGateway["setSelection"]>(async () => ({ ok: true }));
-  return { create, remove, reorder, setSelection, ...overrides };
+  return { create, update, remove, reorder, setSelection, ...overrides };
 }
 
 /** Fresh store over a fresh fake gateway — never shared across tests. */
@@ -117,6 +121,7 @@ function ticket(overrides: Partial<Ticket> & { id: string; projectId: string }):
     priority: "medium",
     labels: [],
     usesWorktree: true,
+    preferredHarnessId: "claude-code",
     order: 0,
     worktreePath: null,
     branch: null,
@@ -748,6 +753,40 @@ describe("hydrate", () => {
   });
 });
 
+describe("updateBaseBranch", () => {
+  it("reconciles the selected project from the persisted result", async () => {
+    const original = project({ id: "p1", path: "/repo", baseBranch: "main" });
+    const gateway = fakeGateway({
+      update: vi.fn<ProjectsGateway["update"]>(async () => ({
+        ok: true,
+        project: { ...original, baseBranch: "release/next", updatedAt: 10 },
+      })),
+    });
+    const { store } = freshStore(gateway);
+    const other = project({ id: "p2", path: "/other", baseBranch: "main" });
+    store.getState().hydrate([original, other], original.id);
+
+    const saved = await store.getState().updateBaseBranch(original.id, "release/next");
+
+    expect(saved).toBe(true);
+    expect(gateway.update).toHaveBeenCalledWith({ id: original.id, baseBranch: "release/next" });
+    expect(store.getState().projects[0]?.baseBranch).toBe("release/next");
+    expect(store.getState().projects[1]).toEqual(other);
+  });
+
+  it("returns false and preserves state when persistence fails", async () => {
+    const original = project({ id: "p1", path: "/repo", baseBranch: "main" });
+    const gateway = fakeGateway({
+      update: vi.fn<ProjectsGateway["update"]>(async () => ({ ok: false, error: "locked" })),
+    });
+    const { store } = freshStore(gateway);
+    store.getState().hydrate([original], original.id);
+
+    await expect(store.getState().updateBaseBranch(original.id, "next")).resolves.toBe(false);
+    expect(store.getState().projects).toEqual([original]);
+  });
+});
+
 describe("createProjectsStore() with the default gateway", () => {
   // No fake gateway injected here — these exercise the real
   // `defaultGateway` wrappers (window.api.projects.* and
@@ -774,6 +813,27 @@ describe("createProjectsStore() with the default gateway", () => {
     await store.getState().addProject({ path: "/a", defaultName: "A" });
 
     expect(create).toHaveBeenCalledWith({ path: "/a", name: "A" });
+  });
+
+  it("updateBaseBranch calls window.api.projects.update", async () => {
+    const original = project({ id: "p1", path: "/repo", baseBranch: "main" });
+    const update = vi.fn(async () => ({
+      ok: true as const,
+      project: { ...original, baseBranch: "next" },
+    }));
+    vi.stubGlobal("window", {
+      api: {
+        projects: { create: vi.fn(), update, remove: vi.fn(), reorder: vi.fn() },
+        terminal: { kill: vi.fn().mockResolvedValue({ ok: true }) },
+        appState: { set: vi.fn().mockResolvedValue({ ok: true }) },
+      },
+    });
+    const store = createProjectsStore();
+    store.getState().hydrate([original], original.id);
+
+    await store.getState().updateBaseBranch(original.id, "next");
+
+    expect(update).toHaveBeenCalledWith({ id: original.id, baseBranch: "next" });
   });
 
   it("removeProject calls window.api.projects.remove", async () => {

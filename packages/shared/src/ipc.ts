@@ -40,6 +40,7 @@ export type VolliIpcChannel =
   | "volli:data-bootstrap"
   | "volli:legacy-import"
   | "volli:project-create"
+  | "volli:project-update"
   | "volli:project-remove"
   | "volli:project-reorder"
   | "volli:ticket-create"
@@ -152,6 +153,8 @@ export type LegacyImportResult = Result<{ data: BootstrapPayload; imported: numb
 
 /** `created: false` means an existing project at that path was selected instead of inserted. */
 export type ProjectCreateResult = Result<{ project: Project; created: boolean }>;
+
+export type ProjectUpdateResult = Result<{ project: Project }>;
 
 export type ProjectMutationResult = Result;
 

@@ -15,6 +15,8 @@ export interface Project {
   name: string;
   path: string;
   ticketPrefix: string;
+  /** Pinned automation base branch; null until detected or explicitly configured. */
+  baseBranch?: string | null;
   /** Index into {@link PROJECT_COLORS}, assigned round-robin at creation. */
   colorIndex: number;
   /** Rail order; dense, rewritten `0..n-1` whenever the rail is reordered. */

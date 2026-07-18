@@ -278,6 +278,31 @@ describe("volli:terminal-create", () => {
     expect(manager.peek("missing", 2)).toBeUndefined();
   });
 
+  it("reports working output and remains observable when foreground probing fails", async () => {
+    const { sessionId, pty } = await createSession();
+    pty.process = "codex";
+    expect(manager.peek(sessionId, 1)?.status).toBe("working");
+    Object.defineProperty(pty, "process", {
+      configurable: true,
+      get() {
+        throw new Error("ECHILD");
+      },
+    });
+    expect(manager.peek(sessionId, 1)?.status).toBe("idle");
+  });
+
+  it("builds an agent PATH when the inherited process PATH is absent", async () => {
+    const previousPath = process.env["PATH"];
+    delete process.env["PATH"];
+    try {
+      await createSession();
+      expect(lastSpawnEnv()["PATH"]).toBe("/profile/bin");
+    } finally {
+      if (previousPath === undefined) delete process.env["PATH"];
+      else process.env["PATH"] = previousPath;
+    }
+  });
+
   it("routes pty exit to the creating window's webContents with the session id", async () => {
     const { sessionId, pty, sender } = await createSession();
     pty.emitExit(7);
@@ -1099,11 +1124,15 @@ describe("ticket sessions", () => {
   });
 
   it("does not write to the pty when the ticket request carries no kickoff", async () => {
-    const { result, pty } = await createTicketSession("tk1");
+    insertTicket(
+      testDb.db,
+      testTicket("w", { id: "tk2", ticketNumber: 13, preferredHarnessId: "codex" }),
+    );
+    const { result, pty } = await createTicketSession("tk2");
     if (!result.ok) throw new Error(`expected session, got ${result.error}`);
     expect(pty.write).not.toHaveBeenCalled();
-    // No kickoff → the default harness is stamped on the record.
-    expect(result.session.harnessId).toBe("claude-code");
+    // No kickoff resumes with the ticket's persisted harness preference.
+    expect(result.session.harnessId).toBe("codex");
   });
 
   it("writes the built harness launch command + CR to the pty exactly once when kickoff is present", async () => {
@@ -1251,6 +1280,12 @@ describe("warm park", () => {
   const contCalls = () => signalledWith("SIGCONT");
 
   describe("park", () => {
+    it("reports a manually parked session through the read-only peek surface", async () => {
+      const { sessionId } = await createParkSession();
+      await parkManager.park(sessionId, { manual: true });
+      expect(parkManager.peek(sessionId, 1)?.status).toBe("parked");
+    });
+
     it("stops parent first, then descendants, and re-collects a newly spawned child", async () => {
       const { sessionId, pty } = await createParkSession();
       parts.descendants

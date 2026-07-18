@@ -228,10 +228,9 @@ export class PtyManager {
         scope: {
           projectId: ctx.projectId,
           ticketId: request.ticket.ticketId,
-          // Harness is no longer a ticket property (migration 004). A kickoff
-          // request carries the harness to launch; without one, a ticket
-          // session boots the default harness, same as a scratch session.
-          harnessId: kickoff?.harnessId ?? DEFAULT_HARNESS_ID,
+          // An explicit kickoff choice wins; later sessions resume with the
+          // ticket's persisted preference.
+          harnessId: kickoff?.harnessId ?? ctx.preferredHarnessId,
           // Ticket sessions run at the MAIN repo root — worktree automation is
           // future work, and VOLLI_ARTIFACTS_DIR always points at the main .volli.
           cwd: ctx.projectPath,

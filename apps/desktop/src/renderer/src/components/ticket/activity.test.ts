@@ -46,6 +46,9 @@ describe("describeEvent", () => {
     expect(describeEvent({ kind: "priority_changed", from: "low", to: "high" })).toBe(
       "changed priority Low → High",
     );
+    expect(describeEvent({ kind: "harness_changed", from: "claude-code", to: "codex" })).toBe(
+      "changed harness Claude Code → Codex",
+    );
     expect(describeEvent({ kind: "retitled", from: "Old", to: "New" })).toBe('renamed to "New"');
     expect(describeEvent({ kind: "body_edited" })).toBe("edited the description");
     expect(describeEvent({ kind: "archived" })).toBe("archived the ticket");
@@ -135,6 +138,7 @@ describe("EVENT_KIND_PRIORITY", () => {
       "created",
       "retitled",
       "priority_changed",
+      "harness_changed",
       "labels_changed",
       "worktree_changed",
       "archived",
