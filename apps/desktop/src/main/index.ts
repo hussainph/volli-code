@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, Notification, session, shell } from "electr
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { errorMessage, ticketBranchName } from "@volli/shared";
+import { errorMessage, MUTATING_AGENT_COMMANDS, ticketBranchName } from "@volli/shared";
 import type { VolliIpcEvent } from "@volli/shared";
 import { isInternalNavigationTarget } from "./navigation";
 import type { DbHandle } from "./data-ipc";
@@ -340,16 +340,7 @@ app.whenReady().then(async () => {
       socketPath: runtimePaths.socketPath,
       execute: async (request) => {
         const response = await execute(request);
-        if (
-          response.ok &&
-          [
-            "ticket.create",
-            "ticket.update",
-            "ticket.move",
-            "ticket.comment",
-            "ticket.archive",
-          ].includes(request.cmd)
-        ) {
+        if (response.ok && MUTATING_AGENT_COMMANDS.includes(request.cmd)) {
           broadcastDataChanged();
         }
         return response;
