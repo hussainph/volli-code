@@ -48,6 +48,7 @@ export const EVENT_KIND_PRIORITY: readonly TicketEventKind[] = [
   "worktree_changed",
   "archived",
   "unarchived",
+  "session_signal",
   "body_edited",
 ];
 
@@ -149,6 +150,10 @@ export function describeEvent(payload: TicketEventPayload): string | null {
       return "ended a session";
     case "worktree_changed":
       return describeWorktreeChange(payload.from, payload.to);
+    case "session_signal":
+      return payload.reason === null
+        ? `reported ${payload.signal}`
+        : `reported ${payload.signal}: ${payload.reason}`;
     case "commented":
       return null;
   }

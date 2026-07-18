@@ -565,7 +565,75 @@ describe("agent command service", () => {
     expect(notifications).toEqual([{ title: "Agent", message: "Needs input" }]);
   });
 
-  it("emits lifecycle signals only for the environment-inferred session", async () => {
+  it("records lifecycle signals on the session's ticket as an automation actor", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    let timestamp = 100;
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => timestamp++,
+      newId: () => "ticket-one",
+    });
+    await service.execute({
+      v: 1,
+      cmd: "ticket.create",
+      args: { title: "Ship CLI" },
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+    const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
+    insertSession(
+      ctx.db,
+      testSession("project-one", "ticket-one", { id: sessionId, cwd: "/repo/volli" }),
+    );
+
+    const blocked = await service.execute({
+      v: 1,
+      cmd: "session.blocked",
+      args: { reason: "Waiting for credentials" },
+      ctx: { cwd: "/repo/volli", env: { session: sessionId, ticket: "VC-1" } },
+    });
+    const events = await service.execute({
+      v: 1,
+      cmd: "ticket.events",
+      args: { id: "VC-1", limit: 10 },
+      ctx: { cwd: "/repo/volli", env: { session: sessionId, ticket: "VC-1" } },
+    });
+
+    expect(blocked).toEqual({
+      v: 1,
+      ok: true,
+      data: {
+        session: "abcdef12",
+        signal: "blocked",
+        reason: "Waiting for credentials",
+        recorded: true,
+      },
+    });
+    expect(events).toMatchObject({
+      ok: true,
+      data: {
+        events: [
+          { payload: { kind: "created" } },
+          {
+            actor: "automation",
+            actorContext: { session: "abcdef12", ticket: "VC-1" },
+            payload: {
+              kind: "session_signal",
+              signal: "blocked",
+              reason: "Waiting for credentials",
+            },
+          },
+        ],
+      },
+    });
+    expect(JSON.stringify(events)).not.toContain(sessionId);
+  });
+
+  it("acknowledges a scratch-session signal without recording, and requires session context", async () => {
     ctx = openTestDb();
     insertProject(
       ctx.db,
@@ -573,17 +641,12 @@ describe("agent command service", () => {
     );
     const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
     insertSession(ctx.db, testSession("project-one", null, { id: sessionId }));
-    const signals: Array<{ sessionId: string; signal: string; reason: string | null }> = [];
-    const service = createAgentCommandService({
-      db: ctx.db,
-      appVersion: "1.2.3",
-      signalSession: (id, signal, reason) => signals.push({ sessionId: id, signal, reason }),
-    });
+    const service = createAgentCommandService({ db: ctx.db, appVersion: "1.2.3" });
 
-    const blocked = await service.execute({
+    const done = await service.execute({
       v: 1,
-      cmd: "session.blocked",
-      args: { reason: "Waiting for credentials" },
+      cmd: "session.done",
+      args: {},
       ctx: { cwd: "/repo/volli", env: { session: sessionId } },
     });
     const missing = await service.execute({
@@ -593,12 +656,11 @@ describe("agent command service", () => {
       ctx: { cwd: "/repo/volli", env: {} },
     });
 
-    expect(blocked).toEqual({
+    expect(done).toEqual({
       v: 1,
       ok: true,
-      data: { session: "abcdef12", signal: "blocked", reason: "Waiting for credentials" },
+      data: { session: "abcdef12", signal: "done", reason: null, recorded: false },
     });
     expect(missing).toMatchObject({ ok: false, error: { code: "CONTEXT_REQUIRED" } });
-    expect(signals).toEqual([{ sessionId, signal: "blocked", reason: "Waiting for credentials" }]);
   });
 });

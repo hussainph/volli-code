@@ -34,6 +34,11 @@ export const TICKET_EVENT_KINDS = [
   // automated later — `from`/`to` snapshot the ticket's worktree identity
   // fields (`ticket.ts`) around the change.
   "worktree_changed",
+  // Session lifecycle signal (`session done|blocked`, volli CLI): the agent
+  // reporting its own outcome on the ticket it's working. Written with an
+  // `automation` actor; `reason` becomes the Needs Review badge when the loop
+  // milestone lands.
+  "session_signal",
 ] as const;
 
 export type TicketEventKind = (typeof TICKET_EVENT_KINDS)[number];
@@ -71,7 +76,8 @@ export type TicketEventPayload =
       harnessId?: HarnessId;
     }
   | { kind: "session_ended"; sessionId: string }
-  | { kind: "worktree_changed"; from: WorktreeIdentity; to: WorktreeIdentity };
+  | { kind: "worktree_changed"; from: WorktreeIdentity; to: WorktreeIdentity }
+  | { kind: "session_signal"; signal: "done" | "blocked"; reason: string | null };
 
 export type TicketEventActorKind = "user" | "session" | "automation";
 

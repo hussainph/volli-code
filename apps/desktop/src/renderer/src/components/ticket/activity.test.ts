@@ -118,6 +118,15 @@ describe("describeEvent", () => {
       "updated worktree",
     );
   });
+
+  it("describes session lifecycle signals with and without a reason", () => {
+    expect(describeEvent({ kind: "session_signal", signal: "done", reason: null })).toBe(
+      "reported done",
+    );
+    expect(
+      describeEvent({ kind: "session_signal", signal: "blocked", reason: "needs creds" }),
+    ).toBe("reported blocked: needs creds");
+  });
 });
 
 describe("commentAuthorLabel", () => {
@@ -143,6 +152,7 @@ describe("EVENT_KIND_PRIORITY", () => {
       "worktree_changed",
       "archived",
       "unarchived",
+      "session_signal",
       "body_edited",
     ];
     expect(EVENT_KIND_PRIORITY).toEqual(expected);

@@ -24,6 +24,7 @@ describe("TICKET_EVENT_KINDS", () => {
       "session_started",
       "session_ended",
       "worktree_changed",
+      "session_signal",
     ]);
   });
 
@@ -55,6 +56,7 @@ describe("TicketEventPayload", () => {
       { kind: "session_started", sessionId: "session-1", title: "Fix bug", harnessId: "codex" },
       { kind: "session_ended", sessionId: "session-1" },
       { kind: "worktree_changed", from: worktreeA, to: worktreeB },
+      { kind: "session_signal", signal: "blocked", reason: "Waiting for credentials" },
     ];
     expect(payloads.map((p) => p.kind)).toEqual(TICKET_EVENT_KINDS);
   });

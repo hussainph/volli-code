@@ -21,7 +21,7 @@ import type {
   Ticket,
 } from "@volli/shared";
 
-import { listTicketEvents } from "./db/events-repo";
+import { listTicketEvents, recordTicketEvent } from "./db/events-repo";
 import { listComments } from "./db/comments-repo";
 import { listAllLabels } from "./db/labels-repo";
 import { listProjects } from "./db/projects-repo";
@@ -52,7 +52,6 @@ export interface AgentCommandServiceOptions {
     lines: number,
   ) => { status: SessionActivityState; output: string } | undefined;
   notify?: (title: string, message: string) => void;
-  signalSession?: (sessionId: string, signal: "done" | "blocked", reason: string | null) => void;
 }
 
 export interface AgentCommandService {
@@ -494,11 +493,31 @@ export function createAgentCommandService(
         }
         const reason = typeof reasonValue === "string" ? reasonValue : null;
         const signal = request.cmd === "session.done" ? "done" : "blocked";
-        options.signalSession?.(session.id, signal, reason);
+        // A scratch session has no ticket to record against — the signal is a
+        // no-op beyond acknowledging it. When the session drives a ticket, the
+        // outcome is written to that ticket's event log as an `automation`
+        // actor (the door, not the keyboard — decision 8), in one transaction.
+        const ticketId = session.ticketId;
+        if (ticketId !== null) {
+          options.db.transaction(() => {
+            recordTicketEvent(
+              options.db,
+              ticketId,
+              { kind: "session_signal", signal, reason },
+              now(),
+              { kind: "automation", sessionId: session.id, ticketId },
+            );
+          })();
+        }
         return {
           v: 1,
           ok: true,
-          data: { session: shortSessionId(session.id), signal, reason },
+          data: {
+            session: shortSessionId(session.id),
+            signal,
+            reason,
+            recorded: ticketId !== null,
+          },
         };
       }
       if (request.cmd === "ticket.list") {
