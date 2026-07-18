@@ -263,12 +263,19 @@ alias for `needs-review`). `<id>` is always a display ID.
   expressed in an industry-standard format instead of a bespoke builder UI. A
   `volli-automations` spoke joins the pack when this lands; the CLI is the
   execution vehicle.
-- **Worktree integration**: research recommendation on file —
+- **Worktree integration**: location ratified 2026-07-18 —
   `<userData>/worktrees/<project-id>/<TICKET-ID>-<slug>/` (T3 Code, Vibe
   Kanban, and Codex Desktop all place worktrees outside the repo; in-repo
   `.volli/worktrees/` risks electron-builder glob sweep, the git
   embedded-repo footgun, and scanner noise — Claude Code is the lone in-repo
-  outlier and documents the costs). Adopt `.worktreeinclude` (the
+  outlier and documents the costs). One caveat travels with the ratification:
+  an app-data worktree is invisible to origin until pushed, so in a
+  multi-device life, unpushed ticket branches are stranded on one machine.
+  The worktree milestone must make unpushed work *visible* (card indicator,
+  akin to the behind-base indicator) and make early branch push cheap or
+  automatic; the full multi-device answer is Personal Cloud's (roadmap
+  phase 3), but no ticket's work may silently live only in one device's
+  `userData`. Adopt `.worktreeinclude` (the
   Claude Code/Codex-converged convention) for copying gitignored files,
   refining CONCEPT #15's copy-globs; per-project setup command runs with
   `VOLLI_PROJECT_ROOT`/`VOLLI_WORKTREE_PATH` injected (T3 Code's pattern).
