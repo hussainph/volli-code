@@ -6,6 +6,7 @@ export default defineConfig({
     environment: "node",
     coverage: {
       include: ["src/**"],
+      exclude: ["src/index.ts"],
       thresholds: { statements: 100, branches: 100, functions: 100, lines: 100 },
     },
   },

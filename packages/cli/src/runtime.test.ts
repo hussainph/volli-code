@@ -2,6 +2,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { launchApp, materializeFileArguments } from "./runtime";
 
+const readFromFile = async () => "from file";
+
 describe("materializeFileArguments", () => {
   it("reads file-backed bodies in the client before the socket round-trip", async () => {
     const invocation = {
@@ -25,9 +27,78 @@ describe("materializeFileArguments", () => {
       },
     });
   });
+
+  it("materializes create and comment files and leaves ordinary arguments alone", async () => {
+    await expect(
+      materializeFileArguments(
+        { command: "ticket.create", args: { bodyFile: "/body" }, json: false },
+        readFromFile,
+      ),
+    ).resolves.toMatchObject({ args: { body: "from file" } });
+    await expect(
+      materializeFileArguments(
+        { command: "ticket.comment", args: { file: "/comment" }, json: false },
+        readFromFile,
+      ),
+    ).resolves.toMatchObject({ args: { message: "from file" } });
+    const invocation = { command: "board", args: {}, json: false };
+    await expect(materializeFileArguments(invocation, readFromFile)).resolves.toBe(invocation);
+    await expect(
+      materializeFileArguments(
+        { command: "board", args: { file: "/unused" }, json: false },
+        readFromFile,
+      ),
+    ).resolves.toMatchObject({ args: {} });
+  });
+
+  it("maps file read errors without leaking arbitrary thrown values", async () => {
+    await expect(
+      materializeFileArguments(
+        { command: "ticket.create", args: { bodyFile: "/missing" }, json: false },
+        async () => {
+          throw new Error("gone");
+        },
+      ),
+    ).rejects.toMatchObject({ code: "FILE_READ_FAILED", message: "Could not read /missing: gone" });
+    await expect(
+      materializeFileArguments(
+        { command: "ticket.comment", args: { file: "/bad" }, json: false },
+        async () => {
+          throw "bad value";
+        },
+      ),
+    ).rejects.toMatchObject({
+      code: "FILE_READ_FAILED",
+      message: "Could not read /bad: bad value",
+    });
+  });
 });
 
 describe("launchApp", () => {
+  it("returns without spawning when the socket is already reachable", async () => {
+    let spawned = false;
+    await expect(
+      launchApp(
+        {
+          socketPath: "/socket",
+          executable: "/app",
+          appEntry: undefined,
+          timeoutMs: 100,
+          env: {},
+        },
+        {
+          probe: async () => undefined,
+          spawnDetached: () => {
+            spawned = true;
+          },
+          delay: async () => undefined,
+          now: () => 0,
+        },
+      ),
+    ).resolves.toEqual({ alreadyRunning: true });
+    expect(spawned).toBe(false);
+  });
+
   it("spawns explicitly, strips run-as-node, and waits until the app is reachable", async () => {
     let probes = 0;
     const spawns: Array<{ executable: string; args: string[]; env: NodeJS.ProcessEnv }> = [];
@@ -62,5 +133,30 @@ describe("launchApp", () => {
       env: { PATH: "/bin", VOLLI_LAUNCHED_BY_CLI: "1" },
     });
     expect(spawns[0]?.env.ELECTRON_RUN_AS_NODE).toBeUndefined();
+  });
+
+  it("passes an app entry and times out if the launched socket never appears", async () => {
+    const spawns: string[][] = [];
+    let now = 0;
+    await expect(
+      launchApp(
+        {
+          socketPath: "/socket",
+          executable: "/electron",
+          appEntry: "/app/main.cjs",
+          timeoutMs: 40,
+          env: {},
+        },
+        {
+          probe: async () => {
+            throw new Error("down");
+          },
+          spawnDetached: (_executable, args) => spawns.push(args),
+          delay: async () => undefined,
+          now: () => (now += 20),
+        },
+      ),
+    ).rejects.toMatchObject({ code: "TIMEOUT" });
+    expect(spawns).toEqual([["/app/main.cjs"]]);
   });
 });

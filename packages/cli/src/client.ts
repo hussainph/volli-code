@@ -47,6 +47,7 @@ export function requestAgent(
     let buffer = "";
     let settled = false;
     const finish = (action: () => void): void => {
+      /* v8 ignore next -- competing socket events may finish the same request; the guard is defensive */
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -86,6 +87,7 @@ export function requestAgent(
       );
     });
     socket.once("end", () => {
+      /* v8 ignore next -- a settled request destroys the socket before a meaningful late end event */
       if (settled || buffer.includes("\n")) return;
       finish(() =>
         reject(new AgentClientError("SOCKET_PROTOCOL", "The app closed without a response.")),

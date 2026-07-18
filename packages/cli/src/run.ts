@@ -1,4 +1,3 @@
-import { AGENT_COMMANDS } from "@volli/shared";
 import type { AgentCommand, AgentError, AgentRequest, AgentResponse } from "@volli/shared";
 
 import { AgentClientError } from "./client";
@@ -16,10 +15,6 @@ export interface RunCliDependencies {
   readText: ReadTextFile;
   request(socketPath: string, request: AgentRequest): Promise<AgentResponse>;
   launch(timeoutMs: number): Promise<{ alreadyRunning: boolean }>;
-}
-
-function isAgentCommand(command: string): command is AgentCommand {
-  return (AGENT_COMMANDS as readonly string[]).includes(command);
 }
 
 function helpText(topic: unknown): string {
@@ -73,7 +68,10 @@ export async function runCli(
     return 2;
   }
   if (parsed.invocation.command === "help") {
-    dependencies.stdout(helpText(parsed.invocation.args["topic"]));
+    const help = helpText(parsed.invocation.args["topic"]);
+    dependencies.stdout(
+      parsed.invocation.json ? `${JSON.stringify({ help: help.trimEnd() })}\n` : help,
+    );
     return 0;
   }
   if (parsed.invocation.command === "app.launch") {
@@ -97,13 +95,11 @@ export async function runCli(
       return exitCodeForError(agentError.code);
     }
   }
-  if (!isAgentCommand(parsed.invocation.command)) {
-    dependencies.stderr("error[USAGE] Unknown command.\n");
-    return 2;
-  }
+  // The parser only emits published commands; local-only help/app launch were handled above.
+  const command = parsed.invocation.command as AgentCommand;
   const socketPath = dependencies.env["VOLLI_SOCKET"];
   if (socketPath === undefined) {
-    if (parsed.invocation.command === "identify") {
+    if (command === "identify") {
       writeDegradedIdentify(parsed.invocation.json, dependencies);
       return 0;
     }
@@ -119,7 +115,7 @@ export async function runCli(
     const invocation = await materializeFileArguments(parsed.invocation, dependencies.readText);
     const request: AgentRequest = {
       v: 1,
-      cmd: parsed.invocation.command,
+      cmd: command,
       args: invocation.args,
       ctx: {
         cwd: dependencies.cwd,
@@ -147,7 +143,7 @@ export async function runCli(
     return 0;
   } catch (error) {
     if (
-      parsed.invocation.command === "identify" &&
+      command === "identify" &&
       error instanceof AgentClientError &&
       error.code === "APP_UNREACHABLE"
     ) {

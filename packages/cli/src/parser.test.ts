@@ -269,4 +269,96 @@ describe("parseCliArgs", () => {
       message: "ticket update accepts exactly one body mutation mode",
     });
   });
+
+  it.each([
+    [[], "Expected a Volli command"],
+    [["identify", "--bad"], "Unknown option --bad"],
+    [["board", "--project"], "--project requires a value"],
+    [["board", "--bad", "x"], "Unknown option --bad"],
+    [["app", "launch", "--timeout", "0"], "--timeout requires a positive integer"],
+    [["help", "one", "two"], "help accepts at most one topic"],
+    [["ticket", "archive"], "ticket archive requires <id>"],
+    [["ticket", "archive", "VC-1", "--bad"], "Unknown option --bad"],
+    [["ticket", "show"], "ticket show requires <id>"],
+    [["ticket", "show", "VC-1", "--bad", "1"], "Unknown option --bad"],
+    [["ticket", "show", "VC-1", "--events"], "--events requires a value"],
+    [["ticket", "show", "VC-1", "--events", "0"], "--events requires a positive integer"],
+    [["ticket", "move"], "ticket move requires <id>"],
+    [["ticket", "move", "VC-1"], "ticket move requires --to"],
+    [["ticket", "move", "VC-1", "--to", "icebox"], 'Unknown column "icebox"'],
+    [["ticket", "move", "VC-1", "--to", "doing", "--bad"], "Unknown option --bad"],
+    [["ticket", "comment"], "ticket comment requires <id>"],
+    [["ticket", "comment", "VC-1"], "ticket comment requires exactly one of -m or --file"],
+    [["ticket", "comment", "VC-1", "-m"], "-m requires a value"],
+    [["ticket", "comment", "VC-1", "--bad", "x"], "Unknown option --bad"],
+    [
+      ["ticket", "comment", "VC-1", "-m", "x", "--file", "/x"],
+      "ticket comment requires exactly one of -m or --file",
+    ],
+    [["session", "done", "--bad", "x"], "Unknown option --bad"],
+    [["session", "done", "--reason"], "--reason requires a value"],
+    [["notify"], "notify requires -m"],
+    [["notify", "--title"], "--title requires a value"],
+    [["notify", "--bad", "x"], "Unknown option --bad"],
+  ] as const)("rejects invalid argv %#", (argv, message) => {
+    expect(parseCliArgs(argv)).toEqual({ ok: false, code: "USAGE", message });
+  });
+
+  it.each([
+    [["ticket", "create"], "ticket create requires --title"],
+    [["ticket", "create", "--title"], "--title requires a value"],
+    [["ticket", "create", "--title", "x", "--priority", "urgent"], 'Unknown priority "urgent"'],
+    [["ticket", "create", "--title", "x", "--status", "icebox"], 'Unknown column "icebox"'],
+    [["ticket", "create", "--title", "x", "--bad", "y"], "Unknown option --bad"],
+    [
+      ["ticket", "create", "--title", "x", "--body", "a", "--body-file", "/b"],
+      "ticket create accepts only one of --body or --body-file",
+    ],
+    [["ticket", "list", "--status"], "--status requires a value"],
+    [["ticket", "list", "--status", "icebox"], 'Unknown column "icebox"'],
+    [["ticket", "list", "--priority", "urgent"], 'Unknown priority "urgent"'],
+    [["ticket", "list", "--limit", "0"], "--limit requires a positive integer"],
+    [["ticket", "list", "--bad", "x"], "Unknown option --bad"],
+    [["ticket", "update"], "ticket update requires <id>"],
+    [["ticket", "update", "VC-1", "--edit", "old"], "--edit requires <old> and <new>"],
+    [["ticket", "update", "VC-1", "--title"], "--title requires a value"],
+    [["ticket", "update", "VC-1", "--priority", "urgent"], 'Unknown priority "urgent"'],
+    [["ticket", "update", "VC-1", "--bad", "x"], "Unknown option --bad"],
+  ] as const)("rejects invalid ticket argv %#", (argv, message) => {
+    expect(parseCliArgs(argv)).toEqual({ ok: false, code: "USAGE", message });
+  });
+
+  it("accepts alternate message flags, JSON-only commands, and every update body mode", () => {
+    expect(parseCliArgs(["ticket", "comment", "VC-1", "--file", "/tmp/c", "--json"])).toMatchObject(
+      { ok: true, invocation: { args: { file: "/tmp/c" }, json: true } },
+    );
+    expect(parseCliArgs(["session", "done", "--json"])).toMatchObject({
+      ok: true,
+      invocation: { command: "session.done", json: true },
+    });
+    expect(parseCliArgs(["notify", "--message", "done", "--json"])).toMatchObject({
+      ok: true,
+      invocation: { args: { message: "done" }, json: true },
+    });
+    expect(parseCliArgs(["project", "list", "--json"])).toMatchObject({
+      ok: true,
+      invocation: { json: true },
+    });
+    expect(parseCliArgs(["ticket", "events", "VC-1", "--json"])).toMatchObject({
+      ok: true,
+      invocation: { json: true },
+    });
+    expect(parseCliArgs(["help"])).toMatchObject({
+      ok: true,
+      invocation: { args: {}, json: false },
+    });
+    for (const args of [
+      ["--body", "body"],
+      ["--body-file", "/body"],
+      ["--title", "new"],
+      ["--json"],
+    ]) {
+      expect(parseCliArgs(["ticket", "update", "VC-1", ...args])).toMatchObject({ ok: true });
+    }
+  });
 });
