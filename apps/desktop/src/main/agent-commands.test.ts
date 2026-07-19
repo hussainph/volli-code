@@ -540,6 +540,38 @@ describe("agent command service", () => {
     expect(shown).toMatchObject({ data: { ticket: { title: "Ship CLI" } } });
   });
 
+  it("rejects an invalid base branch on update without persisting any partial fields", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 100,
+      newId: () => "ticket-one",
+    });
+    const execute = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
+      service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: {} } });
+    await execute("ticket.create", { title: "Original" });
+
+    const rejected = await execute("ticket.update", {
+      id: "VC-1",
+      title: "Must not persist",
+      base: "--upload-pack=malicious command",
+      addLabels: [],
+      removeLabels: [],
+    });
+    const shown = await execute("ticket.show", { id: "VC-1" });
+
+    expect(rejected).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+    expect(shown).toMatchObject({
+      ok: true,
+      data: { ticket: { title: "Original", baseBranch: null } },
+    });
+  });
+
   it("archives a ticket reversibly without exposing a delete command", async () => {
     ctx = openTestDb();
     insertProject(

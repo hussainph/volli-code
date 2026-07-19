@@ -12,6 +12,50 @@ export interface RenderOptions {
   json: boolean;
 }
 
+// ESC/OSC/CSI controls can mutate terminal state (including OSC 52 clipboard
+// writes), while bidi formatting marks can visually reorder trusted prefixes.
+// Preserve the two controls used by our text contract (LF and TAB) and render
+// every other terminal-active character visibly.
+function isUnsafeTerminalCharacter(character: string): boolean {
+  const codePoint = character.codePointAt(0)!;
+  return (
+    codePoint <= 0x08 ||
+    (codePoint >= 0x0b && codePoint <= 0x1f) ||
+    (codePoint >= 0x7f && codePoint <= 0x9f) ||
+    codePoint === 0x061c ||
+    codePoint === 0x200e ||
+    codePoint === 0x200f ||
+    (codePoint >= 0x2028 && codePoint <= 0x202e) ||
+    (codePoint >= 0x2066 && codePoint <= 0x2069)
+  );
+}
+
+function terminalEscape(character: string): string {
+  const codePoint = character.codePointAt(0)!;
+  return codePoint <= 0xff
+    ? `\\x${codePoint.toString(16).padStart(2, "0")}`
+    : `\\u${codePoint.toString(16).padStart(4, "0")}`;
+}
+
+function terminalSafeText(text: string): string {
+  return Array.from(text, (character) =>
+    isUnsafeTerminalCharacter(character) ? terminalEscape(character) : character,
+  ).join("");
+}
+
+function terminalSafeInline(value: unknown): string {
+  return terminalSafeText(String(value)).replaceAll("\t", "\\x09").replaceAll("\n", "\\x0a");
+}
+
+function terminalSafeJson(value: unknown): string {
+  // JSON's \u escape is data-equivalent after parsing and remains valid JSON.
+  return Array.from(JSON.stringify(value), (character) =>
+    isUnsafeTerminalCharacter(character)
+      ? `\\u${character.codePointAt(0)!.toString(16).padStart(4, "0")}`
+      : character,
+  ).join("");
+}
+
 interface TicketListItem {
   id: string;
   status: TicketStatus;
@@ -30,7 +74,7 @@ function titleCase(value: string): string {
 /** Renders `identify`'s project field: `name (prefix)`, consistent with project.list's leading columns. */
 function renderIdentifyProject(value: unknown): string {
   if (isRecord(value) && typeof value["name"] === "string" && typeof value["prefix"] === "string") {
-    return `${value["name"]} (${value["prefix"]})`;
+    return `${terminalSafeInline(value["name"])} (${terminalSafeInline(value["prefix"])})`;
   }
   return "-";
 }
@@ -48,15 +92,14 @@ function renderBoard(data: unknown): string | null {
             (label): label is string => typeof label === "string",
           )
         : [];
-      const labelText = labels.length > 0 ? `  [${labels.join(", ")}]` : "";
-      return `${String(ticket["id"])}  ${titleCase(String(ticket["priority"]))}  ${String(ticket["title"])}${labelText}`;
+      return `${terminalSafeInline(ticket["id"])}  ${terminalSafeInline(titleCase(String(ticket["priority"])))}  ${terminalSafeInline(ticket["title"])}${labels.length > 0 ? `  [${labels.map(terminalSafeInline).join(", ")}]` : ""}`;
     });
     const normalizedStatus = status as TicketStatus;
     sections.push(
-      `${TICKET_STATUS_LABELS[normalizedStatus] ?? titleCase(status)}\n${lines.join("\n")}`,
+      `${terminalSafeInline(TICKET_STATUS_LABELS[normalizedStatus] ?? titleCase(status))}\n${lines.join("\n")}`,
     );
   }
-  const header = `${project["name"]} (${project["prefix"]})`;
+  const header = `${terminalSafeInline(project["name"])} (${terminalSafeInline(project["prefix"])})`;
   return `${header}${sections.length > 0 ? `\n\n${sections.join("\n\n")}` : ""}\n`;
 }
 
@@ -84,8 +127,8 @@ function ticketLine(ticket: Record<string, unknown>): string | null {
   const labels = Array.isArray(ticket["labels"])
     ? ticket["labels"].filter((label): label is string => typeof label === "string")
     : [];
-  const labelText = labels.length > 0 ? `  [${labels.join(", ")}]` : "";
-  return `${ticket["id"]}  ${TICKET_STATUS_LABELS[status] ?? titleCase(status)}  ${ticket["title"]}${labelText}`;
+  const labelText = labels.length > 0 ? `  [${labels.map(terminalSafeInline).join(", ")}]` : "";
+  return `${terminalSafeInline(ticket["id"])}  ${terminalSafeInline(TICKET_STATUS_LABELS[status] ?? titleCase(status))}  ${terminalSafeInline(ticket["title"])}${labelText}`;
 }
 
 function renderTicketResult(data: unknown): string | null {
@@ -101,7 +144,7 @@ function renderDetail(data: unknown): string | null {
   const lines = [first];
   for (const key of ["priority", "harness", "baseBranch", "branch"] as const) {
     const value = ticket[key];
-    if (typeof value === "string") lines.push(`${key}  ${value}`);
+    if (typeof value === "string") lines.push(`${key}  ${terminalSafeInline(value)}`);
   }
   if (typeof ticket["body"] === "string" && ticket["body"].length > 0) {
     lines.push("", ticket["body"]);
@@ -122,11 +165,11 @@ function renderStableLines(command: string, data: unknown): string | null {
   if (command === "ticket.show") return renderDetail(data);
   if (command === "ticket.archive" && isRecord(data["ticket"])) {
     const id = data["ticket"]["id"];
-    return typeof id === "string" ? `${id}  archived` : null;
+    return typeof id === "string" ? `${terminalSafeInline(id)}  archived` : null;
   }
   if (command === "ticket.comment" && isRecord(data["comment"])) {
     const ticket = data["comment"]["ticket"];
-    return typeof ticket === "string" ? `${ticket}  comment added` : null;
+    return typeof ticket === "string" ? `${terminalSafeInline(ticket)}  comment added` : null;
   }
   if (command === "project.list") {
     const projects = recordsAt(data, "projects");
@@ -134,7 +177,7 @@ function renderStableLines(command: string, data: unknown): string | null {
       projects
         ?.map(
           (project) =>
-            `${String(project["prefix"])}  ${String(project["name"])}  ${String(project["path"])}  ${String(project["tickets"])} tickets`,
+            `${terminalSafeInline(project["prefix"])}  ${terminalSafeInline(project["name"])}  ${terminalSafeInline(project["path"])}  ${terminalSafeInline(project["tickets"])} tickets`,
         )
         .join("\n") ?? null
     );
@@ -143,7 +186,10 @@ function renderStableLines(command: string, data: unknown): string | null {
     const labels = recordsAt(data, "labels");
     return (
       labels
-        ?.map((label) => `${String(label["name"])}  ${String(label["tickets"])} tickets`)
+        ?.map(
+          (label) =>
+            `${terminalSafeInline(label["name"])}  ${terminalSafeInline(label["tickets"])} tickets`,
+        )
         .join("\n") ?? null
     );
   }
@@ -154,7 +200,7 @@ function renderStableLines(command: string, data: unknown): string | null {
         ?.map((session) =>
           [session["id"], session["kind"], session["status"], session["ticket"], session["title"]]
             .filter((value) => value !== null && value !== undefined)
-            .map(String)
+            .map(terminalSafeInline)
             .join("  "),
         )
         .join("\n") ?? null
@@ -163,7 +209,7 @@ function renderStableLines(command: string, data: unknown): string | null {
   if (command === "session.peek") {
     if (typeof data["session"] !== "string" || typeof data["status"] !== "string") return null;
     const output = typeof data["output"] === "string" ? data["output"] : "";
-    return `${data["session"]}  ${data["status"]}${output.length > 0 ? `\n${output}` : ""}`;
+    return `${terminalSafeInline(data["session"])}  ${terminalSafeInline(data["status"])}${output.length > 0 ? `\n${output}` : ""}`;
   }
   if (command === "ticket.events") {
     const events = recordsAt(data, "events");
@@ -184,13 +230,13 @@ function renderStableLines(command: string, data: unknown): string | null {
       .map((key) => {
         if (key === "project") return `project  ${renderIdentifyProject(data["project"])}`;
         const value = data[key];
-        return `${key}  ${value === null || value === undefined ? "-" : String(value)}`;
+        return `${key}  ${value === null || value === undefined ? "-" : terminalSafeInline(value)}`;
       });
     if (data["degraded"] === true) lines.push("degraded  true");
     return lines.join("\n");
   }
   if (command === "session.done" || command === "session.blocked") {
-    return `${String(data["session"])}  ${String(data["signal"])}`;
+    return `${terminalSafeInline(data["session"])}  ${terminalSafeInline(data["signal"])}`;
   }
   if (command === "notify") return data["notified"] === true ? "notified" : null;
   if (command === "app.launch") {
@@ -203,8 +249,7 @@ function renderStableLines(command: string, data: unknown): string | null {
  * Renders server JSON directly or as the command's stable text contract.
  * See {@link RenderOptions} for the v1 TTY/pipe-identical output contract.
  */
-export function renderCliSuccess(command: string, data: unknown, options: RenderOptions): string {
-  if (options.json) return `${JSON.stringify(data)}\n`;
+function renderCliTextSuccess(command: string, data: unknown): string {
   if (command === "ticket.brief" && typeof data === "object" && data !== null) {
     const prompt = (data as { prompt?: unknown }).prompt;
     if (typeof prompt === "string") return prompt.endsWith("\n") ? prompt : `${prompt}\n`;
@@ -218,8 +263,11 @@ export function renderCliSuccess(command: string, data: unknown, options: Render
     if (tickets !== null) {
       return tickets
         .map((ticket) => {
-          const labels = ticket.labels.length === 0 ? "" : `  [${ticket.labels.join(", ")}]`;
-          return `${ticket.id}  ${TICKET_STATUS_LABELS[ticket.status]}  ${ticket.title}${labels}`;
+          const labels =
+            ticket.labels.length === 0
+              ? ""
+              : `  [${ticket.labels.map(terminalSafeInline).join(", ")}]`;
+          return `${terminalSafeInline(ticket.id)}  ${terminalSafeInline(TICKET_STATUS_LABELS[ticket.status])}  ${terminalSafeInline(ticket.title)}${labels}`;
         })
         .join("\n")
         .concat(tickets.length === 0 ? "" : "\n");
@@ -227,11 +275,16 @@ export function renderCliSuccess(command: string, data: unknown, options: Render
   }
   const stable = renderStableLines(command, data);
   if (stable !== null) return stable.length === 0 ? "" : `${stable}\n`;
-  return `${JSON.stringify(data)}\n`;
+  return `${terminalSafeJson(data)}\n`;
+}
+
+export function renderCliSuccess(command: string, data: unknown, options: RenderOptions): string {
+  if (options.json) return `${terminalSafeJson(data)}\n`;
+  return terminalSafeText(renderCliTextSuccess(command, data));
 }
 
 export function renderCliError(error: AgentError): string {
-  return `error[${error.code}] ${error.message}\n`;
+  return `error[${error.code}] ${terminalSafeInline(error.message)}\n`;
 }
 
 export function exitCodeForError(code: AgentErrorCode): 1 | 2 | 3 {

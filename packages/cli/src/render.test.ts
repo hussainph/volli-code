@@ -38,6 +38,54 @@ describe("renderCliSuccess", () => {
     expect(exitCodeForError("BODY_MATCH_FAILED")).toBe(1);
   });
 
+  it("neutralizes terminal control and bidi sequences in every text-mode output path", () => {
+    const hostile = "safe\u001b]52;c;YXR0YWNr\u0007\rspoof\u202Etxt";
+    const rendered = renderCliSuccess(
+      "ticket.show",
+      {
+        ticket: {
+          id: "VC-1",
+          status: "doing",
+          title: hostile,
+          labels: [],
+          body: hostile,
+        },
+      },
+      { json: false },
+    );
+    const error = renderCliError({ code: "MUTATION_FAILED", message: hostile });
+
+    for (const control of ["\u001b", "\u0007", "\r", "\u202e"]) {
+      expect(rendered).not.toContain(control);
+    }
+    expect(rendered).toContain("\\x1b]52;c;YXR0YWNr\\x07\\x0dspoof\\u202e");
+    for (const control of ["\u001b", "\u0007", "\r", "\u202e"]) {
+      expect(error).not.toContain(control);
+    }
+    // JSON mode keeps exact parsed data semantics without emitting raw
+    // terminal controls (JSON permits a Unicode escape for the bidi mark).
+    const json = renderCliSuccess("ticket.brief", { prompt: hostile }, { json: true });
+    for (const control of ["\u001b", "\u0007", "\r", "\u202e"]) {
+      expect(json).not.toContain(control);
+    }
+    expect(JSON.parse(json)).toEqual({ prompt: hostile });
+  });
+
+  it("keeps untrusted inline fields from injecting forged output lines", () => {
+    const title = "safe\nerror[MUTATION_FAILED] forged";
+    const rendered = renderCliSuccess(
+      "ticket.list",
+      { tickets: [{ id: "VC-1", status: "doing", title, labels: [] }] },
+      { json: false },
+    );
+    const error = renderCliError({ code: "MUTATION_FAILED", message: title });
+
+    expect(rendered).toContain("safe\\x0aerror[MUTATION_FAILED] forged");
+    expect(rendered).not.toContain(title);
+    expect(error).toContain("safe\\x0aerror[MUTATION_FAILED] forged");
+    expect(error).not.toContain(title);
+  });
+
   it("renders a board as a concise column snapshot instead of serialized JSON", () => {
     expect(
       renderCliSuccess(

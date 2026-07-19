@@ -1,8 +1,9 @@
 import { createConnection } from "node:net";
 
+import { AGENT_ERROR_CODES } from "@volli/shared";
 import type { AgentErrorCode, AgentRequest, AgentResponse } from "@volli/shared";
 
-const MAX_RESPONSE_CHARS = 4 * 1024 * 1024;
+const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 
 export class AgentClientError extends Error {
   constructor(
@@ -21,14 +22,37 @@ function parseResponse(line: string): AgentResponse {
   } catch {
     throw new AgentClientError("SOCKET_PROTOCOL", "The app returned malformed JSON.");
   }
-  if (typeof value !== "object" || value === null) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new AgentClientError("SOCKET_PROTOCOL", "The app returned an invalid response.");
   }
-  const response = value as Partial<AgentResponse>;
-  if (response.v !== 1 || typeof response.ok !== "boolean") {
+  const response = value as Record<string, unknown>;
+  if (response["v"] !== 1 || typeof response["ok"] !== "boolean") {
     throw new AgentClientError("SOCKET_PROTOCOL", "The app returned an unsupported response.");
   }
-  return value as AgentResponse;
+  if (response["ok"] === true) {
+    if (!("data" in response)) {
+      throw new AgentClientError(
+        "SOCKET_PROTOCOL",
+        "The app returned an invalid success response.",
+      );
+    }
+    return { v: 1, ok: true, data: response["data"] };
+  }
+  const error = response["error"];
+  if (
+    typeof error !== "object" ||
+    error === null ||
+    Array.isArray(error) ||
+    typeof (error as Record<string, unknown>)["code"] !== "string" ||
+    !(AGENT_ERROR_CODES as readonly string[]).includes(
+      (error as Record<string, unknown>)["code"] as string,
+    ) ||
+    typeof (error as Record<string, unknown>)["message"] !== "string"
+  ) {
+    throw new AgentClientError("SOCKET_PROTOCOL", "The app returned an invalid error response.");
+  }
+  const typedError = error as { code: AgentErrorCode; message: string };
+  return { v: 1, ok: false, error: { code: typedError.code, message: typedError.message } };
 }
 
 export interface AgentClientOptions {
@@ -45,6 +69,7 @@ export function requestAgent(
     const socket = createConnection(socketPath);
     socket.setEncoding("utf8");
     let buffer = "";
+    let receivedBytes = 0;
     let settled = false;
     let connected = false;
     const finish = (action: () => void): void => {
@@ -65,7 +90,8 @@ export function requestAgent(
     });
     socket.on("data", (chunk: string) => {
       buffer += chunk;
-      if (buffer.length > MAX_RESPONSE_CHARS) {
+      receivedBytes += Buffer.byteLength(chunk);
+      if (receivedBytes > MAX_RESPONSE_BYTES) {
         finish(() =>
           reject(new AgentClientError("SOCKET_PROTOCOL", "The app response is too large.")),
         );

@@ -20,6 +20,30 @@ export interface LaunchAppDependencies {
   now(): number;
 }
 
+const APP_LAUNCH_INJECTION_ENV = new Set([
+  "ELECTRON_RUN_AS_NODE",
+  "ELECTRON_RENDERER_URL",
+  "NODE_OPTIONS",
+  "NODE_PATH",
+  "DYLD_INSERT_LIBRARIES",
+  "DYLD_LIBRARY_PATH",
+  "DYLD_FRAMEWORK_PATH",
+  "DYLD_FALLBACK_LIBRARY_PATH",
+  "DYLD_FALLBACK_FRAMEWORK_PATH",
+  "LD_PRELOAD",
+  "LD_LIBRARY_PATH",
+]);
+
+/** Builds a child environment without carrying CLI authority or loader injection into the GUI. */
+function appLaunchEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env = { ...source };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("VOLLI_") || APP_LAUNCH_INJECTION_ENV.has(key)) delete env[key];
+  }
+  env.VOLLI_LAUNCHED_BY_CLI = "1";
+  return env;
+}
+
 /**
  * Resolves the socket path `app launch` needs to probe/wait on. A shim that
  * never got VOLLI_SOCKET baked in (or is being run outside a Volli-generated
@@ -49,8 +73,7 @@ export async function launchApp(
     // Explicit launch is the recovery path for an unreachable app.
   }
 
-  const env: NodeJS.ProcessEnv = { ...options.env, VOLLI_LAUNCHED_BY_CLI: "1" };
-  delete env.ELECTRON_RUN_AS_NODE;
+  const env = appLaunchEnvironment(options.env);
   dependencies.spawnDetached(options.executable, options.appEntry ? [options.appEntry] : [], env);
 
   const deadline = dependencies.now() + options.timeoutMs;

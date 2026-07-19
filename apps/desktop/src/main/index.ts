@@ -252,13 +252,14 @@ app.whenReady().then(async () => {
 
   // Open (creating + migrating if needed) the SQLite db before the window
   // exists, so the renderer's boot-time volli:data-bootstrap call always has
-  // somewhere to land. VOLLI_DB_PATH overrides the path (dev/tests/e2e);
+  // somewhere to land. VOLLI_DB_PATH overrides the path in dev/tests/e2e;
   // otherwise it's <userData>/volli.db, made possible sharing one userData
   // dir across dev/packaged by the app.setName call above. Failure here must
   // never crash main or leave invoke() hanging: register every data IPC
   // channel with a typed { ok: false, error } response instead, so the
   // renderer can surface the failure like any other failed mutation.
-  const dbPath = process.env["VOLLI_DB_PATH"] ?? join(app.getPath("userData"), "volli.db");
+  const dbPath =
+    (isDev ? process.env["VOLLI_DB_PATH"] : undefined) ?? join(app.getPath("userData"), "volli.db");
   let dbHandle: DbHandle;
   try {
     mkdirSync(dirname(dbPath), { recursive: true });
@@ -323,7 +324,8 @@ app.whenReady().then(async () => {
   // headless installer-idempotency e2e cannot redirect it into a throwaway
   // profile. VOLLI_AGENT_HOME overrides the install/refresh/uninstall home for
   // exactly that. Unset in production, so the real home is used unchanged.
-  const agentToolsHome = process.env["VOLLI_AGENT_HOME"] ?? app.getPath("home");
+  const agentToolsHome =
+    (isDev ? process.env["VOLLI_AGENT_HOME"] : undefined) ?? app.getPath("home");
 
   // Renders hand-edited managed files that were preserved (never overwritten)
   // as path + a readable unified diff in the dialog detail (spec decision 12:
@@ -364,7 +366,7 @@ app.whenReady().then(async () => {
     // needs an administrator (osascript) prompt that no headless e2e can answer,
     // so when a test pre-answers consent via VOLLI_AGENT_CONSENT_CHOICE the link
     // step is skipped. Unset in production, so the admin prompt runs unchanged.
-    if (process.env["VOLLI_AGENT_CONSENT_CHOICE"] === undefined) {
+    if (!isDev || process.env["VOLLI_AGENT_CONSENT_CHOICE"] === undefined) {
       try {
         await installGlobalCliLink(shimPath);
       } catch (error) {
@@ -498,7 +500,7 @@ app.whenReady().then(async () => {
           // Playwright client can patch dialog.showMessageBox, so
           // VOLLI_AGENT_CONSENT_CHOICE pre-answers it. Honored only when set to
           // "install"/"defer"; unset in production, so the dialog shows as before.
-          const preAnswer = process.env["VOLLI_AGENT_CONSENT_CHOICE"];
+          const preAnswer = isDev ? process.env["VOLLI_AGENT_CONSENT_CHOICE"] : undefined;
           if (preAnswer === "install" || preAnswer === "defer") return preAnswer;
           const choice = await dialog.showMessageBox(mainWindow, {
             type: "question",

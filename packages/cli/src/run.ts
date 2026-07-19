@@ -82,7 +82,7 @@ export async function runCli(
 ): Promise<0 | 1 | 2 | 3> {
   const parsed = parseCliArgs(argv);
   if (!parsed.ok) {
-    dependencies.stderr(`error[USAGE] ${parsed.message}\n`);
+    dependencies.stderr(renderCliError({ code: "USAGE", message: parsed.message }));
     return 2;
   }
   if (parsed.invocation.command === "help") {

@@ -151,6 +151,52 @@ describe("launchApp", () => {
     expect(spawns[0]?.env.ELECTRON_RUN_AS_NODE).toBeUndefined();
   });
 
+  it("does not forward CLI context, Node injection, or test-only overrides into the GUI app", async () => {
+    const spawns: NodeJS.ProcessEnv[] = [];
+    let probes = 0;
+    await launchApp(
+      {
+        socketPath: "/profiles/volli.sock",
+        executable: "/Applications/Volli Code.app/Contents/MacOS/Volli Code",
+        appEntry: undefined,
+        timeoutMs: 100,
+        env: {
+          PATH: "/bin",
+          NODE_OPTIONS: "--require /tmp/inject.cjs",
+          NODE_PATH: "/tmp/modules",
+          DYLD_INSERT_LIBRARIES: "/tmp/inject.dylib",
+          LD_PRELOAD: "/tmp/inject.so",
+          ELECTRON_RUN_AS_NODE: "1",
+          ELECTRON_RENDERER_URL: "https://attacker.invalid",
+          VOLLI_SOCKET: "/attacker.sock",
+          VOLLI_SESSION: "spoofed-session",
+          VOLLI_TICKET: "EVIL-1",
+          VOLLI_ARTIFACTS_DIR: "/tmp/evil",
+          VOLLI_APP_EXECUTABLE: "/tmp/evil-app",
+          VOLLI_APP_ENTRY: "/tmp/evil-entry",
+          VOLLI_DB_PATH: "/tmp/evil.db",
+          VOLLI_AGENT_HOME: "/tmp/evil-home",
+          VOLLI_AGENT_CONSENT_CHOICE: "install",
+          VOLLI_SKIP_CLOSE_CONFIRM: "1",
+        },
+      },
+      {
+        probe: async () => {
+          probes += 1;
+          if (probes === 1) throw new Error("not running");
+        },
+        spawnDetached: (_executable, _args, env) => spawns.push(env),
+        delay: async () => undefined,
+        now: (() => {
+          let value = 0;
+          return () => (value += 10);
+        })(),
+      },
+    );
+
+    expect(spawns).toEqual([{ PATH: "/bin", VOLLI_LAUNCHED_BY_CLI: "1" }]);
+  });
+
   it("passes an app entry and times out if the launched socket never appears", async () => {
     const spawns: string[][] = [];
     let now = 0;

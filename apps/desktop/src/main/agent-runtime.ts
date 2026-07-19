@@ -1,4 +1,5 @@
-import { chmod, mkdir, rename, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { chmod, lstat, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import { shellSingleQuote } from "@volli/shared";
@@ -15,12 +16,17 @@ export interface VolliCliShimInput {
 /** Regenerates the userData-local `volli` launcher so it always matches this app build. */
 export async function ensureVolliCliShim(input: VolliCliShimInput): Promise<string> {
   await mkdir(input.binDir, { recursive: true });
+  const binEntry = await lstat(input.binDir);
+  if (!binEntry.isDirectory()) {
+    throw new Error(`Refusing to use non-directory CLI bin path ${input.binDir}`);
+  }
+  await chmod(input.binDir, 0o700);
   const shimPath = join(input.binDir, "volli");
-  const temporaryPath = `${shimPath}.tmp-${process.pid}`;
+  const temporaryPath = `${shimPath}.tmp-${randomUUID()}`;
   const content =
     "#!/bin/sh\n" +
     "export ELECTRON_RUN_AS_NODE=1\n" +
-    // Environment beats the baked default (the context ladder in decision 3):
+    // Environment beats the baked socket default (the context ladder in decision 3):
     // `${VAR:-default}` only substitutes when VAR is unset/empty. This is an
     // assignment RHS (no surrounding double quotes around the whole
     // expansion), which POSIX shells exempt from field splitting and
@@ -29,14 +35,20 @@ export async function ensureVolliCliShim(input: VolliCliShimInput): Promise<stri
     // `"${VAR:-'default'}"`-style wrapper would introduce (single quotes
     // lose their quoting meaning once nested inside double quotes).
     `export VOLLI_SOCKET=\${VOLLI_SOCKET:-${shellSingleQuote(input.socketPath)}}\n` +
-    `export VOLLI_APP_EXECUTABLE=\${VOLLI_APP_EXECUTABLE:-${shellSingleQuote(input.electronPath)}}\n` +
+    // Launch paths are integrity-sensitive and the spec says they are baked:
+    // a caller-controlled environment must not redirect `volli app launch`.
+    `export VOLLI_APP_EXECUTABLE=${shellSingleQuote(input.electronPath)}\n` +
     (input.appEntry !== null
-      ? `export VOLLI_APP_ENTRY=\${VOLLI_APP_ENTRY:-${shellSingleQuote(input.appEntry)}}\n`
+      ? `export VOLLI_APP_ENTRY=${shellSingleQuote(input.appEntry)}\n`
       : "") +
     `exec ${shellSingleQuote(input.electronPath)} ${shellSingleQuote(input.bundlePath)} "$@"\n`;
-  await writeFile(temporaryPath, content, { encoding: "utf8", mode: 0o755 });
-  await chmod(temporaryPath, 0o755);
-  await rename(temporaryPath, shimPath);
+  try {
+    await writeFile(temporaryPath, content, { encoding: "utf8", mode: 0o700, flag: "wx" });
+    await chmod(temporaryPath, 0o755);
+    await rename(temporaryPath, shimPath);
+  } finally {
+    await rm(temporaryPath, { force: true });
+  }
   return shimPath;
 }
 

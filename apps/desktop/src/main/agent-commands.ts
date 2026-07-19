@@ -690,7 +690,7 @@ export function createAgentCommandService(
         if (
           (title !== undefined && (typeof title !== "string" || title.trim().length === 0)) ||
           (priority !== undefined && !isTicketPriority(priority)) ||
-          (base !== undefined && typeof base !== "string") ||
+          (base !== undefined && (typeof base !== "string" || !isValidBranchName(base))) ||
           (harness !== undefined && !isHarnessId(harness)) ||
           (mutation !== undefined && !isBodyMutation(mutation)) ||
           !Array.isArray(addLabels) ||

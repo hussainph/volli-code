@@ -89,6 +89,16 @@ describe("requestAgent", () => {
     ["malformed JSON", "not json\n", "The app returned malformed JSON."],
     ["a primitive", "null\n", "The app returned an invalid response."],
     ["an unsupported envelope", '{"v":2,"ok":true}\n', "The app returned an unsupported response."],
+    [
+      "success without data",
+      '{"v":1,"ok":true}\n',
+      "The app returned an invalid success response.",
+    ],
+    [
+      "failure without a typed error",
+      '{"v":1,"ok":false,"error":{"code":1,"message":"bad"}}\n',
+      "The app returned an invalid error response.",
+    ],
   ])("rejects %s as a protocol error", async (_label, response, message) => {
     await withSocketServer(
       (socket) => socket.end(response),
@@ -103,7 +113,9 @@ describe("requestAgent", () => {
 
   it("rejects oversized and missing responses", async () => {
     await withSocketServer(
-      (socket) => socket.end("x".repeat(4 * 1024 * 1024 + 1)),
+      // Two UTF-16 code units but four UTF-8 bytes: this stays below a
+      // character-count limit while exceeding the four-megabyte wire limit.
+      (socket) => socket.end("💥".repeat(1024 * 1024 + 1)),
       async (socketPath) => {
         await expect(requestAgent(socketPath, request, { timeoutMs: 4_000 })).rejects.toMatchObject(
           {
