@@ -215,12 +215,60 @@ describe("buildActivityFeed", () => {
     const a = event({ kind: "body_edited" }, 0);
     const b = event({ kind: "retitled", from: "A", to: "B" }, BUNCH_GAP_MS); // exactly the gap: stays
     const c = event({ kind: "priority_changed", from: "low", to: "high" }, BUNCH_GAP_MS * 2 + 1); // > gap: breaks
-    const feed = buildActivityFeed([a, b, c], []);
+    const feed = buildActivityFeed([a, b, c], [], BUNCH_GAP_MS * 3);
     expect(feed.map((item) => item.kind)).toEqual(["bunch", "bunch"]);
     const [first, second] = feed;
     if (first?.kind !== "bunch" || second?.kind !== "bunch") throw new Error("expected bunches");
     expect(first.events.map((e) => e.id)).toEqual([a.id, b.id]);
     expect(second.events.map((e) => e.id)).toEqual([c.id]);
+  });
+
+  it("keeps recent multi-hour bursts separate", () => {
+    const hour = 60 * 60 * 1000;
+    const now = 12 * hour;
+    const morning = event({ kind: "body_edited" }, 2 * hour);
+    const afternoon = event({ kind: "retitled", from: "A", to: "B" }, 6 * hour);
+
+    expect(buildActivityFeed([morning, afternoon], [], now)).toHaveLength(2);
+  });
+
+  it("compresses old bursts that share the same visible relative-time bucket", () => {
+    const hour = 60 * 60 * 1000;
+    const day = 24 * hour;
+    const now = 10 * day;
+    const early = event({ kind: "body_edited" }, now - 2 * day - 10 * hour);
+    const late = event({ kind: "retitled", from: "A", to: "B" }, now - 2 * day - 2 * hour);
+
+    const feed = buildActivityFeed([early, late], [], now);
+    expect(feed).toHaveLength(1);
+    expect(feed[0]?.kind === "bunch" ? feed[0].events.map((item) => item.id) : []).toEqual([
+      early.id,
+      late.id,
+    ]);
+  });
+
+  it("keeps old activity in different visible time buckets separate", () => {
+    const day = 24 * 60 * 60 * 1000;
+    const now = 10 * day;
+    const threeDaysAgo = event({ kind: "body_edited" }, now - 3 * day);
+    const twoDaysAgo = event({ kind: "retitled", from: "A", to: "B" }, now - 2 * day);
+
+    expect(buildActivityFeed([threeDaysAgo, twoDaysAgo], [], now)).toHaveLength(2);
+  });
+
+  it("keeps comments as hard boundaries between old activity bursts", () => {
+    const hour = 60 * 60 * 1000;
+    const day = 24 * hour;
+    const now = 10 * day;
+    const before = event({ kind: "body_edited" }, now - 2 * day - 8 * hour);
+    const between = comment({ createdAt: now - 2 * day - 6 * hour });
+    const after = event({ kind: "retitled", from: "A", to: "B" }, now - 2 * day - 2 * hour);
+
+    expect(buildActivityFeed([before, after], [between], now).map((item) => item.kind)).toEqual([
+      "bunch",
+      "comment",
+      "bunch",
+    ]);
   });
 
   it("breaks a bunch at a comment", () => {
