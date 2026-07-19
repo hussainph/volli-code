@@ -74,7 +74,6 @@ function WorkspaceRailToggle() {
     <Button
       variant="ghost"
       size="icon"
-      className="size-7"
       aria-pressed={workspaceRailHidden}
       onClick={() => toggleWorkspaceRailHidden()}
       aria-label={workspaceRailHidden ? "Show workspace switcher" : "Hide workspace switcher"}
@@ -101,7 +100,6 @@ function NavHistoryButtons() {
       <Button
         variant="ghost"
         size="icon"
-        className="size-7"
         disabled={!backEnabled}
         onClick={() => navBack()}
         aria-label="Back"
@@ -113,7 +111,6 @@ function NavHistoryButtons() {
       <Button
         variant="ghost"
         size="icon"
-        className="size-7"
         disabled={!forwardEnabled}
         onClick={() => navForward()}
         aria-label="Forward"
@@ -151,7 +148,7 @@ function RightRailToggle() {
       // scale-x-[-1] mirrors the left-sidebar glyph so it reads as the RIGHT
       // panel (VS Code's secondary-sidebar convention). mr-1 keeps it off the
       // window's right edge.
-      className="app-region-no-drag mr-1 size-7 translate-y-px"
+      className="app-region-no-drag mr-1 translate-y-px"
       aria-pressed={railCollapsed}
       onClick={() => toggleRailCollapsed()}
       aria-label={railCollapsed ? "Show details rail" : "Hide details rail"}

@@ -100,7 +100,7 @@ export function BoardColumn({
         <Button
           variant="ghost"
           onClick={composer.openComposer}
-          className="mx-2 mb-2 h-7 justify-start gap-1.5 text-xs text-muted-foreground"
+          className="mx-2 mb-2 justify-start gap-1.5 text-xs text-muted-foreground"
         >
           <PlusIcon className="size-3.5" />
           New

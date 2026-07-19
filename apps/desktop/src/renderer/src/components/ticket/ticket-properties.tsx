@@ -49,7 +49,7 @@ function StatusField({ projectId, ticket }: { projectId: string; ticket: Ticket 
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
-          className="h-7 w-fit gap-1.5 rounded-full border border-border px-2.5 text-xs text-muted-foreground"
+          className="w-fit gap-1.5 border border-border px-2.5 text-xs text-muted-foreground"
         >
           {TICKET_STATUS_LABELS[ticket.status]}
         </Button>
@@ -82,7 +82,7 @@ function PriorityField({ projectId, ticket }: { projectId: string; ticket: Ticke
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
-          className="h-7 w-fit gap-1.5 rounded-full border border-border px-2.5 text-xs text-muted-foreground"
+          className="w-fit gap-1.5 border border-border px-2.5 text-xs text-muted-foreground"
         >
           <PriorityIndicator priority={ticket.priority} />
           {TICKET_PRIORITY_LABELS[ticket.priority]}

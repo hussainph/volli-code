@@ -57,7 +57,7 @@ function OrderingMenu({ projectId }: { projectId: string }) {
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
-          className="h-7 gap-1.5 rounded-full border border-border px-2.5 text-xs text-muted-foreground"
+          className="gap-1.5 border border-border px-2.5 text-xs text-muted-foreground"
         >
           <ArrowsDownUpIcon className="size-3.5" />
           {TICKET_SORT_LABELS[sort.key]}
@@ -151,8 +151,9 @@ export function BoardHeader({ projectId, ticketCount, tickets, filter }: BoardHe
             reached from here and only here. */}
         <Button
           variant="ghost"
+          size="icon"
           aria-label="Archive"
-          className="size-7 rounded-full border border-border text-muted-foreground"
+          className="border border-border text-muted-foreground"
           onClick={() => setArchiveOpen(true)}
         >
           <ArchiveIcon className="size-3.5" />
@@ -166,7 +167,7 @@ export function BoardHeader({ projectId, ticketCount, tickets, filter }: BoardHe
             ticket", not bare "New" — the column composers' buttons are named
             "New" and the e2e smoke matches both with exact:true. */}
         <Button
-          className="h-7 gap-1 px-2.5 text-xs"
+          className="gap-1 px-2.5 text-xs"
           onClick={() => useUiStore.getState().setNewTicketOpen(true)}
         >
           <PlusIcon className="size-3.5" />

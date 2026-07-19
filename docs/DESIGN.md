@@ -58,8 +58,8 @@ than duplicating them under a second name:
 |---|---|---|---|---|
 | label | `text-label` | 11px / 16px | +0.05em | UPPERCASE section labels, badges, field labels, monogram chips |
 | meta | `text-xs` | 12px / 16px | 0 | timestamps, counts, event lines, hints |
-| ui | `text-ui` | 13px / 20px | 0 | dense UI text: board cards/columns, list rows (BOARD-UI's "13px medium") |
-| body | `text-sm` | 14px / 20px | 0 | prose, inputs, comments, menus, buttons |
+| ui | `text-ui` | 13px / 20px | 0 | dense UI text: board cards/columns, list rows (BOARD-UI's "13px medium"), buttons |
+| body | `text-sm` | 14px / 20px | 0 | prose, inputs, comments, menus |
 | heading | `text-heading` | 18px / 26px | −0.01em | dialog titles, page/section headers |
 | title | `text-title` | 24px / 30px | −0.02em | the ticket title; the largest text in the app |
 
@@ -70,6 +70,22 @@ Rules:
   applied per-use (`uppercase`), since label-size text isn't always caps.
 - Markdown prose (ticket bodies, comments) is typeset by `typeset.css` (`--typeset-size: 0.875rem`,
   em-relative headings) — it's the body step's prose expression, not a separate scale.
+
+## Controls — the pill scale
+
+Buttons and control chips are pills (`rounded-full`, baked into `ui/button.tsx`); the filter/metadata
+chip (`h-7` pill, `text-xs`, `border-border`) set the idiom and the button primitive follows it.
+Heights come from the primitive's size variants — don't restate them per-use:
+
+| Size | Height | Text | Use |
+|---|---|---|---|
+| `xs` / `icon-xs` | 20px | `text-xs` | inline row actions, hover affordances |
+| `sm` / `icon-sm` | 24px | `text-ui` | dialog/footer actions (Create, Comment), toolbar buttons |
+| `default` / `icon` | 28px | `text-ui` | standalone actions, chrome-band icons; matches the chip height |
+| `lg` / `icon-lg` | 32px | `text-sm` | rare hero actions (empty states) |
+
+`default` is the chip height on purpose: a default Button next to a filter chip reads as one family.
+Nothing in the app should render a taller control than `lg`.
 
 ## Vertical rhythm (reading surfaces)
 
