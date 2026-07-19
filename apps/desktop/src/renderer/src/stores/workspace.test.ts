@@ -1,6 +1,7 @@
 import { DEFAULT_TICKET_SORT } from "@volli/shared";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { useBoardStore } from "./board";
+import { ticketScope, useSessionsStore } from "./sessions";
 import { createWorkspaceStore, DEFAULT_WORKSPACE_UI, type NavKey } from "./workspace";
 
 function createMemoryStorage() {
@@ -174,6 +175,41 @@ describe("openTicket", () => {
 
     expect(store.getState().byProject["project-a"]?.nav).toBe("files");
     expect(store.getState().byProject["project-a"]?.boardView).toBe("list");
+  });
+});
+
+describe("openTicketSession", () => {
+  afterEach(() => {
+    useBoardStore.setState({ selectedByProject: {} });
+    useSessionsStore.getState().forgetOwner("ticket-1");
+  });
+
+  it("opens the ticket detail and focuses the exact tab and split pane", () => {
+    useSessionsStore
+      .getState()
+      .addSession(ticketScope("project-a", "ticket-1"), "session-1", "Agent");
+    useSessionsStore
+      .getState()
+      .addSplit("ticket-1", "session-1", "session-1", "session-2", "vertical");
+    useSessionsStore
+      .getState()
+      .addSession(ticketScope("project-a", "ticket-1"), "session-3", "Checks");
+    useSessionsStore.getState().setActivePane("ticket-1", "session-1", "session-1");
+
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().setNav("project-a", "files");
+    store.getState().openTicketSession("project-a", "ticket-1", "session-1", "session-2");
+
+    expect(store.getState().byProject["project-a"]).toMatchObject({
+      nav: "board",
+      openTicketId: "ticket-1",
+      ticketTabs: { "ticket-1": { files: [], active: "session-1" } },
+    });
+    expect(useBoardStore.getState().selectedByProject["project-a"]).toBe("ticket-1");
+    expect(useSessionsStore.getState().byOwner["ticket-1"]?.activeSessionId).toBe("session-1");
+    expect(useSessionsStore.getState().byOwner["ticket-1"]?.tabs[0]?.activePaneId).toBe(
+      "session-2",
+    );
   });
 });
 
