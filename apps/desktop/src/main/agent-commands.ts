@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import type Database from "better-sqlite3";
 import {
   applyTicketBodyMutation,
@@ -378,7 +380,10 @@ export function createAgentCommandService(
   options: AgentCommandServiceOptions,
 ): AgentCommandService {
   const now = options.now ?? Date.now;
-  const newId = options.newId ?? crypto.randomUUID;
+  // node:crypto's randomUUID is a standalone function (safe to reference
+  // detached); the global `crypto.randomUUID` would lose its Crypto `this` when
+  // called via this alias and throw "Value of 'this' must be of type Crypto".
+  const newId = options.newId ?? randomUUID;
 
   return {
     async execute(request): Promise<AgentResponse> {
