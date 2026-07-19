@@ -115,8 +115,18 @@ interface Session {
   /** Chars sent to the renderer and not yet acked; drives pause/resume. */
   unackedChars: number;
   paused: boolean;
-  /** Recent raw output retained independently of renderer batching for read-only session peek. */
-  outputTail: string;
+  /**
+   * Recent raw output retained independently of renderer batching for the
+   * read-only session peek — kept as chunks (not one growing string) so the hot
+   * output path appends in O(chunk) instead of rebuilding a ~256KB string every
+   * event. Whole chunks are trimmed off the front once dropping one still leaves
+   * {@link OBSERVATION_TAIL_MAX_CHARS} behind; {@link Session.tailChars} tracks
+   * the joined length so the trim never re-sums. `peek` joins + slices to the
+   * exact cap on demand.
+   */
+  tailChunks: string[];
+  /** Running total of `tailChunks` char lengths — the trim bound, kept incrementally. */
+  tailChars: number;
   /** Last PTY output OR user input, epoch ms — the warm-park idle clock. */
   lastActivityAt: number;
   /** Renderer-reported: the session's pane is currently on screen. */
@@ -409,7 +419,8 @@ export class PtyManager {
         flushTimer: null,
         unackedChars: 0,
         paused: false,
-        outputTail: "",
+        tailChunks: [],
+        tailChars: 0,
         lastActivityAt: now,
         visible: false,
         keepAwake: false,
@@ -489,7 +500,20 @@ export class PtyManager {
     if (session === undefined) return;
     // PTY output is activity: it keeps a busy session out of the idle window.
     session.lastActivityAt = Date.now();
-    session.outputTail = `${session.outputTail}${data}`.slice(-OBSERVATION_TAIL_MAX_CHARS);
+    // Append to the observation tail as a chunk, then drop whole chunks off the
+    // front while doing so still leaves at least the cap behind (peek slices to
+    // the exact cap on demand). Keeps this hot path O(chunk), not O(cap).
+    session.tailChunks.push(data);
+    session.tailChars += data.length;
+    let firstChunk = session.tailChunks[0];
+    while (
+      firstChunk !== undefined &&
+      session.tailChars - firstChunk.length >= OBSERVATION_TAIL_MAX_CHARS
+    ) {
+      session.tailChunks.shift();
+      session.tailChars -= firstChunk.length;
+      firstChunk = session.tailChunks[0];
+    }
     session.pendingChunks.push(data);
     session.pendingChars += data.length;
     if (session.pendingChars >= BATCH_MAX_CHARS) {
@@ -558,7 +582,13 @@ export class PtyManager {
   ): { status: SessionActivityState; output: string } | undefined {
     const session = this.sessions.get(sessionId);
     if (!session) return undefined;
-    const normalized = session.outputTail.replace(/\r\n?/g, "\n");
+    // Join the retained chunks and slice to the exact cap — the front chunk may
+    // be over-retained (kept because dropping it would breach the cap), so the
+    // slice is what makes the peeked tail byte-identical to the old string form.
+    const normalized = session.tailChunks
+      .join("")
+      .slice(-OBSERVATION_TAIL_MAX_CHARS)
+      .replace(/\r\n?/g, "\n");
     const output = normalized.split("\n").slice(-lines).join("\n");
     let status: SessionActivityState = "idle";
     if (session.parkedPids !== null) status = "parked";
