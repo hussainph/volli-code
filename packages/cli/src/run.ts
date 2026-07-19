@@ -1,7 +1,8 @@
-import { AGENT_ERROR_CODES, errorMessage } from "@volli/shared";
+import { errorMessage } from "@volli/shared";
 import type { AgentCommand, AgentError, AgentRequest, AgentResponse } from "@volli/shared";
 
 import { AgentClientError } from "./client";
+import { bareHelpText, renderHelp } from "./help";
 import { parseCliArgs } from "./parser";
 import { exitCodeForError, renderCliError, renderCliSuccess } from "./render";
 import { materializeFileArguments } from "./runtime";
@@ -15,41 +16,6 @@ export interface RunCliDependencies {
   readText: ReadTextFile;
   request(socketPath: string, request: AgentRequest): Promise<AgentResponse>;
   launch(timeoutMs: number): Promise<{ alreadyRunning: boolean }>;
-}
-
-const EXIT_CLASS_LABEL = {
-  1: "1 failure",
-  2: "2 usage",
-  3: "3 app unreachable (retryable)",
-} as const;
-
-/**
- * The fixed error-code vocabulary (decision 6), rendered from
- * {@link AGENT_ERROR_CODES} so `volli help exit-codes` can never drift from
- * the codes agent-commands.ts actually emits.
- */
-function exitCodesHelpText(): string {
-  const width = Math.max(...AGENT_ERROR_CODES.map((code) => code.length));
-  const rows = AGENT_ERROR_CODES.map(
-    (code) => `  ${code.padEnd(width)}  ${EXIT_CLASS_LABEL[exitCodeForError(code)]}`,
-  );
-  return (
-    "Exit codes: 0 ok; 1 failure; 2 usage; 3 app unreachable (retryable).\n\n" +
-    "Error codes:\n" +
-    `${rows.join("\n")}\n`
-  );
-}
-
-function helpText(topic: unknown): string {
-  if (topic === "exit-codes") return exitCodesHelpText();
-  if (topic === "json") return "Pass --json to any command for stable structured output.\n";
-  if (topic === "addressing") {
-    return "Context: explicit flags, then VOLLI_SESSION/VOLLI_TICKET, then cwd. Volli never guesses.\n";
-  }
-  if (topic === "orchestration") {
-    return "Read before writing; work your own board unless instructed; do not chain-spawn agents.\n";
-  }
-  return "Usage: volli <command> [options]. Try: volli board, volli ticket show VC-12, volli help exit-codes.\n";
 }
 
 function clientError(error: unknown): AgentError {
@@ -80,13 +46,20 @@ export async function runCli(
   argv: readonly string[],
   dependencies: RunCliDependencies,
 ): Promise<0 | 1 | 2 | 3> {
+  // Bare `volli` prints the complete reference to stderr and exits 2 (usage),
+  // so an agent that ran the CLI with no arguments learns the whole surface.
+  if (argv.length === 0) {
+    dependencies.stderr(bareHelpText());
+    return 2;
+  }
   const parsed = parseCliArgs(argv);
   if (!parsed.ok) {
     dependencies.stderr(renderCliError({ code: "USAGE", message: parsed.message }));
     return 2;
   }
   if (parsed.invocation.command === "help") {
-    const help = helpText(parsed.invocation.args["topic"]);
+    // The parser always supplies `path` as a string array for the help command.
+    const help = renderHelp(parsed.invocation.args["path"] as string[]);
     dependencies.stdout(
       parsed.invocation.json ? `${JSON.stringify({ help: help.trimEnd() })}\n` : help,
     );

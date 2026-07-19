@@ -143,9 +143,46 @@ describe("runCli", () => {
     for (const topic of ["json", "addressing", "orchestration", "unknown"]) {
       expect(await runCli(["help", topic], dependencies)).toBe(0);
     }
-    expect(await runCli([], dependencies)).toBe(2);
     expect(output).toHaveLength(4);
-    expect(errors).toEqual(["error[USAGE] Expected a Volli command\n"]);
+    expect(output[0]).toContain("structured JSON");
+    expect(output[1]).toContain("Context ladder");
+    expect(output[2]).toContain("Read before writing");
+    // An unknown topic falls back to the full compact reference, not an error.
+    expect(output[3]).toContain("self-documenting planning CLI");
+
+    // A malformed (non-empty) command surfaces the parser's usage error, exit 2.
+    expect(await runCli(["ticket", "move", "VC-1"], dependencies)).toBe(2);
+    expect(errors).toEqual(["error[USAGE] ticket move requires --to\n"]);
+
+    // Bare `volli` prints the complete reference to stderr and exits 2 (usage).
+    expect(await runCli([], dependencies)).toBe(2);
+    expect(errors).toHaveLength(2);
+    expect(errors[1]).toContain("self-documenting planning CLI");
+    expect(errors[1]).toContain("volli help <command> for detail");
+  });
+
+  it("routes command and --help help through renderHelp, with --json wrapping", async () => {
+    const output: string[] = [];
+    const dependencies = {
+      env: {},
+      cwd: "/work",
+      stdout: (text: string) => output.push(text),
+      stderr: () => undefined,
+      readText: async () => "",
+      request: async () => ({ v: 1, ok: true, data: {} }) as const,
+      launch: async () => ({ alreadyRunning: true }),
+    };
+    // `help <command>` renders that command's detail.
+    expect(await runCli(["help", "ticket", "create"], dependencies)).toBe(0);
+    expect(output[0]).toContain("Usage: volli ticket create --title <text> [options]");
+    // A `--help` flag anywhere is equivalent to `help <command prefix>`, exit 0.
+    expect(await runCli(["ticket", "move", "VC-1", "--help"], dependencies)).toBe(0);
+    expect(output[1]).toContain("ticket move — Move a ticket to another column.");
+    // `--json` wraps the same reference text as { help }.
+    expect(await runCli(["help", "board", "--json"], dependencies)).toBe(0);
+    const { help } = JSON.parse(output[2]!) as { help: string };
+    expect(help).toContain("board — Show a project's board");
+    expect(help.endsWith("\n")).toBe(false);
   });
 
   it("launches explicitly with default/overridden timeouts and maps launch failures", async () => {
