@@ -211,6 +211,24 @@ describe("openTicketSession", () => {
       "session-2",
     );
   });
+
+  it("creates missing workspace state and preserves the active pane when none is requested", () => {
+    useSessionsStore
+      .getState()
+      .addSession(ticketScope("project-a", "ticket-1"), "session-1", "Agent");
+
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicketSession("project-a", "ticket-1", "session-1");
+
+    expect(store.getState().byProject["project-a"]).toMatchObject({
+      nav: "board",
+      openTicketId: "ticket-1",
+      ticketTabs: { "ticket-1": { files: [], active: "session-1" } },
+    });
+    expect(useSessionsStore.getState().byOwner["ticket-1"]?.tabs[0]?.activePaneId).toBe(
+      "session-1",
+    );
+  });
 });
 
 describe("closeTicket", () => {
