@@ -12,6 +12,7 @@
  * tabs are closable, session tabs alone are renameable.
  */
 import * as React from "react";
+import { CornersOutIcon } from "@phosphor-icons/react/dist/csr/CornersOut";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
@@ -73,6 +74,9 @@ interface TicketTabStripProps {
   onRenameSessionTab(tabId: string, title: string): void;
   /** Boots a new session tab — the same path as the rail's New-session button. */
   onNewSession(): void;
+  /** Focus mode is only meaningful when the active descriptor is a resident session tab. */
+  canFocusTerminal: boolean;
+  onEnterTerminalFocus(): void;
 }
 
 /**
@@ -218,40 +222,63 @@ export function TicketTabStrip({
   onCloseTab,
   onRenameSessionTab,
   onNewSession,
+  canFocusTerminal,
+  onEnterTerminalFocus,
 }: TicketTabStripProps) {
   const [editingId, setEditingId] = React.useState<string | null>(null);
 
   return (
-    <div
-      role="tablist"
-      className="flex shrink-0 items-end gap-0.5 border-b border-border bg-rail px-2 pt-1.5"
-    >
-      {tabs.map((tab) => (
-        <TicketTab
-          key={tab.id}
-          tab={tab}
-          active={tab.id === activeTabId}
-          editing={editingId === tab.id}
-          onSelect={() => onSelectTab(tab.id)}
-          onClose={() => onCloseTab(tab)}
-          onStartRename={() => setEditingId(tab.id)}
-          onCommitRename={(next) => {
-            setEditingId(null);
-            onRenameSessionTab(tab.id, next);
-          }}
-          onCancelRename={() => setEditingId(null)}
-        />
-      ))}
-      <Button
-        size="icon-xs"
-        variant="ghost"
-        disabled={creating}
-        onClick={onNewSession}
-        aria-label="New session"
-        className="mb-1 ml-0.5 shrink-0"
-      >
-        <PlusIcon className="size-3.5" />
-      </Button>
+    <div className="flex shrink-0 items-end border-b border-border bg-rail pt-1.5">
+      {/* Tabs and their creation affordance scroll as one cluster, keeping +
+          immediately beside the last tab instead of pinning it away from its
+          destination. The focus control owns a stable slot at the far right. */}
+      <div className="flex min-w-0 flex-1 items-end overflow-x-auto px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <div role="tablist" aria-orientation="horizontal" className="flex items-end gap-0.5">
+          {tabs.map((tab) => (
+            <TicketTab
+              key={tab.id}
+              tab={tab}
+              active={tab.id === activeTabId}
+              editing={editingId === tab.id}
+              onSelect={() => onSelectTab(tab.id)}
+              onClose={() => onCloseTab(tab)}
+              onStartRename={() => setEditingId(tab.id)}
+              onCommitRename={(next) => {
+                setEditingId(null);
+                onRenameSessionTab(tab.id, next);
+              }}
+              onCancelRename={() => setEditingId(null)}
+            />
+          ))}
+        </div>
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          disabled={creating}
+          onClick={onNewSession}
+          aria-label="New session"
+          className="mb-1 ml-0.5 shrink-0"
+        >
+          <PlusIcon className="size-3.5" />
+        </Button>
+      </div>
+      <div className="mb-1 flex shrink-0 items-center border-l border-border/70 px-1.5">
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          disabled={!canFocusTerminal}
+          onClick={onEnterTerminalFocus}
+          aria-label="Enter terminal focus"
+          aria-pressed={false}
+          title={
+            canFocusTerminal
+              ? "Enter terminal focus"
+              : "Select a terminal tab to enter terminal focus"
+          }
+        >
+          <CornersOutIcon className="size-3.5" />
+        </Button>
+      </div>
     </div>
   );
 }

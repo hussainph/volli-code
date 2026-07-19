@@ -126,6 +126,35 @@ describe("setNewTicketOpen", () => {
   });
 });
 
+describe("terminal focus", () => {
+  const target = { projectId: "p1", ticketId: "t1", sessionId: "s1" };
+
+  it("tracks and clears the focused terminal target", () => {
+    const store = createUiStore(createMemoryStorage());
+    expect(store.getState().terminalFocusTarget).toBeNull();
+
+    store.getState().setTerminalFocusTarget(target);
+    expect(store.getState().terminalFocusTarget).toEqual(target);
+
+    store.getState().setTerminalFocusTarget(null);
+    expect(store.getState().terminalFocusTarget).toBeNull();
+  });
+
+  it("is session-only and never enters persisted UI state", () => {
+    const storage = createMemoryStorage();
+    const store = createUiStore(storage);
+    store.getState().setTerminalFocusTarget(target);
+
+    const persisted = JSON.parse(storage.getItem("volli:ui")!) as {
+      state: Record<string, unknown>;
+    };
+    expect(persisted.state).not.toHaveProperty("terminalFocusTarget");
+
+    const reloaded = createUiStore(storage);
+    expect(reloaded.getState().terminalFocusTarget).toBeNull();
+  });
+});
+
 describe("persistence", () => {
   it("persists sidebarWidth + uiScale + workspaceRailHidden + railCollapsed + detailsExpanded — settingsOpen resets each launch", () => {
     const storage = createMemoryStorage();

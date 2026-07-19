@@ -24,6 +24,11 @@
  * collapsed-by-default drawer pinned beneath them, and its open/closed choice
  * persists app-wide by the same reasoning as `railCollapsed`.
  *
+ * `terminalFocusTarget` — the ticket terminal tab temporarily owning the app
+ * canvas. It is deliberately session-only: live PTYs do not survive relaunch,
+ * and entering a new app lifetime with its chrome hidden around a missing
+ * session would strand the user in an invalid view.
+ *
  * Per-workspace UI state (the active nav page) lives in stores/workspace.ts.
  */
 import { DEFAULT_HARNESS_ID, type HarnessId, isHarnessId } from "@volli/shared";
@@ -35,6 +40,14 @@ import { appStateStorage } from "@renderer/lib/app-state-storage";
 export const SIDEBAR_DEFAULT_WIDTH = 318;
 export const SIDEBAR_MIN_WIDTH = 280;
 export const SIDEBAR_MAX_WIDTH = 640;
+
+/** Identity of the ticket terminal tab temporarily owning the app canvas. */
+export interface TerminalFocusTarget {
+  projectId: string;
+  ticketId: string;
+  /** Root session/tab id; split-pane focus remains owned by the session store. */
+  sessionId: string;
+}
 
 export function clampSidebarWidth(width: number): number {
   return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)));
@@ -101,6 +114,8 @@ interface UiState {
   railCollapsed: boolean;
   /** Ticket-detail rail "Details" drawer expanded? Persisted app-wide (see module doc). */
   detailsExpanded: boolean;
+  /** Session-only terminal focus target; never persisted. */
+  terminalFocusTarget: TerminalFocusTarget | null;
   /**
    * The harness the New-ticket composer's "Create & start" last kicked off with.
    * Persisted app-wide (like the chrome preferences above) so the primary action
@@ -119,6 +134,7 @@ interface UiState {
   setRailCollapsed(collapsed: boolean): void;
   toggleDetailsExpanded(): void;
   setDetailsExpanded(expanded: boolean): void;
+  setTerminalFocusTarget(target: TerminalFocusTarget | null): void;
   setLastHarnessId(harnessId: HarnessId): void;
 }
 
@@ -152,6 +168,7 @@ export function createUiStore(storage?: StateStorage) {
         workspaceRailHidden: false,
         railCollapsed: false,
         detailsExpanded: false,
+        terminalFocusTarget: null,
         lastHarnessId: DEFAULT_HARNESS_ID,
         setSidebarWidth: (width) => set({ sidebarWidth: clampSidebarWidth(width) }),
         stepUiScale: (delta) => set((state) => ({ uiScale: steppedScale(state.uiScale, delta) })),
@@ -165,6 +182,7 @@ export function createUiStore(storage?: StateStorage) {
         setRailCollapsed: (collapsed) => set({ railCollapsed: collapsed }),
         toggleDetailsExpanded: () => set((state) => ({ detailsExpanded: !state.detailsExpanded })),
         setDetailsExpanded: (expanded) => set({ detailsExpanded: expanded }),
+        setTerminalFocusTarget: (target) => set({ terminalFocusTarget: target }),
         setLastHarnessId: (harnessId) => set({ lastHarnessId: harnessId }),
       }),
       {
