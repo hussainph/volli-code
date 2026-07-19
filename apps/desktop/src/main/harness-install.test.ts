@@ -106,4 +106,20 @@ describe("harness install executor", () => {
     expect(refreshed.conflicts[0]?.currentContent).toBe("my hand edits");
     expect(await readFile(instructionsPath, "utf8")).toBe(crlfEdited);
   });
+
+  it("refuses to follow a dangling managed-file symlink", async () => {
+    root = await mkdtemp(join(tmpdir(), "volli-harness-test-"));
+    const plan = buildHarnessInstallPlan({ home: root, detected: ["codex"] });
+    const skillPath = join(root, ".agents/skills/volli/SKILL.md");
+    const outsideTarget = join(root, "must-not-be-created.md");
+    const manifestPath = join(root, ".agents/skills/volli/.volli-managed.json");
+    await mkdir(join(root, ".agents/skills/volli"), { recursive: true });
+    await symlink(outsideTarget, skillPath);
+
+    await expect(applyHarnessInstallPlan(plan, manifestPath)).rejects.toThrow(
+      "Refusing to manage non-regular file",
+    );
+    expect((await lstat(skillPath)).isSymbolicLink()).toBe(true);
+    await expect(readFile(outsideTarget, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
 });

@@ -10,9 +10,12 @@ import {
 } from "@volli/shared";
 
 const MAX_REQUEST_BYTES = 1024 * 1024;
+const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+const MAX_CONNECTIONS = 64;
 
 export interface AgentSocketOptions {
   socketPath: string;
+  requestTimeoutMs?: number;
   execute(request: AgentRequest): Promise<AgentResponse>;
 }
 
@@ -65,21 +68,34 @@ function writeResponse(socket: Socket, response: AgentResponse): void {
   socket.end(`${JSON.stringify(response)}\n`);
 }
 
-function handleConnection(socket: Socket, execute: AgentSocketOptions["execute"]): void {
+function handleConnection(
+  socket: Socket,
+  execute: AgentSocketOptions["execute"],
+  requestTimeoutMs: number,
+): void {
   socket.setEncoding("utf8");
   let body = "";
+  let receivedBytes = 0;
   let handled = false;
+  socket.setTimeout(requestTimeoutMs, () => {
+    if (handled) return;
+    handled = true;
+    writeResponse(socket, socketFailure("Request timed out."));
+  });
   socket.on("data", (chunk: string) => {
     if (handled) return;
     body += chunk;
-    if (Buffer.byteLength(body) > MAX_REQUEST_BYTES) {
+    receivedBytes += Buffer.byteLength(chunk);
+    if (receivedBytes > MAX_REQUEST_BYTES) {
       handled = true;
+      socket.setTimeout(0);
       writeResponse(socket, socketFailure("Request exceeds the one-megabyte limit."));
       return;
     }
     const newline = body.indexOf("\n");
     if (newline === -1) return;
     handled = true;
+    socket.setTimeout(0);
     const request = parseRequest(body.slice(0, newline));
     if (!("cmd" in request)) {
       writeResponse(socket, request);
@@ -118,7 +134,14 @@ async function unlinkSocket(socketPath: string): Promise<void> {
 /** Starts the private, one-request-per-connection NDJSON agent surface. */
 export async function startAgentSocket(options: AgentSocketOptions): Promise<AgentSocketServer> {
   await unlinkSocket(options.socketPath);
-  const server = createServer((socket) => handleConnection(socket, options.execute));
+  const server = createServer((socket) =>
+    handleConnection(
+      socket,
+      options.execute,
+      options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    ),
+  );
+  server.maxConnections = MAX_CONNECTIONS;
   await new Promise<void>((resolve, reject) => {
     const onError = (error: Error): void => reject(error);
     server.once("error", onError);
@@ -127,7 +150,13 @@ export async function startAgentSocket(options: AgentSocketOptions): Promise<Age
       resolve();
     });
   });
-  await chmod(options.socketPath, 0o600);
+  try {
+    await chmod(options.socketPath, 0o600);
+  } catch (error) {
+    await closeServer(server).catch(() => undefined);
+    await unlinkSocket(options.socketPath).catch(() => undefined);
+    throw error;
+  }
   return {
     async close(): Promise<void> {
       await closeServer(server);

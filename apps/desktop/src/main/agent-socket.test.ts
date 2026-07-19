@@ -109,4 +109,30 @@ describe("agent socket", () => {
       error: { code: "DB_UNAVAILABLE", message: "Database failed to open." },
     });
   });
+
+  it("times out clients that hold a connection open without completing a request", async () => {
+    ctx = openTestDb();
+    const socketPath = join(dirname(ctx.dbPath), "volli.sock");
+    server = await startAgentSocket({
+      socketPath,
+      requestTimeoutMs: 20,
+      execute: async () => ({ v: 1, ok: true, data: {} }),
+    });
+
+    const response = await new Promise<AgentResponse>((resolve, reject) => {
+      const socket = connect(socketPath);
+      let body = "";
+      socket.setEncoding("utf8");
+      socket.on("data", (chunk: string) => {
+        body += chunk;
+      });
+      socket.on("error", reject);
+      socket.on("end", () => resolve(JSON.parse(body.trim()) as AgentResponse));
+    });
+
+    expect(response).toMatchObject({
+      ok: false,
+      error: { code: "SOCKET_PROTOCOL", message: "Request timed out." },
+    });
+  });
 });

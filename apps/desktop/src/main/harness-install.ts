@@ -1,5 +1,6 @@
-import { createHash } from "node:crypto";
-import { lstat, mkdir, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { constants } from "node:fs";
+import { lstat, mkdir, open, readlink, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import {
@@ -40,11 +41,40 @@ function hash(content: string): string {
 }
 
 async function textAt(path: string): Promise<string | null> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
-    return await readFile(path, "utf8");
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const entry = await handle.stat();
+    if (!entry.isFile()) throw new Error(`Refusing to manage non-regular file ${path}`);
+    return await handle.readFile({ encoding: "utf8" });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    if ((error as NodeJS.ErrnoException).code === "ELOOP") {
+      throw new Error(`Refusing to manage non-regular file ${path}`, { cause: error });
+    }
     throw error;
+  } finally {
+    await handle?.close();
+  }
+}
+
+/** Replaces one managed file without following destination symlinks or using a predictable temp. */
+async function writeTextAtomically(path: string, content: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  let mode = 0o600;
+  try {
+    const entry = await lstat(path);
+    if (!entry.isFile()) throw new Error(`Refusing to manage non-regular file ${path}`);
+    mode = entry.mode & 0o777;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const temporaryPath = `${path}.volli-${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporaryPath, content, { encoding: "utf8", flag: "wx", mode });
+    await rename(temporaryPath, path);
+  } finally {
+    await rm(temporaryPath, { force: true });
   }
 }
 
@@ -121,8 +151,7 @@ function writeManagedFile(
       desiredContent: action.content,
       async apply(decision) {
         if (decision === "skip") return false;
-        await mkdir(dirname(action.path), { recursive: true });
-        await writeFile(action.path, action.content, "utf8");
+        await writeTextAtomically(action.path, action.content);
         return true;
       },
     },
@@ -202,8 +231,7 @@ async function writeManagedFence(
         // Body hash can match (skip) while the surrounding file still needs the
         // version marker refreshed, so re-check merged.changed before no-op.
         if (decision === "skip" && !merged.changed) return false;
-        await mkdir(dirname(action.path), { recursive: true });
-        await writeFile(action.path, merged.content, "utf8");
+        await writeTextAtomically(action.path, merged.content);
         return true;
       },
     },
@@ -224,8 +252,7 @@ export async function applyHarnessInstallPlan(
     else if (action.kind === "symlink") await writeManagedSymlink(action, manifest, result);
     else await writeManagedFence(action, manifest, result);
   }
-  await mkdir(dirname(manifestPath), { recursive: true });
-  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  await writeTextAtomically(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   return result;
 }
 
@@ -285,7 +312,7 @@ export async function uninstallHarnessPlan(
         "\n",
       );
       if (withoutBlock !== current) {
-        await writeFile(action.path, withoutBlock, "utf8");
+        await writeTextAtomically(action.path, withoutBlock);
         result.removed.push(action.path);
       }
     }

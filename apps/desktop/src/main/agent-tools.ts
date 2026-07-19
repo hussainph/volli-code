@@ -103,7 +103,10 @@ function appleScriptString(value: string): string {
  * shell so both happen under a single administrator prompt.
  */
 export function globalCliLinkShellCommand(shimPath: string): string {
-  return `/bin/mkdir -p /usr/local/bin && ln -sf ${shellSingleQuote(shimPath)} /usr/local/bin/volli`;
+  // `-n` prevents a pre-existing symlink-to-directory at the destination from
+  // being followed by the privileged process. Absolute tools avoid PATH-based
+  // command substitution inside the administrator shell.
+  return `/bin/mkdir -p /usr/local/bin && /bin/ln -sfn ${shellSingleQuote(shimPath)} /usr/local/bin/volli`;
 }
 
 /** Uses the standard macOS administrator prompt to expose the generated shim outside Volli. */
@@ -134,7 +137,7 @@ export async function removeGlobalCliLinkIfOurs(shimPath: string): Promise<boole
   if (target !== shimPath) return false;
   await execFileAsync("/usr/bin/osascript", [
     "-e",
-    `do shell script ${appleScriptString("rm -f /usr/local/bin/volli")} with administrator privileges`,
+    `do shell script ${appleScriptString("/bin/rm -f /usr/local/bin/volli")} with administrator privileges`,
   ]);
   return true;
 }
