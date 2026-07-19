@@ -26,8 +26,12 @@ One append-only history record of something that happened to a ticket (created, 
 **Project**:
 A tracked codebase folder: name, path, ticket prefix, rail position. Removing one from Volli never touches the folder on disk.
 
-**Primary session**:
-The one terminal session per ticket whose lifecycle drives board automation; other panes in the ticket are free-form.
+**Ticket worktree**:
+The isolated git checkout a ticket works in: branch `volli/<DISPLAY-ID>-<slug>`, directory `~/.volli/worktrees/<project-dirname>-<short-id>/<DISPLAY-ID>-<slug>/`. App-owned (outside both the repo and Electron's `userData`), named once at creation — neither branch nor directory is renamed when the ticket title changes.
+_Avoid_: workspace (that's the whole ticket surface), checkout (ambiguous with the main checkout)
+
+**Main checkout**:
+The project folder the user added to Volli — the repo's own working tree, never touched by ticket automation. Scratch sessions and worktree-opt-out tickets run here.
 
 **Scratch session**:
 A ticket-less terminal session in a project's Sessions surface — main checkout, no worktree, no board involvement — still recorded in session history.

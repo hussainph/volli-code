@@ -1,7 +1,12 @@
 name: CI
 
 on:
+  # Draft PRs are working sessions — they must not consume Actions minutes.
+  # ready_for_review joins the default types so the full suite runs exactly
+  # once the author flips the PR out of draft; every job below gates on the
+  # draft flag (dependents inherit the skip through `needs`).
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches:
       - main
@@ -29,6 +34,7 @@ jobs:
   # getting stuck in an "Expected" state when GitHub skips the whole workflow.
   scope:
     name: Change scope
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -84,6 +90,7 @@ jobs:
 
   check:
     name: Check
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -121,6 +128,7 @@ jobs:
 
   test:
     name: Test
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -229,6 +237,7 @@ jobs:
   # deliberately visible-but-non-blocking. Dependabot also opens update PRs.
   dependency-audit:
     name: Dependency audit (advisory)
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 5
