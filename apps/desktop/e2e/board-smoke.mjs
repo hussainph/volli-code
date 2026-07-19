@@ -176,6 +176,20 @@ async function columnCount(page, label) {
   }, label);
 }
 
+/** The board-column header box for `label`, excluding matching sidebar metadata. */
+async function columnHeaderBox(page, label) {
+  return page.evaluate((columnLabel) => {
+    const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2"));
+    const header = headers.find((div) => {
+      const first = div.children[0];
+      return first?.tagName === "SPAN" && first.textContent === columnLabel;
+    });
+    if (!header) return null;
+    const rect = header.getBoundingClientRect();
+    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+  }, label);
+}
+
 /**
  * The ordered display ids under each expanded board-view column, keyed by
  * status label (null for a collapsed pill). The full board fingerprint the
@@ -594,7 +608,7 @@ async function main() {
           doing: await columnCount(page, "Doing"),
         };
         const cardBox = await page.locator("article").first().boundingBox();
-        const doingHeaderBox = await page.getByText("Doing", { exact: true }).first().boundingBox();
+        const doingHeaderBox = await columnHeaderBox(page, "Doing");
         if (!cardBox || !doingHeaderBox) throw new Error("card or Doing header not found");
         await drag(page, cardBox, { x: doingHeaderBox.x + 20, y: doingHeaderBox.y + 120 });
         const after = {
