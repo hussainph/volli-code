@@ -516,18 +516,30 @@ async function main() {
       },
     );
 
-    // === 5. Search filter: "ghostty" narrows to 1, clearing restores 11 =====
-    await attempt(5, 'Search "ghostty" narrows to 1 card, clearing restores 11', async () => {
-      const search = page.getByPlaceholder("Search tickets…");
-      await search.click();
+    // === 5. Universal command palette: ticket lookup opens its destination ===
+    await attempt(5, "⌘K searches all tickets and opens the selected destination", async () => {
+      const trigger = page.getByRole("button", { name: "Search tickets and sessions" });
+      const signifier = (await trigger.textContent())?.includes("⌘K") ?? false;
+      await page.keyboard.press("Meta+K");
+      const search = page.getByPlaceholder("Search tickets and sessions…");
+      await search.waitFor();
       await search.fill("ghostty");
+      const result = page
+        .getByRole("dialog")
+        .getByText("Fix ghostty config Cmd+Opt+arrow nav", { exact: true });
+      await result.waitFor();
+      await result.click();
       await sleep(400);
-      const filtered = await page.locator("article").count();
-      await search.fill("");
-      await sleep(400);
-      const restored = await page.locator("article").count();
-      const ok = filtered === 1 && restored === 11;
-      return { ok, detail: `filtered=${filtered} restored=${restored}` };
+      const opened = (await page.getByRole("tab", { name: "VC-9", exact: true }).count()) === 1;
+      const paletteClosed = (await search.count()) === 0;
+      await page.keyboard.press("Escape");
+      await sleep(300);
+      const boardRestored = (await page.locator("article").count()) === 11;
+      const ok = signifier && opened && paletteClosed && boardRestored;
+      return {
+        ok,
+        detail: `signifier=${signifier} opened=${opened} paletteClosed=${paletteClosed} boardRestored=${boardRestored}`,
+      };
     });
 
     // === 6. Priority facet: toggling High narrows, toggling off restores ====
@@ -922,31 +934,50 @@ async function main() {
       },
     );
 
-    // === 16. Sidebar Active Sessions link jumps to the board with selection ==
+    // === 16. Sidebar attention tier is truthful without a live terminal =====
     await attempt(
       16,
-      "Sidebar Active Sessions lists doing+needs_review ids; clicking one selects its card",
+      "Active Sessions promotes Needs Review tickets to Needs you without inventing live sessions",
       async () => {
         const ids = await sidebarSessionIds(page);
-        const expectedIds = ["VC-1", "VC-8", "VC-9", "VC-10", "VC-11"];
+        const expectedIds = ["VC-10", "VC-11"];
         const idsMatch =
           Array.isArray(ids) &&
           ids.length === expectedIds.length &&
           expectedIds.every((id) => ids.includes(id));
-        // Click VC-1's session row (scoped to the sidebar menu button so it can't
-        // hit the board card that shares the id).
-        await page
+        const needsYou = (await page.getByText("Needs you", { exact: true }).count()) === 1;
+        const noInProgress = (await page.getByText("In progress", { exact: true }).count()) === 0;
+        const needsYouRow = page
           .locator('[data-sidebar="menu-button"]')
-          .filter({ has: page.locator("span.font-mono", { hasText: /^VC-1$/ }) })
-          .first()
-          .click();
+          .filter({ has: page.locator("span.font-mono", { hasText: /^VC-10$/ }) })
+          .first();
+        const subtextBefore = await needsYouRow
+          .locator(".session-row-meta")
+          .evaluate((element) => getComputedStyle(element).color);
+        await needsYouRow.click();
         await sleep(400);
-        const card = cardById(page, "VC-1");
-        const onBoard = (await card.count()) === 1;
-        const cardClass = onBoard ? ((await card.getAttribute("class")) ?? "") : "";
-        const selected = cardClass.includes("border-primary/70");
-        const ok = idsMatch && onBoard && selected;
-        return { ok, detail: `ids=${JSON.stringify(ids)} onBoard=${onBoard} selected=${selected}` };
+        const ticketOpened =
+          (await page.getByRole("tab", { name: "VC-10", exact: true }).count()) === 1;
+        const subtextHighlight = await needsYouRow.evaluate((button) => {
+          const subtext = button.querySelector(".session-row-meta");
+          if (!(subtext instanceof HTMLElement)) return null;
+          return {
+            active: button.getAttribute("data-active"),
+            buttonColor: getComputedStyle(button).color,
+            subtextColor: getComputedStyle(subtext).color,
+          };
+        });
+        const subtextHighlighted =
+          subtextHighlight?.active === "true" &&
+          subtextHighlight.subtextColor === subtextHighlight.buttonColor &&
+          subtextHighlight.subtextColor !== subtextBefore;
+        await page.keyboard.press("Escape");
+        await sleep(300);
+        const ok = idsMatch && needsYou && noInProgress && ticketOpened && subtextHighlighted;
+        return {
+          ok,
+          detail: `ids=${JSON.stringify(ids)} needsYou=${needsYou} noInProgress=${noInProgress} ticketOpened=${ticketOpened} subtext=${JSON.stringify(subtextHighlight)}`,
+        };
       },
     );
 
@@ -1038,21 +1069,22 @@ async function main() {
       },
     );
 
-    // === 19. Guard: typing "c" into the chrome search input does not open the dialog
+    // === 19. Guard: typing "c" into ⌘K does not open the ticket composer ===
     await attempt(
       19,
-      'Guard: "c" typed into the chrome search input does not open the New-ticket dialog',
+      'Guard: "c" typed into the command palette does not open the New-ticket composer',
       async () => {
-        const search = page.getByPlaceholder("Search tickets…");
-        await search.click();
+        await page.keyboard.press("Meta+K");
+        const search = page.getByPlaceholder("Search tickets and sessions…");
+        await search.waitFor();
         await search.pressSequentially("c");
         await sleep(300);
-        const dialogCount = await page.getByRole("dialog").count();
-        await search.fill("");
+        const paletteOpen = (await page.getByRole("dialog").count()) === 1;
+        const composerClosed = (await page.getByPlaceholder("Ticket title").count()) === 0;
         await page.keyboard.press("Escape");
         await sleep(300);
-        const ok = dialogCount === 0;
-        return { ok, detail: `dialogCount=${dialogCount}` };
+        const ok = paletteOpen && composerClosed;
+        return { ok, detail: `paletteOpen=${paletteOpen} composerClosed=${composerClosed}` };
       },
     );
 

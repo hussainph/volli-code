@@ -71,7 +71,7 @@ function SessionRow({
         size="lg"
         isActive={active}
         onClick={onActivate}
-        className="h-auto min-h-10 items-start gap-2 py-1.5"
+        className="h-auto min-h-10 items-start gap-2 py-1.5 [&:hover_.session-row-meta]:text-sidebar-accent-foreground [&[data-active=true]_.session-row-meta]:text-sidebar-accent-foreground"
       >
         <span
           aria-hidden
@@ -86,7 +86,7 @@ function SessionRow({
         />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="truncate text-xs text-sidebar-foreground">{row.title}</span>
-          <span className="flex min-w-0 items-center gap-1 text-label text-muted-foreground">
+          <span className="session-row-meta flex min-w-0 items-center gap-1 text-label text-muted-foreground transition-colors">
             <span className="shrink-0 font-mono">
               {displayTicketId(project.ticketPrefix, row.ticket.ticketNumber)}
             </span>
