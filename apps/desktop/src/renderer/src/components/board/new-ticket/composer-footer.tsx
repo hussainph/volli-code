@@ -63,7 +63,7 @@ export function ComposerFooter({
               aria-label="Choose agent"
               variant="ghost"
               size="sm"
-              className="text-ui text-muted-foreground"
+              className="text-muted-foreground"
             >
               {harnessLabel(harnessId)}
               <CaretDownIcon weight="bold" className="size-3" />
@@ -79,13 +79,7 @@ export function ComposerFooter({
           </DropdownMenuContent>
         </DropdownMenu>
 
-        <Button
-          variant="secondary"
-          size="sm"
-          className="text-ui"
-          onClick={onCreate}
-          disabled={disabled}
-        >
+        <Button variant="secondary" size="sm" onClick={onCreate} disabled={disabled}>
           Create
         </Button>
 
@@ -95,7 +89,6 @@ export function ComposerFooter({
           onClick={onKickoff}
           disabled={disabled}
           size="sm"
-          className="text-ui"
         >
           Create &amp; start
         </Button>

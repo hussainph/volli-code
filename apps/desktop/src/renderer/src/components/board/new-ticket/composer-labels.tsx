@@ -33,7 +33,7 @@ export function ComposerLabels({
       <PopoverTrigger asChild>
         <Button
           variant="ghost"
-          className="h-7 gap-1.5 rounded-full border border-border px-2.5 text-xs text-muted-foreground"
+          className="gap-1.5 border border-border px-2.5 text-xs text-muted-foreground"
         >
           <TagIcon className="size-3.5" />
           {value.length === 0 ? (

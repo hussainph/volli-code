@@ -21,7 +21,7 @@ import { Switch } from "@renderer/components/ui/switch";
 
 /** A rounded-full ghost chip trigger — the composer's quiet metadata affordance. */
 function chipClass() {
-  return "h-7 gap-1.5 rounded-full border border-border px-2.5 text-xs text-muted-foreground";
+  return "gap-1.5 border border-border px-2.5 text-xs text-muted-foreground";
 }
 
 function StatusChip({
