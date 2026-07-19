@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { COLUMN_VOCABULARY } from "@volli/shared";
 
-import { COMMAND_HELP, parseCliArgs, PRIORITY_VOCABULARY } from "./parser";
+import { COMMAND_HELP, HARNESS_VOCABULARY, parseCliArgs, PRIORITY_VOCABULARY } from "./parser";
 
 describe("parseCliArgs", () => {
   it("parses ticket creation into a socket command without losing repeated labels", () => {
@@ -352,6 +352,18 @@ describe("parseCliArgs", () => {
       ok: false,
       code: "USAGE",
       message: `Unknown priority "urgent" (valid: ${PRIORITY_VOCABULARY})`,
+    });
+  });
+
+  it.each([
+    ["ticket create --harness", ["ticket", "create", "--title", "x", "--harness", "cursor"]],
+    ["ticket update --harness", ["ticket", "update", "VC-1", "--harness", "cursor"]],
+  ] as const)("enumerates the harness vocabulary when %s rejects a token", (_label, argv) => {
+    const result = parseCliArgs(argv);
+    expect(result).toEqual({
+      ok: false,
+      code: "USAGE",
+      message: `Unknown harness "cursor" (valid: ${HARNESS_VOCABULARY})`,
     });
   });
 

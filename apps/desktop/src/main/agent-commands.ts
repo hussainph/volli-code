@@ -6,6 +6,7 @@ import {
   composeTicketPrompt,
   displayTicketId,
   errorMessage,
+  HARNESS_IDS,
   isTicketPriority,
   isTicketStatus,
   isHarnessId,
@@ -74,6 +75,15 @@ function invalidPriorityResponse(priority: unknown): AgentResponse | null {
   return failure(
     "INVALID_REQUEST",
     `Invalid priority ${JSON.stringify(priority)} (valid: ${TICKET_PRIORITIES.join(", ")})`,
+  );
+}
+
+/** The harness twin of {@link invalidPriorityResponse}: teach the vocabulary, don't lump. */
+function invalidHarnessResponse(harness: unknown): AgentResponse | null {
+  if (harness === undefined || isHarnessId(harness)) return null;
+  return failure(
+    "INVALID_REQUEST",
+    `Invalid harness ${JSON.stringify(harness)} (valid: ${HARNESS_IDS.join(", ")})`,
   );
 }
 
@@ -705,10 +715,11 @@ export function createAgentCommandService(
         const removeLabels = request.args["removeLabels"] ?? [];
         const updatePriorityError = invalidPriorityResponse(priority);
         if (updatePriorityError) return updatePriorityError;
+        const updateHarnessError = invalidHarnessResponse(harness);
+        if (updateHarnessError) return updateHarnessError;
         if (
           (title !== undefined && (typeof title !== "string" || title.trim().length === 0)) ||
           (base !== undefined && (typeof base !== "string" || !isValidBranchName(base))) ||
-          (harness !== undefined && !isHarnessId(harness)) ||
           (mutation !== undefined && !isBodyMutation(mutation)) ||
           !Array.isArray(addLabels) ||
           !addLabels.every((label) => typeof label === "string") ||
@@ -908,6 +919,8 @@ export function createAgentCommandService(
       if (!resolved.ok) return resolved.response;
       const createPriorityError = invalidPriorityResponse(request.args["priority"]);
       if (createPriorityError) return createPriorityError;
+      const createHarnessError = invalidHarnessResponse(request.args["harness"]);
+      if (createHarnessError) return createHarnessError;
       const title = request.args["title"];
       const status = request.args["status"] ?? "backlog";
       const priority = request.args["priority"] ?? "medium";
@@ -919,7 +932,6 @@ export function createAgentCommandService(
         title.trim().length === 0 ||
         !isTicketStatus(status) ||
         !isTicketPriority(priority) ||
-        (harness !== undefined && !isHarnessId(harness)) ||
         (base !== undefined && (typeof base !== "string" || !isValidBranchName(base))) ||
         !Array.isArray(labels) ||
         !labels.every((label) => typeof label === "string")

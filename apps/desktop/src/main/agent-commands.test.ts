@@ -741,6 +741,56 @@ describe("agent command service", () => {
     });
   });
 
+  it("enumerates the harness vocabulary on raw create/update rejections", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "p1", name: "Alpha", path: "/repo/alpha", ticketPrefix: "AL" }),
+    );
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.0.0",
+      newId: () => "t1",
+    });
+    const base = { cwd: "/repo/alpha", env: {} } as const;
+
+    const create = await service.execute({
+      v: 1,
+      cmd: "ticket.create",
+      args: { project: "AL", title: "X", harness: "cursor" },
+      ctx: base,
+    });
+    expect(create).toEqual({
+      v: 1,
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: 'Invalid harness "cursor" (valid: claude-code, codex, opencode)',
+      },
+    });
+
+    await service.execute({
+      v: 1,
+      cmd: "ticket.create",
+      args: { project: "AL", title: "Seed" },
+      ctx: base,
+    });
+    const update = await service.execute({
+      v: 1,
+      cmd: "ticket.update",
+      args: { id: "AL-1", harness: "cursor" },
+      ctx: base,
+    });
+    expect(update).toMatchObject({
+      v: 1,
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: 'Invalid harness "cursor" (valid: claude-code, codex, opencode)',
+      },
+    });
+  });
+
   it("lists public project, label, and session catalogs", async () => {
     ctx = openTestDb();
     insertProject(

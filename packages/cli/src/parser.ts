@@ -1,5 +1,7 @@
 import {
   COLUMN_VOCABULARY,
+  HARNESS_IDS,
+  isHarnessId,
   isTicketPriority,
   parseColumnToken,
   TICKET_PRIORITIES,
@@ -13,6 +15,9 @@ export interface CliInvocation {
 
 /** The priority vocabulary rendered for teaching errors and help, derived from the domain source. */
 export const PRIORITY_VOCABULARY: string = TICKET_PRIORITIES.join(", ");
+
+/** The first-class harness vocabulary rendered for teaching errors and help. */
+export const HARNESS_VOCABULARY: string = HARNESS_IDS.join(", ");
 
 export type CliParseResult =
   | { ok: true; invocation: CliInvocation }
@@ -35,6 +40,14 @@ const priorityValue: ValueParser = (raw) =>
     : {
         ok: false,
         message: `Unknown priority ${JSON.stringify(raw)} (valid: ${PRIORITY_VOCABULARY})`,
+      };
+
+const harnessValue: ValueParser = (raw) =>
+  isHarnessId(raw)
+    ? { ok: true, value: raw }
+    : {
+        ok: false,
+        message: `Unknown harness ${JSON.stringify(raw)} (valid: ${HARNESS_VOCABULARY})`,
       };
 
 const columnValue: ValueParser = (raw) => {
@@ -258,7 +271,14 @@ const TICKET_CREATE_SPEC: CommandSpec = {
       placeholder: "<p>",
       help: "Project (name/prefix/path).",
     },
-    "--harness": { kind: "value", key: "harness", placeholder: "<h>", help: "Harness id." },
+    "--harness": {
+      kind: "value",
+      key: "harness",
+      parse: harnessValue,
+      placeholder: "<h>",
+      help: "Harness id.",
+      values: `valid: ${HARNESS_VOCABULARY}`,
+    },
     "--base": { kind: "value", key: "base", placeholder: "<branch>", help: "Base branch." },
     "--no-worktree": {
       kind: "flag",
@@ -338,7 +358,14 @@ const TICKET_UPDATE_SPEC: CommandSpec = {
       placeholder: "<name>",
       help: "Remove label (repeatable).",
     },
-    "--harness": { kind: "value", key: "harness", placeholder: "<h>", help: "Set the harness." },
+    "--harness": {
+      kind: "value",
+      key: "harness",
+      parse: harnessValue,
+      placeholder: "<h>",
+      help: "Set the harness.",
+      values: `valid: ${HARNESS_VOCABULARY}`,
+    },
     "--base": { kind: "value", key: "base", placeholder: "<branch>", help: "Set the base branch." },
   },
   defaults: { addLabels: [], removeLabels: [] },
