@@ -207,6 +207,7 @@ jobs:
             composer-kickoff-smoke.mjs
             agent-socket-smoke.mjs
             agent-cli-roundtrip-smoke.mjs
+            agent-cli-token-bench.mjs
             agent-pty-env-smoke.mjs
             agent-installer-smoke.mjs
             agent-consent-smoke.mjs
