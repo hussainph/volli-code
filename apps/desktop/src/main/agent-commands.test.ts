@@ -634,7 +634,109 @@ describe("agent command service", () => {
       ok: true,
       data: {
         prompt:
-          "Load and follow the `volli` skill for board coordination.\n\nVC-1: Ship CLI\n\nFollow the implementation contract.",
+          "Coordinate the board through the bundled `volli` CLI: run `volli help` for the full reference (and the volli skill, when installed, for norms).\n\nVC-1: Ship CLI\n\nFollow the implementation contract.",
+      },
+    });
+  });
+
+  it("resolves an explicit identify --project through the context ladder", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "p1", name: "Alpha", path: "/repo/alpha", ticketPrefix: "AL" }),
+    );
+    insertProject(
+      ctx.db,
+      testProject({ id: "p2", name: "Beta", path: "/repo/beta", ticketPrefix: "BE" }),
+    );
+    const service = createAgentCommandService({ db: ctx.db, appVersion: "1.0.0" });
+
+    // An explicit --project wins even when cwd sits outside every project.
+    const response = await service.execute({
+      v: 1,
+      cmd: "identify",
+      args: { project: "BE" },
+      ctx: { cwd: "/somewhere/else", env: {} },
+    });
+
+    expect(response).toMatchObject({
+      v: 1,
+      ok: true,
+      data: { project: { name: "Beta", prefix: "BE", path: "/repo/beta" } },
+    });
+
+    // An unknown --project is a resolution error, not a silent fallback.
+    const missing = await service.execute({
+      v: 1,
+      cmd: "identify",
+      args: { project: "NOPE" },
+      ctx: { cwd: "/somewhere/else", env: {} },
+    });
+    expect(missing).toMatchObject({ v: 1, ok: false, error: { code: "PROJECT_NOT_FOUND" } });
+  });
+
+  it("enumerates the priority vocabulary on raw create/update/list rejections", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "p1", name: "Alpha", path: "/repo/alpha", ticketPrefix: "AL" }),
+    );
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.0.0",
+      newId: () => "t1",
+    });
+    const base = { cwd: "/repo/alpha", env: {} } as const;
+
+    const create = await service.execute({
+      v: 1,
+      cmd: "ticket.create",
+      args: { project: "AL", title: "X", priority: "urgent" },
+      ctx: base,
+    });
+    expect(create).toEqual({
+      v: 1,
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: 'Invalid priority "urgent" (valid: low, medium, high)',
+      },
+    });
+
+    const list = await service.execute({
+      v: 1,
+      cmd: "ticket.list",
+      args: { project: "AL", priority: "urgent" },
+      ctx: base,
+    });
+    expect(list).toMatchObject({
+      v: 1,
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: 'Invalid priority "urgent" (valid: low, medium, high)',
+      },
+    });
+
+    // Seed a real ticket, then reject an invalid priority on update.
+    await service.execute({
+      v: 1,
+      cmd: "ticket.create",
+      args: { project: "AL", title: "Seed" },
+      ctx: base,
+    });
+    const update = await service.execute({
+      v: 1,
+      cmd: "ticket.update",
+      args: { id: "AL-1", priority: "urgent" },
+      ctx: base,
+    });
+    expect(update).toMatchObject({
+      v: 1,
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: 'Invalid priority "urgent" (valid: low, medium, high)',
       },
     });
   });

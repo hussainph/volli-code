@@ -12,6 +12,7 @@ import {
   isValidBranchName,
   resolveAgentContext,
   shortSessionId,
+  TICKET_PRIORITIES,
   TICKET_STATUS_LABELS,
   TICKET_STATUSES,
 } from "@volli/shared";
@@ -60,6 +61,20 @@ export interface AgentCommandService {
 
 function failure(code: AgentErrorCode, message: string): AgentResponse {
   return { v: 1, ok: false, error: { code, message } };
+}
+
+/**
+ * A raw socket request can carry a priority the CLI parser would have rejected;
+ * enumerate the valid vocabulary (from {@link TICKET_PRIORITIES}) so the error
+ * teaches instead of a bare "invalid arguments". Returns null when the priority
+ * is absent or valid.
+ */
+function invalidPriorityResponse(priority: unknown): AgentResponse | null {
+  if (priority === undefined || isTicketPriority(priority)) return null;
+  return failure(
+    "INVALID_REQUEST",
+    `Invalid priority ${JSON.stringify(priority)} (valid: ${TICKET_PRIORITIES.join(", ")})`,
+  );
 }
 
 /**
@@ -610,9 +625,10 @@ export function createAgentCommandService(
         const priority = request.args["priority"];
         const label = request.args["label"];
         const limit = request.args["limit"];
+        const listPriorityError = invalidPriorityResponse(priority);
+        if (listPriorityError) return listPriorityError;
         if (
           (status !== undefined && !isTicketStatus(status)) ||
-          (priority !== undefined && !isTicketPriority(priority)) ||
           (label !== undefined && typeof label !== "string") ||
           (limit !== undefined &&
             (typeof limit !== "number" || !Number.isInteger(limit) || limit <= 0))
@@ -671,7 +687,7 @@ export function createAgentCommandService(
           v: 1,
           ok: true,
           data: {
-            prompt: `Load and follow the \`volli\` skill for board coordination.\n\n${ticketPrompt}`,
+            prompt: `Coordinate the board through the bundled \`volli\` CLI: run \`volli help\` for the full reference (and the volli skill, when installed, for norms).\n\n${ticketPrompt}`,
           },
         };
       }
@@ -687,9 +703,10 @@ export function createAgentCommandService(
         const mutation = request.args["bodyMutation"];
         const addLabels = request.args["addLabels"] ?? [];
         const removeLabels = request.args["removeLabels"] ?? [];
+        const updatePriorityError = invalidPriorityResponse(priority);
+        if (updatePriorityError) return updatePriorityError;
         if (
           (title !== undefined && (typeof title !== "string" || title.trim().length === 0)) ||
-          (priority !== undefined && !isTicketPriority(priority)) ||
           (base !== undefined && (typeof base !== "string" || !isValidBranchName(base))) ||
           (harness !== undefined && !isHarnessId(harness)) ||
           (mutation !== undefined && !isBodyMutation(mutation)) ||
@@ -720,7 +737,7 @@ export function createAgentCommandService(
               },
               { now: updatedAt, actor: actor.actor },
             );
-            if (priority !== undefined && priority !== resolved.ticket.priority) {
+            if (isTicketPriority(priority) && priority !== resolved.ticket.priority) {
               ticket = setTicketPriorityCommand(
                 options.db,
                 { ticketId: resolved.ticket.id, priority },
@@ -889,6 +906,8 @@ export function createAgentCommandService(
       }
       const resolved = projectForCreate(options.db, projects, request);
       if (!resolved.ok) return resolved.response;
+      const createPriorityError = invalidPriorityResponse(request.args["priority"]);
+      if (createPriorityError) return createPriorityError;
       const title = request.args["title"];
       const status = request.args["status"] ?? "backlog";
       const priority = request.args["priority"] ?? "medium";
