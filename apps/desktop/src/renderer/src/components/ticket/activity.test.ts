@@ -141,6 +141,7 @@ describe("commentAuthorLabel", () => {
 describe("EVENT_KIND_PRIORITY", () => {
   it("pins the label priority order (highest signal first, `commented` excluded)", () => {
     const expected: TicketEventKind[] = [
+      "worktree_failed",
       "status_changed",
       "session_started",
       "session_ended",

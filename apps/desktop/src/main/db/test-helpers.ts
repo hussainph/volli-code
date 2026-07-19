@@ -87,6 +87,7 @@ export function testProject(overrides: Partial<Project> = {}): Project {
     path: overrides.path ?? `/repo/project-${n}`,
     ticketPrefix: overrides.ticketPrefix ?? "VC",
     baseBranch: overrides.baseBranch ?? null,
+    setupCommand: overrides.setupCommand ?? null,
     colorIndex: overrides.colorIndex ?? 0,
     sortOrder: overrides.sortOrder ?? 0,
     createdAt: overrides.createdAt ?? 0,

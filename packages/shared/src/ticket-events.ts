@@ -34,6 +34,12 @@ export const TICKET_EVENT_KINDS = [
   // automated later — `from`/`to` snapshot the ticket's worktree identity
   // fields (`ticket.ts`) around the change.
   "worktree_changed",
+  // Worktree creation failure (worktree-support §3/§8): the `ensure` pipeline
+  // aborted at `create`/`copy`/`setup`. Records the failing `stage` and a
+  // trimmed `stderr` excerpt so the History feed shows the real git error
+  // rather than a swallowed toast. The session never falls back to the main
+  // checkout — the worktree toggle is the only sanctioned path there (#38).
+  "worktree_failed",
   // Session lifecycle signal (`session done|blocked`, volli CLI): the agent
   // reporting its own outcome on the ticket it's working. Written with an
   // `automation` actor; `reason` becomes the Needs Review badge when the loop
@@ -77,7 +83,31 @@ export type TicketEventPayload =
     }
   | { kind: "session_ended"; sessionId: string }
   | { kind: "worktree_changed"; from: WorktreeIdentity; to: WorktreeIdentity }
+  | { kind: "worktree_failed"; stage: WorktreeFailureStage; stderr: string }
   | { kind: "session_signal"; signal: "done" | "blocked"; reason: string | null };
+
+/**
+ * The `ensure`-pipeline stage a `worktree_failed` event aborted at
+ * (worktree-support §3): `create` covers identity resolution, reconciliation,
+ * base resolution and `git worktree add`; `copy` the `.worktreeinclude` step;
+ * `setup` the post-spawn sentinel-gated setup command.
+ */
+export type WorktreeFailureStage = "create" | "copy" | "setup";
+
+/**
+ * Upper bound on a stored `worktree_failed` `stderr` excerpt. Git can emit a
+ * lot of progress noise on stderr; the actual error line is at the very end,
+ * so {@link trimWorktreeFailureStderr} keeps the TRAILING slice rather than the
+ * head. Kept here (not in main) so the invariant travels with the payload type.
+ */
+export const MAX_WORKTREE_FAILURE_STDERR = 2000;
+
+/** Trims `stderr` to the trailing {@link MAX_WORKTREE_FAILURE_STDERR} characters. */
+export function trimWorktreeFailureStderr(stderr: string): string {
+  return stderr.length <= MAX_WORKTREE_FAILURE_STDERR
+    ? stderr
+    : stderr.slice(stderr.length - MAX_WORKTREE_FAILURE_STDERR);
+}
 
 export type TicketEventActorKind = "user" | "session" | "automation";
 

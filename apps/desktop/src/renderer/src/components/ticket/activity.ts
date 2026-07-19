@@ -21,6 +21,7 @@ import {
   type TicketEvent,
   type TicketEventKind,
   type TicketEventPayload,
+  type WorktreeFailureStage,
   type WorktreeIdentity,
 } from "@volli/shared";
 
@@ -37,6 +38,7 @@ export const BUNCH_GAP_MS = 60 * 60 * 1000;
  * instead). Exported so the labelling contract is pinned by unit tests.
  */
 export const EVENT_KIND_PRIORITY: readonly TicketEventKind[] = [
+  "worktree_failed",
   "status_changed",
   "session_started",
   "session_ended",
@@ -119,6 +121,13 @@ function describeWorktreeChange(from: WorktreeIdentity, to: WorktreeIdentity): s
   return "updated worktree";
 }
 
+/** Human noun for each worktree-failure stage, read as "worktree <noun> failed". */
+const WORKTREE_FAILURE_STAGE_LABELS: Record<WorktreeFailureStage, string> = {
+  create: "creation",
+  copy: "file copy",
+  setup: "setup",
+};
+
 /**
  * The one-line sentence for a property-change event (`null` for `commented`,
  * which the feed renders as its comment instead). Verb-phrase style, no
@@ -150,6 +159,8 @@ export function describeEvent(payload: TicketEventPayload): string | null {
       return "ended a session";
     case "worktree_changed":
       return describeWorktreeChange(payload.from, payload.to);
+    case "worktree_failed":
+      return `worktree ${WORKTREE_FAILURE_STAGE_LABELS[payload.stage]} failed`;
     case "session_signal":
       return payload.reason === null
         ? `reported ${payload.signal}`
