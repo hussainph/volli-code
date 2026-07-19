@@ -4,6 +4,7 @@ import type Database from "better-sqlite3";
 import {
   derivePrefix,
   errorMessage,
+  isHarnessId,
   isTicketPriority,
   isTicketStatus,
   isValidBranchName,
@@ -18,6 +19,7 @@ import type {
   ArchivedTicketsResult,
   BootstrapPayload,
   BootstrapResult,
+  HarnessId,
   Label,
   LabelResult,
   LegacyImportRequest,
@@ -151,6 +153,8 @@ interface TicketCreateInput {
   labels?: string[];
   /** Whether the ticket boots its agent in an isolated worktree; defaults to `true`. */
   usesWorktree?: boolean;
+  /** The ticket's persisted default harness (set on kickoff); defaults to the DB default. */
+  preferredHarnessId?: HarnessId;
 }
 
 function isTicketCreateInput(value: unknown): value is TicketCreateInput {
@@ -164,7 +168,8 @@ function isTicketCreateInput(value: unknown): value is TicketCreateInput {
     (candidate["priority"] === undefined || isTicketPriority(candidate["priority"])) &&
     (candidate["body"] === undefined || typeof candidate["body"] === "string") &&
     (candidate["labels"] === undefined || isStringArray(candidate["labels"])) &&
-    (candidate["usesWorktree"] === undefined || typeof candidate["usesWorktree"] === "boolean")
+    (candidate["usesWorktree"] === undefined || typeof candidate["usesWorktree"] === "boolean") &&
+    (candidate["preferredHarnessId"] === undefined || isHarnessId(candidate["preferredHarnessId"]))
   );
 }
 
@@ -540,6 +545,7 @@ export function registerDataIpcHandlers(
               body: input.body,
               labels: input.labels,
               usesWorktree: input.usesWorktree,
+              preferredHarnessId: input.preferredHarnessId,
             },
             { now, actor: { kind: "user" } },
           ),

@@ -16,6 +16,7 @@ import type {
   FileWriteResult,
   GhosttyAppearancePayload,
   GhosttyConfigResult,
+  HarnessId,
   LabelResult,
   LegacyImportRequest,
   LegacyImportResult,
@@ -101,6 +102,8 @@ const api = {
       labels?: string[];
       /** Whether the ticket boots its agent in an isolated worktree; defaults to `true`. */
       usesWorktree?: boolean;
+      /** The ticket's persisted default harness (set on kickoff); defaults to the DB default. */
+      preferredHarnessId?: HarnessId;
     }): Promise<TicketResult> =>
       ipcRenderer.invoke("volli:ticket-create" satisfies VolliIpcChannel, input),
     /** Runs the shared board move + persists it; resolves with the project's full authoritative ticket list. */

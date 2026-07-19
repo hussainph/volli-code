@@ -114,6 +114,21 @@ describe("runKickoff", () => {
     expect(deps.focusSession).toHaveBeenCalledWith("p1", "tk", "s1");
   });
 
+  it("persists the chosen harness as the ticket's preferredHarnessId so later resume sessions match", async () => {
+    const deps = fakeDeps({
+      addTicket: vi.fn<SubmitDeps["addTicket"]>(async () => madeTicket({ id: "tk" })),
+    });
+
+    await runKickoff(fields(), deps, { createMore: false, harnessId: "codex" });
+
+    expect(deps.addTicket).toHaveBeenCalledWith(
+      "p1",
+      "doing",
+      "A ticket",
+      expect.objectContaining({ preferredHarnessId: "codex" }),
+    );
+  });
+
   it("boots in the background without navigating when Create-more is on", async () => {
     const deps = fakeDeps({
       addTicket: vi.fn<SubmitDeps["addTicket"]>(async () => madeTicket({ id: "tk" })),

@@ -51,7 +51,14 @@ export interface SubmitDeps {
     projectId: string,
     status: TicketStatus,
     title: string,
-    options: { priority: TicketPriority; body: string; labels: string[]; usesWorktree: boolean },
+    options: {
+      priority: TicketPriority;
+      body: string;
+      labels: string[];
+      usesWorktree: boolean;
+      /** Persisted as the ticket's default harness (kickoff only); omitted keeps the DB default. */
+      preferredHarnessId?: HarnessId;
+    },
   ): Promise<Ticket | null>;
   /** Boot a ticket session, auto-launching the harness with `prompt`; resolves the sessionId or null on failure. */
   startSession(
@@ -101,12 +108,15 @@ export async function runKickoff(
 ): Promise<SubmitResult> {
   deps.persistHarness(opts.harnessId);
   // Kickoff forces Doing — a "Create & start" ticket is booting an agent now,
-  // so it belongs in Doing whatever the Status chip says.
+  // so it belongs in Doing whatever the Status chip says. Persist the chosen
+  // harness as the ticket's preference so later resume sessions boot the SAME
+  // harness (pty.ts resolveScope falls back to it), not the DB default.
   const ticket = await deps.addTicket(fields.projectId, "doing", fields.title, {
     priority: fields.priority,
     body: fields.body,
     labels: fields.labels,
     usesWorktree: fields.usesWorktree,
+    preferredHarnessId: opts.harnessId,
   });
   if (ticket === null) return { created: false };
 

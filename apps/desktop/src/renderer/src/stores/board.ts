@@ -18,6 +18,7 @@ import {
   setTicketPriority as setTicketPriorityOp,
   type ArchivedTicket,
   type ArchivedTicketsResult,
+  type HarnessId,
   type Label,
   type LabelResult,
   type Result,
@@ -47,6 +48,8 @@ export interface BoardGateway {
     labels?: string[];
     /** Whether the ticket boots its agent in an isolated worktree. Defaults to `true`. */
     usesWorktree?: boolean;
+    /** The ticket's persisted default harness (kickoff choice). Defaults to the DB default. */
+    preferredHarnessId?: HarnessId;
   }): Promise<TicketResult>;
   moveTicket(input: {
     projectId: string;
@@ -148,6 +151,7 @@ interface BoardState {
       body?: string;
       labels?: string[];
       usesWorktree?: boolean;
+      preferredHarnessId?: HarnessId;
     },
   ): Promise<Ticket | null>;
   setTicketPriority(projectId: string, ticketId: string, priority: TicketPriority): Promise<void>;
@@ -411,6 +415,7 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
               body: options?.body,
               labels: options?.labels,
               usesWorktree: options?.usesWorktree,
+              preferredHarnessId: options?.preferredHarnessId,
             }),
         );
         if (!result) return null;
