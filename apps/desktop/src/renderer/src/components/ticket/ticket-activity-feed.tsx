@@ -46,6 +46,7 @@ import { Markdown } from "@renderer/components/ticket/markdown";
 import { relativeTime } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
+import { useBoardStore } from "@renderer/stores/board";
 import { writeThrough } from "@renderer/stores/mutate";
 
 type PhosphorIcon = typeof ChatCircleIcon;
@@ -384,9 +385,15 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
     }
   }, [ticketId]);
 
+  // A socket-originated mutation (e.g. an agent's `volli ticket comment`)
+  // refreshes the planning stores and bumps this counter; refetch on every
+  // bump so the feed reflects agent activity without a close/reopen. The feed
+  // mounts only for the open ticket, so an unconditional refetch is cheap. The
+  // effect also fires once on mount (initial version), which is the first load.
+  const planningDataVersion = useBoardStore((state) => state.planningDataVersion);
   React.useEffect(() => {
     void refetch();
-  }, [refetch]);
+  }, [refetch, planningDataVersion]);
 
   // Post a comment: append an optimistic row immediately, then either refetch
   // the authoritative feed (success — the temp row is replaced) or roll the

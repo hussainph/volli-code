@@ -64,6 +64,11 @@ export async function refreshPlanningData(
     : (projects[0]?.id ?? null);
   useProjectsStore.getState().hydrate(projects, selectedProjectId);
   useBoardStore.getState().hydrate(ticketsByProject, labelsByProject);
+  // Signal per-ticket surfaces (the Activity feed) to refetch data not carried
+  // in the board slices — events/comments — so a socket-originated comment
+  // shows up in an already-open ticket. Bumped only on refresh, never at boot
+  // (the feed mounts fresh there).
+  useBoardStore.getState().bumpPlanningDataVersion();
   return { ok: true };
 }
 

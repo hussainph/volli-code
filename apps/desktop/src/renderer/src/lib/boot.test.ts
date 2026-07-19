@@ -414,4 +414,23 @@ describe("refreshPlanningData", () => {
     expect(useProjectsStore.getState().selectedProjectId).toBe("p1");
     expect(useBoardStore.getState().ticketsByProject.p1).toEqual([ticket]);
   });
+
+  it("bumps planningDataVersion so per-ticket surfaces refetch, but only on a successful refresh", async () => {
+    useProjectsStore.getState().hydrate([], null);
+    useBoardStore.getState().hydrate({}, {});
+    const before = useBoardStore.getState().planningDataVersion;
+
+    const okGateway = fakeGateway({
+      bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({ ok: true, data: payload({}) })),
+    });
+    expect(await refreshPlanningData(okGateway)).toEqual({ ok: true });
+    expect(useBoardStore.getState().planningDataVersion).toBe(before + 1);
+
+    const failGateway = fakeGateway({
+      bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({ ok: false, error: "db gone" })),
+    });
+    expect(await refreshPlanningData(failGateway)).toEqual({ ok: false, error: "db gone" });
+    // A failed refresh hydrates nothing, so it must not bump the version either.
+    expect(useBoardStore.getState().planningDataVersion).toBe(before + 1);
+  });
 });
