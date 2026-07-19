@@ -40,9 +40,13 @@ describe("globalCliLinkShellCommand", () => {
   it("creates /usr/local/bin before linking so fresh macOS never fails permanently", () => {
     const command = globalCliLinkShellCommand("/Users/me/Library/App/bin/volli");
     expect(command).toBe(
-      "/bin/mkdir -p /usr/local/bin && /bin/ln -sfn '/Users/me/Library/App/bin/volli' /usr/local/bin/volli",
+      "/bin/mkdir -p /usr/local/bin && " +
+        "if [ -L /usr/local/bin/volli ] && [ \"$(/usr/bin/readlink /usr/local/bin/volli)\" = '/Users/me/Library/App/bin/volli' ]; then :; " +
+        "elif [ -e /usr/local/bin/volli ] || [ -L /usr/local/bin/volli ]; then echo 'Refusing to replace existing /usr/local/bin/volli' >&2; exit 1; " +
+        "else /bin/ln -sn '/Users/me/Library/App/bin/volli' /usr/local/bin/volli; fi",
     );
-    expect(command.indexOf("/bin/mkdir")).toBeLessThan(command.indexOf("/bin/ln -sfn"));
+    expect(command.indexOf("/bin/mkdir")).toBeLessThan(command.indexOf("/bin/ln -sn"));
+    expect(command).not.toContain(" -f");
   });
 });
 

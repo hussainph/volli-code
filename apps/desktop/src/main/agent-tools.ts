@@ -103,10 +103,17 @@ function appleScriptString(value: string): string {
  * shell so both happen under a single administrator prompt.
  */
 export function globalCliLinkShellCommand(shimPath: string): string {
-  // `-n` prevents a pre-existing symlink-to-directory at the destination from
-  // being followed by the privileged process. Absolute tools avoid PATH-based
-  // command substitution inside the administrator shell.
-  return `/bin/mkdir -p /usr/local/bin && /bin/ln -sfn ${shellSingleQuote(shimPath)} /usr/local/bin/volli`;
+  const quotedShimPath = shellSingleQuote(shimPath);
+  // Never clobber an unrelated command under administrator privileges. The
+  // existing link is accepted only when it already points at this exact shim;
+  // `-n` and the absence of `-f` also prevent destination symlink traversal or
+  // replacement in a check/create race. Absolute tools avoid PATH substitution.
+  return (
+    "/bin/mkdir -p /usr/local/bin && " +
+    `if [ -L /usr/local/bin/volli ] && [ "$(/usr/bin/readlink /usr/local/bin/volli)" = ${quotedShimPath} ]; then :; ` +
+    "elif [ -e /usr/local/bin/volli ] || [ -L /usr/local/bin/volli ]; then echo 'Refusing to replace existing /usr/local/bin/volli' >&2; exit 1; " +
+    `else /bin/ln -sn ${quotedShimPath} /usr/local/bin/volli; fi`
+  );
 }
 
 /** Uses the standard macOS administrator prompt to expose the generated shim outside Volli. */
