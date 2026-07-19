@@ -40,6 +40,7 @@ export type VolliIpcChannel =
   | "volli:data-bootstrap"
   | "volli:legacy-import"
   | "volli:project-create"
+  | "volli:project-update"
   | "volli:project-remove"
   | "volli:project-reorder"
   | "volli:ticket-create"
@@ -77,6 +78,7 @@ export type VolliIpcEvent =
   | "volli:terminal-exit"
   | "volli:terminal-park-state"
   | "volli:ghostty-config-changed"
+  | "volli:data-changed"
   // Fired by the native View menu's zoom items. The renderer applies CSS zoom
   // to the content row (below the chrome band) rather than letting Electron
   // scale the whole page — see menu.ts for why the zoom roles are replaced.
@@ -87,6 +89,11 @@ export type VolliIpcEvent =
 
 /** Direction of a `volli:ui-zoom-command` event: step in/out one rung, or reset. */
 export type UiZoomCommand = "in" | "out" | "reset";
+
+/** Main→renderer invalidation after an agent-socket planning mutation. */
+export interface DataChangedEvent {
+  entity: "tickets";
+}
 
 /**
  * Result types below travel as typed discriminated unions rather than
@@ -146,6 +153,8 @@ export type LegacyImportResult = Result<{ data: BootstrapPayload; imported: numb
 
 /** `created: false` means an existing project at that path was selected instead of inserted. */
 export type ProjectCreateResult = Result<{ project: Project; created: boolean }>;
+
+export type ProjectUpdateResult = Result<{ project: Project }>;
 
 export type ProjectMutationResult = Result;
 

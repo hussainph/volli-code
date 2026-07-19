@@ -15,6 +15,8 @@ export interface Project {
   name: string;
   path: string;
   ticketPrefix: string;
+  /** Pinned automation base branch; null until detected or explicitly configured. */
+  baseBranch?: string | null;
   /** Index into {@link PROJECT_COLORS}, assigned round-robin at creation. */
   colorIndex: number;
   /** Rail order; dense, rewritten `0..n-1` whenever the rail is reordered. */
@@ -83,6 +85,28 @@ export function derivePrefix(name: string): string {
  */
 export function isValidPrefix(s: string): boolean {
   return /^[A-Z][A-Z0-9]{0,4}$/.test(s);
+}
+
+export type PrefixValidationResult = { ok: true } | { ok: false; error: string };
+
+/** Validates the workspace-global ticket-prefix invariant with a human-readable collision. */
+export function validateUniquePrefix(
+  prefix: string,
+  projects: readonly Pick<Project, "id" | "name" | "ticketPrefix">[],
+  excludingProjectId?: string,
+): PrefixValidationResult {
+  if (!isValidPrefix(prefix)) {
+    return {
+      ok: false,
+      error: "Ticket prefixes must be 1–5 uppercase letters or digits and start with a letter.",
+    };
+  }
+  const collision = projects.find(
+    (project) => project.id !== excludingProjectId && project.ticketPrefix === prefix,
+  );
+  return collision
+    ? { ok: false, error: `Ticket prefix "${prefix}" is already used by ${collision.name}.` }
+    : { ok: true };
 }
 
 /**

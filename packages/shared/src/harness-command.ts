@@ -6,6 +6,7 @@
  * line into the PTY (`src/main/pty.ts`).
  */
 import type { HarnessId } from "./ticket";
+import { getHarnessAdapter } from "./harness/core";
 
 /**
  * Wraps `input` as a single POSIX single-quoted zsh word so every shell
@@ -58,12 +59,6 @@ export function composeTicketPrompt(input: {
  */
 export function buildHarnessCommand(harnessId: HarnessId, prompt: string): string {
   const quoted = shellSingleQuote(prompt);
-  switch (harnessId) {
-    case "claude-code":
-      return `claude ${quoted}`;
-    case "codex":
-      return `codex ${quoted}`;
-    case "opencode":
-      return `opencode --prompt ${quoted}`;
-  }
+  const adapter = getHarnessAdapter(harnessId);
+  return [adapter.command, adapter.promptFlag, quoted].filter(Boolean).join(" ");
 }

@@ -12,6 +12,7 @@ interface ProjectRow {
   name: string;
   path: string;
   ticket_prefix: string;
+  base_branch: string | null;
   color_index: number;
   sort_order: number;
   row_version: number;
@@ -32,6 +33,7 @@ function mapProject(row: ProjectRow): Project {
     name: row.name,
     path: row.path,
     ticketPrefix: row.ticket_prefix,
+    baseBranch: row.base_branch,
     colorIndex: row.color_index,
     sortOrder: row.sort_order,
     createdAt: row.created_at,
@@ -61,6 +63,22 @@ export function getProjectById(db: Database.Database, id: string): Project | und
   return row ? mapProject(row) : undefined;
 }
 
+/** Updates the pinned automation base branch and returns the authoritative row. */
+export function updateProjectBaseBranch(
+  db: Database.Database,
+  id: string,
+  baseBranch: string | null,
+  now: number,
+): Project | undefined {
+  prepared(
+    db,
+    `UPDATE projects
+        SET base_branch = ?, row_version = row_version + 1, updated_at = ?
+      WHERE id = ?`,
+  ).run(baseBranch, now, id);
+  return getProjectById(db, id);
+}
+
 /** The `sortOrder` one past the current max (`-1` when the table is empty, so this returns `0`). */
 export function nextSortOrder(db: Database.Database): number {
   const row = prepared<[], { max: number | null }>(
@@ -74,13 +92,14 @@ export function nextSortOrder(db: Database.Database): number {
 export function insertProject(db: Database.Database, project: Project): void {
   prepared(
     db,
-    `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
-     VALUES (@id, @name, @path, @ticketPrefix, @colorIndex, @sortOrder, 1, @createdAt, @updatedAt)`,
+    `INSERT INTO projects (id, name, path, ticket_prefix, base_branch, color_index, sort_order, row_version, created_at, updated_at)
+     VALUES (@id, @name, @path, @ticketPrefix, @baseBranch, @colorIndex, @sortOrder, 1, @createdAt, @updatedAt)`,
   ).run({
     id: project.id,
     name: project.name,
     path: project.path,
     ticketPrefix: project.ticketPrefix,
+    baseBranch: project.baseBranch ?? null,
     colorIndex: project.colorIndex,
     sortOrder: project.sortOrder,
     createdAt: project.createdAt,

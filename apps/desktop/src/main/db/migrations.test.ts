@@ -115,13 +115,32 @@ function buildV5DbWithSession(dbPath: string): Database.Database {
   return db;
 }
 
+/** Builds a populated v6 db to exercise the independently-versioned execution preferences. */
+function buildV6DbWithTicket(dbPath: string): Database.Database {
+  const db = openRawDb(dbPath);
+  db.pragma("foreign_keys = ON");
+  for (const migration of MIGRATIONS.filter((m) => m.version <= 6)) {
+    db.exec(migration.sql);
+  }
+  db.pragma("user_version = 6");
+  db.prepare(
+    `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+       VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 1, 0, 0)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO tickets (id, project_id, ticket_number, title, body, status, priority, uses_worktree, position, row_version, created_at, updated_at)
+       VALUES ('t1', 'p1', 1, 'Ticket', '', 'todo', 'medium', 1, 0, 1, 0, 0)`,
+  ).run();
+  return db;
+}
+
 describe("migrate — fresh install", () => {
   it("applies every migration and lands on the latest user_version", () => {
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(6);
+    expect(db.pragma("user_version", { simple: true })).toBe(7);
     db.close();
   });
 
@@ -150,6 +169,7 @@ describe("migrate — fresh install", () => {
     migrate(db, dbPath);
 
     expect(columnNames(db, "tickets")).not.toContain("harness_id");
+    expect(columnNames(db, "tickets")).toContain("preferred_harness_id");
     expect(columnNames(db, "sessions")).toContain("harness_id");
     db.close();
   });
@@ -188,7 +208,7 @@ describe("migrate — 002 to 004 upgrade path", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(6);
+    expect(db.pragma("user_version", { simple: true })).toBe(7);
     const project = db.prepare("SELECT * FROM projects WHERE id = 'p1'").get() as {
       name: string;
     };
@@ -238,9 +258,9 @@ describe("migrate — 002 to 004 upgrade path", () => {
     migrate(db, dbPath);
     migrate(db, dbPath); // second call: nothing pending
 
-    expect(db.pragma("user_version", { simple: true })).toBe(6);
-    // No v6-backup should exist — the second migrate() call had nothing to apply.
-    expect(existsSync(`${dbPath}.backup-v6`)).toBe(false);
+    expect(db.pragma("user_version", { simple: true })).toBe(7);
+    // No v7-backup should exist — the second migrate() call had nothing to apply.
+    expect(existsSync(`${dbPath}.backup-v7`)).toBe(false);
     db.close();
   });
 });
@@ -252,7 +272,7 @@ describe("migrate — 004 to 005 upgrade path (ticket-number counter backfill)",
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(6);
+    expect(db.pragma("user_version", { simple: true })).toBe(7);
     const projects = db
       .prepare("SELECT id, next_ticket_number FROM projects ORDER BY id")
       .all() as { id: string; next_ticket_number: number }[];
@@ -305,11 +325,30 @@ describe("migrate — 005 to 006 upgrade path (truthful session metadata)", () =
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(6);
+    expect(db.pragma("user_version", { simple: true })).toBe(7);
     expect(db.prepare("SELECT launch_kind, placement FROM sessions WHERE id = 's1'").get()).toEqual(
       { launch_kind: "unknown", placement: "unknown" },
     );
     expect(existsSync(`${dbPath}.backup-v5`)).toBe(true);
+    db.close();
+  });
+});
+
+describe("migrate — 006 to 007 upgrade path (execution preferences)", () => {
+  it("adds independent ticket harness and project base-branch defaults", () => {
+    const dbPath = tempDbPath();
+    const db = buildV6DbWithTicket(dbPath);
+
+    migrate(db, dbPath);
+
+    expect(db.pragma("user_version", { simple: true })).toBe(7);
+    expect(db.prepare("SELECT preferred_harness_id FROM tickets WHERE id = 't1'").get()).toEqual({
+      preferred_harness_id: "claude-code",
+    });
+    expect(db.prepare("SELECT base_branch FROM projects WHERE id = 'p1'").get()).toEqual({
+      base_branch: null,
+    });
+    expect(existsSync(`${dbPath}.backup-v6`)).toBe(true);
     db.close();
   });
 });

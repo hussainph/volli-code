@@ -9,12 +9,14 @@ import type {
   BootstrapResult,
   CreateTerminalSessionRequest,
   CreateTerminalSessionResult,
+  DataChangedEvent,
   FileChangedEvent,
   FileIndexResult,
   FileReadResult,
   FileWriteResult,
   GhosttyAppearancePayload,
   GhosttyConfigResult,
+  HarnessId,
   LabelResult,
   LegacyImportRequest,
   LegacyImportResult,
@@ -22,6 +24,7 @@ import type {
   PickFolderResult,
   ProjectCreateResult,
   ProjectMutationResult,
+  ProjectUpdateResult,
   Result,
   RevealResult,
   SessionRenameResult,
@@ -45,6 +48,9 @@ import type {
 
 // Minimal typed API surface exposed to the renderer.
 const api = {
+  app: {
+    launchedByCli: process.env["VOLLI_LAUNCHED_BY_CLI"] === "1",
+  },
   versions: {
     electron: process.versions.electron,
     chrome: process.versions.chrome,
@@ -57,6 +63,14 @@ const api = {
     /** One-time localStorage → SQLite import; a no-op (returns current state) once the db is non-empty. */
     importLegacy: (req: LegacyImportRequest): Promise<LegacyImportResult> =>
       ipcRenderer.invoke("volli:legacy-import" satisfies VolliIpcChannel, req),
+    /** Subscribes to invalidations produced by socket-originated planning mutations. */
+    onChanged: (callback: (event: DataChangedEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: DataChangedEvent) =>
+        callback(payload);
+      ipcRenderer.on("volli:data-changed" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:data-changed" satisfies VolliIpcEvent, listener);
+    },
   },
   projects: {
     pickFolder: (): Promise<PickFolderResult> =>
@@ -66,6 +80,9 @@ const api = {
     /** Creates a project row, or (`created: false`) returns the existing one already tracked at `path`. */
     create: (input: { path: string; name: string }): Promise<ProjectCreateResult> =>
       ipcRenderer.invoke("volli:project-create" satisfies VolliIpcChannel, input),
+    /** Updates the project's pinned automation base branch. */
+    update: (input: { id: string; baseBranch: string | null }): Promise<ProjectUpdateResult> =>
+      ipcRenderer.invoke("volli:project-update" satisfies VolliIpcChannel, input),
     /** Deletes a project; cascades its tickets/labels/events in SQLite. */
     remove: (id: string): Promise<ProjectMutationResult> =>
       ipcRenderer.invoke("volli:project-remove" satisfies VolliIpcChannel, id),
@@ -85,6 +102,8 @@ const api = {
       labels?: string[];
       /** Whether the ticket boots its agent in an isolated worktree; defaults to `true`. */
       usesWorktree?: boolean;
+      /** The ticket's persisted default harness (set on kickoff); defaults to the DB default. */
+      preferredHarnessId?: HarnessId;
     }): Promise<TicketResult> =>
       ipcRenderer.invoke("volli:ticket-create" satisfies VolliIpcChannel, input),
     /** Runs the shared board move + persists it; resolves with the project's full authoritative ticket list. */

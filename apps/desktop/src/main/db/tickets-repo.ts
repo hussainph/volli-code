@@ -25,6 +25,7 @@ export interface TicketRow {
   status: string;
   priority: string;
   uses_worktree: number;
+  preferred_harness_id: string;
   position: number;
   row_version: number;
   created_at: number;
@@ -67,6 +68,7 @@ function mapTicket(row: TicketRow, labels: string[]): Ticket {
     priority: row.priority as TicketPriority,
     labels,
     usesWorktree: row.uses_worktree !== 0,
+    preferredHarnessId: row.preferred_harness_id as Ticket["preferredHarnessId"],
     order: row.position,
     worktreePath: row.worktree_path,
     branch: row.branch,
@@ -291,9 +293,9 @@ export function insertTicket(db: Database.Database, ticket: Ticket): void {
   prepared(
     db,
     `INSERT INTO tickets
-       (id, project_id, ticket_number, title, body, status, priority, uses_worktree, position, worktree_path, branch, base_branch, row_version, created_at, updated_at)
+       (id, project_id, ticket_number, title, body, status, priority, uses_worktree, preferred_harness_id, position, worktree_path, branch, base_branch, row_version, created_at, updated_at)
      VALUES
-       (@id, @projectId, @ticketNumber, @title, @body, @status, @priority, @usesWorktree, @position, @worktreePath, @branch, @baseBranch, 1, @createdAt, @updatedAt)`,
+       (@id, @projectId, @ticketNumber, @title, @body, @status, @priority, @usesWorktree, @preferredHarnessId, @position, @worktreePath, @branch, @baseBranch, 1, @createdAt, @updatedAt)`,
   ).run({
     id: ticket.id,
     projectId: ticket.projectId,
@@ -303,6 +305,7 @@ export function insertTicket(db: Database.Database, ticket: Ticket): void {
     status: ticket.status,
     priority: ticket.priority,
     usesWorktree: ticket.usesWorktree ? 1 : 0,
+    preferredHarnessId: ticket.preferredHarnessId,
     position: ticket.order,
     worktreePath: ticket.worktreePath,
     branch: ticket.branch,
@@ -345,6 +348,7 @@ export interface TicketFieldUpdate {
   worktreePath?: string | null;
   branch?: string | null;
   baseBranch?: string | null;
+  preferredHarnessId?: Ticket["preferredHarnessId"];
 }
 
 /**
@@ -379,6 +383,10 @@ export function updateTicketFields(
   if (fields.baseBranch !== undefined) {
     sets.push("base_branch = ?");
     params.push(fields.baseBranch);
+  }
+  if (fields.preferredHarnessId !== undefined) {
+    sets.push("preferred_harness_id = ?");
+    params.push(fields.preferredHarnessId);
   }
   if (sets.length === 0) return;
   sets.push("row_version = row_version + 1", "updated_at = ?");

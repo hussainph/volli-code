@@ -18,6 +18,7 @@ import {
   setTicketPriority as setTicketPriorityOp,
   type ArchivedTicket,
   type ArchivedTicketsResult,
+  type HarnessId,
   type Label,
   type LabelResult,
   type Result,
@@ -47,6 +48,8 @@ export interface BoardGateway {
     labels?: string[];
     /** Whether the ticket boots its agent in an isolated worktree. Defaults to `true`. */
     usesWorktree?: boolean;
+    /** The ticket's persisted default harness (kickoff choice). Defaults to the DB default. */
+    preferredHarnessId?: HarnessId;
   }): Promise<TicketResult>;
   moveTicket(input: {
     projectId: string;
@@ -98,6 +101,17 @@ interface BoardState {
   filterByProject: Record<string, TicketFilter>;
   /** The selected card per project. Session-only — never persisted; see module doc. */
   selectedByProject: Record<string, string | null>;
+  /**
+   * Monotonic tick bumped every time server-owned planning data is refreshed
+   * after a socket-originated mutation (`refreshPlanningData`, see lib/boot.ts).
+   * Per-ticket surfaces that fetch data NOT carried in `ticketsByProject` — the
+   * Activity feed's events/comments — subscribe to this and refetch when it
+   * changes, so an agent's `volli ticket comment` becomes visible in an already
+   * open ticket without a close/reopen. Session-only; resets on relaunch.
+   */
+  planningDataVersion: number;
+  /** Bumps {@link BoardState.planningDataVersion} — called after a socket-originated refresh rehydrates the planning stores. */
+  bumpPlanningDataVersion(): void;
   /** Seeds tickets/labels from the boot payload — the ONE place state is set wholesale outside a mutation. */
   hydrate(
     ticketsByProject: Record<string, Ticket[]>,
@@ -137,6 +151,7 @@ interface BoardState {
       body?: string;
       labels?: string[];
       usesWorktree?: boolean;
+      preferredHarnessId?: HarnessId;
     },
   ): Promise<Ticket | null>;
   setTicketPriority(projectId: string, ticketId: string, priority: TicketPriority): Promise<void>;
@@ -366,6 +381,11 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
       archivedByProject: {},
       filterByProject: {},
       selectedByProject: {},
+      planningDataVersion: 0,
+
+      bumpPlanningDataVersion() {
+        set({ planningDataVersion: get().planningDataVersion + 1 });
+      },
 
       hydrate(ticketsByProject, labelsByProject) {
         set({ ticketsByProject, labelsByProject });
@@ -395,6 +415,7 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
               body: options?.body,
               labels: options?.labels,
               usesWorktree: options?.usesWorktree,
+              preferredHarnessId: options?.preferredHarnessId,
             }),
         );
         if (!result) return null;

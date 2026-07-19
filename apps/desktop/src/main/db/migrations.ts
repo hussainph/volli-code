@@ -213,6 +213,18 @@ ALTER TABLE sessions ADD COLUMN placement TEXT NOT NULL DEFAULT 'unknown'
   CHECK (placement IN ('tab','split','unknown'));
 `;
 
+/**
+ * Migration 007: execution preferences from the agent-surface contract. The
+ * preferred harness is distinct from durable session identity: it chooses a
+ * future kickoff default, while each actual run still records its harness on
+ * `sessions`. A nullable project base branch pins automation independently of
+ * whichever branch the root checkout happens to have active.
+ */
+const MIGRATION_007_EXECUTION_PREFERENCES = `
+ALTER TABLE tickets ADD COLUMN preferred_harness_id TEXT NOT NULL DEFAULT 'claude-code';
+ALTER TABLE projects ADD COLUMN base_branch TEXT;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -235,6 +247,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 6,
     name: "sessions launch-kind and placement metadata",
     sql: MIGRATION_006_SESSION_METADATA,
+  },
+  {
+    version: 7,
+    name: "ticket harness and project base-branch execution preferences",
+    sql: MIGRATION_007_EXECUTION_PREFERENCES,
   },
 ];
 

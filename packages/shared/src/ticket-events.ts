@@ -12,6 +12,7 @@ export const TICKET_EVENT_KINDS = [
   "created",
   "status_changed",
   "priority_changed",
+  "harness_changed",
   "retitled",
   "body_edited",
   "labels_changed",
@@ -33,6 +34,11 @@ export const TICKET_EVENT_KINDS = [
   // automated later — `from`/`to` snapshot the ticket's worktree identity
   // fields (`ticket.ts`) around the change.
   "worktree_changed",
+  // Session lifecycle signal (`session done|blocked`, volli CLI): the agent
+  // reporting its own outcome on the ticket it's working. Written with an
+  // `automation` actor; `reason` becomes the Needs Review badge when the loop
+  // milestone lands.
+  "session_signal",
 ] as const;
 
 export type TicketEventKind = (typeof TICKET_EVENT_KINDS)[number];
@@ -51,6 +57,7 @@ export type TicketEventPayload =
   | { kind: "created"; status: TicketStatus; title: string }
   | { kind: "status_changed"; from: TicketStatus; to: TicketStatus }
   | { kind: "priority_changed"; from: TicketPriority; to: TicketPriority }
+  | { kind: "harness_changed"; from: HarnessId; to: HarnessId }
   | { kind: "retitled"; from: string; to: string }
   | { kind: "body_edited" }
   | { kind: "labels_changed"; added: string[]; removed: string[] }
@@ -69,12 +76,26 @@ export type TicketEventPayload =
       harnessId?: HarnessId;
     }
   | { kind: "session_ended"; sessionId: string }
-  | { kind: "worktree_changed"; from: WorktreeIdentity; to: WorktreeIdentity };
+  | { kind: "worktree_changed"; from: WorktreeIdentity; to: WorktreeIdentity }
+  | { kind: "session_signal"; signal: "done" | "blocked"; reason: string | null };
+
+export type TicketEventActorKind = "user" | "session" | "automation";
+
+export interface TicketEventActorContext {
+  sessionId: string;
+  ticketId: string | null;
+}
+
+export type TicketEventActor =
+  | { kind: "user" }
+  | ({ kind: "session" | "automation" } & TicketEventActorContext);
 
 export interface TicketEvent {
   id: string;
   ticketId: string;
-  actor: "user";
+  actor: TicketEventActorKind;
+  /** Present for session/automation actors; omitted by legacy callers constructing fixtures. */
+  actorContext?: TicketEventActorContext | null;
   /** Epoch milliseconds. */
   createdAt: number;
   payload: TicketEventPayload;

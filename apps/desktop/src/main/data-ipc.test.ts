@@ -1,5 +1,6 @@
 import type {
   BootstrapResult,
+  ProjectCreateResult,
   Result,
   SessionRenameResult,
   SessionsResult,
@@ -77,6 +78,63 @@ function archiveTicket(ticketId: string): void {
   if (!result.ok) throw new Error(result.error);
 }
 
+describe("volli:project-create — workspace-unique ticket prefixes", () => {
+  it("pins the repository's detected base branch when a project is added", () => {
+    handlers.clear();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { detectBaseBranch: (path) => (path === "/repo/volli" ? "trunk" : null) },
+    );
+
+    const result = invoke<ProjectCreateResult>("volli:project-create", {
+      path: "/repo/volli",
+      name: "Volli Code",
+    });
+
+    expect(result).toMatchObject({ ok: true, project: { baseBranch: "trunk" } });
+  });
+
+  it("surfaces the colliding project instead of creating an ambiguous display-id namespace", () => {
+    const first = invoke<{ ok: boolean; error?: string }>("volli:project-create", {
+      path: "/repo/volli",
+      name: "Volli Code",
+    });
+    const second = invoke<{ ok: boolean; error?: string }>("volli:project-create", {
+      path: "/repo/compiler",
+      name: "Visual Compiler",
+    });
+
+    expect(first.ok).toBe(true);
+    expect(second).toEqual({
+      ok: false,
+      error: 'Ticket prefix "VC" is already used by Volli Code.',
+    });
+  });
+});
+
+describe("volli:project-update — pinned base branch", () => {
+  it("persists an editable base branch and returns the updated project", () => {
+    const projectId = createProject();
+
+    const result = invoke<{ ok: boolean; project?: { baseBranch: string | null } }>(
+      "volli:project-update",
+      { id: projectId, baseBranch: "release/next" },
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: true,
+        project: expect.objectContaining({ baseBranch: "release/next" }),
+      }),
+    );
+    const bootstrap = invoke<BootstrapResult>("volli:data-bootstrap");
+    expect(bootstrap).toMatchObject({
+      ok: true,
+      data: { projects: [{ id: projectId, baseBranch: "release/next" }] },
+    });
+  });
+});
+
 describe("volli:ticket-create — ticket numbers never recycle across a hard delete (#35)", () => {
   it("skips a hard-deleted ticket's number instead of reusing it", () => {
     const projectId = createProject();
@@ -147,6 +205,35 @@ describe("volli:ticket-create — body, labels, usesWorktree", () => {
     expect(events.events.map((e) => e.payload.kind)).toEqual(["created"]);
   });
 
+  it("persists and hydrates a kickoff-chosen preferredHarnessId, defaulting to claude-code when omitted", () => {
+    const projectId = createProject();
+    const chosen = invoke<TicketResult>("volli:ticket-create", {
+      projectId,
+      status: "doing",
+      title: "Kicked off with codex",
+      preferredHarnessId: "codex",
+    });
+    if (!chosen.ok) throw new Error(chosen.error);
+    expect(chosen.ticket.preferredHarnessId).toBe("codex");
+
+    const defaulted = invoke<TicketResult>("volli:ticket-create", {
+      projectId,
+      status: "backlog",
+      title: "No kickoff",
+    });
+    if (!defaulted.ok) throw new Error(defaulted.error);
+    expect(defaulted.ticket.preferredHarnessId).toBe("claude-code");
+
+    // Both survive the boot bootstrap snapshot identically.
+    const boot = invoke<BootstrapResult>("volli:data-bootstrap");
+    if (!boot.ok) throw new Error(boot.error);
+    const tickets = boot.data.ticketsByProject[projectId] ?? [];
+    expect(tickets.find((t) => t.id === chosen.ticket.id)?.preferredHarnessId).toBe("codex");
+    expect(tickets.find((t) => t.id === defaulted.ticket.id)?.preferredHarnessId).toBe(
+      "claude-code",
+    );
+  });
+
   it("produces the same shared, name-deduped label rows the setLabels path would", () => {
     const projectId = createProject();
     // One ticket gets labels at creation; another gets the same labels via setLabels.
@@ -209,6 +296,7 @@ describe("volli:ticket-create — body, labels, usesWorktree", () => {
     ["a labels array with a non-string element", { labels: ["ok", 3] }],
     ["a non-array labels", { labels: "bug" }],
     ["a non-boolean usesWorktree", { usesWorktree: "yes" }],
+    ["an unknown preferredHarnessId", { preferredHarnessId: "not-a-harness" }],
   ])("rejects %s", (_label, extra) => {
     const projectId = createProject();
     const result = invoke<TicketResult>("volli:ticket-create", {

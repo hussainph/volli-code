@@ -51,6 +51,27 @@ export interface BootStorage {
 
 export type BootResult = { ok: true } | { ok: false; error: string };
 
+/** Rehydrates only server-owned planning data after a socket-originated mutation. */
+export async function refreshPlanningData(
+  gateway: Pick<BootGateway, "bootstrap"> = defaultGateway,
+): Promise<BootResult> {
+  const result = await gateway.bootstrap();
+  if (!result.ok) return result;
+  const { projects, ticketsByProject, labelsByProject } = result.data;
+  const previousSelection = useProjectsStore.getState().selectedProjectId;
+  const selectedProjectId = projects.some(({ id }) => id === previousSelection)
+    ? previousSelection
+    : (projects[0]?.id ?? null);
+  useProjectsStore.getState().hydrate(projects, selectedProjectId);
+  useBoardStore.getState().hydrate(ticketsByProject, labelsByProject);
+  // Signal per-ticket surfaces (the Activity feed) to refetch data not carried
+  // in the board slices — events/comments — so a socket-originated comment
+  // shows up in an already-open ticket. Bumped only on refresh, never at boot
+  // (the feed mounts fresh there).
+  useBoardStore.getState().bumpPlanningDataVersion();
+  return { ok: true };
+}
+
 /** Unwraps a zustand-persist envelope (`{state,version}`) into its `state`, or `undefined` for anything else. */
 function unwrapPersistEnvelope(raw: string): unknown {
   try {

@@ -13,7 +13,7 @@ The opaque, permanent record identity of a ticket (a UUID). Never shown to users
 _Avoid_: using `"VC-12"`-style strings as identity
 
 **Display ID**:
-The human-facing ticket handle, `<PREFIX>-<n>` (e.g. `VC-12`), derived from the project's ticket prefix and the ticket number. Appears in the UI and in worktree branch names; presentation only.
+The workspace-unique human handle `<PREFIX>-<n>` (for example `VC-12`), used by the UI, branches, and `volli` CLI. It is derived presentation, never record identity.
 _Avoid_: id, ticket id (when meaning the handle)
 
 **Label**:
@@ -31,3 +31,11 @@ The one terminal session per ticket whose lifecycle drives board automation; oth
 
 **Scratch session**:
 A ticket-less terminal session in a project's Sessions surface — main checkout, no worktree, no board involvement — still recorded in session history.
+
+**Actor**:
+Who a ticket event is attributed to: `user`, `session`, or `automation`. The app derives this from how the mutation arrived; callers never self-declare it.
+_Avoid_: agent (as an actor value — the app cannot know an agent typed it, only which session it came from)
+
+**Deliberate move**:
+A human drag or explicit `volli` move, as opposed to a lifecycle-driven auto-move. It carries the same semantics regardless of actor and wins over trailing lifecycle events.
+_Avoid_: manual move (too narrow — implies human-only)

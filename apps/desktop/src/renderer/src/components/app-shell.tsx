@@ -9,6 +9,7 @@ import { SidebarResizeHandle } from "@renderer/components/sidebar/sidebar-resize
 import { Sidebar, SidebarInset, SidebarProvider } from "@renderer/components/ui/sidebar";
 import { Toaster } from "@renderer/components/ui/sonner";
 import { takeBootNotice } from "@renderer/lib/boot-notice";
+import { takeCliLaunchNotice } from "@renderer/lib/cli-launch-notice";
 import { toastError } from "@renderer/lib/toast";
 import { useNavHistory } from "@renderer/hooks/use-nav-history";
 import { useNewTicketShortcut } from "@renderer/hooks/use-new-ticket-shortcut";
@@ -17,6 +18,7 @@ import { cn } from "@renderer/lib/utils";
 import { errorMessage } from "@volli/shared";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
+import { toast } from "sonner";
 
 const WORKSPACE_RAIL_WIDTH = 60;
 const COLLAPSED_NAV_WIDTH = 48;
@@ -38,6 +40,7 @@ export function AppShell() {
   useProjectRootsSync();
   useZoomCommands();
   useBootNotice();
+  useCliLaunchNotice();
   const sidebarWidth = useUiStore((state) => state.sidebarWidth);
   const workspaceRailHidden = useUiStore((state) => state.workspaceRailHidden);
   const uiScale = useUiStore((state) => state.uiScale);
@@ -147,6 +150,13 @@ function useBootNotice() {
   React.useEffect(() => {
     const notice = takeBootNotice();
     if (notice !== null) toastError(notice);
+  }, []);
+}
+
+function useCliLaunchNotice() {
+  React.useEffect(() => {
+    const notice = takeCliLaunchNotice(window.api.app.launchedByCli);
+    if (notice !== null) toast.info(notice);
   }, []);
 }
 

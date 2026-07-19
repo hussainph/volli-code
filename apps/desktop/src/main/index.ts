@@ -1,9 +1,15 @@
-import { app, BrowserWindow, session, shell } from "electron";
+import { app, BrowserWindow, dialog, Notification, session, shell } from "electron";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { errorMessage, ticketBranchName } from "@volli/shared";
+import {
+  diffManagedContent,
+  errorMessage,
+  MUTATING_AGENT_COMMANDS,
+  ticketBranchName,
+} from "@volli/shared";
 import type { VolliIpcEvent } from "@volli/shared";
+import type { ManagedConflict } from "./harness-install";
 import { isInternalNavigationTarget } from "./navigation";
 import type { DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
@@ -15,6 +21,18 @@ import { registerAppMenu } from "./menu";
 import { confirmDestructiveClose, registerTerminalIpcHandlers } from "./pty";
 import type { PtyManager } from "./pty";
 import { registerFileIpcHandlers } from "./volli-fs";
+import { createAgentCommandService } from "./agent-commands";
+import { ensureVolliCliShim, volliRuntimePaths } from "./agent-runtime";
+import { startAgentSocket, type AgentSocketServer } from "./agent-socket";
+import {
+  installDetectedHarnessSkills,
+  installGlobalCliLink,
+  removeGlobalCliLinkIfOurs,
+  runAgentToolsConsent,
+  uninstallAllHarnessSkills,
+  type AgentToolsConsentStatus,
+} from "./agent-tools";
+import { getAllAppState, setAppState } from "./db/app-state-repo";
 
 // Fixes dev and the packaged app to one shared Electron `userData` dir (by
 // default they diverge: packaged apps use the productName, dev falls back to
@@ -27,6 +45,15 @@ import { registerFileIpcHandlers } from "./volli-fs";
 app.setName("Volli Code");
 
 const isDev = !app.isPackaged;
+let agentSocket: AgentSocketServer | undefined;
+
+function broadcastDataChanged(): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send("volli:data-changed" satisfies VolliIpcEvent, {
+      entity: "tickets",
+    });
+  }
+}
 
 // Dev gets its OWN userData directory. dev and packaged otherwise share one
 // (app.setName above unifies them so the SQLite db survives across launches) —
@@ -74,7 +101,7 @@ function openExternal(target: string): void {
   }
 }
 
-function createWindow(ptyManager: PtyManager): void {
+function createWindow(ptyManager: PtyManager): BrowserWindow {
   const mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -176,9 +203,10 @@ function createWindow(ptyManager: PtyManager): void {
   } else {
     mainWindow.loadFile(PACKAGED_RENDERER_ENTRY);
   }
+  return mainWindow;
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (isDev) {
     // Dev smoke-check that vp pack bundled the workspace TS source (@volli/shared)
     // into main.cjs via deps.alwaysBundle rather than leaving an unresolved
@@ -224,13 +252,14 @@ app.whenReady().then(() => {
 
   // Open (creating + migrating if needed) the SQLite db before the window
   // exists, so the renderer's boot-time volli:data-bootstrap call always has
-  // somewhere to land. VOLLI_DB_PATH overrides the path (dev/tests/e2e);
+  // somewhere to land. VOLLI_DB_PATH overrides the path in dev/tests/e2e;
   // otherwise it's <userData>/volli.db, made possible sharing one userData
   // dir across dev/packaged by the app.setName call above. Failure here must
   // never crash main or leave invoke() hanging: register every data IPC
   // channel with a typed { ok: false, error } response instead, so the
   // renderer can surface the failure like any other failed mutation.
-  const dbPath = process.env["VOLLI_DB_PATH"] ?? join(app.getPath("userData"), "volli.db");
+  const dbPath =
+    (isDev ? process.env["VOLLI_DB_PATH"] : undefined) ?? join(app.getPath("userData"), "volli.db");
   let dbHandle: DbHandle;
   try {
     mkdirSync(dirname(dbPath), { recursive: true });
@@ -253,7 +282,6 @@ app.whenReady().then(() => {
   // renderer-driven CSS zoom (see menu.ts for the rationale). Registered here
   // (rather than up with the other pre-window setup) because File > Export
   // Database needs `dbHandle`, which doesn't exist yet at that point.
-  registerAppMenu(dbHandle);
   registerDataIpcHandlers(dbHandle);
   // Global-artifacts + @file fs plumbing (file index/read/write, artifact
   // create, reveal, per-tab watch); same degraded-DB stance as
@@ -263,9 +291,237 @@ app.whenReady().then(() => {
   // before-quit teardown (kills all PTYs, gated on busy sessions); needs the
   // db, so it registers here. The returned manager feeds each window's own
   // destructive-close gate.
-  const ptyManager = registerTerminalIpcHandlers(dbHandle);
+  const runtimePaths = volliRuntimePaths({
+    userDataPath: app.getPath("userData"),
+    appPath: app.getAppPath(),
+    resourcesPath: process.resourcesPath,
+    isPackaged: app.isPackaged,
+  });
+  // Create the window first so first paint isn't blocked on shim generation or
+  // the socket bind; both start right after, still awaited inside whenReady with
+  // the same failure semantics (logged, non-fatal). registerTerminalIpcHandlers
+  // needs only runtimePaths (a pure join), so it can precede the window it feeds.
+  const ptyManager = registerTerminalIpcHandlers(dbHandle, runtimePaths);
+  const mainWindow = createWindow(ptyManager);
 
-  createWindow(ptyManager);
+  let shimPath = join(runtimePaths.binDir, "volli");
+  try {
+    shimPath = await ensureVolliCliShim({
+      binDir: runtimePaths.binDir,
+      electronPath: process.execPath,
+      bundlePath: runtimePaths.cliBundlePath,
+      socketPath: runtimePaths.socketPath,
+      appEntry: app.isPackaged ? null : join(app.getAppPath(), "dist-electron/main.cjs"),
+    });
+  } catch (error) {
+    console.error("[volli] failed to generate CLI shim:", errorMessage(error));
+  }
+
+  const agentToolsConsentKey = "volli:agent-tools-consent";
+
+  // The skill installer targets the real OS home via app.getPath("home"), which
+  // on macOS ignores $HOME — so a
+  // headless installer-idempotency e2e cannot redirect it into a throwaway
+  // profile. VOLLI_AGENT_HOME overrides the install/refresh/uninstall home for
+  // exactly that. Unset in production, so the real home is used unchanged.
+  const agentToolsHome =
+    (isDev ? process.env["VOLLI_AGENT_HOME"] : undefined) ?? app.getPath("home");
+
+  // Renders hand-edited managed files that were preserved (never overwritten)
+  // as path + a readable unified diff in the dialog detail. Shared by install,
+  // the on-update refresh, and uninstall.
+  const showSkillConflictWarning = async (conflicts: readonly ManagedConflict[]): Promise<void> => {
+    const detail = conflicts
+      .map(
+        (conflict) =>
+          `${conflict.path}\n${diffManagedContent(conflict.currentContent, conflict.desiredContent)}`,
+      )
+      .join("\n\n");
+    await dialog.showMessageBox(mainWindow, {
+      type: "warning",
+      message: "Some Volli skill files were edited and were left untouched.",
+      detail,
+    });
+  };
+
+  const installAgentTools = async (): Promise<void> => {
+    // Each step names itself in any thrown error so the failure dialog says what
+    // broke (skill files vs. the /usr/local/bin symlink) rather than a bare
+    // osascript/fs message. A throw leaves consent un-persisted on purpose, so a
+    // transient failure re-offers next boot instead of latching a broken state.
+    let result;
+    try {
+      result = await installDetectedHarnessSkills({
+        home: agentToolsHome,
+        pathValue: process.env["PATH"] ?? "",
+      });
+    } catch (error) {
+      dialog.showErrorBox(
+        "Agent Tools Installation Failed",
+        `Installing the agent skill pack failed: ${errorMessage(error)}`,
+      );
+      throw error;
+    }
+    // The /usr/local/bin symlink needs an administrator (osascript) prompt that
+    // no headless e2e can answer,
+    // so when a test pre-answers consent via VOLLI_AGENT_CONSENT_CHOICE the link
+    // step is skipped. Unset in production, so the admin prompt runs unchanged.
+    if (!isDev || process.env["VOLLI_AGENT_CONSENT_CHOICE"] === undefined) {
+      try {
+        await installGlobalCliLink(shimPath);
+      } catch (error) {
+        dialog.showErrorBox(
+          "Agent Tools Installation Failed",
+          `Linking the volli CLI into /usr/local/bin failed: ${errorMessage(error)}`,
+        );
+        throw error;
+      }
+    }
+    if (result.conflicts.length > 0) {
+      await showSkillConflictWarning(result.conflicts);
+    }
+  };
+
+  // Menu action: confirm, remove every harness's managed files (hand-edited
+  // ones survive via the uninstall hash guard), drop the /usr/local/bin link
+  // only if it still points at our shim, then reset consent to null so the
+  // first-launch offer returns. Every failure surfaces its own dialog.
+  const uninstallAgentTools = async (): Promise<void> => {
+    const confirm = await dialog.showMessageBox(mainWindow, {
+      type: "warning",
+      message: "Remove the Volli CLI and agent skills?",
+      detail:
+        "This removes the bundled skill pack and the /usr/local/bin/volli link. Files you edited yourself are left in place.",
+      buttons: ["Remove", "Cancel"],
+      defaultId: 1,
+      cancelId: 1,
+    });
+    if (confirm.response !== 0) return;
+
+    let removal;
+    try {
+      removal = await uninstallAllHarnessSkills({ home: agentToolsHome });
+    } catch (error) {
+      dialog.showErrorBox(
+        "Agent Tools Removal Failed",
+        `Removing the agent skill pack failed: ${errorMessage(error)}`,
+      );
+      return;
+    }
+    try {
+      await removeGlobalCliLinkIfOurs(shimPath);
+    } catch (error) {
+      dialog.showErrorBox(
+        "Agent Tools Removal Failed",
+        `Removing the /usr/local/bin/volli link failed: ${errorMessage(error)}`,
+      );
+      return;
+    }
+    if (dbHandle.ok) {
+      try {
+        setAppState(dbHandle.db, agentToolsConsentKey, JSON.stringify(null), Date.now());
+      } catch (error) {
+        dialog.showErrorBox("Agent Tools Removal Failed", errorMessage(error));
+        return;
+      }
+    }
+    const preservedNote =
+      removal.preserved.length > 0
+        ? `\n\nLeft in place because you edited them:\n${removal.preserved.join("\n")}`
+        : "";
+    await dialog.showMessageBox(mainWindow, {
+      type: "info",
+      message: "Volli CLI and agent skills removed.",
+      detail: `Removed ${removal.removed.length} managed item(s).${preservedNote}`,
+    });
+  };
+
+  registerAppMenu(dbHandle, { installAgentTools, uninstallAgentTools });
+
+  try {
+    const execute = dbHandle.ok
+      ? createAgentCommandService({
+          db: dbHandle.db,
+          appVersion: app.getVersion(),
+          observeSession: (sessionId, lines) => ptyManager.peek(sessionId, lines),
+          notify: (title, message) => new Notification({ title, body: message }).show(),
+        }).execute
+      : async () =>
+          ({
+            v: 1,
+            ok: false,
+            error: { code: "DB_UNAVAILABLE", message: dbHandle.error },
+          }) as const;
+    agentSocket = await startAgentSocket({
+      socketPath: runtimePaths.socketPath,
+      execute: async (request) => {
+        const response = await execute(request);
+        if (response.ok && MUTATING_AGENT_COMMANDS.includes(request.cmd)) {
+          broadcastDataChanged();
+        }
+        return response;
+      },
+    });
+  } catch (error) {
+    console.error("[volli] failed to start agent socket:", errorMessage(error));
+  }
+
+  if (dbHandle.ok) {
+    const consentKey = agentToolsConsentKey;
+    const stored = getAllAppState(dbHandle.db)[consentKey];
+    const current: AgentToolsConsentStatus | null =
+      stored === '"installed"' ? "installed" : stored === '"deferred"' ? "deferred" : null;
+    if (current === "installed") {
+      // Re-run the hash-guarded, idempotent skill installer on app updates so
+      // managed files track the shipped version —
+      // byte-identical files skip, user-edited ones conflict and are preserved.
+      // The one-time /usr/local/bin symlink is deliberately NOT re-run here: the
+      // shim it points at is already regenerated every boot, and re-linking would
+      // resurface an admin prompt. Fully non-blocking and swallowed (logged) so a
+      // failed refresh never blocks boot or spams dialogs; only a genuine
+      // conflict warns.
+      void installDetectedHarnessSkills({
+        home: agentToolsHome,
+        pathValue: process.env["PATH"] ?? "",
+      })
+        .then(async (result) => {
+          if (result.conflicts.length > 0) await showSkillConflictWarning(result.conflicts);
+        })
+        .catch((error: unknown) => {
+          console.error("[volli] agent skill refresh failed:", errorMessage(error));
+        });
+    }
+    try {
+      await runAgentToolsConsent({
+        current,
+        prompt: async () => {
+          // A headless e2e cannot click a native dialog, and this prompt fires
+          // during boot before a
+          // Playwright client can patch dialog.showMessageBox, so
+          // VOLLI_AGENT_CONSENT_CHOICE pre-answers it. Honored only when set to
+          // "install"/"defer"; unset in production, so the dialog shows as before.
+          const preAnswer = isDev ? process.env["VOLLI_AGENT_CONSENT_CHOICE"] : undefined;
+          if (preAnswer === "install" || preAnswer === "defer") return preAnswer;
+          const choice = await dialog.showMessageBox(mainWindow, {
+            type: "question",
+            message: "Install the Volli CLI and agent skills?",
+            detail:
+              "Volli will expose its CLI in /usr/local/bin and install the bundled skill only for detected agent harnesses. You can do this later from the File menu.",
+            buttons: ["Install", "Not Now"],
+            defaultId: 0,
+            cancelId: 1,
+          });
+          return choice.response === 0 ? "install" : "defer";
+        },
+        install: installAgentTools,
+        persist: async (status) => {
+          setAppState(dbHandle.db, consentKey, JSON.stringify(status), Date.now());
+        },
+      });
+    } catch {
+      // installAgentTools already surfaced the actionable failure.
+    }
+  }
 
   app.on("activate", () => {
     // On macOS it's common to re-create a window when the dock icon is
@@ -282,4 +538,11 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit();
   }
+});
+
+app.on("before-quit", () => {
+  void agentSocket?.close().catch((error: unknown) => {
+    console.error("[volli] failed to close agent socket:", errorMessage(error));
+  });
+  agentSocket = undefined;
 });

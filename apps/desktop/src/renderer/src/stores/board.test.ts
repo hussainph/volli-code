@@ -28,6 +28,7 @@ function ticket(overrides: Partial<Ticket> & { status: TicketStatus }): Ticket {
     priority: overrides.priority ?? "medium",
     labels: overrides.labels ?? [],
     usesWorktree: overrides.usesWorktree ?? true,
+    preferredHarnessId: overrides.preferredHarnessId ?? "claude-code",
     order: overrides.order ?? 0,
     worktreePath: overrides.worktreePath ?? null,
     branch: overrides.branch ?? null,

@@ -14,6 +14,7 @@ describe("TICKET_EVENT_KINDS", () => {
       "created",
       "status_changed",
       "priority_changed",
+      "harness_changed",
       "retitled",
       "body_edited",
       "labels_changed",
@@ -23,6 +24,7 @@ describe("TICKET_EVENT_KINDS", () => {
       "session_started",
       "session_ended",
       "worktree_changed",
+      "session_signal",
     ]);
   });
 
@@ -44,6 +46,7 @@ describe("TicketEventPayload", () => {
       { kind: "created", status: "backlog", title: "T" },
       { kind: "status_changed", from: "backlog", to: "todo" },
       { kind: "priority_changed", from: "low", to: "high" },
+      { kind: "harness_changed", from: "claude-code", to: "codex" },
       { kind: "retitled", from: "Old", to: "New" },
       { kind: "body_edited" },
       { kind: "labels_changed", added: ["bug"], removed: ["chore"] },
@@ -53,6 +56,7 @@ describe("TicketEventPayload", () => {
       { kind: "session_started", sessionId: "session-1", title: "Fix bug", harnessId: "codex" },
       { kind: "session_ended", sessionId: "session-1" },
       { kind: "worktree_changed", from: worktreeA, to: worktreeB },
+      { kind: "session_signal", signal: "blocked", reason: "Waiting for credentials" },
     ];
     expect(payloads.map((p) => p.kind)).toEqual(TICKET_EVENT_KINDS);
   });

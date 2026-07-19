@@ -46,6 +46,9 @@ describe("describeEvent", () => {
     expect(describeEvent({ kind: "priority_changed", from: "low", to: "high" })).toBe(
       "changed priority Low → High",
     );
+    expect(describeEvent({ kind: "harness_changed", from: "claude-code", to: "codex" })).toBe(
+      "changed harness Claude Code → Codex",
+    );
     expect(describeEvent({ kind: "retitled", from: "Old", to: "New" })).toBe('renamed to "New"');
     expect(describeEvent({ kind: "body_edited" })).toBe("edited the description");
     expect(describeEvent({ kind: "archived" })).toBe("archived the ticket");
@@ -115,6 +118,15 @@ describe("describeEvent", () => {
       "updated worktree",
     );
   });
+
+  it("describes session lifecycle signals with and without a reason", () => {
+    expect(describeEvent({ kind: "session_signal", signal: "done", reason: null })).toBe(
+      "reported done",
+    );
+    expect(
+      describeEvent({ kind: "session_signal", signal: "blocked", reason: "needs creds" }),
+    ).toBe("reported blocked: needs creds");
+  });
 });
 
 describe("commentAuthorLabel", () => {
@@ -135,10 +147,12 @@ describe("EVENT_KIND_PRIORITY", () => {
       "created",
       "retitled",
       "priority_changed",
+      "harness_changed",
       "labels_changed",
       "worktree_changed",
       "archived",
       "unarchived",
+      "session_signal",
       "body_edited",
     ];
     expect(EVENT_KIND_PRIORITY).toEqual(expected);

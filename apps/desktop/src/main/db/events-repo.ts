@@ -5,7 +5,13 @@
  */
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import type { TicketEvent, TicketEventPayload } from "@volli/shared";
+import type {
+  TicketEvent,
+  TicketEventActor,
+  TicketEventActorContext,
+  TicketEventActorKind,
+  TicketEventPayload,
+} from "@volli/shared";
 import { prepared } from "./prepared";
 
 interface TicketEventRow {
@@ -18,13 +24,44 @@ interface TicketEventRow {
 }
 
 function mapTicketEvent(row: TicketEventRow): TicketEvent {
+  const parsedActor = parseActor(row.actor);
   return {
     id: row.id,
     ticketId: row.ticket_id,
-    actor: "user",
+    actor: parsedActor.actor,
+    actorContext: parsedActor.context,
     createdAt: row.created_at,
     payload: JSON.parse(row.payload) as TicketEventPayload,
   };
+}
+
+function parseActor(actor: string): {
+  actor: TicketEventActorKind;
+  context: TicketEventActorContext | null;
+} {
+  if (actor === "user") return { actor: "user", context: null };
+  try {
+    const parsed = JSON.parse(actor) as Partial<TicketEventActor>;
+    if (
+      (parsed.kind === "session" || parsed.kind === "automation") &&
+      typeof parsed.sessionId === "string" &&
+      (typeof parsed.ticketId === "string" || parsed.ticketId === null)
+    ) {
+      return {
+        actor: parsed.kind,
+        context: { sessionId: parsed.sessionId, ticketId: parsed.ticketId },
+      };
+    }
+  } catch {
+    // Older rows may contain a plain actor token.
+  }
+  return actor === "automation" || actor === "session"
+    ? { actor, context: null }
+    : { actor: "user", context: null };
+}
+
+function serializeActor(actor: TicketEventActor): string {
+  return actor.kind === "user" ? "user" : JSON.stringify(actor);
 }
 
 /**
@@ -57,12 +94,15 @@ export function recordTicketEvent(
   ticketId: string,
   payload: TicketEventPayload,
   now: number,
+  actor: TicketEventActor = { kind: "user" },
 ): void {
+  const storedActor = serializeActor(actor);
   if (payload.kind === "body_edited") {
     const latest = latestTicketEvent(db, ticketId);
     if (
       latest &&
       latest.kind === "body_edited" &&
+      latest.actor === storedActor &&
       now - latest.created_at < BODY_EDITED_COALESCE_WINDOW_MS
     ) {
       prepared(db, "UPDATE ticket_events SET created_at = ? WHERE id = ?").run(now, latest.id);
@@ -72,8 +112,8 @@ export function recordTicketEvent(
   prepared(
     db,
     `INSERT INTO ticket_events (id, ticket_id, kind, actor, payload, created_at)
-     VALUES (?, ?, ?, 'user', ?, ?)`,
-  ).run(randomUUID(), ticketId, payload.kind, JSON.stringify(payload), now);
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(randomUUID(), ticketId, payload.kind, storedActor, JSON.stringify(payload), now);
 }
 
 /**

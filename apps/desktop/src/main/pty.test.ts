@@ -225,7 +225,10 @@ beforeEach(() => {
   project = testProject({ id: "w", path: root, ticketPrefix: "VC" });
   insertProject(testDb.db, project);
   // Fresh manager + handlers each test (Map overwrites); reset roots.
-  manager = registerTerminalIpcHandlers({ ok: true, db: testDb.db });
+  manager = registerTerminalIpcHandlers(
+    { ok: true, db: testDb.db },
+    { socketPath: "/profile/volli.sock", binDir: "/profile/bin" },
+  );
   syncProjectRoots([root]);
 });
 
@@ -262,6 +265,61 @@ describe("volli:terminal-create", () => {
       sessionId,
       data: "hello world",
     });
+  });
+
+  it("keeps a bounded line-oriented observation tail for the agent session peek command", async () => {
+    const { sessionId, pty } = await createSession();
+    pty.emitData("line one\r\nline two\nline three");
+
+    expect(manager.peek(sessionId, 2)).toEqual({
+      status: "idle",
+      output: "line two\nline three",
+    });
+    expect(manager.peek("missing", 2)).toBeUndefined();
+  });
+
+  it("keeps the peeked tail byte-identical to a last-N-chars window once chunks exceed the cap", async () => {
+    const { sessionId, pty } = await createSession();
+    // The front chunk is dropped only once the remainder still covers the cap
+    // (total − first ≥ 256k): 500k − 200k = 300k, so `a` gets trimmed while
+    // `b`+`c` (300k) still exceed the cap and peek's exact window is intact.
+    // No newlines, so peek(…, 1) returns the whole normalized tail.
+    const a = "a".repeat(200_000);
+    const b = "b".repeat(200_000);
+    const c = "c".repeat(100_000);
+    pty.emitData(a);
+    pty.emitData(b);
+    pty.emitData(c);
+
+    const expected = (a + b + c).slice(-256_000);
+    const peeked = manager.peek(sessionId, 1);
+    expect(peeked?.output.length).toBe(256_000);
+    expect(peeked?.output).toBe(expected);
+  });
+
+  it("reports working output and remains observable when foreground probing fails", async () => {
+    const { sessionId, pty } = await createSession();
+    pty.process = "codex";
+    expect(manager.peek(sessionId, 1)?.status).toBe("working");
+    Object.defineProperty(pty, "process", {
+      configurable: true,
+      get() {
+        throw new Error("ECHILD");
+      },
+    });
+    expect(manager.peek(sessionId, 1)?.status).toBe("idle");
+  });
+
+  it("builds an agent PATH when the inherited process PATH is absent", async () => {
+    const previousPath = process.env["PATH"];
+    delete process.env["PATH"];
+    try {
+      await createSession();
+      expect(lastSpawnEnv()["PATH"]).toBe("/profile/bin");
+    } finally {
+      if (previousPath === undefined) delete process.env["PATH"];
+      else process.env["PATH"] = previousPath;
+    }
   });
 
   it("routes pty exit to the creating window's webContents with the session id", async () => {
@@ -918,6 +976,9 @@ describe("ticket sessions", () => {
     const env = lastSpawnEnv();
     expect(env["VOLLI_TICKET"]).toBe("VC-12");
     expect(env["VOLLI_ARTIFACTS_DIR"]).toBe(`${root}/.volli/artifacts`);
+    expect(env["VOLLI_SESSION"]).toBe(result.sessionId);
+    expect(env["VOLLI_SOCKET"]).toBe("/profile/volli.sock");
+    expect(env["PATH"]?.split(":")[0]).toBe("/profile/bin");
     expect(env["TERM"]).toBe("xterm-256color");
     const [, , options] = spawn.mock.calls[0] as [string, string[], { cwd: string }];
     expect(options.cwd).toBe(root);
@@ -1106,13 +1167,18 @@ describe("ticket sessions", () => {
   });
 
   it("does not write to the pty when the ticket request carries no kickoff", async () => {
-    const { result, pty } = await createTicketSession("tk1");
+    insertTicket(
+      testDb.db,
+      testTicket("w", { id: "tk2", ticketNumber: 13, preferredHarnessId: "codex" }),
+    );
+    const { result, pty } = await createTicketSession("tk2");
     if (!result.ok) throw new Error(`expected session, got ${result.error}`);
     expect(pty.write).not.toHaveBeenCalled();
-    // No kickoff → a bare shell is recorded; the default harness field is not
-    // treated as user-facing source metadata.
-    expect(result.session.harnessId).toBe("claude-code");
+    // No kickoff keeps the ticket's persisted preference for a future resume,
+    // while launchKind truthfully records that this particular run is a shell.
+    expect(result.session.harnessId).toBe("codex");
     expect(result.session.launchKind).toBe("shell");
+    expect(result.session.placement).toBe("tab");
   });
 
   it("writes the built harness launch command + CR to the pty exactly once when kickoff is present", async () => {
@@ -1268,6 +1334,12 @@ describe("warm park", () => {
   const contCalls = () => signalledWith("SIGCONT");
 
   describe("park", () => {
+    it("reports a manually parked session through the read-only peek surface", async () => {
+      const { sessionId } = await createParkSession();
+      await parkManager.park(sessionId, { manual: true });
+      expect(parkManager.peek(sessionId, 1)?.status).toBe("parked");
+    });
+
     it("stops parent first, then descendants, and re-collects a newly spawned child", async () => {
       const { sessionId, pty } = await createParkSession();
       parts.descendants

@@ -35,6 +35,8 @@ export const VOLLI_GITIGNORE_CONTENT = "*\n";
 
 export const VOLLI_TICKET_ENV = "VOLLI_TICKET";
 export const VOLLI_ARTIFACTS_DIR_ENV = "VOLLI_ARTIFACTS_DIR";
+export const VOLLI_SESSION_ENV = "VOLLI_SESSION";
+export const VOLLI_SOCKET_ENV = "VOLLI_SOCKET";
 
 /**
  * Env vars injected at PTY creation for a ticket-linked session (decision #9):
@@ -62,5 +64,25 @@ export function ticketSessionEnv(projectPath: string, displayId: string): Record
 export function projectSessionEnv(projectPath: string): Record<string, string> {
   return {
     [VOLLI_ARTIFACTS_DIR_ENV]: projectArtifactsDir(projectPath),
+  };
+}
+
+export interface AgentSessionEnvironmentInput {
+  sessionId: string;
+  socketPath: string;
+  binDir: string;
+  inheritedPath: string;
+}
+
+/** Adds the agent-facing runtime contract to a ticket or scratch session environment. */
+export function agentSessionEnv(
+  scopeEnv: Readonly<Record<string, string>>,
+  input: AgentSessionEnvironmentInput,
+): Record<string, string> {
+  return {
+    ...scopeEnv,
+    [VOLLI_SESSION_ENV]: input.sessionId,
+    [VOLLI_SOCKET_ENV]: input.socketPath,
+    PATH: input.inheritedPath ? `${input.binDir}:${input.inheritedPath}` : input.binDir,
   };
 }

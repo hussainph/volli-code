@@ -17,6 +17,7 @@ import {
   type Project,
   type ProjectCreateResult,
   type ProjectMutationResult,
+  type ProjectUpdateResult,
 } from "@volli/shared";
 import { create } from "zustand";
 
@@ -67,6 +68,7 @@ export function decodeProjectsUiState(raw: string | undefined): string | null {
 /** The subset of the preload API the projects store needs — narrow and fake-able for tests. */
 export interface ProjectsGateway {
   create(input: { path: string; name: string }): Promise<ProjectCreateResult>;
+  update(input: { id: string; baseBranch: string | null }): Promise<ProjectUpdateResult>;
   remove(id: string): Promise<ProjectMutationResult>;
   reorder(orderedIds: string[]): Promise<ProjectMutationResult>;
   /** Fire-and-forget persistence of the current selection under {@link PROJECTS_UI_APP_STATE_KEY}. */
@@ -75,6 +77,7 @@ export interface ProjectsGateway {
 
 const defaultGateway: ProjectsGateway = {
   create: (input) => window.api.projects.create(input),
+  update: (input) => window.api.projects.update(input),
   remove: (id) => window.api.projects.remove(id),
   reorder: (orderedIds) => window.api.projects.reorder(orderedIds),
   setSelection: (selectedProjectId) =>
@@ -87,6 +90,7 @@ interface ProjectsState {
   /** Seeds state from the boot payload — the ONE place state is set wholesale outside a mutation. */
   hydrate(projects: Project[], selectedProjectId: string | null): void;
   addProject(input: { path: string; defaultName: string }): Promise<void>;
+  updateBaseBranch(id: string, baseBranch: string | null): Promise<boolean>;
   removeProject(id: string): Promise<void>;
   /** Optimistic local reorder for live drag feedback; does not persist — see `commitReorder`. */
   reorder(activeId: string, overId: string): void;
@@ -160,6 +164,20 @@ export function createProjectsStore(gateway: ProjectsGateway = defaultGateway) {
         selectedProjectId: result.project.id,
       });
       persistSelection(result.project.id);
+    },
+
+    async updateBaseBranch(id, baseBranch) {
+      const result = await writeThrough(
+        "save project base branch",
+        (): Promise<ProjectUpdateResult> => gateway.update({ id, baseBranch }),
+      );
+      if (!result) return false;
+      set({
+        projects: get().projects.map((project) =>
+          project.id === result.project.id ? result.project : project,
+        ),
+      });
+      return true;
     },
 
     async removeProject(id) {

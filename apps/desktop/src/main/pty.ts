@@ -5,6 +5,7 @@ import { stat } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import type Database from "better-sqlite3";
 import {
+  agentSessionEnv,
   breatheShouldWake,
   buildHarnessCommand,
   createSessionRecord,
@@ -22,6 +23,7 @@ import type {
   CreateTerminalSessionRequest,
   CreateTerminalSessionResult,
   HarnessId,
+  SessionActivityState,
   TerminalBusyResult,
   TerminalDataEvent,
   TerminalExitEvent,
@@ -94,6 +96,7 @@ const FLOW_CONTROL_LOW_WATERMARK = 5_000;
 // or until the buffer is large enough that waiting just adds latency.
 const BATCH_WINDOW_MS = 8;
 const BATCH_MAX_CHARS = 256_000;
+const OBSERVATION_TAIL_MAX_CHARS = 256_000;
 
 interface Session {
   pty: PtyProcess;
@@ -112,6 +115,18 @@ interface Session {
   /** Chars sent to the renderer and not yet acked; drives pause/resume. */
   unackedChars: number;
   paused: boolean;
+  /**
+   * Recent raw output retained independently of renderer batching for the
+   * read-only session peek — kept as chunks (not one growing string) so the hot
+   * output path appends in O(chunk) instead of rebuilding a ~256KB string every
+   * event. Whole chunks are trimmed off the front once dropping one still leaves
+   * {@link OBSERVATION_TAIL_MAX_CHARS} behind; {@link Session.tailChars} tracks
+   * the joined length so the trim never re-sums. `peek` joins + slices to the
+   * exact cap on demand.
+   */
+  tailChunks: string[];
+  /** Running total of `tailChunks` char lengths — the trim bound, kept incrementally. */
+  tailChars: number;
   /** Last PTY output OR user input, epoch ms — the warm-park idle clock. */
   lastActivityAt: number;
   /** Renderer-reported: the session's pane is currently on screen. */
@@ -195,6 +210,7 @@ export class PtyManager {
     private readonly dbError: string,
     private readonly inspector: ProcessInspector = createProcessInspector(),
     private readonly parkConfig: ParkConfig = parkConfigFromEnv(process.env, process.platform),
+    private readonly agentRuntime: AgentRuntimeEnvironment | null = null,
   ) {}
 
   /**
@@ -229,10 +245,10 @@ export class PtyManager {
         scope: {
           projectId: ctx.projectId,
           ticketId: request.ticket.ticketId,
-          // Harness is no longer a ticket property (migration 004). A kickoff
-          // request carries the harness to launch; without one, a ticket
-          // session boots the default harness, same as a scratch session.
-          harnessId: kickoff?.harnessId ?? DEFAULT_HARNESS_ID,
+          // An explicit kickoff choice wins; later sessions resume with the
+          // ticket's persisted preference. Launch kind separately preserves
+          // whether this session actually invoked that harness or opened a shell.
+          harnessId: kickoff?.harnessId ?? ctx.preferredHarnessId,
           launchKind: kickoff === undefined ? "shell" : "agent",
           placement,
           // Ticket sessions run at the MAIN repo root — worktree automation is
@@ -321,6 +337,14 @@ export class PtyManager {
       const { file, args } = resolveShell(process.env);
       const sessionId = randomUUID();
       const now = Date.now();
+      const sessionEnv = this.agentRuntime
+        ? agentSessionEnv(scope.env, {
+            sessionId,
+            socketPath: this.agentRuntime.socketPath,
+            binDir: this.agentRuntime.binDir,
+            inheritedPath: process.env["PATH"] ?? "",
+          })
+        : scope.env;
       const pty = nodePty.spawn(file, args, {
         name: "xterm-256color",
         cwd,
@@ -330,7 +354,7 @@ export class PtyManager {
         // negotiates 256-color regardless of the parent's TERM; layer the ticket
         // env (VOLLI_TICKET/VOLLI_ARTIFACTS_DIR) on top for ticket sessions,
         // or just VOLLI_ARTIFACTS_DIR for scratch sessions.
-        env: { ...process.env, TERM: "xterm-256color", ...scope.env } as Record<string, string>,
+        env: { ...process.env, TERM: "xterm-256color", ...sessionEnv } as Record<string, string>,
       });
       // Same race, other side of the spawn: never register against a window
       // whose `destroyed` event already fired.
@@ -395,6 +419,8 @@ export class PtyManager {
         flushTimer: null,
         unackedChars: 0,
         paused: false,
+        tailChunks: [],
+        tailChars: 0,
         lastActivityAt: now,
         visible: false,
         keepAwake: false,
@@ -474,6 +500,20 @@ export class PtyManager {
     if (session === undefined) return;
     // PTY output is activity: it keeps a busy session out of the idle window.
     session.lastActivityAt = Date.now();
+    // Append to the observation tail as a chunk, then drop whole chunks off the
+    // front while doing so still leaves at least the cap behind (peek slices to
+    // the exact cap on demand). Keeps this hot path O(chunk), not O(cap).
+    session.tailChunks.push(data);
+    session.tailChars += data.length;
+    let firstChunk = session.tailChunks[0];
+    while (
+      firstChunk !== undefined &&
+      session.tailChars - firstChunk.length >= OBSERVATION_TAIL_MAX_CHARS
+    ) {
+      session.tailChunks.shift();
+      session.tailChars -= firstChunk.length;
+      firstChunk = session.tailChunks[0];
+    }
     session.pendingChunks.push(data);
     session.pendingChars += data.length;
     if (session.pendingChars >= BATCH_MAX_CHARS) {
@@ -533,6 +573,33 @@ export class PtyManager {
   /** The workspace a live session was created for, or undefined if unknown. */
   workspaceIdFor(sessionId: string): string | undefined {
     return this.sessions.get(sessionId)?.workspaceId;
+  }
+
+  /** Read-only snapshot used by the CLI; it never writes to or controls the observed PTY. */
+  peek(
+    sessionId: string,
+    lines: number,
+  ): { status: SessionActivityState; output: string } | undefined {
+    const session = this.sessions.get(sessionId);
+    if (!session) return undefined;
+    // Join the retained chunks and slice to the exact cap — the front chunk may
+    // be over-retained (kept because dropping it would breach the cap), so the
+    // slice is what makes the peeked tail byte-identical to the old string form.
+    const normalized = session.tailChunks
+      .join("")
+      .slice(-OBSERVATION_TAIL_MAX_CHARS)
+      .replace(/\r\n?/g, "\n");
+    const output = normalized.split("\n").slice(-lines).join("\n");
+    let status: SessionActivityState = "idle";
+    if (session.parkedPids !== null) status = "parked";
+    else {
+      try {
+        if (foregroundProcess(session) !== null) status = "working";
+      } catch {
+        // A failed foreground-process probe still leaves the session observable.
+      }
+    }
+    return { status, output };
   }
 
   /** Pushes the session's current park/keep-awake state to its window (skipped if destroyed). */
@@ -1101,11 +1168,21 @@ function isCreateRequest(value: unknown): value is CreateTerminalSessionRequest 
  * at runtime — renderer-supplied types are never trusted — and returns a
  * typed result rather than throwing across the IPC boundary.
  */
-export function registerTerminalIpcHandlers(handle: DbHandle): PtyManager {
+export interface AgentRuntimeEnvironment {
+  socketPath: string;
+  binDir: string;
+}
+
+export function registerTerminalIpcHandlers(
+  handle: DbHandle,
+  agentRuntime: AgentRuntimeEnvironment | null = null,
+): PtyManager {
   // Every session persists a durable record, so the manager needs the db. When
   // it failed to open, `create` reports the open error (write/kill/etc. operate
   // on the — necessarily empty — live map and stay harmless no-ops).
-  const manager = handle.ok ? new PtyManager(handle.db, "") : new PtyManager(null, handle.error);
+  const manager = handle.ok
+    ? new PtyManager(handle.db, "", undefined, undefined, agentRuntime)
+    : new PtyManager(null, handle.error, undefined, undefined, agentRuntime);
 
   ipcMain.handle(
     "volli:terminal-create" satisfies VolliIpcChannel,

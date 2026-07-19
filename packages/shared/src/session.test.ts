@@ -7,12 +7,19 @@ import {
   SESSION_ACTIVITY_STATES,
   SESSION_LAUNCH_KINDS,
   SESSION_PLACEMENTS,
+  shortSessionId,
 } from "./session";
 import type { SessionActivityState, SessionRecord } from "./session";
 
 describe("SESSION_ACTIVITY_STATES", () => {
   it("lists working, idle, parked, exited in order", () => {
     expect(SESSION_ACTIVITY_STATES).toEqual(["working", "idle", "parked", "exited"]);
+  });
+});
+
+describe("shortSessionId", () => {
+  it("keeps the stable first eight characters", () => {
+    expect(shortSessionId("abcdef12-3456-7890")).toBe("abcdef12");
   });
 });
 

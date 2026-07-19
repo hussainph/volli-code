@@ -60,6 +60,11 @@ export interface SessionRecord {
   endedAt: number | null;
 }
 
+/** Stable human-facing identifier used by the CLI instead of exposing the stored UUID. */
+export function shortSessionId(sessionId: string): string {
+  return sessionId.slice(0, 8);
+}
+
 /**
  * PTY-derived activity vocabulary (ticket-detail-mvp decision #5): "working"
  * (output within ~10s) / "idle" (running, quiet) / "parked" (idle and

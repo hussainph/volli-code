@@ -6,7 +6,7 @@ import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
-import { boot, type BootGateway, type BootStorage } from "./boot";
+import { boot, refreshPlanningData, type BootGateway, type BootStorage } from "./boot";
 import { takeBootNotice } from "./boot-notice";
 
 /** A full BootstrapPayload, defaulting to the "nothing here yet" shape. */
@@ -321,7 +321,7 @@ describe("boot", () => {
       priority: "medium" as const,
       labels: ["bug"],
       usesWorktree: true,
-      harnessId: "claude-code",
+      preferredHarnessId: "claude-code" as const,
       order: 0,
       worktreePath: null,
       branch: null,
@@ -368,5 +368,69 @@ describe("boot", () => {
     expect(useUiStore.getState().sidebarWidth).toBe(500);
     expect(useUiStore.getState().uiScale).toBe(1.25);
     expect(useWorkspaceStore.getState().byProject.p1?.boardView).toBe("list");
+  });
+});
+
+describe("refreshPlanningData", () => {
+  it("replaces planning stores from a fresh bootstrap while preserving the live selection", async () => {
+    const project = {
+      id: "p1",
+      name: "P1",
+      path: "/p1",
+      ticketPrefix: "P1",
+      colorIndex: 0,
+      sortOrder: 0,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const ticket = {
+      id: "t1",
+      projectId: "p1",
+      ticketNumber: 1,
+      title: "Moved by CLI",
+      body: "",
+      status: "doing" as const,
+      priority: "medium" as const,
+      labels: [],
+      usesWorktree: true,
+      preferredHarnessId: "claude-code" as const,
+      order: 0,
+      worktreePath: null,
+      branch: null,
+      baseBranch: null,
+      createdAt: 0,
+      updatedAt: 1,
+    };
+    useProjectsStore.getState().hydrate([project], "p1");
+    useBoardStore.getState().hydrate({ p1: [] }, { p1: [] });
+    const gateway = fakeGateway({
+      bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({
+        ok: true,
+        data: payload({ projects: [project], ticketsByProject: { p1: [ticket] } }),
+      })),
+    });
+
+    expect(await refreshPlanningData(gateway)).toEqual({ ok: true });
+    expect(useProjectsStore.getState().selectedProjectId).toBe("p1");
+    expect(useBoardStore.getState().ticketsByProject.p1).toEqual([ticket]);
+  });
+
+  it("bumps planningDataVersion so per-ticket surfaces refetch, but only on a successful refresh", async () => {
+    useProjectsStore.getState().hydrate([], null);
+    useBoardStore.getState().hydrate({}, {});
+    const before = useBoardStore.getState().planningDataVersion;
+
+    const okGateway = fakeGateway({
+      bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({ ok: true, data: payload({}) })),
+    });
+    expect(await refreshPlanningData(okGateway)).toEqual({ ok: true });
+    expect(useBoardStore.getState().planningDataVersion).toBe(before + 1);
+
+    const failGateway = fakeGateway({
+      bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({ ok: false, error: "db gone" })),
+    });
+    expect(await refreshPlanningData(failGateway)).toEqual({ ok: false, error: "db gone" });
+    // A failed refresh hydrates nothing, so it must not bump the version either.
+    expect(useBoardStore.getState().planningDataVersion).toBe(before + 1);
   });
 });

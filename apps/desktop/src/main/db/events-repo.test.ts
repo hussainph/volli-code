@@ -70,6 +70,20 @@ describe("listTicketEvents", () => {
     expect(event?.payload).toEqual({ kind: "retitled", from: "Old", to: "New" });
     expect(event?.actor).toBe("user");
   });
+
+  it("round-trips the session door and its context for agent-originated mutations", () => {
+    const { ticketId } = setup();
+    recordTicketEvent(ctx.db, ticketId, { kind: "archived" }, 100, {
+      kind: "session",
+      sessionId: "session-7",
+      ticketId,
+    });
+
+    expect(listTicketEvents(ctx.db, ticketId)[0]).toMatchObject({
+      actor: "session",
+      actorContext: { sessionId: "session-7", ticketId },
+    });
+  });
 });
 
 describe("recordTicketEvent — body_edited coalescing", () => {
