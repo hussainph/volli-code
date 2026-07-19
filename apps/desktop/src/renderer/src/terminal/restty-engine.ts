@@ -35,7 +35,6 @@ import { getCurrentAppearance } from "./appearance";
 import type { TerminalAppearance, TerminalDimensions, TerminalEngine } from "./engine";
 import { currentGpuSession, watchGpuDeviceLoss } from "./gpu-session";
 import { heldAltSides, installAltSideTracker, optionAsAltSequence } from "./option-as-alt";
-import { preferTextPresentationForAmbiguousSymbols } from "./symbol-presentation";
 
 /**
  * Replay-buffer cap. Sized for the device-loss rebuild: enough to restore the
@@ -176,7 +175,6 @@ export class ResttyEngine implements TerminalEngine {
           // to avoid a double resize.
           resize: () => true,
         },
-        beforeRenderOutput: ({ text }) => preferTextPresentationForAmbiguousSymbols(text),
       },
     });
     // Registers the transport callbacks used by write()/replay and marks the

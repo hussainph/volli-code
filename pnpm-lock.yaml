@@ -31,7 +31,7 @@ overrides:
 packageExtensionsChecksum: sha256-q5WdBF7BCWKzly/tgcivWtVAQ00t1e/WaEGl0+mhjaI=
 
 patchedDependencies:
-  restty@0.2.0: 6732bccea4784f62e708c1f5bbd87f6df9f4dcf4d3a0c2d152b330165349efd9
+  restty@0.2.0: a46f6a7e25a538e5e66f5926232dce77460fd3d08a2af7424ca0148f2ee242af
 
 importers:
 
@@ -129,7 +129,7 @@ importers:
         version: 19.2.7(react@19.2.7)
       restty:
         specifier: ^0.2.0
-        version: 0.2.0(patch_hash=6732bccea4784f62e708c1f5bbd87f6df9f4dcf4d3a0c2d152b330165349efd9)(typescript@7.0.2)
+        version: 0.2.0(patch_hash=a46f6a7e25a538e5e66f5926232dce77460fd3d08a2af7424ca0148f2ee242af)(typescript@7.0.2)
       sonner:
         specifier: ^2.0.7
         version: 2.0.7(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -8058,7 +8058,7 @@ snapshots:
 
   resolve-pkg-maps@1.0.0: {}
 
-  restty@0.2.0(patch_hash=6732bccea4784f62e708c1f5bbd87f6df9f4dcf4d3a0c2d152b330165349efd9)(typescript@7.0.2):
+  restty@0.2.0(patch_hash=a46f6a7e25a538e5e66f5926232dce77460fd3d08a2af7424ca0148f2ee242af)(typescript@7.0.2):
     dependencies:
       text-shaper: 0.1.23(typescript@7.0.2)
     transitivePeerDependencies:
