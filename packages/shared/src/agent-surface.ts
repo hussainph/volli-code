@@ -118,6 +118,28 @@ const COLUMN_TOKEN_STATUS: Record<ColumnToken, TicketStatus> = {
   done: "done",
 };
 
+/**
+ * The accepted column vocabulary rendered for error/help text, with aliases of
+ * the same status collapsed (`needs-review|review`). Derived from
+ * {@link COLUMN_TOKENS} and {@link COLUMN_TOKEN_STATUS} so teaching errors can
+ * never drift from what {@link parseColumnToken} accepts.
+ */
+export const COLUMN_VOCABULARY: string = (() => {
+  const groups: string[] = [];
+  const indexByStatus = new Map<TicketStatus, number>();
+  for (const token of COLUMN_TOKENS) {
+    const status = COLUMN_TOKEN_STATUS[token];
+    const existing = indexByStatus.get(status);
+    if (existing === undefined) {
+      indexByStatus.set(status, groups.length);
+      groups.push(token);
+    } else {
+      groups[existing] = `${groups[existing]}|${token}`;
+    }
+  }
+  return groups.join(", ");
+})();
+
 export type ColumnTokenResult =
   | { ok: true; status: TicketStatus }
   | { ok: false; code: "INVALID_COLUMN"; message: string };
@@ -129,7 +151,7 @@ export function parseColumnToken(value: string): ColumnTokenResult {
   return {
     ok: false,
     code: "INVALID_COLUMN",
-    message: `Unknown column ${JSON.stringify(value)}`,
+    message: `Unknown column ${JSON.stringify(value)} (valid: ${COLUMN_VOCABULARY})`,
   };
 }
 

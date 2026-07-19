@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   AGENT_ERROR_CODES,
   applyTicketBodyMutation,
+  COLUMN_VOCABULARY,
   parseColumnToken,
   resolveAgentContext,
 } from "./agent-surface";
@@ -312,8 +313,17 @@ describe("parseColumnToken", () => {
     expect(parseColumnToken("icebox")).toEqual({
       ok: false,
       code: "INVALID_COLUMN",
-      message: 'Unknown column "icebox"',
+      message: 'Unknown column "icebox" (valid: backlog, todo, doing, needs-review|review, done)',
     });
+  });
+
+  it("enumerates the vocabulary with review aliases collapsed, derived from COLUMN_TOKENS", () => {
+    // The two review spellings share one status, so they render as one alias group.
+    expect(COLUMN_VOCABULARY).toBe("backlog, todo, doing, needs-review|review, done");
+    // The rejection message embeds exactly this derived list — one source of truth.
+    const rejection = parseColumnToken("nope");
+    expect(rejection.ok).toBe(false);
+    if (!rejection.ok) expect(rejection.message).toContain(`(valid: ${COLUMN_VOCABULARY})`);
   });
 });
 
