@@ -120,6 +120,8 @@ where `volli ticket brief` emits the ticket's title, description, attachment pat
 
 The local CLI exposes the planning surface described in decisions #34–37. Run `volli help` for the command contract; keep this document focused on product semantics rather than duplicating executable help.
 
+`volli help` is the primary discovery surface and the CLI's authoritative reference — a blind agent should never need the skill pack to operate it (measured: thin help forced ~108 commands and ~62k tokens across 7 basic tasks). It is generated from the parser's own `CommandSpec`/`OptionEntry` tables (the same way `volli help exit-codes` renders from `AGENT_ERROR_CODES`), so reference and reality cannot drift: `volli help` prints a grouped compact reference, `volli help <command>` a full detail view, and every vocabulary rejection enumerates the valid tokens inline. The skill pack is therefore activation + norms only — it points at `volli help` and never restates flag syntax. Token budgets are tested contracts, not aspirations: the bare reference and each command's detail have char/token ceilings asserted in unit tests and an e2e token bench (`apps/desktop/e2e/agent-cli-token-bench.mjs`).
+
 Harness adapters generate hook configs on session launch — e.g. Claude Code `Stop` → `volli session done`, `Notification` → `volli notify` — scoped to the worktree so the user's global hook config is untouched.
 
 ### Sessions & audit history
