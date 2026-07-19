@@ -318,6 +318,13 @@ app.whenReady().then(async () => {
 
   const agentToolsConsentKey = "volli:agent-tools-consent";
 
+  // Test seam (docs/plans/volli-cli.md → Tests): the skill installer targets the
+  // real OS home via app.getPath("home"), which on macOS ignores $HOME — so a
+  // headless installer-idempotency e2e cannot redirect it into a throwaway
+  // profile. VOLLI_AGENT_HOME overrides the install/refresh/uninstall home for
+  // exactly that. Unset in production, so the real home is used unchanged.
+  const agentToolsHome = process.env["VOLLI_AGENT_HOME"] ?? app.getPath("home");
+
   // Renders hand-edited managed files that were preserved (never overwritten)
   // as path + a readable unified diff in the dialog detail (spec decision 12:
   // "warn + diff"). Shared by install, the on-update refresh, and uninstall.
@@ -343,7 +350,7 @@ app.whenReady().then(async () => {
     let result;
     try {
       result = await installDetectedHarnessSkills({
-        home: app.getPath("home"),
+        home: agentToolsHome,
         pathValue: process.env["PATH"] ?? "",
       });
     } catch (error) {
@@ -353,14 +360,20 @@ app.whenReady().then(async () => {
       );
       throw error;
     }
-    try {
-      await installGlobalCliLink(shimPath);
-    } catch (error) {
-      dialog.showErrorBox(
-        "Agent Tools Installation Failed",
-        `Linking the volli CLI into /usr/local/bin failed: ${errorMessage(error)}`,
-      );
-      throw error;
+    // Test seam (docs/plans/volli-cli.md → Tests): the /usr/local/bin symlink
+    // needs an administrator (osascript) prompt that no headless e2e can answer,
+    // so when a test pre-answers consent via VOLLI_AGENT_CONSENT_CHOICE the link
+    // step is skipped. Unset in production, so the admin prompt runs unchanged.
+    if (process.env["VOLLI_AGENT_CONSENT_CHOICE"] === undefined) {
+      try {
+        await installGlobalCliLink(shimPath);
+      } catch (error) {
+        dialog.showErrorBox(
+          "Agent Tools Installation Failed",
+          `Linking the volli CLI into /usr/local/bin failed: ${errorMessage(error)}`,
+        );
+        throw error;
+      }
     }
     if (result.conflicts.length > 0) {
       await showSkillConflictWarning(result.conflicts);
@@ -385,7 +398,7 @@ app.whenReady().then(async () => {
 
     let removal;
     try {
-      removal = await uninstallAllHarnessSkills({ home: app.getPath("home") });
+      removal = await uninstallAllHarnessSkills({ home: agentToolsHome });
     } catch (error) {
       dialog.showErrorBox(
         "Agent Tools Removal Failed",
@@ -466,7 +479,7 @@ app.whenReady().then(async () => {
       // failed refresh never blocks boot or spams dialogs; only a genuine
       // conflict warns.
       void installDetectedHarnessSkills({
-        home: app.getPath("home"),
+        home: agentToolsHome,
         pathValue: process.env["PATH"] ?? "",
       })
         .then(async (result) => {
@@ -480,6 +493,13 @@ app.whenReady().then(async () => {
       await runAgentToolsConsent({
         current,
         prompt: async () => {
+          // Test seam (docs/plans/volli-cli.md → Tests): a headless e2e cannot
+          // click a native dialog, and this prompt fires during boot before a
+          // Playwright client can patch dialog.showMessageBox, so
+          // VOLLI_AGENT_CONSENT_CHOICE pre-answers it. Honored only when set to
+          // "install"/"defer"; unset in production, so the dialog shows as before.
+          const preAnswer = process.env["VOLLI_AGENT_CONSENT_CHOICE"];
+          if (preAnswer === "install" || preAnswer === "defer") return preAnswer;
           const choice = await dialog.showMessageBox(mainWindow, {
             type: "question",
             message: "Install the Volli CLI and agent skills?",
