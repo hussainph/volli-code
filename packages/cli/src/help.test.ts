@@ -97,6 +97,10 @@ describe("renderHelp command detail", () => {
   it("matches the longest command prefix, ignoring trailing positionals", () => {
     expect(renderHelp(["ticket", "create", "VC-1"])).toBe(renderHelp(["ticket", "create"]));
   });
+
+  it("resolves a quoted multi-word argument the same as separate words", () => {
+    expect(renderHelp(["ticket create"])).toBe(renderHelp(["ticket", "create"]));
+  });
 });
 
 describe("renderHelp groups and topics", () => {

@@ -216,7 +216,10 @@ function matchCommand(path: readonly string[]): CommandHelpEntry | null {
  * a command prefix → that command's detail; a group word → its subcommand list;
  * a single topic → the topic; anything else → the compact reference.
  */
-export function renderHelp(path: readonly string[]): string {
+export function renderHelp(rawPath: readonly string[]): string {
+  // A quoted multi-word argument (`volli help "ticket create"`) must resolve
+  // the same as separate words, so split every element on whitespace first.
+  const path = rawPath.flatMap((part) => part.split(/\s+/)).filter((part) => part.length > 0);
   if (path.length === 0) return bareHelpText();
   const command = matchCommand(path);
   if (command !== null) return commandDetail(command);
