@@ -280,11 +280,13 @@ describe("volli:terminal-create", () => {
 
   it("keeps the peeked tail byte-identical to a last-N-chars window once chunks exceed the cap", async () => {
     const { sessionId, pty } = await createSession();
-    // Three chunks totalling 300k > the 256k cap, so the front chunk must be
-    // trimmed. No newlines, so peek(…, 1) returns the whole normalized tail.
+    // The front chunk is dropped only once the remainder still covers the cap
+    // (total − first ≥ 256k): 500k − 200k = 300k, so `a` gets trimmed while
+    // `b`+`c` (300k) still exceed the cap and peek's exact window is intact.
+    // No newlines, so peek(…, 1) returns the whole normalized tail.
     const a = "a".repeat(200_000);
-    const b = "b".repeat(60_000);
-    const c = "c".repeat(40_000);
+    const b = "b".repeat(200_000);
+    const c = "c".repeat(100_000);
     pty.emitData(a);
     pty.emitData(b);
     pty.emitData(c);
