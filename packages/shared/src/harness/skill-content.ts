@@ -5,43 +5,42 @@ description: Coordinates Volli planning, tickets, and terminal sessions through 
 
 # Volli
 
-Use the bundled \`volli\` CLI as the planning interface. Start with \`volli identify\`, then read the relevant board or ticket before writing.
+You are working in a Volli-tracked project / Volli terminal session (the \`VOLLI_TICKET\`/\`VOLLI_SESSION\` env vars are present). From here on, use the bundled \`volli\` CLI as your planning interface: tickets, board moves, comments, and session signals go through it, not through ad-hoc notes.
 
-- Read [cli.md](cli.md) for commands and examples.
+The CLI is self-documenting — it is the authoritative reference, not this skill:
+
+- \`volli help\` — the full command reference.
+- \`volli help <command>\` — details for one command.
+- Start with \`volli identify\` to resolve your project/ticket/session context.
+
+- Read [cli.md](cli.md) for the workflow (when to read, comment, move, or signal).
 - Read [orchestration.md](orchestration.md) before coordinating multiple tickets or sessions.
 - Treat files under \`custom/\` as user-owned extensions when present.
 
 If the app is unreachable, run \`volli app launch\` explicitly and retry. Surface every CLI error; never silently continue after a failed mutation.
 `;
 
-export const VOLLI_CLI_REFERENCE = `# Volli CLI
+export const VOLLI_CLI_REFERENCE = `# Volli workflow
 
-Run \`volli identify\` first. Add \`--json\` to any command for structured output.
+This is a workflow guide. For command and flag syntax, run \`volli help\` (full reference) or \`volli help <command>\` (one command) — never guess flags.
 
-## Read
+Start every task with \`volli identify\` to learn your project, ticket, and session.
 
-\`volli board [--project <name|prefix|path>]\`
-\`volli ticket list [--status doing] [--label bug] [--priority high]\`
-\`volli ticket show VC-12 [--events 5] [--comments 5]\`
-\`volli ticket events VC-12\`
-\`volli project list\`
-\`volli label list\`
-\`volli session list [--ticket VC-12]\`
-\`volli session peek abcdef12 [--lines 60]\`
+## Read before you write
 
-## Write
+Inspect state before mutating it: read the board and the target ticket first, so an edit builds on the current record rather than a stale assumption.
 
-\`volli ticket create --title "Fix auth" --label bug\`
-\`volli ticket update VC-12 --edit "old" "new"\`
-\`volli ticket update VC-12 --append "## Findings"\`
-\`volli ticket move VC-12 --to needs-review\`
-\`volli ticket comment VC-12 -m "Ready for review"\`
-\`volli ticket archive VC-12\`
-\`volli session done --reason "Tests pass"\`
-\`volli session blocked --reason "Needs credentials"\`
-\`volli notify -m "Needs input"\`
+- \`volli board\` for the column overview; \`volli ticket show <id>\` for one ticket.
+- Add \`--json\` to anything you intend to parse; the plain output is for reading.
+- Keep \`volli session peek\` narrow — raw terminal output consumes your context.
 
-Ticket handles are display ids only. Session handles are the short ids printed by \`session list\`. Context resolves by explicit flag, then Volli environment, then current directory; ambiguity is an error.
+## Comment vs move vs signal
+
+- Comment (\`volli ticket comment\`) to record findings or hand off context.
+- Move (\`volli ticket move\`) only for a deliberate, real status change.
+- Signal (\`volli session done\` / \`volli session blocked\`) to report your own session's outcome; use exact body edits so a stale read fails instead of clobbering.
+
+Surface every CLI error; never continue silently after a failed mutation.
 `;
 
 export const VOLLI_ORCHESTRATION = `# Volli orchestration
@@ -55,7 +54,7 @@ export const VOLLI_ORCHESTRATION = `# Volli orchestration
 7. Keep session peeks narrow; raw terminal output consumes the caller's context.
 `;
 
-export const VOLLI_OPENCODE_COMMAND = `Load the volli skill, run \`volli identify\`, and follow the relevant CLI and orchestration guidance for this project.
+export const VOLLI_OPENCODE_COMMAND = `You are in a Volli terminal session. Run \`volli identify\`, then use the bundled \`volli\` CLI as your planning interface. It is self-documenting: \`volli help\` for the full reference, \`volli help <command>\` for details. Follow the volli skill (when installed) for norms.
 `;
 
-export const VOLLI_FENCED_INSTRUCTIONS = `When working in a Volli-tracked project, run \`volli identify\` first. Read the relevant board or ticket before writing. Use display ticket ids and short session ids only. If the app is unreachable, run \`volli app launch\` explicitly before retrying.`;
+export const VOLLI_FENCED_INSTRUCTIONS = `You are in a Volli-tracked project / terminal session. Use the bundled \`volli\` CLI as your planning interface for tickets, board moves, comments, and session signals. Run \`volli identify\` first, then read the relevant board or ticket before writing. The CLI is self-documenting: \`volli help\` for the full reference, \`volli help <command>\` for details. If the app is unreachable, run \`volli app launch\` explicitly before retrying; surface every CLI error.`;
