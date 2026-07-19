@@ -20,7 +20,7 @@ type InstallManifest = Record<string, ManifestEntry>;
 /**
  * A managed file left untouched because it no longer matches what the installer
  * recorded (the user hand-edited it). Carries enough to render a readable diff
- * in the warning dialog (spec decision 12: "warn + diff"). `currentContent` /
+ * in the warning dialog. `currentContent` /
  * `desiredContent` are the diffable forms — file text for writes, the fenced
  * body for fences, the link target for symlinks.
  */

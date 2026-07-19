@@ -176,7 +176,7 @@ function projectForCreate(
 
 /**
  * The display id of the ticket an actor's session is itself working, for the
- * "via VC-9's session" attribution (decision 8). `null` when the actor has no
+ * "via VC-9's session" attribution. `null` when the actor has no
  * session ticket (a scratch session) or it no longer resolves.
  */
 function actorSessionTicketDisplay(
@@ -579,7 +579,7 @@ export function createAgentCommandService(
         // A scratch session has no ticket to record against — the signal is a
         // no-op beyond acknowledging it. When the session drives a ticket, the
         // outcome is written to that ticket's event log as an `automation`
-        // actor (the door, not the keyboard — decision 8), in one transaction.
+        // actor (the door, not the keyboard), in one transaction.
         const ticketId = session.ticketId;
         if (ticketId !== null) {
           options.db.transaction(() => {

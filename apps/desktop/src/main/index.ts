@@ -319,8 +319,8 @@ app.whenReady().then(async () => {
 
   const agentToolsConsentKey = "volli:agent-tools-consent";
 
-  // Test seam (docs/plans/volli-cli.md → Tests): the skill installer targets the
-  // real OS home via app.getPath("home"), which on macOS ignores $HOME — so a
+  // The skill installer targets the real OS home via app.getPath("home"), which
+  // on macOS ignores $HOME — so a
   // headless installer-idempotency e2e cannot redirect it into a throwaway
   // profile. VOLLI_AGENT_HOME overrides the install/refresh/uninstall home for
   // exactly that. Unset in production, so the real home is used unchanged.
@@ -328,8 +328,8 @@ app.whenReady().then(async () => {
     (isDev ? process.env["VOLLI_AGENT_HOME"] : undefined) ?? app.getPath("home");
 
   // Renders hand-edited managed files that were preserved (never overwritten)
-  // as path + a readable unified diff in the dialog detail (spec decision 12:
-  // "warn + diff"). Shared by install, the on-update refresh, and uninstall.
+  // as path + a readable unified diff in the dialog detail. Shared by install,
+  // the on-update refresh, and uninstall.
   const showSkillConflictWarning = async (conflicts: readonly ManagedConflict[]): Promise<void> => {
     const detail = conflicts
       .map(
@@ -362,8 +362,8 @@ app.whenReady().then(async () => {
       );
       throw error;
     }
-    // Test seam (docs/plans/volli-cli.md → Tests): the /usr/local/bin symlink
-    // needs an administrator (osascript) prompt that no headless e2e can answer,
+    // The /usr/local/bin symlink needs an administrator (osascript) prompt that
+    // no headless e2e can answer,
     // so when a test pre-answers consent via VOLLI_AGENT_CONSENT_CHOICE the link
     // step is skipped. Unset in production, so the admin prompt runs unchanged.
     if (!isDev || process.env["VOLLI_AGENT_CONSENT_CHOICE"] === undefined) {
@@ -472,8 +472,8 @@ app.whenReady().then(async () => {
     const current: AgentToolsConsentStatus | null =
       stored === '"installed"' ? "installed" : stored === '"deferred"' ? "deferred" : null;
     if (current === "installed") {
-      // App-update refresh (spec decision 12): re-run the hash-guarded,
-      // idempotent skill installer so managed files track the shipped version —
+      // Re-run the hash-guarded, idempotent skill installer on app updates so
+      // managed files track the shipped version —
       // byte-identical files skip, user-edited ones conflict and are preserved.
       // The one-time /usr/local/bin symlink is deliberately NOT re-run here: the
       // shim it points at is already regenerated every boot, and re-linking would
@@ -495,8 +495,8 @@ app.whenReady().then(async () => {
       await runAgentToolsConsent({
         current,
         prompt: async () => {
-          // Test seam (docs/plans/volli-cli.md → Tests): a headless e2e cannot
-          // click a native dialog, and this prompt fires during boot before a
+          // A headless e2e cannot click a native dialog, and this prompt fires
+          // during boot before a
           // Playwright client can patch dialog.showMessageBox, so
           // VOLLI_AGENT_CONSENT_CHOICE pre-answers it. Honored only when set to
           // "install"/"defer"; unset in production, so the dialog shows as before.

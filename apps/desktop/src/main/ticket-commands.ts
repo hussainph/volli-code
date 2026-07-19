@@ -354,8 +354,8 @@ export function unarchiveTicketCommand(
 }
 
 /**
- * Hard-deletes an archived ticket — the one destructive act, Archive-only
- * (CONCEPT #16/#92), never exposed over the agent socket (spec decision 1).
+ * Hard-deletes an archived ticket — the one destructive act, Archive-only and
+ * never exposed over the agent socket.
  * Guarding here (not just in the UI) keeps a stray call from nuking a live
  * ticket's history. Records no event: the row and its events vanish together
  * in the FK cascade, so there is no actor to attribute.

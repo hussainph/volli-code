@@ -1,6 +1,6 @@
 /**
  * A minimal, dependency-free line diff for surfacing *why* a managed file was
- * left untouched (spec decision 12: "warn + diff instead" of a bare path). Pure
+ * left untouched instead of showing only its path. Pure
  * string-in/string-out — no Node, no DOM — so it can render into an Electron
  * dialog's plain-text detail. Not a full Myers diff: it strips the shared common
  * prefix and suffix and shows the differing middle as `-` (on disk) / `+`

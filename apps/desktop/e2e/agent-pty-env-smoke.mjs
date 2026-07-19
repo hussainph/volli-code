@@ -1,6 +1,5 @@
 /**
- * e2e probe 3 (PR #70, spec §Tests → e2e): "PATH + env injection inside a
- * spawned PTY".
+ * E2e probe: PATH and environment injection inside a spawned PTY.
  *
  * Boots a real ticket-linked PTY session through the preload bridge, then runs
  * plain shell commands INSIDE that PTY and reads the output back over the app's

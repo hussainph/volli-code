@@ -24,8 +24,7 @@ const execFileAsync = promisify(execFile);
 /**
  * Finds first-class harness executables without invoking a shell or the harness
  * itself. Iterates the adapter registry so each harness's detection rule lives
- * in its own adapter module (spec decision 13) — adding a harness needs no edit
- * here.
+ * in its own adapter module — adding a harness needs no edit here.
  */
 export async function detectInstalledHarnesses(pathValue: string): Promise<HarnessId[]> {
   const directories = pathValue.split(":").filter(Boolean);

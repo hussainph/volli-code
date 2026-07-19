@@ -1,6 +1,6 @@
 /**
- * agent-kit — shared machinery for the `volli` CLI / agent-socket e2e probes
- * (PR #70). Complements smoke-kit.mjs with the pieces those board/composer
+ * agent-kit — shared machinery for the `volli` CLI / agent-socket e2e probes.
+ * Complements smoke-kit.mjs with the pieces those board/composer
  * smokes never needed: locating the app-generated runtime artifacts (the
  * `volli.sock` and the `<userData>/bin/volli` shim), driving the REAL built CLI
  * against a live app, and one raw NDJSON round-trip so a probe can talk to the
@@ -51,12 +51,12 @@ export async function makeShortScratch(tag = "") {
   };
 }
 
-/** The Unix socket the app binds under its userData dir (spec decision 8). */
+/** The Unix socket the app binds under its userData dir. */
 export function socketPathFor(userDataDir) {
   return join(userDataDir, "volli.sock");
 }
 
-/** The launcher shim the app (re)generates on every boot (spec decision 7). */
+/** The launcher shim the app (re)generates on every boot. */
 export function shimPathFor(userDataDir) {
   return join(userDataDir, "bin", "volli");
 }
@@ -64,7 +64,7 @@ export function shimPathFor(userDataDir) {
 /**
  * Drive the REAL generated `volli` shim (a POSIX sh launcher that sets
  * ELECTRON_RUN_AS_NODE=1 and execs the app's own Electron against the CLI
- * bundle — decision 7's zero-extra-runtime path). `extraEnv` merges over
+ * bundle, avoiding a second runtime). `extraEnv` merges over
  * process.env; point VOLLI_SOCKET here to target a specific (or dead) app.
  * Never throws on a non-zero exit — returns `{ code, stdout, stderr }` so a
  * probe can assert the exit-code contract (0/1/2/3).

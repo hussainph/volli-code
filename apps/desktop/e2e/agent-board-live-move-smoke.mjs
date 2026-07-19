@@ -1,6 +1,5 @@
 /**
- * e2e probe 6 (PR #70, spec §Tests → e2e): "renderer board reflects a
- * socket-driven move".
+ * E2e probe: renderer board reflects a socket-driven move.
  *
  * With the board visible and a seeded ticket in Todo, a CLI `ticket move --to
  * doing` over the socket must move the card into the Doing column LIVE — no
@@ -8,7 +7,7 @@
  * socket-originated mutations broadcast an entity-scoped IPC event the renderer
  * stores apply). This is the "board updates as agents work it" guarantee.
  *
- * Consent is pre-answered "defer" via the documented test seam.
+ * Consent is pre-answered "defer" via the test seam.
  *
  *   Run:
  *     vp run --filter @volli/desktop build

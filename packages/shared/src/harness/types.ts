@@ -12,7 +12,7 @@ export interface HarnessAdapter {
   /**
    * How to detect this harness on the host. `executable` is the binary name to
    * probe on PATH — kept here (not in a parallel table) so adding a harness
-   * touches only its adapter module (spec decision 13).
+   * touches only its adapter module.
    */
   detection: { executable: string };
   installActions(home: string, canonicalSkillPath: string): InstallAction[];

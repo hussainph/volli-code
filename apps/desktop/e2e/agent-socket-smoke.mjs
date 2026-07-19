@@ -1,17 +1,17 @@
 /**
- * e2e probe 1 (PR #70, spec §Tests → e2e): "app boots socket".
+ * E2e probe: app boots the agent socket.
  *
  * Launches the BUILT app against a scratch profile and asserts the agent
  * surface is live the way an external CLI would find it:
- *   1. `<userData>/volli.sock` exists and is a socket with mode 0600
- *      (spec decision 8: private, owner-only).
+ *   1. `<userData>/volli.sock` exists and is a private, owner-only socket with
+ *      mode 0600.
  *   2. A raw NDJSON `identify` request over that socket gets a well-formed v1
  *      response carrying the app version — the socket actually answers, not
  *      merely binds.
- *   3. The launcher shim `<userData>/bin/volli` is (re)generated on boot
- *      (spec decision 7), so an agent has a `volli` to run.
+ *   3. The launcher shim `<userData>/bin/volli` is (re)generated on boot, so an
+ *      agent has a `volli` to run.
  *
- * Consent is pre-answered "defer" via the documented test seam so no native
+ * Consent is pre-answered "defer" via the test seam so no native
  * dialog sheet dangles over teardown (this probe is not about consent).
  *
  *   Run:

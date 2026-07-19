@@ -1,10 +1,9 @@
 /**
- * e2e probe 4 (PR #70, spec §Tests → e2e): "installer idempotency against a
- * fake $HOME".
+ * E2e probe: installer idempotency against a fake $HOME.
  *
  * Runs the REAL install pipeline (detect → plan → apply with manifest) through
- * the app, against a throwaway $HOME, three times — asserting the decision-12
- * guarantees on disk:
+ * the app, against a throwaway $HOME, three times — asserting these guarantees
+ * on disk:
  *   1. First install writes the managed skill pack (canonical copy + Claude
  *      symlink + OpenCode command + manifest) for the detected harnesses.
  *   2. A second run is idempotent: the managed files are byte-identical AND
@@ -14,7 +13,7 @@
  *      not overwritten — while `custom/` still stands.
  *
  * The /usr/local/bin admin symlink is env-gated off in tests (it needs an
- * osascript admin prompt no headless run can answer) via the documented seam;
+ * osascript admin prompt no headless run can answer) via the test seam;
  * this probe exercises exactly the skill-pack pipeline, which is where install
  * idempotency lives. First install is driven by consent=install; the two
  * follow-ups take the app-update refresh path (consent already "installed").

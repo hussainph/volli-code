@@ -1,10 +1,10 @@
 /**
- * e2e probe 5 (PR #70, spec §Tests → e2e): "first-launch consent flow".
+ * E2e probe: first-launch consent flow.
  *
  * The consent moment fires once, during boot, before any Playwright client can
- * patch dialog.showMessageBox — so it is pre-answered through the documented
+ * patch dialog.showMessageBox — so it is pre-answered through the
  * test seam VOLLI_AGENT_CONSENT_CHOICE (mirrors VOLLI_SKIP_CLOSE_CONFIRM for
- * the quit gate). Asserts the two branches of decision 7/12's consent gate:
+ * the quit gate). Asserts both branches of the consent gate:
  *   1. "defer" persists consent = "deferred" and installs NOTHING.
  *   2. "install" persists consent = "installed" and writes the skill pack.
  *   3. A subsequent boot with consent already "installed" triggers the

@@ -1,10 +1,10 @@
 /**
- * e2e probe 2 (PR #70, spec §Tests → e2e): "real CLI against the running app".
+ * E2e probe: real CLI against the running app.
  *
  * Drives the ACTUAL generated `volli` shim (Electron-as-node over the built CLI
- * bundle, decision 7) against a live app's Unix socket and asserts the full
+ * bundle) against a live app's Unix socket and asserts the full
  * write→read round-trip an agent performs, including the display-ID and
- * exit-code contracts (decision 6):
+ * exit-code contracts:
  *   1. `ticket create` prints the new display ID first, in Backlog, exit 0.
  *   2. `ticket move --to doing` reports the same ID now in Doing, exit 0.
  *   3. `ticket comment -m` acknowledges against the same ID, exit 0.
@@ -14,7 +14,7 @@
  *   6. A dead VOLLI_SOCKET yields error[APP_UNREACHABLE] on stderr, exit 3
  *      (the retryable infra class hooks branch on).
  *
- * Consent is pre-answered "defer" via the documented test seam.
+ * Consent is pre-answered "defer" via the test seam.
  *
  *   Run:
  *     vp run --filter @volli/desktop build
