@@ -34,6 +34,7 @@ App data lives under Electron's `userData` dir (a fresh start, not the Swift app
 - `vp run -r typecheck` · `vp run -r test`; `vp check` (= `vp fmt` + `vp lint`) — the quality stack.
 - `act pull_request --container-architecture linux/amd64` — run CI locally before submitting a PR.
 - Ensure all PRs pass CI/CD checks before shipping.
+- **CI is minutes-rationed** (private repo, free Actions tier): PRs run one lean Linux job only. The desktop e2e smokes (`apps/desktop/e2e/*.mjs`) do NOT run in CI — run the relevant ones locally before shipping any desktop-touching PR. The macOS smoke lane is manual-only (`gh workflow run ci.yml -f desktop-smoke=true`, bills ~40 min — don't trigger it casually).
 - `vp install` / `pnpm install` for deps — Electron's binary is fetched lazily on first `require("electron")`; `pnpm run ensure:electron` (`apps/desktop`) prefetches it. `vp` is the global toolchain CLI; Node/pnpm are pinned in the root `package.json`.
 
 ## Settled stack (rationale in CONCEPT.md — don't reach for alternatives)
