@@ -117,9 +117,15 @@ async function main() {
       },
     ).catch(() => {});
     await page.evaluate((id) => {
+      // SPAWNPATH reads the exec-time environment (/proc/$$/environ) where the
+      // kernel exposes it — a Linux login shell's /etc/profile hard-assigns
+      // PATH, so the *shell's* PATH can't witness the spawn-env prepend there.
       const line =
         'echo "SOCK=$VOLLI_SOCKET"; echo "TICK=$VOLLI_TICKET"; ' +
-        'echo "SESS=$VOLLI_SESSION"; echo "VOLLI=$(command -v volli)"; echo PTY_PROBE_DONE\n';
+        'echo "SESS=$VOLLI_SESSION"; echo "VOLLI=$(command -v volli)"; ' +
+        'echo "SHIM=$(test -x "$(dirname "$VOLLI_SOCKET")/bin/volli" && echo ok)"; ' +
+        'if [ -r /proc/$$/environ ]; then echo "SPAWN$(tr "\\0" "\\n" < /proc/$$/environ | grep "^PATH=")"; fi; ' +
+        "echo PTY_PROBE_DONE\n";
       return window.api.terminal.write(id, line);
     }, sid);
 
@@ -159,11 +165,28 @@ async function main() {
       return { ok, detail: `got=${JSON.stringify(got)} want=${JSON.stringify(sid)}` };
     });
 
-    // === 4. `command -v volli` resolves to the generated shim ==============
-    await attempt(4, "`command -v volli` resolves to <userData>/bin/volli", async () => {
+    // === 4. the shim is executable and the spawn env prepends binDir ========
+    // On macOS the interactive shell keeps the prepend (path_helper merges), so
+    // `command -v volli` must resolve to the shim. On Linux the login shell's
+    // /etc/profile hard-assigns PATH, so the contract is asserted where main
+    // actually made it: the exec-time environment via /proc/$$/environ.
+    await attempt(4, "generated shim is executable and binDir leads the spawn PATH", async () => {
+      const shimOk = value("SHIM") === "ok";
+      if (process.platform === "linux") {
+        const spawnPath = value("SPAWNPATH");
+        const binDir = join(realUserData, "bin");
+        const ok = shimOk && spawnPath !== null && spawnPath.startsWith(`${binDir}:`);
+        return {
+          ok,
+          detail: `shim=${shimOk} spawnPath=${JSON.stringify(spawnPath)} wantPrefix=${JSON.stringify(`${binDir}:`)}`,
+        };
+      }
       const got = value("VOLLI");
-      const ok = got === shimPath;
-      return { ok, detail: `got=${JSON.stringify(got)} want=${JSON.stringify(shimPath)}` };
+      const ok = shimOk && got === shimPath;
+      return {
+        ok,
+        detail: `shim=${shimOk} got=${JSON.stringify(got)} want=${JSON.stringify(shimPath)}`,
+      };
     });
 
     // Kill the PTY so teardown's close gate has nothing busy to negotiate.
