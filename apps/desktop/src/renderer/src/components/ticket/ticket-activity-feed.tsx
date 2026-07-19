@@ -321,7 +321,11 @@ function Composer({ onSubmit }: { onSubmit: (body: string) => Promise<boolean> }
         >
           <PaperPlaneTiltIcon weight="fill" />
           Comment
-          <kbd className="text-label font-normal text-primary-foreground/70">⌘↵</kbd>
+          {/* Same shortcut-chip treatment as the workspace picker's tooltip
+              (project-tile.tsx), tinted for the ember primary surface. */}
+          <kbd className="rounded-sm bg-primary-foreground/15 px-1.5 py-0.5 text-label font-normal text-primary-foreground/80">
+            ⌘↵
+          </kbd>
         </Button>
       </div>
     </div>
