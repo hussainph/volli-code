@@ -616,20 +616,27 @@ async function main() {
         await waitUntil("session tab to appear", async () => (await sessionTab.count()) === 1);
         await waitForLiveCanvas(page);
 
-        await focusTerminal(page);
-        await runInTerminal(
-          page,
-          `echo "$VOLLI_TICKET" > ${PROBE_ENV}; echo "$VOLLI_ARTIFACTS_DIR" >> ${PROBE_ENV}`,
-        );
-        const envLines = await waitUntil("env probe file", async () => {
-          const text = await readFileSafe(PROBE_ENV);
-          if (text === null) return null;
-          const lines = text
-            .split("\n")
-            .map((l) => l.trim())
-            .filter((l) => l.length > 0);
-          return lines.length >= 2 ? lines : null;
-        });
+        // A cold shell on a slow CI runner can still be sourcing rc files when
+        // the first line is typed and silently drop it; a second identical line
+        // against the now-live prompt recovers without weakening the assertion.
+        let envLines = null;
+        for (let attempt = 0; attempt < 2 && envLines === null; attempt += 1) {
+          await focusTerminal(page);
+          await runInTerminal(
+            page,
+            `echo "$VOLLI_TICKET" > ${PROBE_ENV}; echo "$VOLLI_ARTIFACTS_DIR" >> ${PROBE_ENV}`,
+          );
+          envLines = await waitUntil("env probe file", async () => {
+            const text = await readFileSafe(PROBE_ENV);
+            if (text === null) return null;
+            const lines = text
+              .split("\n")
+              .map((l) => l.trim())
+              .filter((l) => l.length > 0);
+            return lines.length >= 2 ? lines : null;
+          }).catch(() => null);
+        }
+        if (envLines === null) throw new Error("env probe file never appeared (after retype)");
         const envOk = envLines[0] === DISPLAY_ID && envLines[1] === EXPECTED_ARTIFACTS_DIR;
 
         // Keep-alive across tabs: switch to Doc and back, type again.
