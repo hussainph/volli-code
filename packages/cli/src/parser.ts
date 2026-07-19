@@ -53,9 +53,8 @@ type OptionEntry =
       kind: "multi";
       count: number;
       missingMessage: string;
-      build: (
-        parts: readonly string[],
-      ) => { ok: true; value: Record<string, unknown> } | ParsedValue;
+      /** Missing/flag-shaped parts are rejected before this runs, so it cannot fail. */
+      build: (parts: readonly string[]) => Record<string, unknown>;
       bump?: string;
     };
 
@@ -65,8 +64,8 @@ interface CommandSpec {
   options: Readonly<Record<string, OptionEntry>>;
   /** Keys that must be present in `args` after the walk, each with its own message. */
   required?: Readonly<Record<string, string>>;
-  /** Initial args, applied before the walk (arrays are copied per call). */
-  defaults?: Readonly<Record<string, unknown>>;
+  /** Initial list args, applied before the walk (copied per call). */
+  defaults?: Readonly<Record<string, readonly string[]>>;
   /** Post-walk validation/normalization; return an error message, or null when ok. */
   finalize?: (
     args: Record<string, unknown>,
@@ -83,7 +82,7 @@ function parseWithSpec(
   const args: Record<string, unknown> = {};
   if (spec.defaults) {
     for (const [key, value] of Object.entries(spec.defaults)) {
-      args[key] = Array.isArray(value) ? [...value] : value;
+      args[key] = [...value];
     }
   }
 
@@ -117,9 +116,7 @@ function parseWithSpec(
         if (raw === undefined || raw.startsWith("--")) return usage(entry.missingMessage);
         parts.push(raw);
       }
-      const built = entry.build(parts);
-      if (!built.ok) return usage(built.message);
-      Object.assign(args, built.value);
+      Object.assign(args, entry.build(parts));
       index += entry.count;
     } else {
       const raw = rest[index + 1];
@@ -197,10 +194,7 @@ const TICKET_UPDATE_SPEC: CommandSpec = {
       kind: "multi",
       count: 2,
       missingMessage: "--edit requires <old> and <new>",
-      build: ([oldText, newText]) => ({
-        ok: true,
-        value: { bodyMutation: { mode: "edit", oldText, newText } },
-      }),
+      build: ([oldText, newText]) => ({ bodyMutation: { mode: "edit", oldText, newText } }),
       bump: "bodyMode",
     },
     "--add-label": { kind: "repeated", key: "addLabels" },
