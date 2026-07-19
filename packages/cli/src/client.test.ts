@@ -111,6 +111,22 @@ describe("requestAgent", () => {
     );
   });
 
+  it("accepts a typed failure envelope without weakening the discriminant", async () => {
+    const response = {
+      v: 1,
+      ok: false,
+      error: { code: "DB_UNAVAILABLE", message: "Database failed to open." },
+    } as const;
+    await withSocketServer(
+      (socket) => socket.end(`${JSON.stringify(response)}\n`),
+      async (socketPath) => {
+        await expect(requestAgent(socketPath, request, { timeoutMs: 500 })).resolves.toEqual(
+          response,
+        );
+      },
+    );
+  });
+
   it("rejects oversized and missing responses", async () => {
     await withSocketServer(
       // Two UTF-16 code units but four UTF-8 bytes: this stays below a

@@ -39,7 +39,7 @@ describe("renderCliSuccess", () => {
   });
 
   it("neutralizes terminal control and bidi sequences in every text-mode output path", () => {
-    const hostile = "safe\u001b]52;c;YXR0YWNr\u0007\rspoof\u202Etxt";
+    const hostile = "safe\u001b]52;c;YXR0YWNr\u0007\rspoof\u202Etxt\u2066isolate";
     const rendered = renderCliSuccess(
       "ticket.show",
       {
@@ -55,17 +55,17 @@ describe("renderCliSuccess", () => {
     );
     const error = renderCliError({ code: "MUTATION_FAILED", message: hostile });
 
-    for (const control of ["\u001b", "\u0007", "\r", "\u202e"]) {
+    for (const control of ["\u001b", "\u0007", "\r", "\u202e", "\u2066"]) {
       expect(rendered).not.toContain(control);
     }
-    expect(rendered).toContain("\\x1b]52;c;YXR0YWNr\\x07\\x0dspoof\\u202e");
-    for (const control of ["\u001b", "\u0007", "\r", "\u202e"]) {
+    expect(rendered).toContain("\\x1b]52;c;YXR0YWNr\\x07\\x0dspoof\\u202etxt\\u2066isolate");
+    for (const control of ["\u001b", "\u0007", "\r", "\u202e", "\u2066"]) {
       expect(error).not.toContain(control);
     }
     // JSON mode keeps exact parsed data semantics without emitting raw
     // terminal controls (JSON permits a Unicode escape for the bidi mark).
     const json = renderCliSuccess("ticket.brief", { prompt: hostile }, { json: true });
-    for (const control of ["\u001b", "\u0007", "\r", "\u202e"]) {
+    for (const control of ["\u001b", "\u0007", "\r", "\u202e", "\u2066"]) {
       expect(json).not.toContain(control);
     }
     expect(JSON.parse(json)).toEqual({ prompt: hostile });
