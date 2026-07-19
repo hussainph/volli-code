@@ -21,6 +21,8 @@ import { registerAppMenu } from "./menu";
 import { confirmDestructiveClose, registerTerminalIpcHandlers } from "./pty";
 import type { PtyManager } from "./pty";
 import { registerFileIpcHandlers } from "./volli-fs";
+import { sweepOrphans } from "./worktree";
+import { worktreeDeps } from "./worktree-runtime";
 import { createAgentCommandService } from "./agent-commands";
 import { ensureVolliCliShim, volliRuntimePaths } from "./agent-runtime";
 import { startAgentSocket, type AgentSocketServer } from "./agent-socket";
@@ -287,6 +289,21 @@ app.whenReady().then(async () => {
   // create, reveal, per-tab watch); same degraded-DB stance as
   // registerDataIpcHandlers.
   registerFileIpcHandlers(dbHandle);
+  // Startup orphan sweep (worktree-support §7): prunes stale git metadata and
+  // removes clean orphaned worktree dirs (branches retained); dirty orphans are
+  // left for Settings → Worktrees. Fire-and-forget — never blocks boot, and a
+  // sweep failure is logged, not thrown.
+  if (dbHandle.ok) {
+    sweepOrphans(worktreeDeps(dbHandle.db))
+      .then((report) => {
+        console.log(
+          `[worktree] sweep: pruned=${report.pruned.length} removedClean=${report.removedClean.length} dirty=${report.dirty.length}`,
+        );
+      })
+      .catch((error) => {
+        console.error("[worktree] sweep failed:", errorMessage(error));
+      });
+  }
   // Boots the PTY multiplexer (persists a durable record per session) and its
   // before-quit teardown (kills all PTYs, gated on busy sessions); needs the
   // db, so it registers here. The returned manager feeds each window's own

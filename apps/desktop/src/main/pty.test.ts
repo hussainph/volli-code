@@ -22,13 +22,27 @@ import {
 
 // Hoisted above module evaluation, like ipc.test.ts, so the electron/node-pty
 // mock factories can capture into them.
-const { handlers, listeners, appHandlers, spawn, showMessageBoxSync, appQuit } = vi.hoisted(() => ({
+const {
+  handlers,
+  listeners,
+  appHandlers,
+  spawn,
+  showMessageBoxSync,
+  appQuit,
+  ensureWorktree,
+  onWorktreePhase,
+} = vi.hoisted(() => ({
   handlers: new Map<string, (...args: never[]) => unknown>(),
   listeners: new Map<string, (...args: never[]) => unknown>(),
   appHandlers: new Map<string, (event: { preventDefault: () => void }) => void>(),
   spawn: vi.fn(),
   showMessageBoxSync: vi.fn(),
   appQuit: vi.fn(),
+  // Worktree `ensure` is mocked so no real git runs; the setup-sentinel helpers
+  // stay real (partial mock below). `onWorktreePhase` stands in for the phase
+  // broadcast — the real one reaches for electron's BrowserWindow, absent here.
+  ensureWorktree: vi.fn(),
+  onWorktreePhase: vi.fn(),
 }));
 
 vi.mock("electron", () => ({
@@ -54,6 +68,19 @@ vi.mock("electron", () => ({
 // The whole point of the lazy import in pty.ts: this mock stands in for the
 // Electron-ABI native binary, which never loads under plain-Node vitest.
 vi.mock("node-pty", () => ({ spawn }));
+
+// Only `ensure` is mocked (no real git); `setPhase`/`buildSetupSentinelLine`/
+// `parseSetupSentinel` stay REAL so the sentinel contract is exercised end to
+// end. The runtime deps bundle is replaced so phase broadcasts don't touch
+// electron and `worktreesHome` is a stable stand-in.
+vi.mock("./worktree", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./worktree")>();
+  return { ...actual, ensure: ensureWorktree };
+});
+vi.mock("./worktree-runtime", () => ({
+  worktreeDeps: (db: unknown) => ({ db, git: () => "", onPhase: onWorktreePhase }),
+  worktreesHome: () => "/volli-test-worktrees",
+}));
 
 import { confirmDestructiveClose, PtyManager, registerTerminalIpcHandlers } from "./pty";
 import type { ParkConfig, ProcessInspector } from "./park";
@@ -964,7 +991,9 @@ async function createKickoffSession(
 
 describe("ticket sessions", () => {
   beforeEach(() => {
-    insertTicket(testDb.db, testTicket("w", { id: "tk1", ticketNumber: 12 }));
+    // Non-worktree: these tests exercise the direct-launch path, unchanged by
+    // the worktree wiring. The worktree path has its own describe block below.
+    insertTicket(testDb.db, testTicket("w", { id: "tk1", ticketNumber: 12, usesWorktree: false }));
   });
 
   it("persists a ticket-scoped record, records session_started, and injects ticket env", async () => {
@@ -1065,7 +1094,10 @@ describe("ticket sessions", () => {
     // on disk (moved/deleted repo). ensureProjectArtifactsDir must NOT recreate it.
     const gonePath = join(root, "gone-repo");
     insertProject(testDb.db, testProject({ id: "p-gone", path: gonePath, ticketPrefix: "GO" }));
-    insertTicket(testDb.db, testTicket("p-gone", { id: "tk-gone", ticketNumber: 1 }));
+    insertTicket(
+      testDb.db,
+      testTicket("p-gone", { id: "tk-gone", ticketNumber: 1, usesWorktree: false }),
+    );
     syncProjectRoots([root]);
 
     const result = await invokeCreate(makeWebContents(), {
@@ -1087,7 +1119,10 @@ describe("ticket sessions", () => {
     const filePath = join(root, "root-is-a-file");
     await fs.writeFile(filePath, "not a dir", "utf8");
     insertProject(testDb.db, testProject({ id: "p-file", path: filePath, ticketPrefix: "FI" }));
-    insertTicket(testDb.db, testTicket("p-file", { id: "tk-file", ticketNumber: 1 }));
+    insertTicket(
+      testDb.db,
+      testTicket("p-file", { id: "tk-file", ticketNumber: 1, usesWorktree: false }),
+    );
     syncProjectRoots([root]);
 
     const result = await invokeCreate(makeWebContents(), {
@@ -1169,7 +1204,12 @@ describe("ticket sessions", () => {
   it("does not write to the pty when the ticket request carries no kickoff", async () => {
     insertTicket(
       testDb.db,
-      testTicket("w", { id: "tk2", ticketNumber: 13, preferredHarnessId: "codex" }),
+      testTicket("w", {
+        id: "tk2",
+        ticketNumber: 13,
+        preferredHarnessId: "codex",
+        usesWorktree: false,
+      }),
     );
     const { result, pty } = await createTicketSession("tk2");
     if (!result.ok) throw new Error(`expected session, got ${result.error}`);
@@ -1221,6 +1261,151 @@ describe("ticket sessions", () => {
       launchKind: "agent",
       placement: "tab",
     });
+  });
+});
+
+describe("worktree ticket sessions", () => {
+  // A real worktree lands in ~/.volli/worktrees; here `ensure` is mocked to
+  // return a path inside the project root, so the main-derived cwd passes
+  // `isPathWithinRoots` (the OR branch the guard allows) without touching disk.
+  const wtCwd = () => join(root, "wt-WP-20");
+  const wtBranch = "volli/WP-20-worktree";
+
+  /** Mocks `ensure` to succeed with the given `created` flag and the fixed identity. */
+  function ensureOk(created: boolean) {
+    ensureWorktree.mockResolvedValue({
+      ok: true,
+      value: {
+        identity: { worktreePath: wtCwd(), branch: wtBranch, baseBranch: "main" },
+        created,
+      },
+    });
+  }
+
+  beforeEach(async () => {
+    ensureWorktree.mockReset();
+    onWorktreePhase.mockReset();
+    // A worktree ticket whose project defines a setup command; its dir must
+    // exist for the pre-spawn artifacts pre-flight.
+    const projectPath = join(root, "wtproj");
+    await fs.mkdir(projectPath, { recursive: true });
+    insertProject(
+      testDb.db,
+      testProject({
+        id: "wp",
+        path: projectPath,
+        ticketPrefix: "WP",
+        setupCommand: "pnpm install",
+      }),
+    );
+    insertTicket(testDb.db, testTicket("wp", { id: "wt1", ticketNumber: 20, usesWorktree: true }));
+    syncProjectRoots([root]);
+  });
+
+  /** Boots the wt1 worktree session with an optional kickoff, returning its result + pty. */
+  async function createWorktreeSession(kickoff?: { harnessId: string; prompt: string }) {
+    const pty = makeFakePty();
+    spawn.mockReturnValueOnce(pty);
+    const result = await invokeCreate(makeWebContents(), {
+      workspaceId: "wp",
+      cwd: root,
+      cols: 80,
+      rows: 24,
+      ticket: { ticketId: "wt1", ...(kickoff ? { kickoff } : {}) },
+    });
+    return { result, pty };
+  }
+
+  it("runs ensure before spawn, roots the pty at the worktree, and opens the prompt with the orientation preamble", async () => {
+    ensureOk(false); // reused worktree → launch immediately, no setup gate
+    const { result, pty } = await createWorktreeSession({
+      harnessId: "codex",
+      prompt: "run tests",
+    });
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+
+    expect(ensureWorktree).toHaveBeenCalledTimes(1);
+    // ensure resolved BEFORE the pty was spawned.
+    expect(ensureWorktree.mock.invocationCallOrder[0]).toBeLessThan(
+      spawn.mock.invocationCallOrder[0]!,
+    );
+    // The pty is rooted at the ensure-resolved worktree, not the main checkout.
+    const [, , options] = spawn.mock.calls[0] as [string, string[], { cwd: string }];
+    expect(options.cwd).toBe(wtCwd());
+    // The single launch line is the harness command, opening with the preamble.
+    expect(pty.write).toHaveBeenCalledTimes(1);
+    const written = pty.write.mock.calls[0]![0] as string;
+    expect(written).toContain("isolated git worktree");
+    expect(written).toContain(wtCwd());
+    expect(written).toContain(wtBranch);
+    expect(written).toContain("run tests");
+    expect(written).toContain("codex");
+    expect(written.endsWith("\r")).toBe(true);
+  });
+
+  it("aborts boot and never spawns when ensure fails — never falling back to the main checkout", async () => {
+    ensureWorktree.mockResolvedValue({ ok: false, error: "git worktree add failed" });
+    const result = await invokeCreate(makeWebContents(), {
+      workspaceId: "wp",
+      cwd: root,
+      cols: 80,
+      rows: 24,
+      ticket: { ticketId: "wt1" },
+    });
+    expect(result).toEqual({ ok: false, error: "git worktree add failed" });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("gates a freshly-created worktree on the setup sentinel, then launches the harness on exit 0", async () => {
+    ensureOk(true); // fresh create + a configured setup command → sentinel-gated
+    const { result, pty } = await createWorktreeSession({ harnessId: "codex", prompt: "go" });
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+
+    // The first (and only) line so far is the wrapped setup command, NOT the harness.
+    expect(pty.write).toHaveBeenCalledTimes(1);
+    const setupLine = pty.write.mock.calls[0]![0] as string;
+    expect(setupLine).toContain("pnpm install");
+    expect(setupLine).toContain("__VOLLI_SETUP_DONE");
+    expect(setupLine).not.toContain("codex");
+    expect(onWorktreePhase).toHaveBeenCalledWith("wt1", "setting-up");
+
+    // Setup finishes cleanly → the held harness command is typed, phase → ready.
+    pty.emitData("resolving packages...\n__VOLLI_SETUP_DONE:0__\n");
+    expect(pty.write).toHaveBeenCalledTimes(2);
+    const harness = pty.write.mock.calls[1]![0] as string;
+    expect(harness).toContain("codex");
+    expect(harness).toContain("go");
+    expect(onWorktreePhase).toHaveBeenCalledWith("wt1", "ready");
+  });
+
+  it("leaves a live shell and records worktree_failed(setup) when the setup command exits non-zero", async () => {
+    ensureOk(true);
+    const { result, pty } = await createWorktreeSession({ harnessId: "codex", prompt: "go" });
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+    expect(pty.write).toHaveBeenCalledTimes(1); // setup line only
+
+    pty.emitData("error: no lockfile\n__VOLLI_SETUP_DONE:2__\n");
+
+    // Harness command is never written; the terminal stays a live shell.
+    expect(pty.write).toHaveBeenCalledTimes(1);
+    expect(onWorktreePhase).toHaveBeenCalledWith("wt1", "failed");
+    const failed = listTicketEvents(testDb.db, "wt1").find(
+      (event) => event.payload.kind === "worktree_failed",
+    );
+    expect(failed?.payload).toMatchObject({ kind: "worktree_failed", stage: "setup" });
+  });
+
+  it("does not run the setup command for a reused worktree (created false)", async () => {
+    ensureOk(false);
+    const { result, pty } = await createWorktreeSession({ harnessId: "codex", prompt: "go" });
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+
+    // Straight to the harness command — no sentinel line, no setting-up phase.
+    expect(pty.write).toHaveBeenCalledTimes(1);
+    const written = pty.write.mock.calls[0]![0] as string;
+    expect(written).toContain("codex");
+    expect(written).not.toContain("__VOLLI_SETUP_DONE");
+    expect(onWorktreePhase).not.toHaveBeenCalledWith("wt1", "setting-up");
   });
 });
 

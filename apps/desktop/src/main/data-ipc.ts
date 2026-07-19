@@ -40,6 +40,10 @@ import type {
   TicketsResult,
   TicketStatus,
   VolliIpcChannel,
+  WorktreeBranchesResult,
+  WorktreeOrphansResult,
+  WorktreeRemoveResult,
+  WorktreeStateResult,
 } from "@volli/shared";
 import { getAllAppState, setAppState } from "./db/app-state-repo";
 import { deleteComment, getComment, listComments, updateComment } from "./db/comments-repo";
@@ -54,6 +58,7 @@ import {
   nextSortOrder,
   reorderProjects,
   updateProjectBaseBranch,
+  updateProjectSetupCommand,
 } from "./db/projects-repo";
 import { listSessions, listTicketSessions, updateTitle } from "./db/sessions-repo";
 import { listAllTickets, listArchivedTicketsByProject } from "./db/tickets-repo";
@@ -69,6 +74,8 @@ import {
   updateTicketFieldsCommand,
 } from "./ticket-commands";
 import { detectProjectBaseBranch } from "./project-base-branch";
+import { getState, listBranches, remove as removeWorktree, sweepOrphans } from "./worktree";
+import { worktreeDeps } from "./worktree-runtime";
 
 /** The result of the main-process open+migrate attempt (`src/main/index.ts`), fed into {@link registerDataIpcHandlers}. */
 export type DbHandle = { ok: true; db: Database.Database } | { ok: false; error: string };
@@ -100,6 +107,10 @@ const DATA_CHANNELS: readonly VolliIpcChannel[] = [
   "volli:session-rename",
   "volli:label-set-color",
   "volli:app-state-set",
+  "volli:worktree-state",
+  "volli:worktree-remove",
+  "volli:worktree-branches",
+  "volli:worktree-orphans",
 ];
 
 // ---- input validation -------------------------------------------------
@@ -140,6 +151,25 @@ function isProjectCreateInput(value: unknown): value is ProjectCreateInput {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
   return typeof candidate["path"] === "string" && typeof candidate["name"] === "string";
+}
+
+interface ProjectUpdateInput {
+  id: string;
+  baseBranch: string | null;
+  /** `undefined` (untouched), `null` (clear), or a `string` (set) — the same shape as ticket-update's worktree-identity fields. */
+  setupCommand?: string | null;
+}
+
+function isProjectUpdateInput(value: unknown): value is ProjectUpdateInput {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate["id"] === "string" &&
+    (candidate["baseBranch"] === null ||
+      (typeof candidate["baseBranch"] === "string" &&
+        isValidBranchName(candidate["baseBranch"]))) &&
+    isOptionalNullableString(candidate["setupCommand"])
+  );
 }
 
 interface TicketCreateInput {
@@ -320,6 +350,17 @@ function isProjectIdInput(value: unknown): value is ProjectIdInput {
   return typeof (value as Record<string, unknown>)["projectId"] === "string";
 }
 
+interface WorktreeRemoveInput {
+  ticketId: string;
+  force: boolean;
+}
+
+function isWorktreeRemoveInput(value: unknown): value is WorktreeRemoveInput {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate["ticketId"] === "string" && typeof candidate["force"] === "boolean";
+}
+
 interface LabelSetColorInput {
   labelId: string;
   color: string | null;
@@ -487,22 +528,20 @@ export function registerDataIpcHandlers(
   ipcMain.handle(
     "volli:project-update" satisfies VolliIpcChannel,
     (_event, input: unknown): ProjectUpdateResult => {
-      if (
-        typeof input !== "object" ||
-        input === null ||
-        typeof (input as Record<string, unknown>)["id"] !== "string" ||
-        !(
-          (input as Record<string, unknown>)["baseBranch"] === null ||
-          (typeof (input as Record<string, unknown>)["baseBranch"] === "string" &&
-            isValidBranchName((input as Record<string, unknown>)["baseBranch"] as string))
-        )
-      ) {
+      if (!isProjectUpdateInput(input)) {
         return { ok: false, error: "Invalid project base branch" };
       }
-      const candidate = input as { id: string; baseBranch: string | null };
       try {
-        const project = updateProjectBaseBranch(db, candidate.id, candidate.baseBranch, Date.now());
-        return project ? { ok: true, project } : { ok: false, error: "Unknown project" };
+        const now = Date.now();
+        const project = updateProjectBaseBranch(db, input.id, input.baseBranch, now);
+        if (!project) return { ok: false, error: "Unknown project" };
+        if (input.setupCommand === undefined) return { ok: true, project };
+        // Same trim-to-null-on-empty semantics as the ticket-update worktree
+        // identity fields: an empty command means "skip the setup step".
+        const trimmed = input.setupCommand === null ? null : input.setupCommand.trim();
+        const normalized = trimmed === "" ? null : trimmed;
+        const updated = updateProjectSetupCommand(db, input.id, normalized, now);
+        return updated ? { ok: true, project: updated } : { ok: false, error: "Unknown project" };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }
@@ -851,6 +890,72 @@ export function registerDataIpcHandlers(
       try {
         setAppState(db, key, value, Date.now());
         return { ok: true };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:worktree-state" satisfies VolliIpcChannel,
+    async (_event, input: unknown): Promise<WorktreeStateResult> => {
+      if (!isTicketIdInput(input)) {
+        return { ok: false, error: "Invalid ticket" };
+      }
+      try {
+        const state = await getState(worktreeDeps(db), input.ticketId);
+        return { ok: true, identity: state.identity, phase: state.phase, disk: state.disk };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:worktree-remove" satisfies VolliIpcChannel,
+    async (_event, input: unknown): Promise<WorktreeRemoveResult> => {
+      if (!isWorktreeRemoveInput(input)) {
+        return { ok: false, error: "Invalid worktree removal" };
+      }
+      try {
+        const result = await removeWorktree(worktreeDeps(db), input.ticketId, {
+          force: input.force,
+        });
+        return result.ok ? { ok: true } : { ok: false, error: result.error };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:worktree-branches" satisfies VolliIpcChannel,
+    (_event, input: unknown): WorktreeBranchesResult => {
+      if (!isProjectIdInput(input)) {
+        return { ok: false, error: "Invalid project" };
+      }
+      try {
+        const result = listBranches(worktreeDeps(db), input.projectId);
+        return result.ok
+          ? { ok: true, branches: result.value }
+          : { ok: false, error: result.error };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:worktree-orphans" satisfies VolliIpcChannel,
+    async (): Promise<WorktreeOrphansResult> => {
+      try {
+        const report = await sweepOrphans(worktreeDeps(db));
+        return {
+          ok: true,
+          pruned: report.pruned,
+          removedClean: report.removedClean,
+          dirty: report.dirty,
+        };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }

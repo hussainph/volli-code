@@ -5,19 +5,15 @@
  * stage connects — so nothing in here reaches for a process-global.
  */
 import type Database from "better-sqlite3";
-import type { WorktreeIdentity } from "@volli/shared";
+import type { WorktreeDiskState, WorktreeIdentity, WorktreePhase } from "@volli/shared";
 
 import type { RunGit } from "../project-base-branch";
 
 export type { RunGit } from "../project-base-branch";
-export type { WorktreeIdentity } from "@volli/shared";
-
-/**
- * The transient lifecycle of a worktree's `ensure` pipeline — an in-memory
- * registry value (`phase.ts`), NEVER persisted. On boot, truth is recomputed
- * from disk (`getState`), so a phase surviving a restart would be a lie.
- */
-export type WorktreePhase = "creating" | "copying" | "setting-up" | "ready" | "failed";
+// The phase/disk vocabulary is DEFINED in @volli/shared (ipc.ts) because the
+// renderer consumes it over `volli:worktree-phase`/`volli:worktree-state`; the
+// module re-exports it so internal callers keep one import site.
+export type { WorktreeDiskState, WorktreeIdentity, WorktreePhase } from "@volli/shared";
 
 /**
  * The single injected dependency bundle every public entrypoint takes. `home`
@@ -46,9 +42,6 @@ export function ok<T>(value: T): WorktreeResult<T> {
 export function err<T>(error: string): WorktreeResult<T> {
   return { ok: false, error };
 }
-
-/** Where a worktree dir stands relative to what git knows — the live half of `getState`. */
-export type WorktreeDiskState = "present" | "missing" | "unregistered";
 
 /** The single composed answer `getState` returns (DB identity + transient phase + live disk check). */
 export interface WorktreeState {

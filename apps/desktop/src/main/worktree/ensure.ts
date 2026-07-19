@@ -34,8 +34,20 @@ import { setPhase } from "./phase";
 import { reconcile } from "./reconcile";
 import { err, ok, type RunGit, type WorktreeDeps, type WorktreeResult } from "./types";
 
+/**
+ * The success value of `ensure`: the resolved identity plus whether THIS run
+ * actually created the worktree on disk (`git worktree add` ran) versus found
+ * it already present. `created` is the setup-command gate — the setup command
+ * must run exactly once, for a freshly-materialized worktree only, so a session
+ * booting into an existing worktree never re-runs it (worktree-support §6).
+ */
+export interface EnsureOutcome {
+  identity: WorktreeIdentity;
+  created: boolean;
+}
+
 /** Concurrent `ensure(ticketId)` calls join the same promise; the entry clears on settle. */
-const inflight = new Map<string, Promise<WorktreeResult<WorktreeIdentity>>>();
+const inflight = new Map<string, Promise<WorktreeResult<EnsureOutcome>>>();
 
 const SYSTEM_ACTOR: TicketEventActor = { kind: "user" };
 
@@ -48,7 +60,7 @@ function fail(
   stage: Stage,
   message: string,
   stderr: string,
-): WorktreeResult<WorktreeIdentity> {
+): WorktreeResult<EnsureOutcome> {
   setPhase(ticketId, "failed", deps.onPhase);
   recordTicketEvent(
     deps.db,
@@ -97,7 +109,7 @@ function addWorktree(
 async function runEnsure(
   deps: WorktreeDeps,
   ticketId: string,
-): Promise<WorktreeResult<WorktreeIdentity>> {
+): Promise<WorktreeResult<EnsureOutcome>> {
   const ticket = getTicketRow(deps.db, ticketId);
   if (!ticket) return err("Unknown ticket");
   const project = getProjectById(deps.db, ticket.project_id);
@@ -138,6 +150,8 @@ async function runEnsure(
     return fail(deps, ticketId, "create", message, message);
   }
 
+  // Whether THIS run runs `git worktree add`; drives the setup-command gate.
+  const created = reconciled.value.kind === "create";
   if (reconciled.value.kind === "create") {
     const addArgs = reuseBranch
       ? [identity.path, identity.branch]
@@ -186,18 +200,19 @@ async function runEnsure(
     branch: identity.branch,
     baseBranch,
   };
-  return ok(result);
+  return ok({ identity: result, created });
 }
 
 /**
- * Ensures the ticket's worktree exists and is prepared, returning its identity.
- * Idempotent and single-flight: a concurrent call for the same ticket joins the
- * in-flight promise instead of running the pipeline twice.
+ * Ensures the ticket's worktree exists and is prepared, returning its identity
+ * plus whether THIS call created it (the setup-command gate — see {@link
+ * EnsureOutcome}). Idempotent and single-flight: a concurrent call for the same
+ * ticket joins the in-flight promise instead of running the pipeline twice.
  */
 export function ensure(
   deps: WorktreeDeps,
   ticketId: string,
-): Promise<WorktreeResult<WorktreeIdentity>> {
+): Promise<WorktreeResult<EnsureOutcome>> {
   const existing = inflight.get(ticketId);
   if (existing) return existing;
   const run = runEnsure(deps, ticketId).finally(() => inflight.delete(ticketId));

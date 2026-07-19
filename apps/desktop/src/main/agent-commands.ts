@@ -16,6 +16,7 @@ import {
   TICKET_PRIORITIES,
   TICKET_STATUS_LABELS,
   TICKET_STATUSES,
+  worktreeOrientationPreamble,
 } from "@volli/shared";
 import type {
   AgentErrorCode,
@@ -227,6 +228,7 @@ function agentTicket(ticket: Ticket, project: Project): Record<string, unknown> 
     labels: ticket.labels,
     usesWorktree: ticket.usesWorktree,
     harness: ticket.preferredHarnessId,
+    worktreePath: ticket.worktreePath,
     branch: ticket.branch,
     baseBranch: ticket.baseBranch,
     // Reserved for the loop milestone's reason badge (the Needs Review signal);
@@ -693,11 +695,23 @@ export function createAgentCommandService(
           title: resolved.ticket.title,
           body: resolved.ticket.body,
         });
+        // Orientation preamble (worktree-support §6): agents must never infer
+        // their working directory — state it outright, same as main's own
+        // post-ensure prepend, whenever the ticket has an active worktree.
+        const orientation =
+          resolved.ticket.worktreePath !== null && resolved.ticket.branch !== null
+            ? worktreeOrientationPreamble({
+                worktreePath: resolved.ticket.worktreePath,
+                branch: resolved.ticket.branch,
+                baseBranch: resolved.ticket.baseBranch,
+                projectPath: resolved.project.path,
+              }) + "\n\n"
+            : "";
         return {
           v: 1,
           ok: true,
           data: {
-            prompt: `Coordinate the board through the bundled \`volli\` CLI: run \`volli help\` for the full reference (and the volli skill, when installed, for norms).\n\n${ticketPrompt}`,
+            prompt: `${orientation}Coordinate the board through the bundled \`volli\` CLI: run \`volli help\` for the full reference (and the volli skill, when installed, for norms).\n\n${ticketPrompt}`,
           },
         };
       }

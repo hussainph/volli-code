@@ -77,11 +77,14 @@ describe("ensure — success", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value.branch).toBe(BRANCH);
-      expect(result.value.baseBranch).toBe("main");
+      // A fresh `git worktree add` ran → created true (gates the setup command).
+      expect(result.value.created).toBe(true);
+      const identity = result.value.identity;
+      expect(identity.branch).toBe(BRANCH);
+      expect(identity.baseBranch).toBe("main");
       // <container>-<short-id(8)>/<DISPLAY-ID>-<slug>
-      expect(result.value.worktreePath).toContain("/.volli/worktrees/");
-      expect(result.value.worktreePath?.endsWith("-proj-abc/VC-12-mcp-server")).toBe(true);
+      expect(identity.worktreePath).toContain("/.volli/worktrees/");
+      expect(identity.worktreePath?.endsWith("-proj-abc/VC-12-mcp-server")).toBe(true);
     }
     expect(phases).toEqual(["creating", "copying", "ready"]);
 

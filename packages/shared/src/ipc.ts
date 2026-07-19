@@ -12,7 +12,7 @@ import type { Project } from "./project-identity";
 import type { SessionRecord } from "./session";
 import type { ArchivedTicket, Ticket } from "./ticket";
 import type { TicketComment } from "./ticket-comment";
-import type { TicketEvent } from "./ticket-events";
+import type { TicketEvent, WorktreeIdentity } from "./ticket-events";
 
 /** Channel names for the preload's `contextBridge` API. */
 export type VolliIpcChannel =
@@ -69,7 +69,13 @@ export type VolliIpcChannel =
   | "volli:artifact-create"
   | "volli:file-reveal"
   | "volli:file-watch"
-  | "volli:file-unwatch";
+  | "volli:file-unwatch"
+  // Ticket worktrees (docs/plans/worktree-support.md). `ensure` has no channel
+  // on purpose — it only ever runs implicitly inside terminal-create (§1).
+  | "volli:worktree-state"
+  | "volli:worktree-remove"
+  | "volli:worktree-branches"
+  | "volli:worktree-orphans";
 
 /** Channel names for main→renderer push events (`webContents.send`). */
 export type VolliIpcEvent =
@@ -85,7 +91,10 @@ export type VolliIpcEvent =
   | "volli:ui-zoom-command"
   // Debounced fs.watch broadcast (~250ms) for a single watched file tab —
   // see volli-fs.ts's FileWatchManager.
-  | "volli:file-changed";
+  | "volli:file-changed"
+  // Transient worktree-ensure phase transitions (never persisted; the renderer
+  // mirrors them in a keyed store map, the `starting[ticketId]` pattern).
+  | "volli:worktree-phase";
 
 /** Direction of a `volli:ui-zoom-command` event: step in/out one rung, or reset. */
 export type UiZoomCommand = "in" | "out" | "reset";
@@ -244,3 +253,56 @@ export interface FileChangedEvent {
   relPath: string;
   source: FileSource;
 }
+
+// ---- ticket worktrees (docs/plans/worktree-support.md) ---------------------
+
+/**
+ * The transient lifecycle of a worktree `ensure` pipeline. NEVER persisted —
+ * on boot, truth is recomputed from disk — so a phase only exists while (or
+ * just after) an ensure ran in this app session.
+ */
+export type WorktreePhase = "creating" | "copying" | "setting-up" | "ready" | "failed";
+
+/** One `volli:worktree-phase` push: the ticket whose ensure moved, and where to. */
+export interface WorktreePhaseEvent {
+  ticketId: string;
+  phase: WorktreePhase;
+}
+
+/** Where a worktree dir stands relative to what git knows — the live half of worktree state. */
+export type WorktreeDiskState = "present" | "missing" | "unregistered";
+
+/**
+ * The single composed worktree answer for a ticket (`volli:worktree-state`):
+ * persisted identity + transient phase + live disk check. Callers never join
+ * the DB, the event log, and the stores by hand (#42).
+ */
+export type WorktreeStateResult = Result<{
+  identity: WorktreeIdentity | null;
+  phase: WorktreePhase | null;
+  disk: WorktreeDiskState;
+}>;
+
+/** Ack for a `volli:worktree-remove` (the "Remove worktree…" escape hatch). */
+export type WorktreeRemoveResult = Result;
+
+/** A project's local branch names — returned by `volli:worktree-branches` for the base-branch picker. */
+export type WorktreeBranchesResult = Result<{ branches: string[] }>;
+
+/** One orphan the sweep refused to remove, for the Settings → Worktrees list. */
+export interface DirtyWorktreeOrphan {
+  path: string;
+  projectId?: string;
+  reason: string;
+}
+
+/**
+ * A `volli:worktree-orphans` sweep report: metadata pruned per project, clean
+ * orphan dirs auto-removed (branches retained), and dirty orphans left in
+ * place for the user (§7 — never auto-removed).
+ */
+export type WorktreeOrphansResult = Result<{
+  pruned: string[];
+  removedClean: string[];
+  dirty: DirtyWorktreeOrphan[];
+}>;

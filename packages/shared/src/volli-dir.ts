@@ -37,6 +37,13 @@ export const VOLLI_TICKET_ENV = "VOLLI_TICKET";
 export const VOLLI_ARTIFACTS_DIR_ENV = "VOLLI_ARTIFACTS_DIR";
 export const VOLLI_SESSION_ENV = "VOLLI_SESSION";
 export const VOLLI_SOCKET_ENV = "VOLLI_SOCKET";
+/**
+ * The MAIN checkout's absolute path (worktree-support §8) — injected so an
+ * agent in a ticket worktree can locate the main repo without ever inferring
+ * it from `cwd` (which IS the worktree there). Present for every ticket
+ * session; for a non-worktree ticket it simply equals the cwd.
+ */
+export const VOLLI_PROJECT_DIR_ENV = "VOLLI_PROJECT_DIR";
 
 /**
  * Env vars injected at PTY creation for a ticket-linked session (decision #9):
@@ -51,6 +58,7 @@ export function ticketSessionEnv(projectPath: string, displayId: string): Record
   return {
     [VOLLI_TICKET_ENV]: displayId,
     [VOLLI_ARTIFACTS_DIR_ENV]: projectArtifactsDir(projectPath),
+    [VOLLI_PROJECT_DIR_ENV]: stripTrailingSlash(projectPath),
   };
 }
 

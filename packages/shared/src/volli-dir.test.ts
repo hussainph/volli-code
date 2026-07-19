@@ -47,10 +47,11 @@ describe("env var names", () => {
 });
 
 describe("ticketSessionEnv", () => {
-  it("builds the env map for a ticket-linked session (display id + main-repo artifacts dir)", () => {
+  it("builds the env map for a ticket-linked session (display id + main-repo artifacts dir + main-repo path)", () => {
     expect(ticketSessionEnv("/Users/dev/project", "VC-12")).toEqual({
       VOLLI_TICKET: "VC-12",
       VOLLI_ARTIFACTS_DIR: "/Users/dev/project/.volli/artifacts",
+      VOLLI_PROJECT_DIR: "/Users/dev/project",
     });
   });
 

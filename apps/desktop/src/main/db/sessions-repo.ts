@@ -132,23 +132,50 @@ export interface TicketSessionContext {
   ticketPrefix: string;
   ticketNumber: number;
   preferredHarnessId: HarnessId;
+  /** Whether this ticket runs in an isolated worktree (drives session-boot `ensure`). */
+  usesWorktree: boolean;
+  /** The project's setup command to run once after a fresh worktree is created, or `null`. */
+  setupCommand: string | null;
+}
+
+/** Raw JOIN row — `uses_worktree` is a SQLite int; mapped to a bool below (as tickets-repo does). */
+interface TicketSessionContextRow {
+  projectId: string;
+  projectPath: string;
+  ticketPrefix: string;
+  ticketNumber: number;
+  preferredHarnessId: HarnessId;
+  usesWorktree: number;
+  setupCommand: string | null;
 }
 
 export function getTicketSessionContext(
   db: Database.Database,
   ticketId: string,
 ): TicketSessionContext | undefined {
-  return prepared<[string], TicketSessionContext>(
+  const row = prepared<[string], TicketSessionContextRow>(
     db,
     `SELECT t.project_id     AS projectId,
             p.path           AS projectPath,
             p.ticket_prefix  AS ticketPrefix,
             t.ticket_number  AS ticketNumber,
-            t.preferred_harness_id AS preferredHarnessId
+            t.preferred_harness_id AS preferredHarnessId,
+            t.uses_worktree  AS usesWorktree,
+            p.setup_command  AS setupCommand
        FROM tickets t
        JOIN projects p ON p.id = t.project_id
       WHERE t.id = ?`,
   ).get(ticketId);
+  if (row === undefined) return undefined;
+  return {
+    projectId: row.projectId,
+    projectPath: row.projectPath,
+    ticketPrefix: row.ticketPrefix,
+    ticketNumber: row.ticketNumber,
+    preferredHarnessId: row.preferredHarnessId,
+    usesWorktree: row.usesWorktree !== 0,
+    setupCommand: row.setupCommand,
+  };
 }
 
 /**

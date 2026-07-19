@@ -62,3 +62,25 @@ export function buildHarnessCommand(harnessId: HarnessId, prompt: string): strin
   const adapter = getHarnessAdapter(harnessId);
   return [adapter.command, adapter.promptFlag, quoted].filter(Boolean).join(" ");
 }
+
+/**
+ * The orientation preamble a worktree ticket's prompt OPENS with
+ * (worktree-support §6): agents must never infer — much less "reorient" —
+ * their working directory, so the situation is stated outright before the
+ * ticket content. Main prepends this after `ensure` resolves (only then are
+ * path/branch/base known); the CLI's `ticket.brief` prepends it the same way.
+ */
+export function worktreeOrientationPreamble(input: {
+  worktreePath: string;
+  branch: string;
+  baseBranch: string | null;
+  projectPath: string;
+}): string {
+  const branchedFrom = input.baseBranch ? ` (branched from \`${input.baseBranch}\`)` : "";
+  return (
+    `You are working in an isolated git worktree at \`${input.worktreePath}\` ` +
+    `on branch \`${input.branch}\`${branchedFrom}. All work happens in the ` +
+    `current directory. The main checkout at \`${input.projectPath}\` is ` +
+    `reference-only — never modify it.`
+  );
+}
