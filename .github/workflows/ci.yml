@@ -205,6 +205,12 @@ jobs:
             composer-basics-smoke.mjs
             composer-draft-smoke.mjs
             composer-kickoff-smoke.mjs
+            agent-socket-smoke.mjs
+            agent-cli-roundtrip-smoke.mjs
+            agent-pty-env-smoke.mjs
+            agent-installer-smoke.mjs
+            agent-consent-smoke.mjs
+            agent-board-live-move-smoke.mjs
           )
 
           for smoke in "${smokes[@]}"; do
