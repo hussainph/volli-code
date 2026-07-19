@@ -620,7 +620,7 @@ async function main() {
         // the first line is typed and silently drop it; a second identical line
         // against the now-live prompt recovers without weakening the assertion.
         let envLines = null;
-        for (let attempt = 0; attempt < 2 && envLines === null; attempt += 1) {
+        for (let typeAttempt = 0; typeAttempt < 2 && envLines === null; typeAttempt += 1) {
           await focusTerminal(page);
           await runInTerminal(
             page,
