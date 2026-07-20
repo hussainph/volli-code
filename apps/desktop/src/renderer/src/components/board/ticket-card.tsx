@@ -1,4 +1,5 @@
 import * as React from "react";
+import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { displayTicketId, type Ticket } from "@volli/shared";
@@ -7,9 +8,32 @@ import { PriorityIndicator } from "@renderer/components/board/priority-indicator
 import { TagChip } from "@renderer/components/board/tag-chip";
 import { TicketContextMenu } from "@renderer/components/board/ticket-context-menu";
 import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
+import { useTicketRetention } from "@renderer/hooks/use-ticket-retention";
 import { resolveLabelColor } from "@renderer/lib/labels";
 import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
+
+/**
+ * A minimal archive-ready dot on the card (issue #76): shown only when the
+ * ticket's retention state says its worktree is ready to archive (a merged PR,
+ * or Done past the TTL). Subtle by design — an ember archive glyph with a
+ * native tooltip, never a banner (decision #45's "no dashboard" spirit). The
+ * retention read is gated on the ticket having a branch, so the vast majority
+ * of cards issue no IPC at all.
+ */
+function ArchiveReadyBadge({ ticket }: { ticket: Ticket }) {
+  const { state } = useTicketRetention(ticket.id, ticket.branch !== null);
+  if (!state?.archiveReady) return null;
+  return (
+    <span
+      className="flex items-center text-primary"
+      title="Ready to archive"
+      aria-label="Ready to archive"
+    >
+      <ArchiveIcon weight="fill" className="size-3" />
+    </span>
+  );
+}
 
 /**
  * Pure presentational card body — also rendered inside the drag overlay
@@ -40,7 +64,10 @@ export function TicketCardContent({
     >
       <div className="flex items-center justify-between gap-2">
         <span className="font-mono text-label text-muted-foreground">{displayId}</span>
-        <PriorityIndicator priority={ticket.priority} />
+        <div className="flex items-center gap-1.5">
+          <ArchiveReadyBadge ticket={ticket} />
+          <PriorityIndicator priority={ticket.priority} />
+        </div>
       </div>
       <p className="text-sm font-medium leading-snug text-foreground line-clamp-2">
         {ticket.title}
