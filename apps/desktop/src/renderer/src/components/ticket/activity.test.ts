@@ -152,6 +152,15 @@ describe("describeEvent", () => {
       "worktree file copy failed",
     );
   });
+
+  it("describes the Done-flow commit and draft-PR events", () => {
+    expect(
+      describeEvent({ kind: "worktree_committed", message: "chore(VC-1): commit remaining work" }),
+    ).toBe("committed remaining work");
+    expect(describeEvent({ kind: "pr_opened", url: "https://github.com/fake/repo/pull/42" })).toBe(
+      "opened a draft pull request",
+    );
+  });
 });
 
 describe("commentAuthorLabel", () => {
