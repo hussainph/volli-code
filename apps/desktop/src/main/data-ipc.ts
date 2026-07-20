@@ -42,9 +42,14 @@ import type {
   TicketStatus,
   VolliIpcChannel,
   WorktreeBranchesResult,
+  WorktreeCommitResult,
+  WorktreeDiffMode,
+  WorktreeDiffResult,
   WorktreeOrphanDeleteResult,
   WorktreeOrphansResult,
+  WorktreePushPrResult,
   WorktreeRemoveResult,
+  WorktreeStatusResult,
 } from "@volli/shared";
 import { getAllAppState, setAppState } from "./db/app-state-repo";
 import { deleteComment, getComment, listComments, updateComment } from "./db/comments-repo";
@@ -82,7 +87,16 @@ import {
 import { detectProjectBaseBranch } from "./project-base-branch";
 import { broadcastDataChanged } from "./broadcast";
 import { orphanReport } from "./orphan-sweep";
-import { listBranches, remove as removeWorktree } from "./worktree";
+import {
+  commitTicketRemaining,
+  diffStat,
+  getWorktreeStatus,
+  listBranches,
+  publishTicketBranch,
+  remove as removeWorktree,
+  runNet,
+  type DiffMode,
+} from "./worktree";
 import {
   canonicalize as canonicalizeWorktreePath,
   isInside as isInsideWorktreeHome,
@@ -124,6 +138,10 @@ const DATA_CHANNELS: readonly VolliIpcChannel[] = [
   "volli:worktree-branches",
   "volli:worktree-orphans",
   "volli:worktree-orphan-delete",
+  "volli:worktree-status",
+  "volli:worktree-diff",
+  "volli:worktree-commit",
+  "volli:worktree-push-pr",
 ];
 
 // ---- input validation -------------------------------------------------
@@ -372,6 +390,20 @@ function isWorktreeRemoveInput(value: unknown): value is WorktreeRemoveInput {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
   return typeof candidate["ticketId"] === "string" && typeof candidate["force"] === "boolean";
+}
+
+interface WorktreeDiffInput {
+  ticketId: string;
+  mode: WorktreeDiffMode;
+}
+
+function isWorktreeDiffInput(value: unknown): value is WorktreeDiffInput {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate["ticketId"] === "string" &&
+    (candidate["mode"] === "working-tree" || candidate["mode"] === "merge-base")
+  );
 }
 
 interface LabelSetColorInput {
@@ -1055,6 +1087,97 @@ export function registerDataIpcHandlers(
         // A dirty orphan left the board's attention list — re-hydrate.
         broadcastDataChanged();
         return { ok: true };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  // ---- Done flow (docs/plans/done-flow.md) --------------------------------
+  // The Details-rail diff/commit/push-PR affordances. `status`/`diff` are
+  // read-only (no broadcast); `commit` records an event and `push-pr` writes
+  // `pr_url`, so both broadcast to re-hydrate every board.
+
+  ipcMain.handle(
+    "volli:worktree-status" satisfies VolliIpcChannel,
+    (_event, input: unknown): WorktreeStatusResult => {
+      if (!isTicketIdInput(input)) {
+        return { ok: false, error: "Invalid ticket" };
+      }
+      try {
+        const ticket = getTicketRow(db, input.ticketId);
+        if (!ticket?.worktree_path) {
+          return { ok: false, error: "This ticket has no worktree." };
+        }
+        const status = getWorktreeStatus(worktreeDeps(db).git, {
+          worktreePath: ticket.worktree_path,
+          branch: ticket.branch,
+          baseBranch: ticket.base_branch,
+        });
+        return { ok: true, status };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:worktree-diff" satisfies VolliIpcChannel,
+    (_event, input: unknown): WorktreeDiffResult => {
+      if (!isWorktreeDiffInput(input)) {
+        return { ok: false, error: "Invalid worktree diff request" };
+      }
+      try {
+        const ticket = getTicketRow(db, input.ticketId);
+        if (!ticket?.worktree_path) {
+          return { ok: false, error: "This ticket has no worktree." };
+        }
+        const result = diffStat(
+          worktreeDeps(db).git,
+          { worktreePath: ticket.worktree_path, baseBranch: ticket.base_branch },
+          input.mode as DiffMode,
+        );
+        return result.ok ? { ok: true, diff: result.value } : { ok: false, error: result.error };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:worktree-commit" satisfies VolliIpcChannel,
+    (_event, input: unknown): WorktreeCommitResult => {
+      if (!isTicketIdInput(input)) {
+        return { ok: false, error: "Invalid ticket" };
+      }
+      try {
+        const result = commitTicketRemaining(worktreeDeps(db), input.ticketId);
+        if (!result.ok) return { ok: false, error: result.error };
+        // No ticket row changed, but a `worktree_committed` event landed — the
+        // Activity feed hydrates from the same bootstrap, so re-hydrate boards.
+        broadcastDataChanged();
+        return { ok: true, message: result.value.message };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:worktree-push-pr" satisfies VolliIpcChannel,
+    async (_event, input: unknown): Promise<WorktreePushPrResult> => {
+      if (!isTicketIdInput(input)) {
+        return { ok: false, error: "Invalid ticket" };
+      }
+      try {
+        const result = await publishTicketBranch(
+          { ...worktreeDeps(db), net: runNet },
+          input.ticketId,
+        );
+        if (!result.ok) return { ok: false, error: result.error };
+        // `pr_url` was written (and a `pr_opened` event recorded) — re-hydrate.
+        broadcastDataChanged();
+        return { ok: true, url: result.value.url, existing: result.value.existing };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }

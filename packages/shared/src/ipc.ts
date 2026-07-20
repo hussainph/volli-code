@@ -12,7 +12,7 @@ import type { Project } from "./project-identity";
 import type { SessionRecord } from "./session";
 import type { ArchivedTicket, Ticket } from "./ticket";
 import type { TicketComment } from "./ticket-comment";
-import type { TicketEvent } from "./ticket-events";
+import type { DiffStat, TicketEvent } from "./ticket-events";
 
 /** Channel names for the preload's `contextBridge` API. */
 export type VolliIpcChannel =
@@ -75,7 +75,14 @@ export type VolliIpcChannel =
   | "volli:worktree-remove"
   | "volli:worktree-branches"
   | "volli:worktree-orphans"
-  | "volli:worktree-orphan-delete";
+  | "volli:worktree-orphan-delete"
+  // Done flow (docs/plans/done-flow.md §"Persistence, IPC, events"): the
+  // Details-rail diff/commit/push-PR affordances. `status`/`diff` are read-only;
+  // `commit` records an event; `push-pr` composes fetch→push→PR and is async.
+  | "volli:worktree-status"
+  | "volli:worktree-diff"
+  | "volli:worktree-commit"
+  | "volli:worktree-push-pr";
 
 /** Channel names for main→renderer push events (`webContents.send`). */
 export type VolliIpcEvent =
@@ -302,3 +309,35 @@ export type WorktreeOrphansResult = Result<{
  * lives inside the app-owned worktree home before touching anything.
  */
 export type WorktreeOrphanDeleteResult = Result;
+
+// ---- Done flow (docs/plans/done-flow.md) -----------------------------------
+
+/**
+ * The finer Details-rail worktree status (done-flow §7 "dirty predicate
+ * split"), returned by `volli:worktree-status`. Mirrors main's
+ * `getWorktreeStatus` report: is the tree uncommitted, is a sequencer op
+ * mid-flight (blocks one-click commit), and how far the branch has moved from
+ * its base (`null` when the base is unknown or the count could not be read).
+ */
+export type WorktreeStatusResult = Result<{
+  status: {
+    uncommitted: boolean;
+    sequencerActive: boolean;
+    aheadOfBase: number | null;
+    behindBase: number | null;
+  };
+}>;
+
+/**
+ * A worktree diff summary for `volli:worktree-diff` (done-flow §"diff.ts", the
+ * two-mode split): `"working-tree"` is "what the agent is doing right now",
+ * `"merge-base"` is "what the PR would contain".
+ */
+export type WorktreeDiffMode = "working-tree" | "merge-base";
+export type WorktreeDiffResult = Result<{ diff: DiffStat }>;
+
+/** Ack for `volli:worktree-commit` — the one-click safety-net commit's fixed message. */
+export type WorktreeCommitResult = Result<{ message: string }>;
+
+/** Ack for `volli:worktree-push-pr` — the opened/re-discovered PR url, and whether it pre-existed. */
+export type WorktreePushPrResult = Result<{ url: string; existing: boolean }>;

@@ -196,7 +196,7 @@ describe("createTicket", () => {
     expect(ticket.usesWorktree).toBe(true);
   });
 
-  it("defaults worktreePath, branch, and baseBranch to null", () => {
+  it("defaults worktreePath, branch, baseBranch, and prUrl to null", () => {
     const ticket = createTicket({
       id: "id-1",
       projectId: "proj-1",
@@ -209,6 +209,7 @@ describe("createTicket", () => {
     expect(ticket.worktreePath).toBeNull();
     expect(ticket.branch).toBeNull();
     expect(ticket.baseBranch).toBeNull();
+    expect(ticket.prUrl).toBeNull();
     expect(ticket.preferredHarnessId).toBe("claude-code");
   });
 
@@ -228,6 +229,7 @@ describe("createTicket", () => {
       worktreePath: "/repo/.worktrees/VC-1",
       branch: "volli/VC-1-title",
       baseBranch: "main",
+      prUrl: "https://github.com/acme/repo/pull/7",
     });
     expect(ticket.body).toBe("Some markdown body");
     expect(ticket.priority).toBe("high");
@@ -236,5 +238,6 @@ describe("createTicket", () => {
     expect(ticket.worktreePath).toBe("/repo/.worktrees/VC-1");
     expect(ticket.branch).toBe("volli/VC-1-title");
     expect(ticket.baseBranch).toBe("main");
+    expect(ticket.prUrl).toBe("https://github.com/acme/repo/pull/7");
   });
 });

@@ -33,6 +33,7 @@ function madeTicket(overrides: Partial<Ticket> = {}): Ticket {
     worktreePath: null,
     branch: null,
     baseBranch: null,
+    prUrl: null,
     createdAt: 0,
     updatedAt: 0,
     ...overrides,

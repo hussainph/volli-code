@@ -18,6 +18,7 @@
  */
 import { DiffFileStat, DiffStat } from "@volli/shared";
 
+import { resolveComparisonRef } from "./comparison-ref";
 import { stderrOf } from "./git";
 import { err, ok, type RunGit, type WorktreeResult } from "./types";
 
@@ -101,10 +102,16 @@ export function diffStat(
     return err("No base branch is known for this worktree, so its PR diff cannot be computed.");
   }
   try {
+    // Merge-base measures against `origin/<base>` when that ref exists — the
+    // last-known remote state the PR will actually diff against (comparison-ref.ts).
+    const base =
+      mode === "merge-base"
+        ? resolveComparisonRef(git, input.worktreePath, input.baseBranch)
+        : null;
     const numstatArgs =
       mode === "working-tree"
         ? ["diff", "--numstat", "HEAD"]
-        : ["diff", "--numstat", `${input.baseBranch}...HEAD`];
+        : ["diff", "--numstat", `${base}...HEAD`];
     const tracked = parseNumstat(git(numstatArgs, input.worktreePath));
     const untracked =
       mode === "working-tree"

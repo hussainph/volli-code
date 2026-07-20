@@ -45,10 +45,15 @@ import type {
   VolliIpcChannel,
   VolliIpcEvent,
   WorktreeBranchesResult,
+  WorktreeCommitResult,
+  WorktreeDiffMode,
+  WorktreeDiffResult,
   WorktreeOrphanDeleteResult,
   WorktreeOrphansResult,
   WorktreePhaseEvent,
+  WorktreePushPrResult,
   WorktreeRemoveResult,
+  WorktreeStatusResult,
 } from "@volli/shared";
 
 // Minimal typed API surface exposed to the renderer.
@@ -251,6 +256,18 @@ const api = {
     /** User-confirmed deletion of one dirty orphan dir; main re-validates it lives inside the worktree home. */
     deleteOrphan: (path: string): Promise<WorktreeOrphanDeleteResult> =>
       ipcRenderer.invoke("volli:worktree-orphan-delete" satisfies VolliIpcChannel, { path }),
+    /** Done flow: the finer rail status (uncommitted/sequencer/ahead-behind) for the worktree. */
+    status: (ticketId: string): Promise<WorktreeStatusResult> =>
+      ipcRenderer.invoke("volli:worktree-status" satisfies VolliIpcChannel, { ticketId }),
+    /** Done flow: a diff summary — `"working-tree"` (uncommitted now) or `"merge-base"` (the PR delta). */
+    diff: (ticketId: string, mode: WorktreeDiffMode): Promise<WorktreeDiffResult> =>
+      ipcRenderer.invoke("volli:worktree-diff" satisfies VolliIpcChannel, { ticketId, mode }),
+    /** Done flow: the one-click "commit remaining work" safety net (fixed chore message). */
+    commit: (ticketId: string): Promise<WorktreeCommitResult> =>
+      ipcRenderer.invoke("volli:worktree-commit" satisfies VolliIpcChannel, { ticketId }),
+    /** Done flow: push the branch and open (or re-discover) its draft PR; persists `pr_url`. */
+    pushPr: (ticketId: string): Promise<WorktreePushPrResult> =>
+      ipcRenderer.invoke("volli:worktree-push-pr" satisfies VolliIpcChannel, { ticketId }),
     /** Subscribes to transient worktree-ensure phase transitions; returns the unsubscribe function. */
     onPhase: (callback: (event: WorktreePhaseEvent) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, payload: WorktreePhaseEvent) =>

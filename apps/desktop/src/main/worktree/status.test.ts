@@ -19,10 +19,23 @@ function tempDir(prefix: string): string {
   return dir;
 }
 
-/** A git answering every status probe clean, unless a probe is overridden. */
-function statusGit(gitDir: string, over: Partial<Record<"status" | "revList", () => string>> = {}) {
+/**
+ * A git answering every status probe clean, unless a probe is overridden. The
+ * remote-tracking probe (`rev-parse --verify refs/remotes/origin/<base>`)
+ * FAILS by default — no remote-tracking ref, so comparisons use the local base;
+ * `hasRemoteRef: true` makes it succeed (comparison-ref.ts then prefers
+ * `origin/<base>`).
+ */
+function statusGit(
+  gitDir: string,
+  over: Partial<Record<"status" | "revList", () => string>> & { hasRemoteRef?: boolean } = {},
+) {
   return scriptedGit((args) => {
     if (args[0] === "status") return (over.status ?? (() => ""))();
+    if (args[0] === "rev-parse" && args[1] === "--verify") {
+      if (over.hasRemoteRef) return "abc123\n";
+      throw new Error("fatal: Needed a single revision");
+    }
     if (args[0] === "rev-parse" && args[1] === "--git-dir") return gitDir;
     if (args[0] === "rev-list") return (over.revList ?? (() => "0\t0\n"))();
     return "";
@@ -75,6 +88,16 @@ describe("getWorktreeStatus", () => {
     expect(revList?.args).toContain("--left-right");
     expect(revList?.args).toContain("--count");
     expect(revList?.args).toContain("main...b");
+  });
+
+  it("measures ahead/behind against origin/<base> when the remote-tracking ref exists", () => {
+    const gitDir = tempDir("gitdir");
+    const { git, calls } = statusGit(gitDir, { hasRemoteRef: true, revList: () => "1\t3\n" });
+    const report = getWorktreeStatus(git, { worktreePath: "/wt", branch: "b", baseBranch: "main" });
+    expect(report.behindBase).toBe(1);
+    expect(report.aheadOfBase).toBe(3);
+    const revList = calls.find((c) => c.args[0] === "rev-list");
+    expect(revList?.args).toContain("origin/main...b");
   });
 
   it("returns null ahead/behind when the base is unknown, never spawning rev-list", () => {

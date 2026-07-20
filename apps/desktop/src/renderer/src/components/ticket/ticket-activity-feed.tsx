@@ -6,6 +6,8 @@ import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { FlagIcon } from "@phosphor-icons/react/dist/csr/Flag";
 import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
+import { GitCommitIcon } from "@phosphor-icons/react/dist/csr/GitCommit";
+import { GitPullRequestIcon } from "@phosphor-icons/react/dist/csr/GitPullRequest";
 import { NotePencilIcon } from "@phosphor-icons/react/dist/csr/NotePencil";
 import { PaperPlaneTiltIcon } from "@phosphor-icons/react/dist/csr/PaperPlaneTilt";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
@@ -68,6 +70,8 @@ const EVENT_ICON: Record<TicketEventKind, PhosphorIcon> = {
   session_ended: TerminalWindowIcon,
   worktree_changed: GitBranchIcon,
   worktree_failed: WarningCircleIcon,
+  worktree_committed: GitCommitIcon,
+  pr_opened: GitPullRequestIcon,
   session_signal: FlagIcon,
 };
 

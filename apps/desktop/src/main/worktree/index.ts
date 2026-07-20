@@ -21,6 +21,8 @@ export { commitRemaining } from "./commit";
 export type { CommitRemainingInput } from "./commit";
 export { runNet, fetchBase, pushBranch, ghCreateDraftPr, ghFindPr } from "./net";
 export type { RunNet, GhResult, GhFailure, GhFailureKind } from "./net";
+export { publishTicketBranch, commitTicketRemaining } from "./publish";
+export type { PublishDeps, PublishOutcome } from "./publish";
 
 // The PTY wiring drives the transient phase directly across the setup-command
 // step (`setting-up → ready | failed`), which happens in the terminal after

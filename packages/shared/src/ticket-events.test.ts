@@ -29,6 +29,8 @@ describe("TICKET_EVENT_KINDS", () => {
       "session_ended",
       "worktree_changed",
       "worktree_failed",
+      "worktree_committed",
+      "pr_opened",
       "session_signal",
     ]);
   });
@@ -62,6 +64,8 @@ describe("TicketEventPayload", () => {
       { kind: "session_ended", sessionId: "session-1" },
       { kind: "worktree_changed", from: worktreeA, to: worktreeB },
       { kind: "worktree_failed", stage: "copy", stderr: "fatal: could not copy" },
+      { kind: "worktree_committed", message: "chore(VC-12): commit remaining work" },
+      { kind: "pr_opened", url: "https://github.com/acme/repo/pull/7" },
       { kind: "session_signal", signal: "blocked", reason: "Waiting for credentials" },
     ];
     expect(payloads.map((p) => p.kind)).toEqual(TICKET_EVENT_KINDS);

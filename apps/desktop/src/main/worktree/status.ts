@@ -12,6 +12,7 @@
  * `dirty.ts`'s errs-dirty philosophy. An unreadable tree must never be presented
  * to the user as "nothing to commit".
  */
+import { resolveComparisonRef } from "./comparison-ref";
 import { detectSequencerState } from "./sequencer";
 import type { RunGit } from "./types";
 
@@ -53,11 +54,14 @@ function readAheadBehind(
   git: RunGit,
   input: WorktreeStatusInput,
 ): { aheadOfBase: number | null; behindBase: number | null } {
-  if (!input.baseBranch) return { aheadOfBase: null, behindBase: null };
+  // Measured against `origin/<base>` when that ref exists (what a fetch just
+  // updated, and what the PR will actually diff against) — see comparison-ref.ts.
+  const base = resolveComparisonRef(git, input.worktreePath, input.baseBranch);
+  if (!base) return { aheadOfBase: null, behindBase: null };
   const branch = input.branch ?? "HEAD";
   try {
     const out = git(
-      ["rev-list", "--left-right", "--count", `${input.baseBranch}...${branch}`],
+      ["rev-list", "--left-right", "--count", `${base}...${branch}`],
       input.worktreePath,
     );
     const [left, right] = out.trim().split(/\s+/);

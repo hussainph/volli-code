@@ -75,6 +75,8 @@ describe("diffStat — merge-base mode", () => {
   it("diffs <base>...HEAD (three-dot) and never reads untracked", () => {
     const { git, calls } = scriptedGit((args) => {
       if (args[0] === "diff") return "4\t0\tsrc/a.ts\n";
+      // No remote-tracking ref — comparisons stay on the local base.
+      if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no such ref");
       return "";
     });
     const result = diffStat(git, { worktreePath: "/wt", baseBranch: "main" }, "merge-base");
@@ -91,6 +93,21 @@ describe("diffStat — merge-base mode", () => {
       "main...HEAD",
     ]);
     expect(calls.some((c) => c.args[0] === "status")).toBe(false);
+  });
+
+  it("diffs against origin/<base> when the remote-tracking ref exists", () => {
+    const { git, calls } = scriptedGit((args) => {
+      if (args[0] === "rev-parse" && args[1] === "--verify") return "abc123\n";
+      if (args[0] === "diff") return "4\t0\tsrc/a.ts\n";
+      return "";
+    });
+    const result = diffStat(git, { worktreePath: "/wt", baseBranch: "main" }, "merge-base");
+    expect(result.ok).toBe(true);
+    expect(calls.find((c) => c.args[0] === "diff")?.args).toEqual([
+      "diff",
+      "--numstat",
+      "origin/main...HEAD",
+    ]);
   });
 
   it("errs when the base branch is unknown", () => {
