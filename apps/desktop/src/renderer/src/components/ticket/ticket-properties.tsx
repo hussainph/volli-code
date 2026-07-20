@@ -1,9 +1,13 @@
 import * as React from "react";
+import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
+import { BellSlashIcon } from "@phosphor-icons/react/dist/csr/BellSlash";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import { GitCommitIcon } from "@phosphor-icons/react/dist/csr/GitCommit";
 import { GitPullRequestIcon } from "@phosphor-icons/react/dist/csr/GitPullRequest";
+import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
+import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import { toast } from "sonner";
 import {
   errorMessage,
@@ -28,6 +32,14 @@ import {
   type PrimaryActionKind,
   type WorktreeStatusSnapshot,
 } from "@renderer/components/ticket/worktree-done-flow-model";
+import {
+  ARCHIVE_CLEAN_LABEL,
+  DISMISS_LABEL,
+  KEEP_WORKTREE_LABEL,
+  resolveRetention,
+  UNKEEP_LABEL,
+  type RetentionNotice,
+} from "@renderer/components/ticket/worktree-retention-model";
 import { Button } from "@renderer/components/ui/button";
 import {
   DropdownMenu,
@@ -35,10 +47,12 @@ import {
   DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
 import { Input } from "@renderer/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
+import { useTicketRetention } from "@renderer/hooks/use-ticket-retention";
 import { toastError } from "@renderer/lib/toast";
 import { useBoardStore } from "@renderer/stores/board";
 import { ticketScope } from "@renderer/stores/sessions";
@@ -348,11 +362,23 @@ function WorktreePathField({ path }: { path: string | null }) {
   );
 }
 
-/** The Phosphor icon for a primary action, mirroring the verb's menu icon. */
-function PrimaryActionIcon({ kind }: { kind: PrimaryActionKind }) {
-  if (kind === "commit-pr" || kind === "commit-push-updates") return <GitCommitIcon />;
-  if (kind === "view-pr") return <ArrowSquareOutIcon />;
-  return <GitPullRequestIcon />;
+/**
+ * The Phosphor icon for a primary action, mirroring the verb's menu icon.
+ * `filled` renders the fill weight for the chevron-menu treatment (the demoted
+ * done-flow primary when Archive & clean takes over the button).
+ */
+function PrimaryActionIcon({
+  kind,
+  filled = false,
+}: {
+  kind: PrimaryActionKind;
+  filled?: boolean;
+}) {
+  const weight = filled ? "fill" : undefined;
+  if (kind === "commit-pr" || kind === "commit-push-updates")
+    return <GitCommitIcon weight={weight} />;
+  if (kind === "view-pr") return <ArrowSquareOutIcon weight={weight} />;
+  return <GitPullRequestIcon weight={weight} />;
 }
 
 /**
@@ -389,6 +415,28 @@ function toastPushResult(isUpdate: boolean, existing: boolean) {
 }
 
 /**
+ * One non-gating retention notice (issue #76, decision #44 "button-never-gate"):
+ * a muted line surfacing a merge conflict or failing checks. It explains why a
+ * PR can't merge yet; it disables nothing. When the notice carries `detail`
+ * (the failing checks' names) the line becomes a tooltip trigger listing them.
+ */
+function RetentionNoticeLine({ notice }: { notice: RetentionNotice }) {
+  const line = (
+    <span className="flex w-fit items-center gap-1.5 text-xs text-muted-foreground">
+      <WarningIcon />
+      {notice.text}
+    </span>
+  );
+  if (!notice.detail) return line;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{line}</TooltipTrigger>
+      <TooltipContent>{notice.detail}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/**
  * The Details rail's Done-flow block (docs/plans/done-flow.md "UI", decision
  * #45): one merge-base context line plus one adaptive split button — a primary
  * action whose label is the whole next step, and a chevron menu unbundling the
@@ -404,13 +452,25 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
   const [diff, setDiff] = React.useState<DiffStat | null>(null);
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const [stage, setStage] = React.useState<DoneFlowStage>("idle");
+  // The global Done-TTL, only needed to name the "In Done for N+ days" line.
+  const [ttlDays, setTtlDays] = React.useState<number | null>(null);
+  // A retention mutation (archive/keep/dismiss) in flight — disables its controls.
+  const [retentionBusy, setRetentionBusy] = React.useState(false);
+  // The section only renders once the ticket has a worktree, so retention is
+  // always worth reading here (enabled). It refetches on every planning refresh.
+  const { state: retention, reload: reloadRetention } = useTicketRetention(ticket.id, true);
+  const planningDataVersion = useBoardStore((store) => store.planningDataVersion);
 
   const refresh = React.useCallback(async () => {
     try {
-      const [statusResult, diffResult] = await Promise.all([
+      const [statusResult, diffResult, ttlResult] = await Promise.all([
         window.api.worktree.status(ticket.id),
         window.api.worktree.diff(ticket.id, "merge-base"),
+        window.api.retention.getTtlDays(),
       ]);
+      // The TTL is non-critical (only labels a line) — record it when it reads,
+      // never let its failure block the status/diff summary.
+      if (ttlResult.ok) setTtlDays(ttlResult.days);
       if (!statusResult.ok) {
         setLoadError(statusResult.error);
         return;
@@ -427,9 +487,11 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
     }
   }, [ticket.id]);
 
+  // Refetch on mount and after any mutation broadcast (the TTL setting or a
+  // stacked commit/push change what the summary and reason line should say).
   React.useEffect(() => {
     void refresh();
-  }, [refresh]);
+  }, [refresh, planningDataVersion]);
 
   /** Standalone Commit (chevron menu): keeps its own "Committed: <message>" toast. */
   async function runCommitOnly() {
@@ -512,7 +574,66 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
     if (ticket.prUrl) window.open(ticket.prUrl, "_blank", "noopener");
   }
 
+  /**
+   * Archive & clean (the archive-ready primary): archives the ticket and removes
+   * its worktree. A DIRTY worktree refusal comes typed from main — rendered
+   * faithfully (decision #16: automation never destroys uncommitted work). On
+   * success the ticket leaves the board via the broadcast; no local refresh
+   * (this section may already be unmounting with it).
+   */
+  async function runArchiveAndClean() {
+    setRetentionBusy(true);
+    try {
+      const result = await window.api.retention.archiveAndClean(ticket.id);
+      if (!result.ok) {
+        toastError(result.error);
+        return;
+      }
+      toast.success("Worktree archived & cleaned");
+    } catch (error) {
+      toastError(`Could not archive: ${errorMessage(error)}`);
+    } finally {
+      setRetentionBusy(false);
+    }
+  }
+
+  /** Keep / un-keep the worktree: the durable pin exempting BOTH retention paths. */
+  async function runSetKeep(keep: boolean) {
+    setRetentionBusy(true);
+    try {
+      const result = await window.api.retention.setKeep(ticket.id, keep);
+      if (!result.ok) {
+        toastError(`Could not update Keep: ${result.error}`);
+        return;
+      }
+      toast.success(keep ? "Worktree kept" : "Keep removed");
+    } catch (error) {
+      toastError(`Could not update Keep: ${errorMessage(error)}`);
+    } finally {
+      setRetentionBusy(false);
+      reloadRetention();
+    }
+  }
+
+  /** Dismiss the archive prompt for this launch (re-offered next launch — not the Keep pin). */
+  async function runDismiss() {
+    setRetentionBusy(true);
+    try {
+      const result = await window.api.retention.dismiss(ticket.id);
+      if (!result.ok) {
+        toastError(`Could not dismiss: ${result.error}`);
+        return;
+      }
+    } catch (error) {
+      toastError(`Could not dismiss: ${errorMessage(error)}`);
+    } finally {
+      setRetentionBusy(false);
+      reloadRetention();
+    }
+  }
+
   const view = resolveDoneFlow(status, ticket.prUrl, stage);
+  const retentionView = resolveRetention(retention, ttlDays);
   const mergeBaseSummary = diff ? formatMergeBaseSummary(diff) : null;
 
   function runPrimary() {
@@ -537,7 +658,10 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
     }
   }
 
-  const primaryButton = (
+  // The done-flow primary (commit/push/View PR). When the ticket is
+  // archive-ready it is DEMOTED into the chevron menu and Archive & clean takes
+  // the button — still one adaptive action (decision #45), never a second row.
+  const doneFlowPrimaryButton = (
     <Button
       variant="outline"
       size="xs"
@@ -547,6 +671,19 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
     >
       <PrimaryActionIcon kind={view.primary.kind} />
       {view.primary.label}
+    </Button>
+  );
+
+  const archivePrimaryButton = (
+    <Button
+      variant="outline"
+      size="xs"
+      className="rounded-r-none"
+      disabled={retentionBusy}
+      onClick={() => void runArchiveAndClean()}
+    >
+      <ArchiveIcon />
+      {ARCHIVE_CLEAN_LABEL}
     </Button>
   );
 
@@ -561,20 +698,33 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
           {mergeBaseSummary ?? "No changes vs base yet"}
         </span>
       )}
+      {/* The archive-reason context line — why the wrap-up is being offered. */}
+      {retentionView.archiveReady && retentionView.reasonLine ? (
+        <span className="flex items-center gap-1.5 text-xs text-foreground">
+          <ArchiveIcon className="text-primary" />
+          {retentionView.reasonLine}
+        </span>
+      ) : null}
+      {/* Non-gating surfacing: conflicts / failing checks (decision #44). */}
+      {retentionView.notices.map((notice) => (
+        <RetentionNoticeLine key={notice.text} notice={notice} />
+      ))}
       {/* One control: primary + chevron, corners squared between them so they
           read as a single split button (composer-footer adjacency pattern). */}
       <div className="inline-flex w-fit">
-        {view.primary.reason ? (
+        {retentionView.archiveReady ? (
+          archivePrimaryButton
+        ) : view.primary.reason ? (
           <Tooltip>
             {/* A disabled button emits no pointer events; the span keeps the
                 tooltip trigger hoverable so the reason still shows. */}
             <TooltipTrigger asChild>
-              <span className="inline-flex">{primaryButton}</span>
+              <span className="inline-flex">{doneFlowPrimaryButton}</span>
             </TooltipTrigger>
             <TooltipContent>{view.primary.reason}</TooltipContent>
           </Tooltip>
         ) : (
-          primaryButton
+          doneFlowPrimaryButton
         )}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -588,6 +738,26 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start">
+            {/* Archive-ready: the demoted done-flow primary leads, then the
+                unbundled verbs, then the Keep/Dismiss retention escape hatches. */}
+            {retentionView.archiveReady ? (
+              <>
+                <DropdownMenuItem
+                  disabled={view.primary.disabled}
+                  onSelect={runPrimary}
+                  className="justify-between gap-6"
+                >
+                  <span className="flex items-center gap-2">
+                    <PrimaryActionIcon kind={view.primary.kind} filled />
+                    {view.primary.label}
+                  </span>
+                  {view.primary.disabled && view.primary.reason ? (
+                    <span className="text-xs text-muted-foreground">{view.primary.reason}</span>
+                  ) : null}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+              </>
+            ) : null}
             <DoneFlowMenuItem
               action={view.menu.commit}
               icon={<GitCommitIcon weight="fill" />}
@@ -603,9 +773,37 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
               icon={<ArrowSquareOutIcon weight="fill" />}
               onRun={openPr}
             />
+            {retentionView.archiveReady ? (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem disabled={retentionBusy} onSelect={() => void runSetKeep(true)}>
+                  <PushPinIcon weight="fill" />
+                  {KEEP_WORKTREE_LABEL}
+                </DropdownMenuItem>
+                <DropdownMenuItem disabled={retentionBusy} onSelect={() => void runDismiss()}>
+                  <BellSlashIcon weight="fill" />
+                  {DISMISS_LABEL}
+                </DropdownMenuItem>
+              </>
+            ) : null}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+      {/* The quiet "kept" state (Keep exempts the ticket from both paths) with its un-keep path. */}
+      {retentionView.kept ? (
+        <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <PushPinIcon />
+          Worktree kept
+          <button
+            type="button"
+            disabled={retentionBusy}
+            onClick={() => void runSetKeep(false)}
+            className="text-primary hover:underline disabled:opacity-50"
+          >
+            {UNKEEP_LABEL}
+          </button>
+        </span>
+      ) : null}
     </div>
   );
 }
