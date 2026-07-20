@@ -22,7 +22,7 @@
     "@astrojs/check": "0.9.9",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
-    "typescript": "6.0.3",
+    "typescript": "7.0.2",
     "wrangler": "4.112.0"
   }
 }
