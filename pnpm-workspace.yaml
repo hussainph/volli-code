@@ -27,6 +27,13 @@ catalog:
   # skew) — bump in lockstep with the vite-plus pin above.
   "@vitest/coverage-v8": 4.1.10
 
+# Supply-chain guard: refuse to install any version published within this many
+# minutes (relaxed from the vp default of 1440 = 24h). 60m still blocks the
+# highest-risk same-hour window a compromised publish lands in, but no longer
+# stalls day-old Dependabot bugfix bumps behind the 24h clock. Bump specific
+# pins into the exclude list below when a fresh release must land immediately.
+minimumReleaseAge: 60
+
 minimumReleaseAgeExclude:
   - "@voidzero-dev/vite-plus-core@0.2.5"
   - "@voidzero-dev/vite-plus-darwin-arm64@0.2.5"
