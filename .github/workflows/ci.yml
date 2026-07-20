@@ -1,98 +1,47 @@
 name: CI
 
-on:
-  # Draft PRs are working sessions — they must not consume Actions minutes.
-  # ready_for_review joins the default types so the full suite runs exactly
-  # once the author flips the PR out of draft; every job below gates on the
-  # draft flag (dependents inherit the skip through `needs`).
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-  push:
-    branches:
-      - main
-  # The scheduled run exercises the same blocking gates plus the advisory
-  # dependency and extended Electron probes, so drift is visible even during a
-  # quiet week. workflow_dispatch is the manual equivalent.
-  schedule:
-    - cron: "17 3 * * 1"
-  workflow_dispatch:
+# Minutes-rationed CI (private repo, free-tier Actions pool).
+#
+# macOS runners bill at a 10x multiplier, so the desktop smoke lane alone was
+# ~40 billed minutes per run — ~85% of the old pipeline's cost — and it fired
+# on every PR push AND again on every merge to main. The full application smoke
+# suite runs locally for free (apps/desktop/e2e/*.mjs on the dev Mac), so CI
+# keeps only the cheap cross-check: one Linux job on PRs.
+#
+# Deliberately removed (run them locally or on demand instead):
+#   - push-to-main lane: PRs gate every merge; a duplicate post-merge run
+#     doubled the bill for no new signal.
+#   - weekly cron + extended macOS smokes: silent background burn.
+#   - advisory coverage reports: re-ran the whole test suite twice per run.
+#   - dependency-audit job: Dependabot already opens update PRs; `vp pm audit`
+#     works locally.
+#   - macOS desktop smoke on PRs: now manual-only via workflow_dispatch below
+#     (`gh workflow run ci.yml -f desktop-smoke=true`). One invocation bills
+#     ~40 minutes — save it for release-candidate checks.
 
-# Every job only needs to read the checkout. Keep this explicit so a repository
-# setting change cannot silently widen the token available to third-party code.
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      desktop-smoke:
+        description: "Also run the macOS desktop smoke lane (bills ~40 min)"
+        type: boolean
+        default: false
+
 permissions:
   contents: read
 
-# Cancel superseded runs for the same ref and event. Including the event keeps a
-# scheduled main-branch audit from canceling a push build (or vice versa).
+# Agents push frequently; cancel superseded runs for the same PR so only the
+# latest head ever finishes.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # Always emits a successful result, including for docs-only PRs. Desktop smoke
-  # can therefore become a required check later without path-filtered workflows
-  # getting stuck in an "Expected" state when GitHub skips the whole workflow.
-  scope:
-    name: Change scope
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+  core:
+    name: Check + Test
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      desktop: ${{ steps.changes.outputs.desktop }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Detect desktop-affecting changes
-        id: changes
-        shell: bash
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BEFORE_SHA: ${{ github.event.before }}
-          CURRENT_SHA: ${{ github.sha }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          if [[ "$EVENT_NAME" == "schedule" || "$EVENT_NAME" == "workflow_dispatch" ]]; then
-            desktop=true
-          elif [[ "$EVENT_NAME" == "pull_request" ]]; then
-            base="$PR_BASE_SHA"
-            head="$PR_HEAD_SHA"
-            desktop=false
-          elif [[ "$BEFORE_SHA" =~ ^0+$ ]]; then
-            desktop=true
-          else
-            base="$BEFORE_SHA"
-            head="$CURRENT_SHA"
-            desktop=false
-          fi
-
-          if [[ "$desktop" == "false" ]] && ! git diff --quiet "$base" "$head" -- \
-            .github/workflows/ci.yml \
-            apps/desktop \
-            packages/shared \
-            patches \
-            package.json \
-            pnpm-lock.yaml \
-            pnpm-workspace.yaml \
-            tsconfig.base.json \
-            tsconfig.json \
-            vite.config.ts; then
-            desktop=true
-          fi
-
-          echo "desktop=$desktop" >> "$GITHUB_OUTPUT"
-          echo "### Change scope" >> "$GITHUB_STEP_SUMMARY"
-          echo "Desktop smoke required: **$desktop**" >> "$GITHUB_STEP_SUMMARY"
-
-  check:
-    name: Check
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -109,9 +58,8 @@ jobs:
       - name: Check
         run: vp check
 
-      # Two invocations: setup-vp puts `vp` on PATH but not `pnpm`, and
-      # `vp run -r` covers workspace packages only — the root vite.config.ts
-      # (quality-stack config) needs its own tsc pass.
+      # Two invocations: `vp run -r` covers workspace packages only — the root
+      # vite.config.ts (quality-stack config) needs its own tsc pass.
       - name: Typecheck
         run: |
           vp exec tsc --noEmit -p tsconfig.json
@@ -126,61 +74,16 @@ jobs:
           test -f apps/desktop/dist-electron/preload.cjs
           test -f apps/desktop/dist/index.html
 
-  test:
-    name: Test
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-        with:
-          persist-credentials: false
-
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
-        with:
-          node-version-file: package.json
-          cache: true
-          run-install: true
-
-      # test:coverage runs the identical suite plus the 100%-threshold gate over
-      # the explicitly protected logic layer. This remains blocking.
+      # The identical suite plus the 100%-threshold gate over the protected
+      # logic layer. This remains the hard regression gate.
       - name: Test protected coverage surface
         run: vp run -r test:coverage
 
-      # Wider reports expose untested TypeScript without making every hook or
-      # Electron bootstrap branch block a small PR. The protected surface above
-      # remains the hard regression gate while these reports guide expansion.
-      - name: Broad renderer coverage report (advisory)
-        continue-on-error: true
-        working-directory: apps/desktop
-        run: |
-          vp test run --coverage \
-            '--coverage.include=**/apps/desktop/src/renderer/src/**/*.ts' \
-            --coverage.thresholds.lines=0 \
-            --coverage.thresholds.functions=0 \
-            --coverage.thresholds.statements=0 \
-            --coverage.thresholds.branches=0
-
-      - name: Broad main-process coverage report (advisory)
-        continue-on-error: true
-        working-directory: apps/desktop
-        run: |
-          vp test run --coverage \
-            '--coverage.include=**/apps/desktop/src/main/**/*.ts' \
-            --coverage.thresholds.lines=0 \
-            --coverage.thresholds.functions=0 \
-            --coverage.thresholds.statements=0 \
-            --coverage.thresholds.branches=0
-
-  # This is the application-level blocking gate, but only when the diff can
-  # affect the desktop app. Docs/website-only work still gets fast core checks
-  # without paying for or being blocked by a macOS GUI run.
+  # Manual-only macOS lane (10x billing multiplier — ~40 minutes per run).
+  # Trigger deliberately: gh workflow run ci.yml -f desktop-smoke=true
   desktop-smoke:
-    name: Desktop smoke
-    needs: scope
-    if: needs.scope.outputs.desktop == 'true'
+    name: Desktop smoke (manual)
+    if: github.event_name == 'workflow_dispatch' && inputs.desktop-smoke
     runs-on: macos-15
     timeout-minutes: 35
     steps:
@@ -196,11 +99,10 @@ jobs:
           cache: true
           run-install: true
 
-      - name: Build desktop pipeline
-        run: vp run --filter @volli/desktop build
-
-      - name: Fetch Electron runtime
-        run: vp run --filter @volli/desktop ensure:electron
+      - name: Build and fetch Electron
+        run: |
+          vp run --filter @volli/desktop build
+          vp run --filter @volli/desktop ensure:electron
 
       - name: Run stable application smokes
         shell: bash
@@ -230,80 +132,5 @@ jobs:
 
           if (( failures > 0 )); then
             echo "$failures desktop smoke suite(s) failed" >&2
-            exit 1
-          fi
-
-  # Registry/advisory availability is external to the repository, so this is
-  # deliberately visible-but-non-blocking. Dependabot also opens update PRs.
-  dependency-audit:
-    name: Dependency audit (advisory)
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    continue-on-error: true
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-        with:
-          persist-credentials: false
-
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
-        with:
-          node-version-file: package.json
-          cache: false
-          run-install: false
-
-      - name: Audit dependency lockfile
-        run: vp pm audit -- --audit-level high
-
-  # Hardware/OS-sensitive probes are useful drift detectors, not PR blockers.
-  # Keep them off ordinary PRs and pushes; run weekly or on demand.
-  extended-desktop-smoke:
-    name: Extended desktop smoke (advisory)
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    continue-on-error: true
-    # macos-26 is GitHub's current standard Apple Silicon image. Keep the
-    # blocking PR lane on macos-15 for compatibility and use this advisory lane
-    # to detect newer-OS drift without blocking routine changes.
-    runs-on: macos-26
-    timeout-minutes: 35
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-        with:
-          persist-credentials: false
-
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
-        with:
-          node-version-file: package.json
-          cache: true
-          run-install: true
-
-      - name: Build and fetch Electron
-        run: |
-          vp run --filter @volli/desktop build
-          vp run --filter @volli/desktop ensure:electron
-
-      - name: Run hardware-sensitive smokes
-        shell: bash
-        run: |
-          failures=0
-          smokes=(
-            terminal-smoke.mjs
-            ghostty-config-smoke.mjs
-            live-preview-smoke.mjs
-            park-smoke.mjs
-          )
-
-          for smoke in "${smokes[@]}"; do
-            echo "::group::$smoke"
-            node "apps/desktop/e2e/$smoke" || failures=$((failures + 1))
-            echo "::endgroup::"
-          done
-
-          if (( failures > 0 )); then
-            echo "$failures extended smoke suite(s) failed" >&2
             exit 1
           fi

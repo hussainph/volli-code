@@ -43,22 +43,43 @@ export function AppShell() {
   useCliLaunchNotice();
   const sidebarWidth = useUiStore((state) => state.sidebarWidth);
   const workspaceRailHidden = useUiStore((state) => state.workspaceRailHidden);
+  const terminalFocusTarget = useUiStore((state) => state.terminalFocusTarget);
   const uiScale = useUiStore((state) => state.uiScale);
   const [resizing, setResizing] = React.useState(false);
-  const workspaceRailWidth = workspaceRailHidden ? 0 : WORKSPACE_RAIL_WIDTH;
+  const terminalFocused = terminalFocusTarget !== null;
+  const [focusGeometryInstant, setFocusGeometryInstant] = React.useState(false);
+  const previousTerminalFocused = React.useRef(terminalFocused);
+  const workspaceRailWidth = workspaceRailHidden || terminalFocused ? 0 : WORKSPACE_RAIL_WIDTH;
+
+  // A timed sidebar-width transition sends a cascade of intermediate PTY
+  // resizes while entering/exiting focus. Hold the shell's existing
+  // data-motion=instant escape hatch through the first frame of either change,
+  // producing one settled grid resize instead.
+  React.useLayoutEffect(() => {
+    if (previousTerminalFocused.current === terminalFocused) return;
+    previousTerminalFocused.current = terminalFocused;
+    setFocusGeometryInstant(true);
+    const frame = window.requestAnimationFrame(() => setFocusGeometryInstant(false));
+    return () => window.cancelAnimationFrame(frame);
+  }, [terminalFocused]);
 
   return (
     <SidebarProvider
       className="h-svh flex-col"
+      data-motion={terminalFocused || focusGeometryInstant ? "instant" : undefined}
       data-resizing={resizing || undefined}
       style={
         {
           // `sidebarWidth` stores the full two-tier width. When the workspace
           // rail is hidden, subtract its 60px instead of letting the primary
           // sidebar expand into that space — the canvas genuinely gains it.
-          "--sidebar-width": `${sidebarWidth - (WORKSPACE_RAIL_WIDTH - workspaceRailWidth)}px`,
+          "--sidebar-width": terminalFocused
+            ? "0px"
+            : `${sidebarWidth - (WORKSPACE_RAIL_WIDTH - workspaceRailWidth)}px`,
           // Collapsed = optional workspace rail + 48px nav icon strip.
-          "--sidebar-width-icon": `${COLLAPSED_NAV_WIDTH + workspaceRailWidth}px`,
+          "--sidebar-width-icon": terminalFocused
+            ? "0px"
+            : `${COLLAPSED_NAV_WIDTH + workspaceRailWidth}px`,
           // 60px: a ring-2/offset-3 selected tile (36px + 10) keeps 7px of
           // air to each rail edge.
           "--rail-width": `${workspaceRailWidth}px`,
@@ -87,7 +108,12 @@ export function AppShell() {
       >
         <Sidebar
           collapsible="icon"
-          className="h-full overflow-hidden *:data-[sidebar=sidebar]:flex-row"
+          aria-hidden={terminalFocused || undefined}
+          inert={terminalFocused}
+          className={cn(
+            "h-full overflow-hidden *:data-[sidebar=sidebar]:flex-row",
+            terminalFocused && "invisible",
+          )}
         >
           <Sidebar
             collapsible="none"
@@ -112,7 +138,12 @@ export function AppShell() {
             renders inside this one card, floating on the rail-dark backdrop
             with a hairline border. overflow-hidden clips full-bleed children
             (tab strips, terminals) to the rounded corners. */}
-        <SidebarInset className="m-2 overflow-hidden rounded-xl border border-border">
+        <SidebarInset
+          className={cn(
+            "overflow-hidden",
+            terminalFocused ? "m-0 rounded-none border-0" : "m-2 rounded-xl border border-border",
+          )}
+        >
           <MainContent />
         </SidebarInset>
       </div>

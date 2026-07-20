@@ -32,6 +32,7 @@ import {
   type NavSnapshot,
 } from "@renderer/lib/nav-history";
 import { useBoardStore } from "@renderer/stores/board";
+import { useSessionsStore } from "@renderer/stores/sessions";
 
 /** The per-workspace nav pages (NAV_ITEMS). Settings is app-wide chrome — see stores/ui.ts. */
 export type NavKey = "board" | "sessions" | "files";
@@ -105,6 +106,8 @@ interface WorkspaceState {
    * card already selected (ticket-detail-mvp decision #1).
    */
   openTicket(projectId: string, ticketId: string): void;
+  /** Opens a ticket's exact live terminal tab, optionally focusing one split pane. */
+  openTicketSession(projectId: string, ticketId: string, tabId: string, paneId?: string): void;
   /** Closes the detail view, returning to the plain board. Leaves the board's selection as-is. */
   closeTicket(projectId: string): void;
   /**
@@ -283,6 +286,25 @@ export function createWorkspaceStore(storage?: StateStorage) {
           // board — breadcrumb click, Escape, restart-then-close — shows it
           // selected rather than landing on a blank board.
           useBoardStore.getState().selectTicket(projectId, ticketId);
+        },
+
+        openTicketSession(projectId, ticketId, tabId, paneId) {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const existing = current.ticketTabs[ticketId] ?? { files: [], active: DOC_TAB_ID };
+            return patchWorkspace(state, projectId, {
+              nav: "board",
+              openTicketId: ticketId,
+              ticketTabs: {
+                ...current.ticketTabs,
+                [ticketId]: { ...existing, active: tabId },
+              },
+            });
+          });
+          useBoardStore.getState().selectTicket(projectId, ticketId);
+          const sessions = useSessionsStore.getState();
+          sessions.setActiveSession(ticketId, tabId);
+          if (paneId !== undefined) sessions.setActivePane(ticketId, tabId, paneId);
         },
 
         closeTicket(projectId) {

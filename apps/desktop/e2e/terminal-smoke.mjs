@@ -609,11 +609,14 @@ async function main() {
       `before=${JSON.stringify(scrollBefore)} after=${JSON.stringify(scrollAfter)}`,
     );
 
-    // Keep a visual artifact for the ambiguous-symbol presentation regression:
-    // U+23FA must use the active ANSI green from the text font, not Apple's
-    // blue color-emoji glyph. The pure transformer has deterministic unit
-    // coverage; this screenshot covers the actual GPU font-selection result.
-    await runInTerminal(page, "printf '\\033[32m⏺\\033[0m symbol-probe\\n'");
+    // Manual visual diagnostic for Claude-style status symbols. Restty renders
+    // into a GPU canvas, so Playwright cannot inspect the glyphs as DOM text and
+    // this screenshot is intentionally NOT a pass/fail assertion. Inspect both
+    // the bare U+23FA and explicit U+23FA U+FE0E rows for ghost tofu boxes.
+    await runInTerminal(
+      page,
+      "printf '\\033[32m⏺\\033[0m bare-symbol\\n\\033[36m⏺︎\\033[0m explicit-text-symbol\\n'",
+    );
     await page.mouse.move(mouseBox.x, mouseBox.y);
     await page.mouse.wheel(0, 100_000);
     await sleep(500);
@@ -647,7 +650,9 @@ async function main() {
   console.log(`  ${join(SCRATCH, "04-after-nav-return.png")}      — A after Board↔Sessions nav`);
   console.log(`  ${join(SCRATCH, "06-two-tabs.png")}              — A with two session tabs`);
   console.log(`  ${join(SCRATCH, "07-independent-split.png")}      — two independent split panes`);
-  console.log(`  ${join(SCRATCH, "08-symbol-presentation.png")}     — U+23FA text presentation`);
+  console.log(
+    `  ${join(SCRATCH, "08-symbol-presentation.png")}     — manual-only U+23FA bare + VS15 visual check (pixels not asserted)`,
+  );
   console.log(
     `\nRenderer backend: ${backendReport.webgpu ? "WebGPU" : backendReport.webgl2 ? "WebGL2" : "UNKNOWN"}` +
       ` (webgpu=${backendReport.webgpu} webgl2=${backendReport.webgl2} navigator.gpu=${backendReport.navigatorGpu})`,

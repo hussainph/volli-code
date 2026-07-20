@@ -126,6 +126,64 @@ describe("setNewTicketOpen", () => {
   });
 });
 
+describe("terminal focus", () => {
+  const target = { projectId: "p1", ticketId: "t1", sessionId: "s1" };
+
+  it("tracks and clears the focused terminal target", () => {
+    const store = createUiStore(createMemoryStorage());
+    expect(store.getState().terminalFocusTarget).toBeNull();
+
+    store.getState().setTerminalFocusTarget(target);
+    expect(store.getState().terminalFocusTarget).toEqual(target);
+
+    store.getState().setTerminalFocusTarget(null);
+    expect(store.getState().terminalFocusTarget).toBeNull();
+  });
+
+  it("clearTerminalFocusForTicket clears only a target owned by the given ticket", () => {
+    const store = createUiStore(createMemoryStorage());
+    store.getState().setTerminalFocusTarget(target); // ticketId t1
+
+    // A different ticket's teardown must not clear this ticket's focus.
+    store.getState().clearTerminalFocusForTicket("other");
+    expect(store.getState().terminalFocusTarget).toEqual(target);
+
+    store.getState().clearTerminalFocusForTicket("t1");
+    expect(store.getState().terminalFocusTarget).toBeNull();
+  });
+
+  it("clearTerminalFocusUnlessTicket drops a target that belongs to a different ticket", () => {
+    const store = createUiStore(createMemoryStorage());
+    store.getState().setTerminalFocusTarget(target); // ticketId t1
+
+    // Open ticket is still t1: the target is kept.
+    store.getState().clearTerminalFocusUnlessTicket("t1");
+    expect(store.getState().terminalFocusTarget).toEqual(target);
+
+    // Open ticket changed to t2: the stale foreign target is cleared at the store.
+    store.getState().clearTerminalFocusUnlessTicket("t2");
+    expect(store.getState().terminalFocusTarget).toBeNull();
+
+    // A null target is a no-op regardless of the ticket asked about.
+    store.getState().clearTerminalFocusUnlessTicket("t3");
+    expect(store.getState().terminalFocusTarget).toBeNull();
+  });
+
+  it("is session-only and never enters persisted UI state", () => {
+    const storage = createMemoryStorage();
+    const store = createUiStore(storage);
+    store.getState().setTerminalFocusTarget(target);
+
+    const persisted = JSON.parse(storage.getItem("volli:ui")!) as {
+      state: Record<string, unknown>;
+    };
+    expect(persisted.state).not.toHaveProperty("terminalFocusTarget");
+
+    const reloaded = createUiStore(storage);
+    expect(reloaded.getState().terminalFocusTarget).toBeNull();
+  });
+});
+
 describe("persistence", () => {
   it("persists sidebarWidth + uiScale + workspaceRailHidden + railCollapsed + detailsExpanded — settingsOpen resets each launch", () => {
     const storage = createMemoryStorage();
