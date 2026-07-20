@@ -440,7 +440,12 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
         toastError(`Could not commit: ${result.error}`);
         return;
       }
-      toast.success(`Committed: ${result.message}`);
+      if (result.committed) {
+        toast.success(`Committed: ${result.message}`);
+      } else {
+        // Clean-tree no-op: the snapshot was stale — informational, not an error.
+        toast.info("Nothing to commit — the worktree was already clean.");
+      }
     } catch (error) {
       toastError(`Could not commit: ${errorMessage(error)}`);
     } finally {
@@ -471,7 +476,10 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
    * The stacked primary flow: commit, then (only on success) push. The
    * intermediate commit toast is suppressed — one final toast only. The
    * `worktree_committed` History event still records in main, so nothing is
-   * lost. On commit failure the flow stops (its error toast already fired).
+   * lost. On commit failure the flow stops (its error toast already fired) —
+   * but a clean-tree NO-OP (`committed: false`) continues: the snapshot that
+   * offered "Commit & …" may be stale (the agent committed meanwhile), and the
+   * push half is still exactly what the user asked for.
    */
   async function runCommitThenPush(isUpdate: boolean) {
     setStage("committing");

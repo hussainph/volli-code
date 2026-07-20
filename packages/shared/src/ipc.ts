@@ -338,8 +338,15 @@ export type WorktreeStatusResult = Result<{
 export type WorktreeDiffMode = "working-tree" | "merge-base";
 export type WorktreeDiffResult = Result<{ diff: DiffStat }>;
 
-/** Ack for `volli:worktree-commit` — the one-click safety-net commit's fixed message. */
-export type WorktreeCommitResult = Result<{ message: string }>;
+/**
+ * Ack for `volli:worktree-commit`. `committed: true` carries the safety-net
+ * commit's fixed message; `committed: false` is the clean-tree NO-OP — the
+ * status snapshot that offered the commit was stale and there was nothing to
+ * stage, which is not an error (a stacked commit→push flow proceeds to push).
+ */
+export type WorktreeCommitResult = Result<
+  { committed: true; message: string } | { committed: false; message: null }
+>;
 
 /** Ack for `volli:worktree-push-pr` — the opened/re-discovered PR url, and whether it pre-existed. */
 export type WorktreePushPrResult = Result<{ url: string; existing: boolean }>;

@@ -18,7 +18,7 @@ export type { WorktreeStatusInput, WorktreeStatusReport } from "./status";
 export { diffStat } from "./diff";
 export type { DiffMode, DiffStatInput } from "./diff";
 export { commitRemaining } from "./commit";
-export type { CommitRemainingInput } from "./commit";
+export type { CommitOutcome, CommitRemainingInput } from "./commit";
 export { runNet, fetchBase, pushBranch, ghCreateDraftPr, ghFindPr } from "./net";
 export type { RunNet, GhResult, GhFailure, GhFailureKind } from "./net";
 export { publishTicketBranch, commitTicketRemaining } from "./publish";

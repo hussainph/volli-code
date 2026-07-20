@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { commitRemaining } from "./commit";
-import { GitError } from "./git";
+import { netFailure, scriptedNet } from "./scripted-net";
 import { scriptedGit } from "./scripted-git";
 
 let dirs: string[] = [];
@@ -20,67 +20,67 @@ function tempDir(prefix: string): string {
   return dir;
 }
 
+/** A sync git runner answering the quick probes (sequencer git-dir + status). */
+function probeGit(gitDir: string, status: string) {
+  return scriptedGit((args) => {
+    if (args[0] === "rev-parse" && args[1] === "--git-dir") return gitDir;
+    if (args[0] === "status") return status;
+    return "";
+  }).git;
+}
+
 describe("commitRemaining", () => {
-  it("stages -A and commits with the fixed chore(<id>) message when the tree is dirty", () => {
-    const gitDir = tempDir("gitdir");
-    const { git, calls } = scriptedGit((args) => {
-      if (args[0] === "rev-parse" && args[1] === "--git-dir") return gitDir;
-      if (args[0] === "status") return " M src/a.ts\n";
-      return "";
-    });
-    const result = commitRemaining(git, { worktreePath: "/wt", displayId: "VC-12" });
+  it("stages -A and commits (async runner) with the fixed chore(<id>) message when the tree is dirty", async () => {
+    const git = probeGit(tempDir("gitdir"), " M src/a.ts\n");
+    const { run, calls } = scriptedNet(() => ({}));
+    const result = await commitRemaining(git, run, { worktreePath: "/wt", displayId: "VC-12" });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.message).toBe("chore(VC-12): commit remaining work");
-    // add -A precedes commit -m with the exact message.
-    expect(calls.some((c) => c.args[0] === "add" && c.args[1] === "-A")).toBe(true);
-    const commit = calls.find((c) => c.args[0] === "commit");
-    expect(commit?.args).toEqual(["commit", "-m", "chore(VC-12): commit remaining work"]);
+    expect(result.value).toEqual({
+      committed: true,
+      message: "chore(VC-12): commit remaining work",
+    });
+    // add -A precedes commit -m with the exact message, both through the async runner.
+    expect(calls[0]).toMatchObject({ file: "git", args: ["add", "-A"], cwd: "/wt" });
+    expect(calls[1]).toMatchObject({
+      file: "git",
+      args: ["commit", "-m", "chore(VC-12): commit remaining work"],
+      cwd: "/wt",
+    });
   });
 
-  it("refuses (err) when a sequencer operation is in progress, never staging or committing", () => {
+  it("refuses (err) when a sequencer operation is in progress, never staging or committing", async () => {
     const gitDir = tempDir("gitdir");
     writeFileSync(join(gitDir, "REBASE_HEAD"), "abc\n");
     writeFileSync(join(gitDir, "MERGE_HEAD"), "abc\n");
-    const { git, calls } = scriptedGit((args) => {
-      if (args[0] === "rev-parse" && args[1] === "--git-dir") return gitDir;
-      if (args[0] === "status") return " M src/a.ts\n";
-      return "";
-    });
-    const result = commitRemaining(git, { worktreePath: "/wt", displayId: "VC-12" });
+    const git = probeGit(gitDir, " M src/a.ts\n");
+    const { run, calls } = scriptedNet(() => ({}));
+    const result = await commitRemaining(git, run, { worktreePath: "/wt", displayId: "VC-12" });
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toMatch(/in progress|finish|merge|rebase/i);
-    expect(calls.some((c) => c.args[0] === "add")).toBe(false);
-    expect(calls.some((c) => c.args[0] === "commit")).toBe(false);
+    expect(calls).toHaveLength(0);
   });
 
-  it("errs with a clear message when there is nothing to commit (clean tree)", () => {
-    const gitDir = tempDir("gitdir");
-    const { git, calls } = scriptedGit((args) => {
-      if (args[0] === "rev-parse" && args[1] === "--git-dir") return gitDir;
-      if (args[0] === "status") return "";
-      return "";
-    });
-    const result = commitRemaining(git, { worktreePath: "/wt", displayId: "VC-12" });
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.error).toMatch(/nothing to commit/i);
-    expect(calls.some((c) => c.args[0] === "commit")).toBe(false);
+  it("returns the committed:false no-op (ok, not err) when the tree is already clean", async () => {
+    const git = probeGit(tempDir("gitdir"), "");
+    const { run, calls } = scriptedNet(() => ({}));
+    const result = await commitRemaining(git, run, { worktreePath: "/wt", displayId: "VC-12" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toEqual({ committed: false });
+    expect(calls).toHaveLength(0);
   });
 
-  it("surfaces the real stderr when a commit hook fails", () => {
-    const gitDir = tempDir("gitdir");
-    const { git } = scriptedGit((args) => {
-      if (args[0] === "rev-parse" && args[1] === "--git-dir") return gitDir;
-      if (args[0] === "status") return " M src/a.ts\n";
-      if (args[0] === "add") return "";
+  it("surfaces the real stderr when a commit hook fails", async () => {
+    const git = probeGit(tempDir("gitdir"), " M src/a.ts\n");
+    const { run } = scriptedNet((_file, args) => {
       if (args[0] === "commit") {
-        throw new GitError("failed", "pre-commit hook: lint failed on src/a.ts", args);
+        throw netFailure({ stderr: "pre-commit hook: lint failed on src/a.ts", code: 1 });
       }
-      return "";
+      return {};
     });
-    const result = commitRemaining(git, { worktreePath: "/wt", displayId: "VC-12" });
+    const result = await commitRemaining(git, run, { worktreePath: "/wt", displayId: "VC-12" });
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toContain("pre-commit hook: lint failed");

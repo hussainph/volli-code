@@ -1146,17 +1146,26 @@ export function registerDataIpcHandlers(
 
   ipcMain.handle(
     "volli:worktree-commit" satisfies VolliIpcChannel,
-    (_event, input: unknown): WorktreeCommitResult => {
+    async (_event, input: unknown): Promise<WorktreeCommitResult> => {
       if (!isTicketIdInput(input)) {
         return { ok: false, error: "Invalid ticket" };
       }
       try {
-        const result = commitTicketRemaining(worktreeDeps(db), input.ticketId);
+        // The async runner matters here: `git commit` runs unbounded hook code,
+        // which must never block the main process (net.ts's freeze rationale).
+        const result = await commitTicketRemaining(
+          { ...worktreeDeps(db), net: runNet },
+          input.ticketId,
+        );
         if (!result.ok) return { ok: false, error: result.error };
+        if (!result.value.committed) {
+          // Clean-tree no-op: nothing landed, no event, nothing to re-hydrate.
+          return { ok: true, committed: false, message: null };
+        }
         // No ticket row changed, but a `worktree_committed` event landed — the
         // Activity feed hydrates from the same bootstrap, so re-hydrate boards.
         broadcastDataChanged();
-        return { ok: true, message: result.value.message };
+        return { ok: true, committed: true, message: result.value.message };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }

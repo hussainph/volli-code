@@ -28,7 +28,7 @@ import { recordTicketEvent } from "../db/events-repo";
 import { getProjectById } from "../db/projects-repo";
 import { getTicketRow, updateTicketFields } from "../db/tickets-repo";
 import { resolveBaseBranch } from "./base";
-import { commitRemaining } from "./commit";
+import { commitRemaining, type CommitOutcome } from "./commit";
 import {
   fetchBase,
   ghCreateDraftPr,
@@ -256,14 +256,16 @@ export async function publishTicketBranch(
 
 /**
  * The one-click "commit remaining work" wrapper (done-flow §6): loads identity,
- * runs `commitRemaining`, and records `worktree_committed` on success or
- * `worktree_failed { stage: "commit" }` on refusal/error. No network, so it
- * takes the plain {@link WorktreeDeps} — the git seam is enough.
+ * runs `commitRemaining`, and records `worktree_committed` when a commit landed
+ * or `worktree_failed { stage: "commit" }` on refusal/error. A clean-tree no-op
+ * (`committed: false`) records nothing — nothing happened. Takes
+ * {@link PublishDeps} because `commitRemaining` runs `add`/`commit` through the
+ * async runner (commit hooks are unbounded; sync would freeze main).
  */
-export function commitTicketRemaining(
-  deps: WorktreeDeps,
+export async function commitTicketRemaining(
+  deps: PublishDeps,
   ticketId: string,
-): WorktreeResult<{ message: string }> {
+): Promise<WorktreeResult<CommitOutcome>> {
   const ticket = getTicketRow(deps.db, ticketId);
   if (!ticket) return err("Unknown ticket");
   const project = getProjectById(deps.db, ticket.project_id);
@@ -272,7 +274,7 @@ export function commitTicketRemaining(
     return err("This ticket has no worktree yet, so there is nothing to commit.");
   }
   const displayId = displayTicketId(project.ticketPrefix, ticket.ticket_number);
-  const result = commitRemaining(deps.git, {
+  const result = await commitRemaining(deps.git, deps.net, {
     worktreePath: ticket.worktree_path,
     displayId,
   });
@@ -287,12 +289,14 @@ export function commitTicketRemaining(
     );
     return result;
   }
-  recordTicketEvent(
-    deps.db,
-    ticketId,
-    { kind: "worktree_committed", message: result.value.message },
-    now,
-    USER_ACTOR,
-  );
+  if (result.value.committed) {
+    recordTicketEvent(
+      deps.db,
+      ticketId,
+      { kind: "worktree_committed", message: result.value.message },
+      now,
+      USER_ACTOR,
+    );
+  }
   return result;
 }

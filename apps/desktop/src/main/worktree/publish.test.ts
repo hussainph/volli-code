@@ -18,7 +18,6 @@ import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-hel
 import { commitTicketRemaining, publishTicketBranch, type PublishDeps } from "./publish";
 import { scriptedGit } from "./scripted-git";
 import { netFailure, scriptedNet } from "./scripted-net";
-import { GitError } from "./git";
 import type { WorktreeDeps } from "./types";
 
 let harness: TestDb;
@@ -93,7 +92,7 @@ describe("publishTicketBranch", () => {
     const url = "https://github.com/acme/repo/pull/7";
     const { run } = scriptedNet((file, args) => {
       if (file === "git") return {};
-      if (file === "gh" && args.includes("view")) return { stdout: `${url}\n` };
+      if (file === "gh" && args.includes("list")) return { stdout: `${url}\n` };
       return {};
     });
     const deps: PublishDeps = { db, git: scriptedGit(() => "").git, net: run };
@@ -112,7 +111,7 @@ describe("publishTicketBranch", () => {
     const { db, ticketId } = seedTicket({ prUrl: url });
     const { run } = scriptedNet((file, args) => {
       if (file === "git") return {};
-      if (file === "gh" && args.includes("view")) return { stdout: `${url}\n` };
+      if (file === "gh" && args.includes("list")) return { stdout: `${url}\n` };
       return {};
     });
     const deps: PublishDeps = { db, git: scriptedGit(() => "").git, net: run };
@@ -126,13 +125,13 @@ describe("publishTicketBranch", () => {
   it("falls back to ghFindPr once when create reports pr-exists", async () => {
     const { db, ticketId } = seedTicket();
     const url = "https://github.com/acme/repo/pull/9";
-    let viewCount = 0;
+    let findCount = 0;
     const { run } = scriptedNet((file, args) => {
       if (file === "git") return {};
-      if (file === "gh" && args.includes("view")) {
-        viewCount += 1;
+      if (file === "gh" && args.includes("list")) {
+        findCount += 1;
         // First find: no PR yet. Second (post-create fallback) find: it exists.
-        return { stdout: viewCount === 1 ? "\n" : `${url}\n` };
+        return { stdout: findCount === 1 ? "\n" : `${url}\n` };
       }
       if (file === "gh" && args.includes("create")) {
         throw netFailure({ stderr: "a pull request for branch already exists", code: 1 });
@@ -144,7 +143,7 @@ describe("publishTicketBranch", () => {
     const result = await publishTicketBranch(deps, ticketId);
 
     expect(result).toEqual({ ok: true, value: { url, existing: true } });
-    expect(viewCount).toBe(2);
+    expect(findCount).toBe(2);
     expect(getTicket(db, ticketId)?.prUrl).toBe(url);
   });
 
@@ -152,7 +151,7 @@ describe("publishTicketBranch", () => {
     const { db, ticketId } = seedTicket();
     const { run } = scriptedNet((file, args) => {
       if (file === "git") return {};
-      if (file === "gh" && args.includes("view")) return { stdout: "\n" };
+      if (file === "gh" && args.includes("list")) return { stdout: "\n" };
       if (file === "gh" && args.includes("create")) {
         throw netFailure({ stderr: "spawn gh ENOENT", code: "ENOENT" });
       }
@@ -175,7 +174,7 @@ describe("publishTicketBranch", () => {
     const url = "https://github.com/acme/repo/pull/12";
     const { run, calls } = scriptedNet((file, args) => {
       if (file === "git") return {};
-      if (file === "gh" && args.includes("view")) return { stdout: "\n" };
+      if (file === "gh" && args.includes("list")) return { stdout: "\n" };
       if (file === "gh" && args.includes("create")) return { stdout: `${url}\n` };
       return {};
     });
@@ -207,7 +206,7 @@ describe("publishTicketBranch", () => {
         throw netFailure({ stderr: "fatal: unable to access origin", code: 1 });
       }
       if (file === "git") return {};
-      if (file === "gh" && args.includes("view")) return { stdout: `${url}\n` };
+      if (file === "gh" && args.includes("list")) return { stdout: `${url}\n` };
       return {};
     });
     const deps: PublishDeps = { db, git: scriptedGit(() => "").git, net: run };
@@ -236,15 +235,24 @@ describe("publishTicketBranch", () => {
 });
 
 describe("commitTicketRemaining", () => {
-  it("commits and records worktree_committed on a dirty tree", () => {
+  it("commits (via the async runner) and records worktree_committed on a dirty tree", async () => {
     const { db, ticketId } = seedTicket();
-    const deps: WorktreeDeps = { db, git: commitGit(" M src/a.ts\n") };
+    const { run, calls } = scriptedNet(() => ({}));
+    const deps: PublishDeps = { db, git: commitGit(" M src/a.ts\n"), net: run };
 
-    const result = commitTicketRemaining(deps, ticketId);
+    const result = await commitTicketRemaining(deps, ticketId);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.message).toBe("chore(VC-1): commit remaining work");
+    expect(result.value).toEqual({
+      committed: true,
+      message: "chore(VC-1): commit remaining work",
+    });
+    // add/commit ran through the async runner (hooks must never block main).
+    expect(calls.map((c) => [c.file, c.args[0]])).toEqual([
+      ["git", "add"],
+      ["git", "commit"],
+    ]);
     const committed = events(db, ticketId).find((e) => e.payload.kind === "worktree_committed");
     expect(committed?.payload).toEqual({
       kind: "worktree_committed",
@@ -252,18 +260,29 @@ describe("commitTicketRemaining", () => {
     });
   });
 
-  it("records worktree_failed(commit) and errs when the commit fails", () => {
+  it("returns the committed:false no-op and records NO event on a clean tree", async () => {
     const { db, ticketId } = seedTicket();
-    const git = scriptedGit((args) => {
-      if (args[0] === "rev-parse" && args[1] === "--git-dir") return "/repo/.worktrees/VC-1/.git";
-      if (args[0] === "status") return " M src/a.ts\n";
-      if (args[0] === "add") return "";
-      if (args[0] === "commit") throw new GitError("failed", "pre-commit hook: lint failed", args);
-      return "";
-    }).git;
-    const deps: WorktreeDeps = { db, git };
+    const { run, calls } = scriptedNet(() => ({}));
+    const deps: PublishDeps = { db, git: commitGit(""), net: run };
 
-    const result = commitTicketRemaining(deps, ticketId);
+    const result = await commitTicketRemaining(deps, ticketId);
+
+    expect(result).toEqual({ ok: true, value: { committed: false } });
+    expect(calls).toHaveLength(0);
+    expect(events(db, ticketId)).toHaveLength(0);
+  });
+
+  it("records worktree_failed(commit) and errs when the commit fails", async () => {
+    const { db, ticketId } = seedTicket();
+    const { run } = scriptedNet((_file, args) => {
+      if (args[0] === "commit") {
+        throw netFailure({ stderr: "pre-commit hook: lint failed", code: 1 });
+      }
+      return {};
+    });
+    const deps: PublishDeps = { db, git: commitGit(" M src/a.ts\n"), net: run };
+
+    const result = await commitTicketRemaining(deps, ticketId);
 
     expect(result.ok).toBe(false);
     if (result.ok) return;

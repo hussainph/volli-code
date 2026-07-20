@@ -12,9 +12,9 @@
  *     pushed, so `origin/<base>` exists for the best-effort fetch), and
  *   • a FAKE `gh` shim — an executable shell script in a scratch bin dir that is
  *     PREPENDED to PATH via `launch({ extraEnv })`, so it shadows any real `gh`.
- *     It appends its argv to a log file and is deterministic: `gh pr view …`
- *     prints "no pull requests found" to stderr and exits 1 (→ ghFindPr sees no
- *     PR); `gh pr create …` prints a canned URL to stdout and exits 0.
+ *     It appends its argv to a log file and is deterministic: `gh pr list …`
+ *     prints nothing and exits 0 (no open PR → ghFindPr sees `url: null`);
+ *     `gh pr create …` prints a canned URL to stdout and exits 0.
  *
  * The scenario boots a ticket session so main's ensure pipeline materializes the
  * worktree (worktree-smoke.mjs is the template for that), dirties the worktree
@@ -96,9 +96,10 @@ async function refExists(cwd, ref) {
 
 /**
  * Write the fake `gh` shim: an executable POSIX-sh script that appends its argv
- * (one line per arg, after a header) to `logPath`, answers `pr view` with a
- * no-PR failure and `pr create` with the canned URL, and exits 0 for anything
- * else. The log path is baked in literally so the shim needs no env of its own.
+ * (one line per arg, after a header) to `logPath`, answers `pr list` with an
+ * empty result (no open PR → ghFindPr sees `url: null`) and `pr create` with
+ * the canned URL, and exits 0 for anything else. The log path is baked in
+ * literally so the shim needs no env of its own.
  */
 async function writeGhShim(binDir, logPath) {
   await fs.mkdir(binDir, { recursive: true });
@@ -108,9 +109,8 @@ async function writeGhShim(binDir, logPath) {
   echo "=== gh invocation ==="
   for arg in "$@"; do echo "$arg"; done
 } >> ${JSON.stringify(logPath)}
-if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
-  echo "no pull requests found for branch" 1>&2
-  exit 1
+if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
+  exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
   echo ${JSON.stringify(CANNED_PR_URL)}

@@ -175,21 +175,34 @@ describe("ghCreateDraftPr", () => {
 });
 
 describe("ghFindPr", () => {
-  it("returns the URL for an existing PR", async () => {
+  it("returns the URL for an existing OPEN PR (pr list --state open, never pr view)", async () => {
     const { run, calls } = scriptedNet(() => ({ stdout: "https://github.com/o/r/pull/7\n" }));
     const result = await ghFindPr(run, { worktreePath: "/wt", branch: "volli/VC-12-x" });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.url).toBe("https://github.com/o/r/pull/7");
+    // `pr view <branch>` would resolve a MERGED/CLOSED PR too — the open-state
+    // filter is what keeps a dead PR from blocking a fresh one (see net.ts).
     expect(calls[0]?.args).toEqual([
       "pr",
-      "view",
+      "list",
+      "--head",
       "volli/VC-12-x",
+      "--state",
+      "open",
       "--json",
       "url",
       "--jq",
-      ".url",
+      ".[].url",
     ]);
+  });
+
+  it("returns url=null (ok) when no OPEN PR exists (e.g. the branch's PR merged)", async () => {
+    const { run } = scriptedNet(() => ({ stdout: "" }));
+    const result = await ghFindPr(run, { worktreePath: "/wt", branch: "volli/VC-12-x" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.url).toBeNull();
   });
 
   it("returns url=null (ok) when gh reports no pull requests found", async () => {

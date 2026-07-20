@@ -50,7 +50,7 @@ interface ExecFailure {
   code: number | string | null;
 }
 
-function extractFailure(caught: unknown): ExecFailure {
+export function extractFailure(caught: unknown): ExecFailure {
   const e = caught as { stdout?: unknown; stderr?: unknown; code?: unknown };
   const stderr =
     typeof e.stderr === "string" && e.stderr.length > 0
@@ -240,9 +240,12 @@ export async function ghCreateDraftPr(
 }
 
 /**
- * `gh pr view <branch> --json url --jq .url`. A "no pull requests found" exit is
- * NOT an error — it resolves `url: null` so the caller knows to create one. Any
- * other failure is classified like {@link ghCreateDraftPr}.
+ * `gh pr list --head <branch> --state open --json url --jq .[].url` — the OPEN
+ * PR for the branch, or `url: null` when there is none (empty stdout is not an
+ * error). NOT `gh pr view <branch>`: view resolves the branch's most recent PR
+ * in ANY state, so a merged/closed PR would be "re-discovered" as existing and
+ * silently block opening a fresh PR for the branch's new work. Failures are
+ * classified like {@link ghCreateDraftPr}.
  */
 export async function ghFindPr(
   run: RunNet,
@@ -251,11 +254,16 @@ export async function ghFindPr(
   try {
     const { stdout } = await run(
       "gh",
-      ["pr", "view", input.branch, "--json", "url", "--jq", ".url"],
+      ["pr", "list", "--head", input.branch, "--state", "open", "--json", "url", "--jq", ".[].url"],
       input.worktreePath,
     );
-    const url = stdout.trim();
-    return ghOk({ url: url.length > 0 ? url : null });
+    // GitHub allows at most one open PR per head branch; take the first line
+    // defensively all the same.
+    const url = stdout
+      .split("\n")
+      .map((line) => line.trim())
+      .find((line) => line.length > 0);
+    return ghOk({ url: url ?? null });
   } catch (caught) {
     const { stderr } = extractFailure(caught);
     if (stderr.toLowerCase().includes("no pull requests found")) {
