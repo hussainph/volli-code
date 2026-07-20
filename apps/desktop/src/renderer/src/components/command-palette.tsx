@@ -4,7 +4,10 @@ import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindo
 import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
 import { Command } from "cmdk";
 
-import { buildCommandPaletteItems } from "@renderer/components/command-palette-model";
+import {
+  buildCommandPaletteItems,
+  type CommandPaletteItems,
+} from "@renderer/components/command-palette-model";
 import { useBoardStore } from "@renderer/stores/board";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useSessionsStore } from "@renderer/stores/sessions";
@@ -16,6 +19,9 @@ interface CommandPaletteProps {
   onOpenChange(open: boolean): void;
 }
 
+/** No tickets/sessions to show while closed — keeps the derivation below free. */
+const EMPTY_COMMAND_PALETTE_ITEMS: CommandPaletteItems = { tickets: [], sessions: [] };
+
 /** Universal ⌘K destination picker for every ticket and every open session. */
 export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const projects = useProjectsStore((state) => state.projects);
@@ -24,9 +30,16 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const sessionsByOwner = useSessionsStore((state) => state.byOwner);
   const [query, setQuery] = React.useState("");
 
+  // Closed and invisible: every board/session mutation would otherwise
+  // re-run this projects×tickets×sessions rebuild for nothing. Gating on
+  // `open` keeps the closed palette free; the real derivation only runs once
+  // the dialog is actually shown.
   const items = React.useMemo(
-    () => buildCommandPaletteItems(projects, ticketsByProject, sessionsByOwner, selectedProjectId),
-    [projects, ticketsByProject, sessionsByOwner, selectedProjectId],
+    () =>
+      open
+        ? buildCommandPaletteItems(projects, ticketsByProject, sessionsByOwner, selectedProjectId)
+        : EMPTY_COMMAND_PALETTE_ITEMS,
+    [open, projects, ticketsByProject, sessionsByOwner, selectedProjectId],
   );
 
   React.useEffect(() => {

@@ -27,7 +27,12 @@
  * `terminalFocusTarget` — the ticket terminal tab temporarily owning the app
  * canvas. It is deliberately session-only: live PTYs do not survive relaunch,
  * and entering a new app lifetime with its chrome hidden around a missing
- * session would strand the user in an invalid view.
+ * session would strand the user in an invalid view. The invariant "the target
+ * names a tab of the currently open ticket" lives here at the store layer via
+ * `clearTerminalFocusForTicket` / `clearTerminalFocusUnlessTicket`, so it doesn't
+ * hinge on a particular ticket-detail view staying mounted: any surface that
+ * changes the open ticket enforces it, and app-shell (which hides all chrome
+ * while a target is set) can never be stranded around a ticket that's gone.
  *
  * Per-workspace UI state (the active nav page) lives in stores/workspace.ts.
  */
@@ -135,6 +140,20 @@ interface UiState {
   toggleDetailsExpanded(): void;
   setDetailsExpanded(expanded: boolean): void;
   setTerminalFocusTarget(target: TerminalFocusTarget | null): void;
+  /**
+   * Clear the focus target if it belongs to `ticketId` — used when that ticket's
+   * detail view is torn down (or the ticket is closed back to the board): the
+   * PTY it named is leaving the canvas, so ordinary chrome must return.
+   */
+  clearTerminalFocusForTicket(ticketId: string): void;
+  /**
+   * Enforce that the focus target names a tab of the currently open ticket:
+   * clear it unless it belongs to `ticketId`. Callers invoke this whenever the
+   * open ticket changes, so a target left over from a previous ticket can't
+   * strand app-shell with all chrome hidden — the guarantee no longer depends on
+   * a specific ticket-detail instance staying mounted to notice the change.
+   */
+  clearTerminalFocusUnlessTicket(ticketId: string): void;
   setLastHarnessId(harnessId: HarnessId): void;
 }
 
@@ -183,6 +202,16 @@ export function createUiStore(storage?: StateStorage) {
         toggleDetailsExpanded: () => set((state) => ({ detailsExpanded: !state.detailsExpanded })),
         setDetailsExpanded: (expanded) => set({ detailsExpanded: expanded }),
         setTerminalFocusTarget: (target) => set({ terminalFocusTarget: target }),
+        clearTerminalFocusForTicket: (ticketId) =>
+          set((state) =>
+            state.terminalFocusTarget?.ticketId === ticketId ? { terminalFocusTarget: null } : {},
+          ),
+        clearTerminalFocusUnlessTicket: (ticketId) =>
+          set((state) =>
+            state.terminalFocusTarget !== null && state.terminalFocusTarget.ticketId !== ticketId
+              ? { terminalFocusTarget: null }
+              : {},
+          ),
         setLastHarnessId: (harnessId) => set({ lastHarnessId: harnessId }),
       }),
       {

@@ -10,6 +10,7 @@ import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple"
 import { CommandPalette } from "@renderer/components/command-palette";
 import { Button } from "@renderer/components/ui/button";
 import { SidebarTrigger } from "@renderer/components/ui/sidebar";
+import { useCommandPaletteShortcut } from "@renderer/hooks/use-command-palette-shortcut";
 import { useFullScreen } from "@renderer/hooks/use-fullscreen";
 import { navBack, navForward } from "@renderer/hooks/use-nav-history";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
@@ -32,28 +33,11 @@ import { displayTicketId } from "@volli/shared";
 export function ChromeBar() {
   const fullScreen = useFullScreen();
   const terminalFocusTarget = useUiStore((state) => state.terminalFocusTarget);
-  const [commandPaletteOpen, setCommandPaletteOpen] = React.useState(false);
-
-  React.useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (
-        terminalFocusTarget === null &&
-        event.metaKey &&
-        !event.altKey &&
-        !event.shiftKey &&
-        event.key.toLowerCase() === "k"
-      ) {
-        event.preventDefault();
-        setCommandPaletteOpen((open) => !open);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [terminalFocusTarget]);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useCommandPaletteShortcut();
 
   React.useEffect(() => {
     if (terminalFocusTarget !== null) setCommandPaletteOpen(false);
-  }, [terminalFocusTarget]);
+  }, [terminalFocusTarget, setCommandPaletteOpen]);
 
   return (
     <>

@@ -71,7 +71,7 @@ function SessionRow({
         size="lg"
         isActive={active}
         onClick={onActivate}
-        className="h-auto min-h-10 items-start gap-2 py-1.5 [&:hover_.session-row-meta]:text-sidebar-accent-foreground [&[data-active=true]_.session-row-meta]:text-sidebar-accent-foreground"
+        className="h-auto min-h-10 items-start gap-2 pt-2 pb-3 [&:hover_.session-row-meta]:text-sidebar-accent-foreground [&[data-active=true]_.session-row-meta]:text-sidebar-accent-foreground"
       >
         <span
           aria-hidden
@@ -101,6 +101,7 @@ function SessionRow({
 
 function SessionTier({
   label,
+  tier,
   rows,
   project,
   openTicketId,
@@ -108,6 +109,7 @@ function SessionTier({
   onActivate,
 }: {
   label: string;
+  tier: "needs-you" | "in-progress";
   rows: readonly ActiveSessionRow[];
   project: Project;
   openTicketId: string | null;
@@ -127,7 +129,7 @@ function SessionTier({
             key={row.id}
             project={project}
             row={row}
-            needsAttention={label === "Needs you"}
+            needsAttention={tier === "needs-you"}
             active={
               openTicketId === row.ticket.id &&
               (row.target === null || activeTabId === row.target.tabId)
@@ -165,19 +167,26 @@ export function ActiveSessions({ project }: { project: Project }) {
   const [eventsByTicket, setEventsByTicket] = React.useState<Record<string, TicketEvent[]>>({});
   const [now, setNow] = React.useState(() => Date.now());
 
-  const projectTicketIds = new Set(tickets.map((ticket) => ticket.id));
-  const liveSignature = Object.values(containers)
-    .flatMap((container) =>
-      container.tabs
-        .filter(
-          (tab) =>
-            tab.scope.kind === "ticket" &&
-            tab.scope.projectId === project.id &&
-            projectTicketIds.has(tab.scope.ticketId),
+  const projectTicketIds = React.useMemo(
+    () => new Set(tickets.map((ticket) => ticket.id)),
+    [tickets],
+  );
+  const liveSignature = React.useMemo(
+    () =>
+      Object.values(containers)
+        .flatMap((container) =>
+          container.tabs
+            .filter(
+              (tab) =>
+                tab.scope.kind === "ticket" &&
+                tab.scope.projectId === project.id &&
+                projectTicketIds.has(tab.scope.ticketId),
+            )
+            .flatMap((tab) => sessionPanes(tab.layout).map((pane) => pane.sessionId)),
         )
-        .flatMap((tab) => sessionPanes(tab.layout).map((pane) => pane.sessionId)),
-    )
-    .join(",");
+        .join(","),
+    [containers, project.id, projectTicketIds],
+  );
   const needsReviewIds = React.useMemo(
     () => tickets.filter((ticket) => ticket.status === "needs_review").map((ticket) => ticket.id),
     [tickets],
@@ -217,9 +226,11 @@ export function ActiveSessions({ project }: { project: Project }) {
     )
       .then((results) => {
         if (cancelled) return;
-        const failed = results.find(({ result }) => !result.ok);
-        if (failed?.result.ok === false) {
-          toastError(`Could not load session attention: ${failed.result.error}`);
+        const failures = results.flatMap(({ result }) => (result.ok ? [] : [result.error]));
+        if (failures.length > 0) {
+          toastError(
+            `Could not load session attention for ${failures.length} ticket(s): ${failures.join("; ")}`,
+          );
         }
         setEventsByTicket(
           Object.fromEntries(
@@ -243,15 +254,19 @@ export function ActiveSessions({ project }: { project: Project }) {
     return () => window.clearInterval(timer);
   }, [liveSignature]);
 
-  const listing = buildActiveSessionListing({
-    tickets,
-    containers,
-    eventsByTicket,
-    records,
-    lastOutputAt,
-    parkState,
-    now,
-  });
+  const listing = React.useMemo(
+    () =>
+      buildActiveSessionListing({
+        tickets,
+        containers,
+        eventsByTicket,
+        records,
+        lastOutputAt,
+        parkState,
+        now,
+      }),
+    [tickets, containers, eventsByTicket, records, lastOutputAt, parkState, now],
+  );
   const rowCount = listing.needsYou.length + listing.inProgress.length;
 
   const activate = (row: ActiveSessionRow) => {
@@ -274,6 +289,7 @@ export function ActiveSessions({ project }: { project: Project }) {
         <SidebarMenu>
           <SessionTier
             label="Needs you"
+            tier="needs-you"
             rows={listing.needsYou}
             project={project}
             openTicketId={openTicketId}
@@ -282,6 +298,7 @@ export function ActiveSessions({ project }: { project: Project }) {
           />
           <SessionTier
             label="In progress"
+            tier="in-progress"
             rows={listing.inProgress}
             project={project}
             openTicketId={openTicketId}

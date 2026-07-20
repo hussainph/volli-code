@@ -1,11 +1,11 @@
 import {
-  harnessLabel,
   type SessionActivityState,
   type SessionRecord,
   type Ticket,
   type TicketEvent,
 } from "@volli/shared";
 
+import { sessionSourceLabel } from "../ticket/session-history";
 import {
   sessionActivityState,
   sessionPanes,
@@ -45,9 +45,7 @@ export interface BuildActiveSessionListingInput {
 }
 
 function sessionSource(record: SessionRecord | undefined): string {
-  if (record === undefined || record.launchKind === "unknown") return "Terminal";
-  if (record.launchKind === "shell") return "Shell";
-  return harnessLabel(record.harnessId);
+  return record === undefined ? "Terminal" : sessionSourceLabel(record);
 }
 
 function paneActivity(

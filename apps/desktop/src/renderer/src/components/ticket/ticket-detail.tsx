@@ -89,6 +89,9 @@ export function TicketDetail({
   const railCollapsed = useUiStore((state) => state.railCollapsed);
   const terminalFocusTarget = useUiStore((state) => state.terminalFocusTarget);
   const setTerminalFocusTarget = useUiStore((state) => state.setTerminalFocusTarget);
+  const clearTerminalFocusUnlessTicket = useUiStore(
+    (state) => state.clearTerminalFocusUnlessTicket,
+  );
   const closeGuard = useCloseGuard();
 
   const displayId = displayTicketId(ticketPrefix, ticket.ticketNumber);
@@ -185,20 +188,30 @@ export function TicketDetail({
     setTicketActiveTab(projectId, ticket.id, DOC_TAB_ID);
   }, [creating, activeTabIsRenderable, setTicketActiveTab, projectId, ticket.id]);
 
-  // A focus target names one concrete ticket-session tab. If navigation, tab
-  // selection, or explicit close invalidates that identity, restore ordinary
+  // A focus target names one concrete ticket-session tab. If tab selection or an
+  // explicit close invalidates that identity within this ticket, restore ordinary
   // chrome immediately rather than leaving the app focused around a fallback.
+  // (Cross-ticket staleness is handled at the store layer, below and on unmount.)
   React.useEffect(() => {
     if (terminalFocusTarget === null || terminalFocused) return;
     setTerminalFocusTarget(null);
   }, [terminalFocusTarget, terminalFocused, setTerminalFocusTarget]);
 
+  // Store-layer enforcement of "the target must name a tab of the OPEN ticket":
+  // whenever the open ticket becomes this one, drop any target left over from a
+  // different ticket. Keyed on `ticket.id` so a surface that swaps the open
+  // ticket without unmounting this view still re-checks the invariant. On mount
+  // for the ticket you just focused, the target already matches, so this no-ops.
+  React.useEffect(() => {
+    clearTerminalFocusUnlessTicket(ticket.id);
+  }, [ticket.id, clearTerminalFocusUnlessTicket]);
+
+  // Leaving this ticket entirely (detail torn down / closed to the board) with no
+  // successor view to run the effect above: clear the target the store still holds
+  // for it, so app-shell doesn't hide all chrome around a ticket that's gone.
   React.useEffect(
     () => () => {
-      const target = useUiStore.getState().terminalFocusTarget;
-      if (target?.ticketId === ticket.id) {
-        useUiStore.getState().setTerminalFocusTarget(null);
-      }
+      useUiStore.getState().clearTerminalFocusForTicket(ticket.id);
     },
     [ticket.id],
   );
@@ -237,13 +250,18 @@ export function TicketDetail({
     });
   }, [activeSessionTab, projectId, ticket.id, setTerminalFocusTarget]);
 
-  // Capture Escape before the terminal renderer can forward it to the PTY.
-  // The event's later bubble phase still sees `terminalFocused=true`, so it
-  // cannot also take the ordinary "close ticket detail" path below.
+  // ⌘Escape exits terminal focus. Bare Escape is deliberately left alone so it
+  // reaches the PTY — Claude Code interrupts on Esc and TUIs (vim, etc.) lean on
+  // it constantly, so a blanket Escape capture would break the terminal. ⌘Escape
+  // is a chord no terminal app consumes; we capture it (capture phase, before the
+  // renderer can forward it) and preventDefault so it never reaches the PTY. The
+  // "close ticket detail" listener below early-returns while focused, so it can't
+  // also fire off this keypress.
   React.useEffect(() => {
     if (!terminalFocused) return;
     function exitTerminalFocus(event: KeyboardEvent) {
-      if (event.key !== "Escape" || event.defaultPrevented || isEscapeExempt(event.target)) return;
+      if (event.key !== "Escape" || !event.metaKey) return;
+      if (event.defaultPrevented || isEscapeExempt(event.target)) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       setTerminalFocusTarget(null);
