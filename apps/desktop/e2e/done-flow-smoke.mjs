@@ -19,14 +19,16 @@
  * The scenario boots a ticket session so main's ensure pipeline materializes the
  * worktree (worktree-smoke.mjs is the template for that), dirties the worktree
  * from the test, then drives the REAL rail UI — open the ticket detail, expand
- * the "Details" drawer, wait for and click "Commit remaining changes", then
- * "Push & create draft PR". The git/DB/gh side effects are the assertions:
+ * the "Details" drawer, wait for and click the ONE adaptive primary button
+ * (decision #45), which reads "Commit & create draft PR" for a dirty tree with
+ * no PR and runs the whole stacked flow (commit → push → draft PR) in a single
+ * click. The git/DB/gh side effects are the assertions:
  *   commit  → worktree HEAD subject == "chore(<DISPLAY-ID>): commit remaining
  *             work", working tree clean, a `worktree_committed` ticket event.
  *   push+PR → the bare remote gained the ticket branch, the gh log shows
  *             `pr create --draft` (with --base/--title), the ticket row's
- *             `pr_url` == the canned URL, a `pr_opened` event, and the rail now
- *             offers "Open PR".
+ *             `pr_url` == the canned URL, a `pr_opened` event, and the primary
+ *             button now reads "View PR".
  *
  * If a rail button proves genuinely unreachable in-harness within its timeout,
  * the step FALLS BACK to invoking `window.api.worktree.commit/pushPr` over the
@@ -262,12 +264,13 @@ async function main() {
       return "ui";
     }
 
-    // === 1. Commit remaining changes (rail → git + event) ==================
+    // === 1. Commit & create draft PR — the single primary button (decision #45)
+    //         runs commit → push → PR in one click; here we assert the commit leg.
     let committedTicket = null;
-    let commitVia = "ui";
+    let flowVia = "ui";
     await attempt(
       1,
-      'Commit remaining changes: rail button commits the dirtied worktree — HEAD subject "chore(<id>): commit remaining work", tree clean, worktree_committed event',
+      'Commit & create draft PR: one primary click commits the dirtied worktree — HEAD subject "chore(<id>): commit remaining work", tree clean, worktree_committed event',
       async () => {
         const title = "Done flow commit ticket";
         const { ticketId, displayId } = await createTicketViaBridge(page, PROJECT.name, {
@@ -298,14 +301,19 @@ async function main() {
         await fs.writeFile(join(worktreeDir, "done-flow-change.txt"), "work in progress\n");
         const dirtyBefore = (await gitOut(worktreeDir, ["status", "--porcelain"])).length > 0;
 
-        // Drive the rail button; fall back to the bridge only if it never shows.
+        // Drive the single primary button (one click = commit → push → PR); fall
+        // back to the bridge (running the same two IPCs in sequence) if it never
+        // shows. Either way the DB/git/gh assertions below are identical.
         try {
-          commitVia = await clickRailButton(displayId, "Commit remaining changes");
+          flowVia = await clickRailButton(displayId, "Commit & create draft PR");
         } catch (uiError) {
-          commitVia = "bridge";
-          console.log(`  (commit UI path unavailable: ${uiError.message}; using bridge fallback)`);
-          const res = await page.evaluate((tid) => window.api.worktree.commit(tid), ticketId);
-          if (!res.ok) return { ok: false, detail: `bridge commit failed: ${res.error}` };
+          flowVia = "bridge";
+          console.log(`  (primary UI path unavailable: ${uiError.message}; using bridge fallback)`);
+          const commitRes = await page.evaluate((tid) => window.api.worktree.commit(tid), ticketId);
+          if (!commitRes.ok)
+            return { ok: false, detail: `bridge commit failed: ${commitRes.error}` };
+          const pushRes = await page.evaluate((tid) => window.api.worktree.pushPr(tid), ticketId);
+          if (!pushRes.ok) return { ok: false, detail: `bridge pushPr failed: ${pushRes.error}` };
         }
 
         // Assert the commit landed with the fixed message and a clean tree.
@@ -337,29 +345,21 @@ async function main() {
         return {
           ok,
           detail:
-            `via=${commitVia} dirtyBefore=${dirtyBefore} subjectMatched=${subjectMatched} ` +
+            `via=${flowVia} dirtyBefore=${dirtyBefore} subjectMatched=${subjectMatched} ` +
             `treeClean=${treeClean} fileCommitted=${fileCommitted} committedEvent=${committedEvent !== undefined}`,
         };
       },
     );
 
-    // === 2. Push & create draft PR (rail → bare remote + gh + DB) ===========
-    let pushVia = "ui";
+    // === 2. …the same click pushed + opened the draft PR (bare remote + gh + DB) ===
+    //         No second button: the stacked primary already ran push → PR. We
+    //         assert those side effects landed and the primary now reads "View PR".
     await attempt(
       2,
-      'Push & create draft PR: rail button pushes the branch to the bare origin, runs `gh pr create --draft`, persists pr_url + pr_opened, and the rail then shows "Open PR"',
+      'Push & create draft PR (same click): the branch reached the bare origin, `gh pr create --draft` ran, pr_url + pr_opened persisted, and the primary button now reads "View PR"',
       async () => {
         if (!committedTicket) return { ok: false, detail: "no committed ticket from step 1" };
         const { ticketId, displayId, worktreeDir, branch } = committedTicket;
-
-        try {
-          pushVia = await clickRailButton(displayId, "Push & create draft PR");
-        } catch (uiError) {
-          pushVia = "bridge";
-          console.log(`  (push UI path unavailable: ${uiError.message}; using bridge fallback)`);
-          const res = await page.evaluate((tid) => window.api.worktree.pushPr(tid), ticketId);
-          if (!res.ok) return { ok: false, detail: `bridge pushPr failed: ${res.error}` };
-        }
 
         // The ticket row's pr_url reaches the canned URL once the flow persists.
         const prUrlPersisted = await waitUntil(
@@ -393,15 +393,15 @@ async function main() {
           (e) => e.payload.kind === "pr_opened" && e.payload.url === CANNED_PR_URL,
         );
 
-        // The rail now offers "Open PR" (prUrl set) — check via the real UI.
+        // The primary button now resolves to "View PR" (prUrl set) — check via the real UI.
         if ((await docTab(displayId).count()) !== 1) await openDetail(displayId);
         await expandDetailsDrawer();
-        const openPrShown = await waitUntil(
-          '"Open PR" rail button',
+        const viewPrShown = await waitUntil(
+          '"View PR" primary button',
           async () =>
             (await page
               .locator("aside")
-              .getByRole("button", { name: "Open PR", exact: true })
+              .getByRole("button", { name: "View PR", exact: true })
               .count()) >= 1,
           { timeout: 10000 },
         )
@@ -417,18 +417,18 @@ async function main() {
           sawBase &&
           sawTitle &&
           prOpenedEvent !== undefined &&
-          openPrShown;
+          viewPrShown;
         return {
           ok,
           detail:
-            `via=${pushVia} prUrl=${prUrlPersisted} remoteHasBranch=${remoteHasBranch} ` +
+            `via=${flowVia} prUrl=${prUrlPersisted} remoteHasBranch=${remoteHasBranch} ` +
             `tipsMatch=${tipsMatch} ghCreate=${sawCreate} draft=${sawDraft} base=${sawBase} ` +
-            `title=${sawTitle} prOpenedEvent=${prOpenedEvent !== undefined} openPrShown=${openPrShown}`,
+            `title=${sawTitle} prOpenedEvent=${prOpenedEvent !== undefined} viewPrShown=${viewPrShown}`,
         };
       },
     );
 
-    console.log(`\n  paths: commit via ${commitVia}, push via ${pushVia}`);
+    console.log(`\n  path: stacked commit→push→PR via ${flowVia}`);
 
     // Kill any live PTYs so teardown's close gate has nothing busy to negotiate.
     for (const sessionId of liveSessionIds) {

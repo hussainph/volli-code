@@ -1,9 +1,9 @@
 import * as React from "react";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
+import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import { GitCommitIcon } from "@phosphor-icons/react/dist/csr/GitCommit";
 import { GitPullRequestIcon } from "@phosphor-icons/react/dist/csr/GitPullRequest";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import { toast } from "sonner";
 import {
   errorMessage,
@@ -21,21 +21,24 @@ import { PriorityIndicator } from "@renderer/components/board/priority-indicator
 import { createTerminalSession } from "@renderer/components/sessions/session-create";
 import { TicketLabelEditor } from "@renderer/components/ticket/ticket-label-editor";
 import {
-  formatAheadBehind,
   formatMergeBaseSummary,
-  formatWorkingTree,
-  getDoneFlowActions,
+  resolveDoneFlow,
+  type DoneFlowStage,
+  type MenuAction,
+  type PrimaryActionKind,
   type WorktreeStatusSnapshot,
 } from "@renderer/components/ticket/worktree-done-flow-model";
 import { Button } from "@renderer/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
 import { Input } from "@renderer/components/ui/input";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { toastError } from "@renderer/lib/toast";
 import { useBoardStore } from "@renderer/stores/board";
 import { ticketScope } from "@renderer/stores/sessions";
@@ -345,10 +348,51 @@ function WorktreePathField({ path }: { path: string | null }) {
   );
 }
 
+/** The Phosphor icon for a primary action, mirroring the verb's menu icon. */
+function PrimaryActionIcon({ kind }: { kind: PrimaryActionKind }) {
+  if (kind === "commit-pr" || kind === "commit-push-updates") return <GitCommitIcon />;
+  if (kind === "view-pr") return <ArrowSquareOutIcon />;
+  return <GitPullRequestIcon />;
+}
+
 /**
- * The Details rail's Done-flow block (docs/plans/done-flow.md "UI"): a
- * read-only diff/status summary plus the commit / push-PR / open-PR
- * affordances, rendered only once the ticket has a worktree. Lazy-loads
+ * One chevron-menu row: the verb's icon (filled, per the project's menu-icon
+ * convention) + label, with the disabled reason shown as trailing muted text
+ * (disabled items can't emit hover, so a tooltip wouldn't fire — T3's inline
+ * reason instead).
+ */
+function DoneFlowMenuItem({
+  action,
+  icon,
+  onRun,
+}: {
+  action: MenuAction;
+  icon: React.ReactNode;
+  onRun(): void;
+}) {
+  return (
+    <DropdownMenuItem disabled={action.disabled} onSelect={onRun} className="justify-between gap-6">
+      <span className="flex items-center gap-2">
+        {icon}
+        {action.label}
+      </span>
+      {action.disabled && action.reason ? (
+        <span className="text-xs text-muted-foreground">{action.reason}</span>
+      ) : null}
+    </DropdownMenuItem>
+  );
+}
+
+/** The one success toast for a push-pr result — shared by the standalone push verb and a stacked flow's tail. */
+function toastPushResult(isUpdate: boolean, existing: boolean) {
+  toast.success(isUpdate ? "Updates pushed" : existing ? "PR already existed" : "Draft PR opened");
+}
+
+/**
+ * The Details rail's Done-flow block (docs/plans/done-flow.md "UI", decision
+ * #45): one merge-base context line plus one adaptive split button — a primary
+ * action whose label is the whole next step, and a chevron menu unbundling the
+ * individual verbs. Rendered only once the ticket has a worktree. Lazy-loads
  * `status` + the merge-base diff on mount (the `BaseBranchField` precedent —
  * fetch on first appearance rather than riding along in the boot payload) and
  * refetches after every action so the summary never goes stale. All fetch/busy
@@ -359,8 +403,7 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
   const [status, setStatus] = React.useState<WorktreeStatusSnapshot | null>(null);
   const [diff, setDiff] = React.useState<DiffStat | null>(null);
   const [loadError, setLoadError] = React.useState<string | null>(null);
-  const [committing, setCommitting] = React.useState(false);
-  const [pushingPr, setPushingPr] = React.useState(false);
+  const [stage, setStage] = React.useState<DoneFlowStage>("idle");
 
   const refresh = React.useCallback(async () => {
     try {
@@ -388,8 +431,9 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
     void refresh();
   }, [refresh]);
 
-  async function commit() {
-    setCommitting(true);
+  /** Standalone Commit (chevron menu): keeps its own "Committed: <message>" toast. */
+  async function runCommitOnly() {
+    setStage("committing");
     try {
       const result = await window.api.worktree.commit(ticket.id);
       if (!result.ok) {
@@ -397,32 +441,58 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
         return;
       }
       toast.success(`Committed: ${result.message}`);
-      await refresh();
     } catch (error) {
       toastError(`Could not commit: ${errorMessage(error)}`);
     } finally {
-      setCommitting(false);
+      await refresh();
+      setStage("idle");
     }
   }
 
-  async function pushPr(isUpdate: boolean) {
-    setPushingPr(true);
+  /** Standalone push flow (primary push verbs + chevron menu): the existing pushPr, no commit. */
+  async function runPushOnly(isUpdate: boolean) {
+    setStage("pushing");
     try {
       const result = await window.api.worktree.pushPr(ticket.id);
       if (!result.ok) {
         toastError(result.error);
         return;
       }
-      // The same flow serves both buttons: "Push updates" re-discovers the
-      // existing PR (existing: true) after pushing the new commits.
-      toast.success(
-        isUpdate ? "Updates pushed" : result.existing ? "PR already existed" : "Draft PR opened",
-      );
-      await refresh();
+      toastPushResult(isUpdate, result.existing);
     } catch (error) {
       toastError(`Could not push: ${errorMessage(error)}`);
     } finally {
-      setPushingPr(false);
+      await refresh();
+      setStage("idle");
+    }
+  }
+
+  /**
+   * The stacked primary flow: commit, then (only on success) push. The
+   * intermediate commit toast is suppressed — one final toast only. The
+   * `worktree_committed` History event still records in main, so nothing is
+   * lost. On commit failure the flow stops (its error toast already fired).
+   */
+  async function runCommitThenPush(isUpdate: boolean) {
+    setStage("committing");
+    try {
+      const commitResult = await window.api.worktree.commit(ticket.id);
+      if (!commitResult.ok) {
+        toastError(`Could not commit: ${commitResult.error}`);
+        return;
+      }
+      setStage("pushing");
+      const pushResult = await window.api.worktree.pushPr(ticket.id);
+      if (!pushResult.ok) {
+        toastError(pushResult.error);
+        return;
+      }
+      toastPushResult(isUpdate, pushResult.existing);
+    } catch (error) {
+      toastError(errorMessage(error));
+    } finally {
+      await refresh();
+      setStage("idle");
     }
   }
 
@@ -434,9 +504,43 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
     if (ticket.prUrl) window.open(ticket.prUrl, "_blank", "noopener");
   }
 
-  const actions = getDoneFlowActions(status, ticket.prUrl, { committing, pushingPr });
+  const view = resolveDoneFlow(status, ticket.prUrl, stage);
   const mergeBaseSummary = diff ? formatMergeBaseSummary(diff) : null;
-  const aheadBehind = status ? formatAheadBehind(status) : null;
+
+  function runPrimary() {
+    switch (view.primary.kind) {
+      case "commit-pr":
+        void runCommitThenPush(false);
+        break;
+      case "commit-push-updates":
+        void runCommitThenPush(true);
+        break;
+      case "push-pr":
+        void runPushOnly(false);
+        break;
+      case "push-updates":
+        void runPushOnly(true);
+        break;
+      case "view-pr":
+        openPr();
+        break;
+      case "create-pr":
+        break;
+    }
+  }
+
+  const primaryButton = (
+    <Button
+      variant="outline"
+      size="xs"
+      className="rounded-r-none"
+      disabled={view.primary.disabled}
+      onClick={runPrimary}
+    >
+      <PrimaryActionIcon kind={view.primary.kind} />
+      {view.primary.label}
+    </Button>
+  );
 
   return (
     <div className="flex flex-col gap-2">
@@ -445,61 +549,55 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
           Could not load worktree status: {loadError}
         </span>
       ) : (
-        <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
-          <span>{mergeBaseSummary ?? "No changes vs base yet"}</span>
-          {status ? <span>{formatWorkingTree(status)}</span> : null}
-          {aheadBehind ? <span>{aheadBehind}</span> : null}
-        </div>
+        <span className="text-xs text-muted-foreground">
+          {mergeBaseSummary ?? "No changes vs base yet"}
+        </span>
       )}
-      {actions.showSequencerNotice ? (
-        <div className="flex items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2.5 py-1.5 text-xs text-muted-foreground">
-          <WarningIcon />
-          Merge/rebase in progress — resolve it in the terminal before committing.
-        </div>
-      ) : null}
-      {actions.showCommit || actions.showPushPr || actions.showOpenPr || actions.showPushUpdates ? (
-        <div className="flex flex-wrap gap-1.5">
-          {actions.showCommit ? (
+      {/* One control: primary + chevron, corners squared between them so they
+          read as a single split button (composer-footer adjacency pattern). */}
+      <div className="inline-flex w-fit">
+        {view.primary.reason ? (
+          <Tooltip>
+            {/* A disabled button emits no pointer events; the span keeps the
+                tooltip trigger hoverable so the reason still shows. */}
+            <TooltipTrigger asChild>
+              <span className="inline-flex">{primaryButton}</span>
+            </TooltipTrigger>
+            <TooltipContent>{view.primary.reason}</TooltipContent>
+          </Tooltip>
+        ) : (
+          primaryButton
+        )}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
             <Button
               variant="outline"
-              size="xs"
-              disabled={actions.commitDisabled}
-              onClick={() => void commit()}
+              size="icon-xs"
+              aria-label="More pull request actions"
+              className="-ml-px rounded-l-none"
             >
-              <GitCommitIcon />
-              {committing ? "Committing…" : "Commit remaining changes"}
+              <CaretDownIcon weight="bold" />
             </Button>
-          ) : null}
-          {actions.showPushPr ? (
-            <Button
-              variant="outline"
-              size="xs"
-              disabled={actions.pushPrDisabled}
-              onClick={() => void pushPr(false)}
-            >
-              <GitPullRequestIcon />
-              {pushingPr ? "Pushing…" : "Push & create draft PR"}
-            </Button>
-          ) : null}
-          {actions.showPushUpdates ? (
-            <Button
-              variant="outline"
-              size="xs"
-              disabled={actions.pushPrDisabled}
-              onClick={() => void pushPr(true)}
-            >
-              <GitPullRequestIcon />
-              {pushingPr ? "Pushing…" : "Push updates"}
-            </Button>
-          ) : null}
-          {actions.showOpenPr ? (
-            <Button variant="outline" size="xs" onClick={openPr}>
-              <ArrowSquareOutIcon />
-              Open PR
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DoneFlowMenuItem
+              action={view.menu.commit}
+              icon={<GitCommitIcon weight="fill" />}
+              onRun={() => void runCommitOnly()}
+            />
+            <DoneFlowMenuItem
+              action={view.menu.push}
+              icon={<GitPullRequestIcon weight="fill" />}
+              onRun={() => void runPushOnly(view.menu.push.kind === "push-updates")}
+            />
+            <DoneFlowMenuItem
+              action={view.menu.openPr}
+              icon={<ArrowSquareOutIcon weight="fill" />}
+              onRun={openPr}
+            />
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
     </div>
   );
 }
@@ -557,8 +655,13 @@ export function TicketProperties({ projectId, ticket }: { projectId: string; tic
           {worktreePhase === "failed" ? (
             <WorktreeFailedNotice projectId={projectId} ticketId={ticket.id} />
           ) : null}
-          {ticket.worktreePath ? <WorktreeDoneFlowSection ticket={ticket} /> : null}
         </div>
+        {ticket.worktreePath ? (
+          <div className="flex flex-col gap-1.5">
+            <PropertyLabel>Pull request</PropertyLabel>
+            <WorktreeDoneFlowSection ticket={ticket} />
+          </div>
+        ) : null}
       </div>
       <div className="flex flex-col gap-0.5 border-t border-border pt-3 text-label text-muted-foreground">
         <span>Created {formatTimestamp(ticket.createdAt)}</span>
