@@ -23,3 +23,13 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      # apps/website deliberately pins typescript to 6.x (a literal version,
+      # not `catalog:`): `astro check` — via @astrojs/language-server — needs
+      # TypeScript's programmatic compiler API that TS 7.0+ dropped, so a major
+      # bump silently breaks the site build/deploy while the lean CI (desktop
+      # build + raw `tsc`) stays green. Revisit when astro ships TS7 support:
+      # https://github.com/withastro/roadmap/discussions/1321
+      - dependency-name: "typescript"
+        update-types:
+          - "version-update:semver-major"
