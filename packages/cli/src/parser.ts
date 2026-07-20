@@ -104,8 +104,13 @@ export interface CommandSpec {
   example: string;
   /** Short lines for semantics the option table can't express. */
   notes?: readonly string[];
-  /** When set, the first token of `rest` is consumed as the required `<id>`. */
-  positionalId?: { label: string };
+  /**
+   * When set, the first token of `rest` is consumed as the `<id>`. Required by
+   * default; `optional: true` renders it as `[<id>]` and lets a missing (or
+   * flag-shaped) first token fall through — the worktree commands default the
+   * ticket to the caller's cwd, so an id is an override, not a requirement.
+   */
+  positionalId?: { label: string; optional?: boolean };
   /** Rendered after `<id>` in usage for positionals the option table can't express (help's `[<topic>]`). */
   extraUsage?: string;
   options: Readonly<Record<string, OptionEntry>>;
@@ -154,11 +159,17 @@ function parseWithSpec(
   let index = 0;
   if (spec.positionalId) {
     const id = rest[0];
-    if (id === undefined || id.startsWith("--")) {
-      return usage(`${spec.positionalId.label} requires <id>`);
+    const absent = id === undefined || id.startsWith("--");
+    if (absent) {
+      // An optional id simply falls through to the option walk; a required one
+      // is a usage error.
+      if (spec.positionalId.optional !== true) {
+        return usage(`${spec.positionalId.label} requires <id>`);
+      }
+    } else {
+      args["id"] = id;
+      index = 1;
     }
-    args["id"] = id;
-    index = 1;
   }
 
   let json = false;
@@ -593,6 +604,33 @@ const TICKET_EVENTS_SPEC: CommandSpec = {
   },
 };
 
+const WORKTREE_STATUS_SPEC: CommandSpec = {
+  summary: "Show a ticket's worktree branch, base, and sync state.",
+  example: "volli worktree status VC-12",
+  notes: ["Read-only; defaults to the ticket owning the current directory."],
+  positionalId: { label: "worktree status", optional: true },
+  options: {},
+};
+
+const WORKTREE_DIFF_SPEC: CommandSpec = {
+  summary: "Summarize a ticket's diff (the PR range by default).",
+  example: "volli worktree diff VC-12 --working-tree",
+  notes: [
+    "Read-only; defaults to the ticket owning the current directory.",
+    "Default range is the merge-base diff (what the PR would contain).",
+    "--working-tree switches to the uncommitted working-tree view.",
+  ],
+  positionalId: { label: "worktree diff", optional: true },
+  options: {
+    "--working-tree": {
+      kind: "flag",
+      key: "workingTree",
+      value: true,
+      help: "Diff the uncommitted working tree instead of the PR range.",
+    },
+  },
+};
+
 const SESSION_PEEK_SPEC: CommandSpec = {
   summary: "Peek at a session's recent terminal output.",
   example: "volli session peek a1b2c3 --lines 60",
@@ -672,6 +710,8 @@ export const COMMAND_HELP: readonly CommandHelpEntry[] = [
   { name: "ticket show", group: "Read", spec: TICKET_SHOW_SPEC },
   { name: "ticket events", group: "Read", spec: TICKET_EVENTS_SPEC },
   { name: "ticket brief", group: "Read", spec: TICKET_BRIEF_SPEC },
+  { name: "worktree status", group: "Read", spec: WORKTREE_STATUS_SPEC },
+  { name: "worktree diff", group: "Read", spec: WORKTREE_DIFF_SPEC },
   { name: "project list", group: "Read", spec: PROJECT_LIST_SPEC },
   { name: "label list", group: "Read", spec: LABEL_LIST_SPEC },
   { name: "ticket create", group: "Write", spec: TICKET_CREATE_SPEC },
@@ -725,6 +765,12 @@ export function parseCliArgs(argv: readonly string[]): CliParseResult {
   }
   if (argv[0] === "ticket" && argv[1] === "show") {
     return parseWithSpec("ticket.show", argv.slice(2), TICKET_SHOW_SPEC);
+  }
+  if (argv[0] === "worktree" && argv[1] === "status") {
+    return parseWithSpec("worktree.status", argv.slice(2), WORKTREE_STATUS_SPEC);
+  }
+  if (argv[0] === "worktree" && argv[1] === "diff") {
+    return parseWithSpec("worktree.diff", argv.slice(2), WORKTREE_DIFF_SPEC);
   }
   if (argv[0] === "session" && argv[1] === "peek") {
     return parseWithSpec("session.peek", argv.slice(2), SESSION_PEEK_SPEC);

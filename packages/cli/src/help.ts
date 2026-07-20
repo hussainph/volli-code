@@ -123,7 +123,11 @@ function compactOptionsUsage(spec: CommandSpec): string {
  * options into `[options]`.
  */
 function usageLine(entry: CommandHelpEntry, mode: "reference" | "detail"): string {
-  const id = entry.spec.positionalId ? " <id>" : "";
+  const id = entry.spec.positionalId
+    ? entry.spec.positionalId.optional === true
+      ? " [<id>]"
+      : " <id>"
+    : "";
   const opts =
     mode === "reference" ? fullOptionsUsage(entry.spec) : compactOptionsUsage(entry.spec);
   const extra = entry.spec.extraUsage ? ` ${entry.spec.extraUsage}` : "";
