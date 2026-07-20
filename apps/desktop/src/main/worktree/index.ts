@@ -11,6 +11,19 @@ export { remove } from "./remove";
 export { listBranches } from "./state";
 export { sweepOrphans } from "./sweep";
 
+// Done-flow (§8): the finer status query, both diff modes, the one-click commit
+// safety net, and the async network verbs (fetch/push/gh) with their taxonomy.
+export { getWorktreeStatus } from "./status";
+export type { WorktreeStatusInput, WorktreeStatusReport } from "./status";
+export { diffStat } from "./diff";
+export type { DiffMode, DiffStatInput } from "./diff";
+export { commitRemaining } from "./commit";
+export type { CommitOutcome, CommitRemainingInput } from "./commit";
+export { runNet, fetchBase, pushBranch, ghCreateDraftPr, ghFindPr } from "./net";
+export type { RunNet, GhResult, GhFailure, GhFailureKind } from "./net";
+export { publishTicketBranch, commitTicketRemaining } from "./publish";
+export type { PublishDeps, PublishOutcome } from "./publish";
+
 // The PTY wiring drives the transient phase directly across the setup-command
 // step (`setting-up → ready | failed`), which happens in the terminal after
 // `ensure` resolves — hence the phase registry is part of the module's seam.

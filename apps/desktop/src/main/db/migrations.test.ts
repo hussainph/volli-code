@@ -149,13 +149,32 @@ function buildV7DbWithProject(dbPath: string): Database.Database {
   return db;
 }
 
+/** Builds a populated v8 db to exercise the additive tickets.pr_url column (migration 009). */
+function buildV8DbWithTicket(dbPath: string): Database.Database {
+  const db = openRawDb(dbPath);
+  db.pragma("foreign_keys = ON");
+  for (const migration of MIGRATIONS.filter((m) => m.version <= 8)) {
+    db.exec(migration.sql);
+  }
+  db.pragma("user_version = 8");
+  db.prepare(
+    `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+       VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 1, 0, 0)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO tickets (id, project_id, ticket_number, title, body, status, priority, uses_worktree, position, row_version, created_at, updated_at)
+       VALUES ('t1', 'p1', 1, 'Ticket', '', 'todo', 'medium', 1, 0, 1, 0, 0)`,
+  ).run();
+  return db;
+}
+
 describe("migrate — fresh install", () => {
   it("applies every migration and lands on the latest user_version", () => {
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(8);
+    expect(db.pragma("user_version", { simple: true })).toBe(9);
     db.close();
   });
 
@@ -190,6 +209,26 @@ describe("migrate — fresh install", () => {
     ).run();
     expect(db.prepare("SELECT setup_command FROM projects WHERE id = 'p1'").get()).toEqual({
       setup_command: null,
+    });
+    db.close();
+  });
+
+  it("adds tickets.pr_url as a nullable column (migration 009)", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+
+    expect(columnNames(db, "tickets")).toContain("pr_url");
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO tickets (id, project_id, ticket_number, title, body, status, priority, uses_worktree, position, row_version, created_at, updated_at)
+         VALUES ('t1', 'p1', 1, 'Ticket', '', 'todo', 'medium', 1, 0, 1, 0, 0)`,
+    ).run();
+    expect(db.prepare("SELECT pr_url FROM tickets WHERE id = 't1'").get()).toEqual({
+      pr_url: null,
     });
     db.close();
   });
@@ -239,7 +278,7 @@ describe("migrate — 002 to 004 upgrade path", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(8);
+    expect(db.pragma("user_version", { simple: true })).toBe(9);
     const project = db.prepare("SELECT * FROM projects WHERE id = 'p1'").get() as {
       name: string;
     };
@@ -289,9 +328,9 @@ describe("migrate — 002 to 004 upgrade path", () => {
     migrate(db, dbPath);
     migrate(db, dbPath); // second call: nothing pending
 
-    expect(db.pragma("user_version", { simple: true })).toBe(8);
-    // No v8-backup should exist — the second migrate() call had nothing to apply.
-    expect(existsSync(`${dbPath}.backup-v8`)).toBe(false);
+    expect(db.pragma("user_version", { simple: true })).toBe(9);
+    // No v9-backup should exist — the second migrate() call had nothing to apply.
+    expect(existsSync(`${dbPath}.backup-v9`)).toBe(false);
     db.close();
   });
 });
@@ -303,7 +342,7 @@ describe("migrate — 004 to 005 upgrade path (ticket-number counter backfill)",
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(8);
+    expect(db.pragma("user_version", { simple: true })).toBe(9);
     const projects = db
       .prepare("SELECT id, next_ticket_number FROM projects ORDER BY id")
       .all() as { id: string; next_ticket_number: number }[];
@@ -356,7 +395,7 @@ describe("migrate — 005 to 006 upgrade path (truthful session metadata)", () =
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(8);
+    expect(db.pragma("user_version", { simple: true })).toBe(9);
     expect(db.prepare("SELECT launch_kind, placement FROM sessions WHERE id = 's1'").get()).toEqual(
       { launch_kind: "unknown", placement: "unknown" },
     );
@@ -372,7 +411,7 @@ describe("migrate — 006 to 007 upgrade path (execution preferences)", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(8);
+    expect(db.pragma("user_version", { simple: true })).toBe(9);
     expect(db.prepare("SELECT preferred_harness_id FROM tickets WHERE id = 't1'").get()).toEqual({
       preferred_harness_id: "claude-code",
     });
@@ -391,12 +430,29 @@ describe("migrate — 007 to 008 upgrade path (worktree setup command)", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(8);
+    expect(db.pragma("user_version", { simple: true })).toBe(9);
     expect(db.prepare("SELECT name, setup_command FROM projects WHERE id = 'p1'").get()).toEqual({
       name: "Project",
       setup_command: null,
     });
     expect(existsSync(`${dbPath}.backup-v7`)).toBe(true);
+    db.close();
+  });
+});
+
+describe("migrate — 008 to 009 upgrade path (durable draft-PR url)", () => {
+  it("adds a nullable pr_url to an existing ticket without touching it", () => {
+    const dbPath = tempDbPath();
+    const db = buildV8DbWithTicket(dbPath);
+
+    migrate(db, dbPath);
+
+    expect(db.pragma("user_version", { simple: true })).toBe(9);
+    expect(db.prepare("SELECT title, pr_url FROM tickets WHERE id = 't1'").get()).toEqual({
+      title: "Ticket",
+      pr_url: null,
+    });
+    expect(existsSync(`${dbPath}.backup-v8`)).toBe(true);
     db.close();
   });
 });

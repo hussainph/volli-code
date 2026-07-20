@@ -33,6 +33,7 @@ function ticket(overrides: Partial<Ticket> & { status: TicketStatus }): Ticket {
     worktreePath: overrides.worktreePath ?? null,
     branch: overrides.branch ?? null,
     baseBranch: overrides.baseBranch ?? null,
+    prUrl: overrides.prUrl ?? null,
     createdAt: overrides.createdAt ?? 0,
     updatedAt: overrides.updatedAt ?? 0,
   };

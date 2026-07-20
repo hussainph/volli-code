@@ -112,6 +112,13 @@ export interface Ticket {
   branch: string | null;
   /** The branch {@link branch} was created from. `null` until a worktree exists. */
   baseBranch: string | null;
+  /**
+   * The URL of the draft pull request opened for {@link branch} (Done-flow
+   * §"Persistence, IPC, events"). Durable truth — the foundation the merge-watch
+   * and Archive features build on, and the rail's "Open PR" affordance. `null`
+   * until the push + draft-PR flow has opened (or re-discovered) one.
+   */
+  prUrl: string | null;
   /** Epoch milliseconds. */
   createdAt: number;
   /** Epoch milliseconds. */
@@ -167,6 +174,8 @@ export interface CreateTicketInput {
   branch?: string | null;
   /** Defaults to `null` — no worktree exists yet. */
   baseBranch?: string | null;
+  /** Defaults to `null` — no pull request opened yet. */
+  prUrl?: string | null;
 }
 
 /** Creates a {@link Ticket}. Pure and deterministic — the caller supplies `id` and `now`. */
@@ -186,6 +195,7 @@ export function createTicket(input: CreateTicketInput): Ticket {
     worktreePath: input.worktreePath ?? null,
     branch: input.branch ?? null,
     baseBranch: input.baseBranch ?? null,
+    prUrl: input.prUrl ?? null,
     createdAt: input.now,
     updatedAt: input.now,
   };

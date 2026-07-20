@@ -40,6 +40,14 @@ export const TICKET_EVENT_KINDS = [
   // rather than a swallowed toast. The session never falls back to the main
   // checkout — the worktree toggle is the only sanctioned path there (#38).
   "worktree_failed",
+  // Done-flow (done-flow §"Persistence, IPC, events"): the two manual rail
+  // affordances that touch git. `worktree_committed` records the one-click
+  // "commit remaining work" safety net's fixed-message commit (#14's explicit
+  // exception to "the app never commits"); `pr_opened` records the push +
+  // draft-PR flow reaching a durable PR url — written exactly once per branch
+  // (a re-entry that only re-discovers an existing PR does not spam a second).
+  "worktree_committed",
+  "pr_opened",
   // Session lifecycle signal (`session done|blocked`, volli CLI): the agent
   // reporting its own outcome on the ticket it's working. Written with an
   // `automation` actor; `reason` becomes the Needs Review badge when the loop
@@ -57,6 +65,34 @@ export interface WorktreeIdentity {
   worktreePath: string | null;
   branch: string | null;
   baseBranch: string | null;
+}
+
+/**
+ * One file's line-delta in a {@link DiffStat} (Done-flow `diff.ts`). Crosses the
+ * IPC boundary (main computes it, the Details rail renders it), so it lives in
+ * shared. `insertions`/`deletions` are `null` for binary files — `git diff
+ * --numstat` prints `-\t-` for them, and inventing a `0` would read as "no
+ * change". `untracked` marks a file present only in `git status --porcelain`
+ * (`??`), never in the numstat output, so the working-tree diff can list it with
+ * null counts rather than dropping it.
+ */
+export interface DiffFileStat {
+  path: string;
+  insertions: number | null;
+  deletions: number | null;
+  untracked: boolean;
+}
+
+/**
+ * A worktree diff summary (Done-flow `diff.ts`): the per-file breakdown plus
+ * repo-wide totals. `insertions`/`deletions` sum only the non-null (text) files
+ * — binary and untracked entries carry null counts and never contribute to the
+ * totals, so the totals stay honest line counts.
+ */
+export interface DiffStat {
+  files: DiffFileStat[];
+  insertions: number;
+  deletions: number;
 }
 
 export type TicketEventPayload =
@@ -84,15 +120,21 @@ export type TicketEventPayload =
   | { kind: "session_ended"; sessionId: string }
   | { kind: "worktree_changed"; from: WorktreeIdentity; to: WorktreeIdentity }
   | { kind: "worktree_failed"; stage: WorktreeFailureStage; stderr: string }
+  | { kind: "worktree_committed"; message: string }
+  | { kind: "pr_opened"; url: string }
   | { kind: "session_signal"; signal: "done" | "blocked"; reason: string | null };
 
 /**
  * The `ensure`-pipeline stage a `worktree_failed` event aborted at
  * (worktree-support §3): `create` covers identity resolution, reconciliation,
  * base resolution and `git worktree add`; `copy` the `.worktreeinclude` step;
- * `setup` the post-spawn sentinel-gated setup command.
+ * `setup` the post-spawn sentinel-gated setup command. The Done-flow stages
+ * (done-flow §8) extend it with the manual rail affordances: `commit` (the
+ * one-click safety-net commit refused/errored), `push` (a rejected or
+ * remote-less `git push`), and `pr` (a `gh` draft-PR create that failed the
+ * taxonomy — not-installed, not-authenticated, and friends).
  */
-export type WorktreeFailureStage = "create" | "copy" | "setup";
+export type WorktreeFailureStage = "create" | "copy" | "setup" | "commit" | "push" | "pr";
 
 /**
  * The stable prefix a non-forced worktree removal's DIRTY refusal starts with

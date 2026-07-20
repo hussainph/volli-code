@@ -144,6 +144,9 @@ const WORKTREE_FAILURE_STAGE_LABELS: Record<WorktreeFailureStage, string> = {
   create: "creation",
   copy: "file copy",
   setup: "setup",
+  commit: "commit",
+  push: "push",
+  pr: "pull request",
 };
 
 /**
@@ -210,6 +213,10 @@ export function describeEvent(payload: TicketEventPayload): string | null {
         ? `worktree ${stage} failed: ${excerpt}`
         : `worktree ${stage} failed`;
     }
+    case "worktree_committed":
+      return "committed remaining work";
+    case "pr_opened":
+      return "opened a draft pull request";
     case "session_signal":
       return payload.reason === null
         ? `reported ${payload.signal}`

@@ -140,6 +140,13 @@
   padding: 0.5rem !important;
 }
 
+/* Multi-line rows (size="lg", e.g. Active Sessions) size to their content;
+ * forcing 2rem here clips their bottom padding under overflow-hidden. */
+[data-sidebar-presentation="expanded"] [data-sidebar="menu-button"][data-size="lg"] {
+  height: auto !important;
+  min-height: 2.5rem !important;
+}
+
 [data-sidebar-presentation="expanded"] [data-sidebar="group-label"] {
   margin-top: 0 !important;
   opacity: 1 !important;

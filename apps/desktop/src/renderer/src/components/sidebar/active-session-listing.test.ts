@@ -19,6 +19,7 @@ function ticket(overrides: Partial<Ticket> & { id: string; status: Ticket["statu
     worktreePath: null,
     branch: null,
     baseBranch: null,
+    prUrl: null,
     createdAt: 1,
     updatedAt: overrides.updatedAt ?? 1,
   };

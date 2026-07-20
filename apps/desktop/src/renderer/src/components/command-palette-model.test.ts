@@ -39,6 +39,7 @@ function ticket(
     worktreePath: null,
     branch: null,
     baseBranch: null,
+    prUrl: null,
     order: 0,
     createdAt: 0,
     updatedAt,

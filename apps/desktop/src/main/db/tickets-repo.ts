@@ -36,6 +36,8 @@ export interface TicketRow {
   worktree_path: string | null;
   branch: string | null;
   base_branch: string | null;
+  /** Durable draft-PR url (migration 009) — `null` until the Done flow opens one. */
+  pr_url: string | null;
 }
 
 /**
@@ -73,6 +75,7 @@ function mapTicket(row: TicketRow, labels: string[]): Ticket {
     worktreePath: row.worktree_path,
     branch: row.branch,
     baseBranch: row.base_branch,
+    prUrl: row.pr_url,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -307,9 +310,9 @@ export function insertTicket(db: Database.Database, ticket: Ticket): void {
   prepared(
     db,
     `INSERT INTO tickets
-       (id, project_id, ticket_number, title, body, status, priority, uses_worktree, preferred_harness_id, position, worktree_path, branch, base_branch, row_version, created_at, updated_at)
+       (id, project_id, ticket_number, title, body, status, priority, uses_worktree, preferred_harness_id, position, worktree_path, branch, base_branch, pr_url, row_version, created_at, updated_at)
      VALUES
-       (@id, @projectId, @ticketNumber, @title, @body, @status, @priority, @usesWorktree, @preferredHarnessId, @position, @worktreePath, @branch, @baseBranch, 1, @createdAt, @updatedAt)`,
+       (@id, @projectId, @ticketNumber, @title, @body, @status, @priority, @usesWorktree, @preferredHarnessId, @position, @worktreePath, @branch, @baseBranch, @prUrl, 1, @createdAt, @updatedAt)`,
   ).run({
     id: ticket.id,
     projectId: ticket.projectId,
@@ -324,6 +327,7 @@ export function insertTicket(db: Database.Database, ticket: Ticket): void {
     worktreePath: ticket.worktreePath,
     branch: ticket.branch,
     baseBranch: ticket.baseBranch,
+    prUrl: ticket.prUrl,
     createdAt: ticket.createdAt,
     updatedAt: ticket.updatedAt,
   });
@@ -362,13 +366,15 @@ export interface TicketFieldUpdate {
   worktreePath?: string | null;
   branch?: string | null;
   baseBranch?: string | null;
+  /** Durable draft-PR url (migration 009); `null` clears the field. */
+  prUrl?: string | null;
   preferredHarnessId?: Ticket["preferredHarnessId"];
 }
 
 /**
- * Applies whichever of `title`/`body`/`worktreePath`/`branch`/`baseBranch` are
- * present (including explicit `null` for the worktree fields, distinct from
- * "not present"); bumps `row_version`. No-ops when nothing is set.
+ * Applies whichever of `title`/`body`/`worktreePath`/`branch`/`baseBranch`/
+ * `prUrl` are present (including explicit `null` for the worktree/PR fields,
+ * distinct from "not present"); bumps `row_version`. No-ops when nothing is set.
  */
 export function updateTicketFields(
   db: Database.Database,
@@ -397,6 +403,10 @@ export function updateTicketFields(
   if (fields.baseBranch !== undefined) {
     sets.push("base_branch = ?");
     params.push(fields.baseBranch);
+  }
+  if (fields.prUrl !== undefined) {
+    sets.push("pr_url = ?");
+    params.push(fields.prUrl);
   }
   if (fields.preferredHarnessId !== undefined) {
     sets.push("preferred_harness_id = ?");

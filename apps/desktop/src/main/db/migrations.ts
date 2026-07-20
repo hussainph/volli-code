@@ -239,6 +239,19 @@ const MIGRATION_008_WORKTREE_SETUP = `
 ALTER TABLE projects ADD COLUMN setup_command TEXT;
 `;
 
+/**
+ * Migration 009: durable pull-request truth (done-flow §"Persistence, IPC,
+ * events", decision #5). `tickets.pr_url` (nullable) records the draft PR the
+ * push flow opened — or re-discovered — for the ticket's branch. It is the
+ * foundation the merge-watch (#76) and Archive (#16) features build on and the
+ * value the Details rail's "Open PR" affordance reads. Additive and nullable,
+ * like the migration-003 worktree identity it sits beside; every existing row
+ * starts `NULL`.
+ */
+const MIGRATION_009_TICKET_PR_URL = `
+ALTER TABLE tickets ADD COLUMN pr_url TEXT;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -271,6 +284,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 8,
     name: "projects.setup_command — per-project worktree setup command",
     sql: MIGRATION_008_WORKTREE_SETUP,
+  },
+  {
+    version: 9,
+    name: "tickets.pr_url — durable draft-PR url for the Done flow",
+    sql: MIGRATION_009_TICKET_PR_URL,
   },
 ];
 

@@ -326,6 +326,7 @@ describe("boot", () => {
       worktreePath: null,
       branch: null,
       baseBranch: null,
+      prUrl: null,
       createdAt: 0,
       updatedAt: 0,
     };
@@ -398,6 +399,7 @@ describe("refreshPlanningData", () => {
       worktreePath: null,
       branch: null,
       baseBranch: null,
+      prUrl: null,
       createdAt: 0,
       updatedAt: 1,
     };
