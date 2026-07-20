@@ -33,6 +33,13 @@ export interface WorktreeStatusReport {
   aheadOfBase: number | null;
   /** Commits on the base not on the branch; `null` when the base is unknown or git failed. */
   behindBase: number | null;
+  /**
+   * Commits on the branch not yet on `origin/<branch>` — what a "Push updates"
+   * would send. `null` when the branch is unknown or the remote-tracking ref
+   * does not exist (never pushed / no remote), where the push-vs-create
+   * distinction is meaningless anyway.
+   */
+  unpushed: number | null;
 }
 
 /** `git status --porcelain` non-empty; a READ FAILURE counts as uncommitted, never clean. */
@@ -76,11 +83,31 @@ function readAheadBehind(
   }
 }
 
+/**
+ * `git rev-list --count refs/remotes/origin/<branch>..<branch>` — the commits a
+ * "Push updates" would send. Any failure (no remote-tracking ref — never pushed
+ * or no remote — or an unparseable count) degrades to `null`, never a guess.
+ */
+function readUnpushed(git: RunGit, input: WorktreeStatusInput): number | null {
+  if (!input.branch) return null;
+  try {
+    const out = git(
+      ["rev-list", "--count", `refs/remotes/origin/${input.branch}..${input.branch}`],
+      input.worktreePath,
+    );
+    const count = Number.parseInt(out.trim(), 10);
+    return Number.isInteger(count) ? count : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Computes the Details-rail worktree status report (see {@link WorktreeStatusReport}). */
 export function getWorktreeStatus(git: RunGit, input: WorktreeStatusInput): WorktreeStatusReport {
   return {
     uncommitted: readUncommitted(git, input.worktreePath),
     sequencerActive: detectSequencerState(git, input.worktreePath) === "active",
     ...readAheadBehind(git, input),
+    unpushed: readUnpushed(git, input),
   };
 }

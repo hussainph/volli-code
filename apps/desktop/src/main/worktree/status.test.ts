@@ -28,7 +28,9 @@ function tempDir(prefix: string): string {
  */
 function statusGit(
   gitDir: string,
-  over: Partial<Record<"status" | "revList", () => string>> & { hasRemoteRef?: boolean } = {},
+  over: Partial<Record<"status" | "revList" | "unpushed", () => string>> & {
+    hasRemoteRef?: boolean;
+  } = {},
 ) {
   return scriptedGit((args) => {
     if (args[0] === "status") return (over.status ?? (() => ""))();
@@ -37,7 +39,17 @@ function statusGit(
       throw new Error("fatal: Needed a single revision");
     }
     if (args[0] === "rev-parse" && args[1] === "--git-dir") return gitDir;
-    if (args[0] === "rev-list") return (over.revList ?? (() => "0\t0\n"))();
+    // Two distinct rev-list probes: `--left-right --count` (ahead/behind) and
+    // plain `--count origin/<branch>..<branch>` (unpushed). Default the latter
+    // to failure — no remote-tracking branch — so pre-existing expectations
+    // keep their `unpushed: null`.
+    if (args[0] === "rev-list" && args[1] === "--left-right") {
+      return (over.revList ?? (() => "0\t0\n"))();
+    }
+    if (args[0] === "rev-list") {
+      if (over.unpushed) return over.unpushed();
+      throw new Error("fatal: bad revision");
+    }
     return "";
   });
 }
@@ -48,7 +60,13 @@ describe("getWorktreeStatus", () => {
     const { git } = statusGit(gitDir);
     expect(
       getWorktreeStatus(git, { worktreePath: "/wt", branch: "b", baseBranch: "main" }),
-    ).toEqual({ uncommitted: false, sequencerActive: false, aheadOfBase: 0, behindBase: 0 });
+    ).toEqual({
+      uncommitted: false,
+      sequencerActive: false,
+      aheadOfBase: 0,
+      behindBase: 0,
+      unpushed: null,
+    });
   });
 
   it("flags uncommitted when git status is non-empty", () => {
@@ -106,7 +124,37 @@ describe("getWorktreeStatus", () => {
     const report = getWorktreeStatus(git, { worktreePath: "/wt", branch: "b", baseBranch: null });
     expect(report.aheadOfBase).toBeNull();
     expect(report.behindBase).toBeNull();
-    expect(calls.some((c) => c.args[0] === "rev-list")).toBe(false);
+    // The ahead/behind probe never spawns; the (independent) unpushed probe may.
+    expect(calls.some((c) => c.args[0] === "rev-list" && c.args[1] === "--left-right")).toBe(false);
+  });
+
+  it("counts unpushed commits against origin/<branch>, and nulls when the probe fails", () => {
+    const gitDir = tempDir("gitdir");
+    const { git, calls } = statusGit(gitDir, { unpushed: () => "3\n" });
+    const report = getWorktreeStatus(git, { worktreePath: "/wt", branch: "b", baseBranch: "main" });
+    expect(report.unpushed).toBe(3);
+    const probe = calls.find((c) => c.args[0] === "rev-list" && c.args[1] === "--count");
+    expect(probe?.args).toContain("refs/remotes/origin/b..b");
+
+    const failing = statusGit(gitDir); // default: unpushed probe throws (never pushed)
+    const failed = getWorktreeStatus(failing.git, {
+      worktreePath: "/wt",
+      branch: "b",
+      baseBranch: "main",
+    });
+    expect(failed.unpushed).toBeNull();
+  });
+
+  it("skips the unpushed probe entirely when the branch is unknown", () => {
+    const gitDir = tempDir("gitdir");
+    const { git, calls } = statusGit(gitDir);
+    const report = getWorktreeStatus(git, {
+      worktreePath: "/wt",
+      branch: null,
+      baseBranch: "main",
+    });
+    expect(report.unpushed).toBeNull();
+    expect(calls.some((c) => c.args[0] === "rev-list" && c.args[1] === "--count")).toBe(false);
   });
 
   it("returns null ahead/behind when rev-list fails, but keeps the rest of the report", () => {

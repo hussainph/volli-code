@@ -325,6 +325,8 @@ export type WorktreeStatusResult = Result<{
     sequencerActive: boolean;
     aheadOfBase: number | null;
     behindBase: number | null;
+    /** Commits not yet on `origin/<branch>`; null when never pushed / no remote. */
+    unpushed: number | null;
   };
 }>;
 

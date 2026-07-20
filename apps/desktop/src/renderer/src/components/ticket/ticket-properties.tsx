@@ -1,11 +1,17 @@
 import * as React from "react";
+import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
+import { GitCommitIcon } from "@phosphor-icons/react/dist/csr/GitCommit";
+import { GitPullRequestIcon } from "@phosphor-icons/react/dist/csr/GitPullRequest";
+import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import { toast } from "sonner";
 import {
   errorMessage,
   TICKET_PRIORITIES,
   TICKET_PRIORITY_LABELS,
   TICKET_STATUS_LABELS,
   TICKET_STATUSES,
+  type DiffStat,
   type Ticket,
   type TicketPriority,
   type TicketStatus,
@@ -14,6 +20,13 @@ import {
 import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
 import { createTerminalSession } from "@renderer/components/sessions/session-create";
 import { TicketLabelEditor } from "@renderer/components/ticket/ticket-label-editor";
+import {
+  formatAheadBehind,
+  formatMergeBaseSummary,
+  formatWorkingTree,
+  getDoneFlowActions,
+  type WorktreeStatusSnapshot,
+} from "@renderer/components/ticket/worktree-done-flow-model";
 import { Button } from "@renderer/components/ui/button";
 import {
   DropdownMenu,
@@ -333,6 +346,165 @@ function WorktreePathField({ path }: { path: string | null }) {
 }
 
 /**
+ * The Details rail's Done-flow block (docs/plans/done-flow.md "UI"): a
+ * read-only diff/status summary plus the commit / push-PR / open-PR
+ * affordances, rendered only once the ticket has a worktree. Lazy-loads
+ * `status` + the merge-base diff on mount (the `BaseBranchField` precedent —
+ * fetch on first appearance rather than riding along in the boot payload) and
+ * refetches after every action so the summary never goes stale. All fetch/busy
+ * state is component-local (dialog-state-local convention: no global store)
+ * since it's read fresh whenever this section is visible.
+ */
+function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
+  const [status, setStatus] = React.useState<WorktreeStatusSnapshot | null>(null);
+  const [diff, setDiff] = React.useState<DiffStat | null>(null);
+  const [loadError, setLoadError] = React.useState<string | null>(null);
+  const [committing, setCommitting] = React.useState(false);
+  const [pushingPr, setPushingPr] = React.useState(false);
+
+  const refresh = React.useCallback(async () => {
+    try {
+      const [statusResult, diffResult] = await Promise.all([
+        window.api.worktree.status(ticket.id),
+        window.api.worktree.diff(ticket.id, "merge-base"),
+      ]);
+      if (!statusResult.ok) {
+        setLoadError(statusResult.error);
+        return;
+      }
+      if (!diffResult.ok) {
+        setLoadError(diffResult.error);
+        return;
+      }
+      setLoadError(null);
+      setStatus(statusResult.status);
+      setDiff(diffResult.diff);
+    } catch (error) {
+      setLoadError(errorMessage(error));
+    }
+  }, [ticket.id]);
+
+  React.useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  async function commit() {
+    setCommitting(true);
+    try {
+      const result = await window.api.worktree.commit(ticket.id);
+      if (!result.ok) {
+        toastError(`Could not commit: ${result.error}`);
+        return;
+      }
+      toast.success(`Committed: ${result.message}`);
+      await refresh();
+    } catch (error) {
+      toastError(`Could not commit: ${errorMessage(error)}`);
+    } finally {
+      setCommitting(false);
+    }
+  }
+
+  async function pushPr(isUpdate: boolean) {
+    setPushingPr(true);
+    try {
+      const result = await window.api.worktree.pushPr(ticket.id);
+      if (!result.ok) {
+        toastError(result.error);
+        return;
+      }
+      // The same flow serves both buttons: "Push updates" re-discovers the
+      // existing PR (existing: true) after pushing the new commits.
+      toast.success(
+        isUpdate ? "Updates pushed" : result.existing ? "PR already existed" : "Draft PR opened",
+      );
+      await refresh();
+    } catch (error) {
+      toastError(`Could not push: ${errorMessage(error)}`);
+    } finally {
+      setPushingPr(false);
+    }
+  }
+
+  // Reuses the app's one sanctioned external-open seam (live-preview.ts's
+  // markdown link handler): a `window.open` of an http(s) target never
+  // actually opens a new BrowserWindow — main's `setWindowOpenHandler` denies
+  // it and routes the url to `shell.openExternal` instead. No new IPC needed.
+  function openPr() {
+    if (ticket.prUrl) window.open(ticket.prUrl, "_blank", "noopener");
+  }
+
+  const actions = getDoneFlowActions(status, ticket.prUrl, { committing, pushingPr });
+  const mergeBaseSummary = diff ? formatMergeBaseSummary(diff) : null;
+  const aheadBehind = status ? formatAheadBehind(status) : null;
+
+  return (
+    <div className="flex flex-col gap-2">
+      {loadError ? (
+        <span className="text-xs text-muted-foreground">
+          Could not load worktree status: {loadError}
+        </span>
+      ) : (
+        <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+          <span>{mergeBaseSummary ?? "No changes vs base yet"}</span>
+          {status ? <span>{formatWorkingTree(status)}</span> : null}
+          {aheadBehind ? <span>{aheadBehind}</span> : null}
+        </div>
+      )}
+      {actions.showSequencerNotice ? (
+        <div className="flex items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2.5 py-1.5 text-xs text-muted-foreground">
+          <WarningIcon />
+          Merge/rebase in progress — resolve it in the terminal before committing.
+        </div>
+      ) : null}
+      {actions.showCommit || actions.showPushPr || actions.showOpenPr || actions.showPushUpdates ? (
+        <div className="flex flex-wrap gap-1.5">
+          {actions.showCommit ? (
+            <Button
+              variant="outline"
+              size="xs"
+              disabled={actions.commitDisabled}
+              onClick={() => void commit()}
+            >
+              <GitCommitIcon />
+              {committing ? "Committing…" : "Commit remaining changes"}
+            </Button>
+          ) : null}
+          {actions.showPushPr ? (
+            <Button
+              variant="outline"
+              size="xs"
+              disabled={actions.pushPrDisabled}
+              onClick={() => void pushPr(false)}
+            >
+              <GitPullRequestIcon />
+              {pushingPr ? "Pushing…" : "Push & create draft PR"}
+            </Button>
+          ) : null}
+          {actions.showPushUpdates ? (
+            <Button
+              variant="outline"
+              size="xs"
+              disabled={actions.pushPrDisabled}
+              onClick={() => void pushPr(true)}
+            >
+              <GitPullRequestIcon />
+              {pushingPr ? "Pushing…" : "Push updates"}
+            </Button>
+          ) : null}
+          {actions.showOpenPr ? (
+            <Button variant="outline" size="xs" onClick={openPr}>
+              <ArrowSquareOutIcon />
+              Open PR
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
  * The right rail's Properties block: status, priority, labels, and worktree identity
  * (branch/baseBranch inline-editable, worktreePath read-only), then created/updated timestamps.
  */
@@ -385,6 +557,7 @@ export function TicketProperties({ projectId, ticket }: { projectId: string; tic
           {worktreePhase === "failed" ? (
             <WorktreeFailedNotice projectId={projectId} ticketId={ticket.id} />
           ) : null}
+          {ticket.worktreePath ? <WorktreeDoneFlowSection ticket={ticket} /> : null}
         </div>
       </div>
       <div className="flex flex-col gap-0.5 border-t border-border pt-3 text-label text-muted-foreground">
