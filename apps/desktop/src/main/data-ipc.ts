@@ -45,7 +45,6 @@ import type {
   WorktreeOrphanDeleteResult,
   WorktreeOrphansResult,
   WorktreeRemoveResult,
-  WorktreeStateResult,
 } from "@volli/shared";
 import { getAllAppState, setAppState } from "./db/app-state-repo";
 import { deleteComment, getComment, listComments, updateComment } from "./db/comments-repo";
@@ -63,7 +62,12 @@ import {
   updateProjectSetupCommand,
 } from "./db/projects-repo";
 import { listSessions, listTicketSessions, updateTitle } from "./db/sessions-repo";
-import { listAllTickets, listArchivedTicketsByProject } from "./db/tickets-repo";
+import {
+  getTicketRow,
+  listAllTickets,
+  listArchivedTicketsByProject,
+  listWorktreePaths,
+} from "./db/tickets-repo";
 import {
   archiveTicketCommand,
   createTicketCommand,
@@ -76,7 +80,9 @@ import {
   updateTicketFieldsCommand,
 } from "./ticket-commands";
 import { detectProjectBaseBranch } from "./project-base-branch";
-import { getState, listBranches, remove as removeWorktree, sweepOrphans } from "./worktree";
+import { broadcastDataChanged } from "./broadcast";
+import { orphanReport } from "./orphan-sweep";
+import { listBranches, remove as removeWorktree } from "./worktree";
 import {
   canonicalize as canonicalizeWorktreePath,
   isInside as isInsideWorktreeHome,
@@ -114,7 +120,6 @@ const DATA_CHANNELS: readonly VolliIpcChannel[] = [
   "volli:session-rename",
   "volli:label-set-color",
   "volli:app-state-set",
-  "volli:worktree-state",
   "volli:worktree-remove",
   "volli:worktree-branches",
   "volli:worktree-orphans",
@@ -405,6 +410,15 @@ function buildBootstrapPayload(db: Database.Database): BootstrapPayload {
   return { projects, ticketsByProject, labelsByProject, appState };
 }
 
+/**
+ * Whether any live session's cwd sits at or under `target`. `isInside`
+ * canonicalizes both operands, so a terminal running inside a worktree blocks
+ * a remove/orphan-delete that would pull the directory out from under it.
+ */
+function liveSessionWithin(target: string, cwds: string[]): boolean {
+  return cwds.some((cwd) => isInsideWorktreeHome(target, cwd));
+}
+
 // ---- registration --------------------------------------------------------
 
 /**
@@ -417,7 +431,16 @@ function buildBootstrapPayload(db: Database.Database): BootstrapPayload {
  */
 export function registerDataIpcHandlers(
   handle: DbHandle,
-  options: { detectBaseBranch?: (projectPath: string) => string | null } = {},
+  options: {
+    detectBaseBranch?: (projectPath: string) => string | null;
+    /**
+     * The resolved cwds of every live PTY session (from the PtyManager). The
+     * worktree remove/orphan-delete guards refuse to touch a directory that
+     * still has a session running at or under it. Absent (tests, degraded boot)
+     * means "assume none" — the guard then relies on the git/dirtiness checks.
+     */
+    liveSessionCwds?: () => string[];
+  } = {},
 ): void {
   if (!handle.ok) {
     const error = handle.error;
@@ -905,31 +928,34 @@ export function registerDataIpcHandlers(
   );
 
   ipcMain.handle(
-    "volli:worktree-state" satisfies VolliIpcChannel,
-    async (_event, input: unknown): Promise<WorktreeStateResult> => {
-      if (!isTicketIdInput(input)) {
-        return { ok: false, error: "Invalid ticket" };
-      }
-      try {
-        const state = await getState(worktreeDeps(db), input.ticketId);
-        return { ok: true, identity: state.identity, phase: state.phase, disk: state.disk };
-      } catch (error) {
-        return { ok: false, error: errorMessage(error) };
-      }
-    },
-  );
-
-  ipcMain.handle(
     "volli:worktree-remove" satisfies VolliIpcChannel,
     async (_event, input: unknown): Promise<WorktreeRemoveResult> => {
       if (!isWorktreeRemoveInput(input)) {
         return { ok: false, error: "Invalid worktree removal" };
       }
       try {
+        // Main-side liveness guard (the renderer context menu's disable is a
+        // stale client-side hint only): never yank a worktree out from under a
+        // terminal still running in it. Canonicalized containment, same as the
+        // orphan-delete guard below.
+        const ticket = getTicketRow(db, input.ticketId);
+        const worktreePath = ticket?.worktree_path ?? null;
+        if (
+          worktreePath !== null &&
+          liveSessionWithin(worktreePath, options.liveSessionCwds?.() ?? [])
+        ) {
+          return {
+            ok: false,
+            error: "Close the terminal sessions running in this worktree before removing it.",
+          };
+        }
         const result = await removeWorktree(worktreeDeps(db), input.ticketId, {
           force: input.force,
         });
-        return result.ok ? { ok: true } : { ok: false, error: result.error };
+        if (!result.ok) return { ok: false, error: result.error };
+        // The worktree identity changed (path cleared) — re-hydrate every board.
+        broadcastDataChanged();
+        return { ok: true };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }
@@ -955,9 +981,17 @@ export function registerDataIpcHandlers(
 
   ipcMain.handle(
     "volli:worktree-orphans" satisfies VolliIpcChannel,
-    async (): Promise<WorktreeOrphansResult> => {
+    async (_event, input: unknown): Promise<WorktreeOrphansResult> => {
+      // The startup sweep is DESTRUCTIVE and runs once per launch (index.ts
+      // kicks it off after first paint); this returns that cached report so a
+      // renderer reload never re-sweeps and races the launch sweep. Only an
+      // explicit Settings → Worktrees rescan (`{ rescan: true }`) re-sweeps.
+      const rescan =
+        typeof input === "object" &&
+        input !== null &&
+        (input as Record<string, unknown>)["rescan"] === true;
       try {
-        const report = await sweepOrphans(worktreeDeps(db));
+        const report = await orphanReport(worktreeDeps(db), { rescan });
         return {
           ok: true,
           pruned: report.pruned,
@@ -990,8 +1024,36 @@ export function registerDataIpcHandlers(
       if (!isInsideWorktreeHome(home, target) || samePathAs(home, target)) {
         return { ok: false, error: "Path is outside the worktree home" };
       }
+      // Re-verify RIGHT before the irreversible delete — the Settings report is
+      // a snapshot that can have gone stale since it was shown.
+      //   (b) never delete a worktree the DB still tracks (live OR archived —
+      //       listWorktreePaths includes archived rows by design), else a still-
+      //       linked ticket dead-ends at a vanished path.
+      // `isInside` returns true on equality too, so testing both directions
+      // covers target == a tracked path, target inside one, and target being an
+      // ancestor of one.
+      const knownPaths = listWorktreePaths(db);
+      if (
+        knownPaths.some(
+          (known) => isInsideWorktreeHome(target, known) || isInsideWorktreeHome(known, target),
+        )
+      ) {
+        return {
+          ok: false,
+          error: "This worktree is still linked to a ticket and can't be deleted here.",
+        };
+      }
+      //   (c) never delete out from under a terminal still running in it.
+      if (liveSessionWithin(target, options.liveSessionCwds?.() ?? [])) {
+        return {
+          ok: false,
+          error: "Close the terminal sessions running in this worktree before deleting it.",
+        };
+      }
       try {
         await rm(target, { recursive: true, force: true });
+        // A dirty orphan left the board's attention list — re-hydrate.
+        broadcastDataChanged();
         return { ok: true };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };

@@ -13,7 +13,9 @@
  *     non-empty. Rule: unpushed local commits are unsaved work → dirty.
  *  4. `git worktree list --porcelain` marks the entry `locked` — respected
  *     absolutely.
- *  5. Submodule drift — `git submodule status` reports a `+`/`-`/`U` line.
+ *  5. Submodule drift — `git submodule status` reports a `+` (different SHA) or
+ *     `U` (conflict) line. `-` (uninitialized) is clean: `git worktree add`
+ *     never inits submodules, so it holds no local work.
  *  6. ANY git invocation fails — an unreadable worktree is treated as dirty
  *     rather than assumed clean.
  *
@@ -22,7 +24,7 @@
 import { existsSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 
-import { parseWorktreeList } from "./git";
+import { parseWorktreeList, type WorktreeListEntry } from "./git";
 import { canonicalize } from "./paths";
 import type { RunGit } from "./types";
 
@@ -44,6 +46,12 @@ export interface DirtyInput {
   branch: string | null;
   /** The base branch to measure unpushed commits against; skipped when unknown. */
   baseBranch: string | null;
+  /**
+   * A pre-parsed `git worktree list --porcelain` for the project. When supplied,
+   * the lock check reuses it instead of re-spawning git — the sweep passes one
+   * listing per project rather than one per orphan in its loop.
+   */
+  worktreeEntries?: readonly WorktreeListEntry[];
 }
 
 /** Filenames/dirs whose presence in the private gitdir signals in-progress sequencer state. */
@@ -99,12 +107,18 @@ function checkUnreachableCommits(git: RunGit, input: DirtyInput): DirtyResult {
   }
 }
 
-function checkLock(git: RunGit, cwd: string): DirtyResult {
-  try {
-    const entries = parseWorktreeList(git(["worktree", "list", "--porcelain"], cwd));
-    const target = canonicalize(cwd);
+function checkLock(git: RunGit, input: DirtyInput): DirtyResult {
+  const target = canonicalize(input.worktreePath);
+  const findLocked = (entries: readonly WorktreeListEntry[]): DirtyResult => {
     const entry = entries.find((e) => canonicalize(e.path) === target);
     return entry?.locked ? dirty("the worktree is locked (git worktree lock)") : CLEAN;
+  };
+  // Reuse the caller's listing when given (sweep hot path); else spawn our own.
+  if (input.worktreeEntries) return findLocked(input.worktreeEntries);
+  try {
+    return findLocked(
+      parseWorktreeList(git(["worktree", "list", "--porcelain"], input.worktreePath)),
+    );
   } catch {
     return dirty("could not read the worktree lock state");
   }
@@ -113,7 +127,12 @@ function checkLock(git: RunGit, cwd: string): DirtyResult {
 function checkSubmodules(git: RunGit, cwd: string): DirtyResult {
   try {
     const out = git(["submodule", "status"], cwd);
-    const drifted = out.split("\n").some((line) => /^[+\-U]/.test(line));
+    // Only `+` (a different SHA checked out — real local drift) and `U` (merge
+    // conflicts) count. `-` (uninitialized) is NOT dirt: it holds no local work
+    // and `git worktree add` never inits submodules, so EVERY worktree of a
+    // submodule repo starts `-` — counting it would make non-forced remove and
+    // the auto-sweep permanently refuse.
+    const drifted = out.split("\n").some((line) => /^[+U]/.test(line));
     return drifted ? dirty("submodule drift") : CLEAN;
   } catch {
     return dirty("could not read submodule status");
@@ -126,7 +145,7 @@ export function isWorktreeDirty(git: RunGit, input: DirtyInput): DirtyResult {
     () => checkStatus(git, input.worktreePath),
     () => checkSequencer(git, input.worktreePath),
     () => checkUnreachableCommits(git, input),
-    () => checkLock(git, input.worktreePath),
+    () => checkLock(git, input),
     () => checkSubmodules(git, input.worktreePath),
   ];
   for (const check of checks) {

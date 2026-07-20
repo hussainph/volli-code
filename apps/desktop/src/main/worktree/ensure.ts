@@ -25,7 +25,7 @@ import { recordTicketEvent } from "../db/events-repo";
 import { getProjectById } from "../db/projects-repo";
 import { getTicketRow } from "../db/tickets-repo";
 import { updateTicketFieldsCommand } from "../ticket-commands";
-import { resolveBaseBranch } from "./base";
+import { refExists, resolveBaseBranch } from "./base";
 import { GitError, stderrOf } from "./git";
 import { homeDir } from "./home";
 import { resolveWorktreeIdentity } from "./identity";
@@ -49,7 +49,8 @@ export interface EnsureOutcome {
 /** Concurrent `ensure(ticketId)` calls join the same promise; the entry clears on settle. */
 const inflight = new Map<string, Promise<WorktreeResult<EnsureOutcome>>>();
 
-const SYSTEM_ACTOR: TicketEventActor = { kind: "user" };
+// System-driven, no session: these mutations are attributed to automation.
+const SYSTEM_ACTOR: TicketEventActor = { kind: "automation" };
 
 type Stage = "create" | "copy";
 
@@ -70,16 +71,6 @@ function fail(
     SYSTEM_ACTOR,
   );
   return err(message);
-}
-
-/** Whether `refs/heads/<branch>` already exists — decides new (`-b`) vs reuse. */
-function branchExists(git: RunGit, projectPath: string, branch: string): boolean {
-  try {
-    git(["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], projectPath);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /** Runs `git worktree add`, pruning first if reconcile asked, and retrying ONCE after a prune on failure. */
@@ -139,7 +130,7 @@ async function runEnsure(
   // Resolve base for stamping + (for a new branch) branching. Reusing an
   // existing ticket branch never resets it, so base is only structurally
   // required when we create the branch.
-  const reuseBranch = branchExists(deps.git, project.path, identity.branch);
+  const reuseBranch = refExists(deps.git, project.path, `refs/heads/${identity.branch}`);
   const base = resolveBaseBranch(deps.git, {
     projectPath: project.path,
     ticketBaseBranch: ticket.base_branch,
@@ -214,8 +205,18 @@ export function ensure(
   ticketId: string,
 ): Promise<WorktreeResult<EnsureOutcome>> {
   const existing = inflight.get(ticketId);
-  if (existing) return existing;
+  // A joiner shares the leader's work but must NOT re-fire created-only side
+  // effects (the setup command runs exactly once, for the run that actually
+  // materialized the worktree). Only the leader reports `created` as it
+  // happened; every joiner sees `created: false`.
+  if (existing) return existing.then(asJoiner);
   const run = runEnsure(deps, ticketId).finally(() => inflight.delete(ticketId));
   inflight.set(ticketId, run);
   return run;
+}
+
+/** Masks `created` to false on a joined outcome; leaves the leader's identity intact. */
+function asJoiner(result: WorktreeResult<EnsureOutcome>): WorktreeResult<EnsureOutcome> {
+  if (!result.ok || !result.value.created) return result;
+  return ok({ ...result.value, created: false });
 }

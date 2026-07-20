@@ -23,7 +23,7 @@ export interface BaseResolution {
 }
 
 /** Whether `ref` resolves in `cwd` — `rev-parse --verify --quiet` exits non-zero (throws) when it doesn't. */
-function refExists(git: RunGit, cwd: string, ref: string): boolean {
+export function refExists(git: RunGit, cwd: string, ref: string): boolean {
   try {
     git(["rev-parse", "--verify", "--quiet", ref], cwd);
     return true;

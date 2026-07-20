@@ -70,12 +70,16 @@ export function reconcile(
   const diskExists = existsSync(input.worktreePath);
 
   if (registered) {
-    // Git knows this path. If a DIFFERENT branch is checked out here, the paths
-    // collide — refuse rather than reset someone else's work.
-    if (registered.branch !== null && registered.branch !== input.branch) {
+    // Git knows this path. A DIFFERENT branch — or a DETACHED HEAD (branch ===
+    // null) — checked out here is a collision we refuse rather than reset: a
+    // detached HEAD would otherwise take our commits and strand them off any
+    // branch, so it takes the same hard-fail path (never an auto-checkout).
+    if (registered.branch !== input.branch) {
+      const state =
+        registered.branch === null ? "in detached HEAD state" : `on branch ${registered.branch}`;
       return err(
-        `A worktree already exists at ${input.worktreePath} on branch ${registered.branch}, ` +
-          `not ${input.branch}.`,
+        `A worktree already exists at ${input.worktreePath} ${state}, not ${input.branch}. ` +
+          `Check out ${input.branch} there (or remove the worktree), then retry.`,
       );
     }
     if (diskExists) return ok({ kind: "already-present" });

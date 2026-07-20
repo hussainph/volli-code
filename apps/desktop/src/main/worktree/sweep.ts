@@ -25,13 +25,17 @@ import { listWorktreePaths } from "../db/tickets-repo";
 import { isWorktreeDirty } from "./dirty";
 import { parseWorktreeList } from "./git";
 import { homeDir } from "./home";
-import { canonicalize } from "./paths";
+import { canonicalize, isInside } from "./paths";
 import { type SweepReport, type WorktreeDeps } from "./types";
 
 export async function sweepOrphans(deps: WorktreeDeps): Promise<SweepReport> {
   const report: SweepReport = { pruned: [], removedClean: [], dirty: [] };
 
   const knownPaths = new Set(listWorktreePaths(deps.db).map((p) => canonicalize(p)));
+  // The app-owned root (built like worktree-runtime's `worktreesHome`). Tier 2
+  // may auto-remove ONLY inside it — a user's own `git worktree add ../review`
+  // is git-registered but not ours to delete, so it stays entirely untouched.
+  const worktreesRoot = join(homeDir(deps), ".volli", "worktrees");
   /** Every path any project's git still registers — fills as the loop runs. */
   const registeredPaths = new Set<string>();
 
@@ -61,11 +65,17 @@ export async function sweepOrphans(deps: WorktreeDeps): Promise<SweepReport> {
       if (entry.bare || entryCanonical === projectCanonical) continue;
       if (knownPaths.has(entryCanonical)) continue;
 
-      // An orphan: a registered worktree with no DB row.
+      // Containment gate (§7): an orphan OUTSIDE the app-owned root is someone
+      // else's worktree — never removed, never reported. Only worktrees under
+      // `~/.volli/worktrees` are ours to auto-clean.
+      if (!isInside(worktreesRoot, entry.path)) continue;
+
+      // An orphan: an app-owned registered worktree with no DB row.
       const dirty = isWorktreeDirty(deps.git, {
         worktreePath: entry.path,
         branch: entry.branch,
         baseBranch: null,
+        worktreeEntries: entries,
       });
       if (dirty.dirty) {
         report.dirty.push({
@@ -94,11 +104,10 @@ export async function sweepOrphans(deps: WorktreeDeps): Promise<SweepReport> {
   // git registers anymore is invisible to the loop above (prune already forgot
   // it), yet it may hold real work — git can't vouch for it, and any ambiguity
   // reads dirty (§7). Report it for the Settings list; never touch it.
-  const worktreesHome = join(homeDir(deps), ".volli", "worktrees");
-  if (existsSync(worktreesHome)) {
-    for (const container of readdirSync(worktreesHome, { withFileTypes: true })) {
+  if (existsSync(worktreesRoot)) {
+    for (const container of readdirSync(worktreesRoot, { withFileTypes: true })) {
       if (!container.isDirectory()) continue;
-      const containerPath = join(worktreesHome, container.name);
+      const containerPath = join(worktreesRoot, container.name);
       for (const leaf of readdirSync(containerPath, { withFileTypes: true })) {
         if (!leaf.isDirectory()) continue;
         const leafPath = join(containerPath, leaf.name);

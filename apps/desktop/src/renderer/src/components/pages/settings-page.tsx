@@ -57,7 +57,8 @@ export function ProjectAutomationSettings({
     if (!project || saving) return;
     setSaving(true);
     try {
-      await onSave(project.id, baseBranch.trim() || null);
+      const ok = await onSave(project.id, baseBranch.trim() || null);
+      if (!ok) toastError("Could not save base branch");
     } finally {
       setSaving(false);
     }
@@ -133,7 +134,8 @@ function SetupCommandField({
     if (!project || saving || !onSave) return;
     setSaving(true);
     try {
-      await onSave(project.id, setupCommand.trim() || null);
+      const ok = await onSave(project.id, setupCommand.trim() || null);
+      if (!ok) toastError("Could not save setup command");
     } finally {
       setSaving(false);
     }
@@ -220,7 +222,7 @@ function DirtyWorktreesList() {
   const refresh = useCallback(async () => {
     setState({ status: "loading" });
     try {
-      const result = await window.api.worktree.orphans();
+      const result = await window.api.worktree.orphans({ rescan: true });
       if (!result.ok) {
         toastError(`Could not check orphaned worktrees: ${result.error}`);
         setState({ status: "error" });

@@ -21,7 +21,8 @@ import { registerAppMenu } from "./menu";
 import { confirmDestructiveClose, registerTerminalIpcHandlers } from "./pty";
 import type { PtyManager } from "./pty";
 import { registerFileIpcHandlers } from "./volli-fs";
-import { sweepOrphans } from "./worktree";
+import { broadcastDataChanged } from "./broadcast";
+import { startOrphanSweep } from "./orphan-sweep";
 import { worktreeDeps } from "./worktree-runtime";
 import { createAgentCommandService } from "./agent-commands";
 import { ensureVolliCliShim, volliRuntimePaths } from "./agent-runtime";
@@ -48,14 +49,6 @@ app.setName("Volli Code");
 
 const isDev = !app.isPackaged;
 let agentSocket: AgentSocketServer | undefined;
-
-function broadcastDataChanged(): void {
-  for (const window of BrowserWindow.getAllWindows()) {
-    window.webContents.send("volli:data-changed" satisfies VolliIpcEvent, {
-      entity: "tickets",
-    });
-  }
-}
 
 // Dev gets its OWN userData directory. dev and packaged otherwise share one
 // (app.setName above unifies them so the SQLite db survives across launches) —
@@ -280,30 +273,21 @@ app.whenReady().then(async () => {
       console.error("[volli] failed to sweep stale sessions:", errorMessage(error));
     }
   }
+  // Assigned once registerTerminalIpcHandlers runs below; the worktree
+  // remove/orphan-delete guards read it lazily (only at invoke time, long after
+  // boot) to refuse touching a directory a live session still runs in.
+  let ptyManagerRef: PtyManager | undefined;
   // Standard macOS menu, but with the View-menu zoom roles replaced by
   // renderer-driven CSS zoom (see menu.ts for the rationale). Registered here
   // (rather than up with the other pre-window setup) because File > Export
   // Database needs `dbHandle`, which doesn't exist yet at that point.
-  registerDataIpcHandlers(dbHandle);
+  registerDataIpcHandlers(dbHandle, {
+    liveSessionCwds: () => ptyManagerRef?.liveSessionCwds() ?? [],
+  });
   // Global-artifacts + @file fs plumbing (file index/read/write, artifact
   // create, reveal, per-tab watch); same degraded-DB stance as
   // registerDataIpcHandlers.
   registerFileIpcHandlers(dbHandle);
-  // Startup orphan sweep (worktree-support §7): prunes stale git metadata and
-  // removes clean orphaned worktree dirs (branches retained); dirty orphans are
-  // left for Settings → Worktrees. Fire-and-forget — never blocks boot, and a
-  // sweep failure is logged, not thrown.
-  if (dbHandle.ok) {
-    sweepOrphans(worktreeDeps(dbHandle.db))
-      .then((report) => {
-        console.log(
-          `[worktree] sweep: pruned=${report.pruned.length} removedClean=${report.removedClean.length} dirty=${report.dirty.length}`,
-        );
-      })
-      .catch((error) => {
-        console.error("[worktree] sweep failed:", errorMessage(error));
-      });
-  }
   // Boots the PTY multiplexer (persists a durable record per session) and its
   // before-quit teardown (kills all PTYs, gated on busy sessions); needs the
   // db, so it registers here. The returned manager feeds each window's own
@@ -319,7 +303,29 @@ app.whenReady().then(async () => {
   // the same failure semantics (logged, non-fatal). registerTerminalIpcHandlers
   // needs only runtimePaths (a pure join), so it can precede the window it feeds.
   const ptyManager = registerTerminalIpcHandlers(dbHandle, runtimePaths);
+  ptyManagerRef = ptyManager;
   const mainWindow = createWindow(ptyManager);
+
+  // Startup orphan sweep (worktree-support §7): prunes stale git metadata and
+  // removes clean orphaned worktree dirs (branches retained); dirty orphans are
+  // left for Settings → Worktrees. DESTRUCTIVE, so it runs exactly ONCE per
+  // launch — cached in orphan-sweep.ts and read back (never re-swept) by the
+  // volli:worktree-orphans handler. Deferred to did-finish-load so it never
+  // competes with first paint; a sweep failure is logged, not thrown.
+  if (dbHandle.ok) {
+    const db = dbHandle.db;
+    mainWindow.webContents.once("did-finish-load", () => {
+      startOrphanSweep(worktreeDeps(db))
+        .then((report) => {
+          console.log(
+            `[worktree] sweep: pruned=${report.pruned.length} removedClean=${report.removedClean.length} dirty=${report.dirty.length}`,
+          );
+        })
+        .catch((error) => {
+          console.error("[worktree] sweep failed:", errorMessage(error));
+        });
+    });
+  }
 
   let shimPath = join(runtimePaths.binDir, "volli");
   try {

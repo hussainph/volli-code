@@ -129,6 +129,32 @@ const WORKTREE_FAILURE_STAGE_LABELS: Record<WorktreeFailureStage, string> = {
 };
 
 /**
+ * Upper bound on the stderr excerpt shown inline in a `worktree_failed`
+ * one-liner. The stored excerpt can run up to `MAX_WORKTREE_FAILURE_STDERR`
+ * (2000 chars, @volli/shared) — far too long for a single feed row — so this
+ * keeps the row scannable once the transient failure toast is gone.
+ */
+const WORKTREE_FAILURE_EXCERPT_MAX = 160;
+
+/**
+ * The single most relevant line of a `worktree_failed` stderr excerpt: its
+ * last non-blank line. Git's actual error lands at the end of its stderr
+ * (progress noise precedes it), and the stored excerpt is already trimmed to
+ * the TRAILING slice (see `trimWorktreeFailureStderr`), so the last line is
+ * the diagnosis; truncated further so the feed row stays single-line.
+ */
+function worktreeFailureExcerpt(stderr: string): string {
+  const lines = stderr
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  const last = lines[lines.length - 1] ?? stderr.trim();
+  return last.length > WORKTREE_FAILURE_EXCERPT_MAX
+    ? `${last.slice(0, WORKTREE_FAILURE_EXCERPT_MAX)}…`
+    : last;
+}
+
+/**
  * The one-line sentence for a property-change event (`null` for `commented`,
  * which the feed renders as its comment instead). Verb-phrase style, no
  * subject — the feed row supplies the actor/timestamp chrome.
@@ -159,8 +185,13 @@ export function describeEvent(payload: TicketEventPayload): string | null {
       return "ended a session";
     case "worktree_changed":
       return describeWorktreeChange(payload.from, payload.to);
-    case "worktree_failed":
-      return `worktree ${WORKTREE_FAILURE_STAGE_LABELS[payload.stage]} failed`;
+    case "worktree_failed": {
+      const stage = WORKTREE_FAILURE_STAGE_LABELS[payload.stage];
+      const excerpt = worktreeFailureExcerpt(payload.stderr);
+      return excerpt.length > 0
+        ? `worktree ${stage} failed: ${excerpt}`
+        : `worktree ${stage} failed`;
+    }
     case "session_signal":
       return payload.reason === null
         ? `reported ${payload.signal}`

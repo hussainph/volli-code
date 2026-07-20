@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import { listTicketEvents } from "../db/events-repo";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
-import { getTicketRow, insertTicket, updateTicketFields } from "../db/tickets-repo";
+import { archiveTicket, getTicketRow, insertTicket, updateTicketFields } from "../db/tickets-repo";
 import { getPhase, resetPhasesForTest, setPhase } from "./phase";
 import { remove } from "./remove";
 import { scriptedGit } from "./scripted-git";
@@ -106,6 +106,26 @@ describe("remove", () => {
     const row = getTicketRow(ctx.db, "ticket-1")!;
     expect(row.worktree_path).toBeNull();
     expect(row.branch).not.toBeNull();
+  });
+
+  it("clears the checkout pointer even when the ticket is archived (no spurious throw)", async () => {
+    // `clearIdentity` goes through `updateTicketFieldsCommand`, which normally
+    // refuses an archived ticket — but the dir is already gone, so the pointer
+    // MUST still be nulled or the row dead-ends at a vanished path (fix 6).
+    const gone = join(tempDir("wt"), "vanished");
+    seed(gone);
+    archiveTicket(ctx.db, "ticket-1", 2);
+    const { git } = scriptedGit(() => "");
+
+    const result = await remove({ db: ctx.db, git }, "ticket-1", { force: false });
+
+    expect(result.ok).toBe(true);
+    const row = getTicketRow(ctx.db, "ticket-1")!;
+    expect(row.worktree_path).toBeNull();
+    expect(row.branch).not.toBeNull(); // branch identity still retained
+    expect(listTicketEvents(ctx.db, "ticket-1").map((e) => e.payload.kind)).toContain(
+      "worktree_changed",
+    );
   });
 
   it("refuses a dirty worktree without force, and never runs the delete", async () => {

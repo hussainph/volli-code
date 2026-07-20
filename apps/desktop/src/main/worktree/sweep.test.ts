@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
@@ -32,8 +32,13 @@ describe("sweepOrphans", () => {
   it("prunes per project, auto-removes clean orphans (keeping the branch), and reports dirty ones", async () => {
     const projectPath = tempDir("proj");
     const knownWt = tempDir("known"); // has a DB row → not an orphan
-    const cleanOrphan = tempDir("clean"); // no DB row, clean → auto-remove
-    const dirtyOrphan = tempDir("dirty"); // no DB row, dirty → reported
+    const home = tempDir("home");
+    const root = join(home, ".volli", "worktrees");
+    // Auto-removal is scoped to the app-owned root, so the orphans live there.
+    const cleanOrphan = join(root, "proj-abc", "clean"); // no DB row, clean → auto-remove
+    const dirtyOrphan = join(root, "proj-abc", "dirty"); // no DB row, dirty → reported
+    mkdirSync(cleanOrphan, { recursive: true });
+    mkdirSync(dirtyOrphan, { recursive: true });
     const gitDir = tempDir("gitdir"); // empty: no sequencer files
 
     insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
@@ -47,14 +52,12 @@ describe("sweepOrphans", () => {
       `worktree ${dirtyOrphan}\nHEAD d\nbranch refs/heads/orphan-dirty\n`;
 
     const removed: string[] = [];
+    const listCalls: string[] = [];
     const { git } = scriptedGit((args, cwd) => {
       if (args[0] === "worktree" && args[1] === "prune") return "";
       if (args[0] === "worktree" && args[1] === "list") {
-        // dirty detection's checkLock also lists from the worktree cwd — a
-        // single-entry unlocked answer keeps those clean.
-        return cwd === projectPath
-          ? listPorcelain
-          : `worktree ${cwd}\nHEAD x\nbranch refs/heads/b\n`;
+        listCalls.push(cwd);
+        return listPorcelain;
       }
       if (args[0] === "worktree" && args[1] === "remove") {
         removed.push(args[2]!);
@@ -68,7 +71,7 @@ describe("sweepOrphans", () => {
       return "";
     });
 
-    const report = await sweepOrphans({ db: ctx.db, git });
+    const report = await sweepOrphans({ db: ctx.db, git, home });
 
     expect(report.pruned).toEqual(["proj-1"]);
     expect(report.removedClean).toEqual([cleanOrphan]);
@@ -76,15 +79,49 @@ describe("sweepOrphans", () => {
     expect(report.dirty).toEqual([
       { path: dirtyOrphan, projectId: "proj-1", reason: expect.stringMatching(/untracked/) },
     ]);
+    // The dirty check reuses the project's one listing — never a per-orphan
+    // re-spawn from the worktree cwd (fix 10).
+    expect(listCalls).toEqual([projectPath]);
+  });
+
+  it("leaves a git-registered worktree OUTSIDE the app root completely untouched (not removed, not reported)", async () => {
+    const projectPath = tempDir("proj");
+    const home = tempDir("home"); // app root is home/.volli/worktrees — empty here
+    const personalWt = tempDir("personal"); // the user's own `git worktree add ../review`
+
+    insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
+
+    const removed: string[] = [];
+    const { git } = scriptedGit((args) => {
+      if (args[0] === "worktree" && args[1] === "prune") return "";
+      if (args[0] === "worktree" && args[1] === "list") {
+        return (
+          `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n` +
+          `worktree ${personalWt}\nHEAD b\nbranch refs/heads/feature\n`
+        );
+      }
+      if (args[0] === "worktree" && args[1] === "remove") {
+        removed.push(args[2]!);
+        return "";
+      }
+      return "";
+    });
+
+    const report = await sweepOrphans({ db: ctx.db, git, home });
+
+    expect(removed).toEqual([]); // never deleted — it's not ours
+    expect(report.removedClean).toEqual([]);
+    expect(report.dirty).toEqual([]); // never even reported
   });
 
   it("skips a project whose git can't be read", async () => {
+    const home = tempDir("home"); // hermetic: never reads the real ~/.volli/worktrees
     insertProject(ctx.db, testProject({ id: "proj-1", path: "/repo" }));
     const { git } = scriptedGit((args) => {
       if (args[0] === "worktree" && args[1] === "prune") throw new Error("not a git repo");
       return "";
     });
-    const report = await sweepOrphans({ db: ctx.db, git });
+    const report = await sweepOrphans({ db: ctx.db, git, home });
     expect(report).toEqual({ pruned: [], removedClean: [], dirty: [] });
   });
 });

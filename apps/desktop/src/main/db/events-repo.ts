@@ -61,7 +61,11 @@ function parseActor(actor: string): {
 }
 
 function serializeActor(actor: TicketEventActor): string {
-  return actor.kind === "user" ? "user" : JSON.stringify(actor);
+  if (actor.kind === "user") return "user";
+  // A context-less system automation stores as the bare token (like "user"), so
+  // parseActor's plain-token branch round-trips it back to "automation".
+  if (actor.kind === "automation" && !("sessionId" in actor)) return "automation";
+  return JSON.stringify(actor);
 }
 
 /**

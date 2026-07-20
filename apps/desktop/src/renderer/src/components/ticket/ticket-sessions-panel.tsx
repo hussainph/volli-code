@@ -325,9 +325,11 @@ export function TicketSessionsPanel({
     const parked = parkState[record.id]?.parked ?? false;
     // While the worktree's ensure pipeline is running its setup script, an open
     // pane's honest `working` status is less informative than naming what it's
-    // actually doing — `setup` overrides it for every currently-open row.
+    // actually doing — `setup` overrides it for every currently-open, NOT-YET-
+    // EXITED row; an exited/crashed pane shows its real exited status even
+    // during setup, rather than lying that setup is still in progress.
     const status: TicketSessionStatus =
-      isOpen && worktreePhase === "setting-up"
+      isOpen && !exited && worktreePhase === "setting-up"
         ? "setup"
         : isOpen
           ? sessionActivityState(lastOutputAt[record.id] ?? null, exited, now, parked)

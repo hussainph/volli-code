@@ -308,8 +308,22 @@ async function main() {
         );
         const eventOk = changedEvent !== undefined;
 
-        const sentinelIdx = sentinelOk ? output.indexOf("__VOLLI_SETUP_DONE:0__") : -1;
-        const titleIdx = sentinelOk ? output.indexOf(title) : -1;
+        // The held harness command is typed asynchronously AFTER main observes
+        // the sentinel, so `output` (frozen at the instant the sentinel string
+        // first appeared) can't be trusted to contain it yet — re-poll for the
+        // title instead of asserting against that stale snapshot.
+        const postSentinelOutput = sentinelOk
+          ? await waitUntil(
+              `harness command "${title}" typed after sentinel`,
+              async () => {
+                const text = await bufferFor(sessionId);
+                return text.includes(title) ? text : null;
+              },
+              { timeout: 10000 },
+            ).catch(() => bufferFor(sessionId))
+          : output;
+        const sentinelIdx = sentinelOk ? postSentinelOutput.indexOf("__VOLLI_SETUP_DONE:0__") : -1;
+        const titleIdx = sentinelOk ? postSentinelOutput.indexOf(title) : -1;
         const harnessAfterSentinel = sentinelOk && titleIdx !== -1 && titleIdx > sentinelIdx;
 
         const ok =

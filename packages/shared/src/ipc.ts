@@ -12,7 +12,7 @@ import type { Project } from "./project-identity";
 import type { SessionRecord } from "./session";
 import type { ArchivedTicket, Ticket } from "./ticket";
 import type { TicketComment } from "./ticket-comment";
-import type { TicketEvent, WorktreeIdentity } from "./ticket-events";
+import type { TicketEvent } from "./ticket-events";
 
 /** Channel names for the preload's `contextBridge` API. */
 export type VolliIpcChannel =
@@ -72,7 +72,6 @@ export type VolliIpcChannel =
   | "volli:file-unwatch"
   // Ticket worktrees (docs/plans/worktree-support.md). `ensure` has no channel
   // on purpose — it only ever runs implicitly inside terminal-create (§1).
-  | "volli:worktree-state"
   | "volli:worktree-remove"
   | "volli:worktree-branches"
   | "volli:worktree-orphans"
@@ -272,17 +271,6 @@ export interface WorktreePhaseEvent {
 
 /** Where a worktree dir stands relative to what git knows — the live half of worktree state. */
 export type WorktreeDiskState = "present" | "missing" | "unregistered";
-
-/**
- * The single composed worktree answer for a ticket (`volli:worktree-state`):
- * persisted identity + transient phase + live disk check. Callers never join
- * the DB, the event log, and the stores by hand (#42).
- */
-export type WorktreeStateResult = Result<{
-  identity: WorktreeIdentity | null;
-  phase: WorktreePhase | null;
-  disk: WorktreeDiskState;
-}>;
 
 /** Ack for a `volli:worktree-remove` (the "Remove worktree…" escape hatch). */
 export type WorktreeRemoveResult = Result;

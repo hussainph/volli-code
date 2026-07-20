@@ -95,6 +95,20 @@ describe("reconcile matrix", () => {
     if (!result.ok) expect(result.error).toMatch(/not volli\/VC-1-x/);
   });
 
+  it("refuses a DETACHED-HEAD registration at our target path, naming detached HEAD", () => {
+    // A detached HEAD (no `branch` line) would otherwise pass the wrong-branch
+    // guard vacuously and boot a session that strands its commits off any
+    // branch — refuse just as hard, and say why (fix 2).
+    const target = tempDir("wt");
+    const { git } = listGit(`worktree ${target}\nHEAD def\ndetached\n`);
+    const result = reconcile(git, { projectPath: PROJECT, worktreePath: target, branch: BRANCH });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/detached HEAD/);
+      expect(result.error).toMatch(/not volli\/VC-1-x/);
+    }
+  });
+
   it("surfaces an error when the worktree list can't be read", () => {
     const target = join(tempDir("home"), "wt");
     const { git } = scriptedGit(() => {

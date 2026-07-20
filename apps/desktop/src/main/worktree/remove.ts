@@ -21,7 +21,8 @@ import { GitError } from "./git";
 import { clearPhase } from "./phase";
 import { err, ok, type WorktreeDeps, type WorktreeResult } from "./types";
 
-const SYSTEM_ACTOR: TicketEventActor = { kind: "user" };
+// System-driven, no session: these mutations are attributed to automation.
+const SYSTEM_ACTOR: TicketEventActor = { kind: "automation" };
 
 /**
  * Removes a ticket's worktree. With `force: false`, refuses when the worktree
@@ -98,10 +99,14 @@ export async function remove(
  * `branch`/`base_branch` stay stamped — the branch still exists in git.
  */
 function clearIdentity(deps: WorktreeDeps, ticketId: string): void {
+  // `allowArchived`: the worktree dir is already deleted by the time we get
+  // here, so the pointer must be nulled even on an archived ticket — otherwise
+  // the row dead-ends at a path that no longer exists.
   updateTicketFieldsCommand(
     deps.db,
     { ticketId, worktreePath: null },
     { now: Date.now(), actor: SYSTEM_ACTOR },
+    { allowArchived: true },
   );
   clearPhase(ticketId);
 }

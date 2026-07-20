@@ -63,6 +63,11 @@ vi.mock("electron", () => ({
   dialog: {
     showMessageBoxSync,
   },
+  // The item-4 data-changed broadcast (a fresh worktree stamped identity) fans
+  // out over BrowserWindow; no windows here, so it's a harmless no-op.
+  BrowserWindow: {
+    getAllWindows: () => [],
+  },
 }));
 
 // The whole point of the lazy import in pty.ts: this mock stands in for the

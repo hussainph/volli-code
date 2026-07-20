@@ -221,14 +221,14 @@ function BaseBranchField({ projectId, ticket }: { projectId: string; ticket: Tic
     try {
       const result = await window.api.worktree.branches(projectId);
       if (!result.ok) {
+        // Leave `branches` null (not `[]`) so a failed fetch isn't cached as
+        // "no branches" forever — the next open retries instead.
         toastError(`Could not load branches: ${result.error}`);
-        setBranches([]);
         return;
       }
       setBranches(result.branches);
     } catch (error) {
       toastError(`Could not load branches: ${errorMessage(error)}`);
-      setBranches([]);
     } finally {
       setLoading(false);
     }

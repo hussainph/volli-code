@@ -8,7 +8,7 @@
 export { ensure } from "./ensure";
 export type { EnsureOutcome } from "./ensure";
 export { remove } from "./remove";
-export { getState, listBranches } from "./state";
+export { listBranches } from "./state";
 export { sweepOrphans } from "./sweep";
 
 // The PTY wiring drives the transient phase directly across the setup-command
@@ -25,11 +25,8 @@ export { runGitCapturing, GitError } from "./git";
 export type {
   WorktreeDeps,
   WorktreePhase,
-  WorktreeState,
-  WorktreeDiskState,
   WorktreeResult,
   SweepReport,
-  DirtyOrphan,
   WorktreeIdentity,
   RunGit,
 } from "./types";

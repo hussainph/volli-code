@@ -91,13 +91,41 @@ describe("isWorktreeDirty", () => {
     expect(result.reason).toMatch(/locked/);
   });
 
-  it("is dirty on submodule drift", () => {
+  it("is dirty on submodule drift (`+` different SHA, or `U` conflict)", () => {
     const wt = tempDir("wt");
     const gitDir = tempDir("gitdir");
     const { git } = cleanGit(wt, gitDir, { submodule: () => "+abc123 vendor/lib (v1)\n" });
     const result = isWorktreeDirty(git, { worktreePath: wt, branch: "b", baseBranch: "main" });
     expect(result.dirty).toBe(true);
     expect(result.reason).toMatch(/submodule/);
+  });
+
+  it("is CLEAN when a submodule is merely uninitialized (`-`) — worktree add never inits them", () => {
+    const wt = tempDir("wt");
+    const gitDir = tempDir("gitdir");
+    // Every worktree of a submodule repo starts `-`; counting it would make the
+    // sweep and non-forced remove permanently refuse (fix 3).
+    const { git } = cleanGit(wt, gitDir, { submodule: () => "-abc123 vendor/lib\n" });
+    expect(isWorktreeDirty(git, { worktreePath: wt, branch: "b", baseBranch: "main" })).toEqual({
+      dirty: false,
+      reason: null,
+    });
+  });
+
+  it("reuses a supplied worktree listing for the lock check, never re-spawning git worktree list", () => {
+    const wt = tempDir("wt");
+    const gitDir = tempDir("gitdir");
+    const { git, calls } = cleanGit(wt, gitDir);
+    const result = isWorktreeDirty(git, {
+      worktreePath: wt,
+      branch: "b",
+      baseBranch: "main",
+      worktreeEntries: [{ path: wt, branch: "b", locked: true, bare: false }],
+    });
+    expect(result.dirty).toBe(true);
+    expect(result.reason).toMatch(/locked/);
+    // The caller's listing answered the lock check — no `worktree list` spawn (fix 10).
+    expect(calls.some((c) => c.args[0] === "worktree" && c.args[1] === "list")).toBe(false);
   });
 
   it("errs dirty on ANY git failure (an unreadable worktree is not assumed clean)", () => {

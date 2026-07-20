@@ -84,6 +84,18 @@ describe("listTicketEvents", () => {
       actorContext: { sessionId: "session-7", ticketId },
     });
   });
+
+  it("round-trips a context-less system automation as the bare token", () => {
+    // The worktree ensure/remove/sweep pipeline has no session — it stores as a
+    // bare "automation" token (like "user"), not JSON with a context.
+    const { ticketId } = setup();
+    recordTicketEvent(ctx.db, ticketId, { kind: "archived" }, 100, { kind: "automation" });
+
+    expect(listTicketEvents(ctx.db, ticketId)[0]).toMatchObject({
+      actor: "automation",
+      actorContext: null,
+    });
+  });
 });
 
 describe("recordTicketEvent — body_edited coalescing", () => {

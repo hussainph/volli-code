@@ -124,9 +124,14 @@ export interface TicketEventActorContext {
   ticketId: string | null;
 }
 
+// `session` always carries its context; `automation` may (a session-driven
+// automation) or may NOT (a system-level automation — the worktree ensure/
+// remove/sweep pipeline has no session and stores as a bare token, like `user`).
+// Each `kind` lives in exactly one arm so it stays a clean discriminant.
 export type TicketEventActor =
   | { kind: "user" }
-  | ({ kind: "session" | "automation" } & TicketEventActorContext);
+  | ({ kind: "session" } & TicketEventActorContext)
+  | ({ kind: "automation" } & Partial<TicketEventActorContext>);
 
 export interface TicketEvent {
   id: string;

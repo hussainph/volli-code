@@ -100,7 +100,7 @@ describe("ensure — success", () => {
     expect(kinds).toContain("worktree_changed");
   });
 
-  it("is single-flight: two concurrent ensures run the pipeline once", async () => {
+  it("is single-flight: two concurrent ensures run the pipeline once, and only the leader reports created", async () => {
     const projectPath = tempDir("proj");
     seed(projectPath);
     const home = tempDir("home");
@@ -109,8 +109,16 @@ describe("ensure — success", () => {
 
     const [a, b] = await Promise.all([ensure(deps, "ticket-1"), ensure(deps, "ticket-1")]);
 
-    expect(a).toEqual(b);
     expect(countMatching(["worktree", "add"])).toBe(1);
+    expect(a.ok && b.ok).toBe(true);
+    if (a.ok && b.ok) {
+      // Same materialized worktree, but `created` (the setup-command gate) fires
+      // exactly once — the leader reports it, the joiner sees created:false so
+      // it never re-runs a created-only side effect (fix 7).
+      expect(a.value.identity).toEqual(b.value.identity);
+      expect(a.value.created).toBe(true);
+      expect(b.value.created).toBe(false);
+    }
   });
 });
 

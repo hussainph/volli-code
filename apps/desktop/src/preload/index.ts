@@ -49,7 +49,6 @@ import type {
   WorktreeOrphansResult,
   WorktreePhaseEvent,
   WorktreeRemoveResult,
-  WorktreeStateResult,
 } from "@volli/shared";
 
 // Minimal typed API surface exposed to the renderer.
@@ -236,18 +235,19 @@ const api = {
       ipcRenderer.invoke("volli:app-state-set" satisfies VolliIpcChannel, key, value),
   },
   worktree: {
-    /** The composed worktree answer for a ticket: persisted identity + transient phase + live disk check. */
-    state: (ticketId: string): Promise<WorktreeStateResult> =>
-      ipcRenderer.invoke("volli:worktree-state" satisfies VolliIpcChannel, { ticketId }),
     /** The "Remove worktree…" escape hatch; `force` discards uncommitted work when the caller has confirmed. */
     remove: (ticketId: string, force: boolean): Promise<WorktreeRemoveResult> =>
       ipcRenderer.invoke("volli:worktree-remove" satisfies VolliIpcChannel, { ticketId, force }),
     /** A project's local branch names, for the base-branch picker. */
     branches: (projectId: string): Promise<WorktreeBranchesResult> =>
       ipcRenderer.invoke("volli:worktree-branches" satisfies VolliIpcChannel, { projectId }),
-    /** On-demand orphan sweep (Settings → Worktrees); the same tiers as the startup sweep. */
-    orphans: (): Promise<WorktreeOrphansResult> =>
-      ipcRenderer.invoke("volli:worktree-orphans" satisfies VolliIpcChannel),
+    /**
+     * The launch's cached orphan report — the destructive sweep runs once per
+     * launch (main), so this never re-sweeps. Pass `{ rescan: true }` for the
+     * explicit Settings → Worktrees rescan, which forces a fresh sweep.
+     */
+    orphans: (opts?: { rescan?: boolean }): Promise<WorktreeOrphansResult> =>
+      ipcRenderer.invoke("volli:worktree-orphans" satisfies VolliIpcChannel, opts ?? {}),
     /** User-confirmed deletion of one dirty orphan dir; main re-validates it lives inside the worktree home. */
     deleteOrphan: (path: string): Promise<WorktreeOrphanDeleteResult> =>
       ipcRenderer.invoke("volli:worktree-orphan-delete" satisfies VolliIpcChannel, { path }),

@@ -12,16 +12,21 @@ import type {
   TicketsResult,
   VolliIpcChannel,
   WorktreeBranchesResult,
+  WorktreeOrphanDeleteResult,
   WorktreeOrphansResult,
   WorktreeRemoveResult,
-  WorktreeStateResult,
 } from "@volli/shared";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 // Hoisted above module evaluation, like ipc.test.ts, so the electron mock
-// factory can capture into it.
-const { handlers } = vi.hoisted(() => ({
+// factory can capture into them. `dataChangedSends` collects every
+// volli:data-changed fan-out so the broadcast-on-mutation assertions can see it.
+const { handlers, dataChangedSends } = vi.hoisted(() => ({
   handlers: new Map<string, (...args: never[]) => unknown>(),
+  dataChangedSends: [] as Array<{ channel: string; payload: unknown }>,
 }));
 
 vi.mock("electron", () => ({
@@ -30,6 +35,20 @@ vi.mock("electron", () => ({
       handlers.set(channel, handler);
     },
   },
+  // The worktree remove/orphan-delete broadcasts fan out over BrowserWindow;
+  // one fake window records each send so tests can assert the re-hydrate fired.
+  BrowserWindow: {
+    getAllWindows: () => [
+      {
+        webContents: {
+          isDestroyed: () => false,
+          send: (channel: string, payload: unknown) => {
+            dataChangedSends.push({ channel, payload });
+          },
+        },
+      },
+    ],
+  },
 }));
 
 // The worktree module runs real git — mocked so these handler tests never
@@ -37,7 +56,6 @@ vi.mock("electron", () => ({
 // plain deps object and never touches BrowserWindow unless `onPhase` fires,
 // which the mocked functions below never call).
 vi.mock("./worktree", () => ({
-  getState: vi.fn(),
   remove: vi.fn(),
   listBranches: vi.fn(),
   sweepOrphans: vi.fn(),
@@ -50,7 +68,9 @@ import { registerDataIpcHandlers } from "./data-ipc";
 import { insertSession } from "./db/sessions-repo";
 import { openTestDb, testSession } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
-import { getState, listBranches, remove as removeWorktree, sweepOrphans } from "./worktree";
+import { resetOrphanSweepForTest } from "./orphan-sweep";
+import { worktreesHome } from "./worktree-runtime";
+import { listBranches, remove as removeWorktree, sweepOrphans } from "./worktree";
 
 /** Fake IPC event; unused by any data-ipc handler, but every handler signature expects one. */
 const fakeEvent = { sender: {} };
@@ -67,6 +87,10 @@ let ctx: TestDb;
 beforeEach(() => {
   handlers.clear();
   vi.resetAllMocks();
+  dataChangedSends.length = 0;
+  // The orphan sweep is cached once per launch (module state) — drop it so each
+  // test starts from a clean launch and its own mocked sweep runs.
+  resetOrphanSweepForTest();
   ctx = openTestDb();
   registerDataIpcHandlers({ ok: true, db: ctx.db });
 });
@@ -702,36 +726,8 @@ describe("volli:session-rename", () => {
   });
 });
 
-describe("volli:worktree-state", () => {
-  it("wraps getState's composed answer in the ok result shape", async () => {
-    vi.mocked(getState).mockResolvedValue({
-      identity: { worktreePath: "/wt/VC-1", branch: "volli/VC-1-x", baseBranch: "main" },
-      phase: "ready",
-      disk: "present",
-    });
-
-    const result = await invoke<Promise<WorktreeStateResult>>("volli:worktree-state", {
-      ticketId: "ticket-1",
-    });
-
-    expect(result).toEqual({
-      ok: true,
-      identity: { worktreePath: "/wt/VC-1", branch: "volli/VC-1-x", baseBranch: "main" },
-      phase: "ready",
-      disk: "present",
-    });
-    expect(vi.mocked(getState)).toHaveBeenCalledWith(expect.anything(), "ticket-1");
-  });
-
-  it("rejects a non-string ticketId", async () => {
-    const result = await invoke<Promise<WorktreeStateResult>>("volli:worktree-state", 42);
-    expect(result).toEqual({ ok: false, error: "Invalid ticket" });
-    expect(vi.mocked(getState)).not.toHaveBeenCalled();
-  });
-});
-
 describe("volli:worktree-remove", () => {
-  it("acks on success", async () => {
+  it("acks on success and broadcasts data-changed", async () => {
     vi.mocked(removeWorktree).mockResolvedValue({ ok: true, value: undefined });
 
     const result = await invoke<Promise<WorktreeRemoveResult>>("volli:worktree-remove", {
@@ -743,6 +739,35 @@ describe("volli:worktree-remove", () => {
     expect(vi.mocked(removeWorktree)).toHaveBeenCalledWith(expect.anything(), "ticket-1", {
       force: false,
     });
+    expect(dataChangedSends).toContainEqual({
+      channel: "volli:data-changed",
+      payload: { entity: "tickets" },
+    });
+  });
+
+  it("refuses (main-side) when a live session runs in the ticket's worktree, never calling remove", async () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    const worktreePath = `${worktreesHome()}/VC-9-live`;
+    invoke<TicketResult>("volli:ticket-update", { ticketId: ticket.id, worktreePath });
+
+    handlers.clear();
+    // A session whose cwd is INSIDE the worktree must block the removal.
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { liveSessionCwds: () => [`${worktreePath}/packages`] },
+    );
+
+    const result = await invoke<Promise<WorktreeRemoveResult>>("volli:worktree-remove", {
+      ticketId: ticket.id,
+      force: false,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "Close the terminal sessions running in this worktree before removing it.",
+    });
+    expect(vi.mocked(removeWorktree)).not.toHaveBeenCalled();
   });
 
   it("surfaces a dirty-worktree refusal as a typed error", async () => {
@@ -790,20 +815,121 @@ describe("volli:worktree-branches", () => {
 });
 
 describe("volli:worktree-orphans", () => {
+  const report = {
+    pruned: ["project-1"],
+    removedClean: ["/wt/orphan"],
+    dirty: [{ path: "/wt/dirty", projectId: "project-1", reason: "uncommitted work" }],
+  };
+
   it("wraps the sweep report in the ok result shape", async () => {
-    vi.mocked(sweepOrphans).mockResolvedValue({
-      pruned: ["project-1"],
-      removedClean: ["/wt/orphan"],
-      dirty: [{ path: "/wt/dirty", projectId: "project-1", reason: "uncommitted work" }],
-    });
+    vi.mocked(sweepOrphans).mockResolvedValue(report);
 
     const result = await invoke<Promise<WorktreeOrphansResult>>("volli:worktree-orphans");
 
+    expect(result).toEqual({ ok: true, ...report });
+  });
+
+  it("returns the cached report without re-sweeping on a second call within a launch", async () => {
+    vi.mocked(sweepOrphans).mockResolvedValue(report);
+
+    await invoke<Promise<WorktreeOrphansResult>>("volli:worktree-orphans");
+    await invoke<Promise<WorktreeOrphansResult>>("volli:worktree-orphans");
+
+    // The destructive sweep must run exactly ONCE per launch (a renderer reload
+    // re-invokes this channel, and it must not re-sweep or race the launch sweep).
+    expect(vi.mocked(sweepOrphans)).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-sweeps only on an explicit rescan", async () => {
+    vi.mocked(sweepOrphans).mockResolvedValue(report);
+
+    await invoke<Promise<WorktreeOrphansResult>>("volli:worktree-orphans");
+    await invoke<Promise<WorktreeOrphansResult>>("volli:worktree-orphans", { rescan: true });
+
+    expect(vi.mocked(sweepOrphans)).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("volli:worktree-orphan-delete", () => {
+  let home: string;
+
+  beforeEach(() => {
+    // A throwaway worktree home so the sanctioned rm -rf never touches the real
+    // ~/.volli/worktrees. Read fresh per call by resolveHome, so setting it here
+    // is enough; handlers registered in the outer beforeEach see it too.
+    home = mkdtempSync(join(tmpdir(), "volli-orphan-home-"));
+    process.env["VOLLI_WORKTREE_HOME_DIR"] = home;
+  });
+
+  afterEach(() => {
+    delete process.env["VOLLI_WORKTREE_HOME_DIR"];
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("rejects a path outside the worktree home without deleting", async () => {
+    const result = await invoke<Promise<WorktreeOrphanDeleteResult>>(
+      "volli:worktree-orphan-delete",
+      { path: join(tmpdir(), "somewhere-else") },
+    );
+    expect(result).toEqual({ ok: false, error: "Path is outside the worktree home" });
+  });
+
+  it("refuses to delete a worktree the DB still tracks (linked to a ticket)", async () => {
+    const target = join(worktreesHome(), "VC-1-tracked");
+    mkdirSync(target, { recursive: true });
+    // A ticket still points at this path — listWorktreePaths must veto the delete.
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    invoke<TicketResult>("volli:ticket-update", { ticketId: ticket.id, worktreePath: target });
+
+    const result = await invoke<Promise<WorktreeOrphanDeleteResult>>(
+      "volli:worktree-orphan-delete",
+      { path: target },
+    );
+
     expect(result).toEqual({
-      ok: true,
-      pruned: ["project-1"],
-      removedClean: ["/wt/orphan"],
-      dirty: [{ path: "/wt/dirty", projectId: "project-1", reason: "uncommitted work" }],
+      ok: false,
+      error: "This worktree is still linked to a ticket and can't be deleted here.",
+    });
+    expect(existsSync(target)).toBe(true);
+  });
+
+  it("refuses when a live session runs at or under the target", async () => {
+    const target = join(worktreesHome(), "VC-2-live");
+    mkdirSync(target, { recursive: true });
+
+    handlers.clear();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { liveSessionCwds: () => [join(target, "src")] },
+    );
+
+    const result = await invoke<Promise<WorktreeOrphanDeleteResult>>(
+      "volli:worktree-orphan-delete",
+      { path: target },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: "Close the terminal sessions running in this worktree before deleting it.",
+    });
+    expect(existsSync(target)).toBe(true);
+  });
+
+  it("deletes an untracked, session-free orphan and broadcasts data-changed", async () => {
+    const target = join(worktreesHome(), "VC-3-orphan");
+    mkdirSync(target, { recursive: true });
+
+    const result = await invoke<Promise<WorktreeOrphanDeleteResult>>(
+      "volli:worktree-orphan-delete",
+      { path: target },
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(existsSync(target)).toBe(false);
+    expect(dataChangedSends).toContainEqual({
+      channel: "volli:data-changed",
+      payload: { entity: "tickets" },
     });
   });
 });
@@ -828,10 +954,6 @@ describe("degraded db handle", () => {
     expect(
       invoke<SessionRenameResult>("volli:session-rename", { sessionId: "x", title: "Y" }),
     ).toEqual({
-      ok: false,
-      error: "db is down",
-    });
-    expect(invoke<WorktreeStateResult>("volli:worktree-state", { ticketId: "x" })).toEqual({
       ok: false,
       error: "db is down",
     });

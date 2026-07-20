@@ -212,7 +212,11 @@ export function copyIncludedFiles(projectRoot: string, worktreeRoot: string): Co
     if (!isInside(worktreeRoot, dest)) {
       throw new Error(`Refusing to copy to outside the worktree root: ${dest}`);
     }
-    if (existsSync(dest)) continue; // never overwrite; skips tracked files
+    // Never overwrite (skips tracked files). `lstat` not `existsSync`: a
+    // dangling symlink git may have materialized would read "absent" through
+    // `existsSync` (it follows the link), then `symlinkSync` below throws
+    // EEXIST and fails the whole ensure — lstat sees the link itself.
+    if (lstatSync(dest, { throwIfNoEntry: false }) !== undefined) continue;
 
     mkdirSync(dirname(dest), { recursive: true });
     if (entry.isSymlink) {

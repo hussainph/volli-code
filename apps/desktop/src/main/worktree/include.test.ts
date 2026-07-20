@@ -153,6 +153,24 @@ describe("copyIncludedFiles", () => {
     expect(readlinkSync(dest)).toBe(join(outside, "secret.txt"));
   });
 
+  it("skips a destination that is already a (dangling) symlink instead of throwing EEXIST", () => {
+    const project = tempDir("proj");
+    const worktree = tempDir("wt");
+    const outside = tempDir("outside");
+    write(outside, "secret.txt", "S");
+    symlinkSync(join(outside, "secret.txt"), join(project, "link.txt"));
+    write(project, ".worktreeinclude", "link.txt\n");
+    // git already materialized link.txt in the worktree as a symlink whose
+    // target doesn't exist yet — existsSync follows it and reads "absent", so
+    // the copy's symlinkSync would throw EEXIST and fail the ensure (fix 4).
+    symlinkSync(join(worktree, "does-not-exist"), join(worktree, "link.txt"));
+
+    const { copied } = copyIncludedFiles(project, worktree);
+
+    expect(copied).not.toContain("link.txt"); // never overwritten, never threw
+    expect(readlinkSync(join(worktree, "link.txt"))).toBe(join(worktree, "does-not-exist"));
+  });
+
   it("cannot transport a file from outside the project root via a ../ pattern", () => {
     const project = tempDir("proj");
     const worktree = tempDir("wt");

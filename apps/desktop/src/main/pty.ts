@@ -34,6 +34,7 @@ import type {
   VolliIpcChannel,
   VolliIpcEvent,
 } from "@volli/shared";
+import { broadcastDataChanged } from "./broadcast";
 import type { DbHandle } from "./data-ipc";
 import { createProcessInspector, parkConfigFromEnv } from "./park";
 import type { ParkConfig, ProcessInspector } from "./park";
@@ -110,6 +111,8 @@ interface Session {
   workspaceId: string;
   /** Basename of the spawned shell (`zsh`) — the foreground title that means "idle at a prompt". */
   shellName: string;
+  /** The resolved (canonical, `path.resolve`'d) cwd the PTY runs in — the worktree-delete/remove guards test containment against it. */
+  cwd: string;
   /** The window that created the session; where its output events are sent. */
   webContents: WebContents;
   /** The `destroyed` listener we attached, so we can detach it on cleanup. */
@@ -365,6 +368,12 @@ export class PtyManager {
       const result = await ensure(worktreeDeps(db), scope.worktree.ticketId);
       if (!result.ok) return { ok: false, error: result.error };
       worktreeOutcome = result.value;
+      // A fresh `git worktree add` just stamped worktree_path/branch/base_branch
+      // on the ticket — tell every window so the Branch/Base fields refresh from
+      // their blank-and-editable pre-boot state. Only on `created` (a re-stamp of
+      // a cleared path after removal also reconciles to `create`); a reused
+      // ready worktree changed nothing, so it never broadcasts.
+      if (worktreeOutcome.created) broadcastDataChanged();
     }
 
     // cwd resolution + guard. A renderer-supplied cwd (scratch / non-worktree
@@ -500,6 +509,7 @@ export class PtyManager {
         pty,
         workspaceId: request.workspaceId,
         shellName: basename(file),
+        cwd,
         webContents,
         onDestroyed,
         pendingChunks: [],
@@ -558,7 +568,9 @@ export class PtyManager {
         if (worktreeOutcome.created && setupCommand.length > 0) {
           session.setupWatch = { ticketId: worktree.ticketId, tail: "", launchCommand };
           setPhase(worktree.ticketId, "setting-up", worktreeDeps(db).onPhase);
-          pty.write(`${buildSetupSentinelLine(setupCommand)}\r`);
+          // `file` is the resolved shell the PTY was spawned with — the sentinel
+          // wrapper is shell-aware (fish is not POSIX), so it must match.
+          pty.write(`${buildSetupSentinelLine(setupCommand, file)}\r`);
         } else if (launchCommand !== null) {
           pty.write(`${launchCommand}\r`);
         }
@@ -580,23 +592,10 @@ export class PtyManager {
         if (armedWatch !== null) {
           const watchedSession = this.sessions.get(sessionId);
           if (watchedSession !== undefined) watchedSession.setupWatch = null;
-          setPhase(armedWatch.ticketId, "failed", worktreeDeps(db).onPhase);
-          try {
-            recordTicketEvent(
-              db,
-              armedWatch.ticketId,
-              {
-                kind: "worktree_failed",
-                stage: "setup",
-                stderr: trimWorktreeFailureStderr(
-                  `${armedWatch.tail}\n[shell exited (${exitCode}) before the setup sentinel]`,
-                ),
-              },
-              Date.now(),
-            );
-          } catch (error) {
-            console.error(`[volli] failed to record setup failure: ${errorMessage(error)}`);
-          }
+          this.recordSetupFailure(
+            armedWatch.ticketId,
+            `${armedWatch.tail}\n[shell exited (${exitCode}) before the setup sentinel]`,
+          );
         }
         // Close out the durable record (and, for a still-linked ticket session,
         // record `session_ended`) — runs whether the shell exited on its own or
@@ -644,6 +643,31 @@ export class PtyManager {
     }
   }
 
+  /**
+   * Records a sentinel-gated setup failure — the single source of truth shared
+   * by the two paths that can observe one: the non-zero completion sentinel
+   * ({@link enqueueData}) and a shell that died with the watch still armed
+   * ({@link create}'s onExit). Drives the phase to `failed` and best-effort
+   * records a `worktree_failed`(setup) event with `stderr` as failure context.
+   * The event is best-effort because the ticket can be deleted while its setup
+   * command runs, and a throwing insert must never escape into the pty hot path.
+   */
+  private recordSetupFailure(ticketId: string, stderr: string): void {
+    const onPhase = this.db !== null ? worktreeDeps(this.db).onPhase : undefined;
+    setPhase(ticketId, "failed", onPhase);
+    if (this.db === null) return;
+    try {
+      recordTicketEvent(
+        this.db,
+        ticketId,
+        { kind: "worktree_failed", stage: "setup", stderr: trimWorktreeFailureStderr(stderr) },
+        Date.now(),
+      );
+    } catch (error) {
+      console.error(`[volli] failed to record setup failure: ${errorMessage(error)}`);
+    }
+  }
+
   /** Buffers a pty chunk toward the next coalesced volli:terminal-data send. */
   private enqueueData(sessionId: string, data: string): void {
     const session = this.sessions.get(sessionId);
@@ -670,27 +694,7 @@ export class PtyManager {
           setPhase(watch.ticketId, "ready", onPhase);
           if (watch.launchCommand !== null) session.pty.write(`${watch.launchCommand}\r`);
         } else {
-          setPhase(watch.ticketId, "failed", onPhase);
-          if (this.db !== null) {
-            // The ticket can be deleted while its setup command runs — a
-            // throwing insert here would escape into the pty onData hot path,
-            // so the event record is best-effort (the phase + terminal output
-            // already tell the story).
-            try {
-              recordTicketEvent(
-                this.db,
-                watch.ticketId,
-                {
-                  kind: "worktree_failed",
-                  stage: "setup",
-                  stderr: trimWorktreeFailureStderr(watch.tail),
-                },
-                Date.now(),
-              );
-            } catch (error) {
-              console.error(`[volli] failed to record setup failure: ${errorMessage(error)}`);
-            }
-          }
+          this.recordSetupFailure(watch.ticketId, watch.tail);
         }
       }
     }
@@ -767,6 +771,15 @@ export class PtyManager {
   /** The workspace a live session was created for, or undefined if unknown. */
   workspaceIdFor(sessionId: string): string | undefined {
     return this.sessions.get(sessionId)?.workspaceId;
+  }
+
+  /**
+   * The resolved cwd of every live session — the worktree remove/orphan-delete
+   * guards refuse to touch a directory that still has a session running at or
+   * under it. Read-only snapshot; the caller does the containment check.
+   */
+  liveSessionCwds(): string[] {
+    return Array.from(this.sessions.values(), (session) => session.cwd);
   }
 
   /** Read-only snapshot used by the CLI; it never writes to or controls the observed PTY. */
