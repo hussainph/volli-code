@@ -17,6 +17,7 @@ import {
   useSessionsStore,
   type TerminalSplitDirection,
 } from "@renderer/stores/sessions";
+import { subscribeWorktreePhases } from "@renderer/stores/worktree";
 import { cn } from "@renderer/lib/utils";
 import { useCloseGuard } from "@renderer/terminal/close-guard";
 import { getEngine } from "@renderer/terminal/registry";
@@ -89,6 +90,13 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
       offParkState();
     };
   }, [markExited]);
+
+  // The single subscription to worktree-ensure phase pushes, same reasoning as
+  // the terminal fan-out above: this layer is the one component alive for the
+  // whole session, so it's the natural home for the app-wide `onPhase` stream
+  // (stores/worktree.ts) that the ticket-detail session chip, "starting"
+  // affordance, and Details rail's failed-notice/retry all read from.
+  React.useEffect(() => subscribeWorktreePhases(), []);
 
   const createScratch = React.useCallback((project: Project) => {
     void createTerminalSession(scratchScope(project.id));

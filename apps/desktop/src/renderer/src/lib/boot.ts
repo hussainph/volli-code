@@ -5,6 +5,7 @@
  * main.tsx so the flow (envelope-unwrap, sanitization, the
  * always-clear-legacy-storage step) is unit-testable without mounting React.
  */
+import { toast } from "sonner";
 import {
   sanitizeLegacyProjects,
   type BootstrapPayload,
@@ -171,6 +172,26 @@ function resolveSelectedProjectId(
 }
 
 /**
+ * Fire-and-forget startup nudge: runs the same orphan sweep Settings →
+ * Worktrees runs on demand and surfaces ONE toast if it found anything left
+ * for the user to review there — never the per-orphan detail (that's the
+ * Settings list's job). Wrapped in its own try/catch (not just a `.catch` on
+ * the returned promise) because `window.api` itself may be unavailable in
+ * some hosts — this is a best-effort nudge and must never throw into, block,
+ * or fail `boot()`.
+ */
+async function notifyOrphanedWorktrees(): Promise<void> {
+  try {
+    const result = await window.api.worktree.orphans();
+    if (result.ok && result.dirty.length > 0) {
+      toast.info(`${result.dirty.length} worktree folder(s) need attention — see Settings`);
+    }
+  } catch {
+    // Best-effort only — swallow silently.
+  }
+}
+
+/**
  * Runs the full boot sequence: bootstrap SQLite, one-time legacy import on
  * first run, then hydrates the projects/board/ui/workspace stores. Returns
  * `{ ok: false }` only when `bootstrap()` itself fails — main.tsx renders the
@@ -239,6 +260,10 @@ export async function boot(
   useBoardStore.getState().hydrate(payload.ticketsByProject, payload.labelsByProject);
 
   await Promise.all([useUiStore.persist.rehydrate(), useWorkspaceStore.persist.rehydrate()]);
+
+  // Fire-and-forget — never awaited, so it can't delay the app's first paint,
+  // and its own try/catch means it can't fail boot either.
+  void notifyOrphanedWorktrees();
 
   return { ok: true };
 }

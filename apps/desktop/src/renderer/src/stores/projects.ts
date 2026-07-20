@@ -68,7 +68,12 @@ export function decodeProjectsUiState(raw: string | undefined): string | null {
 /** The subset of the preload API the projects store needs — narrow and fake-able for tests. */
 export interface ProjectsGateway {
   create(input: { path: string; name: string }): Promise<ProjectCreateResult>;
-  update(input: { id: string; baseBranch: string | null }): Promise<ProjectUpdateResult>;
+  update(input: {
+    id: string;
+    baseBranch: string | null;
+    /** `undefined` leaves it untouched; `null`/empty clears it (setup step is skipped). */
+    setupCommand?: string | null;
+  }): Promise<ProjectUpdateResult>;
   remove(id: string): Promise<ProjectMutationResult>;
   reorder(orderedIds: string[]): Promise<ProjectMutationResult>;
   /** Fire-and-forget persistence of the current selection under {@link PROJECTS_UI_APP_STATE_KEY}. */
@@ -91,6 +96,8 @@ interface ProjectsState {
   hydrate(projects: Project[], selectedProjectId: string | null): void;
   addProject(input: { path: string; defaultName: string }): Promise<void>;
   updateBaseBranch(id: string, baseBranch: string | null): Promise<boolean>;
+  /** Settings → Worktrees' setup-command field; leaves `baseBranch` untouched (re-sends the current pinned value). */
+  updateSetupCommand(id: string, setupCommand: string | null): Promise<boolean>;
   removeProject(id: string): Promise<void>;
   /** Optimistic local reorder for live drag feedback; does not persist — see `commitReorder`. */
   reorder(activeId: string, overId: string): void;
@@ -170,6 +177,27 @@ export function createProjectsStore(gateway: ProjectsGateway = defaultGateway) {
       const result = await writeThrough(
         "save project base branch",
         (): Promise<ProjectUpdateResult> => gateway.update({ id, baseBranch }),
+      );
+      if (!result) return false;
+      set({
+        projects: get().projects.map((project) =>
+          project.id === result.project.id ? result.project : project,
+        ),
+      });
+      return true;
+    },
+
+    async updateSetupCommand(id, setupCommand) {
+      // The gateway's `update` always requires baseBranch (it's a full pinned
+      // fields write) — re-send the project's current value so this save
+      // can't clobber it. An unknown id has nothing to re-send; no-op.
+      const current = get().projects.find((project) => project.id === id);
+      if (!current) return false;
+
+      const result = await writeThrough(
+        "save project setup command",
+        (): Promise<ProjectUpdateResult> =>
+          gateway.update({ id, baseBranch: current.baseBranch ?? null, setupCommand }),
       );
       if (!result) return false;
       set({

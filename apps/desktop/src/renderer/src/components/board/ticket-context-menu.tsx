@@ -1,3 +1,4 @@
+import * as React from "react";
 import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
 import { ArrowsLeftRightIcon } from "@phosphor-icons/react/dist/csr/ArrowsLeftRight";
 import { CellSignalHighIcon } from "@phosphor-icons/react/dist/csr/CellSignalHigh";
@@ -9,6 +10,7 @@ import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
 import { FlagIcon } from "@phosphor-icons/react/dist/csr/Flag";
 import { ListChecksIcon } from "@phosphor-icons/react/dist/csr/ListChecks";
 import { PlayCircleIcon } from "@phosphor-icons/react/dist/csr/PlayCircle";
+import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import { TrayIcon } from "@phosphor-icons/react/dist/csr/Tray";
 import {
   TICKET_PRIORITIES,
@@ -29,6 +31,7 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
+import { RemoveWorktreeDialog } from "@renderer/components/ticket/remove-worktree-dialog";
 import { useBoardStore } from "@renderer/stores/board";
 import { sessionPanes, useSessionsStore } from "@renderer/stores/sessions";
 import { useCloseGuard } from "@renderer/terminal/close-guard";
@@ -76,6 +79,17 @@ export function TicketContextMenu({
   // menu unmounts on item select, but this component (and its guard state)
   // survives, so the confirm can open after the menu is gone.
   const closeGuard = useCloseGuard();
+  const [removeWorktreeOpen, setRemoveWorktreeOpen] = React.useState(false);
+
+  // Reactive so the item disables the instant a session boots/exits, not just
+  // at click time — a live session means an agent may still be mid-edit in the
+  // worktree, so removal (even the non-forced path) is refused here rather than
+  // racing main's own dirty check.
+  const hasLiveSessions = useSessionsStore((state) =>
+    (state.byOwner[ticket.id]?.tabs ?? []).some((tab) =>
+      sessionPanes(tab.layout).some((pane) => pane.exitCode === null),
+    ),
+  );
 
   const requestArchive = () => {
     const container = useSessionsStore.getState().byOwner[ticket.id];
@@ -133,6 +147,15 @@ export function TicketContextMenu({
             </ContextMenuSubContent>
           </ContextMenuSub>
           <ContextMenuSeparator />
+          {ticket.worktreePath !== null ? (
+            <ContextMenuItem
+              icon={TrashIcon}
+              disabled={hasLiveSessions}
+              onSelect={() => setRemoveWorktreeOpen(true)}
+            >
+              Remove worktree…
+            </ContextMenuItem>
+          ) : null}
           <ContextMenuItem icon={ArchiveIcon} onSelect={requestArchive}>
             Archive
           </ContextMenuItem>
@@ -146,6 +169,13 @@ export function TicketContextMenu({
         confirmLabel="Archive Anyway"
         verb="Archiving"
       />
+      {ticket.worktreePath !== null ? (
+        <RemoveWorktreeDialog
+          ticketId={ticket.id}
+          open={removeWorktreeOpen}
+          onOpenChange={setRemoveWorktreeOpen}
+        />
+      ) : null}
     </>
   );
 }

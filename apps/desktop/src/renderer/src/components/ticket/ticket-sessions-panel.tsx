@@ -3,7 +3,7 @@ import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGl
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { errorMessage, type SessionActivityState, type SessionRecord } from "@volli/shared";
+import { errorMessage, type SessionRecord } from "@volli/shared";
 
 import { InlineRename } from "@renderer/components/sessions/inline-rename";
 import { Button } from "@renderer/components/ui/button";
@@ -20,30 +20,34 @@ import {
   groupSessionRows,
   sessionSourceLabel,
   type TicketSessionRow,
+  type TicketSessionStatus,
 } from "@renderer/components/ticket/session-history";
 import { relativeTime } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { sessionActivityState, sessionPanes, useSessionsStore } from "@renderer/stores/sessions";
+import { phaseFor, useWorktreeStore } from "@renderer/stores/worktree";
 import { renameTerminalSession } from "@renderer/terminal/session-lifecycle";
 
-const STATUS_LABEL: Record<SessionActivityState, string> = {
+const STATUS_LABEL: Record<TicketSessionStatus, string> = {
   working: "Working",
   idle: "Idle",
   parked: "Parked",
   exited: "Exited",
+  setup: "Setup",
 };
 
 /** Honest PTY-derived status, kept quiet: a small colored dot + label-size muted
  * text (the sidebar's ACTIVE SESSIONS dot treatment) — pill chrome read too loud
- * in the 300px rail. */
-function StatusChip({ status }: { status: SessionActivityState }) {
+ * in the 300px rail. `setup` (the worktree's `setting-up` ensure phase) borrows
+ * the same dot-plus-label vocabulary rather than inventing a new one. */
+function StatusChip({ status }: { status: TicketSessionStatus }) {
   return (
     <span className="flex shrink-0 items-center gap-1.5 text-label text-muted-foreground">
       <span
         className={cn(
           "size-1.5 rounded-full",
-          status === "working" && "bg-emerald-500",
+          (status === "working" || status === "setup") && "bg-emerald-500",
           status === "idle" && "bg-muted-foreground/50",
           status === "parked" && "bg-muted-foreground/35",
           status === "exited" && "bg-muted-foreground/25",
@@ -220,6 +224,12 @@ export function TicketSessionsPanel({
   const lastOutputAt = useSessionsStore((state) => state.lastOutputAt);
   const parkState = useSessionsStore((state) => state.parkState);
   const setActivePane = useSessionsStore((state) => state.setActivePane);
+  const worktreePhase = useWorktreeStore((state) => phaseFor(state.phases, ticketId));
+  // `creating`/`copying` haven't booted a PTY yet, so there's no session row to
+  // chip — they reuse the existing pre-boot "starting" affordance (disables
+  // "New session" the same way an in-flight `starting[ticketId]` create does)
+  // rather than inventing a second loading state.
+  const effectiveCreating = creating || worktreePhase === "creating" || worktreePhase === "copying";
   const [records, setRecords] = React.useState<SessionRecord[]>([]);
   const [now, setNow] = React.useState(() => Date.now());
   const [editingId, setEditingId] = React.useState<string | null>(null);
@@ -313,9 +323,15 @@ export function TicketSessionsPanel({
     // Status derives from THIS pane's own exit code + output, not the tab root's.
     const exited = live !== undefined ? live.exitCode !== null : true;
     const parked = parkState[record.id]?.parked ?? false;
-    const status: SessionActivityState = isOpen
-      ? sessionActivityState(lastOutputAt[record.id] ?? null, exited, now, parked)
-      : "exited";
+    // While the worktree's ensure pipeline is running its setup script, an open
+    // pane's honest `working` status is less informative than naming what it's
+    // actually doing — `setup` overrides it for every currently-open row.
+    const status: TicketSessionStatus =
+      isOpen && worktreePhase === "setting-up"
+        ? "setup"
+        : isOpen
+          ? sessionActivityState(lastOutputAt[record.id] ?? null, exited, now, parked)
+          : "exited";
     // Root pane rows prefer the live tab title (optimistic rename shows before
     // the refetch); non-root pane rows show their own durable record title.
     const title = isRoot ? live.tabTitle : record.title;
@@ -342,7 +358,7 @@ export function TicketSessionsPanel({
             <Button
               size="icon-xs"
               variant="ghost"
-              disabled={creating}
+              disabled={effectiveCreating}
               onClick={onNewSession}
               aria-label="New session"
             >

@@ -45,6 +45,7 @@ import type {
   VolliIpcChannel,
   VolliIpcEvent,
   WorktreeBranchesResult,
+  WorktreeOrphanDeleteResult,
   WorktreeOrphansResult,
   WorktreePhaseEvent,
   WorktreeRemoveResult,
@@ -247,6 +248,9 @@ const api = {
     /** On-demand orphan sweep (Settings → Worktrees); the same tiers as the startup sweep. */
     orphans: (): Promise<WorktreeOrphansResult> =>
       ipcRenderer.invoke("volli:worktree-orphans" satisfies VolliIpcChannel),
+    /** User-confirmed deletion of one dirty orphan dir; main re-validates it lives inside the worktree home. */
+    deleteOrphan: (path: string): Promise<WorktreeOrphanDeleteResult> =>
+      ipcRenderer.invoke("volli:worktree-orphan-delete" satisfies VolliIpcChannel, { path }),
     /** Subscribes to transient worktree-ensure phase transitions; returns the unsubscribe function. */
     onPhase: (callback: (event: WorktreePhaseEvent) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, payload: WorktreePhaseEvent) =>

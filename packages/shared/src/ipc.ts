@@ -75,7 +75,8 @@ export type VolliIpcChannel =
   | "volli:worktree-state"
   | "volli:worktree-remove"
   | "volli:worktree-branches"
-  | "volli:worktree-orphans";
+  | "volli:worktree-orphans"
+  | "volli:worktree-orphan-delete";
 
 /** Channel names for main→renderer push events (`webContents.send`). */
 export type VolliIpcEvent =
@@ -306,3 +307,10 @@ export type WorktreeOrphansResult = Result<{
   removedClean: string[];
   dirty: DirtyWorktreeOrphan[];
 }>;
+
+/**
+ * Ack for a `volli:worktree-orphan-delete` — the Settings list's explicit,
+ * user-confirmed deletion of a dirty orphan dir. Main re-validates the path
+ * lives inside the app-owned worktree home before touching anything.
+ */
+export type WorktreeOrphanDeleteResult = Result;

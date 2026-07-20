@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { rm } from "node:fs/promises";
 import { ipcMain } from "electron";
 import type Database from "better-sqlite3";
 import {
@@ -41,6 +42,7 @@ import type {
   TicketStatus,
   VolliIpcChannel,
   WorktreeBranchesResult,
+  WorktreeOrphanDeleteResult,
   WorktreeOrphansResult,
   WorktreeRemoveResult,
   WorktreeStateResult,
@@ -75,7 +77,12 @@ import {
 } from "./ticket-commands";
 import { detectProjectBaseBranch } from "./project-base-branch";
 import { getState, listBranches, remove as removeWorktree, sweepOrphans } from "./worktree";
-import { worktreeDeps } from "./worktree-runtime";
+import {
+  canonicalize as canonicalizeWorktreePath,
+  isInside as isInsideWorktreeHome,
+  samePath as samePathAs,
+} from "./worktree/paths";
+import { worktreeDeps, worktreesHome } from "./worktree-runtime";
 
 /** The result of the main-process open+migrate attempt (`src/main/index.ts`), fed into {@link registerDataIpcHandlers}. */
 export type DbHandle = { ok: true; db: Database.Database } | { ok: false; error: string };
@@ -111,6 +118,7 @@ const DATA_CHANNELS: readonly VolliIpcChannel[] = [
   "volli:worktree-remove",
   "volli:worktree-branches",
   "volli:worktree-orphans",
+  "volli:worktree-orphan-delete",
 ];
 
 // ---- input validation -------------------------------------------------
@@ -956,6 +964,35 @@ export function registerDataIpcHandlers(
           removedClean: report.removedClean,
           dirty: report.dirty,
         };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:worktree-orphan-delete" satisfies VolliIpcChannel,
+    async (_event, input: unknown): Promise<WorktreeOrphanDeleteResult> => {
+      const path =
+        typeof input === "object" && input !== null
+          ? (input as Record<string, unknown>)["path"]
+          : undefined;
+      if (typeof path !== "string" || path.length === 0) {
+        return { ok: false, error: "Invalid orphan path" };
+      }
+      // The ONLY dir this channel may touch is a leaf inside the app-owned
+      // worktree home — canonicalized on both sides, so no symlink or
+      // `../escape` can point the recursive delete anywhere else. The Settings
+      // dialog has already shown the dirtiness reason and taken explicit
+      // confirmation; this is the one sanctioned rm -rf in the app.
+      const home = worktreesHome();
+      const target = canonicalizeWorktreePath(path);
+      if (!isInsideWorktreeHome(home, target) || samePathAs(home, target)) {
+        return { ok: false, error: "Path is outside the worktree home" };
+      }
+      try {
+        await rm(target, { recursive: true, force: true });
+        return { ok: true };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }

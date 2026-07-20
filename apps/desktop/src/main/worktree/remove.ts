@@ -11,7 +11,7 @@
  */
 import { existsSync } from "node:fs";
 
-import { type TicketEventActor } from "@volli/shared";
+import { WORKTREE_DIRTY_REFUSAL_PREFIX, type TicketEventActor } from "@volli/shared";
 
 import { getProjectById } from "../db/projects-repo";
 import { getTicketRow } from "../db/tickets-repo";
@@ -66,8 +66,10 @@ export async function remove(
       baseBranch: ticket.base_branch,
     });
     if (dirty.dirty) {
+      // The stable shared prefix is the remove dialog's escalation contract:
+      // ONLY this refusal may offer the destructive force step.
       return err(
-        `Worktree has uncommitted work (${dirty.reason ?? "dirty"}). ` +
+        `${WORKTREE_DIRTY_REFUSAL_PREFIX} (${dirty.reason ?? "dirty"}). ` +
           `Confirm removal to discard it.`,
       );
     }

@@ -95,6 +95,14 @@ export type TicketEventPayload =
 export type WorktreeFailureStage = "create" | "copy" | "setup";
 
 /**
+ * The stable prefix a non-forced worktree removal's DIRTY refusal starts with
+ * (main's `worktree/remove.ts`). The remove dialog matches on it to decide
+ * whether an error may escalate to the explicit force step — any OTHER failure
+ * (git broke, path vanished) must never offer "discard work" as the remedy.
+ */
+export const WORKTREE_DIRTY_REFUSAL_PREFIX = "Worktree has uncommitted work";
+
+/**
  * Upper bound on a stored `worktree_failed` `stderr` excerpt. Git can emit a
  * lot of progress noise on stderr; the actual error line is at the very end,
  * so {@link trimWorktreeFailureStderr} keeps the TRAILING slice rather than the

@@ -12,6 +12,7 @@ import {
 } from "@volli/shared";
 
 import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
+import { createTerminalSession } from "@renderer/components/sessions/session-create";
 import { TicketLabelEditor } from "@renderer/components/ticket/ticket-label-editor";
 import { Button } from "@renderer/components/ui/button";
 import {
@@ -24,6 +25,8 @@ import {
 import { Input } from "@renderer/components/ui/input";
 import { toastError } from "@renderer/lib/toast";
 import { useBoardStore } from "@renderer/stores/board";
+import { ticketScope } from "@renderer/stores/sessions";
+import { phaseFor, useWorktreeStore } from "@renderer/stores/worktree";
 
 /** "Jul 14, 2026, 3:04 PM" — a compact created/updated stamp. */
 function formatTimestamp(epochMs: number): string {
@@ -196,6 +199,107 @@ function ReadonlyIdentity({ value }: { value: string }) {
   );
 }
 
+/**
+ * The base-branch picker: while `ticket.baseBranch` is unset, a `StatusField`/
+ * `PriorityField`-style trigger + `DropdownMenuRadioGroup` replaces the free-text
+ * field, offering the project's local branches (fetched lazily — only on the
+ * picker's first open, then cached for the field's lifetime). The persisted
+ * current value stays selectable even if a later fetch no longer lists it,
+ * though for an unset field that only matters if the branch list changes
+ * between two opens. Selecting a branch commits it exactly like the old
+ * free-text field did (same `updateTicket` write-through) — once committed,
+ * `TicketProperties` swaps this out for `ReadonlyIdentity` (branch/baseBranch
+ * are settable ONCE).
+ */
+function BaseBranchField({ projectId, ticket }: { projectId: string; ticket: Ticket }) {
+  const [branches, setBranches] = React.useState<string[] | null>(null);
+  const [loading, setLoading] = React.useState(false);
+
+  async function loadBranches() {
+    if (branches !== null || loading) return;
+    setLoading(true);
+    try {
+      const result = await window.api.worktree.branches(projectId);
+      if (!result.ok) {
+        toastError(`Could not load branches: ${result.error}`);
+        setBranches([]);
+        return;
+      }
+      setBranches(result.branches);
+    } catch (error) {
+      toastError(`Could not load branches: ${errorMessage(error)}`);
+      setBranches([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const options = branches ?? [];
+
+  return (
+    <DropdownMenu onOpenChange={(open) => open && void loadBranches()}>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          className="w-fit gap-1.5 border border-border px-2.5 text-xs text-muted-foreground"
+        >
+          Select branch…
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        {loading ? (
+          <div className="px-2 py-1.5 text-xs text-muted-foreground">Loading…</div>
+        ) : options.length === 0 ? (
+          <div className="px-2 py-1.5 text-xs text-muted-foreground">No branches found</div>
+        ) : (
+          <DropdownMenuRadioGroup
+            value={ticket.baseBranch ?? ""}
+            onValueChange={(next) =>
+              void useBoardStore.getState().updateTicket({ ticketId: ticket.id, baseBranch: next })
+            }
+          >
+            {options.map((branch) => (
+              <DropdownMenuRadioItem key={branch} value={branch}>
+                {branch}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
+ * The Details rail's inline notice for a failed worktree ensure (transient
+ * phase, stores/worktree.ts): muted/small, matching the rail's other inline
+ * affordances, with a Retry that boots a fresh bare-shell ticket session — the
+ * same path `TicketDetail`'s "New session" uses — to re-run `ensure`. No
+ * kickoff: retry only needs the setup pipeline to run again, not a fresh agent
+ * prompt.
+ */
+function WorktreeFailedNotice({ projectId, ticketId }: { projectId: string; ticketId: string }) {
+  const [retrying, setRetrying] = React.useState(false);
+
+  async function retry() {
+    setRetrying(true);
+    try {
+      await createTerminalSession(ticketScope(projectId, ticketId));
+    } finally {
+      setRetrying(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col items-start gap-1.5 rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-2">
+      <span className="text-xs text-destructive">Worktree setup failed.</span>
+      <Button variant="outline" size="xs" disabled={retrying} onClick={() => void retry()}>
+        Retry
+      </Button>
+    </div>
+  );
+}
+
 /** Read-only `worktreePath` display + a reveal-in-Finder affordance (same `api.fs.revealInFinder`
  * call as the project rail's tile — rail/project-tile.tsx). */
 function WorktreePathField({ path }: { path: string | null }) {
@@ -233,6 +337,7 @@ function WorktreePathField({ path }: { path: string | null }) {
  * (branch/baseBranch inline-editable, worktreePath read-only), then created/updated timestamps.
  */
 export function TicketProperties({ projectId, ticket }: { projectId: string; ticket: Ticket }) {
+  const worktreePhase = useWorktreeStore((state) => phaseFor(state.phases, ticket.id));
   return (
     <section className="flex flex-col gap-4">
       <div className="flex flex-col gap-1.5">
@@ -248,9 +353,10 @@ export function TicketProperties({ projectId, ticket }: { projectId: string; tic
         <TicketLabelEditor projectId={projectId} ticket={ticket} />
       </div>
       {/* Branch and base branch are settable ONCE (user decision): while unset they take an
-          inline edit; once a non-empty value is committed they render read-only. The empty→null
-          commit mapping still applies to that initial set. Validation of the entered value happens
-          in main (data-ipc) — added by another agent. */}
+          inline edit (base branch: a picker over the project's local branches), and once a
+          non-empty value is committed they render read-only. The empty→null commit mapping
+          still applies to branch's initial set. Validation of the entered value happens in main
+          (data-ipc) — added by another agent. */}
       <div className="flex flex-col gap-3 border-t border-border pt-4">
         <div className="flex flex-col gap-1.5">
           <PropertyLabel>Branch</PropertyLabel>
@@ -270,19 +376,15 @@ export function TicketProperties({ projectId, ticket }: { projectId: string; tic
           {ticket.baseBranch ? (
             <ReadonlyIdentity value={ticket.baseBranch} />
           ) : (
-            <InlineTextField
-              value={ticket.baseBranch}
-              onCommit={(next) =>
-                void useBoardStore
-                  .getState()
-                  .updateTicket({ ticketId: ticket.id, baseBranch: next })
-              }
-            />
+            <BaseBranchField projectId={projectId} ticket={ticket} />
           )}
         </div>
         <div className="flex flex-col gap-1.5">
           <PropertyLabel>Worktree</PropertyLabel>
           <WorktreePathField path={ticket.worktreePath} />
+          {worktreePhase === "failed" ? (
+            <WorktreeFailedNotice projectId={projectId} ticketId={ticket.id} />
+          ) : null}
         </div>
       </div>
       <div className="flex flex-col gap-0.5 border-t border-border pt-3 text-label text-muted-foreground">
