@@ -174,7 +174,7 @@ describe("migrate — fresh install", () => {
     const db = openRawDb(dbPath);
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(9);
+    expect(db.pragma("user_version", { simple: true })).toBe(10);
     db.close();
   });
 
@@ -233,6 +233,26 @@ describe("migrate — fresh install", () => {
     db.close();
   });
 
+  it("adds tickets.retention_keep defaulting to 0 (migration 010)", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+
+    expect(columnNames(db, "tickets")).toContain("retention_keep");
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO tickets (id, project_id, ticket_number, title, body, status, priority, uses_worktree, position, row_version, created_at, updated_at)
+         VALUES ('t1', 'p1', 1, 'Ticket', '', 'done', 'medium', 1, 0, 1, 0, 0)`,
+    ).run();
+    expect(db.prepare("SELECT retention_keep FROM tickets WHERE id = 't1'").get()).toEqual({
+      retention_keep: 0,
+    });
+    db.close();
+  });
+
   it("drops tickets.harness_id (migration 004) while leaving sessions.harness_id intact", () => {
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
@@ -278,7 +298,7 @@ describe("migrate — 002 to 004 upgrade path", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(9);
+    expect(db.pragma("user_version", { simple: true })).toBe(10);
     const project = db.prepare("SELECT * FROM projects WHERE id = 'p1'").get() as {
       name: string;
     };
@@ -328,7 +348,7 @@ describe("migrate — 002 to 004 upgrade path", () => {
     migrate(db, dbPath);
     migrate(db, dbPath); // second call: nothing pending
 
-    expect(db.pragma("user_version", { simple: true })).toBe(9);
+    expect(db.pragma("user_version", { simple: true })).toBe(10);
     // No v9-backup should exist — the second migrate() call had nothing to apply.
     expect(existsSync(`${dbPath}.backup-v9`)).toBe(false);
     db.close();
@@ -342,7 +362,7 @@ describe("migrate — 004 to 005 upgrade path (ticket-number counter backfill)",
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(9);
+    expect(db.pragma("user_version", { simple: true })).toBe(10);
     const projects = db
       .prepare("SELECT id, next_ticket_number FROM projects ORDER BY id")
       .all() as { id: string; next_ticket_number: number }[];
@@ -395,7 +415,7 @@ describe("migrate — 005 to 006 upgrade path (truthful session metadata)", () =
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(9);
+    expect(db.pragma("user_version", { simple: true })).toBe(10);
     expect(db.prepare("SELECT launch_kind, placement FROM sessions WHERE id = 's1'").get()).toEqual(
       { launch_kind: "unknown", placement: "unknown" },
     );
@@ -411,7 +431,7 @@ describe("migrate — 006 to 007 upgrade path (execution preferences)", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(9);
+    expect(db.pragma("user_version", { simple: true })).toBe(10);
     expect(db.prepare("SELECT preferred_harness_id FROM tickets WHERE id = 't1'").get()).toEqual({
       preferred_harness_id: "claude-code",
     });
@@ -430,7 +450,7 @@ describe("migrate — 007 to 008 upgrade path (worktree setup command)", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(9);
+    expect(db.pragma("user_version", { simple: true })).toBe(10);
     expect(db.prepare("SELECT name, setup_command FROM projects WHERE id = 'p1'").get()).toEqual({
       name: "Project",
       setup_command: null,
@@ -447,7 +467,7 @@ describe("migrate — 008 to 009 upgrade path (durable draft-PR url)", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(9);
+    expect(db.pragma("user_version", { simple: true })).toBe(10);
     expect(db.prepare("SELECT title, pr_url FROM tickets WHERE id = 't1'").get()).toEqual({
       title: "Ticket",
       pr_url: null,

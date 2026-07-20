@@ -38,6 +38,8 @@ export interface TicketRow {
   base_branch: string | null;
   /** Durable draft-PR url (migration 009) — `null` until the Done flow opens one. */
   pr_url: string | null;
+  /** Retention "Keep" pin (migration 010) — `1` exempts the ticket from both retention paths. */
+  retention_keep: number;
 }
 
 /**
@@ -239,6 +241,41 @@ export function listWorktreePaths(db: Database.Database): string[] {
     "SELECT worktree_path FROM tickets WHERE worktree_path IS NOT NULL",
   ).all();
   return rows.map((row) => row.worktree_path);
+}
+
+/**
+ * The retention watch's poll set (issue #76): every NON-ARCHIVED ticket that
+ * has a worktree path OR a branch — the only tickets a merge-watch / Done-TTL
+ * can act on. Archived tickets are already off the board (retention's terminal
+ * state), and a ticket with neither a worktree nor a branch has no git identity
+ * to watch. Returns raw rows; the poll reads `pr_url`/`branch`/`status`/
+ * `retention_keep` off them.
+ */
+export function listRetentionCandidates(db: Database.Database): TicketRow[] {
+  return prepared<[], TicketRow>(
+    db,
+    `SELECT * FROM tickets
+       WHERE archived_at IS NULL
+         AND (worktree_path IS NOT NULL OR branch IS NOT NULL)`,
+  ).all();
+}
+
+/**
+ * Sets (or clears) a ticket's retention "Keep" pin (migration 010); bumps
+ * `row_version`/`updated_at`. A kept ticket is exempt from BOTH retention paths
+ * (merge prompt and Done-TTL). Allowed on an archived ticket too (the pin is a
+ * durable intent orthogonal to lifecycle), so no archived-guard here.
+ */
+export function setTicketRetentionKeep(
+  db: Database.Database,
+  ticketId: string,
+  keep: boolean,
+  updatedAt: number,
+): void {
+  prepared(
+    db,
+    "UPDATE tickets SET retention_keep = ?, row_version = row_version + 1, updated_at = ? WHERE id = ?",
+  ).run(keep ? 1 : 0, updatedAt, ticketId);
 }
 
 /**

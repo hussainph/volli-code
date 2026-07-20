@@ -48,6 +48,11 @@ export const TICKET_EVENT_KINDS = [
   // (a re-entry that only re-discovers an existing PR does not spam a second).
   "worktree_committed",
   "pr_opened",
+  // Retention merge-watch (CONCEPT #16, issue #76): the background poll's FIRST
+  // observation that the ticket's PR merged. Written with an `automation` actor
+  // (no session — the system-level watch), exactly once per branch (a dedup set
+  // guards re-firing), and paired with the single native "PR merged" notification.
+  "pr_merged",
   // Session lifecycle signal (`session done|blocked`, volli CLI): the agent
   // reporting its own outcome on the ticket it's working. Written with an
   // `automation` actor; `reason` becomes the Needs Review badge when the loop
@@ -122,6 +127,7 @@ export type TicketEventPayload =
   | { kind: "worktree_failed"; stage: WorktreeFailureStage; stderr: string }
   | { kind: "worktree_committed"; message: string }
   | { kind: "pr_opened"; url: string }
+  | { kind: "pr_merged"; url: string }
   | { kind: "session_signal"; signal: "done" | "blocked"; reason: string | null };
 
 /**

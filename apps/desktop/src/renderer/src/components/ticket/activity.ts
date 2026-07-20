@@ -217,6 +217,8 @@ export function describeEvent(payload: TicketEventPayload): string | null {
       return "committed remaining work";
     case "pr_opened":
       return "opened a draft pull request";
+    case "pr_merged":
+      return "pull request merged";
     case "session_signal":
       return payload.reason === null
         ? `reported ${payload.signal}`
