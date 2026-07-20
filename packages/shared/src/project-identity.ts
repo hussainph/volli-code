@@ -17,6 +17,12 @@ export interface Project {
   ticketPrefix: string;
   /** Pinned automation base branch; null until detected or explicitly configured. */
   baseBranch?: string | null;
+  /**
+   * Per-project setup command run in a fresh ticket worktree's terminal before
+   * the harness starts (worktree-support §6, migration 008). Null until the
+   * user configures one, in which case the worktree phase skips setup entirely.
+   */
+  setupCommand?: string | null;
   /** Index into {@link PROJECT_COLORS}, assigned round-robin at creation. */
   colorIndex: number;
   /** Rail order; dense, rewritten `0..n-1` whenever the rail is reordered. */

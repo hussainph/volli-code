@@ -68,7 +68,12 @@ export function decodeProjectsUiState(raw: string | undefined): string | null {
 /** The subset of the preload API the projects store needs — narrow and fake-able for tests. */
 export interface ProjectsGateway {
   create(input: { path: string; name: string }): Promise<ProjectCreateResult>;
-  update(input: { id: string; baseBranch: string | null }): Promise<ProjectUpdateResult>;
+  update(input: {
+    id: string;
+    baseBranch: string | null;
+    /** `undefined` leaves it untouched; `null`/empty clears it (setup step is skipped). */
+    setupCommand?: string | null;
+  }): Promise<ProjectUpdateResult>;
   remove(id: string): Promise<ProjectMutationResult>;
   reorder(orderedIds: string[]): Promise<ProjectMutationResult>;
   /** Fire-and-forget persistence of the current selection under {@link PROJECTS_UI_APP_STATE_KEY}. */
@@ -91,6 +96,8 @@ interface ProjectsState {
   hydrate(projects: Project[], selectedProjectId: string | null): void;
   addProject(input: { path: string; defaultName: string }): Promise<void>;
   updateBaseBranch(id: string, baseBranch: string | null): Promise<boolean>;
+  /** Settings → Worktrees' setup-command field; leaves `baseBranch` untouched (re-sends the current pinned value). */
+  updateSetupCommand(id: string, setupCommand: string | null): Promise<boolean>;
   removeProject(id: string): Promise<void>;
   /** Optimistic local reorder for live drag feedback; does not persist — see `commitReorder`. */
   reorder(activeId: string, overId: string): void;
@@ -107,6 +114,32 @@ function sameOrder(a: readonly Project[], b: readonly Project[]): boolean {
 
 /** Factory so tests can inject a fake gateway instead of the real preload bridge. */
 export function createProjectsStore(gateway: ProjectsGateway = defaultGateway) {
+  /**
+   * Chains `gateway.update` calls for the SAME project id so only one is ever
+   * in flight at a time. `updateBaseBranch` and `updateSetupCommand` write
+   * disjoint DB columns, but main's `project-update` RPC always re-writes
+   * `baseBranch` (it's a single pinned-fields write, not a per-field patch) —
+   * so a setup-command save always re-sends the base branch it currently
+   * knows about. Without serialization, a setup-command save started just
+   * before a base-branch save could land its IPC round-trip AFTER it and
+   * clobber the fresh base branch back to the stale value it captured.
+   * Queuing per id guarantees each call only reads `baseBranch` (see
+   * `updateSetupCommand` below) once every earlier-queued write for that
+   * project has already landed in state.
+   */
+  // Every stored link is `started.catch(...)` — already recovered — so chaining
+  // `.then(run)` off it directly can never skip `run` on a predecessor failure.
+  const pendingProjectUpdates = new Map<string, Promise<unknown>>();
+  function queueProjectUpdate<T>(id: string, run: () => Promise<T>): Promise<T> {
+    const previous = pendingProjectUpdates.get(id) ?? Promise.resolve();
+    const started = previous.then(run);
+    pendingProjectUpdates.set(
+      id,
+      started.catch(() => undefined),
+    );
+    return started;
+  }
+
   /**
    * Fire-and-forget persistence of the current selection under
    * {@link PROJECTS_UI_APP_STATE_KEY}. Every path that changes the selection —
@@ -167,17 +200,46 @@ export function createProjectsStore(gateway: ProjectsGateway = defaultGateway) {
     },
 
     async updateBaseBranch(id, baseBranch) {
-      const result = await writeThrough(
-        "save project base branch",
-        (): Promise<ProjectUpdateResult> => gateway.update({ id, baseBranch }),
-      );
-      if (!result) return false;
-      set({
-        projects: get().projects.map((project) =>
-          project.id === result.project.id ? result.project : project,
-        ),
+      return queueProjectUpdate(id, async () => {
+        const result = await writeThrough(
+          "save project base branch",
+          (): Promise<ProjectUpdateResult> => gateway.update({ id, baseBranch }),
+        );
+        if (!result) return false;
+        set({
+          projects: get().projects.map((project) =>
+            project.id === result.project.id ? result.project : project,
+          ),
+        });
+        return true;
       });
-      return true;
+    },
+
+    async updateSetupCommand(id, setupCommand) {
+      return queueProjectUpdate(id, async () => {
+        // The gateway's `update` always requires baseBranch (it's a full
+        // pinned fields write) — re-send the project's current value so this
+        // save can't clobber it. Reading it here (this call's turn in the
+        // per-id queue) rather than before queuing means any earlier-queued
+        // `updateBaseBranch` for this project has already landed in state, so
+        // this always re-sends the latest known value, not a stale one. An
+        // unknown id has nothing to re-send; no-op.
+        const current = get().projects.find((project) => project.id === id);
+        if (!current) return false;
+
+        const result = await writeThrough(
+          "save project setup command",
+          (): Promise<ProjectUpdateResult> =>
+            gateway.update({ id, baseBranch: current.baseBranch ?? null, setupCommand }),
+        );
+        if (!result) return false;
+        set({
+          projects: get().projects.map((project) =>
+            project.id === result.project.id ? result.project : project,
+          ),
+        });
+        return true;
+      });
     },
 
     async removeProject(id) {

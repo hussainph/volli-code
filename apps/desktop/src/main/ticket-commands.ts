@@ -50,6 +50,13 @@ function requireLiveTicket(db: Database.Database, ticketId: string, action: stri
   return row;
 }
 
+/** Existence-only variant for the narrow archived-allowed callers (see below). */
+function requireTicket(db: Database.Database, ticketId: string): TicketRow {
+  const row = getTicketRow(db, ticketId);
+  if (!row) throw new Error("Unknown ticket");
+  return row;
+}
+
 function rowWorktreeIdentity(row: TicketRow): WorktreeIdentity {
   return {
     worktreePath: row.worktree_path,
@@ -185,6 +192,11 @@ export function updateTicketFieldsCommand(
   db: Database.Database,
   input: { ticketId: string } & TicketFieldUpdate,
   context: TicketCommandContext,
+  // `allowArchived` is the narrow opt-in for the worktree module's system-level
+  // identity clear: removing a worktree must null `worktree_path` even after the
+  // ticket is archived (the dir is already gone). Every other caller stays
+  // strict — an archived ticket's fields are otherwise frozen.
+  options: { allowArchived?: boolean } = {},
 ): Ticket {
   if (typeof input.branch === "string" && !isValidBranchName(input.branch)) {
     throw new Error("Invalid branch name");
@@ -193,7 +205,9 @@ export function updateTicketFieldsCommand(
     throw new Error("Invalid base branch name");
   }
   return db.transaction((): Ticket => {
-    const row = requireLiveTicket(db, input.ticketId, "update");
+    const row = options.allowArchived
+      ? requireTicket(db, input.ticketId)
+      : requireLiveTicket(db, input.ticketId, "update");
     const fields: TicketFieldUpdate = {};
     if (input.title !== undefined && input.title !== row.title) fields.title = input.title;
     if (input.body !== undefined && input.body !== row.body) fields.body = input.body;

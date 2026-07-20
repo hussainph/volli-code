@@ -197,9 +197,13 @@ describe("session counts", () => {
 });
 
 describe("getTicketSessionContext", () => {
-  it("resolves a ticket to its project path, prefix, and number", () => {
+  it("resolves a ticket to its project path, prefix, number, worktree flag, and setup command", () => {
     ctx = openTestDb();
-    const project = testProject({ path: "/repo/app", ticketPrefix: "APP" });
+    const project = testProject({
+      path: "/repo/app",
+      ticketPrefix: "APP",
+      setupCommand: "pnpm install",
+    });
     insertProject(ctx.db, project);
     const ticket = testTicket(project.id, { ticketNumber: 7 });
     insertTicket(ctx.db, ticket);
@@ -210,7 +214,22 @@ describe("getTicketSessionContext", () => {
       ticketPrefix: "APP",
       ticketNumber: 7,
       preferredHarnessId: "claude-code",
+      // testTicket defaults usesWorktree → true; the project carries a setup command.
+      usesWorktree: true,
+      setupCommand: "pnpm install",
     });
+  });
+
+  it("maps a non-worktree ticket and a null setup command", () => {
+    ctx = openTestDb();
+    const project = testProject({ path: "/repo/plain", ticketPrefix: "PL" });
+    insertProject(ctx.db, project);
+    const ticket = testTicket(project.id, { ticketNumber: 3, usesWorktree: false });
+    insertTicket(ctx.db, ticket);
+
+    const context = getTicketSessionContext(ctx.db, ticket.id);
+    expect(context?.usesWorktree).toBe(false);
+    expect(context?.setupCommand).toBeNull();
   });
 
   it("returns undefined for an unknown ticket", () => {

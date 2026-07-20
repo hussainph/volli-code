@@ -1,10 +1,19 @@
 import { harnessLabel, type SessionActivityState, type SessionRecord } from "@volli/shared";
 
+/**
+ * The chip's displayed status: the honest PTY-derived {@link SessionActivityState}
+ * states, plus `setup` — a synthetic state (not PTY-derived) shown while the
+ * ticket's worktree ensure pipeline is in its `setting-up` phase, so the rail
+ * reads as "the agent's setup script is running" rather than a generic
+ * `working`.
+ */
+export type TicketSessionStatus = SessionActivityState | "setup";
+
 /** The view model shared by the current-session and historical-session lists. */
 export interface TicketSessionRow {
   record: SessionRecord;
   title: string;
-  status: SessionActivityState;
+  status: TicketSessionStatus;
   isOpen: boolean;
   isRoot: boolean;
   tabId?: string;

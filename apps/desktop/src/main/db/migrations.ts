@@ -225,6 +225,20 @@ ALTER TABLE tickets ADD COLUMN preferred_harness_id TEXT NOT NULL DEFAULT 'claud
 ALTER TABLE projects ADD COLUMN base_branch TEXT;
 `;
 
+/**
+ * Migration 008: per-project worktree setup command (worktree-support §6/§8).
+ * When set, `projects.setup_command` is typed into a fresh ticket worktree's
+ * terminal — sentinel-gated (`worktree/setup.ts`) — before the harness command
+ * runs, so a checkout is prepared (deps installed, env built) in-band with the
+ * session it belongs to. Nullable and set independently of durable session
+ * identity, mirroring the `base_branch` precedent (migration 007): a project
+ * that never configures one simply skips the setup phase. Additive; every
+ * existing row starts `NULL`.
+ */
+const MIGRATION_008_WORKTREE_SETUP = `
+ALTER TABLE projects ADD COLUMN setup_command TEXT;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -252,6 +266,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 7,
     name: "ticket harness and project base-branch execution preferences",
     sql: MIGRATION_007_EXECUTION_PREFERENCES,
+  },
+  {
+    version: 8,
+    name: "projects.setup_command — per-project worktree setup command",
+    sql: MIGRATION_008_WORKTREE_SETUP,
   },
 ];
 

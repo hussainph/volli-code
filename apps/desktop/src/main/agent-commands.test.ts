@@ -7,6 +7,7 @@ import { insertSession } from "./db/sessions-repo";
 import { openTestDb, testProject, testSession } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 import { createAgentCommandService } from "./agent-commands";
+import { updateTicketFieldsCommand } from "./ticket-commands";
 
 let ctx: TestDb;
 
@@ -59,6 +60,7 @@ describe("agent command service", () => {
           labels: [],
           usesWorktree: true,
           harness: "codex",
+          worktreePath: null,
           branch: null,
           baseBranch: null,
           badge: null,
@@ -634,6 +636,55 @@ describe("agent command service", () => {
       ok: true,
       data: {
         prompt:
+          "Coordinate the board through the bundled `volli` CLI: run `volli help` for the full reference (and the volli skill, when installed, for norms).\n\nVC-1: Ship CLI\n\nFollow the implementation contract.",
+      },
+    });
+  });
+
+  it("prepends the worktree orientation preamble to a brief once the ticket has an active worktree", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 100,
+      newId: () => "ticket-one",
+    });
+    await service.execute({
+      v: 1,
+      cmd: "ticket.create",
+      args: { title: "Ship CLI", body: "Follow the implementation contract." },
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+    updateTicketFieldsCommand(
+      ctx.db,
+      {
+        ticketId: "ticket-one",
+        worktreePath: "/Users/x/.volli/worktrees/project-one/VC-1",
+        branch: "volli/VC-1-ship-cli",
+        baseBranch: "main",
+      },
+      { now: 100, actor: { kind: "user" } },
+    );
+
+    const brief = await service.execute({
+      v: 1,
+      cmd: "ticket.brief",
+      args: { id: "VC-1" },
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+
+    expect(brief).toEqual({
+      v: 1,
+      ok: true,
+      data: {
+        prompt:
+          "You are working in an isolated git worktree at `/Users/x/.volli/worktrees/project-one/VC-1` " +
+          "on branch `volli/VC-1-ship-cli` (branched from `main`). All work happens in the current " +
+          "directory. The main checkout at `/repo/volli` is reference-only — never modify it.\n\n" +
           "Coordinate the board through the bundled `volli` CLI: run `volli help` for the full reference (and the volli skill, when installed, for norms).\n\nVC-1: Ship CLI\n\nFollow the implementation contract.",
       },
     });

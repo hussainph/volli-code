@@ -13,6 +13,7 @@ interface ProjectRow {
   path: string;
   ticket_prefix: string;
   base_branch: string | null;
+  setup_command: string | null;
   color_index: number;
   sort_order: number;
   row_version: number;
@@ -34,6 +35,7 @@ function mapProject(row: ProjectRow): Project {
     path: row.path,
     ticketPrefix: row.ticket_prefix,
     baseBranch: row.base_branch,
+    setupCommand: row.setup_command,
     colorIndex: row.color_index,
     sortOrder: row.sort_order,
     createdAt: row.created_at,
@@ -79,6 +81,27 @@ export function updateProjectBaseBranch(
   return getProjectById(db, id);
 }
 
+/**
+ * Updates the per-project worktree setup command and returns the authoritative
+ * row — the `base_branch` precedent above, for the field migration 008 adds.
+ * `null` clears it (the setup phase is then skipped for that project's
+ * worktrees).
+ */
+export function updateProjectSetupCommand(
+  db: Database.Database,
+  id: string,
+  setupCommand: string | null,
+  now: number,
+): Project | undefined {
+  prepared(
+    db,
+    `UPDATE projects
+        SET setup_command = ?, row_version = row_version + 1, updated_at = ?
+      WHERE id = ?`,
+  ).run(setupCommand, now, id);
+  return getProjectById(db, id);
+}
+
 /** The `sortOrder` one past the current max (`-1` when the table is empty, so this returns `0`). */
 export function nextSortOrder(db: Database.Database): number {
   const row = prepared<[], { max: number | null }>(
@@ -92,14 +115,15 @@ export function nextSortOrder(db: Database.Database): number {
 export function insertProject(db: Database.Database, project: Project): void {
   prepared(
     db,
-    `INSERT INTO projects (id, name, path, ticket_prefix, base_branch, color_index, sort_order, row_version, created_at, updated_at)
-     VALUES (@id, @name, @path, @ticketPrefix, @baseBranch, @colorIndex, @sortOrder, 1, @createdAt, @updatedAt)`,
+    `INSERT INTO projects (id, name, path, ticket_prefix, base_branch, setup_command, color_index, sort_order, row_version, created_at, updated_at)
+     VALUES (@id, @name, @path, @ticketPrefix, @baseBranch, @setupCommand, @colorIndex, @sortOrder, 1, @createdAt, @updatedAt)`,
   ).run({
     id: project.id,
     name: project.name,
     path: project.path,
     ticketPrefix: project.ticketPrefix,
     baseBranch: project.baseBranch ?? null,
+    setupCommand: project.setupCommand ?? null,
     colorIndex: project.colorIndex,
     sortOrder: project.sortOrder,
     createdAt: project.createdAt,

@@ -44,6 +44,11 @@ import type {
   UiZoomCommand,
   VolliIpcChannel,
   VolliIpcEvent,
+  WorktreeBranchesResult,
+  WorktreeOrphanDeleteResult,
+  WorktreeOrphansResult,
+  WorktreePhaseEvent,
+  WorktreeRemoveResult,
 } from "@volli/shared";
 
 // Minimal typed API surface exposed to the renderer.
@@ -80,8 +85,13 @@ const api = {
     /** Creates a project row, or (`created: false`) returns the existing one already tracked at `path`. */
     create: (input: { path: string; name: string }): Promise<ProjectCreateResult> =>
       ipcRenderer.invoke("volli:project-create" satisfies VolliIpcChannel, input),
-    /** Updates the project's pinned automation base branch. */
-    update: (input: { id: string; baseBranch: string | null }): Promise<ProjectUpdateResult> =>
+    /** Updates the project's pinned automation base branch and/or worktree setup command. */
+    update: (input: {
+      id: string;
+      baseBranch: string | null;
+      /** `undefined` leaves it untouched; `null`/empty clears it (setup step is skipped). */
+      setupCommand?: string | null;
+    }): Promise<ProjectUpdateResult> =>
       ipcRenderer.invoke("volli:project-update" satisfies VolliIpcChannel, input),
     /** Deletes a project; cascades its tickets/labels/events in SQLite. */
     remove: (id: string): Promise<ProjectMutationResult> =>
@@ -223,6 +233,32 @@ const api = {
     /** Upserts one `app_state` key — the async write-through the ui/workspace persist stores' storage adapter uses. */
     set: (key: string, value: string): Promise<AppStateSetResult> =>
       ipcRenderer.invoke("volli:app-state-set" satisfies VolliIpcChannel, key, value),
+  },
+  worktree: {
+    /** The "Remove worktree…" escape hatch; `force` discards uncommitted work when the caller has confirmed. */
+    remove: (ticketId: string, force: boolean): Promise<WorktreeRemoveResult> =>
+      ipcRenderer.invoke("volli:worktree-remove" satisfies VolliIpcChannel, { ticketId, force }),
+    /** A project's local branch names, for the base-branch picker. */
+    branches: (projectId: string): Promise<WorktreeBranchesResult> =>
+      ipcRenderer.invoke("volli:worktree-branches" satisfies VolliIpcChannel, { projectId }),
+    /**
+     * The launch's cached orphan report — the destructive sweep runs once per
+     * launch (main), so this never re-sweeps. Pass `{ rescan: true }` for the
+     * explicit Settings → Worktrees rescan, which forces a fresh sweep.
+     */
+    orphans: (opts?: { rescan?: boolean }): Promise<WorktreeOrphansResult> =>
+      ipcRenderer.invoke("volli:worktree-orphans" satisfies VolliIpcChannel, opts ?? {}),
+    /** User-confirmed deletion of one dirty orphan dir; main re-validates it lives inside the worktree home. */
+    deleteOrphan: (path: string): Promise<WorktreeOrphanDeleteResult> =>
+      ipcRenderer.invoke("volli:worktree-orphan-delete" satisfies VolliIpcChannel, { path }),
+    /** Subscribes to transient worktree-ensure phase transitions; returns the unsubscribe function. */
+    onPhase: (callback: (event: WorktreePhaseEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: WorktreePhaseEvent) =>
+        callback(payload);
+      ipcRenderer.on("volli:worktree-phase" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:worktree-phase" satisfies VolliIpcEvent, listener);
+    },
   },
   fs: {
     listDirectory: (absPath: string): Promise<ListDirectoryResult> =>

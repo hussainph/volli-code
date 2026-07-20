@@ -18,6 +18,8 @@ import {
   resolveShell,
   ticketSessionEnv,
   treeIsCpuQuiet,
+  trimWorktreeFailureStderr,
+  worktreeOrientationPreamble,
 } from "@volli/shared";
 import type {
   CreateTerminalSessionRequest,
@@ -32,6 +34,7 @@ import type {
   VolliIpcChannel,
   VolliIpcEvent,
 } from "@volli/shared";
+import { broadcastDataChanged } from "./broadcast";
 import type { DbHandle } from "./data-ipc";
 import { createProcessInspector, parkConfigFromEnv } from "./park";
 import type { ParkConfig, ProcessInspector } from "./park";
@@ -47,6 +50,10 @@ import {
 import { getProjectById } from "./db/projects-repo";
 import { isPathWithinRoots } from "./project-roots";
 import { ensureProjectArtifactsDir } from "./volli-fs";
+import { buildSetupSentinelLine, ensure, parseSetupSentinel, setPhase } from "./worktree";
+import type { EnsureOutcome } from "./worktree";
+import { worktreeDeps, worktreesHome } from "./worktree-runtime";
+import { isInside } from "./worktree/paths";
 
 // Structural subset of node-pty we depend on — declared here so nothing in
 // this module needs a value import of node-pty (whose native binary is built
@@ -104,6 +111,8 @@ interface Session {
   workspaceId: string;
   /** Basename of the spawned shell (`zsh`) — the foreground title that means "idle at a prompt". */
   shellName: string;
+  /** The resolved (canonical, `path.resolve`'d) cwd the PTY runs in — the worktree-delete/remove guards test containment against it. */
+  cwd: string;
   /** The window that created the session; where its output events are sent. */
   webContents: WebContents;
   /** The `destroyed` listener we attached, so we can detach it on cleanup. */
@@ -147,7 +156,26 @@ interface Session {
   parkedManually: boolean;
   /** Consecutive CPU-quiet sweeps observed; parks at `quietSamplesRequired`. */
   quietCpuSamples: number;
+  /**
+   * Non-null ONLY while a freshly-created worktree session runs its
+   * sentinel-gated setup command (worktree-support §6). `tail` accumulates
+   * recent terminal output (capped, front-sliced — the sentinel is a trailing
+   * marker) which {@link enqueueData} scans for the completion sentinel;
+   * `launchCommand` is the harness command HELD until the setup command exits
+   * 0, then typed. Cleared the instant the sentinel appears (either outcome) —
+   * a non-zero exit leaves the terminal a live shell with the failure visible
+   * and never launches the harness.
+   */
+  setupWatch: { ticketId: string; tail: string; launchCommand: string | null } | null;
 }
+
+/**
+ * The setup command's retained output cap. The sentinel is emitted on the last
+ * line, so slicing from the FRONT (keeping the trailing window) can never drop
+ * it while bounding a chatty installer's memory. Also the stderr context the
+ * `worktree_failed` event carries when setup exits non-zero.
+ */
+const SETUP_TAIL_MAX_CHARS = 16_000;
 
 /** Plain awaitable pause; the breathe window between SIGCONT and the verdict. */
 const delay = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms));
@@ -173,11 +201,28 @@ interface SessionScope {
   artifactsRoot: string | null;
   /**
    * The harness launch command line to feed the freshly-spawned shell (from a
-   * ticket request's `kickoff`), or `null` for a bare shell. Written into the
-   * PTY exactly once, only after the session is fully persisted, so a failed
-   * persist never leaves a harness running (see {@link PtyManager.create}).
+   * ticket request's `kickoff`), or `null` for a bare shell OR any worktree
+   * ticket session — those defer command composition to {@link
+   * PtyManager.create}, because the orientation preamble the prompt opens with
+   * needs the worktree identity `ensure` only resolves at boot. Written into
+   * the PTY exactly once, only after the session is fully persisted, so a
+   * failed persist never leaves a harness running.
    */
   launchCommand: string | null;
+  /**
+   * Present ONLY for a worktree-backed ticket session (`uses_worktree`). Carries
+   * everything `create` needs to (a) materialize the worktree via `ensure`
+   * before spawn, and (b) compose the launch command afterwards — the raw
+   * `kickoff` (harness + prompt, prefixed with the orientation preamble), the
+   * project's `setupCommand` (sentinel-gated after a FRESH create), and the
+   * main `projectPath` for the preamble. `launchCommand` is `null` in this case.
+   */
+  worktree: {
+    ticketId: string;
+    projectPath: string;
+    setupCommand: string | null;
+    kickoff: { harnessId: HarnessId; prompt: string } | null;
+  } | null;
 }
 
 /**
@@ -240,6 +285,7 @@ export class PtyManager {
       if (ctx === undefined) return { ok: false, error: "Unknown ticket" };
       const displayId = displayTicketId(ctx.ticketPrefix, ctx.ticketNumber);
       const kickoff = request.ticket.kickoff;
+      const usesWorktree = ctx.usesWorktree;
       return {
         ok: true,
         scope: {
@@ -251,14 +297,29 @@ export class PtyManager {
           harnessId: kickoff?.harnessId ?? ctx.preferredHarnessId,
           launchKind: kickoff === undefined ? "shell" : "agent",
           placement,
-          // Ticket sessions run at the MAIN repo root — worktree automation is
-          // future work, and VOLLI_ARTIFACTS_DIR always points at the main .volli.
+          // The MAIN repo root stands in as cwd here; a worktree session
+          // overrides it with the `ensure`-resolved worktree path in create().
+          // VOLLI_ARTIFACTS_DIR always points at the main .volli either way (#9).
           cwd: ctx.projectPath,
           env: ticketSessionEnv(ctx.projectPath, displayId),
           title: `Session ${countTicketSessions(db, request.ticket.ticketId) + 1}`,
           artifactsRoot: ctx.projectPath,
+          // A non-worktree kickoff builds its harness command up front and
+          // launches it directly (unchanged). A worktree session defers this to
+          // create() — the preamble needs the resolved identity — so its command
+          // is null here and the raw kickoff rides on `worktree` instead.
           launchCommand:
-            kickoff !== undefined ? buildHarnessCommand(kickoff.harnessId, kickoff.prompt) : null,
+            !usesWorktree && kickoff !== undefined
+              ? buildHarnessCommand(kickoff.harnessId, kickoff.prompt)
+              : null,
+          worktree: usesWorktree
+            ? {
+                ticketId: request.ticket.ticketId,
+                projectPath: ctx.projectPath,
+                setupCommand: ctx.setupCommand,
+                kickoff: kickoff ?? null,
+              }
+            : null,
         },
       };
     }
@@ -280,6 +341,8 @@ export class PtyManager {
         artifactsRoot: project?.path ?? null,
         // Scratch sessions never auto-launch a harness — just a bare shell.
         launchCommand: null,
+        // Never worktree-backed — scratch sessions run in the renderer's cwd.
+        worktree: null,
       },
     };
   }
@@ -295,11 +358,45 @@ export class PtyManager {
     if (!resolved.ok) return resolved;
     const scope = resolved.scope;
 
-    const cwd = resolve(scope.cwd);
-    // Same defense-in-depth stance as the filesystem handlers: never spawn a
-    // shell rooted outside a registered project.
-    if (!isPathWithinRoots(cwd)) {
-      return { ok: false, error: "cwd is outside known projects" };
+    // Worktree ticket sessions materialize (or reuse) their isolated worktree
+    // BEFORE anything spawns. `ensure` is single-flight and idempotent; on
+    // failure it has already recorded the `worktree_failed` event + `failed`
+    // phase, and the session NEVER falls back to the main checkout (#38) — the
+    // failure aborts boot outright.
+    let worktreeOutcome: EnsureOutcome | null = null;
+    if (scope.worktree !== null) {
+      const result = await ensure(worktreeDeps(db), scope.worktree.ticketId);
+      if (!result.ok) return { ok: false, error: result.error };
+      worktreeOutcome = result.value;
+      // A fresh `git worktree add` just stamped worktree_path/branch/base_branch
+      // on the ticket — tell every window so the Branch/Base fields refresh from
+      // their blank-and-editable pre-boot state. Only on `created` (a re-stamp of
+      // a cleared path after removal also reconciles to `create`); a reused
+      // ready worktree changed nothing, so it never broadcasts.
+      if (worktreeOutcome.created) broadcastDataChanged();
+    }
+
+    // cwd resolution + guard. A renderer-supplied cwd (scratch / non-worktree
+    // ticket) must live inside a registered project, same defense-in-depth as
+    // the filesystem handlers. A worktree cwd is MAIN-derived (ensure returns
+    // it), not renderer input, so it's validated against the app-owned worktree
+    // home — or `isPathWithinRoots`, which also admits a persisted legacy path
+    // that still lives inside a project folder.
+    let cwd: string;
+    if (worktreeOutcome !== null) {
+      const worktreePath = worktreeOutcome.identity.worktreePath;
+      if (worktreePath === null) {
+        return { ok: false, error: "Worktree path was not resolved" };
+      }
+      cwd = resolve(worktreePath);
+      if (!isInside(worktreesHome(), cwd) && !isPathWithinRoots(cwd)) {
+        return { ok: false, error: "Worktree path is outside the worktree home" };
+      }
+    } else {
+      cwd = resolve(scope.cwd);
+      if (!isPathWithinRoots(cwd)) {
+        return { ok: false, error: "cwd is outside known projects" };
+      }
     }
 
     try {
@@ -408,10 +505,11 @@ export class PtyManager {
       };
       // A window teardown must not leave an orphaned shell behind.
       webContents.once("destroyed", onDestroyed);
-      this.sessions.set(sessionId, {
+      const session: Session = {
         pty,
         workspaceId: request.workspaceId,
         shellName: basename(file),
+        cwd,
         webContents,
         onDestroyed,
         pendingChunks: [],
@@ -427,20 +525,56 @@ export class PtyManager {
         parkedPids: null,
         parkedManually: false,
         quietCpuSamples: 0,
-      });
+        setupWatch: null,
+      };
+      this.sessions.set(sessionId, session);
 
       pty.onData((data) => {
-        this.enqueueData(sessionId, data);
+        this.enqueueData(db, sessionId, data);
       });
 
-      // Kickoff: launch the harness now that the session is fully registered
-      // AND persisted — every rollback path above (persist failure, mid-spawn
+      // Launch the session's first line now that it is fully registered AND
+      // persisted — every rollback path above (persist failure, mid-spawn
       // window destroy) has already returned, so nothing can undo the session
       // here, and a failed persist can never leave an agent running. Written
       // directly to the pty (never through this.write's park/wake logic — the
       // session is brand new and running), exactly once. A CR submits the line,
       // matching how write() feeds the pty.
-      if (scope.launchCommand !== null) {
+      //
+      // For a worktree session the harness command opens with the orientation
+      // preamble (agents must never re-infer their cwd) — buildable only now
+      // that ensure resolved the identity. When ensure FRESHLY created the
+      // worktree AND the project defines a setup command, that command runs
+      // FIRST, sentinel-gated (§6): type the wrapped setup line, enter phase
+      // `setting-up`, and hold the harness command in `setupWatch` until
+      // enqueueData sees the completion sentinel. A reused worktree (created
+      // false) is already `ready` from ensure and launches immediately.
+      const worktree = scope.worktree;
+      if (worktree !== null && worktreeOutcome !== null) {
+        const identity = worktreeOutcome.identity;
+        const launchCommand =
+          worktree.kickoff !== null
+            ? buildHarnessCommand(
+                worktree.kickoff.harnessId,
+                `${worktreeOrientationPreamble({
+                  worktreePath: cwd,
+                  branch: identity.branch ?? "",
+                  baseBranch: identity.baseBranch,
+                  projectPath: worktree.projectPath,
+                })}\n\n${worktree.kickoff.prompt}`,
+              )
+            : null;
+        const setupCommand = worktree.setupCommand?.trim() ?? "";
+        if (worktreeOutcome.created && setupCommand.length > 0) {
+          session.setupWatch = { ticketId: worktree.ticketId, tail: "", launchCommand };
+          setPhase(worktree.ticketId, "setting-up", worktreeDeps(db).onPhase);
+          // `file` is the resolved shell the PTY was spawned with — the sentinel
+          // wrapper is shell-aware (fish is not POSIX), so it must match.
+          pty.write(`${buildSetupSentinelLine(setupCommand, file)}\r`);
+        } else if (launchCommand !== null) {
+          pty.write(`${launchCommand}\r`);
+        }
+      } else if (scope.launchCommand !== null) {
         pty.write(`${scope.launchCommand}\r`);
       }
 
@@ -448,6 +582,22 @@ export class PtyManager {
         // Flush buffered output first so the renderer never sees the exit
         // event ahead of the shell's final bytes.
         this.flush(sessionId);
+        // A shell dying with the setup watch still armed means the sentinel
+        // never printed — the subshell wrapper contains a setup's own `exit`,
+        // but a crash or an `exec` can still take the shell down. Without this
+        // the ticket would sit `setting-up` forever with zero failure signal;
+        // report it as a setup failure (best-effort, same stance as the
+        // non-zero-sentinel path in enqueueData).
+        const watchedSession = this.sessions.get(sessionId);
+        const armedWatch = watchedSession?.setupWatch ?? null;
+        if (watchedSession !== undefined && armedWatch !== null) {
+          watchedSession.setupWatch = null;
+          this.recordSetupFailure(
+            db,
+            armedWatch.ticketId,
+            `${armedWatch.tail}\n[shell exited (${exitCode}) before the setup sentinel]`,
+          );
+        }
         // Close out the durable record (and, for a still-linked ticket session,
         // record `session_ended`) — runs whether the shell exited on its own or
         // was killed, so the row never lingers as falsely-live.
@@ -494,12 +644,58 @@ export class PtyManager {
     }
   }
 
-  /** Buffers a pty chunk toward the next coalesced volli:terminal-data send. */
-  private enqueueData(sessionId: string, data: string): void {
+  /**
+   * Records a sentinel-gated setup failure — the single source of truth shared
+   * by the two paths that can observe one: the non-zero completion sentinel
+   * ({@link enqueueData}) and a shell that died with the watch still armed
+   * ({@link create}'s onExit). Drives the phase to `failed` and best-effort
+   * records a `worktree_failed`(setup) event with `stderr` as failure context.
+   * The event is best-effort because the ticket can be deleted while its setup
+   * command runs, and a throwing insert must never escape into the pty hot path.
+   */
+  private recordSetupFailure(db: Database.Database, ticketId: string, stderr: string): void {
+    setPhase(ticketId, "failed", worktreeDeps(db).onPhase);
+    try {
+      recordTicketEvent(
+        db,
+        ticketId,
+        { kind: "worktree_failed", stage: "setup", stderr: trimWorktreeFailureStderr(stderr) },
+        Date.now(),
+      );
+    } catch (error) {
+      console.error(`[volli] failed to record setup failure: ${errorMessage(error)}`);
+    }
+  }
+
+  /** Buffers a pty chunk toward the next coalesced volli:terminal-data send. `db` comes from the create() that wired the onData handler — a live session implies the manager booted with one. */
+  private enqueueData(db: Database.Database, sessionId: string, data: string): void {
     const session = this.sessions.get(sessionId);
     if (session === undefined) return;
     // PTY output is activity: it keeps a busy session out of the idle window.
     session.lastActivityAt = Date.now();
+    // Sentinel-gated worktree setup step (§6): while the setup command runs, its
+    // output is ALSO scanned for the completion sentinel (output still flows to
+    // the renderer below — the user watches the install). Until the sentinel
+    // appears the harness command is held; no timeout, since "no sentinel yet"
+    // is not an error (installs are slow, prompts happen). On exit 0 the harness
+    // command is typed and the phase goes `ready`; on a non-zero exit the phase
+    // goes `failed`, a `worktree_failed`(setup) event is recorded with the tail
+    // as the best failure context, and the harness is NOT launched — the
+    // terminal stays a live shell with the failure on screen.
+    const watch = session.setupWatch;
+    if (watch !== null) {
+      watch.tail = (watch.tail + data).slice(-SETUP_TAIL_MAX_CHARS);
+      const exitCode = parseSetupSentinel(watch.tail);
+      if (exitCode !== null) {
+        session.setupWatch = null;
+        if (exitCode === 0) {
+          setPhase(watch.ticketId, "ready", worktreeDeps(db).onPhase);
+          if (watch.launchCommand !== null) session.pty.write(`${watch.launchCommand}\r`);
+        } else {
+          this.recordSetupFailure(db, watch.ticketId, watch.tail);
+        }
+      }
+    }
     // Append to the observation tail as a chunk, then drop whole chunks off the
     // front while doing so still leaves at least the cap behind (peek slices to
     // the exact cap on demand). Keeps this hot path O(chunk), not O(cap).
@@ -573,6 +769,15 @@ export class PtyManager {
   /** The workspace a live session was created for, or undefined if unknown. */
   workspaceIdFor(sessionId: string): string | undefined {
     return this.sessions.get(sessionId)?.workspaceId;
+  }
+
+  /**
+   * The resolved cwd of every live session — the worktree remove/orphan-delete
+   * guards refuse to touch a directory that still has a session running at or
+   * under it. Read-only snapshot; the caller does the containment check.
+   */
+  liveSessionCwds(): string[] {
+    return Array.from(this.sessions.values(), (session) => session.cwd);
   }
 
   /** Read-only snapshot used by the CLI; it never writes to or controls the observed PTY. */

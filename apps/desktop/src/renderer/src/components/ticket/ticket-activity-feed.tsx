@@ -15,6 +15,7 @@ import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
 import { TerminalIcon } from "@phosphor-icons/react/dist/csr/Terminal";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { TrashSimpleIcon } from "@phosphor-icons/react/dist/csr/TrashSimple";
+import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
 import {
   errorMessage,
   isAgentActor,
@@ -66,6 +67,7 @@ const EVENT_ICON: Record<TicketEventKind, PhosphorIcon> = {
   session_started: TerminalIcon,
   session_ended: TerminalWindowIcon,
   worktree_changed: GitBranchIcon,
+  worktree_failed: WarningCircleIcon,
   session_signal: FlagIcon,
 };
 

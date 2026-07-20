@@ -225,6 +225,20 @@ export function getTicketRow(db: Database.Database, ticketId: string): TicketRow
 }
 
 /**
+ * Every non-null `worktree_path` across ALL tickets — live AND archived. The
+ * startup orphan sweep (worktree/sweep.ts) diffs this DB-known set against the
+ * worktrees git actually has registered, so an archived ticket's retained
+ * worktree is never mistaken for an orphan.
+ */
+export function listWorktreePaths(db: Database.Database): string[] {
+  const rows = prepared<[], { worktree_path: string }>(
+    db,
+    "SELECT worktree_path FROM tickets WHERE worktree_path IS NOT NULL",
+  ).all();
+  return rows.map((row) => row.worktree_path);
+}
+
+/**
  * Allocates the next display ticket number for a project and durably bumps
  * `projects.next_ticket_number` (migration 005) in the same call — the
  * counter only ever moves forward, so once a number is handed out it can

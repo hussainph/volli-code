@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { TICKET_EVENT_KINDS } from "./ticket-events";
+import {
+  MAX_WORKTREE_FAILURE_STDERR,
+  TICKET_EVENT_KINDS,
+  trimWorktreeFailureStderr,
+} from "./ticket-events";
 import type {
   TicketEvent,
   TicketEventKind,
@@ -24,6 +28,7 @@ describe("TICKET_EVENT_KINDS", () => {
       "session_started",
       "session_ended",
       "worktree_changed",
+      "worktree_failed",
       "session_signal",
     ]);
   });
@@ -56,9 +61,23 @@ describe("TicketEventPayload", () => {
       { kind: "session_started", sessionId: "session-1", title: "Fix bug", harnessId: "codex" },
       { kind: "session_ended", sessionId: "session-1" },
       { kind: "worktree_changed", from: worktreeA, to: worktreeB },
+      { kind: "worktree_failed", stage: "copy", stderr: "fatal: could not copy" },
       { kind: "session_signal", signal: "blocked", reason: "Waiting for credentials" },
     ];
     expect(payloads.map((p) => p.kind)).toEqual(TICKET_EVENT_KINDS);
+  });
+});
+
+describe("trimWorktreeFailureStderr", () => {
+  it("passes short stderr through unchanged", () => {
+    expect(trimWorktreeFailureStderr("fatal: boom")).toBe("fatal: boom");
+  });
+
+  it("keeps the trailing slice when stderr exceeds the cap (git's error is last)", () => {
+    const noise = "x".repeat(MAX_WORKTREE_FAILURE_STDERR);
+    const trimmed = trimWorktreeFailureStderr(`${noise}fatal: the real error`);
+    expect(trimmed.length).toBe(MAX_WORKTREE_FAILURE_STDERR);
+    expect(trimmed.endsWith("fatal: the real error")).toBe(true);
   });
 });
 
