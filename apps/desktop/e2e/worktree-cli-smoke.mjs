@@ -87,12 +87,14 @@ function parseJson(result) {
 }
 
 async function main() {
-  // realpath the worktree home: macOS `/tmp` is a symlink to `/private/tmp`, and
-  // an EXTERNAL `volli` process reports the PHYSICAL path from `process.cwd()`.
-  // If the row's worktreePath stayed logical, the cwd → worktree prefix match
-  // would miss. Same pitfall makeGitRepo already realpaths against.
-  await fs.mkdir(join(scratch, "home"), { recursive: true });
-  const fakeHome = await fs.realpath(join(scratch, "home"));
+  // Deliberately LOGICAL worktree home: the scratch root sits under macOS's
+  // `/tmp` (a symlink to `/private/tmp`), so the row's stamped worktreePath
+  // inherits the logical prefix while the EXTERNAL `volli` process reports the
+  // PHYSICAL path from `process.cwd()`. The cwd → worktree rung must
+  // canonicalize both sides for scenario 1 to resolve at all — this probe is
+  // the end-to-end proof of that.
+  const fakeHome = join(scratch, "home");
+  await fs.mkdir(fakeHome, { recursive: true });
 
   const app = await launch({
     dbPath,
@@ -320,7 +322,7 @@ async function main() {
           mb !== null &&
           wt !== null &&
           (mb.insertions !== wt.insertions ||
-            JSON.stringify(mbPaths.sort()) !== JSON.stringify(wtPaths.sort()));
+            JSON.stringify(mbPaths.toSorted()) !== JSON.stringify(wtPaths.toSorted()));
 
         return {
           ok: mbOk && wtOk && differ,

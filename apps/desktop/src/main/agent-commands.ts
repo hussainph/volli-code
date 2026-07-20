@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
 
 import type Database from "better-sqlite3";
 import {
@@ -300,6 +301,21 @@ function cwdWithin(root: string, cwd: string): boolean {
 }
 
 /**
+ * A path canonicalized for the cwd ↔ worktree prefix match. The CLI stamps a
+ * PHYSICAL `process.cwd()`, while a stamped worktreePath can carry a symlink
+ * (macOS `/tmp` → `/private/tmp`); comparing the raw strings would miss. A path
+ * that cannot be resolved (gone, or a test's fictional path) passes through
+ * unchanged so resolution still ends in the friendly CONTEXT error, never a throw.
+ */
+function canonicalPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+/**
  * Resolves the ticket a worktree command targets. An explicit display-id arg is
  * the override; otherwise the caller's cwd is matched to the single ticket whose
  * worktree owns it (agent cwd → worktree → ticket) — the whole point of a
@@ -314,13 +330,15 @@ function resolveWorktreeTicket(
     return ticketForDisplayId(db, projects, request.args["id"]);
   }
   const projectById = new Map(projects.map((project) => [project.id, project]));
+  const cwd = canonicalPath(request.ctx.cwd);
   const matches = projects
     .flatMap((project) => [
       ...listTicketsByProject(db, project.id),
       ...listArchivedTicketsByProject(db, project.id),
     ])
     .filter(
-      (ticket) => ticket.worktreePath !== null && cwdWithin(ticket.worktreePath, request.ctx.cwd),
+      (ticket) =>
+        ticket.worktreePath !== null && cwdWithin(canonicalPath(ticket.worktreePath), cwd),
     );
   if (matches.length > 1) {
     return {

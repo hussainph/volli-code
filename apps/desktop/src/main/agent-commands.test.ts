@@ -1,3 +1,7 @@
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import type { AgentRequest } from "@volli/shared";
@@ -1188,6 +1192,50 @@ describe("agent command service", () => {
       ctx: { cwd: "/wt/VC-1/packages/shared", env: {} },
     });
     expect(nested).toMatchObject({ ok: true, data: { ticket: "VC-1" } });
+  });
+
+  it("matches the cwd rung across symlinks (physical cwd vs symlinked stamp)", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    const { git } = scriptedGit(() => "");
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.0.0",
+      now: () => 100,
+      newId: () => "ticket-one",
+      git,
+    });
+    // A real on-disk worktree stamped through a SYMLINKED prefix, queried from
+    // the PHYSICAL cwd the CLI's `process.cwd()` reports — the exact macOS
+    // `/tmp` → `/private/tmp` split. Resolution must canonicalize both sides.
+    const base = mkdtempSync(join(tmpdir(), "volli-cwd-"));
+    try {
+      const real = join(base, "real");
+      mkdirSync(join(real, "VC-1"), { recursive: true });
+      symlinkSync(real, join(base, "link"));
+      const stamped = join(base, "link", "VC-1");
+      await seedWorktreeTicket(service, { worktreePath: stamped });
+      const physicalCwd = realpathSync(stamped);
+      expect(physicalCwd).not.toBe(stamped); // the logical/physical divergence is real
+
+      const res = await service.execute({
+        v: 1,
+        cmd: "worktree.status",
+        args: {},
+        ctx: { cwd: physicalCwd, env: {} },
+      });
+      expect(res).toMatchObject({ ok: true, data: { ticket: "VC-1" } });
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 
   it("honors an explicit display-id override from outside any worktree", async () => {
