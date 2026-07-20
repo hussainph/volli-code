@@ -32,6 +32,29 @@ export type { RunNet, GhResult, GhFailure, GhFailureKind, PrStatusReport } from 
 export { publishTicketBranch, commitTicketRemaining } from "./publish";
 export type { PublishDeps, PublishOutcome } from "./publish";
 
+// Retention (CONCEPT #16, issue #76): the Done-TTL setting, the Keep-aware
+// archive-readiness verdict, the archive-and-clean composition, and the
+// merge-watch poll step + interval driver.
+export {
+  getRetentionTtlDays,
+  setRetentionTtlDays,
+  archiveAndClean,
+  DEFAULT_RETENTION_TTL_DAYS,
+} from "./retention";
+export {
+  RetentionWatcher,
+  createRetentionStore,
+  pollRetention,
+  getRetentionState,
+  retentionConfigFromEnv,
+} from "./watch";
+export type {
+  RetentionPollDeps,
+  RetentionStore,
+  RetentionWatchConfig,
+  TicketRetentionState,
+} from "./watch";
+
 // The PTY wiring drives the transient phase directly across the setup-command
 // step (`setting-up → ready | failed`), which happens in the terminal after
 // `ensure` resolves — hence the phase registry is part of the module's seam.
