@@ -18,7 +18,14 @@ const SENTINEL_PATTERN = /__VOLLI_SETUP_DONE:(\d+)__/g;
  * Wraps `setupCommand` so its exit code is emitted on a line the watcher can
  * detect:
  *
- *   <setupCommand>; printf '\n__VOLLI_SETUP_DONE:%d__\n' $?
+ *   ( <setupCommand> ); printf '\n__VOLLI_SETUP_DONE:%d__\n' $?
+ *
+ * The SUBSHELL is load-bearing: a setup script that itself calls `exit N` (a
+ * plausible pattern, caught by the worktree e2e smoke) would otherwise
+ * terminate the interactive shell at top level — the sentinel would never
+ * print and the session would die with the ticket stuck `setting-up`. Inside
+ * `( … )` the `exit` only ends the subshell, whose code lands in `$?` for the
+ * parent's `printf`.
  *
  * Crucially, the literal `%d` is what the shell ECHOES when the line is typed —
  * only AFTER `printf` runs does `%d` expand to the actual exit digit. So the
@@ -28,7 +35,7 @@ const SENTINEL_PATTERN = /__VOLLI_SETUP_DONE:(\d+)__/g;
  * output buffer.
  */
 export function buildSetupSentinelLine(setupCommand: string): string {
-  return `${setupCommand}; printf '\\n__VOLLI_SETUP_DONE:%d__\\n' $?`;
+  return `( ${setupCommand} ); printf '\\n__VOLLI_SETUP_DONE:%d__\\n' $?`;
 }
 
 /**

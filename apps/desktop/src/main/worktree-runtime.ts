@@ -25,16 +25,26 @@ function broadcastPhase(ticketId: string, phase: WorktreePhase): void {
   }
 }
 
+/**
+ * The `~` the worktree tree lives under. `VOLLI_WORKTREE_HOME_DIR` overrides it
+ * for the e2e smokes ONLY — a real user's `~/.volli/worktrees` must never be
+ * touched by a test run. Threaded as `deps.home` so the module's identity/sweep
+ * paths and {@link worktreesHome} always agree.
+ */
+function resolveHome(): string {
+  const override = process.env["VOLLI_WORKTREE_HOME_DIR"];
+  return override !== undefined && override.length > 0 ? override : homedir();
+}
+
 /** The standard runtime deps bundle for every worktree module call. */
 export function worktreeDeps(db: Database.Database): WorktreeDeps {
-  return { db, git: runGitCapturing, onPhase: broadcastPhase };
+  return { db, git: runGitCapturing, home: resolveHome(), onPhase: broadcastPhase };
 }
 
 /**
- * The app-owned worktree home (`~/.volli/worktrees`) — registered as an
- * allowed PTY root so worktree cwds pass `isPathWithinRoots`, which otherwise
- * only knows renderer-registered project folders.
+ * The app-owned worktree home (`<home>/.volli/worktrees`) — the cwd allowance
+ * for worktree PTYs and the orphan-delete channel's containment root.
  */
 export function worktreesHome(): string {
-  return join(homedir(), ".volli", "worktrees");
+  return join(resolveHome(), ".volli", "worktrees");
 }

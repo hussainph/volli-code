@@ -3,9 +3,17 @@ import { describe, expect, it } from "vite-plus/test";
 import { buildSetupSentinelLine, parseSetupSentinel } from "./setup";
 
 describe("buildSetupSentinelLine", () => {
-  it("appends an exit-code printf whose format string carries a literal %d", () => {
+  it("subshells the command and appends an exit-code printf whose format string carries a literal %d", () => {
     const line = buildSetupSentinelLine("pnpm install");
-    expect(line).toBe("pnpm install; printf '\\n__VOLLI_SETUP_DONE:%d__\\n' $?");
+    expect(line).toBe("( pnpm install ); printf '\\n__VOLLI_SETUP_DONE:%d__\\n' $?");
+  });
+
+  it("subshell-contains a setup that calls exit, so the parent shell survives to print the sentinel", () => {
+    // Without the ( … ) a top-level `exit 7` would kill the interactive shell
+    // before printf ran — the e2e-smoke-caught bug this test pins.
+    expect(buildSetupSentinelLine("exit 7")).toBe(
+      "( exit 7 ); printf '\\n__VOLLI_SETUP_DONE:%d__\\n' $?",
+    );
   });
 });
 

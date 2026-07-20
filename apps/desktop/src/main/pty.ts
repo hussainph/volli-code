@@ -570,6 +570,34 @@ export class PtyManager {
         // Flush buffered output first so the renderer never sees the exit
         // event ahead of the shell's final bytes.
         this.flush(sessionId);
+        // A shell dying with the setup watch still armed means the sentinel
+        // never printed — the subshell wrapper contains a setup's own `exit`,
+        // but a crash or an `exec` can still take the shell down. Without this
+        // the ticket would sit `setting-up` forever with zero failure signal;
+        // report it as a setup failure (best-effort, same stance as the
+        // non-zero-sentinel path in enqueueData).
+        const armedWatch = this.sessions.get(sessionId)?.setupWatch ?? null;
+        if (armedWatch !== null) {
+          const watchedSession = this.sessions.get(sessionId);
+          if (watchedSession !== undefined) watchedSession.setupWatch = null;
+          setPhase(armedWatch.ticketId, "failed", worktreeDeps(db).onPhase);
+          try {
+            recordTicketEvent(
+              db,
+              armedWatch.ticketId,
+              {
+                kind: "worktree_failed",
+                stage: "setup",
+                stderr: trimWorktreeFailureStderr(
+                  `${armedWatch.tail}\n[shell exited (${exitCode}) before the setup sentinel]`,
+                ),
+              },
+              Date.now(),
+            );
+          } catch (error) {
+            console.error(`[volli] failed to record setup failure: ${errorMessage(error)}`);
+          }
+        }
         // Close out the durable record (and, for a still-linked ticket session,
         // record `session_ended`) — runs whether the shell exited on its own or
         // was killed, so the row never lingers as falsely-live.
