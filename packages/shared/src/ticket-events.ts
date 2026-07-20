@@ -59,6 +59,34 @@ export interface WorktreeIdentity {
   baseBranch: string | null;
 }
 
+/**
+ * One file's line-delta in a {@link DiffStat} (Done-flow `diff.ts`). Crosses the
+ * IPC boundary (main computes it, the Details rail renders it), so it lives in
+ * shared. `insertions`/`deletions` are `null` for binary files — `git diff
+ * --numstat` prints `-\t-` for them, and inventing a `0` would read as "no
+ * change". `untracked` marks a file present only in `git status --porcelain`
+ * (`??`), never in the numstat output, so the working-tree diff can list it with
+ * null counts rather than dropping it.
+ */
+export interface DiffFileStat {
+  path: string;
+  insertions: number | null;
+  deletions: number | null;
+  untracked: boolean;
+}
+
+/**
+ * A worktree diff summary (Done-flow `diff.ts`): the per-file breakdown plus
+ * repo-wide totals. `insertions`/`deletions` sum only the non-null (text) files
+ * — binary and untracked entries carry null counts and never contribute to the
+ * totals, so the totals stay honest line counts.
+ */
+export interface DiffStat {
+  files: DiffFileStat[];
+  insertions: number;
+  deletions: number;
+}
+
 export type TicketEventPayload =
   | { kind: "created"; status: TicketStatus; title: string }
   | { kind: "status_changed"; from: TicketStatus; to: TicketStatus }

@@ -21,11 +21,9 @@
  *
  * The first matching rule short-circuits and its reason is returned.
  */
-import { existsSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
-
 import { parseWorktreeList, type WorktreeListEntry } from "./git";
 import { canonicalize } from "./paths";
+import { detectSequencerState } from "./sequencer";
 import type { RunGit } from "./types";
 
 export interface DirtyResult {
@@ -54,16 +52,6 @@ export interface DirtyInput {
   worktreeEntries?: readonly WorktreeListEntry[];
 }
 
-/** Filenames/dirs whose presence in the private gitdir signals in-progress sequencer state. */
-const SEQUENCER_ENTRIES = [
-  "MERGE_HEAD",
-  "CHERRY_PICK_HEAD",
-  "REVERT_HEAD",
-  "BISECT_LOG",
-  "rebase-merge",
-  "rebase-apply",
-];
-
 function checkStatus(git: RunGit, cwd: string): DirtyResult {
   try {
     const status = git(["status", "--porcelain"], cwd);
@@ -74,19 +62,16 @@ function checkStatus(git: RunGit, cwd: string): DirtyResult {
 }
 
 function checkSequencer(git: RunGit, cwd: string): DirtyResult {
-  let gitDir: string;
-  try {
-    gitDir = git(["rev-parse", "--git-dir"], cwd).trim();
-  } catch {
-    return dirty("could not resolve the worktree's git directory");
-  }
-  const absoluteGitDir = isAbsolute(gitDir) ? gitDir : resolve(cwd, gitDir);
-  for (const entry of SEQUENCER_ENTRIES) {
-    if (existsSync(resolve(absoluteGitDir, entry))) {
+  // `unknown` (git-dir unresolvable) errs dirty — §7's rule that an unreadable
+  // worktree is never assumed clean; `active` is the mid-flight operation.
+  switch (detectSequencerState(git, cwd)) {
+    case "unknown":
+      return dirty("could not resolve the worktree's git directory");
+    case "active":
       return dirty("an in-progress merge, rebase, cherry-pick, revert, or bisect");
-    }
+    default:
+      return CLEAN;
   }
-  return CLEAN;
 }
 
 function checkUnreachableCommits(git: RunGit, input: DirtyInput): DirtyResult {
