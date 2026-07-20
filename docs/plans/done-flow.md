@@ -1,6 +1,6 @@
 # Done Flow — Diff Visibility, Commit Safety Net, Push + Draft PR
 
-**Status**: settled (battle-test review July 2026) · **Branch**: `feat/done-flow` · **Issue**: [#75](https://github.com/hussainph/volli-code/issues/75) · **Decisions**: CONCEPT #44 (amending the #75 sketch; upholding #14, #38, #42)
+**Status**: settled (battle-test review July 2026) · **Branch**: `feat/done-flow` · **Issue**: [#75](https://github.com/hussainph/volli-code/issues/75) · **Decisions**: CONCEPT #44 (amending the #75 sketch; upholding #14, #38, #42) + #45 (UI revision: one adaptive action, no status dashboard)
 
 Implements decision #14's safety net as **visibility + manual affordances in the ticket Details rail — a button, never a gate**. The Done-entry adaptive dialog sketched in issue #75 is consciously deferred: every researched tool (Vibe Kanban, Conductor, Codex, T3 Code, cmux) ships PR creation as an explicit user action, none intercepts a board gesture with a git modal, and #38 already made column moves pure data. If usage shows Done entries arriving dirty in practice, the prompt returns as a *user-configurable* automation in #79's vocabulary.
 
@@ -13,7 +13,8 @@ Implements decision #14's safety net as **visibility + manual affordances in the
 5. **PR URL is durable truth**: `tickets.pr_url` column (migration; the foundation #76's merge-watch and #16's Archive need) + a `pr_opened` event for History.
 6. **Commit convention**: one-click commit writes `chore(<DISPLAY-ID>): commit remaining work` — fixed, greppable, honest about its origin. The explicit exception to "the app never commits" (#14).
 7. **Dirty predicate split**: `isWorktreeDirty` stays the *removal-safety* predicate (unpushed commits = dirty). The rail uses a finer query — `uncommitted` / `sequencerActive` / `aheadOfBase` / `behindBase` — so a fully-committed branch is never told to "commit remaining changes."
-8. **Async execution for network verbs.** `RunGit` (`execFileSync`) never carries push/`gh` — a synchronous network call would freeze the main process. New injectable async runner seam (the `promisify(execFile)` pattern of `park.ts`/`agent-tools.ts`), same args-array/no-shell discipline, owned by `src/main/worktree/` (#42).
+8. **Single adaptive action, no status dashboard (July 2026 revision — owner call after comparative research).** The rail exposes one split button whose label is the resolved next verb, plus one merge-base context line. Raw status (working-tree, ahead/behind) is never rendered as standalone lines — it only drives labels and disabled reasons. Vibe Kanban-style automation (auto-commit per agent turn) stays out of scope here; it's an #79 automation candidate.
+9. **Async execution for network verbs.** `RunGit` (`execFileSync`) never carries push/`gh` — a synchronous network call would freeze the main process. New injectable async runner seam (the `promisify(execFile)` pattern of `park.ts`/`agent-tools.ts`), same args-array/no-shell discipline, owned by `src/main/worktree/` (#42).
 
 ## Module contracts (`apps/desktop/src/main/worktree/`)
 
@@ -28,12 +29,23 @@ Implements decision #14's safety net as **visibility + manual affordances in the
 - Events: `worktree_committed { message }`, `pr_opened { url }`; `WorktreeFailureStage` union extended with `commit | push | pr`.
 - IPC: `volli:worktree-status`, `volli:worktree-diff`, `volli:worktree-commit`, `volli:worktree-push-pr` — each with a hand-written input guard (the `data-ipc.ts` pattern), preload methods under `api.worktree.*`. `push-pr` composes in main: fetch (best-effort) → push → find-existing-else-create-draft → persist `pr_url` + `pr_opened` + broadcast. Failures record `worktree_failed` with the new stages; renderer surfaces via `writeThrough`/`toastError` — never silent.
 
-## UI (Details rail, worktree section of `ticket-properties.tsx`)
+## UI (Details rail, "Pull request" block of `ticket-properties.tsx`)
 
-Lazy-loaded on drawer open (the `BaseBranchField` precedent), refreshed after every action:
+> **Revised July 2026** (comparative UI research: T3 Code, Vibe Kanban, Codex desktop, Conductor, cmux) — the first build's three status lines + four conditional buttons read as a git dashboard; every researched tool ships less state and fewer affordances. T3 renders **no** ahead/behind counts anywhere (status only picks the button label + disabled reasons); Vibe Kanban's at-rest surface is five elements with **no commit button in the product**; Conductor is one "Create PR" button + an aggregating Checks tab; Codex has no ahead/behind indicator at all. The old design's side-by-side "Commit remaining changes" / "Push & create draft PR" was also a footgun: push does not commit, so the natural click shipped a PR missing the latest work.
 
-- **Diff stat**: merge-base summary (files, +N −M) = "what would the PR contain"; a working-tree dirty line = "what the agent is doing right now"; ahead/behind info line.
-- **Buttons** (conditional, filled-Phosphor per convention): dirty → **Commit remaining changes**; ahead with no `prUrl` → **Push & create draft PR**; `prUrl` set → **Open PR**.
+Lazy-loaded on drawer open (the `BaseBranchField` precedent), refreshed after every action. Two rules:
+
+- **Status is never a dashboard.** The status snapshot is read only to resolve the action's label and disabled reason — no working-tree line, no ahead/behind line. One context line remains: the merge-base stat (`3 files · +12 −4` / `No changes vs base yet`) = "what would the PR contain".
+- **One adaptive split button** (T3's verb resolution; primitives: `Button` + `DropdownMenu` adjacency, the composer-footer pattern). The primary label is the *whole* next step — clicking runs the stacked flow by sequencing the existing IPC (commit → push-pr) in the renderer; no new channels:
+  - uncommitted, no PR → **Commit & create draft PR**
+  - uncommitted, PR exists → **Commit & push updates**
+  - clean, ahead of base, no PR → **Push & create draft PR**
+  - PR exists, unpushed commits → **Push updates**
+  - PR exists, nothing pending → **View PR**
+  - nothing to do (or still loading) → disabled **Create draft PR** with the reason as tooltip (`No changes vs base yet` / `Loading…` / `Base branch not set`) — the button never appears/vanishes; it disables with a reason.
+  - sequencer active → primary disabled, reason `Merge/rebase in progress — resolve it in the terminal.` (replaces the old banner).
+  - The chevron menu unbundles the verbs, each with its own disabled reason: **Commit** · **Push & create draft PR** / **Push updates** · **Open PR**.
+- Busy state: one local flag; the primary label shows the running stage (`Committing…` / `Pushing…`). Stage results keep their toasts; failures keep the typed taxonomy + `worktree_failed` events.
 
 ## Testing
 
