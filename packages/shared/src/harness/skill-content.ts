@@ -26,6 +26,10 @@ This is a workflow guide. For command and flag syntax, run \`volli help\` (full 
 
 Start every task with \`volli identify\` to learn your project, ticket, and session.
 
+## Orient yourself
+
+Your working directory is the ticket's git worktree — every edit happens there, in your \`cwd\`. \`VOLLI_PROJECT_DIR\` names the main checkout: it is reference-only, never your edit target. Inspect the worktree through the CLI rather than reaching for raw git: \`volli worktree status\` (branch, base, and ahead/behind/unpushed sync state) and \`volli worktree diff\` (the merge-base PR range by default, or \`--working-tree\` for uncommitted changes).
+
 ## Read before you write
 
 Inspect state before mutating it: read the board and the target ticket first, so an edit builds on the current record rather than a stale assumption.
