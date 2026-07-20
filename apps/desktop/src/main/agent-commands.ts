@@ -35,6 +35,8 @@ import { listAllLabels } from "./db/labels-repo";
 import { listProjects } from "./db/projects-repo";
 import { getSession, listSessions } from "./db/sessions-repo";
 import { getTicket, listArchivedTicketsByProject, listTicketsByProject } from "./db/tickets-repo";
+import { diffStat, getWorktreeStatus, runGitCapturing } from "./worktree";
+import type { DiffMode, RunGit } from "./worktree";
 import {
   archiveTicketCommand,
   createTicketCommand,
@@ -50,6 +52,12 @@ export interface AgentCommandServiceOptions {
   appVersion: string;
   now?: () => number;
   newId?: () => string;
+  /**
+   * The git runner the read-only worktree commands execute through. All git
+   * calls stay inside the worktree module (CONCEPT #42); this seam only lets
+   * tests substitute a scripted runner. Defaults to {@link runGitCapturing}.
+   */
+  git?: RunGit;
   observeSession?: (
     sessionId: string,
     lines: number,
@@ -285,6 +293,82 @@ function ticketForDisplayId(
     : { ok: false, response: failure("TICKET_NOT_FOUND", `No ticket matches ${displayId}.`) };
 }
 
+/** Whether `cwd` is `root` itself or nested beneath it (trailing-slash tolerant). */
+function cwdWithin(root: string, cwd: string): boolean {
+  const normalized = root.endsWith("/") ? root.slice(0, -1) : root;
+  return cwd === normalized || cwd.startsWith(`${normalized}/`);
+}
+
+/**
+ * Resolves the ticket a worktree command targets. An explicit display-id arg is
+ * the override; otherwise the caller's cwd is matched to the single ticket whose
+ * worktree owns it (agent cwd → worktree → ticket) — the whole point of a
+ * worktree query is "the tree I'm standing in". Read-only: no git, no writes.
+ */
+function resolveWorktreeTicket(
+  db: Database.Database,
+  projects: readonly Project[],
+  request: AgentRequest,
+): { ok: true; ticket: Ticket; project: Project } | { ok: false; response: AgentResponse } {
+  if (request.args["id"] !== undefined) {
+    return ticketForDisplayId(db, projects, request.args["id"]);
+  }
+  const projectById = new Map(projects.map((project) => [project.id, project]));
+  const matches = projects
+    .flatMap((project) => [
+      ...listTicketsByProject(db, project.id),
+      ...listArchivedTicketsByProject(db, project.id),
+    ])
+    .filter(
+      (ticket) => ticket.worktreePath !== null && cwdWithin(ticket.worktreePath, request.ctx.cwd),
+    );
+  if (matches.length > 1) {
+    return {
+      ok: false,
+      response: failure("AMBIGUOUS_CONTEXT", `Cwd ${request.ctx.cwd} sits in multiple worktrees.`),
+    };
+  }
+  const match = matches[0];
+  if (match === undefined) {
+    return {
+      ok: false,
+      response: failure(
+        "CONTEXT_REQUIRED",
+        "Provide a ticket id or run inside a ticket's worktree.",
+      ),
+    };
+  }
+  const project = projectById.get(match.projectId);
+  return project
+    ? { ok: true, ticket: match, project }
+    : {
+        ok: false,
+        response: failure("PROJECT_NOT_FOUND", "The resolved project no longer exists."),
+      };
+}
+
+/**
+ * A resolved ticket's worktree path, or a friendly error when it has none — a
+ * ticket that never reached Doing is not a stack trace, and git must never run
+ * against a null path.
+ */
+function requireWorktreePath(
+  ticket: Ticket,
+  project: Project,
+): { ok: true; worktreePath: string; displayId: string } | { ok: false; response: AgentResponse } {
+  const displayId = displayTicketId(project.ticketPrefix, ticket.ticketNumber);
+  if (ticket.worktreePath === null) {
+    return {
+      ok: false,
+      response: failure(
+        "INVALID_REQUEST",
+        `Ticket ${displayId} has no worktree yet — move it to Doing to create one.`,
+      ),
+    };
+  }
+  return { ok: true, worktreePath: ticket.worktreePath, displayId };
+}
+
 function boardData(db: Database.Database, project: Project): Record<string, unknown> {
   const tickets = listTicketsByProject(db, project.id);
   const columns = Object.fromEntries(
@@ -411,6 +495,7 @@ export function createAgentCommandService(
   // detached); the global `crypto.randomUUID` would lose its Crypto `this` when
   // called via this alias and throw "Value of 'this' must be of type Crypto".
   const newId = options.newId ?? randomUUID;
+  const git = options.git ?? runGitCapturing;
 
   return {
     async execute(request): Promise<AgentResponse> {
@@ -712,6 +797,64 @@ export function createAgentCommandService(
           ok: true,
           data: {
             prompt: `${orientation}Coordinate the board through the bundled \`volli\` CLI: run \`volli help\` for the full reference (and the volli skill, when installed, for norms).\n\n${ticketPrompt}`,
+          },
+        };
+      }
+      if (request.cmd === "worktree.status") {
+        const resolved = resolveWorktreeTicket(options.db, projects, request);
+        if (!resolved.ok) return resolved.response;
+        const worktree = requireWorktreePath(resolved.ticket, resolved.project);
+        if (!worktree.ok) return worktree.response;
+        // All git runs inside the worktree module (CONCEPT #42); we only compose
+        // its report with the ticket's persisted identity.
+        const report = getWorktreeStatus(git, {
+          worktreePath: worktree.worktreePath,
+          branch: resolved.ticket.branch,
+          baseBranch: resolved.ticket.baseBranch,
+        });
+        return {
+          v: 1,
+          ok: true,
+          data: {
+            ticket: worktree.displayId,
+            project: resolved.project.name,
+            worktreePath: worktree.worktreePath,
+            branch: resolved.ticket.branch,
+            baseBranch: resolved.ticket.baseBranch,
+            ...report,
+          },
+        };
+      }
+      if (request.cmd === "worktree.diff") {
+        const resolved = resolveWorktreeTicket(options.db, projects, request);
+        if (!resolved.ok) return resolved.response;
+        const worktree = requireWorktreePath(resolved.ticket, resolved.project);
+        if (!worktree.ok) return worktree.response;
+        // Merge-base ("what the PR would contain") is the default; --working-tree
+        // switches to the uncommitted view. Same two-mode diff.ts the rail uses.
+        const mode: DiffMode = request.args["workingTree"] === true ? "working-tree" : "merge-base";
+        const result = diffStat(
+          git,
+          { worktreePath: worktree.worktreePath, baseBranch: resolved.ticket.baseBranch },
+          mode,
+        );
+        if (!result.ok) return failure("INVALID_REQUEST", result.error);
+        // Cap the per-file rows so a sprawling diff never blows the token ceiling;
+        // the rollup count keeps the omission honest. Totals stay across ALL files.
+        const CAP = 20;
+        const shown = result.value.files.slice(0, CAP);
+        return {
+          v: 1,
+          ok: true,
+          data: {
+            ticket: worktree.displayId,
+            mode,
+            baseBranch: resolved.ticket.baseBranch,
+            files: shown,
+            insertions: result.value.insertions,
+            deletions: result.value.deletions,
+            totalFiles: result.value.files.length,
+            omittedFiles: result.value.files.length - shown.length,
           },
         };
       }
