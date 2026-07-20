@@ -1,5 +1,11 @@
-import { describe, expect, it } from "vite-plus/test";
-import { createWorktreeStore, phaseFor } from "./worktree";
+import type { WorktreePhaseEvent } from "@volli/shared";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import {
+  createWorktreeStore,
+  phaseFor,
+  subscribeWorktreePhases,
+  useWorktreeStore,
+} from "./worktree";
 
 describe("setPhase", () => {
   it("records a ticket's first phase", () => {
@@ -51,5 +57,33 @@ describe("phaseFor", () => {
 
   it("returns null for a ticket with no recorded phase", () => {
     expect(phaseFor({ t1: "ready" }, "t2")).toBeNull();
+  });
+});
+
+describe("subscribeWorktreePhases", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    useWorktreeStore.setState({ phases: {} });
+  });
+
+  it("wires api.worktree.onPhase into the singleton store's setPhase", () => {
+    let pushed: ((event: WorktreePhaseEvent) => void) | undefined;
+    const unsubscribe = vi.fn();
+    vi.stubGlobal("window", {
+      api: {
+        worktree: {
+          onPhase: (callback: (event: WorktreePhaseEvent) => void) => {
+            pushed = callback;
+            return unsubscribe;
+          },
+        },
+      },
+    });
+
+    const returnedUnsubscribe = subscribeWorktreePhases();
+    pushed?.({ ticketId: "t1", phase: "setting-up" });
+
+    expect(useWorktreeStore.getState().phases).toEqual({ t1: "setting-up" });
+    expect(returnedUnsubscribe).toBe(unsubscribe);
   });
 });

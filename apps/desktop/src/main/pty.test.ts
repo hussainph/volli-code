@@ -490,6 +490,34 @@ describe("PtyManager.workspaceIdFor", () => {
   });
 });
 
+describe("PtyManager.liveSessionCwds", () => {
+  it("returns an empty snapshot when nothing is live", () => {
+    expect(manager.liveSessionCwds()).toEqual([]);
+  });
+
+  it("returns the resolved cwd of every live session — the worktree remove/orphan guards' containment check", async () => {
+    const sub = join(root, "sub");
+    await fs.mkdir(sub, { recursive: true });
+    const first = await createSession(); // rooted at `root`
+    const otherSender = makeWebContents();
+    const pty2 = makeFakePty();
+    spawn.mockReturnValueOnce(pty2);
+    const second = await invokeCreate(otherSender, {
+      workspaceId: "w",
+      cwd: sub,
+      cols: 80,
+      rows: 24,
+    });
+    if (!second.ok) throw new Error(`expected session, got ${second.error}`);
+
+    expect(manager.liveSessionCwds().toSorted()).toEqual([root, sub].toSorted());
+
+    // A killed session drops out of the snapshot.
+    invokeKill(first.sessionId);
+    expect(manager.liveSessionCwds()).toEqual([sub]);
+  });
+});
+
 describe("PtyManager.busy", () => {
   it("reports not busy for an unknown session", () => {
     expect(manager.busy("nope")).toEqual({ ok: true, busy: false, process: null });
@@ -1361,6 +1389,44 @@ describe("worktree ticket sessions", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
+  it("rejects a successful ensure that didn't resolve a worktree path, without spawning", async () => {
+    ensureWorktree.mockResolvedValue({
+      ok: true,
+      value: {
+        identity: { worktreePath: null, branch: wtBranch, baseBranch: "main" },
+        created: true,
+      },
+    });
+    const result = await invokeCreate(makeWebContents(), {
+      workspaceId: "wp",
+      cwd: root,
+      cols: 80,
+      rows: 24,
+      ticket: { ticketId: "wt1" },
+    });
+    expect(result).toEqual({ ok: false, error: "Worktree path was not resolved" });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects a worktree path resolved outside both the worktree home and any known project root", async () => {
+    ensureWorktree.mockResolvedValue({
+      ok: true,
+      value: {
+        identity: { worktreePath: outside, branch: wtBranch, baseBranch: "main" },
+        created: true,
+      },
+    });
+    const result = await invokeCreate(makeWebContents(), {
+      workspaceId: "wp",
+      cwd: root,
+      cols: 80,
+      rows: 24,
+      ticket: { ticketId: "wt1" },
+    });
+    expect(result).toEqual({ ok: false, error: "Worktree path is outside the worktree home" });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it("gates a freshly-created worktree on the setup sentinel, then launches the harness on exit 0", async () => {
     ensureOk(true); // fresh create + a configured setup command → sentinel-gated
     const { result, pty } = await createWorktreeSession({ harnessId: "codex", prompt: "go" });
@@ -1400,6 +1466,50 @@ describe("worktree ticket sessions", () => {
     expect(failed?.payload).toMatchObject({ kind: "worktree_failed", stage: "setup" });
   });
 
+  it("records a setup failure when the shell dies with the setup watch still armed (no sentinel)", async () => {
+    ensureOk(true); // fresh create + a configured setup command → sentinel-gated
+    const { result, pty } = await createWorktreeSession({ harnessId: "codex", prompt: "go" });
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+    expect(pty.write).toHaveBeenCalledTimes(1); // setup line only, no sentinel seen yet
+
+    pty.emitData("resolving packages...\n");
+    // The shell dies (crash / a setup-internal `exec`) before the sentinel ever
+    // printed — the watch is still armed, so onExit must report it as a setup
+    // failure itself rather than leaving the ticket stuck `setting-up` forever.
+    pty.emitExit(1);
+
+    expect(onWorktreePhase).toHaveBeenCalledWith("wt1", "failed");
+    const failed = listTicketEvents(testDb.db, "wt1").find(
+      (event) => event.payload.kind === "worktree_failed",
+    );
+    expect(failed?.payload).toMatchObject({ kind: "worktree_failed", stage: "setup" });
+    const stderr = (failed!.payload as { stderr: string }).stderr;
+    expect(stderr).toContain("resolving packages...");
+    expect(stderr).toContain("shell exited (1) before the setup sentinel");
+    // The harness command was never held for launch after this — nothing else is written.
+    expect(pty.write).toHaveBeenCalledTimes(1);
+  });
+
+  it("swallows a failed setup-failure event write (ticket deleted mid-setup) without throwing", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    ensureOk(true);
+    const { result, pty } = await createWorktreeSession({ harnessId: "codex", prompt: "go" });
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+
+    // The ticket is deleted while its setup command is still running (best-effort
+    // stance documented on recordSetupFailure): the ticket_events insert now
+    // violates the FK, and that throw must be caught, not escape into the pty
+    // hot path.
+    deleteTicket(testDb.db, "wt1");
+
+    expect(() => pty.emitExit(1)).not.toThrow();
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("failed to record setup failure"),
+    );
+    expect(listTicketEvents(testDb.db, "wt1")).toEqual([]);
+  });
+
   it("does not run the setup command for a reused worktree (created false)", async () => {
     ensureOk(false);
     const { result, pty } = await createWorktreeSession({ harnessId: "codex", prompt: "go" });
@@ -1411,6 +1521,80 @@ describe("worktree ticket sessions", () => {
     expect(written).toContain("codex");
     expect(written).not.toContain("__VOLLI_SETUP_DONE");
     expect(onWorktreePhase).not.toHaveBeenCalledWith("wt1", "setting-up");
+  });
+
+  it("boots a reused worktree ticket with no kickoff as a bare, untouched shell", async () => {
+    ensureOk(false); // reused → no setup gate either way
+    const { result, pty } = await createWorktreeSession(); // no kickoff → no launch command
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+
+    // Nothing to type: no setup command runs (reused) and no kickoff to launch.
+    expect(pty.write).not.toHaveBeenCalled();
+    expect(onWorktreePhase).not.toHaveBeenCalledWith("wt1", "setting-up");
+  });
+
+  it("uses an empty branch placeholder in the orientation preamble when identity has no branch yet", async () => {
+    ensureWorktree.mockResolvedValue({
+      ok: true,
+      value: {
+        identity: { worktreePath: wtCwd(), branch: null, baseBranch: "main" },
+        created: false,
+      },
+    });
+    const { result, pty } = await createWorktreeSession({ harnessId: "codex", prompt: "go" });
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+
+    expect(pty.write).toHaveBeenCalledTimes(1);
+    const written = pty.write.mock.calls[0]![0] as string;
+    expect(written).toContain("on branch ``");
+  });
+
+  it("completes setup successfully with no kickoff to launch — the terminal stays a bare shell", async () => {
+    ensureOk(true); // fresh create + a configured setup command → sentinel-gated
+    const { result, pty } = await createWorktreeSession(); // no kickoff
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+    expect(pty.write).toHaveBeenCalledTimes(1); // setup line only
+
+    pty.emitData("done\n__VOLLI_SETUP_DONE:0__\n");
+
+    expect(onWorktreePhase).toHaveBeenCalledWith("wt1", "ready");
+    // No held launch command — nothing more is ever written.
+    expect(pty.write).toHaveBeenCalledTimes(1);
+  });
+
+  it("launches the harness immediately on a fresh create when the project defines no setup command", async () => {
+    const projectPath = join(root, "wtproj-nosetup");
+    await fs.mkdir(projectPath, { recursive: true });
+    // No `setupCommand` — testProject defaults it to null.
+    insertProject(testDb.db, testProject({ id: "wp2", path: projectPath, ticketPrefix: "WQ" }));
+    insertTicket(testDb.db, testTicket("wp2", { id: "wt2", ticketNumber: 1, usesWorktree: true }));
+    syncProjectRoots([root, projectPath]);
+    const wt2Cwd = join(projectPath, "wt-WQ-1");
+    ensureWorktree.mockResolvedValue({
+      ok: true,
+      value: {
+        identity: { worktreePath: wt2Cwd, branch: "volli/WQ-1-x", baseBranch: "main" },
+        created: true,
+      },
+    });
+
+    const pty = makeFakePty();
+    spawn.mockReturnValueOnce(pty);
+    const result = await invokeCreate(makeWebContents(), {
+      workspaceId: "wp2",
+      cwd: projectPath,
+      cols: 80,
+      rows: 24,
+      ticket: { ticketId: "wt2", kickoff: { harnessId: "codex", prompt: "go" } },
+    });
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+
+    // Fresh create, but nothing to gate on — the harness launches right away.
+    expect(pty.write).toHaveBeenCalledTimes(1);
+    const written = pty.write.mock.calls[0]![0] as string;
+    expect(written).toContain("codex");
+    expect(written).not.toContain("__VOLLI_SETUP_DONE");
+    expect(onWorktreePhase).not.toHaveBeenCalledWith("wt2", "setting-up");
   });
 });
 

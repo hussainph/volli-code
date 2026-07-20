@@ -530,7 +530,7 @@ export class PtyManager {
       this.sessions.set(sessionId, session);
 
       pty.onData((data) => {
-        this.enqueueData(sessionId, data);
+        this.enqueueData(db, sessionId, data);
       });
 
       // Launch the session's first line now that it is fully registered AND
@@ -588,11 +588,12 @@ export class PtyManager {
         // the ticket would sit `setting-up` forever with zero failure signal;
         // report it as a setup failure (best-effort, same stance as the
         // non-zero-sentinel path in enqueueData).
-        const armedWatch = this.sessions.get(sessionId)?.setupWatch ?? null;
-        if (armedWatch !== null) {
-          const watchedSession = this.sessions.get(sessionId);
-          if (watchedSession !== undefined) watchedSession.setupWatch = null;
+        const watchedSession = this.sessions.get(sessionId);
+        const armedWatch = watchedSession?.setupWatch ?? null;
+        if (watchedSession !== undefined && armedWatch !== null) {
+          watchedSession.setupWatch = null;
           this.recordSetupFailure(
+            db,
             armedWatch.ticketId,
             `${armedWatch.tail}\n[shell exited (${exitCode}) before the setup sentinel]`,
           );
@@ -652,13 +653,11 @@ export class PtyManager {
    * The event is best-effort because the ticket can be deleted while its setup
    * command runs, and a throwing insert must never escape into the pty hot path.
    */
-  private recordSetupFailure(ticketId: string, stderr: string): void {
-    const onPhase = this.db !== null ? worktreeDeps(this.db).onPhase : undefined;
-    setPhase(ticketId, "failed", onPhase);
-    if (this.db === null) return;
+  private recordSetupFailure(db: Database.Database, ticketId: string, stderr: string): void {
+    setPhase(ticketId, "failed", worktreeDeps(db).onPhase);
     try {
       recordTicketEvent(
-        this.db,
+        db,
         ticketId,
         { kind: "worktree_failed", stage: "setup", stderr: trimWorktreeFailureStderr(stderr) },
         Date.now(),
@@ -668,8 +667,8 @@ export class PtyManager {
     }
   }
 
-  /** Buffers a pty chunk toward the next coalesced volli:terminal-data send. */
-  private enqueueData(sessionId: string, data: string): void {
+  /** Buffers a pty chunk toward the next coalesced volli:terminal-data send. `db` comes from the create() that wired the onData handler — a live session implies the manager booted with one. */
+  private enqueueData(db: Database.Database, sessionId: string, data: string): void {
     const session = this.sessions.get(sessionId);
     if (session === undefined) return;
     // PTY output is activity: it keeps a busy session out of the idle window.
@@ -689,12 +688,11 @@ export class PtyManager {
       const exitCode = parseSetupSentinel(watch.tail);
       if (exitCode !== null) {
         session.setupWatch = null;
-        const onPhase = this.db !== null ? worktreeDeps(this.db).onPhase : undefined;
         if (exitCode === 0) {
-          setPhase(watch.ticketId, "ready", onPhase);
+          setPhase(watch.ticketId, "ready", worktreeDeps(db).onPhase);
           if (watch.launchCommand !== null) session.pty.write(`${watch.launchCommand}\r`);
         } else {
-          this.recordSetupFailure(watch.ticketId, watch.tail);
+          this.recordSetupFailure(db, watch.ticketId, watch.tail);
         }
       }
     }

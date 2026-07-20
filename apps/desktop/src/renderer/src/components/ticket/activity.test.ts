@@ -127,6 +127,31 @@ describe("describeEvent", () => {
       describeEvent({ kind: "session_signal", signal: "blocked", reason: "needs creds" }),
     ).toBe("reported blocked: needs creds");
   });
+
+  it("describes a worktree_failed event with the last non-blank stderr line, truncated at 160 chars", () => {
+    // Git's real diagnosis lands last; blank progress lines around it are skipped.
+    expect(
+      describeEvent({
+        kind: "worktree_failed",
+        stage: "setup",
+        stderr: "resolving packages...\n\n  fatal: lockfile mismatch  \n\n",
+      }),
+    ).toBe("worktree setup failed: fatal: lockfile mismatch");
+
+    // A last line past the 160-char cap is truncated with an ellipsis.
+    const longLine = "x".repeat(200);
+    expect(describeEvent({ kind: "worktree_failed", stage: "create", stderr: longLine })).toBe(
+      `worktree creation failed: ${"x".repeat(160)}…`,
+    );
+
+    // An all-blank (or empty) stderr excerpt falls back to no colon at all.
+    expect(describeEvent({ kind: "worktree_failed", stage: "copy", stderr: "" })).toBe(
+      "worktree file copy failed",
+    );
+    expect(describeEvent({ kind: "worktree_failed", stage: "copy", stderr: "   \n  \n" })).toBe(
+      "worktree file copy failed",
+    );
+  });
 });
 
 describe("commentAuthorLabel", () => {

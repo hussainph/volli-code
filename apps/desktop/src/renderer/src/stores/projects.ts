@@ -127,10 +127,12 @@ export function createProjectsStore(gateway: ProjectsGateway = defaultGateway) {
    * `updateSetupCommand` below) once every earlier-queued write for that
    * project has already landed in state.
    */
+  // Every stored link is `started.catch(...)` — already recovered — so chaining
+  // `.then(run)` off it directly can never skip `run` on a predecessor failure.
   const pendingProjectUpdates = new Map<string, Promise<unknown>>();
   function queueProjectUpdate<T>(id: string, run: () => Promise<T>): Promise<T> {
     const previous = pendingProjectUpdates.get(id) ?? Promise.resolve();
-    const started = previous.catch(() => undefined).then(run);
+    const started = previous.then(run);
     pendingProjectUpdates.set(
       id,
       started.catch(() => undefined),

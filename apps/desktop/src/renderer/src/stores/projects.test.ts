@@ -790,6 +790,29 @@ describe("updateBaseBranch", () => {
     await expect(store.getState().updateBaseBranch(original.id, "next")).resolves.toBe(false);
     expect(store.getState().projects).toEqual([original]);
   });
+
+  it("keeps the per-project update queue usable after a queued update itself rejects", async () => {
+    // Every update for a project id chains behind the last one (queueProjectUpdate)
+    // so writes can't land out of order. A gateway result that's typed `ok` but
+    // missing `project` makes the reconciliation step (`result.project.id`) throw
+    // instead of resolving — this must not wedge later updates to the same id.
+    const original = project({ id: "p1", path: "/repo", baseBranch: "main" });
+    const update = vi.fn<ProjectsGateway["update"]>();
+    update.mockResolvedValueOnce({ ok: true } as never);
+    update.mockResolvedValueOnce({
+      ok: true,
+      project: { ...original, baseBranch: "release/next" },
+    });
+    const gateway = fakeGateway({ update });
+    const { store } = freshStore(gateway);
+    store.getState().hydrate([original], original.id);
+
+    await expect(store.getState().updateBaseBranch(original.id, "broken")).rejects.toThrow();
+
+    const second = await store.getState().updateBaseBranch(original.id, "release/next");
+    expect(second).toBe(true);
+    expect(store.getState().projects[0]?.baseBranch).toBe("release/next");
+  });
 });
 
 describe("updateSetupCommand", () => {
@@ -841,6 +864,26 @@ describe("updateSetupCommand", () => {
 
     expect(saved).toBe(false);
     expect(gateway.update).not.toHaveBeenCalled();
+  });
+
+  it("re-sends null when the project has no pinned baseBranch, and leaves other projects untouched", async () => {
+    const target = project({ id: "p1", path: "/repo", baseBranch: null });
+    const other = project({ id: "p2", path: "/other", baseBranch: "main" });
+    const gateway = fakeGateway();
+    const { store } = freshStore(gateway);
+    store.getState().hydrate([target, other], target.id);
+
+    const saved = await store.getState().updateSetupCommand(target.id, "pnpm install");
+
+    expect(saved).toBe(true);
+    expect(gateway.update).toHaveBeenCalledWith({
+      id: target.id,
+      baseBranch: null,
+      setupCommand: "pnpm install",
+    });
+    expect(store.getState().projects[0]?.setupCommand).toBe("pnpm install");
+    // The unrelated project passes through the reconciliation map unchanged.
+    expect(store.getState().projects[1]).toEqual(other);
   });
 
   it("returns false and preserves state when persistence fails", async () => {
