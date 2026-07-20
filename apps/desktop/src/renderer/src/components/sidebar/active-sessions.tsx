@@ -71,7 +71,7 @@ function SessionRow({
         size="lg"
         isActive={active}
         onClick={onActivate}
-        className="h-auto min-h-10 items-start gap-2 pt-2 pb-3 [&:hover_.session-row-meta]:text-sidebar-accent-foreground [&[data-active=true]_.session-row-meta]:text-sidebar-accent-foreground"
+        className="h-auto min-h-10 items-start gap-2 py-2 [&:hover_.session-row-meta]:text-sidebar-accent-foreground [&[data-active=true]_.session-row-meta]:text-sidebar-accent-foreground"
       >
         <span
           aria-hidden
