@@ -1,5 +1,5 @@
 diff --git a/dist/chunk-db9dt7pr.js b/dist/chunk-db9dt7pr.js
-index d1f8f49c9b625be8ecbf5d71540a1436d0136771..0380f7074497436aa5f52f450d07fca62afc8303 100644
+index d1f8f49c9b625be8ecbf5d71540a1436d0136771..58f83ded846d602b5c3009c20a22a320e53af367 100644
 --- a/dist/chunk-db9dt7pr.js
 +++ b/dist/chunk-db9dt7pr.js
 @@ -1727,18 +1727,9 @@ function isNerdSymbolCodepoint(cp) {
@@ -44,3 +44,24 @@ index d1f8f49c9b625be8ecbf5d71540a1436d0136771..0380f7074497436aa5f52f450d07fca6
  }
  function isVariationSelectorCodepoint2(cp) {
    if (cp >= 65024 && cp <= 65039)
+@@ -52828,7 +52810,19 @@ function createFontRuntimeTextHelpers(options) {
+     const buffer = new UnicodeBuffer;
+     buffer.addStr(text2);
+     const glyphBuffer = shape(entry.font, buffer);
+-    const glyphs = glyphBufferToShapedGlyphs(glyphBuffer);
++    const shapedGlyphs = glyphBufferToShapedGlyphs(glyphBuffer);
++    const hasMissingGlyph = shapedGlyphs.some((glyph) => glyph.glyphId === 0);
++    const hasRealGlyph = shapedGlyphs.some((glyph) => glyph.glyphId !== 0);
++    const hasVariationSelector = hasMissingGlyph && hasRealGlyph && Array.from(text2).some((char) => {
++      const cp = char.codePointAt(0) ?? 0;
++      return isVariationSelectorCodepoint2(cp);
++    });
++    // text-shaper can emit an advancing .notdef for VS15/VS16 after resolving
++    // the base glyph. Drop only that mixed cluster artifact; an all-.notdef
++    // cluster still renders tofu for a genuinely unsupported base character.
++    const glyphs = hasVariationSelector
++      ? shapedGlyphs.filter((glyph) => glyph.glyphId !== 0)
++      : shapedGlyphs;
+     const advance = glyphs.reduce((sum, g) => sum + g.xAdvance, 0);
+     const shaped = { glyphs, advance };
+     setBoundedMap(entry.glyphCache, text2, shaped, glyphShapeCacheLimit);

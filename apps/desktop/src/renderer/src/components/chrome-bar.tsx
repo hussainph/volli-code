@@ -1,21 +1,27 @@
 import * as React from "react";
 import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
+import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
+import { CornersInIcon } from "@phosphor-icons/react/dist/csr/CornersIn";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { SidebarIcon } from "@phosphor-icons/react/dist/csr/Sidebar";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 
+import { CommandPalette } from "@renderer/components/command-palette";
 import { Button } from "@renderer/components/ui/button";
 import { SidebarTrigger } from "@renderer/components/ui/sidebar";
+import { useCommandPaletteShortcut } from "@renderer/hooks/use-command-palette-shortcut";
 import { useFullScreen } from "@renderer/hooks/use-fullscreen";
 import { navBack, navForward } from "@renderer/hooks/use-nav-history";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { cn } from "@renderer/lib/utils";
 import { canGoBack, canGoForward } from "@renderer/lib/nav-history";
 import { useBoardStore } from "@renderer/stores/board";
+import { useProjectsStore } from "@renderer/stores/projects";
+import { useSessionsStore } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { displayTicketId } from "@volli/shared";
 
 /**
  * Full-width window chrome band — the ONLY drag-region owner for window
@@ -26,38 +32,114 @@ import { useWorkspaceStore } from "@renderer/stores/workspace";
  */
 export function ChromeBar() {
   const fullScreen = useFullScreen();
+  const terminalFocusTarget = useUiStore((state) => state.terminalFocusTarget);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useCommandPaletteShortcut();
+
+  React.useEffect(() => {
+    if (terminalFocusTarget !== null) setCommandPaletteOpen(false);
+  }, [terminalFocusTarget, setCommandPaletteOpen]);
 
   return (
-    // relative: the search pill centers itself against the band, not the flex
-    // row, so it stays put in the window when the traffic-light spacer
-    // collapses in fullscreen.
-    <div className="app-region-drag relative flex h-10 shrink-0 items-center bg-rail">
-      {/* Clears the traffic lights (start x:10, group renders ≈60px wide,
+    <>
+      {/* relative: the command trigger centers itself against the band, not the
+          flex row, so it stays put when the traffic-light spacer collapses. */}
+      <div className="app-region-drag relative flex h-10 shrink-0 items-center bg-rail">
+        {/* Clears the traffic lights (start x:10, group renders ≈60px wide,
           ending ≈70px) plus breathing room so the trigger doesn't crowd them.
           Fullscreen hides the lights, so the spacer collapses and the trigger
           slides to the left edge — same animation the old rail-top-strip used. */}
-      <div
-        className={cn(
-          "shrink-0 transition-[width] duration-300 ease-swift",
-          fullScreen ? "w-2" : "w-[78px]",
-        )}
-      />
-      {/* translate-y-px: the lights' optical center lands at ~20.5px (y:14 +
+        <div
+          className={cn(
+            "shrink-0 transition-[width] duration-300 ease-swift",
+            fullScreen ? "w-2" : "w-[78px]",
+          )}
+        />
+        {terminalFocusTarget !== null ? (
+          <TerminalFocusControls />
+        ) : (
+          <>
+            {/* translate-y-px: the lights' optical center lands at ~20.5px (y:14 +
           half their ~13px diameter), just below the band's 20px flex center —
           nudge the trigger down to meet them. */}
-      <div className="app-region-no-drag flex translate-y-px items-center">
-        <WorkspaceRailToggle />
-        <SidebarTrigger
-          aria-label="Toggle navigation sidebar"
-          title="Toggle navigation sidebar (⌘B)"
-        />
+            <div className="app-region-no-drag flex translate-y-px items-center">
+              <WorkspaceRailToggle />
+              <SidebarTrigger
+                aria-label="Toggle navigation sidebar"
+                title="Toggle navigation sidebar (⌘B)"
+              />
+            </div>
+            <NavHistoryButtons />
+            <CommandPaletteTrigger onClick={() => setCommandPaletteOpen(true)} />
+            {/* The content-area tab strip (if any) lives below in MainContent, not here. */}
+            <div className="flex-1" />
+            <RightRailToggle />
+          </>
+        )}
       </div>
-      <NavHistoryButtons />
-      <UniversalSearchPill />
-      {/* The content-area tab strip (if any) lives below in MainContent, not here. */}
+      <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
+    </>
+  );
+}
+
+/**
+ * Compact terminal-focus chrome. The existing band remains the only window
+ * drag region and traffic-light owner; all ordinary navigation/search controls
+ * step aside so the terminal gets every pixel below this single 40px row.
+ */
+function TerminalFocusControls() {
+  const target = useUiStore((state) => state.terminalFocusTarget);
+  const project = useProjectsStore((state) =>
+    target === null
+      ? undefined
+      : state.projects.find((candidate) => candidate.id === target.projectId),
+  );
+  const ticket = useBoardStore((state) =>
+    target === null
+      ? undefined
+      : state.ticketsByProject[target.projectId]?.find(
+          (candidate) => candidate.id === target.ticketId,
+        ),
+  );
+  const sessionTitle = useSessionsStore((state) =>
+    target === null
+      ? undefined
+      : state.byOwner[target.ticketId]?.tabs.find(
+          (candidate) => candidate.sessionId === target.sessionId,
+        )?.title,
+  );
+
+  if (target === null) return null;
+
+  const ticketLabel =
+    project !== undefined && ticket !== undefined
+      ? displayTicketId(project.ticketPrefix, ticket.ticketNumber)
+      : "Ticket";
+
+  return (
+    <>
+      <div
+        aria-live="polite"
+        className="pointer-events-none absolute left-1/2 top-1/2 flex max-w-[45vw] -translate-x-1/2 -translate-y-1/2 items-center gap-2 text-xs text-muted-foreground"
+      >
+        <span className="shrink-0 font-medium text-foreground">{ticketLabel}</span>
+        <span aria-hidden="true" className="text-border">
+          /
+        </span>
+        <span className="truncate">{sessionTitle ?? "Terminal"}</span>
+      </div>
       <div className="flex-1" />
-      <RightRailToggle />
-    </div>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="app-region-no-drag mr-1 translate-y-px"
+        onClick={() => useUiStore.getState().setTerminalFocusTarget(null)}
+        aria-label="Exit terminal focus"
+        title="Exit terminal focus (Esc)"
+      >
+        <CornersInIcon weight="bold" />
+        <span className="sr-only">Exit terminal focus</span>
+      </Button>
+    </>
   );
 }
 
@@ -161,11 +243,9 @@ function RightRailToggle() {
 }
 
 /**
- * The chrome band's ⌘K center: the band was designed with its middle reserved
- * for a command surface (Slack-style), and this pill claims it as universal
- * search. Board search state lives per-project in the board store
- * (filterByProject[id].search) — the pill is just another writer of it, so
- * board filtering keeps working unchanged.
+ * The chrome band's ⌘K center opens the app-wide ticket/session destination
+ * picker. It is a button, not a board filter: the palette can move directly to
+ * a ticket document or an already-running terminal from anywhere in the app.
  *
  * Absolutely centered so it anchors to the WINDOW's midline regardless of the
  * traffic-light spacer / fullscreen collapse. Overlap math at minWidth 940px
@@ -173,75 +253,22 @@ function RightRailToggle() {
  * pill's left edge sits at (940 − 380) / 2 = 280px — comfortably clear.
  * max-w-[40vw] only shrinks it further on narrow windows.
  */
-function UniversalSearchPill() {
-  const project = useSelectedProject();
-  const projectId = project?.id ?? null;
-  // Subscribe to the search string itself (not the filter object) so the pill
-  // only re-renders on actual query changes.
-  const search = useBoardStore((state) =>
-    projectId === null ? "" : (state.filterByProject[projectId]?.search ?? ""),
-  );
-  const inputRef = React.useRef<HTMLInputElement>(null);
-
-  React.useEffect(() => {
-    // ⌘K routes to the pill (the band's ⌘K-center design decision — see the
-    // chrome band notes). Window-level listener: focus must work from
-    // anywhere, including when no input has focus.
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.metaKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        const input = inputRef.current;
-        if (input === null || input.disabled) return;
-        input.focus();
-        // Select any existing query so typing replaces rather than appends.
-        input.select();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
-
-  const disabled = projectId === null;
-
+function CommandPaletteTrigger({ onClick }: { onClick(): void }) {
   return (
-    // h-[26px] w-[380px]: measured/deliberate chrome-band geometry (see the
-    // overlap math in the JSDoc above) — don't resize the pill itself.
-    <div
-      className={cn(
-        "absolute left-1/2 top-1/2 flex h-[26px] w-[380px] max-w-[40vw] -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-md border border-border/60 bg-white/[0.06] px-2 transition-colors",
-        "focus-within:border-ring/60 focus-within:ring-1 focus-within:ring-ring/40",
-        // app-region-no-drag: the pill sits inside the drag region and must
-        // reclaim its clicks or the window steals them as drag-to-move. Only
-        // while it's live — the disabled pill (no project) is inert, so it
-        // stays draggable window chrome rather than a dead strip in the band.
-        disabled ? "opacity-50" : "app-region-no-drag hover:bg-white/[0.08]",
-      )}
+    <button
+      type="button"
+      onClick={onClick}
+      aria-haspopup="dialog"
+      aria-label="Search tickets and sessions"
+      title="Search tickets and sessions (⌘K)"
+      className="app-region-no-drag absolute left-1/2 top-1/2 flex h-[26px] w-[380px] max-w-[40vw] -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-md border border-border/60 bg-white/[0.06] px-2 text-left text-ui text-muted-foreground transition-colors hover:border-border hover:bg-white/[0.08] focus-visible:border-ring/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/40"
     >
       <MagnifyingGlassIcon className="size-3.5 shrink-0 text-muted-foreground" />
-      <input
-        ref={inputRef}
-        type="text"
-        value={search}
-        disabled={disabled}
-        onChange={(event) => {
-          if (projectId !== null) useBoardStore.getState().setSearch(projectId, event.target.value);
-        }}
-        // "Search tickets…" exactly — the e2e smoke locates the input by this
-        // placeholder. The project-less variant is never exercised by it.
-        placeholder={disabled ? "Search" : "Search tickets…"}
-        className="min-w-0 flex-1 bg-transparent text-ui text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
-      />
-      {search !== "" ? (
-        <button
-          type="button"
-          onClick={() => {
-            if (projectId !== null) useBoardStore.getState().setSearch(projectId, "");
-          }}
-          className="shrink-0 text-muted-foreground hover:text-foreground"
-        >
-          <XIcon className="size-3.5" />
-        </button>
-      ) : null}
-    </div>
+      <span className="min-w-0 flex-1 truncate">Search tickets and sessions</span>
+      <kbd className="shrink-0 rounded border border-border/70 bg-black/10 px-1.5 py-px font-sans text-label leading-none text-muted-foreground">
+        ⌘K
+      </kbd>
+      <CaretDownIcon aria-hidden className="size-3 shrink-0" weight="bold" />
+    </button>
   );
 }

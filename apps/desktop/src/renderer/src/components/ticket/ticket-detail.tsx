@@ -27,6 +27,7 @@ import { useUiStore } from "@renderer/stores/ui";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { useCloseGuard } from "@renderer/terminal/close-guard";
 import { closeTicketSession, renameTerminalSession } from "@renderer/terminal/session-lifecycle";
+import { getEngine } from "@renderer/terminal/registry";
 
 /** The always-present Doc tab's id — the fallback every persisted/live tab id
  * resets to once it no longer names a renderable tab (doc/file/session). */
@@ -86,6 +87,11 @@ export function TicketDetail({
   const sessionTabs = useSessionsStore((state) => state.byOwner[ticket.id]?.tabs);
   const creating = useSessionsStore((state) => state.starting[ticket.id] ?? false);
   const railCollapsed = useUiStore((state) => state.railCollapsed);
+  const terminalFocusTarget = useUiStore((state) => state.terminalFocusTarget);
+  const setTerminalFocusTarget = useUiStore((state) => state.setTerminalFocusTarget);
+  const clearTerminalFocusUnlessTicket = useUiStore(
+    (state) => state.clearTerminalFocusUnlessTicket,
+  );
   const closeGuard = useCloseGuard();
 
   const displayId = displayTicketId(ticketPrefix, ticket.ticketNumber);
@@ -158,6 +164,15 @@ export function TicketDetail({
   // A closed session tab, or a persisted active id with no live tab, falls back to Doc.
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0]!;
   const activeTabIsRenderable = activeTab.id === activeTabId;
+  const activeSessionTab =
+    activeTab.kind === "session"
+      ? sessionTabs?.find((candidate) => candidate.sessionId === activeTab.id)
+      : undefined;
+  const terminalFocused =
+    terminalFocusTarget?.projectId === projectId &&
+    terminalFocusTarget.ticketId === ticket.id &&
+    terminalFocusTarget.sessionId === activeTab.id &&
+    activeSessionTab !== undefined;
 
   // The fallback above is purely visual — it renders Doc without writing the
   // store, so a persisted `active` naming a session that's since closed (or
@@ -173,6 +188,47 @@ export function TicketDetail({
     setTicketActiveTab(projectId, ticket.id, DOC_TAB_ID);
   }, [creating, activeTabIsRenderable, setTicketActiveTab, projectId, ticket.id]);
 
+  // A focus target names one concrete ticket-session tab. If tab selection or an
+  // explicit close invalidates that identity within this ticket, restore ordinary
+  // chrome immediately rather than leaving the app focused around a fallback.
+  // (Cross-ticket staleness is handled at the store layer, below and on unmount.)
+  React.useEffect(() => {
+    if (terminalFocusTarget === null || terminalFocused) return;
+    setTerminalFocusTarget(null);
+  }, [terminalFocusTarget, terminalFocused, setTerminalFocusTarget]);
+
+  // Store-layer enforcement of "the target must name a tab of the OPEN ticket":
+  // whenever the open ticket becomes this one, drop any target left over from a
+  // different ticket. Keyed on `ticket.id` so a surface that swaps the open
+  // ticket without unmounting this view still re-checks the invariant. On mount
+  // for the ticket you just focused, the target already matches, so this no-ops.
+  React.useEffect(() => {
+    clearTerminalFocusUnlessTicket(ticket.id);
+  }, [ticket.id, clearTerminalFocusUnlessTicket]);
+
+  // Leaving this ticket entirely (detail torn down / closed to the board) with no
+  // successor view to run the effect above: clear the target the store still holds
+  // for it, so app-shell doesn't hide all chrome around a ticket that's gone.
+  React.useEffect(
+    () => () => {
+      useUiStore.getState().clearTerminalFocusForTicket(ticket.id);
+    },
+    [ticket.id],
+  );
+
+  // Toolbar clicks take DOM focus away from the canvas. Refit after either
+  // geometry transition, then return focus to the split tab's active pane.
+  React.useEffect(() => {
+    const paneId = activeSessionTab?.activePaneId;
+    if (paneId === undefined) return;
+    const frame = window.requestAnimationFrame(() => {
+      const engine = getEngine(paneId);
+      engine?.fit();
+      engine?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [terminalFocused, activeSessionTab?.activePaneId]);
+
   const handleClose = React.useCallback(() => closeTicket(projectId), [closeTicket, projectId]);
 
   // Boots a ticket-scoped PTY (env-injected VOLLI_TICKET/VOLLI_ARTIFACTS_DIR in
@@ -185,6 +241,35 @@ export function TicketDetail({
     if (sessionId !== null) setActiveTab(sessionId);
   }, [projectId, ticket.id, setActiveTab]);
 
+  const enterTerminalFocus = React.useCallback(() => {
+    if (activeSessionTab === undefined) return;
+    setTerminalFocusTarget({
+      projectId,
+      ticketId: ticket.id,
+      sessionId: activeSessionTab.sessionId,
+    });
+  }, [activeSessionTab, projectId, ticket.id, setTerminalFocusTarget]);
+
+  // ⌘Escape exits terminal focus. Bare Escape is deliberately left alone so it
+  // reaches the PTY — Claude Code interrupts on Esc and TUIs (vim, etc.) lean on
+  // it constantly, so a blanket Escape capture would break the terminal. ⌘Escape
+  // is a chord no terminal app consumes; we capture it (capture phase, before the
+  // renderer can forward it) and preventDefault so it never reaches the PTY. The
+  // "close ticket detail" listener below early-returns while focused, so it can't
+  // also fire off this keypress.
+  React.useEffect(() => {
+    if (!terminalFocused) return;
+    function exitTerminalFocus(event: KeyboardEvent) {
+      if (event.key !== "Escape" || !event.metaKey) return;
+      if (event.defaultPrevented || isEscapeExempt(event.target)) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setTerminalFocusTarget(null);
+    }
+    window.addEventListener("keydown", exitTerminalFocus, true);
+    return () => window.removeEventListener("keydown", exitTerminalFocus, true);
+  }, [terminalFocused, setTerminalFocusTarget]);
+
   // Escape closes the detail view and returns to the board — but only when
   // focus isn't inside an input/textarea/contenteditable or an open menu/
   // dialog, the same guard board.tsx's own Escape-deselect uses, so a
@@ -196,12 +281,13 @@ export function TicketDetail({
   React.useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (terminalFocused) return;
       if (isEscapeExempt(event.target)) return;
       handleClose();
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [handleClose]);
+  }, [handleClose, terminalFocused]);
 
   return (
     <>
@@ -209,39 +295,45 @@ export function TicketDetail({
         {/* One full-width tab row above both the main column and the rail (the
           browser-window metaphor). The active tab fuses with the content plane
           in the main column below it. */}
-        <TicketTabStrip
-          tabs={tabs}
-          activeTabId={activeTab.id}
-          creating={creating}
-          onSelectTab={setActiveTab}
-          onCloseTab={(tab) => {
-            if (tab.kind === "file" && tab.relPath !== undefined) {
-              const relPath = tab.relPath;
-              closeTicketFile(projectId, ticket.id, relPath);
-              // Otherwise a reopened tab can briefly show the last-known
-              // worktree/main badge from before the close, until the new
-              // FileView's own read reports back — the record is keyed by
-              // relPath only and never pruned on its own.
-              setFileSources((prev) => {
-                if (!(relPath in prev)) return prev;
-                const next = { ...prev };
-                delete next[relPath];
-                return next;
-              });
-              return;
-            }
-            const sessionId = tab.id;
-            const sessionTab = sessionTabs?.find((candidate) => candidate.sessionId === sessionId);
-            const liveIds = sessionTab
-              ? sessionPanes(sessionTab.layout)
-                  .filter((pane) => pane.exitCode === null)
-                  .map((pane) => pane.sessionId)
-              : [sessionId];
-            closeGuard.guard(liveIds, () => closeTicketSession(ticket.id, sessionId));
-          }}
-          onRenameSessionTab={(sessionId, title) => renameTerminalSession(sessionId, title)}
-          onNewSession={() => void createSession()}
-        />
+        {terminalFocused ? null : (
+          <TicketTabStrip
+            tabs={tabs}
+            activeTabId={activeTab.id}
+            creating={creating}
+            onSelectTab={setActiveTab}
+            onCloseTab={(tab) => {
+              if (tab.kind === "file" && tab.relPath !== undefined) {
+                const relPath = tab.relPath;
+                closeTicketFile(projectId, ticket.id, relPath);
+                // Otherwise a reopened tab can briefly show the last-known
+                // worktree/main badge from before the close, until the new
+                // FileView's own read reports back — the record is keyed by
+                // relPath only and never pruned on its own.
+                setFileSources((prev) => {
+                  if (!(relPath in prev)) return prev;
+                  const next = { ...prev };
+                  delete next[relPath];
+                  return next;
+                });
+                return;
+              }
+              const sessionId = tab.id;
+              const sessionTab = sessionTabs?.find(
+                (candidate) => candidate.sessionId === sessionId,
+              );
+              const liveIds = sessionTab
+                ? sessionPanes(sessionTab.layout)
+                    .filter((pane) => pane.exitCode === null)
+                    .map((pane) => pane.sessionId)
+                : [sessionId];
+              closeGuard.guard(liveIds, () => closeTicketSession(ticket.id, sessionId));
+            }}
+            onRenameSessionTab={(sessionId, title) => renameTerminalSession(sessionId, title)}
+            onNewSession={() => void createSession()}
+            canFocusTerminal={activeSessionTab !== undefined}
+            onEnterTerminalFocus={enterTerminalFocus}
+          />
+        )}
         <div className="flex min-h-0 flex-1 overflow-hidden">
           {/* No horizontal padding here: the Doc tab centers its title/body on
             the measure via <ContentColumn>; file views own their edges and pick
@@ -289,7 +381,7 @@ export function TicketDetail({
               />
             </div>
           </div>
-          {railCollapsed ? null : (
+          {railCollapsed || terminalFocused ? null : (
             // w-[300px]: deliberately fixed, unlike the resizable left sidebar —
             // a resizable details rail is deferred (HIG audit finding 10).
             <aside className="flex w-[300px] shrink-0 flex-col border-l border-sidebar-border bg-sidebar">

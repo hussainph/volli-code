@@ -656,20 +656,35 @@ async function main() {
         const shellSource = (await aside.getByText("Shell", { exact: true }).count()) === 1;
         const noFalseClaude = (await aside.getByText("Claude Code", { exact: true }).count()) === 0;
 
-        const ok = envOk && aliveOk && railRow && railChip && shellSource && noFalseClaude;
+        // Active Sessions intentionally indexes Doing/Needs Review work only.
+        // Put this live shell ticket into Doing through the real property UI,
+        // then collapse Details again so the later rail-default check remains
+        // meaningful.
+        const details = aside.getByRole("button", { name: "Details", exact: true });
+        await details.click();
+        await aside.getByRole("button", { name: "Todo", exact: true }).click();
+        await page.getByRole("menuitemradio", { name: "Doing", exact: true }).click();
+        const doing = await waitUntil("ticket moves to Doing", async () => {
+          const persisted = await readTicket(page, TICKET_ID);
+          return persisted?.status === "doing";
+        });
+        await details.click();
+
+        const ok =
+          envOk && aliveOk && railRow && railChip && shellSource && noFalseClaude && !!doing;
         return {
           ok,
-          detail: `env=${JSON.stringify(envLines)} envOk=${envOk} alive=${aliveOk} railRow=${railRow} railChip=${railChip} shell=${shellSource} noClaude=${noFalseClaude}`,
+          detail: `env=${JSON.stringify(envLines)} envOk=${envOk} alive=${aliveOk} railRow=${railRow} railChip=${railChip} shell=${shellSource} noClaude=${noFalseClaude} doing=${!!doing}`,
         };
       },
     );
 
     // ===================================================================
-    // 6. RESIDENT KEEP-ALIVE — terminal survives ticket → board → ticket
+    // 6. ACTIVE SESSIONS + RESIDENT KEEP-ALIVE — direct session destination
     // ===================================================================
     await attempt(
       6,
-      "Resident keep-alive: the terminal canvas node + shell survive navigating ticket → board → ticket (overlay-hosted, not detail-owned)",
+      "Active Sessions opens the exact live tab; its terminal canvas node + shell stay resident across ticket → board → session",
       async () => {
         await fs.rm(PROBE_NAV, { force: true });
         const sessionTab = page.getByRole("tab", { name: SESSION_INITIAL, exact: true });
@@ -686,10 +701,22 @@ async function main() {
           return true;
         });
 
-        // Navigate away to the board and back into the ticket + session tab.
+        // Navigate away, then use the attention/index sidebar rather than the
+        // board card. The row must restore the exact session destination.
         await escapeToBoard(page);
-        await openTicketViaCard(page);
-        await page.getByRole("tab", { name: SESSION_INITIAL, exact: true }).click();
+        const activeSessionRow = page
+          .locator('[data-sidebar="menu-button"]')
+          .filter({ hasText: SESSION_INITIAL })
+          .filter({ hasText: DISPLAY_ID });
+        await waitUntil(
+          "live session row in Active Sessions",
+          async () => (await activeSessionRow.count()) === 1,
+        );
+        await activeSessionRow.click();
+        const exactTabSelected = await waitUntil("exact session tab selected", async () => {
+          const tab = page.getByRole("tab", { name: SESSION_INITIAL, exact: true });
+          return (await tab.count()) === 1 && (await tab.getAttribute("aria-selected")) === "true";
+        });
         await waitForLiveCanvas(page);
 
         // The tagged canvas is still in the DOM (never unmounted/remounted).
@@ -709,10 +736,97 @@ async function main() {
           return text !== null && text.includes("nav-survivor");
         });
 
-        const ok = marked && !!nodeSurvived && !!shellAlive;
+        const ok = marked && !!exactTabSelected && !!nodeSurvived && !!shellAlive;
         return {
           ok,
-          detail: `marked=${marked} nodeSurvived=${!!nodeSurvived} shellAlive=${!!shellAlive}`,
+          detail: `marked=${marked} exactTab=${!!exactTabSelected} nodeSurvived=${!!nodeSurvived} shellAlive=${!!shellAlive}`,
+        };
+      },
+    );
+
+    // ===================================================================
+    // 6b. TERMINAL FOCUS — thin chrome, no sidebars, same resident canvas
+    // ===================================================================
+    await attempt(
+      "6b",
+      "Terminal focus reclaims sidebars/tab rail, keeps one thin chrome row, preserves the live canvas, and Escape restores the workspace",
+      async () => {
+        const marked = await page.evaluate(() => {
+          const canvas = Array.from(document.querySelectorAll("canvas")).find(
+            (candidate) =>
+              candidate.offsetParent !== null &&
+              candidate.clientWidth > 0 &&
+              candidate.clientHeight > 0,
+          );
+          if (!canvas) return false;
+          canvas.dataset.e2eFocus = "focus-1";
+          return true;
+        });
+        await page.getByRole("button", { name: "Enter terminal focus" }).click();
+        const focused = await waitUntil("terminal focus geometry", async () =>
+          page.evaluate(() => {
+            const sidebar = document.querySelector('[data-sidebar="sidebar"]');
+            const inset = document.querySelector('[data-slot="sidebar-inset"]');
+            const chrome = document.querySelector(".app-region-drag");
+            const markedCanvas = document.querySelector('canvas[data-e2e-focus="focus-1"]');
+            const state = {
+              sidebarHidden: sidebar?.closest('[aria-hidden="true"]') !== null,
+              insetLeft: inset?.getBoundingClientRect().left ?? -1,
+              chromeHeight: chrome?.getBoundingClientRect().height ?? -1,
+              tablists: Array.from(document.querySelectorAll('[role="tablist"]')).filter(
+                (element) =>
+                  element instanceof HTMLElement &&
+                  element.offsetParent !== null &&
+                  element.getBoundingClientRect().height > 0,
+              ).length,
+              asides: document.querySelectorAll("aside").length,
+              canvasVisible:
+                markedCanvas instanceof HTMLCanvasElement && markedCanvas.offsetParent !== null,
+            };
+            return state.sidebarHidden && state.insetLeft === 0 && state.canvasVisible
+              ? state
+              : false;
+          }),
+        );
+        const focusGeometry =
+          focused.sidebarHidden &&
+          focused.insetLeft === 0 &&
+          focused.chromeHeight === 40 &&
+          focused.tablists === 0 &&
+          focused.asides === 0 &&
+          focused.canvasVisible;
+
+        await page.keyboard.press("Escape");
+        const restored = await waitUntil("workspace geometry restored", async () =>
+          page.evaluate(() => {
+            const inset = document.querySelector('[data-slot="sidebar-inset"]');
+            const markedCanvas = document.querySelector('canvas[data-e2e-focus="focus-1"]');
+            const state = {
+              insetLeft: inset?.getBoundingClientRect().left ?? 0,
+              tablists: Array.from(document.querySelectorAll('[role="tablist"]')).filter(
+                (element) =>
+                  element instanceof HTMLElement &&
+                  element.offsetParent !== null &&
+                  element.getBoundingClientRect().height > 0,
+              ).length,
+              asides: document.querySelectorAll("aside").length,
+              canvasVisible:
+                markedCanvas instanceof HTMLCanvasElement && markedCanvas.offsetParent !== null,
+            };
+            return state.insetLeft > 0 && state.canvasVisible ? state : false;
+          }),
+        );
+        const restoredGeometry =
+          restored.insetLeft > 0 &&
+          restored.tablists === 1 &&
+          restored.asides === 1 &&
+          restored.canvasVisible;
+        const ticketStillOpen = await detailOpen(page);
+
+        const ok = marked && focusGeometry && restoredGeometry && ticketStillOpen;
+        return {
+          ok,
+          detail: `marked=${marked} focused=${JSON.stringify(focused)} restored=${JSON.stringify(restored)} ticketOpen=${ticketStillOpen}`,
         };
       },
     );

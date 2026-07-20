@@ -24,11 +24,29 @@ import {
   type WorktreeIdentity,
 } from "@volli/shared";
 
+import { relativeTime } from "@renderer/lib/relative-time";
+
 /**
  * Consecutive events merge into one bunch row; a bunch only breaks at a comment
  * or when consecutive events are separated by a quiet gap longer than this.
  */
 export const BUNCH_GAP_MS = 60 * 60 * 1000;
+
+const OLD_ACTIVITY_AGE_MS = 24 * BUNCH_GAP_MS;
+
+/**
+ * Activity uses semantic zoom: while work is fresh, a one-hour quiet gap is a
+ * meaningful break. Once both events have aged past a day, the compact label
+ * the user can actually see ("2d ago", "3w ago", or an absolute date) becomes
+ * the useful boundary instead. This lets a long-running ticket settle into a
+ * calmer history without erasing comments or coalescing distinct visible time
+ * buckets.
+ */
+function belongsToSameBunch(previousAt: number, nextAt: number, now: number): boolean {
+  if (nextAt - previousAt <= BUNCH_GAP_MS) return true;
+  if (now - previousAt < OLD_ACTIVITY_AGE_MS || now - nextAt < OLD_ACTIVITY_AGE_MS) return false;
+  return relativeTime(previousAt, now) === relativeTime(nextAt, now);
+}
 
 /**
  * Which event kind fronts a bunch, highest signal first. The bunch's visible
@@ -175,6 +193,7 @@ type MergedEntry =
 export function buildActivityFeed(
   events: readonly TicketEvent[],
   comments: readonly TicketComment[],
+  now: number = Date.now(),
 ): FeedItem[] {
   const merged: MergedEntry[] = [];
   for (const event of events) {
@@ -209,7 +228,7 @@ export function buildActivityFeed(
       continue;
     }
     const last = bunch[bunch.length - 1];
-    if (last !== undefined && entry.at - last.createdAt > BUNCH_GAP_MS) flushBunch();
+    if (last !== undefined && !belongsToSameBunch(last.createdAt, entry.at, now)) flushBunch();
     bunch.push(entry.event);
   }
   flushBunch();
