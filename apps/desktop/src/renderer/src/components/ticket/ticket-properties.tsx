@@ -54,6 +54,7 @@ import { Input } from "@renderer/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { useTicketRetention } from "@renderer/hooks/use-ticket-retention";
 import { toastError } from "@renderer/lib/toast";
+import { useDebouncedCallback } from "@renderer/lib/use-debounced-callback";
 import { useBoardStore } from "@renderer/stores/board";
 import { ticketScope } from "@renderer/stores/sessions";
 import { phaseFor, useWorktreeStore } from "@renderer/stores/worktree";
@@ -461,16 +462,13 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
   const { state: retention, reload: reloadRetention } = useTicketRetention(ticket.id, true);
   const planningDataVersion = useBoardStore((store) => store.planningDataVersion);
 
-  const refresh = React.useCallback(async () => {
+  /** The git-spawning half of the summary: `worktree.status` + the merge-base diff. */
+  const refreshStatusAndDiff = React.useCallback(async () => {
     try {
-      const [statusResult, diffResult, ttlResult] = await Promise.all([
+      const [statusResult, diffResult] = await Promise.all([
         window.api.worktree.status(ticket.id),
         window.api.worktree.diff(ticket.id, "merge-base"),
-        window.api.retention.getTtlDays(),
       ]);
-      // The TTL is non-critical (only labels a line) — record it when it reads,
-      // never let its failure block the status/diff summary.
-      if (ttlResult.ok) setTtlDays(ttlResult.days);
       if (!statusResult.ok) {
         setLoadError(statusResult.error);
         return;
@@ -487,11 +485,44 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
     }
   }, [ticket.id]);
 
-  // Refetch on mount and after any mutation broadcast (the TTL setting or a
-  // stacked commit/push change what the summary and reason line should say).
+  /** The TTL-only half: a single non-critical DB read (only labels a line, never blocks the
+   * status/diff summary on failure) — no git subprocess, so unlike `refreshStatusAndDiff` it's
+   * cheap enough to re-run on every broadcast without debouncing (see the effect below). */
+  const refreshTtl = React.useCallback(async () => {
+    const ttlResult = await window.api.retention.getTtlDays();
+    if (ttlResult.ok) setTtlDays(ttlResult.days);
+  }, []);
+
+  /** Full refresh: mount, and every direct action below (commit/push/archive/etc.) — those want
+   * immediate, un-debounced feedback since the user just triggered them locally. */
+  const refresh = React.useCallback(async () => {
+    await Promise.all([refreshStatusAndDiff(), refreshTtl()]);
+  }, [refreshStatusAndDiff, refreshTtl]);
+
   React.useEffect(() => {
     void refresh();
-  }, [refresh, planningDataVersion]);
+  }, [refresh]);
+
+  // K4 (review): `planningDataVersion` bumps on EVERY data-changed broadcast —
+  // another ticket moving, a retention keep/dismiss elsewhere, etc. — not just
+  // this ticket's own git state changing. The broadcast is still load-bearing
+  // (it's the only path a CLI-side commit/push has to reach this rail — issue
+  // #80), so it can't just be dropped; but re-spawning `worktree.status` +
+  // `worktree.diff` git subprocesses on every single bump is wasteful. Split
+  // the two halves of the summary instead: the cheap TTL read re-runs directly
+  // on every bump, while the git-spawning refresh is debounced so a burst of
+  // unrelated broadcasts collapses into one subprocess pair.
+  const debouncedGitRefresh = useDebouncedCallback(() => void refreshStatusAndDiff(), 1500);
+  // Tracks the planningDataVersion already covered by the mount-time `refresh()` above, so this
+  // effect's own first run (which always fires on mount, whatever the initial version is) is a
+  // no-op rather than a redundant duplicate fetch.
+  const seenPlanningDataVersion = React.useRef(planningDataVersion);
+  React.useEffect(() => {
+    if (seenPlanningDataVersion.current === planningDataVersion) return;
+    seenPlanningDataVersion.current = planningDataVersion;
+    void refreshTtl();
+    debouncedGitRefresh.schedule();
+  }, [planningDataVersion, refreshTtl, debouncedGitRefresh]);
 
   /** Standalone Commit (chevron menu): keeps its own "Committed: <message>" toast. */
   async function runCommitOnly() {
@@ -597,7 +628,18 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
     }
   }
 
-  /** Keep / un-keep the worktree: the durable pin exempting BOTH retention paths. */
+  /**
+   * Keep / un-keep the worktree: the durable pin exempting BOTH retention paths.
+   *
+   * The handler already broadcasts `data-changed` on success (K3, review), but that broadcast
+   * drives `refreshPlanningData` (lib/boot.ts), which awaits a full `bootstrap()` re-fetch of
+   * every project/ticket/label BEFORE it bumps `planningDataVersion` — a materially slower round
+   * trip than this direct, single-ticket `retention.state()` read. The explicit `reloadRetention()`
+   * here is therefore not redundant with the broadcast-driven refetch; it's what makes the Keep
+   * pin's own toggle land without a visible lag, and the broadcast-driven refetch remains as the
+   * catch-all for every OTHER surface (e.g. another open ticket's card) that also needs to learn
+   * about this change. Kept deliberately — do not remove for being "already covered".
+   */
   async function runSetKeep(keep: boolean) {
     setRetentionBusy(true);
     try {
@@ -615,7 +657,11 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
     }
   }
 
-  /** Dismiss the archive prompt for this launch (re-offered next launch — not the Keep pin). */
+  /**
+   * Dismiss the archive prompt for this launch (re-offered next launch — not the Keep pin).
+   * Same reasoning as `runSetKeep` above for the explicit `reloadRetention()` — it beats the
+   * broadcast-driven `refreshPlanningData` round trip for THIS ticket's own perceived latency.
+   */
   async function runDismiss() {
     setRetentionBusy(true);
     try {

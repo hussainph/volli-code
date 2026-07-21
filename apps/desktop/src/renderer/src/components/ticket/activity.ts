@@ -58,6 +58,8 @@ function belongsToSameBunch(previousAt: number, nextAt: number, now: number): bo
 export const EVENT_KIND_PRIORITY: readonly TicketEventKind[] = [
   "worktree_failed",
   "status_changed",
+  "pr_merged",
+  "pr_opened",
   "session_started",
   "session_ended",
   "created",

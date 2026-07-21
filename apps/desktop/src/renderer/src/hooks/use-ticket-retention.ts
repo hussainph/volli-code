@@ -23,8 +23,17 @@ export function useTicketRetention(
 ): { state: TicketRetentionState | null; reload: () => void } {
   const [state, setState] = React.useState<TicketRetentionState | null>(null);
   const planningDataVersion = useBoardStore((store) => store.planningDataVersion);
+  // Bumped on every `reload()` call, including the `enabled === false` branch,
+  // so a request can recognize at resolution time that it's been superseded —
+  // guards both a late resolve landing after `enabled` flips false (which
+  // already did the synchronous `setState(null)` below) and one landing out
+  // of order after a newer fetch. `reload` is called from the effect AND
+  // externally (WorktreeDoneFlowSection's post-mutation refetch), so the
+  // token lives in a ref rather than effect-local state.
+  const requestIdRef = React.useRef(0);
 
   const reload = React.useCallback(() => {
+    const requestId = ++requestIdRef.current;
     if (!enabled) {
       setState(null);
       return;
@@ -32,6 +41,7 @@ export function useTicketRetention(
     void window.api.retention
       .state(ticketId)
       .then((result) => {
+        if (requestId !== requestIdRef.current) return; // superseded — stale, drop it
         if (result.ok) setState(result.state);
         // Silent on failure: a background read never toasts; keep the last state.
       })
