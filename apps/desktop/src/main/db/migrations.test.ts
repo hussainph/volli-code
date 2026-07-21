@@ -346,11 +346,16 @@ describe("migrate — 002 to 004 upgrade path", () => {
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
     migrate(db, dbPath);
+    // Backups are named `backup-v<from>`, and `<from>` is wherever the first
+    // migrate() call landed — read it back instead of hardcoding the latest
+    // version, so this guard can't go stale on the next migration bump.
+    const latestVersion = db.pragma("user_version", { simple: true }) as number;
     migrate(db, dbPath); // second call: nothing pending
 
     expect(db.pragma("user_version", { simple: true })).toBe(10);
-    // No v9-backup should exist — the second migrate() call had nothing to apply.
-    expect(existsSync(`${dbPath}.backup-v9`)).toBe(false);
+    // No backup should exist for the already-latest version — the second
+    // migrate() call had nothing to apply.
+    expect(existsSync(`${dbPath}.backup-v${latestVersion}`)).toBe(false);
     db.close();
   });
 });
