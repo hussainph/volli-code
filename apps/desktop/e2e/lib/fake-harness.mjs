@@ -41,6 +41,23 @@
  *   path_helper pass. `runShadowSanityCheck()` below performs exactly this and is
  *   invoked by the kickoff smoke as a precondition (its own numbered check), so a
  *   broken shadow is reported rather than silently passing a false negative.
+ *
+ * Interactive (stay-alive) mode — interrupt/resume smoke
+ * --------------------------------------------------------
+ * The kickoff smoke's fakes exit immediately (exit 0) — fine for proving WHAT
+ * launched, useless for proving a live agent process receives/survives an Esc
+ * byte (issue #78's backward-move interrupt). Passing `opts.interactiveDir` to
+ * {@link buildFakeHarness} makes every fake ALSO, after recording argv, check
+ * for `VOLLI_FAKE_HARNESS_INTERACTIVE_DIR` at runtime: when set (and the app's
+ * own per-session `VOLLI_SESSION` env var is present — real ticket sessions
+ * always carry it, see `volli-dir.ts`), the fake puts the pty in raw mode
+ * (`stty raw -echo`, so a lone Esc arrives immediately instead of waiting on a
+ * line-buffered newline) and `exec`s into `cat`, blocking forever while it
+ * copies every stdin byte verbatim into `<dir>/<VOLLI_SESSION>.stdin` — keyed
+ * by the app's own session id so concurrent sessions in one run never collide.
+ * It never exits on its own; the smoke ends the session itself
+ * (`window.api.terminal.kill`) once it's done asserting against the live
+ * process. Without `interactiveDir` (the default), behavior is unchanged.
  */
 import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
@@ -56,15 +73,20 @@ const execFileAsync = promisify(execFile);
  * @param {string} scratchDir  A writable scratch directory owned by the smoke.
  * @param {string} [probePath] Where the fakes append argv; defaults to
  *                             `<scratchDir>/harness-probe.txt`.
+ * @param {{interactiveDir?: string}} [opts] `interactiveDir` opts every fake
+ *   into stay-alive raw-stdin-capture mode (see the module header) instead of
+ *   exiting immediately — the interrupt/resume smoke's needed shape.
  * @returns {Promise<{ binDir: string, zdotDir: string, probe: string,
- *                     binaries: string[] }>}
+ *                     binaries: string[], interactiveDir: string|null }>}
  */
-export async function buildFakeHarness(scratchDir, probePath) {
+export async function buildFakeHarness(scratchDir, probePath, opts = {}) {
   const binDir = join(scratchDir, "fake-bin");
   const zdotDir = join(scratchDir, "zdot");
   const probe = probePath ?? join(scratchDir, "harness-probe.txt");
+  const interactiveDir = opts.interactiveDir ?? null;
   await fs.mkdir(binDir, { recursive: true });
   await fs.mkdir(zdotDir, { recursive: true });
+  if (interactiveDir) await fs.mkdir(interactiveDir, { recursive: true });
 
   const binaries = ["claude", "codex", "opencode"];
   for (const name of binaries) {
@@ -72,8 +94,14 @@ export async function buildFakeHarness(scratchDir, probePath) {
     //   line 1: "$0 $@"  — the whole argv on one line ("<path>/claude <args…>")
     //   then:   one line per positional arg (a multi-line prompt arg spans lines)
     // The smoke asserts substrings against the file, so multi-line args are fine.
+    // When VOLLI_FAKE_HARNESS_INTERACTIVE_DIR is set (interrupt/resume smoke
+    // only — see the module header), the fake then puts the pty in raw mode and
+    // blocks forever copying stdin verbatim into a per-session log instead of
+    // exiting; otherwise (every other smoke) it exits 0 right after recording.
     const script = `#!/bin/sh
-# Fake "${name}" harness for e2e kickoff probes. Records argv, then exits 0.
+# Fake "${name}" harness for e2e kickoff / interrupt-resume probes. Records
+# argv, then either exits 0 (default) or blocks copying raw stdin (interactive
+# mode) — see fake-harness.mjs's module doc comment.
 probe="\${VOLLI_FAKE_HARNESS_PROBE:-${probe}}"
 {
   echo "$0 $@"
@@ -81,6 +109,10 @@ probe="\${VOLLI_FAKE_HARNESS_PROBE:-${probe}}"
     echo "$arg"
   done
 } >> "$probe"
+if [ -n "$VOLLI_FAKE_HARNESS_INTERACTIVE_DIR" ] && [ -n "$VOLLI_SESSION" ]; then
+  stty raw -echo 2>/dev/null
+  exec cat >> "$VOLLI_FAKE_HARNESS_INTERACTIVE_DIR/$VOLLI_SESSION.stdin"
+fi
 exit 0
 `;
     const file = join(binDir, name);
@@ -95,19 +127,39 @@ exit 0
     "# e2e scratch zshrc — deliberately does NOT modify PATH (see fake-harness.mjs)\n",
   );
 
-  return { binDir, zdotDir, probe, binaries };
+  return { binDir, zdotDir, probe, binaries, interactiveDir };
 }
 
 /**
  * The env additions the smoke must merge over `process.env` when launching
  * Electron so the fake harness deterministically shadows any real one.
+ * Adds `VOLLI_FAKE_HARNESS_INTERACTIVE_DIR` only when `buildFakeHarness` was
+ * given an `interactiveDir` — every other smoke's fakes keep exiting immediately.
  */
-export function harnessEnv({ binDir, zdotDir, probe }) {
+export function harnessEnv({ binDir, zdotDir, probe, interactiveDir }) {
   return {
     PATH: `${binDir}:${process.env.PATH ?? ""}`,
     ZDOTDIR: zdotDir,
     VOLLI_FAKE_HARNESS_PROBE: probe,
+    ...(interactiveDir ? { VOLLI_FAKE_HARNESS_INTERACTIVE_DIR: interactiveDir } : {}),
   };
+}
+
+/**
+ * Read one session's raw stdin-capture log (interactive mode only), or `null`
+ * if it doesn't exist yet (the fake hasn't reached its capture loop, or never
+ * ran). Returns a Buffer (not a string) — the whole point is catching a raw
+ * control byte like Esc (`0x1b`), which a naive utf8 round-trip could mangle.
+ *
+ * @param {string} interactiveDir
+ * @param {string} sessionId
+ */
+export async function readStdinLog(interactiveDir, sessionId) {
+  try {
+    return await fs.readFile(join(interactiveDir, `${sessionId}.stdin`));
+  } catch {
+    return null;
+  }
 }
 
 /**

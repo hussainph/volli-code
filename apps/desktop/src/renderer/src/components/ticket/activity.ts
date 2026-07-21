@@ -71,6 +71,8 @@ export const EVENT_KIND_PRIORITY: readonly TicketEventKind[] = [
   "archived",
   "unarchived",
   "session_signal",
+  "sessions_interrupted",
+  "session_resumed",
   "body_edited",
 ];
 

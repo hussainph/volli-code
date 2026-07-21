@@ -193,6 +193,8 @@ describe("EVENT_KIND_PRIORITY", () => {
       "archived",
       "unarchived",
       "session_signal",
+      "sessions_interrupted",
+      "session_resumed",
       "body_edited",
     ];
     expect(EVENT_KIND_PRIORITY).toEqual(expected);
