@@ -447,4 +447,23 @@ describe("renderCliSuccess", () => {
     expect(rendered.split("\n").filter((l) => l.startsWith("  src/")).length).toBe(20);
     expect(rendered.length).toBeLessThanOrEqual(1200);
   });
+
+  it("renders a worktree diff with a missing files array as the header alone", () => {
+    // A malformed/minimal payload (files absent) must degrade to just the
+    // header — no file rows, no throw.
+    const rendered = renderCliSuccess(
+      "worktree.diff",
+      {
+        ticket: "VC-12",
+        mode: "working-tree",
+        insertions: 0,
+        deletions: 0,
+        totalFiles: 0,
+        omittedFiles: 0,
+      },
+      { json: false },
+    );
+    expect(rendered).toContain("VC-12  working-tree  0 files  +0 -0");
+    expect(rendered.split("\n").filter((l) => l.startsWith("  "))).toEqual([]);
+  });
 });
