@@ -18,10 +18,13 @@
  * (`git worktree add` under `$VOLLI_WORKTREE_HOME_DIR`, stamp the row's
  * worktreePath/branch/baseBranch). We poll the ticket row for that stamp rather
  * than scraping the DOM, then run the shim FROM INSIDE the stamped worktree dir
- * (agent-kit's `runVolliShim(..., { cwd })`). No fake harness is installed — the
- * default `claude-code` binary isn't on PATH, so the held command fails with
- * "command not found"; that's irrelevant here, which cares only about the
- * git/worktree query surface, not the agent process.
+ * (agent-kit's `runVolliShim(..., { cwd })`). The booted session's harness is
+ * the FAKE HARNESS (./lib/fake-harness.mjs, the same shadow composer-kickoff-smoke
+ * uses): on a dev machine the real `claude` binary IS on PATH, and letting the
+ * held command launch a real Claude Code session would nondeterministically
+ * dirty the worktree between this probe's exact-count diff/status assertions.
+ * The fake is inert (records argv, exits 0) — irrelevant here, which cares only
+ * about the git/worktree query surface, not the agent process.
  *
  * `$VOLLI_WORKTREE_HOME_DIR` is ALWAYS overridden to a scratch dir so a dev's
  * real `~/.volli/worktrees` is never touched; the scratch profile roots under a
@@ -47,6 +50,7 @@ import {
   shimPathFor,
   socketPathFor,
 } from "./lib/agent-kit.mjs";
+import { buildFakeHarness, harnessEnv } from "./lib/fake-harness.mjs";
 import {
   assertProfileIsolated,
   createRunner,
@@ -95,6 +99,7 @@ async function main() {
   // the end-to-end proof of that.
   const fakeHome = join(scratch, "home");
   await fs.mkdir(fakeHome, { recursive: true });
+  const harness = await buildFakeHarness(scratch);
 
   const app = await launch({
     dbPath,
@@ -102,6 +107,7 @@ async function main() {
     extraEnv: {
       VOLLI_WORKTREE_HOME_DIR: fakeHome,
       VOLLI_AGENT_CONSENT_CHOICE: "defer",
+      ...harnessEnv(harness),
     },
   });
   const shimPath = shimPathFor(userDataDir);

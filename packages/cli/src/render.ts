@@ -210,9 +210,9 @@ function renderWorktreeDiff(data: Record<string, unknown>): string {
 }
 
 function renderStableLines(command: string, data: unknown): string | null {
-  if (command === "worktree.status" && isRecord(data)) return renderWorktreeStatus(data);
-  if (command === "worktree.diff" && isRecord(data)) return renderWorktreeDiff(data);
   if (!isRecord(data)) return null;
+  if (command === "worktree.status") return renderWorktreeStatus(data);
+  if (command === "worktree.diff") return renderWorktreeDiff(data);
   if (["ticket.create", "ticket.update", "ticket.move"].includes(command)) {
     return renderTicketResult(data);
   }

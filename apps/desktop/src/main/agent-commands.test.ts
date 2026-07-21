@@ -1157,6 +1157,9 @@ describe("agent command service", () => {
       now: () => 100,
       newId: () => "ticket-one",
       git,
+      // The seeded worktreePath ("/wt/VC-1") is fictional; stub the disk-existence
+      // seam (C3) so this scenario isn't about that check.
+      worktreeExists: () => true,
     });
     await seedWorktreeTicket(service);
 
@@ -1256,6 +1259,7 @@ describe("agent command service", () => {
       now: () => 100,
       newId: () => "ticket-one",
       git,
+      worktreeExists: () => true,
     });
     await seedWorktreeTicket(service);
 
@@ -1347,6 +1351,7 @@ describe("agent command service", () => {
       now: () => 100,
       newId: () => "ticket-one",
       git,
+      worktreeExists: () => true,
     });
     await seedWorktreeTicket(service);
 
@@ -1415,6 +1420,7 @@ describe("agent command service", () => {
       now: () => 100,
       newId: () => "ticket-one",
       git,
+      worktreeExists: () => true,
     });
     await seedWorktreeTicket(service);
 
@@ -1430,6 +1436,135 @@ describe("agent command service", () => {
     expect(data.files.length).toBe(20);
     expect(data.totalFiles).toBe(25);
     expect(data.omittedFiles).toBe(5);
+  });
+
+  it("resolves an archived ticket by explicit id for worktree verbs, but other commands still refuse it (C2)", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    const { git } = scriptedGit(() => "");
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.0.0",
+      now: () => 100,
+      newId: () => "ticket-one",
+      git,
+      worktreeExists: () => true,
+    });
+    await seedWorktreeTicket(service);
+    await service.execute({
+      v: 1,
+      cmd: "ticket.archive",
+      args: { id: "VC-1" },
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+
+    // Read-only worktree verbs serve an archived ticket by explicit id —
+    // retention deliberately retains worktrees past archive (decision #76).
+    const status = await service.execute({
+      v: 1,
+      cmd: "worktree.status",
+      args: { id: "VC-1" },
+      ctx: { cwd: "/somewhere/else", env: {} },
+    });
+    expect(status).toMatchObject({ ok: true, data: { ticket: "VC-1", worktreePath: "/wt/VC-1" } });
+
+    // Every other command still refuses the same archived ticket outright.
+    const show = await service.execute({
+      v: 1,
+      cmd: "ticket.show",
+      args: { id: "VC-1" },
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+    expect(show).toMatchObject({ ok: false, error: { code: "ARCHIVED_TICKET" } });
+  });
+
+  it("refuses a stamped-but-deleted worktree directory with INVALID_REQUEST (C3)", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    const { git } = scriptedGit(() => "");
+    // No worktreeExists stub here — this exercises the REAL default (existsSync)
+    // against a directory that genuinely never existed by the time it's checked.
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.0.0",
+      now: () => 100,
+      newId: () => "ticket-one",
+      git,
+    });
+    const scratchBase = mkdtempSync(join(tmpdir(), "volli-missing-"));
+    const missingPath = join(scratchBase, "worktree");
+    rmSync(scratchBase, { recursive: true, force: true }); // stamped, then deleted
+    await seedWorktreeTicket(service, { worktreePath: missingPath });
+
+    const res = await service.execute({
+      v: 1,
+      cmd: "worktree.status",
+      args: { id: "VC-1" },
+      ctx: { cwd: "/somewhere/else", env: {} },
+    });
+    expect(res).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+    if (!res.ok) {
+      expect(res.error.message).toContain("missing on disk");
+      expect(res.error.message).toContain(missingPath);
+    }
+  });
+
+  it("resolves the worktree target from VOLLI_TICKET context even when the cwd sits elsewhere (K2)", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    const { git } = scriptedGit(() => "");
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.0.0",
+      now: () => 100,
+      newId: () => "ticket-one",
+      git,
+      worktreeExists: () => true,
+    });
+    await seedWorktreeTicket(service);
+
+    // Cwd is the MAIN checkout, not the worktree — only the VOLLI_TICKET env
+    // rung of the shared context ladder pins the ticket.
+    const viaEnv = await service.execute({
+      v: 1,
+      cmd: "worktree.status",
+      args: {},
+      ctx: { cwd: "/repo/volli", env: { ticket: "VC-1" } },
+    });
+    expect(viaEnv).toMatchObject({ ok: true, data: { ticket: "VC-1", worktreePath: "/wt/VC-1" } });
+
+    // Sanity: the same cwd with no VOLLI_TICKET env can't resolve any ticket.
+    const bare = await service.execute({
+      v: 1,
+      cmd: "worktree.status",
+      args: {},
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+    expect(bare).toMatchObject({ ok: false, error: { code: "CONTEXT_REQUIRED" } });
   });
 
   it("exposes worktree identity through ticket.show fields and ticket.brief prose", async () => {
