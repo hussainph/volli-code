@@ -53,23 +53,26 @@ function withCounterSuffix(fileName: string, n: number): string {
  * agent-facing materialized names must be stable and collision-free, so the
  * FIRST attachment to use a given `fileName` keeps it verbatim; every later
  * attachment with the same `fileName` gets a `-2`, `-3`, … counter inserted
- * before the extension. `url`-kind attachments are excluded (nothing is
- * materialized for them). Deterministic: the same chronological input always
- * produces the same mapping.
+ * before the extension. The counter skips over any name ALREADY assigned —
+ * a second `spec.png` alongside a verbatim `spec-2.png` becomes `spec-3.png`,
+ * never a duplicate (a duplicate would make the skip-if-exists materialize
+ * silently drop one attachment's bytes). `url`-kind attachments are excluded
+ * (nothing is materialized for them). Deterministic: the same chronological
+ * input always produces the same mapping.
  */
 export function materializedAttachmentNames(
   attachments: readonly TicketAttachment[],
 ): Map<string, string> {
-  const seenCounts = new Map<string, number>();
+  const taken = new Set<string>();
   const names = new Map<string, string>();
   for (const attachment of attachments) {
     if (attachment.kind !== "file") continue;
-    const priorUses = seenCounts.get(attachment.fileName) ?? 0;
-    seenCounts.set(attachment.fileName, priorUses + 1);
-    names.set(
-      attachment.id,
-      priorUses === 0 ? attachment.fileName : withCounterSuffix(attachment.fileName, priorUses + 1),
-    );
+    let candidate = attachment.fileName;
+    for (let n = 2; taken.has(candidate); n += 1) {
+      candidate = withCounterSuffix(attachment.fileName, n);
+    }
+    taken.add(candidate);
+    names.set(attachment.id, candidate);
   }
   return names;
 }

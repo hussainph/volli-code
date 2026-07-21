@@ -150,6 +150,33 @@ describe("materializedAttachmentNames — dedup counter", () => {
     expect(map.get("a2")).toBe("notes-2");
   });
 
+  it("never collides a counter-suffixed name with another attachment's verbatim name", () => {
+    // a3 is the second `spec.png`, so the naive counter would hand it
+    // `spec-2.png` — already taken verbatim by a2. It must skip ahead.
+    const map = materializedAttachmentNames([
+      fileAttachment("a1", "spec.png"),
+      fileAttachment("a2", "spec-2.png"),
+      fileAttachment("a3", "spec.png"),
+    ]);
+    expect(map.get("a1")).toBe("spec.png");
+    expect(map.get("a2")).toBe("spec-2.png");
+    expect(map.get("a3")).toBe("spec-3.png");
+    expect(new Set(map.values()).size).toBe(3);
+  });
+
+  it("never collides a verbatim name with an already-generated counter name", () => {
+    // a2's dedupe took `spec-2.png` before a3 arrived wanting it verbatim.
+    const map = materializedAttachmentNames([
+      fileAttachment("a1", "spec.png"),
+      fileAttachment("a2", "spec.png"),
+      fileAttachment("a3", "spec-2.png"),
+    ]);
+    expect(map.get("a1")).toBe("spec.png");
+    expect(map.get("a2")).toBe("spec-2.png");
+    expect(map.get("a3")).toBe("spec-2-2.png");
+    expect(new Set(map.values()).size).toBe(3);
+  });
+
   it("is deterministic — the same chronological input always maps the same way", () => {
     const attachments = [
       fileAttachment("a1", "spec.png"),
