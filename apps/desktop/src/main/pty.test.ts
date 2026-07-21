@@ -473,6 +473,20 @@ describe("volli:terminal-create", () => {
         ticket: { ticketId: "t", kickoff: { harnessId: "codex", prompt: 5 } },
       },
     ],
+    [
+      "a non-object resume",
+      { workspaceId: "w", cwd: "/x", cols: 80, rows: 24, ticket: { ticketId: "t", resume: 42 } },
+    ],
+    [
+      "a resume with a non-string sessionId",
+      {
+        workspaceId: "w",
+        cwd: "/x",
+        cols: 80,
+        rows: 24,
+        ticket: { ticketId: "t", resume: { sessionId: 7 } },
+      },
+    ],
   ])("rejects %s request without spawning", async (_label, req) => {
     const result = await invokeCreate(makeWebContents(), req);
     expect(result).toEqual({ ok: false, error: "Invalid terminal request" });
@@ -1341,6 +1355,27 @@ describe("PtyManager.interruptTicketSessions", () => {
   it("returns an empty array for a ticket with no live sessions", () => {
     expect(manager.interruptTicketSessions("itk1")).toEqual([]);
   });
+
+  it("keeps interrupting the rest when one session's pty write throws", async () => {
+    const broken = await createKickoffSession("itk1", { harnessId: "codex", prompt: "go" });
+    const healthy = await createKickoffSession("itk1", { harnessId: "codex", prompt: "go" });
+    if (!broken.result.ok || !healthy.result.ok) throw new Error("expected two sessions");
+    broken.pty.write.mockClear();
+    healthy.pty.write.mockClear();
+    broken.pty.write.mockImplementation(() => {
+      throw new Error("EIO: pty is gone");
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      const interrupted = manager.interruptTicketSessions("itk1");
+
+      expect(interrupted).toEqual([healthy.result.sessionId]);
+      expect(healthy.pty.write).toHaveBeenCalledWith("\x1b");
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
 });
 
 describe("resume launch (issue #78)", () => {
@@ -1433,6 +1468,12 @@ describe("resume launch (issue #78)", () => {
       sessionId: result.sessionId,
       previousSessionId: prior.id,
     });
+  });
+
+  it("rejects resuming an unknown session", async () => {
+    const result = await resumeExpectingError("rtk1", "no-such-session");
+    if (result.ok) throw new Error("expected an error");
+    expect(result.error).toContain("unknown session");
   });
 
   it("rejects resuming a harness with no resume support, without spawning", async () => {
