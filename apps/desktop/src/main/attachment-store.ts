@@ -22,33 +22,33 @@ export function attachmentsRoot(userDataPath: string): string {
 }
 
 /**
- * Guards `fileName` against escaping its attachment id directory: rejects any
- * `fileName` containing a path separator (`/` or, on Windows, `\`) or a `..`
- * substring. `fileName` must be the original basename ONLY — this is the one
- * place that invariant is enforced for the file store (the repo layer stores
- * whatever it's given; this module is the one that touches disk).
+ * Guards a path segment (`attachmentId` or `fileName`) against escaping the
+ * attachments root: rejects any value containing a path separator (`/` or, on
+ * Windows, `\`) or a `..` substring. `fileName` must be the original basename
+ * ONLY, and `attachmentId` a repo-generated UUID — this is the one place those
+ * invariants are enforced for the file store (the repo layer stores whatever
+ * it's given; this module is the one that touches disk). Guarding the id too
+ * matters most for {@link removeAttachmentFiles}: an unchecked id like `..`
+ * would `rmSync` the attachments root — or `userData` itself — recursively.
  */
-function assertSafeFileName(fileName: string): void {
-  if (
-    fileName.length === 0 ||
-    fileName.includes("/") ||
-    fileName.includes(sep) ||
-    fileName.includes("..")
-  ) {
-    throw new Error(`Unsafe attachment fileName: ${JSON.stringify(fileName)}`);
+function assertSafePathSegment(what: "attachmentId" | "fileName", value: string): void {
+  if (value.length === 0 || value.includes("/") || value.includes(sep) || value.includes("..")) {
+    throw new Error(`Unsafe attachment ${what}: ${JSON.stringify(value)}`);
   }
 }
 
 /** The absolute path an attachment's `fileName` is (or would be) stored at, under `root`. */
 export function attachmentFilePath(root: string, attachmentId: string, fileName: string): string {
-  assertSafeFileName(fileName);
+  assertSafePathSegment("attachmentId", attachmentId);
+  assertSafePathSegment("fileName", fileName);
   return join(root, attachmentId, fileName);
 }
 
 /**
  * Copies `sourcePath`'s bytes into the attachment's id directory (created if
  * absent) as `fileName`, and returns the stored absolute path. Throws if
- * `fileName` fails {@link assertSafeFileName}'s traversal guard.
+ * `attachmentId` or `fileName` fails {@link assertSafePathSegment}'s
+ * traversal guard.
  */
 export function importAttachmentFile(
   root: string,
@@ -64,5 +64,6 @@ export function importAttachmentFile(
 
 /** Removes an attachment's whole id directory. Idempotent — a missing directory is not an error. */
 export function removeAttachmentFiles(root: string, attachmentId: string): void {
+  assertSafePathSegment("attachmentId", attachmentId);
   rmSync(join(root, attachmentId), { recursive: true, force: true });
 }

@@ -72,7 +72,7 @@ export type CreateAttachmentInput = (
   | { kind: "url"; url: string }
 ) & {
   ticketId: string;
-  /** Defaults to the fileName/url via {@link defaultAttachmentLabel}. */
+  /** Omitted or empty defaults to the fileName/url via {@link defaultAttachmentLabel}. */
   label?: string;
   /** Audit-log attribution for the originating command. */
   eventActor?: TicketEventActor;
@@ -89,7 +89,9 @@ export function createAttachment(
   now: number,
 ): TicketAttachment {
   const run = db.transaction((): TicketAttachment => {
-    const label = input.label ?? defaultAttachmentLabel(input);
+    // `||`, not `??`: an empty-string label falls back too, upholding the
+    // schema's CHECK (label <> '') — label is never empty at rest.
+    const label = input.label || defaultAttachmentLabel(input);
     const attachment: TicketAttachment =
       input.kind === "file"
         ? {
