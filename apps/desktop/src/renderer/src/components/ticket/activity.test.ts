@@ -160,6 +160,9 @@ describe("describeEvent", () => {
     expect(describeEvent({ kind: "pr_opened", url: "https://github.com/fake/repo/pull/42" })).toBe(
       "opened a draft pull request",
     );
+    expect(describeEvent({ kind: "pr_merged", url: "https://github.com/fake/repo/pull/42" })).toBe(
+      "pull request merged",
+    );
   });
 });
 
@@ -177,6 +180,8 @@ describe("EVENT_KIND_PRIORITY", () => {
     const expected: TicketEventKind[] = [
       "worktree_failed",
       "status_changed",
+      "pr_merged",
+      "pr_opened",
       "session_started",
       "session_ended",
       "created",
@@ -192,6 +197,12 @@ describe("EVENT_KIND_PRIORITY", () => {
     ];
     expect(EVENT_KIND_PRIORITY).toEqual(expected);
     expect(EVENT_KIND_PRIORITY).not.toContain("commented");
+  });
+
+  it("outranks a routine edit with a merged PR", () => {
+    const edited = event({ kind: "body_edited" }, 10);
+    const merged = event({ kind: "pr_merged", url: "https://github.com/fake/repo/pull/42" }, 20);
+    expect(pickBunchLabel([edited, merged]).id).toBe(merged.id);
   });
 });
 

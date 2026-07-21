@@ -31,6 +31,7 @@ describe("TICKET_EVENT_KINDS", () => {
       "worktree_failed",
       "worktree_committed",
       "pr_opened",
+      "pr_merged",
       "session_signal",
     ]);
   });
@@ -66,6 +67,7 @@ describe("TicketEventPayload", () => {
       { kind: "worktree_failed", stage: "copy", stderr: "fatal: could not copy" },
       { kind: "worktree_committed", message: "chore(VC-12): commit remaining work" },
       { kind: "pr_opened", url: "https://github.com/acme/repo/pull/7" },
+      { kind: "pr_merged", url: "https://github.com/acme/repo/pull/7" },
       { kind: "session_signal", signal: "blocked", reason: "Waiting for credentials" },
     ];
     expect(payloads.map((p) => p.kind)).toEqual(TICKET_EVENT_KINDS);

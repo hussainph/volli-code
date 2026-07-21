@@ -19,10 +19,41 @@ export { diffStat } from "./diff";
 export type { DiffMode, DiffStatInput } from "./diff";
 export { commitRemaining } from "./commit";
 export type { CommitOutcome, CommitRemainingInput } from "./commit";
-export { runNet, fetchBase, pushBranch, ghCreateDraftPr, ghFindPr } from "./net";
-export type { RunNet, GhResult, GhFailure, GhFailureKind } from "./net";
+export {
+  runNet,
+  fetchBase,
+  pushBranch,
+  ghCreateDraftPr,
+  ghFindPr,
+  ghPrStatus,
+  ghDiscoverPr,
+} from "./net";
+export type { RunNet, GhResult, GhFailure, GhFailureKind, PrStatusReport } from "./net";
 export { publishTicketBranch, commitTicketRemaining } from "./publish";
 export type { PublishDeps, PublishOutcome } from "./publish";
+
+// Retention (CONCEPT #16, issue #76): the Done-TTL setting, the Keep-aware
+// archive-readiness verdict, the archive-and-clean composition, and the
+// merge-watch poll step + interval driver.
+export {
+  getRetentionTtlDays,
+  setRetentionTtlDays,
+  archiveAndClean,
+  DEFAULT_RETENTION_TTL_DAYS,
+} from "./retention";
+export {
+  RetentionWatcher,
+  createRetentionStore,
+  pollRetention,
+  getRetentionState,
+  retentionConfigFromEnv,
+} from "./watch";
+export type {
+  RetentionPollDeps,
+  RetentionStore,
+  RetentionWatchConfig,
+  TicketRetentionState,
+} from "./watch";
 
 // The PTY wiring drives the transient phase directly across the setup-command
 // step (`setting-up → ready | failed`), which happens in the terminal after

@@ -107,6 +107,7 @@ export function ProjectAutomationSettings({
           </div>
 
           <SetupCommandField project={project} onSave={onSaveSetupCommand} />
+          <DoneTtlField />
           <CopySetInfo />
           <DirtyWorktreesList />
         </section>
@@ -161,6 +162,104 @@ function SetupCommandField({
           }}
         />
         <Button disabled={!project || saving} onClick={() => void save()}>
+          {saving ? "Saving…" : "Save"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The global Done-TTL: whole days ≥ 1, or `null` when the input is blank/invalid
+ * (the field toasts and skips the write). Main clamps to ≥ 1 too — this is the
+ * front-line guard so an obviously-bad value never round-trips. Pure/exported
+ * for unit testing (the round-trip's only branching logic).
+ */
+export function parseTtlDaysInput(raw: string): number | null {
+  const parsed = Number.parseInt(raw.trim(), 10);
+  return Number.isFinite(parsed) && parsed >= 1 ? parsed : null;
+}
+
+/**
+ * Global Done-TTL setting (issue #76, CONCEPT #16): a PR-less ticket sitting in
+ * Done this many days is offered for archive & clean. App-wide (stored in
+ * `app_state`, not per project), so it's always enabled regardless of the
+ * selected project. Loads once via `getTtlDays`; saves via `setTtlDays` and
+ * reflects the clamped stored value main returns.
+ */
+function DoneTtlField() {
+  const [days, setDays] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.api.retention
+      .getTtlDays()
+      .then((result) => {
+        if (cancelled) return;
+        if (result.ok) setDays(String(result.days));
+        else toastError(`Could not load the Done TTL: ${result.error}`);
+        setLoaded(true);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        toastError(`Could not load the Done TTL: ${errorMessage(error)}`);
+        setLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function save(): Promise<void> {
+    if (saving) return;
+    const parsed = parseTtlDaysInput(days);
+    if (parsed === null) {
+      toastError("The Done TTL must be a whole number of days, at least 1.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const result = await window.api.retention.setTtlDays(parsed);
+      if (!result.ok) {
+        toastError(`Could not save the Done TTL: ${result.error}`);
+        return;
+      }
+      // Reflect the clamped, stored value main returns.
+      setDays(String(result.days));
+    } catch (error) {
+      toastError(`Could not save the Done TTL: ${errorMessage(error)}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="mt-5">
+      <label className="block text-sm font-medium" htmlFor="done-ttl-days">
+        Archive Done tickets after
+      </label>
+      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+        A ticket left in Done this many days with no open PR is offered for archive &amp; clean.
+        Defaults to 14 days.
+      </p>
+      <div className="mt-3 flex max-w-md items-center gap-2">
+        <Input
+          id="done-ttl-days"
+          type="number"
+          min={1}
+          value={days}
+          placeholder="14"
+          disabled={!loaded || saving}
+          onChange={(event) => setDays(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") void save();
+          }}
+          className="w-24"
+        />
+        <span className="text-sm text-muted-foreground">days</span>
+        <Button disabled={!loaded || saving} onClick={() => void save()}>
           {saving ? "Saving…" : "Save"}
         </Button>
       </div>

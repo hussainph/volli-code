@@ -50,6 +50,12 @@ import type {
   WorktreePushPrResult,
   WorktreeRemoveResult,
   WorktreeStatusResult,
+  RetentionArchiveCleanResult,
+  RetentionDismissResult,
+  RetentionKeepResult,
+  RetentionPollResult,
+  RetentionStateResult,
+  RetentionTtlResult,
 } from "@volli/shared";
 import { getAllAppState, setAppState } from "./db/app-state-repo";
 import { deleteComment, getComment, listComments, updateComment } from "./db/comments-repo";
@@ -72,6 +78,7 @@ import {
   listAllTickets,
   listArchivedTicketsByProject,
   listWorktreePaths,
+  setTicketRetentionKeep,
 } from "./db/tickets-repo";
 import {
   archiveTicketCommand,
@@ -88,15 +95,19 @@ import { detectProjectBaseBranch } from "./project-base-branch";
 import { broadcastDataChanged } from "./broadcast";
 import { orphanReport } from "./orphan-sweep";
 import {
+  archiveAndClean,
   commitTicketRemaining,
   diffStat,
+  getRetentionTtlDays,
   getWorktreeStatus,
   listBranches,
   publishTicketBranch,
   remove as removeWorktree,
   runNet,
+  setRetentionTtlDays,
   type DiffMode,
 } from "./worktree";
+import { getRetentionWatcher } from "./retention-runtime";
 import {
   canonicalize as canonicalizeWorktreePath,
   isInside as isInsideWorktreeHome,
@@ -142,6 +153,13 @@ const DATA_CHANNELS: readonly VolliIpcChannel[] = [
   "volli:worktree-diff",
   "volli:worktree-commit",
   "volli:worktree-push-pr",
+  "volli:retention-state",
+  "volli:retention-keep",
+  "volli:retention-dismiss",
+  "volli:retention-archive-clean",
+  "volli:retention-ttl-get",
+  "volli:retention-ttl-set",
+  "volli:retention-poll",
 ];
 
 // ---- input validation -------------------------------------------------
@@ -311,6 +329,13 @@ interface TicketIdInput {
 function isTicketIdInput(value: unknown): value is TicketIdInput {
   if (typeof value !== "object" || value === null) return false;
   return typeof (value as Record<string, unknown>)["ticketId"] === "string";
+}
+
+/** The `{ ticketId, keep }` shape for `volli:retention-keep`. */
+function isRetentionKeepInput(value: unknown): value is { ticketId: string; keep: boolean } {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate["ticketId"] === "string" && typeof candidate["keep"] === "boolean";
 }
 
 interface CommentCreateInput {
@@ -1192,4 +1217,121 @@ export function registerDataIpcHandlers(
       }
     },
   );
+
+  // ---- retention (CONCEPT #16, issue #76) ---------------------------------
+  // The merge-watch/Done-TTL surface. `state` is a read; `keep`/`dismiss`/
+  // `archive-clean`/`ttl-set` mutate and re-hydrate; `poll` triggers an
+  // immediate watch poll (e.g. on window focus). The watch singleton
+  // (retention-runtime.ts) is shared with index.ts's start/stop + focus wiring.
+
+  ipcMain.handle(
+    "volli:retention-state" satisfies VolliIpcChannel,
+    (_event, input: unknown): RetentionStateResult => {
+      if (!isTicketIdInput(input)) return { ok: false, error: "Invalid ticket" };
+      try {
+        const state = getRetentionWatcher(db).getState(input.ticketId);
+        if (state === null) return { ok: false, error: "Unknown ticket" };
+        return { ok: true, state };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:retention-keep" satisfies VolliIpcChannel,
+    (_event, input: unknown): RetentionKeepResult => {
+      if (!isRetentionKeepInput(input)) return { ok: false, error: "Invalid keep request" };
+      try {
+        if (!getTicketRow(db, input.ticketId)) return { ok: false, error: "Unknown ticket" };
+        setTicketRetentionKeep(db, input.ticketId, input.keep, Date.now());
+        // The pin exempts both retention paths — re-hydrate so the surface updates.
+        broadcastDataChanged();
+        return { ok: true, keep: input.keep };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:retention-dismiss" satisfies VolliIpcChannel,
+    (_event, input: unknown): RetentionDismissResult => {
+      if (!isTicketIdInput(input)) return { ok: false, error: "Invalid ticket" };
+      try {
+        // In-memory, launch-scoped: the prompt is re-offered next launch.
+        getRetentionWatcher(db).dismiss(input.ticketId);
+        broadcastDataChanged();
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:retention-archive-clean" satisfies VolliIpcChannel,
+    async (_event, input: unknown): Promise<RetentionArchiveCleanResult> => {
+      if (!isTicketIdInput(input)) return { ok: false, error: "Invalid ticket" };
+      try {
+        // Liveness guard, mirroring worktree-remove: never yank a worktree out
+        // from under a terminal still running in it.
+        const worktreePath = getTicketRow(db, input.ticketId)?.worktree_path ?? null;
+        if (
+          worktreePath !== null &&
+          liveSessionWithin(worktreePath, options.liveSessionCwds?.() ?? [])
+        ) {
+          return {
+            ok: false,
+            error: "Close the terminal sessions running in this worktree before archiving it.",
+          };
+        }
+        const result = await archiveAndClean(worktreeDeps(db), input.ticketId);
+        if (!result.ok) return { ok: false, error: result.error };
+        broadcastDataChanged();
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle("volli:retention-ttl-get" satisfies VolliIpcChannel, (): RetentionTtlResult => {
+    try {
+      return { ok: true, days: getRetentionTtlDays(db) };
+    } catch (error) {
+      return { ok: false, error: errorMessage(error) };
+    }
+  });
+
+  ipcMain.handle(
+    "volli:retention-ttl-set" satisfies VolliIpcChannel,
+    (_event, input: unknown): RetentionTtlResult => {
+      const days =
+        typeof input === "object" && input !== null
+          ? (input as Record<string, unknown>)["days"]
+          : undefined;
+      if (typeof days !== "number" || !Number.isFinite(days)) {
+        return { ok: false, error: "Invalid TTL" };
+      }
+      try {
+        const stored = setRetentionTtlDays(db, days, Date.now());
+        // The TTL clock moved — re-evaluate every ticket's archive-readiness.
+        broadcastDataChanged();
+        return { ok: true, days: stored };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle("volli:retention-poll" satisfies VolliIpcChannel, (): RetentionPollResult => {
+    try {
+      // Fire-and-forget: the poll runs async and broadcasts on change itself.
+      getRetentionWatcher(db).triggerNow();
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: errorMessage(error) };
+    }
+  });
 }

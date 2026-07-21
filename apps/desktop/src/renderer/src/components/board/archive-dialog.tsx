@@ -1,6 +1,7 @@
 import * as React from "react";
 import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
 import { ArrowUUpLeftIcon } from "@phosphor-icons/react/dist/csr/ArrowUUpLeft";
+import { GitPullRequestIcon } from "@phosphor-icons/react/dist/csr/GitPullRequest";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import {
   displayTicketId,
@@ -39,8 +40,23 @@ function formatArchivedAt(epochMs: number): string {
   });
 }
 
-/** One archived-ticket row: identity + title, its retained column, when it was archived, and the two actions. */
-function ArchiveRow({
+/**
+ * Opens an http(s) url externally. Reuses the app's one sanctioned external-open
+ * seam (the done-flow rail's "Open PR"): a `window.open` of an http(s) target
+ * never opens a BrowserWindow — main's `setWindowOpenHandler` denies it and
+ * routes the url to `shell.openExternal`. No new IPC needed.
+ */
+function openExternalUrl(url: string): void {
+  window.open(url, "_blank", "noopener");
+}
+
+/**
+ * One archived-ticket row: identity + title, its retained column, when it was
+ * archived, and — the retention record CONCEPT #16 promises the Archive keeps —
+ * the retained branch name and a link to its PR (both survive archive on
+ * {@link ArchivedTicket}). Plus the two lifecycle actions (Restore / Delete).
+ */
+export function ArchiveRow({
   project,
   ticket,
   onRequestDelete,
@@ -49,6 +65,7 @@ function ArchiveRow({
   ticket: ArchivedTicket;
   onRequestDelete(ticket: ArchivedTicket): void;
 }) {
+  const { branch, prUrl } = ticket;
   return (
     <li className="flex items-center gap-2 rounded-md px-2 py-2 hover:bg-accent/50">
       <div className="min-w-0 flex-1">
@@ -58,8 +75,31 @@ function ArchiveRow({
           </span>
           <span className="truncate text-sm">{ticket.title}</span>
         </div>
-        <div className="mt-0.5 text-xs text-muted-foreground">
-          {TICKET_STATUS_LABELS[ticket.status]} · Archived {formatArchivedAt(ticket.archivedAt)}
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
+          <span>{TICKET_STATUS_LABELS[ticket.status]}</span>
+          <span aria-hidden>·</span>
+          <span>Archived {formatArchivedAt(ticket.archivedAt)}</span>
+          {branch !== null ? (
+            <>
+              <span aria-hidden>·</span>
+              <span className="truncate font-mono" title={branch}>
+                {branch}
+              </span>
+            </>
+          ) : null}
+          {prUrl !== null ? (
+            <>
+              <span aria-hidden>·</span>
+              <button
+                type="button"
+                onClick={() => openExternalUrl(prUrl)}
+                className="inline-flex shrink-0 items-center gap-1 text-primary hover:underline"
+              >
+                <GitPullRequestIcon className="size-3" />
+                PR
+              </button>
+            </>
+          ) : null}
         </div>
       </div>
       <Button

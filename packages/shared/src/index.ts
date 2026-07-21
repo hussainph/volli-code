@@ -20,4 +20,5 @@ export * from "./ghostty-config";
 export * from "./session";
 export * from "./park";
 export * from "./volli-dir";
+export * from "./retention";
 export type * from "./ipc";

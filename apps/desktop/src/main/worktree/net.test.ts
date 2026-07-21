@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { fetchBase, ghCreateDraftPr, ghFindPr, pushBranch } from "./net";
+import { fetchBase, ghCreateDraftPr, ghDiscoverPr, ghFindPr, ghPrStatus, pushBranch } from "./net";
 import { netFailure, scriptedNet } from "./scripted-net";
 
 describe("fetchBase", () => {
@@ -220,6 +220,212 @@ describe("ghFindPr", () => {
       throw netFailure({ stderr: "gh auth login required", code: 1 });
     });
     const result = await ghFindPr(run, { worktreePath: "/wt", branch: "volli/VC-12-x" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.failure.kind).toBe("not-authenticated");
+  });
+});
+
+describe("ghPrStatus", () => {
+  const input = { worktreePath: "/wt", prUrl: "https://github.com/o/r/pull/7" };
+
+  it("runs gh pr view <url> with the retention json fields", async () => {
+    const { run, calls } = scriptedNet(() => ({
+      stdout: JSON.stringify({
+        state: "OPEN",
+        mergedAt: null,
+        mergeStateStatus: "CLEAN",
+        statusCheckRollup: [],
+      }),
+    }));
+    const result = await ghPrStatus(run, input);
+    expect(result.ok).toBe(true);
+    expect(calls[0]?.file).toBe("gh");
+    expect(calls[0]?.args).toEqual([
+      "pr",
+      "view",
+      "https://github.com/o/r/pull/7",
+      "--json",
+      "state,mergedAt,mergeStateStatus,statusCheckRollup",
+    ]);
+  });
+
+  it("parses an open, mergeable PR with passing checks", async () => {
+    const { run } = scriptedNet(() => ({
+      stdout: JSON.stringify({
+        state: "OPEN",
+        mergedAt: null,
+        mergeStateStatus: "CLEAN",
+        statusCheckRollup: [
+          { __typename: "CheckRun", name: "build", status: "COMPLETED", conclusion: "SUCCESS" },
+        ],
+      }),
+    }));
+    const result = await ghPrStatus(run, input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toEqual({
+      state: "open",
+      mergedAt: null,
+      hasConflicts: false,
+      failingChecks: [],
+    });
+  });
+
+  it("maps MERGED state and its mergedAt timestamp", async () => {
+    const { run } = scriptedNet(() => ({
+      stdout: JSON.stringify({
+        state: "MERGED",
+        mergedAt: "2026-07-20T10:00:00Z",
+        mergeStateStatus: "CLEAN",
+        statusCheckRollup: [],
+      }),
+    }));
+    const result = await ghPrStatus(run, input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.state).toBe("merged");
+    expect(result.value.mergedAt).toBe("2026-07-20T10:00:00Z");
+  });
+
+  it("flags a merge conflict from mergeStateStatus DIRTY", async () => {
+    const { run } = scriptedNet(() => ({
+      stdout: JSON.stringify({
+        state: "OPEN",
+        mergedAt: null,
+        mergeStateStatus: "DIRTY",
+        statusCheckRollup: [],
+      }),
+    }));
+    const result = await ghPrStatus(run, input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.hasConflicts).toBe(true);
+  });
+
+  it("collects failing check names from CheckRun conclusions and StatusContext states", async () => {
+    const { run } = scriptedNet(() => ({
+      stdout: JSON.stringify({
+        state: "OPEN",
+        mergedAt: null,
+        mergeStateStatus: "BLOCKED",
+        statusCheckRollup: [
+          { __typename: "CheckRun", name: "lint", status: "COMPLETED", conclusion: "FAILURE" },
+          { __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "SUCCESS" },
+          { __typename: "CheckRun", name: "e2e", status: "IN_PROGRESS", conclusion: null },
+          { __typename: "StatusContext", context: "ci/legacy", state: "ERROR" },
+          { __typename: "StatusContext", context: "ci/ok", state: "SUCCESS" },
+        ],
+      }),
+    }));
+    const result = await ghPrStatus(run, input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.failingChecks).toEqual(["lint", "ci/legacy"]);
+  });
+
+  it("treats an unparseable body as an unknown failure rather than throwing", async () => {
+    const { run } = scriptedNet(() => ({ stdout: "not json" }));
+    const result = await ghPrStatus(run, input);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.failure.kind).toBe("unknown");
+  });
+
+  it("classifies transport failures (network) like the other gh verbs", async () => {
+    const { run } = scriptedNet(() => {
+      throw netFailure({ stderr: "could not resolve host: api.github.com", code: 1 });
+    });
+    const result = await ghPrStatus(run, input);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.failure.kind).toBe("network");
+  });
+});
+
+describe("ghDiscoverPr", () => {
+  const wt = "/wt";
+
+  it("lists PRs for the branch in ANY state (the merge-watch must see merged PRs too)", async () => {
+    const { run, calls } = scriptedNet(() => ({ stdout: "[]" }));
+    await ghDiscoverPr(run, { worktreePath: wt, branch: "volli/VC-12-x" });
+    expect(calls[0]?.args).toEqual([
+      "pr",
+      "list",
+      "--head",
+      "volli/VC-12-x",
+      "--state",
+      "all",
+      "--json",
+      "url,state,updatedAt",
+    ]);
+  });
+
+  it("prefers an OPEN PR over a more-recently-updated closed one", async () => {
+    const { run } = scriptedNet(() => ({
+      stdout: JSON.stringify([
+        { url: "https://x/pull/1", state: "OPEN", updatedAt: "2026-07-01T00:00:00Z" },
+        { url: "https://x/pull/2", state: "CLOSED", updatedAt: "2026-07-20T00:00:00Z" },
+      ]),
+    }));
+    const result = await ghDiscoverPr(run, { worktreePath: wt, branch: "b" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.url).toBe("https://x/pull/1");
+  });
+
+  it("falls back to the most-recently-updated MERGED PR when none are open", async () => {
+    const { run } = scriptedNet(() => ({
+      stdout: JSON.stringify([
+        { url: "https://x/pull/1", state: "MERGED", updatedAt: "2026-07-01T00:00:00Z" },
+        { url: "https://x/pull/2", state: "CLOSED", updatedAt: "2026-07-20T00:00:00Z" },
+      ]),
+    }));
+    const result = await ghDiscoverPr(run, { worktreePath: wt, branch: "b" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // pull/2 is more recently updated, but it's CLOSED-UNMERGED (dead) — the
+    // MERGED pull/1 wins, proving the fallback is restricted to open-or-merged
+    // rather than "most recent in any state" (F2).
+    expect(result.value.url).toBe("https://x/pull/1");
+  });
+
+  it("never adopts a closed-unmerged PR — Create PR must stay available (F2)", async () => {
+    const { run } = scriptedNet(() => ({
+      stdout: JSON.stringify([
+        { url: "https://x/pull/1", state: "CLOSED", updatedAt: "2026-07-01T00:00:00Z" },
+        { url: "https://x/pull/2", state: "CLOSED", updatedAt: "2026-07-20T00:00:00Z" },
+      ]),
+    }));
+    const result = await ghDiscoverPr(run, { worktreePath: wt, branch: "b" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.url).toBeNull();
+  });
+
+  it("returns url=null (ok) when the branch has no PRs", async () => {
+    const { run } = scriptedNet(() => ({ stdout: "[]" }));
+    const result = await ghDiscoverPr(run, { worktreePath: wt, branch: "b" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.url).toBeNull();
+  });
+
+  it("returns url=null (ok) when gh reports no pull requests found", async () => {
+    const { run } = scriptedNet(() => {
+      throw netFailure({ stderr: 'no pull requests found for branch "b"', code: 1 });
+    });
+    const result = await ghDiscoverPr(run, { worktreePath: wt, branch: "b" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.url).toBeNull();
+  });
+
+  it("classifies real failures rather than swallowing them", async () => {
+    const { run } = scriptedNet(() => {
+      throw netFailure({ stderr: "gh auth login required", code: 1 });
+    });
+    const result = await ghDiscoverPr(run, { worktreePath: wt, branch: "b" });
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.failure.kind).toBe("not-authenticated");

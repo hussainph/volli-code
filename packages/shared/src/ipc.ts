@@ -82,7 +82,17 @@ export type VolliIpcChannel =
   | "volli:worktree-status"
   | "volli:worktree-diff"
   | "volli:worktree-commit"
-  | "volli:worktree-push-pr";
+  | "volli:worktree-push-pr"
+  // Retention (CONCEPT #16, issue #76): the merge-watch/Done-TTL surface. `state`
+  // is a read; `keep`/`dismiss`/`archive-clean`/`ttl-set` mutate; `poll` is the
+  // renderer-side trigger of an immediate poll (e.g. on window focus).
+  | "volli:retention-state"
+  | "volli:retention-keep"
+  | "volli:retention-dismiss"
+  | "volli:retention-archive-clean"
+  | "volli:retention-ttl-get"
+  | "volli:retention-ttl-set"
+  | "volli:retention-poll";
 
 /** Channel names for main→renderer push events (`webContents.send`). */
 export type VolliIpcEvent =
@@ -350,3 +360,55 @@ export type WorktreeCommitResult = Result<
 
 /** Ack for `volli:worktree-push-pr` — the opened/re-discovered PR url, and whether it pre-existed. */
 export type WorktreePushPrResult = Result<{ url: string; existing: boolean }>;
+
+// ---- retention (CONCEPT #16, issue #76) ------------------------------------
+
+/** Why a ticket is archive-ready — drives the retention prompt's copy. */
+export type RetentionReason = "pr-merged" | "ttl-expired";
+
+/**
+ * The composed retention state for ONE ticket, returned by
+ * `volli:retention-state`. Everything but `keep` is TRANSIENT (decision #42:
+ * persist identity, compute state) — recomputed from the merge-watch's last
+ * poll plus the live Done-TTL clock, never stored. `keep` is the durable pin
+ * (migration 010). `hasConflicts`/`failingChecks` are surfacing-only (the
+ * #44/#45 button-never-gate rule): they explain why a PR can't merge yet, they
+ * do not block the wrap-up prompt.
+ */
+export interface TicketRetentionState {
+  ticketId: string;
+  /** The watched PR url, or `null` when the ticket has none yet. */
+  prUrl: string | null;
+  /** The watched PR's state, or `null` when unknown / no PR. */
+  prState: "open" | "merged" | "closed" | null;
+  /** The PR's base branch conflicts with it (`mergeStateStatus` DIRTY). */
+  hasConflicts: boolean;
+  /** Display names of the PR's failing/errored checks (may be empty). */
+  failingChecks: string[];
+  /** Whether the Archive & clean prompt should be offered right now. */
+  archiveReady: boolean;
+  /** The condition behind `archiveReady` (still set when suppressed by dismissal). */
+  reason: RetentionReason | null;
+  /** The durable Keep pin — exempts the ticket from BOTH retention paths. */
+  keep: boolean;
+  /** Whether the prompt was dismissed this launch (re-offered next launch). */
+  dismissed: boolean;
+}
+
+/** The composed retention state for a ticket — returned by `volli:retention-state`. */
+export type RetentionStateResult = Result<{ state: TicketRetentionState }>;
+
+/** Ack for `volli:retention-keep` (set/clear the pin) — carries the new value. */
+export type RetentionKeepResult = Result<{ keep: boolean }>;
+
+/** Ack for `volli:retention-dismiss` — the prompt is suppressed until next launch. */
+export type RetentionDismissResult = Result;
+
+/** Ack for `volli:retention-archive-clean` — archives + removes the worktree (dirty refuses). */
+export type RetentionArchiveCleanResult = Result;
+
+/** The Done-TTL in days — returned by `volli:retention-ttl-get`/`-set`. */
+export type RetentionTtlResult = Result<{ days: number }>;
+
+/** Ack for `volli:retention-poll` — the on-focus/manual trigger of the merge-watch poll. */
+export type RetentionPollResult = Result;

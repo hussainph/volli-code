@@ -24,6 +24,7 @@ import { registerFileIpcHandlers } from "./volli-fs";
 import { broadcastDataChanged } from "./broadcast";
 import { startOrphanSweep } from "./orphan-sweep";
 import { worktreeDeps } from "./worktree-runtime";
+import { getRetentionWatcher } from "./retention-runtime";
 import { createAgentCommandService } from "./agent-commands";
 import { ensureVolliCliShim, volliRuntimePaths } from "./agent-runtime";
 import { startAgentSocket, type AgentSocketServer } from "./agent-socket";
@@ -325,6 +326,15 @@ app.whenReady().then(async () => {
           console.error("[worktree] sweep failed:", errorMessage(error));
         });
     });
+
+    // Retention merge-watch (CONCEPT #16, issue #76): the background 60s poll of
+    // each worktree ticket's PR, plus an on-focus trigger for immediacy. Started
+    // after first paint so it never competes with boot; a background read
+    // failure is silent (a read is not a mutation). Main-process focus detection
+    // is the established pattern (park/quit gates live here, not the renderer).
+    const retention = getRetentionWatcher(db);
+    mainWindow.webContents.once("did-finish-load", () => retention.start());
+    app.on("browser-window-focus", () => retention.triggerNow());
   }
 
   let shimPath = join(runtimePaths.binDir, "volli");

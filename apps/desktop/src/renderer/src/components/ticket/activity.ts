@@ -58,6 +58,8 @@ function belongsToSameBunch(previousAt: number, nextAt: number, now: number): bo
 export const EVENT_KIND_PRIORITY: readonly TicketEventKind[] = [
   "worktree_failed",
   "status_changed",
+  "pr_merged",
+  "pr_opened",
   "session_started",
   "session_ended",
   "created",
@@ -217,6 +219,8 @@ export function describeEvent(payload: TicketEventPayload): string | null {
       return "committed remaining work";
     case "pr_opened":
       return "opened a draft pull request";
+    case "pr_merged":
+      return "pull request merged";
     case "session_signal":
       return payload.reason === null
         ? `reported ${payload.signal}`

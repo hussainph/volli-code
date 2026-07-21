@@ -54,6 +54,12 @@ import type {
   WorktreePushPrResult,
   WorktreeRemoveResult,
   WorktreeStatusResult,
+  RetentionArchiveCleanResult,
+  RetentionDismissResult,
+  RetentionKeepResult,
+  RetentionPollResult,
+  RetentionStateResult,
+  RetentionTtlResult,
 } from "@volli/shared";
 
 // Minimal typed API surface exposed to the renderer.
@@ -276,6 +282,34 @@ const api = {
       return () =>
         ipcRenderer.removeListener("volli:worktree-phase" satisfies VolliIpcEvent, listener);
     },
+  },
+  retention: {
+    /**
+     * The composed retention state for a ticket (merge/conflict/failing-checks +
+     * archive-ready + reason + keep + dismissed). Everything but `keep` is
+     * transient (recomputed from the merge-watch's last poll + the live TTL
+     * clock); re-fetch on a `data-changed` push to stay current.
+     */
+    state: (ticketId: string): Promise<RetentionStateResult> =>
+      ipcRenderer.invoke("volli:retention-state" satisfies VolliIpcChannel, { ticketId }),
+    /** Sets/clears the durable Keep pin — exempts the ticket from BOTH retention paths. */
+    setKeep: (ticketId: string, keep: boolean): Promise<RetentionKeepResult> =>
+      ipcRenderer.invoke("volli:retention-keep" satisfies VolliIpcChannel, { ticketId, keep }),
+    /** Dismisses the Archive prompt for this launch (re-offered next launch — NOT the Keep pin). */
+    dismiss: (ticketId: string): Promise<RetentionDismissResult> =>
+      ipcRenderer.invoke("volli:retention-dismiss" satisfies VolliIpcChannel, { ticketId }),
+    /** Archive & clean: archives the ticket + removes its worktree (dirty refuses); branch retained. */
+    archiveAndClean: (ticketId: string): Promise<RetentionArchiveCleanResult> =>
+      ipcRenderer.invoke("volli:retention-archive-clean" satisfies VolliIpcChannel, { ticketId }),
+    /** The global Done-TTL in days. */
+    getTtlDays: (): Promise<RetentionTtlResult> =>
+      ipcRenderer.invoke("volli:retention-ttl-get" satisfies VolliIpcChannel),
+    /** Sets the global Done-TTL (clamped to ≥ 1 day); resolves with the stored value. */
+    setTtlDays: (days: number): Promise<RetentionTtlResult> =>
+      ipcRenderer.invoke("volli:retention-ttl-set" satisfies VolliIpcChannel, { days }),
+    /** Triggers an immediate merge-watch poll (e.g. on window focus / manual refresh). */
+    poll: (): Promise<RetentionPollResult> =>
+      ipcRenderer.invoke("volli:retention-poll" satisfies VolliIpcChannel),
   },
   fs: {
     listDirectory: (absPath: string): Promise<ListDirectoryResult> =>

@@ -252,6 +252,20 @@ const MIGRATION_009_TICKET_PR_URL = `
 ALTER TABLE tickets ADD COLUMN pr_url TEXT;
 `;
 
+/**
+ * Migration 010: the retention "Keep" pin (CONCEPT #16, issue #76).
+ * `tickets.retention_keep` (0/1, default 0) is an EXPLICIT per-ticket exemption
+ * from BOTH retention paths — the PR-merge archive prompt AND the Done-TTL sweep
+ * (Vibe Kanban's source-verified bug is a TTL sweep that ignores its own pinned
+ * flag; the keep pin here must be honored by both). Unlike the transient
+ * merge/conflict/archive-ready state (computed, never stored — decision #42),
+ * the pin is durable user intent, so it is a real column. Additive; every
+ * existing row starts `0` (not kept).
+ */
+const MIGRATION_010_RETENTION_KEEP = `
+ALTER TABLE tickets ADD COLUMN retention_keep INTEGER NOT NULL DEFAULT 0;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -289,6 +303,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 9,
     name: "tickets.pr_url — durable draft-PR url for the Done flow",
     sql: MIGRATION_009_TICKET_PR_URL,
+  },
+  {
+    version: 10,
+    name: "tickets.retention_keep — per-ticket retention Keep pin",
+    sql: MIGRATION_010_RETENTION_KEEP,
   },
 ];
 

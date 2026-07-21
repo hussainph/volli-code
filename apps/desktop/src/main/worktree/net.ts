@@ -272,3 +272,194 @@ export async function ghFindPr(
     return { ok: false, failure: classifyGh(caught) };
   }
 }
+
+// ---------------------------------------------------------------------------
+// gh — retention merge-watch (issue #76)
+// ---------------------------------------------------------------------------
+
+/**
+ * The parsed report the retention watch reads off `gh pr view` (issue #76).
+ * `state` is normalized to lowercase; `hasConflicts` reflects a `DIRTY`
+ * `mergeStateStatus` (the PR can't merge until rebased); `failingChecks` are the
+ * human-readable names of the checks the rollup reports as failed/errored — so
+ * the wrap-up prompt is never offered on a PR that can't actually merge (the
+ * #44 surface-don't-gate contract). NOTE: `gh pr view`'s `statusCheckRollup`
+ * does not expose per-check required-ness, so this counts ALL failing checks,
+ * not only required ones — surfacing, not gating, is the point.
+ */
+export interface PrStatusReport {
+  state: "open" | "merged" | "closed";
+  /** ISO timestamp the PR merged, or `null` when it is not merged. */
+  mergedAt: string | null;
+  /** `mergeStateStatus === "DIRTY"` — the branch conflicts with its base. */
+  hasConflicts: boolean;
+  /** Names of the checks the rollup reports as failing/errored (may be empty). */
+  failingChecks: string[];
+}
+
+/** The subset of a `gh pr view --json` body the watch reads (everything untyped-in). */
+interface GhPrViewBody {
+  state?: unknown;
+  mergedAt?: unknown;
+  mergeStateStatus?: unknown;
+  statusCheckRollup?: unknown;
+}
+
+/** Normalizes gh's UPPERCASE PR state; anything but MERGED/CLOSED reads as open. */
+function normalizePrState(raw: unknown): "open" | "merged" | "closed" {
+  const s = typeof raw === "string" ? raw.toUpperCase() : "";
+  if (s === "MERGED") return "merged";
+  if (s === "CLOSED") return "closed";
+  return "open";
+}
+
+/** A non-empty, real merge timestamp — gh omits/nulls it for unmerged PRs. */
+function normalizeMergedAt(raw: unknown): string | null {
+  if (typeof raw !== "string" || raw.length === 0) return null;
+  // gh renders an unset time field as the zero date on some paths; treat as null.
+  return raw.startsWith("0001-01-01") ? null : raw;
+}
+
+// A CheckRun conclusion (COMPLETED runs) that means the check did not pass.
+const FAILING_CHECK_CONCLUSIONS = new Set([
+  "FAILURE",
+  "TIMED_OUT",
+  "CANCELLED",
+  "STARTUP_FAILURE",
+  "ACTION_REQUIRED",
+]);
+// A StatusContext (legacy commit-status) state that means the context failed.
+const FAILING_STATUS_STATES = new Set(["FAILURE", "ERROR"]);
+
+/** The failing checks' display names, from both the CheckRun and StatusContext rollup shapes. */
+function extractFailingChecks(rollup: unknown): string[] {
+  if (!Array.isArray(rollup)) return [];
+  const names: string[] = [];
+  for (const entry of rollup) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const item = entry as {
+      conclusion?: unknown;
+      state?: unknown;
+      name?: unknown;
+      context?: unknown;
+    };
+    const failing =
+      (typeof item.conclusion === "string" && FAILING_CHECK_CONCLUSIONS.has(item.conclusion)) ||
+      (typeof item.state === "string" && FAILING_STATUS_STATES.has(item.state));
+    if (!failing) continue;
+    const name =
+      typeof item.name === "string" && item.name.length > 0
+        ? item.name
+        : typeof item.context === "string" && item.context.length > 0
+          ? item.context
+          : "check";
+    names.push(name);
+  }
+  return names;
+}
+
+/**
+ * `gh pr view <url> --json state,mergedAt,mergeStateStatus,statusCheckRollup`,
+ * parsed into a {@link PrStatusReport}. A body that won't parse is an `unknown`
+ * GhFailure (never a throw) so the caller treats it as a transient read error,
+ * not clean truth. Failures are classified like the other gh verbs.
+ */
+export async function ghPrStatus(
+  run: RunNet,
+  input: { worktreePath: string; prUrl: string },
+): Promise<GhResult<PrStatusReport>> {
+  try {
+    const { stdout } = await run(
+      "gh",
+      ["pr", "view", input.prUrl, "--json", "state,mergedAt,mergeStateStatus,statusCheckRollup"],
+      input.worktreePath,
+    );
+    let body: GhPrViewBody;
+    try {
+      body = JSON.parse(stdout) as GhPrViewBody;
+    } catch {
+      return {
+        ok: false,
+        failure: { kind: "unknown", message: `Unparseable gh pr view output: ${stdout}` },
+      };
+    }
+    return ghOk({
+      state: normalizePrState(body.state),
+      mergedAt: normalizeMergedAt(body.mergedAt),
+      hasConflicts: body.mergeStateStatus === "DIRTY",
+      failingChecks: extractFailingChecks(body.statusCheckRollup),
+    });
+  } catch (caught) {
+    return { ok: false, failure: classifyGh(caught) };
+  }
+}
+
+/** One row of `gh pr list --json url,state,updatedAt`. */
+interface GhPrListRow {
+  url?: unknown;
+  state?: unknown;
+  updatedAt?: unknown;
+}
+
+/**
+ * Picks the PR the watch should adopt for a branch: an OPEN one wins (there is
+ * at most one), else the most recently updated MERGED one. A CLOSED-UNMERGED
+ * PR is NEVER adopted — {@link ghFindPr}'s open-only contract exists
+ * specifically so "a dead PR never blocks a fresh one" (the Create PR
+ * affordance stays available), and durably stamping a closed-unmerged PR as
+ * this ticket's `pr_url` would contradict that: the rail would offer
+ * View PR / Push updates against a dead PR while quietly blocking Create PR.
+ * `null` when the list is empty, unparseable, or contains only
+ * closed-unmerged PRs — a discovery read must never invent a URL.
+ */
+function pickDiscoveredPr(stdout: string): string | null {
+  let rows: GhPrListRow[];
+  try {
+    const parsed = JSON.parse(stdout) as unknown;
+    rows = Array.isArray(parsed) ? (parsed as GhPrListRow[]) : [];
+  } catch {
+    return null;
+  }
+  const withUrl = rows.filter((r): r is GhPrListRow & { url: string } => typeof r.url === "string");
+  if (withUrl.length === 0) return null;
+  const open = withUrl.find((r) => typeof r.state === "string" && r.state.toUpperCase() === "OPEN");
+  if (open) return open.url;
+  const merged = withUrl.filter(
+    (r) => typeof r.state === "string" && r.state.toUpperCase() === "MERGED",
+  );
+  if (merged.length === 0) return null;
+  const mostRecent = merged.reduce((best, r) => {
+    const a = typeof r.updatedAt === "string" ? r.updatedAt : "";
+    const b = typeof best.updatedAt === "string" ? best.updatedAt : "";
+    return a > b ? r : best;
+  });
+  return mostRecent.url;
+}
+
+/**
+ * `gh pr list --head <branch> --state all --json url,state,updatedAt` — the
+ * merge-watch's PR DISCOVERY for a branch that has no stored `pr_url` yet
+ * (an agent may have opened the PR itself). Unlike {@link ghFindPr} (open-only,
+ * by design, so a dead PR never blocks a fresh one), this looks at ALL states
+ * because the watch must also see an already-merged PR. Returns the adopted url
+ * or `null`; "no pull requests found" is an empty result, not an error.
+ */
+export async function ghDiscoverPr(
+  run: RunNet,
+  input: { worktreePath: string; branch: string },
+): Promise<GhResult<{ url: string | null }>> {
+  try {
+    const { stdout } = await run(
+      "gh",
+      ["pr", "list", "--head", input.branch, "--state", "all", "--json", "url,state,updatedAt"],
+      input.worktreePath,
+    );
+    return ghOk({ url: pickDiscoveredPr(stdout) });
+  } catch (caught) {
+    const { stderr } = extractFailure(caught);
+    if (stderr.toLowerCase().includes("no pull requests found")) {
+      return ghOk({ url: null });
+    }
+    return { ok: false, failure: classifyGh(caught) };
+  }
+}
