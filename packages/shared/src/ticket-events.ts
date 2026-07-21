@@ -58,6 +58,12 @@ export const TICKET_EVENT_KINDS = [
   // `automation` actor; `reason` becomes the Needs Review badge when the loop
   // milestone lands.
   "session_signal",
+  // Attachments (`ticket_attachments`, migration 011, issue #77): spec
+  // material — a file or URL — attached to a ticket. Mirrors `commented`'s
+  // shape (the attachment itself lives in `ticket_attachments`, `label` here
+  // is just enough for the event log to read without a join).
+  "attachment_added",
+  "attachment_removed",
 ] as const;
 
 export type TicketEventKind = (typeof TICKET_EVENT_KINDS)[number];
@@ -128,7 +134,9 @@ export type TicketEventPayload =
   | { kind: "worktree_committed"; message: string }
   | { kind: "pr_opened"; url: string }
   | { kind: "pr_merged"; url: string }
-  | { kind: "session_signal"; signal: "done" | "blocked"; reason: string | null };
+  | { kind: "session_signal"; signal: "done" | "blocked"; reason: string | null }
+  | { kind: "attachment_added"; attachmentId: string; label: string }
+  | { kind: "attachment_removed"; attachmentId: string; label: string };
 
 /**
  * The `ensure`-pipeline stage a `worktree_failed` event aborted at

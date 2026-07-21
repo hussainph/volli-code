@@ -6,6 +6,7 @@ export * from "./harness";
 export * from "./agent-surface";
 export * from "./ticket-branch";
 export * from "./ticket-comment";
+export * from "./ticket-attachment";
 export * from "./ticket-events";
 export * from "./ticket-filter";
 export * from "./ticket-sort";
