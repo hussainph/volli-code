@@ -9,13 +9,17 @@ import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-hel
 import { getTicketRow, insertTicket, updateTicketFields } from "../db/tickets-repo";
 import {
   archiveAndClean,
-  computeArchiveReadiness,
   DEFAULT_RETENTION_TTL_DAYS,
   doneEntryTimestamp,
   getRetentionTtlDays,
   setRetentionTtlDays,
 } from "./retention";
 import { scriptedGit } from "./scripted-git";
+
+// `computeArchiveReadiness` (+ its ArchiveReadiness*/ types) moved to
+// `@volli/shared` (K2, pure/dependency-free domain logic) along with its unit
+// tests — see packages/shared/src/retention.test.ts. This module re-exports it
+// unchanged, so nothing else here needed to move.
 
 let ctx: TestDb;
 let tempDirs: string[] = [];
@@ -35,8 +39,6 @@ function tempDir(prefix: string): string {
   tempDirs.push(dir);
   return dir;
 }
-
-const DAY = 24 * 60 * 60 * 1000;
 
 describe("retention TTL setting", () => {
   it("defaults to 14 days when unset", () => {
@@ -100,79 +102,6 @@ describe("doneEntryTimestamp", () => {
   it("recognizes a ticket created directly in done", () => {
     recordTicketEvent(ctx.db, "t1", { kind: "created", status: "done", title: "T" }, 42);
     expect(doneEntryTimestamp(ctx.db, "t1")).toBe(42);
-  });
-});
-
-describe("computeArchiveReadiness", () => {
-  const base = {
-    status: "done" as const,
-    keep: false,
-    dismissed: false,
-    prState: null,
-    doneEntryAt: 0,
-    now: 100 * DAY,
-    ttlMs: 14 * DAY,
-  };
-
-  it("flags a merged PR as archive-ready in any column (reason pr-merged)", () => {
-    expect(
-      computeArchiveReadiness({
-        ...base,
-        status: "needs_review",
-        prState: "merged",
-        doneEntryAt: null,
-      }),
-    ).toEqual({ archiveReady: true, reason: "pr-merged" });
-  });
-
-  it("does not TTL a ticket whose Done entry is younger than the TTL", () => {
-    expect(computeArchiveReadiness({ ...base, doneEntryAt: 99 * DAY })).toEqual({
-      archiveReady: false,
-      reason: null,
-    });
-  });
-
-  it("flags a Done, PR-less ticket past its TTL (reason ttl-expired)", () => {
-    expect(computeArchiveReadiness({ ...base, doneEntryAt: 80 * DAY })).toEqual({
-      archiveReady: true,
-      reason: "ttl-expired",
-    });
-  });
-
-  it("never TTLs a ticket with an OPEN PR — it waits for the merge", () => {
-    expect(computeArchiveReadiness({ ...base, prState: "open", doneEntryAt: 1 })).toEqual({
-      archiveReady: false,
-      reason: null,
-    });
-  });
-
-  it("TTLs a Done ticket whose PR was closed (not merged) once expired", () => {
-    expect(computeArchiveReadiness({ ...base, prState: "closed", doneEntryAt: 1 })).toEqual({
-      archiveReady: true,
-      reason: "ttl-expired",
-    });
-  });
-
-  it("suppresses the prompt when dismissed, but still reports the reason", () => {
-    expect(computeArchiveReadiness({ ...base, prState: "merged", dismissed: true })).toEqual({
-      archiveReady: false,
-      reason: "pr-merged",
-    });
-  });
-
-  // The Vibe-Kanban bug, encoded: a kept ticket is exempt from BOTH paths.
-  it("Keep exempts a merged-PR ticket (merge path)", () => {
-    expect(computeArchiveReadiness({ ...base, prState: "merged", keep: true })).toEqual({
-      archiveReady: false,
-      reason: null,
-    });
-  });
-
-  it("Keep exempts an expired Done ticket (TTL path)", () => {
-    expect(computeArchiveReadiness({ ...base, doneEntryAt: 1, keep: true })).toEqual({
-      archiveReady: false,
-      reason: null,
-    });
   });
 });
 

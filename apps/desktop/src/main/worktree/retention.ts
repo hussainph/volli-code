@@ -8,15 +8,17 @@
  *    ui/workspace persist stores already use);
  *  - `doneEntryTimestamp`, the event-log read that dates a ticket's LATEST entry
  *    into the Done column — the anchor the TTL counts from;
- *  - `computeArchiveReadiness`, the pure verdict (merge vs TTL vs neither) with
- *    the Keep-pin and dismissal exemptions folded in — the one place the
- *    Vibe-Kanban bug (a TTL sweep that ignores its own pin) is forbidden;
+ *  - `computeArchiveReadiness` (re-exported from `@volli/shared` — it's pure
+ *    and dependency-free, so it lives there), the verdict (merge vs TTL vs
+ *    neither) with the Keep-pin and dismissal exemptions folded in — the one
+ *    place the Vibe-Kanban bug (a TTL sweep that ignores its own pin) is
+ *    forbidden;
  *  - `archiveAndClean`, the human-disposes composition: it reuses `remove`
  *    (dirty ALWAYS refuses via the shared refusal contract) and the existing
  *    archive path, adding no new git call site (decision #42).
  */
 import type Database from "better-sqlite3";
-import type { TicketEventActor, TicketEventPayload, TicketStatus } from "@volli/shared";
+import type { TicketEventActor, TicketEventPayload } from "@volli/shared";
 
 import { getAllAppState, setAppState } from "../db/app-state-repo";
 import { prepared } from "../db/prepared";
@@ -80,12 +82,16 @@ export function retentionTtlMs(db: Database.Database): number {
  * bounced out of and back into Done counts from the LATEST entry.
  */
 export function doneEntryTimestamp(db: Database.Database, ticketId: string): number | null {
+  // `.iterate()` (not `.all()`) so a ticket with a long event log stops at the
+  // FIRST matching row instead of materializing and JSON-parsing every
+  // status_changed/created event it ever had — this runs once per ticket per
+  // `volli:retention-state` call (K3), so the per-row cost compounds.
   const rows = prepared<[string], { payload: string; created_at: number }>(
     db,
     `SELECT payload, created_at FROM ticket_events
        WHERE ticket_id = ? AND kind IN ('status_changed', 'created')
        ORDER BY created_at DESC, rowid DESC`,
-  ).all(ticketId);
+  ).iterate(ticketId);
   for (const row of rows) {
     let payload: TicketEventPayload;
     try {
@@ -99,57 +105,21 @@ export function doneEntryTimestamp(db: Database.Database, ticketId: string): num
   return null;
 }
 
-/** Why a ticket is archive-ready — drives the prompt copy. */
-export type RetentionReason = "pr-merged" | "ttl-expired";
-
-/** The inputs the readiness verdict is a pure function of. */
-export interface ArchiveReadinessInput {
-  status: TicketStatus;
-  /** The durable Keep pin — exempts BOTH paths. */
-  keep: boolean;
-  /** In-memory, launch-scoped dismissal of the prompt (suppresses, doesn't exempt). */
-  dismissed: boolean;
-  /** The watched PR's state, or `null` when the ticket has no PR. */
-  prState: "open" | "merged" | "closed" | null;
-  /** Epoch ms the ticket entered Done, or `null` when unknown. */
-  doneEntryAt: number | null;
-  now: number;
-  ttlMs: number;
-}
-
-/** The readiness verdict: whether to prompt, and the underlying reason. */
-export interface ArchiveReadiness {
-  archiveReady: boolean;
-  reason: RetentionReason | null;
-}
-
 /**
- * The pure retention verdict. Precedence:
- *  1. Keep pin — a HARD exemption from both paths (`reason: null`). This is the
- *     Vibe-Kanban anti-pattern encoded as a guarantee: their TTL sweep ignores
- *     its own pin; ours must not, so the pin short-circuits before any path.
- *  2. Merge path — a MERGED PR is archive-ready in any column.
- *  3. TTL path — a Done ticket with NO open PR (an open PR waits for its merge,
- *     never a TTL) whose Done entry is at least `ttlMs` old.
- * `archiveReady` is the reason being met AND not dismissed; `reason` still
- * reports the met condition when dismissed, so the surface can explain itself.
+ * The archive-readiness verdict is pure and dependency-free, so it lives in
+ * `@volli/shared` (K2) alongside the repo's other pure domain logic; this
+ * re-export keeps every existing importer (the merge-watch, its IPC surface,
+ * this module's own `archiveAndClean`) working unchanged.
  */
-export function computeArchiveReadiness(input: ArchiveReadinessInput): ArchiveReadiness {
-  if (input.keep) return { archiveReady: false, reason: null };
-
-  let reason: RetentionReason | null = null;
-  if (input.prState === "merged") {
-    reason = "pr-merged";
-  } else if (
-    input.status === "done" &&
-    input.prState !== "open" &&
-    input.doneEntryAt !== null &&
-    input.now - input.doneEntryAt >= input.ttlMs
-  ) {
-    reason = "ttl-expired";
-  }
-  return { archiveReady: reason !== null && !input.dismissed, reason };
-}
+export {
+  computeArchiveReadiness,
+  type ArchiveReadiness,
+  type ArchiveReadinessInput,
+} from "@volli/shared";
+// `RetentionReason` also moved — it was already duplicated character-identical
+// with `packages/shared/src/ipc.ts` (K1); nothing in this file uses it directly
+// (the type only appears inside `ArchiveReadiness`, re-exported above), so no
+// import is needed here.
 
 // The archive here is a human-disposed affordance (the UI's "Archive & clean"),
 // so its `archived` event is attributed to the user — matching volli:ticket-archive.
