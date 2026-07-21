@@ -35,6 +35,12 @@ vi.mock("electron", () => ({
       handlers.set(channel, handler);
     },
   },
+  // `worktree-runtime`'s real `worktreeDeps` resolves `attachmentsRoot` off
+  // this — a stable stand-in path is enough since none of the mocked worktree
+  // functions below actually read it.
+  app: {
+    getPath: () => "/volli-test-userdata",
+  },
   // The worktree remove/orphan-delete broadcasts fan out over BrowserWindow;
   // one fake window records each send so tests can assert the re-hydrate fired.
   BrowserWindow: {

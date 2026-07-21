@@ -7,6 +7,7 @@ import {
   agentSessionEnv,
   projectArtifactsDir,
   projectSessionEnv,
+  sessionAttachmentsDir,
   ticketSessionEnv,
   volliDir,
 } from "./volli-dir";
@@ -30,6 +31,28 @@ describe("volliDir", () => {
 describe("projectArtifactsDir", () => {
   it("nests artifacts under the project's .volli dir", () => {
     expect(projectArtifactsDir("/Users/dev/project")).toBe("/Users/dev/project/.volli/artifacts");
+  });
+});
+
+describe("sessionAttachmentsDir", () => {
+  it("nests attachments under the SESSION root's .volli dir", () => {
+    expect(sessionAttachmentsDir("/Users/dev/project")).toBe(
+      "/Users/dev/project/.volli/attachments",
+    );
+  });
+
+  it("resolves against a worktree root, not the main project path — the ticket-scoped exception (decision #19)", () => {
+    // Unlike projectArtifactsDir (always main-repo-keyed), this rule's
+    // `rootPath` is whatever session checkout is live — a worktree path here.
+    expect(sessionAttachmentsDir("/Users/dev/project/.volli/worktrees/repo-abc/VC-12")).toBe(
+      "/Users/dev/project/.volli/worktrees/repo-abc/VC-12/.volli/attachments",
+    );
+  });
+
+  it("strips a trailing slash on the root path first", () => {
+    expect(sessionAttachmentsDir("/Users/dev/project/")).toBe(
+      "/Users/dev/project/.volli/attachments",
+    );
   });
 });
 

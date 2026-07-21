@@ -6,7 +6,8 @@
  *
  * Order (git first, DB write last — DB writes never straddle long-running git):
  *   resolve identity → reconcile → resolve base → git worktree add → copy step
- *   → persist identity (emits `worktree_changed`) → phase `ready`.
+ *   → materialize attachments (CONCEPT decision #19, issue #77 PR 2) →
+ *   persist identity (emits `worktree_changed`) → phase `ready`.
  *
  * On failure at any stage: phase → `failed`, a `worktree_failed` ticket event
  * with the stage + trimmed stderr, and a typed error Result the caller toasts —
@@ -21,6 +22,7 @@ import {
   type WorktreeIdentity,
 } from "@volli/shared";
 
+import { materializeAttachments } from "../attachment-materialize";
 import { recordTicketEvent } from "../db/events-repo";
 import { getProjectById } from "../db/projects-repo";
 import { getTicketRow } from "../db/tickets-repo";
@@ -52,7 +54,7 @@ const inflight = new Map<string, Promise<WorktreeResult<EnsureOutcome>>>();
 // System-driven, no session: these mutations are attributed to automation.
 const SYSTEM_ACTOR: TicketEventActor = { kind: "automation" };
 
-type Stage = "create" | "copy";
+type Stage = "create" | "copy" | "attachments";
 
 /** Records the failure event + phase, returns the typed error Result. */
 function fail(
@@ -165,6 +167,18 @@ async function runEnsure(
   } catch (caught) {
     const message = caught instanceof Error ? caught.message : String(caught);
     return fail(deps, ticketId, "copy", message, message);
+  }
+
+  // Materialize the ticket's file attachments into the fresh worktree
+  // (CONCEPT decision #19, issue #77 PR 2) — still within the "copying"
+  // phase; there's no dedicated phase for this quick post-copy step. A
+  // missing source file (row exists, bytes don't) throws with the
+  // attachment's label, which becomes this stage's failure message.
+  try {
+    materializeAttachments(deps.db, deps.attachmentsRoot, ticketId, identity.path);
+  } catch (caught) {
+    const message = caught instanceof Error ? caught.message : String(caught);
+    return fail(deps, ticketId, "attachments", message, message);
   }
 
   // Persist identity (synchronous, after all git work) — emits `worktree_changed`.

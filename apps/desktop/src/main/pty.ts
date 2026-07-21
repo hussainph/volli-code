@@ -6,8 +6,10 @@ import { basename, resolve } from "node:path";
 import type Database from "better-sqlite3";
 import {
   agentSessionEnv,
+  attachmentsSectionInput,
   breatheShouldWake,
   buildHarnessCommand,
+  composeAttachmentsSection,
   createSessionRecord,
   DEFAULT_HARNESS_ID,
   displayTicketId,
@@ -34,11 +36,14 @@ import type {
   VolliIpcChannel,
   VolliIpcEvent,
 } from "@volli/shared";
+import { attachmentsRoot } from "./attachment-store";
+import { materializeAttachments } from "./attachment-materialize";
 import { broadcastDataChanged } from "./broadcast";
 import type { DbHandle } from "./data-ipc";
 import { createProcessInspector, parkConfigFromEnv } from "./park";
 import type { ParkConfig, ProcessInspector } from "./park";
 import { recordTicketEvent } from "./db/events-repo";
+import { listAttachments } from "./db/attachments-repo";
 import {
   countProjectScratchSessions,
   countTicketSessions,
@@ -249,6 +254,12 @@ export class PtyManager {
    * @param parkConfig warm-park tuning; disabled config makes every park path a
    *                   no-op. Additive with defaults so existing callers/tests
    *                   need not pass it.
+   * @param attachmentsRootPath the userData attachment-bytes root (issue #77
+   *                   PR 2) a non-worktree ticket's kickoff materializes from
+   *                   before spawn — see `resolveScope`. Defaults to `""`
+   *                   (never used in production; `registerTerminalIpcHandlers`
+   *                   always resolves the real path) so existing tests/callers
+   *                   that never seed attachments need not pass it.
    */
   constructor(
     private readonly db: Database.Database | null,
@@ -256,6 +267,7 @@ export class PtyManager {
     private readonly inspector: ProcessInspector = createProcessInspector(),
     private readonly parkConfig: ParkConfig = parkConfigFromEnv(process.env, process.platform),
     private readonly agentRuntime: AgentRuntimeEnvironment | null = null,
+    private readonly attachmentsRootPath: string = "",
   ) {}
 
   /**
@@ -286,6 +298,34 @@ export class PtyManager {
       const displayId = displayTicketId(ctx.ticketPrefix, ctx.ticketNumber);
       const kickoff = request.ticket.kickoff;
       const usesWorktree = ctx.usesWorktree;
+      // A non-worktree kickoff builds its harness command up front and
+      // launches it directly (unchanged). A worktree session defers this to
+      // create() — the preamble needs the resolved identity — so its command
+      // is null here and the raw kickoff rides on `worktree` instead.
+      //
+      // A worktree-opt-out ticket never runs `ensure`, so THIS is the one
+      // place its attachments materialize (CONCEPT decision #19) — into the
+      // PROJECT root, since that root IS the session's checkout. The composed
+      // "## Attachments" section is appended after the ticket prompt. A
+      // materialize failure (a stored attachment's bytes are missing) must
+      // surface as the create-path error the caller toasts, not be swallowed.
+      let launchCommand: string | null = null;
+      if (!usesWorktree && kickoff !== undefined) {
+        let prompt = kickoff.prompt;
+        try {
+          const materialized = materializeAttachments(
+            db,
+            this.attachmentsRootPath,
+            request.ticket.ticketId,
+            ctx.projectPath,
+          );
+          const attachmentsSection = composeAttachmentsSection(materialized);
+          if (attachmentsSection.length > 0) prompt = `${prompt}\n\n${attachmentsSection}`;
+        } catch (error) {
+          return { ok: false, error: errorMessage(error) };
+        }
+        launchCommand = buildHarnessCommand(kickoff.harnessId, prompt);
+      }
       return {
         ok: true,
         scope: {
@@ -304,14 +344,7 @@ export class PtyManager {
           env: ticketSessionEnv(ctx.projectPath, displayId),
           title: `Session ${countTicketSessions(db, request.ticket.ticketId) + 1}`,
           artifactsRoot: ctx.projectPath,
-          // A non-worktree kickoff builds its harness command up front and
-          // launches it directly (unchanged). A worktree session defers this to
-          // create() — the preamble needs the resolved identity — so its command
-          // is null here and the raw kickoff rides on `worktree` instead.
-          launchCommand:
-            !usesWorktree && kickoff !== undefined
-              ? buildHarnessCommand(kickoff.harnessId, kickoff.prompt)
-              : null,
+          launchCommand,
           worktree: usesWorktree
             ? {
                 ticketId: request.ticket.ticketId,
@@ -550,20 +583,29 @@ export class PtyManager {
       // enqueueData sees the completion sentinel. A reused worktree (created
       // false) is already `ready` from ensure and launches immediately.
       const worktree = scope.worktree;
-      if (worktree !== null && worktreeOutcome !== null) {
+      let launchCommand: string | null = null;
+      if (worktree !== null && worktree.kickoff !== null && worktreeOutcome !== null) {
         const identity = worktreeOutcome.identity;
-        const launchCommand =
-          worktree.kickoff !== null
-            ? buildHarnessCommand(
-                worktree.kickoff.harnessId,
-                `${worktreeOrientationPreamble({
-                  worktreePath: cwd,
-                  branch: identity.branch ?? "",
-                  baseBranch: identity.baseBranch,
-                  projectPath: worktree.projectPath,
-                })}\n\n${worktree.kickoff.prompt}`,
-              )
-            : null;
+        // `ensure` already materialized the ticket's attachments into this
+        // worktree (CONCEPT decision #19); the section is re-derived here —
+        // cheap, deterministic, no fs touch — rather than threading the
+        // materialize output through EnsureOutcome.
+        const attachmentsSection = composeAttachmentsSection(
+          attachmentsSectionInput(listAttachments(db, worktree.ticketId)),
+        );
+        const attachmentsSuffix = attachmentsSection.length > 0 ? `\n\n${attachmentsSection}` : "";
+        const preamble = worktreeOrientationPreamble({
+          worktreePath: cwd,
+          branch: identity.branch ?? "",
+          baseBranch: identity.baseBranch,
+          projectPath: worktree.projectPath,
+        });
+        launchCommand = buildHarnessCommand(
+          worktree.kickoff.harnessId,
+          `${preamble}\n\n${worktree.kickoff.prompt}${attachmentsSuffix}`,
+        );
+      }
+      if (worktree !== null && worktreeOutcome !== null) {
         const setupCommand = worktree.setupCommand?.trim() ?? "";
         if (worktreeOutcome.created && setupCommand.length > 0) {
           session.setupWatch = { ticketId: worktree.ticketId, tail: "", launchCommand };
@@ -1382,12 +1424,15 @@ export function registerTerminalIpcHandlers(
   handle: DbHandle,
   agentRuntime: AgentRuntimeEnvironment | null = null,
 ): PtyManager {
+  // Same resolution as worktree-runtime.ts's `worktreeDeps`: one production
+  // seam, `app.getPath("userData")`-derived.
+  const attachmentsRootPath = attachmentsRoot(app.getPath("userData"));
   // Every session persists a durable record, so the manager needs the db. When
   // it failed to open, `create` reports the open error (write/kill/etc. operate
   // on the — necessarily empty — live map and stay harmless no-ops).
   const manager = handle.ok
-    ? new PtyManager(handle.db, "", undefined, undefined, agentRuntime)
-    : new PtyManager(null, handle.error, undefined, undefined, agentRuntime);
+    ? new PtyManager(handle.db, "", undefined, undefined, agentRuntime, attachmentsRootPath)
+    : new PtyManager(null, handle.error, undefined, undefined, agentRuntime, attachmentsRootPath);
 
   ipcMain.handle(
     "volli:terminal-create" satisfies VolliIpcChannel,

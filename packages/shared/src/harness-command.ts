@@ -63,6 +63,47 @@ export function buildHarnessCommand(harnessId: HarnessId, prompt: string): strin
   return [adapter.command, adapter.promptFlag, quoted].filter(Boolean).join(" ");
 }
 
+/** The last `/`-segment of a relative path — the materialized file's own basename. */
+function basenameOf(relPath: string): string {
+  const idx = relPath.lastIndexOf("/");
+  return idx === -1 ? relPath : relPath.slice(idx + 1);
+}
+
+/**
+ * The prompt's "## Attachments" section (CONCEPT decision #19): lists every
+ * materialized file's relative path plus every URL attachment, so the agent
+ * knows exactly what spec material it has and where. Returns `""` when there
+ * is nothing to list — main and the CLI's `ticket.brief` both skip appending
+ * a separator in that case. A file/URL's label is suffixed with ` — ${label}`
+ * only when it differs from the raw name (the file's basename) or URL —
+ * repeating an identical label would be pure noise. The "Read each attached
+ * file…" lead-in appears only when there's at least one file; "Reference
+ * URLs:" only when there's at least one URL.
+ */
+export function composeAttachmentsSection(input: {
+  files: readonly { relPath: string; label: string }[];
+  urls: readonly { url: string; label: string }[];
+}): string {
+  if (input.files.length === 0 && input.urls.length === 0) return "";
+
+  const lines: string[] = ["## Attachments", ""];
+  if (input.files.length > 0) {
+    lines.push("Read each attached file before starting — they are part of the ticket's spec:");
+    for (const file of input.files) {
+      const suffix = file.label === basenameOf(file.relPath) ? "" : ` — ${file.label}`;
+      lines.push(`- \`${file.relPath}\`${suffix}`);
+    }
+  }
+  if (input.urls.length > 0) {
+    lines.push("Reference URLs:");
+    for (const url of input.urls) {
+      const suffix = url.label === url.url ? "" : ` — ${url.label}`;
+      lines.push(`- ${url.url}${suffix}`);
+    }
+  }
+  return lines.join("\n");
+}
+
 /**
  * The orientation preamble a worktree ticket's prompt OPENS with
  * (worktree-support §6): agents must never infer — much less "reorient" —
