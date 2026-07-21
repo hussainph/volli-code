@@ -374,17 +374,33 @@ describe("ghDiscoverPr", () => {
     expect(result.value.url).toBe("https://x/pull/1");
   });
 
-  it("falls back to the most-recently-updated PR when none are open", async () => {
+  it("falls back to the most-recently-updated MERGED PR when none are open", async () => {
     const { run } = scriptedNet(() => ({
       stdout: JSON.stringify([
-        { url: "https://x/pull/1", state: "CLOSED", updatedAt: "2026-07-01T00:00:00Z" },
-        { url: "https://x/pull/2", state: "MERGED", updatedAt: "2026-07-20T00:00:00Z" },
+        { url: "https://x/pull/1", state: "MERGED", updatedAt: "2026-07-01T00:00:00Z" },
+        { url: "https://x/pull/2", state: "CLOSED", updatedAt: "2026-07-20T00:00:00Z" },
       ]),
     }));
     const result = await ghDiscoverPr(run, { worktreePath: wt, branch: "b" });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.url).toBe("https://x/pull/2");
+    // pull/2 is more recently updated, but it's CLOSED-UNMERGED (dead) — the
+    // MERGED pull/1 wins, proving the fallback is restricted to open-or-merged
+    // rather than "most recent in any state" (F2).
+    expect(result.value.url).toBe("https://x/pull/1");
+  });
+
+  it("never adopts a closed-unmerged PR — Create PR must stay available (F2)", async () => {
+    const { run } = scriptedNet(() => ({
+      stdout: JSON.stringify([
+        { url: "https://x/pull/1", state: "CLOSED", updatedAt: "2026-07-01T00:00:00Z" },
+        { url: "https://x/pull/2", state: "CLOSED", updatedAt: "2026-07-20T00:00:00Z" },
+      ]),
+    }));
+    const result = await ghDiscoverPr(run, { worktreePath: wt, branch: "b" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.url).toBeNull();
   });
 
   it("returns url=null (ok) when the branch has no PRs", async () => {

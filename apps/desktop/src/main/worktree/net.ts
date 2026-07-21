@@ -403,8 +403,14 @@ interface GhPrListRow {
 
 /**
  * Picks the PR the watch should adopt for a branch: an OPEN one wins (there is
- * at most one), else the most recently updated. `null` when the list is empty
- * or unparseable — a discovery read must never invent a URL.
+ * at most one), else the most recently updated MERGED one. A CLOSED-UNMERGED
+ * PR is NEVER adopted — {@link ghFindPr}'s open-only contract exists
+ * specifically so "a dead PR never blocks a fresh one" (the Create PR
+ * affordance stays available), and durably stamping a closed-unmerged PR as
+ * this ticket's `pr_url` would contradict that: the rail would offer
+ * View PR / Push updates against a dead PR while quietly blocking Create PR.
+ * `null` when the list is empty, unparseable, or contains only
+ * closed-unmerged PRs — a discovery read must never invent a URL.
  */
 function pickDiscoveredPr(stdout: string): string | null {
   let rows: GhPrListRow[];
@@ -418,7 +424,11 @@ function pickDiscoveredPr(stdout: string): string | null {
   if (withUrl.length === 0) return null;
   const open = withUrl.find((r) => typeof r.state === "string" && r.state.toUpperCase() === "OPEN");
   if (open) return open.url;
-  const mostRecent = withUrl.reduce((best, r) => {
+  const merged = withUrl.filter(
+    (r) => typeof r.state === "string" && r.state.toUpperCase() === "MERGED",
+  );
+  if (merged.length === 0) return null;
+  const mostRecent = merged.reduce((best, r) => {
     const a = typeof r.updatedAt === "string" ? r.updatedAt : "";
     const b = typeof best.updatedAt === "string" ? best.updatedAt : "";
     return a > b ? r : best;
