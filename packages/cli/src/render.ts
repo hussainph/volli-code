@@ -157,8 +157,62 @@ function renderDetail(data: unknown): string | null {
   return lines.join("\n");
 }
 
+/** A nullable ahead/behind/unpushed count: `-` when unknown, else the number. */
+function countCell(value: unknown): string {
+  return value === null || value === undefined ? "-" : terminalSafeInline(value);
+}
+
+/** The worktree.status snapshot: branch→base, worktree path, dirty/sequencer/sync. */
+function renderWorktreeStatus(data: Record<string, unknown>): string {
+  const branch = typeof data["branch"] === "string" ? data["branch"] : "(detached)";
+  const base = typeof data["baseBranch"] === "string" ? data["baseBranch"] : "(unknown base)";
+  const lines = [
+    `${terminalSafeInline(data["ticket"])}  ${terminalSafeInline(branch)} → ${terminalSafeInline(base)}`,
+    `worktree  ${terminalSafeInline(data["worktreePath"])}`,
+    `uncommitted  ${data["uncommitted"] === true ? "yes" : "no"}`,
+  ];
+  // The sequencer line is exceptional state — shown only mid merge/rebase.
+  if (data["sequencerActive"] === true) lines.push("sequencer  active");
+  lines.push(
+    `ahead ${countCell(data["aheadOfBase"])}  behind ${countCell(data["behindBase"])}  unpushed ${countCell(data["unpushed"])}`,
+  );
+  return lines.join("\n");
+}
+
+/** One diff --stat row: `+ins -del`, `bin` for binaries, `(untracked)` for new files. */
+function diffFileLine(file: Record<string, unknown>): string {
+  const path = terminalSafeInline(file["path"]);
+  if (file["untracked"] === true) return `  ${path}  (untracked)`;
+  if (file["insertions"] === null || file["deletions"] === null) return `  ${path}  bin`;
+  return `  ${path}  +${terminalSafeInline(file["insertions"])} -${terminalSafeInline(file["deletions"])}`;
+}
+
+/**
+ * The worktree.diff --stat summary: a header (mode, base for merge-base, totals),
+ * the already-capped per-file rows, and an `… and N more files` rollup when the
+ * handler omitted rows to hold the token budget.
+ */
+function renderWorktreeDiff(data: Record<string, unknown>): string {
+  const mode = terminalSafeInline(data["mode"]);
+  const against =
+    data["mode"] === "merge-base" && typeof data["baseBranch"] === "string"
+      ? ` vs ${terminalSafeInline(data["baseBranch"])}`
+      : "";
+  const totalFiles = countCell(data["totalFiles"]);
+  const header = `${terminalSafeInline(data["ticket"])}  ${mode}${against}  ${totalFiles} files  +${terminalSafeInline(data["insertions"])} -${terminalSafeInline(data["deletions"])}`;
+  const files = Array.isArray(data["files"]) ? data["files"].filter(isRecord) : [];
+  const lines = [header, ...files.map(diffFileLine)];
+  const omitted = data["omittedFiles"];
+  if (typeof omitted === "number" && omitted > 0) {
+    lines.push(`  … and ${terminalSafeInline(omitted)} more files`);
+  }
+  return lines.join("\n");
+}
+
 function renderStableLines(command: string, data: unknown): string | null {
   if (!isRecord(data)) return null;
+  if (command === "worktree.status") return renderWorktreeStatus(data);
+  if (command === "worktree.diff") return renderWorktreeDiff(data);
   if (["ticket.create", "ticket.update", "ticket.move"].includes(command)) {
     return renderTicketResult(data);
   }

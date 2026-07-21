@@ -12,6 +12,8 @@ export const AGENT_COMMANDS = [
   "ticket.comment",
   "ticket.archive",
   "ticket.brief",
+  "worktree.status",
+  "worktree.diff",
   "project.list",
   "label.list",
   "session.list",

@@ -462,4 +462,36 @@ describe("parseCliArgs", () => {
       expect(parseCliArgs(["ticket", "update", "VC-1", ...args])).toMatchObject({ ok: true });
     }
   });
+
+  it("parses worktree status/diff with an optional id override and diff's working-tree flag", () => {
+    // The id is optional (defaults to the cwd's worktree); omitting it is valid.
+    expect(parseCliArgs(["worktree", "status"])).toEqual({
+      ok: true,
+      invocation: { command: "worktree.status", args: {}, json: false },
+    });
+    // An explicit display id overrides the cwd rung.
+    expect(parseCliArgs(["worktree", "status", "VC-12", "--json"])).toEqual({
+      ok: true,
+      invocation: { command: "worktree.status", args: { id: "VC-12" }, json: true },
+    });
+    // diff defaults to the merge-base (PR) range; no id, no flag → empty args.
+    expect(parseCliArgs(["worktree", "diff"])).toEqual({
+      ok: true,
+      invocation: { command: "worktree.diff", args: {}, json: false },
+    });
+    // --working-tree switches modes and coexists with an explicit id.
+    expect(parseCliArgs(["worktree", "diff", "VC-12", "--working-tree"])).toEqual({
+      ok: true,
+      invocation: {
+        command: "worktree.diff",
+        args: { id: "VC-12", workingTree: true },
+        json: false,
+      },
+    });
+    // A leading flag is never swallowed as the optional id.
+    expect(parseCliArgs(["worktree", "diff", "--working-tree"])).toEqual({
+      ok: true,
+      invocation: { command: "worktree.diff", args: { workingTree: true }, json: false },
+    });
+  });
 });

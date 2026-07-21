@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 
 import type Database from "better-sqlite3";
 import {
@@ -35,6 +36,9 @@ import { listAllLabels } from "./db/labels-repo";
 import { listProjects } from "./db/projects-repo";
 import { getSession, listSessions } from "./db/sessions-repo";
 import { getTicket, listArchivedTicketsByProject, listTicketsByProject } from "./db/tickets-repo";
+import { diffStat, getWorktreeStatus, runGitCapturing } from "./worktree";
+import type { DiffMode, RunGit } from "./worktree";
+import { isInside } from "./worktree/paths";
 import {
   archiveTicketCommand,
   createTicketCommand,
@@ -50,6 +54,20 @@ export interface AgentCommandServiceOptions {
   appVersion: string;
   now?: () => number;
   newId?: () => string;
+  /**
+   * The git runner the read-only worktree commands execute through. All git
+   * calls stay inside the worktree module (CONCEPT #42); this seam only lets
+   * tests substitute a scripted runner. Defaults to {@link runGitCapturing}.
+   */
+  git?: RunGit;
+  /**
+   * Whether a ticket's stamped worktree directory still exists on disk (C3): a
+   * stamped-but-deleted directory must refuse with INVALID_REQUEST rather than
+   * let `getWorktreeStatus`'s errs-dirty fallback report `uncommitted: true`
+   * for a tree that's gone. Same seam shape as {@link git} — defaults to
+   * {@link existsSync}; tests substitute a scripted predicate.
+   */
+  worktreeExists?: (path: string) => boolean;
   observeSession?: (
     sessionId: string,
     lines: number,
@@ -239,10 +257,16 @@ function agentTicket(ticket: Ticket, project: Project): Record<string, unknown> 
   };
 }
 
+/**
+ * `allowArchived` lets a read-only worktree verb serve an archived ticket
+ * (retention deliberately retains worktrees past archive — decision #76): every
+ * other caller defaults to false and keeps refusing with ARCHIVED_TICKET.
+ */
 function ticketForDisplayId(
   db: Database.Database,
   projects: readonly Project[],
   displayId: unknown,
+  options: { allowArchived?: boolean } = {},
 ): { ok: true; ticket: Ticket; project: Project } | { ok: false; response: AgentResponse } {
   if (typeof displayId !== "string") {
     return { ok: false, response: failure("INVALID_REQUEST", "A ticket display id is required.") };
@@ -277,12 +301,182 @@ function ticketForDisplayId(
       .map((ticket) => ({ ticket, project })),
   );
   if (archivedMatches.length > 1) return ambiguous();
-  return archivedMatches.length === 1
-    ? {
+  const archivedMatch = archivedMatches[0];
+  if (archivedMatch) {
+    return options.allowArchived
+      ? { ok: true, ...archivedMatch }
+      : { ok: false, response: failure("ARCHIVED_TICKET", `Ticket ${displayId} is archived.`) };
+  }
+  return { ok: false, response: failure("TICKET_NOT_FOUND", `No ticket matches ${displayId}.`) };
+}
+
+/**
+ * Resolves the ticket a worktree command targets. An explicit display-id arg is
+ * the override (and — unlike every other command — resolves an archived ticket
+ * too: retention deliberately retains worktrees past archive). Otherwise the
+ * shared context ladder (`resolveAgentContext`) gets first crack, so an agent
+ * driving from VOLLI_SESSION/VOLLI_TICKET context but standing in an unrelated
+ * cwd (e.g. the main checkout) still resolves the ticket it's orchestrating.
+ * Only when the ladder yields no *ticket* (a project-level `cwd` match, or a
+ * failed resolution) does the caller's cwd get matched directly against
+ * worktree paths (agent cwd → worktree → ticket) — the whole point of a
+ * worktree query when nothing else pins the ticket. Read-only: no git, no writes.
+ */
+function resolveWorktreeTicket(
+  db: Database.Database,
+  projects: readonly Project[],
+  request: AgentRequest,
+): { ok: true; ticket: Ticket; project: Project } | { ok: false; response: AgentResponse } {
+  if (request.args["id"] !== undefined) {
+    return ticketForDisplayId(db, projects, request.args["id"], { allowArchived: true });
+  }
+  const projectById = new Map(projects.map((project) => [project.id, project]));
+  const liveTickets = projects.flatMap((project) => listTicketsByProject(db, project.id));
+  const archivedTickets = projects.flatMap((project) =>
+    listArchivedTicketsByProject(db, project.id),
+  );
+  const allTickets = [...liveTickets, ...archivedTickets];
+  const ticketDisplayById = new Map(
+    allTickets.flatMap((ticket) => {
+      const project = projectById.get(ticket.projectId);
+      return project
+        ? [[ticket.id, displayTicketId(project.ticketPrefix, ticket.ticketNumber)] as const]
+        : [];
+    }),
+  );
+  const ladder = resolveAgentContext({
+    explicit: {},
+    env: {
+      VOLLI_SESSION: request.ctx.env.session,
+      VOLLI_TICKET: request.ctx.env.ticket,
+      VOLLI_SOCKET: request.ctx.env.socket,
+    },
+    cwd: request.ctx.cwd,
+    projects: projects.map((project) => ({
+      ...project,
+      worktreePaths: allTickets
+        .filter((ticket) => ticket.projectId === project.id && ticket.worktreePath !== null)
+        .map((ticket) => ticket.worktreePath!),
+    })),
+    tickets: allTickets.map((ticket) => ({
+      displayId: ticketDisplayById.get(ticket.id)!,
+      projectId: ticket.projectId,
+    })),
+    sessions: projects.flatMap((project) =>
+      listSessions(db, project.id).map((session) => ({
+        id: session.id,
+        projectId: project.id,
+        ticketDisplayId: session.ticketId
+          ? (ticketDisplayById.get(session.ticketId) ?? null)
+          : null,
+      })),
+    ),
+  });
+  if (ladder.ok && ladder.context.ticketDisplayId !== null) {
+    return ticketForDisplayId(db, projects, ladder.context.ticketDisplayId, {
+      allowArchived: true,
+    });
+  }
+
+  // The shared ladder resolved to a project only (or failed outright); fall
+  // back to matching the cwd directly against worktree paths. Live tickets
+  // scan first — a cwd sitting in both a live and an archived ticket's
+  // worktree isn't a real layout — so archives only get scanned (and their
+  // realpath cost paid) when no live match was found.
+  const liveMatches = liveTickets.filter(
+    (ticket) => ticket.worktreePath !== null && isInside(ticket.worktreePath, request.ctx.cwd),
+  );
+  const matches =
+    liveMatches.length > 0
+      ? liveMatches
+      : archivedTickets.filter(
+          (ticket) =>
+            ticket.worktreePath !== null && isInside(ticket.worktreePath, request.ctx.cwd),
+        );
+  if (matches.length > 1) {
+    return {
+      ok: false,
+      response: failure("AMBIGUOUS_CONTEXT", `Cwd ${request.ctx.cwd} sits in multiple worktrees.`),
+    };
+  }
+  const match = matches[0];
+  if (match === undefined) {
+    return {
+      ok: false,
+      response: failure(
+        "CONTEXT_REQUIRED",
+        "Provide a ticket id or run inside a ticket's worktree.",
+      ),
+    };
+  }
+  const project = projectById.get(match.projectId);
+  return project
+    ? { ok: true, ticket: match, project }
+    : {
         ok: false,
-        response: failure("ARCHIVED_TICKET", `Ticket ${displayId} is archived.`),
-      }
-    : { ok: false, response: failure("TICKET_NOT_FOUND", `No ticket matches ${displayId}.`) };
+        response: failure("PROJECT_NOT_FOUND", "The resolved project no longer exists."),
+      };
+}
+
+/**
+ * A resolved ticket's worktree path, or a friendly error when it has none — a
+ * ticket that never reached Doing is not a stack trace, and git must never run
+ * against a null path. Also refuses a STAMPED-but-deleted directory: reporting
+ * `uncommitted: true` for a tree that no longer exists (getWorktreeStatus's
+ * errs-dirty fallback) is a UI convention, not something an agent should be
+ * told as fact.
+ */
+function requireWorktreePath(
+  ticket: Ticket,
+  project: Project,
+  exists: (path: string) => boolean,
+): { ok: true; worktreePath: string; displayId: string } | { ok: false; response: AgentResponse } {
+  const displayId = displayTicketId(project.ticketPrefix, ticket.ticketNumber);
+  if (ticket.worktreePath === null) {
+    return {
+      ok: false,
+      response: failure(
+        "INVALID_REQUEST",
+        `Ticket ${displayId} has no worktree yet — move it to Doing to create one.`,
+      ),
+    };
+  }
+  if (!exists(ticket.worktreePath)) {
+    return {
+      ok: false,
+      response: failure(
+        "INVALID_REQUEST",
+        `Ticket ${displayId}'s worktree directory is missing on disk (expected at ${ticket.worktreePath}).`,
+      ),
+    };
+  }
+  return { ok: true, worktreePath: ticket.worktreePath, displayId };
+}
+
+/**
+ * K4: the two worktree handlers share the exact same resolve-ticket-then-
+ * require-worktree-path ceremony; this collapses it to one call so each
+ * handler only branches on the failure once.
+ */
+function resolveWorktreeTarget(
+  db: Database.Database,
+  projects: readonly Project[],
+  request: AgentRequest,
+  worktreeExists: (path: string) => boolean,
+):
+  | { ok: true; ticket: Ticket; project: Project; worktreePath: string; displayId: string }
+  | { ok: false; response: AgentResponse } {
+  const resolved = resolveWorktreeTicket(db, projects, request);
+  if (!resolved.ok) return resolved;
+  const worktree = requireWorktreePath(resolved.ticket, resolved.project, worktreeExists);
+  if (!worktree.ok) return worktree;
+  return {
+    ok: true,
+    ticket: resolved.ticket,
+    project: resolved.project,
+    worktreePath: worktree.worktreePath,
+    displayId: worktree.displayId,
+  };
 }
 
 function boardData(db: Database.Database, project: Project): Record<string, unknown> {
@@ -411,6 +605,8 @@ export function createAgentCommandService(
   // detached); the global `crypto.randomUUID` would lose its Crypto `this` when
   // called via this alias and throw "Value of 'this' must be of type Crypto".
   const newId = options.newId ?? randomUUID;
+  const git = options.git ?? runGitCapturing;
+  const worktreeExists = options.worktreeExists ?? existsSync;
 
   return {
     async execute(request): Promise<AgentResponse> {
@@ -712,6 +908,60 @@ export function createAgentCommandService(
           ok: true,
           data: {
             prompt: `${orientation}Coordinate the board through the bundled \`volli\` CLI: run \`volli help\` for the full reference (and the volli skill, when installed, for norms).\n\n${ticketPrompt}`,
+          },
+        };
+      }
+      if (request.cmd === "worktree.status") {
+        const target = resolveWorktreeTarget(options.db, projects, request, worktreeExists);
+        if (!target.ok) return target.response;
+        // All git runs inside the worktree module (CONCEPT #42); we only compose
+        // its report with the ticket's persisted identity.
+        const report = getWorktreeStatus(git, {
+          worktreePath: target.worktreePath,
+          branch: target.ticket.branch,
+          baseBranch: target.ticket.baseBranch,
+        });
+        return {
+          v: 1,
+          ok: true,
+          data: {
+            ticket: target.displayId,
+            project: target.project.name,
+            worktreePath: target.worktreePath,
+            branch: target.ticket.branch,
+            baseBranch: target.ticket.baseBranch,
+            ...report,
+          },
+        };
+      }
+      if (request.cmd === "worktree.diff") {
+        const target = resolveWorktreeTarget(options.db, projects, request, worktreeExists);
+        if (!target.ok) return target.response;
+        // Merge-base ("what the PR would contain") is the default; --working-tree
+        // switches to the uncommitted view. Same two-mode diff.ts the rail uses.
+        const mode: DiffMode = request.args["workingTree"] === true ? "working-tree" : "merge-base";
+        const result = diffStat(
+          git,
+          { worktreePath: target.worktreePath, baseBranch: target.ticket.baseBranch },
+          mode,
+        );
+        if (!result.ok) return failure("INVALID_REQUEST", result.error);
+        // Cap the per-file rows so a sprawling diff never blows the token ceiling;
+        // the rollup count keeps the omission honest. Totals stay across ALL files.
+        const CAP = 20;
+        const shown = result.value.files.slice(0, CAP);
+        return {
+          v: 1,
+          ok: true,
+          data: {
+            ticket: target.displayId,
+            mode,
+            baseBranch: target.ticket.baseBranch,
+            files: shown,
+            insertions: result.value.insertions,
+            deletions: result.value.deletions,
+            totalFiles: result.value.files.length,
+            omittedFiles: result.value.files.length - shown.length,
           },
         };
       }

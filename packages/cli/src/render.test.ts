@@ -337,4 +337,133 @@ describe("renderCliSuccess", () => {
     expect(exitCodeForError("USAGE")).toBe(2);
     expect(exitCodeForError("UNSUPPORTED_COMMAND")).toBe(2);
   });
+
+  it("renders worktree status as a compact branch/base/sync snapshot", () => {
+    expect(
+      renderCliSuccess(
+        "worktree.status",
+        {
+          ticket: "VC-12",
+          project: "Volli Code",
+          worktreePath: "/repo/.volli/worktrees/VC-12",
+          branch: "volli/VC-12-slug",
+          baseBranch: "main",
+          uncommitted: true,
+          sequencerActive: false,
+          aheadOfBase: 3,
+          behindBase: 0,
+          unpushed: 2,
+        },
+        { json: false },
+      ),
+    ).toBe(
+      "VC-12  volli/VC-12-slug → main\n" +
+        "worktree  /repo/.volli/worktrees/VC-12\n" +
+        "uncommitted  yes\n" +
+        "ahead 3  behind 0  unpushed 2\n",
+    );
+  });
+
+  it("shows a sequencer line only when active and nulls unknown counts as dashes", () => {
+    expect(
+      renderCliSuccess(
+        "worktree.status",
+        {
+          ticket: "VC-9",
+          project: "Volli Code",
+          worktreePath: "/wt",
+          branch: null,
+          baseBranch: null,
+          uncommitted: false,
+          sequencerActive: true,
+          aheadOfBase: null,
+          behindBase: null,
+          unpushed: null,
+        },
+        { json: false },
+      ),
+    ).toBe(
+      "VC-9  (detached) → (unknown base)\n" +
+        "worktree  /wt\n" +
+        "uncommitted  no\n" +
+        "sequencer  active\n" +
+        "ahead -  behind -  unpushed -\n",
+    );
+  });
+
+  it("renders a worktree diff as a --stat summary with per-file kinds", () => {
+    expect(
+      renderCliSuccess(
+        "worktree.diff",
+        {
+          ticket: "VC-12",
+          mode: "merge-base",
+          baseBranch: "main",
+          files: [
+            { path: "src/a.ts", insertions: 3, deletions: 1, untracked: false },
+            { path: "assets/logo.png", insertions: null, deletions: null, untracked: false },
+            { path: "src/new.ts", insertions: null, deletions: null, untracked: true },
+          ],
+          insertions: 3,
+          deletions: 1,
+          totalFiles: 3,
+          omittedFiles: 0,
+        },
+        { json: false },
+      ),
+    ).toBe(
+      "VC-12  merge-base vs main  3 files  +3 -1\n" +
+        "  src/a.ts  +3 -1\n" +
+        "  assets/logo.png  bin\n" +
+        "  src/new.ts  (untracked)\n",
+    );
+  });
+
+  it("caps diff rows with an '… and N more files' rollup and stays compact", () => {
+    const files = Array.from({ length: 20 }, (_, i) => ({
+      path: `src/module/file-${i}.ts`,
+      insertions: 5,
+      deletions: 2,
+      untracked: false,
+    }));
+    const rendered = renderCliSuccess(
+      "worktree.diff",
+      {
+        ticket: "VC-12",
+        mode: "working-tree",
+        baseBranch: "main",
+        files,
+        insertions: 500,
+        deletions: 200,
+        totalFiles: 480,
+        omittedFiles: 460,
+      },
+      { json: false },
+    );
+    // Working-tree header omits the "vs base" clause.
+    expect(rendered).toContain("VC-12  working-tree  480 files  +500 -200\n");
+    expect(rendered).toContain("  … and 460 more files\n");
+    // 20 file rows + header + rollup, and the whole thing stays well bounded.
+    expect(rendered.split("\n").filter((l) => l.startsWith("  src/")).length).toBe(20);
+    expect(rendered.length).toBeLessThanOrEqual(1200);
+  });
+
+  it("renders a worktree diff with a missing files array as the header alone", () => {
+    // A malformed/minimal payload (files absent) must degrade to just the
+    // header — no file rows, no throw.
+    const rendered = renderCliSuccess(
+      "worktree.diff",
+      {
+        ticket: "VC-12",
+        mode: "working-tree",
+        insertions: 0,
+        deletions: 0,
+        totalFiles: 0,
+        omittedFiles: 0,
+      },
+      { json: false },
+    );
+    expect(rendered).toContain("VC-12  working-tree  0 files  +0 -0");
+    expect(rendered.split("\n").filter((l) => l.startsWith("  "))).toEqual([]);
+  });
 });

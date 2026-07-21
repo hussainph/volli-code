@@ -1,3 +1,7 @@
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import type { AgentRequest } from "@volli/shared";
@@ -8,6 +12,7 @@ import { openTestDb, testProject, testSession } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 import { createAgentCommandService } from "./agent-commands";
 import { updateTicketFieldsCommand } from "./ticket-commands";
+import { scriptedGit } from "./worktree/scripted-git";
 
 let ctx: TestDb;
 
@@ -1100,5 +1105,511 @@ describe("agent command service", () => {
       data: { session: "abcdef12", signal: "done", reason: null, recorded: false },
     });
     expect(missing).toMatchObject({ ok: false, error: { code: "CONTEXT_REQUIRED" } });
+  });
+
+  // ---- worktree.status / worktree.diff (issue #80) ------------------------
+
+  /** Seeds one VC-1 ticket (internal id `ticket-one`) with an active worktree. */
+  const seedWorktreeTicket = async (
+    service: ReturnType<typeof createAgentCommandService>,
+    fields: Record<string, unknown> = {},
+  ): Promise<void> => {
+    await service.execute({
+      v: 1,
+      cmd: "ticket.create",
+      args: { title: "Ship" },
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+    updateTicketFieldsCommand(
+      ctx.db,
+      {
+        ticketId: "ticket-one",
+        worktreePath: "/wt/VC-1",
+        branch: "volli/VC-1-ship",
+        baseBranch: "main",
+        ...fields,
+      },
+      { now: 100, actor: { kind: "user" } },
+    );
+  };
+
+  it("composes a worktree status report from the ticket owning the cwd", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    const { git } = scriptedGit((args) => {
+      if (args[0] === "status") return " M src/a.ts\n";
+      if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
+      if (args[0] === "rev-list" && args[1] === "--left-right") return "0\t3\n";
+      if (args[0] === "rev-list") return "2\n";
+      return "";
+    });
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.0.0",
+      now: () => 100,
+      newId: () => "ticket-one",
+      git,
+      // The seeded worktreePath ("/wt/VC-1") is fictional; stub the disk-existence
+      // seam (C3) so this scenario isn't about that check.
+      worktreeExists: () => true,
+    });
+    await seedWorktreeTicket(service);
+
+    // No id, cwd inside the worktree → the report resolves via the cwd rung.
+    // The exact object pins the stable, typed --json shape (behavior 2).
+    const res = await service.execute({
+      v: 1,
+      cmd: "worktree.status",
+      args: {},
+      ctx: { cwd: "/wt/VC-1", env: {} },
+    });
+    expect(res).toEqual({
+      v: 1,
+      ok: true,
+      data: {
+        ticket: "VC-1",
+        project: "Volli Code",
+        worktreePath: "/wt/VC-1",
+        branch: "volli/VC-1-ship",
+        baseBranch: "main",
+        uncommitted: true,
+        sequencerActive: false,
+        aheadOfBase: 3,
+        behindBase: 0,
+        unpushed: 2,
+      },
+    });
+    // A cwd nested BELOW the worktree resolves the same ticket.
+    const nested = await service.execute({
+      v: 1,
+      cmd: "worktree.status",
+      args: {},
+      ctx: { cwd: "/wt/VC-1/packages/shared", env: {} },
+    });
+    expect(nested).toMatchObject({ ok: true, data: { ticket: "VC-1" } });
+  });
+
+  it("matches the cwd rung across symlinks (physical cwd vs symlinked stamp)", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    const { git } = scriptedGit(() => "");
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.0.0",
+      now: () => 100,
+      newId: () => "ticket-one",
+      git,
+    });
+    // A real on-disk worktree stamped through a SYMLINKED prefix, queried from
+    // the PHYSICAL cwd the CLI's `process.cwd()` reports — the exact macOS
+    // `/tmp` → `/private/tmp` split. Resolution must canonicalize both sides.
+    const base = mkdtempSync(join(tmpdir(), "volli-cwd-"));
+    try {
+      const real = join(base, "real");
+      mkdirSync(join(real, "VC-1"), { recursive: true });
+      symlinkSync(real, join(base, "link"));
+      const stamped = join(base, "link", "VC-1");
+      await seedWorktreeTicket(service, { worktreePath: stamped });
+      const physicalCwd = realpathSync(stamped);
+      expect(physicalCwd).not.toBe(stamped); // the logical/physical divergence is real
+
+      const res = await service.execute({
+        v: 1,
+        cmd: "worktree.status",
+        args: {},
+        ctx: { cwd: physicalCwd, env: {} },
+      });
+      expect(res).toMatchObject({ ok: true, data: { ticket: "VC-1" } });
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("honors an explicit display-id override from outside any worktree", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    const { git } = scriptedGit(() => "");
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.0.0",
+      now: () => 100,
+      newId: () => "ticket-one",
+      git,
+      worktreeExists: () => true,
+    });
+    await seedWorktreeTicket(service);
+
+    const res = await service.execute({
+      v: 1,
+      cmd: "worktree.status",
+      args: { id: "VC-1" },
+      ctx: { cwd: "/somewhere/else", env: {} },
+    });
+    expect(res).toMatchObject({ ok: true, data: { ticket: "VC-1", worktreePath: "/wt/VC-1" } });
+  });
+
+  it("returns friendly errors for unknown ids, worktree-less tickets, and no context", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    const { git } = scriptedGit(() => "");
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.0.0",
+      now: () => 100,
+      newId: () => "ticket-one",
+      git,
+    });
+    // A ticket that never entered Doing has no worktree.
+    await service.execute({
+      v: 1,
+      cmd: "ticket.create",
+      args: { title: "Backlog item" },
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+
+    const unknown = await service.execute({
+      v: 1,
+      cmd: "worktree.status",
+      args: { id: "VC-99" },
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+    expect(unknown).toMatchObject({ ok: false, error: { code: "TICKET_NOT_FOUND" } });
+
+    const noWorktree = await service.execute({
+      v: 1,
+      cmd: "worktree.status",
+      args: { id: "VC-1" },
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+    expect(noWorktree).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+    expect(noWorktree).toMatchObject({ ok: false });
+    if (!noWorktree.ok) expect(noWorktree.error.message).toContain("no worktree");
+
+    // Cwd sits in no worktree and no id was given → a teaching CONTEXT error.
+    const noContext = await service.execute({
+      v: 1,
+      cmd: "worktree.status",
+      args: {},
+      ctx: { cwd: "/elsewhere", env: {} },
+    });
+    expect(noContext).toMatchObject({ ok: false, error: { code: "CONTEXT_REQUIRED" } });
+  });
+
+  it("summarizes the merge-base PR diff by default and the working tree on request", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    const { git } = scriptedGit((args) => {
+      if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
+      if (args[0] === "diff" && args.includes("main...HEAD")) return "3\t1\tsrc/a.ts\n";
+      if (args[0] === "diff" && args.includes("HEAD")) return "9\t0\tsrc/wip.ts\n";
+      if (args[0] === "status") return "?? src/new.ts\n";
+      return "";
+    });
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.0.0",
+      now: () => 100,
+      newId: () => "ticket-one",
+      git,
+      worktreeExists: () => true,
+    });
+    await seedWorktreeTicket(service);
+
+    // Default is the merge-base (PR) range.
+    const pr = await service.execute({
+      v: 1,
+      cmd: "worktree.diff",
+      args: {},
+      ctx: { cwd: "/wt/VC-1", env: {} },
+    });
+    expect(pr).toEqual({
+      v: 1,
+      ok: true,
+      data: {
+        ticket: "VC-1",
+        mode: "merge-base",
+        baseBranch: "main",
+        files: [{ path: "src/a.ts", insertions: 3, deletions: 1, untracked: false }],
+        insertions: 3,
+        deletions: 1,
+        totalFiles: 1,
+        omittedFiles: 0,
+      },
+    });
+
+    // --working-tree switches to the uncommitted view (tracked + untracked).
+    const wip = await service.execute({
+      v: 1,
+      cmd: "worktree.diff",
+      args: { workingTree: true },
+      ctx: { cwd: "/wt/VC-1", env: {} },
+    });
+    expect(wip).toMatchObject({
+      ok: true,
+      data: {
+        mode: "working-tree",
+        files: [
+          { path: "src/wip.ts", insertions: 9, deletions: 0, untracked: false },
+          { path: "src/new.ts", insertions: null, deletions: null, untracked: true },
+        ],
+      },
+    });
+  });
+
+  it("caps diff file rows at 20 and reports the omitted remainder", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    const numstat =
+      Array.from({ length: 25 }, (_, i) => `1\t0\tsrc/file-${i}.ts`).join("\n") + "\n";
+    const { git } = scriptedGit((args) => {
+      if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
+      if (args[0] === "diff") return numstat;
+      return "";
+    });
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.0.0",
+      now: () => 100,
+      newId: () => "ticket-one",
+      git,
+      worktreeExists: () => true,
+    });
+    await seedWorktreeTicket(service);
+
+    const res = await service.execute({
+      v: 1,
+      cmd: "worktree.diff",
+      args: {},
+      ctx: { cwd: "/wt/VC-1", env: {} },
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const data = res.data as { files: unknown[]; totalFiles: number; omittedFiles: number };
+    expect(data.files.length).toBe(20);
+    expect(data.totalFiles).toBe(25);
+    expect(data.omittedFiles).toBe(5);
+  });
+
+  it("resolves an archived ticket by explicit id for worktree verbs, but other commands still refuse it (C2)", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    const { git } = scriptedGit(() => "");
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.0.0",
+      now: () => 100,
+      newId: () => "ticket-one",
+      git,
+      worktreeExists: () => true,
+    });
+    await seedWorktreeTicket(service);
+    await service.execute({
+      v: 1,
+      cmd: "ticket.archive",
+      args: { id: "VC-1" },
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+
+    // Read-only worktree verbs serve an archived ticket by explicit id —
+    // retention deliberately retains worktrees past archive (decision #76).
+    const status = await service.execute({
+      v: 1,
+      cmd: "worktree.status",
+      args: { id: "VC-1" },
+      ctx: { cwd: "/somewhere/else", env: {} },
+    });
+    expect(status).toMatchObject({ ok: true, data: { ticket: "VC-1", worktreePath: "/wt/VC-1" } });
+
+    // Every other command still refuses the same archived ticket outright.
+    const show = await service.execute({
+      v: 1,
+      cmd: "ticket.show",
+      args: { id: "VC-1" },
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+    expect(show).toMatchObject({ ok: false, error: { code: "ARCHIVED_TICKET" } });
+  });
+
+  it("refuses a stamped-but-deleted worktree directory with INVALID_REQUEST (C3)", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    const { git } = scriptedGit(() => "");
+    // No worktreeExists stub here — this exercises the REAL default (existsSync)
+    // against a directory that genuinely never existed by the time it's checked.
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.0.0",
+      now: () => 100,
+      newId: () => "ticket-one",
+      git,
+    });
+    const scratchBase = mkdtempSync(join(tmpdir(), "volli-missing-"));
+    const missingPath = join(scratchBase, "worktree");
+    rmSync(scratchBase, { recursive: true, force: true }); // stamped, then deleted
+    await seedWorktreeTicket(service, { worktreePath: missingPath });
+
+    const res = await service.execute({
+      v: 1,
+      cmd: "worktree.status",
+      args: { id: "VC-1" },
+      ctx: { cwd: "/somewhere/else", env: {} },
+    });
+    expect(res).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+    if (!res.ok) {
+      expect(res.error.message).toContain("missing on disk");
+      expect(res.error.message).toContain(missingPath);
+    }
+  });
+
+  it("resolves the worktree target from VOLLI_TICKET context even when the cwd sits elsewhere (K2)", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    const { git } = scriptedGit(() => "");
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.0.0",
+      now: () => 100,
+      newId: () => "ticket-one",
+      git,
+      worktreeExists: () => true,
+    });
+    await seedWorktreeTicket(service);
+
+    // Cwd is the MAIN checkout, not the worktree — only the VOLLI_TICKET env
+    // rung of the shared context ladder pins the ticket.
+    const viaEnv = await service.execute({
+      v: 1,
+      cmd: "worktree.status",
+      args: {},
+      ctx: { cwd: "/repo/volli", env: { ticket: "VC-1" } },
+    });
+    expect(viaEnv).toMatchObject({ ok: true, data: { ticket: "VC-1", worktreePath: "/wt/VC-1" } });
+
+    // Sanity: the same cwd with no VOLLI_TICKET env can't resolve any ticket.
+    const bare = await service.execute({
+      v: 1,
+      cmd: "worktree.status",
+      args: {},
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+    expect(bare).toMatchObject({ ok: false, error: { code: "CONTEXT_REQUIRED" } });
+  });
+
+  it("exposes worktree identity through ticket.show fields and ticket.brief prose", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.0.0",
+      now: () => 100,
+      newId: () => "ticket-one",
+    });
+    await seedWorktreeTicket(service);
+
+    const show = await service.execute({
+      v: 1,
+      cmd: "ticket.show",
+      args: { id: "VC-1" },
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+    expect(show).toMatchObject({
+      ok: true,
+      data: {
+        ticket: { worktreePath: "/wt/VC-1", branch: "volli/VC-1-ship", baseBranch: "main" },
+      },
+    });
+
+    const brief = await service.execute({
+      v: 1,
+      cmd: "ticket.brief",
+      args: { id: "VC-1" },
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+    expect(brief.ok).toBe(true);
+    if (!brief.ok) return;
+    const prompt = (brief.data as { prompt: string }).prompt;
+    expect(prompt).toContain("/wt/VC-1");
+    expect(prompt).toContain("volli/VC-1-ship");
+    expect(prompt).toContain("`main`");
   });
 });

@@ -89,6 +89,21 @@ describe("renderHelp command detail", () => {
     expect(detail).not.toContain("Notes:");
   });
 
+  it("renders an optional positional id as [<id>] for the worktree commands", () => {
+    const status = renderHelp(["worktree", "status"]);
+    expect(status).toContain(
+      "worktree status — Show a ticket's worktree branch, base, and sync state.",
+    );
+    // Optional id → bracketed, and no leftover [options] since it has none.
+    expect(status).toContain("Usage: volli worktree status [<id>]");
+    expect(status).not.toContain("[options]");
+
+    const diff = renderHelp(["worktree", "diff"]);
+    expect(diff).toContain("Usage: volli worktree diff [<id>] [options]");
+    expect(diff).toContain("--working-tree");
+    expect(diff).toContain("Default range is the merge-base diff");
+  });
+
   it("carries a command's extra usage tail into its detail", () => {
     const detail = renderHelp(["help"]);
     expect(detail).toContain("Usage: volli help [<command> | <topic>]");

@@ -69,12 +69,17 @@ export function shimPathFor(userDataDir) {
  * Never throws on a non-zero exit — returns `{ code, stdout, stderr }` so a
  * probe can assert the exit-code contract (0/1/2/3).
  *
+ * `opts.cwd` sets the child's working directory — the CLI stamps it as the
+ * agent request's `ctx.cwd`, so a worktree probe can run the shim FROM INSIDE a
+ * ticket's worktree and exercise the cwd → worktree → ticket resolution rung.
+ *
  * @param {string} shimPath  Absolute path to `<userData>/bin/volli`.
  * @param {readonly string[]} args
  * @param {Record<string,string|undefined>} [extraEnv]
+ * @param {{cwd?:string}} [opts]
  */
-export async function runVolliShim(shimPath, args, extraEnv = {}) {
-  return runCapturing(shimPath, args, extraEnv);
+export async function runVolliShim(shimPath, args, extraEnv = {}, opts = {}) {
+  return runCapturing(shimPath, args, extraEnv, opts);
 }
 
 /**
@@ -87,11 +92,12 @@ export async function runVolliNode(args, extraEnv = {}) {
   return runCapturing(process.execPath, [CLI_BUNDLE, ...args], extraEnv);
 }
 
-async function runCapturing(file, args, extraEnv) {
+async function runCapturing(file, args, extraEnv, { cwd } = {}) {
   try {
     const { stdout, stderr } = await execFileAsync(file, args, {
       env: { ...process.env, ...extraEnv },
       maxBuffer: 8 * 1024 * 1024,
+      ...(cwd ? { cwd } : {}),
     });
     return { code: 0, stdout, stderr };
   } catch (error) {
