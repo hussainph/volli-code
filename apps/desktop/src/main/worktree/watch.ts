@@ -16,6 +16,7 @@
  * Keep or dismissing takes effect immediately, without waiting for a poll. A
  * background READ failure is silent (a read is not a mutation — no toasts).
  */
+import { existsSync } from "node:fs";
 import type Database from "better-sqlite3";
 import type { TicketEventActor, TicketRetentionState, TicketStatus } from "@volli/shared";
 
@@ -25,7 +26,6 @@ import { prepared } from "../db/prepared";
 import { listRetentionCandidates, updateTicketFields, type TicketRow } from "../db/tickets-repo";
 import { ghDiscoverPr, ghPrStatus, type RunNet } from "./net";
 import { computeArchiveReadiness, doneEntryTimestamp, retentionTtlMs } from "./retention";
-import type { RunGit } from "./types";
 
 export type { TicketRetentionState } from "@volli/shared";
 
@@ -110,7 +110,6 @@ export function createRetentionStore(): RetentionStore {
 /** The poll step's injected seams — DB, network, clock, and notify/broadcast callbacks. */
 export interface RetentionPollDeps {
   db: Database.Database;
-  git: RunGit;
   net: RunNet;
   /** Injected clock (never `Date.now()` inline) — the TTL and readiness read it. */
   now: () => number;
@@ -157,7 +156,7 @@ function observationChanged(a: RetentionObservation | undefined, b: RetentionObs
  * on archive while the branch + `pr_url` are retained and still worth watching).
  */
 function ghCwd(deps: RetentionPollDeps, ticket: TicketRow): string | null {
-  if (ticket.worktree_path) return ticket.worktree_path;
+  if (ticket.worktree_path && existsSync(ticket.worktree_path)) return ticket.worktree_path;
   const project = getProjectById(deps.db, ticket.project_id);
   return project?.path ?? null;
 }
@@ -181,64 +180,87 @@ export async function pollRetention(
   const result: PollResult = { changed: false, attempted: 0, failed: 0 };
 
   for (const ticket of listRetentionCandidates(deps.db)) {
-    const cwd = ghCwd(deps, ticket);
-    if (cwd === null) continue;
+    // Per-ticket isolation: a throw here (SQLITE_BUSY, an FK failure on a
+    // ticket deleted mid-cycle, ...) must not abort the whole candidate loop —
+    // log it and move on so every OTHER ticket's discovery/status/merge still
+    // runs this cycle, and `deps.onChange` still fires for whatever changed.
+    try {
+      const cwd = ghCwd(deps, ticket);
+      if (cwd === null) continue;
 
-    let prUrl = ticket.pr_url;
+      let prUrl = ticket.pr_url;
 
-    // (1) DISCOVER — adopt an agent-opened PR for a branch with no stored url.
-    if (prUrl === null && ticket.branch) {
-      result.attempted += 1;
-      const discovered = await ghDiscoverPr(deps.net, { worktreePath: cwd, branch: ticket.branch });
-      if (!discovered.ok) {
-        result.failed += 1;
-        console.error(`[retention] discover failed for ${ticket.id}:`, discovered.failure.message);
+      // (1) DISCOVER — adopt an agent-opened PR for a branch with no stored url.
+      if (prUrl === null && ticket.branch) {
+        result.attempted += 1;
+        const discovered = await ghDiscoverPr(deps.net, {
+          worktreePath: cwd,
+          branch: ticket.branch,
+        });
+        if (!discovered.ok) {
+          result.failed += 1;
+          console.error(
+            `[retention] discover failed for ${ticket.id}:`,
+            discovered.failure.message,
+          );
+          continue;
+        }
+        if (discovered.value.url !== null) {
+          // A durable write, isolated in its own try/catch below — a failure
+          // there leaves `prUrl` null so DISCOVER simply retries next poll,
+          // rather than treating a stamp we couldn't persist as adopted.
+          if (stampDiscoveredPr(deps, ticket, discovered.value.url)) {
+            prUrl = discovered.value.url;
+            result.changed = true;
+          }
+        }
+      }
+
+      // No PR to watch — clear any stale observation so the state answer is honest.
+      if (prUrl === null) {
+        if (store.observations.delete(ticket.id)) result.changed = true;
         continue;
       }
-      if (discovered.value.url !== null) {
-        prUrl = discovered.value.url;
-        stampDiscoveredPr(deps, ticket.id, prUrl);
+
+      // (2) STATUS — read the PR's live state.
+      result.attempted += 1;
+      const status = await ghPrStatus(deps.net, { worktreePath: cwd, prUrl });
+      if (!status.ok) {
+        result.failed += 1;
+        console.error(`[retention] status failed for ${ticket.id}:`, status.failure.message);
+        continue;
       }
-    }
 
-    // No PR to watch — clear any stale observation so the state answer is honest.
-    if (prUrl === null) {
-      if (store.observations.delete(ticket.id)) result.changed = true;
-      continue;
-    }
+      const observation: RetentionObservation = {
+        prUrl,
+        prState: status.value.state,
+        hasConflicts: status.value.hasConflicts,
+        failingChecks: status.value.failingChecks,
+      };
+      if (observationChanged(store.observations.get(ticket.id), observation)) result.changed = true;
+      store.observations.set(ticket.id, observation);
 
-    // (2) STATUS — read the PR's live state.
-    result.attempted += 1;
-    const status = await ghPrStatus(deps.net, { worktreePath: cwd, prUrl });
-    if (!status.ok) {
-      result.failed += 1;
-      console.error(`[retention] status failed for ${ticket.id}:`, status.failure.message);
-      continue;
-    }
-
-    const observation: RetentionObservation = {
-      prUrl,
-      prState: status.value.state,
-      hasConflicts: status.value.hasConflicts,
-      failingChecks: status.value.failingChecks,
-    };
-    if (observationChanged(store.observations.get(ticket.id), observation)) result.changed = true;
-    store.observations.set(ticket.id, observation);
-
-    // (3) MERGE — the one-shot merged event + notification.
-    if (status.value.state === "merged" && !store.notifiedMerged.has(ticket.id)) {
-      store.notifiedMerged.add(ticket.id);
-      if (!hasPrMergedEvent(deps.db, ticket.id)) {
-        recordTicketEvent(
-          deps.db,
-          ticket.id,
-          { kind: "pr_merged", url: prUrl },
-          deps.now(),
-          AUTOMATION_ACTOR,
-        );
-        deps.notify("Pull request merged", `${ticket.title} — its PR was merged.`);
-        result.changed = true;
+      // (3) MERGE — the one-shot merged event + notification. `notifiedMerged`
+      // is added only AFTER the event + notification succeed (or are found to
+      // already exist) — never before — so a throw here (e.g. SQLITE_BUSY)
+      // lands in this ticket's catch below and the ticket retries next poll
+      // instead of being suppressed until an app restart.
+      if (status.value.state === "merged" && !store.notifiedMerged.has(ticket.id)) {
+        if (!hasPrMergedEvent(deps.db, ticket.id)) {
+          recordTicketEvent(
+            deps.db,
+            ticket.id,
+            { kind: "pr_merged", url: prUrl },
+            deps.now(),
+            AUTOMATION_ACTOR,
+          );
+          deps.notify("Pull request merged", `${ticket.title} — its PR was merged.`);
+          result.changed = true;
+        }
+        store.notifiedMerged.add(ticket.id);
       }
+    } catch (error) {
+      console.error(`[retention] poll failed for ${ticket.id}:`, error);
     }
   }
 
@@ -246,14 +268,35 @@ export async function pollRetention(
   return result;
 }
 
-/** Stamps a newly-discovered PR url and records the `pr_opened` event (automation). */
-function stampDiscoveredPr(deps: RetentionPollDeps, ticketId: string, url: string): void {
-  const now = deps.now();
-  const write = deps.db.transaction(() => {
-    updateTicketFields(deps.db, ticketId, { prUrl: url }, now);
-    recordTicketEvent(deps.db, ticketId, { kind: "pr_opened", url }, now, AUTOMATION_ACTOR);
-  });
-  write();
+/**
+ * Stamps a newly-discovered PR url and records the `pr_opened` event
+ * (automation). This is a durable mutation, not a background read, so it gets
+ * its own try/catch (isolated from the rest of the per-ticket cycle above)
+ * and surfaces a failure the same way the merge one-shot does — the native
+ * notification is the only user-visible surface a background poll has (repo
+ * CLAUDE.md: never silently swallow a failed mutation). The write is
+ * transactional, so a failure leaves `pr_url` untouched in the DB; returning
+ * `false` tells the caller not to adopt the url this cycle either, which
+ * means DISCOVER naturally retries the stamp on the next poll — no separate
+ * retry bookkeeping needed.
+ */
+function stampDiscoveredPr(deps: RetentionPollDeps, ticket: TicketRow, url: string): boolean {
+  try {
+    const now = deps.now();
+    const write = deps.db.transaction(() => {
+      updateTicketFields(deps.db, ticket.id, { prUrl: url }, now);
+      recordTicketEvent(deps.db, ticket.id, { kind: "pr_opened", url }, now, AUTOMATION_ACTOR);
+    });
+    write();
+    return true;
+  } catch (error) {
+    console.error(`[retention] failed to stamp discovered PR for ${ticket.id}:`, error);
+    deps.notify(
+      "Couldn't save discovered PR",
+      `${ticket.title} — found PR ${url} but couldn't record it; will retry.`,
+    );
+    return false;
+  }
 }
 
 // --- composed state (read) --------------------------------------------------
@@ -292,6 +335,7 @@ export function getRetentionState(
     status: ticket.status as TicketStatus,
     keep,
     dismissed,
+    prUrl: observation.prUrl,
     prState: observation.prState,
     doneEntryAt: doneEntryTimestamp(deps.db, ticketId),
     now: deps.now(),
@@ -368,6 +412,11 @@ export class RetentionWatcher {
 
   private schedule(delay: number): void {
     if (!this.started) return;
+    // Clear any timer already pending before overwriting the field — without
+    // this, a stop()-during-in-flight-poll followed by start() lets the
+    // in-flight run's `finally` schedule a SECOND self-perpetuating chain
+    // that stop() can no longer reach (it only clears the last-written id).
+    if (this.timer !== null) clearTimeout(this.timer);
     this.timer = setTimeout(() => void this.runOnce(), delay);
     // Never keep the process alive for a poll at quit (park.ts precedent).
     this.timer.unref();

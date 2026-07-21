@@ -1,4 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import { dirname, join } from "node:path";
+import type Database from "better-sqlite3";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { listTicketEvents, recordTicketEvent } from "../db/events-repo";
 import { insertProject } from "../db/projects-repo";
@@ -9,8 +11,9 @@ import {
   setTicketRetentionKeep,
   updateTicketFields,
 } from "../db/tickets-repo";
+import type { RunNet } from "./net";
 import { setRetentionTtlDays } from "./retention";
-import { scriptedNet } from "./scripted-net";
+import { netFailure, scriptedNet } from "./scripted-net";
 import {
   createRetentionStore,
   getRetentionState,
@@ -50,7 +53,6 @@ function makeDeps(
   return {
     deps: {
       db: ctx.db,
-      git: () => "",
       net: run,
       now: () => now,
       notify: (title, body) => notifications.push({ title, body }),
@@ -103,6 +105,35 @@ function prView(over: Record<string, unknown> = {}): { stdout: string } {
       ...over,
     }),
   };
+}
+
+/**
+ * Wraps a real db so `.transaction(...)` throws — every other call passes
+ * through, rebound to the real instance (better-sqlite3's native methods
+ * require the real `this`, not the proxy). Simulates a durable-write failure
+ * (F7) without needing a real constraint violation.
+ */
+function dbWithBrokenTransaction(db: Database.Database): Database.Database {
+  return new Proxy(db, {
+    get(target, prop) {
+      if (prop === "transaction") {
+        return () => {
+          throw new Error("simulated write failure");
+        };
+      }
+      const value = Reflect.get(target, prop);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as Database.Database;
+}
+
+/** A promise plus its externally-callable resolver — for pausing a scripted net call mid-flight. */
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
 }
 
 describe("pollRetention — discovery", () => {
@@ -177,6 +208,60 @@ describe("pollRetention — merge", () => {
   });
 });
 
+describe("pollRetention — F3: per-ticket isolation on the merge one-shot", () => {
+  it("a throw recording one ticket's pr_merged event doesn't poison notifiedMerged nor abort the rest of the cycle", async () => {
+    seedProject();
+    insertTicket(
+      ctx.db,
+      testTicket("p1", {
+        id: "t1",
+        status: "needs_review",
+        worktreePath: "/repo/wt1",
+        branch: "volli/VC-1-x",
+      }),
+    );
+    updateTicketFields(ctx.db, "t1", { prUrl: "https://x/pull/1" }, 1);
+    insertTicket(
+      ctx.db,
+      testTicket("p1", {
+        id: "t2",
+        status: "needs_review",
+        worktreePath: "/repo/wt2",
+        branch: "volli/VC-2-y",
+      }),
+    );
+    updateTicketFields(ctx.db, "t2", { prUrl: "https://x/pull/2" }, 1);
+
+    const { deps, notifications } = makeDeps((_file, args) => {
+      if (args[1] === "view") {
+        if (args[2] === "https://x/pull/1") {
+          // Simulate a concurrent delete racing the poll: t1's ticket row is
+          // gone by the time its merge event tries to write, so the FK insert
+          // throws.
+          ctx.db.prepare("DELETE FROM tickets WHERE id = ?").run("t1");
+        }
+        return prView({ state: "MERGED" });
+      }
+      return { stdout: "" };
+    });
+    const store = createRetentionStore();
+
+    const result = await pollRetention(deps, store);
+
+    // notifiedMerged was never poisoned by an add-before-success: t1's write
+    // threw, so it was never added.
+    expect(store.notifiedMerged.has("t1")).toBe(false);
+    // t2's own merge event + notification still landed — one ticket's throw
+    // didn't abort the whole candidate loop.
+    expect(
+      listTicketEvents(ctx.db, "t2").filter((e) => e.payload.kind === "pr_merged"),
+    ).toHaveLength(1);
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]!.title).toBe("Pull request merged");
+    expect(result.changed).toBe(true);
+  });
+});
+
 describe("pollRetention — checks & conflicts surfacing", () => {
   it("surfaces merge conflicts and failing checks; an open conflicted PR is not archive-ready", async () => {
     seedProject();
@@ -211,6 +296,144 @@ describe("pollRetention — background read failures are silent", () => {
     expect(result.attempted).toBe(1);
     expect(result.failed).toBe(1);
     expect(notifications).toHaveLength(0);
+  });
+});
+
+describe("pollRetention — F5: ghCwd falls back to the project checkout", () => {
+  it("uses the project path when worktree_path doesn't exist on disk", async () => {
+    // A real, existing directory (the test db's own tmp dir) stands in for
+    // the project checkout; the worktree path is a sibling that was never
+    // created — the documented "removed on archive" case.
+    const realProjectDir = dirname(ctx.dbPath);
+    insertProject(ctx.db, testProject({ id: "p1", path: realProjectDir }));
+    const missingWorktree = join(realProjectDir, "gone-worktree");
+    insertTicket(
+      ctx.db,
+      testTicket("p1", {
+        id: "t1",
+        status: "needs_review",
+        worktreePath: missingWorktree,
+        branch: "volli/VC-1-x",
+      }),
+    );
+    updateTicketFields(ctx.db, "t1", { prUrl: "https://x/pull/7" }, 1);
+
+    const { run, calls } = scriptedNet(() => prView());
+    const deps: RetentionPollDeps = {
+      db: ctx.db,
+      net: run,
+      now: () => 1000,
+      notify: () => {},
+    };
+    await pollRetention(deps, createRetentionStore());
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.cwd).toBe(realProjectDir);
+  });
+});
+
+describe("pollRetention — F6: a discovery stamp counts as a change even if the following status fetch fails", () => {
+  it("sets result.changed when the pr_url write lands, before the status fetch fails", async () => {
+    seedProject();
+    seedTicket({ prUrl: null });
+    const { deps } = makeDeps((_file, args) => {
+      if (args[1] === "list") {
+        return {
+          stdout: JSON.stringify([{ url: "https://x/pull/9", state: "OPEN", updatedAt: "z" }]),
+        };
+      }
+      if (args[1] === "view") {
+        throw netFailure({ stderr: "network blip", code: 1 });
+      }
+      return { stdout: "" };
+    });
+
+    const result = await pollRetention(deps, createRetentionStore());
+
+    // The stamp durably wrote pr_url...
+    expect(getTicketRow(ctx.db, "t1")!.pr_url).toBe("https://x/pull/9");
+    // ...and that write is reflected even though the immediately-following
+    // status fetch for the same ticket, same cycle, failed.
+    expect(result.changed).toBe(true);
+    expect(result.failed).toBe(1);
+  });
+});
+
+describe("pollRetention — F7: a failed PR-url stamp is isolated, surfaced, and retryable", () => {
+  it("notifies on a stamp failure, leaves pr_url null for DISCOVER to retry, and doesn't poison the cycle", async () => {
+    seedProject();
+    seedTicket({ prUrl: null });
+    const { deps, notifications } = makeDeps((_file, args) => {
+      if (args[1] === "list") {
+        return {
+          stdout: JSON.stringify([{ url: "https://x/pull/9", state: "OPEN", updatedAt: "z" }]),
+        };
+      }
+      return { stdout: "" };
+    });
+    const brokenDeps: RetentionPollDeps = { ...deps, db: dbWithBrokenTransaction(ctx.db) };
+
+    const result = await pollRetention(brokenDeps, createRetentionStore());
+
+    // Surfaced via the same native-notification seam the merge one-shot uses
+    // — the only user-visible surface a background poll has.
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]!.title).toBe("Couldn't save discovered PR");
+    // Retry path: the write never landed, so pr_url is still null — DISCOVER
+    // tries the stamp again next poll.
+    expect(getTicketRow(ctx.db, "t1")!.pr_url).toBeNull();
+    expect(listTicketEvents(ctx.db, "t1")).toHaveLength(0);
+    // The failure didn't poison the rest of the cycle: the poll still
+    // returns cleanly.
+    expect(result.changed).toBe(false);
+  });
+});
+
+describe("RetentionWatcher — F4: schedule() never leaves a second timer chain", () => {
+  it("stop() during an in-flight poll, then start(), leaves exactly one self-perpetuating chain", async () => {
+    vi.useFakeTimers();
+    try {
+      seedProject();
+      seedTicket({ prUrl: "https://x/pull/7" });
+      let callCount = 0;
+      const gate = deferred<{ stdout: string; stderr: string }>();
+      const net: RunNet = async () => {
+        callCount += 1;
+        if (callCount === 1) return gate.promise;
+        return { stdout: prView().stdout, stderr: "" };
+      };
+      const deps: RetentionPollDeps = {
+        db: ctx.db,
+        net,
+        now: () => 1000,
+        notify: () => {},
+      };
+      const config = { intervalMs: 1000, maxBackoffMs: 60_000 };
+      const watcher = new RetentionWatcher(deps, config);
+
+      watcher.start();
+      // Fire the first scheduled poll — it calls net and suspends on `gate`.
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(callCount).toBe(1);
+
+      // stop() while the poll is in flight, then start() again: the bug lets
+      // the in-flight run's `finally` reschedule a SECOND chain that stop()
+      // can no longer reach (it only clears the last-written timer id).
+      watcher.stop();
+      watcher.start();
+
+      // Let the in-flight poll resolve; its `finally` reschedules too.
+      gate.resolve({ stdout: prView().stdout, stderr: "" });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Advance exactly one more interval. With the fix, only ONE chain is
+      // alive, so exactly one more poll runs (2 total). The bug would run
+      // TWO (3 total) — start()'s chain AND the orphaned finally chain.
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(callCount).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -262,6 +485,21 @@ describe("getRetentionState — Keep exempts BOTH paths (the Vibe-Kanban bug)", 
     const state = getRetentionState(deps, store, "t1")!;
     expect(state.archiveReady).toBe(true);
     expect(state.reason).toBe("ttl-expired");
+  });
+});
+
+describe("getRetentionState — F1: an unpolled PR blocks the TTL path", () => {
+  it("a Done-past-TTL ticket with a stamped pr_url but no observation yet is NOT archive-ready", () => {
+    seedProject();
+    setRetentionTtlDays(ctx.db, 14, 0);
+    seedTicket({ status: "done", prUrl: "https://x/pull/7", doneAt: 0 });
+    // No pollRetention: the PR's state is UNKNOWN (offline, gh missing, or
+    // simply before the first interval) — "an open PR waits for its merge,
+    // never a TTL" must hold in that window too.
+    const { deps } = makeDeps(() => ({ stdout: "[]" }), 100 * DAY);
+    const state = getRetentionState(deps, createRetentionStore(), "t1")!;
+    expect(state.archiveReady).toBe(false);
+    expect(state.reason).toBeNull();
   });
 });
 
