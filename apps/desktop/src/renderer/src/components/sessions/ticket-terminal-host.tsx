@@ -2,8 +2,12 @@ import * as React from "react";
 
 import { ConfirmCloseDialog } from "@renderer/components/sessions/confirm-close-dialog";
 import { SessionSplitLayout } from "@renderer/components/sessions/session-split-layout";
-import { createTerminalSplit } from "@renderer/components/sessions/session-create";
+import {
+  createTerminalSplit,
+  resumeTicketSession,
+} from "@renderer/components/sessions/session-create";
 import { useSessionsStore, type SessionContainer } from "@renderer/stores/sessions";
+import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { useCloseGuard } from "@renderer/terminal/close-guard";
 import { closeTerminalPane } from "@renderer/terminal/session-lifecycle";
 
@@ -113,6 +117,22 @@ export function TicketTerminalOverlay({
                     onResize={(splitId, ratio) =>
                       setSplitRatio(ownerId, tab.sessionId, splitId, ratio)
                     }
+                    // Resume boots a NEW tab (session-create.ts's shared boot
+                    // pipeline) and switches to it, mirroring "New session" —
+                    // the dead pane stays exactly where it is, unresumed. The
+                    // `tab.scope.kind === "ticket"` filter above guarantees
+                    // this at runtime; the guard narrows `scope` so
+                    // `.ticketId` is accessible below.
+                    onResume={(resumeOfSessionId) => {
+                      if (scope.kind !== "ticket") return;
+                      void resumeTicketSession(scope, resumeOfSessionId).then((sessionId) => {
+                        if (sessionId !== null) {
+                          useWorkspaceStore
+                            .getState()
+                            .setTicketActiveTab(scope.projectId, scope.ticketId, sessionId);
+                        }
+                      });
+                    }}
                   />
                 </div>
               </TicketTerminalBox>

@@ -17,6 +17,7 @@ import {
   useSessionsStore,
   type TerminalSplitDirection,
 } from "@renderer/stores/sessions";
+import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { subscribeWorktreePhases } from "@renderer/stores/worktree";
 import { cn } from "@renderer/lib/utils";
 import { useCloseGuard } from "@renderer/terminal/close-guard";
@@ -80,6 +81,19 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
     });
     const offExit = window.api.terminal.onExit((event) => {
       markExited(event.sessionId, event.exitCode);
+      // Refresh the ticket's durable session-records cache so the just-ended
+      // record's `endedAt` (and therefore its resumability, interrupt/resume
+      // issue #78) lands promptly — the rail's History rows and the exited-
+      // pane resume overlay both read this one shared cache
+      // (stores/ticket-session-records.ts) and neither is guaranteed to be
+      // mounted to notice the exit itself. `sessionOwner` resolves ANY pane
+      // (root or split leaf) to its owner id; every tab under one owner
+      // shares the same scope kind (ownerKey never collides scratch/ticket).
+      const state = useSessionsStore.getState();
+      const ownerId = state.sessionOwner[event.sessionId];
+      const isTicketOwner =
+        ownerId !== undefined && state.byOwner[ownerId]?.tabs[0]?.scope.kind === "ticket";
+      if (isTicketOwner) void useTicketSessionRecordsStore.getState().refresh(ownerId);
     });
     const offParkState = window.api.terminal.onParkState((event) => {
       useSessionsStore.getState().setParkState(event.sessionId, event.parked, event.keepAwake);

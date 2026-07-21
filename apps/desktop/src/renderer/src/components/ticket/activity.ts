@@ -225,6 +225,12 @@ export function describeEvent(payload: TicketEventPayload): string | null {
       return payload.reason === null
         ? `reported ${payload.signal}`
         : `reported ${payload.signal}: ${payload.reason}`;
+    case "sessions_interrupted":
+      return payload.sessionIds.length === 1
+        ? "interrupted a session"
+        : `interrupted ${payload.sessionIds.length} sessions`;
+    case "session_resumed":
+      return "resumed the interrupted session";
     case "commented":
       return null;
   }

@@ -5,6 +5,8 @@ export const claudeCodeAdapter: HarnessAdapter = {
   command: "claude",
   promptFlag: null,
   detection: { executable: "claude" },
+  resumeIdArgs: ["--resume"],
+  resumeLatestArgs: ["--continue"],
   installActions(home, canonicalSkillPath) {
     return [
       {

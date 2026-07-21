@@ -8,10 +8,12 @@ import {
   agentSessionEnv,
   breatheShouldWake,
   buildHarnessCommand,
+  buildHarnessResumeCommand,
   createSessionRecord,
   DEFAULT_HARNESS_ID,
   displayTicketId,
   errorMessage,
+  harnessLabel,
   isHarnessId,
   isParkCandidate,
   projectSessionEnv,
@@ -26,6 +28,7 @@ import type {
   CreateTerminalSessionResult,
   HarnessId,
   SessionActivityState,
+  SessionLaunchKind,
   TerminalBusyResult,
   TerminalDataEvent,
   TerminalExitEvent,
@@ -43,6 +46,7 @@ import {
   countProjectScratchSessions,
   countTicketSessions,
   endSession,
+  getSession,
   getSessionTicketId,
   getTicketSessionContext,
   insertSession,
@@ -109,6 +113,17 @@ interface Session {
   pty: PtyProcess;
   /** The workspace this session is scoped to (future `volli` CLI/notifications consumer). */
   workspaceId: string;
+  /**
+   * The ticket this session drives, or `null` for a scratch session. Held
+   * in-memory so {@link PtyManager.interruptTicketSessions} can find every live
+   * session of a ticket without a db round-trip (issue #78 backward-move interrupt).
+   */
+  ticketId: string | null;
+  /**
+   * What this PTY's first line launched — an agent harness or a bare shell.
+   * Interrupts target only `agent` sessions (an Esc to a plain shell is noise).
+   */
+  launchKind: SessionLaunchKind;
   /** Basename of the spawned shell (`zsh`) — the foreground title that means "idle at a prompt". */
   shellName: string;
   /** The resolved (canonical, `path.resolve`'d) cwd the PTY runs in — the worktree-delete/remove guards test containment against it. */
@@ -216,13 +231,28 @@ interface SessionScope {
    * `kickoff` (harness + prompt, prefixed with the orientation preamble), the
    * project's `setupCommand` (sentinel-gated after a FRESH create), and the
    * main `projectPath` for the preamble. `launchCommand` is `null` in this case.
+   *
+   * `resumeCommand` is the pre-built harness resume line for a RESUME launch
+   * (issue #78): it needs no worktree identity (a resume carries no orientation
+   * preamble), so it is composed up front in {@link PtyManager.resolveScope} and
+   * simply written after `ensure` — through the same setup-sentinel gate when a
+   * fresh worktree runs a setup command. Mutually exclusive with `kickoff`.
    */
   worktree: {
     ticketId: string;
     projectPath: string;
     setupCommand: string | null;
     kickoff: { harnessId: HarnessId; prompt: string } | null;
+    resumeCommand: string | null;
   } | null;
+  /**
+   * Present ONLY for a RESUME launch (issue #78, CONCEPT #21): the ended agent
+   * session this one picks up from. `previousSessionId` is recorded in the
+   * `session_resumed` event; `harnessSessionId` is that session's best-known
+   * resume seed, inherited by the new row so a follow-up interrupt/resume chain
+   * keeps a valid seed until the harness re-`link`s a fresh one.
+   */
+  resume: { previousSessionId: string; harnessSessionId: string | null } | null;
 }
 
 /**
@@ -285,7 +315,67 @@ export class PtyManager {
       if (ctx === undefined) return { ok: false, error: "Unknown ticket" };
       const displayId = displayTicketId(ctx.ticketPrefix, ctx.ticketNumber);
       const kickoff = request.ticket.kickoff;
+      const resume = request.ticket.resume;
       const usesWorktree = ctx.usesWorktree;
+      const title = `Session ${countTicketSessions(db, request.ticket.ticketId) + 1}`;
+      // Resume launch (issue #78, CONCEPT #21): pick up an ENDED agent session
+      // of this same ticket. Kickoff and resume are mutually exclusive — reject
+      // both present outright rather than silently preferring one.
+      if (resume !== undefined) {
+        if (kickoff !== undefined) {
+          return { ok: false, error: "A session cannot both start a kickoff and resume another" };
+        }
+        const prior = getSession(db, resume.sessionId);
+        if (prior === undefined) return { ok: false, error: "Cannot resume an unknown session" };
+        if (prior.ticketId !== request.ticket.ticketId) {
+          return { ok: false, error: "Cannot resume a session that belongs to another ticket" };
+        }
+        if (prior.launchKind !== "agent") {
+          return { ok: false, error: "Only an agent session can be resumed" };
+        }
+        if (prior.endedAt === null) {
+          return { ok: false, error: "Cannot resume a session that is still live" };
+        }
+        // The resume line needs no worktree identity (no orientation preamble),
+        // so it composes up front. A harness with no resume support yields null.
+        const resumeCommand = buildHarnessResumeCommand(prior.harnessId, prior.harnessSessionId);
+        if (resumeCommand === null) {
+          return {
+            ok: false,
+            error: `The ${harnessLabel(prior.harnessId)} harness does not support resuming a session`,
+          };
+        }
+        return {
+          ok: true,
+          scope: {
+            projectId: ctx.projectId,
+            ticketId: request.ticket.ticketId,
+            harnessId: prior.harnessId,
+            launchKind: "agent",
+            placement,
+            cwd: ctx.projectPath,
+            env: ticketSessionEnv(ctx.projectPath, displayId),
+            title,
+            artifactsRoot: ctx.projectPath,
+            // Non-worktree resumes launch the resume line directly; a worktree
+            // resume defers the write to create() (post-`ensure`, setup-gated).
+            launchCommand: usesWorktree ? null : resumeCommand,
+            worktree: usesWorktree
+              ? {
+                  ticketId: request.ticket.ticketId,
+                  projectPath: ctx.projectPath,
+                  setupCommand: ctx.setupCommand,
+                  kickoff: null,
+                  resumeCommand,
+                }
+              : null,
+            resume: {
+              previousSessionId: prior.id,
+              harnessSessionId: prior.harnessSessionId,
+            },
+          },
+        };
+      }
       return {
         ok: true,
         scope: {
@@ -302,7 +392,7 @@ export class PtyManager {
           // VOLLI_ARTIFACTS_DIR always points at the main .volli either way (#9).
           cwd: ctx.projectPath,
           env: ticketSessionEnv(ctx.projectPath, displayId),
-          title: `Session ${countTicketSessions(db, request.ticket.ticketId) + 1}`,
+          title,
           artifactsRoot: ctx.projectPath,
           // A non-worktree kickoff builds its harness command up front and
           // launches it directly (unchanged). A worktree session defers this to
@@ -318,8 +408,10 @@ export class PtyManager {
                 projectPath: ctx.projectPath,
                 setupCommand: ctx.setupCommand,
                 kickoff: kickoff ?? null,
+                resumeCommand: null,
               }
             : null,
+          resume: null,
         },
       };
     }
@@ -343,6 +435,8 @@ export class PtyManager {
         launchCommand: null,
         // Never worktree-backed — scratch sessions run in the renderer's cwd.
         worktree: null,
+        // Scratch sessions are never a resume.
+        resume: null,
       },
     };
   }
@@ -475,6 +569,12 @@ export class PtyManager {
         cwd,
         now,
       });
+      // A resume inherits the ended session's best-known resume seed, so a
+      // follow-up interrupt/resume keeps a valid `--resume <id>` until the
+      // harness re-`link`s a fresh one. Set before insert so it persists.
+      if (scope.resume !== null && scope.resume.harnessSessionId !== null) {
+        record.harnessSessionId = scope.resume.harnessSessionId;
+      }
       try {
         const persist = db.transaction(() => {
           insertSession(db, record);
@@ -492,6 +592,19 @@ export class PtyManager {
               },
               now,
             );
+            // A resume also links the new session to the one it picks up from.
+            if (scope.resume !== null) {
+              recordTicketEvent(
+                db,
+                record.ticketId,
+                {
+                  kind: "session_resumed",
+                  sessionId: record.id,
+                  previousSessionId: scope.resume.previousSessionId,
+                },
+                now,
+              );
+            }
           }
         });
         persist();
@@ -508,6 +621,8 @@ export class PtyManager {
       const session: Session = {
         pty,
         workspaceId: request.workspaceId,
+        ticketId: scope.ticketId,
+        launchKind: scope.launchKind,
         shellName: basename(file),
         cwd,
         webContents,
@@ -552,18 +667,24 @@ export class PtyManager {
       const worktree = scope.worktree;
       if (worktree !== null && worktreeOutcome !== null) {
         const identity = worktreeOutcome.identity;
+        // A resume writes its pre-built resume line verbatim (no orientation
+        // preamble — the harness is picking up an existing session). Otherwise a
+        // kickoff composes the harness command with the preamble now that the
+        // worktree identity is resolved. Both flow through the setup gate below.
         const launchCommand =
-          worktree.kickoff !== null
-            ? buildHarnessCommand(
-                worktree.kickoff.harnessId,
-                `${worktreeOrientationPreamble({
-                  worktreePath: cwd,
-                  branch: identity.branch ?? "",
-                  baseBranch: identity.baseBranch,
-                  projectPath: worktree.projectPath,
-                })}\n\n${worktree.kickoff.prompt}`,
-              )
-            : null;
+          worktree.resumeCommand !== null
+            ? worktree.resumeCommand
+            : worktree.kickoff !== null
+              ? buildHarnessCommand(
+                  worktree.kickoff.harnessId,
+                  `${worktreeOrientationPreamble({
+                    worktreePath: cwd,
+                    branch: identity.branch ?? "",
+                    baseBranch: identity.baseBranch,
+                    projectPath: worktree.projectPath,
+                  })}\n\n${worktree.kickoff.prompt}`,
+                )
+              : null;
         const setupCommand = worktree.setupCommand?.trim() ?? "";
         if (worktreeOutcome.created && setupCommand.length > 0) {
           session.setupWatch = { ticketId: worktree.ticketId, tail: "", launchCommand };
@@ -1195,6 +1316,36 @@ export class PtyManager {
     return busy;
   }
 
+  /**
+   * Interrupts every LIVE agent session of a ticket by writing a single Esc
+   * byte (`\x1b`) to each — the backward-move interrupt (issue #78, CONCEPT
+   * #20): when a ticket leaves the active columns its running agents are told
+   * to stop, but the PTYs are NEVER killed or signalled (the transcript stays
+   * intact for a later resume). Shell sessions and other tickets' sessions are
+   * left untouched. Parked sessions are woken first (a SIGSTOP'd shell can't
+   * consume input), mirroring {@link write}'s discipline. Returns the ids of
+   * the sessions actually interrupted.
+   */
+  interruptTicketSessions(ticketId: string): string[] {
+    const interrupted: string[] = [];
+    for (const [sessionId, session] of this.sessions) {
+      if (session.ticketId !== ticketId || session.launchKind !== "agent") continue;
+      // User-equivalent input: keep the session out of the idle window and wake
+      // it before the write, exactly as write() does.
+      session.lastActivityAt = Date.now();
+      if (session.parkedPids !== null) this.wake(sessionId);
+      try {
+        session.pty.write("\x1b");
+        interrupted.push(sessionId);
+      } catch (error) {
+        // One session's dead pty must never block interrupting the rest; it
+        // simply isn't reported as interrupted.
+        console.error(`[volli] failed to interrupt session ${sessionId}: ${errorMessage(error)}`);
+      }
+    }
+    return interrupted;
+  }
+
   write(sessionId: string, data: string): TerminalIoResult {
     const session = this.sessions.get(sessionId);
     if (session === undefined) {
@@ -1345,14 +1496,32 @@ function isOptionalKickoff(
 }
 
 /**
- * `undefined` (scratch session) or a `{ ticketId: string; kickoff? }` object
- * (ticket session). A malformed kickoff shape rejects the whole ticket.
+ * `undefined` (no resume) or a `{ sessionId: string }` object. A malformed
+ * resume shape rejects the whole ticket. The kickoff/resume mutual exclusion is
+ * a semantic rule enforced in {@link PtyManager.resolveScope} (with a clear
+ * message), not a shape rule — both fields being well-formed is valid here.
+ */
+function isOptionalResume(value: unknown): value is { sessionId: string } | undefined {
+  if (value === undefined) return true;
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate["sessionId"] === "string";
+}
+
+/**
+ * `undefined` (scratch session) or a `{ ticketId: string; kickoff?; resume? }`
+ * object (ticket session). A malformed kickoff or resume shape rejects the whole
+ * ticket.
  */
 function isOptionalTicket(value: unknown): value is CreateTerminalSessionRequest["ticket"] {
   if (value === undefined) return true;
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
-  return typeof candidate["ticketId"] === "string" && isOptionalKickoff(candidate["kickoff"]);
+  return (
+    typeof candidate["ticketId"] === "string" &&
+    isOptionalKickoff(candidate["kickoff"]) &&
+    isOptionalResume(candidate["resume"])
+  );
 }
 
 function isCreateRequest(value: unknown): value is CreateTerminalSessionRequest {

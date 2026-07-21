@@ -173,6 +173,22 @@ describe("parseCliArgs", () => {
         json: false,
       },
     });
+    expect(parseCliArgs(["session", "link", "harness-uuid-123", "--json"])).toEqual({
+      ok: true,
+      invocation: {
+        command: "session.link",
+        args: { id: "harness-uuid-123" },
+        json: true,
+      },
+    });
+  });
+
+  it("requires the harness session id positional for session link", () => {
+    expect(parseCliArgs(["session", "link"])).toEqual({
+      ok: false,
+      code: "USAGE",
+      message: "session link requires <id>",
+    });
   });
 
   it("routes the remaining published read, help, and explicit launch commands", () => {

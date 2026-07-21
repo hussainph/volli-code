@@ -5,5 +5,7 @@ export const codexAdapter: HarnessAdapter = {
   command: "codex",
   promptFlag: null,
   detection: { executable: "codex" },
+  resumeIdArgs: ["resume"],
+  resumeLatestArgs: ["resume", "--last"],
   installActions: () => [],
 };

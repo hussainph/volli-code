@@ -29,8 +29,19 @@ export interface CreateTerminalSessionRequest {
    * built command line is written into the PTY exactly once, after the session
    * is fully persisted), and stamps the session record's `harnessId`
    * accordingly. Absent = a bare shell with no agent launched.
+   *
+   * `resume`, when present, makes main auto-launch the harness's resume
+   * command (interrupt/resume, issue #78) for the ended session named by
+   * `sessionId` — resolved from that session's own durable record
+   * (`harnessId`/`harnessSessionId`) via `buildHarnessResumeCommand`, run in
+   * the SAME cwd (the ticket's existing worktree). Mutually exclusive with
+   * `kickoff`: the renderer only ever sends one or the other.
    */
-  ticket?: { ticketId: string; kickoff?: { harnessId: HarnessId; prompt: string } };
+  ticket?: {
+    ticketId: string;
+    kickoff?: { harnessId: HarnessId; prompt: string };
+    resume?: { sessionId: string };
+  };
 }
 
 /**

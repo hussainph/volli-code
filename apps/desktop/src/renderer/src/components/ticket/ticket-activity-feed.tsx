@@ -1,5 +1,6 @@
 import * as React from "react";
 import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
+import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
 import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
@@ -11,6 +12,7 @@ import { GitMergeIcon } from "@phosphor-icons/react/dist/csr/GitMerge";
 import { GitPullRequestIcon } from "@phosphor-icons/react/dist/csr/GitPullRequest";
 import { NotePencilIcon } from "@phosphor-icons/react/dist/csr/NotePencil";
 import { PaperPlaneTiltIcon } from "@phosphor-icons/react/dist/csr/PaperPlaneTilt";
+import { PauseCircleIcon } from "@phosphor-icons/react/dist/csr/PauseCircle";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { PlusCircleIcon } from "@phosphor-icons/react/dist/csr/PlusCircle";
 import { RobotIcon } from "@phosphor-icons/react/dist/csr/Robot";
@@ -75,6 +77,8 @@ const EVENT_ICON: Record<TicketEventKind, PhosphorIcon> = {
   pr_opened: GitPullRequestIcon,
   pr_merged: GitMergeIcon,
   session_signal: FlagIcon,
+  sessions_interrupted: PauseCircleIcon,
+  session_resumed: ArrowClockwiseIcon,
 };
 
 /** The single muted line for one property-change event: icon + sentence + time. */

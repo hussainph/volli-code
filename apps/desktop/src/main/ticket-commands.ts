@@ -2,6 +2,7 @@ import type Database from "better-sqlite3";
 import {
   createTicket,
   isValidBranchName,
+  leavesActiveColumns,
   moveTicket,
   type Ticket,
   type TicketEventActor,
@@ -163,6 +164,37 @@ export function moveTicketCommand(
     }
     return after;
   })();
+}
+
+/**
+ * The backward-move side effect (issue #78, CONCEPT #20): a board move that
+ * leaves the active columns ({@link leavesActiveColumns}) interrupts every live
+ * agent session of the ticket and records ONE `sessions_interrupted` event
+ * naming them, attributed to the same actor as the move. Called AFTER the move
+ * commits at each choke point — the move is the truth, the interrupt its
+ * consequence — so a failed move never interrupts. A missing seam
+ * (`interruptTicketSessions` undefined: tests, degraded boot) is a clean no-op,
+ * and an empty interrupt (no live agent sessions) records nothing. Returns the
+ * interrupted session ids so the caller can surface them if it wants.
+ */
+export function interruptOnBackwardMove(
+  db: Database.Database,
+  input: { ticketId: string; fromStatus: TicketStatus; toStatus: TicketStatus },
+  context: TicketCommandContext,
+  interruptTicketSessions: ((ticketId: string) => string[]) | undefined,
+): string[] {
+  if (interruptTicketSessions === undefined) return [];
+  if (!leavesActiveColumns(input.fromStatus, input.toStatus)) return [];
+  const sessionIds = interruptTicketSessions(input.ticketId);
+  if (sessionIds.length === 0) return [];
+  recordTicketEvent(
+    db,
+    input.ticketId,
+    { kind: "sessions_interrupted", sessionIds },
+    context.now,
+    context.actor,
+  );
+  return sessionIds;
 }
 
 export function setTicketPriorityCommand(

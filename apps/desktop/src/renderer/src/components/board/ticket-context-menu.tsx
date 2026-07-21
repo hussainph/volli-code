@@ -1,5 +1,6 @@
 import * as React from "react";
 import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
+import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { ArrowsLeftRightIcon } from "@phosphor-icons/react/dist/csr/ArrowsLeftRight";
 import { CellSignalHighIcon } from "@phosphor-icons/react/dist/csr/CellSignalHigh";
 import { CellSignalLowIcon } from "@phosphor-icons/react/dist/csr/CellSignalLow";
@@ -17,10 +18,12 @@ import {
   TICKET_PRIORITY_LABELS,
   TICKET_STATUS_LABELS,
   TICKET_STATUSES,
+  type SessionRecord,
   type Ticket,
 } from "@volli/shared";
 
 import { ConfirmCloseDialog } from "@renderer/components/sessions/confirm-close-dialog";
+import { resumeTicketSession } from "@renderer/components/sessions/session-create";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -32,9 +35,16 @@ import {
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
 import { RemoveWorktreeDialog } from "@renderer/components/ticket/remove-worktree-dialog";
+import { latestResumableSession } from "@renderer/components/ticket/session-history";
 import { useBoardStore } from "@renderer/stores/board";
-import { sessionPanes, useSessionsStore } from "@renderer/stores/sessions";
+import { sessionPanes, ticketScope, useSessionsStore } from "@renderer/stores/sessions";
+import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
+import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { useCloseGuard } from "@renderer/terminal/close-guard";
+
+/** Stable empty array so the per-card session-records selector never forces a
+ *  re-render of every OTHER card's menu when one ticket's cache is touched. */
+const NO_RECORDS: readonly SessionRecord[] = [];
 
 const STATUS_ICON = {
   backlog: TrayIcon,
@@ -104,9 +114,31 @@ export function TicketContextMenu({
     );
   };
 
+  // Resumability (interrupt/resume, issue #78) needs the ticket's durable
+  // session records — the same shared cache the rail and the exited-pane
+  // overlay read (stores/ticket-session-records.ts), fetched lazily on menu
+  // open rather than eagerly for every card on the board.
+  const records = useTicketSessionRecordsStore((state) => state.byTicket[ticket.id] ?? NO_RECORDS);
+  const resumableSession = latestResumableSession(records);
+
+  const resumeLastSession = () => {
+    if (resumableSession === null) return;
+    void resumeTicketSession(ticketScope(projectId, ticket.id), resumableSession.id).then(
+      (sessionId) => {
+        if (sessionId === null) return;
+        useWorkspaceStore.getState().openTicket(projectId, ticket.id);
+        useWorkspaceStore.getState().setTicketActiveTab(projectId, ticket.id, sessionId);
+      },
+    );
+  };
+
   return (
     <>
-      <ContextMenu>
+      <ContextMenu
+        onOpenChange={(open) => {
+          if (open) void useTicketSessionRecordsStore.getState().refresh(ticket.id);
+        }}
+      >
         <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
         <ContextMenuContent>
           <ContextMenuSub>
@@ -147,6 +179,11 @@ export function TicketContextMenu({
             </ContextMenuSubContent>
           </ContextMenuSub>
           <ContextMenuSeparator />
+          {resumableSession !== null ? (
+            <ContextMenuItem icon={ArrowClockwiseIcon} onSelect={resumeLastSession}>
+              Resume last session
+            </ContextMenuItem>
+          ) : null}
           {ticket.worktreePath !== null ? (
             <ContextMenuItem
               icon={TrashIcon}

@@ -58,6 +58,15 @@ export const TICKET_EVENT_KINDS = [
   // `automation` actor; `reason` becomes the Needs Review badge when the loop
   // milestone lands.
   "session_signal",
+  // Backward-move interrupt/resume (issue #78, CONCEPT #20): a board move
+  // that exits the active columns (`leavesActiveColumns` in `ticket.ts`)
+  // interrupts every still-live session on the ticket — `sessions_interrupted`
+  // records the interrupted session ids in one event. `session_resumed` is
+  // written when a ticket re-enters an active column and a new session picks
+  // up where an interrupted one left off — `sessionId` is the new session's
+  // record id, `previousSessionId` the ended session it resumes.
+  "sessions_interrupted",
+  "session_resumed",
 ] as const;
 
 export type TicketEventKind = (typeof TICKET_EVENT_KINDS)[number];
@@ -128,7 +137,9 @@ export type TicketEventPayload =
   | { kind: "worktree_committed"; message: string }
   | { kind: "pr_opened"; url: string }
   | { kind: "pr_merged"; url: string }
-  | { kind: "session_signal"; signal: "done" | "blocked"; reason: string | null };
+  | { kind: "session_signal"; signal: "done" | "blocked"; reason: string | null }
+  | { kind: "sessions_interrupted"; sessionIds: string[] }
+  | { kind: "session_resumed"; sessionId: string; previousSessionId: string };
 
 /**
  * The `ensure`-pipeline stage a `worktree_failed` event aborted at

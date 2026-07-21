@@ -85,6 +85,7 @@ import {
   createTicketCommand,
   createTicketCommentCommand,
   deleteTicketCommand,
+  interruptOnBackwardMove,
   moveTicketCommand,
   setTicketLabelsCommand,
   setTicketPriorityCommand,
@@ -497,6 +498,14 @@ export function registerDataIpcHandlers(
      * means "assume none" — the guard then relies on the git/dirtiness checks.
      */
     liveSessionCwds?: () => string[];
+    /**
+     * Interrupts every live agent session of a ticket, returning their ids (from
+     * the PtyManager). The backward-move choke point (issue #78): after a
+     * user-initiated move that leaves the active columns commits, its ticket's
+     * running agents are Esc'd and one `sessions_interrupted` event is recorded.
+     * Absent (tests, degraded boot) means the interrupt is a no-op.
+     */
+    interruptTicketSessions?: (ticketId: string) => string[];
   } = {},
 ): void {
   if (!handle.ok) {
@@ -691,10 +700,27 @@ export function registerDataIpcHandlers(
       }
       try {
         const now = Date.now();
-        return {
-          ok: true,
-          tickets: moveTicketCommand(db, input, { now, actor: { kind: "user" } }),
-        };
+        const actor = { kind: "user" } as const;
+        // Snapshot the pre-move status BEFORE the move so the backward-move
+        // interrupt can decide whether the move left the active columns. Reading
+        // the raw row (never trusting the renderer) keeps the from-status honest.
+        const before = getTicketRow(db, input.ticketId);
+        const tickets = moveTicketCommand(db, input, { now, actor });
+        // The move committed above (its own transaction); the interrupt is the
+        // side effect, fired only for a real backward move (issue #78).
+        if (before !== undefined) {
+          interruptOnBackwardMove(
+            db,
+            {
+              ticketId: input.ticketId,
+              fromStatus: before.status as TicketStatus,
+              toStatus: input.toStatus,
+            },
+            { now, actor },
+            options.interruptTicketSessions,
+          );
+        }
+        return { ok: true, tickets };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }

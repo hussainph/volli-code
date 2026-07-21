@@ -284,6 +284,11 @@ app.whenReady().then(async () => {
   // Database needs `dbHandle`, which doesn't exist yet at that point.
   registerDataIpcHandlers(dbHandle, {
     liveSessionCwds: () => ptyManagerRef?.liveSessionCwds() ?? [],
+    // Backward-move interrupt (issue #78): a user move that leaves the active
+    // columns Esc's the ticket's live agent sessions. Lazy through the ref —
+    // this runs before the PtyManager is built below, but only ever fires at
+    // invoke time, long after boot.
+    interruptTicketSessions: (ticketId) => ptyManagerRef?.interruptTicketSessions(ticketId) ?? [],
   });
   // Global-artifacts + @file fs plumbing (file index/read/write, artifact
   // create, reveal, per-tab watch); same degraded-DB stance as
@@ -478,6 +483,9 @@ app.whenReady().then(async () => {
           appVersion: app.getVersion(),
           observeSession: (sessionId, lines) => ptyManager.peek(sessionId, lines),
           notify: (title, message) => new Notification({ title, body: message }).show(),
+          // Backward-move interrupt (issue #78): a socket `ticket.move` that
+          // leaves the active columns Esc's the ticket's live agent sessions.
+          interruptTicketSessions: (ticketId) => ptyManager.interruptTicketSessions(ticketId),
         }).execute
       : async () =>
           ({
