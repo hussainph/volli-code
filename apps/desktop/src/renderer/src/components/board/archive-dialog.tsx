@@ -29,15 +29,12 @@ import {
   DialogTitle,
 } from "@renderer/components/ui/dialog";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
+import { formatStamp } from "@renderer/lib/relative-time";
 import { useBoardStore } from "@renderer/stores/board";
 
 /** "Jul 14, 2026" — a compact archived-on stamp. */
 function formatArchivedAt(epochMs: number): string {
-  return new Date(epochMs).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
+  return formatStamp(epochMs);
 }
 
 /**

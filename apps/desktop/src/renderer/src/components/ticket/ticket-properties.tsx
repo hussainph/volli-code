@@ -53,6 +53,7 @@ import {
 import { Input } from "@renderer/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { useTicketRetention } from "@renderer/hooks/use-ticket-retention";
+import { formatStamp } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
 import { useDebouncedCallback } from "@renderer/lib/use-debounced-callback";
 import { useBoardStore } from "@renderer/stores/board";
@@ -61,13 +62,7 @@ import { phaseFor, useWorktreeStore } from "@renderer/stores/worktree";
 
 /** "Jul 14, 2026, 3:04 PM" — a compact created/updated stamp. */
 function formatTimestamp(epochMs: number): string {
-  return new Date(epochMs).toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
+  return formatStamp(epochMs, { time: true });
 }
 
 function PropertyLabel({ children }: { children: React.ReactNode }) {

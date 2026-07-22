@@ -1,5 +1,6 @@
 import { connect } from "node:net";
 import { stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
@@ -134,5 +135,34 @@ describe("agent socket", () => {
       ok: false,
       error: { code: "SOCKET_PROTOCOL", message: "Request timed out." },
     });
+  });
+
+  it("restores the process umask after the socket is created (chmod-race belt-and-braces)", async () => {
+    ctx = openTestDb();
+    const socketPath = join(dirname(ctx.dbPath), "volli.sock");
+    const before = process.umask();
+
+    server = await startAgentSocket({
+      socketPath,
+      execute: async () => ({ v: 1, ok: true, data: {} }),
+    });
+
+    expect(process.umask()).toBe(before);
+  });
+
+  it("restores the process umask even when the socket fails to bind", async () => {
+    const before = process.umask();
+    // The parent directory doesn't exist, so `listen()` rejects with ENOENT
+    // before ever reaching the post-listen chmod.
+    const badPath = join(tmpdir(), "volli-agent-socket-test-missing-dir", "volli.sock");
+
+    await expect(
+      startAgentSocket({
+        socketPath: badPath,
+        execute: async () => ({ v: 1, ok: true, data: {} }),
+      }),
+    ).rejects.toThrow();
+
+    expect(process.umask()).toBe(before);
   });
 });

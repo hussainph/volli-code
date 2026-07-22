@@ -121,6 +121,10 @@ function createWindow(ptyManager: PtyManager): BrowserWindow {
       preload: join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
+      // Electron 20+ already defaults this on; explicit so it can't silently
+      // regress. Safe: the preload only imports `electron` (contextBridge,
+      // ipcRenderer) plus type-only @volli/shared imports — no Node builtins.
+      sandbox: true,
     },
   });
 
@@ -514,7 +518,15 @@ app.whenReady().then(async () => {
       },
     });
   } catch (error) {
+    // The bundled `volli` CLI is entirely dead for this launch with no other
+    // signal — a lightweight native Notification (the same mechanism already
+    // used for lifecycle notices) surfaces it instead of only a console line
+    // no one but a developer will ever see.
     console.error("[volli] failed to start agent socket:", errorMessage(error));
+    new Notification({
+      title: "Volli CLI unavailable",
+      body: "The volli agent socket failed to start, so CLI/agent commands won't work this launch.",
+    }).show();
   }
 
   if (dbHandle.ok) {

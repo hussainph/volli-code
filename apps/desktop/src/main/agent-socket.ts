@@ -142,14 +142,25 @@ export async function startAgentSocket(options: AgentSocketOptions): Promise<Age
     ),
   );
   server.maxConnections = MAX_CONNECTIONS;
-  await new Promise<void>((resolve, reject) => {
-    const onError = (error: Error): void => reject(error);
-    server.once("error", onError);
-    server.listen(options.socketPath, () => {
-      server.off("error", onError);
-      resolve();
+  // Belt-and-braces against the create-then-chmod race: `listen()` creates the
+  // socket file with umask-default perms, and another local process could open
+  // it in the window before the `chmod` below lands. A restrictive umask makes
+  // the file arrive at 0o600 already; the process-global umask is restored
+  // (both success and error paths) the instant `listen` resolves so it never
+  // leaks into unrelated file creation elsewhere in the process.
+  const previousUmask = process.umask(0o077);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const onError = (error: Error): void => reject(error);
+      server.once("error", onError);
+      server.listen(options.socketPath, () => {
+        server.off("error", onError);
+        resolve();
+      });
     });
-  });
+  } finally {
+    process.umask(previousUmask);
+  }
   try {
     await chmod(options.socketPath, 0o600);
   } catch (error) {
