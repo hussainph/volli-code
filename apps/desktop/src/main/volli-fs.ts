@@ -18,13 +18,15 @@ import { existsSync, promises as fsp, watch as fsWatch } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { basename, dirname, join, sep } from "node:path";
-import { ipcMain, shell } from "electron";
+import { shell } from "electron";
 import type { WebContents } from "electron";
 import type Database from "better-sqlite3";
 import {
   artifactBaseName,
   classifyFileKind,
   errorMessage,
+  FILE_CHANNELS,
+  FILE_IPC,
   imageMimeType,
   isArtifactRelPath,
   isSafeRelPath,
@@ -36,24 +38,30 @@ import {
   withMarkdownExtension,
 } from "@volli/shared";
 import type {
+  ArtifactCreateInput,
   ArtifactCreateResult,
   FileChangedEvent,
   FileContent,
+  FileIndexInput,
   FileIndexResult,
+  FileIpcChannel,
   FileKind,
+  FilePathInput,
   FileReadResult,
   FileSource,
+  FileWriteInput,
   FileWriteResult,
   IndexedFile,
   Result,
   RevealResult,
-  VolliIpcChannel,
   VolliIpcEvent,
 } from "@volli/shared";
 import type { DbHandle } from "./data-ipc";
 import { getProjectById } from "./db/projects-repo";
 import { getTicketRow } from "./db/tickets-repo";
 import type { TicketRow } from "./db/tickets-repo";
+import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
+import type { IpcHandlerTable } from "./ipc-registry";
 
 const execFileAsync = promisify(execFile);
 
@@ -740,59 +748,6 @@ export class FileWatchManager {
 
 // ---- IPC wiring --------------------------------------------------------------
 
-const FILE_CHANNELS: readonly VolliIpcChannel[] = [
-  "volli:file-index",
-  "volli:file-read",
-  "volli:file-write",
-  "volli:artifact-create",
-  "volli:file-reveal",
-  "volli:file-watch",
-  "volli:file-unwatch",
-];
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-interface ProjectScopeInput {
-  projectId: string;
-}
-function isProjectScopeInput(value: unknown): value is ProjectScopeInput {
-  return isRecord(value) && typeof value["projectId"] === "string";
-}
-
-interface FilePathInput {
-  projectId: string;
-  ticketId?: string;
-  relPath: string;
-}
-function isFilePathInput(value: unknown): value is FilePathInput {
-  if (!isRecord(value)) return false;
-  if (typeof value["projectId"] !== "string" || typeof value["relPath"] !== "string") return false;
-  return value["ticketId"] === undefined || typeof value["ticketId"] === "string";
-}
-
-interface FileWriteInput extends FilePathInput {
-  content: string;
-  expectedMtime?: number;
-}
-function isFileWriteInput(value: unknown): value is FileWriteInput {
-  if (!isFilePathInput(value)) return false;
-  const candidate = value as unknown as Record<string, unknown>;
-  if (typeof candidate["content"] !== "string") return false;
-  return candidate["expectedMtime"] === undefined || typeof candidate["expectedMtime"] === "number";
-}
-
-interface ArtifactNameInput {
-  projectId: string;
-  name: string;
-}
-function isArtifactNameInput(value: unknown): value is ArtifactNameInput {
-  return (
-    isRecord(value) && typeof value["projectId"] === "string" && typeof value["name"] === "string"
-  );
-}
-
 /** The main-repo path for a project id, or a typed error. */
 function resolveProjectPath(
   db: Database.Database,
@@ -831,140 +786,94 @@ async function resolveFileScope(
 }
 
 /**
- * Registers every `volli:file-*` / `volli:artifact-create` handler. When the db
- * failed to open, every channel resolves with a typed `{ ok: false, error }`
- * instead — same degraded-DB stance as `registerDataIpcHandlers`. Returns the
- * watch manager; watchers are otherwise self-cleaning on window
- * `destroyed`/explicit unwatch.
+ * Registers every `volli:file-*` / `volli:artifact-create` handler through the
+ * shared guard→body→envelope registry (issue #98): `FILE_IPC` (@volli/shared)
+ * supplies the descriptor table (validators + invalid-request messages) and
+ * `registerGuardedIpcHandlers` applies guard → body → try/catch; this module
+ * supplies only the handler bodies below. When the db failed to open, every
+ * channel instead resolves with a typed `{ ok: false, error }`
+ * (`registerDegradedIpcHandlers(FILE_CHANNELS, …)`) — same degraded-DB stance
+ * as `registerDataIpcHandlers`. Returns the watch manager; watchers are
+ * otherwise self-cleaning on window `destroyed`/explicit unwatch.
  */
 export function registerFileIpcHandlers(handle: DbHandle): FileWatchManager {
   const manager = new FileWatchManager();
 
   if (!handle.ok) {
-    const error = handle.error;
-    for (const channel of FILE_CHANNELS) {
-      ipcMain.handle(channel, () => ({ ok: false, error }));
-    }
+    registerDegradedIpcHandlers(FILE_CHANNELS, handle.error);
     return manager;
   }
 
   const db = handle.db;
 
-  ipcMain.handle(
-    "volli:file-index" satisfies VolliIpcChannel,
-    async (_event, input: unknown): Promise<FileIndexResult> => {
-      if (!isProjectScopeInput(input)) return { ok: false, error: "Invalid request" };
-      try {
-        const project = resolveProjectPath(db, input.projectId);
-        if (!project.ok) return project;
-        const { files, truncated } = await buildFileIndex(project.projectPath);
-        return { ok: true, files, truncated };
-      } catch (error) {
-        return { ok: false, error: errorMessage(error) };
-      }
+  const handlers: IpcHandlerTable<FileIpcChannel> = {
+    "volli:file-index": async (input: FileIndexInput): Promise<FileIndexResult> => {
+      const project = resolveProjectPath(db, input.projectId);
+      if (!project.ok) return project;
+      const { files, truncated } = await buildFileIndex(project.projectPath);
+      return { ok: true, files, truncated };
     },
-  );
 
-  ipcMain.handle(
-    "volli:file-read" satisfies VolliIpcChannel,
-    async (_event, input: unknown): Promise<FileReadResult> => {
-      if (!isFilePathInput(input)) return { ok: false, error: "Invalid request" };
-      try {
-        const scope = await resolveFileScope(db, input.projectId, input.ticketId);
-        if (!scope.ok) return scope;
-        return await readFile(scope.projectPath, scope.worktreeRoot, input.relPath);
-      } catch (error) {
-        return { ok: false, error: errorMessage(error) };
-      }
+    "volli:file-read": async (input: FilePathInput): Promise<FileReadResult> => {
+      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      if (!scope.ok) return scope;
+      return await readFile(scope.projectPath, scope.worktreeRoot, input.relPath);
     },
-  );
 
-  ipcMain.handle(
-    "volli:file-write" satisfies VolliIpcChannel,
-    async (_event, input: unknown): Promise<FileWriteResult> => {
-      if (!isFileWriteInput(input)) return { ok: false, error: "Invalid request" };
-      try {
-        const scope = await resolveFileScope(db, input.projectId, input.ticketId);
-        if (!scope.ok) return scope;
-        return await writeFile(
-          scope.projectPath,
-          scope.worktreeRoot,
-          input.relPath,
-          input.content,
-          input.expectedMtime,
-        );
-      } catch (error) {
-        return { ok: false, error: errorMessage(error) };
-      }
+    "volli:file-write": async (input: FileWriteInput): Promise<FileWriteResult> => {
+      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      if (!scope.ok) return scope;
+      return await writeFile(
+        scope.projectPath,
+        scope.worktreeRoot,
+        input.relPath,
+        input.content,
+        input.expectedMtime,
+      );
     },
-  );
 
-  ipcMain.handle(
-    "volli:artifact-create" satisfies VolliIpcChannel,
-    async (_event, input: unknown): Promise<ArtifactCreateResult> => {
-      if (!isArtifactNameInput(input)) return { ok: false, error: "Invalid request" };
-      try {
-        const project = resolveProjectPath(db, input.projectId);
-        if (!project.ok) return project;
-        return await createArtifact(project.projectPath, input.name);
-      } catch (error) {
-        return { ok: false, error: errorMessage(error) };
-      }
+    "volli:artifact-create": async (input: ArtifactCreateInput): Promise<ArtifactCreateResult> => {
+      const project = resolveProjectPath(db, input.projectId);
+      if (!project.ok) return project;
+      return await createArtifact(project.projectPath, input.name);
     },
-  );
 
-  ipcMain.handle(
-    "volli:file-reveal" satisfies VolliIpcChannel,
-    async (_event, input: unknown): Promise<RevealResult> => {
-      if (!isFilePathInput(input)) return { ok: false, error: "Invalid request" };
-      try {
-        const scope = await resolveFileScope(db, input.projectId, input.ticketId);
-        if (!scope.ok) return scope;
-        return await revealFile(scope.projectPath, scope.worktreeRoot, input.relPath);
-      } catch (error) {
-        return { ok: false, error: errorMessage(error) };
-      }
+    "volli:file-reveal": async (input: FilePathInput): Promise<RevealResult> => {
+      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      if (!scope.ok) return scope;
+      return await revealFile(scope.projectPath, scope.worktreeRoot, input.relPath);
     },
-  );
 
-  ipcMain.handle(
-    "volli:file-watch" satisfies VolliIpcChannel,
-    async (event, input: unknown): Promise<Result> => {
-      if (!isFilePathInput(input)) return { ok: false, error: "Invalid request" };
-      try {
-        const scope = await resolveFileScope(db, input.projectId, input.ticketId);
-        if (!scope.ok) return scope;
-        const resolved = await resolveSafePath(
-          scope.projectPath,
-          scope.worktreeRoot,
-          input.relPath,
-        );
-        if (!resolved.ok) return resolved;
-        const { source, filePath } = resolved.value;
-        return manager.watch(
-          event.sender,
-          input.projectId,
-          input.ticketId ?? null,
-          input.relPath,
-          source,
-          dirname(filePath),
-          basename(filePath),
-          scope.projectPath,
-        );
-      } catch (error) {
-        return { ok: false, error: errorMessage(error) };
-      }
+    "volli:file-watch": async (input: FilePathInput, sender: WebContents): Promise<Result> => {
+      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      if (!scope.ok) return scope;
+      const resolved = await resolveSafePath(scope.projectPath, scope.worktreeRoot, input.relPath);
+      if (!resolved.ok) return resolved;
+      const { source, filePath } = resolved.value;
+      return manager.watch(
+        sender,
+        input.projectId,
+        input.ticketId ?? null,
+        input.relPath,
+        source,
+        dirname(filePath),
+        basename(filePath),
+        scope.projectPath,
+      );
     },
-  );
 
-  ipcMain.handle(
-    "volli:file-unwatch" satisfies VolliIpcChannel,
-    (event, input: unknown): Result => {
-      if (!isFilePathInput(input)) return { ok: false, error: "Invalid request" };
-      manager.unwatch(event.sender, input.projectId, input.ticketId ?? null, input.relPath);
+    // No try/catch previously guarded this handler either — `manager.unwatch`
+    // is synchronous teardown (close/clearTimeout calls), not expected to
+    // throw. Under the envelope a throw here now yields `{ ok: false }` rather
+    // than an unhandled IPC rejection: a deliberate hardening, not a behavior
+    // this handler relied on.
+    "volli:file-unwatch": (input: FilePathInput, sender: WebContents): Result => {
+      manager.unwatch(sender, input.projectId, input.ticketId ?? null, input.relPath);
       return { ok: true };
     },
-  );
+  };
+
+  registerGuardedIpcHandlers(FILE_IPC, handlers);
 
   return manager;
 }
