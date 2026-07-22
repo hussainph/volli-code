@@ -1,7 +1,11 @@
+import { DATA_CHANNELS } from "@volli/shared";
 import type {
+  AppStateSetResult,
   BootstrapResult,
   ProjectCreateResult,
+  ProjectMutationResult,
   Result,
+  RetentionTtlResult,
   SessionRenameResult,
   SessionsResult,
   Ticket,
@@ -1070,6 +1074,69 @@ describe("degraded db handle", () => {
     expect(invoke<WorktreeOrphansResult>("volli:worktree-orphans")).toEqual({
       ok: false,
       error: "db is down",
+    });
+  });
+
+  it("answers EVERY DATA_CHANNELS member with the degraded error — the omitted-channel defect (issue #98)", () => {
+    handlers.clear();
+    registerDataIpcHandlers({ ok: false, error: "db is down" });
+
+    for (const channel of DATA_CHANNELS) {
+      expect(invoke(channel)).toEqual({ ok: false, error: "db is down" });
+    }
+  });
+});
+
+describe("registerDataIpcHandlers — registration completeness", () => {
+  it("registers a handler for every DATA_CHANNELS member when the db opened successfully", () => {
+    // `ctx`'s outer beforeEach already registered a healthy handle — assert
+    // the resulting table (not a hand-picked subset) covers the whole contract.
+    for (const channel of DATA_CHANNELS) {
+      expect(handlers.has(channel)).toBe(true);
+    }
+  });
+});
+
+describe("descriptor guard rejections reach the caller through the envelope, one per argument shape", () => {
+  it("zero-arg shape: rejects a stray argument", () => {
+    expect(invoke<RetentionTtlResult>("volli:retention-ttl-get", "unexpected")).toEqual({
+      ok: false,
+      error: "Invalid request",
+    });
+  });
+
+  it("single string-arg shape: rejects a non-string", () => {
+    expect(invoke<ProjectMutationResult>("volli:project-remove", { not: "a string" })).toEqual({
+      ok: false,
+      error: "Invalid project id",
+    });
+  });
+
+  it("single string-array-arg shape: rejects a non-array", () => {
+    expect(invoke<ProjectMutationResult>("volli:project-reorder", "not-an-array")).toEqual({
+      ok: false,
+      error: "Invalid project order",
+    });
+  });
+
+  it("single object-arg shape: rejects garbage — e.g. ticket-move", () => {
+    expect(invoke<TicketsResult>("volli:ticket-move", "nope")).toEqual({
+      ok: false,
+      error: "Invalid ticket move",
+    });
+  });
+
+  it("two-positional-string-arg shape: rejects the wrong types", () => {
+    expect(invoke<AppStateSetResult>("volli:app-state-set", 1, 2)).toEqual({
+      ok: false,
+      error: "Invalid app state",
+    });
+  });
+
+  it("optional-object-arg shape: rejects a non-object argument", () => {
+    expect(invoke<WorktreeOrphansResult>("volli:worktree-orphans", "nope")).toEqual({
+      ok: false,
+      error: "Invalid request",
     });
   });
 });
