@@ -10,9 +10,42 @@ import type { Label } from "./label";
 import type { LegacyProject } from "./legacy-import";
 import type { Project } from "./project-identity";
 import type { SessionRecord } from "./session";
-import type { ArchivedTicket, Ticket } from "./ticket";
+import type { ArchivedTicket, Ticket, TicketStatus } from "./ticket";
 import type { TicketComment } from "./ticket-comment";
 import type { DiffStat, TicketEvent } from "./ticket-events";
+
+// ---- request contract (issue #98) ------------------------------------------
+// Each invoke request is declared ONCE here as `{ args, result }`; the runtime
+// descriptor table in ipc-descriptors.ts is keyed by these channels and its
+// guards are compile-checked against the `args` tuples, so channel membership,
+// argument shape, and validator can no longer drift apart.
+
+/** `volli:ticket-move` — runs the shared board move + persists it. */
+export interface TicketMoveInput {
+  projectId: string;
+  ticketId: string;
+  toStatus: TicketStatus;
+  toIndex: number;
+}
+
+/**
+ * The DB-backed request surface `src/main/data-ipc.ts` owns. Args are the raw
+ * `ipcRenderer.invoke` argument tuples — positional shapes (e.g. app-state-set's
+ * `[key, value]`) stay positional so the wire format is unchanged.
+ */
+export interface VolliDataIpcContract {
+  "volli:data-bootstrap": { args: []; result: BootstrapResult };
+  "volli:ticket-move": { args: [input: TicketMoveInput]; result: TicketsResult };
+  "volli:app-state-set": { args: [key: string, value: string]; result: AppStateSetResult };
+}
+
+/** Every invoke channel with a contract entry (grows toward the full catalog). */
+export interface VolliInvokeContract extends VolliDataIpcContract {}
+
+export type DataIpcChannel = keyof VolliDataIpcContract;
+
+export type IpcArgs<C extends keyof VolliInvokeContract> = VolliInvokeContract[C]["args"];
+export type IpcResult<C extends keyof VolliInvokeContract> = VolliInvokeContract[C]["result"];
 
 /** Channel names for the preload's `contextBridge` API. */
 export type VolliIpcChannel =
