@@ -12,7 +12,7 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FileChangedEvent, VolliIpcChannel } from "@volli/shared";
-import { VOLLI_GITIGNORE_CONTENT } from "@volli/shared";
+import { FILE_CHANNELS, VOLLI_GITIGNORE_CONTENT } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 // Hoisted above module evaluation, like pty.test.ts/data-ipc.test.ts, so the
@@ -934,5 +934,56 @@ describe("registerFileIpcHandlers", () => {
       { projectId: "p" },
     );
     expect(result).toEqual({ ok: false, error: "disk full" });
+
+    // Every FILE_CHANNELS member, not just file-index — the degraded path
+    // ignores its arguments entirely, so an empty payload exercises them all.
+    for (const channel of FILE_CHANNELS) {
+      const outcome = await invoke<{ ok: boolean; error?: string }>(channel, {});
+      expect(outcome).toEqual({ ok: false, error: "disk full" });
+    }
+  });
+
+  it("registers a handler for every FILE_CHANNELS member", () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    for (const channel of FILE_CHANNELS) {
+      expect(handlers.has(channel)).toBe(true);
+    }
+  });
+
+  it("yields the exact envelope 'Invalid request' reply for a malformed payload", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const result = await invoke<{ ok: boolean; error?: string }>(
+      "volli:file-read",
+      {},
+      { nonsense: true },
+    );
+    expect(result).toEqual({ ok: false, error: "Invalid request" });
+  });
+
+  it("threads the invoking WebContents through file-watch to FileWatchManager.watch (the trailing sender param)", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    await invoke("volli:artifact-create", {}, { projectId: setup.projectId, name: "sender-check" });
+    const subscriber = makeWebContents(101);
+    const bystander = makeWebContents(202);
+
+    const watched = await invoke<{ ok: boolean }>("volli:file-watch", subscriber, {
+      projectId: setup.projectId,
+      relPath: ".volli/artifacts/sender-check.md",
+    });
+    expect(watched).toEqual({ ok: true });
+
+    vi.useFakeTimers();
+    watchCalls[0]?.cb("change", "sender-check.md");
+    vi.advanceTimersByTime(250);
+
+    expect(subscriber.send).toHaveBeenCalledWith("volli:file-changed", {
+      projectId: setup.projectId,
+      relPath: ".volli/artifacts/sender-check.md",
+      source: "main",
+    } satisfies FileChangedEvent);
+    expect(bystander.send).not.toHaveBeenCalled();
   });
 });
