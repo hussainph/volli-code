@@ -49,7 +49,10 @@ describe("registerGuardedIpcHandlers", () => {
       "volli:app-state-set": () => ({ ok: true }),
       "volli:data-bootstrap": () => ({ ok: false, error: "unused" }),
     });
-    expect([...handlers.keys()].sort()).toEqual(["volli:app-state-set", "volli:data-bootstrap"]);
+    expect([...handlers.keys()].toSorted()).toEqual([
+      "volli:app-state-set",
+      "volli:data-bootstrap",
+    ]);
   });
 
   it("rejects guard failures synchronously with the descriptor's exact message, never reaching the handler", () => {

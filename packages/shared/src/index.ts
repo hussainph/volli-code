@@ -23,3 +23,4 @@ export * from "./park";
 export * from "./volli-dir";
 export * from "./retention";
 export type * from "./ipc";
+export * from "./ipc-descriptors";

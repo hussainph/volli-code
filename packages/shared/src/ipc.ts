@@ -10,7 +10,14 @@ import type { Label } from "./label";
 import type { LegacyProject } from "./legacy-import";
 import type { Project } from "./project-identity";
 import type { SessionRecord } from "./session";
-import type { ArchivedTicket, Ticket, TicketStatus } from "./ticket";
+import type {
+  CreateTerminalSessionRequest,
+  CreateTerminalSessionResult,
+  GhosttyConfigResult,
+  TerminalBusyResult,
+  TerminalIoResult,
+} from "./terminal";
+import type { ArchivedTicket, HarnessId, Ticket, TicketPriority, TicketStatus } from "./ticket";
 import type { TicketComment } from "./ticket-comment";
 import type { DiffStat, TicketEvent } from "./ticket-events";
 
@@ -20,12 +27,160 @@ import type { DiffStat, TicketEvent } from "./ticket-events";
 // guards are compile-checked against the `args` tuples, so channel membership,
 // argument shape, and validator can no longer drift apart.
 
+// ---- request input shapes ---------------------------------------------------
+// Grouped to match the handler groups in src/main/data-ipc.ts.
+
+export interface ProjectCreateInput {
+  path: string;
+  name: string;
+}
+
+export interface ProjectUpdateInput {
+  id: string;
+  baseBranch: string | null;
+  /** `undefined` (untouched), `null` (clear), or a `string` (set) — the same shape as ticket-update's worktree-identity fields. */
+  setupCommand?: string | null;
+}
+
+/** `{ projectId }` — shared by every project-scoped read (session list, worktree branches). */
+export interface ProjectIdInput {
+  projectId: string;
+}
+
+export interface TicketCreateInput {
+  projectId: string;
+  status: TicketStatus;
+  title: string;
+  priority?: TicketPriority;
+  /** Markdown; defaults to `""`. Becomes the agent prompt on kickoff. */
+  body?: string;
+  /** Label names; defaults to `[]`. Persisted as shared, name-deduped label rows (the setLabels path). */
+  labels?: string[];
+  /** Whether the ticket boots its agent in an isolated worktree; defaults to `true`. */
+  usesWorktree?: boolean;
+  /** The ticket's persisted default harness (set on kickoff); defaults to the DB default. */
+  preferredHarnessId?: HarnessId;
+}
+
 /** `volli:ticket-move` — runs the shared board move + persists it. */
 export interface TicketMoveInput {
   projectId: string;
   ticketId: string;
   toStatus: TicketStatus;
   toIndex: number;
+}
+
+export interface TicketSetPriorityInput {
+  ticketId: string;
+  priority: TicketPriority;
+}
+
+export interface TicketUpdateInput {
+  ticketId: string;
+  title?: string;
+  body?: string;
+  /** First-class worktree identity (migration 003); `null` explicitly clears the field, `undefined` leaves it untouched. */
+  worktreePath?: string | null;
+  branch?: string | null;
+  baseBranch?: string | null;
+}
+
+export interface TicketSetLabelsInput {
+  ticketId: string;
+  labels: string[];
+}
+
+/** The `{ ticketId }` shape shared by every single-ticket-scoped read/mutation (archive/unarchive/delete/events/comment-list/session-list-for-ticket/worktree-status/retention-*). */
+export interface TicketIdInput {
+  ticketId: string;
+}
+
+export interface CommentCreateInput {
+  ticketId: string;
+  body: string;
+  sessionId?: string | null;
+}
+
+export interface CommentUpdateInput {
+  commentId: string;
+  body: string;
+}
+
+export interface CommentIdInput {
+  commentId: string;
+}
+
+/** `{ sessionId, title }` with a non-blank title — the rename handler trims before persisting. */
+export interface SessionRenameInput {
+  sessionId: string;
+  title: string;
+}
+
+export interface LabelSetColorInput {
+  labelId: string;
+  color: string | null;
+}
+
+export interface WorktreeRemoveInput {
+  ticketId: string;
+  force: boolean;
+}
+
+export interface WorktreeDiffInput {
+  ticketId: string;
+  mode: WorktreeDiffMode;
+}
+
+/** `{ rescan: true }` forces a fresh orphan sweep (Settings → Worktrees rescan); omitted/`false` returns the launch's cached report. */
+export interface WorktreeOrphansInput {
+  rescan?: boolean;
+}
+
+/** `{ path }` — the Settings list's explicit, user-confirmed dirty-orphan deletion target. */
+export interface WorktreeOrphanDeleteInput {
+  path: string;
+}
+
+/** `{ ticketId, keep }` — sets/clears the durable retention pin. */
+export interface RetentionKeepInput {
+  ticketId: string;
+  keep: boolean;
+}
+
+/** `{ days }` — the new global Done-TTL; `setRetentionTtlDays` clamps it to ≥ 1 day. */
+export interface RetentionTtlSetInput {
+  days: number;
+}
+
+// ---- file-channel input shapes (docs/plans/global-artifacts.md) -----------
+
+/** The whole-project file index is always read from the project's MAIN checkout. */
+export interface FileIndexInput {
+  projectId: string;
+}
+
+/**
+ * The shape shared by read/reveal/watch/unwatch: a project-relative path,
+ * resolved worktree-awarely when `ticketId` is given (decision #6, `.volli/**`
+ * always resolves to the main checkout regardless), else against the
+ * project's main checkout.
+ */
+export interface FilePathInput {
+  projectId: string;
+  ticketId?: string;
+  relPath: string;
+}
+
+/** `write`'s extra fields: the new content, and an optional mtime conflict guard (decision #7). */
+export interface FileWriteInput extends FilePathInput {
+  content: string;
+  expectedMtime?: number;
+}
+
+/** `name` is forced to `.md` inside `.volli/artifacts/` (decision #8). */
+export interface ArtifactCreateInput {
+  projectId: string;
+  name: string;
 }
 
 /**
@@ -35,97 +190,203 @@ export interface TicketMoveInput {
  */
 export interface VolliDataIpcContract {
   "volli:data-bootstrap": { args: []; result: BootstrapResult };
+  /** One-time localStorage → SQLite import; a no-op (returns current state) once the db is non-empty. */
+  "volli:legacy-import": { args: [request: LegacyImportRequest]; result: LegacyImportResult };
+
+  "volli:project-create": { args: [input: ProjectCreateInput]; result: ProjectCreateResult };
+  /** Updates the project's pinned automation base branch and/or worktree setup command. */
+  "volli:project-update": { args: [input: ProjectUpdateInput]; result: ProjectUpdateResult };
+  /** Deletes a project; cascades its tickets/labels/events in SQLite. */
+  "volli:project-remove": { args: [id: string]; result: ProjectMutationResult };
+  /** Rewrites rail `sort_order` to `0..n-1` following `orderedIds`. */
+  "volli:project-reorder": { args: [orderedIds: string[]]; result: ProjectMutationResult };
+
+  "volli:ticket-create": { args: [input: TicketCreateInput]; result: TicketResult };
   "volli:ticket-move": { args: [input: TicketMoveInput]; result: TicketsResult };
+  /** Resolves with just the mutated ticket (patched into the list by id), not the whole project. */
+  "volli:ticket-set-priority": { args: [input: TicketSetPriorityInput]; result: TicketResult };
+  "volli:ticket-update": { args: [input: TicketUpdateInput]; result: TicketResult };
+  /** Replaces a ticket's labels by name; unknown names are created (`color: null`) per project. */
+  "volli:ticket-set-labels": { args: [input: TicketSetLabelsInput]; result: TicketResult };
+  /** Archives a ticket — it leaves the board but the row, labels, and event log survive (reversible). */
+  "volli:ticket-archive": { args: [input: TicketIdInput]; result: Result };
+  /** Returns an archived ticket to the board (appended to its retained column); resolves with the revived live ticket. */
+  "volli:ticket-unarchive": { args: [input: TicketIdInput]; result: TicketResult };
+  /** Hard-deletes an archived ticket (cascades its labels + events). The only destructive act — rejects a live ticket. */
+  "volli:ticket-delete": { args: [input: TicketIdInput]; result: Result };
+  /** The project's archived tickets, newest first — loaded on demand for the Archive view. */
+  "volli:ticket-list-archived": { args: [projectId: string]; result: ArchivedTicketsResult };
+  /** A ticket's full event history, chronological — backs the Activity feed. */
+  "volli:ticket-events": { args: [input: TicketIdInput]; result: TicketEventsResult };
+
+  /** A ticket's comments, chronological — the work-log feed. */
+  "volli:comment-list": { args: [input: TicketIdInput]; result: TicketCommentsResult };
+  /** Posts a comment as the human user; also records a `commented` event in the same transaction. */
+  "volli:comment-create": { args: [input: CommentCreateInput]; result: TicketCommentResult };
+  /** Edits a comment's body; touches `updatedAt` only, no event. */
+  "volli:comment-update": { args: [input: CommentUpdateInput]; result: TicketCommentResult };
+  /** Hard-deletes a comment; no event. */
+  "volli:comment-remove": { args: [input: CommentIdInput]; result: Result };
+
+  /** Every durable session record in a project (ticket-scoped and project-scoped scratch), newest first. */
+  "volli:session-list": { args: [input: ProjectIdInput]; result: SessionsResult };
+  /** A ticket's durable session records, newest first — backs the right-rail linked-sessions list. */
+  "volli:session-list-for-ticket": { args: [input: TicketIdInput]; result: SessionsResult };
+  /** Renames a session (scratch or ticket-scoped); the title is trimmed and must be non-empty in main. */
+  "volli:session-rename": { args: [input: SessionRenameInput]; result: SessionRenameResult };
+  "volli:label-set-color": { args: [input: LabelSetColorInput]; result: LabelResult };
   "volli:app-state-set": { args: [key: string, value: string]; result: AppStateSetResult };
+
+  // Ticket worktrees (docs/plans/worktree-support.md). `ensure` has no channel
+  // on purpose — it only ever runs implicitly inside terminal-create (§1).
+  /** The "Remove worktree…" escape hatch; `force` discards uncommitted work when the caller has confirmed. */
+  "volli:worktree-remove": { args: [input: WorktreeRemoveInput]; result: WorktreeRemoveResult };
+  /** A project's local branch names, for the base-branch picker. */
+  "volli:worktree-branches": { args: [input: ProjectIdInput]; result: WorktreeBranchesResult };
+  /**
+   * The launch's cached orphan report — the destructive sweep runs once per
+   * launch (main), so this never re-sweeps. `{ rescan: true }` forces the
+   * explicit Settings → Worktrees rescan. `opts` is optional on the wire (the
+   * existing test suite invokes this with no argument at all) — the preload
+   * always sends `opts ?? {}`, so both `[]` and `[{ rescan? }]` are live.
+   */
+  "volli:worktree-orphans": {
+    args: [opts?: WorktreeOrphansInput];
+    result: WorktreeOrphansResult;
+  };
+  /** User-confirmed deletion of one dirty orphan dir; main re-validates it lives inside the worktree home. */
+  "volli:worktree-orphan-delete": {
+    args: [input: WorktreeOrphanDeleteInput];
+    result: WorktreeOrphanDeleteResult;
+  };
+
+  // Done flow (docs/plans/done-flow.md §"Persistence, IPC, events"): the
+  // Details-rail diff/commit/push-PR affordances. `status`/`diff` are read-only;
+  // `commit` records an event; `push-pr` composes fetch→push→PR and is async.
+  "volli:worktree-status": { args: [input: TicketIdInput]; result: WorktreeStatusResult };
+  /** `"working-tree"` (uncommitted now) or `"merge-base"` (the PR delta). */
+  "volli:worktree-diff": { args: [input: WorktreeDiffInput]; result: WorktreeDiffResult };
+  /** The one-click "commit remaining work" safety net (fixed chore message). */
+  "volli:worktree-commit": { args: [input: TicketIdInput]; result: WorktreeCommitResult };
+  /** Push the branch and open (or re-discover) its draft PR; persists `pr_url`. */
+  "volli:worktree-push-pr": { args: [input: TicketIdInput]; result: WorktreePushPrResult };
+
+  // Retention (CONCEPT #16, issue #76): the merge-watch/Done-TTL surface. `state`
+  // is a read; `keep`/`dismiss`/`archive-clean`/`ttl-set` mutate; `poll` is the
+  // renderer-side trigger of an immediate poll (e.g. on window focus).
+  "volli:retention-state": { args: [input: TicketIdInput]; result: RetentionStateResult };
+  /** Sets/clears the durable Keep pin — exempts the ticket from BOTH retention paths. */
+  "volli:retention-keep": { args: [input: RetentionKeepInput]; result: RetentionKeepResult };
+  /** Dismisses the Archive prompt for this launch (re-offered next launch — NOT the Keep pin). */
+  "volli:retention-dismiss": { args: [input: TicketIdInput]; result: RetentionDismissResult };
+  /** Archives the ticket + removes its worktree (dirty refuses); branch retained. */
+  "volli:retention-archive-clean": {
+    args: [input: TicketIdInput];
+    result: RetentionArchiveCleanResult;
+  };
+  "volli:retention-ttl-get": { args: []; result: RetentionTtlResult };
+  /** `setRetentionTtlDays` clamps to ≥ 1 day; resolves with the stored value. */
+  "volli:retention-ttl-set": { args: [input: RetentionTtlSetInput]; result: RetentionTtlResult };
+  /** Fire-and-forget trigger of an immediate merge-watch poll; the poll itself broadcasts on change. */
+  "volli:retention-poll": { args: []; result: RetentionPollResult };
 }
 
-/** Every invoke channel with a contract entry (grows toward the full catalog). */
-export interface VolliInvokeContract extends VolliDataIpcContract {}
-
 export type DataIpcChannel = keyof VolliDataIpcContract;
+
+/**
+ * Global artifacts + `@file` refs (docs/plans/global-artifacts.md) — the 7
+ * file channels `src/main/volli-fs.ts` owns.
+ */
+export interface VolliFileIpcContract {
+  /** The whole-project file index the `@` picker ranks over (git-listed + `.volli/artifacts/`). Fetched fresh per picker open. */
+  "volli:file-index": { args: [input: FileIndexInput]; result: FileIndexResult };
+  /** Reads any repo/artifact file worktree-awarely: text (capped), image (data URI), or binary stub. */
+  "volli:file-read": { args: [input: FilePathInput]; result: FileReadResult };
+  /** Writes markdown content; markdown-only, `expectedMtime` conflict-guarded. Resolves with the fresh mtime. */
+  "volli:file-write": { args: [input: FileWriteInput]; result: FileWriteResult };
+  /** Creates a new, minimally-templated `.md` in `.volli/artifacts/`. Resolves with its `@ref`-able relPath. */
+  "volli:artifact-create": { args: [input: ArtifactCreateInput]; result: ArtifactCreateResult };
+  /** Reveals the resolved file in Finder. */
+  "volli:file-reveal": { args: [input: FilePathInput]; result: Result };
+  /** Watches one open file tab (debounced main→renderer change events); pair with `unwatch` on unmount. */
+  "volli:file-watch": { args: [input: FilePathInput]; result: Result };
+  "volli:file-unwatch": { args: [input: FilePathInput]; result: Result };
+}
+
+export type FileIpcChannel = keyof VolliFileIpcContract;
+
+/**
+ * Type-only entries for every remaining invoke channel — these live outside
+ * `src/main/data-ipc.ts`/`volli-fs.ts` (in `src/main/ipc.ts`/`pty.ts`/
+ * `ghostty-config.ts`) and have no runtime descriptor table yet, but are
+ * declared here so the whole invoke catalog is contract-complete and
+ * {@link VolliIpcChannel} can be derived rather than hand-maintained.
+ */
+export interface VolliSystemIpcContract {
+  "volli:pick-project-folder": { args: []; result: PickFolderResult };
+  "volli:sync-project-roots": { args: [paths: string[]]; result: void };
+  "volli:list-directory": { args: [absPath: string]; result: ListDirectoryResult };
+  "volli:reveal-in-finder": { args: [absPath: string]; result: RevealResult };
+  "volli:window-is-fullscreen": { args: []; result: boolean };
+  /** Boots a PTY session; resolves with its id or a typed error. */
+  "volli:terminal-create": {
+    args: [req: CreateTerminalSessionRequest];
+    result: CreateTerminalSessionResult;
+  };
+  /** Writes raw input bytes to a session's PTY. */
+  "volli:terminal-write": { args: [sessionId: string, data: string]; result: TerminalIoResult };
+  /** Resizes a session's PTY to the given grid. */
+  "volli:terminal-resize": {
+    args: [sessionId: string, cols: number, rows: number];
+    result: TerminalIoResult;
+  };
+  /** Kills a session's PTY. */
+  "volli:terminal-kill": { args: [sessionId: string]; result: TerminalIoResult };
+  /** Parks a session (SIGSTOP its tree) on user request; bypasses the auto-park guards. */
+  "volli:terminal-park": { args: [sessionId: string]; result: TerminalIoResult };
+  /** Wakes a parked session (SIGCONT its tree). */
+  "volli:terminal-wake": { args: [sessionId: string]; result: TerminalIoResult };
+  /** Pins/unpins a session against auto-park; waking it if already parked. */
+  "volli:terminal-keep-awake": {
+    args: [sessionId: string, keepAwake: boolean];
+    result: TerminalIoResult;
+  };
+  /** Foreground-process probe: is the session running something beyond its shell? */
+  "volli:terminal-busy": { args: [sessionId: string]; result: TerminalBusyResult };
+  /** Reads the user's resolved Ghostty config, mapped onto restty's appearance model. */
+  "volli:ghostty-config-get": { args: []; result: GhosttyConfigResult };
+}
+
+/**
+ * The 2 send-based channels (`ipcRenderer.send`, not `invoke`) — declared
+ * separately from {@link VolliInvokeContract} because they have no result to
+ * await.
+ */
+export interface VolliSendContract {
+  // Send-based (ipcRenderer.send, not invoke): a fire-and-forget flow-control
+  // ack needs no reply, and awaiting one per data event would defeat it.
+  "volli:terminal-ack": { args: [sessionId: string, chars: number] };
+  // Send-based (ipcRenderer.send, not invoke): visibility flips on every board
+  // ⇄ session nav, needs no reply, and round-tripping an invoke per flip would
+  // add latency to navigation for nothing.
+  "volli:terminal-set-visible": { args: [sessionId: string, visible: boolean] };
+}
+
+/** Every invoke channel with a contract entry — the full catalog. */
+export interface VolliInvokeContract
+  extends VolliDataIpcContract, VolliFileIpcContract, VolliSystemIpcContract {}
 
 export type IpcArgs<C extends keyof VolliInvokeContract> = VolliInvokeContract[C]["args"];
 export type IpcResult<C extends keyof VolliInvokeContract> = VolliInvokeContract[C]["result"];
 
-/** Channel names for the preload's `contextBridge` API. */
-export type VolliIpcChannel =
-  | "volli:pick-project-folder"
-  | "volli:sync-project-roots"
-  | "volli:list-directory"
-  | "volli:reveal-in-finder"
-  | "volli:window-is-fullscreen"
-  | "volli:terminal-create"
-  | "volli:terminal-write"
-  | "volli:terminal-resize"
-  | "volli:terminal-kill"
-  | "volli:terminal-park"
-  | "volli:terminal-wake"
-  | "volli:terminal-keep-awake"
-  | "volli:terminal-busy"
-  // Send-based (ipcRenderer.send, not invoke): a fire-and-forget flow-control
-  // ack needs no reply, and awaiting one per data event would defeat it.
-  | "volli:terminal-ack"
-  // Send-based (ipcRenderer.send, not invoke): visibility flips on every board
-  // ⇄ session nav, needs no reply, and round-tripping an invoke per flip would
-  // add latency to navigation for nothing.
-  | "volli:terminal-set-visible"
-  | "volli:ghostty-config-get"
-  | "volli:data-bootstrap"
-  | "volli:legacy-import"
-  | "volli:project-create"
-  | "volli:project-update"
-  | "volli:project-remove"
-  | "volli:project-reorder"
-  | "volli:ticket-create"
-  | "volli:ticket-move"
-  | "volli:ticket-set-priority"
-  | "volli:ticket-update"
-  | "volli:ticket-set-labels"
-  | "volli:ticket-archive"
-  | "volli:ticket-unarchive"
-  | "volli:ticket-delete"
-  | "volli:ticket-list-archived"
-  | "volli:ticket-events"
-  | "volli:comment-list"
-  | "volli:comment-create"
-  | "volli:comment-update"
-  | "volli:comment-remove"
-  | "volli:session-list"
-  | "volli:session-list-for-ticket"
-  | "volli:session-rename"
-  | "volli:label-set-color"
-  | "volli:app-state-set"
-  // Global artifacts + @file refs (docs/plans/global-artifacts.md).
-  | "volli:file-index"
-  | "volli:file-read"
-  | "volli:file-write"
-  | "volli:artifact-create"
-  | "volli:file-reveal"
-  | "volli:file-watch"
-  | "volli:file-unwatch"
-  // Ticket worktrees (docs/plans/worktree-support.md). `ensure` has no channel
-  // on purpose — it only ever runs implicitly inside terminal-create (§1).
-  | "volli:worktree-remove"
-  | "volli:worktree-branches"
-  | "volli:worktree-orphans"
-  | "volli:worktree-orphan-delete"
-  // Done flow (docs/plans/done-flow.md §"Persistence, IPC, events"): the
-  // Details-rail diff/commit/push-PR affordances. `status`/`diff` are read-only;
-  // `commit` records an event; `push-pr` composes fetch→push→PR and is async.
-  | "volli:worktree-status"
-  | "volli:worktree-diff"
-  | "volli:worktree-commit"
-  | "volli:worktree-push-pr"
-  // Retention (CONCEPT #16, issue #76): the merge-watch/Done-TTL surface. `state`
-  // is a read; `keep`/`dismiss`/`archive-clean`/`ttl-set` mutate; `poll` is the
-  // renderer-side trigger of an immediate poll (e.g. on window focus).
-  | "volli:retention-state"
-  | "volli:retention-keep"
-  | "volli:retention-dismiss"
-  | "volli:retention-archive-clean"
-  | "volli:retention-ttl-get"
-  | "volli:retention-ttl-set"
-  | "volli:retention-poll";
+/**
+ * Channel names for the preload's `contextBridge` API — every invoke channel
+ * (the full contract) plus the 2 send-based ones. Derived, so a channel can no
+ * longer be added to one side (a handler, a preload call) and forgotten on the
+ * other: every literal channel string in main/preload carries a `satisfies
+ * VolliIpcChannel`, so an omission here fails the whole desktop compile.
+ */
+export type VolliIpcChannel = keyof VolliInvokeContract | keyof VolliSendContract;
 
 /** Channel names for main→renderer push events (`webContents.send`). */
 export type VolliIpcEvent =
