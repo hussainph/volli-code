@@ -1,4 +1,6 @@
 import * as React from "react";
+import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
+import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
 import {
   displayTicketId,
   errorMessage,
@@ -19,7 +21,11 @@ import {
 import {
   buildActiveSessionListing,
   type ActiveSessionRow,
+  type ActiveSessionTarget,
+  type SessionOutcome,
+  type SettledSessionRow,
 } from "@renderer/components/sidebar/active-session-listing";
+import { relativeTime } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
@@ -29,12 +35,24 @@ import { useWorkspaceStore } from "@renderer/stores/workspace";
 const EMPTY_TICKETS: readonly Ticket[] = [];
 const EMPTY_TICKET_TABS: Record<string, { files: string[]; active: string }> = {};
 
+/** How many settled rows show before the "Show N more" reveal (T3's settled-tail cap). */
+const SETTLED_TAIL_INITIAL_COUNT = 8;
+
 const ACTIVITY_LABEL: Record<SessionActivityState, string> = {
   working: "Working",
   idle: "Idle",
   parked: "Parked",
   exited: "Exited",
 };
+
+const SETTLED_OUTCOME_LABEL: Record<SessionOutcome, string> = {
+  failed: "Failed",
+  done: "Done",
+  ended: "Ended",
+};
+
+/** What activation needs from any row, so Active tiers and the Settled tail share one handler. */
+type ActivationTarget = { ticket: Ticket; target: ActiveSessionTarget | null };
 
 function SessionRow({
   project,
@@ -142,11 +160,141 @@ function SessionTier({
   );
 }
 
+function SettledRow({
+  project,
+  row,
+  now,
+  active,
+  onActivate,
+}: {
+  project: Project;
+  row: SettledSessionRow;
+  now: number;
+  active: boolean;
+  onActivate(): void;
+}) {
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        size="lg"
+        isActive={active}
+        onClick={onActivate}
+        className="h-auto min-h-10 items-start gap-2 py-2 [&:hover_.session-row-meta]:text-sidebar-accent-foreground [&[data-active=true]_.session-row-meta]:text-sidebar-accent-foreground"
+      >
+        <span
+          aria-hidden
+          className={cn(
+            "mt-1.5 size-1.5 shrink-0 rounded-full",
+            row.outcome === "failed" ? "bg-red-500" : "bg-muted-foreground/40",
+          )}
+        />
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="flex min-w-0 items-center gap-1">
+            <span className="truncate text-xs text-muted-foreground">{row.title}</span>
+            {row.resumable ? (
+              <ArrowClockwiseIcon
+                aria-label="Resumable"
+                className="size-3 shrink-0 text-muted-foreground/70"
+              />
+            ) : null}
+          </span>
+          <span className="session-row-meta flex min-w-0 items-center gap-1 text-label text-muted-foreground transition-colors">
+            <span className="shrink-0 font-mono">
+              {displayTicketId(project.ticketPrefix, row.ticket.ticketNumber)}
+            </span>
+            <span aria-hidden>·</span>
+            <span className="shrink-0">{SETTLED_OUTCOME_LABEL[row.outcome]}</span>
+            <span aria-hidden>·</span>
+            <span className="truncate">{relativeTime(row.endedAt, now)}</span>
+          </span>
+        </span>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  );
+}
+
+/**
+ * The Settled tail: recently concluded sessions, collapsed by default so the
+ * board stays calm and expandable when you need to reopen or resume one. Beyond
+ * {@link SETTLED_TAIL_INITIAL_COUNT} a "Show N more" reveal keeps the list short;
+ * deep history lives in the ticket rail's History drawer.
+ */
+function SettledSection({
+  project,
+  rows,
+  now,
+  openTicketId,
+  activeTabId,
+  onActivate,
+}: {
+  project: Project;
+  rows: readonly SettledSessionRow[];
+  now: number;
+  openTicketId: string | null;
+  activeTabId: string | null;
+  onActivate(row: ActivationTarget): void;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const [showAll, setShowAll] = React.useState(false);
+  if (rows.length === 0) return null;
+  const shown = showAll ? rows : rows.slice(0, SETTLED_TAIL_INITIAL_COUNT);
+  const hiddenCount = rows.length - shown.length;
+  return (
+    <li className="flex flex-col gap-1">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        className="flex items-center justify-between px-2 pt-1 pb-0.5 text-label font-medium text-muted-foreground uppercase transition-colors hover:text-foreground"
+      >
+        <span className="flex items-center gap-1">
+          <CaretRightIcon
+            weight="bold"
+            aria-hidden
+            className={cn("size-3 transition-transform duration-150 ease-out", open && "rotate-90")}
+          />
+          Settled
+        </span>
+        <span aria-label={`${rows.length} settled`}>{rows.length}</span>
+      </button>
+      {open ? (
+        <SidebarMenu>
+          {shown.map((row) => (
+            <SettledRow
+              key={row.id}
+              project={project}
+              row={row}
+              now={now}
+              active={
+                openTicketId === row.ticket.id &&
+                (row.target === null || activeTabId === row.target.tabId)
+              }
+              onActivate={() => onActivate(row)}
+            />
+          ))}
+          {hiddenCount > 0 ? (
+            <SidebarMenuItem>
+              <button
+                type="button"
+                onClick={() => setShowAll(true)}
+                className="w-full px-2 py-1 text-left text-label text-muted-foreground transition-colors hover:text-foreground"
+              >
+                Show {hiddenCount} more
+              </button>
+            </SidebarMenuItem>
+          ) : null}
+        </SidebarMenu>
+      ) : null}
+    </li>
+  );
+}
+
 /**
  * Attention-first navigator for the selected project's ticket sessions. The
  * rows come from the resident session model, not ticket-status stand-ins:
  * Needs Review promotes the exact latest signaled session when possible;
- * every other live tab remains independently reachable under In progress.
+ * every other live tab remains independently reachable under In progress; and a
+ * durable Settled tail keeps recently concluded sessions one click from resume.
  */
 export function ActiveSessions({ project }: { project: Project }) {
   const tickets = useBoardStore((state) => state.ticketsByProject[project.id]) ?? EMPTY_TICKETS;
@@ -267,9 +415,10 @@ export function ActiveSessions({ project }: { project: Project }) {
       }),
     [tickets, containers, eventsByTicket, records, lastOutputAt, parkState, now],
   );
-  const rowCount = listing.needsYou.length + listing.inProgress.length;
+  const rowCount = listing.needsYou.length + listing.inProgress.length + listing.settled.length;
+  const activeTabId = openTicketId === null ? null : (ticketTabs[openTicketId]?.active ?? "doc");
 
-  const activate = (row: ActiveSessionRow) => {
+  const activate = (row: ActivationTarget) => {
     if (row.target !== null) {
       openTicketSession(project.id, row.ticket.id, row.target.tabId, row.target.paneId);
       return;
@@ -293,7 +442,7 @@ export function ActiveSessions({ project }: { project: Project }) {
             rows={listing.needsYou}
             project={project}
             openTicketId={openTicketId}
-            activeTabId={openTicketId === null ? null : (ticketTabs[openTicketId]?.active ?? "doc")}
+            activeTabId={activeTabId}
             onActivate={activate}
           />
           <SessionTier
@@ -302,7 +451,15 @@ export function ActiveSessions({ project }: { project: Project }) {
             rows={listing.inProgress}
             project={project}
             openTicketId={openTicketId}
-            activeTabId={openTicketId === null ? null : (ticketTabs[openTicketId]?.active ?? "doc")}
+            activeTabId={activeTabId}
+            onActivate={activate}
+          />
+          <SettledSection
+            project={project}
+            rows={listing.settled}
+            now={now}
+            openTicketId={openTicketId}
+            activeTabId={activeTabId}
             onActivate={activate}
           />
         </SidebarMenu>
