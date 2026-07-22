@@ -1,8 +1,10 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
+import { attachmentsRoot, importAttachmentFile } from "../attachment-store";
+import { createAttachment } from "../db/attachments-repo";
 import { listTicketEvents } from "../db/events-repo";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
@@ -71,7 +73,13 @@ describe("ensure — success", () => {
     const phases: WorktreePhase[] = [];
 
     const result = await ensure(
-      { db: ctx.db, git, home, onPhase: (_, phase) => phases.push(phase) },
+      {
+        db: ctx.db,
+        git,
+        home,
+        onPhase: (_, phase) => phases.push(phase),
+        attachmentsRoot: "unused",
+      },
       "ticket-1",
     );
 
@@ -105,7 +113,7 @@ describe("ensure — success", () => {
     seed(projectPath);
     const home = tempDir("home");
     const { git, countMatching } = happyGit(projectPath);
-    const deps = { db: ctx.db, git, home };
+    const deps = { db: ctx.db, git, home, attachmentsRoot: "unused" };
 
     const [a, b] = await Promise.all([ensure(deps, "ticket-1"), ensure(deps, "ticket-1")]);
 
@@ -137,7 +145,13 @@ describe("ensure — failure", () => {
     });
 
     const result = await ensure(
-      { db: ctx.db, git, home, onPhase: (_, phase) => phases.push(phase) },
+      {
+        db: ctx.db,
+        git,
+        home,
+        onPhase: (_, phase) => phases.push(phase),
+        attachmentsRoot: "unused",
+      },
       "ticket-1",
     );
 
@@ -160,7 +174,7 @@ describe("ensure — failure", () => {
     const home = tempDir("home");
     const { git } = happyGit("/volli-nonexistent-project-dir");
 
-    const result = await ensure({ db: ctx.db, git, home }, "ticket-1");
+    const result = await ensure({ db: ctx.db, git, home, attachmentsRoot: "unused" }, "ticket-1");
 
     expect(result.ok).toBe(false);
     const failed = listTicketEvents(ctx.db, "ticket-1").find(
@@ -171,7 +185,80 @@ describe("ensure — failure", () => {
 
   it("errors on an unknown ticket without touching phases", async () => {
     const { git } = scriptedGit(() => "");
-    const result = await ensure({ db: ctx.db, git }, "nope");
+    const result = await ensure({ db: ctx.db, git, attachmentsRoot: "unused" }, "nope");
     expect(result).toEqual({ ok: false, error: "Unknown ticket" });
+  });
+});
+
+describe("ensure — attachments stage", () => {
+  it("materializes the ticket's file attachments into the fresh worktree, post-copy", async () => {
+    const projectPath = tempDir("proj");
+    const { ticket } = seed(projectPath);
+    const home = tempDir("home");
+    const { git } = happyGit(projectPath);
+    const attachmentsRootDir = attachmentsRoot(tempDir("userdata"));
+
+    const attachment = createAttachment(
+      ctx.db,
+      { ticketId: ticket.id, kind: "file", fileName: "spec.png" },
+      100,
+    );
+    const source = join(tempDir("source"), "spec.png");
+    writeFileSync(source, "spec bytes");
+    importAttachmentFile(attachmentsRootDir, attachment.id, source, "spec.png");
+
+    const result = await ensure(
+      { db: ctx.db, git, home, attachmentsRoot: attachmentsRootDir },
+      "ticket-1",
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const worktreePath = result.value.identity.worktreePath!;
+    const destPath = join(worktreePath, ".volli", "attachments", "spec.png");
+    expect(readFileSync(destPath, "utf8")).toBe("spec bytes");
+  });
+
+  it("records worktree_failed (stage attachments) when a file attachment's stored bytes are missing", async () => {
+    const projectPath = tempDir("proj");
+    seed(projectPath);
+    const home = tempDir("home");
+    const { git } = happyGit(projectPath);
+    const attachmentsRootDir = attachmentsRoot(tempDir("userdata"));
+
+    createAttachment(ctx.db, { ticketId: "ticket-1", kind: "file", fileName: "spec.png" }, 100);
+    // Bytes never imported — the missing-source guard fires.
+
+    const result = await ensure(
+      { db: ctx.db, git, home, attachmentsRoot: attachmentsRootDir },
+      "ticket-1",
+    );
+
+    expect(result.ok).toBe(false);
+    const failed = listTicketEvents(ctx.db, "ticket-1").find(
+      (e) => e.payload.kind === "worktree_failed",
+    );
+    expect(failed?.payload).toMatchObject({ kind: "worktree_failed", stage: "attachments" });
+
+    // The create + copy stages already ran, but a stage failure after them
+    // must still leave identity unpersisted (fail() runs before the persist
+    // step regardless of which stage aborted).
+    const row = getTicketRow(ctx.db, "ticket-1")!;
+    expect(row.worktree_path).toBeNull();
+  });
+
+  it("is a no-op when the ticket has no attachments (unchanged pipeline behavior)", async () => {
+    const projectPath = tempDir("proj");
+    seed(projectPath);
+    const home = tempDir("home");
+    const { git } = happyGit(projectPath);
+    const attachmentsRootDir = attachmentsRoot(tempDir("userdata"));
+
+    const result = await ensure(
+      { db: ctx.db, git, home, attachmentsRoot: attachmentsRootDir },
+      "ticket-1",
+    );
+
+    expect(result.ok).toBe(true);
   });
 });

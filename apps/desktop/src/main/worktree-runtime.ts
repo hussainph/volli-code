@@ -6,12 +6,13 @@
  * orphans) — build their deps HERE so phases always reach the renderer no
  * matter which entrypoint moved them.
  */
-import { BrowserWindow } from "electron";
+import { app, BrowserWindow } from "electron";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type Database from "better-sqlite3";
 import type { VolliIpcEvent, WorktreePhaseEvent } from "@volli/shared";
 
+import { attachmentsRoot } from "./attachment-store";
 import { runGitCapturing } from "./worktree";
 import type { WorktreeDeps, WorktreePhase } from "./worktree";
 
@@ -36,9 +37,22 @@ function resolveHome(): string {
   return override !== undefined && override.length > 0 ? override : homedir();
 }
 
-/** The standard runtime deps bundle for every worktree module call. */
+/**
+ * The standard runtime deps bundle for every worktree module call.
+ * `attachmentsRoot` — the userData attachment-bytes root the post-copy
+ * materialize step reads from (issue #77 PR 2) — resolves off
+ * `app.getPath("userData")` exactly like {@link resolveHome} resolves `~`: one
+ * production resolution point every worktree-module consumer shares, even the
+ * ones (remove/sweep/publish/…) that never read the field.
+ */
 export function worktreeDeps(db: Database.Database): WorktreeDeps {
-  return { db, git: runGitCapturing, home: resolveHome(), onPhase: broadcastPhase };
+  return {
+    db,
+    git: runGitCapturing,
+    home: resolveHome(),
+    onPhase: broadcastPhase,
+    attachmentsRoot: attachmentsRoot(app.getPath("userData")),
+  };
 }
 
 /**

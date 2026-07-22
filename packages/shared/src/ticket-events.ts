@@ -153,13 +153,23 @@ export type TicketEventPayload =
  * The `ensure`-pipeline stage a `worktree_failed` event aborted at
  * (worktree-support §3): `create` covers identity resolution, reconciliation,
  * base resolution and `git worktree add`; `copy` the `.worktreeinclude` step;
- * `setup` the post-spawn sentinel-gated setup command. The Done-flow stages
- * (done-flow §8) extend it with the manual rail affordances: `commit` (the
- * one-click safety-net commit refused/errored), `push` (a rejected or
- * remote-less `git push`), and `pr` (a `gh` draft-PR create that failed the
- * taxonomy — not-installed, not-authenticated, and friends).
+ * `attachments` the post-copy attachment-materialize step (CONCEPT decision
+ * #19, issue #77 PR 2 — copying a ticket's file attachments into the fresh
+ * worktree's `.volli/attachments/`); `setup` the post-spawn sentinel-gated
+ * setup command. The Done-flow stages (done-flow §8) extend it with the
+ * manual rail affordances: `commit` (the one-click safety-net commit
+ * refused/errored), `push` (a rejected or remote-less `git push`), and `pr`
+ * (a `gh` draft-PR create that failed the taxonomy — not-installed,
+ * not-authenticated, and friends).
  */
-export type WorktreeFailureStage = "create" | "copy" | "setup" | "commit" | "push" | "pr";
+export type WorktreeFailureStage =
+  | "create"
+  | "copy"
+  | "attachments"
+  | "setup"
+  | "commit"
+  | "push"
+  | "pr";
 
 /**
  * The stable prefix a non-forced worktree removal's DIRTY refusal starts with

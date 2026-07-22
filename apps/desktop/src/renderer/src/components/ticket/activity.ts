@@ -149,6 +149,7 @@ function describeWorktreeChange(from: WorktreeIdentity, to: WorktreeIdentity): s
 const WORKTREE_FAILURE_STAGE_LABELS: Record<WorktreeFailureStage, string> = {
   create: "creation",
   copy: "file copy",
+  attachments: "attachment materialize",
   setup: "setup",
   commit: "commit",
   push: "push",

@@ -62,7 +62,9 @@ describe("remove", () => {
   it("no-ops when the ticket has no worktree path", async () => {
     seed(null);
     const { git, calls } = scriptedGit(() => "");
-    const result = await remove({ db: ctx.db, git }, "ticket-1", { force: false });
+    const result = await remove({ db: ctx.db, git, attachmentsRoot: "unused" }, "ticket-1", {
+      force: false,
+    });
     expect(result.ok).toBe(true);
     expect(calls.some((c) => c.args[1] === "remove")).toBe(false);
   });
@@ -74,7 +76,9 @@ describe("remove", () => {
     setPhase("ticket-1", "ready");
     const { git, calls } = statusGit(wt, gitDir, false);
 
-    const result = await remove({ db: ctx.db, git }, "ticket-1", { force: false });
+    const result = await remove({ db: ctx.db, git, attachmentsRoot: "unused" }, "ticket-1", {
+      force: false,
+    });
 
     expect(result.ok).toBe(true);
     // Plain remove — never --force for a clean worktree.
@@ -97,7 +101,9 @@ describe("remove", () => {
     seed(gone);
     const { git, calls } = scriptedGit(() => "");
 
-    const result = await remove({ db: ctx.db, git }, "ticket-1", { force: false });
+    const result = await remove({ db: ctx.db, git, attachmentsRoot: "unused" }, "ticket-1", {
+      force: false,
+    });
 
     expect(result.ok).toBe(true);
     // Never `worktree remove` a missing path — prune the stale metadata instead.
@@ -117,7 +123,9 @@ describe("remove", () => {
     archiveTicket(ctx.db, "ticket-1", 2);
     const { git } = scriptedGit(() => "");
 
-    const result = await remove({ db: ctx.db, git }, "ticket-1", { force: false });
+    const result = await remove({ db: ctx.db, git, attachmentsRoot: "unused" }, "ticket-1", {
+      force: false,
+    });
 
     expect(result.ok).toBe(true);
     const row = getTicketRow(ctx.db, "ticket-1")!;
@@ -134,7 +142,9 @@ describe("remove", () => {
     seed(wt);
     const { git, calls } = statusGit(wt, gitDir, true);
 
-    const result = await remove({ db: ctx.db, git }, "ticket-1", { force: false });
+    const result = await remove({ db: ctx.db, git, attachmentsRoot: "unused" }, "ticket-1", {
+      force: false,
+    });
 
     expect(result.ok).toBe(false);
     expect(calls.some((c) => c.args[1] === "remove")).toBe(false);
@@ -148,7 +158,9 @@ describe("remove", () => {
     seed(wt);
     const { git, calls } = statusGit(wt, gitDir, true);
 
-    const result = await remove({ db: ctx.db, git }, "ticket-1", { force: true });
+    const result = await remove({ db: ctx.db, git, attachmentsRoot: "unused" }, "ticket-1", {
+      force: true,
+    });
 
     expect(result.ok).toBe(true);
     const removeCall = calls.find((c) => c.args[1] === "remove");

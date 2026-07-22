@@ -71,7 +71,7 @@ describe("sweepOrphans", () => {
       return "";
     });
 
-    const report = await sweepOrphans({ db: ctx.db, git, home });
+    const report = await sweepOrphans({ db: ctx.db, git, home, attachmentsRoot: "unused" });
 
     expect(report.pruned).toEqual(["proj-1"]);
     expect(report.removedClean).toEqual([cleanOrphan]);
@@ -107,7 +107,7 @@ describe("sweepOrphans", () => {
       return "";
     });
 
-    const report = await sweepOrphans({ db: ctx.db, git, home });
+    const report = await sweepOrphans({ db: ctx.db, git, home, attachmentsRoot: "unused" });
 
     expect(removed).toEqual([]); // never deleted — it's not ours
     expect(report.removedClean).toEqual([]);
@@ -121,7 +121,7 @@ describe("sweepOrphans", () => {
       if (args[0] === "worktree" && args[1] === "prune") throw new Error("not a git repo");
       return "";
     });
-    const report = await sweepOrphans({ db: ctx.db, git, home });
+    const report = await sweepOrphans({ db: ctx.db, git, home, attachmentsRoot: "unused" });
     expect(report).toEqual({ pruned: [], removedClean: [], dirty: [] });
   });
 });

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import type { AgentRequest } from "@volli/shared";
 
+import { createAttachment } from "./db/attachments-repo";
 import { insertProject } from "./db/projects-repo";
 import { getSession, insertSession } from "./db/sessions-repo";
 import { openTestDb, testProject, testSession } from "./db/test-helpers";
@@ -785,6 +786,99 @@ describe("agent command service", () => {
           "on branch `volli/VC-1-ship-cli` (branched from `main`). All work happens in the current " +
           "directory. The main checkout at `/repo/volli` is reference-only — never modify it.\n\n" +
           "Coordinate the board through the bundled `volli` CLI: run `volli help` for the full reference (and the volli skill, when installed, for norms).\n\nVC-1: Ship CLI\n\nFollow the implementation contract.",
+      },
+    });
+  });
+
+  it("appends an Attachments section to the brief when the ticket has attachments", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 100,
+      newId: () => "ticket-one",
+    });
+    await service.execute({
+      v: 1,
+      cmd: "ticket.create",
+      args: { title: "Ship CLI", body: "Follow the implementation contract." },
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+    createAttachment(
+      ctx.db,
+      { ticketId: "ticket-one", kind: "file", fileName: "spec.png", label: "homepage mock" },
+      100,
+    );
+    createAttachment(
+      ctx.db,
+      {
+        ticketId: "ticket-one",
+        kind: "url",
+        url: "https://example.com/design",
+        label: "design doc",
+      },
+      200,
+    );
+
+    const brief = await service.execute({
+      v: 1,
+      cmd: "ticket.brief",
+      args: { id: "VC-1" },
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+
+    expect(brief).toEqual({
+      v: 1,
+      ok: true,
+      data: {
+        prompt:
+          "Coordinate the board through the bundled `volli` CLI: run `volli help` for the full reference (and the volli skill, when installed, for norms).\n\n" +
+          "VC-1: Ship CLI\n\nFollow the implementation contract.\n\n" +
+          "## Attachments\n\n" +
+          "Read each attached file before starting — they are part of the ticket's spec:\n" +
+          "- `.volli/attachments/spec.png` — homepage mock\n" +
+          "Reference URLs:\n" +
+          "- https://example.com/design — design doc",
+      },
+    });
+  });
+
+  it("omits the Attachments section from the brief when the ticket has no attachments", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 100,
+      newId: () => "ticket-one",
+    });
+    await service.execute({
+      v: 1,
+      cmd: "ticket.create",
+      args: { title: "Ship CLI" },
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+
+    const brief = await service.execute({
+      v: 1,
+      cmd: "ticket.brief",
+      args: { id: "VC-1" },
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+
+    expect(brief).toEqual({
+      v: 1,
+      ok: true,
+      data: {
+        prompt:
+          "Coordinate the board through the bundled `volli` CLI: run `volli help` for the full reference (and the volli skill, when installed, for norms).\n\nVC-1: Ship CLI",
       },
     });
   });

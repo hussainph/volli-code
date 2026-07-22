@@ -31,6 +31,7 @@ const {
   appQuit,
   ensureWorktree,
   onWorktreePhase,
+  userDataPathRef,
 } = vi.hoisted(() => ({
   handlers: new Map<string, (...args: never[]) => unknown>(),
   listeners: new Map<string, (...args: never[]) => unknown>(),
@@ -43,6 +44,10 @@ const {
   // broadcast — the real one reaches for electron's BrowserWindow, absent here.
   ensureWorktree: vi.fn(),
   onWorktreePhase: vi.fn(),
+  // registerTerminalIpcHandlers resolves its attachments root off
+  // `app.getPath("userData")`; mutable so beforeAll can point it at a real
+  // temp dir once one exists.
+  userDataPathRef: { current: "/volli-test-userdata" },
 }));
 
 vi.mock("electron", () => ({
@@ -59,6 +64,8 @@ vi.mock("electron", () => ({
       appHandlers.set(event, handler);
     },
     quit: appQuit,
+    getPath: (name: string) =>
+      name === "userData" ? userDataPathRef.current : "/volli-test-other",
   },
   dialog: {
     showMessageBoxSync,
@@ -89,6 +96,8 @@ vi.mock("./worktree-runtime", () => ({
 
 import { confirmDestructiveClose, PtyManager, registerTerminalIpcHandlers } from "./pty";
 import type { ParkConfig, ProcessInspector } from "./park";
+import { attachmentsRoot, importAttachmentFile } from "./attachment-store";
+import { createAttachment } from "./db/attachments-repo";
 import { listTicketEvents } from "./db/events-repo";
 import { insertProject } from "./db/projects-repo";
 import { getSession, insertSession, listSessions, listTicketSessions } from "./db/sessions-repo";
@@ -240,6 +249,9 @@ beforeAll(async () => {
   process.env["VOLLI_PARK_DISABLE"] = "1";
   root = await fs.realpath(await fs.mkdtemp(join(os.tmpdir(), "volli-pty-")));
   outside = await fs.realpath(await fs.mkdtemp(join(os.tmpdir(), "volli-pty-outside-")));
+  userDataPathRef.current = await fs.realpath(
+    await fs.mkdtemp(join(os.tmpdir(), "volli-pty-userdata-")),
+  );
 });
 
 afterAll(async () => {
@@ -247,6 +259,7 @@ afterAll(async () => {
   else process.env["VOLLI_PARK_DISABLE"] = priorParkDisable;
   await fs.rm(root, { recursive: true, force: true });
   await fs.rm(outside, { recursive: true, force: true });
+  await fs.rm(userDataPathRef.current, { recursive: true, force: true });
 });
 
 beforeEach(() => {
@@ -1289,6 +1302,60 @@ describe("ticket sessions", () => {
     expect(pty.write).toHaveBeenCalledWith("claude 'it'\\''s `$X`'\r");
   });
 
+  it("materializes the ticket's file attachments into the PROJECT root and appends the Attachments section to the kickoff prompt", async () => {
+    const attachmentsRootDir = attachmentsRoot(userDataPathRef.current);
+    const attachment = createAttachment(
+      testDb.db,
+      { ticketId: "tk1", kind: "file", fileName: "spec.png", label: "homepage mock" },
+      Date.now(),
+    );
+    const source = join(await fs.mkdtemp(join(os.tmpdir(), "volli-pty-src-")), "spec.png");
+    await fs.writeFile(source, "spec bytes");
+    importAttachmentFile(attachmentsRootDir, attachment.id, source, "spec.png");
+
+    const { result, pty } = await createKickoffSession("tk1", {
+      harnessId: "codex",
+      prompt: "run the tests",
+    });
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+
+    // Bytes landed in the PROJECT root's .volli/attachments — non-worktree
+    // tickets never run `ensure`, so this is the only materialize point.
+    const dest = join(root, ".volli", "attachments", "spec.png");
+    await expect(fs.readFile(dest, "utf8")).resolves.toBe("spec bytes");
+
+    const [written] = pty.write.mock.calls[0] as [string];
+    expect(written).toContain("run the tests");
+    expect(written).toContain("## Attachments");
+    expect(written).toContain(".volli/attachments/spec.png");
+    expect(written).toContain("homepage mock");
+  });
+
+  it("errors the create call (never spawns) when an attachment's stored bytes are missing", async () => {
+    createAttachment(
+      testDb.db,
+      { ticketId: "tk1", kind: "file", fileName: "missing.png", label: "the missing one" },
+      Date.now(),
+    );
+
+    // The materialize failure aborts inside `resolveScope`, before `create`
+    // ever loads node-pty — no fake pty is queued, since `spawn` is never
+    // reached (a queued-but-unconsumed `mockReturnValueOnce` would otherwise
+    // leak into whichever later test's `spawn()` call comes next).
+    const result = await invokeCreate(makeWebContents(), {
+      workspaceId: "w",
+      cwd: root,
+      cols: 80,
+      rows: 24,
+      ticket: { ticketId: "tk1", kickoff: { harnessId: "codex", prompt: "run the tests" } },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected a materialize failure");
+    expect(result.error).toContain("the missing one");
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it("stamps the persisted SessionRecord harnessId from the kickoff harness", async () => {
     const { result } = await createKickoffSession("tk1", {
       harnessId: "opencode",
@@ -1618,6 +1685,28 @@ describe("worktree ticket sessions", () => {
     expect(written).toContain("run tests");
     expect(written).toContain("codex");
     expect(written.endsWith("\r")).toBe(true);
+  });
+
+  it("appends the Attachments section (re-derived, no fs touch) to a worktree kickoff prompt", async () => {
+    ensureOk(false); // reused worktree → launch immediately, no setup gate
+    createAttachment(
+      testDb.db,
+      { ticketId: "wt1", kind: "url", url: "https://example.com/design", label: "design doc" },
+      Date.now(),
+    );
+
+    const { result, pty } = await createWorktreeSession({
+      harnessId: "codex",
+      prompt: "run tests",
+    });
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+
+    const written = pty.write.mock.calls[0]![0] as string;
+    expect(written).toContain("## Attachments");
+    expect(written).toContain("https://example.com/design");
+    expect(written).toContain("design doc");
+    // The section trails the ticket prompt, after the orientation preamble.
+    expect(written.indexOf("run tests")).toBeLessThan(written.indexOf("## Attachments"));
   });
 
   it("resumes a worktree ticket through the same ensure cwd, writing the resume line (no preamble)", async () => {

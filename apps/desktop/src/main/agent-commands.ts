@@ -4,6 +4,8 @@ import { existsSync } from "node:fs";
 import type Database from "better-sqlite3";
 import {
   applyTicketBodyMutation,
+  attachmentsSectionInput,
+  composeAttachmentsSection,
   composeTicketPrompt,
   displayTicketId,
   errorMessage,
@@ -30,6 +32,7 @@ import type {
   Ticket,
 } from "@volli/shared";
 
+import { listAttachments } from "./db/attachments-repo";
 import { listTicketEvents, recordTicketEvent } from "./db/events-repo";
 import { listComments } from "./db/comments-repo";
 import { listAllLabels } from "./db/labels-repo";
@@ -943,11 +946,20 @@ export function createAgentCommandService(
                 projectPath: resolved.project.path,
               }) + "\n\n"
             : "";
+        // Attachments (CONCEPT decision #19): the brief is read-only — it never
+        // materializes, only lists what session boot already did (or will do),
+        // via the same deterministic relPath mapping main's `ensure` pipeline
+        // uses. Relative paths are correct whether this session runs in the
+        // worktree or the main checkout (cwd is the session root either way).
+        const attachmentsSection = composeAttachmentsSection(
+          attachmentsSectionInput(listAttachments(options.db, resolved.ticket.id)),
+        );
+        const attachmentsSuffix = attachmentsSection.length > 0 ? `\n\n${attachmentsSection}` : "";
         return {
           v: 1,
           ok: true,
           data: {
-            prompt: `${orientation}Coordinate the board through the bundled \`volli\` CLI: run \`volli help\` for the full reference (and the volli skill, when installed, for norms).\n\n${ticketPrompt}`,
+            prompt: `${orientation}Coordinate the board through the bundled \`volli\` CLI: run \`volli help\` for the full reference (and the volli skill, when installed, for norms).\n\n${ticketPrompt}${attachmentsSuffix}`,
           },
         };
       }

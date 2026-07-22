@@ -139,7 +139,7 @@ describe("archiveAndClean", () => {
     seed(wt);
     const { git, calls } = statusGit(wt, gitDir, false);
 
-    const result = await archiveAndClean({ db: ctx.db, git }, "t1");
+    const result = await archiveAndClean({ db: ctx.db, git, attachmentsRoot: "unused" }, "t1");
     expect(result.ok).toBe(true);
 
     const row = getTicketRow(ctx.db, "t1")!;
@@ -156,7 +156,7 @@ describe("archiveAndClean", () => {
     seed(wt);
     const { git, calls } = statusGit(wt, gitDir, true);
 
-    const result = await archiveAndClean({ db: ctx.db, git }, "t1");
+    const result = await archiveAndClean({ db: ctx.db, git, attachmentsRoot: "unused" }, "t1");
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toContain("uncommitted work");
@@ -171,7 +171,7 @@ describe("archiveAndClean", () => {
   it("archives a PR-less ticket with no worktree (nothing to remove)", async () => {
     seed(null);
     const { git } = scriptedGit(() => "");
-    const result = await archiveAndClean({ db: ctx.db, git }, "t1");
+    const result = await archiveAndClean({ db: ctx.db, git, attachmentsRoot: "unused" }, "t1");
     expect(result.ok).toBe(true);
     expect(getTicketRow(ctx.db, "t1")!.archived_at).not.toBeNull();
   });

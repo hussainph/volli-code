@@ -7,6 +7,13 @@
  * usable from main, preload, and (later) the volli CLI alike. `projectPath` is
  * always the MAIN repo's absolute path — never a worktree's — see
  * {@link ticketSessionEnv}.
+ *
+ * IMPORTANT boundary: `.volli/artifacts` (via {@link projectArtifactsDir})
+ * stays main-repo-keyed as above — but `.volli/attachments` (via {@link
+ * sessionAttachmentsDir}, CONCEPT decision #19) is the ONE ticket-scoped,
+ * session-root-LOCAL exception. Its `rootPath` is the SESSION's checkout root
+ * — the worktree for a worktree ticket, the main checkout otherwise — never
+ * forced to the main repo the way every other `.volli/**` path is.
  */
 
 export const VOLLI_DIR_NAME = ".volli";
@@ -24,6 +31,17 @@ export function volliDir(projectPath: string): string {
 /** The project's single artifacts directory: `<volliDir>/artifacts`. */
 export function projectArtifactsDir(projectPath: string): string {
   return `${volliDir(projectPath)}/artifacts`;
+}
+
+/**
+ * The SESSION-local materialized-attachments directory: `<rootPath>/.volli/attachments`
+ * (CONCEPT decision #19). `rootPath` is the session's own checkout root — the
+ * ticket's worktree when it has one, the main checkout for a worktree-opt-out
+ * ticket — NEVER forced to the main repo path the way {@link
+ * projectArtifactsDir} is. See this module's header for the boundary.
+ */
+export function sessionAttachmentsDir(rootPath: string): string {
+  return `${volliDir(rootPath)}/attachments`;
 }
 
 /**

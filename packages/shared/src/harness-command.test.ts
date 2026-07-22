@@ -3,6 +3,7 @@ import { HARNESS_IDS } from "./ticket";
 import {
   buildHarnessCommand,
   buildHarnessResumeCommand,
+  composeAttachmentsSection,
   composeTicketPrompt,
   shellSingleQuote,
   worktreeOrientationPreamble,
@@ -138,6 +139,94 @@ describe("buildHarnessResumeCommand", () => {
   it("quotes a session id that needs shell quoting, same as prompt quoting", () => {
     expect(buildHarnessResumeCommand("claude-code", "it's a session")).toBe(
       "claude --resume 'it'\\''s a session'",
+    );
+  });
+});
+
+describe("composeAttachmentsSection", () => {
+  it("returns an empty string when there are no files and no urls", () => {
+    expect(composeAttachmentsSection({ files: [], urls: [] })).toBe("");
+  });
+
+  it("renders a files-only section with the read-each lead-in and no urls block", () => {
+    const section = composeAttachmentsSection({
+      files: [{ relPath: ".volli/attachments/spec.png", label: "homepage mock" }],
+      urls: [],
+    });
+    expect(section).toBe(
+      "## Attachments\n\n" +
+        "Read each attached file before starting — they are part of the ticket's spec:\n" +
+        "- `.volli/attachments/spec.png` — homepage mock",
+    );
+  });
+
+  it("renders a urls-only section with no read-each lead-in", () => {
+    const section = composeAttachmentsSection({
+      files: [],
+      urls: [{ url: "https://example.com/design", label: "design doc" }],
+    });
+    expect(section).toBe(
+      "## Attachments\n\nReference URLs:\n- https://example.com/design — design doc",
+    );
+  });
+
+  it("renders both files and urls together", () => {
+    const section = composeAttachmentsSection({
+      files: [{ relPath: ".volli/attachments/spec.png", label: "homepage mock" }],
+      urls: [{ url: "https://example.com/design", label: "design doc" }],
+    });
+    expect(section).toBe(
+      "## Attachments\n\n" +
+        "Read each attached file before starting — they are part of the ticket's spec:\n" +
+        "- `.volli/attachments/spec.png` — homepage mock\n" +
+        "Reference URLs:\n" +
+        "- https://example.com/design — design doc",
+    );
+  });
+
+  it("omits the ` — label` suffix when a file's label matches its materialized basename", () => {
+    const section = composeAttachmentsSection({
+      files: [{ relPath: ".volli/attachments/spec.png", label: "spec.png" }],
+      urls: [],
+    });
+    expect(section.endsWith("- `.volli/attachments/spec.png`")).toBe(true);
+  });
+
+  it("treats a slashless relPath as its own basename for the label-suffix check", () => {
+    const section = composeAttachmentsSection({
+      files: [{ relPath: "spec.png", label: "spec.png" }],
+      urls: [],
+    });
+    expect(section.endsWith("- `spec.png`")).toBe(true);
+  });
+
+  it("omits the ` — label` suffix when a url's label matches the url verbatim", () => {
+    const section = composeAttachmentsSection({
+      files: [],
+      urls: [{ url: "https://example.com/design", label: "https://example.com/design" }],
+    });
+    expect(section).toBe("## Attachments\n\nReference URLs:\n- https://example.com/design");
+  });
+
+  it("lists multiple files and urls in order", () => {
+    const section = composeAttachmentsSection({
+      files: [
+        { relPath: ".volli/attachments/a.png", label: "a.png" },
+        { relPath: ".volli/attachments/b.png", label: "b.png" },
+      ],
+      urls: [
+        { url: "https://example.com/a", label: "https://example.com/a" },
+        { url: "https://example.com/b", label: "https://example.com/b" },
+      ],
+    });
+    expect(section).toBe(
+      "## Attachments\n\n" +
+        "Read each attached file before starting — they are part of the ticket's spec:\n" +
+        "- `.volli/attachments/a.png`\n" +
+        "- `.volli/attachments/b.png`\n" +
+        "Reference URLs:\n" +
+        "- https://example.com/a\n" +
+        "- https://example.com/b",
     );
   });
 });

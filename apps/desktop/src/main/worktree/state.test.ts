@@ -19,14 +19,14 @@ describe("listBranches", () => {
   it("returns local branch short names", () => {
     insertProject(ctx.db, testProject({ id: "proj-1", path: "/repo" }));
     const { git, calls } = scriptedGit(() => "main\nfeature/x\nvolli/VC-1-x\n");
-    const result = listBranches({ db: ctx.db, git }, "proj-1");
+    const result = listBranches({ db: ctx.db, git, attachmentsRoot: "unused" }, "proj-1");
     expect(result).toEqual({ ok: true, value: ["main", "feature/x", "volli/VC-1-x"] });
     expect(calls[0]?.args).toEqual(["for-each-ref", "refs/heads", "--format=%(refname:short)"]);
   });
 
   it("errors for an unknown project", () => {
     const { git } = scriptedGit(() => "");
-    expect(listBranches({ db: ctx.db, git }, "nope")).toEqual({
+    expect(listBranches({ db: ctx.db, git, attachmentsRoot: "unused" }, "nope")).toEqual({
       ok: false,
       error: "Unknown project",
     });

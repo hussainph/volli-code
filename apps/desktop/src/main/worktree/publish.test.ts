@@ -73,7 +73,12 @@ describe("publishTicketBranch", () => {
       }
       return {};
     });
-    const deps: PublishDeps = { db, git: scriptedGit(() => "").git, net: run };
+    const deps: PublishDeps = {
+      db,
+      git: scriptedGit(() => "").git,
+      net: run,
+      attachmentsRoot: "unused",
+    };
 
     const result = await publishTicketBranch(deps, ticketId);
 
@@ -95,7 +100,12 @@ describe("publishTicketBranch", () => {
       if (file === "gh" && args.includes("list")) return { stdout: `${url}\n` };
       return {};
     });
-    const deps: PublishDeps = { db, git: scriptedGit(() => "").git, net: run };
+    const deps: PublishDeps = {
+      db,
+      git: scriptedGit(() => "").git,
+      net: run,
+      attachmentsRoot: "unused",
+    };
 
     const result = await publishTicketBranch(deps, ticketId);
 
@@ -114,7 +124,12 @@ describe("publishTicketBranch", () => {
       if (file === "gh" && args.includes("list")) return { stdout: `${url}\n` };
       return {};
     });
-    const deps: PublishDeps = { db, git: scriptedGit(() => "").git, net: run };
+    const deps: PublishDeps = {
+      db,
+      git: scriptedGit(() => "").git,
+      net: run,
+      attachmentsRoot: "unused",
+    };
 
     const result = await publishTicketBranch(deps, ticketId);
 
@@ -138,7 +153,12 @@ describe("publishTicketBranch", () => {
       }
       return {};
     });
-    const deps: PublishDeps = { db, git: scriptedGit(() => "").git, net: run };
+    const deps: PublishDeps = {
+      db,
+      git: scriptedGit(() => "").git,
+      net: run,
+      attachmentsRoot: "unused",
+    };
 
     const result = await publishTicketBranch(deps, ticketId);
 
@@ -157,7 +177,12 @@ describe("publishTicketBranch", () => {
       }
       return {};
     });
-    const deps: PublishDeps = { db, git: scriptedGit(() => "").git, net: run };
+    const deps: PublishDeps = {
+      db,
+      git: scriptedGit(() => "").git,
+      net: run,
+      attachmentsRoot: "unused",
+    };
 
     const result = await publishTicketBranch(deps, ticketId);
 
@@ -178,7 +203,12 @@ describe("publishTicketBranch", () => {
       if (file === "gh" && args.includes("create")) return { stdout: `${url}\n` };
       return {};
     });
-    const deps: PublishDeps = { db, git: scriptedGit(() => "").git, net: run };
+    const deps: PublishDeps = {
+      db,
+      git: scriptedGit(() => "").git,
+      net: run,
+      attachmentsRoot: "unused",
+    };
 
     const result = await publishTicketBranch(deps, ticketId);
 
@@ -209,7 +239,12 @@ describe("publishTicketBranch", () => {
       if (file === "gh" && args.includes("list")) return { stdout: `${url}\n` };
       return {};
     });
-    const deps: PublishDeps = { db, git: scriptedGit(() => "").git, net: run };
+    const deps: PublishDeps = {
+      db,
+      git: scriptedGit(() => "").git,
+      net: run,
+      attachmentsRoot: "unused",
+    };
 
     const result = await publishTicketBranch(deps, ticketId);
 
@@ -225,7 +260,12 @@ describe("publishTicketBranch", () => {
     const ticket = testTicket(project.id, { id: "t1", ticketNumber: 1 });
     insertTicket(harness.db, { ...ticket, prUrl: null });
     const { run, calls } = scriptedNet(() => ({}));
-    const deps: PublishDeps = { db: harness.db, git: scriptedGit(() => "").git, net: run };
+    const deps: PublishDeps = {
+      db: harness.db,
+      git: scriptedGit(() => "").git,
+      net: run,
+      attachmentsRoot: "unused",
+    };
 
     const result = await publishTicketBranch(deps, ticket.id);
 
@@ -238,7 +278,12 @@ describe("commitTicketRemaining", () => {
   it("commits (via the async runner) and records worktree_committed on a dirty tree", async () => {
     const { db, ticketId } = seedTicket();
     const { run, calls } = scriptedNet(() => ({}));
-    const deps: PublishDeps = { db, git: commitGit(" M src/a.ts\n"), net: run };
+    const deps: PublishDeps = {
+      db,
+      git: commitGit(" M src/a.ts\n"),
+      net: run,
+      attachmentsRoot: "unused",
+    };
 
     const result = await commitTicketRemaining(deps, ticketId);
 
@@ -263,7 +308,7 @@ describe("commitTicketRemaining", () => {
   it("returns the committed:false no-op and records NO event on a clean tree", async () => {
     const { db, ticketId } = seedTicket();
     const { run, calls } = scriptedNet(() => ({}));
-    const deps: PublishDeps = { db, git: commitGit(""), net: run };
+    const deps: PublishDeps = { db, git: commitGit(""), net: run, attachmentsRoot: "unused" };
 
     const result = await commitTicketRemaining(deps, ticketId);
 
@@ -280,7 +325,12 @@ describe("commitTicketRemaining", () => {
       }
       return {};
     });
-    const deps: PublishDeps = { db, git: commitGit(" M src/a.ts\n"), net: run };
+    const deps: PublishDeps = {
+      db,
+      git: commitGit(" M src/a.ts\n"),
+      net: run,
+      attachmentsRoot: "unused",
+    };
 
     const result = await commitTicketRemaining(deps, ticketId);
 
