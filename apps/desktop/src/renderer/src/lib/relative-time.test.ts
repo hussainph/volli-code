@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { relativeTime } from "./relative-time";
+import { formatStamp, relativeTime } from "./relative-time";
 
 const NOW = Date.UTC(2026, 6, 14, 12, 0, 0); // 2026-07-14T12:00:00Z
 const SECOND = 1000;
@@ -34,5 +34,21 @@ describe("relativeTime", () => {
 
   it("defaults `now` to the wall clock", () => {
     expect(relativeTime(Date.now())).toBe("just now");
+  });
+});
+
+describe("formatStamp", () => {
+  it("renders a date-only stamp by default, year always present", () => {
+    const stamp = formatStamp(NOW);
+    expect(stamp).toContain("2026");
+    expect(stamp).not.toMatch(/\d:\d\d/);
+    // Explicit `time: false` is the same date-only rendering.
+    expect(formatStamp(NOW, { time: false })).toBe(stamp);
+  });
+
+  it("adds hour/minute with `time: true`", () => {
+    const stamp = formatStamp(NOW, { time: true });
+    expect(stamp).toContain("2026");
+    expect(stamp).toMatch(/\d:\d\d/);
   });
 });
