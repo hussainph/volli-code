@@ -66,7 +66,14 @@ export interface SubmitDeps {
     ticketId: string,
     kickoff: { harnessId: HarnessId; prompt: string },
   ): Promise<string | null>;
-  openTicket(projectId: string, ticketId: string): void;
+  /**
+   * Makes the ticket's workspace visible NOW — switches nav to Board, opens
+   * its detail, and selects it on the board (workspace.openTicketWorkspace).
+   * Using the narrower `workspace.openTicket` here was the bug: it never
+   * touches nav, so invoking Create-&-start from Files/Sessions (the "c"
+   * shortcut is app-wide) left the promised detail/terminal unrendered.
+   */
+  openTicketWorkspace(projectId: string, ticketId: string): void;
   /** Focus `sessionId`'s tab inside the ticket's detail view (tab ids are session ids). */
   focusSession(projectId: string, ticketId: string, sessionId: string): void;
   persistHarness(harnessId: HarnessId): void;
@@ -140,7 +147,7 @@ export async function runKickoff(
   // the terminal as the agent boots, not on the Doc tab with the session
   // parked behind it. A failed boot (null) leaves Doc focused, which is the
   // sane retry surface.
-  deps.openTicket(fields.projectId, ticket.id);
+  deps.openTicketWorkspace(fields.projectId, ticket.id);
   const sessionId = await deps.startSession(fields.projectId, ticket.id, {
     harnessId: opts.harnessId,
     prompt,

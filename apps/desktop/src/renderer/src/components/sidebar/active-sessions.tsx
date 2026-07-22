@@ -160,9 +160,8 @@ export function ActiveSessions({ project }: { project: Project }) {
   const ticketTabs = useWorkspaceStore(
     (state) => state.byProject[project.id]?.ticketTabs ?? EMPTY_TICKET_TABS,
   );
-  const openTicket = useWorkspaceStore((state) => state.openTicket);
+  const openTicketWorkspace = useWorkspaceStore((state) => state.openTicketWorkspace);
   const openTicketSession = useWorkspaceStore((state) => state.openTicketSession);
-  const setNav = useWorkspaceStore((state) => state.setNav);
   const [records, setRecords] = React.useState<SessionRecord[]>([]);
   const [eventsByTicket, setEventsByTicket] = React.useState<Record<string, TicketEvent[]>>({});
   const [now, setNow] = React.useState(() => Date.now());
@@ -274,8 +273,7 @@ export function ActiveSessions({ project }: { project: Project }) {
       openTicketSession(project.id, row.ticket.id, row.target.tabId, row.target.paneId);
       return;
     }
-    setNav(project.id, "board");
-    openTicket(project.id, row.ticket.id);
+    openTicketWorkspace(project.id, row.ticket.id);
   };
 
   return (
