@@ -110,16 +110,27 @@ describe("listTicketSessions", () => {
 });
 
 describe("endSession", () => {
-  it("stamps ended_at, leaving everything else untouched", () => {
+  it("stamps ended_at and the observed exit code, leaving everything else untouched", () => {
     const { projectId } = setup();
     const session = testSession(projectId, null);
     insertSession(ctx.db, session);
 
-    endSession(ctx.db, session.id, 500);
+    endSession(ctx.db, session.id, 500, 1);
 
     const [persisted] = listSessions(ctx.db, projectId);
     expect(persisted?.endedAt).toBe(500);
+    expect(persisted?.exitCode).toBe(1);
     expect(persisted?.title).toBe(session.title);
+  });
+
+  it("records an unobserved outcome as a null exit code", () => {
+    const { projectId } = setup();
+    const session = testSession(projectId, null);
+    insertSession(ctx.db, session);
+
+    endSession(ctx.db, session.id, 500, null);
+
+    expect(listSessions(ctx.db, projectId)[0]?.exitCode).toBeNull();
   });
 });
 
@@ -160,7 +171,7 @@ describe("endLiveSessions (boot sweep)", () => {
     insertSession(ctx.db, testSession(projectId, null, { id: "live2" }));
     const alreadyEnded = testSession(projectId, null, { id: "done" });
     insertSession(ctx.db, alreadyEnded);
-    endSession(ctx.db, "done", 42);
+    endSession(ctx.db, "done", 42, 0);
 
     const swept = endLiveSessions(ctx.db, 999);
 

@@ -119,6 +119,7 @@ describe("createSessionRecord", () => {
     });
     expect(session.harnessSessionId).toBeNull();
     expect(session.endedAt).toBeNull();
+    expect(session.exitCode).toBeNull();
   });
 });
 
@@ -136,6 +137,7 @@ describe("SessionRecord", () => {
       cwd: "/Users/dev/project",
       createdAt: 0,
       endedAt: null,
+      exitCode: null,
     };
     expect(record.ticketId).toBeNull();
   });

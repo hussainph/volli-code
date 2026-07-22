@@ -19,6 +19,7 @@ function record(overrides: Partial<SessionRecord> = {}): SessionRecord {
     cwd: "/repo",
     createdAt: 1,
     endedAt: null,
+    exitCode: null,
     ...overrides,
   };
 }

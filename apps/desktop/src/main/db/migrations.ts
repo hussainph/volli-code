@@ -292,6 +292,18 @@ CREATE TABLE ticket_attachments (
 CREATE INDEX idx_ticket_attachments_ticket ON ticket_attachments(ticket_id);
 `;
 
+/**
+ * Migration 012: `sessions.exit_code` — the shell's exit code, stamped by the
+ * PTY exit path in the same transaction as `ended_at`. Backs the sidebar's
+ * honest outcome labels for concluded sessions ("Done"/"Failed" only when the
+ * code was actually observed). NULL while live, for boot-sweep ends (the
+ * process outcome was never seen), and for every historical row — readers must
+ * treat NULL as "unknown", never as success.
+ */
+const MIGRATION_012_SESSION_EXIT_CODE = `
+ALTER TABLE sessions ADD COLUMN exit_code INTEGER;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -339,6 +351,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 11,
     name: "ticket_attachments — file/url attachments on a ticket",
     sql: MIGRATION_011_TICKET_ATTACHMENTS,
+  },
+  {
+    version: 12,
+    name: "sessions.exit_code — observed shell exit code for concluded sessions",
+    sql: MIGRATION_012_SESSION_EXIT_CODE,
   },
 ];
 
