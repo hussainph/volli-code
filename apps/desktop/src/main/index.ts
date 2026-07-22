@@ -21,7 +21,7 @@ import { registerAppMenu } from "./menu";
 import { confirmDestructiveClose, registerTerminalIpcHandlers } from "./pty";
 import type { PtyManager } from "./pty";
 import { registerFileIpcHandlers } from "./volli-fs";
-import { broadcastDataChanged } from "./broadcast";
+import { broadcastDataChanged, broadcastSessionsInterrupted } from "./broadcast";
 import { startOrphanSweep } from "./orphan-sweep";
 import { worktreeDeps } from "./worktree-runtime";
 import { getRetentionWatcher } from "./retention-runtime";
@@ -278,6 +278,17 @@ app.whenReady().then(async () => {
   // remove/orphan-delete guards read it lazily (only at invoke time, long after
   // boot) to refuse touching a directory a live session still runs in.
   let ptyManagerRef: PtyManager | undefined;
+  // The ONE interrupt entry both choke points (renderer `volli:ticket-move`
+  // IPC, socket `ticket.move`) inject: Escs the ticket's live agent sessions
+  // and, when any were actually interrupted, announces it to every window
+  // (issue #78 — automation de-escalates, but never silently). Lazy through
+  // the ref: registration below runs before the PtyManager is built, but the
+  // seam only ever fires at invoke time, long after boot.
+  const interruptTicketSessionsAnnounced = (ticketId: string): string[] => {
+    const sessionIds = ptyManagerRef?.interruptTicketSessions(ticketId) ?? [];
+    if (sessionIds.length > 0) broadcastSessionsInterrupted(ticketId, sessionIds);
+    return sessionIds;
+  };
   // Standard macOS menu, but with the View-menu zoom roles replaced by
   // renderer-driven CSS zoom (see menu.ts for the rationale). Registered here
   // (rather than up with the other pre-window setup) because File > Export
@@ -285,10 +296,8 @@ app.whenReady().then(async () => {
   registerDataIpcHandlers(dbHandle, {
     liveSessionCwds: () => ptyManagerRef?.liveSessionCwds() ?? [],
     // Backward-move interrupt (issue #78): a user move that leaves the active
-    // columns Esc's the ticket's live agent sessions. Lazy through the ref —
-    // this runs before the PtyManager is built below, but only ever fires at
-    // invoke time, long after boot.
-    interruptTicketSessions: (ticketId) => ptyManagerRef?.interruptTicketSessions(ticketId) ?? [],
+    // columns Esc's the ticket's live agent sessions, announced via toast.
+    interruptTicketSessions: interruptTicketSessionsAnnounced,
   });
   // Global-artifacts + @file fs plumbing (file index/read/write, artifact
   // create, reveal, per-tab watch); same degraded-DB stance as
@@ -484,8 +493,9 @@ app.whenReady().then(async () => {
           observeSession: (sessionId, lines) => ptyManager.peek(sessionId, lines),
           notify: (title, message) => new Notification({ title, body: message }).show(),
           // Backward-move interrupt (issue #78): a socket `ticket.move` that
-          // leaves the active columns Esc's the ticket's live agent sessions.
-          interruptTicketSessions: (ticketId) => ptyManager.interruptTicketSessions(ticketId),
+          // leaves the active columns Esc's the ticket's live agent sessions,
+          // announced via toast exactly like the renderer's own move path.
+          interruptTicketSessions: interruptTicketSessionsAnnounced,
         }).execute
       : async () =>
           ({

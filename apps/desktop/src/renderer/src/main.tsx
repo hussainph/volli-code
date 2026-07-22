@@ -7,11 +7,20 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { errorMessage } from "@volli/shared";
 import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
+import { toast } from "sonner";
 
 import App from "./App";
+import { interruptToastModel } from "./components/sessions/interrupt-toast";
 import { boot, refreshPlanningData } from "./lib/boot";
 import { toastError } from "./lib/toast";
+import { useBoardStore } from "./stores/board";
+import { useProjectsStore } from "./stores/projects";
+import { useWorkspaceStore } from "./stores/workspace";
 import { initTerminalAppearance } from "./terminal/appearance";
+
+/** Interrupt toasts outlive sonner's ~4s default: an automated de-escalation
+ *  must be seen, not glimpsed (same reasoning as `toastError`'s longer window). */
+const INTERRUPT_TOAST_DURATION_MS = 8000;
 
 /** Full-window failure panel — mirrors the app's empty-state styling (see files-page.tsx). */
 function BootErrorPanel({ error }: { error: string }) {
@@ -52,6 +61,31 @@ async function main() {
       <App />
     </StrictMode>,
   );
+
+  // Backward-move interrupt announcements (issue #78, CONCEPT #20): automation
+  // only ever de-escalates, and never silently — the move that Esc'd live
+  // agent sessions toasts where the mover is looking, with a jump-to-ticket
+  // action. Fired for BOTH move choke points (renderer drag and socket/CLI).
+  window.api.sessions.onInterrupted((event) => {
+    const model = interruptToastModel(
+      event,
+      useBoardStore.getState().ticketsByProject,
+      useProjectsStore.getState().projects,
+    );
+    const target = model.target;
+    toast(model.message, {
+      duration: INTERRUPT_TOAST_DURATION_MS,
+      ...(target === null
+        ? {}
+        : {
+            action: {
+              label: "View ticket",
+              onClick: () =>
+                useWorkspaceStore.getState().openTicket(target.projectId, target.ticketId),
+            },
+          }),
+    });
+  });
 
   window.api.data.onChanged(() => {
     void refreshPlanningData()

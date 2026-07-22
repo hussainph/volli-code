@@ -329,12 +329,25 @@ async function main() {
             e.payload.kind === "sessions_interrupted" && e.payload.sessionIds.includes(session.id),
         );
 
-        const ok = beforeBusy && receivedEsc && stillAlive && interruptedEvent !== undefined;
+        // The interrupt announces itself (CONCEPT #20: automation de-escalates,
+        // never silently): a toast naming the ticket lands in the window that
+        // did NOT initiate the move (it came over the socket).
+        const toastVisible = await waitUntil(
+          "interrupt toast announces the de-escalation",
+          () => page.getByText(`${displayId}: interrupted an agent session`).first().isVisible(),
+          { timeout: 8000 },
+        )
+          .then(() => true)
+          .catch(() => false);
+
+        const ok =
+          beforeBusy && receivedEsc && stillAlive && interruptedEvent !== undefined && toastVisible;
         return {
           ok,
           detail:
             `beforeBusy=${beforeBusy} receivedEsc=${receivedEsc} stillAlive=${stillAlive} ` +
-            `process=${JSON.stringify(after.ok ? after.process : after.error)} interruptedEvent=${interruptedEvent !== undefined}`,
+            `process=${JSON.stringify(after.ok ? after.process : after.error)} interruptedEvent=${interruptedEvent !== undefined} ` +
+            `toast=${toastVisible}`,
         };
       },
     );
@@ -379,10 +392,14 @@ async function main() {
         const events = await eventsFor(page, ticketId);
         const interruptedEvent = events.find((e) => e.payload.kind === "sessions_interrupted");
 
-        const ok = noEsc && stillAlive && interruptedEvent === undefined;
+        // No toast either — scoped to THIS ticket's display id, since
+        // scenario 1's own toast (8s lifetime) may still be on screen.
+        const noToast = (await page.getByText(`${displayId}: interrupted`).count()) === 0;
+
+        const ok = noEsc && stillAlive && interruptedEvent === undefined && noToast;
         return {
           ok,
-          detail: `noEsc=${noEsc} stillAlive=${stillAlive} interruptedEventPresent=${interruptedEvent !== undefined}`,
+          detail: `noEsc=${noEsc} stillAlive=${stillAlive} interruptedEventPresent=${interruptedEvent !== undefined} noToast=${noToast}`,
         };
       },
     );
