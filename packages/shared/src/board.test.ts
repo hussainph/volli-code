@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vite-plus/test";
 import { createTicket, displayTicketId } from "./ticket";
 import type { Ticket, TicketStatus } from "./ticket";
-import { groupTicketsByStatus, moveTicket, emptyStatuses, setTicketPriority } from "./board";
+import { groupTicketsByStatus, moveTicket, setTicketPriority } from "./board";
 
 function ticket(overrides: {
   ticketNumber: number;
@@ -138,24 +138,6 @@ describe("moveTicket", () => {
     // Ticket "VC-2" is already last (index 1); requesting index 99 clamps to 1 too, so this is a no-op.
     const result = moveTicket(tickets, "VC-2", "todo", 99, 100);
     expect(result).toBe(tickets);
-  });
-});
-
-describe("emptyStatuses", () => {
-  it("returns all statuses when there are no tickets", () => {
-    expect(emptyStatuses([])).toEqual(["backlog", "todo", "doing", "needs_review", "done"]);
-  });
-
-  it("excludes statuses that have at least one ticket", () => {
-    const a = ticket({ ticketNumber: 1, status: "todo", order: 0 });
-    expect(emptyStatuses([a])).toEqual(["backlog", "doing", "needs_review", "done"]);
-  });
-
-  it("returns an empty array when every status has a ticket", () => {
-    const tickets = ["backlog", "todo", "doing", "needs_review", "done"].map((status, i) =>
-      ticket({ ticketNumber: i + 1, status: status as TicketStatus, order: 0 }),
-    );
-    expect(emptyStatuses(tickets)).toEqual([]);
   });
 });
 

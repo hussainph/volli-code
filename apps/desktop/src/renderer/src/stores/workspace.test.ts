@@ -178,6 +178,64 @@ describe("openTicket", () => {
   });
 });
 
+describe("openTicketWorkspace", () => {
+  afterEach(() => {
+    useBoardStore.setState({ selectedByProject: {} });
+  });
+
+  it("switches nav to Board even when the project's nav was elsewhere (composer kickoff from Files/Sessions regression)", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    // Simulate invoking Create-&-start (or any ticket-open action) while the
+    // user is on a non-Board nav — the app-wide "c" shortcut and the command
+    // palette both allow this. `openTicket` alone never touched nav, so the
+    // ticket detail it promises never rendered (main-content.tsx only shows
+    // it under nav === "board"); `openTicketWorkspace` must always land on
+    // Board regardless of the starting nav.
+    store.getState().setNav("project-a", "sessions");
+
+    store.getState().openTicketWorkspace("project-a", "ticket-1");
+
+    expect(store.getState().byProject["project-a"]).toMatchObject({
+      nav: "board",
+      openTicketId: "ticket-1",
+    });
+  });
+
+  it("selects the same ticket in the board store", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicketWorkspace("project-a", "ticket-1");
+
+    expect(useBoardStore.getState().selectedByProject["project-a"]).toBe("ticket-1");
+  });
+
+  it("activates the given tab", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicketWorkspace("project-a", "ticket-1", { tabId: "doc" });
+
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
+      files: [],
+      active: "doc",
+    });
+  });
+
+  it("leaves the ticket's existing tab untouched when no tabId is given", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicketFile("project-a", "ticket-1", "a.md"); // active: file:a.md
+    store.getState().openTicketWorkspace("project-a", "ticket-1");
+
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.active).toBe(
+      "file:a.md",
+    );
+  });
+
+  it("creates no ticketTabs record when no tabId is given and none existed", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicketWorkspace("project-a", "ticket-1");
+
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toBeUndefined();
+  });
+});
+
 describe("openTicketSession", () => {
   afterEach(() => {
     useBoardStore.setState({ selectedByProject: {} });

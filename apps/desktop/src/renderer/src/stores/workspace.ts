@@ -106,7 +106,35 @@ interface WorkspaceState {
    * card already selected (ticket-detail-mvp decision #1).
    */
   openTicket(projectId: string, ticketId: string): void;
-  /** Opens a ticket's exact live terminal tab, optionally focusing one split pane. */
+  /**
+   * THE navigation-intent seam: makes `ticketId`'s workspace visible right
+   * now, no matter where the project's nav currently is. Switches this
+   * project onto the Board nav (ticket detail only renders there —
+   * main-content.tsx — so a caller that skips this step can set
+   * `openTicketId` while nav stays on Files/Sessions and the promised detail
+   * view never appears; this was the composer kickoff bug), opens the
+   * ticket's full-page detail, and selects the same ticket in the board
+   * store (same ordering `openTicketSession` below already used internally).
+   *
+   * `opts.tabId`, when given, also activates that tab (`"doc"`, a
+   * `file:<relPath>`, or a session id). Omit it to leave the ticket's
+   * current tab untouched — e.g. Active Sessions activating a ticket with no
+   * live session to focus. For a SESSION tab specifically, call
+   * `openTicketSession` instead of passing its id here: it wraps this seam
+   * and additionally syncs the sessions store's active session/pane so the
+   * terminal actually in view matches.
+   *
+   * Every surface that promises "the user is now looking at this ticket" —
+   * the command palette, Active Sessions, and the new-ticket kickoff — routes
+   * through this one seam instead of hand-rolling setNav+openTicket(+tab)
+   * themselves.
+   */
+  openTicketWorkspace(projectId: string, ticketId: string, opts?: { tabId?: string }): void;
+  /**
+   * Opens a ticket's exact live terminal tab, optionally focusing one split
+   * pane. A thin wrapper over {@link openTicketWorkspace}'s ordering, plus the
+   * sessions-store sync a session tab (unlike Doc/file tabs) needs.
+   */
   openTicketSession(projectId: string, ticketId: string, tabId: string, paneId?: string): void;
   /** Closes the detail view, returning to the plain board. Leaves the board's selection as-is. */
   closeTicket(projectId: string): void;
@@ -288,9 +316,13 @@ export function createWorkspaceStore(storage?: StateStorage) {
           useBoardStore.getState().selectTicket(projectId, ticketId);
         },
 
-        openTicketSession(projectId, ticketId, tabId, paneId) {
+        openTicketWorkspace(projectId, ticketId, opts) {
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const tabId = opts?.tabId;
+            if (tabId === undefined) {
+              return patchWorkspace(state, projectId, { nav: "board", openTicketId: ticketId });
+            }
             const existing = current.ticketTabs[ticketId] ?? { files: [], active: DOC_TAB_ID };
             return patchWorkspace(state, projectId, {
               nav: "board",
@@ -302,6 +334,10 @@ export function createWorkspaceStore(storage?: StateStorage) {
             });
           });
           useBoardStore.getState().selectTicket(projectId, ticketId);
+        },
+
+        openTicketSession(projectId, ticketId, tabId, paneId) {
+          get().openTicketWorkspace(projectId, ticketId, { tabId });
           const sessions = useSessionsStore.getState();
           sessions.setActiveSession(ticketId, tabId);
           if (paneId !== undefined) sessions.setActivePane(ticketId, tabId, paneId);

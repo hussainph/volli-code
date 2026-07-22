@@ -132,10 +132,9 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
               keywords={[item.displayId, item.title, item.projectName]}
               onSelect={() => {
                 useProjectsStore.getState().select(item.projectId);
-                const workspace = useWorkspaceStore.getState();
-                workspace.setNav(item.projectId, "board");
-                workspace.openTicket(item.projectId, item.ticketId);
-                workspace.setTicketActiveTab(item.projectId, item.ticketId, "doc");
+                useWorkspaceStore
+                  .getState()
+                  .openTicketWorkspace(item.projectId, item.ticketId, { tabId: "doc" });
                 finishNavigation();
               }}
               className="flex cursor-pointer items-center gap-3 rounded-lg px-2.5 py-2 outline-none data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground"

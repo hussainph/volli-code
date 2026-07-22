@@ -126,8 +126,11 @@ export function TicketContextMenu({
     void resumeTicketSession(ticketScope(projectId, ticket.id), resumableSession.id).then(
       (sessionId) => {
         if (sessionId === null) return;
-        useWorkspaceStore.getState().openTicket(projectId, ticket.id);
-        useWorkspaceStore.getState().setTicketActiveTab(projectId, ticket.id, sessionId);
+        // Route through the nav-intent seam so the resumed tab is made visible
+        // from any nav — it switches to the Board, opens the ticket detail, and
+        // syncs the sessions store's active session — inheriting the nav→board
+        // fix instead of hand-rolling openTicket + setTicketActiveTab.
+        useWorkspaceStore.getState().openTicketSession(projectId, ticket.id, sessionId);
       },
     );
   };

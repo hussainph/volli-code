@@ -9,7 +9,7 @@ import {
 } from "@volli/shared";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
-import { type BoardGateway, createBoardStore } from "./board";
+import { type BoardGateway, createBoardStore, planningChangeAffects } from "./board";
 import { ticketScope, useSessionsStore } from "./sessions";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
@@ -1708,5 +1708,45 @@ describe("createBoardStore() with the default gateway", () => {
     await store.getState().loadArchived("p1");
 
     expect(listArchived).toHaveBeenCalledWith("p1");
+  });
+});
+
+describe("notePlanningChange", () => {
+  it("bumps the version monotonically and records the change scope", () => {
+    const store = createBoardStore();
+    expect(store.getState().lastPlanningChange).toEqual({
+      version: 0,
+      ticketId: null,
+      projectId: null,
+    });
+
+    store.getState().notePlanningChange({ ticketId: "t1", projectId: "p1" });
+    expect(store.getState().lastPlanningChange).toEqual({
+      version: 1,
+      ticketId: "t1",
+      projectId: "p1",
+    });
+
+    // A scopeless call is untargeted: version still climbs, scope resets to null.
+    store.getState().notePlanningChange();
+    expect(store.getState().lastPlanningChange).toEqual({
+      version: 2,
+      ticketId: null,
+      projectId: null,
+    });
+  });
+});
+
+describe("planningChangeAffects", () => {
+  it("refires for an untargeted change (the conservative recovery arm)", () => {
+    const change = { version: 3, ticketId: null, projectId: null };
+    expect(planningChangeAffects(change, "t1")).toBe(true);
+    expect(planningChangeAffects(change, "t2")).toBe(true);
+  });
+
+  it("refires only for the targeted ticket, skipping a change for another ticket", () => {
+    const change = { version: 4, ticketId: "t1", projectId: "p1" };
+    expect(planningChangeAffects(change, "t1")).toBe(true);
+    expect(planningChangeAffects(change, "t2")).toBe(false);
   });
 });

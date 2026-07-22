@@ -17,6 +17,13 @@ export { getWorktreeStatus } from "./status";
 export type { WorktreeStatusInput, WorktreeStatusReport } from "./status";
 export { diffStat } from "./diff";
 export type { DiffMode, DiffStatInput } from "./diff";
+
+// TicketId-in read verbs (CONCEPT #42): resolve ticket→identity, discriminate
+// no-worktree / stamped-but-deleted, then compose status.ts/diff.ts. The single
+// door both the IPC and CLI status/diff paths go through — never the shallow
+// pair directly — so the disk-existence contract can't drift between them again.
+export { readWorktreeStatus, readWorktreeDiff } from "./read";
+export type { WorktreeReadDeps, WorktreeStatusRead, WorktreeDiffRead } from "./read";
 export { commitRemaining } from "./commit";
 export type { CommitOutcome, CommitRemainingInput } from "./commit";
 export {
@@ -60,8 +67,14 @@ export type {
 // `ensure` resolves — hence the phase registry is part of the module's seam.
 export { setPhase, clearPhase } from "./phase";
 
-// Pure helpers the PTY wiring stage consumes for the sentinel-gated setup step.
+// Pure helpers the sentinel-gated setup step is built from.
 export { buildSetupSentinelLine, parseSetupSentinel } from "./setup";
+
+// The stateful sentinel-gated setup-command machine (§6): pty.ts drives it
+// through a narrow handle (feed output, notify exit) instead of owning the
+// tail-scan / phase-transition / worktree_failed(setup) emission inline.
+export { createSetupRun } from "./setup-run";
+export type { SetupRun, SetupRunDeps, SetupRunParams, SetupFeedResult } from "./setup-run";
 
 // The default git runner (captures stderr) — callers build `deps.git` from this.
 export { runGitCapturing, GitError } from "./git";

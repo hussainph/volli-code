@@ -135,8 +135,8 @@ export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPr
   }, [groups, boardSort]);
   const hidden =
     drag?.hiddenAtStart ??
-    // Derived straight from `groups` — the shared `emptyStatuses` helper would
-    // group (and sort) the same array a second time.
+    // Derived straight from `groups` — a separate helper would group (and
+    // sort) the same array a second time.
     TICKET_STATUSES.filter(
       (status) => groups[status].length === 0 && status !== expandedEmptyStatus,
     );

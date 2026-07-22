@@ -44,7 +44,7 @@ function fakeDeps(overrides: Partial<SubmitDeps> = {}): SubmitDeps {
   return {
     addTicket: vi.fn<SubmitDeps["addTicket"]>(async () => madeTicket()),
     startSession: vi.fn<SubmitDeps["startSession"]>(async () => "s1"),
-    openTicket: vi.fn<SubmitDeps["openTicket"]>(),
+    openTicketWorkspace: vi.fn<SubmitDeps["openTicketWorkspace"]>(),
     focusSession: vi.fn<SubmitDeps["focusSession"]>(),
     persistHarness: vi.fn<SubmitDeps["persistHarness"]>(),
     toastSuccess: vi.fn<SubmitDeps["toastSuccess"]>(),
@@ -106,7 +106,7 @@ describe("runKickoff", () => {
       "A ticket",
       expect.objectContaining({ body: "the body" }),
     );
-    expect(deps.openTicket).toHaveBeenCalledWith("p1", "tk");
+    expect(deps.openTicketWorkspace).toHaveBeenCalledWith("p1", "tk");
     expect(deps.startSession).toHaveBeenCalledWith("p1", "tk", {
       harnessId: "codex",
       prompt: "VC-42: A ticket\n\nthe body",
@@ -138,7 +138,7 @@ describe("runKickoff", () => {
     await runKickoff(fields(), deps, { createMore: true, harnessId: "claude-code" });
 
     expect(deps.startSession).toHaveBeenCalledWith("p1", "tk", expect.anything());
-    expect(deps.openTicket).not.toHaveBeenCalled();
+    expect(deps.openTicketWorkspace).not.toHaveBeenCalled();
     expect(deps.focusSession).not.toHaveBeenCalled();
   });
 
@@ -154,7 +154,7 @@ describe("runKickoff", () => {
     });
 
     expect(result).toEqual({ created: true });
-    expect(deps.openTicket).toHaveBeenCalledWith("p1", "tk");
+    expect(deps.openTicketWorkspace).toHaveBeenCalledWith("p1", "tk");
     // No session to focus — Doc stays active as the retry surface.
     expect(deps.focusSession).not.toHaveBeenCalled();
   });
@@ -169,7 +169,7 @@ describe("runKickoff", () => {
 
     expect(result).toEqual({ created: false });
     expect(deps.startSession).not.toHaveBeenCalled();
-    expect(deps.openTicket).not.toHaveBeenCalled();
+    expect(deps.openTicketWorkspace).not.toHaveBeenCalled();
     expect(deps.toastSuccess).not.toHaveBeenCalled();
   });
 });

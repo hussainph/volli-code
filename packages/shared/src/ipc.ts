@@ -415,9 +415,36 @@ export type VolliIpcEvent =
 /** Direction of a `volli:ui-zoom-command` event: step in/out one rung, or reset. */
 export type UiZoomCommand = "in" | "out" | "reset";
 
-/** Main→renderer invalidation after an agent-socket planning mutation. */
+/**
+ * A coarse hint at WHAT a {@link DataChangedEvent} touched — advisory only
+ * (diagnostics, possible future routing). Readers decide whether to refire from
+ * `ticketId`, never from this. Kept a small closed union so every producer names
+ * its change.
+ */
+export type DataChangeKind = "ticket" | "comment" | "session" | "worktree" | "retention";
+
+/**
+ * Main→renderer invalidation after a planning mutation that happened OUTSIDE the
+ * renderer's own request/response cycle (a socket-originated agent command, a
+ * session-lifecycle worktree boot, a worktree/retention side effect). The
+ * renderer always re-hydrates the board wholesale on receipt (cheap SQLite reads
+ * — the recovery guarantee); the optional scope only lets a per-ticket surface
+ * skip a refetch when the change PROVABLY targets a different ticket.
+ *
+ * An UNTARGETED payload — one with no `ticketId` — means "anything may have
+ * changed" and every reader must still react to it (the conservative arm). A
+ * targeted payload carries the affected `ticketId` (and, when the producer knows
+ * it, its `projectId`), so a reader watching that ticket refreshes promptly
+ * while readers for other tickets stand down.
+ */
 export interface DataChangedEvent {
   entity: "tickets";
+  /** The ticket the change targets; omitted for an untargeted (anything-changed) broadcast. */
+  ticketId?: string;
+  /** The project the change belongs to, when the producer knows it. */
+  projectId?: string;
+  /** Advisory hint at what changed — never the basis of a reader's refire decision. */
+  kind?: DataChangeKind;
 }
 
 /**

@@ -31,6 +31,19 @@ import {
   type NavKeyEvent,
   type NavSnapshot,
 } from "@renderer/lib/nav-history";
+
+/** Picks the fields {@link NavKeyEvent} needs off a live DOM `KeyboardEvent`. */
+function toNavKeyEvent(event: KeyboardEvent): NavKeyEvent {
+  return {
+    metaKey: event.metaKey,
+    ctrlKey: event.ctrlKey,
+    altKey: event.altKey,
+    shiftKey: event.shiftKey,
+    key: event.key,
+    code: event.code,
+    repeat: event.repeat,
+  };
+}
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
 import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
@@ -145,7 +158,7 @@ export function useNavHistory(): void {
 
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const nav = event as unknown as NavKeyEvent;
+      const nav = toNavKeyEvent(event);
       if (isNavBackKeyEvent(nav)) {
         if (isEditingTarget(event.target)) return;
         event.preventDefault();
@@ -164,7 +177,7 @@ export function useNavHistory(): void {
     // Capture phase: run before ui/sidebar.tsx's bubble-phase ⌘B listener and
     // halt the event so ⌥⌘B never doubles as a left-sidebar toggle.
     const onKeyDownCapture = (event: KeyboardEvent) => {
-      if (!isRailToggleKeyEvent(event as unknown as NavKeyEvent)) return;
+      if (!isRailToggleKeyEvent(toNavKeyEvent(event))) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       useUiStore.getState().toggleRailCollapsed();

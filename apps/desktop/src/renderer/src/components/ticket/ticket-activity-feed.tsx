@@ -50,10 +50,11 @@ import {
   describeEvent,
 } from "@renderer/components/ticket/activity";
 import { Markdown } from "@renderer/components/ticket/markdown";
+import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { relativeTime } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
-import { useBoardStore } from "@renderer/stores/board";
+import { planningChangeAffects, useBoardStore } from "@renderer/stores/board";
 import { writeThrough } from "@renderer/stores/mutate";
 
 type PhosphorIcon = typeof ChatCircleIcon;
@@ -365,12 +366,19 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
   const [comments, setComments] = React.useState<TicketComment[]>([]);
   const [loaded, setLoaded] = React.useState(false);
 
+  // Shared stale-guard for both reads below: a fast ticket switch (or a newer
+  // refresh) supersedes an in-flight fetch, so its late resolve drops itself
+  // rather than painting the wrong ticket's activity.
+  const activityFetch = useLatestAsync();
+
   const refetch = React.useCallback(async () => {
+    const token = activityFetch.claim();
     try {
       const [ev, cm] = await Promise.all([
         window.api.tickets.events({ ticketId }),
         window.api.comments.list({ ticketId }),
       ]);
+      if (!activityFetch.isCurrent(token)) return; // superseded — drop the stale result
       if (!ev.ok) {
         toastError(`Could not load activity: ${ev.error}`);
         return;
@@ -383,36 +391,50 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
       setComments(cm.comments);
       setLoaded(true);
     } catch (error) {
-      toastError(`Could not load activity: ${errorMessage(error)}`);
+      if (activityFetch.isCurrent(token))
+        toastError(`Could not load activity: ${errorMessage(error)}`);
     }
-  }, [ticketId]);
+  }, [ticketId, activityFetch]);
 
   // Comment edits and deletes record no ticket_event (per the comments-repo
   // contract), so they only need the comments re-read — not the whole event log
   // alongside it. Only a NEW comment (which the composer path handles) refetches
   // both.
   const refetchComments = React.useCallback(async () => {
+    const token = activityFetch.claim();
     try {
       const cm = await window.api.comments.list({ ticketId });
+      if (!activityFetch.isCurrent(token)) return; // superseded — drop the stale result
       if (!cm.ok) {
         toastError(`Could not load activity: ${cm.error}`);
         return;
       }
       setComments(cm.comments);
     } catch (error) {
-      toastError(`Could not load activity: ${errorMessage(error)}`);
+      if (activityFetch.isCurrent(token))
+        toastError(`Could not load activity: ${errorMessage(error)}`);
     }
-  }, [ticketId]);
+  }, [ticketId, activityFetch]);
 
-  // A socket-originated mutation (e.g. an agent's `volli ticket comment`)
-  // refreshes the planning stores and bumps this counter; refetch on every
-  // bump so the feed reflects agent activity without a close/reopen. The feed
-  // mounts only for the open ticket, so an unconditional refetch is cheap. The
-  // effect also fires once on mount (initial version), which is the first load.
-  const planningDataVersion = useBoardStore((state) => state.planningDataVersion);
+  // Initial load, and reload when the open ticket switches (refetch's identity
+  // tracks ticketId).
   React.useEffect(() => {
     void refetch();
-  }, [refetch, planningDataVersion]);
+  }, [refetch]);
+
+  // A socket-originated mutation (e.g. an agent's `volli ticket comment`)
+  // refreshes the planning stores and publishes the change's scope. Refetch only
+  // when it's untargeted or targets THIS ticket — a change for another ticket
+  // can't affect this feed. The seen-version ref skips the mount duplicate the
+  // effect above already covered.
+  const planningChange = useBoardStore((state) => state.lastPlanningChange);
+  const seenPlanningVersion = React.useRef(planningChange.version);
+  React.useEffect(() => {
+    if (planningChange.version === seenPlanningVersion.current) return;
+    seenPlanningVersion.current = planningChange.version;
+    if (!planningChangeAffects(planningChange, ticketId)) return;
+    void refetch();
+  }, [planningChange, ticketId, refetch]);
 
   // Post a comment: append an optimistic row immediately, then either refetch
   // the authoritative feed (success — the temp row is replaced) or roll the
