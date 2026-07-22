@@ -57,6 +57,15 @@ describe("describeEvent", () => {
       describeEvent({ kind: "session_started", sessionId: "s1", title: "fix", harnessId: "codex" }),
     ).toBe("started session fix");
     expect(describeEvent({ kind: "session_ended", sessionId: "s1" })).toBe("ended a session");
+    expect(describeEvent({ kind: "sessions_interrupted", sessionIds: ["s1"] })).toBe(
+      "interrupted a session",
+    );
+    expect(describeEvent({ kind: "sessions_interrupted", sessionIds: ["s1", "s2", "s3"] })).toBe(
+      "interrupted 3 sessions",
+    );
+    expect(
+      describeEvent({ kind: "session_resumed", sessionId: "s2", previousSessionId: "s1" }),
+    ).toBe("resumed an earlier session");
   });
 
   it("returns null for a commented event (rendered as its comment instead)", () => {
@@ -204,6 +213,8 @@ describe("EVENT_KIND_PRIORITY", () => {
       "archived",
       "unarchived",
       "session_signal",
+      "sessions_interrupted",
+      "session_resumed",
       "body_edited",
     ];
     expect(EVENT_KIND_PRIORITY).toEqual(expected);

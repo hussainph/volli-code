@@ -73,6 +73,8 @@ export const EVENT_KIND_PRIORITY: readonly TicketEventKind[] = [
   "archived",
   "unarchived",
   "session_signal",
+  "sessions_interrupted",
+  "session_resumed",
   "body_edited",
 ];
 
@@ -228,6 +230,14 @@ export function describeEvent(payload: TicketEventPayload): string | null {
       return payload.reason === null
         ? `reported ${payload.signal}`
         : `reported ${payload.signal}: ${payload.reason}`;
+    case "sessions_interrupted":
+      return payload.sessionIds.length === 1
+        ? "interrupted a session"
+        : `interrupted ${payload.sessionIds.length} sessions`;
+    case "session_resumed":
+      // "earlier", not "interrupted" — resume works for any ENDED agent
+      // session (exited on its own, closed by the user), not only Esc'd ones.
+      return "resumed an earlier session";
     case "commented":
       return null;
     case "attachment_added":

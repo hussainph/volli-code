@@ -584,6 +584,100 @@ describe("archived-ticket guards — ticket-update/set-priority/set-labels/move"
   });
 });
 
+describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
+  /** Re-registers the data handlers with a stubbed interrupt seam returning `ids`. */
+  function withInterrupt(ids: string[]) {
+    const interruptTicketSessions = vi.fn((_ticketId: string) => ids);
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { interruptTicketSessions });
+    return interruptTicketSessions;
+  }
+
+  function move(projectId: string, ticketId: string, toStatus: string): TicketsResult {
+    return invoke<TicketsResult>("volli:ticket-move", {
+      projectId,
+      ticketId,
+      toStatus,
+      toIndex: 0,
+    });
+  }
+
+  function interruptedEvent(ticketId: string) {
+    const events = invoke<TicketEventsResult>("volli:ticket-events", { ticketId });
+    if (!events.ok) throw new Error("expected events");
+    return events.events.find((event) => event.payload.kind === "sessions_interrupted");
+  }
+
+  it("interrupts the ticket's agent sessions and records sessions_interrupted on a doing→todo move", () => {
+    const interrupt = withInterrupt(["s1", "s2"]);
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    move(projectId, ticket.id, "doing");
+    interrupt.mockClear();
+
+    const result = move(projectId, ticket.id, "todo");
+
+    expect(result.ok).toBe(true);
+    expect(interrupt).toHaveBeenCalledExactlyOnceWith(ticket.id);
+    const event = interruptedEvent(ticket.id);
+    expect(event?.payload).toEqual({ kind: "sessions_interrupted", sessionIds: ["s1", "s2"] });
+    expect(event?.actor).toBe("user");
+  });
+
+  it("interrupts on a needs_review→done move (completion still exits the active columns)", () => {
+    const interrupt = withInterrupt(["s1"]);
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    move(projectId, ticket.id, "doing");
+    move(projectId, ticket.id, "needs_review");
+    interrupt.mockClear();
+
+    move(projectId, ticket.id, "done");
+
+    expect(interrupt).toHaveBeenCalledExactlyOnceWith(ticket.id);
+    expect(interruptedEvent(ticket.id)).toBeDefined();
+  });
+
+  it("does not interrupt a doing→needs_review move (still an active column)", () => {
+    const interrupt = withInterrupt(["s1"]);
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    move(projectId, ticket.id, "doing");
+    interrupt.mockClear();
+
+    move(projectId, ticket.id, "needs_review");
+
+    expect(interrupt).not.toHaveBeenCalled();
+    expect(interruptedEvent(ticket.id)).toBeUndefined();
+  });
+
+  it("does not interrupt a todo→backlog move (never was an active column)", () => {
+    const interrupt = withInterrupt(["s1"]);
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    move(projectId, ticket.id, "todo");
+    interrupt.mockClear();
+
+    move(projectId, ticket.id, "backlog");
+
+    expect(interrupt).not.toHaveBeenCalled();
+    expect(interruptedEvent(ticket.id)).toBeUndefined();
+  });
+
+  it("records nothing when the interrupt finds no live agent sessions", () => {
+    const interrupt = withInterrupt([]);
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    move(projectId, ticket.id, "doing");
+    interrupt.mockClear();
+
+    move(projectId, ticket.id, "todo");
+
+    expect(interrupt).toHaveBeenCalledExactlyOnceWith(ticket.id);
+    expect(interruptedEvent(ticket.id)).toBeUndefined();
+  });
+});
+
 describe("volli:ticket-events", () => {
   it("rejects a non-object payload", () => {
     expect(invoke<TicketEventsResult>("volli:ticket-events", "nope")).toEqual({

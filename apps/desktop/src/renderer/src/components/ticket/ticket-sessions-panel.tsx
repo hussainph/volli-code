@@ -1,4 +1,5 @@
 import * as React from "react";
+import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
@@ -6,6 +7,7 @@ import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindo
 import { errorMessage, type SessionRecord } from "@volli/shared";
 
 import { InlineRename } from "@renderer/components/sessions/inline-rename";
+import { resumeTicketSession } from "@renderer/components/sessions/session-create";
 import { Button } from "@renderer/components/ui/button";
 import {
   ContextMenu,
@@ -16,6 +18,7 @@ import {
 import { Input } from "@renderer/components/ui/input";
 import { RailDrawer } from "@renderer/components/ticket/rail-drawer";
 import {
+  canResumeSession,
   filterSessionHistory,
   groupSessionRows,
   sessionSourceLabel,
@@ -25,9 +28,19 @@ import {
 import { relativeTime } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
-import { sessionActivityState, sessionPanes, useSessionsStore } from "@renderer/stores/sessions";
+import {
+  sessionActivityState,
+  sessionPanes,
+  ticketScope,
+  useSessionsStore,
+} from "@renderer/stores/sessions";
+import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { phaseFor, useWorktreeStore } from "@renderer/stores/worktree";
 import { renameTerminalSession } from "@renderer/terminal/session-lifecycle";
+
+/** Stable empty list so the records selector never returns a fresh reference
+ *  (and re-renders the panel) on unrelated store updates while the cache is cold. */
+const NO_RECORDS: SessionRecord[] = [];
 
 const STATUS_LABEL: Record<TicketSessionStatus, string> = {
   working: "Working",
@@ -68,6 +81,7 @@ function SessionRow({
   onStartRename,
   onCommitRename,
   onCancelRename,
+  onResume,
 }: {
   record: SessionRecord;
   /** The live tab title when open (so optimistic renames show), else the durable record title. */
@@ -80,6 +94,8 @@ function SessionRow({
   onStartRename(): void;
   onCommitRename(next: string): void;
   onCancelRename(): void;
+  /** Present only for resumable history rows (interrupt/resume, issue #78). */
+  onResume?(): void;
 }) {
   const titleNode = editing ? (
     <InlineRename
@@ -134,6 +150,11 @@ function SessionRow({
       <ContextMenu>
         <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
         <ContextMenuContent>
+          {onResume !== undefined ? (
+            <ContextMenuItem icon={ArrowClockwiseIcon} onSelect={onResume}>
+              Resume
+            </ContextMenuItem>
+          ) : null}
           <ContextMenuItem icon={PencilSimpleIcon} onSelect={onStartRename}>
             Rename
           </ContextMenuItem>
@@ -153,6 +174,7 @@ function SessionList({
   setActivePane,
   onActivateSession,
   onCommitRename,
+  onResumeSession,
 }: {
   rows: readonly TicketSessionRow[];
   /** Current rows trail with live status; history rows trail with when they ended. */
@@ -164,6 +186,7 @@ function SessionList({
   setActivePane(ownerId: string, tabId: string, paneId: string): void;
   onActivateSession(sessionId: string): void;
   onCommitRename(record: SessionRecord, isRoot: boolean, next: string): void;
+  onResumeSession(record: SessionRecord): void;
 }) {
   return (
     <ul className="flex flex-col gap-1">
@@ -193,6 +216,11 @@ function SessionList({
           onStartRename={() => setEditingId(record.id)}
           onCommitRename={(next) => onCommitRename(record, isRoot, next)}
           onCancelRename={() => setEditingId(null)}
+          onResume={
+            variant === "history" && canResumeSession(record)
+              ? () => onResumeSession(record)
+              : undefined
+          }
         />
       ))}
     </ul>
@@ -230,7 +258,13 @@ export function TicketSessionsPanel({
   // "New session" the same way an in-flight `starting[ticketId]` create does)
   // rather than inventing a second loading state.
   const effectiveCreating = creating || worktreePhase === "creating" || worktreePhase === "copying";
-  const [records, setRecords] = React.useState<SessionRecord[]>([]);
+  // The durable list is a shared cache (stores/ticket-session-records.ts), not
+  // local state: the exited-pane resume overlay reads the exact same cache
+  // (it can't invent a second `listForTicket` fetch — see session-split-layout.tsx),
+  // and SessionsLayer's exit handler refreshes it directly so a just-ended
+  // session's `endedAt`/resumability lands here without this panel needing to
+  // be the one to notice the exit.
+  const records = useTicketSessionRecordsStore((state) => state.byTicket[ticketId] ?? NO_RECORDS);
   const [now, setNow] = React.useState(() => Date.now());
   const [editingId, setEditingId] = React.useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = React.useState(false);
@@ -249,18 +283,10 @@ export function TicketSessionsPanel({
     .join(",");
   const hasLive = tabs.length > 0;
 
-  const refresh = React.useCallback(async () => {
-    try {
-      const result = await window.api.sessions.listForTicket({ ticketId });
-      if (!result.ok) {
-        toastError(`Could not load sessions: ${result.error}`);
-        return;
-      }
-      setRecords(result.sessions);
-    } catch (error) {
-      toastError(`Could not load sessions: ${errorMessage(error)}`);
-    }
-  }, [ticketId]);
+  const refresh = React.useCallback(
+    () => useTicketSessionRecordsStore.getState().refresh(ticketId),
+    [ticketId],
+  );
 
   React.useEffect(() => {
     void refresh();
@@ -297,7 +323,7 @@ export function TicketSessionsPanel({
     setEditingId(null);
     const trimmed = next.trim();
     if (trimmed.length === 0 || trimmed === record.title) return;
-    setRecords((rows) => rows.map((r) => (r.id === record.id ? { ...r, title: trimmed } : r)));
+    useTicketSessionRecordsStore.getState().renameLocally(ticketId, record.id, trimmed);
     if (isRoot) {
       renameTerminalSession(record.id, trimmed);
       return;
@@ -314,6 +340,18 @@ export function TicketSessionsPanel({
         toastError(`Rename failed: ${errorMessage(error)}`);
         void refresh();
       });
+  };
+
+  // The shared boot pipeline (session-create.ts) — starting-flag guard, engine
+  // pre-create, structured-error toast — same as "New session", just with a
+  // resume intent instead of a fresh kickoff. Lands as a NEW tab; the ended
+  // record's own row stays put in History.
+  const handleResume = (record: SessionRecord) => {
+    void resumeTicketSession(ticketScope(record.projectId, ticketId), record.id).then(
+      (sessionId) => {
+        if (sessionId !== null) onActivateSession(sessionId);
+      },
+    );
   };
 
   const rows: TicketSessionRow[] = records.map((record) => {
@@ -349,6 +387,7 @@ export function TicketSessionsPanel({
     setActivePane,
     onActivateSession,
     onCommitRename: commitRename,
+    onResumeSession: handleResume,
   };
 
   return (

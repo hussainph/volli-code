@@ -33,12 +33,23 @@ export interface SessionKickoff {
   prompt: string;
 }
 
+/**
+ * The resume intent for a ticket session's boot (interrupt/resume, issue
+ * #78): `sessionId` names the ENDED session whose durable record (harness +
+ * harness session id) main resolves into a resume command, run in that
+ * ticket's existing worktree cwd. Mutually exclusive with {@link SessionKickoff}.
+ */
+export interface SessionResume {
+  sessionId: string;
+}
+
 /** The main-process create request derived from a scope (ticket scopes carry env-injection intent). */
 function createRequest(
   scope: SessionScope,
   projectPath: string,
   placement: "tab" | "split",
   kickoff?: SessionKickoff,
+  resume?: SessionResume,
 ) {
   return {
     workspaceId: scope.projectId,
@@ -47,7 +58,13 @@ function createRequest(
     rows: INITIAL_ROWS,
     placement,
     ...(scope.kind === "ticket"
-      ? { ticket: { ticketId: scope.ticketId, ...(kickoff ? { kickoff } : {}) } }
+      ? {
+          ticket: {
+            ticketId: scope.ticketId,
+            ...(kickoff ? { kickoff } : {}),
+            ...(resume ? { resume } : {}),
+          },
+        }
       : {}),
   };
 }
@@ -80,7 +97,9 @@ function abandon(sessionId: string): void {
  * once. `land` performs the surface-specific placement against FRESH store
  * state and returns whether it landed (false ⇒ the tab/source pane vanished
  * mid-flight, so abandon the orphaned PTY). `verb` fills `Could not ${verb}:`.
- * Resolves the booted sessionId, or null on any guard/failure.
+ * `kickoff`/`resume` are mutually exclusive launch intents (only ticket
+ * scopes ever pass either). Resolves the booted sessionId, or null on any
+ * guard/failure.
  */
 async function bootSession(
   scope: SessionScope,
@@ -88,6 +107,7 @@ async function bootSession(
   verb: string,
   land: (sessionId: string, title: string) => boolean,
   kickoff?: SessionKickoff,
+  resume?: SessionResume,
 ): Promise<string | null> {
   const store = useSessionsStore.getState();
   const id = ownerKey(scope);
@@ -98,7 +118,7 @@ async function bootSession(
   store.setStarting(id, true);
   try {
     const result = await window.api.terminal.create(
-      createRequest(scope, project.path, placement, kickoff),
+      createRequest(scope, project.path, placement, kickoff, resume),
     );
     if (!result.ok) {
       toastError(`Could not ${verb}: ${result.error}`);
@@ -142,6 +162,40 @@ export async function createTerminalSession(
       return true;
     },
     kickoff,
+  );
+}
+
+/**
+ * Boot a resumed session as a fresh tab (interrupt/resume, issue #78): the
+ * exact same boot pipeline as {@link createTerminalSession} — starting-flag
+ * guard, engine pre-create, stale-owner abandon, structured-error toast — but
+ * main resolves the harness's resume command from `resumeOfSessionId`'s own
+ * durable record instead of a fresh kickoff prompt, and runs it in the
+ * ticket's existing worktree. `scope` is typed as the general {@link SessionScope}
+ * (matching `createTerminalSession`'s own convention — callers pass whatever
+ * `ticketScope()`/a live tab's `.scope` hands them) but is only ever called
+ * with a ticket scope in practice: resume has no scratch-session meaning, and
+ * a scratch `ticketId`-less ticket object passed to main's IPC layer would
+ * simply omit the `ticket` field, so nothing resumes. The resumed session
+ * lands as a NEW tab; the ended session's own pane/scrollback is left
+ * untouched. Every one of the rail, exited-pane overlay, and ticket context
+ * menu resume affordances call only this — no surface talks to
+ * `window.api.terminal.create` directly.
+ */
+export async function resumeTicketSession(
+  scope: SessionScope,
+  resumeOfSessionId: string,
+): Promise<string | null> {
+  return bootSession(
+    scope,
+    "tab",
+    "resume session",
+    (sessionId, title) => {
+      useSessionsStore.getState().addSession(scope, sessionId, title);
+      return true;
+    },
+    undefined,
+    { sessionId: resumeOfSessionId },
   );
 }
 

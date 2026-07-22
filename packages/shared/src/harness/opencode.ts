@@ -6,6 +6,8 @@ export const opencodeAdapter: HarnessAdapter = {
   command: "opencode",
   promptFlag: "--prompt",
   detection: { executable: "opencode" },
+  resumeIdArgs: ["--session"],
+  resumeLatestArgs: ["--continue"],
   installActions(home) {
     return [
       {

@@ -5,8 +5,10 @@
  * Node/Electron/DOM imports (package rule) — main injects the built command
  * line into the PTY (`src/main/pty.ts`).
  */
+import { isHarnessId } from "./ticket";
 import type { HarnessId } from "./ticket";
 import { getHarnessAdapter } from "./harness/core";
+import { GENERIC_RESUME_METADATA } from "./harness/generic";
 
 /**
  * Wraps `input` as a single POSIX single-quoted zsh word so every shell
@@ -102,6 +104,37 @@ export function composeAttachmentsSection(input: {
     }
   }
   return lines.join("\n");
+}
+
+/**
+ * The command line to resume a harness's prior session (interrupt/resume,
+ * issue #78): the same shell-quoting {@link shellSingleQuote} applies to
+ * prompts applies to the session id here.
+ *
+ * Fallback chain:
+ * 1. `harnessSessionId` is known AND the harness has by-id resume support
+ *    (`resumeIdArgs`) → `<command> <resumeIdArgs...> <quoted-id>`.
+ * 2. Otherwise, the harness has "resume latest in cwd" support
+ *    (`resumeLatestArgs`) → `<command> <resumeLatestArgs...>`.
+ * 3. Otherwise (a custom/undetected harness id, or a first-class harness
+ *    missing both) → `null` — the caller falls back to a fresh launch.
+ */
+export function buildHarnessResumeCommand(
+  harnessId: HarnessId | string,
+  harnessSessionId: string | null,
+): string | null {
+  const adapter = isHarnessId(harnessId) ? getHarnessAdapter(harnessId) : null;
+  const command = adapter?.command ?? null;
+  const resumeIdArgs = adapter?.resumeIdArgs ?? GENERIC_RESUME_METADATA.resumeIdArgs;
+  const resumeLatestArgs = adapter?.resumeLatestArgs ?? GENERIC_RESUME_METADATA.resumeLatestArgs;
+
+  if (command && harnessSessionId && resumeIdArgs) {
+    return [command, ...resumeIdArgs, shellSingleQuote(harnessSessionId)].join(" ");
+  }
+  if (command && resumeLatestArgs) {
+    return [command, ...resumeLatestArgs].join(" ");
+  }
+  return null;
 }
 
 /**

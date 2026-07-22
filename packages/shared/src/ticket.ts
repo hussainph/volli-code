@@ -24,6 +24,35 @@ export function isTicketStatus(value: unknown): value is TicketStatus {
   return typeof value === "string" && (TICKET_STATUSES as readonly string[]).includes(value);
 }
 
+/**
+ * Columns where a ticket is actively worked by a live agent session
+ * (interrupt/resume, issue #78). A ticket is "active" from the moment it
+ * enters Doing until it leaves Needs Review — Backlog/Todo haven't started
+ * and Done is finished.
+ */
+export const ACTIVE_TICKET_STATUSES = [
+  "doing",
+  "needs_review",
+] as const satisfies readonly TicketStatus[];
+
+export type ActiveTicketStatus = (typeof ACTIVE_TICKET_STATUSES)[number];
+
+/** Whether `status` is one of the {@link ACTIVE_TICKET_STATUSES}. */
+export function isActiveTicketStatus(status: TicketStatus): status is ActiveTicketStatus {
+  return (ACTIVE_TICKET_STATUSES as readonly TicketStatus[]).includes(status);
+}
+
+/**
+ * Whether a move from `from` to `to` exits the active columns (issue #78,
+ * CONCEPT decision #20): true for any move that starts active and lands
+ * somewhere inactive — including `doing`/`needs_review` → `done`, which is a
+ * completion, not a "still working" transition. False when the ticket stays
+ * active (`doing` ⇄ `needs_review`) or never was active to begin with.
+ */
+export function leavesActiveColumns(from: TicketStatus, to: TicketStatus): boolean {
+  return isActiveTicketStatus(from) && !isActiveTicketStatus(to);
+}
+
 export const TICKET_PRIORITIES = ["low", "medium", "high"] as const;
 
 export type TicketPriority = (typeof TICKET_PRIORITIES)[number];

@@ -37,7 +37,7 @@ import { listTicketEvents, recordTicketEvent } from "./db/events-repo";
 import { listComments } from "./db/comments-repo";
 import { listAllLabels } from "./db/labels-repo";
 import { listProjects } from "./db/projects-repo";
-import { getSession, listSessions } from "./db/sessions-repo";
+import { getSession, listSessions, setHarnessSessionId } from "./db/sessions-repo";
 import { getTicket, listArchivedTicketsByProject, listTicketsByProject } from "./db/tickets-repo";
 import { diffStat, getWorktreeStatus, runGitCapturing } from "./worktree";
 import type { DiffMode, RunGit } from "./worktree";
@@ -46,6 +46,7 @@ import {
   archiveTicketCommand,
   createTicketCommand,
   createTicketCommentCommand,
+  interruptOnBackwardMove,
   moveTicketCommand,
   setTicketLabelsCommand,
   setTicketPriorityCommand,
@@ -76,6 +77,14 @@ export interface AgentCommandServiceOptions {
     lines: number,
   ) => { status: SessionActivityState; output: string } | undefined;
   notify?: (title: string, message: string) => void;
+  /**
+   * Interrupts every live agent session of a ticket, returning their ids (from
+   * the PtyManager). The socket-side backward-move choke point (issue #78):
+   * after a `ticket.move` that leaves the active columns commits, its ticket's
+   * running agents are Esc'd and one `sessions_interrupted` event is recorded.
+   * Absent (tests) means the interrupt is a no-op.
+   */
+  interruptTicketSessions?: (ticketId: string) => string[];
 }
 
 export interface AgentCommandService {
@@ -829,6 +838,37 @@ export function createAgentCommandService(
           },
         };
       }
+      if (request.cmd === "session.link") {
+        // The harness reports its OWN resume/session UUID for the current Volli
+        // session (interrupt/resume seed, issue #78/CONCEPT #21) — driven off
+        // VOLLI_SESSION exactly like session.done, and typically wired to the
+        // harness's session-start hook rather than run by hand.
+        const sessionId = request.ctx.env.session;
+        if (!sessionId) {
+          return failure("CONTEXT_REQUIRED", "session link requires VOLLI_SESSION context.");
+        }
+        const session = getSession(options.db, sessionId);
+        if (!session) return failure("SESSION_NOT_FOUND", `No session matches ${sessionId}.`);
+        const idValue = request.args["id"];
+        if (typeof idValue !== "string") {
+          return failure("INVALID_REQUEST", "session link requires a harness session id.");
+        }
+        const harnessSessionId = idValue.trim();
+        if (harnessSessionId.length === 0) {
+          return failure("INVALID_REQUEST", "The harness session id must not be empty.");
+        }
+        if (harnessSessionId.length > 200) {
+          return failure("INVALID_REQUEST", "The harness session id is too long (max 200 chars).");
+        }
+        // Idempotent overwrite — a later link wins, so a re-run (or a harness that
+        // rotates its id mid-session) always leaves the newest resume seed.
+        setHarnessSessionId(options.db, session.id, harnessSessionId);
+        return {
+          v: 1,
+          ok: true,
+          data: { session: shortSessionId(session.id), harnessSessionId },
+        };
+      }
       if (request.cmd === "ticket.list") {
         const resolved = projectForCreate(options.db, projects, request);
         if (!resolved.ok) return resolved.response;
@@ -1111,6 +1151,19 @@ export function createAgentCommandService(
             { now: movedAt, actor: actor.actor },
           );
           const ticket = moved.find(({ id }) => id === resolved.ticket.id)!;
+          // Backward-move interrupt (issue #78): the move committed above, so the
+          // interrupt runs as its side effect. `resolved.ticket.status` is the
+          // pre-move status (same-column no-ops already returned above).
+          interruptOnBackwardMove(
+            options.db,
+            {
+              ticketId: resolved.ticket.id,
+              fromStatus: resolved.ticket.status,
+              toStatus: to,
+            },
+            { now: movedAt, actor: actor.actor },
+            options.interruptTicketSessions,
+          );
           // Guardrail is visibility, not caps (decision 2): an agent- or
           // automation-initiated entry into Doing fires a native notification.
           // A plain CLI move (no session env → user actor, "the door not the

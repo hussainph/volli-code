@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { SessionRecord } from "@volli/shared";
+import type { HarnessId, SessionRecord } from "@volli/shared";
 
 import {
+  canResumeSession,
   filterSessionHistory,
   groupSessionRows,
+  latestResumableSession,
   sessionSourceLabel,
   type TicketSessionRow,
 } from "./session-history";
@@ -72,6 +74,75 @@ describe("groupSessionRows", () => {
       current: [working, parked],
       history: [openExited, closed],
     });
+  });
+});
+
+describe("canResumeSession", () => {
+  it("is false for a still-live agent session — nothing has ended to resume into", () => {
+    expect(canResumeSession(record({ launchKind: "agent", endedAt: null }))).toBe(false);
+  });
+
+  it("is false for a bare shell, whether live or ended", () => {
+    expect(canResumeSession(record({ launchKind: "shell", endedAt: null }))).toBe(false);
+    expect(canResumeSession(record({ launchKind: "shell", endedAt: 10 }))).toBe(false);
+  });
+
+  it("is false for an ended session whose harness has no known resume support", () => {
+    expect(
+      canResumeSession(
+        record({ launchKind: "agent", endedAt: 10, harnessId: "my-custom-harness" as HarnessId }),
+      ),
+    ).toBe(false);
+  });
+
+  it("is true for an ended Claude Code agent session", () => {
+    expect(
+      canResumeSession(
+        record({
+          launchKind: "agent",
+          endedAt: 10,
+          harnessId: "claude-code",
+          harnessSessionId: null,
+        }),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("latestResumableSession", () => {
+  it("returns null when no record qualifies", () => {
+    expect(
+      latestResumableSession([
+        record({ id: "live", launchKind: "agent", endedAt: null }),
+        record({ id: "shell", launchKind: "shell", endedAt: 10 }),
+      ]),
+    ).toBeNull();
+  });
+
+  it("picks the newest resumable record regardless of input order", () => {
+    const older = record({
+      id: "older",
+      launchKind: "agent",
+      harnessId: "claude-code",
+      createdAt: 10,
+      endedAt: 20,
+    });
+    const newer = record({
+      id: "newer",
+      launchKind: "agent",
+      harnessId: "codex",
+      createdAt: 30,
+      endedAt: 40,
+    });
+    const unresumableNewest = record({
+      id: "unresumable",
+      launchKind: "shell",
+      createdAt: 99,
+      endedAt: 100,
+    });
+
+    expect(latestResumableSession([unresumableNewest, older, newer])).toEqual(newer);
+    expect(latestResumableSession([newer, unresumableNewest, older])).toEqual(newer);
   });
 });
 

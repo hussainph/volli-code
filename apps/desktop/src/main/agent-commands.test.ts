@@ -8,7 +8,7 @@ import type { AgentRequest } from "@volli/shared";
 
 import { createAttachment } from "./db/attachments-repo";
 import { insertProject } from "./db/projects-repo";
-import { insertSession } from "./db/sessions-repo";
+import { getSession, insertSession } from "./db/sessions-repo";
 import { openTestDb, testProject, testSession } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 import { createAgentCommandService } from "./agent-commands";
@@ -18,6 +18,19 @@ import { scriptedGit } from "./worktree/scripted-git";
 let ctx: TestDb;
 
 afterEach(() => ctx.cleanup());
+
+/** The `sessions_interrupted` event payload for VC-1, if the backward move recorded one. */
+async function interruptedEventPayload(
+  exec: (cmd: AgentRequest["cmd"], args: Record<string, unknown>) => Promise<unknown>,
+): Promise<{ kind: string; sessionIds?: string[] } | undefined> {
+  const events = (await exec("ticket.events", { id: "VC-1", limit: 10 })) as {
+    ok: boolean;
+    data: { events: { payload: { kind: string; sessionIds?: string[] } }[] };
+  };
+  return events.data.events
+    .map((event) => event.payload)
+    .find((p) => p.kind === "sessions_interrupted");
+}
 
 describe("agent command service", () => {
   it("creates a ticket through display-id-only input and output", async () => {
@@ -313,6 +326,87 @@ describe("agent command service", () => {
     await exec("ticket.move", { id: "VC-1", to: "doing" }, orchestrator);
 
     expect(notifications).toEqual([{ title: "VC-1 → Doing", message: "Moved via VC-2's session" }]);
+  });
+
+  describe("ticket.move backward-move interrupt (issue #78)", () => {
+    /** Builds a service whose interrupt seam records its calls and returns `ids`. */
+    function serviceWithInterrupt(ids: string[]) {
+      ctx = openTestDb();
+      insertProject(
+        ctx.db,
+        testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+      );
+      let id = 0;
+      let timestamp = 100;
+      const interruptedTickets: string[] = [];
+      const service = createAgentCommandService({
+        db: ctx.db,
+        appVersion: "1.2.3",
+        now: () => timestamp++,
+        newId: () => `ticket-${++id}`,
+        interruptTicketSessions: (ticketId) => {
+          interruptedTickets.push(ticketId);
+          return ids;
+        },
+      });
+      const exec = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
+        service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: {} } });
+      return { exec, interruptedTickets };
+    }
+
+    it("interrupts and records sessions_interrupted on a doing→todo move", async () => {
+      const { exec, interruptedTickets } = serviceWithInterrupt(["s1", "s2"]);
+      await exec("ticket.create", { title: "T", status: "doing" });
+
+      const moved = await exec("ticket.move", { id: "VC-1", to: "todo" });
+
+      expect((moved as { ok: boolean }).ok).toBe(true);
+      expect(interruptedTickets).toEqual(["ticket-1"]);
+      expect(await interruptedEventPayload(exec)).toEqual({
+        kind: "sessions_interrupted",
+        sessionIds: ["s1", "s2"],
+      });
+    });
+
+    it("interrupts on a needs_review→done move", async () => {
+      const { exec, interruptedTickets } = serviceWithInterrupt(["s1"]);
+      await exec("ticket.create", { title: "T", status: "needs_review" });
+
+      await exec("ticket.move", { id: "VC-1", to: "done" });
+
+      expect(interruptedTickets).toEqual(["ticket-1"]);
+      expect(await interruptedEventPayload(exec)).toBeDefined();
+    });
+
+    it("does not interrupt a doing→needs_review move (still active)", async () => {
+      const { exec, interruptedTickets } = serviceWithInterrupt(["s1"]);
+      await exec("ticket.create", { title: "T", status: "doing" });
+
+      await exec("ticket.move", { id: "VC-1", to: "needs_review" });
+
+      expect(interruptedTickets).toEqual([]);
+      expect(await interruptedEventPayload(exec)).toBeUndefined();
+    });
+
+    it("does not interrupt a todo→backlog move (never active)", async () => {
+      const { exec, interruptedTickets } = serviceWithInterrupt(["s1"]);
+      await exec("ticket.create", { title: "T", status: "todo" });
+
+      await exec("ticket.move", { id: "VC-1", to: "backlog" });
+
+      expect(interruptedTickets).toEqual([]);
+      expect(await interruptedEventPayload(exec)).toBeUndefined();
+    });
+
+    it("records nothing when the interrupt finds no live agent sessions", async () => {
+      const { exec, interruptedTickets } = serviceWithInterrupt([]);
+      await exec("ticket.create", { title: "T", status: "doing" });
+
+      await exec("ticket.move", { id: "VC-1", to: "todo" });
+
+      expect(interruptedTickets).toEqual(["ticket-1"]);
+      expect(await interruptedEventPayload(exec)).toBeUndefined();
+    });
   });
 
   it("identifies the project, ticket, and short session from the injected environment", async () => {
@@ -1199,6 +1293,62 @@ describe("agent command service", () => {
       data: { session: "abcdef12", signal: "done", reason: null, recorded: false },
     });
     expect(missing).toMatchObject({ ok: false, error: { code: "CONTEXT_REQUIRED" } });
+  });
+
+  describe("session.link (issue #78)", () => {
+    const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
+
+    function linkService() {
+      ctx = openTestDb();
+      insertProject(
+        ctx.db,
+        testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+      );
+      insertSession(ctx.db, testSession("project-one", null, { id: sessionId }));
+      const service = createAgentCommandService({ db: ctx.db, appVersion: "1.2.3" });
+      const link = (id: unknown, session: string | null = sessionId) =>
+        service.execute({
+          v: 1,
+          cmd: "session.link",
+          args: { id },
+          ctx: { cwd: "/repo/volli", env: session ? { session } : {} },
+        });
+      return { link };
+    }
+
+    it("persists the harness session id (trimmed) and lets a later link overwrite it", async () => {
+      const { link } = linkService();
+
+      const first = await link("  first-uuid  ");
+      expect(first).toEqual({
+        v: 1,
+        ok: true,
+        data: { session: "abcdef12", harnessSessionId: "first-uuid" },
+      });
+      expect(getSession(ctx.db, sessionId)?.harnessSessionId).toBe("first-uuid");
+
+      await link("second-uuid");
+      expect(getSession(ctx.db, sessionId)?.harnessSessionId).toBe("second-uuid");
+    });
+
+    it("requires VOLLI_SESSION context (same wording style as session.done)", async () => {
+      const { link } = linkService();
+      const noContext = await link("some-uuid", null);
+      expect(noContext).toMatchObject({
+        ok: false,
+        error: {
+          code: "CONTEXT_REQUIRED",
+          message: "session link requires VOLLI_SESSION context.",
+        },
+      });
+    });
+
+    it("rejects an empty/whitespace id", async () => {
+      const { link } = linkService();
+      const empty = await link("   ");
+      expect(empty).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+      expect(getSession(ctx.db, sessionId)?.harnessSessionId).toBeNull();
+    });
   });
 
   // ---- worktree.status / worktree.diff (issue #80) ------------------------

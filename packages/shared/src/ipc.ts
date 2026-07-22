@@ -102,6 +102,11 @@ export type VolliIpcEvent =
   | "volli:terminal-park-state"
   | "volli:ghostty-config-changed"
   | "volli:data-changed"
+  // Backward-move interrupt announcement (issue #78, CONCEPT #20): fired after
+  // a ticket move out of the active columns actually Esc'd live agent sessions,
+  // so every window can surface the automated de-escalation where the mover is
+  // looking (a toast with a jump-to-ticket action) — never silently.
+  | "volli:sessions-interrupted"
   // Fired by the native View menu's zoom items. The renderer applies CSS zoom
   // to the content row (below the chrome band) rather than letting Electron
   // scale the whole page — see menu.ts for why the zoom roles are replaced.
@@ -119,6 +124,16 @@ export type UiZoomCommand = "in" | "out" | "reset";
 /** Main→renderer invalidation after an agent-socket planning mutation. */
 export interface DataChangedEvent {
   entity: "tickets";
+}
+
+/**
+ * Main→renderer announcement that a backward move interrupted live agent
+ * sessions (issue #78, CONCEPT #20). Fired only when `sessionIds` is
+ * non-empty — an empty interrupt announces nothing, mirroring the event log.
+ */
+export interface SessionsInterruptedEvent {
+  ticketId: string;
+  sessionIds: string[];
 }
 
 /**

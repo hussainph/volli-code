@@ -12,6 +12,9 @@ import {
   isTicketStatus,
   isTicketPriority,
   isHarnessId,
+  ACTIVE_TICKET_STATUSES,
+  isActiveTicketStatus,
+  leavesActiveColumns,
 } from "./ticket";
 
 describe("displayTicketId", () => {
@@ -45,6 +48,45 @@ describe("isTicketStatus", () => {
     expect(isTicketStatus(42)).toBe(false);
     expect(isTicketStatus(null)).toBe(false);
     expect(isTicketStatus(undefined)).toBe(false);
+  });
+});
+
+describe("isActiveTicketStatus", () => {
+  it("treats doing and needs_review as active", () => {
+    for (const status of ACTIVE_TICKET_STATUSES) {
+      expect(isActiveTicketStatus(status)).toBe(true);
+    }
+  });
+
+  it("treats backlog, todo, and done as inactive", () => {
+    expect(isActiveTicketStatus("backlog")).toBe(false);
+    expect(isActiveTicketStatus("todo")).toBe(false);
+    expect(isActiveTicketStatus("done")).toBe(false);
+  });
+});
+
+describe("leavesActiveColumns", () => {
+  it("is true when doing exits to backlog, todo, or done", () => {
+    expect(leavesActiveColumns("doing", "backlog")).toBe(true);
+    expect(leavesActiveColumns("doing", "todo")).toBe(true);
+    expect(leavesActiveColumns("doing", "done")).toBe(true);
+  });
+
+  it("is true when needs_review exits to backlog, todo, or done", () => {
+    expect(leavesActiveColumns("needs_review", "backlog")).toBe(true);
+    expect(leavesActiveColumns("needs_review", "todo")).toBe(true);
+    expect(leavesActiveColumns("needs_review", "done")).toBe(true);
+  });
+
+  it("is false when moving between active columns", () => {
+    expect(leavesActiveColumns("doing", "needs_review")).toBe(false);
+    expect(leavesActiveColumns("needs_review", "doing")).toBe(false);
+  });
+
+  it("is false when the ticket was never active", () => {
+    expect(leavesActiveColumns("backlog", "todo")).toBe(false);
+    expect(leavesActiveColumns("todo", "doing")).toBe(false);
+    expect(leavesActiveColumns("backlog", "done")).toBe(false);
   });
 });
 

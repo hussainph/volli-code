@@ -35,6 +35,8 @@ describe("TICKET_EVENT_KINDS", () => {
       "session_signal",
       "attachment_added",
       "attachment_removed",
+      "sessions_interrupted",
+      "session_resumed",
     ]);
   });
 
@@ -73,6 +75,8 @@ describe("TicketEventPayload", () => {
       { kind: "session_signal", signal: "blocked", reason: "Waiting for credentials" },
       { kind: "attachment_added", attachmentId: "attach-1", label: "spec.pdf" },
       { kind: "attachment_removed", attachmentId: "attach-1", label: "spec.pdf" },
+      { kind: "sessions_interrupted", sessionIds: ["session-1", "session-2"] },
+      { kind: "session_resumed", sessionId: "session-3", previousSessionId: "session-1" },
     ];
     expect(payloads.map((p) => p.kind)).toEqual(TICKET_EVENT_KINDS);
   });

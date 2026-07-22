@@ -16,4 +16,16 @@ export interface HarnessAdapter {
    */
   detection: { executable: string };
   installActions(home: string, canonicalSkillPath: string): InstallAction[];
+  /**
+   * Argv fragment (goes between {@link command} and the quoted session id)
+   * that resumes a specific prior session by id, or `null` when this harness
+   * has no known by-id resume flag (interrupt/resume, issue #78).
+   */
+  resumeIdArgs: string[] | null;
+  /**
+   * Argv fragment that resumes the most recently active session in the
+   * current working directory, or `null` when this harness has no known
+   * "resume latest" flag. Used when no harness session id was recorded.
+   */
+  resumeLatestArgs: string[] | null;
 }
