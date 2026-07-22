@@ -90,6 +90,19 @@ function invoke<T>(channel: VolliIpcChannel, ...args: unknown[]): T {
 
 let ctx: TestDb;
 
+// `volli:project-create` now requires an existing directory (main-side path
+// validation, see data-ipc.ts) — every fixture project needs a real temp dir
+// rather than a fabricated path like the old "/repo/proj". Tracked here so
+// `afterEach` can remove them all regardless of which test created them.
+const createdProjectDirs: string[] = [];
+
+/** A fresh, real, empty directory for a `volli:project-create` fixture path. */
+function freshProjectDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), "volli-project-"));
+  createdProjectDirs.push(dir);
+  return dir;
+}
+
 beforeEach(() => {
   handlers.clear();
   vi.resetAllMocks();
@@ -103,11 +116,14 @@ beforeEach(() => {
 
 afterEach(() => {
   ctx.cleanup();
+  for (const dir of createdProjectDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 function createProject(): string {
   const result = invoke<{ ok: true; project: { id: string } }>("volli:project-create", {
-    path: "/repo/proj",
+    path: freshProjectDir(),
     name: "Proj",
   });
   return result.project.id;
@@ -131,13 +147,14 @@ function archiveTicket(ticketId: string): void {
 describe("volli:project-create — workspace-unique ticket prefixes", () => {
   it("pins the repository's detected base branch when a project is added", () => {
     handlers.clear();
+    const volliPath = freshProjectDir();
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
-      { detectBaseBranch: (path) => (path === "/repo/volli" ? "trunk" : null) },
+      { detectBaseBranch: (path) => (path === volliPath ? "trunk" : null) },
     );
 
     const result = invoke<ProjectCreateResult>("volli:project-create", {
-      path: "/repo/volli",
+      path: volliPath,
       name: "Volli Code",
     });
 
@@ -146,11 +163,11 @@ describe("volli:project-create — workspace-unique ticket prefixes", () => {
 
   it("surfaces the colliding project instead of creating an ambiguous display-id namespace", () => {
     const first = invoke<{ ok: boolean; error?: string }>("volli:project-create", {
-      path: "/repo/volli",
+      path: freshProjectDir(),
       name: "Volli Code",
     });
     const second = invoke<{ ok: boolean; error?: string }>("volli:project-create", {
-      path: "/repo/compiler",
+      path: freshProjectDir(),
       name: "Visual Compiler",
     });
 

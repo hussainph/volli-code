@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { statSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { ipcMain } from "electron";
 import type Database from "better-sqlite3";
@@ -98,11 +99,11 @@ import { orphanReport } from "./orphan-sweep";
 import {
   archiveAndClean,
   commitTicketRemaining,
-  diffStat,
   getRetentionTtlDays,
-  getWorktreeStatus,
   listBranches,
   publishTicketBranch,
+  readWorktreeDiff,
+  readWorktreeStatus,
   remove as removeWorktree,
   runNet,
   setRetentionTtlDays,
@@ -583,6 +584,15 @@ export function registerDataIpcHandlers(
         const existing = findProjectByPath(db, input.path);
         if (existing) {
           return { ok: true, project: existing, created: false };
+        }
+        let stats;
+        try {
+          stats = statSync(input.path);
+        } catch {
+          return { ok: false, error: "Project path does not exist" };
+        }
+        if (!stats.isDirectory()) {
+          return { ok: false, error: "Project path is not a directory" };
         }
         const now = Date.now();
         const ticketPrefix = derivePrefix(input.name);
@@ -1156,16 +1166,22 @@ export function registerDataIpcHandlers(
         return { ok: false, error: "Invalid ticket" };
       }
       try {
-        const ticket = getTicketRow(db, input.ticketId);
-        if (!ticket?.worktree_path) {
-          return { ok: false, error: "This ticket has no worktree." };
+        // Thin adapter over the ticketId-in read verb (CONCEPT #42): it owns the
+        // ticket→identity resolution, the no-worktree discrimination, AND the
+        // stamped-but-deleted disk check the CLI door always did but this one
+        // used to skip — which fed a deleted path into the errs-dirty status
+        // read and lied `uncommitted: true` to the renderer.
+        const read = readWorktreeStatus(worktreeDeps(db), input.ticketId);
+        switch (read.kind) {
+          case "missing-ticket":
+            return { ok: false, error: "Unknown ticket" };
+          case "no-worktree":
+            return { ok: false, error: "This ticket has no worktree." };
+          case "missing-on-disk":
+            return { ok: false, error: "This ticket's worktree directory is missing on disk." };
+          case "ok":
+            return { ok: true, status: read.status };
         }
-        const status = getWorktreeStatus(worktreeDeps(db).git, {
-          worktreePath: ticket.worktree_path,
-          branch: ticket.branch,
-          baseBranch: ticket.base_branch,
-        });
-        return { ok: true, status };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }
@@ -1179,16 +1195,19 @@ export function registerDataIpcHandlers(
         return { ok: false, error: "Invalid worktree diff request" };
       }
       try {
-        const ticket = getTicketRow(db, input.ticketId);
-        if (!ticket?.worktree_path) {
-          return { ok: false, error: "This ticket has no worktree." };
+        const read = readWorktreeDiff(worktreeDeps(db), input.ticketId, input.mode as DiffMode);
+        switch (read.kind) {
+          case "missing-ticket":
+            return { ok: false, error: "Unknown ticket" };
+          case "no-worktree":
+            return { ok: false, error: "This ticket has no worktree." };
+          case "missing-on-disk":
+            return { ok: false, error: "This ticket's worktree directory is missing on disk." };
+          case "diff-error":
+            return { ok: false, error: read.error };
+          case "ok":
+            return { ok: true, diff: read.diff };
         }
-        const result = diffStat(
-          worktreeDeps(db).git,
-          { worktreePath: ticket.worktree_path, baseBranch: ticket.base_branch },
-          input.mode as DiffMode,
-        );
-        return result.ok ? { ok: true, diff: result.value } : { ok: false, error: result.error };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }
