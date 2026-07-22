@@ -25,6 +25,7 @@ import type {
   AgentErrorCode,
   AgentRequest,
   AgentResponse,
+  DataChangeKind,
   Project,
   SessionActivityState,
   TicketEventActor,
@@ -39,7 +40,7 @@ import { listAllLabels } from "./db/labels-repo";
 import { listProjects } from "./db/projects-repo";
 import { getSession, listSessions, setHarnessSessionId } from "./db/sessions-repo";
 import { getTicket, listArchivedTicketsByProject, listTicketsByProject } from "./db/tickets-repo";
-import { diffStat, getWorktreeStatus, runGitCapturing } from "./worktree";
+import { readWorktreeDiff, readWorktreeStatus, runGitCapturing } from "./worktree";
 import type { DiffMode, RunGit } from "./worktree";
 import { isInside } from "./worktree/paths";
 import {
@@ -65,11 +66,12 @@ export interface AgentCommandServiceOptions {
    */
   git?: RunGit;
   /**
-   * Whether a ticket's stamped worktree directory still exists on disk (C3): a
-   * stamped-but-deleted directory must refuse with INVALID_REQUEST rather than
-   * let `getWorktreeStatus`'s errs-dirty fallback report `uncommitted: true`
-   * for a tree that's gone. Same seam shape as {@link git} — defaults to
-   * {@link existsSync}; tests substitute a scripted predicate.
+   * Whether a ticket's stamped worktree directory still exists on disk (C3):
+   * threaded into the worktree read verbs' disk-existence seam so a stamped-
+   * but-deleted directory refuses with INVALID_REQUEST rather than letting
+   * status.ts's errs-dirty fallback report `uncommitted: true` for a tree that's
+   * gone. Same seam shape as {@link git} — defaults to {@link existsSync}; tests
+   * substitute a scripted predicate.
    */
   worktreeExists?: (path: string) => boolean;
   observeSession?: (
@@ -85,6 +87,15 @@ export interface AgentCommandServiceOptions {
    * Absent (tests) means the interrupt is a no-op.
    */
   interruptTicketSessions?: (ticketId: string) => string[];
+  /**
+   * Called after a socket command COMMITS a planning mutation, with the exact
+   * ticket it resolved and touched — the scope index.ts broadcasts as
+   * `volli:data-changed` so the renderer refreshes the right surfaces promptly.
+   * Never called for a read-only command or a no-op (e.g. a same-column
+   * `ticket.move`, or a scratch session's `session.done` that records nothing).
+   * Absent (tests) means the broadcast is a no-op.
+   */
+  onMutation?: (change: { ticketId: string; projectId: string; kind: DataChangeKind }) => void;
 }
 
 export interface AgentCommandService {
@@ -430,67 +441,6 @@ function resolveWorktreeTicket(
       };
 }
 
-/**
- * A resolved ticket's worktree path, or a friendly error when it has none — a
- * ticket that never reached Doing is not a stack trace, and git must never run
- * against a null path. Also refuses a STAMPED-but-deleted directory: reporting
- * `uncommitted: true` for a tree that no longer exists (getWorktreeStatus's
- * errs-dirty fallback) is a UI convention, not something an agent should be
- * told as fact.
- */
-function requireWorktreePath(
-  ticket: Ticket,
-  project: Project,
-  exists: (path: string) => boolean,
-): { ok: true; worktreePath: string; displayId: string } | { ok: false; response: AgentResponse } {
-  const displayId = displayTicketId(project.ticketPrefix, ticket.ticketNumber);
-  if (ticket.worktreePath === null) {
-    return {
-      ok: false,
-      response: failure(
-        "INVALID_REQUEST",
-        `Ticket ${displayId} has no worktree yet — move it to Doing to create one.`,
-      ),
-    };
-  }
-  if (!exists(ticket.worktreePath)) {
-    return {
-      ok: false,
-      response: failure(
-        "INVALID_REQUEST",
-        `Ticket ${displayId}'s worktree directory is missing on disk (expected at ${ticket.worktreePath}).`,
-      ),
-    };
-  }
-  return { ok: true, worktreePath: ticket.worktreePath, displayId };
-}
-
-/**
- * K4: the two worktree handlers share the exact same resolve-ticket-then-
- * require-worktree-path ceremony; this collapses it to one call so each
- * handler only branches on the failure once.
- */
-function resolveWorktreeTarget(
-  db: Database.Database,
-  projects: readonly Project[],
-  request: AgentRequest,
-  worktreeExists: (path: string) => boolean,
-):
-  | { ok: true; ticket: Ticket; project: Project; worktreePath: string; displayId: string }
-  | { ok: false; response: AgentResponse } {
-  const resolved = resolveWorktreeTicket(db, projects, request);
-  if (!resolved.ok) return resolved;
-  const worktree = requireWorktreePath(resolved.ticket, resolved.project, worktreeExists);
-  if (!worktree.ok) return worktree;
-  return {
-    ok: true,
-    ticket: resolved.ticket,
-    project: resolved.project,
-    worktreePath: worktree.worktreePath,
-    displayId: worktree.displayId,
-  };
-}
-
 function boardData(db: Database.Database, project: Project): Record<string, unknown> {
   const tickets = listTicketsByProject(db, project.id);
   const columns = Object.fromEntries(
@@ -826,6 +776,9 @@ export function createAgentCommandService(
               { kind: "automation", sessionId: session.id, ticketId },
             );
           })();
+          // A Needs-Review signal landed on the ticket this session drives — a
+          // scratch session (ticketId null) records nothing, so it never fires.
+          options.onMutation?.({ ticketId, projectId: session.projectId, kind: "session" });
         }
         return {
           v: 1,
@@ -964,58 +917,91 @@ export function createAgentCommandService(
         };
       }
       if (request.cmd === "worktree.status") {
-        const target = resolveWorktreeTarget(options.db, projects, request, worktreeExists);
-        if (!target.ok) return target.response;
-        // All git runs inside the worktree module (CONCEPT #42); we only compose
-        // its report with the ticket's persisted identity.
-        const report = getWorktreeStatus(git, {
-          worktreePath: target.worktreePath,
-          branch: target.ticket.branch,
-          baseBranch: target.ticket.baseBranch,
-        });
-        return {
-          v: 1,
-          ok: true,
-          data: {
-            ticket: target.displayId,
-            project: target.project.name,
-            worktreePath: target.worktreePath,
-            branch: target.ticket.branch,
-            baseBranch: target.ticket.baseBranch,
-            ...report,
-          },
-        };
+        // Context resolution (which ticket the agent means) stays this door's
+        // concern; the git compose + the no-worktree / stamped-but-deleted
+        // discrimination live behind the ticketId-in read verb (CONCEPT #42).
+        const resolved = resolveWorktreeTicket(options.db, projects, request);
+        if (!resolved.ok) return resolved.response;
+        const read = readWorktreeStatus(
+          { db: options.db, git, worktreeExists },
+          resolved.ticket.id,
+        );
+        switch (read.kind) {
+          case "missing-ticket":
+            return failure("TICKET_NOT_FOUND", "The resolved ticket no longer exists.");
+          case "no-worktree":
+            return failure(
+              "INVALID_REQUEST",
+              `Ticket ${read.displayId} has no worktree yet — move it to Doing to create one.`,
+            );
+          case "missing-on-disk":
+            return failure(
+              "INVALID_REQUEST",
+              `Ticket ${read.displayId}'s worktree directory is missing on disk (expected at ${read.worktreePath}).`,
+            );
+          case "ok":
+            return {
+              v: 1,
+              ok: true,
+              data: {
+                ticket: read.displayId,
+                project: resolved.project.name,
+                worktreePath: read.worktreePath,
+                branch: read.branch,
+                baseBranch: read.baseBranch,
+                ...read.status,
+              },
+            };
+        }
       }
       if (request.cmd === "worktree.diff") {
-        const target = resolveWorktreeTarget(options.db, projects, request, worktreeExists);
-        if (!target.ok) return target.response;
+        const resolved = resolveWorktreeTicket(options.db, projects, request);
+        if (!resolved.ok) return resolved.response;
         // Merge-base ("what the PR would contain") is the default; --working-tree
         // switches to the uncommitted view. Same two-mode diff.ts the rail uses.
         const mode: DiffMode = request.args["workingTree"] === true ? "working-tree" : "merge-base";
-        const result = diffStat(
-          git,
-          { worktreePath: target.worktreePath, baseBranch: target.ticket.baseBranch },
+        const read = readWorktreeDiff(
+          { db: options.db, git, worktreeExists },
+          resolved.ticket.id,
           mode,
         );
-        if (!result.ok) return failure("INVALID_REQUEST", result.error);
-        // Cap the per-file rows so a sprawling diff never blows the token ceiling;
-        // the rollup count keeps the omission honest. Totals stay across ALL files.
-        const CAP = 20;
-        const shown = result.value.files.slice(0, CAP);
-        return {
-          v: 1,
-          ok: true,
-          data: {
-            ticket: target.displayId,
-            mode,
-            baseBranch: target.ticket.baseBranch,
-            files: shown,
-            insertions: result.value.insertions,
-            deletions: result.value.deletions,
-            totalFiles: result.value.files.length,
-            omittedFiles: result.value.files.length - shown.length,
-          },
-        };
+        switch (read.kind) {
+          case "missing-ticket":
+            return failure("TICKET_NOT_FOUND", "The resolved ticket no longer exists.");
+          case "no-worktree":
+            return failure(
+              "INVALID_REQUEST",
+              `Ticket ${read.displayId} has no worktree yet — move it to Doing to create one.`,
+            );
+          case "missing-on-disk":
+            return failure(
+              "INVALID_REQUEST",
+              `Ticket ${read.displayId}'s worktree directory is missing on disk (expected at ${read.worktreePath}).`,
+            );
+          case "diff-error":
+            return failure("INVALID_REQUEST", read.error);
+          case "ok": {
+            // Cap the per-file rows so a sprawling diff never blows the token
+            // ceiling; the rollup count keeps the omission honest. Totals stay
+            // across ALL files.
+            const CAP = 20;
+            const shown = read.diff.files.slice(0, CAP);
+            return {
+              v: 1,
+              ok: true,
+              data: {
+                ticket: read.displayId,
+                mode,
+                baseBranch: read.baseBranch,
+                files: shown,
+                insertions: read.diff.insertions,
+                deletions: read.diff.deletions,
+                totalFiles: read.diff.files.length,
+                omittedFiles: read.diff.files.length - shown.length,
+              },
+            };
+          }
+        }
       }
       if (request.cmd === "ticket.update") {
         const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
@@ -1082,10 +1068,16 @@ export function createAgentCommandService(
             );
             return ticket;
           });
+          const updated = run();
+          options.onMutation?.({
+            ticketId: resolved.ticket.id,
+            projectId: resolved.project.id,
+            kind: "ticket",
+          });
           return {
             v: 1,
             ok: true,
-            data: { ticket: agentTicket(run(), resolved.project) },
+            data: { ticket: agentTicket(updated, resolved.project) },
           };
         } catch (error) {
           return failure("MUTATION_FAILED", errorMessage(error));
@@ -1101,6 +1093,11 @@ export function createAgentCommandService(
           archiveTicketCommand(options.db, resolved.ticket.id, {
             now: archivedAt,
             actor: actor.actor,
+          });
+          options.onMutation?.({
+            ticketId: resolved.ticket.id,
+            projectId: resolved.project.id,
+            kind: "ticket",
           });
           return {
             v: 1,
@@ -1183,6 +1180,11 @@ export function createAgentCommandService(
             }
             options.notify?.(`${movedDisplay} → ${TICKET_STATUS_LABELS[to]}`, body);
           }
+          options.onMutation?.({
+            ticketId: resolved.ticket.id,
+            projectId: resolved.project.id,
+            kind: "ticket",
+          });
           return {
             v: 1,
             ok: true,
@@ -1212,6 +1214,11 @@ export function createAgentCommandService(
             },
             { now: now(), actor: actor.actor },
           );
+          options.onMutation?.({
+            ticketId: resolved.ticket.id,
+            projectId: resolved.project.id,
+            kind: "comment",
+          });
           return {
             v: 1,
             ok: true,
@@ -1294,6 +1301,11 @@ export function createAgentCommandService(
           },
           { now: createdAt, actor: actor.actor },
         );
+        options.onMutation?.({
+          ticketId: ticket.id,
+          projectId: resolved.project.id,
+          kind: "ticket",
+        });
         return {
           v: 1,
           ok: true,

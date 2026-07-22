@@ -74,6 +74,30 @@ export interface BoardGateway {
   listArchived(projectId: string): Promise<ArchivedTicketsResult>;
 }
 
+/**
+ * The scope of the last planning refresh the board published — see
+ * {@link BoardState.lastPlanningChange}. `ticketId` is `null` for an untargeted
+ * (anything-may-have-changed) refresh.
+ */
+export interface PlanningChange {
+  /** Monotonic; a repeat change for the same ticket still reads as new. */
+  version: number;
+  /** The ticket the change targeted, or `null` when untargeted. */
+  ticketId: string | null;
+  /** The project the change belonged to, when known. */
+  projectId: string | null;
+}
+
+/**
+ * Whether a per-ticket reader watching `ticketId` must refire for `change`: true
+ * when the change is untargeted (the conservative recovery arm — anything may
+ * have changed) OR it targets exactly this ticket. A change provably for a
+ * different ticket is the only case a reader may safely skip.
+ */
+export function planningChangeAffects(change: PlanningChange, ticketId: string): boolean {
+  return change.ticketId === null || change.ticketId === ticketId;
+}
+
 const defaultGateway: BoardGateway = {
   createTicket: (input) => window.api.tickets.create(input),
   moveTicket: (input) => window.api.tickets.move(input),
@@ -102,16 +126,25 @@ interface BoardState {
   /** The selected card per project. Session-only — never persisted; see module doc. */
   selectedByProject: Record<string, string | null>;
   /**
-   * Monotonic tick bumped every time server-owned planning data is refreshed
-   * after a socket-originated mutation (`refreshPlanningData`, see lib/boot.ts).
+   * The last server-owned planning refresh, published after `refreshPlanningData`
+   * (see lib/boot.ts) re-hydrates the board from SQLite. `version` is monotonic
+   * (so a repeat change for the same ticket still reads as new); `ticketId`/
+   * `projectId` carry the change's SCOPE from the `volli:data-changed` payload,
+   * or `null` for an untargeted "anything may have changed" refresh.
+   *
    * Per-ticket surfaces that fetch data NOT carried in `ticketsByProject` — the
-   * Activity feed's events/comments — subscribe to this and refetch when it
-   * changes, so an agent's `volli ticket comment` becomes visible in an already
-   * open ticket without a close/reopen. Session-only; resets on relaunch.
+   * Activity feed's events/comments, the retention badge, the Done-flow rail's
+   * git summary — subscribe to this and refetch only when the change is
+   * untargeted OR targets THEIR ticket ({@link planningChangeAffects}); a change
+   * provably for another ticket is skipped. Session-only; resets on relaunch.
    */
-  planningDataVersion: number;
-  /** Bumps {@link BoardState.planningDataVersion} — called after a socket-originated refresh rehydrates the planning stores. */
-  bumpPlanningDataVersion(): void;
+  lastPlanningChange: PlanningChange;
+  /**
+   * Publishes a planning refresh with its scope — called after a socket-originated
+   * refresh re-hydrates the planning stores (see lib/boot.ts). Always bumps
+   * `version`; `change.ticketId`/`projectId` default to `null` (untargeted).
+   */
+  notePlanningChange(change?: { ticketId?: string; projectId?: string }): void;
   /** Seeds tickets/labels from the boot payload — the ONE place state is set wholesale outside a mutation. */
   hydrate(
     ticketsByProject: Record<string, Ticket[]>,
@@ -381,10 +414,16 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
       archivedByProject: {},
       filterByProject: {},
       selectedByProject: {},
-      planningDataVersion: 0,
+      lastPlanningChange: { version: 0, ticketId: null, projectId: null },
 
-      bumpPlanningDataVersion() {
-        set({ planningDataVersion: get().planningDataVersion + 1 });
+      notePlanningChange(change) {
+        set({
+          lastPlanningChange: {
+            version: get().lastPlanningChange.version + 1,
+            ticketId: change?.ticketId ?? null,
+            projectId: change?.projectId ?? null,
+          },
+        });
       },
 
       hydrate(ticketsByProject, labelsByProject) {

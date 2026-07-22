@@ -80,15 +80,21 @@ async function main() {
         : {
             action: {
               label: "View ticket",
+              // Route through the nav-intent seam, not bare openTicket: the toast
+              // can fire from any nav (Files/Sessions), and detail only renders on
+              // the Board — openTicketWorkspace switches nav so the ticket actually
+              // appears (the same fix the composer kickoff needed).
               onClick: () =>
-                useWorkspaceStore.getState().openTicket(target.projectId, target.ticketId),
+                useWorkspaceStore.getState().openTicketWorkspace(target.projectId, target.ticketId),
             },
           }),
     });
   });
 
-  window.api.data.onChanged(() => {
-    void refreshPlanningData()
+  window.api.data.onChanged((event) => {
+    // Forward the payload's scope (affected ticket/project, or untargeted) so
+    // per-ticket surfaces can skip a refetch that's provably for another ticket.
+    void refreshPlanningData({ ticketId: event.ticketId, projectId: event.projectId })
       .then((refreshResult) => {
         if (!refreshResult.ok) {
           toastError(`Could not refresh agent changes: ${refreshResult.error}`);

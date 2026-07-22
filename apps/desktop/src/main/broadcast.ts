@@ -7,14 +7,26 @@
  * single implementation rather than each rolling their own.
  */
 import { BrowserWindow } from "electron";
-import type { SessionsInterruptedEvent, VolliIpcEvent } from "@volli/shared";
+import type { DataChangedEvent, SessionsInterruptedEvent, VolliIpcEvent } from "@volli/shared";
 
-export function broadcastDataChanged(): void {
+/**
+ * Fans the invalidation out to every open window. `change` carries the best
+ * scope the caller knows: a `ticketId` (plus `projectId`/`kind` when it has
+ * them) for a change it can pin to one ticket, or `{}` (the default —
+ * untargeted) when it genuinely can't, which the renderer reads as "anything may
+ * have changed". The `entity` discriminant is stamped here so call sites only
+ * ever pass scope.
+ */
+export function broadcastDataChanged(change: Omit<DataChangedEvent, "entity"> = {}): void {
   for (const window of BrowserWindow.getAllWindows()) {
     if (window.webContents.isDestroyed()) continue;
-    window.webContents.send("volli:data-changed" satisfies VolliIpcEvent, {
-      entity: "tickets",
-    });
+    window.webContents.send(
+      "volli:data-changed" satisfies VolliIpcEvent,
+      {
+        entity: "tickets",
+        ...change,
+      } satisfies DataChangedEvent,
+    );
   }
 }
 

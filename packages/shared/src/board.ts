@@ -91,12 +91,6 @@ export function moveTicket(
   return result;
 }
 
-/** Statuses with zero tickets, in {@link TICKET_STATUSES} order. */
-export function emptyStatuses(tickets: readonly Ticket[]): TicketStatus[] {
-  const groups = groupTicketsByStatus(tickets);
-  return TICKET_STATUSES.filter((status) => groups[status].length === 0);
-}
-
 /**
  * Sets a ticket's priority. Returns the same array reference when the id is
  * unknown or the priority is unchanged; otherwise a new array with the
