@@ -4,6 +4,7 @@ import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
 import {
   displayTicketId,
   errorMessage,
+  type LatestSessionSignal,
   type Project,
   type SessionActivityState,
   type SessionRecord,
@@ -53,6 +54,34 @@ const SETTLED_OUTCOME_LABEL: Record<SessionOutcome, string> = {
 
 /** What activation needs from any row, so Active tiers and the Settled tail share one handler. */
 type ActivationTarget = { ticket: Ticket; target: ActiveSessionTarget | null };
+
+/**
+ * Rehydrates the batched `latestSignals` read into the `eventsByTicket` shape
+ * the pure listing model already consumes — one synthetic session_signal event
+ * per ticket. Keeps the tested model untouched while the fetch collapses from a
+ * per-needs-review-ticket fan-out to a single project query.
+ */
+function signalsToEventsByTicket(
+  signals: readonly LatestSessionSignal[],
+): Record<string, TicketEvent[]> {
+  const byTicket: Record<string, TicketEvent[]> = {};
+  for (const signal of signals) {
+    byTicket[signal.ticketId] = [
+      {
+        id: `signal:${signal.ticketId}`,
+        ticketId: signal.ticketId,
+        actor: signal.sessionId === null ? "automation" : "session",
+        actorContext:
+          signal.sessionId === null
+            ? null
+            : { ticketId: signal.ticketId, sessionId: signal.sessionId },
+        createdAt: signal.createdAt,
+        payload: { kind: "session_signal", signal: signal.signal, reason: signal.reason },
+      },
+    ];
+  }
+  return byTicket;
+}
 
 function SessionRow({
   project,
@@ -335,11 +364,6 @@ export function ActiveSessions({ project }: { project: Project }) {
         .join(","),
     [containers, project.id, projectTicketIds],
   );
-  const needsReviewIds = React.useMemo(
-    () => tickets.filter((ticket) => ticket.status === "needs_review").map((ticket) => ticket.id),
-    [tickets],
-  );
-
   React.useEffect(() => {
     let cancelled = false;
     window.api.sessions
@@ -362,31 +386,15 @@ export function ActiveSessions({ project }: { project: Project }) {
 
   React.useEffect(() => {
     let cancelled = false;
-    if (needsReviewIds.length === 0) {
-      setEventsByTicket({});
-      return;
-    }
-    Promise.all(
-      needsReviewIds.map(async (ticketId) => ({
-        ticketId,
-        result: await window.api.tickets.events({ ticketId }),
-      })),
-    )
-      .then((results) => {
+    window.api.tickets
+      .latestSignals({ projectId: project.id })
+      .then((result) => {
         if (cancelled) return;
-        const failures = results.flatMap(({ result }) => (result.ok ? [] : [result.error]));
-        if (failures.length > 0) {
-          toastError(
-            `Could not load session attention for ${failures.length} ticket(s): ${failures.join("; ")}`,
-          );
+        if (!result.ok) {
+          toastError(`Could not load session attention: ${result.error}`);
+          return;
         }
-        setEventsByTicket(
-          Object.fromEntries(
-            results.flatMap(({ ticketId, result }) =>
-              result.ok ? [[ticketId, result.events] as const] : [],
-            ),
-          ),
-        );
+        setEventsByTicket(signalsToEventsByTicket(result.signals));
       })
       .catch((error: unknown) => {
         if (!cancelled) toastError(`Could not load session attention: ${errorMessage(error)}`);
@@ -394,7 +402,7 @@ export function ActiveSessions({ project }: { project: Project }) {
     return () => {
       cancelled = true;
     };
-  }, [needsReviewIds, planningDataVersion]);
+  }, [project.id, planningDataVersion]);
 
   React.useEffect(() => {
     if (liveSignature === "") return;

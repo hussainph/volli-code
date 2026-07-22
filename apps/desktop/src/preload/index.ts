@@ -38,6 +38,7 @@ import type {
   TicketCommentResult,
   TicketCommentsResult,
   TicketEventsResult,
+  TicketLatestSignalsResult,
   TicketPriority,
   TicketResult,
   TicketsResult,
@@ -167,6 +168,9 @@ const api = {
     /** A ticket's full event history, chronological — backs the Activity feed. */
     events: (input: { ticketId: string }): Promise<TicketEventsResult> =>
       ipcRenderer.invoke("volli:ticket-events" satisfies VolliIpcChannel, input),
+    /** The latest session_signal per ticket in the project — one batched read backing the sidebar's attention tiers. */
+    latestSignals: (input: { projectId: string }): Promise<TicketLatestSignalsResult> =>
+      ipcRenderer.invoke("volli:ticket-latest-signals" satisfies VolliIpcChannel, input),
   },
   comments: {
     /** A ticket's comments, chronological — the work-log feed. */

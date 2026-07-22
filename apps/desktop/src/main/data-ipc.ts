@@ -36,6 +36,7 @@ import type {
   TicketCommentResult,
   TicketCommentsResult,
   TicketEventsResult,
+  TicketLatestSignalsResult,
   TicketPriority,
   TicketResult,
   TicketsResult,
@@ -59,7 +60,7 @@ import type {
 } from "@volli/shared";
 import { getAllAppState, setAppState } from "./db/app-state-repo";
 import { deleteComment, getComment, listComments, updateComment } from "./db/comments-repo";
-import { listTicketEvents } from "./db/events-repo";
+import { latestSessionSignalsByProject, listTicketEvents } from "./db/events-repo";
 import { listAllLabels, setLabelColor } from "./db/labels-repo";
 import {
   countProjects,
@@ -137,6 +138,7 @@ const DATA_CHANNELS: readonly VolliIpcChannel[] = [
   "volli:ticket-delete",
   "volli:ticket-list-archived",
   "volli:ticket-events",
+  "volli:ticket-latest-signals",
   "volli:comment-list",
   "volli:comment-create",
   "volli:comment-update",
@@ -852,6 +854,20 @@ export function registerDataIpcHandlers(
       }
       try {
         return { ok: true, events: listTicketEvents(db, input.ticketId) };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "volli:ticket-latest-signals" satisfies VolliIpcChannel,
+    (_event, input: unknown): TicketLatestSignalsResult => {
+      if (!isProjectIdInput(input)) {
+        return { ok: false, error: "Invalid project" };
+      }
+      try {
+        return { ok: true, signals: latestSessionSignalsByProject(db, input.projectId) };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }

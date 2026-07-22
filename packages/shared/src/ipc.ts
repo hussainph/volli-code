@@ -12,7 +12,7 @@ import type { Project } from "./project-identity";
 import type { SessionRecord } from "./session";
 import type { ArchivedTicket, Ticket } from "./ticket";
 import type { TicketComment } from "./ticket-comment";
-import type { DiffStat, TicketEvent } from "./ticket-events";
+import type { DiffStat, LatestSessionSignal, TicketEvent } from "./ticket-events";
 
 /** Channel names for the preload's `contextBridge` API. */
 export type VolliIpcChannel =
@@ -53,6 +53,7 @@ export type VolliIpcChannel =
   | "volli:ticket-delete"
   | "volli:ticket-list-archived"
   | "volli:ticket-events"
+  | "volli:ticket-latest-signals"
   | "volli:comment-list"
   | "volli:comment-create"
   | "volli:comment-update"
@@ -224,6 +225,9 @@ export type AppStateSetResult = Result;
 
 /** A ticket's full event history, chronological — returned by `ticket-events` (the Activity feed read). */
 export type TicketEventsResult = Result<{ events: TicketEvent[] }>;
+
+/** The latest `session_signal` per ticket in a project — the sidebar's batched attention read. */
+export type TicketLatestSignalsResult = Result<{ signals: LatestSessionSignal[] }>;
 
 /** A single comment, returned by a mutation that affects only that one comment — create, update. */
 export type TicketCommentResult = Result<{ comment: TicketComment }>;
