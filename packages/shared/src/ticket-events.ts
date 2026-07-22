@@ -58,6 +58,12 @@ export const TICKET_EVENT_KINDS = [
   // `automation` actor; `reason` becomes the Needs Review badge when the loop
   // milestone lands.
   "session_signal",
+  // Attachments (`ticket_attachments`, migration 011, issue #77): spec
+  // material — a file or URL — attached to a ticket. Mirrors `commented`'s
+  // shape (the attachment itself lives in `ticket_attachments`, `label` here
+  // is just enough for the event log to read without a join).
+  "attachment_added",
+  "attachment_removed",
   // Backward-move interrupt/resume (issue #78, CONCEPT #20): a board move
   // that exits the active columns (`leavesActiveColumns` in `ticket.ts`)
   // interrupts every still-live session on the ticket — `sessions_interrupted`
@@ -138,6 +144,8 @@ export type TicketEventPayload =
   | { kind: "pr_opened"; url: string }
   | { kind: "pr_merged"; url: string }
   | { kind: "session_signal"; signal: "done" | "blocked"; reason: string | null }
+  | { kind: "attachment_added"; attachmentId: string; label: string }
+  | { kind: "attachment_removed"; attachmentId: string; label: string }
   | { kind: "sessions_interrupted"; sessionIds: string[] }
   | { kind: "session_resumed"; sessionId: string; previousSessionId: string };
 

@@ -33,6 +33,8 @@ describe("TICKET_EVENT_KINDS", () => {
       "pr_opened",
       "pr_merged",
       "session_signal",
+      "attachment_added",
+      "attachment_removed",
       "sessions_interrupted",
       "session_resumed",
     ]);
@@ -71,6 +73,8 @@ describe("TicketEventPayload", () => {
       { kind: "pr_opened", url: "https://github.com/acme/repo/pull/7" },
       { kind: "pr_merged", url: "https://github.com/acme/repo/pull/7" },
       { kind: "session_signal", signal: "blocked", reason: "Waiting for credentials" },
+      { kind: "attachment_added", attachmentId: "attach-1", label: "spec.pdf" },
+      { kind: "attachment_removed", attachmentId: "attach-1", label: "spec.pdf" },
       { kind: "sessions_interrupted", sessionIds: ["session-1", "session-2"] },
       { kind: "session_resumed", sessionId: "session-3", previousSessionId: "session-1" },
     ];

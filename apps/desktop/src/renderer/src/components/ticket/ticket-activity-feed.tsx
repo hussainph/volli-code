@@ -11,6 +11,7 @@ import { GitCommitIcon } from "@phosphor-icons/react/dist/csr/GitCommit";
 import { GitMergeIcon } from "@phosphor-icons/react/dist/csr/GitMerge";
 import { GitPullRequestIcon } from "@phosphor-icons/react/dist/csr/GitPullRequest";
 import { NotePencilIcon } from "@phosphor-icons/react/dist/csr/NotePencil";
+import { PaperclipIcon } from "@phosphor-icons/react/dist/csr/Paperclip";
 import { PaperPlaneTiltIcon } from "@phosphor-icons/react/dist/csr/PaperPlaneTilt";
 import { PauseCircleIcon } from "@phosphor-icons/react/dist/csr/PauseCircle";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
@@ -77,6 +78,8 @@ const EVENT_ICON: Record<TicketEventKind, PhosphorIcon> = {
   pr_opened: GitPullRequestIcon,
   pr_merged: GitMergeIcon,
   session_signal: FlagIcon,
+  attachment_added: PaperclipIcon,
+  attachment_removed: TrashSimpleIcon,
   sessions_interrupted: PauseCircleIcon,
   session_resumed: ArrowClockwiseIcon,
 };
