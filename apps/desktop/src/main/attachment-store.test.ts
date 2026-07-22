@@ -77,6 +77,11 @@ describe("attachmentFilePath", () => {
   it("rejects an unsafe fileName", () => {
     expect(() => attachmentFilePath(root, "attach-1", "../escape.pdf")).toThrow();
   });
+
+  it("rejects an unsafe attachmentId", () => {
+    expect(() => attachmentFilePath(root, "..", "spec.pdf")).toThrow();
+    expect(() => attachmentFilePath(root, "sub/escape", "spec.pdf")).toThrow();
+  });
 });
 
 describe("removeAttachmentFiles", () => {
@@ -105,5 +110,17 @@ describe("removeAttachmentFiles", () => {
 
     expect(existsSync(join(root, "attach-1"))).toBe(false);
     expect(existsSync(join(root, "attach-2", "spec.pdf"))).toBe(true);
+  });
+
+  it("rejects a traversal attachmentId instead of deleting outside the root", () => {
+    const sourcePath = join(dir, "source.pdf");
+    writeFileSync(sourcePath, "spec contents");
+    importAttachmentFile(root, "attach-1", sourcePath, "spec.pdf");
+
+    expect(() => removeAttachmentFiles(root, "..")).toThrow();
+    expect(() => removeAttachmentFiles(root, "../..")).toThrow();
+
+    // The root (and everything in it) survives.
+    expect(existsSync(join(root, "attach-1", "spec.pdf"))).toBe(true);
   });
 });

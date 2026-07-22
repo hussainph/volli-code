@@ -109,6 +109,29 @@ describe("createAttachment — file", () => {
     expect(attachment.label).toBe("The Spec");
   });
 
+  it("treats an empty-string label as absent and defaults it", () => {
+    const { ticketId } = setup();
+    const attachment = createAttachment(
+      ctx.db,
+      { ticketId, kind: "file", fileName: "spec.pdf", label: "" },
+      100,
+    );
+
+    expect(attachment.label).toBe("spec.pdf");
+  });
+
+  it("never stores an empty label — the schema CHECK rejects one outright", () => {
+    const { ticketId } = setup();
+    expect(() =>
+      ctx.db
+        .prepare(
+          `INSERT INTO ticket_attachments (id, ticket_id, kind, label, file_name, url, created_at)
+           VALUES ('a1', ?, 'file', '', 'spec.pdf', NULL, 100)`,
+        )
+        .run(ticketId),
+    ).toThrow(/CHECK/);
+  });
+
   it("round-trips through getAttachment", () => {
     const { ticketId } = setup();
     const attachment = createAttachment(

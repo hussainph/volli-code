@@ -275,7 +275,7 @@ ALTER TABLE tickets ADD COLUMN retention_keep INTEGER NOT NULL DEFAULT 0;
  * original basename, bytes stored separately under Electron `userData` —
  * `apps/desktop/src/main/attachment-store.ts`) and leaves `url` NULL; a `url`
  * row sets `url` and leaves `file_name` NULL. `label` is always non-empty —
- * the repo layer defaults it before insert, never NULL/empty at rest.
+ * the repo layer defaults it before insert and the CHECK enforces it at rest.
  * `ON DELETE CASCADE` off `ticket_id` mirrors `ticket_comments`: an
  * attachment cannot outlive its ticket.
  */
@@ -284,7 +284,7 @@ CREATE TABLE ticket_attachments (
   id         TEXT PRIMARY KEY,
   ticket_id  TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
   kind       TEXT NOT NULL CHECK (kind IN ('file','url')),
-  label      TEXT NOT NULL,
+  label      TEXT NOT NULL CHECK (label <> ''),
   file_name  TEXT,
   url        TEXT,
   created_at INTEGER NOT NULL
