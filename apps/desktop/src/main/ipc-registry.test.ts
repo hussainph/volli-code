@@ -93,6 +93,19 @@ describe("registerGuardedIpcHandlers", () => {
     });
   });
 
+  it("appends the invoking WebContents after the contract args — sender-scoped handlers (file-watch) need it, everyone else omits the trailing param", () => {
+    const seen: unknown[] = [];
+    registerGuardedIpcHandlers(descriptors, {
+      "volli:app-state-set": (key, value, sender) => {
+        seen.push(key, value, sender);
+        return { ok: true };
+      },
+      "volli:data-bootstrap": () => ({ ok: false, error: "unused" }),
+    });
+    invoke("volli:app-state-set", "k", "v");
+    expect(seen).toEqual(["k", "v", fakeEvent.sender]);
+  });
+
   it("converts an async handler rejection into a RESOLVED { ok: false } — failures must cross IPC as data", async () => {
     registerGuardedIpcHandlers(descriptors, {
       "volli:app-state-set": async () => {

@@ -1,4 +1,5 @@
 import { ipcMain } from "electron";
+import type { WebContents } from "electron";
 import { errorMessage } from "@volli/shared";
 import type { IpcArgs, IpcResult, VolliInvokeContract } from "@volli/shared";
 
@@ -17,9 +18,16 @@ export type IpcDescriptorTable<Cs extends keyof VolliInvokeContract> = {
   };
 };
 
-/** One handler body per channel — already-validated args in, the contract's result out. */
+/**
+ * One handler body per channel — already-validated args in, the contract's
+ * result out. The invoking `WebContents` rides along as a TRAILING parameter:
+ * the rare sender-scoped handler (file-watch subscriptions) declares it, and
+ * every other handler simply omits the trailing param it doesn't use.
+ */
 export type IpcHandlerTable<Cs extends keyof VolliInvokeContract> = {
-  readonly [C in Cs]: (...args: IpcArgs<C>) => IpcResult<C> | Promise<IpcResult<C>>;
+  readonly [C in Cs]: (
+    ...args: [...IpcArgs<C>, sender: WebContents]
+  ) => IpcResult<C> | Promise<IpcResult<C>>;
 };
 
 /**
@@ -37,10 +45,10 @@ export function registerGuardedIpcHandlers<Cs extends keyof VolliInvokeContract>
   const register = <C extends Cs>(channel: C): void => {
     const { guard, invalidError } = descriptors[channel];
     const handler = handlers[channel];
-    ipcMain.handle(channel, (_event, ...args: unknown[]) => {
+    ipcMain.handle(channel, (event, ...args: unknown[]) => {
       if (!guard(args)) return { ok: false, error: invalidError };
       try {
-        const outcome = handler(...args);
+        const outcome = handler(...args, event.sender);
         return outcome instanceof Promise
           ? outcome.catch((error: unknown) => ({ ok: false, error: errorMessage(error) }))
           : outcome;
