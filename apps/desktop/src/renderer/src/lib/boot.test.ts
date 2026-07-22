@@ -412,27 +412,49 @@ describe("refreshPlanningData", () => {
       })),
     });
 
-    expect(await refreshPlanningData(gateway)).toEqual({ ok: true });
+    expect(await refreshPlanningData({}, gateway)).toEqual({ ok: true });
     expect(useProjectsStore.getState().selectedProjectId).toBe("p1");
     expect(useBoardStore.getState().ticketsByProject.p1).toEqual([ticket]);
   });
 
-  it("bumps planningDataVersion so per-ticket surfaces refetch, but only on a successful refresh", async () => {
+  it("publishes lastPlanningChange so per-ticket surfaces refetch, but only on a successful refresh", async () => {
     useProjectsStore.getState().hydrate([], null);
     useBoardStore.getState().hydrate({}, {});
-    const before = useBoardStore.getState().planningDataVersion;
+    const before = useBoardStore.getState().lastPlanningChange.version;
 
     const okGateway = fakeGateway({
       bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({ ok: true, data: payload({}) })),
     });
-    expect(await refreshPlanningData(okGateway)).toEqual({ ok: true });
-    expect(useBoardStore.getState().planningDataVersion).toBe(before + 1);
+    expect(await refreshPlanningData({}, okGateway)).toEqual({ ok: true });
+    expect(useBoardStore.getState().lastPlanningChange.version).toBe(before + 1);
 
     const failGateway = fakeGateway({
       bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({ ok: false, error: "db gone" })),
     });
-    expect(await refreshPlanningData(failGateway)).toEqual({ ok: false, error: "db gone" });
+    expect(await refreshPlanningData({}, failGateway)).toEqual({ ok: false, error: "db gone" });
     // A failed refresh hydrates nothing, so it must not bump the version either.
-    expect(useBoardStore.getState().planningDataVersion).toBe(before + 1);
+    expect(useBoardStore.getState().lastPlanningChange.version).toBe(before + 1);
+  });
+
+  it("forwards the change scope (ticket/project) into lastPlanningChange, defaulting to untargeted", async () => {
+    useProjectsStore.getState().hydrate([], null);
+    useBoardStore.getState().hydrate({}, {});
+    const gateway = fakeGateway({
+      bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({ ok: true, data: payload({}) })),
+    });
+
+    // A targeted refresh carries the affected ticket/project through to the signal.
+    await refreshPlanningData({ ticketId: "t-9", projectId: "p-9" }, gateway);
+    expect(useBoardStore.getState().lastPlanningChange).toMatchObject({
+      ticketId: "t-9",
+      projectId: "p-9",
+    });
+
+    // An untargeted refresh (no scope) resets both to null — "anything may have changed".
+    await refreshPlanningData({}, gateway);
+    expect(useBoardStore.getState().lastPlanningChange).toMatchObject({
+      ticketId: null,
+      projectId: null,
+    });
   });
 });

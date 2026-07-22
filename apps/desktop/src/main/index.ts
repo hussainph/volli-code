@@ -2,12 +2,7 @@ import { app, BrowserWindow, dialog, Notification, session, shell } from "electr
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import {
-  diffManagedContent,
-  errorMessage,
-  MUTATING_AGENT_COMMANDS,
-  ticketBranchName,
-} from "@volli/shared";
+import { diffManagedContent, errorMessage, ticketBranchName } from "@volli/shared";
 import type { VolliIpcEvent } from "@volli/shared";
 import type { ManagedConflict } from "./harness-install";
 import { isInternalNavigationTarget } from "./navigation";
@@ -500,6 +495,14 @@ app.whenReady().then(async () => {
           // leaves the active columns Esc's the ticket's live agent sessions,
           // announced via toast exactly like the renderer's own move path.
           interruptTicketSessions: interruptTicketSessionsAnnounced,
+          // A socket command that commits a planning mutation reaches the
+          // renderer via this broadcast. The service reports the exact ticket it
+          // resolved and touched (CONCEPT #42 — it owns the display-id→ticket
+          // resolution), so a CLI `ticket comment`/`ticket move`/… lands on THAT
+          // ticket's open surfaces promptly while other tickets' readers stand
+          // down. Read-only commands and no-ops (e.g. a same-column move) never
+          // fire it, so a stray broadcast can't slip through.
+          onMutation: (change) => broadcastDataChanged(change),
         }).execute
       : async () =>
           ({
@@ -509,13 +512,7 @@ app.whenReady().then(async () => {
           }) as const;
     agentSocket = await startAgentSocket({
       socketPath: runtimePaths.socketPath,
-      execute: async (request) => {
-        const response = await execute(request);
-        if (response.ok && MUTATING_AGENT_COMMANDS.includes(request.cmd)) {
-          broadcastDataChanged();
-        }
-        return response;
-      },
+      execute,
     });
   } catch (error) {
     // The bundled `volli` CLI is entirely dead for this launch with no other

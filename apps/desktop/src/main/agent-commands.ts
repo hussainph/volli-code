@@ -25,6 +25,7 @@ import type {
   AgentErrorCode,
   AgentRequest,
   AgentResponse,
+  DataChangeKind,
   Project,
   SessionActivityState,
   TicketEventActor,
@@ -86,6 +87,15 @@ export interface AgentCommandServiceOptions {
    * Absent (tests) means the interrupt is a no-op.
    */
   interruptTicketSessions?: (ticketId: string) => string[];
+  /**
+   * Called after a socket command COMMITS a planning mutation, with the exact
+   * ticket it resolved and touched — the scope index.ts broadcasts as
+   * `volli:data-changed` so the renderer refreshes the right surfaces promptly.
+   * Never called for a read-only command or a no-op (e.g. a same-column
+   * `ticket.move`, or a scratch session's `session.done` that records nothing).
+   * Absent (tests) means the broadcast is a no-op.
+   */
+  onMutation?: (change: { ticketId: string; projectId: string; kind: DataChangeKind }) => void;
 }
 
 export interface AgentCommandService {
@@ -766,6 +776,9 @@ export function createAgentCommandService(
               { kind: "automation", sessionId: session.id, ticketId },
             );
           })();
+          // A Needs-Review signal landed on the ticket this session drives — a
+          // scratch session (ticketId null) records nothing, so it never fires.
+          options.onMutation?.({ ticketId, projectId: session.projectId, kind: "session" });
         }
         return {
           v: 1,
@@ -1055,10 +1068,16 @@ export function createAgentCommandService(
             );
             return ticket;
           });
+          const updated = run();
+          options.onMutation?.({
+            ticketId: resolved.ticket.id,
+            projectId: resolved.project.id,
+            kind: "ticket",
+          });
           return {
             v: 1,
             ok: true,
-            data: { ticket: agentTicket(run(), resolved.project) },
+            data: { ticket: agentTicket(updated, resolved.project) },
           };
         } catch (error) {
           return failure("MUTATION_FAILED", errorMessage(error));
@@ -1074,6 +1093,11 @@ export function createAgentCommandService(
           archiveTicketCommand(options.db, resolved.ticket.id, {
             now: archivedAt,
             actor: actor.actor,
+          });
+          options.onMutation?.({
+            ticketId: resolved.ticket.id,
+            projectId: resolved.project.id,
+            kind: "ticket",
           });
           return {
             v: 1,
@@ -1156,6 +1180,11 @@ export function createAgentCommandService(
             }
             options.notify?.(`${movedDisplay} → ${TICKET_STATUS_LABELS[to]}`, body);
           }
+          options.onMutation?.({
+            ticketId: resolved.ticket.id,
+            projectId: resolved.project.id,
+            kind: "ticket",
+          });
           return {
             v: 1,
             ok: true,
@@ -1185,6 +1214,11 @@ export function createAgentCommandService(
             },
             { now: now(), actor: actor.actor },
           );
+          options.onMutation?.({
+            ticketId: resolved.ticket.id,
+            projectId: resolved.project.id,
+            kind: "comment",
+          });
           return {
             v: 1,
             ok: true,
@@ -1267,6 +1301,11 @@ export function createAgentCommandService(
           },
           { now: createdAt, actor: actor.actor },
         );
+        options.onMutation?.({
+          ticketId: ticket.id,
+          projectId: resolved.project.id,
+          kind: "ticket",
+        });
         return {
           v: 1,
           ok: true,

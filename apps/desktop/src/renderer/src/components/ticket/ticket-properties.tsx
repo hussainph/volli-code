@@ -455,7 +455,7 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
   // The section only renders once the ticket has a worktree, so retention is
   // always worth reading here (enabled). It refetches on every planning refresh.
   const { state: retention, reload: reloadRetention } = useTicketRetention(ticket.id, true);
-  const planningDataVersion = useBoardStore((store) => store.planningDataVersion);
+  const planningChange = useBoardStore((store) => store.lastPlanningChange);
 
   /** The git-spawning half of the summary: `worktree.status` + the merge-base diff. */
   const refreshStatusAndDiff = React.useCallback(async () => {
@@ -498,26 +498,35 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
     void refresh();
   }, [refresh]);
 
-  // K4 (review): `planningDataVersion` bumps on EVERY data-changed broadcast —
-  // another ticket moving, a retention keep/dismiss elsewhere, etc. — not just
-  // this ticket's own git state changing. The broadcast is still load-bearing
-  // (it's the only path a CLI-side commit/push has to reach this rail — issue
-  // #80), so it can't just be dropped; but re-spawning `worktree.status` +
-  // `worktree.diff` git subprocesses on every single bump is wasteful. Split
-  // the two halves of the summary instead: the cheap TTL read re-runs directly
-  // on every bump, while the git-spawning refresh is debounced so a burst of
-  // unrelated broadcasts collapses into one subprocess pair.
+  // K4 (review): a data-changed broadcast used to be scopeless, so this rail had
+  // to debounce a git refresh on EVERY bump (another ticket moving, a retention
+  // toggle elsewhere) — wasteful, but undroppable since the broadcast is the only
+  // path a CLI/rail-side commit/push has to reach this rail (issue #80). The
+  // broadcast now carries the change's SCOPE, so three cases split cleanly:
+  //   • provably ANOTHER ticket → this ticket's git + TTL can't have moved, skip;
+  //   • THIS ticket (a commit/push/worktree change carrying our id) → the git
+  //     state genuinely changed, refetch promptly, NO debounce — the CLI-commit-
+  //     reaches-the-rail guarantee, now faster;
+  //   • untargeted ("anything may have changed") → we can't rule this ticket out,
+  //     so refresh conservatively but DEBOUNCED, collapsing a burst of unrelated
+  //     broadcasts into one status+diff subprocess pair.
+  // TTL is a cheap global DB read, so it re-runs directly on any non-skipped bump.
   const debouncedGitRefresh = useDebouncedCallback(() => void refreshStatusAndDiff(), 1500);
-  // Tracks the planningDataVersion already covered by the mount-time `refresh()` above, so this
+  // Tracks the version already covered by the mount-time `refresh()` above, so this
   // effect's own first run (which always fires on mount, whatever the initial version is) is a
   // no-op rather than a redundant duplicate fetch.
-  const seenPlanningDataVersion = React.useRef(planningDataVersion);
+  const seenPlanningVersion = React.useRef(planningChange.version);
   React.useEffect(() => {
-    if (seenPlanningDataVersion.current === planningDataVersion) return;
-    seenPlanningDataVersion.current = planningDataVersion;
+    if (seenPlanningVersion.current === planningChange.version) return;
+    seenPlanningVersion.current = planningChange.version;
+    if (planningChange.ticketId !== null && planningChange.ticketId !== ticket.id) return;
     void refreshTtl();
-    debouncedGitRefresh.schedule();
-  }, [planningDataVersion, refreshTtl, debouncedGitRefresh]);
+    if (planningChange.ticketId === ticket.id) {
+      void refreshStatusAndDiff();
+    } else {
+      debouncedGitRefresh.schedule();
+    }
+  }, [planningChange, ticket.id, refreshTtl, refreshStatusAndDiff, debouncedGitRefresh]);
 
   /** Standalone Commit (chevron menu): keeps its own "Committed: <message>" toast. */
   async function runCommitOnly() {
@@ -628,7 +637,7 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
    *
    * The handler already broadcasts `data-changed` on success (K3, review), but that broadcast
    * drives `refreshPlanningData` (lib/boot.ts), which awaits a full `bootstrap()` re-fetch of
-   * every project/ticket/label BEFORE it bumps `planningDataVersion` — a materially slower round
+   * every project/ticket/label BEFORE it publishes `lastPlanningChange` — a materially slower round
    * trip than this direct, single-ticket `retention.state()` read. The explicit `reloadRetention()`
    * here is therefore not redundant with the broadcast-driven refetch; it's what makes the Keep
    * pin's own toggle land without a visible lag, and the broadcast-driven refetch remains as the

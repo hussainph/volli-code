@@ -856,9 +856,11 @@ describe("volli:worktree-remove", () => {
     expect(vi.mocked(removeWorktree)).toHaveBeenCalledWith(expect.anything(), "ticket-1", {
       force: false,
     });
+    // Targeted at the ticket whose worktree path was cleared (projectId is
+    // undefined here — no ticket row was seeded — and undefined keys are ignored).
     expect(dataChangedSends).toContainEqual({
       channel: "volli:data-changed",
-      payload: { entity: "tickets" },
+      payload: { entity: "tickets", ticketId: "ticket-1", kind: "worktree" },
     });
   });
 
@@ -1044,9 +1046,10 @@ describe("volli:worktree-orphan-delete", () => {
 
     expect(result).toEqual({ ok: true });
     expect(existsSync(target)).toBe(false);
+    // An orphan is unlinked from any live ticket, so this broadcast is untargeted.
     expect(dataChangedSends).toContainEqual({
       channel: "volli:data-changed",
-      payload: { entity: "tickets" },
+      payload: { entity: "tickets", kind: "worktree" },
     });
   });
 });

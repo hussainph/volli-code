@@ -52,8 +52,16 @@ export interface BootStorage {
 
 export type BootResult = { ok: true } | { ok: false; error: string };
 
-/** Rehydrates only server-owned planning data after a socket-originated mutation. */
+/**
+ * Rehydrates only server-owned planning data after a socket-originated mutation.
+ * `change` is the `volli:data-changed` payload's scope (the affected ticket/
+ * project, or `{}` for an untargeted refresh): the board hydrate below is always
+ * wholesale (the recovery guarantee), but the scope is published so per-ticket
+ * surfaces can skip a refetch when the change provably targets a different
+ * ticket — see `useBoardStore().lastPlanningChange`.
+ */
 export async function refreshPlanningData(
+  change: { ticketId?: string; projectId?: string } = {},
   gateway: Pick<BootGateway, "bootstrap"> = defaultGateway,
 ): Promise<BootResult> {
   const result = await gateway.bootstrap();
@@ -65,11 +73,13 @@ export async function refreshPlanningData(
     : (projects[0]?.id ?? null);
   useProjectsStore.getState().hydrate(projects, selectedProjectId);
   useBoardStore.getState().hydrate(ticketsByProject, labelsByProject);
-  // Signal per-ticket surfaces (the Activity feed) to refetch data not carried
-  // in the board slices — events/comments — so a socket-originated comment
-  // shows up in an already-open ticket. Bumped only on refresh, never at boot
-  // (the feed mounts fresh there).
-  useBoardStore.getState().bumpPlanningDataVersion();
+  // Signal per-ticket surfaces (the Activity feed, retention badge, Done-flow
+  // rail) to refetch data not carried in the board slices — events/comments,
+  // retention/git state — so a socket-originated change shows up in an
+  // already-open ticket. Carries the change's scope so a surface for another
+  // ticket can stand down. Published only on refresh, never at boot (surfaces
+  // mount fresh there).
+  useBoardStore.getState().notePlanningChange(change);
   return { ok: true };
 }
 

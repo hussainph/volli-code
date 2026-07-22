@@ -490,8 +490,15 @@ export class PtyManager {
       // on the ticket — tell every window so the Branch/Base fields refresh from
       // their blank-and-editable pre-boot state. Only on `created` (a re-stamp of
       // a cleared path after removal also reconciles to `create`); a reused
-      // ready worktree changed nothing, so it never broadcasts.
-      if (worktreeOutcome.created) broadcastDataChanged();
+      // ready worktree changed nothing, so it never broadcasts. Targeted at the
+      // booting ticket, so its own rail refreshes promptly.
+      if (worktreeOutcome.created) {
+        broadcastDataChanged({
+          ticketId: scope.worktree.ticketId,
+          projectId: scope.projectId,
+          kind: "worktree",
+        });
+      }
     }
 
     // cwd resolution + guard. A renderer-supplied cwd (scratch / non-worktree
