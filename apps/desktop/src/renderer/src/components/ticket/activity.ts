@@ -232,7 +232,9 @@ export function describeEvent(payload: TicketEventPayload): string | null {
         ? "interrupted a session"
         : `interrupted ${payload.sessionIds.length} sessions`;
     case "session_resumed":
-      return "resumed the interrupted session";
+      // "earlier", not "interrupted" — resume works for any ENDED agent
+      // session (exited on its own, closed by the user), not only Esc'd ones.
+      return "resumed an earlier session";
     case "commented":
       return null;
   }

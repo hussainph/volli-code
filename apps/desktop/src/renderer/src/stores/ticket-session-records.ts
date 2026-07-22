@@ -49,6 +49,8 @@ export function createTicketSessionRecordsStore() {
           byTicket: {
             ...state.byTicket,
             [ticketId]: records.map((record) =>
+              // Object.assign, not spread: oxc(no-map-spread) bans spreads in
+              // map callbacks; a fresh target object keeps this copy-on-write.
               record.id === sessionId ? Object.assign({}, record, { title }) : record,
             ),
           },

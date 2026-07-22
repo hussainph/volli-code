@@ -65,7 +65,7 @@ describe("describeEvent", () => {
     );
     expect(
       describeEvent({ kind: "session_resumed", sessionId: "s2", previousSessionId: "s1" }),
-    ).toBe("resumed the interrupted session");
+    ).toBe("resumed an earlier session");
   });
 
   it("returns null for a commented event (rendered as its comment instead)", () => {
