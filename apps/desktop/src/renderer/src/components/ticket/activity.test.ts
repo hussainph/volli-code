@@ -63,6 +63,15 @@ describe("describeEvent", () => {
     expect(describeEvent({ kind: "commented", commentId: "c1" })).toBeNull();
   });
 
+  it("describes attachment add/remove events", () => {
+    expect(describeEvent({ kind: "attachment_added", attachmentId: "a1", label: "spec.pdf" })).toBe(
+      'attached "spec.pdf"',
+    );
+    expect(
+      describeEvent({ kind: "attachment_removed", attachmentId: "a1", label: "spec.pdf" }),
+    ).toBe('removed attachment "spec.pdf"');
+  });
+
   it("summarises label changes in both directions", () => {
     expect(describeEvent({ kind: "labels_changed", added: ["auth", "api"], removed: [] })).toBe(
       "added auth, api",
@@ -189,6 +198,8 @@ describe("EVENT_KIND_PRIORITY", () => {
       "priority_changed",
       "harness_changed",
       "labels_changed",
+      "attachment_added",
+      "attachment_removed",
       "worktree_changed",
       "archived",
       "unarchived",

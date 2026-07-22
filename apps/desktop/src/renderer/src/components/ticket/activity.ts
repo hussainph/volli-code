@@ -67,6 +67,8 @@ export const EVENT_KIND_PRIORITY: readonly TicketEventKind[] = [
   "priority_changed",
   "harness_changed",
   "labels_changed",
+  "attachment_added",
+  "attachment_removed",
   "worktree_changed",
   "archived",
   "unarchived",
@@ -227,6 +229,10 @@ export function describeEvent(payload: TicketEventPayload): string | null {
         : `reported ${payload.signal}: ${payload.reason}`;
     case "commented":
       return null;
+    case "attachment_added":
+      return `attached "${payload.label}"`;
+    case "attachment_removed":
+      return `removed attachment "${payload.label}"`;
   }
 }
 

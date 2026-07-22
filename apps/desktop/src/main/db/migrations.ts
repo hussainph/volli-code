@@ -266,6 +266,32 @@ const MIGRATION_010_RETENTION_KEEP = `
 ALTER TABLE tickets ADD COLUMN retention_keep INTEGER NOT NULL DEFAULT 0;
 `;
 
+/**
+ * Migration 011: ticket attachments (issue #77). `ticket_attachments` is spec
+ * material — a file or URL — attached to a ticket, materialized into the
+ * agent's worktree at session boot (a later PR; this migration is storage
+ * only). One row shape covers both variants (`kind` discriminates, like
+ * `ticket_comments`' single-table shape): a `file` row sets `file_name` (the
+ * original basename, bytes stored separately under Electron `userData` —
+ * `apps/desktop/src/main/attachment-store.ts`) and leaves `url` NULL; a `url`
+ * row sets `url` and leaves `file_name` NULL. `label` is always non-empty —
+ * the repo layer defaults it before insert and the CHECK enforces it at rest.
+ * `ON DELETE CASCADE` off `ticket_id` mirrors `ticket_comments`: an
+ * attachment cannot outlive its ticket.
+ */
+const MIGRATION_011_TICKET_ATTACHMENTS = `
+CREATE TABLE ticket_attachments (
+  id         TEXT PRIMARY KEY,
+  ticket_id  TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  kind       TEXT NOT NULL CHECK (kind IN ('file','url')),
+  label      TEXT NOT NULL CHECK (label <> ''),
+  file_name  TEXT,
+  url        TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_ticket_attachments_ticket ON ticket_attachments(ticket_id);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -308,6 +334,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 10,
     name: "tickets.retention_keep — per-ticket retention Keep pin",
     sql: MIGRATION_010_RETENTION_KEEP,
+  },
+  {
+    version: 11,
+    name: "ticket_attachments — file/url attachments on a ticket",
+    sql: MIGRATION_011_TICKET_ATTACHMENTS,
   },
 ];
 
