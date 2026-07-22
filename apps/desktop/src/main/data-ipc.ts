@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { statSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { ipcMain } from "electron";
 import type Database from "better-sqlite3";
@@ -99,11 +100,11 @@ import { orphanReport } from "./orphan-sweep";
 import {
   archiveAndClean,
   commitTicketRemaining,
-  diffStat,
   getRetentionTtlDays,
-  getWorktreeStatus,
   listBranches,
   publishTicketBranch,
+  readWorktreeDiff,
+  readWorktreeStatus,
   remove as removeWorktree,
   runNet,
   setRetentionTtlDays,
@@ -586,6 +587,15 @@ export function registerDataIpcHandlers(
         if (existing) {
           return { ok: true, project: existing, created: false };
         }
+        let stats;
+        try {
+          stats = statSync(input.path);
+        } catch {
+          return { ok: false, error: "Project path does not exist" };
+        }
+        if (!stats.isDirectory()) {
+          return { ok: false, error: "Project path is not a directory" };
+        }
         const now = Date.now();
         const ticketPrefix = derivePrefix(input.name);
         const prefixValidation = validateUniquePrefix(ticketPrefix, listProjects(db));
@@ -1052,8 +1062,13 @@ export function registerDataIpcHandlers(
           force: input.force,
         });
         if (!result.ok) return { ok: false, error: result.error };
-        // The worktree identity changed (path cleared) — re-hydrate every board.
-        broadcastDataChanged();
+        // The worktree identity changed (path cleared) for THIS ticket — re-hydrate
+        // every board, and let this ticket's own surfaces refresh promptly.
+        broadcastDataChanged({
+          ticketId: input.ticketId,
+          projectId: ticket?.project_id,
+          kind: "worktree",
+        });
         return { ok: true };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
@@ -1151,8 +1166,10 @@ export function registerDataIpcHandlers(
       }
       try {
         await rm(target, { recursive: true, force: true });
-        // A dirty orphan left the board's attention list — re-hydrate.
-        broadcastDataChanged();
+        // A dirty orphan left the board's attention list. An orphan is by
+        // definition unlinked from any live ticket, so there's no ticket to
+        // target — untargeted (everyone re-hydrates).
+        broadcastDataChanged({ kind: "worktree" });
         return { ok: true };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
@@ -1172,16 +1189,22 @@ export function registerDataIpcHandlers(
         return { ok: false, error: "Invalid ticket" };
       }
       try {
-        const ticket = getTicketRow(db, input.ticketId);
-        if (!ticket?.worktree_path) {
-          return { ok: false, error: "This ticket has no worktree." };
+        // Thin adapter over the ticketId-in read verb (CONCEPT #42): it owns the
+        // ticket→identity resolution, the no-worktree discrimination, AND the
+        // stamped-but-deleted disk check the CLI door always did but this one
+        // used to skip — which fed a deleted path into the errs-dirty status
+        // read and lied `uncommitted: true` to the renderer.
+        const read = readWorktreeStatus(worktreeDeps(db), input.ticketId);
+        switch (read.kind) {
+          case "missing-ticket":
+            return { ok: false, error: "Unknown ticket" };
+          case "no-worktree":
+            return { ok: false, error: "This ticket has no worktree." };
+          case "missing-on-disk":
+            return { ok: false, error: "This ticket's worktree directory is missing on disk." };
+          case "ok":
+            return { ok: true, status: read.status };
         }
-        const status = getWorktreeStatus(worktreeDeps(db).git, {
-          worktreePath: ticket.worktree_path,
-          branch: ticket.branch,
-          baseBranch: ticket.base_branch,
-        });
-        return { ok: true, status };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }
@@ -1195,16 +1218,19 @@ export function registerDataIpcHandlers(
         return { ok: false, error: "Invalid worktree diff request" };
       }
       try {
-        const ticket = getTicketRow(db, input.ticketId);
-        if (!ticket?.worktree_path) {
-          return { ok: false, error: "This ticket has no worktree." };
+        const read = readWorktreeDiff(worktreeDeps(db), input.ticketId, input.mode as DiffMode);
+        switch (read.kind) {
+          case "missing-ticket":
+            return { ok: false, error: "Unknown ticket" };
+          case "no-worktree":
+            return { ok: false, error: "This ticket has no worktree." };
+          case "missing-on-disk":
+            return { ok: false, error: "This ticket's worktree directory is missing on disk." };
+          case "diff-error":
+            return { ok: false, error: read.error };
+          case "ok":
+            return { ok: true, diff: read.diff };
         }
-        const result = diffStat(
-          worktreeDeps(db).git,
-          { worktreePath: ticket.worktree_path, baseBranch: ticket.base_branch },
-          input.mode as DiffMode,
-        );
-        return result.ok ? { ok: true, diff: result.value } : { ok: false, error: result.error };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }
@@ -1229,9 +1255,11 @@ export function registerDataIpcHandlers(
           // Clean-tree no-op: nothing landed, no event, nothing to re-hydrate.
           return { ok: true, committed: false, message: null };
         }
-        // No ticket row changed, but a `worktree_committed` event landed — the
-        // Activity feed hydrates from the same bootstrap, so re-hydrate boards.
-        broadcastDataChanged();
+        // No ticket row changed, but a `worktree_committed` event landed on THIS
+        // ticket. Targeting it is what lets the Details rail's git summary refresh
+        // promptly (the CLI/rail-side commit → rail guarantee, issue #80) instead
+        // of riding the debounced untargeted arm.
+        broadcastDataChanged({ ticketId: input.ticketId, kind: "worktree" });
         return { ok: true, committed: true, message: result.value.message };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
@@ -1251,8 +1279,9 @@ export function registerDataIpcHandlers(
           input.ticketId,
         );
         if (!result.ok) return { ok: false, error: result.error };
-        // `pr_url` was written (and a `pr_opened` event recorded) — re-hydrate.
-        broadcastDataChanged();
+        // `pr_url` was written (and a `pr_opened` event recorded) on THIS ticket —
+        // target it so its rail refreshes promptly, same as the commit path.
+        broadcastDataChanged({ ticketId: input.ticketId, kind: "worktree" });
         return { ok: true, url: result.value.url, existing: result.value.existing };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
@@ -1287,8 +1316,9 @@ export function registerDataIpcHandlers(
       try {
         if (!getTicketRow(db, input.ticketId)) return { ok: false, error: "Unknown ticket" };
         setTicketRetentionKeep(db, input.ticketId, input.keep, Date.now());
-        // The pin exempts both retention paths — re-hydrate so the surface updates.
-        broadcastDataChanged();
+        // The pin exempts both retention paths for THIS ticket — target it so its
+        // retention surface updates promptly.
+        broadcastDataChanged({ ticketId: input.ticketId, kind: "retention" });
         return { ok: true, keep: input.keep };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
@@ -1303,7 +1333,7 @@ export function registerDataIpcHandlers(
       try {
         // In-memory, launch-scoped: the prompt is re-offered next launch.
         getRetentionWatcher(db).dismiss(input.ticketId);
-        broadcastDataChanged();
+        broadcastDataChanged({ ticketId: input.ticketId, kind: "retention" });
         return { ok: true };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
@@ -1330,7 +1360,9 @@ export function registerDataIpcHandlers(
         }
         const result = await archiveAndClean(worktreeDeps(db), input.ticketId);
         if (!result.ok) return { ok: false, error: result.error };
-        broadcastDataChanged();
+        // The ticket archived + its worktree was removed — target it so its own
+        // still-open surfaces refresh (the full re-hydrate drops the card).
+        broadcastDataChanged({ ticketId: input.ticketId, kind: "retention" });
         return { ok: true };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
@@ -1358,8 +1390,9 @@ export function registerDataIpcHandlers(
       }
       try {
         const stored = setRetentionTtlDays(db, days, Date.now());
-        // The TTL clock moved — re-evaluate every ticket's archive-readiness.
-        broadcastDataChanged();
+        // The TTL clock is GLOBAL — it moves every Done ticket's archive-readiness
+        // at once, so this is untargeted: every retention surface must re-evaluate.
+        broadcastDataChanged({ kind: "retention" });
         return { ok: true, days: stored };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };

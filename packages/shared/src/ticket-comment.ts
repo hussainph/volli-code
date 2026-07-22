@@ -30,7 +30,8 @@ export interface TicketComment {
 /** The actor value for a human-authored comment/event. */
 export const USER_ACTOR = "user";
 
-const AGENT_ACTOR_PREFIX = "agent:";
+/** The actor-string prefix marking an {@link agentActor} value (`"agent:<harnessId>"`). */
+export const AGENT_ACTOR_PREFIX = "agent:";
 
 /** Builds the actor value for a comment/event authored by a given harness (`"agent:<harnessId>"`). */
 export function agentActor(harnessId: HarnessId): string {

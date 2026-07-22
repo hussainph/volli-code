@@ -23,6 +23,7 @@ import {
   type ActiveSessionRow,
   type SessionOutcome,
 } from "@renderer/components/sidebar/active-session-listing";
+import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { relativeTime } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
@@ -217,7 +218,7 @@ function SessionTier({
  */
 export function ActiveSessions({ project }: { project: Project }) {
   const tickets = useBoardStore((state) => state.ticketsByProject[project.id]) ?? EMPTY_TICKETS;
-  const planningDataVersion = useBoardStore((state) => state.planningDataVersion);
+  const planningChange = useBoardStore((state) => state.lastPlanningChange);
   const containers = useSessionsStore((state) => state.byOwner);
   const lastOutputAt = useSessionsStore((state) => state.lastOutputAt);
   const parkState = useSessionsStore((state) => state.parkState);
@@ -227,9 +228,8 @@ export function ActiveSessions({ project }: { project: Project }) {
   const ticketTabs = useWorkspaceStore(
     (state) => state.byProject[project.id]?.ticketTabs ?? EMPTY_TICKET_TABS,
   );
-  const openTicket = useWorkspaceStore((state) => state.openTicket);
+  const openTicketWorkspace = useWorkspaceStore((state) => state.openTicketWorkspace);
   const openTicketSession = useWorkspaceStore((state) => state.openTicketSession);
-  const setNav = useWorkspaceStore((state) => state.setNav);
   const [records, setRecords] = React.useState<SessionRecord[]>([]);
   const [eventsByTicket, setEventsByTicket] = React.useState<Record<string, TicketEvent[]>>({});
   const [now, setNow] = React.useState(() => Date.now());
@@ -254,12 +254,18 @@ export function ActiveSessions({ project }: { project: Project }) {
         .join(","),
     [containers, project.id, projectTicketIds],
   );
+  const needsReviewIds = React.useMemo(
+    () => tickets.filter((ticket) => ticket.status === "needs_review").map((ticket) => ticket.id),
+    [tickets],
+  );
+
+  const sessionsFetch = useLatestAsync();
   React.useEffect(() => {
-    let cancelled = false;
+    const token = sessionsFetch.claim();
     window.api.sessions
       .list({ projectId: project.id })
       .then((result) => {
-        if (cancelled) return;
+        if (!sessionsFetch.isCurrent(token)) return;
         if (!result.ok) {
           toastError(`Could not load active sessions: ${result.error}`);
           return;
@@ -267,19 +273,23 @@ export function ActiveSessions({ project }: { project: Project }) {
         setRecords(result.sessions);
       })
       .catch((error: unknown) => {
-        if (!cancelled) toastError(`Could not load active sessions: ${errorMessage(error)}`);
+        if (sessionsFetch.isCurrent(token))
+          toastError(`Could not load active sessions: ${errorMessage(error)}`);
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [project.id, liveSignature]);
+    return () => sessionsFetch.invalidate();
+  }, [project.id, liveSignature, sessionsFetch]);
 
-  React.useEffect(() => {
-    let cancelled = false;
+  const signalsFetch = useLatestAsync();
+  const loadAttentionSignals = React.useCallback(() => {
+    const token = signalsFetch.claim();
+    if (needsReviewIds.length === 0) {
+      setEventsByTicket({});
+      return;
+    }
     window.api.tickets
       .latestSignals({ projectId: project.id })
       .then((result) => {
-        if (cancelled) return;
+        if (!signalsFetch.isCurrent(token)) return;
         if (!result.ok) {
           toastError(`Could not load session attention: ${result.error}`);
           return;
@@ -287,12 +297,37 @@ export function ActiveSessions({ project }: { project: Project }) {
         setEventsByTicket(signalsToEventsByTicket(result.signals));
       })
       .catch((error: unknown) => {
-        if (!cancelled) toastError(`Could not load session attention: ${errorMessage(error)}`);
+        if (signalsFetch.isCurrent(token))
+          toastError(`Could not load session attention: ${errorMessage(error)}`);
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [project.id, planningDataVersion]);
+  }, [needsReviewIds, project.id, signalsFetch]);
+
+  // Two triggers, deduped to at most one fetch per render:
+  //   • the needs-review SET changed (a ticket entered/left the column) → always
+  //     reload, since the set of tickets whose signals we show is different now;
+  //   • a planning refresh whose scope is untargeted OR names a ticket we're
+  //     already showing → reload; a refresh for any OTHER ticket can't touch our
+  //     attention rows, so skip it.
+  // Tracking both previous values (rather than two effects) stops a refresh that
+  // ALSO moved the set from firing the reload twice. The ids ref starts `null` so
+  // the first run always loads (mount), whatever the initial version.
+  const seenNeedsReviewIds = React.useRef<readonly string[] | null>(null);
+  const seenPlanningVersion = React.useRef(planningChange.version);
+  React.useEffect(() => {
+    const idsChanged = seenNeedsReviewIds.current !== needsReviewIds;
+    const versionChanged = seenPlanningVersion.current !== planningChange.version;
+    seenNeedsReviewIds.current = needsReviewIds;
+    seenPlanningVersion.current = planningChange.version;
+    if (idsChanged) {
+      loadAttentionSignals();
+      return;
+    }
+    if (!versionChanged) return;
+    if (planningChange.ticketId !== null && !needsReviewIds.includes(planningChange.ticketId)) {
+      return;
+    }
+    loadAttentionSignals();
+  }, [needsReviewIds, planningChange, loadAttentionSignals]);
 
   React.useEffect(() => {
     if (liveSignature === "") return;
@@ -321,8 +356,7 @@ export function ActiveSessions({ project }: { project: Project }) {
       openTicketSession(project.id, row.ticket.id, row.target.tabId, row.target.paneId);
       return;
     }
-    setNav(project.id, "board");
-    openTicket(project.id, row.ticket.id);
+    openTicketWorkspace(project.id, row.ticket.id);
   };
 
   return (

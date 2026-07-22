@@ -12,6 +12,7 @@
 
 import {
   actorHarnessId,
+  AGENT_ACTOR_PREFIX,
   harnessLabel,
   isAgentActor,
   TICKET_PRIORITY_LABELS,
@@ -105,11 +106,6 @@ export function pickBunchLabel(events: readonly TicketEvent[]): TicketEvent {
   return events[events.length - 1]!;
 }
 
-// TODO: @volli/shared's ticket-comment.ts owns this prefix (its AGENT_ACTOR_PREFIX)
-// but doesn't export it; adopt that export here once it's public rather than
-// re-declaring the literal.
-const AGENT_PREFIX = "agent:";
-
 /**
  * A comment/event author's display name: the human is "You"; a first-class
  * harness shows its label (via @volli/shared's `harnessLabel`); a custom
@@ -119,7 +115,7 @@ export function commentAuthorLabel(actor: string): string {
   if (actor === USER_ACTOR) return "You";
   const harnessId = actorHarnessId(actor);
   if (harnessId !== null) return harnessLabel(harnessId);
-  if (isAgentActor(actor)) return actor.slice(AGENT_PREFIX.length);
+  if (isAgentActor(actor)) return actor.slice(AGENT_ACTOR_PREFIX.length);
   return actor;
 }
 

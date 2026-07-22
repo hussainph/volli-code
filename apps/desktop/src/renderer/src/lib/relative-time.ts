@@ -13,6 +13,22 @@ const DAY = 24 * HOUR;
 const WEEK = 7 * DAY;
 
 /**
+ * The one place owning absolute-date `Intl`/`toLocaleString` option objects
+ * (three call sites previously each rolled their own): `{ time: true }` adds
+ * hour/minute to the date-only default. Always includes the year — unlike
+ * {@link relativeTime}'s year-omitted-if-current-year rollup, an explicit
+ * "created"/"updated"/"archived" stamp reads better with it always present.
+ */
+export function formatStamp(epochMs: number, options: { time?: boolean } = {}): string {
+  return new Date(epochMs).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    ...(options.time ? { hour: "numeric", minute: "2-digit" } : {}),
+  });
+}
+
+/**
  * `epochMs` phrased relative to `now` (default: wall clock): "just now",
  * "5m ago", "3h ago", "2d ago", "3w ago", or an absolute "Mon D" / "Mon D, YYYY"
  * date beyond ~4 weeks. Future or sub-45s stamps read as "just now".

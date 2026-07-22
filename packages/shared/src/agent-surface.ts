@@ -26,22 +26,6 @@ export const AGENT_COMMANDS = [
 
 export type AgentCommand = (typeof AGENT_COMMANDS)[number];
 
-/**
- * The subset of {@link AGENT_COMMANDS} whose socket execution mutates persisted
- * state and must broadcast `volli:data-changed` so the renderer refreshes live.
- * `session.done`/`session.blocked` belong here because they record a ticket
- * event (a Needs Review signal on the ticket the session drives).
- */
-export const MUTATING_AGENT_COMMANDS: readonly AgentCommand[] = [
-  "ticket.create",
-  "ticket.update",
-  "ticket.move",
-  "ticket.comment",
-  "ticket.archive",
-  "session.done",
-  "session.blocked",
-];
-
 export const AGENT_ERROR_CODES = [
   "USAGE",
   "INVALID_REQUEST",

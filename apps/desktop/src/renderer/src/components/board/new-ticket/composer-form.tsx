@@ -124,10 +124,13 @@ export function ComposerForm({
         useBoardStore.getState().addTicket(projectId, ticketStatus, ticketTitle, options),
       startSession: (projectId, ticketId, kickoff) =>
         createTerminalSession(ticketScope(projectId, ticketId), kickoff),
-      openTicket: (projectId, ticketId) =>
-        useWorkspaceStore.getState().openTicket(projectId, ticketId),
+      openTicketWorkspace: (projectId, ticketId) =>
+        useWorkspaceStore.getState().openTicketWorkspace(projectId, ticketId),
+      // openTicketSession (not the narrower setTicketActiveTab) so the freshly
+      // booted session also becomes this ticket's active session in the
+      // sessions store, same as every other surface that focuses a session tab.
       focusSession: (projectId, ticketId, sessionId) =>
-        useWorkspaceStore.getState().setTicketActiveTab(projectId, ticketId, sessionId),
+        useWorkspaceStore.getState().openTicketSession(projectId, ticketId, sessionId),
       persistHarness: (harnessId) => useUiStore.getState().setLastHarnessId(harnessId),
       toastSuccess: (message) => toast.success(message),
     }),

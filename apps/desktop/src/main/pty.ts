@@ -22,7 +22,6 @@ import {
   resolveShell,
   ticketSessionEnv,
   treeIsCpuQuiet,
-  trimWorktreeFailureStderr,
   worktreeOrientationPreamble,
 } from "@volli/shared";
 import type {
@@ -59,8 +58,8 @@ import {
 import { getProjectById } from "./db/projects-repo";
 import { isPathWithinRoots } from "./project-roots";
 import { ensureProjectArtifactsDir } from "./volli-fs";
-import { buildSetupSentinelLine, ensure, parseSetupSentinel, setPhase } from "./worktree";
-import type { EnsureOutcome } from "./worktree";
+import { createSetupRun, ensure } from "./worktree";
+import type { EnsureOutcome, SetupRun } from "./worktree";
 import { worktreeDeps, worktreesHome } from "./worktree-runtime";
 import { isInside } from "./worktree/paths";
 
@@ -178,24 +177,16 @@ interface Session {
   quietCpuSamples: number;
   /**
    * Non-null ONLY while a freshly-created worktree session runs its
-   * sentinel-gated setup command (worktree-support §6). `tail` accumulates
-   * recent terminal output (capped, front-sliced — the sentinel is a trailing
-   * marker) which {@link enqueueData} scans for the completion sentinel;
-   * `launchCommand` is the harness command HELD until the setup command exits
-   * 0, then typed. Cleared the instant the sentinel appears (either outcome) —
-   * a non-zero exit leaves the terminal a live shell with the failure visible
-   * and never launches the harness.
+   * sentinel-gated setup command (worktree-support §6). The whole state machine
+   * — tail scanning, phase transitions, the `worktree_failed(setup)` event —
+   * lives in the worktree module's {@link createSetupRun} handle; this field is
+   * just pty.ts's grip on it: {@link enqueueData} feeds it output chunks and
+   * {@link create}'s onExit notifies it of a premature shell death. Cleared the
+   * instant the run settles (either outcome) — a non-zero exit leaves the
+   * terminal a live shell with the failure visible and never launches the harness.
    */
-  setupWatch: { ticketId: string; tail: string; launchCommand: string | null } | null;
+  setupRun: SetupRun | null;
 }
-
-/**
- * The setup command's retained output cap. The sentinel is emitted on the last
- * line, so slicing from the FRONT (keeping the trailing window) can never drop
- * it while bounding a chatty installer's memory. Also the stderr context the
- * `worktree_failed` event carries when setup exits non-zero.
- */
-const SETUP_TAIL_MAX_CHARS = 16_000;
 
 /** Plain awaitable pause; the breathe window between SIGCONT and the verdict. */
 const delay = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms));
@@ -499,8 +490,15 @@ export class PtyManager {
       // on the ticket — tell every window so the Branch/Base fields refresh from
       // their blank-and-editable pre-boot state. Only on `created` (a re-stamp of
       // a cleared path after removal also reconciles to `create`); a reused
-      // ready worktree changed nothing, so it never broadcasts.
-      if (worktreeOutcome.created) broadcastDataChanged();
+      // ready worktree changed nothing, so it never broadcasts. Targeted at the
+      // booting ticket, so its own rail refreshes promptly.
+      if (worktreeOutcome.created) {
+        broadcastDataChanged({
+          ticketId: scope.worktree.ticketId,
+          projectId: scope.projectId,
+          kind: "worktree",
+        });
+      }
     }
 
     // cwd resolution + guard. A renderer-supplied cwd (scratch / non-worktree
@@ -673,12 +671,12 @@ export class PtyManager {
         parkedPids: null,
         parkedManually: false,
         quietCpuSamples: 0,
-        setupWatch: null,
+        setupRun: null,
       };
       this.sessions.set(sessionId, session);
 
       pty.onData((data) => {
-        this.enqueueData(db, sessionId, data);
+        this.enqueueData(sessionId, data);
       });
 
       // Launch the session's first line now that it is fully registered AND
@@ -693,9 +691,10 @@ export class PtyManager {
       // preamble (agents must never re-infer their cwd) — buildable only now
       // that ensure resolved the identity. When ensure FRESHLY created the
       // worktree AND the project defines a setup command, that command runs
-      // FIRST, sentinel-gated (§6): type the wrapped setup line, enter phase
-      // `setting-up`, and hold the harness command in `setupWatch` until
-      // enqueueData sees the completion sentinel. A reused worktree (created
+      // FIRST, sentinel-gated (§6): the worktree module's `createSetupRun` handle
+      // owns the whole machine (wrapped line, phase `setting-up`, tail scan,
+      // failure event); pty.ts only writes its command line and holds the handle
+      // in `setupRun` so enqueueData can feed it. A reused worktree (created
       // false) is already `ready` from ensure and launches immediately.
       const worktree = scope.worktree;
       if (worktree !== null && worktreeOutcome !== null) {
@@ -730,11 +729,14 @@ export class PtyManager {
         }
         const setupCommand = worktree.setupCommand?.trim() ?? "";
         if (worktreeOutcome.created && setupCommand.length > 0) {
-          session.setupWatch = { ticketId: worktree.ticketId, tail: "", launchCommand };
-          setPhase(worktree.ticketId, "setting-up", worktreeDeps(db).onPhase);
           // `file` is the resolved shell the PTY was spawned with — the sentinel
           // wrapper is shell-aware (fish is not POSIX), so it must match.
-          pty.write(`${buildSetupSentinelLine(setupCommand, file)}\r`);
+          const setupRun = createSetupRun(
+            { db, onPhase: worktreeDeps(db).onPhase },
+            { ticketId: worktree.ticketId, setupCommand, shellPath: file, launchCommand },
+          );
+          session.setupRun = setupRun;
+          pty.write(`${setupRun.commandLine}\r`);
         } else if (launchCommand !== null) {
           pty.write(`${launchCommand}\r`);
         }
@@ -746,21 +748,16 @@ export class PtyManager {
         // Flush buffered output first so the renderer never sees the exit
         // event ahead of the shell's final bytes.
         this.flush(sessionId);
-        // A shell dying with the setup watch still armed means the sentinel
-        // never printed — the subshell wrapper contains a setup's own `exit`,
-        // but a crash or an `exec` can still take the shell down. Without this
-        // the ticket would sit `setting-up` forever with zero failure signal;
-        // report it as a setup failure (best-effort, same stance as the
-        // non-zero-sentinel path in enqueueData).
+        // A shell dying with the setup run still armed means the sentinel never
+        // printed — the subshell wrapper contains a setup's own `exit`, but a
+        // crash or an `exec` can still take the shell down. Without this the
+        // ticket would sit `setting-up` forever with zero failure signal; hand
+        // the exit to the run so it records the setup failure (best-effort).
         const watchedSession = this.sessions.get(sessionId);
-        const armedWatch = watchedSession?.setupWatch ?? null;
-        if (watchedSession !== undefined && armedWatch !== null) {
-          watchedSession.setupWatch = null;
-          this.recordSetupFailure(
-            db,
-            armedWatch.ticketId,
-            `${armedWatch.tail}\n[shell exited (${exitCode}) before the setup sentinel]`,
-          );
+        const armedRun = watchedSession?.setupRun ?? null;
+        if (watchedSession !== undefined && armedRun !== null) {
+          watchedSession.setupRun = null;
+          armedRun.handleExit(exitCode);
         }
         // Close out the durable record (and, for a still-linked ticket session,
         // record `session_ended`) — runs whether the shell exited on its own or
@@ -808,55 +805,27 @@ export class PtyManager {
     }
   }
 
-  /**
-   * Records a sentinel-gated setup failure — the single source of truth shared
-   * by the two paths that can observe one: the non-zero completion sentinel
-   * ({@link enqueueData}) and a shell that died with the watch still armed
-   * ({@link create}'s onExit). Drives the phase to `failed` and best-effort
-   * records a `worktree_failed`(setup) event with `stderr` as failure context.
-   * The event is best-effort because the ticket can be deleted while its setup
-   * command runs, and a throwing insert must never escape into the pty hot path.
-   */
-  private recordSetupFailure(db: Database.Database, ticketId: string, stderr: string): void {
-    setPhase(ticketId, "failed", worktreeDeps(db).onPhase);
-    try {
-      recordTicketEvent(
-        db,
-        ticketId,
-        { kind: "worktree_failed", stage: "setup", stderr: trimWorktreeFailureStderr(stderr) },
-        Date.now(),
-      );
-    } catch (error) {
-      console.error(`[volli] failed to record setup failure: ${errorMessage(error)}`);
-    }
-  }
-
-  /** Buffers a pty chunk toward the next coalesced volli:terminal-data send. `db` comes from the create() that wired the onData handler — a live session implies the manager booted with one. */
-  private enqueueData(db: Database.Database, sessionId: string, data: string): void {
+  /** Buffers a pty chunk toward the next coalesced volli:terminal-data send. */
+  private enqueueData(sessionId: string, data: string): void {
     const session = this.sessions.get(sessionId);
     if (session === undefined) return;
     // PTY output is activity: it keeps a busy session out of the idle window.
     session.lastActivityAt = Date.now();
     // Sentinel-gated worktree setup step (§6): while the setup command runs, its
-    // output is ALSO scanned for the completion sentinel (output still flows to
-    // the renderer below — the user watches the install). Until the sentinel
-    // appears the harness command is held; no timeout, since "no sentinel yet"
-    // is not an error (installs are slow, prompts happen). On exit 0 the harness
-    // command is typed and the phase goes `ready`; on a non-zero exit the phase
-    // goes `failed`, a `worktree_failed`(setup) event is recorded with the tail
-    // as the best failure context, and the harness is NOT launched — the
+    // output is ALSO fed to the setup run (output still flows to the renderer
+    // below — the user watches the install). The run holds the harness command
+    // until the sentinel appears; no timeout, since "no sentinel yet" is not an
+    // error (installs are slow, prompts happen). On exit 0 it advances the phase
+    // to `ready` and returns the harness command to type; on a non-zero exit it
+    // records `worktree_failed`(setup) itself and returns nothing to launch — the
     // terminal stays a live shell with the failure on screen.
-    const watch = session.setupWatch;
-    if (watch !== null) {
-      watch.tail = (watch.tail + data).slice(-SETUP_TAIL_MAX_CHARS);
-      const exitCode = parseSetupSentinel(watch.tail);
-      if (exitCode !== null) {
-        session.setupWatch = null;
-        if (exitCode === 0) {
-          setPhase(watch.ticketId, "ready", worktreeDeps(db).onPhase);
-          if (watch.launchCommand !== null) session.pty.write(`${watch.launchCommand}\r`);
-        } else {
-          this.recordSetupFailure(db, watch.ticketId, watch.tail);
+    const setupRun = session.setupRun;
+    if (setupRun !== null) {
+      const result = setupRun.feed(data);
+      if (result.status !== "pending") {
+        session.setupRun = null;
+        if (result.status === "ready" && result.launchCommand !== null) {
+          session.pty.write(`${result.launchCommand}\r`);
         }
       }
     }
