@@ -1,12 +1,15 @@
 import * as React from "react";
+import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
 import { ColumnsPlusRightIcon } from "@phosphor-icons/react/dist/csr/ColumnsPlusRight";
 import { MinusCircleIcon } from "@phosphor-icons/react/dist/csr/MinusCircle";
 import { PlusCircleIcon } from "@phosphor-icons/react/dist/csr/PlusCircle";
 import { RowsPlusBottomIcon } from "@phosphor-icons/react/dist/csr/RowsPlusBottom";
 import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
+import type { SessionRecord } from "@volli/shared";
 
 import { TerminalView } from "@renderer/components/sessions/terminal-view";
+import { Button } from "@renderer/components/ui/button";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -15,9 +18,11 @@ import {
   ContextMenuShortcut,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
+import { canResumeSession } from "@renderer/components/ticket/session-history";
 import { cn } from "@renderer/lib/utils";
 import type { SessionLayout, SessionTab, TerminalSplitDirection } from "@renderer/stores/sessions";
 import { sessionPanes } from "@renderer/stores/sessions";
+import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { getEngine } from "@renderer/terminal/registry";
 
 interface SessionSplitLayoutProps {
@@ -29,6 +34,12 @@ interface SessionSplitLayoutProps {
   onSplit(sessionId: string, direction: TerminalSplitDirection): void;
   onClose(sessionId: string): void;
   onResize(splitId: string, ratio: number): void;
+  /**
+   * Boots a resumed session for an exited, resumable ticket pane
+   * (interrupt/resume, issue #78). Absent for the scratch surface — resume is
+   * ticket-only, so scratch panes never show the affordance.
+   */
+  onResume?(sessionId: string): void;
 }
 
 /** Recursive app-owned split tree. Each leaf is one TerminalView/engine/PTY. */
@@ -40,8 +51,20 @@ export function SessionSplitLayout({
   onSplit,
   onClose,
   onResize,
+  onResume,
 }: SessionSplitLayoutProps) {
   const isSplit = sessionPanes(tab.layout).length > 1;
+  // The ticket's durable session records (stores/ticket-session-records.ts) —
+  // the ONE shared cache also fed by the rail and SessionsLayer's exit
+  // handler, so an exited pane's resumability shows up here without a second
+  // `listForTicket` fetch. `byTicket` is keyed by ticketId only, so this is a
+  // no-op lookup (undefined) for the scratch surface.
+  const records = useTicketSessionRecordsStore((state) => state.byTicket[ownerId]);
+  const recordsById = React.useMemo(() => {
+    if (records === undefined) return null;
+    return new Map<string, SessionRecord>(records.map((record) => [record.id, record]));
+  }, [records]);
+
   return (
     <div className={cn("absolute inset-0 min-h-0 min-w-0", !visible && "hidden")}>
       <SplitNode
@@ -55,6 +78,8 @@ export function SessionSplitLayout({
         onSplit={onSplit}
         onClose={onClose}
         onResize={onResize}
+        onResume={onResume}
+        recordsById={recordsById}
       />
     </div>
   );
@@ -71,12 +96,25 @@ interface SplitNodeProps {
   onSplit(sessionId: string, direction: TerminalSplitDirection): void;
   onClose(sessionId: string): void;
   onResize(splitId: string, ratio: number): void;
+  onResume?(sessionId: string): void;
+  recordsById: Map<string, SessionRecord> | null;
 }
 
 function SplitNode(props: SplitNodeProps) {
   const { layout } = props;
   if (layout.kind === "pane") {
     const active = layout.sessionId === props.activePaneId;
+    // Exited-pane resume affordance (interrupt/resume, issue #78): only for a
+    // ticket pane whose PTY has actually exited AND whose own durable record
+    // is resumable (agent launch, ended, harness knows how to resume). The
+    // dead terminal's scrollback is left exactly as-is underneath — resuming
+    // always boots a NEW tab, never touches this pane.
+    const record = props.recordsById?.get(layout.sessionId);
+    const resumable =
+      layout.exitCode !== null &&
+      record !== undefined &&
+      canResumeSession(record) &&
+      props.onResume !== undefined;
     return (
       <ContextMenu>
         <ContextMenuTrigger asChild>
@@ -100,6 +138,26 @@ function SplitNode(props: SplitNodeProps) {
               active={active}
               onActivate={() => props.onActivate(layout.sessionId)}
             />
+            {resumable ? (
+              <div
+                className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center pb-4"
+                onPointerDown={(event) => event.stopPropagation()}
+              >
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  className="pointer-events-auto shadow-md"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    props.onResume?.(layout.sessionId);
+                  }}
+                >
+                  <ArrowClockwiseIcon weight="fill" />
+                  Resume session
+                </Button>
+              </div>
+            ) : null}
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent>

@@ -91,8 +91,9 @@ import { confirmDestructiveClose, PtyManager, registerTerminalIpcHandlers } from
 import type { ParkConfig, ProcessInspector } from "./park";
 import { listTicketEvents } from "./db/events-repo";
 import { insertProject } from "./db/projects-repo";
-import { listSessions, listTicketSessions } from "./db/sessions-repo";
-import { openTestDb, testProject, testTicket, type TestDb } from "./db/test-helpers";
+import { getSession, insertSession, listSessions, listTicketSessions } from "./db/sessions-repo";
+import { openTestDb, testProject, testSession, testTicket, type TestDb } from "./db/test-helpers";
+import type { HarnessId } from "@volli/shared";
 import { deleteTicket, insertTicket } from "./db/tickets-repo";
 import { syncProjectRoots } from "./project-roots";
 
@@ -470,6 +471,20 @@ describe("volli:terminal-create", () => {
         cols: 80,
         rows: 24,
         ticket: { ticketId: "t", kickoff: { harnessId: "codex", prompt: 5 } },
+      },
+    ],
+    [
+      "a non-object resume",
+      { workspaceId: "w", cwd: "/x", cols: 80, rows: 24, ticket: { ticketId: "t", resume: 42 } },
+    ],
+    [
+      "a resume with a non-string sessionId",
+      {
+        workspaceId: "w",
+        cwd: "/x",
+        cols: 80,
+        rows: 24,
+        ticket: { ticketId: "t", resume: { sessionId: 7 } },
       },
     ],
   ])("rejects %s request without spawning", async (_label, req) => {
@@ -1297,6 +1312,235 @@ describe("ticket sessions", () => {
   });
 });
 
+describe("PtyManager.interruptTicketSessions", () => {
+  beforeEach(() => {
+    insertTicket(testDb.db, testTicket("w", { id: "itk1", ticketNumber: 40, usesWorktree: false }));
+    insertTicket(testDb.db, testTicket("w", { id: "itk2", ticketNumber: 41, usesWorktree: false }));
+  });
+
+  it("writes a single Esc to each live agent session of the ticket and returns their ids", async () => {
+    const agent = await createKickoffSession("itk1", { harnessId: "codex", prompt: "go" });
+    if (!agent.result.ok) throw new Error(`expected session, got ${agent.result.error}`);
+    agent.pty.write.mockClear(); // drop the kickoff launch write
+
+    const interrupted = manager.interruptTicketSessions("itk1");
+
+    expect(interrupted).toEqual([agent.result.sessionId]);
+    expect(agent.pty.write).toHaveBeenCalledTimes(1);
+    expect(agent.pty.write).toHaveBeenCalledWith("\x1b");
+  });
+
+  it("never interrupts a bare shell session of the same ticket", async () => {
+    const shell = await createTicketSession("itk1"); // no kickoff → launchKind shell
+    if (!shell.result.ok) throw new Error(`expected session, got ${shell.result.error}`);
+
+    expect(manager.interruptTicketSessions("itk1")).toEqual([]);
+    expect(shell.pty.write).not.toHaveBeenCalled();
+  });
+
+  it("never interrupts another ticket's agent sessions", async () => {
+    const mine = await createKickoffSession("itk1", { harnessId: "codex", prompt: "go" });
+    const other = await createKickoffSession("itk2", { harnessId: "codex", prompt: "go" });
+    if (!mine.result.ok || !other.result.ok) throw new Error("expected two sessions");
+    mine.pty.write.mockClear();
+    other.pty.write.mockClear();
+
+    const interrupted = manager.interruptTicketSessions("itk1");
+
+    expect(interrupted).toEqual([mine.result.sessionId]);
+    expect(mine.pty.write).toHaveBeenCalledWith("\x1b");
+    expect(other.pty.write).not.toHaveBeenCalled();
+  });
+
+  it("returns an empty array for a ticket with no live sessions", () => {
+    expect(manager.interruptTicketSessions("itk1")).toEqual([]);
+  });
+
+  it("keeps interrupting the rest when one session's pty write throws", async () => {
+    const broken = await createKickoffSession("itk1", { harnessId: "codex", prompt: "go" });
+    const healthy = await createKickoffSession("itk1", { harnessId: "codex", prompt: "go" });
+    if (!broken.result.ok || !healthy.result.ok) throw new Error("expected two sessions");
+    broken.pty.write.mockClear();
+    healthy.pty.write.mockClear();
+    broken.pty.write.mockImplementation(() => {
+      throw new Error("EIO: pty is gone");
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      const interrupted = manager.interruptTicketSessions("itk1");
+
+      expect(interrupted).toEqual([healthy.result.sessionId]);
+      expect(healthy.pty.write).toHaveBeenCalledWith("\x1b");
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+});
+
+describe("resume launch (issue #78)", () => {
+  beforeEach(() => {
+    insertTicket(testDb.db, testTicket("w", { id: "rtk1", ticketNumber: 50, usesWorktree: false }));
+    insertTicket(testDb.db, testTicket("w", { id: "rtk2", ticketNumber: 51, usesWorktree: false }));
+  });
+
+  /** Inserts an ENDED session for `ticketId` with the given resume seed + harness. */
+  function insertEndedAgent(
+    ticketId: string,
+    harnessSessionId: string | null,
+    harnessId: HarnessId = "claude-code",
+  ) {
+    const record = testSession("w", ticketId, { harnessId, launchKind: "agent" });
+    record.harnessSessionId = harnessSessionId;
+    record.endedAt = 1000;
+    insertSession(testDb.db, record);
+    return record;
+  }
+
+  /** Boots a resume session for `ticketId` picking up `priorSessionId`. */
+  async function resumeSession(ticketId: string, priorSessionId: string) {
+    const pty = makeFakePty();
+    spawn.mockReturnValueOnce(pty);
+    const result = await invokeCreate(makeWebContents(), {
+      workspaceId: "w",
+      cwd: root,
+      cols: 80,
+      rows: 24,
+      ticket: { ticketId, resume: { sessionId: priorSessionId } },
+    });
+    return { result, pty };
+  }
+
+  /**
+   * Attempts a resume WITHOUT queueing a spawn — the error paths reject before
+   * spawning, and a queued-but-unconsumed pty would leak into later tests
+   * (`clearAllMocks` does not drain a `mockReturnValueOnce`).
+   */
+  const resumeExpectingError = (ticketId: string, priorSessionId: string) =>
+    invokeCreate(makeWebContents(), {
+      workspaceId: "w",
+      cwd: root,
+      cols: 80,
+      rows: 24,
+      ticket: { ticketId, resume: { sessionId: priorSessionId } },
+    });
+
+  it("resumes an ended claude session with a recorded id via `claude --resume '<id>'`", async () => {
+    const prior = insertEndedAgent("rtk1", "abc-123");
+    const { result, pty } = await resumeSession("rtk1", prior.id);
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+
+    expect(pty.write).toHaveBeenCalledTimes(1);
+    expect(pty.write).toHaveBeenCalledWith("claude --resume 'abc-123'\r");
+    expect(result.session.launchKind).toBe("agent");
+    expect(result.session.harnessId).toBe("claude-code");
+  });
+
+  it("resumes an ended claude session with no recorded id via `claude --continue`", async () => {
+    const prior = insertEndedAgent("rtk1", null);
+    const { result, pty } = await resumeSession("rtk1", prior.id);
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+
+    expect(pty.write).toHaveBeenCalledWith("claude --continue\r");
+  });
+
+  it("inherits the prior session's harnessSessionId onto the new row as its resume seed", async () => {
+    const prior = insertEndedAgent("rtk1", "seed-xyz");
+    const { result } = await resumeSession("rtk1", prior.id);
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+
+    expect(result.session.harnessSessionId).toBe("seed-xyz");
+    const row = getSession(testDb.db, result.sessionId);
+    expect(row?.harnessSessionId).toBe("seed-xyz");
+  });
+
+  it("records a session_resumed event linking the new session to the previous one", async () => {
+    const prior = insertEndedAgent("rtk1", "abc-123");
+    const { result } = await resumeSession("rtk1", prior.id);
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+
+    const resumed = listTicketEvents(testDb.db, "rtk1").filter(
+      (event) => event.payload.kind === "session_resumed",
+    );
+    expect(resumed).toHaveLength(1);
+    expect(resumed[0]?.payload).toEqual({
+      kind: "session_resumed",
+      sessionId: result.sessionId,
+      previousSessionId: prior.id,
+    });
+  });
+
+  it("rejects resuming an unknown session", async () => {
+    const result = await resumeExpectingError("rtk1", "no-such-session");
+    if (result.ok) throw new Error("expected an error");
+    expect(result.error).toContain("unknown session");
+  });
+
+  it("rejects resuming a harness with no resume support, without spawning", async () => {
+    const prior = insertEndedAgent("rtk1", "abc-123", "made-up-harness" as HarnessId);
+    const result = await resumeExpectingError("rtk1", prior.id);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
+    expect(result.error).toContain("does not support resuming");
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects resuming a session that is still live", async () => {
+    const live = testSession("w", "rtk1", { launchKind: "agent" });
+    live.harnessSessionId = "abc-123"; // endedAt stays null → still live
+    insertSession(testDb.db, live);
+
+    const result = await resumeExpectingError("rtk1", live.id);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
+    expect(result.error).toContain("still live");
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects resuming a non-agent (shell) session", async () => {
+    const shell = testSession("w", "rtk1", { launchKind: "shell" });
+    shell.endedAt = 1000;
+    insertSession(testDb.db, shell);
+
+    const result = await resumeExpectingError("rtk1", shell.id);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
+    expect(result.error).toContain("agent session");
+  });
+
+  it("rejects resuming a session that belongs to another ticket", async () => {
+    const prior = insertEndedAgent("rtk2", "abc-123");
+    const result = await resumeExpectingError("rtk1", prior.id);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
+    expect(result.error).toContain("another ticket");
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects a request carrying both kickoff and resume, without spawning", async () => {
+    const prior = insertEndedAgent("rtk1", "abc-123");
+    // No spawn is queued: create() rejects the both-present request before spawning.
+    const result = await invokeCreate(makeWebContents(), {
+      workspaceId: "w",
+      cwd: root,
+      cols: 80,
+      rows: 24,
+      ticket: {
+        ticketId: "rtk1",
+        kickoff: { harnessId: "codex", prompt: "go" },
+        resume: { sessionId: prior.id },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
+    expect(result.error).toContain("cannot both");
+    expect(spawn).not.toHaveBeenCalled();
+  });
+});
+
 describe("worktree ticket sessions", () => {
   // A real worktree lands in ~/.volli/worktrees; here `ensure` is mocked to
   // return a path inside the project root, so the main-derived cwd passes
@@ -1374,6 +1618,34 @@ describe("worktree ticket sessions", () => {
     expect(written).toContain("run tests");
     expect(written).toContain("codex");
     expect(written.endsWith("\r")).toBe(true);
+  });
+
+  it("resumes a worktree ticket through the same ensure cwd, writing the resume line (no preamble)", async () => {
+    ensureOk(false); // reused worktree → launch immediately, no setup gate
+    const prior = testSession("wp", "wt1", { harnessId: "claude-code", launchKind: "agent" });
+    prior.harnessSessionId = "wt-abc";
+    prior.endedAt = 1000;
+    insertSession(testDb.db, prior);
+
+    const pty = makeFakePty();
+    spawn.mockReturnValueOnce(pty);
+    const result = await invokeCreate(makeWebContents(), {
+      workspaceId: "wp",
+      cwd: root,
+      cols: 80,
+      rows: 24,
+      ticket: { ticketId: "wt1", resume: { sessionId: prior.id } },
+    });
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+
+    // ensure resolved the worktree cwd, exactly like a kickoff launch.
+    const [, , options] = spawn.mock.calls[0] as [string, string[], { cwd: string }];
+    expect(options.cwd).toBe(wtCwd());
+    // The resume line is written verbatim — no orientation preamble.
+    expect(pty.write).toHaveBeenCalledTimes(1);
+    const written = pty.write.mock.calls[0]![0] as string;
+    expect(written).toBe("claude --resume 'wt-abc'\r");
+    expect(written).not.toContain("isolated git worktree");
   });
 
   it("aborts boot and never spawns when ensure fails — never falling back to the main checkout", async () => {
@@ -1956,6 +2228,33 @@ describe("warm park", () => {
       expect(parkManager.kill(sessionId)).toEqual({ ok: true });
       expect(contCalls()).toEqual([pty.pid]);
       expect(pty.kill).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("interruptTicketSessions (parked)", () => {
+    it("wakes a parked agent session before writing the Esc", async () => {
+      insertTicket(
+        testDb.db,
+        testTicket("w", { id: "itk-park", ticketNumber: 42, usesWorktree: false }),
+      );
+      const pty = makeFakePty();
+      spawn.mockReturnValueOnce(pty);
+      const created = await parkManager.create(asWc(makeWebContents()), {
+        workspaceId: "w",
+        cwd: root,
+        cols: 80,
+        rows: 24,
+        ticket: { ticketId: "itk-park", kickoff: { harnessId: "codex", prompt: "go" } },
+      });
+      if (!created.ok) throw new Error(`expected session, got ${created.error}`);
+      await parkManager.park(created.sessionId, { manual: true });
+      pty.write.mockClear();
+
+      const interrupted = parkManager.interruptTicketSessions("itk-park");
+
+      expect(interrupted).toEqual([created.sessionId]);
+      expect(contCalls()).toEqual([pty.pid]); // woken before the write
+      expect(pty.write).toHaveBeenCalledWith("\x1b");
     });
   });
 

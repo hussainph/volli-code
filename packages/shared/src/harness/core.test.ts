@@ -77,6 +77,26 @@ describe("harnessAdapters", () => {
   });
 });
 
+describe("resume metadata (issue #78)", () => {
+  it("gives claude-code --resume/--continue argv fragments", () => {
+    const claude = harnessAdapters.find((adapter) => adapter.id === "claude-code");
+    expect(claude?.resumeIdArgs).toEqual(["--resume"]);
+    expect(claude?.resumeLatestArgs).toEqual(["--continue"]);
+  });
+
+  it("gives codex resume/resume --last argv fragments", () => {
+    const codex = harnessAdapters.find((adapter) => adapter.id === "codex");
+    expect(codex?.resumeIdArgs).toEqual(["resume"]);
+    expect(codex?.resumeLatestArgs).toEqual(["resume", "--last"]);
+  });
+
+  it("gives opencode --session/--continue argv fragments", () => {
+    const opencode = harnessAdapters.find((adapter) => adapter.id === "opencode");
+    expect(opencode?.resumeIdArgs).toEqual(["--session"]);
+    expect(opencode?.resumeLatestArgs).toEqual(["--continue"]);
+  });
+});
+
 describe("buildHarnessInstallPlan", () => {
   it("does nothing when no supported harness is detected", () => {
     expect(buildHarnessInstallPlan({ home: "/home/dev", detected: [] })).toEqual([]);

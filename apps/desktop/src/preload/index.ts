@@ -30,6 +30,7 @@ import type {
   SessionRenameResult,
   SessionsResult,
   TerminalBusyResult,
+  SessionsInterruptedEvent,
   TerminalDataEvent,
   TerminalExitEvent,
   TerminalIoResult,
@@ -195,6 +196,18 @@ const api = {
     /** Renames a session (scratch or ticket-scoped); the title is trimmed and must be non-empty in main. */
     rename: (input: { sessionId: string; title: string }): Promise<SessionRenameResult> =>
       ipcRenderer.invoke("volli:session-rename" satisfies VolliIpcChannel, input),
+    /**
+     * Subscribes to backward-move interrupt announcements (issue #78, CONCEPT
+     * #20): fired only when a ticket move out of the active columns actually
+     * Esc'd live agent sessions — the renderer toasts it, never silently.
+     */
+    onInterrupted: (callback: (event: SessionsInterruptedEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: SessionsInterruptedEvent) =>
+        callback(payload);
+      ipcRenderer.on("volli:sessions-interrupted" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:sessions-interrupted" satisfies VolliIpcEvent, listener);
+    },
   },
   labels: {
     setColor: (input: { labelId: string; color: string | null }): Promise<LabelResult> =>

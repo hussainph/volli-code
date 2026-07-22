@@ -20,6 +20,7 @@ export const AGENT_COMMANDS = [
   "session.peek",
   "session.done",
   "session.blocked",
+  "session.link",
   "notify",
 ] as const;
 

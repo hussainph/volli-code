@@ -1,4 +1,9 @@
-import { harnessLabel, type SessionActivityState, type SessionRecord } from "@volli/shared";
+import {
+  buildHarnessResumeCommand,
+  harnessLabel,
+  type SessionActivityState,
+  type SessionRecord,
+} from "@volli/shared";
 
 /**
  * The chip's displayed status: the honest PTY-derived {@link SessionActivityState}
@@ -48,6 +53,39 @@ export function groupSessionRows(rows: readonly TicketSessionRow[]): {
     (row.isOpen && row.status !== "exited" ? current : history).push(row);
   }
   return { current, history };
+}
+
+/**
+ * Whether `record` can be resumed (interrupt/resume, issue #78). A record
+ * qualifies only when it actually launched an agent (a bare shell or
+ * pre-metadata `unknown` record has no harness session to resume), has
+ * actually ended (a still-live session has nothing to resume INTO — it's
+ * already running), and its harness knows how to resume at all — an
+ * unrecognized/generic harness id makes {@link buildHarnessResumeCommand}
+ * return `null` for both its by-id and latest-in-cwd fallbacks.
+ */
+export function canResumeSession(record: SessionRecord): boolean {
+  return (
+    record.launchKind === "agent" &&
+    record.endedAt !== null &&
+    buildHarnessResumeCommand(record.harnessId, record.harnessSessionId) !== null
+  );
+}
+
+/**
+ * The newest resumable record among `records`, or `null` if none qualify.
+ * Compares `createdAt` directly rather than trusting input order — the store
+ * (`listTicketSessions`, `created_at DESC`) already hands these back
+ * newest-first, but this stays correct even if a caller passes an
+ * unordered/filtered subset.
+ */
+export function latestResumableSession(records: readonly SessionRecord[]): SessionRecord | null {
+  let latest: SessionRecord | null = null;
+  for (const record of records) {
+    if (!canResumeSession(record)) continue;
+    if (latest === null || record.createdAt > latest.createdAt) latest = record;
+  }
+  return latest;
 }
 
 /** Title + truthful source metadata make collapsed history easy to recover. */

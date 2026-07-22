@@ -64,6 +64,15 @@ export const TICKET_EVENT_KINDS = [
   // is just enough for the event log to read without a join).
   "attachment_added",
   "attachment_removed",
+  // Backward-move interrupt/resume (issue #78, CONCEPT #20): a board move
+  // that exits the active columns (`leavesActiveColumns` in `ticket.ts`)
+  // interrupts every still-live session on the ticket — `sessions_interrupted`
+  // records the interrupted session ids in one event. `session_resumed` is
+  // written when a ticket re-enters an active column and a new session picks
+  // up where an interrupted one left off — `sessionId` is the new session's
+  // record id, `previousSessionId` the ended session it resumes.
+  "sessions_interrupted",
+  "session_resumed",
 ] as const;
 
 export type TicketEventKind = (typeof TICKET_EVENT_KINDS)[number];
@@ -136,7 +145,9 @@ export type TicketEventPayload =
   | { kind: "pr_merged"; url: string }
   | { kind: "session_signal"; signal: "done" | "blocked"; reason: string | null }
   | { kind: "attachment_added"; attachmentId: string; label: string }
-  | { kind: "attachment_removed"; attachmentId: string; label: string };
+  | { kind: "attachment_removed"; attachmentId: string; label: string }
+  | { kind: "sessions_interrupted"; sessionIds: string[] }
+  | { kind: "session_resumed"; sessionId: string; previousSessionId: string };
 
 /**
  * The `ensure`-pipeline stage a `worktree_failed` event aborted at

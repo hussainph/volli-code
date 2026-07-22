@@ -476,6 +476,17 @@ const SESSION_BLOCKED_SPEC = sessionSignalSpec(
   ["Acts on VOLLI_SESSION; needs a Volli session."],
 );
 
+const SESSION_LINK_SPEC: CommandSpec = {
+  summary: "Record the harness's own session id on the current Volli session.",
+  example: "volli session link 4f1c9a2e-8b7d-4e5a-9c3f-2a1b0d6e5f4c",
+  notes: [
+    "Acts on VOLLI_SESSION; needs a Volli session.",
+    "Seeds resume-on-re-entry; usually run from the harness's session-start hook.",
+  ],
+  positionalId: { label: "session link" },
+  options: {},
+};
+
 const TICKET_MOVE_SPEC: CommandSpec = {
   summary: "Move a ticket to another column.",
   example: "volli ticket move VC-12 --to needs-review",
@@ -723,6 +734,7 @@ export const COMMAND_HELP: readonly CommandHelpEntry[] = [
   { name: "session peek", group: "Session", spec: SESSION_PEEK_SPEC },
   { name: "session done", group: "Session", spec: SESSION_DONE_SPEC },
   { name: "session blocked", group: "Session", spec: SESSION_BLOCKED_SPEC },
+  { name: "session link", group: "Session", spec: SESSION_LINK_SPEC },
   { name: "notify", group: "Session", spec: NOTIFY_SPEC },
   { name: "app launch", group: "App", spec: APP_LAUNCH_SPEC },
   { name: "help", group: "App", spec: HELP_SPEC },
@@ -780,6 +792,9 @@ export function parseCliArgs(argv: readonly string[]): CliParseResult {
   }
   if (argv[0] === "session" && argv[1] === "blocked") {
     return parseWithSpec("session.blocked", argv.slice(2), SESSION_BLOCKED_SPEC);
+  }
+  if (argv[0] === "session" && argv[1] === "link") {
+    return parseWithSpec("session.link", argv.slice(2), SESSION_LINK_SPEC);
   }
   if (argv[0] === "session" && argv[1] === "list") {
     return parseWithSpec("session.list", argv.slice(2), SESSION_LIST_SPEC);
