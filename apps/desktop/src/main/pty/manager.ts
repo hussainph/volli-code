@@ -38,14 +38,14 @@ import type {
   VolliIpcChannel,
   VolliIpcEvent,
 } from "@volli/shared";
-import { attachmentsRoot } from "./attachment-store";
-import { materializeAttachments } from "./attachment-materialize";
-import { broadcastDataChanged } from "./broadcast";
-import type { DbHandle } from "./data-ipc";
-import { createProcessInspector, parkConfigFromEnv } from "./park";
-import type { ParkConfig, ProcessInspector } from "./park";
-import { recordTicketEvent } from "./db/events-repo";
-import { listAttachments } from "./db/attachments-repo";
+import { attachmentsRoot } from "../attachment-store";
+import { materializeAttachments } from "../attachment-materialize";
+import { broadcastDataChanged } from "../broadcast";
+import type { DbHandle } from "../data-ipc";
+import { createProcessInspector, parkConfigFromEnv } from "../park";
+import type { ParkConfig, ProcessInspector } from "../park";
+import { recordTicketEvent } from "../db/events-repo";
+import { listAttachments } from "../db/attachments-repo";
 import {
   countProjectScratchSessions,
   countTicketSessions,
@@ -54,14 +54,14 @@ import {
   getSessionTicketId,
   getTicketSessionContext,
   insertSession,
-} from "./db/sessions-repo";
-import { getProjectById } from "./db/projects-repo";
-import { isPathWithinRoots } from "./project-roots";
-import { ensureProjectArtifactsDir } from "./volli-fs";
-import { createSetupRun, ensure } from "./worktree";
-import type { EnsureOutcome, SetupRun } from "./worktree";
-import { worktreeDeps, worktreesHome } from "./worktree-runtime";
-import { isInside } from "./worktree/paths";
+} from "../db/sessions-repo";
+import { getProjectById } from "../db/projects-repo";
+import { isPathWithinRoots } from "../project-roots";
+import { ensureProjectArtifactsDir } from "../volli-fs";
+import { createSetupRun, ensure } from "../worktree";
+import type { EnsureOutcome, SetupRun } from "../worktree";
+import { worktreeDeps, worktreesHome } from "../worktree-runtime";
+import { isInside } from "../worktree/paths";
 
 // Structural subset of node-pty we depend on — declared here so nothing in
 // this module needs a value import of node-pty (whose native binary is built
