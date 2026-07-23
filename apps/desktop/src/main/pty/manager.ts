@@ -40,6 +40,8 @@ import type { EnsureOutcome, SetupRun } from "../worktree";
 import { worktreeDeps, worktreesHome } from "../worktree-runtime";
 import { isInside } from "../worktree/paths";
 import { composeWorktreeLaunchCommand } from "./launch";
+import { createOutputPipeline } from "./output";
+import type { OutputPipeline, OutputSink } from "./output";
 import { closeOutSession, persistSessionStart } from "./persistence";
 import { resolveScope } from "./scope";
 
@@ -78,21 +80,6 @@ interface NodePty {
   ): PtyProcess;
 }
 
-// Flow control (the VS Code ack pattern): the renderer acks every data event
-// it consumes; once the chars in flight exceed the high watermark the pty is
-// paused, and it resumes only after acks drain the count below the low one.
-// Without this, `yes` or `cat bigfile` queues unbounded IPC in the main
-// process faster than the renderer can render.
-const FLOW_CONTROL_HIGH_WATERMARK = 100_000;
-const FLOW_CONTROL_LOW_WATERMARK = 5_000;
-
-// Output batching: raw pty chunks are tiny (often <1 KiB), so a big `cat` is
-// thousands of IPC messages. Chunks coalesce for a frame's worth of time —
-// or until the buffer is large enough that waiting just adds latency.
-const BATCH_WINDOW_MS = 8;
-const BATCH_MAX_CHARS = 256_000;
-const OBSERVATION_TAIL_MAX_CHARS = 256_000;
-
 interface Session {
   pty: PtyProcess;
   /** The workspace this session is scoped to (future `volli` CLI/notifications consumer). */
@@ -116,25 +103,15 @@ interface Session {
   webContents: WebContents;
   /** The `destroyed` listener we attached, so we can detach it on cleanup. */
   onDestroyed: () => void;
-  /** Output chunks coalescing toward the next flush. */
-  pendingChunks: string[];
-  pendingChars: number;
-  flushTimer: NodeJS.Timeout | null;
-  /** Chars sent to the renderer and not yet acked; drives pause/resume. */
-  unackedChars: number;
-  paused: boolean;
   /**
-   * Recent raw output retained independently of renderer batching for the
-   * read-only session peek — kept as chunks (not one growing string) so the hot
-   * output path appends in O(chunk) instead of rebuilding a ~256KB string every
-   * event. Whole chunks are trimmed off the front once dropping one still leaves
-   * {@link OBSERVATION_TAIL_MAX_CHARS} behind; {@link Session.tailChars} tracks
-   * the joined length so the trim never re-sums. `peek` joins + slices to the
-   * exact cap on demand.
+   * This session's output pipeline: batching, the ack-based flow control, and
+   * the bounded observation tail — all the machinery {@link enqueueData} used to
+   * spread across seven Session fields, now owned by {@link createOutputPipeline}
+   * (issue #99). The manager keeps only the side effects that ride the same
+   * onData chunk (activity stamping, setup-run feeding) and adapts a
+   * {@link OutputSink} onto this session's webContents + pty.
    */
-  tailChunks: string[];
-  /** Running total of `tailChunks` char lengths — the trim bound, kept incrementally. */
-  tailChars: number;
+  output: OutputPipeline;
   /** Last PTY output OR user input, epoch ms — the warm-park idle clock. */
   lastActivityAt: number;
   /** Renderer-reported: the session's pane is currently on screen. */
@@ -160,7 +137,7 @@ interface Session {
    * sentinel-gated setup command (worktree-support §6). The whole state machine
    * — tail scanning, phase transitions, the `worktree_failed(setup)` event —
    * lives in the worktree module's {@link createSetupRun} handle; this field is
-   * just pty.ts's grip on it: {@link enqueueData} feeds it output chunks and
+   * just pty.ts's grip on it: the pty `onData` handler feeds it output chunks and
    * {@link create}'s onExit notifies it of a premature shell death. Cleared the
    * instant the run settles (either outcome) — a non-zero exit leaves the
    * terminal a live shell with the failure visible and never launches the harness.
@@ -367,6 +344,20 @@ export class PtyManager {
       };
       // A window teardown must not leave an orphaned shell behind.
       webContents.once("destroyed", onDestroyed);
+      // The output pipeline's window onto this session: a batch is delivered as
+      // one `volli:terminal-data` event (dropped, `send` returning false, once
+      // the owning window is destroyed), and backpressure maps onto the pty's
+      // real fd pause/resume.
+      const sink: OutputSink = {
+        send: (data: string): boolean => {
+          if (webContents.isDestroyed()) return false;
+          const payload: TerminalDataEvent = { sessionId, data };
+          webContents.send("volli:terminal-data" satisfies VolliIpcEvent, payload);
+          return true;
+        },
+        pause: () => pty.pause(),
+        resume: () => pty.resume(),
+      };
       const session: Session = {
         pty,
         workspaceId: request.workspaceId,
@@ -376,13 +367,7 @@ export class PtyManager {
         cwd,
         webContents,
         onDestroyed,
-        pendingChunks: [],
-        pendingChars: 0,
-        flushTimer: null,
-        unackedChars: 0,
-        paused: false,
-        tailChunks: [],
-        tailChars: 0,
+        output: createOutputPipeline(sink),
         lastActivityAt: now,
         visible: false,
         keepAwake: false,
@@ -394,7 +379,33 @@ export class PtyManager {
       this.sessions.set(sessionId, session);
 
       pty.onData((data) => {
-        this.enqueueData(sessionId, data);
+        const target = this.sessions.get(sessionId);
+        // node-pty can deliver a final read after the session was forgotten
+        // (kill drops it from the map before pty.kill); that chunk must not
+        // buffer, schedule a flush, or send.
+        if (target === undefined) return;
+        // PTY output is activity: it keeps a busy session out of the idle window.
+        target.lastActivityAt = Date.now();
+        // Sentinel-gated worktree setup step (§6): while the setup command runs,
+        // its output is ALSO fed to the setup run (output still flows to the
+        // renderer below — the user watches the install). The run holds the
+        // harness command until the sentinel appears; no timeout, since "no
+        // sentinel yet" is not an error (installs are slow, prompts happen). On
+        // exit 0 it advances the phase to `ready` and returns the harness command
+        // to type; on a non-zero exit it records `worktree_failed`(setup) itself
+        // and returns nothing to launch — the terminal stays a live shell with
+        // the failure on screen.
+        const setupRun = target.setupRun;
+        if (setupRun !== null) {
+          const result = setupRun.feed(data);
+          if (result.status !== "pending") {
+            target.setupRun = null;
+            if (result.status === "ready" && result.launchCommand !== null) {
+              target.pty.write(`${result.launchCommand}\r`);
+            }
+          }
+        }
+        target.output.enqueue(data);
       });
 
       // Launch the session's first line now that it is fully registered AND
@@ -441,7 +452,7 @@ export class PtyManager {
       pty.onExit(({ exitCode }) => {
         // Flush buffered output first so the renderer never sees the exit
         // event ahead of the shell's final bytes.
-        this.flush(sessionId);
+        session.output.flush();
         // A shell dying with the setup run still armed means the sentinel never
         // printed — the subshell wrapper contains a setup's own `exit`, but a
         // crash or an `exec` can still take the shell down. Without this the
@@ -470,98 +481,17 @@ export class PtyManager {
     }
   }
 
-  /** Buffers a pty chunk toward the next coalesced volli:terminal-data send. */
-  private enqueueData(sessionId: string, data: string): void {
-    const session = this.sessions.get(sessionId);
-    if (session === undefined) return;
-    // PTY output is activity: it keeps a busy session out of the idle window.
-    session.lastActivityAt = Date.now();
-    // Sentinel-gated worktree setup step (§6): while the setup command runs, its
-    // output is ALSO fed to the setup run (output still flows to the renderer
-    // below — the user watches the install). The run holds the harness command
-    // until the sentinel appears; no timeout, since "no sentinel yet" is not an
-    // error (installs are slow, prompts happen). On exit 0 it advances the phase
-    // to `ready` and returns the harness command to type; on a non-zero exit it
-    // records `worktree_failed`(setup) itself and returns nothing to launch — the
-    // terminal stays a live shell with the failure on screen.
-    const setupRun = session.setupRun;
-    if (setupRun !== null) {
-      const result = setupRun.feed(data);
-      if (result.status !== "pending") {
-        session.setupRun = null;
-        if (result.status === "ready" && result.launchCommand !== null) {
-          session.pty.write(`${result.launchCommand}\r`);
-        }
-      }
-    }
-    // Append to the observation tail as a chunk, then drop whole chunks off the
-    // front while doing so still leaves at least the cap behind (peek slices to
-    // the exact cap on demand). Keeps this hot path O(chunk), not O(cap).
-    session.tailChunks.push(data);
-    session.tailChars += data.length;
-    let firstChunk = session.tailChunks[0];
-    while (
-      firstChunk !== undefined &&
-      session.tailChars - firstChunk.length >= OBSERVATION_TAIL_MAX_CHARS
-    ) {
-      session.tailChunks.shift();
-      session.tailChars -= firstChunk.length;
-      firstChunk = session.tailChunks[0];
-    }
-    session.pendingChunks.push(data);
-    session.pendingChars += data.length;
-    if (session.pendingChars >= BATCH_MAX_CHARS) {
-      this.flush(sessionId);
-      return;
-    }
-    if (session.flushTimer === null) {
-      session.flushTimer = setTimeout(() => {
-        this.flush(sessionId);
-      }, BATCH_WINDOW_MS);
-    }
-  }
-
-  /**
-   * Sends the session's buffered output as ONE data event and applies the
-   * flow-control accounting to the joined payload. No-ops (dropping the
-   * buffer) once the owning window is destroyed. Note a paused pty stops
-   * producing new onData chunks, but anything already buffered still flushes.
-   */
-  private flush(sessionId: string): void {
-    const session = this.sessions.get(sessionId);
-    if (session === undefined) return;
-    if (session.flushTimer !== null) {
-      clearTimeout(session.flushTimer);
-      session.flushTimer = null;
-    }
-    if (session.pendingChunks.length === 0) return;
-    const data = session.pendingChunks.join("");
-    session.pendingChunks = [];
-    session.pendingChars = 0;
-    if (session.webContents.isDestroyed()) return;
-    const payload: TerminalDataEvent = { sessionId, data };
-    session.webContents.send("volli:terminal-data" satisfies VolliIpcEvent, payload);
-    session.unackedChars += data.length;
-    if (!session.paused && session.unackedChars > FLOW_CONTROL_HIGH_WATERMARK) {
-      session.paused = true;
-      session.pty.pause();
-    }
-  }
-
   /**
    * Renderer flow-control ack: `chars` of output were consumed. Only honored
    * from the session's owning webContents — the same window-scoping stance as
-   * the output events themselves.
+   * the output events themselves. The pause/resume accounting lives in the
+   * session's output pipeline.
    */
   ack(sender: WebContents, sessionId: string, chars: number): void {
     const session = this.sessions.get(sessionId);
     if (session === undefined) return;
     if (session.webContents !== sender) return;
-    session.unackedChars = Math.max(0, session.unackedChars - chars);
-    if (session.paused && session.unackedChars <= FLOW_CONTROL_LOW_WATERMARK) {
-      session.paused = false;
-      session.pty.resume();
-    }
+    session.output.ack(chars);
   }
 
   /** The workspace a live session was created for, or undefined if unknown. */
@@ -585,14 +515,9 @@ export class PtyManager {
   ): { status: SessionActivityState; output: string } | undefined {
     const session = this.sessions.get(sessionId);
     if (!session) return undefined;
-    // Join the retained chunks and slice to the exact cap — the front chunk may
-    // be over-retained (kept because dropping it would breach the cap), so the
-    // slice is what makes the peeked tail byte-identical to the old string form.
-    const normalized = session.tailChunks
-      .join("")
-      .slice(-OBSERVATION_TAIL_MAX_CHARS)
-      .replace(/\r\n?/g, "\n");
-    const output = normalized.split("\n").slice(-lines).join("\n");
+    // The pipeline owns the bounded tail; peekTail joins + slices to the exact
+    // cap and normalizes line endings, byte-identical to the old string form.
+    const output = session.output.peekTail(lines);
     let status: SessionActivityState = "idle";
     if (session.parkedPids !== null) status = "parked";
     else {
@@ -676,7 +601,7 @@ export class PtyManager {
     if (preStopBlock !== null) return { ok: false, error: preStopBlock };
     // Flush pending output before freezing — the renderer must not be left
     // waiting on bytes the stopped shell can no longer push.
-    this.flush(sessionId);
+    session.output.flush();
     // Stop parent first so it can't fork new children we haven't seen, then its
     // descendants in listed order.
     const stopOrder = [rootPid, ...initial];
@@ -1087,17 +1012,13 @@ export class PtyManager {
 
   /**
    * Drops a session from the registry, detaches its window listener, and
-   * discards any buffered-but-unflushed output along with its flush timer.
+   * disposes its output pipeline (discarding any buffered-but-unflushed output
+   * along with its flush timer).
    */
   private forget(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (session === undefined) return;
-    if (session.flushTimer !== null) {
-      clearTimeout(session.flushTimer);
-      session.flushTimer = null;
-    }
-    session.pendingChunks = [];
-    session.pendingChars = 0;
+    session.output.dispose();
     if (!session.webContents.isDestroyed()) {
       session.webContents.removeListener("destroyed", session.onDestroyed);
     }
