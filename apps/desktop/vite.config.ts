@@ -81,6 +81,7 @@ export default defineConfig({
         "src/terminal/option-as-alt.ts",
         "src/terminal/session-lifecycle.ts",
         "**/src/main/ipc.ts",
+        "**/src/main/ipc-registry.ts",
         "**/src/main/navigation.ts",
         "**/src/main/project-roots.ts",
         "**/src/main/pty.ts",

@@ -5,52 +5,71 @@ import { contextBridge, ipcRenderer } from "electron";
 import type {
   AppStateSetResult,
   ArchivedTicketsResult,
+  ArtifactCreateInput,
   ArtifactCreateResult,
   BootstrapResult,
+  CommentCreateInput,
+  CommentIdInput,
+  CommentUpdateInput,
   CreateTerminalSessionRequest,
   CreateTerminalSessionResult,
   DataChangedEvent,
   FileChangedEvent,
+  FileIndexInput,
   FileIndexResult,
+  FilePathInput,
   FileReadResult,
+  FileWriteInput,
   FileWriteResult,
   GhosttyAppearancePayload,
   GhosttyConfigResult,
-  HarnessId,
+  IpcArgs,
+  IpcResult,
   LabelResult,
+  LabelSetColorInput,
   LegacyImportRequest,
   LegacyImportResult,
   ListDirectoryResult,
   PickFolderResult,
+  ProjectCreateInput,
   ProjectCreateResult,
+  ProjectIdInput,
   ProjectMutationResult,
+  ProjectUpdateInput,
   ProjectUpdateResult,
   Result,
   RevealResult,
+  SessionRenameInput,
   SessionRenameResult,
+  SessionsInterruptedEvent,
   SessionsResult,
   TerminalBusyResult,
-  SessionsInterruptedEvent,
   TerminalDataEvent,
   TerminalExitEvent,
   TerminalIoResult,
   TerminalParkStateEvent,
   TicketCommentResult,
   TicketCommentsResult,
+  TicketCreateInput,
   TicketEventsResult,
   TicketLatestSignalsResult,
-  TicketPriority,
+  TicketIdInput,
+  TicketMoveInput,
   TicketResult,
+  TicketSetLabelsInput,
+  TicketSetPriorityInput,
   TicketsResult,
-  TicketStatus,
+  TicketUpdateInput,
   UiZoomCommand,
-  VolliIpcChannel,
+  VolliInvokeContract,
   VolliIpcEvent,
+  VolliSendContract,
   WorktreeBranchesResult,
   WorktreeCommitResult,
   WorktreeDiffMode,
   WorktreeDiffResult,
   WorktreeOrphanDeleteResult,
+  WorktreeOrphansInput,
   WorktreeOrphansResult,
   WorktreePhaseEvent,
   WorktreePushPrResult,
@@ -64,6 +83,20 @@ import type {
   RetentionTtlResult,
 } from "@volli/shared";
 
+/** Typed `ipcRenderer.invoke` bound to the shared contract: the channel literal fixes both the argument tuple and the result type, so a wrong pairing is a compile error. */
+const invoke = <C extends keyof VolliInvokeContract>(
+  channel: C,
+  ...args: IpcArgs<C>
+): Promise<IpcResult<C>> => ipcRenderer.invoke(channel, ...args);
+
+/** Typed `ipcRenderer.send` for the 2 fire-and-forget channels, bound the same way. */
+const send = <C extends keyof VolliSendContract>(
+  channel: C,
+  ...args: VolliSendContract[C]["args"]
+): void => {
+  ipcRenderer.send(channel, ...args);
+};
+
 // Minimal typed API surface exposed to the renderer.
 const api = {
   app: {
@@ -76,11 +109,10 @@ const api = {
   },
   data: {
     /** Reads the full SQLite snapshot (projects/tickets/labels/app_state) the renderer boots from. */
-    bootstrap: (): Promise<BootstrapResult> =>
-      ipcRenderer.invoke("volli:data-bootstrap" satisfies VolliIpcChannel),
+    bootstrap: (): Promise<BootstrapResult> => invoke("volli:data-bootstrap"),
     /** One-time localStorage → SQLite import; a no-op (returns current state) once the db is non-empty. */
     importLegacy: (req: LegacyImportRequest): Promise<LegacyImportResult> =>
-      ipcRenderer.invoke("volli:legacy-import" satisfies VolliIpcChannel, req),
+      invoke("volli:legacy-import", req),
     /** Subscribes to invalidations produced by socket-originated planning mutations. */
     onChanged: (callback: (event: DataChangedEvent) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, payload: DataChangedEvent) =>
@@ -91,115 +123,72 @@ const api = {
     },
   },
   projects: {
-    pickFolder: (): Promise<PickFolderResult> =>
-      ipcRenderer.invoke("volli:pick-project-folder" satisfies VolliIpcChannel),
-    syncRoots: (paths: string[]): Promise<void> =>
-      ipcRenderer.invoke("volli:sync-project-roots" satisfies VolliIpcChannel, paths),
+    pickFolder: (): Promise<PickFolderResult> => invoke("volli:pick-project-folder"),
+    syncRoots: (paths: string[]): Promise<void> => invoke("volli:sync-project-roots", paths),
     /** Creates a project row, or (`created: false`) returns the existing one already tracked at `path`. */
-    create: (input: { path: string; name: string }): Promise<ProjectCreateResult> =>
-      ipcRenderer.invoke("volli:project-create" satisfies VolliIpcChannel, input),
+    create: (input: ProjectCreateInput): Promise<ProjectCreateResult> =>
+      invoke("volli:project-create", input),
     /** Updates the project's pinned automation base branch and/or worktree setup command. */
-    update: (input: {
-      id: string;
-      baseBranch: string | null;
-      /** `undefined` leaves it untouched; `null`/empty clears it (setup step is skipped). */
-      setupCommand?: string | null;
-    }): Promise<ProjectUpdateResult> =>
-      ipcRenderer.invoke("volli:project-update" satisfies VolliIpcChannel, input),
+    update: (input: ProjectUpdateInput): Promise<ProjectUpdateResult> =>
+      invoke("volli:project-update", input),
     /** Deletes a project; cascades its tickets/labels/events in SQLite. */
-    remove: (id: string): Promise<ProjectMutationResult> =>
-      ipcRenderer.invoke("volli:project-remove" satisfies VolliIpcChannel, id),
+    remove: (id: string): Promise<ProjectMutationResult> => invoke("volli:project-remove", id),
     /** Rewrites rail `sort_order` to `0..n-1` following `orderedIds`. */
     reorder: (orderedIds: string[]): Promise<ProjectMutationResult> =>
-      ipcRenderer.invoke("volli:project-reorder" satisfies VolliIpcChannel, orderedIds),
+      invoke("volli:project-reorder", orderedIds),
   },
   tickets: {
-    create: (input: {
-      projectId: string;
-      status: TicketStatus;
-      title: string;
-      priority?: TicketPriority;
-      /** Markdown; defaults to `""`. Becomes the agent prompt on kickoff. */
-      body?: string;
-      /** Label names; defaults to `[]`. Created (`color: null`) per project, name-deduped. */
-      labels?: string[];
-      /** Whether the ticket boots its agent in an isolated worktree; defaults to `true`. */
-      usesWorktree?: boolean;
-      /** The ticket's persisted default harness (set on kickoff); defaults to the DB default. */
-      preferredHarnessId?: HarnessId;
-    }): Promise<TicketResult> =>
-      ipcRenderer.invoke("volli:ticket-create" satisfies VolliIpcChannel, input),
+    create: (input: TicketCreateInput): Promise<TicketResult> =>
+      invoke("volli:ticket-create", input),
     /** Runs the shared board move + persists it; resolves with the project's full authoritative ticket list. */
-    move: (input: {
-      projectId: string;
-      ticketId: string;
-      toStatus: TicketStatus;
-      toIndex: number;
-    }): Promise<TicketsResult> =>
-      ipcRenderer.invoke("volli:ticket-move" satisfies VolliIpcChannel, input),
+    move: (input: TicketMoveInput): Promise<TicketsResult> => invoke("volli:ticket-move", input),
     /** Resolves with just the mutated ticket (patched into the list by id), not the whole project. */
-    setPriority: (input: { ticketId: string; priority: TicketPriority }): Promise<TicketResult> =>
-      ipcRenderer.invoke("volli:ticket-set-priority" satisfies VolliIpcChannel, input),
-    update: (input: {
-      ticketId: string;
-      title?: string;
-      body?: string;
-      /** First-class worktree identity (migration 003); `null` explicitly clears the field. */
-      worktreePath?: string | null;
-      branch?: string | null;
-      baseBranch?: string | null;
-    }): Promise<TicketResult> =>
-      ipcRenderer.invoke("volli:ticket-update" satisfies VolliIpcChannel, input),
+    setPriority: (input: TicketSetPriorityInput): Promise<TicketResult> =>
+      invoke("volli:ticket-set-priority", input),
+    update: (input: TicketUpdateInput): Promise<TicketResult> =>
+      invoke("volli:ticket-update", input),
     /** Replaces a ticket's labels by name; unknown names are created (`color: null`) per project. Resolves with just that ticket. */
-    setLabels: (input: { ticketId: string; labels: string[] }): Promise<TicketResult> =>
-      ipcRenderer.invoke("volli:ticket-set-labels" satisfies VolliIpcChannel, input),
+    setLabels: (input: TicketSetLabelsInput): Promise<TicketResult> =>
+      invoke("volli:ticket-set-labels", input),
     /** Archives a ticket — it leaves the board but the row, labels, and event log survive (reversible). */
-    archive: (input: { ticketId: string }): Promise<Result> =>
-      ipcRenderer.invoke("volli:ticket-archive" satisfies VolliIpcChannel, input),
+    archive: (input: TicketIdInput): Promise<Result> => invoke("volli:ticket-archive", input),
     /** Returns an archived ticket to the board (appended to its retained column); resolves with the revived live ticket. */
-    unarchive: (input: { ticketId: string }): Promise<TicketResult> =>
-      ipcRenderer.invoke("volli:ticket-unarchive" satisfies VolliIpcChannel, input),
+    unarchive: (input: TicketIdInput): Promise<TicketResult> =>
+      invoke("volli:ticket-unarchive", input),
     /** Hard-deletes an archived ticket (cascades its labels + events). The only destructive act — rejects a live ticket. */
-    delete: (input: { ticketId: string }): Promise<Result> =>
-      ipcRenderer.invoke("volli:ticket-delete" satisfies VolliIpcChannel, input),
+    delete: (input: TicketIdInput): Promise<Result> => invoke("volli:ticket-delete", input),
     /** The project's archived tickets, newest first — loaded on demand for the Archive view. */
     listArchived: (projectId: string): Promise<ArchivedTicketsResult> =>
-      ipcRenderer.invoke("volli:ticket-list-archived" satisfies VolliIpcChannel, projectId),
+      invoke("volli:ticket-list-archived", projectId),
     /** A ticket's full event history, chronological — backs the Activity feed. */
-    events: (input: { ticketId: string }): Promise<TicketEventsResult> =>
-      ipcRenderer.invoke("volli:ticket-events" satisfies VolliIpcChannel, input),
+    events: (input: TicketIdInput): Promise<TicketEventsResult> =>
+      invoke("volli:ticket-events", input),
     /** The latest session_signal per ticket in the project — one batched read backing the sidebar's attention tiers. */
-    latestSignals: (input: { projectId: string }): Promise<TicketLatestSignalsResult> =>
-      ipcRenderer.invoke("volli:ticket-latest-signals" satisfies VolliIpcChannel, input),
+    latestSignals: (input: ProjectIdInput): Promise<TicketLatestSignalsResult> =>
+      invoke("volli:ticket-latest-signals", input),
   },
   comments: {
     /** A ticket's comments, chronological — the work-log feed. */
-    list: (input: { ticketId: string }): Promise<TicketCommentsResult> =>
-      ipcRenderer.invoke("volli:comment-list" satisfies VolliIpcChannel, input),
+    list: (input: TicketIdInput): Promise<TicketCommentsResult> =>
+      invoke("volli:comment-list", input),
     /** Posts a comment as the human user; also records a `commented` event in the same transaction. */
-    create: (input: {
-      ticketId: string;
-      body: string;
-      sessionId?: string | null;
-    }): Promise<TicketCommentResult> =>
-      ipcRenderer.invoke("volli:comment-create" satisfies VolliIpcChannel, input),
+    create: (input: CommentCreateInput): Promise<TicketCommentResult> =>
+      invoke("volli:comment-create", input),
     /** Edits a comment's body; touches `updatedAt` only, no event. */
-    update: (input: { commentId: string; body: string }): Promise<TicketCommentResult> =>
-      ipcRenderer.invoke("volli:comment-update" satisfies VolliIpcChannel, input),
+    update: (input: CommentUpdateInput): Promise<TicketCommentResult> =>
+      invoke("volli:comment-update", input),
     /** Hard-deletes a comment; no event. */
-    remove: (input: { commentId: string }): Promise<Result> =>
-      ipcRenderer.invoke("volli:comment-remove" satisfies VolliIpcChannel, input),
+    remove: (input: CommentIdInput): Promise<Result> => invoke("volli:comment-remove", input),
   },
   sessions: {
     /** Every durable session record in a project (ticket-scoped and project-scoped scratch), newest first. */
-    list: (input: { projectId: string }): Promise<SessionsResult> =>
-      ipcRenderer.invoke("volli:session-list" satisfies VolliIpcChannel, input),
+    list: (input: ProjectIdInput): Promise<SessionsResult> => invoke("volli:session-list", input),
     /** A ticket's durable session records, newest first — backs the right-rail linked-sessions list. */
-    listForTicket: (input: { ticketId: string }): Promise<SessionsResult> =>
-      ipcRenderer.invoke("volli:session-list-for-ticket" satisfies VolliIpcChannel, input),
+    listForTicket: (input: TicketIdInput): Promise<SessionsResult> =>
+      invoke("volli:session-list-for-ticket", input),
     /** Renames a session (scratch or ticket-scoped); the title is trimmed and must be non-empty in main. */
-    rename: (input: { sessionId: string; title: string }): Promise<SessionRenameResult> =>
-      ipcRenderer.invoke("volli:session-rename" satisfies VolliIpcChannel, input),
+    rename: (input: SessionRenameInput): Promise<SessionRenameResult> =>
+      invoke("volli:session-rename", input),
     /**
      * Subscribes to backward-move interrupt announcements (issue #78, CONCEPT
      * #20): fired only when a ticket move out of the active columns actually
@@ -214,40 +203,24 @@ const api = {
     },
   },
   labels: {
-    setColor: (input: { labelId: string; color: string | null }): Promise<LabelResult> =>
-      ipcRenderer.invoke("volli:label-set-color" satisfies VolliIpcChannel, input),
+    setColor: (input: LabelSetColorInput): Promise<LabelResult> =>
+      invoke("volli:label-set-color", input),
   },
   files: {
     /** The whole-project file index the `@` picker ranks over (git-listed + `.volli/artifacts/`). Fetched fresh per picker open. */
-    index: (input: { projectId: string }): Promise<FileIndexResult> =>
-      ipcRenderer.invoke("volli:file-index" satisfies VolliIpcChannel, input),
+    index: (input: FileIndexInput): Promise<FileIndexResult> => invoke("volli:file-index", input),
     /** Reads any repo/artifact file worktree-awarely: text (capped), image (data URI), or binary stub. */
-    read: (input: {
-      projectId: string;
-      ticketId?: string;
-      relPath: string;
-    }): Promise<FileReadResult> =>
-      ipcRenderer.invoke("volli:file-read" satisfies VolliIpcChannel, input),
+    read: (input: FilePathInput): Promise<FileReadResult> => invoke("volli:file-read", input),
     /** Writes markdown content; markdown-only, `expectedMtime` conflict-guarded. Resolves with the fresh mtime. */
-    write: (input: {
-      projectId: string;
-      ticketId?: string;
-      relPath: string;
-      content: string;
-      expectedMtime?: number;
-    }): Promise<FileWriteResult> =>
-      ipcRenderer.invoke("volli:file-write" satisfies VolliIpcChannel, input),
+    write: (input: FileWriteInput): Promise<FileWriteResult> => invoke("volli:file-write", input),
     /** Creates a new, minimally-templated `.md` in `.volli/artifacts/`; `name` is forced to `.md`. Resolves with its `@ref`-able relPath. */
-    createArtifact: (input: { projectId: string; name: string }): Promise<ArtifactCreateResult> =>
-      ipcRenderer.invoke("volli:artifact-create" satisfies VolliIpcChannel, input),
+    createArtifact: (input: ArtifactCreateInput): Promise<ArtifactCreateResult> =>
+      invoke("volli:artifact-create", input),
     /** Reveals the resolved file in Finder. */
-    reveal: (input: { projectId: string; ticketId?: string; relPath: string }): Promise<Result> =>
-      ipcRenderer.invoke("volli:file-reveal" satisfies VolliIpcChannel, input),
+    reveal: (input: FilePathInput): Promise<Result> => invoke("volli:file-reveal", input),
     /** Watches one open file tab (debounced main→renderer change events); pair with `unwatch` on unmount. */
-    watch: (input: { projectId: string; ticketId?: string; relPath: string }): Promise<Result> =>
-      ipcRenderer.invoke("volli:file-watch" satisfies VolliIpcChannel, input),
-    unwatch: (input: { projectId: string; ticketId?: string; relPath: string }): Promise<Result> =>
-      ipcRenderer.invoke("volli:file-unwatch" satisfies VolliIpcChannel, input),
+    watch: (input: FilePathInput): Promise<Result> => invoke("volli:file-watch", input),
+    unwatch: (input: FilePathInput): Promise<Result> => invoke("volli:file-unwatch", input),
     /** Subscribes to debounced per-file change events; returns the unsubscribe function. */
     onChanged: (callback: (event: FileChangedEvent) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, payload: FileChangedEvent) =>
@@ -260,37 +233,37 @@ const api = {
   appState: {
     /** Upserts one `app_state` key — the async write-through the ui/workspace persist stores' storage adapter uses. */
     set: (key: string, value: string): Promise<AppStateSetResult> =>
-      ipcRenderer.invoke("volli:app-state-set" satisfies VolliIpcChannel, key, value),
+      invoke("volli:app-state-set", key, value),
   },
   worktree: {
     /** The "Remove worktree…" escape hatch; `force` discards uncommitted work when the caller has confirmed. */
     remove: (ticketId: string, force: boolean): Promise<WorktreeRemoveResult> =>
-      ipcRenderer.invoke("volli:worktree-remove" satisfies VolliIpcChannel, { ticketId, force }),
+      invoke("volli:worktree-remove", { ticketId, force }),
     /** A project's local branch names, for the base-branch picker. */
     branches: (projectId: string): Promise<WorktreeBranchesResult> =>
-      ipcRenderer.invoke("volli:worktree-branches" satisfies VolliIpcChannel, { projectId }),
+      invoke("volli:worktree-branches", { projectId }),
     /**
      * The launch's cached orphan report — the destructive sweep runs once per
      * launch (main), so this never re-sweeps. Pass `{ rescan: true }` for the
      * explicit Settings → Worktrees rescan, which forces a fresh sweep.
      */
-    orphans: (opts?: { rescan?: boolean }): Promise<WorktreeOrphansResult> =>
-      ipcRenderer.invoke("volli:worktree-orphans" satisfies VolliIpcChannel, opts ?? {}),
+    orphans: (opts?: WorktreeOrphansInput): Promise<WorktreeOrphansResult> =>
+      invoke("volli:worktree-orphans", opts ?? {}),
     /** User-confirmed deletion of one dirty orphan dir; main re-validates it lives inside the worktree home. */
     deleteOrphan: (path: string): Promise<WorktreeOrphanDeleteResult> =>
-      ipcRenderer.invoke("volli:worktree-orphan-delete" satisfies VolliIpcChannel, { path }),
+      invoke("volli:worktree-orphan-delete", { path }),
     /** Done flow: the finer rail status (uncommitted/sequencer/ahead-behind) for the worktree. */
     status: (ticketId: string): Promise<WorktreeStatusResult> =>
-      ipcRenderer.invoke("volli:worktree-status" satisfies VolliIpcChannel, { ticketId }),
+      invoke("volli:worktree-status", { ticketId }),
     /** Done flow: a diff summary — `"working-tree"` (uncommitted now) or `"merge-base"` (the PR delta). */
     diff: (ticketId: string, mode: WorktreeDiffMode): Promise<WorktreeDiffResult> =>
-      ipcRenderer.invoke("volli:worktree-diff" satisfies VolliIpcChannel, { ticketId, mode }),
+      invoke("volli:worktree-diff", { ticketId, mode }),
     /** Done flow: the one-click "commit remaining work" safety net (fixed chore message). */
     commit: (ticketId: string): Promise<WorktreeCommitResult> =>
-      ipcRenderer.invoke("volli:worktree-commit" satisfies VolliIpcChannel, { ticketId }),
+      invoke("volli:worktree-commit", { ticketId }),
     /** Done flow: push the branch and open (or re-discover) its draft PR; persists `pr_url`. */
     pushPr: (ticketId: string): Promise<WorktreePushPrResult> =>
-      ipcRenderer.invoke("volli:worktree-push-pr" satisfies VolliIpcChannel, { ticketId }),
+      invoke("volli:worktree-push-pr", { ticketId }),
     /** Subscribes to transient worktree-ensure phase transitions; returns the unsubscribe function. */
     onPhase: (callback: (event: WorktreePhaseEvent) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, payload: WorktreePhaseEvent) =>
@@ -308,35 +281,32 @@ const api = {
      * clock); re-fetch on a `data-changed` push to stay current.
      */
     state: (ticketId: string): Promise<RetentionStateResult> =>
-      ipcRenderer.invoke("volli:retention-state" satisfies VolliIpcChannel, { ticketId }),
+      invoke("volli:retention-state", { ticketId }),
     /** Sets/clears the durable Keep pin — exempts the ticket from BOTH retention paths. */
     setKeep: (ticketId: string, keep: boolean): Promise<RetentionKeepResult> =>
-      ipcRenderer.invoke("volli:retention-keep" satisfies VolliIpcChannel, { ticketId, keep }),
+      invoke("volli:retention-keep", { ticketId, keep }),
     /** Dismisses the Archive prompt for this launch (re-offered next launch — NOT the Keep pin). */
     dismiss: (ticketId: string): Promise<RetentionDismissResult> =>
-      ipcRenderer.invoke("volli:retention-dismiss" satisfies VolliIpcChannel, { ticketId }),
+      invoke("volli:retention-dismiss", { ticketId }),
     /** Archive & clean: archives the ticket + removes its worktree (dirty refuses); branch retained. */
     archiveAndClean: (ticketId: string): Promise<RetentionArchiveCleanResult> =>
-      ipcRenderer.invoke("volli:retention-archive-clean" satisfies VolliIpcChannel, { ticketId }),
+      invoke("volli:retention-archive-clean", { ticketId }),
     /** The global Done-TTL in days. */
-    getTtlDays: (): Promise<RetentionTtlResult> =>
-      ipcRenderer.invoke("volli:retention-ttl-get" satisfies VolliIpcChannel),
+    getTtlDays: (): Promise<RetentionTtlResult> => invoke("volli:retention-ttl-get"),
     /** Sets the global Done-TTL (clamped to ≥ 1 day); resolves with the stored value. */
     setTtlDays: (days: number): Promise<RetentionTtlResult> =>
-      ipcRenderer.invoke("volli:retention-ttl-set" satisfies VolliIpcChannel, { days }),
+      invoke("volli:retention-ttl-set", { days }),
     /** Triggers an immediate merge-watch poll (e.g. on window focus / manual refresh). */
-    poll: (): Promise<RetentionPollResult> =>
-      ipcRenderer.invoke("volli:retention-poll" satisfies VolliIpcChannel),
+    poll: (): Promise<RetentionPollResult> => invoke("volli:retention-poll"),
   },
   fs: {
     listDirectory: (absPath: string): Promise<ListDirectoryResult> =>
-      ipcRenderer.invoke("volli:list-directory" satisfies VolliIpcChannel, absPath),
+      invoke("volli:list-directory", absPath),
     revealInFinder: (absPath: string): Promise<RevealResult> =>
-      ipcRenderer.invoke("volli:reveal-in-finder" satisfies VolliIpcChannel, absPath),
+      invoke("volli:reveal-in-finder", absPath),
   },
   window: {
-    isFullScreen: (): Promise<boolean> =>
-      ipcRenderer.invoke("volli:window-is-fullscreen" satisfies VolliIpcChannel),
+    isFullScreen: (): Promise<boolean> => invoke("volli:window-is-fullscreen"),
     onFullScreenChange: (callback: (isFullScreen: boolean) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, isFullScreen: boolean) =>
         callback(isFullScreen);
@@ -355,39 +325,35 @@ const api = {
   terminal: {
     /** Boots a PTY session; resolves with its id or a typed error. */
     create: (req: CreateTerminalSessionRequest): Promise<CreateTerminalSessionResult> =>
-      ipcRenderer.invoke("volli:terminal-create" satisfies VolliIpcChannel, req),
+      invoke("volli:terminal-create", req),
     /** Writes raw input bytes to a session's PTY. */
     write: (sessionId: string, data: string): Promise<TerminalIoResult> =>
-      ipcRenderer.invoke("volli:terminal-write" satisfies VolliIpcChannel, sessionId, data),
+      invoke("volli:terminal-write", sessionId, data),
     /** Resizes a session's PTY to the given grid. */
     resize: (sessionId: string, cols: number, rows: number): Promise<TerminalIoResult> =>
-      ipcRenderer.invoke("volli:terminal-resize" satisfies VolliIpcChannel, sessionId, cols, rows),
+      invoke("volli:terminal-resize", sessionId, cols, rows),
     /** Kills a session's PTY. */
     kill: (sessionId: string): Promise<TerminalIoResult> =>
-      ipcRenderer.invoke("volli:terminal-kill" satisfies VolliIpcChannel, sessionId),
+      invoke("volli:terminal-kill", sessionId),
     /** Foreground-process probe: is the session running something beyond its shell? */
     busy: (sessionId: string): Promise<TerminalBusyResult> =>
-      ipcRenderer.invoke("volli:terminal-busy" satisfies VolliIpcChannel, sessionId),
+      invoke("volli:terminal-busy", sessionId),
     /** Flow-control ack: fire-and-forget count of consumed output chars. */
     ack: (sessionId: string, chars: number): void => {
-      ipcRenderer.send("volli:terminal-ack" satisfies VolliIpcChannel, sessionId, chars);
+      send("volli:terminal-ack", sessionId, chars);
     },
     /** Parks a session (SIGSTOP its tree) on user request; bypasses the auto-park guards. */
     park: (sessionId: string): Promise<TerminalIoResult> =>
-      ipcRenderer.invoke("volli:terminal-park" satisfies VolliIpcChannel, sessionId),
+      invoke("volli:terminal-park", sessionId),
     /** Wakes a parked session (SIGCONT its tree). */
     wake: (sessionId: string): Promise<TerminalIoResult> =>
-      ipcRenderer.invoke("volli:terminal-wake" satisfies VolliIpcChannel, sessionId),
+      invoke("volli:terminal-wake", sessionId),
     /** Pins/unpins a session against auto-park; waking it if already parked. */
     setKeepAwake: (sessionId: string, keepAwake: boolean): Promise<TerminalIoResult> =>
-      ipcRenderer.invoke(
-        "volli:terminal-keep-awake" satisfies VolliIpcChannel,
-        sessionId,
-        keepAwake,
-      ),
+      invoke("volli:terminal-keep-awake", sessionId, keepAwake),
     /** Reports pane visibility: fire-and-forget, since it flips on every nav. */
     setVisible: (sessionId: string, visible: boolean): void => {
-      ipcRenderer.send("volli:terminal-set-visible" satisfies VolliIpcChannel, sessionId, visible);
+      send("volli:terminal-set-visible", sessionId, visible);
     },
     /** Subscribes to park/wake/pin state pushes; returns the unsubscribe function. */
     onParkState: (callback: (event: TerminalParkStateEvent) => void): (() => void) => {
@@ -414,8 +380,7 @@ const api = {
         ipcRenderer.removeListener("volli:terminal-exit" satisfies VolliIpcEvent, listener);
     },
     /** Reads the user's resolved Ghostty config, mapped onto restty's appearance model. */
-    ghosttyConfig: (): Promise<GhosttyConfigResult> =>
-      ipcRenderer.invoke("volli:ghostty-config-get" satisfies VolliIpcChannel),
+    ghosttyConfig: (): Promise<GhosttyConfigResult> => invoke("volli:ghostty-config-get"),
     /** Subscribes to live Ghostty config reloads; returns the unsubscribe function. */
     onGhosttyConfigChanged: (
       callback: (payload: GhosttyAppearancePayload) => void,
