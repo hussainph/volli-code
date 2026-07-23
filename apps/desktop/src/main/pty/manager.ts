@@ -6,13 +6,10 @@ import { basename, resolve } from "node:path";
 import type Database from "better-sqlite3";
 import {
   agentSessionEnv,
-  breatheShouldWake,
   createSessionRecord,
   errorMessage,
   isHarnessId,
-  isParkCandidate,
   resolveShell,
-  treeIsCpuQuiet,
 } from "@volli/shared";
 import type {
   CreateTerminalSessionRequest,
@@ -42,6 +39,7 @@ import { isInside } from "../worktree/paths";
 import { composeWorktreeLaunchCommand } from "./launch";
 import { createOutputPipeline } from "./output";
 import type { OutputPipeline, OutputSink } from "./output";
+import { ParkController } from "./park-controller";
 import { closeOutSession, persistSessionStart } from "./persistence";
 import { resolveScope } from "./scope";
 
@@ -145,9 +143,6 @@ interface Session {
   setupRun: SetupRun | null;
 }
 
-/** Plain awaitable pause; the breathe window between SIGCONT and the verdict. */
-const delay = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms));
-
 /**
  * Owns every live PTY, keyed by an opaque session id. Sessions are scoped to
  * the window that created them: output events go only to that window, and a
@@ -157,10 +152,13 @@ const delay = (ms: number): Promise<void> => new Promise((done) => setTimeout(do
  */
 export class PtyManager {
   private readonly sessions = new Map<string, Session>();
-  /** Recurring warm-park sweep handle; `null` until `startParkSweep`. */
-  private sweepTimer: NodeJS.Timeout | null = null;
-  /** Guards against a slow sweep's async stages overlapping the next tick. */
-  private sweeping = false;
+  /**
+   * The warm-park duty cycle (park/wake + breathe/sweep), extracted per issue
+   * #99. It reads this manager's live `sessions` map (the SAME instance) and
+   * mutates each session's park fields in place; the manager keeps only the
+   * side effects that touch node-pty/webContents and hands them in as deps.
+   */
+  private readonly parkController: ParkController;
 
   /**
    * @param db         the app database, or `null` when it failed to open. Every
@@ -186,7 +184,23 @@ export class PtyManager {
     private readonly parkConfig: ParkConfig = parkConfigFromEnv(process.env, process.platform),
     private readonly agentRuntime: AgentRuntimeEnvironment | null = null,
     private readonly attachmentsRootPath: string = "",
-  ) {}
+  ) {
+    // The controller shares this manager's live session map and mutates each
+    // session's park fields in place. `flush` and `pushParkState` stay here —
+    // they touch the output pipeline and webContents — and every current
+    // pushParkState call site has already verified the session is the map's
+    // current entry, so the id→session re-lookup is safe.
+    this.parkController = new ParkController({
+      config: this.parkConfig,
+      inspector: this.inspector,
+      sessions: this.sessions,
+      flush: (id) => this.sessions.get(id)?.output.flush(),
+      pushParkState: (id) => {
+        const session = this.sessions.get(id);
+        if (session !== undefined) this.pushParkState(session, id);
+      },
+    });
+  }
 
   /**
    * Lazy dynamic import of node-pty. Isolated in a method so tests can
@@ -542,124 +556,25 @@ export class PtyManager {
   }
 
   /**
-   * Parks a session: SIGSTOP its whole process tree so macOS compresses/pages
-   * its memory (issue #51 warm tier). Auto-park (`manual: false`) refuses a
-   * visible or kept-awake session — the belt-and-braces half of the safety
-   * rule (the sweep already gated on idle + CPU-quiet + no LISTEN socket).
-   * Manual park bypasses those guards. Stops parent FIRST then descendants, then
-   * re-collects to catch any child that spawned mid-stop (bounded to 3 rounds).
-   *
-   * `activityBaseline` is the `lastActivityAt` the caller's eligibility verdict
-   * was based on. The verdict is a snapshot — PTY output or input can land
-   * during the sweep's async inspection stages (or ours below) — so an auto
-   * park re-checks it before every SIGSTOP round and refuses if the session
-   * resumed work. Defaults to the session's activity at entry.
+   * Parks a session (SIGSTOP its whole tree — issue #51 warm tier). Delegates to
+   * the {@link ParkController}, which owns the guards, mid-park death races, and
+   * fork-rescan rounds; the manager keeps this signature because the CLI/IPC and
+   * the equivalence benchmark drive park through it.
    */
-  async park(
+  park(
     sessionId: string,
     opts: { manual: boolean; activityBaseline?: number },
   ): Promise<TerminalIoResult> {
-    if (!this.parkConfig.enabled) {
-      // Refusing (rather than silently "succeeding") keeps a manual Park Now
-      // honest on platforms without SIGSTOP or under VOLLI_PARK_DISABLE.
-      return { ok: false, error: "Session parking is disabled" };
-    }
-    const session = this.sessions.get(sessionId);
-    if (session === undefined) return { ok: false, error: "Unknown terminal session" };
-    if (session.parkedPids !== null) {
-      // A Park Now on an already-parked session upgrades it to a manual
-      // freeze — explicit intent exempts it from the breathe duty cycle.
-      if (opts.manual) session.parkedManually = true;
-      return { ok: true };
-    }
-    const activityBaseline = opts.activityBaseline ?? session.lastActivityAt;
-    // The auto-park guards, re-checked after every await below (not just at
-    // entry): visibility/pin flips and fresh activity can all land while the
-    // inspector calls are in flight, and a session that resumed work must
-    // never be frozen — the hard safety rule.
-    const autoParkBlocked = (): string | null => {
-      if (opts.manual) return null;
-      if (session.visible || session.keepAwake) return "Session is visible or kept awake";
-      if (session.lastActivityAt > activityBaseline) return "Session became active while parking";
-      return null;
-    };
-    const entryBlock = autoParkBlocked();
-    if (entryBlock !== null) return { ok: false, error: entryBlock };
-    // The session can be killed (or its window destroyed) across any of the
-    // awaits below. kill()'s CONT-before-kill runs off `parkedPids`, which is
-    // only assigned at the end — so a kill landing mid-park would SIGHUP an
-    // already-stopped tree, and SIGHUP *pends* on a stopped process: the tree
-    // would leak frozen. Every await is followed by this liveness re-check,
-    // and a mid-park death CONTs whatever was stopped so the pending kill
-    // signals can act.
-    const stillParking = (): boolean =>
-      this.sessions.get(sessionId) === session && session.parkedPids === null;
-    const rootPid = session.pty.pid;
-    const initial = await this.inspector.descendants(rootPid);
-    if (!stillParking()) return { ok: false, error: "Session ended while parking" };
-    const preStopBlock = autoParkBlocked();
-    if (preStopBlock !== null) return { ok: false, error: preStopBlock };
-    // Flush pending output before freezing — the renderer must not be left
-    // waiting on bytes the stopped shell can no longer push.
-    session.output.flush();
-    // Stop parent first so it can't fork new children we haven't seen, then its
-    // descendants in listed order.
-    const stopOrder = [rootPid, ...initial];
-    const stopped = new Set<number>(stopOrder);
-    const abortPark = (error: string): TerminalIoResult => {
-      for (const pid of stopOrder.toReversed()) this.inspector.signal(pid, "SIGCONT");
-      return { ok: false, error };
-    };
-    for (const pid of stopOrder) this.inspector.signal(pid, "SIGSTOP");
-    // A child may have spawned between listing and its parent's stop; re-scan and
-    // stop any newcomer until the tree is stable (bounded so a fork bomb can't
-    // spin the sweep forever).
-    for (let round = 0; round < 3; round += 1) {
-      let rescan: number[];
-      try {
-        rescan = await this.inspector.descendants(rootPid);
-      } catch (error) {
-        // A failed rescan must never leak a half-stopped tree: CONT what we
-        // stopped, then let the failure propagate to the caller's logging.
-        abortPark("");
-        throw error;
-      }
-      if (!stillParking()) return abortPark("Session ended while parking");
-      // Output buffered before the SIGSTOP can still drain during the rescan
-      // awaits — a session that just showed work must not be left frozen.
-      const midStopBlock = autoParkBlocked();
-      if (midStopBlock !== null) return abortPark(midStopBlock);
-      const fresh = rescan.filter((pid) => !stopped.has(pid));
-      if (fresh.length === 0) break;
-      for (const pid of fresh) {
-        this.inspector.signal(pid, "SIGSTOP");
-        stopOrder.push(pid);
-        stopped.add(pid);
-      }
-    }
-    session.parkedPids = stopOrder;
-    session.parkedManually = opts.manual;
-    this.pushParkState(session, sessionId);
-    return { ok: true };
+    return this.parkController.park(sessionId, opts);
   }
 
   /**
-   * Wakes a parked session: SIGCONT its tree in REVERSE of the stop order
-   * (children before parent). Synchronous so before-quit teardown can call it
-   * off the stored pid list. A running session is a no-op.
+   * Wakes a parked session (SIGCONT its tree in reverse). Synchronous so
+   * before-quit teardown and the wake-before-write/kill/interrupt call sites can
+   * use it off the stored pid list. Delegates to the {@link ParkController}.
    */
   wake(sessionId: string): TerminalIoResult {
-    const session = this.sessions.get(sessionId);
-    if (session === undefined) return { ok: false, error: "Unknown terminal session" };
-    const parkedPids = session.parkedPids;
-    if (parkedPids === null) return { ok: true };
-    for (const pid of parkedPids.toReversed()) this.inspector.signal(pid, "SIGCONT");
-    session.parkedPids = null;
-    session.parkedManually = false;
-    session.quietCpuSamples = 0;
-    session.lastActivityAt = Date.now();
-    this.pushParkState(session, sessionId);
-    return { ok: true };
+    return this.parkController.wake(sessionId);
   }
 
   /**
@@ -672,7 +587,7 @@ export class PtyManager {
     if (session === undefined) return;
     if (session.webContents !== sender) return;
     session.visible = visible;
-    if (visible && session.parkedPids !== null) this.wake(sessionId);
+    if (visible && session.parkedPids !== null) this.parkController.wake(sessionId);
   }
 
   /** User pin: excludes a session from auto-park, waking it if already parked. */
@@ -680,205 +595,28 @@ export class PtyManager {
     const session = this.sessions.get(sessionId);
     if (session === undefined) return { ok: false, error: "Unknown terminal session" };
     session.keepAwake = keepAwake;
-    if (keepAwake && session.parkedPids !== null) this.wake(sessionId);
+    if (keepAwake && session.parkedPids !== null) this.parkController.wake(sessionId);
     this.pushParkState(session, sessionId);
     return { ok: true };
   }
 
   /**
-   * Stage 0 of the sweep — the no-silent-failure duty cycle. A frozen process
-   * cannot tell us it has pending work (an expired timer, a file-watch event,
-   * data queued on a socket), so once per sweep every auto-parked session
-   * breathes: its tree is CONT'd for `breatheWindowMs`, then re-frozen unless
-   * the window surfaced real work (output/input, CPU, a fresh child, a new
-   * listener — the pure verdict in @volli/shared's breatheShouldWake). Worst
-   * case, background work runs one sweep interval late instead of never.
-   * Manual Park Now freezes are exempt: explicit intent stays frozen until an
-   * explicit wake.
-   *
-   * `parkedPids` deliberately stays set across the window — SIGCONT is
-   * idempotent, so any wake path landing mid-breathe (input, visibility, Keep
-   * Awake, kill's CONT-before-kill) works unchanged, and the renderer's
-   * parked badge never flickers. Liveness is re-checked after every await;
-   * the re-freeze goes through park() so its mid-park death races and
-   * fork-rescan rounds stay handled in exactly one place.
+   * One warm-park sweep (breathe stage 0 + the three staged auto-park gates).
+   * Delegates to the {@link ParkController}; kept on the manager because the
+   * equivalence benchmark drives the sweep through it.
    */
-  private async breathe(): Promise<void> {
-    const breathing: Array<{ id: string; session: Session; activityAtStart: number }> = [];
-    for (const [id, session] of this.sessions) {
-      if (session.parkedPids === null || session.parkedManually) continue;
-      breathing.push({ id, session, activityAtStart: session.lastActivityAt });
-      for (const pid of session.parkedPids.toReversed()) this.inspector.signal(pid, "SIGCONT");
-    }
-    if (breathing.length === 0) return;
-    await delay(this.parkConfig.breatheWindowMs);
-
-    // One descendants walk per still-parked tree, then one ps and one lsof
-    // across the union. A session killed or explicitly woken during the window
-    // is no longer ours to touch.
-    const stillBreathing = (id: string, session: Session): boolean =>
-      this.sessions.get(id) === session && session.parkedPids !== null;
-    try {
-      const trees: Array<{
-        id: string;
-        session: Session;
-        activityAtStart: number;
-        pids: number[];
-      }> = [];
-      for (const { id, session, activityAtStart } of breathing) {
-        if (!stillBreathing(id, session)) continue;
-        const pids = [session.pty.pid, ...(await this.inspector.descendants(session.pty.pid))];
-        trees.push({ id, session, activityAtStart, pids });
-      }
-      if (trees.length === 0) return;
-      const union = new Set<number>();
-      for (const { pids } of trees) for (const pid of pids) union.add(pid);
-      const cpuByPid = await this.inspector.cpuPercents([...union]);
-      const listeners = await this.inspector.listeningPids([...union]);
-
-      for (const { id, session, activityAtStart, pids } of trees) {
-        // Re-check after the sampling awaits — a kill or wake may have landed.
-        if (!stillBreathing(id, session)) continue;
-        const stopped = new Set(session.parkedPids);
-        const shouldWake = breatheShouldWake({
-          activityAtStart,
-          activityAtEnd: session.lastActivityAt,
-          cpuQuiet: treeIsCpuQuiet(cpuByPid, pids, this.parkConfig.cpuBusyPercent),
-          treeGrew: pids.some((pid) => !stopped.has(pid)),
-          hasListener: pids.some((pid) => listeners.has(pid)),
-        });
-        // A Park Now that landed mid-window wins over the verdict: re-freeze,
-        // preserving the manual exemption.
-        if (shouldWake && !session.parkedManually) {
-          this.wake(id);
-        } else {
-          const manual = session.parkedManually;
-          session.parkedPids = null;
-          const refrozen = await this.park(id, { manual, activityBaseline: activityAtStart });
-          if (!refrozen.ok && this.sessions.get(id) === session && session.parkedPids === null) {
-            // The re-freeze was refused — activity or a pin/visibility flip
-            // landed mid-park. The session stays awake; sync the renderer's
-            // badge (nothing else pushes on this path) and make it re-earn
-            // its quiet streak from scratch.
-            session.quietCpuSamples = 0;
-            this.pushParkState(session, id);
-          }
-        }
-      }
-    } catch (error) {
-      // Inspection failed mid-cycle: these trees were just CONT'd and we can
-      // no longer judge them. Fail open — waking every one still marked parked
-      // beats re-freezing unjudged, possibly-working sessions. A session whose
-      // re-freeze threw mid-park is already CONT'd and unmarked; it just needs
-      // its renderer badge synced.
-      for (const { id, session } of breathing) {
-        if (stillBreathing(id, session)) this.wake(id);
-        else if (this.sessions.get(id) === session) this.pushParkState(session, id);
-      }
-      throw error;
-    }
-  }
-
-  /**
-   * One warm-park sweep. Stage 0 breathes every auto-parked session (see
-   * {@link breathe}), then three staged gates over running sessions, each
-   * cheaper-first: (1) the synchronous idle/visible/keep-awake eligibility
-   * check; (2) two consecutive CPU-quiet samples across the whole tree (one
-   * `ps` call for every candidate's union of pids); (3) no TCP LISTEN socket
-   * anywhere in the tree (one `lsof` call) — a quiet dev server must never be
-   * frozen, since inbound requests would hang. Survivors are auto-parked. A
-   * boolean flag drops a tick that arrives while the previous sweep's async
-   * stages are still running.
-   */
-  async sweep(now = Date.now()): Promise<void> {
-    if (!this.parkConfig.enabled) return;
-    if (this.sweeping) return;
-    this.sweeping = true;
-    try {
-      await this.breathe();
-      // Stage 1: cheap eligibility. A session that fails it loses its quiet
-      // streak. `activityAt` snapshots the idle clock the verdict is based on —
-      // stage 4's park() refuses any session whose clock advanced past it
-      // while stages 2–3 were in flight.
-      const candidates: Array<{ id: string; session: Session; activityAt: number }> = [];
-      for (const [id, session] of this.sessions) {
-        const eligible = isParkCandidate(
-          {
-            parked: session.parkedPids !== null,
-            visible: session.visible,
-            keepAwake: session.keepAwake,
-            lastActivityAt: session.lastActivityAt,
-          },
-          now,
-          this.parkConfig.idleThresholdMs,
-        );
-        if (eligible) candidates.push({ id, session, activityAt: session.lastActivityAt });
-        else session.quietCpuSamples = 0;
-      }
-      if (candidates.length === 0) return;
-
-      // Stage 2: one CPU sample across the union of every candidate's tree.
-      const withTrees: Array<{
-        id: string;
-        session: Session;
-        activityAt: number;
-        pids: number[];
-      }> = [];
-      const cpuUnion = new Set<number>();
-      for (const { id, session, activityAt } of candidates) {
-        const pids = [session.pty.pid, ...(await this.inspector.descendants(session.pty.pid))];
-        withTrees.push({ id, session, activityAt, pids });
-        for (const pid of pids) cpuUnion.add(pid);
-      }
-      const cpuByPid = await this.inspector.cpuPercents([...cpuUnion]);
-      const quietEnough: Array<{ id: string; activityAt: number; pids: number[] }> = [];
-      for (const { id, session, activityAt, pids } of withTrees) {
-        if (treeIsCpuQuiet(cpuByPid, pids, this.parkConfig.cpuBusyPercent)) {
-          session.quietCpuSamples += 1;
-          if (session.quietCpuSamples >= this.parkConfig.quietSamplesRequired) {
-            quietEnough.push({ id, activityAt, pids });
-          }
-        } else {
-          session.quietCpuSamples = 0;
-        }
-      }
-      if (quietEnough.length === 0) return;
-
-      // Stage 3: one LISTEN-socket check across their union; a tree with any
-      // listener is left for next sweep (counter untouched) rather than frozen.
-      const listenUnion = new Set<number>();
-      for (const { pids } of quietEnough) for (const pid of pids) listenUnion.add(pid);
-      const listeners = await this.inspector.listeningPids([...listenUnion]);
-      for (const { id, activityAt, pids } of quietEnough) {
-        if (pids.some((pid) => listeners.has(pid))) continue;
-        await this.park(id, { manual: false, activityBaseline: activityAt });
-      }
-    } catch (error) {
-      // Inspection is best-effort: a failed pgrep/ps/lsof degrades to "nothing
-      // parks this sweep" (breathe already woke anything it couldn't judge) —
-      // never an unhandled rejection, never a session left wrongly frozen.
-      console.error("[park] sweep failed; no sessions parked this sweep:", error);
-    } finally {
-      this.sweeping = false;
-    }
+  sweep(now = Date.now()): Promise<void> {
+    return this.parkController.sweep(now);
   }
 
   /** Starts the recurring sweep (no-op when disabled or already running). */
   startParkSweep(): void {
-    if (!this.parkConfig.enabled) return;
-    if (this.sweepTimer !== null) return;
-    this.sweepTimer = setInterval(() => {
-      void this.sweep();
-    }, this.parkConfig.sweepIntervalMs);
-    // Never let the sweep keep the process alive at quit.
-    this.sweepTimer.unref();
+    this.parkController.start();
   }
 
   /** Stops the recurring sweep. */
   stopParkSweep(): void {
-    if (this.sweepTimer === null) return;
-    clearInterval(this.sweepTimer);
-    this.sweepTimer = null;
+    this.parkController.stop();
   }
 
   /**
@@ -935,7 +673,7 @@ export class PtyManager {
       // User-equivalent input: keep the session out of the idle window and wake
       // it before the write, exactly as write() does.
       session.lastActivityAt = Date.now();
-      if (session.parkedPids !== null) this.wake(sessionId);
+      if (session.parkedPids !== null) this.parkController.wake(sessionId);
       try {
         session.pty.write("\x1b");
         interrupted.push(sessionId);
@@ -957,7 +695,7 @@ export class PtyManager {
     // SIGSTOP'd shell can't consume input, but SIGCONT delivery is fast and the
     // kernel has already buffered the bytes, so waking here loses nothing.
     session.lastActivityAt = Date.now();
-    if (session.parkedPids !== null) this.wake(sessionId);
+    if (session.parkedPids !== null) this.parkController.wake(sessionId);
     try {
       session.pty.write(data);
       return { ok: true };
@@ -989,7 +727,7 @@ export class PtyManager {
     // shell (and its tree) would never die and would leak as an orphan. wake()
     // is synchronous and needs the session still in the map, so it runs before
     // forget(). killAll() inherits this via kill().
-    if (session.parkedPids !== null) this.wake(sessionId);
+    if (session.parkedPids !== null) this.parkController.wake(sessionId);
     // Forget first so the pty's own onExit (which also calls forget) is a
     // no-op, and so a kill() that throws still drops the session.
     this.forget(sessionId);
