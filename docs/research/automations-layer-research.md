@@ -256,6 +256,38 @@ Default budget ladder (the *standard* notch; thrifty/premium shift each stage on
 
 ---
 
+## 9. MVP proposal: column playbooks
+
+The buildable-today core, derived from one observation: Volli already *is* this system
+with one hardcoded automation ("enters Doing → compose brief → boot agent → stops →
+Needs Review"). The MVP generalizes that seam instead of adding machinery.
+
+**One new object — the playbook.** A small markdown file in
+`<project>/.volli/playbooks/<name>.md`: frontmatter for `model`, `effort`, optional
+`check` (a command) and `rounds` (fix-it attempts after a failed check, default 2);
+body = the instructions appended to the composed ticket brief. Committable, diffable,
+fork-on-edit. The playbook *is* the budget config — no separate budget UI.
+
+**One new setting — the same slot on every column.** "When a ticket lands here:
+do nothing / run <playbook> in a fresh session." Project-level, with a per-ticket
+override (`Use project default / <playbook> / Manual`). `Manual` is the HITL bit.
+
+**Two hard laws, in the state machine, not configurable:**
+1. Every automated session ends with the ticket in Needs Review, carrying a reason
+   badge and what it produced. Automation never marks Done (extends #13/#20).
+2. Automations never fire automations. Only a deliberate move starts a playbook —
+   every token spent traces to a human act (extends #20's asymmetry law).
+
+Chaining therefore happens *through the human*: Todo's plan playbook lands the plan at
+the gate; approving it is dragging to Doing, which fires the implement playbook, which
+reads the plan artifact. The board is the pipeline; drags advance it; Needs Review is
+every automation's terminus. §6's default workflows collapse into shipped playbook
+files plus column assignments — configurations, not features. Deferred to later
+additive fields on the same record: schedule/event triggers, advisor escalation,
+cost meter, budget dial, automation-to-automation chaining (if ever).
+
+---
+
 ## Appendix: sources by track
 
 **HumanLayer / Dex Horthy** — [12-factor-agents](https://github.com/humanlayer/12-factor-agents) ·
