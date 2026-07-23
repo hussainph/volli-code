@@ -765,7 +765,7 @@ export class PtyManager {
         const endedAt = Date.now();
         try {
           const end = db.transaction(() => {
-            endSession(db, sessionId, endedAt);
+            endSession(db, sessionId, endedAt, exitCode);
             // Resolve the ticket link from the CURRENT row, never the stale
             // in-memory `record.ticketId`: `sessions.ticket_id` is ON DELETE SET
             // NULL, so a ticket (or its project) deleted while the session lived
@@ -786,7 +786,7 @@ export class PtyManager {
           // next boot).
           console.error(`[volli] failed to close out session ${sessionId}: ${errorMessage(error)}`);
           try {
-            endSession(db, sessionId, endedAt);
+            endSession(db, sessionId, endedAt, exitCode);
           } catch {
             // Even the bare end failed (e.g. the db is gone) — leave it to the
             // boot-time endLiveSessions sweep.

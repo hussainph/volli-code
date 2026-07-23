@@ -23,6 +23,7 @@ interface SessionRow {
   cwd: string;
   created_at: number;
   ended_at: number | null;
+  exit_code: number | null;
 }
 
 function mapSession(row: SessionRow): SessionRecord {
@@ -38,6 +39,7 @@ function mapSession(row: SessionRow): SessionRecord {
     cwd: row.cwd,
     createdAt: row.created_at,
     endedAt: row.ended_at,
+    exitCode: row.exit_code,
   };
 }
 
@@ -46,9 +48,9 @@ export function insertSession(db: Database.Database, session: SessionRecord): vo
   prepared(
     db,
     `INSERT INTO sessions
-       (id, project_id, ticket_id, harness_id, harness_session_id, launch_kind, placement, title, cwd, created_at, ended_at)
+       (id, project_id, ticket_id, harness_id, harness_session_id, launch_kind, placement, title, cwd, created_at, ended_at, exit_code)
      VALUES
-       (@id, @projectId, @ticketId, @harnessId, @harnessSessionId, @launchKind, @placement, @title, @cwd, @createdAt, @endedAt)`,
+       (@id, @projectId, @ticketId, @harnessId, @harnessSessionId, @launchKind, @placement, @title, @cwd, @createdAt, @endedAt, @exitCode)`,
   ).run({
     id: session.id,
     projectId: session.projectId,
@@ -61,6 +63,7 @@ export function insertSession(db: Database.Database, session: SessionRecord): vo
     cwd: session.cwd,
     createdAt: session.createdAt,
     endedAt: session.endedAt,
+    exitCode: session.exitCode,
   });
 }
 
@@ -72,9 +75,22 @@ export function getSession(db: Database.Database, sessionId: string): SessionRec
   return row ? mapSession(row) : undefined;
 }
 
-/** Stamps `ended_at` — marks a session as no longer live. */
-export function endSession(db: Database.Database, sessionId: string, endedAt: number): void {
-  prepared(db, "UPDATE sessions SET ended_at = ? WHERE id = ?").run(endedAt, sessionId);
+/**
+ * Stamps `ended_at` (and the observed `exit_code`, when the caller saw one) —
+ * marks a session as no longer live. Pass `exitCode: null` only when the
+ * process outcome genuinely wasn't observed.
+ */
+export function endSession(
+  db: Database.Database,
+  sessionId: string,
+  endedAt: number,
+  exitCode: number | null,
+): void {
+  prepared(db, "UPDATE sessions SET ended_at = ?, exit_code = ? WHERE id = ?").run(
+    endedAt,
+    exitCode,
+    sessionId,
+  );
 }
 
 /**

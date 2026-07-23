@@ -220,3 +220,18 @@ export interface TicketEvent {
   createdAt: number;
   payload: TicketEventPayload;
 }
+
+/**
+ * The latest `session_signal` for one ticket, denormalized for the sidebar's
+ * batched attention read (`api.tickets.latestSignals`): one project-wide query
+ * replaces the per-needs-review-ticket event fan-out. `sessionId` is the
+ * signaling session when the event carried a session/automation actor context.
+ */
+export interface LatestSessionSignal {
+  ticketId: string;
+  sessionId: string | null;
+  signal: "done" | "blocked";
+  reason: string | null;
+  /** Epoch milliseconds. */
+  createdAt: number;
+}

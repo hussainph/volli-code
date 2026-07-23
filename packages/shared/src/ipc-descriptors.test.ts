@@ -468,6 +468,30 @@ describe("DATA_IPC descriptor table", () => {
     });
   });
 
+  describe("volli:ticket-latest-signals", () => {
+    const { guard, invalidError } = DATA_IPC["volli:ticket-latest-signals"];
+
+    it("accepts a valid { projectId } payload", () => {
+      expect(guard([{ projectId: "p1" }])).toBe(true);
+    });
+
+    it("rejects a non-object payload", () => {
+      expect(guard([null])).toBe(false);
+    });
+
+    it("rejects a non-string projectId", () => {
+      expect(guard([{ projectId: 1 }])).toBe(false);
+    });
+
+    it("rejects a wrong arity", () => {
+      expect(guard([])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid project");
+    });
+  });
+
   describe("volli:comment-list", () => {
     const { guard, invalidError } = DATA_IPC["volli:comment-list"];
 
@@ -996,8 +1020,8 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 40 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(40);
+    it("covers all 41 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(41);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
       expect(DATA_CHANNELS).toContain("volli:ticket-move");
       expect(DATA_CHANNELS).toContain("volli:app-state-set");

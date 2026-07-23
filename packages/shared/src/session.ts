@@ -58,6 +58,12 @@ export interface SessionRecord {
   createdAt: number;
   /** Epoch milliseconds; `null` while the session is live. */
   endedAt: number | null;
+  /**
+   * The shell's exit code, stamped by the PTY exit path alongside `endedAt`.
+   * `null` while live, for boot-sweep ends (the process outcome was never
+   * observed), and for rows predating the column — outcome labels never guess.
+   */
+  exitCode: number | null;
 }
 
 /** Stable human-facing identifier used by the CLI instead of exposing the stored UUID. */
@@ -114,5 +120,6 @@ export function createSessionRecord(input: CreateSessionInput): SessionRecord {
     cwd: input.cwd,
     createdAt: input.now,
     endedAt: null,
+    exitCode: null,
   };
 }

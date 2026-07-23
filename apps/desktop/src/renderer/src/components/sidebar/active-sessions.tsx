@@ -1,7 +1,9 @@
 import * as React from "react";
+import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import {
   displayTicketId,
   errorMessage,
+  type LatestSessionSignal,
   type Project,
   type SessionActivityState,
   type SessionRecord,
@@ -19,8 +21,10 @@ import {
 import {
   buildActiveSessionListing,
   type ActiveSessionRow,
+  type SessionOutcome,
 } from "@renderer/components/sidebar/active-session-listing";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
+import { relativeTime } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
@@ -37,15 +41,51 @@ const ACTIVITY_LABEL: Record<SessionActivityState, string> = {
   exited: "Exited",
 };
 
+const OUTCOME_LABEL: Record<SessionOutcome, string> = {
+  failed: "Failed",
+  done: "Done",
+  ended: "Ended",
+};
+
+/**
+ * Rehydrates the batched `latestSignals` read into the `eventsByTicket` shape
+ * the pure listing model already consumes — one synthetic session_signal event
+ * per ticket. Keeps the tested model untouched while the fetch collapses from a
+ * per-needs-review-ticket fan-out to a single project query.
+ */
+function signalsToEventsByTicket(
+  signals: readonly LatestSessionSignal[],
+): Record<string, TicketEvent[]> {
+  const byTicket: Record<string, TicketEvent[]> = {};
+  for (const signal of signals) {
+    byTicket[signal.ticketId] = [
+      {
+        id: `signal:${signal.ticketId}`,
+        ticketId: signal.ticketId,
+        actor: signal.sessionId === null ? "automation" : "session",
+        actorContext:
+          signal.sessionId === null
+            ? null
+            : { ticketId: signal.ticketId, sessionId: signal.sessionId },
+        createdAt: signal.createdAt,
+        payload: { kind: "session_signal", signal: signal.signal, reason: signal.reason },
+      },
+    ];
+  }
+  return byTicket;
+}
+
 function SessionRow({
   project,
   row,
+  now,
   active,
   needsAttention,
   onActivate,
 }: {
   project: Project;
   row: ActiveSessionRow;
+  now: number;
   active: boolean;
   needsAttention: boolean;
   onActivate(): void;
@@ -62,9 +102,13 @@ function SessionRow({
         : "Needs review";
   const stateLabel = needsAttention
     ? attentionLabel
-    : row.activity === null
-      ? row.source
-      : `${row.source} · ${ACTIVITY_LABEL[row.activity]}`;
+    : row.lastRun !== null
+      ? row.lastRun.endedAt === null
+        ? OUTCOME_LABEL[row.lastRun.outcome]
+        : `${OUTCOME_LABEL[row.lastRun.outcome]} · ${relativeTime(row.lastRun.endedAt, now)}`
+      : row.activity === null
+        ? row.source
+        : `${row.source} · ${ACTIVITY_LABEL[row.activity]}`;
 
   return (
     <SidebarMenuItem>
@@ -80,13 +124,30 @@ function SessionRow({
             "mt-1.5 size-1.5 shrink-0 rounded-full",
             needsAttention
               ? "bg-amber-500"
-              : row.activity === "working"
-                ? "bg-emerald-500"
-                : "bg-muted-foreground/40",
+              : row.lastRun?.outcome === "failed"
+                ? "bg-red-500"
+                : row.activity === "working"
+                  ? "bg-emerald-500"
+                  : "bg-muted-foreground/40",
           )}
         />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="truncate text-xs text-sidebar-foreground">{row.title}</span>
+          <span className="flex min-w-0 items-center gap-1">
+            <span
+              className={cn(
+                "truncate text-xs",
+                row.lastRun !== null ? "text-muted-foreground" : "text-sidebar-foreground",
+              )}
+            >
+              {row.title}
+            </span>
+            {row.lastRun?.resumable ? (
+              <ArrowClockwiseIcon
+                aria-label="Resumable"
+                className="size-3 shrink-0 text-muted-foreground/70"
+              />
+            ) : null}
+          </span>
           <span className="session-row-meta flex min-w-0 items-center gap-1 text-label text-muted-foreground transition-colors">
             <span className="shrink-0 font-mono">
               {displayTicketId(project.ticketPrefix, row.ticket.ticketNumber)}
@@ -105,14 +166,16 @@ function SessionTier({
   tier,
   rows,
   project,
+  now,
   openTicketId,
   activeTabId,
   onActivate,
 }: {
   label: string;
-  tier: "needs-you" | "in-progress";
+  tier: "needs-you" | "active";
   rows: readonly ActiveSessionRow[];
   project: Project;
+  now: number;
   openTicketId: string | null;
   activeTabId: string | null;
   onActivate(row: ActiveSessionRow): void;
@@ -130,6 +193,7 @@ function SessionTier({
             key={row.id}
             project={project}
             row={row}
+            now={now}
             needsAttention={tier === "needs-you"}
             active={
               openTicketId === row.ticket.id &&
@@ -146,8 +210,11 @@ function SessionTier({
 /**
  * Attention-first navigator for the selected project's ticket sessions. The
  * rows come from the resident session model, not ticket-status stand-ins:
- * Needs Review promotes the exact latest signaled session when possible;
- * every other live tab remains independently reachable under In progress.
+ * Needs Review promotes the exact latest signaled session when possible; every
+ * live tab remains independently reachable under Active, and a Doing ticket
+ * with nothing live keeps one last-run row there (outcome + resume seed), so
+ * the tier always mirrors the board's Doing column — even right after a
+ * relaunch killed every PTY.
  */
 export function ActiveSessions({ project }: { project: Project }) {
   const tickets = useBoardStore((state) => state.ticketsByProject[project.id]) ?? EMPTY_TICKETS;
@@ -212,44 +279,32 @@ export function ActiveSessions({ project }: { project: Project }) {
     return () => sessionsFetch.invalidate();
   }, [project.id, liveSignature, sessionsFetch]);
 
-  const eventsFetch = useLatestAsync();
-  const loadNeedsReviewEvents = React.useCallback(() => {
-    const token = eventsFetch.claim();
+  const signalsFetch = useLatestAsync();
+  const loadAttentionSignals = React.useCallback(() => {
+    const token = signalsFetch.claim();
     if (needsReviewIds.length === 0) {
       setEventsByTicket({});
       return;
     }
-    Promise.all(
-      needsReviewIds.map(async (ticketId) => ({
-        ticketId,
-        result: await window.api.tickets.events({ ticketId }),
-      })),
-    )
-      .then((results) => {
-        if (!eventsFetch.isCurrent(token)) return;
-        const failures = results.flatMap(({ result }) => (result.ok ? [] : [result.error]));
-        if (failures.length > 0) {
-          toastError(
-            `Could not load session attention for ${failures.length} ticket(s): ${failures.join("; ")}`,
-          );
+    window.api.tickets
+      .latestSignals({ projectId: project.id })
+      .then((result) => {
+        if (!signalsFetch.isCurrent(token)) return;
+        if (!result.ok) {
+          toastError(`Could not load session attention: ${result.error}`);
+          return;
         }
-        setEventsByTicket(
-          Object.fromEntries(
-            results.flatMap(({ ticketId, result }) =>
-              result.ok ? [[ticketId, result.events] as const] : [],
-            ),
-          ),
-        );
+        setEventsByTicket(signalsToEventsByTicket(result.signals));
       })
       .catch((error: unknown) => {
-        if (eventsFetch.isCurrent(token))
+        if (signalsFetch.isCurrent(token))
           toastError(`Could not load session attention: ${errorMessage(error)}`);
       });
-  }, [needsReviewIds, eventsFetch]);
+  }, [needsReviewIds, project.id, signalsFetch]);
 
   // Two triggers, deduped to at most one fetch per render:
   //   • the needs-review SET changed (a ticket entered/left the column) → always
-  //     reload, since the set of tickets whose events we show is different now;
+  //     reload, since the set of tickets whose signals we show is different now;
   //   • a planning refresh whose scope is untargeted OR names a ticket we're
   //     already showing → reload; a refresh for any OTHER ticket can't touch our
   //     attention rows, so skip it.
@@ -264,15 +319,15 @@ export function ActiveSessions({ project }: { project: Project }) {
     seenNeedsReviewIds.current = needsReviewIds;
     seenPlanningVersion.current = planningChange.version;
     if (idsChanged) {
-      loadNeedsReviewEvents();
+      loadAttentionSignals();
       return;
     }
     if (!versionChanged) return;
     if (planningChange.ticketId !== null && !needsReviewIds.includes(planningChange.ticketId)) {
       return;
     }
-    loadNeedsReviewEvents();
-  }, [needsReviewIds, planningChange, loadNeedsReviewEvents]);
+    loadAttentionSignals();
+  }, [needsReviewIds, planningChange, loadAttentionSignals]);
 
   React.useEffect(() => {
     if (liveSignature === "") return;
@@ -293,7 +348,8 @@ export function ActiveSessions({ project }: { project: Project }) {
       }),
     [tickets, containers, eventsByTicket, records, lastOutputAt, parkState, now],
   );
-  const rowCount = listing.needsYou.length + listing.inProgress.length;
+  const rowCount = listing.needsYou.length + listing.active.length;
+  const activeTabId = openTicketId === null ? null : (ticketTabs[openTicketId]?.active ?? "doc");
 
   const activate = (row: ActiveSessionRow) => {
     if (row.target !== null) {
@@ -317,17 +373,19 @@ export function ActiveSessions({ project }: { project: Project }) {
             tier="needs-you"
             rows={listing.needsYou}
             project={project}
+            now={now}
             openTicketId={openTicketId}
-            activeTabId={openTicketId === null ? null : (ticketTabs[openTicketId]?.active ?? "doc")}
+            activeTabId={activeTabId}
             onActivate={activate}
           />
           <SessionTier
-            label="In progress"
-            tier="in-progress"
-            rows={listing.inProgress}
+            label="Active"
+            tier="active"
+            rows={listing.active}
             project={project}
+            now={now}
             openTicketId={openTicketId}
-            activeTabId={openTicketId === null ? null : (ticketTabs[openTicketId]?.active ?? "doc")}
+            activeTabId={activeTabId}
             onActivate={activate}
           />
         </SidebarMenu>

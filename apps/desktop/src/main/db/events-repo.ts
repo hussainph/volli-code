@@ -6,6 +6,7 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import type {
+  LatestSessionSignal,
   TicketEvent,
   TicketEventActor,
   TicketEventActorContext,
@@ -131,4 +132,42 @@ export function listTicketEvents(db: Database.Database, ticketId: string): Ticke
     "SELECT * FROM ticket_events WHERE ticket_id = ? ORDER BY created_at ASC, rowid ASC",
   ).all(ticketId);
   return rows.map(mapTicketEvent);
+}
+
+/**
+ * The latest `session_signal` per ticket across a whole project — the sidebar's
+ * batched attention read (`api.tickets.latestSignals`). One indexed query
+ * replaces a per-needs-review-ticket event fan-out: the correlated subquery
+ * keeps only each ticket's newest signal (`created_at`, `rowid` tiebreak).
+ * Tickets that never signaled contribute no row.
+ */
+export function latestSessionSignalsByProject(
+  db: Database.Database,
+  projectId: string,
+): LatestSessionSignal[] {
+  const rows = prepared<[string], TicketEventRow>(
+    db,
+    `SELECT e.* FROM ticket_events e
+     JOIN tickets t ON t.id = e.ticket_id
+     WHERE t.project_id = ? AND e.kind = 'session_signal'
+       AND e.rowid = (
+         SELECT e2.rowid FROM ticket_events e2
+         WHERE e2.ticket_id = e.ticket_id AND e2.kind = 'session_signal'
+         ORDER BY e2.created_at DESC, e2.rowid DESC
+         LIMIT 1
+       )`,
+  ).all(projectId);
+  const signals: LatestSessionSignal[] = [];
+  for (const row of rows) {
+    const payload = JSON.parse(row.payload) as TicketEventPayload;
+    if (payload.kind !== "session_signal") continue;
+    signals.push({
+      ticketId: row.ticket_id,
+      sessionId: parseActor(row.actor).context?.sessionId ?? null,
+      signal: payload.signal,
+      reason: payload.reason,
+      createdAt: row.created_at,
+    });
+  }
+  return signals;
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
-import { listTicketEvents, recordTicketEvent } from "./events-repo";
+import { latestSessionSignalsByProject, listTicketEvents, recordTicketEvent } from "./events-repo";
 import { insertProject } from "./projects-repo";
 import { openTestDb, testProject, testTicket } from "./test-helpers";
 import type { TestDb } from "./test-helpers";
@@ -171,5 +171,103 @@ describe("recordTicketEvent — body_edited coalescing", () => {
 
     expect(listTicketEvents(ctx.db, ticketA.id)).toHaveLength(1);
     expect(listTicketEvents(ctx.db, ticketB.id)).toHaveLength(1);
+  });
+});
+
+describe("latestSessionSignalsByProject", () => {
+  it("returns no signals for a project whose tickets never signaled", () => {
+    const { ticketId } = setup();
+    recordTicketEvent(ctx.db, ticketId, { kind: "archived" }, 100);
+    expect(latestSessionSignalsByProject(ctx.db, "project-1")).toEqual([]);
+  });
+
+  it("keeps only the newest session_signal per ticket and carries its session context", () => {
+    ctx = openTestDb();
+    const project = testProject({ id: "project-1" });
+    insertProject(ctx.db, project);
+    const ticket = testTicket(project.id, { id: "ticket-a" });
+    insertTicket(ctx.db, ticket);
+
+    // An older 'done' is superseded by a newer 'blocked' on the same session.
+    recordTicketEvent(
+      ctx.db,
+      ticket.id,
+      { kind: "session_signal", signal: "done", reason: null },
+      100,
+      { kind: "session", sessionId: "s1", ticketId: ticket.id },
+    );
+    recordTicketEvent(
+      ctx.db,
+      ticket.id,
+      { kind: "session_signal", signal: "blocked", reason: "Approve access" },
+      200,
+      { kind: "session", sessionId: "s2", ticketId: ticket.id },
+    );
+
+    expect(latestSessionSignalsByProject(ctx.db, project.id)).toEqual([
+      {
+        ticketId: "ticket-a",
+        sessionId: "s2",
+        signal: "blocked",
+        reason: "Approve access",
+        createdAt: 200,
+      },
+    ]);
+  });
+
+  it("ignores non-signal events and unsignaled tickets", () => {
+    ctx = openTestDb();
+    const project = testProject({ id: "project-1" });
+    insertProject(ctx.db, project);
+    const signaled = testTicket(project.id, { id: "signaled" });
+    const quiet = testTicket(project.id, { id: "quiet" });
+    insertTicket(ctx.db, signaled);
+    insertTicket(ctx.db, quiet);
+
+    recordTicketEvent(ctx.db, signaled.id, { kind: "archived" }, 50);
+    recordTicketEvent(
+      ctx.db,
+      signaled.id,
+      { kind: "session_signal", signal: "done", reason: null },
+      100,
+      { kind: "automation" },
+    );
+    recordTicketEvent(ctx.db, quiet.id, { kind: "body_edited" }, 100);
+
+    // A context-less automation signal reports a null sessionId.
+    expect(latestSessionSignalsByProject(ctx.db, project.id)).toEqual([
+      { ticketId: "signaled", sessionId: null, signal: "done", reason: null, createdAt: 100 },
+    ]);
+  });
+
+  it("scopes strictly to the requested project", () => {
+    ctx = openTestDb();
+    const projectA = testProject({ id: "project-a" });
+    const projectB = testProject({ id: "project-b" });
+    insertProject(ctx.db, projectA);
+    insertProject(ctx.db, projectB);
+    const ticketA = testTicket(projectA.id, { id: "ticket-a" });
+    const ticketB = testTicket(projectB.id, { id: "ticket-b" });
+    insertTicket(ctx.db, ticketA);
+    insertTicket(ctx.db, ticketB);
+
+    recordTicketEvent(
+      ctx.db,
+      ticketA.id,
+      { kind: "session_signal", signal: "blocked", reason: null },
+      100,
+      { kind: "session", sessionId: "sa", ticketId: ticketA.id },
+    );
+    recordTicketEvent(
+      ctx.db,
+      ticketB.id,
+      { kind: "session_signal", signal: "done", reason: null },
+      100,
+      { kind: "session", sessionId: "sb", ticketId: ticketB.id },
+    );
+
+    expect(latestSessionSignalsByProject(ctx.db, projectA.id).map((s) => s.ticketId)).toEqual([
+      "ticket-a",
+    ]);
   });
 });

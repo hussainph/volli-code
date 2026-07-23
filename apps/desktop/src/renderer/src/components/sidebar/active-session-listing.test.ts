@@ -1,4 +1,4 @@
-import type { Ticket, TicketEvent } from "@volli/shared";
+import type { SessionRecord, Ticket, TicketEvent } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
 import { buildActiveSessionListing } from "./active-session-listing";
@@ -25,8 +25,40 @@ function ticket(overrides: Partial<Ticket> & { id: string; status: Ticket["statu
   };
 }
 
+function record(overrides: Partial<SessionRecord> & { id: string }): SessionRecord {
+  return {
+    id: overrides.id,
+    projectId: overrides.projectId ?? "p1",
+    ticketId: overrides.ticketId ?? null,
+    harnessId: overrides.harnessId ?? "claude-code",
+    harnessSessionId: overrides.harnessSessionId ?? null,
+    launchKind: overrides.launchKind ?? "agent",
+    placement: overrides.placement ?? "tab",
+    title: overrides.title ?? "Session",
+    cwd: overrides.cwd ?? "/tmp",
+    createdAt: overrides.createdAt ?? 1,
+    endedAt: overrides.endedAt ?? null,
+    exitCode: overrides.exitCode ?? null,
+  };
+}
+
+/** A single-pane ticket tab, the common container shape in these fixtures. */
+function paneTab(sessionId: string, title: string, exitCode: number | null = null) {
+  return {
+    sessionId,
+    title,
+    scope: { kind: "ticket", projectId: "p1", ticketId: "t1" } as const,
+    layout: { kind: "pane", sessionId, exitCode } as const,
+    activePaneId: sessionId,
+  };
+}
+
+function container(activeSessionId: string | null, tabs: ReturnType<typeof paneTab>[]) {
+  return { activeSessionId, tabs };
+}
+
 describe("buildActiveSessionListing", () => {
-  it("lists every live tab on a Doing ticket as its own in-progress destination", () => {
+  it("lists every live tab on a Doing ticket as its own active destination", () => {
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "doing" })],
       containers: {
@@ -58,7 +90,7 @@ describe("buildActiveSessionListing", () => {
     });
 
     expect(result.needsYou).toEqual([]);
-    expect(result.inProgress.map((row) => ({ title: row.title, target: row.target }))).toEqual([
+    expect(result.active.map((row) => ({ title: row.title, target: row.target }))).toEqual([
       { title: "Implement UI", target: { tabId: "s1", paneId: "s1" } },
       { title: "Run checks", target: { tabId: "s2", paneId: "s2" } },
     ]);
@@ -110,7 +142,7 @@ describe("buildActiveSessionListing", () => {
         target: { tabId: "s2", paneId: "s2" },
       },
     ]);
-    expect(result.inProgress.map((row) => row.title)).toEqual(["Keep building"]);
+    expect(result.active.map((row) => row.title)).toEqual(["Keep building"]);
   });
 
   it("falls back truthfully to the active tab, or the ticket when no live session can be identified", () => {
@@ -156,7 +188,7 @@ describe("buildActiveSessionListing", () => {
       { title: "Current tab", target: { tabId: "s2", paneId: "s2" } },
       { title: "Review finished work", target: null },
     ]);
-    expect(result.inProgress.map((row) => row.title)).toEqual(["Earlier tab"]);
+    expect(result.active.map((row) => row.title)).toEqual(["Earlier tab"]);
   });
 
   it("maps the latest signal from a split pane back to its containing tab and exact pane", () => {
@@ -212,7 +244,7 @@ describe("buildActiveSessionListing", () => {
     });
   });
 
-  it("orders live work by activity and excludes fully exited tabs", () => {
+  it("orders live work by activity and folds fully exited tabs into one concluded row", () => {
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "doing" })],
       containers: {
@@ -257,10 +289,260 @@ describe("buildActiveSessionListing", () => {
       now: 100_000,
     });
 
-    expect(result.inProgress.map((row) => `${row.title}:${row.activity}`)).toEqual([
+    // The exited tab produces no row of its own: the ticket has live work, so
+    // the tier already mirrors the board without a concluded fallback.
+    expect(result.active.map((row) => `${row.title}:${row.activity}`)).toEqual([
       "Working:working",
       "Idle:idle",
       "Parked:parked",
+    ]);
+  });
+
+  it("keeps a Doing ticket visible after relaunch as a record-backed resume row", () => {
+    const now = 1_000_000;
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: {},
+      eventsByTicket: {},
+      records: [
+        record({
+          id: "old",
+          ticketId: "t1",
+          title: "Earlier run",
+          endedAt: now - 60_000,
+        }),
+        record({
+          id: "split",
+          ticketId: "t1",
+          title: "Split pane",
+          placement: "split",
+          endedAt: now - 500,
+        }),
+        record({ id: "live", ticketId: "t1", title: "Still open", endedAt: null }),
+        record({
+          id: "s1",
+          ticketId: "t1",
+          title: "Claude run",
+          harnessSessionId: "resume-seed-1",
+          endedAt: now - 1_000,
+        }),
+      ],
+      lastOutputAt: {},
+      parkState: {},
+      now,
+    });
+
+    // The newest ended tab-placement record wins: split panes never stand alone
+    // and a not-yet-ended record is not a concluded run.
+    expect(result.needsYou).toEqual([]);
+    expect(result.active).toMatchObject([
+      {
+        title: "Claude run",
+        activity: null,
+        lastRun: { outcome: "ended", endedAt: now - 1_000, resumable: true },
+        target: null,
+      },
+    ]);
+  });
+
+  it("prefers a still-mounted exited tab for the fallback row and labels its outcome", () => {
+    const now = 1_000_000;
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: {
+        t1: container("failed", [
+          paneTab("clean", "Finished cleanly", 0),
+          paneTab("failed", "Broke the build", 1),
+        ]),
+      },
+      eventsByTicket: {},
+      records: [
+        record({ id: "failed", ticketId: "t1", title: "Broke the build", endedAt: now - 5_000 }),
+      ],
+      lastOutputAt: {},
+      parkState: {},
+      now,
+    });
+
+    // One row per concluded ticket: the container's active tab, reopenable in
+    // place, with the outcome read from its exited pane.
+    expect(result.active).toMatchObject([
+      {
+        title: "Broke the build",
+        lastRun: { outcome: "failed", endedAt: now - 5_000, resumable: false },
+        target: { tabId: "failed", paneId: "failed" },
+      },
+    ]);
+  });
+
+  it("maps record exit codes to outcomes and orders concluded rows after live ones by recency", () => {
+    const now = 1_000_000;
+    const result = buildActiveSessionListing({
+      tickets: [
+        ticket({ id: "t-live", status: "doing", ticketNumber: 1 }),
+        ticket({ id: "t-done", status: "doing", ticketNumber: 2 }),
+        ticket({ id: "t-failed", status: "doing", ticketNumber: 3 }),
+        ticket({ id: "t-finished", status: "done", ticketNumber: 4 }),
+      ],
+      containers: {
+        "t-live": {
+          activeSessionId: "s-live",
+          tabs: [
+            {
+              sessionId: "s-live",
+              title: "Live agent",
+              scope: { kind: "ticket", projectId: "p1", ticketId: "t-live" },
+              layout: { kind: "pane", sessionId: "s-live", exitCode: null },
+              activePaneId: "s-live",
+            },
+          ],
+        },
+      },
+      eventsByTicket: {},
+      records: [
+        record({
+          id: "r-done",
+          ticketId: "t-done",
+          title: "Clean run",
+          exitCode: 0,
+          endedAt: now - 5_000,
+        }),
+        record({
+          id: "r-failed",
+          ticketId: "t-failed",
+          title: "Crashed run",
+          exitCode: 2,
+          endedAt: now - 1_000,
+        }),
+        record({
+          id: "r-finished",
+          ticketId: "t-finished",
+          title: "On a done ticket",
+          exitCode: 0,
+          endedAt: now - 1_000,
+        }),
+      ],
+      lastOutputAt: {},
+      parkState: {},
+      now,
+    });
+
+    // Done-column tickets contribute nothing; concluded Doing rows trail the
+    // live one, most recently ended first.
+    expect(
+      result.active.map((row) => ({ title: row.title, outcome: row.lastRun?.outcome ?? null })),
+    ).toEqual([
+      { title: "Live agent", outcome: null },
+      { title: "Crashed run", outcome: "failed" },
+      { title: "Clean run", outcome: "done" },
+    ]);
+  });
+
+  it("gives a Doing ticket with no sessions at all a bare presence row", () => {
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing", title: "Just moved here" })],
+      containers: {},
+      eventsByTicket: {},
+      records: [],
+      lastOutputAt: {},
+      parkState: {},
+      now: 100_000,
+    });
+
+    expect(result.active).toMatchObject([
+      { title: "Just moved here", source: "No live session", lastRun: null, target: null },
+    ]);
+  });
+
+  it("gives a promoted Needs Review attention session no duplicate active row", () => {
+    const now = 1_000_000;
+    const signal: TicketEvent = {
+      id: "e1",
+      ticketId: "t1",
+      actor: "automation",
+      actorContext: { ticketId: "t1", sessionId: "s1" },
+      createdAt: now - 2_000,
+      payload: { kind: "session_signal", signal: "blocked", reason: "Approve" },
+    };
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "needs_review" })],
+      containers: {
+        t1: container("s1", [paneTab("s1", "Agent", 1)]),
+      },
+      eventsByTicket: { t1: [signal] },
+      records: [record({ id: "s1", ticketId: "t1", title: "Agent", endedAt: now - 1_000 })],
+      lastOutputAt: {},
+      parkState: {},
+      now,
+    });
+
+    expect(result.needsYou).toMatchObject([
+      { title: "Agent", attention: { signal: "blocked", reason: "Approve" } },
+    ]);
+    expect(result.active).toEqual([]);
+  });
+
+  it("orders needsYou blocked before done before a bare review prompt", () => {
+    const now = 1_000_000;
+    const blocked: TicketEvent = {
+      id: "b",
+      ticketId: "t-blocked",
+      actor: "automation",
+      actorContext: { ticketId: "t-blocked", sessionId: "sb" },
+      createdAt: now - 100,
+      payload: { kind: "session_signal", signal: "blocked", reason: null },
+    };
+    const done: TicketEvent = {
+      id: "d",
+      ticketId: "t-done",
+      actor: "automation",
+      actorContext: { ticketId: "t-done", sessionId: "sd" },
+      createdAt: now - 100,
+      payload: { kind: "session_signal", signal: "done", reason: null },
+    };
+    const result = buildActiveSessionListing({
+      tickets: [
+        ticket({ id: "t-done", status: "needs_review", ticketNumber: 1, title: "Done work" }),
+        ticket({ id: "t-bare", status: "needs_review", ticketNumber: 2, title: "Bare review" }),
+        ticket({ id: "t-blocked", status: "needs_review", ticketNumber: 3, title: "Blocked work" }),
+      ],
+      containers: {
+        "t-done": {
+          activeSessionId: "sd",
+          tabs: [
+            {
+              sessionId: "sd",
+              title: "Done session",
+              scope: { kind: "ticket", projectId: "p1", ticketId: "t-done" },
+              layout: { kind: "pane", sessionId: "sd", exitCode: null },
+              activePaneId: "sd",
+            },
+          ],
+        },
+        "t-blocked": {
+          activeSessionId: "sb",
+          tabs: [
+            {
+              sessionId: "sb",
+              title: "Blocked session",
+              scope: { kind: "ticket", projectId: "p1", ticketId: "t-blocked" },
+              layout: { kind: "pane", sessionId: "sb", exitCode: null },
+              activePaneId: "sb",
+            },
+          ],
+        },
+      },
+      eventsByTicket: { "t-blocked": [blocked], "t-done": [done] },
+      records: [],
+      lastOutputAt: {},
+      parkState: {},
+      now,
+    });
+
+    expect(result.needsYou.map((row) => row.title)).toEqual([
+      "Blocked session",
+      "Done session",
+      "Bare review",
     ]);
   });
 });

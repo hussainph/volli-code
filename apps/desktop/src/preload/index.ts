@@ -52,6 +52,7 @@ import type {
   TicketCommentsResult,
   TicketCreateInput,
   TicketEventsResult,
+  TicketLatestSignalsResult,
   TicketIdInput,
   TicketMoveInput,
   TicketResult,
@@ -162,6 +163,9 @@ const api = {
     /** A ticket's full event history, chronological — backs the Activity feed. */
     events: (input: TicketIdInput): Promise<TicketEventsResult> =>
       invoke("volli:ticket-events", input),
+    /** The latest session_signal per ticket in the project — one batched read backing the sidebar's attention tiers. */
+    latestSignals: (input: ProjectIdInput): Promise<TicketLatestSignalsResult> =>
+      invoke("volli:ticket-latest-signals", input),
   },
   comments: {
     /** A ticket's comments, chronological — the work-log feed. */

@@ -284,6 +284,20 @@ async function columnHasCard(page, label, id) {
   );
 }
 
+/** Every card id in a board column, top to bottom. */
+async function columnCardIds(page, label) {
+  return page.evaluate((columnLabel) => {
+    const headers = Array.from(document.querySelectorAll("div.flex.items-center.gap-2"));
+    const header = headers.find((div) => {
+      const first = div.children[0];
+      return first?.tagName === "SPAN" && first.textContent === columnLabel;
+    });
+    return Array.from(header?.parentElement?.querySelectorAll("article span.font-mono") ?? []).map(
+      (span) => span.textContent?.trim(),
+    );
+  }, label);
+}
+
 /** The ticket ids listed in the sidebar's "Active Sessions" group, in DOM order. */
 async function sidebarSessionIds(page) {
   return page.evaluate(() => {
@@ -951,15 +965,22 @@ async function main() {
     // === 16. Sidebar attention tier is truthful without a live terminal =====
     await attempt(
       16,
-      "Active Sessions promotes Needs Review tickets to Needs you without inventing live sessions",
+      "Active Sessions promotes Needs Review to Needs you and mirrors Doing under Active without inventing live sessions",
       async () => {
+        // The Active tier guarantees every Doing ticket a presence (bare rows
+        // here — no PTY ever ran), alongside the promoted Needs Review rows.
+        const doingIds = await columnCardIds(page, "Doing");
         const ids = await sidebarSessionIds(page);
-        const expectedIds = ["VC-10", "VC-11"];
+        const expectedIds = ["VC-10", "VC-11", ...doingIds];
         const idsMatch =
           Array.isArray(ids) &&
+          doingIds.length > 0 &&
           ids.length === expectedIds.length &&
           expectedIds.every((id) => ids.includes(id));
         const needsYou = (await page.getByText("Needs you", { exact: true }).count()) === 1;
+        const activeTier = (await page.getByText("Active", { exact: true }).count()) === 1;
+        const bareDoingRows =
+          (await page.getByText("No live session", { exact: false }).count()) >= doingIds.length;
         const noInProgress = (await page.getByText("In progress", { exact: true }).count()) === 0;
         const needsYouRow = page
           .locator('[data-sidebar="menu-button"]')
@@ -987,10 +1008,17 @@ async function main() {
           subtextHighlight.subtextColor !== subtextBefore;
         await page.keyboard.press("Escape");
         await sleep(300);
-        const ok = idsMatch && needsYou && noInProgress && ticketOpened && subtextHighlighted;
+        const ok =
+          idsMatch &&
+          needsYou &&
+          activeTier &&
+          bareDoingRows &&
+          noInProgress &&
+          ticketOpened &&
+          subtextHighlighted;
         return {
           ok,
-          detail: `ids=${JSON.stringify(ids)} needsYou=${needsYou} noInProgress=${noInProgress} ticketOpened=${ticketOpened} subtext=${JSON.stringify(subtextHighlight)}`,
+          detail: `ids=${JSON.stringify(ids)} doing=${JSON.stringify(doingIds)} needsYou=${needsYou} activeTier=${activeTier} bareDoingRows=${bareDoingRows} noInProgress=${noInProgress} ticketOpened=${ticketOpened} subtext=${JSON.stringify(subtextHighlight)}`,
         };
       },
     );

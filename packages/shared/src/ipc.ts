@@ -19,7 +19,7 @@ import type {
 } from "./terminal";
 import type { ArchivedTicket, HarnessId, Ticket, TicketPriority, TicketStatus } from "./ticket";
 import type { TicketComment } from "./ticket-comment";
-import type { DiffStat, TicketEvent } from "./ticket-events";
+import type { DiffStat, LatestSessionSignal, TicketEvent } from "./ticket-events";
 
 // ---- request contract (issue #98) ------------------------------------------
 // Each invoke request is declared ONCE here as `{ args, result }`; the runtime
@@ -218,6 +218,11 @@ export interface VolliDataIpcContract {
   "volli:ticket-list-archived": { args: [projectId: string]; result: ArchivedTicketsResult };
   /** A ticket's full event history, chronological — backs the Activity feed. */
   "volli:ticket-events": { args: [input: TicketIdInput]; result: TicketEventsResult };
+  /** The latest `session_signal` per ticket in the project — one batched read backing the sidebar's attention tiers. */
+  "volli:ticket-latest-signals": {
+    args: [input: ProjectIdInput];
+    result: TicketLatestSignalsResult;
+  };
 
   /** A ticket's comments, chronological — the work-log feed. */
   "volli:comment-list": { args: [input: TicketIdInput]; result: TicketCommentsResult };
@@ -545,6 +550,9 @@ export type AppStateSetResult = Result;
 
 /** A ticket's full event history, chronological — returned by `ticket-events` (the Activity feed read). */
 export type TicketEventsResult = Result<{ events: TicketEvent[] }>;
+
+/** The latest `session_signal` per ticket in a project — returned by `ticket-latest-signals` (the sidebar's batched attention read). */
+export type TicketLatestSignalsResult = Result<{ signals: LatestSessionSignal[] }>;
 
 /** A single comment, returned by a mutation that affects only that one comment — create, update. */
 export type TicketCommentResult = Result<{ comment: TicketComment }>;
