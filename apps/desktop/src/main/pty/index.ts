@@ -2,5 +2,6 @@
 // former monolithic `pty.ts` per issue #99. This barrel is the module's
 // public surface — import from "./pty" (or "../pty"), not from "./pty/manager" directly.
 
-export { PtyManager, confirmDestructiveClose, registerTerminalIpcHandlers } from "./manager";
+export { PtyManager } from "./manager";
 export type { AgentRuntimeEnvironment } from "./manager";
+export { confirmDestructiveClose, registerTerminalIpcHandlers } from "./ipc";
