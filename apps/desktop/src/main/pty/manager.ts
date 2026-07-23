@@ -6,17 +6,13 @@ import { basename, resolve } from "node:path";
 import type Database from "better-sqlite3";
 import {
   agentSessionEnv,
-  attachmentsSectionInput,
   breatheShouldWake,
-  buildHarnessCommand,
-  composeAttachmentsSection,
   createSessionRecord,
   errorMessage,
   isHarnessId,
   isParkCandidate,
   resolveShell,
   treeIsCpuQuiet,
-  worktreeOrientationPreamble,
 } from "@volli/shared";
 import type {
   CreateTerminalSessionRequest,
@@ -37,13 +33,13 @@ import { broadcastDataChanged } from "../broadcast";
 import type { DbHandle } from "../data-ipc";
 import { createProcessInspector, parkConfigFromEnv } from "../park";
 import type { ParkConfig, ProcessInspector } from "../park";
-import { listAttachments } from "../db/attachments-repo";
 import { isPathWithinRoots } from "../project-roots";
 import { ensureProjectArtifactsDir } from "../volli-fs";
 import { createSetupRun, ensure } from "../worktree";
 import type { EnsureOutcome, SetupRun } from "../worktree";
 import { worktreeDeps, worktreesHome } from "../worktree-runtime";
 import { isInside } from "../worktree/paths";
+import { composeWorktreeLaunchCommand } from "./launch";
 import { closeOutSession, persistSessionStart } from "./persistence";
 import { resolveScope } from "./scope";
 
@@ -421,34 +417,10 @@ export class PtyManager {
       const worktree = scope.worktree;
       if (worktree !== null && worktreeOutcome !== null) {
         const identity = worktreeOutcome.identity;
-        // A resume writes its pre-built resume line verbatim (no orientation
-        // preamble — the harness is picking up an existing session). Otherwise a
-        // kickoff composes the harness command with the preamble now that the
-        // worktree identity is resolved: `ensure` already materialized the
-        // ticket's attachments into this worktree (CONCEPT decision #19), so
-        // the "## Attachments" section is re-derived here — cheap,
-        // deterministic, no fs touch — rather than threading the materialize
-        // output through EnsureOutcome. Both flow through the setup gate below.
-        let launchCommand: string | null = null;
-        if (worktree.resumeCommand !== null) {
-          launchCommand = worktree.resumeCommand;
-        } else if (worktree.kickoff !== null) {
-          const attachmentsSection = composeAttachmentsSection(
-            attachmentsSectionInput(listAttachments(db, worktree.ticketId)),
-          );
-          const attachmentsSuffix =
-            attachmentsSection.length > 0 ? `\n\n${attachmentsSection}` : "";
-          const preamble = worktreeOrientationPreamble({
-            worktreePath: cwd,
-            branch: identity.branch ?? "",
-            baseBranch: identity.baseBranch,
-            projectPath: worktree.projectPath,
-          });
-          launchCommand = buildHarnessCommand(
-            worktree.kickoff.harnessId,
-            `${preamble}\n\n${worktree.kickoff.prompt}${attachmentsSuffix}`,
-          );
-        }
+        // Compose the worktree session's first line now that ensure resolved the
+        // identity (resume line verbatim, else a preamble-opened kickoff, else
+        // nothing). It still flows through the setup gate below.
+        const launchCommand = composeWorktreeLaunchCommand(db, worktree, identity, cwd);
         const setupCommand = worktree.setupCommand?.trim() ?? "";
         if (worktreeOutcome.created && setupCommand.length > 0) {
           // `file` is the resolved shell the PTY was spawned with — the sentinel
