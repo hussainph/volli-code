@@ -44,17 +44,14 @@ import { broadcastDataChanged } from "../broadcast";
 import type { DbHandle } from "../data-ipc";
 import { createProcessInspector, parkConfigFromEnv } from "../park";
 import type { ParkConfig, ProcessInspector } from "../park";
-import { recordTicketEvent } from "../db/events-repo";
 import { listAttachments } from "../db/attachments-repo";
 import {
   countProjectScratchSessions,
   countTicketSessions,
-  endSession,
   getSession,
-  getSessionTicketId,
   getTicketSessionContext,
-  insertSession,
 } from "../db/sessions-repo";
+import { closeOutSession, persistSessionStart } from "./persistence";
 import { getProjectById } from "../db/projects-repo";
 import { isPathWithinRoots } from "../project-roots";
 import { ensureProjectArtifactsDir } from "../volli-fs";
@@ -600,45 +597,8 @@ export class PtyManager {
         cwd,
         now,
       });
-      // A resume inherits the ended session's best-known resume seed, so a
-      // follow-up interrupt/resume keeps a valid `--resume <id>` until the
-      // harness re-`link`s a fresh one. Set before insert so it persists.
-      if (scope.resume !== null && scope.resume.harnessSessionId !== null) {
-        record.harnessSessionId = scope.resume.harnessSessionId;
-      }
       try {
-        const persist = db.transaction(() => {
-          insertSession(db, record);
-          if (record.ticketId !== null) {
-            recordTicketEvent(
-              db,
-              record.ticketId,
-              {
-                kind: "session_started",
-                sessionId: record.id,
-                title: record.title,
-                launchKind: record.launchKind,
-                placement: record.placement,
-                ...(record.launchKind === "agent" ? { harnessId: record.harnessId } : {}),
-              },
-              now,
-            );
-            // A resume also links the new session to the one it picks up from.
-            if (scope.resume !== null) {
-              recordTicketEvent(
-                db,
-                record.ticketId,
-                {
-                  kind: "session_resumed",
-                  sessionId: record.id,
-                  previousSessionId: scope.resume.previousSessionId,
-                },
-                now,
-              );
-            }
-          }
-        });
-        persist();
+        persistSessionStart(db, record, scope.resume, now);
       } catch (error) {
         pty.kill();
         return { ok: false, error: errorMessage(error) };
@@ -761,37 +721,8 @@ export class PtyManager {
         }
         // Close out the durable record (and, for a still-linked ticket session,
         // record `session_ended`) — runs whether the shell exited on its own or
-        // was killed, so the row never lingers as falsely-live.
-        const endedAt = Date.now();
-        try {
-          const end = db.transaction(() => {
-            endSession(db, sessionId, endedAt, exitCode);
-            // Resolve the ticket link from the CURRENT row, never the stale
-            // in-memory `record.ticketId`: `sessions.ticket_id` is ON DELETE SET
-            // NULL, so a ticket (or its project) deleted while the session lived
-            // leaves this null. Recording `session_ended` off the stale capture
-            // would then violate the ticket_events FK, roll the whole
-            // transaction back, and strand the row as falsely-live.
-            const ticketId = getSessionTicketId(db, sessionId);
-            if (ticketId !== null) {
-              recordTicketEvent(db, ticketId, { kind: "session_ended", sessionId }, endedAt);
-            }
-          });
-          end();
-        } catch (error) {
-          // Nothing about closing out the record may prevent the renderer's exit
-          // notification or the manager's own cleanup below. Log it, then make a
-          // best-effort bare endSession outside the transaction so the row isn't
-          // stranded as falsely-live (endLiveSessions sweeps any residue on the
-          // next boot).
-          console.error(`[volli] failed to close out session ${sessionId}: ${errorMessage(error)}`);
-          try {
-            endSession(db, sessionId, endedAt, exitCode);
-          } catch {
-            // Even the bare end failed (e.g. the db is gone) — leave it to the
-            // boot-time endLiveSessions sweep.
-          }
-        }
+        // was killed, so the row never lingers as falsely-live. Never throws.
+        closeOutSession(db, sessionId, Date.now(), exitCode);
         if (!webContents.isDestroyed()) {
           const payload: TerminalExitEvent = { sessionId, exitCode };
           webContents.send("volli:terminal-exit" satisfies VolliIpcEvent, payload);
