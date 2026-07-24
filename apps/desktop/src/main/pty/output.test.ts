@@ -224,4 +224,22 @@ describe("dispose", () => {
     vi.advanceTimersByTime(1000);
     expect(sink.send).not.toHaveBeenCalled();
   });
+
+  it("makes a flush after dispose a no-op — no send, no accounting, no backpressure", () => {
+    vi.useFakeTimers();
+    const { sink } = makeSink();
+    const pipeline = createOutputPipeline(sink);
+
+    // A batch well past the high watermark is buffered, then the session is
+    // forgotten (dispose) before the manager's onExit flush lands — the real
+    // kill path, where forget()->dispose() runs before node-pty's onExit fires.
+    pipeline.enqueue("x".repeat(FLOW_CONTROL_HIGH_WATERMARK + 1));
+    pipeline.dispose();
+
+    // onExit calls flush() on the disposed pipeline: the buffer is already gone,
+    // so nothing sends, nothing pauses, and no unacked count is stranded.
+    pipeline.flush();
+    expect(sink.send).not.toHaveBeenCalled();
+    expect(sink.pause).not.toHaveBeenCalled();
+  });
 });

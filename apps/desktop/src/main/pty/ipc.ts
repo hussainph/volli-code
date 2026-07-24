@@ -75,8 +75,8 @@ function isOptionalKickoff(
 /**
  * `undefined` (no resume) or a `{ sessionId: string }` object. A malformed
  * resume shape rejects the whole ticket. The kickoff/resume mutual exclusion is
- * a semantic rule enforced in {@link PtyManager.resolveScope} (with a clear
- * message), not a shape rule — both fields being well-formed is valid here.
+ * a semantic rule enforced in {@link resolveScope} (with a clear message), not a
+ * shape rule — both fields being well-formed is valid here.
  */
 function isOptionalResume(value: unknown): value is { sessionId: string } | undefined {
   if (value === undefined) return true;

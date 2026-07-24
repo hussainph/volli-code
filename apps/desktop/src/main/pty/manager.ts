@@ -92,8 +92,8 @@ interface Session {
   onDestroyed: () => void;
   /**
    * This session's output pipeline: batching, the ack-based flow control, and
-   * the bounded observation tail — all the machinery {@link enqueueData} used to
-   * spread across seven Session fields, now owned by {@link createOutputPipeline}
+   * the bounded observation tail — all the machinery the manager's onData
+   * handler used to spread across seven Session fields, now owned by {@link createOutputPipeline}
    * (issue #99). The manager keeps only the side effects that ride the same
    * onData chunk (activity stamping, setup-run feeding) and adapts a
    * {@link OutputSink} onto this session's webContents + pty.
@@ -124,7 +124,7 @@ interface Session {
    * sentinel-gated setup command (worktree-support §6). The whole state machine
    * — tail scanning, phase transitions, the `worktree_failed(setup)` event —
    * lives in the worktree module's {@link createSetupRun} handle; this field is
-   * just pty.ts's grip on it: the pty `onData` handler feeds it output chunks and
+   * just the manager's grip on it: the pty `onData` handler feeds it output chunks and
    * {@link create}'s onExit notifies it of a premature shell death. Cleared the
    * instant the run settles (either outcome) — a non-zero exit leaves the
    * terminal a live shell with the failure visible and never launches the harness.
@@ -425,8 +425,8 @@ export class PtyManager {
       // worktree AND the project defines a setup command, that command runs
       // FIRST, sentinel-gated (§6): the worktree module's `createSetupRun` handle
       // owns the whole machine (wrapped line, phase `setting-up`, tail scan,
-      // failure event); pty.ts only writes its command line and holds the handle
-      // in `setupRun` so enqueueData can feed it. A reused worktree (created
+      // failure event); the manager only writes its command line and holds the
+      // handle in `setupRun` so the onData handler can feed it. A reused worktree (created
       // false) is already `ready` from ensure and launches immediately.
       const worktree = scope.worktree;
       if (worktree !== null && worktreeOutcome !== null) {
