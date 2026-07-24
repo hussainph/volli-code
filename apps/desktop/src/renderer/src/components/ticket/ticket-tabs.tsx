@@ -262,10 +262,17 @@ export function TicketTabStrip({
           <PlusIcon className="size-3.5" />
         </Button>
       </div>
-      <div className="mb-1 flex shrink-0 items-center border-l border-border/70 px-1.5">
+      {/* Full-height corner control: self-stretch ignores the parent's items-end
+          and -mt-1.5 cancels its pt-1.5 so this column spans the strip's true
+          top edge to bottom (the framed card's rounded-t-lg + overflow clips the
+          outer corner). The button fills that height (h-full over size-5's height,
+          width kept) with a rectangular hover (rounded-none) so it reads as a
+          corner region, not a tall pill. */}
+      <div className="-mt-1.5 flex shrink-0 items-stretch self-stretch border-l border-border/70 px-1.5">
         <Button
           size="icon-xs"
           variant="ghost"
+          className="h-full rounded-none"
           disabled={!canFocusTerminal}
           onClick={onEnterTerminalFocus}
           aria-label="Enter terminal focus"

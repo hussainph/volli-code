@@ -183,7 +183,7 @@ async function main() {
     await sleep(1500);
 
     // === Setup: two scratch tabs, each writing its shell pid to a marker ======
-    await page.getByText("Sessions", { exact: true }).click();
+    await page.getByText("Terminals", { exact: true }).click();
     await waitForLiveCanvas(page); // first visit auto-creates tab 1
 
     const marker1 = join(SCRATCH, "tab-1.pid");

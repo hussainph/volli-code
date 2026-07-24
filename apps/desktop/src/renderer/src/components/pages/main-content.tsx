@@ -1,6 +1,7 @@
 import { FolderPlusIcon } from "@phosphor-icons/react/dist/csr/FolderPlus";
 
 import { BoardPage } from "@renderer/components/pages/board-page";
+import { ConfigurePage } from "@renderer/components/pages/configure-page";
 import { FilesPage } from "@renderer/components/pages/files-page";
 import { SettingsPage } from "@renderer/components/pages/settings-page";
 import { SessionsLayer } from "@renderer/components/sessions/sessions-layer";
@@ -42,6 +43,8 @@ export function MainContent() {
           <BoardPage />
         ) : activeNav === "files" ? (
           <FilesPage />
+        ) : activeNav === "configure" ? (
+          <ConfigurePage />
         ) : null /* sessions: rendered by the always-mounted SessionsLayer above */
       }
     </div>

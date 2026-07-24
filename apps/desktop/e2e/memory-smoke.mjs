@@ -245,7 +245,7 @@ async function main() {
     await snap("baseline (Board, 0 tabs)");
 
     // === Phase 2: N idle claude sessions =====================================
-    await page.getByText("Sessions", { exact: true }).click();
+    await page.getByText("Terminals", { exact: true }).click();
     await waitForLiveCanvas(page); // first visit auto-creates session 1
 
     for (let i = 1; i <= N_SESSIONS; i++) {

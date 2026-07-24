@@ -275,7 +275,7 @@ async function main() {
     await page.waitForLoadState("domcontentloaded");
 
     // === 1. Fresh session renders in Front End Delight ======================
-    await page.getByText("Sessions", { exact: true }).click();
+    await page.getByText("Terminals", { exact: true }).click();
     await waitForLiveCanvas(page);
     const bootColor = await terminalBackgroundColor(page, join(SCRATCH, "01-fed.png"));
     const fedDistance = colorDistance(bootColor, FED_BG);
