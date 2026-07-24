@@ -1,4 +1,12 @@
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm as removeSourceBundle,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -142,7 +150,7 @@ describe("ensureVolliCliShim", () => {
       rendererUrl: null,
       appEntry: "/work/volli-code/apps/desktop",
     });
-    await rm(sourceBundle);
+    await removeSourceBundle(sourceBundle);
 
     const installedBundle = join(binDir, "volli.cjs");
     await expect(readFile(installedBundle, "utf8")).resolves.toContain("profile client");
