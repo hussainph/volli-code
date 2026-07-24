@@ -28,8 +28,8 @@ const bundleWorkspacePackages = (id: string): boolean => id.startsWith("@volli/"
 export default defineConfig({
   // Renderer (React) app build. `root` points Vite at the renderer's index.html.
   root: "src/renderer",
-  // CRITICAL: assets must be referenced relatively so the built index.html works
-  // under file:// in the packaged app. Plain Vite defaults to "/" which 404s.
+  // CRITICAL: assets stay relative so the built index and worker chunks resolve
+  // beneath volli-app://bundle/ in packaged builds. Plain Vite defaults to "/".
   base: "./",
   plugins: [tailwindcss(), react()],
   resolve: {
@@ -76,6 +76,9 @@ export default defineConfig({
         "src/lib/relative-time.ts",
         "src/lib/debounce.ts",
         "src/lib/escape-guard.ts",
+        "src/editor/document-identity.ts",
+        "src/editor/document-registry.ts",
+        "src/editor/monaco-theme.ts",
         "src/terminal/css-color.ts",
         "src/terminal/appearance-model.ts",
         "src/terminal/option-as-alt.ts",

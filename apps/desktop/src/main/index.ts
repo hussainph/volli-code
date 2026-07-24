@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, Notification, session, shell } from "electron";
+import { app, BrowserWindow, dialog, net, Notification, protocol, session, shell } from "electron";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -32,6 +32,27 @@ import {
   type AgentToolsConsentStatus,
 } from "./agent-tools";
 import { getAllAppState, setAppState } from "./db/app-state-repo";
+import {
+  PACKAGED_RENDERER_ENTRY_URL,
+  PACKAGED_RENDERER_HOST,
+  PACKAGED_RENDERER_PROTOCOL,
+  PACKAGED_RENDERER_SCHEME,
+  resolvePackagedRendererAsset,
+} from "./app-protocol";
+
+// Monaco's language services require web workers, which Chromium does not
+// permit from file://. Register one standard, secure, fetch-capable app scheme
+// before Electron becomes ready; deliberately omit bypassCSP.
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: PACKAGED_RENDERER_SCHEME,
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+    },
+  },
+]);
 
 // Fixes dev and the packaged app to one shared Electron `userData` dir (by
 // default they diverge: packaged apps use the productName, dev falls back to
@@ -58,9 +79,10 @@ if (isDev && !app.commandLine.hasSwitch("user-data-dir")) {
   app.setPath("userData", `${app.getPath("userData")}-dev`);
 }
 
-// The packaged renderer entry — loaded by createWindow's loadFile below and,
-// mirrored here, the sole allowed in-window file:// document in prod.
-const PACKAGED_RENDERER_ENTRY = join(__dirname, "../dist/index.html");
+// The app-owned directory exposed by volli-app://bundle/. The protocol resolver
+// below is exact-host and containment checked: it cannot serve project files or
+// anything else from the local filesystem.
+const PACKAGED_RENDERER_ROOT = join(__dirname, "../dist");
 
 // Navigation hardening (Electron footgun). Markdown in ticket bodies, comments,
 // and agent-written artifacts now renders real <a href> links, so a click would
@@ -68,20 +90,21 @@ const PACKAGED_RENDERER_ENTRY = join(__dirname, "../dist/index.html");
 // window.open would punch out an uncontrolled child window.
 //
 // The only allowed in-window destinations are the dev-server origin in dev and
-// the EXACT packaged index.html document in prod (compared by pathname, so any
-// OTHER local file — e.g. an .html dragged onto the window — is external even
-// though it's also file://). Everything else is external. See navigation.ts.
+// the exact packaged app scheme+host in production. Everything else is
+// external. See navigation.ts.
 function isInternalNavigation(target: string): boolean {
   const devUrl = isDev ? process.env["ELECTRON_RENDERER_URL"] : undefined;
   if (devUrl) {
     return isInternalNavigationTarget(target, {
-      devOrigin: new URL(devUrl).origin,
-      packagedPathname: null,
+      kind: "dev",
+      origin: new URL(devUrl).origin,
     });
   }
   return isInternalNavigationTarget(target, {
-    devOrigin: null,
-    packagedPathname: pathToFileURL(PACKAGED_RENDERER_ENTRY).pathname,
+    kind: "packaged",
+    scheme: PACKAGED_RENDERER_PROTOCOL,
+    host: PACKAGED_RENDERER_HOST,
+    pathname: "/index.html",
   });
 }
 
@@ -191,17 +214,26 @@ function createWindow(ptyManager: PtyManager): BrowserWindow {
   });
 
   // In dev, scripts/dev.mjs injects ELECTRON_RENDERER_URL and runs the Vite dev
-  // server there for HMR. In production, load the built renderer from disk.
+  // server there for HMR. Otherwise load the built renderer through the secure,
+  // app-owned origin (including local packaged-runtime smoke launches).
   // DevTools is not auto-opened — toggle it with ⌥⌘I when needed.
   if (isDev && process.env["ELECTRON_RENDERER_URL"]) {
     mainWindow.loadURL(process.env["ELECTRON_RENDERER_URL"]);
   } else {
-    mainWindow.loadFile(PACKAGED_RENDERER_ENTRY);
+    mainWindow.loadURL(PACKAGED_RENDERER_ENTRY_URL);
   }
   return mainWindow;
 }
 
 app.whenReady().then(async () => {
+  protocol.handle(PACKAGED_RENDERER_SCHEME, (request) => {
+    const assetPath = resolvePackagedRendererAsset(request.url, PACKAGED_RENDERER_ROOT);
+    if (assetPath === null) {
+      return new Response("Not found", { status: 404 });
+    }
+    return net.fetch(pathToFileURL(assetPath).toString());
+  });
+
   if (isDev) {
     // Dev smoke-check that vp pack bundled the workspace TS source (@volli/shared)
     // into main.cjs via deps.alwaysBundle rather than leaving an unresolved
