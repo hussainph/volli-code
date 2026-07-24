@@ -417,6 +417,9 @@ app.whenReady().then(async () => {
   // exactly that. Unset in production, so the real home is used unchanged.
   const agentToolsHome =
     (isDev ? process.env["VOLLI_AGENT_HOME"] : undefined) ?? app.getPath("home");
+  const managedLegacyCliTarget = isDev
+    ? undefined
+    : join(dirname(app.getPath("userData")), `${app.getName()}-dev`, "bin", "volli");
 
   // Renders hand-edited managed files that were preserved (never overwritten)
   // as path + a readable unified diff in the dialog detail. Shared by install,
@@ -459,7 +462,7 @@ app.whenReady().then(async () => {
     // step is skipped. Unset in production, so the admin prompt runs unchanged.
     if (!isDev || process.env["VOLLI_AGENT_CONSENT_CHOICE"] === undefined) {
       try {
-        await installGlobalCliLink(shimPath);
+        await installGlobalCliLink(shimPath, managedLegacyCliTarget);
       } catch (error) {
         dialog.showErrorBox(
           "Agent Tools Installation Failed",

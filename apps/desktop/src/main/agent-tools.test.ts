@@ -48,6 +48,17 @@ describe("globalCliLinkShellCommand", () => {
     expect(command.indexOf("/bin/mkdir")).toBeLessThan(command.indexOf("/bin/ln -sn"));
     expect(command).not.toContain(" -f");
   });
+
+  it("lets a packaged install replace only the exact legacy dev launcher", () => {
+    expect(
+      globalCliLinkShellCommand(
+        "/Users/me/Library/Application Support/Volli Code/bin/volli",
+        "/Users/me/Library/Application Support/Volli Code-dev/bin/volli",
+      ),
+    ).toContain(
+      `elif [ -L /usr/local/bin/volli ] && [ "$(/usr/bin/readlink /usr/local/bin/volli)" = '/Users/me/Library/Application Support/Volli Code-dev/bin/volli' ]; then /bin/ln -sfn '/Users/me/Library/Application Support/Volli Code/bin/volli' /usr/local/bin/volli;`,
+    );
+  });
 });
 
 describe("uninstallAllHarnessSkills", () => {
