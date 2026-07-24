@@ -206,9 +206,10 @@ describe("launchApp", () => {
           socketPath: "/socket",
           executable: "/electron",
           appEntry: "/app/main.cjs",
+          userDataPath: "/profiles/volli-dev",
           timeoutMs: 40,
           env: {},
-        },
+        } as Parameters<typeof launchApp>[0],
         {
           probe: async () => {
             throw new Error("down");
@@ -219,6 +220,6 @@ describe("launchApp", () => {
         },
       ),
     ).rejects.toMatchObject({ code: "TIMEOUT" });
-    expect(spawns).toEqual([["/app/main.cjs"]]);
+    expect(spawns).toEqual([["/app/main.cjs", "--user-data-dir=/profiles/volli-dev"]]);
   });
 });

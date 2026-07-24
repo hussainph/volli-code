@@ -9,6 +9,7 @@ export interface VolliCliShimInput {
   electronPath: string;
   bundlePath: string;
   socketPath: string;
+  userDataPath: string;
   /** The dev main-process entry `volli app launch` should boot; null when packaged (the bare executable boots the app on its own). */
   appEntry: string | null;
 }
@@ -41,6 +42,7 @@ export async function ensureVolliCliShim(input: VolliCliShimInput): Promise<stri
     (input.appEntry !== null
       ? `export VOLLI_APP_ENTRY=${shellSingleQuote(input.appEntry)}\n`
       : "") +
+    `export VOLLI_APP_USER_DATA=${shellSingleQuote(input.userDataPath)}\n` +
     `exec ${shellSingleQuote(input.electronPath)} ${shellSingleQuote(input.bundlePath)} "$@"\n`;
   try {
     await writeFile(temporaryPath, content, { encoding: "utf8", mode: 0o700, flag: "wx" });

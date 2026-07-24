@@ -52,6 +52,7 @@ async function main(): Promise<void> {
           socketPath: requireLaunchSocketPath(socketPath),
           executable: env.VOLLI_APP_EXECUTABLE ?? process.execPath,
           appEntry: env.VOLLI_APP_ENTRY,
+          userDataPath: env.VOLLI_APP_USER_DATA,
           timeoutMs,
           env,
         },

@@ -9,6 +9,7 @@ export interface LaunchAppOptions {
   socketPath: string;
   executable: string;
   appEntry: string | undefined;
+  userDataPath?: string;
   timeoutMs: number;
   env: NodeJS.ProcessEnv;
 }
@@ -74,7 +75,14 @@ export async function launchApp(
   }
 
   const env = appLaunchEnvironment(options.env);
-  dependencies.spawnDetached(options.executable, options.appEntry ? [options.appEntry] : [], env);
+  dependencies.spawnDetached(
+    options.executable,
+    [
+      ...(options.appEntry ? [options.appEntry] : []),
+      ...(options.userDataPath ? [`--user-data-dir=${options.userDataPath}`] : []),
+    ],
+    env,
+  );
 
   const deadline = dependencies.now() + options.timeoutMs;
   while (dependencies.now() < deadline) {

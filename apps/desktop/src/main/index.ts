@@ -402,6 +402,7 @@ app.whenReady().then(async () => {
       electronPath: process.execPath,
       bundlePath: runtimePaths.cliBundlePath,
       socketPath: runtimePaths.socketPath,
+      userDataPath: app.getPath("userData"),
       appEntry: runtimePaths.appEntry,
     });
   } catch (error) {
