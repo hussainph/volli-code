@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  clampRailWidth,
   clampSidebarWidth,
   createUiStore,
+  RAIL_DEFAULT_WIDTH,
+  RAIL_MAX_WIDTH,
+  RAIL_MIN_WIDTH,
   SIDEBAR_DEFAULT_WIDTH,
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
@@ -42,6 +46,37 @@ describe("setSidebarWidth", () => {
 
     store.getState().setSidebarWidth(420);
     expect(store.getState().sidebarWidth).toBe(420);
+  });
+});
+
+describe("clampRailWidth", () => {
+  it("clamps to the min/max range and rounds fractional widths", () => {
+    expect(clampRailWidth(RAIL_MIN_WIDTH - 100)).toBe(RAIL_MIN_WIDTH);
+    expect(clampRailWidth(RAIL_MAX_WIDTH + 100)).toBe(RAIL_MAX_WIDTH);
+    expect(clampRailWidth(360.4)).toBe(360);
+    expect(clampRailWidth(360.6)).toBe(361);
+  });
+
+  it("keeps the default width inside its own bounds", () => {
+    expect(clampRailWidth(RAIL_DEFAULT_WIDTH)).toBe(RAIL_DEFAULT_WIDTH);
+    expect(RAIL_DEFAULT_WIDTH).toBeGreaterThanOrEqual(RAIL_MIN_WIDTH);
+    expect(RAIL_DEFAULT_WIDTH).toBeLessThanOrEqual(RAIL_MAX_WIDTH);
+  });
+});
+
+describe("setRailWidth", () => {
+  it("stores clamped widths", () => {
+    const store = createUiStore(createMemoryStorage());
+    expect(store.getState().railWidth).toBe(RAIL_DEFAULT_WIDTH);
+
+    store.getState().setRailWidth(RAIL_MAX_WIDTH + 500);
+    expect(store.getState().railWidth).toBe(RAIL_MAX_WIDTH);
+
+    store.getState().setRailWidth(RAIL_MIN_WIDTH - 500);
+    expect(store.getState().railWidth).toBe(RAIL_MIN_WIDTH);
+
+    store.getState().setRailWidth(360);
+    expect(store.getState().railWidth).toBe(360);
   });
 });
 
@@ -185,11 +220,12 @@ describe("terminal focus", () => {
 });
 
 describe("persistence", () => {
-  it("persists sidebarWidth + uiScale + workspaceRailHidden + railCollapsed + detailsExpanded — settingsOpen resets each launch", () => {
+  it("persists sidebarWidth + railWidth + uiScale + workspaceRailHidden + railCollapsed + detailsExpanded — settingsOpen resets each launch", () => {
     const storage = createMemoryStorage();
     const store = createUiStore(storage);
     store.getState().setSettingsOpen(true);
     store.getState().setSidebarWidth(500);
+    store.getState().setRailWidth(360);
     store.getState().stepUiScale(1);
     store.getState().toggleWorkspaceRailHidden();
     store.getState().toggleRailCollapsed();
@@ -200,6 +236,7 @@ describe("persistence", () => {
     };
     expect(persisted.state).toEqual({
       sidebarWidth: 500,
+      railWidth: 360,
       uiScale: UI_SCALE_STEPS[3],
       workspaceRailHidden: true,
       railCollapsed: true,
@@ -315,6 +352,23 @@ describe("persistence", () => {
     await reloaded.persist.rehydrate();
     expect(reloaded.getState().sidebarWidth).toBe(444);
   });
+
+  it("rehydrates railWidth from storage; missing key falls back to the default", async () => {
+    const storage = createMemoryStorage();
+    createUiStore(storage).getState().setRailWidth(420);
+
+    const reloaded = createUiStore(storage);
+    await reloaded.persist.rehydrate();
+    expect(reloaded.getState().railWidth).toBe(420);
+
+    // Older persisted state without the key defaults to the rail's default width.
+    const missing = createMemoryStorage();
+    missing.setItem(
+      "volli:ui",
+      JSON.stringify({ state: { sidebarWidth: 320, uiScale: 1 }, version: 1 }),
+    );
+    expect(createUiStore(missing).getState().railWidth).toBe(RAIL_DEFAULT_WIDTH);
+  });
 });
 
 describe("rehydration sanitization (corrupt JSON)", () => {
@@ -350,6 +404,22 @@ describe("rehydration sanitization (corrupt JSON)", () => {
       JSON.stringify({ state: { sidebarWidth: null, uiScale: 1 }, version: 1 }),
     );
     expect(createUiStore(nonNumeric).getState().sidebarWidth).toBe(SIDEBAR_DEFAULT_WIDTH);
+  });
+
+  it("clamps a corrupt persisted railWidth back into the resize bounds", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:ui",
+      JSON.stringify({ state: { sidebarWidth: 320, uiScale: 1, railWidth: 10_000 }, version: 1 }),
+    );
+    expect(createUiStore(storage).getState().railWidth).toBe(RAIL_MAX_WIDTH);
+
+    const nonNumeric = createMemoryStorage();
+    nonNumeric.setItem(
+      "volli:ui",
+      JSON.stringify({ state: { sidebarWidth: 320, uiScale: 1, railWidth: null }, version: 1 }),
+    );
+    expect(createUiStore(nonNumeric).getState().railWidth).toBe(RAIL_DEFAULT_WIDTH);
   });
 
   it("falls back to defaults when the persisted state is not an object", () => {

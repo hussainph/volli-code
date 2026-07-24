@@ -282,8 +282,8 @@ async function main() {
     await page.reload();
     await page.waitForLoadState("domcontentloaded");
 
-    // === 1. Workspace A: open Sessions, get a terminal, probe cwd ===========
-    await page.getByText("Sessions", { exact: true }).click();
+    // === 1. Workspace A: open Terminals, get a terminal, probe cwd ==========
+    await page.getByText("Terminals", { exact: true }).click();
     await waitForLiveCanvas(page); // first-visit auto-creates a session
     const aTabs1 = await tabCount(page);
     await page.screenshot({ path: shot("01-workspace-a-terminal.png") });
@@ -300,9 +300,9 @@ async function main() {
 
     // === 2. Workspace B: switch via rail, get its own terminal, probe cwd ===
     // Nav is remembered per-workspace and defaults to Board, so a fresh
-    // workspace opens on Board — click Sessions to reveal its terminal surface.
+    // workspace opens on Board — click Terminals to reveal its terminal surface.
     await page.getByText("BC", { exact: true }).click(); // Beta Cove monogram
-    await page.getByText("Sessions", { exact: true }).click();
+    await page.getByText("Terminals", { exact: true }).click();
     await waitForLiveCanvas(page); // auto-creates beta's first session
     const bTabs = await tabCount(page);
     await page.screenshot({ path: shot("02-workspace-b-terminal.png") });
@@ -318,9 +318,9 @@ async function main() {
     );
 
     // === 3. Isolation/concurrency: back in A, SAME session, no dup tab ======
-    // Alpha remembers it was on Sessions, but re-assert to be robust.
+    // Alpha remembers it was on Terminals, but re-assert to be robust.
     await page.getByText("AR", { exact: true }).click(); // Alpha Ridge monogram
-    await page.getByText("Sessions", { exact: true }).click();
+    await page.getByText("Terminals", { exact: true }).click();
     await waitForLiveCanvas(page);
     const aTabs2 = await tabCount(page);
     await focusTerminal(page);
@@ -336,10 +336,10 @@ async function main() {
       `tabs=${aTabs2}`,
     );
 
-    // === 4. Keep-alive across nav: A → Board → Sessions, history intact =====
+    // === 4. Keep-alive across nav: A → Board → Terminals, history intact =====
     await page.getByText("Board", { exact: true }).click();
     await sleep(500);
-    await page.getByText("Sessions", { exact: true }).click();
+    await page.getByText("Terminals", { exact: true }).click();
     await waitForLiveCanvas(page);
     const aTabs3 = await tabCount(page);
     await focusTerminal(page);
@@ -349,7 +349,7 @@ async function main() {
     await page.screenshot({ path: shot("04-after-nav-return.png") });
     check(
       4,
-      "Keep-alive across nav (Board↔Sessions): same shell, cwd intact",
+      "Keep-alive across nav (Board↔Terminals): same shell, cwd intact",
       aThird !== null && aThird.includes(`third-${alphaDir}`) && aTabs3 === 1,
       `tabs=${aTabs3}`,
     );
@@ -507,7 +507,7 @@ async function main() {
       dpr: window.devicePixelRatio,
       sessionsFontSize: getComputedStyle(
         Array.from(document.querySelectorAll("*")).find(
-          (element) => element.textContent === "Sessions" && element.children.length === 0,
+          (element) => element.textContent === "Terminals" && element.children.length === 0,
         ),
       ).fontSize,
     }));
@@ -524,7 +524,7 @@ async function main() {
       dpr: window.devicePixelRatio,
       sessionsFontSize: getComputedStyle(
         Array.from(document.querySelectorAll("*")).find(
-          (element) => element.textContent === "Sessions" && element.children.length === 0,
+          (element) => element.textContent === "Terminals" && element.children.length === 0,
         ),
       ).fontSize,
     }));
@@ -647,7 +647,7 @@ async function main() {
   console.log("\nScreenshots:");
   console.log(`  ${join(SCRATCH, "01-workspace-a-terminal.png")}  — Workspace A live terminal`);
   console.log(`  ${join(SCRATCH, "02-workspace-b-terminal.png")}  — Workspace B live terminal`);
-  console.log(`  ${join(SCRATCH, "04-after-nav-return.png")}      — A after Board↔Sessions nav`);
+  console.log(`  ${join(SCRATCH, "04-after-nav-return.png")}      — A after Board↔Terminals nav`);
   console.log(`  ${join(SCRATCH, "06-two-tabs.png")}              — A with two session tabs`);
   console.log(`  ${join(SCRATCH, "07-independent-split.png")}      — two independent split panes`);
   console.log(

@@ -3,6 +3,9 @@
  * two-tier sidebar width (60px rail + resizable panel) — persists to
  * localStorage so the grip position survives relaunch. Same interim-storage
  * caveat as the projects store: dev and packaged origins don't share data.
+ * `railWidth` — the ticket-detail right rail's width, resizable via its own
+ * left-edge grip (see rail-resize-handle.tsx) — persists app-wide by the same
+ * reasoning: it's a global chrome preference, not per-workspace state.
  * `settingsOpen` is session-only: Settings is app-wide chrome (the sidebar
  * footer entry), not a per-workspace place, so it stays up across project
  * switches and closes when a nav page is picked. `newTicketOpen` is
@@ -46,6 +49,13 @@ export const SIDEBAR_DEFAULT_WIDTH = 318;
 export const SIDEBAR_MIN_WIDTH = 280;
 export const SIDEBAR_MAX_WIDTH = 640;
 
+export const RAIL_DEFAULT_WIDTH = 300;
+// The rail's session rows / properties all wrap in min-w-0 + truncate, so they
+// reflow gracefully; 240 is the floor where the "Sessions" header + status chip
+// and the History search stay legible without crowding.
+export const RAIL_MIN_WIDTH = 240;
+export const RAIL_MAX_WIDTH = 560;
+
 /** Identity of the ticket terminal tab temporarily owning the app canvas. */
 export interface TerminalFocusTarget {
   projectId: string;
@@ -56,6 +66,10 @@ export interface TerminalFocusTarget {
 
 export function clampSidebarWidth(width: number): number {
   return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)));
+}
+
+export function clampRailWidth(width: number): number {
+  return Math.min(RAIL_MAX_WIDTH, Math.max(RAIL_MIN_WIDTH, Math.round(width)));
 }
 
 /**
@@ -107,8 +121,16 @@ function sanitizeSidebarWidth(width: unknown): number {
   return clampSidebarWidth(width);
 }
 
+/** A persisted details-rail width, put back inside its resize grip's bounds. */
+function sanitizeRailWidth(width: unknown): number {
+  if (typeof width !== "number" || !Number.isFinite(width)) return RAIL_DEFAULT_WIDTH;
+  return clampRailWidth(width);
+}
+
 interface UiState {
   sidebarWidth: number;
+  /** Ticket-detail right rail width; resizable via its grip, persisted app-wide. */
+  railWidth: number;
   uiScale: number;
   settingsOpen: boolean;
   /** Session-only — never persisted; see module doc. */
@@ -129,6 +151,7 @@ interface UiState {
    */
   lastHarnessId: HarnessId;
   setSidebarWidth(width: number): void;
+  setRailWidth(width: number): void;
   stepUiScale(delta: 1 | -1): void;
   resetUiScale(): void;
   setSettingsOpen(open: boolean): void;
@@ -160,6 +183,7 @@ interface UiState {
 type PersistedUiState = Pick<
   UiState,
   | "sidebarWidth"
+  | "railWidth"
   | "uiScale"
   | "workspaceRailHidden"
   | "railCollapsed"
@@ -181,6 +205,7 @@ export function createUiStore(storage?: StateStorage) {
     persist(
       (set) => ({
         sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
+        railWidth: RAIL_DEFAULT_WIDTH,
         uiScale: UI_SCALE_DEFAULT,
         settingsOpen: false,
         newTicketOpen: false,
@@ -190,6 +215,7 @@ export function createUiStore(storage?: StateStorage) {
         terminalFocusTarget: null,
         lastHarnessId: DEFAULT_HARNESS_ID,
         setSidebarWidth: (width) => set({ sidebarWidth: clampSidebarWidth(width) }),
+        setRailWidth: (width) => set({ railWidth: clampRailWidth(width) }),
         stepUiScale: (delta) => set((state) => ({ uiScale: steppedScale(state.uiScale, delta) })),
         resetUiScale: () => set({ uiScale: UI_SCALE_DEFAULT }),
         setSettingsOpen: (open) => set({ settingsOpen: open }),
@@ -222,6 +248,7 @@ export function createUiStore(storage?: StateStorage) {
         // A missing `uiScale` key (pre-zoom persisted state) just defaults to 1.
         partialize: (state): PersistedUiState => ({
           sidebarWidth: state.sidebarWidth,
+          railWidth: state.railWidth,
           uiScale: state.uiScale,
           workspaceRailHidden: state.workspaceRailHidden,
           railCollapsed: state.railCollapsed,
@@ -238,6 +265,7 @@ export function createUiStore(storage?: StateStorage) {
           return {
             ...current,
             sidebarWidth: sanitizeSidebarWidth(stored.sidebarWidth),
+            railWidth: sanitizeRailWidth(stored.railWidth),
             uiScale: sanitizeUiScale(stored.uiScale),
             // Missing/corrupt state from an older build keeps the switcher
             // visible so projects never become unexpectedly undiscoverable.

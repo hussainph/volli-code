@@ -13,6 +13,7 @@ import { ConfirmCloseDialog } from "@renderer/components/sessions/confirm-close-
 import { createTerminalSession } from "@renderer/components/sessions/session-create";
 import { FileView } from "@renderer/components/ticket/file-view";
 import { RailDrawer } from "@renderer/components/ticket/rail-drawer";
+import { RailResizeHandle } from "@renderer/components/ticket/rail-resize-handle";
 import { TicketDocTab } from "@renderer/components/ticket/ticket-doc-tab";
 import { TicketProperties } from "@renderer/components/ticket/ticket-properties";
 import { TicketSessionPlane } from "@renderer/components/ticket/ticket-session-plane";
@@ -87,6 +88,7 @@ export function TicketDetail({
   const sessionTabs = useSessionsStore((state) => state.byOwner[ticket.id]?.tabs);
   const creating = useSessionsStore((state) => state.starting[ticket.id] ?? false);
   const railCollapsed = useUiStore((state) => state.railCollapsed);
+  const railWidth = useUiStore((state) => state.railWidth);
   const terminalFocusTarget = useUiStore((state) => state.terminalFocusTarget);
   const setTerminalFocusTarget = useUiStore((state) => state.setTerminalFocusTarget);
   const clearTerminalFocusUnlessTicket = useUiStore(
@@ -382,9 +384,15 @@ export function TicketDetail({
             </div>
           </div>
           {railCollapsed || terminalFocused ? null : (
-            // w-[300px]: deliberately fixed, unlike the resizable left sidebar —
-            // a resizable details rail is deferred (HIG audit finding 10).
-            <aside className="flex w-[300px] shrink-0 flex-col border-l border-sidebar-border bg-sidebar">
+            // Resizable details rail: a grip on its inner (left) edge widens it
+            // leftward, mirroring the left sidebar's outer-edge handle. `relative`
+            // makes the aside the grip's positioning context; the width persists
+            // app-wide via the ui store.
+            <aside
+              className="relative flex shrink-0 flex-col border-l border-sidebar-border bg-sidebar"
+              style={{ width: railWidth }}
+            >
+              <RailResizeHandle />
               {/* The panel owns the scrollable working set AND the pinned History
                 drawer, so History and Details stack as RailDrawer siblings. */}
               <TicketSessionsPanel

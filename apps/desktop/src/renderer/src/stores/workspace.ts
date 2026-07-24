@@ -34,8 +34,13 @@ import {
 import { useBoardStore } from "@renderer/stores/board";
 import { useSessionsStore } from "@renderer/stores/sessions";
 
-/** The per-workspace nav pages (NAV_ITEMS). Settings is app-wide chrome — see stores/ui.ts. */
-export type NavKey = "board" | "sessions" | "files";
+/**
+ * The per-workspace nav pages (NAV_ITEMS). `configure` holds the selected
+ * project's scoped settings (base branch, setup command, worktrees); app-wide
+ * Settings is separate chrome — see stores/ui.ts. Ticket detail is a child of
+ * `board`, so only Board selection clears `openTicketId` (see setNav).
+ */
+export type NavKey = "board" | "sessions" | "files" | "configure";
 
 /** Kanban columns vs. Linear-style grouped list — same data, filter, selection. */
 export type BoardView = "board" | "list";

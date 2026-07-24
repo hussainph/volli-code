@@ -47,6 +47,18 @@ describe("setNav", () => {
       openTicketId: null,
     });
   });
+
+  it("switches to Configure without clearing the open ticket (only Board does)", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicket("project-a", "ticket-1");
+
+    store.getState().setNav("project-a", "configure");
+
+    expect(store.getState().byProject["project-a"]).toMatchObject({
+      nav: "configure",
+      openTicketId: "ticket-1",
+    });
+  });
 });
 
 describe("setDirExpanded", () => {

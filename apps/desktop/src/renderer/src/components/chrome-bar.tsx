@@ -119,7 +119,9 @@ function TerminalFocusControls() {
     <>
       <div
         aria-live="polite"
-        className="pointer-events-none absolute left-1/2 top-1/2 flex max-w-[45vw] -translate-x-1/2 -translate-y-1/2 items-center gap-2 text-xs text-muted-foreground"
+        // top-[21px], not top-1/2: same 1px correction as the ⌘K pill — the
+        // sibling Exit button carries translate-y-px to meet the traffic lights.
+        className="pointer-events-none absolute left-1/2 top-[21px] flex max-w-[45vw] -translate-x-1/2 -translate-y-1/2 items-center gap-2 text-xs text-muted-foreground"
       >
         <span className="shrink-0 font-medium text-foreground">{ticketLabel}</span>
         <span aria-hidden="true" className="text-border">
@@ -261,7 +263,10 @@ function CommandPaletteTrigger({ onClick }: { onClick(): void }) {
       aria-haspopup="dialog"
       aria-label="Search tickets and sessions"
       title="Search tickets and sessions (⌘K)"
-      className="app-region-no-drag absolute left-1/2 top-1/2 flex h-[26px] w-[380px] max-w-[40vw] -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-md border border-border/60 bg-white/[0.06] px-2 text-left text-ui text-muted-foreground transition-colors hover:border-border hover:bg-white/[0.08] focus-visible:border-ring/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/40"
+      // top-[21px] (not top-1/2): band center is 20px, but the sibling
+      // icon-buttons carry translate-y-px to meet the traffic lights at ~21px.
+      // Anchor the pill's -translate-y-1/2 center to 21px so it aligns with them.
+      className="app-region-no-drag absolute left-1/2 top-[21px] flex h-[26px] w-[380px] max-w-[40vw] -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-md border border-border/60 bg-white/[0.06] px-2 text-left text-ui text-muted-foreground transition-colors hover:border-border hover:bg-white/[0.08] focus-visible:border-ring/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/40"
     >
       <MagnifyingGlassIcon className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate">Search tickets and sessions</span>
