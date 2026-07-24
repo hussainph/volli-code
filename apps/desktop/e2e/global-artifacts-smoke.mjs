@@ -18,11 +18,11 @@
  *      `Create artifact "newnote.md"` row; picking it creates
  *      `.volli/artifacts/newnote.md` on disk (templated `# newnote`), inserts
  *      the @ref, opens its tab, and `.volli/.gitignore` is `*` (self-ignored).
- *   5. Repo-file ref opens READ-ONLY — `@src/notes.txt` (a plain repo file)
- *      resolves in the picker and its tab shows the content in a read-only
- *      CodeMirror (`contenteditable=false`) — code never becomes editable.
- *      And the dead ticket tier is truly dead: `.volli/tickets/` was never
- *      created on disk.
+ *   5. Repo-file ref opens READ-ONLY — `@src/monaco-probe.ts` resolves in the
+ *      picker and its tab shows the content in a read-only Monaco editor under
+ *      `volli-app://bundle/`. The TypeScript language worker completes a real
+ *      public-API handshake without a fallback warning. And the dead ticket
+ *      tier is truly dead: `.volli/tickets/` was never created on disk.
  *   6. Tab persistence — relaunch against the SAME app-data dir: the detail
  *      reopens with the file tabs restored and the last-active file tab
  *      selected (persisted `ticketTabs` in workspace ui state).
@@ -86,9 +86,9 @@ const ARTIFACT_NAME = "probe.md";
 const ARTIFACT_REL = `.volli/artifacts/${ARTIFACT_NAME}`;
 const ARTIFACT_MARKDOWN = "Probe intro line\n\n# Probe Artifact\n\nBody with `code`.\n";
 const ARTIFACT_EDITED = "# Probe Edited\n\nRewritten through the file tab.\n";
-const REPO_FILE_NAME = "notes.txt";
+const REPO_FILE_NAME = "monaco-probe.ts";
 const REPO_FILE_REL = `src/${REPO_FILE_NAME}`;
-const REPO_FILE_CONTENT = "plain repo file line one\nline two\n";
+const REPO_FILE_CONTENT = 'export const monacoProbe: string = "language worker ready";\n';
 const CREATED_NAME = "newnote";
 const CREATED_REL = `.volli/artifacts/${CREATED_NAME}.md`;
 
@@ -251,6 +251,20 @@ async function main() {
     }
 
     let page = await app.firstWindow();
+    const monacoRuntimeFailures = [];
+    page.on("console", (message) => {
+      if (
+        (message.type() === "warning" || message.type() === "error") &&
+        /monaco|worker|fallback/i.test(message.text())
+      ) {
+        monacoRuntimeFailures.push(`${message.type()}: ${message.text()}`);
+      }
+    });
+    page.on("pageerror", (error) => {
+      if (/monaco|worker/i.test(error.message)) {
+        monacoRuntimeFailures.push(`pageerror: ${error.message}`);
+      }
+    });
     await page.waitForLoadState("domcontentloaded");
     await sleep(1000);
 
@@ -443,11 +457,11 @@ async function main() {
     );
 
     // ===================================================================
-    // 5. REPO FILE OPENS READ-ONLY + NO TICKET TIER ON DISK
+    // 5. REPO FILE OPENS READ-ONLY IN MONACO + LANGUAGE WORKER + APP ORIGIN
     // ===================================================================
     await attempt(
       5,
-      "Repo-file ref: @src/notes.txt opens a READ-ONLY tab (contenteditable=false) showing the content; .volli/tickets/ was never created",
+      "Repo-file ref opens a read-only Monaco TypeScript model under the app origin, completes a real language-worker handshake, and never creates .volli/tickets/",
       async () => {
         await page.locator(".cm-content").click();
         await page.keyboard.press("Meta+ArrowDown");
@@ -464,24 +478,54 @@ async function main() {
           "repo-file tab active",
           async () => (await tab.getAttribute("aria-selected")) === "true",
         );
-        // Read-only CodeMirror: content div is not editable, and the file's
-        // text is in the DOM (unlike the canvas terminal).
-        const readOnly = await waitUntil("read-only editor with content", async () => {
-          const el = await page.evaluate(() => {
-            const content = document.querySelector(".cm-content");
-            return content
-              ? { ce: content.getAttribute("contenteditable"), text: content.textContent ?? "" }
-              : null;
-          });
-          return el !== null && el.ce === "false" && el.text.includes("plain repo file line one")
-            ? el
-            : null;
-        });
+        const monacoReady = await waitUntil(
+          "read-only Monaco editor with worker",
+          async () => {
+            const el = await page.evaluate(() => {
+              const host = document.querySelector("[data-monaco-status]");
+              const editor = host?.querySelector(".monaco-editor");
+              const input = editor?.querySelector("textarea");
+              const fallback = document.querySelector("[data-monaco-fallback]");
+              return host
+                ? {
+                    status: host.getAttribute("data-monaco-status"),
+                    language: host.getAttribute("data-monaco-language"),
+                    worker: host.getAttribute("data-monaco-worker"),
+                    readOnlyConfigured: host.getAttribute("data-monaco-read-only") === "true",
+                    inputReadOnly: input?.hasAttribute("readonly") ?? null,
+                    editor: editor !== null,
+                    text: editor?.textContent ?? "",
+                    fallback: fallback?.getAttribute("title") ?? null,
+                  }
+                : { status: null, fallback: fallback?.getAttribute("title") ?? null };
+            });
+            if (
+              el.status === "ready" &&
+              el.language === "typescript" &&
+              el.worker === "ready" &&
+              el.readOnlyConfigured &&
+              el.inputReadOnly &&
+              el.editor &&
+              el.text.includes("monacoProbe")
+            ) {
+              return el;
+            }
+            throw new Error(
+              `state=${JSON.stringify(el)} runtimeFailures=${JSON.stringify(monacoRuntimeFailures)}`,
+            );
+          },
+          { timeout: 20000 },
+        );
 
+        const appOrigin = page.url().startsWith("volli-app://bundle/index.html");
         const noTicketTier = !(await pathExists(join(VOLLI_DIR, "tickets")));
+        const noFallback = monacoRuntimeFailures.length === 0;
 
-        const ok = !!readOnly && noTicketTier;
-        return { ok, detail: `readOnly=${!!readOnly} noTicketTier=${noTicketTier}` };
+        const ok = !!monacoReady && appOrigin && noFallback && noTicketTier;
+        return {
+          ok,
+          detail: `monaco=${!!monacoReady} readOnly=${monacoReady?.inputReadOnly === true} origin=${appOrigin} worker=${monacoReady?.worker ?? "missing"} noFallback=${noFallback} noTicketTier=${noTicketTier}${noFallback ? "" : ` failures=${JSON.stringify(monacoRuntimeFailures)}`}`,
+        };
       },
     );
 

@@ -1,6 +1,16 @@
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { createVolliMonacoTheme } from "./monaco-theme";
+import { createVolliMonacoTheme, readVolliMonacoTokens } from "./monaco-theme";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+function fakeStyles(values: Readonly<Record<string, string>>): CSSStyleDeclaration {
+  return {
+    getPropertyValue: (name: string) => values[name] ?? "",
+  } as CSSStyleDeclaration;
+}
 
 describe("createVolliMonacoTheme", () => {
   it("derives editor chrome and syntax colors from canonical Volli tokens", () => {
@@ -30,5 +40,86 @@ describe("createVolliMonacoTheme", () => {
         "editorError.foreground": "#e5484d",
       },
     });
+  });
+
+  it("expands minified three-digit CSS token colors for Monaco's hex parser", () => {
+    const theme = createVolliMonacoTheme({
+      background: "#111",
+      foreground: "#fff",
+      muted: "#222",
+      mutedForeground: "#999",
+      border: "#333",
+      primary: "#e65",
+      destructive: "#e54",
+    });
+
+    expect(theme.rules).toContainEqual({ token: "string", foreground: "ffffff" });
+    expect(theme.colors).toMatchObject({
+      "editor.background": "#111111",
+      "editor.foreground": "#ffffff",
+      "editor.selectionBackground": "#ee665540",
+      "editorError.foreground": "#ee5544",
+    });
+  });
+
+  it("rejects design-token formats Monaco cannot parse safely", () => {
+    expect(() =>
+      createVolliMonacoTheme({
+        background: "rgb(17 17 17)",
+        foreground: "#fff",
+        muted: "#222",
+        mutedForeground: "#999",
+        border: "#333",
+        primary: "#e65",
+        destructive: "#e54",
+      }),
+    ).toThrow("must resolve to #RGB or #RRGGBB");
+  });
+
+  it("reads every theme color from the supplied canonical CSS tokens", () => {
+    const styles = fakeStyles({
+      "--background": " #111 ",
+      "--foreground": "#fff",
+      "--muted": "#222",
+      "--muted-foreground": "#999",
+      "--border": "#333",
+      "--primary": "#e65",
+      "--destructive": "#e54",
+    });
+
+    expect(readVolliMonacoTokens(styles)).toEqual({
+      background: "#111",
+      foreground: "#fff",
+      muted: "#222",
+      mutedForeground: "#999",
+      border: "#333",
+      primary: "#e65",
+      destructive: "#e54",
+    });
+  });
+
+  it("fails visibly when a canonical CSS token is missing", () => {
+    expect(() => readVolliMonacoTokens(fakeStyles({}))).toThrow(
+      "Missing canonical design token --background",
+    );
+  });
+
+  it("reads from the document root by default", () => {
+    const documentElement = {};
+    const styles = fakeStyles({
+      "--background": "#111",
+      "--foreground": "#fff",
+      "--muted": "#222",
+      "--muted-foreground": "#999",
+      "--border": "#333",
+      "--primary": "#e65",
+      "--destructive": "#e54",
+    });
+    const getComputedStyle = vi.fn(() => styles);
+    vi.stubGlobal("document", { documentElement });
+    vi.stubGlobal("getComputedStyle", getComputedStyle);
+
+    expect(readVolliMonacoTokens().background).toBe("#111");
+    expect(getComputedStyle).toHaveBeenCalledWith(documentElement);
   });
 });

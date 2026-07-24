@@ -23,6 +23,41 @@ export function workerKindForLabel(label: string): MonacoWorkerKind {
   return "editor";
 }
 
+interface LanguageWorkerRegistrationOptions {
+  attempts?: number;
+  waitForNextAttempt?: () => Promise<void>;
+}
+
+function registrationIsPending(error: unknown): boolean {
+  return /^(TypeScript|JavaScript) not registered!$/.test(
+    error instanceof Error ? error.message : String(error),
+  );
+}
+
+/**
+ * Creating the first model requests rich language features, whose mode module
+ * registers asynchronously. Monaco's public worker accessor rejects during
+ * that short activation window, so yield and retry only that exact condition.
+ */
+export async function waitForLanguageWorkerRegistration<Worker>(
+  getWorker: () => Promise<Worker>,
+  options: LanguageWorkerRegistrationOptions = {},
+): Promise<Worker> {
+  const attempts = options.attempts ?? 50;
+  const waitForNextAttempt =
+    options.waitForNextAttempt ??
+    (() => new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0)));
+
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await getWorker();
+    } catch (error) {
+      if (!registrationIsPending(error) || attempt >= attempts) throw error;
+      await waitForNextAttempt();
+    }
+  }
+}
+
 export interface MonacoRuntime {
   monaco: typeof Monaco;
   registry: DocumentRegistry<Monaco.editor.ITextModel, Monaco.editor.ICodeEditorViewState>;
@@ -100,7 +135,7 @@ export async function startModelLanguageWorker(
     language === "typescript"
       ? runtime.monaco.typescript.getTypeScriptWorker
       : runtime.monaco.typescript.getJavaScriptWorker;
-  const workerFor = await getWorker();
+  const workerFor = await waitForLanguageWorkerRegistration(getWorker);
   await workerFor(model.uri);
   return "typescript";
 }

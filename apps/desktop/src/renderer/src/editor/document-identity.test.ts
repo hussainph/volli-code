@@ -167,6 +167,7 @@ describe("detectDocumentLanguage", () => {
     ["config/app.yaml", "yaml"],
     ["Dockerfile", "dockerfile"],
     ["Makefile", "makefile"],
+    ["CMakeLists.txt", "cmake"],
   ])("selects %s as %s", (relPath, expected) => {
     expect(detectDocumentLanguage({ ...mainFile, relPath })).toBe(expected);
   });

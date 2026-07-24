@@ -1,16 +1,16 @@
 import * as React from "react";
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
-import { EditorState } from "@codemirror/state";
-import { EditorView, lineNumbers } from "@codemirror/view";
 import { baseNameOf, errorMessage, type FileSource } from "@volli/shared";
 
+import { MonacoCodeView } from "@renderer/components/editor/monaco-code-view";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import {
   MarkdownLiveEditor,
   type MarkdownFileRefs,
 } from "@renderer/components/editor/markdown-live-editor";
 import { Button } from "@renderer/components/ui/button";
+import { fileDocumentIdentity } from "@renderer/editor/document-identity";
 import { toastError } from "@renderer/lib/toast";
 import { useDebouncedCallback } from "@renderer/lib/use-debounced-callback";
 
@@ -31,71 +31,15 @@ type LoadState =
   | { status: "loading" }
   | { status: "error"; error: string }
   | { status: "markdown" }
-  | { status: "code"; text: string; truncated: boolean }
+  | {
+      status: "code";
+      text: string;
+      truncated: boolean;
+      source: FileSource;
+      revision: number;
+    }
   | { status: "image"; dataUrl: string }
   | { status: "binary" };
-
-/** A read-only monospace CodeMirror peek (decision #7: no grammar highlighting in v1). */
-function ReadOnlyCode({ text }: { text: string }) {
-  const hostRef = React.useRef<HTMLDivElement>(null);
-  const viewRef = React.useRef<EditorView | null>(null);
-  const initialRef = React.useRef(text);
-
-  React.useEffect(() => {
-    const host = hostRef.current;
-    if (!host) return;
-    const state = EditorState.create({
-      doc: initialRef.current,
-      extensions: [
-        lineNumbers(),
-        EditorView.lineWrapping,
-        EditorState.readOnly.of(true),
-        EditorView.editable.of(false),
-        readOnlyTheme,
-      ],
-    });
-    const view = new EditorView({ state, parent: host });
-    viewRef.current = view;
-    return () => {
-      view.destroy();
-      viewRef.current = null;
-    };
-    // Mount once; later text (fs-watch re-read) flows through the sync effect.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Adopt an external change silently — a read-only view has no user edits to
-  // protect, so it always reflects the newest disk content.
-  React.useEffect(() => {
-    const view = viewRef.current;
-    if (!view) return;
-    const current = view.state.doc.toString();
-    if (current === text) return;
-    view.dispatch({ changes: { from: 0, to: current.length, insert: text } });
-  }, [text]);
-
-  return <div ref={hostRef} className="h-full" />;
-}
-
-const readOnlyTheme = EditorView.theme(
-  {
-    "&": {
-      color: "var(--foreground)",
-      fontFamily: "var(--font-mono)",
-      fontSize: "0.8125rem",
-      backgroundColor: "transparent",
-      height: "100%",
-    },
-    ".cm-scroller": { fontFamily: "var(--font-mono)", lineHeight: "1.6" },
-    ".cm-gutters": {
-      backgroundColor: "transparent",
-      color: "var(--muted-foreground)",
-      border: "none",
-    },
-    ".cm-content": { caretColor: "transparent" },
-  },
-  { dark: true },
-);
 
 /**
  * A `file` tab's content pane (global-artifacts decision #7), generalized from
@@ -104,7 +48,7 @@ const readOnlyTheme = EditorView.theme(
  * on-disk mtime: each write carries the last-seen mtime as `expectedMtime`, and
  * a rejected write (agent edit underneath) raises a non-destructive "Changed on
  * disk" banner rather than overwriting. Everything else is read-only — code/text
- * in a monospace CodeMirror, images inline, binary/oversize a Reveal-in-Finder
+ * in a language-aware Monaco view, images inline, binary/oversize a Reveal-in-Finder
  * stub. Re-reads on the tab's `api.files.onChanged` subscription: read-only
  * views adopt silently, the markdown editor keeps the dirty/focus-aware logic.
  *
@@ -173,7 +117,13 @@ export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: F
       // latter would autosave back only the truncated prefix, so it stays
       // read-only.
       syncedMtimeRef.current = result.mtime;
-      setState({ status: "code", text: content.text, truncated: content.truncated });
+      setState({
+        status: "code",
+        text: content.text,
+        truncated: content.truncated,
+        source: result.source,
+        revision: result.mtime,
+      });
     }
   }, [readFile, onSource, relPath]);
 
@@ -225,7 +175,13 @@ export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: F
         debouncer.cancel();
         syncedMtimeRef.current = disk.mtime;
         if (mountedRef.current) {
-          setState({ status: "code", text: disk.content.text, truncated: disk.content.truncated });
+          setState({
+            status: "code",
+            text: disk.content.text,
+            truncated: disk.content.truncated,
+            source: disk.source,
+            revision: disk.mtime,
+          });
           toastError(
             `${name} changed on disk and grew past the editable 1 MiB cap (or is no longer markdown) — editing stopped.`,
           );
@@ -297,7 +253,13 @@ export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: F
         // unconditionally — nothing to protect.
         if (disk.kind !== "markdown" || disk.content.truncated) {
           syncedMtimeRef.current = disk.mtime;
-          setState({ status: "code", text: disk.content.text, truncated: disk.content.truncated });
+          setState({
+            status: "code",
+            text: disk.content.text,
+            truncated: disk.content.truncated,
+            source: disk.source,
+            revision: disk.mtime,
+          });
           return;
         }
         // Markdown, no real change vs the content baseline (also the echo of
@@ -435,8 +397,19 @@ export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: F
             {revealButton}
           </div>
         )}
-        <div className="min-h-0 flex-1 overflow-auto rounded-md border border-border bg-muted/30">
-          <ReadOnlyCode text={state.text} />
+        <div className="min-h-0 flex-1 overflow-hidden rounded-md border border-border bg-background">
+          <MonacoCodeView
+            identity={fileDocumentIdentity({
+              projectId,
+              ticketId,
+              relPath,
+              source: state.source,
+            })}
+            value={state.text}
+            revision={state.revision}
+            viewId={`file:${projectId}:${ticketId ?? "main"}:${relPath}:source`}
+            ariaLabel={`${name} contents`}
+          />
         </div>
       </div>
     );

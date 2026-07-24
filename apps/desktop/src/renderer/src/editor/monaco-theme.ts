@@ -10,16 +10,40 @@ export interface VolliMonacoTokens {
   destructive: string;
 }
 
+function normalizedHex(color: string): string {
+  const match = /^#([\da-f]{3}|[\da-f]{6})$/i.exec(color);
+  if (match === null) {
+    throw new Error(`Monaco theme tokens must resolve to #RGB or #RRGGBB, received ${color}`);
+  }
+  const value = match[1];
+  const expanded =
+    value.length === 3
+      ? value
+          .split("")
+          .map((digit) => `${digit}${digit}`)
+          .join("")
+      : value;
+  return `#${expanded}`;
+}
+
 function withoutHash(color: string): string {
-  return color.startsWith("#") ? color.slice(1) : color;
+  return normalizedHex(color).slice(1);
 }
 
 function withAlpha(color: string, alpha: string): string {
-  return `${color}${alpha}`;
+  return `${normalizedHex(color)}${alpha}`;
 }
 
 /** Maps the canonical renderer tokens onto Monaco's supported theme surface. */
 export function createVolliMonacoTheme(tokens: VolliMonacoTokens): editor.IStandaloneThemeData {
+  const background = normalizedHex(tokens.background);
+  const foreground = normalizedHex(tokens.foreground);
+  const muted = normalizedHex(tokens.muted);
+  const mutedForeground = normalizedHex(tokens.mutedForeground);
+  const border = normalizedHex(tokens.border);
+  const primary = normalizedHex(tokens.primary);
+  const destructive = normalizedHex(tokens.destructive);
+
   return {
     base: "vs-dark",
     inherit: true,
@@ -30,16 +54,16 @@ export function createVolliMonacoTheme(tokens: VolliMonacoTokens): editor.IStand
       { token: "string", foreground: withoutHash(tokens.foreground) },
     ],
     colors: {
-      "editor.background": tokens.background,
-      "editor.foreground": tokens.foreground,
-      "editorLineNumber.foreground": tokens.mutedForeground,
-      "editorGutter.background": tokens.background,
-      "editorCursor.foreground": tokens.primary,
-      "editor.selectionBackground": withAlpha(tokens.primary, "40"),
-      "editor.inactiveSelectionBackground": withAlpha(tokens.primary, "24"),
-      "editorWidget.background": tokens.muted,
-      "editorWidget.border": tokens.border,
-      "editorError.foreground": tokens.destructive,
+      "editor.background": background,
+      "editor.foreground": foreground,
+      "editorLineNumber.foreground": mutedForeground,
+      "editorGutter.background": background,
+      "editorCursor.foreground": primary,
+      "editor.selectionBackground": withAlpha(primary, "40"),
+      "editor.inactiveSelectionBackground": withAlpha(primary, "24"),
+      "editorWidget.background": muted,
+      "editorWidget.border": border,
+      "editorError.foreground": destructive,
     },
   };
 }

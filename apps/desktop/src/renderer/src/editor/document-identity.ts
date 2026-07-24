@@ -125,7 +125,7 @@ const EXTENSION_LANGUAGES: Readonly<Record<string, string>> = {
 };
 
 function languageForPath(relPath: string): string {
-  const name = relPath.split("/").at(-1)?.toLowerCase() ?? "";
+  const name = relPath.slice(relPath.lastIndexOf("/") + 1).toLowerCase();
   if (name === "makefile" || name.startsWith("makefile.")) return "makefile";
   if (name === "dockerfile" || name.startsWith("dockerfile.")) return "dockerfile";
   if (name === "cmakelists.txt") return "cmake";

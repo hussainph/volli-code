@@ -196,6 +196,72 @@ describe("DocumentRegistry", () => {
     expect(first.snapshot().viewReferences).toBe(1);
   });
 
+  it("rejects a second active view with a conflicting save policy", () => {
+    const { registry } = makeRegistry();
+    registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "baseline", revision: "r1" },
+      savePolicy: "read-only",
+    });
+
+    expect(() =>
+      registry.acquire({
+        identity: mainIdentity,
+        viewId: "editable-file",
+        seed: { value: "baseline", revision: "r1" },
+        savePolicy: "explicit",
+      }),
+    ).toThrow("different save policy");
+  });
+
+  it("rejects a new disk seed while a zero-view dirty draft is guarded", () => {
+    const { registry } = makeRegistry();
+    const file = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "baseline", revision: "r1" },
+      savePolicy: "explicit",
+    });
+    file.model.setValue("guarded draft");
+    file.release();
+
+    expect(() =>
+      registry.acquire({
+        identity: mainIdentity,
+        viewId: "reopened",
+        seed: { value: "new disk bytes", revision: "r2" },
+        savePolicy: "explicit",
+      }),
+    ).toThrow("different seed");
+  });
+
+  it("accepts the latest seed after the last clean view released", () => {
+    const { registry, models } = makeRegistry();
+    const file = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "old baseline", revision: "r1" },
+      savePolicy: "read-only",
+    });
+    expect(file.restoreViewState()).toBeNull();
+    file.release();
+
+    const reopened = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "new baseline", revision: "r2" },
+      savePolicy: "read-only",
+    });
+    expect(reopened.model.getValue()).toBe("new baseline");
+    expect(reopened.snapshot()).toMatchObject({
+      baseline: "new baseline",
+      baselineRevision: "r2",
+      externalRevision: "r2",
+    });
+    expect(models).toHaveLength(2);
+  });
+
   it("adopts a new baseline into every clean shared view without becoming dirty", () => {
     const { registry } = makeRegistry();
     const file = registry.acquire({
@@ -263,6 +329,27 @@ describe("DocumentRegistry", () => {
       viewReferences: 0,
     });
     expect(model.dispose).toHaveBeenCalledTimes(1);
+
+    // A late duplicate completion sees the already-disposed model and retains
+    // the saved baseline rather than replacing it with an absent model value.
+    file.markSaved("r3");
+    expect(file.snapshot().baseline).toBe("saved draft");
+  });
+
+  it("can mark or discard an active clean model without disposing it", () => {
+    const { registry } = makeRegistry();
+    const file = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "baseline", revision: "r1" },
+      savePolicy: "explicit",
+    });
+    const model = file.model as FakeModel;
+
+    file.markSaved("r2");
+    file.discard();
+    expect(file.snapshot()).toMatchObject({ dirty: false, baselineRevision: "r2" });
+    expect(model.dispose).not.toHaveBeenCalled();
   });
 
   it("discards a zero-view dirty draft back to its baseline before disposal", () => {
@@ -282,5 +369,48 @@ describe("DocumentRegistry", () => {
     expect(model.getValue()).toBe("baseline");
     expect(file.snapshot().dirty).toBe(false);
     expect(model.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("can explicitly forget saved state for one view", () => {
+    const { registry } = makeRegistry();
+    const file = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "baseline", revision: "r1" },
+      savePolicy: "read-only",
+    });
+    file.release({ cursor: 7 });
+
+    const reopened = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "baseline", revision: "r1" },
+      savePolicy: "read-only",
+    });
+    expect(reopened.restoreViewState()).toEqual({ cursor: 7 });
+    reopened.release(null);
+
+    const withoutState = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "baseline", revision: "r1" },
+      savePolicy: "read-only",
+    });
+    expect(withoutState.restoreViewState()).toBeNull();
+  });
+
+  it("does not rewrite a model when adopting its existing clean baseline", () => {
+    const { registry } = makeRegistry();
+    const file = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "baseline", revision: "r1" },
+      savePolicy: "read-only",
+    });
+    const model = file.model as FakeModel;
+    const setValue = vi.spyOn(model, "setValue");
+
+    expect(file.adoptCleanBaseline({ value: "baseline", revision: "r2" })).toBe("adopted");
+    expect(setValue).not.toHaveBeenCalled();
   });
 });
