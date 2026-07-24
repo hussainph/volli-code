@@ -280,19 +280,24 @@ app.whenReady().then(async () => {
   // Open (creating + migrating if needed) the SQLite db before the window
   // exists, so the renderer's boot-time volli:data-bootstrap call always has
   // somewhere to land. VOLLI_DB_PATH overrides the path in dev/tests/e2e;
-  // otherwise it's <userData>/volli.db, made possible sharing one userData
-  // dir across dev/packaged by the app.setName call above. Failure here must
-  // never crash main or leave invoke() hanging: register every data IPC
-  // channel with a typed { ok: false, error } response instead, so the
-  // renderer can surface the failure like any other failed mutation.
-  const dbPath =
-    (isDev ? process.env["VOLLI_DB_PATH"] : undefined) ?? join(app.getPath("userData"), "volli.db");
-  // Log the resolved db up front: dev and packaged deliberately open DIFFERENT
-  // files (the `-dev` userData split above), so a `pnpm dev` boot lands on the
-  // empty `Volli Code-dev/volli.db` while your real data sits in the packaged
-  // app's `Volli Code/volli.db`. Without this line an empty dev UI is
+  // otherwise it's <userData>/volli.db — and dev's userData is its own `-dev`
+  // directory (see the app.setPath above), so dev and packaged open DIFFERENT
+  // files by default. Failure here must never crash main or leave invoke()
+  // hanging: register every data IPC channel with a typed { ok: false, error }
+  // response instead, so the renderer can surface the failure like any other
+  // failed mutation.
+  //
+  // Resolve the override ONCE and derive both the path and the logged source
+  // from it: deriving the label separately would disagree with `??` on an
+  // empty `VOLLI_DB_PATH=` (not nullish, so it wins and yields an empty path)
+  // and blame userData for a failure the override caused.
+  const dbOverride = isDev ? process.env["VOLLI_DB_PATH"] : undefined;
+  const dbPath = dbOverride ?? join(app.getPath("userData"), "volli.db");
+  // Log the resolved db up front: a `pnpm dev` boot lands on the empty
+  // `Volli Code-dev/volli.db` while your real data sits in the packaged app's
+  // `Volli Code/volli.db`. Without this line an empty dev UI is
   // indistinguishable from a broken data pointer — surface which db is live.
-  const dbSource = isDev && process.env["VOLLI_DB_PATH"] ? "VOLLI_DB_PATH" : "userData";
+  const dbSource = dbOverride === undefined ? "userData" : "VOLLI_DB_PATH";
   console.info(`[volli] db: mode=${isDev ? "dev" : "packaged"} source=${dbSource} path=${dbPath}`);
   let dbHandle: DbHandle;
   try {
