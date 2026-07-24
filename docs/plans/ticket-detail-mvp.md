@@ -35,7 +35,7 @@ Worktrees are **pure code isolation** for parallelizing dozens of tickets. Creat
 
 ### Artifacts & `.volli`
 
-> **Partially superseded 2026-07-17** by [`global-artifacts.md`](global-artifacts.md) (CONCEPT decision #33): the ticket tier, promote flow, Artifacts tab, and `VOLLI_TICKET_DIR` are gone — one project-level `.volli/artifacts/` dir, referenced from ticket docs via plain-text `@relative/path` refs that open as file tabs. #13 (filesystem-as-truth) and #15 (self-gitignore) stand.
+> **Partially superseded 2026-07-17** by [`global-artifacts.md`](global-artifacts.md) (CONCEPT decision #33): the ticket tier, promote flow, Artifacts tab, and `VOLLI_TICKET_DIR` are gone — one project-level `.volli/artifacts/` dir, referenced from Ticket Bodies via plain-text `@relative/path` refs that open as file tabs. #13 (filesystem-as-truth) and #15 (self-gitignore) stand.
 13. **Filesystem-as-truth, no artifacts DB table.** `.volli` is plain md/html-first — human- and agent-readable/renderable outside Volli (respects the `.claude`/`.agents` meta).
 14. *(superseded — see note above)* **Two tiers**:
     - `<project>/.volli/artifacts/` — project-level artifacts
@@ -70,14 +70,14 @@ Worktrees are **pure code isolation** for parallelizing dozens of tickets. Creat
 
 ## Round 2 — UX revision (grilling 2026-07-14, Hussain × Fable; supersedes conflicting round-1 items)
 
-29. **Editor is Obsidian-style live preview**, replacing click-to-edit (supersedes #9's textarea flip). CodeMirror 6 + an owned decoration layer (Obsidian's architecture): the markdown buffer is the document; syntax renders in place and reveals near the cursor. No mode flip, no accent border on edit — clicking just places a cursor. Byte-faithful to agent-written files.
+29. *(editor engine superseded by [`monaco-migration.md`](monaco-migration.md), CONCEPT #60)* **Editor is Obsidian-style live preview**, replacing click-to-edit (supersedes #9's textarea flip). Monaco Document Mode owns the projection: the Markdown buffer is the document; syntax renders in place and reveals near the cursor. No mode flip, no accent border on edit — clicking just places a cursor. Byte-faithful to agent-written files.
 30. Editor v1 construct set: headings, bold/italic/strike, inline code, links (syntax hidden, click-to-open), bullet/ordered/task lists, blockquotes, code fences, images inline, horizontal rules. Tables stay raw syntax. No floating toolbar; ⌘B/⌘I wrap selection. Debounced autosave semantics from #10 unchanged.
 31. **Artifacts `.md` editing uses the same editor** with autosave (explicit Save button removed) + an on-disk conflict guard: if the file changed on disk since load, don't clobber — surface it. Title stays an inline input; comment composing stays a plain textarea this round.
 32. **Activity feed = hybrid signal/collapse**: comments and high-signal events (`created`, `status_changed`, `session_started`, `session_ended`) render inline; runs of low-signal events (`retitled`, `body_edited`, `priority_changed`, `labels_changed`, `worktree_changed`, `archived`, `unarchived`) collapse into a trailing "+N more" inline expander.
 33. **Harness removed from tickets entirely** (migration 004 drops `tickets.harness_id`; type, filter model, properties row, filter chip, create-dialog picker all go). Harness identity lives on sessions only. `HARNESS_IDS`/labels stay in shared for session identity.
 34. **Right rail is sessions-first**: sessions list gets the rail; a "Details" collapsible (default collapsed, persisted) pinned at the bottom holds status/priority/labels/worktree (resolves #4's flagged placement revisit).
 35. **Right-rail toggle** at the chrome bar's right edge (mirrored sidebar icon, visible when a ticket is open), ⌥⌘B, collapsed state persisted.
-36. **Chrome-style tab strip at the top of the detail view**, spanning main column + rail (browser-window metaphor): Doc tab labeled with the ticket display ID, Artifacts, session tabs with close ×, a `+` for new session. Breadcrumb header retires.
+36. *(Artifact tab superseded by #33; terminology updated by the Monaco migration)* **Chrome-style tab strip at the top of the detail view**, spanning main column + rail (browser-window metaphor): Ticket Body tab labeled with the ticket display ID, file and session tabs with close ×, and a `+` for new session. Breadcrumb header retires.
 37. **Slack-style ←/→ workspace nav history** in the chrome bar traversing all navigation snapshots (project switches, sidebar nav, ticket open/close); ⌘[ / ⌘]; Escape-in-detail still returns to Board. History is in-memory (not persisted).
 38. **Sessions unified onto one store + resident layer**: scratch and ticket sessions share `stores/sessions.ts` machinery with a scope field; the always-mounted layer owns all live terminal views (ticket detail becomes a view over it — terminals survive navigating back to Board). Splits, font controls, kill/close reach parity inside tickets.
 39. **Sessions renameable**: double-click tab / rail row for inline rename + context-menu Rename (filled Phosphor icon); persists via `api.sessions.rename` → sessions repo title update; both surfaces.

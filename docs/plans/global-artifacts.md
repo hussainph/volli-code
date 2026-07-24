@@ -10,30 +10,31 @@ the decision record **and** the implementation contract for the rework.
    artifacts location. `.volli/tickets/` dies — no dir helpers, no code path.
    No migration code: old ticket-tier files stay on disk, inert (gitignored,
    recoverable by hand).
-2. **The ticket Doc is the scratch pad.** Ephemeral plans/notes belong in the
-   ticket body (agents will write it via the volli CLI, MVP scope). Only
+2. **The Ticket Body is the scratch pad.** Ephemeral plans/notes belong in the
+   Ticket Body (agents will write it via the volli CLI, MVP scope). Only
    things that outlive a ticket become artifacts — and those are
    project-scoped by nature.
-3. **@file = @artifact, whole-repo scope.** In the doc editor, `@` opens a
+3. **@file = @artifact, whole-repo scope.** In the Ticket Body editor, `@` opens a
    Claude-Code-style fuzzy picker over the project file index
    (gitignore-respecting, `.volli/artifacts/` force-included, artifacts ranked
    first).
-4. **Stored form is plain text**: `@relative/path` in the markdown — zero
-   translation when the doc becomes an agent prompt. The live editor decorates
-   @tokens that resolve to a real file into clickable chips; dangling refs
-   degrade to plain text. No new markdown dialect, no URI scheme.
+4. **Stored form is plain text**: `@relative/path` in the markdown. The body
+   remains verbatim when it becomes an agent prompt; the generated Runtime
+   Brief appends a small resolution manifest so worktree files and main-repo
+   Artifacts are unambiguous to every harness (CONCEPT decision #62). The live
+   editor decorates @tokens that resolve to a real file into clickable chips;
+   dangling refs degrade to plain text. No new markdown dialect, no URI scheme.
 5. **Clicking a chip opens a `file` tab** in the ticket tab strip (the
    `artifacts` tab kind is deleted). Open file tabs + the active tab persist
    in workspace UI state (per project, per ticket) across restarts.
 6. **Worktree-aware resolution**: inside a ticket that has a live worktree,
    repo paths resolve to the worktree copy (badge on the tab); otherwise the
    main checkout. `.volli/**` always resolves to the main repo path.
-7. **Markdown edits, everything else read-only**: markdown → the existing
-   live editor with autosave + mtime conflict guard; code/text → read-only
-   CodeMirror (plain monospace, line numbers; **grammar syntax highlighting
-   deferred** — `@codemirror/language-data` would pull ~40 grammar packages
-   for a peek surface, not worth it in v1); images → inline data-URI viewer;
-   binary/oversize → stub tab with Reveal in Finder.
+7. *(superseded by the Monaco migration, CONCEPT #48–#60)* **One editor,
+   role-specific write policy**: Ticket Body and Markdown Artifacts use Monaco
+   Document Mode with autosave; repository text uses Monaco Source Mode with
+   explicit save; images render inline; binary/oversize files remain a stub
+   with Reveal in Finder.
 8. **Creation lives in the picker**: a "Create artifact '<name>'" row writes a
    templated `.md` into `.volli/artifacts/`, inserts the @ref at the cursor,
    and opens the tab.
@@ -41,14 +42,14 @@ the decision record **and** the implementation contract for the rework.
    `VOLLI_TICKET_DIR` is deleted; `VOLLI_ARTIFACTS_DIR` (absolute,
    main-repo `.volli/artifacts`) is added — injected for ticket-scoped *and*
    project-scoped scratch sessions.
-10. **No browse surface for now.** The Files nav page stays a placeholder;
-    the right-sidebar/nav-model rethink (file tree, tickets-as-tabs, git
-    diffs) is deferred to its own session.
+10. *(superseded by the Monaco migration, CONCEPT #46–#56)* **Project Files is
+    a first-class repository workspace;** Ticket Files and Changes live in the
+    ticket navigator and open tabs in the ticket workspace.
 
 Known v1 limitations (accepted): paths containing whitespace are excluded
 from the picker (the plain-text token can't hold spaces); renames dangle refs
 (they degrade to plain text); read-only chips in the *read-only* markdown
-renderer (comments/feed) are deferred — only CodeMirror surfaces decorate.
+renderer (comments/feed) are deferred — only editor surfaces decorate.
 
 ## Contract
 
@@ -127,16 +128,14 @@ leave the seam), else main. Path safety: normalized relPath, reject
 - `TicketTabKind = "doc" | "session" | "file"`; file tab id =
   `file:<relPath>`, label = basename, closable; worktree badge driven by the
   read result's `source`.
-- New `file-tab.tsx` hosts by kind: markdown → generalized editor view
-  (rework `artifact-viewer.tsx` → `file-view.tsx` on the `api.files`
-  surface); code/text → read-only CodeMirror + `@codemirror/language-data`
-  highlighting; image → inline; binary/truncated → stub + Reveal.
-- @ picker: CodeMirror autocomplete in `markdown-live-editor.tsx` (enabled
-  for both ticket body and markdown file tabs) triggered on `@`, backed by a
+- New `file-tab.tsx` hosts by kind: text → the shared Monaco model with the
+  role-specific presentation/write policy from `monaco-migration.md`; image →
+  inline; binary/truncated → stub + Reveal.
+- @ picker: Monaco completion in Document Mode (enabled for both Ticket Body
+  and Markdown Artifact tabs) triggered on `@`, backed by a
   ~10s-cached `api.files.index`, filtered/ranked by `scoreFileMatch`;
   create-row when no exact match → `createArtifact` + insert + open tab.
-  (Adds one dep: `@codemirror/autocomplete`.)
-- Chip decoration in `live-preview.ts` via `parseFileRefs` against the
+- Reference decoration uses `parseFileRefs` against the
   cached index (chip = icon + basename; unresolved = plain text); click →
   open/focus the file tab.
 - Workspace store: `WorkspaceUiState` gains persisted

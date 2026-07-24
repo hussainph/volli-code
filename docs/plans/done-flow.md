@@ -9,7 +9,7 @@ Implements decision #14's safety net as **visibility + manual affordances in the
 1. **No move interception.** `useBoardStore.moveTicket` is untouched. CLI moves to Done land as pure data (accepted bypass); the rail affordances serve both paths.
 2. **Divergence: hard blockers only.** In-progress sequencer state blocks the one-click commit; a rejected (non-fast-forward) push surfaces typed. "Base moved ahead N commits" is info, never a blocker — GitHub merges diverged-base PRs natively.
 3. **Fetch policy**: kickoff stays offline (#40 stands); the push flow — already a network moment — runs one targeted `git fetch origin <base>` first, best-effort. Failure degrades to stale-local info, never blocks.
-4. **PR shape**: `gh pr create --draft`, title `<DISPLAY-ID>: <ticket title>`, body = ticket doc markdown + a footer line naming the Volli ticket. No session-summary composition (no structured concept exists yet).
+4. **PR shape**: `gh pr create --draft`, title `<DISPLAY-ID>: <ticket title>`, body = Ticket Body Markdown + a footer line naming the Volli ticket. No session-summary composition (no structured concept exists yet).
 5. **PR URL is durable truth**: `tickets.pr_url` column (migration; the foundation #76's merge-watch and #16's Archive need) + a `pr_opened` event for History.
 6. **Commit convention**: one-click commit writes `chore(<DISPLAY-ID>): commit remaining work` — fixed, greppable, honest about its origin. The explicit exception to "the app never commits" (#14).
 7. **Dirty predicate split**: `isWorktreeDirty` stays the *removal-safety* predicate (unpushed commits = dirty). The rail uses a finer query — `uncommitted` / `sequencerActive` / `aheadOfBase` / `behindBase` — so a fully-committed branch is never told to "commit remaining changes."

@@ -15,7 +15,7 @@ filling every pixel (the Linear lesson — maximal width reads as noise, not as 
 
 Every surface declares which tier it is; the tiers may not be mixed ad hoc.
 
-- **Tier A — reading surfaces.** Prose-like content someone reads or writes: the ticket Doc tab
+- **Tier A — reading surfaces.** Prose-like content someone reads or writes: the Ticket Body tab
   (title, description, activity, composer), Settings when it's built, empty states. These center on
   the canonical measure via `<ContentColumn>`; surrounding whitespace is the point.
 - **Tier B — workbench surfaces.** Content that genuinely earns width: the kanban board, list
@@ -89,7 +89,7 @@ Nothing in the app should render a taller control than `lg`.
 
 ## Vertical rhythm (reading surfaces)
 
-The ticket Doc tab is the reference implementation: generous air above the title (`pt-8` below the
+The Ticket Body tab is the reference implementation: generous air above the title (`pt-8` below the
 tab strip), 24px title→body, `gap-8` (32px) between the body and the Activity section, Activity
 separated by `border-t` + `pt-6`, and a deep `pb-16` tail so the last content never kisses the card
 edge. Micro-spacing inside components stays on Tailwind's stock scale — the language governs
@@ -100,5 +100,5 @@ page-level rhythm, not every 4px.
 - The body editor bleeds its hover block into the gutter (`-mx-3` + `px-3`) so body **text**
   left-aligns exactly with the title on the column edge (Notion-style). Boxed elements (comment
   cards, the composer) align their **borders** to the column edge instead.
-- Terminals and the artifacts viewer are Tier B planes inside the ticket surface: full-bleed to
-  the card edge (terminals) or gutter-aligned (artifacts), beneath the Tier A title.
+- Terminals, file editors, and diffs are Tier B planes inside the ticket surface: full-bleed to
+  the card edge (terminals) or gutter-aligned where the workbench benefits from it.
