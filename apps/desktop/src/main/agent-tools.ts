@@ -101,8 +101,15 @@ function appleScriptString(value: string): string {
  * so `ln` alone fails permanently; `mkdir -p` runs first in the same elevated
  * shell so both happen under a single administrator prompt.
  */
-export function globalCliLinkShellCommand(shimPath: string): string {
+export function globalCliLinkShellCommand(
+  shimPath: string,
+  managedReplacementTarget?: string,
+): string {
   const quotedShimPath = shellSingleQuote(shimPath);
+  const managedReplacement =
+    managedReplacementTarget === undefined
+      ? ""
+      : `elif [ -L /usr/local/bin/volli ] && [ "$(/usr/bin/readlink /usr/local/bin/volli)" = ${shellSingleQuote(managedReplacementTarget)} ]; then /bin/ln -sfn ${quotedShimPath} /usr/local/bin/volli; `;
   // Never clobber an unrelated command under administrator privileges. The
   // existing link is accepted only when it already points at this exact shim;
   // `-n` and the absence of `-f` also prevent destination symlink traversal or
@@ -110,16 +117,22 @@ export function globalCliLinkShellCommand(shimPath: string): string {
   return (
     "/bin/mkdir -p /usr/local/bin && " +
     `if [ -L /usr/local/bin/volli ] && [ "$(/usr/bin/readlink /usr/local/bin/volli)" = ${quotedShimPath} ]; then :; ` +
+    managedReplacement +
     "elif [ -e /usr/local/bin/volli ] || [ -L /usr/local/bin/volli ]; then echo 'Refusing to replace existing /usr/local/bin/volli' >&2; exit 1; " +
     `else /bin/ln -sn ${quotedShimPath} /usr/local/bin/volli; fi`
   );
 }
 
 /** Uses the standard macOS administrator prompt to expose the generated shim outside Volli. */
-export async function installGlobalCliLink(shimPath: string): Promise<void> {
+export async function installGlobalCliLink(
+  shimPath: string,
+  managedReplacementTarget?: string,
+): Promise<void> {
   await execFileAsync("/usr/bin/osascript", [
     "-e",
-    `do shell script ${appleScriptString(globalCliLinkShellCommand(shimPath))} with administrator privileges`,
+    `do shell script ${appleScriptString(
+      globalCliLinkShellCommand(shimPath, managedReplacementTarget),
+    )} with administrator privileges`,
   ]);
 }
 

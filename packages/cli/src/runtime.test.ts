@@ -159,6 +159,7 @@ describe("launchApp", () => {
         socketPath: "/profiles/volli.sock",
         executable: "/Applications/Volli Code.app/Contents/MacOS/Volli Code",
         appEntry: undefined,
+        rendererUrl: "http://127.0.0.1:5173",
         timeoutMs: 100,
         env: {
           PATH: "/bin",
@@ -179,7 +180,7 @@ describe("launchApp", () => {
           VOLLI_AGENT_CONSENT_CHOICE: "install",
           VOLLI_SKIP_CLOSE_CONFIRM: "1",
         },
-      },
+      } as Parameters<typeof launchApp>[0],
       {
         probe: async () => {
           probes += 1;
@@ -194,7 +195,13 @@ describe("launchApp", () => {
       },
     );
 
-    expect(spawns).toEqual([{ PATH: "/bin", VOLLI_LAUNCHED_BY_CLI: "1" }]);
+    expect(spawns).toEqual([
+      {
+        PATH: "/bin",
+        VOLLI_LAUNCHED_BY_CLI: "1",
+        ELECTRON_RENDERER_URL: "http://127.0.0.1:5173",
+      },
+    ]);
   });
 
   it("passes an app entry and times out if the launched socket never appears", async () => {
@@ -206,9 +213,10 @@ describe("launchApp", () => {
           socketPath: "/socket",
           executable: "/electron",
           appEntry: "/app/main.cjs",
+          userDataPath: "/profiles/volli-dev",
           timeoutMs: 40,
           env: {},
-        },
+        } as Parameters<typeof launchApp>[0],
         {
           probe: async () => {
             throw new Error("down");
@@ -219,6 +227,6 @@ describe("launchApp", () => {
         },
       ),
     ).rejects.toMatchObject({ code: "TIMEOUT" });
-    expect(spawns).toEqual([["/app/main.cjs"]]);
+    expect(spawns).toEqual([["/app/main.cjs", "--user-data-dir=/profiles/volli-dev"]]);
   });
 });

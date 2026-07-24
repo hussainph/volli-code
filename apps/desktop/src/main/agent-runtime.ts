@@ -1,14 +1,31 @@
 import { randomUUID } from "node:crypto";
-import { chmod, lstat, mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { chmod, copyFile, lstat, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import { shellSingleQuote } from "@volli/shared";
 
+export interface VolliAppProfileLock {
+  requestSingleInstanceLock(): boolean;
+  quit(): void;
+}
+
+/** Claims one Electron process per finalized userData profile before any app state is opened. */
+export function acquireVolliAppProfile(app: VolliAppProfileLock): boolean {
+  if (app.requestSingleInstanceLock()) return true;
+  app.quit();
+  return false;
+}
+
 export interface VolliCliShimInput {
   binDir: string;
   electronPath: string;
-  bundlePath: string;
+  /** Build-owned CLI bundle copied into the stable profile before the shim is replaced. */
+  bundleSourcePath: string;
   socketPath: string;
+  userDataPath: string;
+  /** Trusted dev-server URL baked by the app; null for packaged/local-build launches. */
+  rendererUrl: string | null;
   /** The dev main-process entry `volli app launch` should boot; null when packaged (the bare executable boots the app on its own). */
   appEntry: string | null;
 }
@@ -22,7 +39,10 @@ export async function ensureVolliCliShim(input: VolliCliShimInput): Promise<stri
   }
   await chmod(input.binDir, 0o700);
   const shimPath = join(input.binDir, "volli");
-  const temporaryPath = `${shimPath}.tmp-${randomUUID()}`;
+  const bundlePath = join(input.binDir, "volli.cjs");
+  const nonce = randomUUID();
+  const temporaryBundlePath = `${bundlePath}.tmp-${nonce}`;
+  const temporaryShimPath = `${shimPath}.tmp-${nonce}`;
   const content =
     "#!/bin/sh\n" +
     "export ELECTRON_RUN_AS_NODE=1\n" +
@@ -41,13 +61,21 @@ export async function ensureVolliCliShim(input: VolliCliShimInput): Promise<stri
     (input.appEntry !== null
       ? `export VOLLI_APP_ENTRY=${shellSingleQuote(input.appEntry)}\n`
       : "") +
-    `exec ${shellSingleQuote(input.electronPath)} ${shellSingleQuote(input.bundlePath)} "$@"\n`;
+    `export VOLLI_APP_USER_DATA=${shellSingleQuote(input.userDataPath)}\n` +
+    (input.rendererUrl !== null
+      ? `export VOLLI_APP_RENDERER_URL=${shellSingleQuote(input.rendererUrl)}\n`
+      : "") +
+    `exec ${shellSingleQuote(input.electronPath)} ${shellSingleQuote(bundlePath)} "$@"\n`;
   try {
-    await writeFile(temporaryPath, content, { encoding: "utf8", mode: 0o700, flag: "wx" });
-    await chmod(temporaryPath, 0o755);
-    await rename(temporaryPath, shimPath);
+    await copyFile(input.bundleSourcePath, temporaryBundlePath, constants.COPYFILE_EXCL);
+    await chmod(temporaryBundlePath, 0o600);
+    await rename(temporaryBundlePath, bundlePath);
+    await writeFile(temporaryShimPath, content, { encoding: "utf8", mode: 0o700, flag: "wx" });
+    await chmod(temporaryShimPath, 0o755);
+    await rename(temporaryShimPath, shimPath);
   } finally {
-    await rm(temporaryPath, { force: true });
+    await rm(temporaryBundlePath, { force: true });
+    await rm(temporaryShimPath, { force: true });
   }
   return shimPath;
 }
@@ -55,21 +83,28 @@ export async function ensureVolliCliShim(input: VolliCliShimInput): Promise<stri
 export interface VolliRuntimePaths {
   binDir: string;
   socketPath: string;
+  cliBundleSourcePath: string;
   cliBundlePath: string;
+  /** The stable app directory Electron should launch in dev; packaged executables need no entry. */
+  appEntry: string | null;
 }
 
-/** Resolves the three runtime paths shared by the shim, socket, and PTY environment. */
+/** Resolves the runtime paths shared by the shim, socket, and PTY environment. */
 export function volliRuntimePaths(input: {
   userDataPath: string;
   appPath: string;
+  mainProcessDir: string;
   resourcesPath: string;
   isPackaged: boolean;
 }): VolliRuntimePaths {
+  const binDir = join(input.userDataPath, "bin");
   return {
-    binDir: join(input.userDataPath, "bin"),
+    binDir,
     socketPath: join(input.userDataPath, "volli.sock"),
-    cliBundlePath: input.isPackaged
+    cliBundleSourcePath: input.isPackaged
       ? join(input.appPath, "dist-electron/volli-cli.cjs")
-      : resolve(input.appPath, "../../packages/cli/dist/volli.cjs"),
+      : resolve(input.mainProcessDir, "../../../packages/cli/dist/volli.cjs"),
+    cliBundlePath: join(binDir, "volli.cjs"),
+    appEntry: input.isPackaged ? null : resolve(input.mainProcessDir, ".."),
   };
 }
