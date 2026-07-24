@@ -353,6 +353,7 @@ app.whenReady().then(async () => {
   const runtimePaths = volliRuntimePaths({
     userDataPath: app.getPath("userData"),
     appPath: app.getAppPath(),
+    mainProcessDir: __dirname,
     resourcesPath: process.resourcesPath,
     isPackaged: app.isPackaged,
   });
@@ -401,7 +402,7 @@ app.whenReady().then(async () => {
       electronPath: process.execPath,
       bundlePath: runtimePaths.cliBundlePath,
       socketPath: runtimePaths.socketPath,
-      appEntry: app.isPackaged ? null : join(app.getAppPath(), "dist-electron/main.cjs"),
+      appEntry: runtimePaths.appEntry,
     });
   } catch (error) {
     console.error("[volli] failed to generate CLI shim:", errorMessage(error));

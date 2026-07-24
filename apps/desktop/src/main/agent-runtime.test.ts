@@ -4,11 +4,38 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { ensureVolliCliShim } from "./agent-runtime";
+import { ensureVolliCliShim, volliRuntimePaths } from "./agent-runtime";
 
 let cleanup: (() => Promise<void>) | undefined;
 
 afterEach(async () => cleanup?.());
+
+describe("volliRuntimePaths", () => {
+  it("keeps dev launcher paths stable across an Electron relaunch from the built main entry", () => {
+    const mainProcessDir = "/work/volli-code/apps/desktop/dist-electron";
+    const input = {
+      userDataPath: "/Users/dev/Library/Application Support/Volli Code-dev",
+      resourcesPath: "/electron/resources",
+      isPackaged: false,
+      mainProcessDir,
+    };
+
+    const initial = volliRuntimePaths({
+      ...input,
+      appPath: "/work/volli-code/apps/desktop",
+    } as Parameters<typeof volliRuntimePaths>[0]);
+    const relaunched = volliRuntimePaths({
+      ...input,
+      appPath: mainProcessDir,
+    } as Parameters<typeof volliRuntimePaths>[0]);
+
+    expect(relaunched).toEqual(initial);
+    expect(relaunched).toMatchObject({
+      cliBundlePath: "/work/volli-code/packages/cli/dist/volli.cjs",
+      appEntry: "/work/volli-code/apps/desktop",
+    });
+  });
+});
 
 describe("ensureVolliCliShim", () => {
   it("generates an executable Electron-as-Node shim with safely quoted, baked launch paths", async () => {

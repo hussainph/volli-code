@@ -56,12 +56,15 @@ export interface VolliRuntimePaths {
   binDir: string;
   socketPath: string;
   cliBundlePath: string;
+  /** The stable app directory Electron should launch in dev; packaged executables need no entry. */
+  appEntry: string | null;
 }
 
-/** Resolves the three runtime paths shared by the shim, socket, and PTY environment. */
+/** Resolves the runtime paths shared by the shim, socket, and PTY environment. */
 export function volliRuntimePaths(input: {
   userDataPath: string;
   appPath: string;
+  mainProcessDir: string;
   resourcesPath: string;
   isPackaged: boolean;
 }): VolliRuntimePaths {
@@ -70,6 +73,7 @@ export function volliRuntimePaths(input: {
     socketPath: join(input.userDataPath, "volli.sock"),
     cliBundlePath: input.isPackaged
       ? join(input.appPath, "dist-electron/volli-cli.cjs")
-      : resolve(input.appPath, "../../packages/cli/dist/volli.cjs"),
+      : resolve(input.mainProcessDir, "../../../packages/cli/dist/volli.cjs"),
+    appEntry: input.isPackaged ? null : resolve(input.mainProcessDir, ".."),
   };
 }
