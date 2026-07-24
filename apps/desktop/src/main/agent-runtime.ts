@@ -5,6 +5,18 @@ import { join, resolve } from "node:path";
 
 import { shellSingleQuote } from "@volli/shared";
 
+export interface VolliAppProfileLock {
+  requestSingleInstanceLock(): boolean;
+  quit(): void;
+}
+
+/** Claims one Electron process per finalized userData profile before any app state is opened. */
+export function acquireVolliAppProfile(app: VolliAppProfileLock): boolean {
+  if (app.requestSingleInstanceLock()) return true;
+  app.quit();
+  return false;
+}
+
 export interface VolliCliShimInput {
   binDir: string;
   electronPath: string;

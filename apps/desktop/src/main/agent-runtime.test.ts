@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { ensureVolliCliShim, volliRuntimePaths } from "./agent-runtime";
+import { acquireVolliAppProfile, ensureVolliCliShim, volliRuntimePaths } from "./agent-runtime";
 
 let cleanup: (() => Promise<void>) | undefined;
 
@@ -16,6 +16,23 @@ async function writeSourceBundle(root: string): Promise<string> {
   await writeFile(bundlePath, "#!/usr/bin/env node\n");
   return bundlePath;
 }
+
+describe("acquireVolliAppProfile", () => {
+  it("quits before boot when another process already owns the profile", () => {
+    const actions: string[] = [];
+
+    expect(
+      acquireVolliAppProfile({
+        requestSingleInstanceLock: () => {
+          actions.push("lock");
+          return false;
+        },
+        quit: () => actions.push("quit"),
+      }),
+    ).toBe(false);
+    expect(actions).toEqual(["lock", "quit"]);
+  });
+});
 
 describe("volliRuntimePaths", () => {
   it("keeps dev launcher paths stable across an Electron relaunch from the built main entry", () => {

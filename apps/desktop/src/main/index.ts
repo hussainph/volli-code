@@ -21,7 +21,7 @@ import { startOrphanSweep } from "./orphan-sweep";
 import { worktreeDeps } from "./worktree-runtime";
 import { getRetentionWatcher } from "./retention-runtime";
 import { createAgentCommandService } from "./agent-commands";
-import { ensureVolliCliShim, volliRuntimePaths } from "./agent-runtime";
+import { acquireVolliAppProfile, ensureVolliCliShim, volliRuntimePaths } from "./agent-runtime";
 import { startAgentSocket, type AgentSocketServer } from "./agent-socket";
 import {
   installDetectedHarnessSkills,
@@ -77,6 +77,16 @@ let agentSocket: AgentSocketServer | undefined;
 // the db path regardless.
 if (isDev && !app.commandLine.hasSwitch("user-data-dir")) {
   app.setPath("userData", `${app.getPath("userData")}-dev`);
+}
+const ownsAppProfile = acquireVolliAppProfile(app);
+if (ownsAppProfile) {
+  app.on("second-instance", () => {
+    const mainWindow = BrowserWindow.getAllWindows()[0];
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
 }
 
 // The app-owned directory exposed by volli-app://bundle/. The protocol resolver
@@ -226,6 +236,7 @@ function createWindow(ptyManager: PtyManager): BrowserWindow {
 }
 
 app.whenReady().then(async () => {
+  if (!ownsAppProfile) return;
   protocol.handle(PACKAGED_RENDERER_SCHEME, (request) => {
     const assetPath = resolvePackagedRendererAsset(request.url, PACKAGED_RENDERER_ROOT);
     if (assetPath === null) {
@@ -396,19 +407,6 @@ app.whenReady().then(async () => {
   }
 
   let shimPath = join(runtimePaths.binDir, "volli");
-  try {
-    shimPath = await ensureVolliCliShim({
-      binDir: runtimePaths.binDir,
-      electronPath: process.execPath,
-      bundleSourcePath: runtimePaths.cliBundleSourcePath,
-      socketPath: runtimePaths.socketPath,
-      userDataPath: app.getPath("userData"),
-      rendererUrl: isDev ? (process.env["ELECTRON_RENDERER_URL"] ?? null) : null,
-      appEntry: runtimePaths.appEntry,
-    });
-  } catch (error) {
-    console.error("[volli] failed to generate CLI shim:", errorMessage(error));
-  }
 
   const agentToolsConsentKey = "volli:agent-tools-consent";
 
@@ -561,6 +559,22 @@ app.whenReady().then(async () => {
       socketPath: runtimePaths.socketPath,
       execute,
     });
+    // Only the process that owns this profile's socket may publish its client
+    // bundle and launcher. A rejected second instance must not redirect the
+    // global link or in-app PTYs to a build that does not own the live socket.
+    try {
+      shimPath = await ensureVolliCliShim({
+        binDir: runtimePaths.binDir,
+        electronPath: process.execPath,
+        bundleSourcePath: runtimePaths.cliBundleSourcePath,
+        socketPath: runtimePaths.socketPath,
+        userDataPath: app.getPath("userData"),
+        rendererUrl: isDev ? (process.env["ELECTRON_RENDERER_URL"] ?? null) : null,
+        appEntry: runtimePaths.appEntry,
+      });
+    } catch (error) {
+      console.error("[volli] failed to generate CLI shim:", errorMessage(error));
+    }
   } catch (error) {
     // The bundled `volli` CLI is entirely dead for this launch with no other
     // signal — a lightweight native Notification (the same mechanism already
