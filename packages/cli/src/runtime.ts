@@ -10,6 +10,7 @@ export interface LaunchAppOptions {
   executable: string;
   appEntry: string | undefined;
   userDataPath?: string;
+  rendererUrl?: string;
   timeoutMs: number;
   env: NodeJS.ProcessEnv;
 }
@@ -75,6 +76,7 @@ export async function launchApp(
   }
 
   const env = appLaunchEnvironment(options.env);
+  if (options.rendererUrl) env.ELECTRON_RENDERER_URL = options.rendererUrl;
   dependencies.spawnDetached(
     options.executable,
     [

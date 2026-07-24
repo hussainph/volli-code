@@ -403,6 +403,7 @@ app.whenReady().then(async () => {
       bundlePath: runtimePaths.cliBundlePath,
       socketPath: runtimePaths.socketPath,
       userDataPath: app.getPath("userData"),
+      rendererUrl: isDev ? (process.env["ELECTRON_RENDERER_URL"] ?? null) : null,
       appEntry: runtimePaths.appEntry,
     });
   } catch (error) {

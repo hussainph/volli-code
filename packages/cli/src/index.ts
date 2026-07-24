@@ -53,6 +53,7 @@ async function main(): Promise<void> {
           executable: env.VOLLI_APP_EXECUTABLE ?? process.execPath,
           appEntry: env.VOLLI_APP_ENTRY,
           userDataPath: env.VOLLI_APP_USER_DATA,
+          rendererUrl: env.VOLLI_APP_RENDERER_URL,
           timeoutMs,
           env,
         },

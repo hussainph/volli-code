@@ -50,6 +50,7 @@ describe("ensureVolliCliShim", () => {
       bundlePath: "/tmp/owner's build/volli.cjs",
       socketPath: "/Users/dev/Library/Application Support/Volli Code/volli.sock",
       userDataPath: "/Users/dev/Library/Application Support/Volli Code",
+      rendererUrl: null,
       appEntry: null,
     });
 
@@ -79,6 +80,7 @@ describe("ensureVolliCliShim", () => {
       socketPath: "/tmp/volli.sock",
       appEntry: "/work/volli-code/apps/desktop/dist-electron/main.cjs",
       userDataPath: root,
+      rendererUrl: "http://127.0.0.1:5173",
     } as Parameters<typeof ensureVolliCliShim>[0]);
 
     expect(await readFile(shimPath, "utf8")).toBe(
@@ -88,6 +90,7 @@ describe("ensureVolliCliShim", () => {
         "export VOLLI_APP_EXECUTABLE='/work/volli-code/node_modules/.bin/electron'\n" +
         "export VOLLI_APP_ENTRY='/work/volli-code/apps/desktop/dist-electron/main.cjs'\n" +
         `export VOLLI_APP_USER_DATA='${root}'\n` +
+        "export VOLLI_APP_RENDERER_URL='http://127.0.0.1:5173'\n" +
         "exec '/work/volli-code/node_modules/.bin/electron' '/work/volli-code/packages/cli/dist/volli.cjs' \"$@\"\n",
     );
   });
@@ -110,6 +113,7 @@ describe("ensureVolliCliShim", () => {
         bundlePath: "/Applications/Volli Code.app/Contents/Resources/volli.cjs",
         socketPath: "/tmp/volli.sock",
         userDataPath: root,
+        rendererUrl: null,
         appEntry: null,
       }),
     ).rejects.toThrow("Refusing to use non-directory CLI bin path");
