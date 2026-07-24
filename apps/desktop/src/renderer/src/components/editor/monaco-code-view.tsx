@@ -40,7 +40,7 @@ export function MonacoCodeView({
   const seedRef = React.useRef<SeedRef>({ key, value, revision });
   seedRef.current = { key, value, revision };
   const [failure, setFailure] = React.useState<{ key: string; message: string } | null>(null);
-  const failedForCurrentDocument = failure?.key === key;
+  const currentFailure = failure !== null && failure.key === key ? failure : null;
 
   React.useEffect(() => {
     const host = hostRef.current;
@@ -146,11 +146,12 @@ export function MonacoCodeView({
     active.lease.adoptCleanBaseline({ value, revision });
   }, [key, revision, value]);
 
-  if (failedForCurrentDocument) {
+  if (currentFailure !== null) {
     return (
       <pre
         data-monaco-fallback="true"
-        title={`Monaco unavailable: ${failure.message}`}
+        aria-label={ariaLabel}
+        title={`Monaco unavailable: ${currentFailure.message}`}
         className="h-full overflow-auto whitespace-pre-wrap p-3 font-mono text-ui text-foreground"
       >
         {value}

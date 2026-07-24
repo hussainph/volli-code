@@ -47,6 +47,10 @@ function makeRegistry() {
   return { registry: new DocumentRegistry<FakeModel, { cursor: number }>(factory), models };
 }
 
+function entryCount(registry: DocumentRegistry<FakeModel, { cursor: number }>): number {
+  return (registry as unknown as { entries: Map<string, unknown> }).entries.size;
+}
+
 const mainIdentity: DocumentIdentity = {
   kind: "file",
   projectId: "project-1",
@@ -251,7 +255,7 @@ describe("DocumentRegistry", () => {
       savePolicy: "read-only",
     });
     expect(file.restoreViewState()).toBeNull();
-    file.release();
+    file.release({ cursor: 7 });
 
     const reopened = registry.acquire({
       identity: mainIdentity,
@@ -268,6 +272,37 @@ describe("DocumentRegistry", () => {
     expect(models).toHaveLength(2);
   });
 
+  it("evicts a clean entry after its final view and view state are released", () => {
+    const { registry } = makeRegistry();
+    const file = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "baseline", revision: "r1" },
+      savePolicy: "read-only",
+    });
+    file.release({ cursor: 7 });
+    expect(entryCount(registry)).toBe(1);
+
+    const reopened = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "baseline", revision: "r1" },
+      savePolicy: "read-only",
+    });
+    reopened.release(null);
+
+    expect(entryCount(registry)).toBe(0);
+
+    const reseeded = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "fresh baseline", revision: "r2" },
+      savePolicy: "read-only",
+    });
+    expect(reseeded.model.getValue()).toBe("fresh baseline");
+    expect(reseeded.snapshot().baselineRevision).toBe("r2");
+  });
+
   it("allows a clean inactive document to adopt a new save policy", () => {
     const { registry } = makeRegistry();
     const preview = registry.acquire({
@@ -276,7 +311,7 @@ describe("DocumentRegistry", () => {
       seed: { value: "baseline", revision: "r1" },
       savePolicy: "read-only",
     });
-    preview.release();
+    preview.release({ cursor: 7 });
 
     const editable = registry.acquire({
       identity: mainIdentity,

@@ -129,7 +129,7 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
         entry.baselineRevision = revision;
         entry.externalRevision = revision;
         entry.dirty = false;
-        if (entry.references.size === 0) this.disposeModel(entry);
+        this.cleanupReleasedEntry(key, entry);
       },
       discard: () => {
         entry.applyingBaseline = true;
@@ -141,7 +141,7 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
         } finally {
           entry.applyingBaseline = false;
         }
-        if (entry.references.size === 0) this.disposeModel(entry);
+        this.cleanupReleasedEntry(key, entry);
       },
       release: (viewState?: ViewState | null) => {
         if (released) return;
@@ -153,9 +153,7 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
         }
         entry.references.delete(reference);
         entry.viewReferences = entry.references.size;
-        if (entry.references.size === 0 && !entry.dirty && entry.model !== null) {
-          this.disposeModel(entry);
-        }
+        this.cleanupReleasedEntry(key, entry);
       },
     };
   }
@@ -202,6 +200,14 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
     entry.changeSubscription = null;
     entry.model?.dispose();
     entry.model = null;
+  }
+
+  private cleanupReleasedEntry(key: string, entry: DocumentEntry<Model, ViewState>): void {
+    if (entry.references.size > 0 || entry.dirty) return;
+    this.disposeModel(entry);
+    if (entry.viewStates.size === 0 && this.entries.get(key) === entry) {
+      this.entries.delete(key);
+    }
   }
 
   private snapshot(entry: DocumentEntry<Model, ViewState>): DocumentSnapshot {
