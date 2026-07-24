@@ -10,6 +10,9 @@ describe("SettingsPage (app-wide)", () => {
     expect(html).toContain("General");
     expect(html).toContain("Appearance");
     expect(html).toContain("Harness Runtimes");
+    // Orphan cleanup is app-wide (the sweep walks every project), so it lives
+    // here rather than on the per-project Configure page.
+    expect(html).toContain("Worktrees");
   });
 
   it("shows the global Done-TTL in the default General category, scoped to all projects", () => {

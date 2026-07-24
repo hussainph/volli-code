@@ -48,8 +48,10 @@ export function RailResizeHandle() {
 
   return (
     // Absolute over the aside's left edge (its positioning context), hugging the
-    // full height. The rail's content sits behind px-4 padding, so the 6px grip
-    // never overlaps an interactive control.
+    // full height. Like the sidebar's grip, the 6px strip sits ON TOP of the
+    // rail's full-width controls (the RailDrawer headers), so their leftmost 6px
+    // resizes instead of toggling — the same accepted trade as the sidebar, and
+    // the col-resize cursor makes the zone legible before the click lands.
     <div
       role="separator"
       aria-orientation="vertical"

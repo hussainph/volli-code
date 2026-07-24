@@ -119,7 +119,9 @@ function TerminalFocusControls() {
     <>
       <div
         aria-live="polite"
-        className="pointer-events-none absolute left-1/2 top-1/2 flex max-w-[45vw] -translate-x-1/2 -translate-y-1/2 items-center gap-2 text-xs text-muted-foreground"
+        // top-[21px], not top-1/2: same 1px correction as the ⌘K pill — the
+        // sibling Exit button carries translate-y-px to meet the traffic lights.
+        className="pointer-events-none absolute left-1/2 top-[21px] flex max-w-[45vw] -translate-x-1/2 -translate-y-1/2 items-center gap-2 text-xs text-muted-foreground"
       >
         <span className="shrink-0 font-medium text-foreground">{ticketLabel}</span>
         <span aria-hidden="true" className="text-border">

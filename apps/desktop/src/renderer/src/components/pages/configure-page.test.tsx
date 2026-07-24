@@ -2,7 +2,11 @@ import type { Project } from "@volli/shared";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import { ConfigureGeneralSection, ConfigurePage } from "./configure-page";
+import {
+  ConfigureGeneralSection,
+  ConfigurePage,
+  ConfigureWorktreesSection,
+} from "./configure-page";
 
 const project: Project = {
   id: "p1",
@@ -34,6 +38,18 @@ describe("ConfigureGeneralSection", () => {
     expect(html).toContain("Save");
     // The project name titles the section.
     expect(html).toContain("Volli Code");
+  });
+});
+
+describe("ConfigureWorktreesSection", () => {
+  it("documents the per-project copy set without the app-wide orphan list", () => {
+    const html = renderToStaticMarkup(<ConfigureWorktreesSection />);
+
+    expect(html).toContain("Copied files");
+    expect(html).toContain(".worktreeinclude");
+    // `sweepOrphans` walks every project, so its list (and its permanent
+    // deletes) belongs to app-wide Settings — never a single project's page.
+    expect(html).not.toContain("Orphaned worktrees");
   });
 });
 

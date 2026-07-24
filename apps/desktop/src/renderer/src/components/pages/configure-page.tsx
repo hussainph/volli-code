@@ -1,11 +1,8 @@
-import { ArrowsClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowsClockwise";
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
 import { SlidersHorizontalIcon } from "@phosphor-icons/react/dist/csr/SlidersHorizontal";
-import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
-import { useCallback, useEffect, useState } from "react";
-import { errorMessage, type DirtyWorktreeOrphan, type Project } from "@volli/shared";
+import { useEffect, useState } from "react";
+import { type Project } from "@volli/shared";
 
 import {
   SettingsRow,
@@ -13,16 +10,6 @@ import {
   SettingsShell,
   type SettingsCategory,
 } from "@renderer/components/pages/settings-shell";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@renderer/components/ui/alert-dialog";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
@@ -74,7 +61,7 @@ export function ConfigurePage() {
       key: "worktrees",
       label: "Worktrees",
       icon: TreeStructureIcon,
-      description: "What gets copied into worktrees, and leftover worktree cleanup.",
+      description: "What gets copied from this project's root into every new ticket worktree.",
       content: <ConfigureWorktreesSection />,
     },
   ];
@@ -200,14 +187,14 @@ function SetupCommandField({
   );
 }
 
-/** Worktrees category: the copy-set explainer plus on-demand orphan cleanup. */
+/**
+ * Worktrees category: the per-project copy-set explainer. Orphan cleanup is NOT
+ * here — `sweepOrphans` walks every project in the db, so its list (and its
+ * permanent deletes) is app-wide and lives in Settings → Worktrees. Showing it
+ * on this per-project page would let project A delete project B's dirty work.
+ */
 export function ConfigureWorktreesSection() {
-  return (
-    <>
-      <CopySetInfo />
-      <DirtyWorktreesList />
-    </>
-  );
+  return <CopySetInfo />;
 }
 
 /** Read-only documentation of the default worktree copy set and how a repo-root `.worktreeinclude` extends it. */
@@ -228,168 +215,6 @@ function CopySetInfo() {
         file (gitignore syntax — <code className="rounded bg-muted px-1 py-0.5 font-mono">!</code>{" "}
         negates) extends or overrides this set.
       </p>
-    </SettingsSection>
-  );
-}
-
-type OrphansState =
-  | { status: "loading" }
-  | { status: "loaded"; dirty: DirtyWorktreeOrphan[] }
-  | { status: "error" };
-
-/** Truncates a long path to `start…end`, keeping enough of both ends to stay identifiable. */
-function truncateMiddle(value: string, max = 56): string {
-  if (value.length <= max) return value;
-  const keep = Math.floor((max - 1) / 2);
-  return `${value.slice(0, keep)}…${value.slice(value.length - keep)}`;
-}
-
-/** Reveal one orphan dir in Finder; failures toast (never silent). */
-async function revealOrphan(path: string): Promise<void> {
-  try {
-    const result = await window.api.fs.revealInFinder(path);
-    if (!result.ok) toastError(`Could not reveal in Finder: ${result.error}`);
-  } catch (error) {
-    toastError(`Could not reveal in Finder: ${errorMessage(error)}`);
-  }
-}
-
-/**
- * On-demand orphan sweep (§7 — dirty orphans are never auto-removed) with
- * per-row Reveal/Delete actions. Fetches on mount — the Worktrees category only
- * mounts when it's the active pane, so this is already "lazy" without extra
- * gating.
- */
-function DirtyWorktreesList() {
-  const [state, setState] = useState<OrphansState>({ status: "loading" });
-  const [pendingDelete, setPendingDelete] = useState<DirtyWorktreeOrphan | null>(null);
-  const [deleting, setDeleting] = useState(false);
-
-  const refresh = useCallback(async () => {
-    setState({ status: "loading" });
-    try {
-      const result = await window.api.worktree.orphans({ rescan: true });
-      if (!result.ok) {
-        toastError(`Could not check orphaned worktrees: ${result.error}`);
-        setState({ status: "error" });
-        return;
-      }
-      setState({ status: "loaded", dirty: result.dirty });
-    } catch (error) {
-      toastError(`Could not check orphaned worktrees: ${errorMessage(error)}`);
-      setState({ status: "error" });
-    }
-  }, []);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  async function confirmDelete(): Promise<void> {
-    if (!pendingDelete || deleting) return;
-    setDeleting(true);
-    try {
-      const result = await window.api.worktree.deleteOrphan(pendingDelete.path);
-      if (!result.ok) {
-        toastError(`Could not delete worktree: ${result.error}`);
-        return;
-      }
-      setPendingDelete(null);
-      await refresh();
-    } catch (error) {
-      toastError(`Could not delete worktree: ${errorMessage(error)}`);
-    } finally {
-      setDeleting(false);
-    }
-  }
-
-  const dirty = state.status === "loaded" ? state.dirty : [];
-
-  const refreshAction = (
-    <Button
-      variant="ghost"
-      size="icon-xs"
-      aria-label="Refresh orphaned worktrees"
-      disabled={state.status === "loading"}
-      onClick={() => void refresh()}
-    >
-      <ArrowsClockwiseIcon className={state.status === "loading" ? "animate-spin" : undefined} />
-    </Button>
-  );
-
-  return (
-    <SettingsSection
-      title="Orphaned worktrees"
-      description="Worktree folders with uncommitted work left over from a removed ticket — never deleted automatically."
-      action={refreshAction}
-    >
-      <div className="flex flex-col gap-1.5">
-        {state.status === "loading" ? (
-          <p className="text-xs text-muted-foreground">Checking…</p>
-        ) : dirty.length === 0 ? (
-          <p className="text-xs text-muted-foreground">No orphaned worktrees.</p>
-        ) : (
-          dirty.map((orphan) => (
-            <div
-              key={orphan.path}
-              className="flex items-center justify-between gap-3 rounded-md border border-border/60 bg-background/40 px-3 py-2"
-            >
-              <div className="min-w-0">
-                <p className="truncate font-mono text-xs text-foreground" title={orphan.path}>
-                  {truncateMiddle(orphan.path)}
-                </p>
-                <p className="mt-0.5 text-xs text-muted-foreground">{orphan.reason}</p>
-              </div>
-              <div className="flex shrink-0 items-center gap-1">
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label="Reveal in Finder"
-                  onClick={() => void revealOrphan(orphan.path)}
-                >
-                  <FolderOpenIcon />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label="Delete worktree"
-                  onClick={() => setPendingDelete(orphan)}
-                >
-                  <TrashIcon />
-                </Button>
-              </div>
-            </div>
-          ))
-        )}
-      </div>
-
-      <AlertDialog
-        open={pendingDelete !== null}
-        onOpenChange={(open) => {
-          if (!open) setPendingDelete(null);
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete this worktree?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This permanently deletes{" "}
-              <span className="font-mono text-foreground">{pendingDelete?.path}</span> and any
-              uncommitted work inside it. This can't be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              disabled={deleting}
-              onClick={() => void confirmDelete()}
-            >
-              {deleting ? "Deleting…" : "Delete"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </SettingsSection>
   );
 }

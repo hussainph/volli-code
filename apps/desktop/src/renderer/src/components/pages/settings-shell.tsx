@@ -138,7 +138,10 @@ export function SettingsSection({
           {action ? <div className="shrink-0">{action}</div> : null}
         </div>
       ) : null}
-      {children}
+      {/* Rows live in their own wrapper so SettingsRow's `first:`/`last:` divider
+          rules actually match. Without it the header div is the section's
+          :first-child, so the first row still drew a stray top hairline. */}
+      <div>{children}</div>
     </section>
   );
 }
