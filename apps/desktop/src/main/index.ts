@@ -400,7 +400,7 @@ app.whenReady().then(async () => {
     shimPath = await ensureVolliCliShim({
       binDir: runtimePaths.binDir,
       electronPath: process.execPath,
-      bundlePath: runtimePaths.cliBundlePath,
+      bundleSourcePath: runtimePaths.cliBundleSourcePath,
       socketPath: runtimePaths.socketPath,
       userDataPath: app.getPath("userData"),
       rendererUrl: isDev ? (process.env["ELECTRON_RENDERER_URL"] ?? null) : null,

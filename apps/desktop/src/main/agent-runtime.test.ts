@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, stat, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -9,6 +9,13 @@ import { ensureVolliCliShim, volliRuntimePaths } from "./agent-runtime";
 let cleanup: (() => Promise<void>) | undefined;
 
 afterEach(async () => cleanup?.());
+
+async function writeSourceBundle(root: string): Promise<string> {
+  const bundlePath = join(root, "source", "volli.cjs");
+  await mkdir(join(root, "source"), { recursive: true });
+  await writeFile(bundlePath, "#!/usr/bin/env node\n");
+  return bundlePath;
+}
 
 describe("volliRuntimePaths", () => {
   it("keeps dev launcher paths stable across an Electron relaunch from the built main entry", () => {
@@ -31,7 +38,8 @@ describe("volliRuntimePaths", () => {
 
     expect(relaunched).toEqual(initial);
     expect(relaunched).toMatchObject({
-      cliBundlePath: "/work/volli-code/packages/cli/dist/volli.cjs",
+      cliBundleSourcePath: "/work/volli-code/packages/cli/dist/volli.cjs",
+      cliBundlePath: "/Users/dev/Library/Application Support/Volli Code-dev/bin/volli.cjs",
       appEntry: "/work/volli-code/apps/desktop",
     });
   });
@@ -44,10 +52,11 @@ describe("ensureVolliCliShim", () => {
       const { rm } = await import("node:fs/promises");
       await rm(root, { recursive: true, force: true });
     };
+    const bundleSourcePath = await writeSourceBundle(root);
     const shimPath = await ensureVolliCliShim({
       binDir: join(root, "bin"),
       electronPath: "/Applications/Volli Code.app/Contents/MacOS/Volli Code",
-      bundlePath: "/tmp/owner's build/volli.cjs",
+      bundleSourcePath,
       socketPath: "/Users/dev/Library/Application Support/Volli Code/volli.sock",
       userDataPath: "/Users/dev/Library/Application Support/Volli Code",
       rendererUrl: null,
@@ -61,7 +70,7 @@ describe("ensureVolliCliShim", () => {
         "export VOLLI_SOCKET=${VOLLI_SOCKET:-'/Users/dev/Library/Application Support/Volli Code/volli.sock'}\n" +
         "export VOLLI_APP_EXECUTABLE='/Applications/Volli Code.app/Contents/MacOS/Volli Code'\n" +
         "export VOLLI_APP_USER_DATA='/Users/dev/Library/Application Support/Volli Code'\n" +
-        "exec '/Applications/Volli Code.app/Contents/MacOS/Volli Code' '/tmp/owner'\\''s build/volli.cjs' \"$@\"\n",
+        `exec '/Applications/Volli Code.app/Contents/MacOS/Volli Code' '${join(root, "bin", "volli.cjs")}' "$@"\n`,
     );
     expect((await stat(shimPath)).mode & 0o777).toBe(0o755);
     expect((await stat(join(root, "bin"))).mode & 0o777).toBe(0o700);
@@ -73,10 +82,11 @@ describe("ensureVolliCliShim", () => {
       const { rm } = await import("node:fs/promises");
       await rm(root, { recursive: true, force: true });
     };
+    const bundleSourcePath = await writeSourceBundle(root);
     const shimPath = await ensureVolliCliShim({
       binDir: join(root, "bin"),
       electronPath: "/work/volli-code/node_modules/.bin/electron",
-      bundlePath: "/work/volli-code/packages/cli/dist/volli.cjs",
+      bundleSourcePath,
       socketPath: "/tmp/volli.sock",
       appEntry: "/work/volli-code/apps/desktop/dist-electron/main.cjs",
       userDataPath: root,
@@ -91,7 +101,36 @@ describe("ensureVolliCliShim", () => {
         "export VOLLI_APP_ENTRY='/work/volli-code/apps/desktop/dist-electron/main.cjs'\n" +
         `export VOLLI_APP_USER_DATA='${root}'\n` +
         "export VOLLI_APP_RENDERER_URL='http://127.0.0.1:5173'\n" +
-        "exec '/work/volli-code/node_modules/.bin/electron' '/work/volli-code/packages/cli/dist/volli.cjs' \"$@\"\n",
+        `exec '/work/volli-code/node_modules/.bin/electron' '${join(root, "bin", "volli.cjs")}' "$@"\n`,
+    );
+  });
+
+  it("installs the bundled client beside the shim so source dist cleanup cannot break it", async () => {
+    const root = await mkdtemp(join(tmpdir(), "volli-shim-test-"));
+    cleanup = async () => {
+      const { rm: remove } = await import("node:fs/promises");
+      await remove(root, { recursive: true, force: true });
+    };
+    const sourceBundle = join(root, "checkout", "packages", "cli", "dist", "volli.cjs");
+    const binDir = join(root, "profile", "bin");
+    await mkdir(join(root, "checkout", "packages", "cli", "dist"), { recursive: true });
+    await writeFile(sourceBundle, "#!/usr/bin/env node\nconsole.log('profile client');\n");
+
+    const shimPath = await ensureVolliCliShim({
+      binDir,
+      electronPath: "/electron",
+      bundleSourcePath: sourceBundle,
+      socketPath: join(root, "profile", "volli.sock"),
+      userDataPath: join(root, "profile"),
+      rendererUrl: null,
+      appEntry: "/work/volli-code/apps/desktop",
+    });
+    await rm(sourceBundle);
+
+    const installedBundle = join(binDir, "volli.cjs");
+    await expect(readFile(installedBundle, "utf8")).resolves.toContain("profile client");
+    await expect(readFile(shimPath, "utf8")).resolves.toContain(
+      `exec '/electron' '${installedBundle}' "$@"`,
     );
   });
 
@@ -110,7 +149,7 @@ describe("ensureVolliCliShim", () => {
       ensureVolliCliShim({
         binDir,
         electronPath: "/Applications/Volli Code.app/Contents/MacOS/Volli Code",
-        bundlePath: "/Applications/Volli Code.app/Contents/Resources/volli.cjs",
+        bundleSourcePath: join(root, "source", "volli.cjs"),
         socketPath: "/tmp/volli.sock",
         userDataPath: root,
         rendererUrl: null,
