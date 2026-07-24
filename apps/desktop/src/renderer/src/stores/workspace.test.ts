@@ -1,4 +1,4 @@
-import { DEFAULT_TICKET_SORT } from "@volli/shared";
+import { DEFAULT_TICKET_SORT, EMPTY_FILE_WORKSPACE } from "@volli/shared";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { useBoardStore } from "./board";
 import { ticketScope, useSessionsStore } from "./sessions";
@@ -497,6 +497,252 @@ describe("ticket file tab persistence", () => {
   });
 });
 
+describe("project file workspace", () => {
+  it("previewProjectFile opens a preview tab for that project only", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().previewProjectFile("project-a", "src/app.ts");
+
+    expect(store.getState().byProject["project-a"]?.projectFiles).toEqual({
+      tabs: [{ relPath: "src/app.ts", pinned: false }],
+      activeRelPath: "src/app.ts",
+    });
+    expect(store.getState().byProject["project-b"]?.projectFiles).toBeUndefined();
+  });
+
+  it("preview replaces the preview slot in place while a pinned tab is appended past", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().previewProjectFile("project-a", "one.ts");
+    store.getState().pinProjectFile("project-a", "one.ts");
+    store.getState().previewProjectFile("project-a", "two.ts");
+    store.getState().previewProjectFile("project-a", "three.ts");
+
+    expect(store.getState().byProject["project-a"]?.projectFiles).toEqual({
+      tabs: [
+        { relPath: "one.ts", pinned: true },
+        { relPath: "three.ts", pinned: false },
+      ],
+      activeRelPath: "three.ts",
+    });
+  });
+
+  it("markProjectFileEdited promotes the preview tab so the next preview appends", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().previewProjectFile("project-a", "one.ts");
+    store.getState().markProjectFileEdited("project-a", "one.ts");
+    store.getState().previewProjectFile("project-a", "two.ts");
+
+    expect(store.getState().byProject["project-a"]?.projectFiles.tabs).toEqual([
+      { relPath: "one.ts", pinned: true },
+      { relPath: "two.ts", pinned: false },
+    ]);
+  });
+
+  it("activateProjectFile focuses an open tab and ignores a path that is not open", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().pinProjectFile("project-a", "one.ts");
+    store.getState().pinProjectFile("project-a", "two.ts");
+
+    store.getState().activateProjectFile("project-a", "one.ts");
+    expect(store.getState().byProject["project-a"]?.projectFiles.activeRelPath).toBe("one.ts");
+
+    store.getState().activateProjectFile("project-a", "never-opened.ts");
+    expect(store.getState().byProject["project-a"]?.projectFiles.activeRelPath).toBe("one.ts");
+  });
+
+  it("setProjectFileViewState keeps one opaque view state per relPath, per project", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().setProjectFileViewState("project-a", "one.ts", { cursor: 3 });
+    store.getState().setProjectFileViewState("project-a", "two.ts", { cursor: 9 });
+    store.getState().setProjectFileViewState("project-b", "one.ts", { cursor: 1 });
+    store.getState().setProjectFileViewState("project-a", "one.ts", { cursor: 4 });
+
+    expect(store.getState().byProject["project-a"]?.projectFileViewStates).toEqual({
+      "one.ts": { cursor: 4 },
+      "two.ts": { cursor: 9 },
+    });
+    expect(store.getState().byProject["project-b"]?.projectFileViewStates).toEqual({
+      "one.ts": { cursor: 1 },
+    });
+  });
+
+  it("closeProjectFile closes the tab and drops its persisted view state", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().pinProjectFile("project-a", "one.ts");
+    store.getState().pinProjectFile("project-a", "two.ts");
+    store.getState().setProjectFileViewState("project-a", "one.ts", { cursor: 3 });
+    store.getState().setProjectFileViewState("project-a", "two.ts", { cursor: 9 });
+
+    store.getState().closeProjectFile("project-a", "one.ts");
+
+    expect(store.getState().byProject["project-a"]?.projectFiles).toEqual({
+      tabs: [{ relPath: "two.ts", pinned: true }],
+      activeRelPath: "two.ts",
+    });
+    // View state must die with the tab, or the map grows without bound as the
+    // user churns through files.
+    expect(store.getState().byProject["project-a"]?.projectFileViewStates).toEqual({
+      "two.ts": { cursor: 9 },
+    });
+  });
+
+  it("closeProjectFile leaves the record untouched for a file that is not open", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().pinProjectFile("project-a", "one.ts");
+    store.getState().setProjectFileViewState("project-a", "one.ts", { cursor: 3 });
+    const before = store.getState().byProject["project-a"];
+
+    store.getState().closeProjectFile("project-a", "never-opened.ts");
+
+    // Identity, not just equality: closing something that was never open must
+    // not churn the record, or every stray close would notify subscribers and
+    // rewrite persisted state for nothing.
+    expect(store.getState().byProject["project-a"]).toBe(before);
+
+    // Same for a project with no record at all — a close racing a project
+    // removal must not conjure one back into the map.
+    store.getState().closeProjectFile("project-never-seen", "one.ts");
+    expect(store.getState().byProject["project-never-seen"]).toBeUndefined();
+  });
+});
+
+describe("project file workspace persistence", () => {
+  it("rehydrates tabs, order, pinned flags, and the active tab across a relaunch", () => {
+    const storage = createMemoryStorage();
+    const store = createWorkspaceStore(storage);
+    store.getState().pinProjectFile("project-a", "src/one.ts");
+    store.getState().previewProjectFile("project-a", "src/two.ts");
+    store.getState().activateProjectFile("project-a", "src/one.ts");
+
+    const rehydrated = createWorkspaceStore(storage);
+    expect(rehydrated.getState().byProject["project-a"]?.projectFiles).toEqual({
+      tabs: [
+        { relPath: "src/one.ts", pinned: true },
+        { relPath: "src/two.ts", pinned: false },
+      ],
+      activeRelPath: "src/one.ts",
+    });
+  });
+
+  it("round-trips a tab's Monaco view state through persistence", () => {
+    const storage = createMemoryStorage();
+    const store = createWorkspaceStore(storage);
+    store.getState().pinProjectFile("project-a", "src/one.ts");
+    store.getState().setProjectFileViewState("project-a", "src/one.ts", {
+      cursorState: [{ position: { lineNumber: 12, column: 3 } }],
+      viewState: { scrollTop: 240 },
+    });
+
+    const rehydrated = createWorkspaceStore(storage);
+    expect(rehydrated.getState().byProject["project-a"]?.projectFileViewStates).toEqual({
+      "src/one.ts": {
+        cursorState: [{ position: { lineNumber: 12, column: 3 } }],
+        viewState: { scrollTop: 240 },
+      },
+    });
+  });
+
+  it("persists tab identities and view state only — never file contents", () => {
+    const storage = createMemoryStorage();
+    const store = createWorkspaceStore(storage);
+    store.getState().pinProjectFile("project-a", "src/one.ts");
+    store.getState().previewProjectFile("project-a", "src/two.ts");
+    store.getState().setProjectFileViewState("project-a", "src/one.ts", { scrollTop: 40 });
+
+    const raw = storage.getItem("volli:workspace")!;
+    const parsed = JSON.parse(raw) as {
+      state: {
+        byProject: Record<
+          string,
+          { projectFiles: { tabs: Record<string, unknown>[]; activeRelPath: string } }
+        >;
+      };
+    };
+    // A tab record carries identity + the preview flag and nothing else; the
+    // document text reloads lazily from the checkout on return (decision #55).
+    for (const tab of parsed.state.byProject["project-a"]!.projectFiles.tabs) {
+      expect(Object.keys(tab).toSorted()).toEqual(["pinned", "relPath"]);
+    }
+    for (const contentKey of ["content", "contents", "text", "body", "source"]) {
+      expect(raw).not.toContain(`"${contentKey}"`);
+    }
+  });
+
+  it("drops the project's record again once its last file tab is closed", () => {
+    const storage = createMemoryStorage();
+    const store = createWorkspaceStore(storage);
+    store.getState().previewProjectFile("project-a", "src/one.ts");
+    store.getState().setProjectFileViewState("project-a", "src/one.ts", { scrollTop: 40 });
+    store.getState().closeProjectFile("project-a", "src/one.ts");
+
+    const parsed = JSON.parse(storage.getItem("volli:workspace")!) as {
+      state: { byProject: Record<string, unknown> };
+    };
+    // Back to all-default values → the persisted map must not keep a record
+    // for a merely-visited project.
+    expect(parsed.state.byProject).toEqual({});
+  });
+
+  it("falls back to an empty workspace for malformed persisted projectFiles without throwing", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:workspace",
+      JSON.stringify({
+        state: {
+          byProject: {
+            "project-a": { projectFiles: null },
+            "project-b": { projectFiles: "junk" },
+            "project-c": { projectFiles: { tabs: "nope", activeRelPath: 7 } },
+            "project-d": { projectFiles: { tabs: [{ relPath: 42 }, null, { pinned: true }] } },
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    const store = createWorkspaceStore(storage);
+    for (const projectId of ["project-a", "project-b", "project-c", "project-d"]) {
+      expect(store.getState().byProject[projectId]?.projectFiles).toEqual(EMPTY_FILE_WORKSPACE);
+    }
+  });
+
+  it("sanitizes the persisted view-state map: non-object raw, junk entries, and orphans are dropped", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:workspace",
+      JSON.stringify({
+        state: {
+          byProject: {
+            "project-a": {
+              projectFiles: {
+                tabs: [
+                  { relPath: "src/one.ts", pinned: true },
+                  { relPath: "src/two.ts", pinned: false },
+                ],
+                activeRelPath: "src/one.ts",
+              },
+              projectFileViewStates: {
+                "src/one.ts": { scrollTop: 40 },
+                "src/two.ts": "not-a-view-state",
+                "src/three.ts": { scrollTop: 90 }, // no surviving tab
+                "src/four.ts": [1, 2, 3],
+                "src/five.ts": null,
+              },
+            },
+            "project-b": { projectFileViewStates: "junk" },
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    const store = createWorkspaceStore(storage);
+    expect(store.getState().byProject["project-a"]?.projectFileViewStates).toEqual({
+      "src/one.ts": { scrollTop: 40 },
+    });
+    expect(store.getState().byProject["project-b"]?.projectFileViewStates).toEqual({});
+  });
+});
+
 describe("forget", () => {
   it("drops the project's record so a re-add starts at the defaults", () => {
     const store = createWorkspaceStore(createMemoryStorage());
@@ -504,6 +750,8 @@ describe("forget", () => {
     store.getState().setDirExpanded("project-a", "/a/src", true);
     store.getState().setBoardView("project-a", "list");
     store.getState().setBoardSort("project-a", { key: "priority", direction: "desc" });
+    store.getState().previewProjectFile("project-a", "src/app.ts");
+    store.getState().setProjectFileViewState("project-a", "src/app.ts", { cursor: 3 });
     store.getState().forget("project-a");
 
     expect(store.getState().byProject["project-a"]).toBeUndefined();
@@ -514,6 +762,8 @@ describe("forget", () => {
       boardSort: DEFAULT_TICKET_SORT,
       openTicketId: null,
       ticketTabs: {},
+      projectFiles: EMPTY_FILE_WORKSPACE,
+      projectFileViewStates: {},
     });
   });
 
@@ -547,6 +797,8 @@ describe("persistence", () => {
       "boardSort",
       "boardView",
       "openTicketId",
+      "projectFileViewStates",
+      "projectFiles",
       "ticketTabs",
     ]);
   });

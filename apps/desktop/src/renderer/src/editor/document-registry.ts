@@ -44,6 +44,23 @@ interface DocumentEntry<Model extends RegistryModel, ViewState> extends Document
   readonly viewStates: Map<string, ViewState>;
 }
 
+/**
+ * A lease-free handle on a document the registry ALREADY holds — the seam a
+ * workbench needs to save or discard a tab it is about to close. It has to be
+ * lease-free because a dirty document deliberately outlives its last view
+ * (`cleanupReleasedEntry` keeps it), so the tab whose draft needs rescuing is
+ * usually the one whose editor is no longer mounted. `peek` never CREATES an
+ * entry, so it can neither resurrect a closed document nor seed a baseline it
+ * doesn't know.
+ */
+export interface DocumentHandle<Model extends RegistryModel> {
+  /** The live model, or `null` if the document is parked without one (clean, viewless). */
+  readonly model: Model | null;
+  snapshot(): DocumentSnapshot;
+  discard(): void;
+  markSaved(revision: DocumentRevision): void;
+}
+
 export interface DocumentLease<Model extends RegistryModel, ViewState> {
   readonly model: Model;
   snapshot(): DocumentSnapshot;
@@ -124,25 +141,8 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
         return state === undefined ? null : structuredClone(state);
       },
       adoptCleanBaseline: (seed) => this.adoptCleanBaseline(entry, seed),
-      markSaved: (revision) => {
-        entry.baseline = entry.model?.getValue() ?? entry.baseline;
-        entry.baselineRevision = revision;
-        entry.externalRevision = revision;
-        entry.dirty = false;
-        this.cleanupReleasedEntry(key, entry);
-      },
-      discard: () => {
-        entry.applyingBaseline = true;
-        try {
-          if (entry.model !== null && entry.model.getValue() !== entry.baseline) {
-            entry.model.setValue(entry.baseline);
-          }
-          entry.dirty = false;
-        } finally {
-          entry.applyingBaseline = false;
-        }
-        this.cleanupReleasedEntry(key, entry);
-      },
+      markSaved: (revision) => this.markEntrySaved(key, entry, revision),
+      discard: () => this.discardEntry(key, entry),
       release: (viewState?: ViewState | null) => {
         if (released) return;
         released = true;
@@ -156,6 +156,49 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
         this.cleanupReleasedEntry(key, entry);
       },
     };
+  }
+
+  /**
+   * A handle on an already-open document, or `null` when this registry has
+   * never opened it (or has already cleaned it up).
+   */
+  peek(identity: DocumentIdentity): DocumentHandle<Model> | null {
+    const key = documentIdentityKey(identity);
+    const entry = this.entries.get(key);
+    if (entry === undefined) return null;
+    return {
+      get model() {
+        return entry.model;
+      },
+      snapshot: () => this.snapshot(entry),
+      discard: () => this.discardEntry(key, entry),
+      markSaved: (revision) => this.markEntrySaved(key, entry, revision),
+    };
+  }
+
+  private markEntrySaved(
+    key: string,
+    entry: DocumentEntry<Model, ViewState>,
+    revision: DocumentRevision,
+  ): void {
+    entry.baseline = entry.model?.getValue() ?? entry.baseline;
+    entry.baselineRevision = revision;
+    entry.externalRevision = revision;
+    entry.dirty = false;
+    this.cleanupReleasedEntry(key, entry);
+  }
+
+  private discardEntry(key: string, entry: DocumentEntry<Model, ViewState>): void {
+    entry.applyingBaseline = true;
+    try {
+      if (entry.model !== null && entry.model.getValue() !== entry.baseline) {
+        entry.model.setValue(entry.baseline);
+      }
+      entry.dirty = false;
+    } finally {
+      entry.applyingBaseline = false;
+    }
+    this.cleanupReleasedEntry(key, entry);
   }
 
   private adoptCleanBaseline(

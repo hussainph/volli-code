@@ -473,4 +473,76 @@ describe("DocumentRegistry", () => {
     expect(file.adoptCleanBaseline({ value: "baseline", revision: "r2" })).toBe("adopted");
     expect(setValue).not.toHaveBeenCalled();
   });
+
+  it("peeks a document that is already open, exposing its live model and dirty flag", () => {
+    const { registry } = makeRegistry();
+    const view = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "baseline", revision: "r1" },
+      savePolicy: "explicit",
+    });
+    view.model.setValue("draft");
+
+    const handle = registry.peek(mainIdentity);
+
+    expect(handle?.snapshot().dirty).toBe(true);
+    expect(handle?.snapshot().baselineRevision).toBe("r1");
+    expect(handle?.model?.getValue()).toBe("draft");
+  });
+
+  it("returns null for a document the registry has never opened", () => {
+    const { registry } = makeRegistry();
+
+    expect(registry.peek(mainIdentity)).toBeNull();
+  });
+
+  it("peeks a dirty document whose last view has already been released", () => {
+    const { registry } = makeRegistry();
+    const view = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "baseline", revision: "r1" },
+      savePolicy: "explicit",
+    });
+    view.model.setValue("draft");
+    view.release();
+
+    const handle = registry.peek(mainIdentity);
+
+    expect(handle?.model?.getValue()).toBe("draft");
+    expect(handle?.snapshot().dirty).toBe(true);
+  });
+
+  it("discards a viewless dirty draft through the peeked handle, dropping the entry", () => {
+    const { registry } = makeRegistry();
+    const view = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "baseline", revision: "r1" },
+      savePolicy: "explicit",
+    });
+    view.model.setValue("draft");
+    view.release();
+
+    registry.peek(mainIdentity)?.discard();
+
+    expect(entryCount(registry)).toBe(0);
+  });
+
+  it("marks a viewless draft saved through the peeked handle", () => {
+    const { registry } = makeRegistry();
+    const view = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "baseline", revision: "r1" },
+      savePolicy: "explicit",
+    });
+    view.model.setValue("draft");
+    view.release();
+
+    registry.peek(mainIdentity)?.markSaved("r2");
+
+    expect(entryCount(registry)).toBe(0);
+  });
 });
