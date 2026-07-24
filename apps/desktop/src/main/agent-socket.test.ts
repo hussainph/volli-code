@@ -1,5 +1,7 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { connect } from "node:net";
-import { stat } from "node:fs/promises";
+import { lstat, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -36,6 +38,26 @@ function rawRoundTrip(socketPath: string, line: string): Promise<AgentResponse> 
     socket.on("error", reject);
     socket.on("end", () => resolve(JSON.parse(response.trim()) as AgentResponse));
   });
+}
+
+async function leaveStaleSocket(socketPath: string): Promise<void> {
+  const child = spawn(
+    process.execPath,
+    [
+      "-e",
+      "const {createServer}=require('node:net');const server=createServer();server.listen(process.argv[1],()=>process.send('ready'));",
+      socketPath,
+    ],
+    { stdio: ["ignore", "ignore", "inherit", "ipc"] },
+  );
+  try {
+    await once(child, "message");
+    child.kill("SIGKILL");
+    await once(child, "exit");
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  }
+  expect((await lstat(socketPath)).isSocket()).toBe(true);
 }
 
 describe("agent socket", () => {
@@ -109,6 +131,61 @@ describe("agent socket", () => {
       ok: false,
       error: { code: "DB_UNAVAILABLE", message: "Database failed to open." },
     });
+  });
+
+  it("refuses to replace a live agent socket and leaves its owner reachable", async () => {
+    ctx = openTestDb();
+    const socketPath = join(dirname(ctx.dbPath), "volli.sock");
+    server = await startAgentSocket({
+      socketPath,
+      execute: async () => ({ v: 1, ok: true, data: { owner: "first" } }),
+    });
+
+    let replacement: AgentSocketServer | undefined;
+    let startupError: unknown;
+    try {
+      try {
+        replacement = await startAgentSocket({
+          socketPath,
+          execute: async () => ({ v: 1, ok: true, data: { owner: "second" } }),
+        });
+      } catch (error) {
+        startupError = error;
+      }
+
+      expect(startupError).toMatchObject({ code: "EADDRINUSE" });
+      expect(replacement).toBeUndefined();
+      await expect(
+        roundTrip(socketPath, {
+          v: 1,
+          cmd: "identify",
+          args: {},
+          ctx: { cwd: "/repo/volli", env: {} },
+        }),
+      ).resolves.toMatchObject({ ok: true, data: { owner: "first" } });
+    } finally {
+      await replacement?.close();
+    }
+  });
+
+  it("recovers a stale socket left behind by a crashed owner", async () => {
+    ctx = openTestDb();
+    const socketPath = join(dirname(ctx.dbPath), "volli.sock");
+    await leaveStaleSocket(socketPath);
+
+    server = await startAgentSocket({
+      socketPath,
+      execute: async () => ({ v: 1, ok: true, data: { owner: "recovered" } }),
+    });
+
+    await expect(
+      roundTrip(socketPath, {
+        v: 1,
+        cmd: "identify",
+        args: {},
+        ctx: { cwd: "/repo/volli", env: {} },
+      }),
+    ).resolves.toMatchObject({ ok: true, data: { owner: "recovered" } });
   });
 
   it("times out clients that hold a connection open without completing a request", async () => {
