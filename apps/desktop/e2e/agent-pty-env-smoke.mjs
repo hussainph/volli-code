@@ -10,9 +10,11 @@
  *   • VOLLI_SOCKET  = the app's live socket path,
  *   • VOLLI_TICKET  = the ticket's display ID,
  *   • VOLLI_SESSION = the spawned session's id,
- *   • `command -v volli` resolves to `<userData>/bin/volli` — the generated
- *     shim wins on PATH even through a login shell's path_helper pass
- *     (binDir is prepended and lives in no /etc/paths file).
+ *   • `<userData>/bin` reaches the session's PATH and its shim is executable.
+ *     Absolute precedence is NOT asserted: macOS `path_helper` re-hoists
+ *     /etc/paths entries in every login shell, so an installed
+ *     /usr/local/bin/volli can win `command -v`. Session identity does not
+ *     depend on which shim wins — see the note on check 4.
  *
  * ZDOTDIR points at a PATH-neutral scratch rc so the developer's own dotfiles
  * can't reorder PATH under the fake — the same shadow technique the kickoff
@@ -122,6 +124,7 @@ async function main() {
       const line =
         'echo "SOCK=$VOLLI_SOCKET"; echo "TICK=$VOLLI_TICKET"; ' +
         'echo "SESS=$VOLLI_SESSION"; echo "VOLLI=$(command -v volli)"; ' +
+        'echo "SHELLPATH=$PATH"; ' +
         'echo "SHIM=$(test -x "$(dirname "$VOLLI_SOCKET")/bin/volli" && echo ok)"; ' +
         'if [ -r /proc/$$/environ ]; then echo "SPAWN$(tr "\\0" "\\n" < /proc/$$/environ | grep "^PATH=")"; fi; ' +
         "echo PTY_PROBE_DONE\n";
@@ -164,29 +167,43 @@ async function main() {
       return { ok, detail: `got=${JSON.stringify(got)} want=${JSON.stringify(sid)}` };
     });
 
-    // === 4. the shim is executable and the spawn env prepends binDir ========
-    // On macOS the interactive shell keeps the prepend (path_helper merges), so
-    // `command -v volli` must resolve to the shim. On Linux the login shell's
-    // /etc/profile hard-assigns PATH, so the contract is asserted where main
-    // actually made it: the exec-time environment via /proc/$$/environ.
-    await attempt(4, "generated shim is executable and binDir leads the spawn PATH", async () => {
-      const shimOk = value("SHIM") === "ok";
-      if (process.platform === "linux") {
-        const spawnPath = value("SPAWNPATH");
+    // === 4. the shim is executable and binDir reaches the session's PATH =====
+    // Linux: the login shell's /etc/profile hard-assigns PATH, so the contract
+    // is asserted where main actually made it — the exec-time environment via
+    // /proc/$$/environ, which still shows the prepend.
+    //
+    // macOS: /etc/zprofile runs `path_helper`, which REBUILDS PATH in every
+    // login shell — /etc/paths entries (including /usr/local/bin) are hoisted
+    // above the spawn env's prepend. Membership survives; precedence does not.
+    // So a pre-existing /usr/local/bin/volli link legitimately wins
+    // `command -v`, and asserting the shim wins would fail on any machine that
+    // has ever installed the global link. That is not a session-identity bug:
+    // every generated shim resolves its socket as ${VOLLI_SOCKET:-<baked>}, so
+    // whichever shim runs still talks to THIS app. Assert what main controls —
+    // binDir is on the session PATH and this profile's shim is executable.
+    await attempt(
+      4,
+      "generated shim is executable and binDir reaches the session PATH",
+      async () => {
+        const shimOk = value("SHIM") === "ok";
         const binDir = join(realUserData, "bin");
-        const ok = shimOk && spawnPath !== null && spawnPath.startsWith(`${binDir}:`);
+        if (process.platform === "linux") {
+          const spawnPath = value("SPAWNPATH");
+          const ok = shimOk && spawnPath !== null && spawnPath.startsWith(`${binDir}:`);
+          return {
+            ok,
+            detail: `shim=${shimOk} spawnPath=${JSON.stringify(spawnPath)} wantPrefix=${JSON.stringify(`${binDir}:`)}`,
+          };
+        }
+        const shellPath = value("SHELLPATH");
+        const onPath = shellPath !== null && shellPath.split(":").includes(binDir);
+        const ok = shimOk && onPath;
         return {
           ok,
-          detail: `shim=${shimOk} spawnPath=${JSON.stringify(spawnPath)} wantPrefix=${JSON.stringify(`${binDir}:`)}`,
+          detail: `shim=${shimOk} binDirOnPath=${onPath} resolved=${JSON.stringify(value("VOLLI"))} want=${JSON.stringify(shimPath)}`,
         };
-      }
-      const got = value("VOLLI");
-      const ok = shimOk && got === shimPath;
-      return {
-        ok,
-        detail: `shim=${shimOk} got=${JSON.stringify(got)} want=${JSON.stringify(shimPath)}`,
-      };
-    });
+      },
+    );
 
     // Kill the PTY so teardown's close gate has nothing busy to negotiate.
     await page.evaluate((id) => window.api.terminal.kill(id), sid).catch(() => {});
