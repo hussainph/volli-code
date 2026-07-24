@@ -215,7 +215,7 @@ describe("DocumentRegistry", () => {
     ).toThrow("different save policy");
   });
 
-  it("rejects a new disk seed while a zero-view dirty draft is guarded", () => {
+  it("reopens a zero-view dirty draft and records the newer external revision", () => {
     const { registry } = makeRegistry();
     const file = registry.acquire({
       identity: mainIdentity,
@@ -226,14 +226,20 @@ describe("DocumentRegistry", () => {
     file.model.setValue("guarded draft");
     file.release();
 
-    expect(() =>
-      registry.acquire({
-        identity: mainIdentity,
-        viewId: "reopened",
-        seed: { value: "new disk bytes", revision: "r2" },
-        savePolicy: "explicit",
-      }),
-    ).toThrow("different seed");
+    const reopened = registry.acquire({
+      identity: mainIdentity,
+      viewId: "reopened",
+      seed: { value: "new disk bytes", revision: "r2" },
+      savePolicy: "explicit",
+    });
+    expect(reopened.model).toBe(file.model);
+    expect(reopened.model.getValue()).toBe("guarded draft");
+    expect(reopened.snapshot()).toMatchObject({
+      baseline: "baseline",
+      baselineRevision: "r1",
+      externalRevision: "r2",
+      dirty: true,
+    });
   });
 
   it("accepts the latest seed after the last clean view released", () => {
@@ -260,6 +266,25 @@ describe("DocumentRegistry", () => {
       externalRevision: "r2",
     });
     expect(models).toHaveLength(2);
+  });
+
+  it("allows a clean inactive document to adopt a new save policy", () => {
+    const { registry } = makeRegistry();
+    const preview = registry.acquire({
+      identity: mainIdentity,
+      viewId: "preview",
+      seed: { value: "baseline", revision: "r1" },
+      savePolicy: "read-only",
+    });
+    preview.release();
+
+    const editable = registry.acquire({
+      identity: mainIdentity,
+      viewId: "editor",
+      seed: { value: "baseline", revision: "r1" },
+      savePolicy: "explicit",
+    });
+    expect(editable.snapshot().savePolicy).toBe("explicit");
   });
 
   it("adopts a new baseline into every clean shared view without becoming dirty", () => {

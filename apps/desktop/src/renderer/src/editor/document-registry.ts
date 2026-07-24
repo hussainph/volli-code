@@ -89,18 +89,25 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
       this.entries.set(key, entry);
     } else {
       if (entry.savePolicy !== input.savePolicy) {
-        throw new Error(`Document ${key} was acquired with a different save policy`);
+        if (entry.references.size > 0 || entry.dirty) {
+          throw new Error(`Document ${key} was acquired with a different save policy`);
+        }
+        entry.savePolicy = input.savePolicy;
       }
       const sameSeed =
         entry.baseline === input.seed.value &&
         Object.is(entry.baselineRevision, input.seed.revision);
       if (!sameSeed) {
-        if (entry.references.size > 0 || entry.dirty) {
+        if (entry.references.size > 0) {
           throw new Error(`Document ${key} was acquired with a different seed`);
         }
-        entry.baseline = input.seed.value;
-        entry.baselineRevision = input.seed.revision;
-        entry.externalRevision = input.seed.revision;
+        if (entry.dirty) {
+          entry.externalRevision = input.seed.revision;
+        } else {
+          entry.baseline = input.seed.value;
+          entry.baselineRevision = input.seed.revision;
+          entry.externalRevision = input.seed.revision;
+        }
       }
     }
 
