@@ -4,6 +4,7 @@
 // runtime export here is fine for main, but preload must never import it at
 // runtime.
 
+import type { ChangeSetSnapshot } from "./change-set";
 import type { FileKind, FileSource, IndexedFile } from "./file-ref";
 import type { DirEntry } from "./fs-entries";
 import type { Label } from "./label";
@@ -132,6 +133,12 @@ export interface WorktreeRemoveInput {
 export interface WorktreeDiffInput {
   ticketId: string;
   mode: WorktreeDiffMode;
+}
+
+/** `{ ticketId, path }` — a worktree-relative path to read at the Change Set base. */
+export interface WorktreeBaseReadInput {
+  ticketId: string;
+  path: string;
 }
 
 /** `{ rescan: true }` forces a fresh orphan sweep (Settings → Worktrees rescan); omitted/`false` returns the launch's cached report. */
@@ -286,6 +293,26 @@ export interface VolliDataIpcContract {
   "volli:worktree-status": { args: [input: TicketIdInput]; result: WorktreeStatusResult };
   /** `"working-tree"` (uncommitted now) or `"merge-base"` (the PR delta). */
   "volli:worktree-diff": { args: [input: WorktreeDiffInput]; result: WorktreeDiffResult };
+  /**
+   * The composed Change Set snapshot (CONCEPT #47): the ticket worktree's
+   * complete current outcome relative to its recorded base.
+   */
+  "volli:worktree-change-set": {
+    args: [input: TicketIdInput];
+    result: WorktreeChangeSetResult;
+  };
+  /**
+   * Reads one file's contents at the Change Set's stamped base revision without
+   * mutating the checkout (`git show`). `{ missing: true }` when the path was
+   * absent at the base (added/untracked originals).
+   */
+  "volli:worktree-base-read": {
+    args: [input: WorktreeBaseReadInput];
+    result: WorktreeBaseReadResult;
+  };
+  /** Starts a debounced recursive watch on the ticket worktree for Change Set refresh. */
+  "volli:worktree-change-watch": { args: [input: TicketIdInput]; result: Result };
+  "volli:worktree-change-unwatch": { args: [input: TicketIdInput]; result: Result };
   /** The one-click "commit remaining work" safety net (fixed chore message). */
   "volli:worktree-commit": { args: [input: TicketIdInput]; result: WorktreeCommitResult };
   /** Push the branch and open (or re-discover) its draft PR; persists `pr_url`. */
@@ -856,6 +883,17 @@ export type WorktreeStatusResult = Result<{
  */
 export type WorktreeDiffMode = "working-tree" | "merge-base";
 export type WorktreeDiffResult = Result<{ diff: DiffStat }>;
+
+/** The composed Change Set for `volli:worktree-change-set`. */
+export type WorktreeChangeSetResult = Result<{ changeSet: ChangeSetSnapshot }>;
+
+/**
+ * Base-revision file contents for `volli:worktree-base-read`. `missing: true`
+ * is success (the path was absent at the base), not an error.
+ */
+export type WorktreeBaseReadResult = Result<
+  { content: string; missing?: undefined } | { missing: true; content?: undefined }
+>;
 
 /**
  * Ack for `volli:worktree-commit`. `committed: true` carries the safety-net

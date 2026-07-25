@@ -60,6 +60,9 @@ import type {
   TicketStatus,
   TicketUpdateInput,
   WorktreeBranchesResult,
+  WorktreeChangeSetResult,
+  WorktreeBaseReadInput,
+  WorktreeBaseReadResult,
   WorktreeCommitResult,
   WorktreeDiffInput,
   WorktreeDiffResult,
@@ -116,6 +119,8 @@ import {
   getRetentionTtlDays,
   listBranches,
   publishTicketBranch,
+  readWorktreeBaseFile,
+  readWorktreeChangeSet,
   readWorktreeDiff,
   readWorktreeStatus,
   remove as removeWorktree,
@@ -123,6 +128,7 @@ import {
   setRetentionTtlDays,
   type DiffMode,
 } from "./worktree";
+import { WorktreeChangeWatchManager } from "./worktree/change-set-watch";
 import { getRetentionWatcher } from "./retention-runtime";
 import {
   canonicalize as canonicalizeWorktreePath,
@@ -205,6 +211,7 @@ export function registerDataIpcHandlers(
   }
 
   const db = handle.db;
+  const changeWatchManager = new WorktreeChangeWatchManager();
 
   const handlers: IpcHandlerTable<DataIpcChannel> = {
     "volli:data-bootstrap": (): BootstrapResult => {
@@ -606,6 +613,59 @@ export function registerDataIpcHandlers(
         case "ok":
           return { ok: true, diff: read.diff };
       }
+    },
+
+    "volli:worktree-change-set": (input: TicketIdInput): WorktreeChangeSetResult => {
+      const read = readWorktreeChangeSet(worktreeDeps(db), input.ticketId);
+      switch (read.kind) {
+        case "missing-ticket":
+          return { ok: false, error: "Unknown ticket" };
+        case "no-worktree":
+          return { ok: false, error: "This ticket has no worktree." };
+        case "missing-on-disk":
+          return { ok: false, error: "This ticket's worktree directory is missing on disk." };
+        case "change-set-error":
+          return { ok: false, error: read.error };
+        case "ok":
+          return { ok: true, changeSet: read.changeSet };
+      }
+    },
+
+    "volli:worktree-base-read": (input: WorktreeBaseReadInput): WorktreeBaseReadResult => {
+      const read = readWorktreeBaseFile(worktreeDeps(db), input.ticketId, input.path);
+      switch (read.kind) {
+        case "missing-ticket":
+          return { ok: false, error: "Unknown ticket" };
+        case "no-worktree":
+          return { ok: false, error: "This ticket has no worktree." };
+        case "missing-on-disk":
+          return { ok: false, error: "This ticket's worktree directory is missing on disk." };
+        case "base-read-error":
+          return { ok: false, error: read.error };
+        case "ok":
+          return read.file.missing === true
+            ? { ok: true, missing: true }
+            : { ok: true, content: read.file.content };
+      }
+    },
+
+    "volli:worktree-change-watch": (input: TicketIdInput, sender): Result => {
+      const status = readWorktreeStatus(worktreeDeps(db), input.ticketId);
+      switch (status.kind) {
+        case "missing-ticket":
+          return { ok: false, error: "Unknown ticket" };
+        case "no-worktree":
+          return { ok: false, error: "This ticket has no worktree." };
+        case "missing-on-disk":
+          return { ok: false, error: "This ticket's worktree directory is missing on disk." };
+        case "ok":
+          return changeWatchManager.watch(sender, input.ticketId, status.worktreePath);
+      }
+    },
+
+    "volli:worktree-change-unwatch": (input: TicketIdInput, sender): Result => {
+      changeWatchManager.unwatch(sender, input.ticketId);
+      return { ok: true };
     },
 
     "volli:worktree-commit": async (input: TicketIdInput): Promise<WorktreeCommitResult> => {

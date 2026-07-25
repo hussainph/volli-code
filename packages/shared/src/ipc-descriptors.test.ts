@@ -898,6 +898,60 @@ describe("DATA_IPC descriptor table", () => {
     });
   });
 
+  describe("volli:worktree-change-set / volli:worktree-change-watch / volli:worktree-change-unwatch", () => {
+    const channels = [
+      "volli:worktree-change-set",
+      "volli:worktree-change-watch",
+      "volli:worktree-change-unwatch",
+    ] as const;
+
+    for (const channel of channels) {
+      describe(channel, () => {
+        const { guard, invalidError } = DATA_IPC[channel];
+
+        it("accepts a valid { ticketId } payload", () => {
+          expect(guard([{ ticketId: "t1" }])).toBe(true);
+        });
+
+        it("rejects a non-object payload", () => {
+          expect(guard([null])).toBe(false);
+        });
+
+        it("rejects a wrong arity", () => {
+          expect(guard([])).toBe(false);
+        });
+
+        it("carries the handler's exact invalid-input message", () => {
+          expect(invalidError).toBe("Invalid ticket");
+        });
+      });
+    }
+  });
+
+  describe("volli:worktree-base-read", () => {
+    const { guard, invalidError } = DATA_IPC["volli:worktree-base-read"];
+
+    it("accepts a valid { ticketId, path } payload", () => {
+      expect(guard([{ ticketId: "t1", path: "src/a.ts" }])).toBe(true);
+    });
+
+    it("rejects a missing path", () => {
+      expect(guard([{ ticketId: "t1" }])).toBe(false);
+    });
+
+    it("rejects a non-string path", () => {
+      expect(guard([{ ticketId: "t1", path: 1 }])).toBe(false);
+    });
+
+    it("rejects a wrong arity", () => {
+      expect(guard([])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid worktree base read request");
+    });
+  });
+
   describe("the ticketId-input worktree/retention channels (commit/push-pr/retention-state/dismiss/archive-clean)", () => {
     const cases = [
       ["volli:worktree-commit", "Invalid ticket"],
@@ -1028,12 +1082,16 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 41 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(41);
+    it("covers all 45 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(45);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
       expect(DATA_CHANNELS).toContain("volli:ticket-move");
       expect(DATA_CHANNELS).toContain("volli:app-state-set");
       expect(DATA_CHANNELS).toContain("volli:retention-poll");
+      expect(DATA_CHANNELS).toContain("volli:worktree-change-set");
+      expect(DATA_CHANNELS).toContain("volli:worktree-base-read");
+      expect(DATA_CHANNELS).toContain("volli:worktree-change-watch");
+      expect(DATA_CHANNELS).toContain("volli:worktree-change-unwatch");
     });
   });
 });

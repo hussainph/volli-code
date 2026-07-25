@@ -7,8 +7,8 @@ import {
 } from "./change-set-watch";
 
 interface FakeWatcher {
-  close: ReturnType<typeof vi.fn>;
-  on: ReturnType<typeof vi.fn>;
+  close: ReturnType<typeof vi.fn<() => void>>;
+  on: ReturnType<typeof vi.fn<(event: "error", listener: (error: Error) => void) => void>>;
 }
 
 interface WatchCall {
@@ -19,7 +19,10 @@ interface WatchCall {
 }
 
 function makeFakeWatcher(): FakeWatcher {
-  return { close: vi.fn(), on: vi.fn() };
+  return {
+    close: vi.fn<() => void>(),
+    on: vi.fn<(event: "error", listener: (error: Error) => void) => void>(),
+  };
 }
 
 function makeWebContents(id = 1) {
@@ -53,13 +56,11 @@ describe("WorktreeChangeWatchManager", () => {
   });
 
   function makeManager(): WorktreeChangeWatchManager {
-    const watchFn: WorktreeWatchFn = ((path, optionsOrCb, maybeCb) => {
-      const options = typeof optionsOrCb === "function" ? undefined : optionsOrCb;
-      const cb = typeof optionsOrCb === "function" ? optionsOrCb : maybeCb!;
+    const watchFn: WorktreeWatchFn = (path, options, cb) => {
       const watcher = makeFakeWatcher();
       watchCalls.push({ path, options, cb, watcher });
-      return watcher as never;
-    }) as WorktreeWatchFn;
+      return watcher;
+    };
     return new WorktreeChangeWatchManager({ watch: watchFn, debounceMs: WATCH_DEBOUNCE_MS });
   }
 

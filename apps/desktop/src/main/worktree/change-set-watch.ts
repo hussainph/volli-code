@@ -12,14 +12,23 @@ import type { Result, WorktreeChangedEvent, VolliIpcEvent } from "@volli/shared"
 /** Same debounce as FileWatchManager / DirWatchManager (volli-fs.ts). */
 export const WATCH_DEBOUNCE_MS = 250;
 
+interface WorktreeWatchHandle {
+  close(): void;
+  on(event: "error", listener: (error: Error) => void): void;
+}
+
 /** Injectable `fs.watch` seam so tests drive events without racing the OS. */
-export type WorktreeWatchFn = typeof fsWatch;
+export type WorktreeWatchFn = (
+  path: string,
+  options: { recursive?: boolean },
+  listener: (eventType: string, filename: string | null) => void,
+) => WorktreeWatchHandle;
 
 interface WorktreeWatchSubscription {
   webContents: WebContents;
   ticketId: string;
   worktreePath: string;
-  watcher: ReturnType<typeof fsWatch> | null;
+  watcher: WorktreeWatchHandle | null;
   debounceTimer: NodeJS.Timeout | null;
   onDestroyed: () => void;
 }
@@ -39,7 +48,7 @@ export class WorktreeChangeWatchManager {
   private readonly debounceMs: number;
 
   constructor(options: WorktreeChangeWatchOptions = {}) {
-    this.watchFn = options.watch ?? fsWatch;
+    this.watchFn = options.watch ?? ((path, opts, listener) => fsWatch(path, opts, listener));
     this.debounceMs = options.debounceMs ?? WATCH_DEBOUNCE_MS;
   }
 
@@ -63,10 +72,11 @@ export class WorktreeChangeWatchManager {
     };
     this.subs.set(key, sub);
     try {
-      sub.watcher = this.watchFn(worktreePath, { recursive: true }, () => {
+      const watcher = this.watchFn(worktreePath, { recursive: true }, () => {
         this.scheduleBroadcast(sub);
       });
-      sub.watcher.on("error", () => {
+      sub.watcher = watcher;
+      watcher.on("error", () => {
         // An async watch fault must never crash main — drop this subscription.
         this.teardown(key);
       });

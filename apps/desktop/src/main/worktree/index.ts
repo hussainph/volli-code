@@ -22,8 +22,22 @@ export type { DiffMode, DiffStatInput } from "./diff";
 // no-worktree / stamped-but-deleted, then compose status.ts/diff.ts. The single
 // door both the IPC and CLI status/diff paths go through — never the shallow
 // pair directly — so the disk-existence contract can't drift between them again.
-export { readWorktreeStatus, readWorktreeDiff } from "./read";
-export type { WorktreeReadDeps, WorktreeStatusRead, WorktreeDiffRead } from "./read";
+export {
+  readWorktreeStatus,
+  readWorktreeDiff,
+  readWorktreeChangeSet,
+  readWorktreeBaseFile,
+} from "./read";
+export type {
+  WorktreeReadDeps,
+  WorktreeStatusRead,
+  WorktreeDiffRead,
+  WorktreeChangeSetRead,
+  WorktreeBaseFileRead,
+} from "./read";
+export { changeSetSnapshot, readChangeSetBaseFile } from "./change-set";
+export type { ChangeSetInput, ChangeSetBaseFileInput, ChangeSetBaseFile } from "./change-set";
+export { WorktreeChangeWatchManager, WATCH_DEBOUNCE_MS } from "./change-set-watch";
 export { commitRemaining } from "./commit";
 export type { CommitOutcome, CommitRemainingInput } from "./commit";
 export {

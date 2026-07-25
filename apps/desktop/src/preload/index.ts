@@ -67,6 +67,9 @@ import type {
   VolliIpcEvent,
   VolliSendContract,
   WorktreeBranchesResult,
+  WorktreeBaseReadResult,
+  WorktreeChangeSetResult,
+  WorktreeChangedEvent,
   WorktreeCommitResult,
   WorktreeDiffMode,
   WorktreeDiffResult,
@@ -281,6 +284,25 @@ const api = {
     /** Done flow: a diff summary — `"working-tree"` (uncommitted now) or `"merge-base"` (the PR delta). */
     diff: (ticketId: string, mode: WorktreeDiffMode): Promise<WorktreeDiffResult> =>
       invoke("volli:worktree-diff", { ticketId, mode }),
+    /** Composed Change Set snapshot relative to the ticket's recorded base. */
+    changeSet: (ticketId: string): Promise<WorktreeChangeSetResult> =>
+      invoke("volli:worktree-change-set", { ticketId }),
+    /** Reads one path at the Change Set base revision without mutating the checkout. */
+    baseRead: (ticketId: string, path: string): Promise<WorktreeBaseReadResult> =>
+      invoke("volli:worktree-base-read", { ticketId, path }),
+    /** Debounced recursive watch on the ticket worktree; pair with `unwatchChangeSet` on leave. */
+    watchChangeSet: (ticketId: string): Promise<Result> =>
+      invoke("volli:worktree-change-watch", { ticketId }),
+    unwatchChangeSet: (ticketId: string): Promise<Result> =>
+      invoke("volli:worktree-change-unwatch", { ticketId }),
+    /** Subscribes to debounced worktree filesystem changes for Change Set refresh. */
+    onChanged: (callback: (event: WorktreeChangedEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: WorktreeChangedEvent) =>
+        callback(payload);
+      ipcRenderer.on("volli:worktree-changed" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:worktree-changed" satisfies VolliIpcEvent, listener);
+    },
     /** Done flow: the one-click "commit remaining work" safety net (fixed chore message). */
     commit: (ticketId: string): Promise<WorktreeCommitResult> =>
       invoke("volli:worktree-commit", { ticketId }),

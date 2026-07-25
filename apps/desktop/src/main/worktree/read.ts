@@ -19,11 +19,14 @@
 import { existsSync } from "node:fs";
 
 import type Database from "better-sqlite3";
-import { displayTicketId, type DiffStat } from "@volli/shared";
+import { displayTicketId, type ChangeSetSnapshot, type DiffStat } from "@volli/shared";
 
 import { getProjectById } from "../db/projects-repo";
 import { getTicketRow } from "../db/tickets-repo";
+import { changeSetSnapshot, readChangeSetBaseFile, type ChangeSetBaseFile } from "./change-set";
+import { resolveComparisonRef } from "./comparison-ref";
 import { diffStat, type DiffMode } from "./diff";
+import { stderrOf } from "./git";
 import { getWorktreeStatus, type WorktreeStatusReport } from "./status";
 import type { RunGit } from "./types";
 
@@ -63,6 +66,18 @@ export type WorktreeDiffRead =
   | WorktreeReadFailure
   | { kind: "diff-error"; displayId: string; error: string }
   | { kind: "ok"; displayId: string; baseBranch: string | null; diff: DiffStat };
+
+/** The discriminated result of {@link readWorktreeChangeSet}. */
+export type WorktreeChangeSetRead =
+  | WorktreeReadFailure
+  | { kind: "change-set-error"; displayId: string; error: string }
+  | { kind: "ok"; displayId: string; changeSet: ChangeSetSnapshot };
+
+/** The discriminated result of {@link readWorktreeBaseFile}. */
+export type WorktreeBaseFileRead =
+  | WorktreeReadFailure
+  | { kind: "base-read-error"; displayId: string; error: string }
+  | { kind: "ok"; displayId: string; baseRevision: string; file: ChangeSetBaseFile };
 
 /** The resolved, on-disk worktree identity a read verb git-queries against. */
 interface ReadTarget {
@@ -158,5 +173,77 @@ export function readWorktreeDiff(
     displayId: target.displayId,
     baseBranch: target.baseBranch,
     diff: result.value,
+  };
+}
+
+/**
+ * Composes the unified Change Set snapshot for a ticket: resolves identity,
+ * discriminates no-worktree / missing-on-disk, then runs {@link changeSetSnapshot}.
+ */
+export function readWorktreeChangeSet(
+  deps: WorktreeReadDeps,
+  ticketId: string,
+): WorktreeChangeSetRead {
+  const resolved = resolveReadTarget(deps, ticketId);
+  if (resolved.kind !== "ok") return resolved;
+  const { target } = resolved;
+  const result = changeSetSnapshot(deps.git, {
+    worktreePath: target.worktreePath,
+    baseBranch: target.baseBranch,
+  });
+  if (!result.ok) {
+    return { kind: "change-set-error", displayId: target.displayId, error: result.error };
+  }
+  return { kind: "ok", displayId: target.displayId, changeSet: result.value };
+}
+
+/**
+ * Reads one path at the ticket Change Set's stamped base revision. Resolves
+ * the same identity/disk checks as the other read verbs, resolve-and-stamps
+ * the comparison base (same as {@link changeSetSnapshot}), then runs
+ * {@link readChangeSetBaseFile} without mutating the checkout.
+ */
+export function readWorktreeBaseFile(
+  deps: WorktreeReadDeps,
+  ticketId: string,
+  path: string,
+): WorktreeBaseFileRead {
+  const resolved = resolveReadTarget(deps, ticketId);
+  if (resolved.kind !== "ok") return resolved;
+  const { target } = resolved;
+  if (!target.baseBranch) {
+    return {
+      kind: "base-read-error",
+      displayId: target.displayId,
+      error: "No base branch is known for this worktree, so its Change Set cannot be computed.",
+    };
+  }
+  let baseRevision: string;
+  try {
+    const comparisonRef = resolveComparisonRef(deps.git, target.worktreePath, target.baseBranch);
+    if (!comparisonRef) {
+      return {
+        kind: "base-read-error",
+        displayId: target.displayId,
+        error: "No base branch is known for this worktree, so its Change Set cannot be computed.",
+      };
+    }
+    baseRevision = deps.git(["rev-parse", comparisonRef], target.worktreePath).trim();
+  } catch (caught) {
+    return { kind: "base-read-error", displayId: target.displayId, error: stderrOf(caught) };
+  }
+  const file = readChangeSetBaseFile(deps.git, {
+    worktreePath: target.worktreePath,
+    baseRevision,
+    path,
+  });
+  if (!file.ok) {
+    return { kind: "base-read-error", displayId: target.displayId, error: file.error };
+  }
+  return {
+    kind: "ok",
+    displayId: target.displayId,
+    baseRevision,
+    file: file.value,
   };
 }
