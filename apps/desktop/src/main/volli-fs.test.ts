@@ -498,6 +498,18 @@ describe("writeFile", () => {
     expect(await readFile(join(project, "data.txt"))).toEqual(bytes);
   });
 
+  // The write guard must scan as far as the reader does, not just the cheap
+  // 64 KiB prefix: a NUL past that window is still a binary file, and stopping
+  // early would let an overwrite clobber it.
+  it("refuses a file whose first NUL sits PAST the binary-sniff window", async () => {
+    const project = makeTempProjectDir();
+    const bytes = Buffer.concat([Buffer.alloc(200 * 1024, 0x41), Buffer.from([0x00, 0x42])]);
+    await writeFile(join(project, "late-nul.bin"), bytes);
+    const result = await writeFsFile(project, null, "late-nul.bin", "clobber");
+    expect(result).toEqual({ ok: false, error: "Binary files cannot be edited" });
+    expect(await readFile(join(project, "late-nul.bin"))).toEqual(bytes);
+  });
+
   it("rejects incoming content past the 1 MiB cap without touching the file", async () => {
     const project = makeTempProjectDir();
     await writeFile(join(project, "notes.md"), "small", "utf8");

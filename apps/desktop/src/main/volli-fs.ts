@@ -471,25 +471,34 @@ async function statOrNull(path: string): Promise<import("node:fs").Stats | null>
  * silently drop its tail; large-file editing stays deliberately unsupported),
  * and on-disk binary was rendered as a stub, never as text.
  *
- * Deliberately CHEAP, because it runs on every write and autosave commits every
- * ~1.5s: the size verdict comes from the `stat` the caller already took (no
- * read at all), and the NUL sniff reads a bounded prefix rather than re-reading
- * up to a megabyte per keystroke-batch. For any file under
- * {@link BINARY_SNIFF_BYTES} — every artifact, essentially every source file —
- * the prefix IS the whole file, so the guard is byte-for-byte as strong as a
- * full scan; past that it narrows to the same leading-window heuristic git
- * itself uses for binary detection (git sniffs an even shorter 8000 bytes).
- * The residual gap is a file whose first NUL sits past the window, which
- * {@link readContent} (full-buffer sniff) would still refuse to show as text,
- * so no such tab can exist to save from.
+ * The binary verdict is EXACTLY {@link readContent}'s — a NUL anywhere in the
+ * same window the reader would have served. Deliberately not stricter: a stricter
+ * write guard would make a file the editor happily shows unwritable, stranding
+ * the draft with no way out. Not looser either, which is what the sniff window
+ * below is careful about.
+ *
+ * Cheap in the case that matters. The size verdict comes from the `stat` the
+ * caller already took (no read at all). For a file within
+ * {@link BINARY_SNIFF_BYTES} — every artifact, essentially every source file,
+ * and so every ~1.5s autosave commit — the prefix IS the whole file, so one
+ * short read settles it. Only a file past that window pays the full scan, and
+ * those are explicit-save documents, not the autosave hot path.
+ *
+ * An earlier revision stopped at the prefix for every size and argued the gap
+ * was unreachable because `readContent` full-scans, so no tab could exist to
+ * save from. True today, but it made a data-integrity guarantee here depend on
+ * another function's behavior staying put — so the scan is local again.
  */
 async function assertTextWritable(
   filePath: string,
   size: number,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   if (size > TEXT_CAP_BYTES) return { ok: false, error: "File is too large to edit (over 1 MiB)" };
-  const prefix = await readPrefix(filePath, BINARY_SNIFF_BYTES);
-  if (prefix.includes(0)) return { ok: false, error: "Binary files cannot be edited" };
+  const sniffed =
+    size <= BINARY_SNIFF_BYTES
+      ? await readPrefix(filePath, BINARY_SNIFF_BYTES)
+      : (await readCapped(filePath, TEXT_CAP_BYTES, size)).buf;
+  if (sniffed.includes(0)) return { ok: false, error: "Binary files cannot be edited" };
   return { ok: true };
 }
 
