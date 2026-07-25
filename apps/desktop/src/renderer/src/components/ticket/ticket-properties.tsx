@@ -10,6 +10,7 @@ import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import { toast } from "sonner";
 import {
+  changeSetToDiffStat,
   errorMessage,
   TICKET_PRIORITIES,
   TICKET_PRIORITY_LABELS,
@@ -437,11 +438,13 @@ function RetentionNoticeLine({ notice }: { notice: RetentionNotice }) {
  * #45): one merge-base context line plus one adaptive split button — a primary
  * action whose label is the whole next step, and a chevron menu unbundling the
  * individual verbs. Rendered only once the ticket has a worktree. Lazy-loads
- * `status` + the merge-base diff on mount (the `BaseBranchField` precedent —
+ * `status` + the composed Change Set on mount (the `BaseBranchField` precedent —
  * fetch on first appearance rather than riding along in the boot payload) and
- * refetches after every action so the summary never goes stale. All fetch/busy
- * state is component-local (dialog-state-local convention: no global store)
- * since it's read fresh whenever this section is visible.
+ * refetches after every action so the summary never goes stale. The summary is
+ * projected from the same Change Set snapshot the Changes navigator reads
+ * (`changeSetToDiffStat`) so Properties and Changes cannot disagree (#108).
+ * All fetch/busy state is component-local (dialog-state-local convention: no
+ * global store) since it's read fresh whenever this section is visible.
  */
 function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
   const [status, setStatus] = React.useState<WorktreeStatusSnapshot | null>(null);
@@ -457,24 +460,24 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
   const { state: retention, reload: reloadRetention } = useTicketRetention(ticket.id, true);
   const planningChange = useBoardStore((store) => store.lastPlanningChange);
 
-  /** The git-spawning half of the summary: `worktree.status` + the merge-base diff. */
+  /** The git-spawning half of the summary: `worktree.status` + composed Change Set. */
   const refreshStatusAndDiff = React.useCallback(async () => {
     try {
-      const [statusResult, diffResult] = await Promise.all([
+      const [statusResult, changeSetResult] = await Promise.all([
         window.api.worktree.status(ticket.id),
-        window.api.worktree.diff(ticket.id, "merge-base"),
+        window.api.worktree.changeSet(ticket.id),
       ]);
       if (!statusResult.ok) {
         setLoadError(statusResult.error);
         return;
       }
-      if (!diffResult.ok) {
-        setLoadError(diffResult.error);
+      if (!changeSetResult.ok) {
+        setLoadError(changeSetResult.error);
         return;
       }
       setLoadError(null);
       setStatus(statusResult.status);
-      setDiff(diffResult.diff);
+      setDiff(changeSetToDiffStat(changeSetResult.changeSet));
     } catch (error) {
       setLoadError(errorMessage(error));
     }

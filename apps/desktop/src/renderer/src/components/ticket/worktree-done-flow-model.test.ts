@@ -1,4 +1,5 @@
 import type { DiffStat } from "@volli/shared";
+import { changeSetToDiffStat } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -261,5 +262,35 @@ describe("formatMergeBaseSummary", () => {
       }),
     );
     expect(summary).toBe("3 files · +1 −0 · +2 binary/untracked");
+  });
+
+  it("agrees with a Change Set snapshot projected through changeSetToDiffStat", () => {
+    // Properties and Changes must share one composed model (#108 AC).
+    const summary = formatMergeBaseSummary(
+      changeSetToDiffStat({
+        baseRevision: "base",
+        headRevision: "head",
+        revision: "rev",
+        insertions: 11,
+        deletions: 2,
+        files: [
+          {
+            path: "a.ts",
+            status: "modified",
+            insertions: 10,
+            deletions: 2,
+            binary: false,
+          },
+          {
+            path: "b.ts",
+            status: "added",
+            insertions: 1,
+            deletions: 0,
+            binary: false,
+          },
+        ],
+      }),
+    );
+    expect(summary).toBe("2 files · +11 −2");
   });
 });
