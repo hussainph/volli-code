@@ -87,3 +87,31 @@ _Avoid_: agent (as an actor value — the app cannot know an agent typed it, onl
 **Deliberate move**:
 A human drag or explicit `volli` move, as opposed to a lifecycle-driven auto-move. It carries the same semantics regardless of actor and wins over trailing lifecycle events.
 _Avoid_: manual move (too narrow — implies human-only)
+
+**Automation**:
+A saved, named way of starting work on a ticket, made of four parts: the Trigger (which columns it applies to, and whether it may fire unattended), its Instructions, its Runtime, and its Outcome. An Automation removes the repetitive setup of composing a prompt and picking a harness, model, and effort — it does not remove the person. Running one always opens a Session the user is expected to work inside, watch, and interrupt; it is never a silent background job.
+_Avoid_: recipe, preset, workflow, template, pipeline
+
+**Armed automation**:
+The single Automation a column fires on its own when a ticket arrives there by Deliberate move. A column has at most one, or none — in which case an arriving ticket is a pure status change and any Automation must be chosen by hand. Arming a column is not retroactive: it governs tickets that arrive afterward, never those already sitting there.
+_Avoid_: default automation (collides with the project's default harness and default base branch)
+
+**Instructions**:
+The prompt an Automation sends when it opens its Session: authored prose, Context Chips, and commands belonging to its pinned harness. Every Automation starts from an opinionated default that already carries the ticket's own context, so composing it by hand is optional.
+_Avoid_: prompt template, Ticket Body, Runtime Brief
+
+**Context chip**:
+A placeholder in an Automation's Instructions that resolves at launch to live ticket state — the Runtime Brief, Change Set, comment timeline, or pull request. A chip is always a reference resolved at launch, never a stored copy.
+_Avoid_: variable, macro, Attachment
+
+**Runtime**:
+An Automation's execution setting: one pinned harness plus that harness's own model and effort expression. The harness is pinned because Instructions are written in its dialect and do not port; model and effort are defaults that may be overridden at the moment the Automation is invoked.
+_Avoid_: agent, harness (alone), model (alone)
+
+**Run**:
+One invocation of an Automation against one ticket, and the record of which Automation and Runtime produced a given Session. A Run owns exactly one Session and carries that Automation's Outcome if it has one; only that Session finishing can resolve it. A ticket has at most one Run in flight at a time. Runs outlive the app: one whose Session died is interrupted, never lost, and only a human restarts it. Sessions a user starts by hand belong to no Run and never move the board.
+_Avoid_: job, task, session (a Run has a Session — it is not one)
+
+**Outcome**:
+What a Run does to its ticket once its agent hands control back: move it to a named column, announce it and stay put, or nothing at all. An Outcome has one arm per way a Run can end — completed, blocked, or ended without signalling — so a Run that stalls is never mistaken for one that succeeded. It is a contract the Run carries from the moment it launches, never a property of the ticket or of the column it lands in.
+_Avoid_: result, action, auto-move
