@@ -36,9 +36,11 @@
  *      alive (the overlay hosts terminals, the detail is only a view over it).
  *   7. Session rename — double-click the session tab, type, Enter; the new title
  *      shows on both the tab and the rail row.
- *   8. Rail + Details — the right rail is sessions-first with a collapsed-by-
- *      default "Details" drawer holding status/priority/labels; NO harness row
- *      anywhere, and the board filter bar has NO Harness chip.
+ *   8. Icon-mode rail — Sessions is the default mode; Properties renders
+ *      status/priority in the rail; NO harness row anywhere, and the board
+ *      filter bar has NO Harness chip. Mode switches never steal the active
+ *      main-view tab (decision #46). A persisted active:"doc" still restores
+ *      the Ticket Body tab.
  *   9. Nav history — the chrome bar's ←/→ buttons (and ⌘[ / ⌘]) traverse
  *      ticket open/close snapshots.
  *  10. Rail toggle — the chrome bar's mirrored rail button and ⌥⌘B hide/show the
@@ -862,18 +864,17 @@ async function main() {
         const noFalseClaude = (await aside.getByText("Claude Code", { exact: true }).count()) === 0;
 
         // Active Sessions intentionally indexes Doing/Needs Review work only.
-        // Put this live shell ticket into Doing through the real property UI,
-        // then collapse Details again so the later rail-default check remains
-        // meaningful.
-        const details = aside.getByRole("button", { name: "Details", exact: true });
-        await details.click();
+        // Put this live shell ticket into Doing through the real property UI
+        // (Properties icon mode), then return to Sessions so later checks that
+        // expect the session list stay meaningful.
+        await aside.getByTestId("ticket-rail-mode-properties").click();
         await aside.getByRole("button", { name: "Todo", exact: true }).click();
         await page.getByRole("menuitemradio", { name: "Doing", exact: true }).click();
         const doing = await waitUntil("ticket moves to Doing", async () => {
           const persisted = await readTicket(page, TICKET_ID);
           return persisted?.status === "doing";
         });
-        await details.click();
+        await aside.getByTestId("ticket-rail-mode-sessions").click();
 
         const ok =
           envOk && aliveOk && railRow && railChip && shellSource && noFalseClaude && !!doing;
@@ -1074,28 +1075,29 @@ async function main() {
     );
 
     // ===================================================================
-    // 8. RAIL IS SESSIONS-FIRST — Details drawer + no harness anywhere
+    // 8. ICON-MODE RAIL — Sessions default + Properties + no harness
     // ===================================================================
     await attempt(
       8,
-      "Rail: sessions-first with a collapsed-by-default Details drawer (status/priority/labels); no Harness row anywhere; board filter bar has no Harness chip",
+      "Rail: icon-mode Sessions default with Properties metadata in-rail; no Harness row anywhere; board filter bar has no Harness chip",
       async () => {
         const aside = page.locator("aside");
-        // Sessions section is present at the top of the rail.
+        // Sessions mode is the default — heading present, mode strip pressed.
         const sessionsHeading =
           (await aside.getByRole("heading", { name: "Sessions" }).count()) >= 1;
+        const sessionsPressed =
+          (await aside.getByTestId("ticket-rail-mode-sessions").getAttribute("aria-pressed")) ===
+          "true";
 
-        // Details drawer: collapsed by default (aria-expanded=false), its
-        // status/priority controls not shown until expanded.
-        const detailsButton = aside.getByRole("button", { name: "Details", exact: true });
-        const collapsedByDefault = (await detailsButton.getAttribute("aria-expanded")) === "false";
-        await detailsButton.click();
-        const expanded = await waitUntil("Details drawer expands", async () => {
+        // Properties mode renders status/priority directly in the rail (decision #46).
+        await aside.getByTestId("ticket-rail-mode-properties").click();
+        const propertiesShown = await waitUntil("Properties mode content", async () => {
           return (
             (await aside.getByText("Status", { exact: false }).count()) >= 1 &&
             (await aside.getByText("Priority", { exact: false }).count()) >= 1
           );
         });
+        await aside.getByTestId("ticket-rail-mode-sessions").click();
 
         // No harness identity anywhere in the ticket detail rail.
         const noHarnessInRail = (await aside.getByText(/harness/i).count()) === 0;
@@ -1107,13 +1109,139 @@ async function main() {
 
         const ok =
           sessionsHeading &&
-          collapsedByDefault &&
-          !!expanded &&
+          sessionsPressed &&
+          !!propertiesShown &&
           noHarnessInRail &&
           noHarnessOnBoard;
         return {
           ok,
-          detail: `sessions=${sessionsHeading} collapsed=${collapsedByDefault} expanded=${!!expanded} railNoHarness=${noHarnessInRail} boardNoHarness=${noHarnessOnBoard}`,
+          detail: `sessions=${sessionsHeading} pressed=${sessionsPressed} properties=${!!propertiesShown} railNoHarness=${noHarnessInRail} boardNoHarness=${noHarnessOnBoard}`,
+        };
+      },
+    );
+
+    // ===================================================================
+    // 8b. DECISION #46 — rail mode switch never steals the active tab
+    // ===================================================================
+    await attempt(
+      "8b",
+      "Rail mode switch never changes the active main-view tab (decision #46)",
+      async () => {
+        if (!(await detailOpen(page))) await openTicketViaCard(page);
+        const aside = page.locator("aside");
+
+        // Land on the Ticket Body tab so we have a stable active id to watch.
+        await docTab(page).click();
+        await waitUntil("Ticket Body tab selected", async () => {
+          return (await docTab(page).getAttribute("aria-selected")) === "true";
+        });
+
+        const modes = ["files", "changes", "properties", "sessions"];
+        for (const mode of modes) {
+          await aside.getByTestId(`ticket-rail-mode-${mode}`).click();
+          const stillBody = await waitUntil(
+            `Ticket Body still active after ${mode} mode`,
+            async () => (await docTab(page).getAttribute("aria-selected")) === "true",
+          ).catch(() => null);
+          if (!stillBody) {
+            return {
+              ok: false,
+              detail: `active tab stolen after switching to ${mode}`,
+            };
+          }
+        }
+
+        // Files/Changes placeholders must not open a file/diff tab either.
+        const fileTabs = await page
+          .getByRole("tab")
+          .evaluateAll((tabs) => tabs.map((t) => t.getAttribute("aria-label") ?? ""));
+        const noAutoFile = fileTabs.every(
+          (label) => label === DISPLAY_ID || label === SESSION_INITIAL || label === SESSION_RENAMED,
+        );
+
+        return {
+          ok: noAutoFile,
+          detail: `modes=${modes.join(",")} tabs=${JSON.stringify(fileTabs)} noAutoFile=${noAutoFile}`,
+        };
+      },
+    );
+
+    // ===================================================================
+    // 8c. LEGACY "doc" WIRE KEY — Ticket Body still restores
+    // ===================================================================
+    await attempt(
+      "8c",
+      'Persisted active:"doc" still restores the Ticket Body tab after rename',
+      async () => {
+        if (!(await detailOpen(page))) await openTicketViaCard(page);
+
+        // Switch away from the body so we can prove restore, not a sticky default.
+        const sessionTab = page.getByRole("tab", { name: SESSION_RENAMED, exact: true });
+        if ((await sessionTab.count()) === 1) {
+          await sessionTab.click();
+          await waitUntil("session tab selected before legacy write", async () => {
+            return (await sessionTab.getAttribute("aria-selected")) === "true";
+          });
+        }
+
+        const wrote = await page.evaluate(async (ticketId) => {
+          const boot = await window.api.data.bootstrap();
+          if (!boot.ok) return { ok: false, error: boot.error };
+          const raw = boot.data.appState["volli:workspace"];
+          if (typeof raw !== "string") return { ok: false, error: "no workspace state" };
+          const parsed = JSON.parse(raw);
+          const byProject = parsed?.state?.byProject;
+          if (!byProject || typeof byProject !== "object") {
+            return { ok: false, error: "no byProject" };
+          }
+          const projectId = Object.keys(byProject)[0];
+          if (!projectId) return { ok: false, error: "empty byProject" };
+          const ui = byProject[projectId];
+          const existing = ui.ticketTabs?.[ticketId] ?? { files: [] };
+          ui.ticketTabs = {
+            ...(ui.ticketTabs ?? {}),
+            // Literal legacy wire value — what real upgrades still have on disk.
+            [ticketId]: { files: existing.files ?? [], active: "doc" },
+          };
+          ui.openTicketId = ticketId;
+          const next = JSON.stringify(parsed);
+          const set = await window.api.appState.set("volli:workspace", next);
+          return { ok: set.ok, error: set.ok ? undefined : set.error, projectId };
+        }, TICKET_ID);
+
+        if (!wrote.ok) {
+          return { ok: false, detail: `write failed: ${wrote.error}` };
+        }
+
+        await page.reload();
+        await page.waitForLoadState("domcontentloaded");
+        const restored = await waitUntil(
+          "Ticket Body tab after legacy doc rehydrate",
+          async () => {
+            if (!(await detailOpen(page))) return false;
+            return (await docTab(page).getAttribute("aria-selected")) === "true";
+          },
+          { timeout: 20000 },
+        );
+
+        // Confirm the store still holds the wire id (compatibility, not migration-away).
+        const active = await page.evaluate(async (ticketId) => {
+          const boot = await window.api.data.bootstrap();
+          if (!boot.ok) return null;
+          const raw = boot.data.appState["volli:workspace"];
+          if (typeof raw !== "string") return null;
+          const parsed = JSON.parse(raw);
+          for (const ui of Object.values(parsed?.state?.byProject ?? {})) {
+            const tabs = ui?.ticketTabs?.[ticketId];
+            if (tabs) return tabs.active;
+          }
+          return null;
+        }, TICKET_ID);
+
+        const ok = !!restored && active === "doc";
+        return {
+          ok,
+          detail: `restored=${!!restored} active=${JSON.stringify(active)}`,
         };
       },
     );
