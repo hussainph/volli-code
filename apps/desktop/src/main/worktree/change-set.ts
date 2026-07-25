@@ -103,9 +103,10 @@ export function changeSetSnapshot(
 /**
  * Reads a file's contents at `baseRevision` without mutating the checkout
  * (`git show <rev>:<path>` — never `git checkout`). Path containment rejects
- * absolute paths and `..` traversal. A path absent at the base returns
- * `{ missing: true }` (added/untracked originals); other git failures surface
- * real stderr.
+ * absolute paths and `..` traversal. Absence at the base is decided structurally
+ * via `git cat-file -e <rev>:<path>` (exit status only — never English stderr
+ * matching, which breaks under non-C locales). Other git failures surface real
+ * stderr.
  */
 export function readChangeSetBaseFile(
   git: RunGit,
@@ -114,13 +115,23 @@ export function readChangeSetBaseFile(
   if (!isSafeRepoRelativePath(input.path)) {
     return err("Path is outside the worktree.");
   }
+  const object = `${input.baseRevision}:${input.path}`;
   try {
-    const content = git(["show", `${input.baseRevision}:${input.path}`], input.worktreePath);
+    git(["cat-file", "-e", object], input.worktreePath);
+  } catch (probeError) {
+    // Path probe failed — distinguish "rev ok, path absent" from "rev invalid".
+    try {
+      git(["cat-file", "-e", input.baseRevision], input.worktreePath);
+      return ok({ missing: true });
+    } catch {
+      return err(stderrOf(probeError));
+    }
+  }
+  try {
+    const content = git(["show", object], input.worktreePath);
     return ok({ content });
   } catch (caught) {
-    const message = stderrOf(caught);
-    if (isMissingAtRevision(message)) return ok({ missing: true });
-    return err(message);
+    return err(stderrOf(caught));
   }
 }
 
@@ -131,16 +142,6 @@ function isSafeRepoRelativePath(path: string): boolean {
   if (isAbsolute(normalized)) return false;
   const parts = normalized.split(sep);
   return !parts.some((part) => part === "..");
-}
-
-/** git show's "path does not exist in 'rev'" (and close cousins). */
-function isMissingAtRevision(message: string): boolean {
-  const lower = message.toLowerCase();
-  return (
-    lower.includes("does not exist") ||
-    lower.includes("exists on disk, but not in") ||
-    lower.includes("path not in")
-  );
 }
 
 function composeFiles(

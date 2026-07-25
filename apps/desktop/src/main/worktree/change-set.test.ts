@@ -338,6 +338,7 @@ describe("changeSetSnapshot — failures", () => {
 describe("readChangeSetBaseFile", () => {
   it("reads file contents at the base revision via git show", () => {
     const { git, calls } = scriptedGit((args) => {
+      if (args[0] === "cat-file") return "";
       if (args[0] === "show") return "hello from base\n";
       return "";
     });
@@ -351,7 +352,10 @@ describe("readChangeSetBaseFile", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value).toEqual({ content: "hello from base\n" });
-    expect(calls[0]?.args).toEqual(["show", "basesha:src/a.ts"]);
+    expect(calls.map((c) => c.args)).toEqual([
+      ["cat-file", "-e", "basesha:src/a.ts"],
+      ["show", "basesha:src/a.ts"],
+    ]);
   });
 
   it("rejects path traversal outside the worktree", () => {
@@ -367,9 +371,14 @@ describe("readChangeSetBaseFile", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("returns missing when the path is absent at the base revision", () => {
-    const { git } = scriptedGit((args) => {
-      throw new GitError("failed", "fatal: path 'src/new.ts' does not exist in 'basesha'", args);
+  it("returns missing via cat-file probe without depending on stderr locale", () => {
+    const { git, calls } = scriptedGit((args) => {
+      if (args[0] === "cat-file" && args[2]?.includes(":")) {
+        // Non-English / nonsense stderr — must not be required for missing detection.
+        throw new GitError("failed", "fatal: Pfad existiert nicht in 'basesha'", args);
+      }
+      if (args[0] === "cat-file") return ""; // revision itself exists
+      return "";
     });
     const result = readChangeSetBaseFile(git, {
       worktreePath: "/wt",
@@ -379,9 +388,11 @@ describe("readChangeSetBaseFile", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value).toEqual({ missing: true });
+    expect(calls.map((c) => c.args[0])).toEqual(["cat-file", "cat-file"]);
+    expect(calls.some((c) => c.args[0] === "show")).toBe(false);
   });
 
-  it("surfaces real git stderr for non-missing failures", () => {
+  it("surfaces real git stderr when the base revision itself is invalid", () => {
     const { git } = scriptedGit((args) => {
       throw new GitError("failed", "fatal: bad object basesha", args);
     });
