@@ -194,6 +194,50 @@ describe("changeSetSnapshot — renames, binaries, additions, deletions", () => 
   });
 });
 
+describe("changeSetSnapshot — conflicted / unrecognized status", () => {
+  it("surfaces unmerged (U) paths as conflicted instead of dropping them", () => {
+    const { git } = scriptedChangeSetGit({
+      nameStatus: z("U", "src/conflict.ts"),
+      numstat: z("1\t1\tsrc/conflict.ts"),
+    });
+
+    const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.files).toEqual([
+      {
+        path: "src/conflict.ts",
+        status: "conflicted",
+        insertions: 1,
+        deletions: 1,
+        binary: false,
+      },
+    ]);
+  });
+
+  it("never silently drops an unrecognized name-status code", () => {
+    const { git } = scriptedChangeSetGit({
+      nameStatus: z("X", "src/weird.ts"),
+      numstat: z("0\t0\tsrc/weird.ts"),
+    });
+
+    const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.files).toEqual([
+      {
+        path: "src/weird.ts",
+        status: "conflicted",
+        insertions: 0,
+        deletions: 0,
+        binary: false,
+      },
+    ]);
+  });
+});
+
 describe("changeSetSnapshot — untracked", () => {
   it("appends untracked paths from porcelain v2 with null counts", () => {
     const path = "new file.txt";

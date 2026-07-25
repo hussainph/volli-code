@@ -8,8 +8,14 @@
 import type { DiffFileStat, DiffStat } from "./ticket-events";
 
 /** One file's outcome inside a {@link ChangeSetSnapshot}. */
-export type ChangeSetFileStatus = "added" | "modified" | "deleted" | "renamed" | "untracked";
-
+export type ChangeSetFileStatus =
+  | "added"
+  | "modified"
+  | "deleted"
+  | "renamed"
+  | "untracked"
+  /** Unmerged / conflicted path (git name-status `U`, or an unrecognized code we refuse to drop). */
+  | "conflicted";
 /**
  * One path in a Change Set. `insertions`/`deletions` are `null` for binary
  * files (`git diff --numstat` prints `-\t-`) and typically for untracked files

@@ -190,8 +190,9 @@ function parseNameStatus(out: string): ParsedNameStatus[] {
     }
     const path = tokens[i++] ?? "";
     if (path.length === 0) continue;
-    const status = statusFromCode(kind);
-    if (status) entries.push({ status, path });
+    // statusFromCode never returns null — unrecognized codes become conflicted
+    // so they cannot vanish from the snapshot (never silently swallow).
+    entries.push({ status: statusFromCode(kind), path });
   }
   return entries;
 }
@@ -248,7 +249,12 @@ function parseUntracked(out: string): ChangeSetFile[] {
   return files;
 }
 
-function statusFromCode(kind: string): ChangeSetFileStatus | null {
+/**
+ * Maps a git name-status letter to a Change Set status. Unmerged (`U`) and any
+ * unrecognized future code become `"conflicted"` — never `null`, so a path can
+ * never disappear from the snapshot without a trace.
+ */
+function statusFromCode(kind: string): ChangeSetFileStatus {
   switch (kind) {
     case "A":
       return "added";
@@ -257,8 +263,10 @@ function statusFromCode(kind: string): ChangeSetFileStatus | null {
       return "modified";
     case "D":
       return "deleted";
+    case "U":
+      return "conflicted";
     default:
-      return null;
+      return "conflicted";
   }
 }
 
