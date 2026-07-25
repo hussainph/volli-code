@@ -581,4 +581,43 @@ describe("DocumentRegistry", () => {
     });
     expect(registry.peek(artifact.snapshot().identity)?.snapshot().dirty).toBe(false);
   });
+
+  it("lets a host flush markSaved via peek after last-view release without discard", () => {
+    // React runs child cleanups before parent: MonacoDocumentEditor must not
+    // discard() on last-view unmount, or FileView's subsequent flush cannot
+    // markSaved via registry.peek after a successful write (lease already null
+    // on the editor handle). Park dirty, then clear through peek — the same
+    // ordering the unmount flush relies on.
+    const { registry } = makeRegistry();
+    const identity: DocumentIdentity = {
+      kind: "file",
+      projectId: "project-1",
+      checkout: { kind: "main" },
+      relPath: ".volli/artifacts/notes.md",
+    };
+    const artifact = registry.acquire({
+      identity,
+      viewId: "artifact",
+      seed: { value: "hello", revision: 10 },
+      savePolicy: "autosave",
+    });
+    artifact.model.setValue("hello world");
+    // No discard — mirrors the fixed autosave editor cleanup.
+    artifact.release();
+
+    const handle = registry.peek(identity);
+    expect(handle?.snapshot()).toMatchObject({
+      dirty: true,
+      baseline: "hello",
+      externalRevision: 10,
+      viewReferences: 0,
+      savePolicy: "autosave",
+    });
+    expect(handle?.model?.getValue()).toBe("hello world");
+
+    handle?.markSaved(11);
+
+    expect(entryCount(registry)).toBe(0);
+    expect(registry.peek(identity)).toBeNull();
+  });
 });

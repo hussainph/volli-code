@@ -4,11 +4,11 @@ import type { Ticket } from "@volli/shared";
 
 import {
   type DocumentFileRefs,
-  type MonacoDocumentEditorHandle,
   MonacoDocumentEditor,
 } from "@renderer/components/editor/monaco-document-editor";
 import { Button } from "@renderer/components/ui/button";
 import { AUTOSAVE_IDLE_MS, planAutosave } from "@renderer/editor/autosave-plan";
+import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { useDebouncedCallback } from "@renderer/lib/use-debounced-callback";
 import { useBoardStore } from "@renderer/stores/board";
 
@@ -43,7 +43,6 @@ export function TicketBodyEditor({
   fileRefs?: DocumentFileRefs;
 }) {
   const updateTicket = useBoardStore((state) => state.updateTicket);
-  const editorRef = React.useRef<MonacoDocumentEditorHandle>(null);
 
   // The value that seeds / resets the editor doc; changing it re-syncs the
   // editor's buffer when it isn't focused (or, if focused-but-untouched, on blur
@@ -79,6 +78,24 @@ export function TicketBodyEditor({
     setConflict(external);
   }, [ticket.body]);
 
+  /**
+   * Clear registry dirty via `peek`, not the editor ref. React runs child
+   * cleanups first: on unmount the Monaco editor has already released its lease
+   * before this host's debounced flush runs `save`, so an imperative
+   * `editorRef.markSaved` would no-op and leave the ticket-body entry parked dirty.
+   */
+  const markBodySaved = React.useCallback(() => {
+    void loadMonacoRuntime()
+      .then((runtime) => {
+        runtime.registry
+          .peek({ kind: "ticket-body", projectId: ticket.projectId, ticketId: ticket.id })
+          ?.markSaved(null);
+      })
+      .catch(() => {
+        // Monaco never loaded — nothing in the registry to clear.
+      });
+  }, [ticket.projectId, ticket.id]);
+
   const save = React.useCallback(() => {
     const next = draftRef.current;
     // `writing: false` — `updateTicket` is fire-and-forget through the store, so
@@ -94,9 +111,9 @@ export function TicketBodyEditor({
     lastSavedRef.current = next;
     // Keep the registry baseline in step with the store write so a later peek
     // does not see a permanently dirty ticket-body document.
-    editorRef.current?.markSaved(null);
+    markBodySaved();
     void updateTicket({ ticketId: ticket.id, body: next });
-  }, [updateTicket, ticket.id]);
+  }, [updateTicket, ticket.id, markBodySaved]);
 
   const debouncer = useDebouncedCallback(save, AUTOSAVE_IDLE_MS);
 
@@ -136,7 +153,6 @@ export function TicketBodyEditor({
           box (see MonacoDocumentEditor). */}
       <div className="-mx-3 rounded-md px-3">
         <MonacoDocumentEditor
-          ref={editorRef}
           identity={{ kind: "ticket-body", projectId: ticket.projectId, ticketId: ticket.id }}
           viewId={`ticket-body:${ticket.id}`}
           value={docValue}

@@ -10,12 +10,12 @@ import {
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import {
   type DocumentFileRefs,
-  type MonacoDocumentEditorHandle,
   MonacoDocumentEditor,
 } from "@renderer/components/editor/monaco-document-editor";
 import { Button } from "@renderer/components/ui/button";
 import { AUTOSAVE_IDLE_MS, planAutosave } from "@renderer/editor/autosave-plan";
 import { documentIdentityKey, fileDocumentIdentity } from "@renderer/editor/document-identity";
+import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { toastError } from "@renderer/lib/toast";
 import { useDebouncedCallback } from "@renderer/lib/use-debounced-callback";
 
@@ -121,7 +121,6 @@ export function FileView({
   // event may replace the view with the read-only error state.
   const sourceDirtyRef = React.useRef(false);
   const writingRef = React.useRef(false);
-  const documentEditorRef = React.useRef<MonacoDocumentEditorHandle>(null);
   const mountedRef = React.useRef(true);
   // Mirrors `state` for the fs-watch subscription (set up once, so it can't
   // read the current `state` off a render closure) — only its `.status` and
@@ -194,6 +193,36 @@ export function FileView({
     void load();
   }, [load]);
 
+  /**
+   * Clear registry dirty + record the on-disk mtime via `peek`, not the editor
+   * ref. React runs child cleanups first: on tab close the Monaco editor has
+   * already released its lease before this host's unmount flush runs `commit`,
+   * so `documentEditorRef.current?.markSaved` would no-op while disk already
+   * has the new bytes.
+   */
+  const markDocumentSaved = React.useCallback(
+    async (mtime: number) => {
+      const current = stateRef.current;
+      if (current.status !== "markdown") return;
+      try {
+        const runtime = await loadMonacoRuntime();
+        runtime.registry
+          .peek(
+            fileDocumentIdentity({
+              projectId,
+              ticketId,
+              relPath,
+              source: current.source,
+            }),
+          )
+          ?.markSaved(mtime);
+      } catch {
+        // Monaco never loaded — nothing in the registry to clear.
+      }
+    },
+    [projectId, ticketId, relPath],
+  );
+
   // Guarded autosave: never write while paused by a conflict, while another
   // write is in flight, or when nothing changed. A rejected write (or drifted
   // mtime) means an agent edited the file underneath us — re-read to distinguish
@@ -228,7 +257,7 @@ export function FileView({
           // Clear registry dirty + record the on-disk mtime. Without this,
           // peek().dirty stays true with externalRevision null and Save-on-close
           // refuses with "version on disk is unknown".
-          documentEditorRef.current?.markSaved(result.mtime);
+          await markDocumentSaved(result.mtime);
           onDirtyChange?.(false);
           return;
         }
@@ -275,7 +304,7 @@ export function FileView({
         }
         // Same content, drifted mtime — adopt it and retry the write.
         syncedMtimeRef.current = disk.mtime;
-        documentEditorRef.current?.markSaved(disk.mtime);
+        await markDocumentSaved(disk.mtime);
       }
       // Both attempts hit an mtime drift with identical content (rapid external
       // touches) — give up quietly this cycle; the next edit reschedules a save.
@@ -287,7 +316,7 @@ export function FileView({
     // note there) — deliberately omitted from deps; its identity never
     // changes for the component's lifetime.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, ticketId, relPath, readFile, name, onDirtyChange]);
+  }, [projectId, ticketId, relPath, readFile, name, onDirtyChange, markDocumentSaved]);
 
   const debouncer = useDebouncedCallback(() => void commit(), AUTOSAVE_IDLE_MS);
 
@@ -390,7 +419,7 @@ export function FileView({
         // the registry keeps Save-on-close's conflict guard current.
         if (disk.content.text === syncedRef.current) {
           syncedMtimeRef.current = disk.mtime;
-          documentEditorRef.current?.markSaved(disk.mtime);
+          void markDocumentSaved(disk.mtime);
           if (stateRef.current.status !== "markdown") {
             draftRef.current = disk.content.text;
             setDocValue(disk.content.text);
@@ -425,7 +454,7 @@ export function FileView({
       unsubscribe();
       void window.api.files.unwatch({ projectId, ticketId, relPath });
     };
-  }, [projectId, ticketId, relPath, readFile, name, onSource]);
+  }, [projectId, ticketId, relPath, readFile, name, onSource, markDocumentSaved]);
 
   function handleChange(next: string) {
     draftRef.current = next;
@@ -549,7 +578,6 @@ export function FileView({
             }}
           >
             <MonacoDocumentEditor
-              ref={documentEditorRef}
               identity={documentIdentity}
               viewId={`file:${projectId}:${ticketId ?? "main"}:${relPath}:document`}
               value={docValue}

@@ -372,10 +372,15 @@ export const MonacoDocumentEditor = React.forwardRef<
       view?.dispose();
       editorRef.current = null;
       if (lease !== null) {
-        // The host flushed its autosave on unmount; leaving the model dirty
-        // would park it in the registry forever (a dirty document is never
-        // cleaned up), so hand the entry back clean unless another view holds it.
-        if (lease.snapshot().viewReferences <= 1) lease.discard();
+        // React runs child cleanups BEFORE parent cleanups. Hosts
+        // (FileView / TicketBodyEditor) flush pending autosave in a parent
+        // `useDebouncedCallback` unmount effect — that flush has NOT run yet
+        // when we get here. Discarding the last-view autosave lease would wipe
+        // the draft (and its dirty bit) before the host can write +
+        // `registry.peek(...).markSaved`. Leave dirty parked for that flush;
+        // `cleanupReleasedEntry` retains dirty zero-view entries, and autosave
+        // dirties are intentionally not re-seeded into Save-on-close
+        // (explicit-only). A successful host flush clears via markSaved.
         lease.release(viewState);
       }
       leaseRef.current = null;
