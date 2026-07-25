@@ -216,6 +216,29 @@ describe("volli:list-directory", () => {
       error: expect.stringContaining("ENOENT"),
     });
   });
+
+  it("lists directories under the worktree home even when no project root is synced", async () => {
+    // Ticket Files navigates ticket worktrees living under worktreesHome(),
+    // which is deliberately outside the project checkout (#108).
+    const prev = process.env["VOLLI_WORKTREE_HOME_DIR"];
+    const fakeHome = await fs.realpath(await fs.mkdtemp(join(os.tmpdir(), "volli-ipc-wthome-")));
+    process.env["VOLLI_WORKTREE_HOME_DIR"] = fakeHome;
+    try {
+      const { worktreesHome } = await import("./worktree-runtime");
+      const wtDir = join(worktreesHome(), "proj", "T-1-slug");
+      await fs.mkdir(wtDir, { recursive: true });
+      await fs.writeFile(join(wtDir, "note.md"), "hi");
+      syncRoots([]);
+      await expect(listDirectory(wtDir)).resolves.toEqual({
+        ok: true,
+        entries: [{ name: "note.md", kind: "file" }],
+      });
+    } finally {
+      if (prev === undefined) delete process.env["VOLLI_WORKTREE_HOME_DIR"];
+      else process.env["VOLLI_WORKTREE_HOME_DIR"] = prev;
+      await fs.rm(fakeHome, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("volli:pick-project-folder", () => {

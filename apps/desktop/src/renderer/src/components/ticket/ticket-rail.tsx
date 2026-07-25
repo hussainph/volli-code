@@ -10,7 +10,8 @@
  *   - Pass `filesContent` / `changesContent` to replace the empty placeholders.
  *   - On row select, call the host's open/focus helpers — typically
  *     `useWorkspaceStore.getState().openTicketFile(projectId, ticketId, relPath)`
- *     for Files, and (once landed) the Change Set diff-tab opener for Changes.
+ *     for Files and Changes (#108). Issue #109 swaps the Changes opener to a
+ *     Monaco diff tab — a one-line change at the TicketRail host call site.
  *     Sessions already call `onActivateSession(sessionId)` → `setTicketActiveTab`.
  *   - Do NOT call those openers from agent/filesystem event handlers.
  */
@@ -70,7 +71,8 @@ export function TicketRailModeStrip({
             onClick={() => onSelectMode(key)}
             className={cn(
               "rounded-md text-muted-foreground",
-              active && "bg-accent text-accent-foreground",
+              active &&
+                "bg-primary/15 text-primary ring-1 ring-inset ring-primary/40 hover:bg-primary/20 hover:text-primary",
             )}
           >
             <Icon weight="fill" className="size-3.5" />
