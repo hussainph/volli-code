@@ -331,3 +331,66 @@ describe("projectMarkdown — blockquotes", () => {
     ]);
   });
 });
+
+describe("projectMarkdown — lists", () => {
+  it("swaps a bullet marker for a bullet glyph", () => {
+    const ops = projectMarkdown({ text: "- one\n- two", selection: [], focused: false });
+
+    expect(ops).toEqual([
+      { kind: "widget", from: 0, to: 1, widget: { type: "bullet" } },
+      { kind: "widget", from: 6, to: 7, widget: { type: "bullet" } },
+    ]);
+  });
+
+  it("puts the raw marker back on the line being edited", () => {
+    const text = "- one\n- two";
+    const ops = projectMarkdown({ text, selection: [{ from: 3, to: 3 }], focused: true });
+
+    expect(ops).toEqual([
+      { kind: "inline-class", from: 0, to: 1, className: "volli-md-list-mark" },
+      { kind: "widget", from: 6, to: 7, widget: { type: "bullet" } },
+    ]);
+  });
+
+  it("keeps an ordered marker's own text, styled, whether or not it is revealed", () => {
+    const text = "1. first\n2. second";
+    const styled = [
+      { kind: "inline-class", from: 0, to: 2, className: "volli-md-list-mark" },
+      { kind: "inline-class", from: 9, to: 11, className: "volli-md-list-mark" },
+    ];
+
+    // The number IS the content — replacing it with a glyph would lose it.
+    expect(projectMarkdown({ text, selection: [], focused: false })).toEqual(styled);
+    expect(projectMarkdown({ text, selection: [{ from: 3, to: 3 }], focused: true })).toEqual(
+      styled,
+    );
+  });
+
+  it("hides a task item's bullet and renders its marker as a checkbox", () => {
+    const ops = projectMarkdown({ text: "- [ ] todo\n- [x] done", selection: [], focused: false });
+
+    expect(ops).toEqual([
+      // The bullet goes entirely: the checkbox is the item's marker now.
+      { kind: "hide", from: 0, to: 2 },
+      { kind: "widget", from: 2, to: 5, widget: { type: "checkbox", checked: false } },
+      { kind: "hide", from: 11, to: 13 },
+      { kind: "widget", from: 13, to: 16, widget: { type: "checkbox", checked: true } },
+    ]);
+  });
+
+  it("treats an upper-case `[X]` as checked", () => {
+    const ops = projectMarkdown({ text: "- [X] done", selection: [], focused: false });
+
+    expect(ops).toContainEqual({
+      kind: "widget",
+      from: 2,
+      to: 5,
+      widget: { type: "checkbox", checked: true },
+    });
+  });
+
+  it("shows a task item's raw `- [ ]` syntax while its line is being edited", () => {
+    const text = "- [ ] todo";
+    expect(projectMarkdown({ text, selection: [{ from: 8, to: 8 }], focused: true })).toEqual([]);
+  });
+});

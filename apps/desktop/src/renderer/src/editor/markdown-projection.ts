@@ -44,6 +44,10 @@ import { buildLineIndex, lineAt } from "./text-position";
 const markdownParser = parser.configure([GFM, Subscript, Superscript, Emoji]);
 
 const HEADING_RE = /^ATXHeading([1-6])$/;
+/** An ordered list's `1.`/`2)` marker, as opposed to a `-`/`*`/`+` bullet. */
+const ORDERED_MARK_RE = /\d/;
+/** `[x]` or `[X]` — anything else in the brackets is an unchecked task. */
+const CHECKED_MARKER_RE = /x/i;
 
 /** Inline containers that keep their text but get styled: node name → class. */
 const INLINE_CLASSES: Readonly<Record<string, string | undefined>> = {
@@ -289,6 +293,58 @@ export function projectMarkdown(input: ProjectionInput): readonly ProjectionOp[]
         // on the line being edited, so the rest stays rendered.
         if (!lineTouched(node.from)) {
           ops.push({ kind: "hide", from: node.from, to: throughTrailingSpace(node.from, node.to) });
+        }
+        return;
+      }
+
+      // --- Lists: bullets → glyph, ordered markers styled, tasks → checkbox -
+      if (node.name === "ListItem") {
+        const item = node.node;
+        const isTask = item.getChild("Task") !== null;
+        // Read the marker from the item rather than visiting `ListMark` on its
+        // own, so "is this a task?" is answered without walking back up to a
+        // parent that the type system has to admit might not be there.
+        for (const mark of item.getChildren("ListMark")) {
+          const reveal = lineTouched(mark.from);
+          const styled: ProjectionOp = {
+            kind: "inline-class",
+            from: mark.from,
+            to: mark.to,
+            className: "volli-md-list-mark",
+          };
+          if (ORDERED_MARK_RE.test(text.slice(mark.from, mark.to))) {
+            // The number IS content — a glyph in its place would lose it, and
+            // it stays styled whether or not the line is being edited.
+            ops.push(styled);
+          } else if (isTask) {
+            // The checkbox below becomes the item's marker, so the bullet goes
+            // entirely rather than sitting beside it.
+            if (!reveal) {
+              ops.push({
+                kind: "hide",
+                from: mark.from,
+                to: throughTrailingSpace(mark.from, mark.to),
+              });
+            }
+          } else if (!reveal) {
+            ops.push({ kind: "widget", from: mark.from, to: mark.to, widget: { type: "bullet" } });
+          } else {
+            ops.push(styled);
+          }
+        }
+        return; // descend for Task/TaskMarker + inline content
+      }
+      if (node.name === "TaskMarker") {
+        if (!lineTouched(node.from)) {
+          ops.push({
+            kind: "widget",
+            from: node.from,
+            to: node.to,
+            widget: {
+              type: "checkbox",
+              checked: CHECKED_MARKER_RE.test(text.slice(node.from, node.to)),
+            },
+          });
         }
         return;
       }
