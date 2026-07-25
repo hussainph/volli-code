@@ -8,6 +8,7 @@ import { PrimarySidebar } from "@renderer/components/sidebar/primary-sidebar";
 import { SidebarResizeHandle } from "@renderer/components/sidebar/sidebar-resize-handle";
 import { Sidebar, SidebarInset, SidebarProvider } from "@renderer/components/ui/sidebar";
 import { Toaster } from "@renderer/components/ui/sonner";
+import { GrainOverlay } from "@renderer/theme/grain-overlay";
 import { takeBootNotice } from "@renderer/lib/boot-notice";
 import { takeCliLaunchNotice } from "@renderer/lib/cli-launch-notice";
 import { toastError } from "@renderer/lib/toast";
@@ -17,6 +18,7 @@ import { useProjectShortcuts } from "@renderer/hooks/use-project-shortcuts";
 import { cn } from "@renderer/lib/utils";
 import { errorMessage } from "@volli/shared";
 import { useProjectsStore } from "@renderer/stores/projects";
+import { effectiveTheme, useThemeStore } from "@renderer/stores/theme";
 import { useUiStore } from "@renderer/stores/ui";
 import { toast } from "sonner";
 
@@ -45,6 +47,10 @@ export function AppShell() {
   const workspaceRailHidden = useUiStore((state) => state.workspaceRailHidden);
   const terminalFocusTarget = useUiStore((state) => state.terminalFocusTarget);
   const uiScale = useUiStore((state) => state.uiScale);
+  // Read-only: the theme store owns `grain`, this shell only paints it.
+  // `effectiveTheme` already folds in the running preview and the per-project
+  // override, so dragging the grain slider repaints live.
+  const grain = useThemeStore((state) => effectiveTheme(state).grain);
   const [resizing, setResizing] = React.useState(false);
   const terminalFocused = terminalFocusTarget !== null;
   const [focusGeometryInstant, setFocusGeometryInstant] = React.useState(false);
@@ -138,12 +144,28 @@ export function AppShell() {
             renders inside this one card, floating on the rail-dark backdrop
             with a hairline border. overflow-hidden clips full-bleed children
             (tab strips, terminals) to the rounded corners. */}
+        {/* `isolate` is what lets the grain layer below work: it makes this
+            card its own stacking context, so a z-index:-1 child paints above
+            the card's own --background fill and beneath every page — text
+            included. Without it the layer escapes to the row's stacking
+            context and disappears under this fill. Nothing inside the card
+            competes for stacking with anything outside it (overflow-hidden
+            clips it, and every popover/dialog portals to the body), so the
+            isolation costs nothing. */}
         <SidebarInset
           className={cn(
-            "overflow-hidden",
+            "isolate overflow-hidden",
             terminalFocused ? "m-0 rounded-none border-0" : "m-2 rounded-xl border border-border",
           )}
         >
+          {/* The one grain overlay (docs/plans/theming-engine.md § Grain).
+              The card is the app's principal surface and the only layer where
+              texture is visible at all — the rail, the sidebar and the chrome
+              band are opaque fills stacked above the backdrop. It sits behind
+              everything the card renders, so it is never above text and never
+              over restty's canvas or Monaco, which paint their own opaque
+              surfaces on top of it. */}
+          <GrainOverlay grain={grain} />
           <MainContent />
         </SidebarInset>
       </div>
