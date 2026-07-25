@@ -15,6 +15,7 @@ import {
   type ChangeRowPresentation,
   type ChangesNavigatorState,
 } from "@renderer/components/ticket/ticket-changes-model";
+import { subscribeWorktreeChanges } from "@renderer/components/ticket/worktree-change-watch";
 import { cn } from "@renderer/lib/utils";
 import { toastError } from "@renderer/lib/toast";
 
@@ -165,29 +166,15 @@ export function TicketChangesPanel({
     void loadChangeSet();
   }, [loadChangeSet]);
 
-  // Watch lifecycle: start when the ticket has a live worktree; always unwatch
-  // on leave/ticket change so watches cannot leak.
+  // Watch lifecycle: start when the ticket has a live worktree; the returned
+  // teardown always unwatches, so watches cannot leak.
   React.useEffect(() => {
     if (ticket.worktreePath === null) return;
-    const ticketId = ticket.id;
-    let cancelled = false;
-    void window.api.worktree.watchChangeSet(ticketId).then((result) => {
-      if (cancelled) {
-        void window.api.worktree.unwatchChangeSet(ticketId);
-        return;
-      }
-      if (!result.ok) toastError(`Couldn't watch changes: ${result.error}`);
-    });
-    const unsubscribe = window.api.worktree.onChanged((event) => {
-      if (event.ticketId !== ticketId) return;
+    return subscribeWorktreeChanges(window.api.worktree, ticket.id, {
       // Refresh ONLY — never open/focus a tab from a filesystem event.
-      void loadChangeSet();
+      onChanged: () => void loadChangeSet(),
+      onWatchError: (message) => toastError(`Couldn't watch changes: ${message}`),
     });
-    return () => {
-      cancelled = true;
-      unsubscribe();
-      void window.api.worktree.unwatchChangeSet(ticketId);
-    };
   }, [ticket.id, ticket.worktreePath, loadChangeSet]);
 
   const handleSelect = React.useCallback(
