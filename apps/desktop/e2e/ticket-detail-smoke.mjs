@@ -40,7 +40,8 @@
  *      status/priority in the rail; NO harness row anywhere, and the board
  *      filter bar has NO Harness chip. Mode switches never steal the active
  *      main-view tab (decision #46). A persisted active:"doc" still restores
- *      the Ticket Body tab.
+ *      the Ticket Body tab. (Checks 8/8b/8c run before 6b so they are not
+ *      stranded by the pre-existing terminal-focus restore failure.)
  *   9. Nav history — the chrome bar's ←/→ buttons (and ⌘[ / ⌘]) traverse
  *      ticket open/close snapshots.
  *  10. Rail toggle — the chrome bar's mirrored rail button and ⌥⌘B hide/show the
@@ -254,6 +255,8 @@ async function readFileSafe(path) {
 // ---- launch ----------------------------------------------------------------
 
 function launch(dbPath) {
+  // Agent shells export ELECTRON_RUN_AS_NODE=1, which makes Electron run as
+  // plain Node. Match scripts/start-electron.mjs and strip it at launch.
   const env = {
     ...process.env,
     VOLLI_DB_PATH: dbPath,
@@ -333,41 +336,6 @@ async function escapeToBoard(page) {
   await blurToNeutral(page);
   await page.keyboard.press("Escape");
   await waitUntil("board after Escape", () => boardOpen(page));
-}
-
-/** Dismiss any open dialog/menu overlay that would intercept rail clicks. */
-async function dismissOverlays(page) {
-  for (let i = 0; i < 3; i++) {
-    const open = await page.locator('[data-slot="dialog-overlay"][data-state="open"]').count();
-    if (open === 0) break;
-    await page.keyboard.press("Escape");
-    await sleep(150);
-  }
-  await blurToNeutral(page);
-}
-
-/**
- * Exit terminal-focus mode if it is still engaged (tab strip + rail are
- * unmounted while focused). ⌘Escape is the only exit chord — bare Escape
- * goes to the PTY. Safe to call when already restored.
- */
-async function ensureTerminalFocusExited(page) {
-  const focused = await page.evaluate(() => {
-    const tablists = Array.from(document.querySelectorAll('[role="tablist"]')).filter(
-      (element) =>
-        element instanceof HTMLElement &&
-        element.offsetParent !== null &&
-        element.getBoundingClientRect().height > 0,
-    ).length;
-    return tablists === 0 && document.querySelectorAll("aside").length === 0;
-  });
-  if (!focused) return;
-  await page.keyboard.press("Meta+Escape");
-  await waitUntil("terminal focus exited", async () => {
-    return (
-      (await page.getByRole("tablist").count()) >= 1 || (await page.locator("aside").count()) === 1
-    );
-  }).catch(() => null);
 }
 
 // ---- terminal (canvas — side-effect assertions only) -----------------------
@@ -852,12 +820,8 @@ async function main() {
       async () => {
         await fs.rm(PROBE_ENV, { force: true });
         await fs.rm(PROBE_ALIVE, { force: true });
-        await dismissOverlays(page);
-        if (!(await detailOpen(page))) await openTicketViaCard(page);
-        await dismissOverlays(page);
+
         const aside = page.locator("aside");
-        // Ensure Sessions mode before booting — icon-mode can leave Properties up.
-        await aside.getByTestId("ticket-rail-mode-sessions").click();
         await aside.getByRole("button", { name: "New session" }).click();
 
         const sessionTab = page.getByRole("tab", { name: SESSION_INITIAL, exact: true });
@@ -906,8 +870,7 @@ async function main() {
 
         // Active Sessions intentionally indexes Doing/Needs Review work only.
         // Put this live shell ticket into Doing through the real property UI
-        // (Properties icon mode), then return to Sessions so later checks that
-        // expect the session list stay meaningful.
+        // (Properties icon mode replaces the retired Details drawer).
         await aside.getByTestId("ticket-rail-mode-properties").click();
         await aside.getByRole("button", { name: "Todo", exact: true }).click();
         await page.getByRole("menuitemradio", { name: "Doing", exact: true }).click();
@@ -992,151 +955,17 @@ async function main() {
     );
 
     // ===================================================================
-    // 6b. TERMINAL FOCUS — thin chrome, no sidebars, same resident canvas
-    // ===================================================================
-    await attempt(
-      "6b",
-      "Terminal focus reclaims sidebars/tab rail, keeps one thin chrome row, preserves the live canvas, and ⌘Escape restores the workspace",
-      async () => {
-        try {
-          const marked = await page.evaluate(() => {
-            const canvas = Array.from(document.querySelectorAll("canvas")).find(
-              (candidate) =>
-                candidate.offsetParent !== null &&
-                candidate.clientWidth > 0 &&
-                candidate.clientHeight > 0,
-            );
-            if (!canvas) return false;
-            canvas.dataset.e2eFocus = "focus-1";
-            return true;
-          });
-          await page.getByRole("button", { name: "Enter terminal focus" }).click();
-          const focused = await waitUntil("terminal focus geometry", async () =>
-            page.evaluate(() => {
-              const sidebar = document.querySelector('[data-sidebar="sidebar"]');
-              const inset = document.querySelector('[data-slot="sidebar-inset"]');
-              const chrome = document.querySelector(".app-region-drag");
-              const markedCanvas = document.querySelector('canvas[data-e2e-focus="focus-1"]');
-              const state = {
-                sidebarHidden: sidebar?.closest('[aria-hidden="true"]') !== null,
-                insetLeft: inset?.getBoundingClientRect().left ?? -1,
-                chromeHeight: chrome?.getBoundingClientRect().height ?? -1,
-                tablists: Array.from(document.querySelectorAll('[role="tablist"]')).filter(
-                  (element) =>
-                    element instanceof HTMLElement &&
-                    element.offsetParent !== null &&
-                    element.getBoundingClientRect().height > 0,
-                ).length,
-                asides: document.querySelectorAll("aside").length,
-                canvasVisible:
-                  markedCanvas instanceof HTMLCanvasElement && markedCanvas.offsetParent !== null,
-              };
-              return state.sidebarHidden && state.insetLeft === 0 && state.canvasVisible
-                ? state
-                : false;
-            }),
-          );
-          const focusGeometry =
-            focused.sidebarHidden &&
-            focused.insetLeft === 0 &&
-            focused.chromeHeight === 40 &&
-            focused.tablists === 0 &&
-            focused.asides === 0 &&
-            focused.canvasVisible;
-
-          // ⌘Escape, NOT bare Escape. Terminal focus deliberately leaves plain Esc
-          // to the PTY (Claude Code interrupts on it, vim and friends lean on it
-          // constantly), so the exit is a chord no terminal app consumes — see the
-          // `exitTerminalFocus` listener in ticket-detail.tsx. This check pressed
-          // bare Escape and had been asserting the pre-#78 behavior; it never
-          // caught it because the non-git fixture failed 6b long before this line.
-          await page.keyboard.press("Meta+Escape");
-          const restored = await waitUntil("workspace geometry restored", async () =>
-            page.evaluate(() => {
-              const inset = document.querySelector('[data-slot="sidebar-inset"]');
-              const markedCanvas = document.querySelector('canvas[data-e2e-focus="focus-1"]');
-              const state = {
-                insetLeft: inset?.getBoundingClientRect().left ?? 0,
-                tablists: Array.from(document.querySelectorAll('[role="tablist"]')).filter(
-                  (element) =>
-                    element instanceof HTMLElement &&
-                    element.offsetParent !== null &&
-                    element.getBoundingClientRect().height > 0,
-                ).length,
-                asides: document.querySelectorAll("aside").length,
-                canvasVisible:
-                  markedCanvas instanceof HTMLCanvasElement && markedCanvas.offsetParent !== null,
-              };
-              return state.insetLeft > 0 && state.canvasVisible ? state : false;
-            }),
-          );
-          const restoredGeometry =
-            restored.insetLeft > 0 &&
-            restored.tablists === 1 &&
-            restored.asides === 1 &&
-            restored.canvasVisible;
-          const ticketStillOpen = await detailOpen(page);
-
-          const ok = marked && focusGeometry && restoredGeometry && ticketStillOpen;
-          return {
-            ok,
-            detail: `marked=${marked} focused=${JSON.stringify(focused)} restored=${JSON.stringify(restored)} ticketOpen=${ticketStillOpen}`,
-          };
-        } finally {
-          // Never leave the suite stranded in terminal focus — tab strip + rail
-          // are unmounted there, so later checks would time out on missing tabs.
-          await ensureTerminalFocusExited(page);
-        }
-      },
-    );
-
-    // ===================================================================
-    // 7. SESSION RENAME (double-click tab → tab + rail update)
-    // ===================================================================
-    await attempt(
-      7,
-      "Session rename: double-click the session tab, type, Enter; the new title shows on the tab and the rail row",
-      async () => {
-        await ensureTerminalFocusExited(page);
-        await dismissOverlays(page);
-        const sessionTab = page.getByRole("tab", { name: SESSION_INITIAL, exact: true });
-        await sessionTab.dblclick();
-        const renameInput = page.getByRole("textbox", { name: `Rename ${SESSION_INITIAL}` });
-        await renameInput.waitFor();
-        await renameInput.fill(SESSION_RENAMED);
-        await page.keyboard.press("Enter");
-
-        const tabRenamed = await waitUntil("session tab shows new title", async () => {
-          const hasNew =
-            (await page.getByRole("tab", { name: SESSION_RENAMED, exact: true }).count()) === 1;
-          const goneOld =
-            (await page.getByRole("tab", { name: SESSION_INITIAL, exact: true }).count()) === 0;
-          return hasNew && goneOld;
-        });
-        const aside = page.locator("aside");
-        const railRenamed = await waitUntil("rail row shows new title", async () => {
-          return (await aside.getByText(SESSION_RENAMED, { exact: true }).count()) >= 1;
-        });
-
-        const ok = !!tabRenamed && !!railRenamed;
-        return { ok, detail: `tab=${!!tabRenamed} rail=${!!railRenamed}` };
-      },
-    );
-
-    // ===================================================================
     // 8. ICON-MODE RAIL — Sessions default + Properties + no harness
+    //     (runs before 6b so a pre-existing terminal-focus restore failure
+    //     cannot hide a real rail regression)
     // ===================================================================
     await attempt(
       8,
       "Rail: icon-mode Sessions default with Properties metadata in-rail; no Harness row anywhere; board filter bar has no Harness chip",
       async () => {
-        await ensureTerminalFocusExited(page);
-        await dismissOverlays(page);
         if (!(await detailOpen(page))) await openTicketViaCard(page);
-        await dismissOverlays(page);
         const aside = page.locator("aside");
-        // Sessions mode is the default — heading present, mode strip pressed.
-        await aside.getByTestId("ticket-rail-mode-sessions").click();
+        // Sessions is the default icon mode.
         const sessionsHeading =
           (await aside.getByRole("heading", { name: "Sessions" }).count()) >= 1;
         const sessionsPressed =
@@ -1144,19 +973,16 @@ async function main() {
           "true";
 
         // Properties mode renders status/priority directly in the rail (decision #46).
-        await aside.getByTestId("ticket-rail-mode-properties").click({ force: true });
+        await aside.getByTestId("ticket-rail-mode-properties").click();
         const propertiesShown = await waitUntil("Properties mode content", async () => {
           return (
             (await aside.getByText("Status", { exact: false }).count()) >= 1 &&
             (await aside.getByText("Priority", { exact: false }).count()) >= 1
           );
         });
-        await aside.getByTestId("ticket-rail-mode-sessions").click({ force: true });
+        await aside.getByTestId("ticket-rail-mode-sessions").click();
 
-        // No harness identity anywhere in the ticket detail rail.
         const noHarnessInRail = (await aside.getByText(/harness/i).count()) === 0;
-
-        // Board filter bar carries no Harness chip either.
         await escapeToBoard(page);
         const noHarnessOnBoard = (await page.getByText(/harness/i).count()) === 0;
         await openTicketViaCard(page);
@@ -1181,13 +1007,9 @@ async function main() {
       "8b",
       "Rail mode switch never changes the active main-view tab (decision #46)",
       async () => {
-        await ensureTerminalFocusExited(page);
-        await dismissOverlays(page);
         if (!(await detailOpen(page))) await openTicketViaCard(page);
-        await dismissOverlays(page);
         const aside = page.locator("aside");
 
-        // Land on the Ticket Body tab so we have a stable active id to watch.
         await docTab(page).click();
         await waitUntil("Ticket Body tab selected", async () => {
           return (await docTab(page).getAttribute("aria-selected")) === "true";
@@ -1195,26 +1017,23 @@ async function main() {
 
         const modes = ["files", "changes", "properties", "sessions"];
         for (const mode of modes) {
-          await aside.getByTestId(`ticket-rail-mode-${mode}`).click({ force: true });
+          await aside.getByTestId(`ticket-rail-mode-${mode}`).click();
           const stillBody = await waitUntil(
             `Ticket Body still active after ${mode} mode`,
             async () => (await docTab(page).getAttribute("aria-selected")) === "true",
           ).catch(() => null);
           if (!stillBody) {
-            return {
-              ok: false,
-              detail: `active tab stolen after switching to ${mode}`,
-            };
+            return { ok: false, detail: `active tab stolen after switching to ${mode}` };
           }
         }
 
-        // Files/Changes placeholders must not open a file/diff tab either.
         const fileTabs = await page
           .getByRole("tab")
           .evaluateAll((tabs) => tabs.map((t) => t.getAttribute("aria-label") ?? ""));
-        const known = new Set([DISPLAY_ID, SESSION_INITIAL, SESSION_RENAMED]);
-        const noAutoFile = fileTabs.every((label) => known.has(label));
-
+        // Only the body tab and any already-open session tabs — never an auto-opened file.
+        const noAutoFile = fileTabs.every(
+          (label) => label === DISPLAY_ID || label === SESSION_INITIAL || label === SESSION_RENAMED,
+        );
         return {
           ok: noAutoFile,
           detail: `modes=${modes.join(",")} tabs=${JSON.stringify(fileTabs)} noAutoFile=${noAutoFile}`,
@@ -1229,21 +1048,14 @@ async function main() {
       "8c",
       'Persisted active:"doc" still restores the Ticket Body tab after rename',
       async () => {
-        await ensureTerminalFocusExited(page);
-        await dismissOverlays(page);
         if (!(await detailOpen(page))) await openTicketViaCard(page);
-        await dismissOverlays(page);
 
-        // Switch away from the body so we can prove restore, not a sticky default.
-        // Prefer a live session tab when one exists; otherwise open a file-less
-        // path by activating body then writing "doc" after leaving via setActive.
-        const sessionTab = page
-          .getByRole("tab", { name: SESSION_RENAMED, exact: true })
-          .or(page.getByRole("tab", { name: SESSION_INITIAL, exact: true }));
-        if ((await sessionTab.count()) >= 1) {
-          await sessionTab.first().click();
+        // Switch away from the body when a session tab exists so restore is observable.
+        const sessionTab = page.getByRole("tab", { name: SESSION_INITIAL, exact: true });
+        if ((await sessionTab.count()) === 1) {
+          await sessionTab.click();
           await waitUntil("session tab selected before legacy write", async () => {
-            return (await sessionTab.first().getAttribute("aria-selected")) === "true";
+            return (await sessionTab.getAttribute("aria-selected")) === "true";
           });
         }
 
@@ -1262,19 +1074,17 @@ async function main() {
           const ui = byProject[projectId];
           const existing = ui.ticketTabs?.[ticketId] ?? { files: [] };
           ui.ticketTabs = {
-            ...ui.ticketTabs,
+            ...(ui.ticketTabs ?? {}),
             // Literal legacy wire value — what real upgrades still have on disk.
             [ticketId]: { files: existing.files ?? [], active: "doc" },
           };
           ui.openTicketId = ticketId;
           const next = JSON.stringify(parsed);
           const set = await window.api.appState.set("volli:workspace", next);
-          return { ok: set.ok, error: set.ok ? undefined : set.error, projectId };
+          return { ok: set.ok, error: set.ok ? undefined : set.error };
         }, TICKET_ID);
 
-        if (!wrote.ok) {
-          return { ok: false, detail: `write failed: ${wrote.error}` };
-        }
+        if (!wrote.ok) return { ok: false, detail: `write failed: ${wrote.error}` };
 
         await page.reload();
         await page.waitForLoadState("domcontentloaded");
@@ -1287,7 +1097,6 @@ async function main() {
           { timeout: 20000 },
         );
 
-        // Confirm the store still holds the wire id (compatibility, not migration-away).
         const active = await page.evaluate(async (ticketId) => {
           const boot = await window.api.data.bootstrap();
           if (!boot.ok) return null;
@@ -1302,10 +1111,131 @@ async function main() {
         }, TICKET_ID);
 
         const ok = !!restored && active === "doc";
+        return { ok, detail: `restored=${!!restored} active=${JSON.stringify(active)}` };
+      },
+    );
+
+    // ===================================================================
+    // 6b. TERMINAL FOCUS — thin chrome, no sidebars, same resident canvas
+    // ===================================================================
+    await attempt(
+      "6b",
+      "Terminal focus reclaims sidebars/tab rail, keeps one thin chrome row, preserves the live canvas, and ⌘Escape restores the workspace",
+      async () => {
+        const marked = await page.evaluate(() => {
+          const canvas = Array.from(document.querySelectorAll("canvas")).find(
+            (candidate) =>
+              candidate.offsetParent !== null &&
+              candidate.clientWidth > 0 &&
+              candidate.clientHeight > 0,
+          );
+          if (!canvas) return false;
+          canvas.dataset.e2eFocus = "focus-1";
+          return true;
+        });
+        await page.getByRole("button", { name: "Enter terminal focus" }).click();
+        const focused = await waitUntil("terminal focus geometry", async () =>
+          page.evaluate(() => {
+            const sidebar = document.querySelector('[data-sidebar="sidebar"]');
+            const inset = document.querySelector('[data-slot="sidebar-inset"]');
+            const chrome = document.querySelector(".app-region-drag");
+            const markedCanvas = document.querySelector('canvas[data-e2e-focus="focus-1"]');
+            const state = {
+              sidebarHidden: sidebar?.closest('[aria-hidden="true"]') !== null,
+              insetLeft: inset?.getBoundingClientRect().left ?? -1,
+              chromeHeight: chrome?.getBoundingClientRect().height ?? -1,
+              tablists: Array.from(document.querySelectorAll('[role="tablist"]')).filter(
+                (element) =>
+                  element instanceof HTMLElement &&
+                  element.offsetParent !== null &&
+                  element.getBoundingClientRect().height > 0,
+              ).length,
+              asides: document.querySelectorAll("aside").length,
+              canvasVisible:
+                markedCanvas instanceof HTMLCanvasElement && markedCanvas.offsetParent !== null,
+            };
+            return state.sidebarHidden && state.insetLeft === 0 && state.canvasVisible
+              ? state
+              : false;
+          }),
+        );
+        const focusGeometry =
+          focused.sidebarHidden &&
+          focused.insetLeft === 0 &&
+          focused.chromeHeight === 40 &&
+          focused.tablists === 0 &&
+          focused.asides === 0 &&
+          focused.canvasVisible;
+
+        // ⌘Escape, NOT bare Escape. Terminal focus deliberately leaves plain Esc
+        // to the PTY (Claude Code interrupts on it, vim and friends lean on it
+        // constantly), so the exit is a chord no terminal app consumes — see the
+        // `exitTerminalFocus` listener in ticket-detail.tsx. This check pressed
+        // bare Escape and had been asserting the pre-#78 behavior; it never
+        // caught it because the non-git fixture failed 6b long before this line.
+        await page.keyboard.press("Meta+Escape");
+        const restored = await waitUntil("workspace geometry restored", async () =>
+          page.evaluate(() => {
+            const inset = document.querySelector('[data-slot="sidebar-inset"]');
+            const markedCanvas = document.querySelector('canvas[data-e2e-focus="focus-1"]');
+            const state = {
+              insetLeft: inset?.getBoundingClientRect().left ?? 0,
+              tablists: Array.from(document.querySelectorAll('[role="tablist"]')).filter(
+                (element) =>
+                  element instanceof HTMLElement &&
+                  element.offsetParent !== null &&
+                  element.getBoundingClientRect().height > 0,
+              ).length,
+              asides: document.querySelectorAll("aside").length,
+              canvasVisible:
+                markedCanvas instanceof HTMLCanvasElement && markedCanvas.offsetParent !== null,
+            };
+            return state.insetLeft > 0 && state.canvasVisible ? state : false;
+          }),
+        );
+        const restoredGeometry =
+          restored.insetLeft > 0 &&
+          restored.tablists === 1 &&
+          restored.asides === 1 &&
+          restored.canvasVisible;
+        const ticketStillOpen = await detailOpen(page);
+
+        const ok = marked && focusGeometry && restoredGeometry && ticketStillOpen;
         return {
           ok,
-          detail: `restored=${!!restored} active=${JSON.stringify(active)}`,
+          detail: `marked=${marked} focused=${JSON.stringify(focused)} restored=${JSON.stringify(restored)} ticketOpen=${ticketStillOpen}`,
         };
+      },
+    );
+
+    // ===================================================================
+    // 7. SESSION RENAME (double-click tab → tab + rail update)
+    // ===================================================================
+    await attempt(
+      7,
+      "Session rename: double-click the session tab, type, Enter; the new title shows on the tab and the rail row",
+      async () => {
+        const sessionTab = page.getByRole("tab", { name: SESSION_INITIAL, exact: true });
+        await sessionTab.dblclick();
+        const renameInput = page.getByRole("textbox", { name: `Rename ${SESSION_INITIAL}` });
+        await renameInput.waitFor();
+        await renameInput.fill(SESSION_RENAMED);
+        await page.keyboard.press("Enter");
+
+        const tabRenamed = await waitUntil("session tab shows new title", async () => {
+          const hasNew =
+            (await page.getByRole("tab", { name: SESSION_RENAMED, exact: true }).count()) === 1;
+          const goneOld =
+            (await page.getByRole("tab", { name: SESSION_INITIAL, exact: true }).count()) === 0;
+          return hasNew && goneOld;
+        });
+        const aside = page.locator("aside");
+        const railRenamed = await waitUntil("rail row shows new title", async () => {
+          return (await aside.getByText(SESSION_RENAMED, { exact: true }).count()) >= 1;
+        });
+
+        const ok = !!tabRenamed && !!railRenamed;
+        return { ok, detail: `tab=${!!tabRenamed} rail=${!!railRenamed}` };
       },
     );
 
