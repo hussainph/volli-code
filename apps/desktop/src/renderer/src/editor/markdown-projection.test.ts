@@ -298,3 +298,36 @@ describe("projectMarkdown — horizontal rules", () => {
     expect(ops).toEqual([{ kind: "line-class", line: 3, className: "volli-md-hr-reveal" }]);
   });
 });
+
+describe("projectMarkdown — blockquotes", () => {
+  it("classes every quoted line and hides each `>` marker", () => {
+    const ops = projectMarkdown({ text: "> quote\n> more", selection: [], focused: false });
+
+    expect(ops).toEqual([
+      { kind: "line-class", line: 1, className: "volli-md-blockquote" },
+      { kind: "line-class", line: 2, className: "volli-md-blockquote" },
+      { kind: "hide", from: 0, to: 2 },
+      { kind: "hide", from: 8, to: 10 },
+    ]);
+  });
+
+  it("reveals only the marker on the line the caret is on", () => {
+    const text = "> quote\n> more";
+    const ops = projectMarkdown({ text, selection: [{ from: 3, to: 3 }], focused: true });
+
+    expect(ops).toEqual([
+      { kind: "line-class", line: 1, className: "volli-md-blockquote" },
+      { kind: "line-class", line: 2, className: "volli-md-blockquote" },
+      { kind: "hide", from: 8, to: 10 },
+    ]);
+  });
+
+  it("hides a marker with no space after it", () => {
+    const ops = projectMarkdown({ text: ">tight", selection: [], focused: false });
+
+    expect(ops).toEqual([
+      { kind: "line-class", line: 1, className: "volli-md-blockquote" },
+      { kind: "hide", from: 0, to: 1 },
+    ]);
+  });
+});

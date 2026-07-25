@@ -275,6 +275,24 @@ export function projectMarkdown(input: ProjectionInput): readonly ProjectionOp[]
         return;
       }
 
+      // --- Blockquote: per-line border; hide `>` marks off-line. ------------
+      if (node.name === "Blockquote") {
+        const startLine = lineAt(index, node.from);
+        const endLine = lineAt(index, Math.max(node.from, Math.min(node.to - 1, index.length)));
+        for (let n = startLine.number; n <= endLine.number; n += 1) {
+          ops.push({ kind: "line-class", line: n, className: "volli-md-blockquote" });
+        }
+        return; // descend for QuoteMark + inline
+      }
+      if (node.name === "QuoteMark") {
+        // Per LINE, not per block: a multi-line quote reveals only the marker
+        // on the line being edited, so the rest stays rendered.
+        if (!lineTouched(node.from)) {
+          ops.push({ kind: "hide", from: node.from, to: throughTrailingSpace(node.from, node.to) });
+        }
+        return;
+      }
+
       return;
     },
   });
