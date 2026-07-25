@@ -1,7 +1,11 @@
-import { describe, expect, it } from "vite-plus/test";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { changeSetSnapshot, readChangeSetBaseFile } from "./change-set";
-import { GitError } from "./git";
+import { GitError, runGitCapturing } from "./git";
 import { scriptedGit } from "./scripted-git";
 
 /** Scripted git that resolves local `main` and returns the given NUL payloads. */
@@ -51,7 +55,7 @@ describe("changeSetSnapshot — NUL-delimited path safety", () => {
     const path = "docs/my notes.md";
     const { git } = scriptedChangeSetGit({
       nameStatus: `M\0${path}\0`,
-      numstat: `2\t1\0${path}\0`,
+      numstat: `2\t1\t${path}\0`,
     });
 
     const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
@@ -75,7 +79,7 @@ describe("changeSetSnapshot — NUL-delimited path safety", () => {
     const path = "src/café/日本語.ts";
     const { git } = scriptedChangeSetGit({
       nameStatus: `M\0${path}\0`,
-      numstat: `1\t0\0${path}\0`,
+      numstat: `1\t0\t${path}\0`,
     });
 
     const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
@@ -98,7 +102,7 @@ describe("changeSetSnapshot — renames, binaries, additions, deletions", () => 
   it("retains both path and previousPath for a rename", () => {
     const { git } = scriptedChangeSetGit({
       nameStatus: "R100\0src/old.ts\0src/new.ts\0",
-      numstat: "1\t1\0src/old.ts\0src/new.ts\0",
+      numstat: "1\t1\t\0src/old.ts\0src/new.ts\0",
     });
 
     const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
@@ -120,7 +124,7 @@ describe("changeSetSnapshot — renames, binaries, additions, deletions", () => 
   it("marks binary files with null counts and binary: true", () => {
     const { git } = scriptedChangeSetGit({
       nameStatus: "A\0assets/logo.png\0",
-      numstat: "-\t-\0assets/logo.png\0",
+      numstat: "-\t-\tassets/logo.png\0",
     });
 
     const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
@@ -143,7 +147,7 @@ describe("changeSetSnapshot — renames, binaries, additions, deletions", () => 
   it("classifies additions and deletions", () => {
     const { git } = scriptedChangeSetGit({
       nameStatus: "A\0src/new.ts\0D\0src/gone.ts\0",
-      numstat: "4\t0\0src/new.ts\0" + "0\t3\0src/gone.ts\0",
+      numstat: "4\t0\tsrc/new.ts\0" + "0\t3\tsrc/gone.ts\0",
     });
 
     const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
@@ -201,7 +205,7 @@ describe("changeSetSnapshot — unified outcome", () => {
     // Simulates: a committed add (relative to base), a dirty modify, and an untracked file.
     const { git } = scriptedChangeSetGit({
       nameStatus: "A\0src/committed.ts\0M\0src/dirty.ts\0",
-      numstat: "5\t0\0src/committed.ts\0" + "3\t1\0src/dirty.ts\0",
+      numstat: "5\t0\tsrc/committed.ts\0" + "3\t1\tsrc/dirty.ts\0",
       status: "? untracked.txt\0",
     });
 
@@ -303,5 +307,118 @@ describe("readChangeSetBaseFile", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toContain("bad object");
+  });
+});
+
+describe("changeSetSnapshot — real git repository", () => {
+  const tempDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  function git(cwd: string, args: readonly string[]): string {
+    return execFileSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Volli Test",
+        GIT_AUTHOR_EMAIL: "test@volli.local",
+        GIT_COMMITTER_NAME: "Volli Test",
+        GIT_COMMITTER_EMAIL: "test@volli.local",
+      },
+    });
+  }
+
+  function makeRepo(): string {
+    const dir = mkdtempSync(join(tmpdir(), "volli-changeset-"));
+    tempDirs.push(dir);
+    git(dir, ["init", "-q"]);
+    // Ensure the default branch is `main` regardless of the host's init.defaultBranch.
+    git(dir, ["checkout", "-b", "main"]);
+    writeFileSync(join(dir, "tracked.ts"), "line one\n");
+    writeFileSync(join(dir, "keep.ts"), "keep\n");
+    writeFileSync(join(dir, "rename-me.ts"), "rename body\n");
+    writeFileSync(join(dir, "delete-me.ts"), "delete me\n");
+    git(dir, ["add", "."]);
+    git(dir, ["commit", "-q", "-m", "base"]);
+    return dir;
+  }
+
+  it("composes committed, staged, unstaged, untracked, rename, delete, binary, and special paths", () => {
+    const dir = makeRepo();
+
+    // Committed change on a branch (relative to main / base).
+    git(dir, ["checkout", "-b", "ticket"]);
+    writeFileSync(join(dir, "tracked.ts"), "line one\nline two\n");
+    git(dir, ["add", "tracked.ts"]);
+    git(dir, ["commit", "-q", "-m", "commit change"]);
+
+    // Staged modify.
+    writeFileSync(join(dir, "keep.ts"), "keep\nstaged\n");
+    git(dir, ["add", "keep.ts"]);
+
+    // Unstaged further modify of the committed file.
+    writeFileSync(join(dir, "tracked.ts"), "line one\nline two\nline three\n");
+
+    // Rename (staged) + delete (staged).
+    git(dir, ["mv", "rename-me.ts", "renamed.ts"]);
+    git(dir, ["rm", "-q", "delete-me.ts"]);
+
+    // Untracked with space + Unicode; binary untracked.
+    writeFileSync(join(dir, "my notes 日本語.txt"), "untracked\n");
+    writeFileSync(join(dir, "logo.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01]));
+
+    // Tracked binary addition (numstat emits -/-).
+    writeFileSync(join(dir, "asset.bin"), Buffer.from([0x00, 0x01, 0xff]));
+    git(dir, ["add", "asset.bin"]);
+
+    const result = changeSetSnapshot(runGitCapturing, {
+      worktreePath: dir,
+      baseBranch: "main",
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const byPath = new Map(result.value.files.map((f) => [f.path, f]));
+    expect(byPath.get("tracked.ts")?.status).toBe("modified");
+    expect(byPath.get("keep.ts")?.status).toBe("modified");
+    expect(byPath.get("renamed.ts")).toMatchObject({
+      status: "renamed",
+      previousPath: "rename-me.ts",
+    });
+    expect(byPath.get("delete-me.ts")?.status).toBe("deleted");
+    expect(byPath.get("my notes 日本語.txt")).toMatchObject({
+      status: "untracked",
+      insertions: null,
+      deletions: null,
+    });
+    expect(byPath.get("logo.png")?.status).toBe("untracked");
+    expect(byPath.get("asset.bin")).toMatchObject({
+      status: "added",
+      binary: true,
+      insertions: null,
+      deletions: null,
+    });
+
+    // Base read must not mutate the working tree.
+    const before = readFileSync(join(dir, "tracked.ts"));
+    const baseRead = readChangeSetBaseFile(runGitCapturing, {
+      worktreePath: dir,
+      baseRevision: result.value.baseRevision,
+      path: "tracked.ts",
+    });
+    expect(baseRead.ok).toBe(true);
+    if (!baseRead.ok) return;
+    expect(baseRead.value).toEqual({ content: "line one\n" });
+    expect(readFileSync(join(dir, "tracked.ts"))).toEqual(before);
+
+    // Status still dirty after the base read (prove we didn't checkout).
+    const status = git(dir, ["status", "--porcelain"]);
+    expect(status.length).toBeGreaterThan(0);
   });
 });

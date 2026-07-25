@@ -198,43 +198,30 @@ function parseNameStatus(out: string): ParsedNameStatus[] {
 
 /**
  * Parses `git diff --numstat -z -M` output.
- * Ordinary: `added\tdeleted\0path\0` · Rename: `added\tdeleted\0old\0new\0`.
+ * Ordinary: `added\tdeleted\tpath\0`
+ * Rename:   `added\tdeleted\t\0old\0new\0` (empty path field, then two path tokens).
  */
 function parseNumstat(out: string): ParsedNumstat[] {
   const tokens = splitNul(out);
   const entries: ParsedNumstat[] = [];
   let i = 0;
   while (i < tokens.length) {
-    const counts = tokens[i]!;
-    i += 1;
-    if (counts.length === 0) continue;
-    const tab = counts.indexOf("\t");
-    if (tab === -1) continue;
-    const insertions = parseCount(counts.slice(0, tab));
-    const deletions = parseCount(counts.slice(tab + 1));
-    const firstPath = tokens[i++] ?? "";
-    if (firstPath.length === 0) continue;
-    // Rename/copy: two path tokens before the next counts field (or end).
-    // Counts fields always contain a tab (`added\tdeleted`); paths never do.
-    const next = tokens[i];
-    const nextLooksLikeCounts = next !== undefined && next.includes("\t");
-    if (next !== undefined && next.length > 0 && !nextLooksLikeCounts) {
-      i += 1;
-      entries.push({
-        path: next,
-        previousPath: firstPath,
-        insertions,
-        deletions,
-        binary: insertions === null && deletions === null,
-      });
-    } else {
-      entries.push({
-        path: firstPath,
-        insertions,
-        deletions,
-        binary: insertions === null && deletions === null,
-      });
+    const field = tokens[i++]!;
+    if (field.length === 0) continue;
+    const parts = field.split("\t");
+    if (parts.length < 2) continue;
+    const insertions = parseCount(parts[0]!);
+    const deletions = parseCount(parts[1]!);
+    const pathPart = parts[2] ?? "";
+    const binary = insertions === null && deletions === null;
+    if (pathPart.length > 0) {
+      entries.push({ path: pathPart, insertions, deletions, binary });
+      continue;
     }
+    const previousPath = tokens[i++] ?? "";
+    const path = tokens[i++] ?? "";
+    if (path.length === 0) continue;
+    entries.push({ path, previousPath, insertions, deletions, binary });
   }
   return entries;
 }
