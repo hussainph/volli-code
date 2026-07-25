@@ -9,8 +9,9 @@
  *   • makeScratch()  — an isolated scratch dir + user-data dir + scratch DB path,
  *                      with `ownsScratch`/cleanup honouring VOLLI_SMOKE_DIR.
  *   • launch()       — launch the BUILT Electron app against a scratch
- *                      VOLLI_DB_PATH + isolated --user-data-dir, extra env merged
- *                      over process.env. Skips the PTY-busy close confirm.
+ *                      VOLLI_DB_PATH + isolated --user-data-dir + worktree home,
+ *                      with extra env merged over process.env. Skips the PTY-busy
+ *                      close confirm.
  *   • createRunner() — the numbered attempt()/check() runner + summary/exit-code,
  *                      identical semantics to the inline harness the smokes use
  *                      (a failed check never aborts the run).
@@ -94,11 +95,26 @@ export async function makeScratch(prefix) {
  * Launch the built app against a scratch DB + isolated profile. `extraEnv` is
  * merged over process.env (the child keeps PATH etc. unless overridden — the
  * kickoff smoke overrides PATH/ZDOTDIR here to install its fake harness).
+ *
+ * Every launch defaults VOLLI_WORKTREE_HOME_DIR to a directory alongside the
+ * scratch DB. Worktree-creating probes must never inherit the developer's
+ * real home directory: cleanup() owns the scratch tree and removes every
+ * fixture checkout with it. A probe can still supply an explicit alternate
+ * root through extraEnv when it needs to assert a particular layout.
  * VOLLI_SKIP_CLOSE_CONFIRM=1 stops a PTY-busy close from hanging the run.
  *
+ * @param {string} dbPath
+ * @param {Record<string,string>} [extraEnv]
+ */
+export function worktreeHomeFor(dbPath, extraEnv = {}) {
+  return extraEnv.VOLLI_WORKTREE_HOME_DIR ?? join(dirname(dbPath), "worktree-home");
+}
+
+/**
  * @param {{dbPath:string, userDataDir:string, extraEnv?:Record<string,string>}} opts
  */
 export function launch({ dbPath, userDataDir, extraEnv = {} }) {
+  const worktreeHome = worktreeHomeFor(dbPath, extraEnv);
   return _electron.launch({
     executablePath: ELECTRON,
     args: [APP_DIR, `--user-data-dir=${userDataDir}`],
@@ -107,6 +123,7 @@ export function launch({ dbPath, userDataDir, extraEnv = {} }) {
       VOLLI_DB_PATH: dbPath,
       VOLLI_SKIP_CLOSE_CONFIRM: "1",
       ...extraEnv,
+      VOLLI_WORKTREE_HOME_DIR: worktreeHome,
     },
   });
 }
