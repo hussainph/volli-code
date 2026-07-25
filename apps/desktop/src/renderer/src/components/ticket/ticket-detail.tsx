@@ -573,6 +573,7 @@ export function TicketDetail({
                 creating={creating}
                 onNewSession={() => void createSession()}
                 onActivateSession={setActiveTab}
+                activeTabId={activeTabId}
                 changesContent={
                   <TicketChangesPanel
                     ticket={ticket}

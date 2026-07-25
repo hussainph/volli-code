@@ -28,6 +28,7 @@ import { TicketSessionsPanel } from "@renderer/components/ticket/ticket-sessions
 import {
   TICKET_RAIL_MODES,
   TICKET_RAIL_MODE_LABELS,
+  selectRailMode,
   type TicketRailMode,
 } from "@renderer/components/ticket/ticket-rail-model";
 import { Button } from "@renderer/components/ui/button";
@@ -101,6 +102,7 @@ export function TicketRail({
   creating,
   onNewSession,
   onActivateSession,
+  activeTabId,
   filesContent,
   changesContent,
 }: {
@@ -111,6 +113,12 @@ export function TicketRail({
   /** Focus (or open) a session tab in the main strip — deliberate selection only. */
   onActivateSession(sessionId: string): void;
   /**
+   * The main strip's active tab. The rail never changes it — it is threaded in
+   * so mode switches run through {@link selectRailMode} on the live path (see
+   * `onSelectMode`), not only in tests.
+   */
+  activeTabId: string;
+  /**
    * Optional Files navigator. When omitted, a quiet placeholder renders so the
    * shell stays usable until the Files agent lands.
    */
@@ -120,6 +128,19 @@ export function TicketRail({
 }) {
   const mode = useUiStore((state) => state.railMode);
   const setRailMode = useUiStore((state) => state.setRailMode);
+
+  // Decision #46: switching navigator must not open, close, or retarget a
+  // main-view tab. The chrome transition is computed by the pure contract and
+  // only its `mode` is committed, so the store has no path by which a mode
+  // click could reach the tab strip — and the rule the tests assert is the same
+  // code the app runs, rather than a parallel description of it.
+  const onSelectMode = React.useCallback(
+    (next: TicketRailMode) => {
+      const chrome = selectRailMode({ mode, activeTabId }, next);
+      setRailMode(chrome.mode);
+    },
+    [mode, activeTabId, setRailMode],
+  );
 
   return (
     <div className="flex min-h-0 flex-1" data-testid="ticket-rail">
@@ -143,7 +164,7 @@ export function TicketRail({
           </div>
         ) : null}
       </div>
-      <TicketRailModeStrip mode={mode} onSelectMode={setRailMode} />
+      <TicketRailModeStrip mode={mode} onSelectMode={onSelectMode} />
     </div>
   );
 }
