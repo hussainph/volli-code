@@ -555,6 +555,10 @@ export type VolliIpcEvent =
   // see volli-fs.ts's DirWatchManager. Carries no listing: the renderer
   // re-reads the one directory it owns, so the tree never mirrors the repo.
   | "volli:dir-changed"
+  // Debounced recursive watch over a live ticket worktree — see
+  // worktree/change-set-watch.ts. Carries only the ticketId; the renderer
+  // refetches the Change Set snapshot.
+  | "volli:worktree-changed"
   // Transient worktree-ensure phase transitions (never persisted; the renderer
   // mirrors them in a keyed store map, the `starting[ticketId]` pattern).
   | "volli:worktree-phase";
@@ -780,6 +784,15 @@ export type WorktreePhase = "creating" | "copying" | "setting-up" | "ready" | "f
 export interface WorktreePhaseEvent {
   ticketId: string;
   phase: WorktreePhase;
+}
+
+/**
+ * Debounced signal that a live ticket worktree's filesystem changed
+ * (`volli:worktree-changed`). The renderer refetches the Change Set; the
+ * payload carries only the ticket id (no file list).
+ */
+export interface WorktreeChangedEvent {
+  ticketId: string;
 }
 
 /** Where a worktree dir stands relative to what git knows — the live half of worktree state. */
