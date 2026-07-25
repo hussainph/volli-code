@@ -3,7 +3,15 @@
 // stays type-only on @volli/shared (the pack config keeps main and preload
 // dependency-disjoint; see CAUTION in apps/desktop/vite.config.ts).
 
-import type { DataIpcChannel, FileIpcChannel, IpcArgs, VolliInvokeContract } from "./ipc";
+import type {
+  DataIpcChannel,
+  FileIpcChannel,
+  IpcArgs,
+  ThemeIpcChannel,
+  VolliInvokeContract,
+} from "./ipc";
+import { isValidOverlayKey, isValidOverlayValue } from "./theme/ghostty-overlay";
+import { isProjectThemeOverride, isThemeDefinition } from "./theme/persistence";
 import { isHarnessId, isTicketPriority, isTicketStatus } from "./ticket";
 import { isValidBranchName } from "./ticket-branch";
 
@@ -503,3 +511,72 @@ export const FILE_IPC: { readonly [C in FileIpcChannel]: IpcRequestDescriptor<C>
 
 /** Every channel the file-IPC surface owns, derived — never hand-synced. */
 export const FILE_CHANNELS = Object.keys(FILE_IPC) as readonly FileIpcChannel[];
+
+// ---- theme-IPC descriptor table ------------------------------------------
+// Exactly one entry per VolliThemeIpcContract channel (the 4 channels
+// `src/main/theme-ipc.ts` owns). The theme/override shape guards live next to
+// the persistence rules they enforce (`theme/persistence.ts`), imported above.
+
+/**
+ * Whether every value is a string or null — the overlay edit-set shape (`null`
+ * removes the key) — AND every key/value is one `applyOverlayEdits` will
+ * actually write. The character rule is imported, not restated, so the IPC
+ * boundary cannot drift from the writer it guards: an edit that would inject a
+ * second ghostty directive (`command = …` sets the program the terminal runs)
+ * is refused here, before main runs, as well as there.
+ */
+function isOverlayEdits(value: unknown): value is Record<string, string | null> {
+  return (
+    isRecord(value) &&
+    !Array.isArray(value) &&
+    Object.entries(value).every(
+      ([key, entry]) =>
+        isValidOverlayKey(key) &&
+        (entry === null || (typeof entry === "string" && isValidOverlayValue(entry))),
+    )
+  );
+}
+
+export const THEME_IPC: { readonly [C in ThemeIpcChannel]: IpcRequestDescriptor<C> } = {
+  "volli:theme-state": {
+    guard: (args): args is IpcArgs<"volli:theme-state"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      return (
+        isRecord(input) &&
+        (input["projectId"] === undefined || typeof input["projectId"] === "string")
+      );
+    },
+    invalidError: "Invalid theme request",
+  },
+  "volli:theme-set-global": {
+    guard: (args): args is IpcArgs<"volli:theme-set-global"> =>
+      args.length === 1 && isRecord(args[0]) && isThemeDefinition(args[0]["theme"]),
+    invalidError: "Invalid theme",
+  },
+  "volli:theme-set-project": {
+    guard: (args): args is IpcArgs<"volli:theme-set-project"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (!isRecord(input) || typeof input["projectId"] !== "string") return false;
+      return input["override"] === null || isProjectThemeOverride(input["override"]);
+    },
+    invalidError: "Invalid project theme override",
+  },
+  // The renderer names a SCOPE, never a path — so the "Volli never writes the
+  // user's own ghostty config" invariant (#67) holds at the IPC boundary as
+  // well as at the write path, rather than relying on the guard alone.
+  "volli:theme-terminal-overlay-write": {
+    guard: (args): args is IpcArgs<"volli:theme-terminal-overlay-write"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (!isRecord(input) || !isOverlayEdits(input["edits"])) return false;
+      if (input["scope"] === "global") return true;
+      return input["scope"] === "project" && typeof input["projectId"] === "string";
+    },
+    invalidError: "Invalid terminal overlay write",
+  },
+};
+
+/** Every channel the theme-IPC surface owns, derived — never hand-synced. */
+export const THEME_CHANNELS = Object.keys(THEME_IPC) as readonly ThemeIpcChannel[];

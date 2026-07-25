@@ -15,6 +15,9 @@
     "test:coverage": "vp test run --coverage"
   },
   "devDependencies": {
+    "@types/culori": "^4.0.1",
+    "apca-w3": "^0.1.9",
+    "culori": "^4.0.2",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
   }

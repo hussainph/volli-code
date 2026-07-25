@@ -34,10 +34,10 @@ function persist(key: string, value: string, failureVerb: string): void {
   window.api.appState
     .set(key, value)
     .then((result) => {
-      if (!result.ok) toastError(`Could not ${failureVerb} "${key}": ${result.error}`);
+      if (!result.ok) toastError(`Couldn't ${failureVerb} "${key}": ${result.error}`);
     })
     .catch((error: unknown) => {
-      toastError(`Could not ${failureVerb} "${key}": ${errorMessage(error)}`);
+      toastError(`Couldn't ${failureVerb} "${key}": ${errorMessage(error)}`);
     });
 }
 

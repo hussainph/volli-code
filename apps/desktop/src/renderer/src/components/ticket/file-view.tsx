@@ -214,7 +214,7 @@ export function FileView({
       }
       const disk = await readFile();
       if (!(disk.ok && disk.content.type === "text")) {
-        toastError(`Could not save ${name}: ${result.error}`);
+        toastError(`Couldn't save ${name}: ${result.error}`);
         return;
       }
       if (
@@ -241,17 +241,15 @@ export function FileView({
             revision: disk.mtime,
             editable: false,
           });
-          toastError(
-            `${name} changed on disk and grew past the editable 1 MiB cap — editing stopped.`,
-          );
+          toastError(`${name} changed on disk and is no longer editable. Editing stopped.`);
         } else {
-          toastError(`${name} changed on disk — your last edits were not saved.`);
+          toastError(`${name} changed on disk. Your last edits were not saved.`);
         }
         return;
       }
       if (disk.content.text !== syncedRef.current) {
         if (mountedRef.current) setConflict({ text: disk.content.text, mtime: disk.mtime });
-        else toastError(`${name} changed on disk — your last edits were not saved.`);
+        else toastError(`${name} changed on disk. Your last edits were not saved.`);
         return;
       }
       // Same content, drifted mtime — adopt it and retry the write.
@@ -259,7 +257,7 @@ export function FileView({
     }
     // Both attempts hit an mtime drift with identical content (rapid external
     // touches) — give up quietly this cycle; the next edit reschedules a save.
-    toastError(`Could not save ${name}: the file is being modified externally.`);
+    toastError(`Couldn't save ${name}: the file is being modified externally.`);
     // `debouncer` is referenced above but declared after this callback (see
     // note there) — deliberately omitted from deps; its identity never
     // changes for the component's lifetime.
@@ -274,9 +272,7 @@ export function FileView({
   React.useEffect(() => {
     void window.api.files.watch({ projectId, ticketId, relPath }).then((result) => {
       if (!result.ok) {
-        toastError(
-          `Live updates for ${name} are unavailable — it may not refresh until you reopen it.`,
-        );
+        toastError(`Live updates for ${name} are off. Reopen the file to refresh it.`);
       }
     });
     const unsubscribe = window.api.files.onChanged((event) => {
@@ -299,7 +295,9 @@ export function FileView({
               ? draftRef.current !== syncedRef.current
               : current.status === "code" && current.editable && sourceDirtyRef.current;
           if (dirty) {
-            toastError(`${name} changed on disk (now unreadable) — your unsaved edits were kept.`);
+            toastError(
+              `${name} changed on disk and is now unreadable. Your unsaved edits were kept.`,
+            );
           } else {
             setState({ status: "error", error: disk.error });
           }
@@ -462,9 +460,9 @@ export function FileView({
   async function handleReveal() {
     try {
       const result = await window.api.files.reveal({ projectId, ticketId, relPath });
-      if (!result.ok) toastError(`Could not reveal in Finder: ${result.error}`);
+      if (!result.ok) toastError(`Couldn't reveal in Finder: ${result.error}`);
     } catch (error) {
-      toastError(`Could not reveal in Finder: ${errorMessage(error)}`);
+      toastError(`Couldn't reveal in Finder: ${errorMessage(error)}`);
     }
   }
 
@@ -494,7 +492,7 @@ export function FileView({
         <ContentColumn className="flex flex-col gap-2 py-6">
           {conflict !== null && (
             <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-              <span>Changed on disk — autosave paused to avoid overwriting.</span>
+              <span>Changed on disk. Autosave paused.</span>
               <Button size="sm" variant="secondary" onClick={reload}>
                 <ArrowClockwiseIcon />
                 Reload
@@ -543,7 +541,7 @@ export function FileView({
       <div className="flex min-h-0 flex-1 flex-col gap-2 px-gutter py-4">
         {state.truncated && (
           <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-            <span>Showing the first 1 MiB — reveal in Finder for the full file.</span>
+            <span>Showing the first 1 MiB. Reveal in Finder for the whole file.</span>
             {revealButton}
           </div>
         )}

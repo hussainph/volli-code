@@ -159,7 +159,7 @@ function fileCompletionSource(config: FileRefsConfig): CompletionSource {
           void (async () => {
             const result = await config.createArtifact(query.trim());
             if (!result.ok) {
-              toastError(`Could not create artifact: ${result.error}`);
+              toastError(`Couldn't create artifact: ${result.error}`);
               return;
             }
             config.onOpenFile(result.relPath);

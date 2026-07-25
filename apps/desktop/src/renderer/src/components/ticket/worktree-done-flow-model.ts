@@ -77,7 +77,7 @@ export interface DoneFlowView {
 const REASON_LOADING = "Loading…";
 const REASON_NO_CHANGES = "No changes vs base yet";
 const REASON_BASE_UNRESOLVED = "Base branch not resolved";
-const REASON_SEQUENCER = "Merge/rebase in progress — resolve it in the terminal.";
+const REASON_SEQUENCER = "Merge in progress. Finish it in the terminal.";
 const REASON_CLEAN_TREE = "Working tree clean";
 const REASON_NOTHING_TO_PUSH = "Nothing to push";
 const REASON_NO_PR_YET = "No PR yet";

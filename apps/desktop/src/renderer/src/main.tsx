@@ -15,6 +15,7 @@ import { boot, refreshPlanningData } from "./lib/boot";
 import { toastError } from "./lib/toast";
 import { useBoardStore } from "./stores/board";
 import { useProjectsStore } from "./stores/projects";
+import { useThemeStore } from "./stores/theme";
 import { useWorkspaceStore } from "./stores/workspace";
 import { initTerminalAppearance } from "./terminal/appearance";
 
@@ -41,6 +42,19 @@ async function main() {
   // boot round-trip needlessly widens the window where a terminal's first
   // paint lands on the token fallback (they re-theme live either way).
   void initTerminalAppearance();
+
+  // Same reasoning for the theme: it is a db read with no dependency on the
+  // bootstrap payload, and globals.css already paints the shipped default, so
+  // fetching it concurrently only narrows the window where a non-default theme
+  // hasn't landed yet. Settings' provenance labels track later config edits
+  // through the same push the terminals re-theme from.
+  void useThemeStore.getState().hydrate();
+  // The broadcast is global-scope by contract (main/ghostty-config.ts), so it
+  // is handed to the store as such — a project scope re-reads its own layered
+  // resolution instead of adopting global values under a project's label.
+  window.api.terminal.onGhosttyConfigChanged((payload) => {
+    useThemeStore.getState().acceptGlobalTerminal(payload);
+  });
 
   // boot() returns { ok: false } for a failed bootstrap; the catch covers the
   // unexpected throw (e.g. a corrupt pref blob exploding during rehydrate) so
@@ -97,11 +111,11 @@ async function main() {
     void refreshPlanningData({ ticketId: event.ticketId, projectId: event.projectId })
       .then((refreshResult) => {
         if (!refreshResult.ok) {
-          toastError(`Could not refresh agent changes: ${refreshResult.error}`);
+          toastError(`Couldn't refresh agent changes: ${refreshResult.error}`);
         }
       })
       .catch((error: unknown) => {
-        toastError(`Could not refresh agent changes: ${errorMessage(error)}`);
+        toastError(`Couldn't refresh agent changes: ${errorMessage(error)}`);
       });
   });
 }

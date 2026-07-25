@@ -19,7 +19,7 @@ export function useAddProject(): () => Promise<void> {
       if (!result.canceled)
         await addProject({ path: result.path, defaultName: result.defaultName });
     } catch (error) {
-      toastError(`Could not open folder picker: ${errorMessage(error)}`);
+      toastError(`Couldn't open folder picker: ${errorMessage(error)}`);
     }
   }, [addProject]);
 }

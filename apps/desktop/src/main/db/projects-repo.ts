@@ -4,7 +4,8 @@
  * only tickets get one (`ticket_events`, migration 001).
  */
 import type Database from "better-sqlite3";
-import type { Project } from "@volli/shared";
+import { isProjectThemeOverrideEmpty } from "@volli/shared";
+import type { Project, ProjectThemeOverride } from "@volli/shared";
 import { prepared } from "./prepared";
 
 interface ProjectRow {
@@ -14,6 +15,11 @@ interface ProjectRow {
   ticket_prefix: string;
   base_branch: string | null;
   setup_command: string | null;
+  /** Migration 013 — one nullable column per surface, plus the auto-tint seed; NULL = inherit. */
+  theme_app_slug: string | null;
+  theme_terminal_name: string | null;
+  theme_editor_id: string | null;
+  theme_seed: string | null;
   color_index: number;
   sort_order: number;
   row_version: number;
@@ -28,6 +34,22 @@ interface ProjectRow {
   next_ticket_number: number;
 }
 
+/**
+ * The row's four theme columns as a domain override — or `null` when every one
+ * of them is NULL. Collapsing the all-inherit case to `null` keeps "does this
+ * project override anything?" a single check for every reader, instead of an
+ * object whose fields all have to be interrogated.
+ */
+function mapThemeOverride(row: ProjectRow): ProjectThemeOverride | null {
+  const override: ProjectThemeOverride = {
+    appThemeSlug: row.theme_app_slug,
+    terminalThemeName: row.theme_terminal_name,
+    editorThemeId: row.theme_editor_id,
+    seed: row.theme_seed,
+  };
+  return isProjectThemeOverrideEmpty(override) ? null : override;
+}
+
 function mapProject(row: ProjectRow): Project {
   return {
     id: row.id,
@@ -36,6 +58,7 @@ function mapProject(row: ProjectRow): Project {
     ticketPrefix: row.ticket_prefix,
     baseBranch: row.base_branch,
     setupCommand: row.setup_command,
+    themeOverride: mapThemeOverride(row),
     colorIndex: row.color_index,
     sortOrder: row.sort_order,
     createdAt: row.created_at,
@@ -99,6 +122,40 @@ export function updateProjectSetupCommand(
         SET setup_command = ?, row_version = row_version + 1, updated_at = ?
       WHERE id = ?`,
   ).run(setupCommand, now, id);
+  return getProjectById(db, id);
+}
+
+/**
+ * Updates the project's per-surface theme override and returns the
+ * authoritative row — the `base_branch`/`setup_command` precedent above, for
+ * the columns migration 013 adds.
+ *
+ * `null` clears every surface back to inheriting the global theme; a partial
+ * override clears only the surfaces whose fields are null, because resolution
+ * is per surface and never per token (#69). All four columns are written on
+ * every call, so the stored row always equals the override the caller asked
+ * for — no read-modify-write, no stale surface left behind.
+ */
+export function updateProjectThemeOverride(
+  db: Database.Database,
+  id: string,
+  override: ProjectThemeOverride | null,
+  now: number,
+): Project | undefined {
+  prepared(
+    db,
+    `UPDATE projects
+        SET theme_app_slug = ?, theme_terminal_name = ?, theme_editor_id = ?, theme_seed = ?,
+            row_version = row_version + 1, updated_at = ?
+      WHERE id = ?`,
+  ).run(
+    override?.appThemeSlug ?? null,
+    override?.terminalThemeName ?? null,
+    override?.editorThemeId ?? null,
+    override?.seed ?? null,
+    now,
+    id,
+  );
   return getProjectById(db, id);
 }
 

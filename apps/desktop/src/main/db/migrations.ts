@@ -304,6 +304,33 @@ const MIGRATION_012_SESSION_EXIT_CODE = `
 ALTER TABLE sessions ADD COLUMN exit_code INTEGER;
 `;
 
+/**
+ * Migration 013: per-project theming (docs/plans/theming-engine.md, decisions
+ * #69/#72). Four nullable columns on `projects`, one per surface plus the
+ * auto-tint seed — additive, every existing row starts `NULL`, and `NULL`
+ * means *inherit the global theme*, which is what makes "per-project theming
+ * is off by default" (#72) the literal storage state rather than a UI
+ * convention.
+ *
+ * Deliberately FOUR columns rather than one JSON blob: resolution is per
+ * surface, never per token (#69), so "what is overridden" must be answerable
+ * by looking at the row. It also keeps a future `WHERE theme_app_slug IS NOT
+ * NULL` sweep (find every project that overrides the app surface) an index-able
+ * question instead of a JSON scan.
+ *
+ * What is NOT here: the resolved token set. `{global theme, project override}`
+ * is authoritative and the tokens are derived at render time — VS Code's
+ * most-complained-about theming bug is auto-switching persisting the resolved
+ * theme over the user's authored intent. The global half lives in `app_state`
+ * under the `theme` key (see `db/theme-repo.ts`), not in a column here.
+ */
+const MIGRATION_013_PROJECT_THEME_OVERRIDE = `
+ALTER TABLE projects ADD COLUMN theme_app_slug TEXT;
+ALTER TABLE projects ADD COLUMN theme_terminal_name TEXT;
+ALTER TABLE projects ADD COLUMN theme_editor_id TEXT;
+ALTER TABLE projects ADD COLUMN theme_seed TEXT;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -356,6 +383,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 12,
     name: "sessions.exit_code — observed shell exit code for concluded sessions",
     sql: MIGRATION_012_SESSION_EXIT_CODE,
+  },
+  {
+    version: 13,
+    name: "projects theme override — per-surface app/terminal/editor slugs + auto-tint seed",
+    sql: MIGRATION_013_PROJECT_THEME_OVERRIDE,
   },
 ];
 

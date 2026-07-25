@@ -115,7 +115,7 @@ export async function sweepOrphans(deps: WorktreeDeps): Promise<SweepReport> {
         if (registeredPaths.has(leafCanonical) || knownPaths.has(leafCanonical)) continue;
         report.dirty.push({
           path: leafPath,
-          reason: "not registered with git — cannot verify it is safe to remove",
+          reason: "Not registered with git, so it isn't safe to remove automatically.",
         });
       }
     }

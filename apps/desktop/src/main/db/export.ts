@@ -27,6 +27,26 @@ export interface ExportProject {
   path: string;
   ticketPrefix: string;
   baseBranch: string | null;
+  /**
+   * The monotonic ticket-number counter (migration 005). NOT derivable from
+   * the exported tickets — its whole reason to exist is that `MAX(ticket_number) + 1`
+   * rolls back after a hard-delete — so an export without it would hand out a
+   * display id, and a worktree branch, that a deleted ticket already used.
+   */
+  nextTicketNumber: number;
+  /** The command run in a fresh ticket worktree (migration 008), or `null` when the project sets none. */
+  setupCommand: string | null;
+  /**
+   * The per-project theme override (migration 013), one field per surface plus
+   * the auto-tint seed; `null` means that surface inherits the global theme.
+   * Carried as four flat fields, mirroring the four columns — the GLOBAL theme
+   * rides `app_state`, so without these an export/import round trip would drop
+   * exactly half of a user's theming.
+   */
+  themeAppSlug: string | null;
+  themeTerminalName: string | null;
+  themeEditorId: string | null;
+  themeSeed: string | null;
   colorIndex: number;
   sortOrder: number;
   rowVersion: number;
@@ -144,6 +164,12 @@ interface ProjectRow {
   path: string;
   ticket_prefix: string;
   base_branch: string | null;
+  next_ticket_number: number;
+  setup_command: string | null;
+  theme_app_slug: string | null;
+  theme_terminal_name: string | null;
+  theme_editor_id: string | null;
+  theme_seed: string | null;
   color_index: number;
   sort_order: number;
   row_version: number;
@@ -151,6 +177,12 @@ interface ProjectRow {
   updated_at: number;
 }
 
+/**
+ * Every `projects` column — the flat row, not the app's `Project` model, so a
+ * column added by a migration is carried whether or not the model happens to
+ * surface it. The tests hold this against `PRAGMA table_info`, because a
+ * column dropped here is invisible at every layer above.
+ */
 function exportProjects(db: Database.Database): ExportProject[] {
   const rows = prepared<[], ProjectRow>(db, "SELECT * FROM projects ORDER BY id").all();
   return rows.map((row) => ({
@@ -159,6 +191,12 @@ function exportProjects(db: Database.Database): ExportProject[] {
     path: row.path,
     ticketPrefix: row.ticket_prefix,
     baseBranch: row.base_branch,
+    nextTicketNumber: row.next_ticket_number,
+    setupCommand: row.setup_command,
+    themeAppSlug: row.theme_app_slug,
+    themeTerminalName: row.theme_terminal_name,
+    themeEditorId: row.theme_editor_id,
+    themeSeed: row.theme_seed,
     colorIndex: row.color_index,
     sortOrder: row.sort_order,
     rowVersion: row.row_version,

@@ -15,6 +15,10 @@ import { registerIpcHandlers } from "./ipc";
 import { registerAppMenu } from "./menu";
 import { confirmDestructiveClose, registerTerminalIpcHandlers } from "./pty";
 import type { PtyManager } from "./pty";
+import { registerThemeIpcHandlers } from "./theme-ipc";
+import { defaultFsDeps } from "./fs-deps";
+import { getGlobalTheme } from "./db/theme-repo";
+import { windowBackgroundColor } from "./window-theme";
 import { registerFileIpcHandlers } from "./volli-fs";
 import { broadcastDataChanged, broadcastSessionsInterrupted } from "./broadcast";
 import { startOrphanSweep } from "./orphan-sweep";
@@ -125,7 +129,7 @@ function openExternal(target: string): void {
   }
 }
 
-function createWindow(ptyManager: PtyManager): BrowserWindow {
+function createWindow(ptyManager: PtyManager, backgroundColor: string): BrowserWindow {
   const mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -142,9 +146,11 @@ function createWindow(ptyManager: PtyManager): BrowserWindow {
     // ((40 - 12) / 2 = 14). Must stay in sync with ChromeBar's h-10 height
     // (chrome-bar.tsx), the same way backgroundColor below tracks --background.
     trafficLightPosition: { x: 10, y: 14 },
-    // Must match --background in renderer globals.css (main cannot read
-    // renderer CSS) — prevents the white flash before first paint.
-    backgroundColor: "#111111",
+    // The active theme's generated --background (window-theme.ts runs the same
+    // pure generator the renderer does) — prevents the white flash before
+    // first paint, and keeps the window edge from flashing the OLD palette
+    // during a resize after a theme change.
+    backgroundColor,
     webPreferences: {
       preload: join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -285,8 +291,17 @@ app.whenReady().then(async () => {
   );
 
   registerIpcHandlers();
-  // Ghostty config read + live-reload watch, feeding restty's appearance.
-  registerGhosttyConfigIpc();
+  // The ONE filesystem seam the config surfaces share (fs-deps.ts) — ghostty
+  // resolution and the terminal-overlay writer both pull their slice from this
+  // single value, so there is no second `readFile` or second `userData` root to
+  // keep in agreement. Built here because this is the one place that may
+  // resolve `app.getPath("userData")`, the same injection stance as the db path
+  // and the attachment store below.
+  const fsDeps = defaultFsDeps(app.getPath("userData"));
+  // Ghostty config read + live-reload watch, feeding restty's appearance. The
+  // `userData` root is where Volli's own ghostty OVERLAY files live (decision
+  // #67).
+  registerGhosttyConfigIpc(fsDeps);
 
   // Open (creating + migrating if needed) the SQLite db before the window
   // exists, so the renderer's boot-time volli:data-bootstrap call always has
@@ -357,6 +372,35 @@ app.whenReady().then(async () => {
   // create, reveal, per-tab watch); same degraded-DB stance as
   // registerDataIpcHandlers.
   registerFileIpcHandlers(dbHandle);
+  // Theming: resolved state, global theme, per-project override, and the
+  // ghostty overlay write path. Same degraded-DB stance as the two above; the
+  // `userData` root is where Volli's overlay files live (never the user's own
+  // ghostty config — decision #67).
+  //
+  // The window background follows the global theme: every window repaints its
+  // edge the moment the theme is persisted, so a resize right after a theme
+  // change can't reveal the previous palette.
+  registerThemeIpcHandlers(
+    dbHandle,
+    { fs: fsDeps, now: Date.now },
+    {
+      onGlobalThemeChanged: (theme) => {
+        // The theme is already persisted by the time this runs, so a generator
+        // failure must not turn a successful write into a rejected set-global.
+        // Leave the windows on their current edge color rather than repainting
+        // to the default: a theme that can't generate never reached the
+        // renderer's own surfaces either, so the old color is the honest one.
+        let color: string;
+        try {
+          color = windowBackgroundColor(theme);
+        } catch (error) {
+          console.warn("[volli] failed to derive the window background:", errorMessage(error));
+          return;
+        }
+        for (const window of BrowserWindow.getAllWindows()) window.setBackgroundColor(color);
+      },
+    },
+  );
   // Boots the PTY multiplexer (persists a durable record per session) and its
   // before-quit teardown (kills all PTYs, gated on busy sessions); needs the
   // db, so it registers here. The returned manager feeds each window's own
@@ -374,7 +418,19 @@ app.whenReady().then(async () => {
   // needs only runtimePaths (a pure join), so it can precede the window it feeds.
   const ptyManager = registerTerminalIpcHandlers(dbHandle, runtimePaths);
   ptyManagerRef = ptyManager;
-  const mainWindow = createWindow(ptyManager);
+  // Read fresh per window rather than once at boot: `activate` can re-create
+  // the window long after the user has changed themes.
+  const currentWindowBackground = (): string => {
+    if (!dbHandle.ok) return windowBackgroundColor(null);
+    try {
+      return windowBackgroundColor(getGlobalTheme(dbHandle.db) ?? null);
+    } catch (error) {
+      // Never fatal: a window with a slightly-wrong edge color beats no window.
+      console.warn("[volli] failed to read the stored theme:", errorMessage(error));
+      return windowBackgroundColor(null);
+    }
+  };
+  const mainWindow = createWindow(ptyManager, currentWindowBackground());
 
   // Startup orphan sweep (worktree-support §7): prunes stale git metadata and
   // removes clean orphaned worktree dirs (branches retained); dirty orphans are
@@ -433,7 +489,7 @@ app.whenReady().then(async () => {
       .join("\n\n");
     await dialog.showMessageBox(mainWindow, {
       type: "warning",
-      message: "Some Volli skill files were edited and were left untouched.",
+      message: "You edited some skill files, so Volli left them alone.",
       detail,
     });
   };
@@ -485,7 +541,7 @@ app.whenReady().then(async () => {
       type: "warning",
       message: "Remove the Volli CLI and agent skills?",
       detail:
-        "This removes the bundled skill pack and the /usr/local/bin/volli link. Files you edited yourself are left in place.",
+        "Removes the bundled skill pack and the /usr/local/bin/volli link. Files you edited yourself stay.",
       buttons: ["Remove", "Cancel"],
       defaultId: 1,
       cancelId: 1,
@@ -521,12 +577,12 @@ app.whenReady().then(async () => {
     }
     const preservedNote =
       removal.preserved.length > 0
-        ? `\n\nLeft in place because you edited them:\n${removal.preserved.join("\n")}`
+        ? `\n\nKept, because you edited them:\n${removal.preserved.join("\n")}`
         : "";
     await dialog.showMessageBox(mainWindow, {
       type: "info",
       message: "Volli CLI and agent skills removed.",
-      detail: `Removed ${removal.removed.length} managed item(s).${preservedNote}`,
+      detail: `Removed ${removal.removed.length} item(s).${preservedNote}`,
     });
   };
 
@@ -586,7 +642,7 @@ app.whenReady().then(async () => {
     console.error("[volli] failed to start agent socket:", errorMessage(error));
     new Notification({
       title: "Volli CLI unavailable",
-      body: "The volli agent socket failed to start, so CLI/agent commands won't work this launch.",
+      body: "The agent socket failed to start. CLI commands won't work this launch.",
     }).show();
   }
 
@@ -630,7 +686,7 @@ app.whenReady().then(async () => {
             type: "question",
             message: "Install the Volli CLI and agent skills?",
             detail:
-              "Volli will expose its CLI in /usr/local/bin and install the bundled skill only for detected agent harnesses. You can do this later from the File menu.",
+              "Adds the volli command to /usr/local/bin and installs its skill for the agents you already have. You can do this later from the File menu.",
             buttons: ["Install", "Not Now"],
             defaultId: 0,
             cancelId: 1,
@@ -651,7 +707,7 @@ app.whenReady().then(async () => {
     // On macOS it's common to re-create a window when the dock icon is
     // clicked and there are no other windows open.
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow(ptyManager);
+      createWindow(ptyManager, currentWindowBackground());
     }
   });
 });

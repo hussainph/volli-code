@@ -139,7 +139,7 @@ async function runEnsure(
     projectBaseBranch: project.baseBranch ?? null,
   });
   if (!reuseBranch && !base) {
-    const message = "Could not resolve a base branch to create the worktree from.";
+    const message = "Couldn't resolve a base branch to create the worktree from.";
     return fail(deps, ticketId, "create", message, message);
   }
 

@@ -380,11 +380,11 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
       ]);
       if (!activityFetch.isCurrent(token)) return; // superseded — drop the stale result
       if (!ev.ok) {
-        toastError(`Could not load activity: ${ev.error}`);
+        toastError(`Couldn't load activity: ${ev.error}`);
         return;
       }
       if (!cm.ok) {
-        toastError(`Could not load activity: ${cm.error}`);
+        toastError(`Couldn't load activity: ${cm.error}`);
         return;
       }
       setEvents(ev.events);
@@ -392,7 +392,7 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
       setLoaded(true);
     } catch (error) {
       if (activityFetch.isCurrent(token))
-        toastError(`Could not load activity: ${errorMessage(error)}`);
+        toastError(`Couldn't load activity: ${errorMessage(error)}`);
     }
   }, [ticketId, activityFetch]);
 
@@ -406,13 +406,13 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
       const cm = await window.api.comments.list({ ticketId });
       if (!activityFetch.isCurrent(token)) return; // superseded — drop the stale result
       if (!cm.ok) {
-        toastError(`Could not load activity: ${cm.error}`);
+        toastError(`Couldn't load activity: ${cm.error}`);
         return;
       }
       setComments(cm.comments);
     } catch (error) {
       if (activityFetch.isCurrent(token))
-        toastError(`Could not load activity: ${errorMessage(error)}`);
+        toastError(`Couldn't load activity: ${errorMessage(error)}`);
     }
   }, [ticketId, activityFetch]);
 

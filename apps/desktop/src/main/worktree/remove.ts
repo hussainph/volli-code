@@ -86,7 +86,7 @@ export async function remove(
         : caught instanceof Error
           ? caught.message
           : String(caught);
-    return err(`Could not remove the worktree: ${message}`);
+    return err(`Couldn't remove the worktree: ${message}`);
   }
 
   // Clear the checkout pointer (emits `worktree_changed`) after the git work succeeds.

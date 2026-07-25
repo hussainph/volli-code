@@ -71,10 +71,10 @@ export function RemoveProjectDialog({ project, open, onOpenChange }: RemoveProje
         <AlertDialogHeader>
           <AlertDialogTitle>Remove {project.name} from Volli?</AlertDialogTitle>
           <AlertDialogDescription>
-            This removes the project from Volli; the folder on disk is untouched.
+            The folder on disk is untouched.
             {busyProcesses.length > 0 && (
               <span className="mt-2 block text-destructive">
-                {describeBusy(busyProcesses, " — removing the project will end")}
+                {describeBusy(busyProcesses, ". Removing the project will end")}
               </span>
             )}
           </AlertDialogDescription>

@@ -56,14 +56,14 @@ export function useFileIndex(projectId: string): FileIndexHandle {
       const result = await window.api.files.index({ projectId });
       if (!mountedRef.current) return;
       if (!result.ok) {
-        toastError(`Could not load the file index: ${result.error}`);
+        toastError(`Couldn't load the file index: ${result.error}`);
         return;
       }
       indexRef.current = result.files;
       lastFetchRef.current = Date.now();
       setVersion((n) => n + 1);
     } catch (error) {
-      if (mountedRef.current) toastError(`Could not load the file index: ${errorMessage(error)}`);
+      if (mountedRef.current) toastError(`Couldn't load the file index: ${errorMessage(error)}`);
     } finally {
       inflightRef.current = false;
       // A forceRefresh landed while this fetch was in flight; run one more now

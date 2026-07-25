@@ -260,9 +260,7 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
           {selected && scratchTabCount === 0 && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center">
               <TerminalWindowIcon weight="fill" className="size-8 text-muted-foreground" />
-              <p className="max-w-sm text-sm text-muted-foreground">
-                Global scratch sessions — plan, brainstorm, and orchestrate outside any ticket.
-              </p>
+              <p className="text-sm text-muted-foreground">No open sessions.</p>
               <Button size="sm" onClick={() => createScratch(selected)} disabled={creatingSelected}>
                 {creatingSelected ? "Starting…" : "New session"}
               </Button>

@@ -5,6 +5,8 @@
  * Ported behavior-for-behavior from the Swift original.
  */
 
+import type { ProjectThemeOverride } from "./theme/persistence";
+
 /**
  * A tracked project. Mirrors the SQLite `projects` row shape (migration
  * 001): `sortOrder` drives rail order (dense, rewritten `0..n-1` on
@@ -23,6 +25,13 @@ export interface Project {
    * user configures one, in which case the worktree phase skips setup entirely.
    */
   setupCommand?: string | null;
+  /**
+   * Per-surface theming override (decision #69, migration 013). `null` — the
+   * default for every project (#72) — means the project inherits the global
+   * theme on all three surfaces; a non-null value still inherits per surface
+   * wherever its own field is null.
+   */
+  themeOverride?: ProjectThemeOverride | null;
   /** Index into {@link PROJECT_COLORS}, assigned round-robin at creation. */
   colorIndex: number;
   /** Rail order; dense, rewritten `0..n-1` whenever the rail is reordered. */

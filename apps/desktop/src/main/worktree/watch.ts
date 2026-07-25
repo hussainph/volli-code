@@ -254,7 +254,7 @@ export async function pollRetention(
             deps.now(),
             AUTOMATION_ACTOR,
           );
-          deps.notify("Pull request merged", `${ticket.title} — its PR was merged.`);
+          deps.notify("Pull request merged", ticket.title);
           result.changed = true;
         }
         store.notifiedMerged.add(ticket.id);
@@ -293,7 +293,7 @@ function stampDiscoveredPr(deps: RetentionPollDeps, ticket: TicketRow, url: stri
     console.error(`[retention] failed to stamp discovered PR for ${ticket.id}:`, error);
     deps.notify(
       "Couldn't save discovered PR",
-      `${ticket.title} — found PR ${url} but couldn't record it; will retry.`,
+      `${ticket.title}: found PR ${url} but couldn't record it. Will retry.`,
     );
     return false;
   }

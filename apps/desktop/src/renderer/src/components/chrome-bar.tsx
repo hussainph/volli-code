@@ -8,6 +8,7 @@ import { SidebarIcon } from "@phosphor-icons/react/dist/csr/Sidebar";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
 
 import { CommandPalette } from "@renderer/components/command-palette";
+import { ThemePickerDialog } from "@renderer/components/theme/theme-picker";
 import { Button } from "@renderer/components/ui/button";
 import { SidebarTrigger } from "@renderer/components/ui/sidebar";
 import { useCommandPaletteShortcut } from "@renderer/hooks/use-command-palette-shortcut";
@@ -34,6 +35,11 @@ export function ChromeBar() {
   const fullScreen = useFullScreen();
   const terminalFocusTarget = useUiStore((state) => state.terminalFocusTarget);
   const [commandPaletteOpen, setCommandPaletteOpen] = useCommandPaletteShortcut();
+  // Local, per the codebase's dialog rule: one opener (⌘K's theme action), so
+  // no global ui-store flag. It lives up here rather than inside the palette
+  // because the picker previews against the live app — it must outlive the
+  // palette that launched it, and must not sit behind the palette's scrim.
+  const [themePickerOpen, setThemePickerOpen] = React.useState(false);
 
   React.useEffect(() => {
     if (terminalFocusTarget !== null) setCommandPaletteOpen(false);
@@ -76,7 +82,12 @@ export function ChromeBar() {
           </>
         )}
       </div>
-      <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
+      <CommandPalette
+        open={commandPaletteOpen}
+        onOpenChange={setCommandPaletteOpen}
+        onChangeTheme={() => setThemePickerOpen(true)}
+      />
+      <ThemePickerDialog open={themePickerOpen} onOpenChange={setThemePickerOpen} />
     </>
   );
 }

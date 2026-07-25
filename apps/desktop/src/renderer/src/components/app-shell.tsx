@@ -207,7 +207,7 @@ function useProjectRootsSync() {
   React.useEffect(() => {
     const paths = useProjectsStore.getState().projects.map((project) => project.path);
     window.api.projects.syncRoots(paths).catch((error: unknown) => {
-      toastError(`Could not sync project roots: ${errorMessage(error)}`);
+      toastError(`Couldn't sync project roots: ${errorMessage(error)}`);
     });
   }, [rootsKey]);
 }

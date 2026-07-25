@@ -20,7 +20,7 @@ type Err = { ok: false; error: string };
 
 /**
  * Runs `call`; on a thrown/rejected IPC or a typed `{ ok: false }`, toasts
- * `Could not ${verb}: <reason>` and resolves `null`. On success, resolves the
+ * `Couldn't ${verb}: <reason>` and resolves `null`. On success, resolves the
  * ok-variant of the result (narrowed, so `.project`/`.ticket`/… are typed).
  */
 export async function writeThrough<R extends Ok | Err>(
@@ -31,11 +31,11 @@ export async function writeThrough<R extends Ok | Err>(
   try {
     result = await call();
   } catch (error) {
-    toastError(`Could not ${verb}: ${errorMessage(error)}`);
+    toastError(`Couldn't ${verb}: ${errorMessage(error)}`);
     return null;
   }
   if (!result.ok) {
-    toastError(`Could not ${verb}: ${result.error}`);
+    toastError(`Couldn't ${verb}: ${result.error}`);
     return null;
   }
   return result as Extract<R, Ok>;

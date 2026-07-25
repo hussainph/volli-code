@@ -10,13 +10,18 @@ import {
 } from "./export";
 import { addTicketLabel, getOrCreateLabel } from "./labels-repo";
 import { MIGRATIONS } from "./migrations";
-import { insertProject } from "./projects-repo";
+import { insertProject, updateProjectThemeOverride } from "./projects-repo";
 import { insertSession } from "./sessions-repo";
 import { openTestDb, testProject, testSession, testTicket } from "./test-helpers";
 import type { TestDb } from "./test-helpers";
 import { archiveTicket, insertTicket } from "./tickets-repo";
 
 let ctx: TestDb;
+
+/** `snake_case` column → the `camelCase` key the export document uses for it. */
+function camelCase(column: string): string {
+  return column.replace(/_([a-z])/g, (_match, letter: string) => letter.toUpperCase());
+}
 
 afterEach(() => {
   ctx.cleanup();
@@ -58,8 +63,21 @@ describe("buildExportDocument — empty db", () => {
 describe("buildExportDocument — populated db", () => {
   it("dumps every table, camelCased, with the ticket displayId reused from displayTicketId", () => {
     ctx = openTestDb();
-    const project = testProject({ id: "proj-1", ticketPrefix: "VC", baseBranch: "main" });
+    const project = testProject({
+      id: "proj-1",
+      ticketPrefix: "VC",
+      baseBranch: "main",
+      setupCommand: "pnpm install",
+    });
     insertProject(ctx.db, project);
+    // Migration 013's four columns. The GLOBAL theme rides `app_state` and so
+    // survives an export for free; the per-project override lives only here.
+    updateProjectThemeOverride(
+      ctx.db,
+      project.id,
+      { appThemeSlug: "sea", terminalThemeName: "Nord", editorThemeId: "vs-dark", seed: "#3a7d9a" },
+      60,
+    );
 
     const liveTicket = testTicket(project.id, {
       id: "ticket-live",
@@ -78,6 +96,10 @@ describe("buildExportDocument — populated db", () => {
     });
     insertTicket(ctx.db, archivedTicket);
     archiveTicket(ctx.db, archivedTicket.id, 999);
+
+    // Ahead of every surviving ticket — the state a hard-delete leaves behind,
+    // and the reason the counter cannot be rebuilt from the exported tickets.
+    ctx.db.prepare("UPDATE projects SET next_ticket_number = 14 WHERE id = ?").run(project.id);
 
     const label = getOrCreateLabel(ctx.db, project.id, "bug", 5);
     addTicketLabel(ctx.db, liveTicket.id, label.id);
@@ -112,11 +134,18 @@ describe("buildExportDocument — populated db", () => {
         path: project.path,
         ticketPrefix: "VC",
         baseBranch: "main",
+        nextTicketNumber: 14,
+        setupCommand: "pnpm install",
+        themeAppSlug: "sea",
+        themeTerminalName: "Nord",
+        themeEditorId: "vs-dark",
+        themeSeed: "#3a7d9a",
         colorIndex: project.colorIndex,
         sortOrder: project.sortOrder,
-        rowVersion: 1,
+        // Bumped by the theme-override write above.
+        rowVersion: 2,
         createdAt: project.createdAt,
-        updatedAt: project.updatedAt,
+        updatedAt: 60,
       },
     ]);
 
@@ -216,6 +245,30 @@ describe("buildExportDocument — populated db", () => {
 
     expect(document.tickets).toHaveLength(1);
     expect(document.tickets[0]?.displayId).toBe(`${project.id}-1`);
+  });
+
+  /**
+   * The gap this guards is invisible from above: `setup_command` (008) and the
+   * four theme columns (013) were both added to `projects` without reaching
+   * `exportProjects`, so an export silently dropped them. Derived from
+   * `PRAGMA table_info` rather than a hand-written list, so the NEXT migration
+   * that forgets the export fails here instead of shipping.
+   */
+  it("carries every projects column, so a migration cannot silently drop one from the export", () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "proj-1" }));
+
+    const document = buildExportDocument(ctx.db, { appVersion: "1.0.0", now: 0 });
+
+    const columns = ctx.db
+      .prepare("SELECT name FROM pragma_table_info('projects')")
+      .all() as Array<{ name: string }>;
+    const exported = document.projects[0];
+    expect(exported).toBeDefined();
+    expect(columns.length).toBeGreaterThan(0);
+    for (const { name } of columns) {
+      expect(Object.hasOwn(exported as object, camelCase(name))).toBe(true);
+    }
   });
 
   it("orders every table by a stable, data-derived key rather than insertion order", () => {

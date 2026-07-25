@@ -75,7 +75,7 @@ describe("materializeFileArguments", () => {
           throw new Error("gone");
         },
       ),
-    ).rejects.toMatchObject({ code: "FILE_READ_FAILED", message: "Could not read /missing: gone" });
+    ).rejects.toMatchObject({ code: "FILE_READ_FAILED", message: "Couldn't read /missing: gone" });
     await expect(
       materializeFileArguments(
         { command: "ticket.comment", args: { file: "/bad" }, json: false },
@@ -85,7 +85,7 @@ describe("materializeFileArguments", () => {
       ),
     ).rejects.toMatchObject({
       code: "FILE_READ_FAILED",
-      message: "Could not read /bad: bad value",
+      message: "Couldn't read /bad: bad value",
     });
   });
 });

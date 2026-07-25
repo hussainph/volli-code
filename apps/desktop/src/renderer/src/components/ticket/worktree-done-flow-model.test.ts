@@ -122,7 +122,7 @@ describe("resolveDoneFlow — sequencer rule", () => {
     const { primary } = view(status({ uncommitted: true, sequencerActive: true }), null);
     expect(primary.kind).toBe("commit-pr");
     expect(primary.disabled).toBe(true);
-    expect(primary.reason).toBe("Merge/rebase in progress — resolve it in the terminal.");
+    expect(primary.reason).toBe("Merge in progress. Finish it in the terminal.");
   });
 
   it("leaves a push-only primary enabled during a sequencer op", () => {
@@ -144,7 +144,7 @@ describe("resolveDoneFlow — sequencer rule", () => {
       null,
     );
     expect(menu.commit.disabled).toBe(true);
-    expect(menu.commit.reason).toBe("Merge/rebase in progress — resolve it in the terminal.");
+    expect(menu.commit.reason).toBe("Merge in progress. Finish it in the terminal.");
     expect(menu.push.disabled).toBe(false);
   });
 });

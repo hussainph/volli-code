@@ -50,7 +50,7 @@ export function reconcile(
     listOutput = git(["worktree", "list", "--porcelain"], input.projectPath);
   } catch (caught) {
     const detail = caught instanceof GitError ? caught.stderr || caught.message : String(caught);
-    return err(`Could not read the project's worktrees: ${detail}`);
+    return err(`Couldn't read the project's worktrees: ${detail}`);
   }
   const entries = parseWorktreeList(listOutput);
 

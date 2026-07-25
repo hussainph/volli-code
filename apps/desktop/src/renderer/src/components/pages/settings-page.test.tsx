@@ -15,12 +15,13 @@ describe("SettingsPage (app-wide)", () => {
     expect(html).toContain("Worktrees");
   });
 
-  it("shows the global Done-TTL in the default General category, scoped to all projects", () => {
+  // Its app-wide scope is structural (it lives here, not on Configure) rather
+  // than something the copy has to state — see the base-branch test below.
+  it("shows the global Done-TTL in the default General category", () => {
     const html = renderToStaticMarkup(<SettingsPage />);
 
     expect(html).toContain("Archive Done tickets after");
     expect(html).toContain('id="done-ttl-days"');
-    expect(html).toContain("every project");
   });
 
   it("no longer hosts the project-scoped base branch field (moved to Configure)", () => {

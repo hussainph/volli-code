@@ -249,12 +249,12 @@ function BaseBranchField({ projectId, ticket }: { projectId: string; ticket: Tic
       if (!result.ok) {
         // Leave `branches` null (not `[]`) so a failed fetch isn't cached as
         // "no branches" forever — the next open retries instead.
-        toastError(`Could not load branches: ${result.error}`);
+        toastError(`Couldn't load branches: ${result.error}`);
         return;
       }
       setBranches(result.branches);
     } catch (error) {
-      toastError(`Could not load branches: ${errorMessage(error)}`);
+      toastError(`Couldn't load branches: ${errorMessage(error)}`);
     } finally {
       setLoading(false);
     }
@@ -333,9 +333,9 @@ function WorktreePathField({ path }: { path: string | null }) {
     if (!path) return;
     try {
       const result = await window.api.fs.revealInFinder(path);
-      if (!result.ok) toastError(`Could not reveal in Finder: ${result.error}`);
+      if (!result.ok) toastError(`Couldn't reveal in Finder: ${result.error}`);
     } catch (error) {
-      toastError(`Could not reveal in Finder: ${errorMessage(error)}`);
+      toastError(`Couldn't reveal in Finder: ${errorMessage(error)}`);
     }
   }
 
@@ -534,17 +534,17 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
     try {
       const result = await window.api.worktree.commit(ticket.id);
       if (!result.ok) {
-        toastError(`Could not commit: ${result.error}`);
+        toastError(`Couldn't commit: ${result.error}`);
         return;
       }
       if (result.committed) {
         toast.success(`Committed: ${result.message}`);
       } else {
         // Clean-tree no-op: the snapshot was stale — informational, not an error.
-        toast.info("Nothing to commit — the worktree was already clean.");
+        toast.info("Nothing to commit.");
       }
     } catch (error) {
-      toastError(`Could not commit: ${errorMessage(error)}`);
+      toastError(`Couldn't commit: ${errorMessage(error)}`);
     } finally {
       await refresh();
       setStage("idle");
@@ -562,7 +562,7 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
       }
       toastPushResult(isUpdate, result.existing);
     } catch (error) {
-      toastError(`Could not push: ${errorMessage(error)}`);
+      toastError(`Couldn't push: ${errorMessage(error)}`);
     } finally {
       await refresh();
       setStage("idle");
@@ -583,7 +583,7 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
     try {
       const commitResult = await window.api.worktree.commit(ticket.id);
       if (!commitResult.ok) {
-        toastError(`Could not commit: ${commitResult.error}`);
+        toastError(`Couldn't commit: ${commitResult.error}`);
         return;
       }
       setStage("pushing");
@@ -626,7 +626,7 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
       }
       toast.success("Worktree archived & cleaned");
     } catch (error) {
-      toastError(`Could not archive: ${errorMessage(error)}`);
+      toastError(`Couldn't archive: ${errorMessage(error)}`);
     } finally {
       setRetentionBusy(false);
     }
@@ -649,12 +649,12 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
     try {
       const result = await window.api.retention.setKeep(ticket.id, keep);
       if (!result.ok) {
-        toastError(`Could not update Keep: ${result.error}`);
+        toastError(`Couldn't update Keep: ${result.error}`);
         return;
       }
       toast.success(keep ? "Worktree kept" : "Keep removed");
     } catch (error) {
-      toastError(`Could not update Keep: ${errorMessage(error)}`);
+      toastError(`Couldn't update Keep: ${errorMessage(error)}`);
     } finally {
       setRetentionBusy(false);
       reloadRetention();
@@ -671,11 +671,11 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
     try {
       const result = await window.api.retention.dismiss(ticket.id);
       if (!result.ok) {
-        toastError(`Could not dismiss: ${result.error}`);
+        toastError(`Couldn't dismiss: ${result.error}`);
         return;
       }
     } catch (error) {
-      toastError(`Could not dismiss: ${errorMessage(error)}`);
+      toastError(`Couldn't dismiss: ${errorMessage(error)}`);
     } finally {
       setRetentionBusy(false);
       reloadRetention();
@@ -741,7 +741,7 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
     <div className="flex flex-col gap-2">
       {loadError ? (
         <span className="text-xs text-muted-foreground">
-          Could not load worktree status: {loadError}
+          Couldn't load worktree status: {loadError}
         </span>
       ) : (
         <span className="text-xs text-muted-foreground">
