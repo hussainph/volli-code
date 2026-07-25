@@ -341,13 +341,15 @@ const fileRefsTheme = EditorView.theme({
     borderColor: "var(--border-hover)",
     background: "var(--muted)",
   },
+  // These three are glyphs set as text, not drawn icons, so they take
+  // --primary-text like the rest of the accent-colored copy.
   ".cm-file-chip-icon": {
-    color: "var(--primary)",
+    color: "var(--primary-text)",
     fontWeight: "600",
   },
-  ".cm-completionIcon-volli-artifact::after": { content: "'◆'", color: "var(--primary)" },
+  ".cm-completionIcon-volli-artifact::after": { content: "'◆'", color: "var(--primary-text)" },
   ".cm-completionIcon-volli-file::after": { content: "'○'", color: "var(--muted-foreground)" },
-  ".cm-completionIcon-volli-create::after": { content: "'+'", color: "var(--primary)" },
+  ".cm-completionIcon-volli-create::after": { content: "'+'", color: "var(--primary-text)" },
 });
 
 /**

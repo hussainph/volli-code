@@ -47,6 +47,12 @@
   /* Ember orange — the single brand accent (CLAUDE.md). */
   --primary: #e8652a;
   --primary-foreground: #ffffff;
+  /* The same accent solved to APCA Lc 60 on --background, for body-sized
+   * accent TEXT. --primary is Lc 41 as copy — fine for an icon, below the
+   * floor for a paragraph link — and it cannot simply be brightened, because
+   * its lightness is what makes it work as a fill. Use --primary for fills and
+   * icons, --primary-text for anything you read. */
+  --primary-text: #ff966c;
   --secondary: #211a17;
   --secondary-foreground: #ebe3df;
   --muted: #211a17;
@@ -88,6 +94,7 @@
   --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-primary-text: var(--primary-text);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);

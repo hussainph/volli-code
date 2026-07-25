@@ -142,7 +142,9 @@ function OriginBadge({ row }: { row: TerminalSettingRow }) {
             ? "border-border text-muted-foreground"
             : row.source === "ghostty"
               ? "border-border text-muted-foreground"
-              : "border-primary/40 text-primary",
+              : // The label is 11px, so it needs the text token even more than
+                // body copy does; the border stays on --primary, which is a fill.
+                "border-primary/40 text-primary-text",
         )}
       >
         {row.sourceLabel}

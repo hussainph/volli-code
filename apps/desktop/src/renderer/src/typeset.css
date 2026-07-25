@@ -93,7 +93,9 @@
 }
 
 .typeset a {
-  color: var(--primary);
+  /* --primary-text, not --primary: body copy needs Lc 60 and the accent's fill
+   * lightness only reaches 41. This is every markdown link in the app. */
+  color: var(--primary-text);
   text-decoration: underline;
   text-underline-offset: 2px;
   text-decoration-thickness: 1px;

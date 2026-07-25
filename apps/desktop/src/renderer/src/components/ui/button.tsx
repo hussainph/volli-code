@@ -16,7 +16,9 @@ const buttonVariants = cva(
           "border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
         secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
         ghost: "hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50",
-        link: "text-primary underline-offset-4 hover:underline",
+        // --primary-text, not --primary: a link variant is read, not clicked
+        // as a colored area, so it takes the accent's body-copy lightness.
+        link: "text-primary-text underline-offset-4 hover:underline",
       },
       // Pill scale (DESIGN.md): the h-7 rounded-full chip is the app's control
       // idiom — default matches it; sm/xs step down, lg is the ceiling.

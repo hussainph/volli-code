@@ -848,7 +848,7 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
             type="button"
             disabled={retentionBusy}
             onClick={() => void runSetKeep(false)}
-            className="text-primary hover:underline disabled:opacity-50"
+            className="text-primary-text hover:underline disabled:opacity-50"
           >
             {UNKEEP_LABEL}
           </button>
