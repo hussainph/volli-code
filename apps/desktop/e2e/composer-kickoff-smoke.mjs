@@ -48,6 +48,7 @@ import {
   readSeededProjects,
   seedProjects,
   sleep,
+  typeIntoMonaco,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
 
@@ -88,11 +89,16 @@ async function detailOpen(page) {
   return (await page.getByRole("tab").count()) >= 1;
 }
 
-/** Type title + body into the composer (body via the CodeMirror content div). */
+/**
+ * Type title + body into the composer. The body is Monaco Document Mode, whose
+ * input surface is a `native-edit-context` div rather than a textarea, so there
+ * is nothing to `fill()` — click into the editor, then type, then wait for the
+ * characters to land (see `typeIntoMonaco`: check 4 presses the kickoff hotkey
+ * the instant this returns, and a body still in flight ships a truncated prompt).
+ */
 async function fillTitleAndBody(page, title, body) {
   await titleInput(page).fill(title);
-  await composer(page).locator(".cm-content").click();
-  await page.keyboard.type(body);
+  await typeIntoMonaco(composer(page), body);
 }
 
 async function ticketsFor(page, projectId) {

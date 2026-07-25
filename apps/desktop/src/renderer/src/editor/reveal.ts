@@ -1,14 +1,15 @@
 /**
  * Pure range/selection geometry for the live-preview decoration layer
- * (Obsidian-style reveal). Extracted from the CodeMirror plugin so the "when
- * does a node's syntax reveal?" rule is unit-testable without a DOM or an
+ * (Obsidian-style reveal). Extracted from the old CodeMirror plugin so the
+ * "when does a node's syntax reveal?" rule is unit-testable without a DOM or an
  * editor instance.
  *
- * It lives here, beside the editor-engine modules, rather than in the
- * CodeMirror component dir, because it is now the shared reveal rule for BOTH
- * renderers: the CodeMirror live-preview plugin and the Monaco Document Mode
- * projection engine (`markdown-projection.ts`) apply the exact same predicate,
- * which is what makes the migration a swap of renderers and not of behaviour.
+ * It lives here, beside the editor-engine modules, rather than inside a
+ * renderer component, because it is the one behavioural contract the Monaco
+ * migration had to preserve: the Document Mode projection engine
+ * (`markdown-projection.ts`) applies the exact same predicate the CodeMirror
+ * plugin did, which is what made the migration a swap of renderers and not of
+ * behaviour.
  *
  * The rule, everywhere: a node's formatting marks are hidden until the
  * selection (cursor or range) *touches* the node — for inline nodes that means

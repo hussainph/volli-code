@@ -210,7 +210,7 @@ describe("isEditingTarget", () => {
 
   it("matches when closest finds an editing ancestor", () => {
     const target = {
-      closest: (selector: string) => (selector.includes(".cm-editor") ? {} : null),
+      closest: (selector: string) => (selector.includes("[contenteditable]") ? {} : null),
     };
     expect(isEditingTarget(target)).toBe(true);
   });

@@ -181,8 +181,7 @@ export function isRailToggleKeyEvent(event: NavKeyEvent): boolean {
 /**
  * Selector for editing contexts where ⌘[ / ⌘] must stay hands-off — it means
  * "outdent" in a text field or code editor, not "go back". Covers form fields,
- * contenteditable regions, CodeMirror (`.cm-editor`, still mounted until the
- * CodeMirror removal lands), and Monaco.
+ * contenteditable regions, and Monaco.
  *
  * Monaco needs its own entries because it matches NONE of the generic tokens:
  * its input surface in this build is a `div.native-edit-context`, not an
@@ -191,7 +190,7 @@ export function isRailToggleKeyEvent(event: NavKeyEvent): boolean {
  * shortcut all recognise a Monaco surface the same way — see that module for
  * why it takes two anchors.
  */
-export const NAV_SUPPRESS_SELECTOR = `input, textarea, [contenteditable], .cm-editor, ${MONACO_SURFACE_SELECTOR}`;
+export const NAV_SUPPRESS_SELECTOR = `input, textarea, [contenteditable], ${MONACO_SURFACE_SELECTOR}`;
 
 /**
  * True when a keydown originated inside an editing context (see

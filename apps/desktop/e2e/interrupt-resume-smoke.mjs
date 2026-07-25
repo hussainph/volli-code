@@ -74,6 +74,7 @@ import {
   readSeededProjects,
   seedProjects,
   sleep,
+  typeIntoMonaco,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
 
@@ -114,10 +115,10 @@ async function detailOpen(page) {
   return (await page.getByRole("tab").count()) >= 1;
 }
 
+/** The composer body is Monaco Document Mode: click into it, then type. */
 async function fillTitleAndBody(page, title, body) {
   await titleInput(page).fill(title);
-  await composer(page).locator(".cm-content").click();
-  await page.keyboard.type(body);
+  await typeIntoMonaco(composer(page), body);
 }
 
 async function ticketsFor(page, projectId) {

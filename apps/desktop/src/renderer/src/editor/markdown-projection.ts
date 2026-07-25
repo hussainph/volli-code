@@ -5,26 +5,26 @@
  * markdown tree and returns the list of things a renderer should do: style a
  * line, style an inline span, hide raw syntax, or replace a span with a widget.
  * It decides nothing about *how* those land on screen — that is the renderer's
- * job (Monaco decorations + content widgets in PR 2).
+ * job (Monaco decorations + content widgets).
  *
  * Why it is pure and renderer-free:
- *  - It is a straight port of the CodeMirror `live-preview.ts` view plugin, and
- *    the port is only trustworthy if the behaviour is testable. Renderer tests
+ *  - It began as a straight port of the previous CodeMirror live-preview view
+ *    plugin, and the port was only trustworthy if testable. Renderer tests
  *    here run in Node with no DOM, so anything that touches an editor instance
  *    is untestable by construction; anything that returns plain objects is
  *    exhaustively testable.
- *  - `reveal.ts` already owns the "is the selection touching this node?" rule
- *    that both renderers share. Keeping the projection pure keeps that rule the
- *    single behavioural contract of the migration.
+ *  - `reveal.ts` owns the "is the selection touching this node?" rule. Keeping
+ *    the projection pure kept that rule the single behavioural contract of the
+ *    migration.
  *
- * Two deliberate departures from the CodeMirror plugin:
- *  - The plugin only decorates `view.visibleRanges` (viewport culling). That is
- *    a renderer performance concern, not a projection rule, so this function is
+ * Two deliberate departures from the plugin this replaced:
+ *  - It only decorated `view.visibleRanges` (viewport culling). That is a
+ *    renderer performance concern, not a projection rule, so this function is
  *    total over the document and the caller may cull as it likes.
- *  - The plugin reads `view.hasFocus` itself. Here focus is an input: `focused:
- *    false` reveals nothing, exactly like a blurred CodeMirror editor, because
- *    an invisible selection leaving raw delimiters on screen reads as a
- *    rendering glitch.
+ *  - It read `view.hasFocus` itself. Here focus is an input: `focused: false`
+ *    reveals nothing, matching the old blurred-editor behaviour, because an
+ *    invisible selection leaving raw delimiters on screen reads as a rendering
+ *    glitch.
  *
  * Coordinates are character offsets — the same currency the markdown parser,
  * `reveal.ts` and `parseFileRefs` all speak. Only line-scale ops carry a Monaco
@@ -36,10 +36,13 @@ import { selectionTouches, type SelRange } from "./reveal";
 import { buildLineIndex, lineAt } from "./text-position";
 
 /**
- * The exact dialect `@codemirror/lang-markdown`'s `markdownLanguage` configures
- * (GFM + subscript/superscript/emoji). It matters beyond the extra node types:
- * enabling Subscript changes how `~…~` parses, so a parser missing it would
- * disagree with the CodeMirror editor about what is even a strikethrough.
+ * GFM + subscript/superscript/emoji — the dialect the previous editor parsed
+ * with, kept verbatim so the migration changed no parse results. It matters
+ * beyond the extra node types: enabling Subscript changes how `~…~` parses, so
+ * a parser missing it would disagree about what is even a strikethrough.
+ *
+ * `@lezer/markdown` is a direct dependency for exactly this reason. It is the
+ * parser, not an editor engine, so it outlived the editor it was chosen with.
  */
 const markdownParser = parser.configure([GFM, Subscript, Superscript, Emoji]);
 

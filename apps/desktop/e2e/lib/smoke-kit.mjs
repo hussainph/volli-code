@@ -30,6 +30,16 @@
  *                      interrogate this Monaco build (input surface, read-only
  *                      contract, rendered aria-label), shared by every probe
  *                      that opens an editor.
+ *   • monacoEditor()/clickMonaco()/readMonacoText()/typeIntoMonaco() — the same
+ *                      encoding, scoped to one host, for surfaces that mount
+ *                      several editors. Typing is click-then-keyboard (Monaco's
+ *                      input surface is not a textarea): clickMonaco polls
+ *                      `data-monaco-status === "ready"` before focusing, and
+ *                      typeIntoMonaco always waits for the characters to land.
+ *   • readDocumentLine()/readDocumentView() — Document Mode's rendered text split
+ *                      into what is SEEN and what is COLLAPSED, by COMPUTED
+ *                      STYLE. textContent still returns `display:none` text, so
+ *                      it cannot answer "is this delimiter visible?".
  *   • cardById()/columnCount() — the board DOM readers both composer probes need.
  *
  * These smokes are NOT wired into `vp test`; they need a display + the built app.
@@ -312,6 +322,188 @@ export async function readSeededProjects(page) {
 }
 
 // ---- Monaco DOM readers ----------------------------------------------------
+
+/**
+ * The mounted Monaco editor host. `[data-monaco-status]` is set imperatively by
+ * `components/editor/monaco-{file,document}-editor.tsx`; `.monaco-editor` is
+ * Monaco's own root inside it. Nothing in the app renders one without the other,
+ * so this pair is the ONE selector every smoke uses to reach an editor.
+ */
+export const MONACO_EDITOR_SELECTOR = "[data-monaco-status] .monaco-editor";
+
+/**
+ * The Monaco editor inside `scope` (a Page or a Locator — a dialog, a tab panel).
+ * Scoped rather than page-global because several surfaces mount more than one
+ * editor at a time (ticket detail's body + a file tab).
+ *
+ * @param {import("playwright-core").Page | import("playwright-core").Locator} scope
+ */
+export function monacoEditor(scope) {
+  return scope.locator(MONACO_EDITOR_SELECTOR).first();
+}
+
+/**
+ * Put the caret in `scope`'s Monaco editor, ready for `page.keyboard.type()`.
+ * Monaco's input surface in this build is a `native-edit-context` div rather
+ * than a textarea (see {@link readMonacoState}), so there is nothing to `fill()`
+ * and nothing to `focus()` by role — typing is always click-then-keyboard.
+ *
+ * Polls `data-monaco-status === "ready"` first: the host can mount with a
+ * `.monaco-editor` child a tick before the model is actually receptive, and a
+ * click+type in that window drops the leading keystrokes.
+ *
+ * @param {import("playwright-core").Page | import("playwright-core").Locator} scope
+ */
+export async function clickMonaco(scope) {
+  const editor = monacoEditor(scope);
+  await waitUntil("Monaco editor to be ready", async () => {
+    try {
+      const status = await editor.evaluate(
+        (el) => el.closest("[data-monaco-status]")?.getAttribute("data-monaco-status") ?? null,
+      );
+      return status === "ready" ? status : null;
+    } catch {
+      return null;
+    }
+  });
+  await editor.click();
+}
+
+/** The Page behind a Page-or-Locator scope. */
+function pageOf(scope) {
+  return typeof scope.page === "function" ? scope.page() : scope;
+}
+
+/**
+ * Click into `scope`'s Monaco editor, type `text`, and WAIT for the document to
+ * actually hold it.
+ *
+ * The waits are not decoration. {@link clickMonaco} first polls
+ * `data-monaco-status === "ready"`, then Monaco's `native-edit-context` applies
+ * keystrokes on asynchronous `textupdate` events — so with Playwright's
+ * zero-delay typing the last characters are still in flight when the next
+ * action runs. A probe that typed a body and immediately pressed the kickoff
+ * hotkey created its ticket with the final three characters missing. Polling
+ * the rendered document is both the fix and a stronger assertion than the bare
+ * type it replaces.
+ *
+ * @param {import("playwright-core").Page | import("playwright-core").Locator} scope
+ * @param {string} text
+ */
+export async function typeIntoMonaco(scope, text) {
+  const page = pageOf(scope);
+  await clickMonaco(scope);
+  await page.keyboard.type(text);
+  // `readMonacoText` joins rendered view-lines with `\n` and does not invent a
+  // trailing newline for the final line, so a typed string that ends in `\n`
+  // (file contents, etc.) must be matched without that terminator.
+  const expected = text.replaceAll("\r\n", "\n").replace(/\n$/, "");
+  await waitUntil(`typed text to land in Monaco (${JSON.stringify(text.slice(-24))})`, async () => {
+    const actual = await readMonacoText(scope);
+    return actual.includes(expected) ? actual : null;
+  });
+}
+
+/**
+ * The rendered text of `scope`'s Monaco editor, newline-joined per view line and
+ * with Monaco's non-breaking spaces normalized back to spaces — the scoped twin
+ * of {@link readMonacoState}'s `lines`.
+ *
+ * NOTE: this is `textContent`, so it INCLUDES text Document Mode has collapsed
+ * with `display:none` (`volli-md-hidden`). That makes it the right reader for
+ * "does the buffer contain X" and the WRONG one for "is X visible" — for the
+ * latter use {@link readDocumentLine}, which consults computed style.
+ *
+ * @param {import("playwright-core").Page | import("playwright-core").Locator} scope
+ */
+export async function readMonacoText(scope) {
+  return monacoEditor(scope).evaluate((editor) =>
+    Array.from(editor.querySelectorAll(".view-line"))
+      .map((line) => (line.textContent ?? "").replace(/\u00a0/g, " "))
+      .join("\n"),
+  );
+}
+
+/**
+ * Split ONE rendered Document Mode line into what a human SEES and what is
+ * COLLAPSED, plus the `volli-md-*` classes it carries. Returns null when no
+ * rendered line contains `needle` (a virtualized line Monaco has not drawn yet).
+ *
+ * This partition is the only honest reading of "is this delimiter visible?".
+ * Monaco has no `Decoration.replace`, so Document Mode collapses markdown
+ * punctuation with an `inlineClassName` whose CSS is `display:none`: the
+ * characters stay in the DOM and `textContent` still returns them, which means
+ * `!line.includes("## ")` FAILS even when the reveal rule is working perfectly.
+ * Reading computed style is also strictly STRONGER than the CodeMirror-era text
+ * assertions it replaces — it proves the mark is present AND invisible, where a
+ * projection that never ran at all used to pass.
+ *
+ * Monaco renders a view line as leaf spans, one per decoration range, so a
+ * collapsed delimiter is always its own span.
+ *
+ * The partition below is written out longhand inside the `evaluate` callback
+ * rather than factored into helpers: the body is serialized into the renderer,
+ * so nothing here can reference anything defined outside it.
+ *
+ * @param {import("playwright-core").Page} page
+ * @param {string} needle
+ * @returns {Promise<{text:string, visible:string, collapsed:string, classes:string[]}|null>}
+ */
+export function readDocumentLine(page, needle) {
+  return page.evaluate((search) => {
+    const nbsp = /\u00a0/g;
+    const line = Array.from(document.querySelectorAll(".view-line")).find((el) =>
+      (el.textContent ?? "").replace(nbsp, " ").includes(search),
+    );
+    if (!line) return null;
+    const visible = [];
+    const collapsed = [];
+    for (const span of line.querySelectorAll("span")) {
+      if (span.children.length > 0) continue; // only leaf spans hold text
+      const bucket =
+        getComputedStyle(span).display === "none" || span.getBoundingClientRect().width === 0
+          ? collapsed
+          : visible;
+      bucket.push((span.textContent ?? "").replace(nbsp, " "));
+    }
+    const classes = new Set();
+    for (const el of line.querySelectorAll("[class]")) {
+      for (const name of el.classList) if (name.startsWith("volli-md-")) classes.add(name);
+    }
+    return {
+      text: (line.textContent ?? "").replace(nbsp, " "),
+      visible: visible.join(""),
+      collapsed: collapsed.join(""),
+      classes: [...classes].toSorted(),
+    };
+  }, needle);
+}
+
+/**
+ * The same seen/collapsed partition across EVERY rendered line at once — what
+ * "no delimiter is visible ANYWHERE" needs, since that is a statement about the
+ * whole view rather than one line. See {@link readDocumentLine} for why computed
+ * style is the only valid signal.
+ *
+ * @param {import("playwright-core").Page} page
+ * @returns {Promise<{visible:string, collapsed:string}>}
+ */
+export function readDocumentView(page) {
+  return page.evaluate(() => {
+    const nbsp = /\u00a0/g;
+    const visible = [];
+    const collapsed = [];
+    for (const span of document.querySelectorAll(".view-line span")) {
+      if (span.children.length > 0) continue; // only leaf spans hold text
+      const bucket =
+        getComputedStyle(span).display === "none" || span.getBoundingClientRect().width === 0
+          ? collapsed
+          : visible;
+      bucket.push((span.textContent ?? "").replace(nbsp, " "));
+    }
+    return { visible: visible.join(""), collapsed: collapsed.join("") };
+  });
+}
 
 /**
  * Read the mounted Monaco editor(s) straight out of the page. THE one place the

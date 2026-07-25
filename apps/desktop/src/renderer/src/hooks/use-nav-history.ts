@@ -139,7 +139,7 @@ export function navForward(): void {
 /**
  * Mounted once (app shell). Seeds the initial location, records every later
  * navigation via store subscriptions, and binds the nav shortcuts:
- *   - ⌘[ / ⌘] → back / forward, suppressed inside inputs / CodeMirror (where
+ *   - ⌘[ / ⌘] → back / forward, suppressed inside inputs / Monaco (where
  *     ⌘[ means outdent).
  *   - ⌥⌘B → toggle the ticket-detail right rail. Bound in the CAPTURE phase and
  *     stops propagation so it preempts the left-sidebar ⌘B handler in

@@ -30,9 +30,11 @@ import {
   launch,
   makeGitRepo,
   makeScratch,
+  readMonacoText,
   readSeededProjects,
   seedProjects,
   sleep,
+  typeIntoMonaco,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
 
@@ -72,7 +74,7 @@ async function closeAnyDialog(page) {
 async function readComposerState(page) {
   const chipText = (await projectChip(page).textContent()) ?? "";
   const title = await titleInput(page).inputValue();
-  const bodyText = (await composer(page).locator(".cm-content").textContent()) ?? "";
+  const bodyText = await readMonacoText(composer(page));
   const statusTodo = await composer(page).getByRole("button", { name: "Todo" }).count();
   const statusBacklog = await composer(page).getByRole("button", { name: "Backlog" }).count();
   const priorityHigh = await composer(page).getByRole("button", { name: "High" }).count();
@@ -139,8 +141,7 @@ async function main() {
         await page.keyboard.press("Escape"); // close the label menu only
         await sleep(200);
         await titleInput(page).fill(DRAFT.title);
-        await composer(page).locator(".cm-content").click();
-        await page.keyboard.type(DRAFT.body);
+        await typeIntoMonaco(composer(page), DRAFT.body);
 
         // Accidental Escape.
         await closeAnyDialog(page);
@@ -258,8 +259,7 @@ async function main() {
         }
         const restartTitle = "Restart survivor draft";
         await titleInput(page).fill(restartTitle);
-        await composer(page).locator(".cm-content").click();
-        await page.keyboard.type("Body across restarts DELTA-9");
+        await typeIntoMonaco(composer(page), "Body across restarts DELTA-9");
         // Let the debounced app_state write land in SQLite before quitting.
         await sleep(700);
         await closeAnyDialog(page);
@@ -273,7 +273,7 @@ async function main() {
         const reopened = await openComposerViaHeader(page);
         if (!reopened) return { ok: false, detail: "composer did not reopen after relaunch" };
         const title = await titleInput(page).inputValue();
-        const bodyText = (await composer(page).locator(".cm-content").textContent()) ?? "";
+        const bodyText = await readMonacoText(composer(page));
         await closeAnyDialog(page);
         const ok = title === restartTitle && bodyText.includes("DELTA-9");
         return {

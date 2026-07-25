@@ -1,8 +1,10 @@
 # Monaco Migration
 
-**Status**: ready for implementation · **Branch**: `feat/monaco-migration` · **Decisions**: `docs/CONCEPT.md` #46–#65
+**Status**: in progress — §12 slices 1–4 delivered, slices 5–8 outstanding · **Decisions**: `docs/CONCEPT.md` #46–#65
 
-This plan replaces every CodeMirror surface with Monaco and turns the existing Files navigation into a real repository workspace. It also adds the ticket-scoped Change Set needed for quick review and occasional human intervention.
+This plan replaced every CodeMirror surface with Monaco and turns the existing Files navigation into a real repository workspace. It also adds the ticket-scoped Change Set needed for quick review and occasional human intervention.
+
+CodeMirror is gone as of slice 4: no `@codemirror/*` dependency, import, or editor module remains in the tree. Everything below that still names CodeMirror describes what the migration replaced, not how the app works today.
 
 The migration is intentionally not a conventional IDE build. Volli remains board-first and agent-led: people usually observe work at ticket altitude, then deliberately zoom into a Ticket Body, referenced context, a file, or a diff when judgment is useful.
 
@@ -12,13 +14,13 @@ The migration is intentionally not a conventional IDE build. Volli remains board
 
 - Make Monaco work in both Vite development and the packaged Electron app.
 - Establish one shared Monaco model layer for Ticket Bodies, repository files, Artifacts, and modified diff sides.
-- Replace the CodeMirror Markdown editor, live-preview decorations, `@file` completion/chips, and read-only code peek.
+- Replace the CodeMirror Markdown editor, live-preview decorations, `@file` completion/chips, and read-only code peek. **(Delivered, slices 2 and 4.)**
 - Make Project Files a first-class main-checkout workspace with a file tree and persistent preview/pinned tabs.
 - Make ticket Files and Changes navigators open worktree-scoped file and diff tabs in the existing ticket tab strip.
 - Add real Change Set content, including committed, staged, unstaged, and untracked outcomes relative to the ticket base.
 - Keep open tabs synchronized with agent filesystem changes without routine reload prompts.
 - Preserve explicit save for repository code and document-style autosave for the Ticket Body and Markdown Artifacts.
-- Remove every CodeMirror dependency and import once all four existing surfaces have moved.
+- Remove every CodeMirror dependency and import once all four existing surfaces have moved. **(Delivered, slice 4.)**
 
 ### Designed here, delivered as follow-ups
 
@@ -32,7 +34,9 @@ This boundary keeps the branch centered on code understanding and review while p
 
 ## 2. Current seams to deepen
 
-| Existing seam | Current state | Migration |
+The middle column is the seam's state **when this plan was written**, kept as the migration's baseline. It is not a description of the app today — slices 1–4 have since landed, so the CodeMirror rows are history.
+
+| Existing seam | State when planned | Migration |
 |---|---|---|
 | `components/pages/files-page.tsx` | Placeholder | Project Files workbench and tab host |
 | `components/sidebar/file-tree.tsx` | Lazy directory tree; file rows inert | Open preview/pinned main-checkout tabs |
@@ -147,8 +151,8 @@ This migration does not promise repository-wide IntelliSense. Monaco’s built-i
 
 Document Mode is a lossless projection over canonical Markdown, not a second document format.
 
-- Keep `@lezer/markdown` as an editor-independent parser if it remains useful; remove only CodeMirror and its adapters.
-- Port the current live-preview behaviors into a Monaco contribution using decorations, content widgets, and view zones.
+- Keep `@lezer/markdown` as an editor-independent parser if it remains useful; remove only CodeMirror and its adapters. **(Delivered: `@lezer/markdown` stays as the parser behind `editor/markdown-projection.ts`; every `@codemirror/*` package is gone.)**
+- Port the live-preview behaviors into a Monaco contribution using decorations, content widgets, and view zones. **(Delivered.)**
 - Reveal source punctuation around the active cursor/selection and keep unknown syntax byte-faithful.
 - Implement headings, emphasis, links, lists, code, blockquotes, checkboxes, and the existing image/link safety behavior incrementally.
 - Port `@file` suggestions through a Monaco completion provider.
@@ -306,20 +310,21 @@ The Monaco registry and document identities in this plan are prerequisites for t
 
 Each slice should be independently reviewable and land with its own focused tests.
 
-1. **Packaged Monaco proof**
+1. **Packaged Monaco proof** — ✅ delivered (#111)
    - Secure custom protocol, navigation-policy migration, CSP worker support.
    - Install `monaco-editor`, configure workers/theme, render a disposable proof editor.
    - Packaged Electron smoke proves worker startup and removes the proof surface.
-2. **Shared model foundation**
+2. **Shared model foundation** — ✅ delivered (#111)
    - Document identities, model registry, view-state ownership, language mapping.
    - Replace the read-only CodeMirror code peek with Monaco.
-3. **Project Files vertical slice**
+3. **Project Files vertical slice** — ✅ delivered (#115)
    - Persistent preview/pinned tabs, file-tree activation, explicit text save, dirty close guard.
    - Main-checkout live refresh.
-4. **Document Mode and CodeMirror removal**
+4. **Document Mode and CodeMirror removal** — ✅ delivered (#107)
    - Port Ticket Body, composer, Markdown Artifacts, live preview, and `@file` interactions.
    - Preserve autosave and byte fidelity.
    - Remove CodeMirror packages/imports and obsolete adapter files.
+   - Not carried over: the `Mod-b`/`Mod-i` emphasis-wrapping keymap. Document Mode ships without it; re-adding it as a Monaco action is tracked separately, not silently owed by this slice.
 5. **Ticket rail and Change Set**
    - Icon-mode rail shell, Files/Changes navigators, composed git backend, Monaco diff tabs.
    - Shared modified models, inline/side-by-side preference, updated indicators.
@@ -380,7 +385,7 @@ The packaged app is the required proof seam:
 
 The migration is complete when:
 
-- Monaco is the only code/document editor engine in the application.
+- Monaco is the only code/document editor engine in the application. **(Met as of slice 4.)**
 - Project Files is a usable, resumable Main-checkout workspace.
 - Ticket Files and Changes provide deliberate zoom-in without turning review into mandatory bookkeeping.
 - File and diff views of one ticket path share a live model.

@@ -1,28 +1,42 @@
 /**
- * End-to-end smoke for the markdown live-preview REVEAL rules (PR #63 follow-up
- * bug: raw formatting delimiters — `##`, `**`, `~~` — stayed visible until a
- * click forced a decoration rebuild).
+ * End-to-end smoke for Document Mode's markdown REVEAL rules — the behaviour a
+ * PR #63 follow-up bug once broke (raw formatting delimiters — `##`, `**`, `~~`
+ * — stayed visible until a click forced a decoration rebuild).
  *
- * Two root causes, both asserted here:
- *   a. Reveal ignored focus: a blurred editor still has a selection (initially
- *      0,0 — the first line), so the caret line's raw syntax stayed revealed
- *      while "not editing". Clicking in and away moved the caret, which is why
- *      it "fixed itself".
- *   b. The decoration plugin ignored the background parse: lezer parses
- *      markdown incrementally, and the "more is parsed now" notification is a
- *      language-state-only transaction (no doc/selection/viewport flags), so
- *      content past the parse frontier kept raw syntax until the next
- *      interaction.
+ * The rule under test is engine-independent and is the reason the CodeMirror →
+ * Monaco migration is a swap of renderers rather than of behaviour: a node's
+ * formatting marks are collapsed until the selection TOUCHES the node, and a
+ * blurred editor reveals nothing whatever its selection says (`reveal.ts`,
+ * `markdown-projection.ts`). The two original root causes are still both
+ * asserted:
+ *   a. Reveal must respect FOCUS. A blurred editor still has a selection
+ *      (initially line 1, column 1 — the heading's own line), so a focus-blind
+ *      rule leaves the caret line's raw syntax revealed while "not editing".
+ *      Clicking in and away moved the caret, which is why it "fixed itself".
+ *   b. Reveal must converge for content the user has not interacted with. Under
+ *      CodeMirror that meant lezer's incremental parse frontier; under Monaco it
+ *      means a virtualized view line, rendered for the first time on scroll, has
+ *      to arrive already carrying its decorations.
+ *
+ * HOW THIS IS ASSERTED (the trap this file exists to encode): Monaco has no
+ * `Decoration.replace`. Document Mode collapses punctuation with an
+ * `inlineClassName` whose CSS is `display:none`, so the characters are still in
+ * the DOM and `textContent` still returns them. `!lineText.includes("##")`
+ * therefore FAILS even when the reveal rule is working perfectly. Every check
+ * below reads COMPUTED STYLE instead, and splits each line into the text a human
+ * can see and the text that is collapsed — which is strictly stronger than the
+ * old textContent assertions: it proves the mark exists AND is invisible, where
+ * a missing decoration used to pass.
  *
  * Checks (against a seeded ticket body, never typing into the editor first):
  *   1. Blurred mount — the first line (`## First Heading`) shows NO raw `##`.
  *   2. Blurred mount — no `**`/`~~` delimiters visible anywhere in view.
  *   3. Caret reveal still works — clicking the heading line reveals its `##`.
  *   4. Blur re-collapses — clicking outside the editor (Doc tab) hides `##`
- *      again even though the CM selection still touches that line.
- *   5. Background-parse convergence — wheel-scroll (no clicks) to a heading
- *      deep in a large body; it must render as a heading (styled line, no raw
- *      `##`) without any interaction beyond the scroll.
+ *      again even though the selection still touches that line.
+ *   5. Convergence on lazily-rendered content — wheel-scroll (no clicks) to a
+ *      heading deep in a large body; it must render as a styled heading with its
+ *      `##` collapsed, without any interaction beyond the scroll.
  *
  * This is a MANUALLY-RUN smoke (needs a display + the built app); it is NOT
  * wired into `vp test`.
@@ -32,47 +46,42 @@
  *     node apps/desktop/e2e/live-preview-smoke.mjs
  */
 import { promises as fs } from "node:fs";
-import os from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 
-import { _electron } from "playwright-core";
+import {
+  assertProfileIsolated,
+  cardById,
+  createRunner,
+  launch,
+  makeScratch,
+  monacoEditor,
+  readDocumentLine,
+  readDocumentView,
+  readMonacoState,
+  seedProjects,
+  waitUntil,
+} from "./lib/smoke-kit.mjs";
 
-const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const APP_DIR = join(REPO, "apps", "desktop");
-const ELECTRON = join(
-  APP_DIR,
-  "node_modules",
-  "electron",
-  "dist",
-  "Electron.app",
-  "Contents",
-  "MacOS",
-  "Electron",
-);
+const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("volli-live-preview-smoke-");
+const { attempt, summarize } = createRunner();
 
-const SCRATCH = await fs.mkdtemp(join(os.tmpdir(), "volli-live-preview-smoke-"));
-const USER_DATA_DIR = join(SCRATCH, "user-data");
-const DB_PATH = join(SCRATCH, "volli.db");
-await fs.mkdir(USER_DATA_DIR, { recursive: true });
-const PROJECT_DIR = await fs.realpath(await fs.mkdtemp(join(SCRATCH, "project-")));
+const PROJECT_DIR = await fs.realpath(await fs.mkdtemp(`${scratch}/project-`));
+const PROJECT = { id: "live-preview-project", name: "Live Preview Project", prefix: "VC" };
+const DISPLAY_ID = `${PROJECT.prefix}-1`;
 
-const PROJECT_SEED_ID = "live-preview-project";
-const TICKET_PREFIX = "VC";
-const DISPLAY_ID = `${TICKET_PREFIX}-1`;
-
-// The seeded body: formatting on the FIRST line (the default 0,0 selection's
-// line — root cause a), then a large filler so the tail heading sits past the
-// initial parse frontier (root cause b).
+// The seeded body: formatting on the FIRST line (the default line-1 selection's
+// line — root cause a), then a large filler so the tail heading is far outside
+// the first rendered viewport (root cause b).
 const FILLER = Array.from(
   { length: 400 },
   (_, i) => `Filler paragraph ${i} with some plain prose to pad the document out.`,
 ).join("\n\n");
+const HEADING_TEXT = "First Heading";
 const TAIL_HEADING = "Deep Tail Heading";
+const EMPHASIS_LINE = "Intro **bold** and ~~struck~~ text.";
 const BODY = [
-  "## First Heading",
+  `## ${HEADING_TEXT}`,
   "",
-  "Intro **bold** and ~~struck~~ text.",
+  EMPHASIS_LINE,
   "",
   FILLER,
   "",
@@ -81,118 +90,22 @@ const BODY = [
   "Tail line.",
 ].join("\n");
 
-// ---- tiny test harness -----------------------------------------------------
-
-const results = [];
-function check(n, label, ok, detail = "") {
-  const status = ok ? "PASS" : "FAIL";
-  results.push({ n, ok });
-  console.log(`  [${status}] ${n}. ${label}${detail ? ` — ${detail}` : ""}`);
-}
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-async function attempt(n, label, fn) {
-  try {
-    const { ok, detail } = await fn();
-    check(n, label, ok, detail);
-  } catch (error) {
-    check(n, label, false, `threw: ${error?.message ?? error}`);
-  }
-}
-
-async function waitUntil(label, fn, { timeout = 12000, interval = 150 } = {}) {
-  const start = Date.now();
-  let lastErr = null;
-  let lastVal;
-  while (Date.now() - start < timeout) {
-    try {
-      lastVal = await fn();
-      if (lastVal) return lastVal;
-    } catch (error) {
-      lastErr = error;
-    }
-    await sleep(interval);
-  }
-  const tail = lastErr
-    ? `last error: ${lastErr.message}`
-    : `last value: ${JSON.stringify(lastVal)}`;
-  throw new Error(`timed out waiting for ${label} (${tail})`);
-}
-
-// ---- DOM helpers -----------------------------------------------------------
-
-function cardById(page, id) {
-  const exact = new RegExp(`^${id}$`);
-  return page
-    .locator("article")
-    .filter({ has: page.locator("span.font-mono", { hasText: exact }) });
-}
-
-function docTab(page) {
-  return page.getByRole("tab", { name: DISPLAY_ID, exact: true });
-}
-
-/** The rendered text of the line containing `text` (empty string if absent). */
-async function lineText(page, text) {
-  const line = page.locator(".cm-line", { hasText: text }).first();
-  if ((await line.count()) === 0) return "";
-  return (await line.textContent()) ?? "";
-}
+const docTab = (page) => page.getByRole("tab", { name: DISPLAY_ID, exact: true });
+const headingLine = (page) => page.locator(".view-line").filter({ hasText: HEADING_TEXT }).first();
 
 // ---- main ------------------------------------------------------------------
 
 async function main() {
-  const app = await _electron.launch({
-    executablePath: ELECTRON,
-    args: [APP_DIR, `--user-data-dir=${USER_DATA_DIR}`],
-    env: { ...process.env, VOLLI_DB_PATH: DB_PATH, VOLLI_SKIP_CLOSE_CONFIRM: "1" },
-  });
+  const app = await launch({ dbPath, userDataDir });
 
   try {
-    // Profile isolation guard: a leaked default profile would corrupt real data.
-    const actualUserDataDir = await app.evaluate(({ app: electronApp }) =>
-      electronApp.getPath("userData"),
-    );
-    const [actual, expected] = await Promise.all([
-      fs.realpath(actualUserDataDir),
-      fs.realpath(USER_DATA_DIR),
-    ]);
-    if (actual !== expected) {
-      throw new Error(`smoke profile is not isolated: expected ${expected}, got ${actual}`);
-    }
+    await assertProfileIsolated(app, userDataDir);
 
     const page = await app.firstWindow();
     await page.waitForLoadState("domcontentloaded");
-    await sleep(1000);
 
     // ---- seed: one project, one ticket with the probe body -----------------
-    await page.evaluate(
-      ({ id, path, prefix }) => {
-        localStorage.setItem(
-          "volli:projects",
-          JSON.stringify({
-            state: {
-              projects: [
-                {
-                  id,
-                  name: "Live Preview Project",
-                  path,
-                  ticketPrefix: prefix,
-                  colorIndex: 0,
-                  createdAt: Date.now(),
-                },
-              ],
-              selectedProjectId: id,
-            },
-            version: 1,
-          }),
-        );
-      },
-      { id: PROJECT_SEED_ID, path: PROJECT_DIR, prefix: TICKET_PREFIX },
-    );
-    await page.reload();
-    await page.waitForLoadState("domcontentloaded");
-    await sleep(1200);
+    await seedProjects(page, [{ ...PROJECT, path: PROJECT_DIR }]);
 
     const seed = await page.evaluate(async (body) => {
       const boot = await window.api.data.bootstrap();
@@ -207,7 +120,7 @@ async function main() {
       });
       if (!created.ok) return { ok: false, error: `create: ${created.error}` };
       const updated = await window.api.tickets.update({ ticketId: created.ticket.id, body });
-      if (!updated.ok) return { ok: false, error: `update: ${updated.error}` };
+      if (updated && updated.ok === false) return { ok: false, error: `update: ${updated.error}` };
       return { ok: true };
     }, BODY);
     if (!seed.ok) throw new Error(`seed failed: ${seed.error}`);
@@ -220,110 +133,141 @@ async function main() {
     );
     await cardById(page, DISPLAY_ID).dblclick();
     await waitUntil("detail view to open", async () => (await docTab(page).count()) === 1);
+    // The Document Mode editor must genuinely boot — a `data-monaco-fallback`
+    // <pre> would render the raw markdown and pass a naive "no ## visible" test
+    // for entirely the wrong reason.
     await waitUntil(
-      "body editor to render the seeded doc",
-      async () => (await page.locator(".cm-line", { hasText: "First Heading" }).count()) >= 1,
+      "Document Mode editor to boot with the seeded doc",
+      async () => {
+        const state = await readMonacoState(page);
+        if (state.status !== "ready" || state.fallbacks !== 0 || !state.hasEditor) return null;
+        return state.lines.includes(HEADING_TEXT) ? state : null;
+      },
+      { timeout: 20000 },
     );
 
     // ===================================================================
-    // 1. BLURRED MOUNT: the first line's `##` must be hidden even though
-    //    the default CM selection (0,0) touches it.
+    // 1. BLURRED MOUNT: the first line's `##` must be collapsed even though
+    //    the default selection (line 1) touches it.
     // ===================================================================
     await attempt(1, "Blurred mount: first-line heading shows no raw ##", async () => {
-      const hidden = await waitUntil(
+      const line = await waitUntil(
         "first heading to collapse",
         async () => {
-          const text = await lineText(page, "First Heading");
-          return text !== "" && !text.includes("#") ? text : null;
+          const current = await readDocumentLine(page, HEADING_TEXT);
+          return current !== null && !current.visible.includes("#") ? current : null;
         },
         { timeout: 8000 },
       );
-      return { ok: !!hidden, detail: `line=${JSON.stringify(hidden)}` };
+      // The mark must be PRESENT-and-invisible, not simply absent: a projection
+      // that never ran also renders no `#`.
+      const ok =
+        line.visible.trim() === HEADING_TEXT &&
+        line.collapsed.includes("##") &&
+        line.classes.includes("volli-md-h2");
+      return { ok, detail: `line=${JSON.stringify(line)}` };
     });
 
     // ===================================================================
     // 2. BLURRED MOUNT: no **/~~ delimiters visible anywhere in view.
     // ===================================================================
     await attempt(2, "Blurred mount: no **/~~ delimiters visible", async () => {
-      const clean = await waitUntil(
+      const view = await waitUntil(
         "emphasis delimiters to collapse",
         async () => {
-          const text = await page.locator(".cm-content").innerText();
-          return !text.includes("**") && !text.includes("~~") ? true : null;
+          const current = await readDocumentView(page);
+          return !current.visible.includes("**") && !current.visible.includes("~~")
+            ? current
+            : null;
         },
         { timeout: 8000 },
       );
-      return { ok: !!clean, detail: "" };
+      const emphasis = await readDocumentLine(page, "bold");
+      const ok =
+        view.collapsed.includes("**") &&
+        view.collapsed.includes("~~") &&
+        emphasis !== null &&
+        emphasis.visible.trim() === "Intro bold and struck text." &&
+        emphasis.classes.includes("volli-md-strong") &&
+        emphasis.classes.includes("volli-md-strike");
+      return {
+        ok,
+        detail: `emphasisLine=${JSON.stringify(emphasis)} collapsedHasDelimiters=${view.collapsed.includes("**") && view.collapsed.includes("~~")}`,
+      };
     });
 
     // ===================================================================
     // 3. CARET REVEAL: clicking the heading line reveals its ## marks.
     // ===================================================================
     await attempt(3, "Focused caret on the heading line reveals ##", async () => {
-      await page.locator(".cm-line", { hasText: "First Heading" }).first().click();
-      const revealed = await waitUntil("heading marks to reveal", async () => {
-        const text = await lineText(page, "First Heading");
-        return text.includes("##") ? text : null;
+      await headingLine(page).click();
+      const line = await waitUntil("heading marks to reveal", async () => {
+        const current = await readDocumentLine(page, HEADING_TEXT);
+        return current !== null && current.visible.includes("##") ? current : null;
       });
-      return { ok: !!revealed, detail: `line=${JSON.stringify(revealed)}` };
+      const ok = line.visible.trim().startsWith("##") && line.collapsed.trim() === "";
+      return { ok, detail: `line=${JSON.stringify(line)}` };
     });
 
     // ===================================================================
     // 4. BLUR RE-COLLAPSES: clicking outside the editor hides ## again,
-    //    even though the CM selection still touches that line.
+    //    even though the selection still touches that line.
     // ===================================================================
     await attempt(4, "Blur (click outside editor) re-collapses the caret line", async () => {
       await docTab(page).click();
-      const hidden = await waitUntil("heading marks to re-collapse on blur", async () => {
-        const text = await lineText(page, "First Heading");
-        return text !== "" && !text.includes("#") ? text : null;
+      const line = await waitUntil("heading marks to re-collapse on blur", async () => {
+        const current = await readDocumentLine(page, HEADING_TEXT);
+        return current !== null && !current.visible.includes("#") ? current : null;
       });
-      return { ok: !!hidden, detail: `line=${JSON.stringify(hidden)}` };
+      const ok = line.visible.trim() === HEADING_TEXT && line.collapsed.includes("##");
+      return { ok, detail: `line=${JSON.stringify(line)}` };
     });
 
     // ===================================================================
-    // 5. BACKGROUND-PARSE CONVERGENCE: wheel-scroll (no clicks, no caret
-    //    moves) to the deep tail heading; it must style as a heading with
-    //    its ## hidden purely from parse/viewport updates.
+    // 5. CONVERGENCE ON LAZILY-RENDERED CONTENT: wheel-scroll (no clicks,
+    //    no caret moves) to the deep tail heading; it must style as a
+    //    heading with its ## collapsed, purely from render/projection.
     // ===================================================================
     await attempt(5, "Deep heading styles correctly after wheel-scroll only", async () => {
-      // The editor grows to content height (the OUTER overflow-y div scrolls),
-      // so clamp to the visible window — the box's center can be thousands of
-      // px below the viewport, where wheel events land on nothing.
-      const scroller = page.locator(".cm-scroller").first();
-      const box = await scroller.boundingBox();
-      if (!box) throw new Error("no scroller box");
+      // The Document Mode host grows to content height (the OUTER overflow-y
+      // div scrolls), so clamp the pointer to the visible window — the editor
+      // box's center is thousands of px below the viewport, where wheel events
+      // land on nothing.
+      const box = await monacoEditor(page).boundingBox();
+      if (!box) throw new Error("no editor box");
       const viewport = page.viewportSize() ?? { height: 600 };
       const y = Math.min(box.y + box.height / 2, viewport.height - 100);
       await page.mouse.move(box.x + box.width / 2, Math.max(box.y + 10, y));
-      const converged = await waitUntil(
+      const line = await waitUntil(
         "tail heading to render collapsed + styled",
         async () => {
           await page.mouse.wheel(0, 4000);
-          const line = page.locator(".cm-line", { hasText: TAIL_HEADING }).first();
-          if ((await line.count()) === 0) return null;
-          const text = (await line.textContent()) ?? "";
-          const cls = (await line.getAttribute("class")) ?? "";
-          return !text.includes("#") && cls.includes("cm-md-h2") ? `${cls}` : null;
+          const current = await readDocumentLine(page, TAIL_HEADING);
+          if (current === null) return null;
+          return !current.visible.includes("#") &&
+            current.collapsed.includes("##") &&
+            current.classes.includes("volli-md-h2")
+            ? current
+            : null;
         },
-        { timeout: 15000, interval: 250 },
+        { timeout: 20000, interval: 250 },
       );
-      return { ok: !!converged, detail: `class=${JSON.stringify(converged)}` };
+      return { ok: line.visible.trim() === TAIL_HEADING, detail: `line=${JSON.stringify(line)}` };
     });
   } finally {
     await app.close().catch(() => {});
   }
 
-  const failed = results.filter((r) => !r.ok);
-  console.log(
-    failed.length === 0
-      ? `\nlive-preview smoke: all ${results.length} checks passed`
-      : `\nlive-preview smoke: ${failed.length}/${results.length} checks FAILED`,
-  );
-  process.exit(failed.length === 0 ? 0 : 1);
+  return summarize();
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+let code = 1;
+try {
+  code = await main();
+} catch (error) {
+  console.error("\nSMOKE ABORTED:", error?.stack ?? error);
+  code = 1;
+} finally {
+  await cleanup();
+}
+process.exit(code);

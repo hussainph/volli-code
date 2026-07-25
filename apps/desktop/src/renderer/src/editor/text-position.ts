@@ -9,8 +9,8 @@
  *
  * Two conventions to hold on to:
  *  - `to` on a line is the offset just past its last CHARACTER, excluding the
- *    line terminator — the same convention CodeMirror's `doc.lineAt()` uses, so
- *    the geometry ported from the live-preview plugin keeps working verbatim.
+ *    line terminator. That was CodeMirror's `doc.lineAt()` convention, kept on
+ *    purpose so the geometry ported off the old plugin works verbatim.
  *  - `\r\n` is one terminator, not two. Monaco normalizes a model's EOL, but the
  *    text handed to this module is whatever came off disk, so a CRLF document
  *    must not be read as a trailing `\r` character on every line.

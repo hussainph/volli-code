@@ -8,8 +8,8 @@
  *     data-testid="composer-project-chip") → static "New ticket" text, plus
  *     Expand and Close buttons; clicking the chip opens a project menu that
  *     RETARGETS which project the ticket is created in;
- *   • a title input (placeholder "Ticket title") + a CodeMirror markdown
- *     description editor (placeholder "Add description…");
+ *   • a title input (placeholder "Ticket title") + a Monaco Document Mode
+ *     markdown description editor (placeholder "Add description…");
  *   • a metadata chip row: Status ("Backlog"), Priority ("Medium"),
  *     Labels ("Labels"), and a Worktree toggle (role switch, default on);
  *   • a footer with a "Create more" switch, a "Choose agent" harness picker,
@@ -35,6 +35,7 @@ import {
   assertProfileIsolated,
   columnHasCard,
   createRunner,
+  MONACO_EDITOR_SELECTOR,
   goToBoard,
   launch,
   makeGitRepo,
@@ -42,6 +43,7 @@ import {
   readSeededProjects,
   seedProjects,
   sleep,
+  typeIntoMonaco,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
 
@@ -130,7 +132,7 @@ async function main() {
         const expandBtn = await composer(page).getByRole("button", { name: "Expand" }).count();
         const closeBtn = await composer(page).getByRole("button", { name: "Close" }).count();
         const title = await titleInput(page).count();
-        const desc = await composer(page).locator(".cm-editor").count();
+        const desc = await composer(page).locator(MONACO_EDITOR_SELECTOR).count();
         const statusChip = await composer(page).getByRole("button", { name: "Backlog" }).count();
         const priorityChip = await composer(page).getByRole("button", { name: "Medium" }).count();
         const labelsChip = await composer(page).getByRole("button", { name: "Labels" }).count();
@@ -243,8 +245,7 @@ async function main() {
         await page.keyboard.press("Escape"); // close the label menu, keep the composer open
         // Title + markdown description.
         await titleInput(page).fill(title);
-        await composer(page).locator(".cm-content").click();
-        await page.keyboard.type("## A heading\n\nBody paragraph.");
+        await typeIntoMonaco(composer(page), "## A heading\n\nBody paragraph.");
         await composer(page).getByRole("button", { name: "Create", exact: true }).click();
         await waitUntil(
           "dialog closes after create",

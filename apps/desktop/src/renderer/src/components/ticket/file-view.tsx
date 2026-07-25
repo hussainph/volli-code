@@ -76,7 +76,8 @@ type LoadState =
  * re-asking "is this markdown?":
  *
  *  - `autosave` — a Markdown Artifact, the app's own document surface: the
- *    always-mounted live-preview editor with 1.5s debounced autosave.
+ *    always-mounted Monaco Document Mode editor (live preview) with 1.5s
+ *    debounced autosave.
  *  - `explicit` — everything else editable, REPOSITORY MARKDOWN INCLUDED: a
  *    Monaco source editor that writes only on ⌘S.
  *  - `read-only` — images, binary, and truncated reads (saving a capped prefix
