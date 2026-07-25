@@ -78,9 +78,12 @@ export function changeSetSnapshot(
     const statusOut = git(["status", "--porcelain=v2", "-z"], input.worktreePath);
 
     const tracked = composeFiles(parseNameStatus(nameStatusOut), parseNumstat(numstatOut));
-    const trackedPaths = new Set(tracked.map((f) => f.path));
-    const untracked = parseUntracked(statusOut).filter((f) => !trackedPaths.has(f.path));
-    const files = [...tracked, ...untracked];
+    // `git diff <base>` reports conflicted paths as M; porcelain v2 `u` lines
+    // are the honest unmerged signal — upgrade/add those as conflicted.
+    const withConflicts = applyUnmerged(tracked, parseUnmergedPaths(statusOut));
+    const presentPaths = new Set(withConflicts.map((f) => f.path));
+    const untracked = parseUntracked(statusOut).filter((f) => !presentPaths.has(f.path));
+    const files = [...withConflicts, ...untracked];
     const insertions = total(files, "insertions");
     const deletions = total(files, "deletions");
     const revision = snapshotRevision(baseRevision, headRevision, files, insertions, deletions);
@@ -247,6 +250,48 @@ function parseUntracked(out: string): ChangeSetFile[] {
     });
   }
   return files;
+}
+
+/**
+ * Parses unmerged paths from `git status --porcelain=v2 -z`.
+ * Format: `u <xy> <sub> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <path>\0`.
+ */
+function parseUnmergedPaths(out: string): string[] {
+  const tokens = splitNul(out);
+  const paths: string[] = [];
+  for (const token of tokens) {
+    if (!token.startsWith("u ")) continue;
+    const parts = token.split(" ");
+    // u + 9 fixed fields + path (path may contain spaces — rejoin the tail).
+    if (parts.length < 11) continue;
+    const path = parts.slice(10).join(" ");
+    if (path.length > 0) paths.push(path);
+  }
+  return paths;
+}
+
+/**
+ * Upgrades existing entries to conflicted and appends any unmerged path that
+ * name-status omitted entirely. Counts stay as composed (or null when new).
+ */
+function applyUnmerged(files: ChangeSetFile[], unmergedPaths: readonly string[]): ChangeSetFile[] {
+  if (unmergedPaths.length === 0) return files;
+  const unmerged = new Set(unmergedPaths);
+  const next = files.map((file) =>
+    unmerged.has(file.path) ? { ...file, status: "conflicted" as const } : file,
+  );
+  const present = new Set(next.map((f) => f.path));
+  for (const path of unmergedPaths) {
+    if (present.has(path)) continue;
+    next.push({
+      path,
+      status: "conflicted",
+      insertions: null,
+      deletions: null,
+      binary: false,
+    });
+  }
+  return next;
 }
 
 /**

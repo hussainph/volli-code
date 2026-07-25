@@ -236,6 +236,29 @@ describe("changeSetSnapshot — conflicted / unrecognized status", () => {
       },
     ]);
   });
+
+  it("upgrades a path to conflicted when porcelain v2 reports it unmerged", () => {
+    // Real `git diff <base>` emits M for conflicted files; honesty comes from status.
+    const { git } = scriptedChangeSetGit({
+      nameStatus: z("M", "src/conflict.ts"),
+      numstat: z("1\t1\tsrc/conflict.ts"),
+      status: z("u UU N... 100644 100644 100644 100644 aaa bbb ccc src/conflict.ts"),
+    });
+
+    const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.files).toEqual([
+      {
+        path: "src/conflict.ts",
+        status: "conflicted",
+        insertions: 1,
+        deletions: 1,
+        binary: false,
+      },
+    ]);
+  });
 });
 
 describe("changeSetSnapshot — untracked", () => {
@@ -469,5 +492,43 @@ describe("changeSetSnapshot — real git repository", () => {
     // Status still dirty after the base read (prove we didn't checkout).
     const status = runRepoGit(dir, ["status", "--porcelain"]);
     expect(status.length).toBeGreaterThan(0);
+  });
+
+  it("marks a real merge conflict as conflicted relative to the base", () => {
+    const dir = mkdtempSync(join(tmpdir(), "volli-changeset-conflict-"));
+    tempDirs.push(dir);
+    runRepoGit(dir, ["init", "-q"]);
+    runRepoGit(dir, ["checkout", "-b", "main"]);
+    writeFileSync(join(dir, "conflict.ts"), "base\n");
+    runRepoGit(dir, ["add", "."]);
+    runRepoGit(dir, ["commit", "-q", "-m", "base"]);
+
+    runRepoGit(dir, ["checkout", "-b", "left"]);
+    writeFileSync(join(dir, "conflict.ts"), "left\n");
+    runRepoGit(dir, ["add", "."]);
+    runRepoGit(dir, ["commit", "-q", "-m", "left"]);
+
+    runRepoGit(dir, ["checkout", "main"]);
+    runRepoGit(dir, ["checkout", "-b", "right"]);
+    writeFileSync(join(dir, "conflict.ts"), "right\n");
+    runRepoGit(dir, ["add", "."]);
+    runRepoGit(dir, ["commit", "-q", "-m", "right"]);
+
+    try {
+      runRepoGit(dir, ["merge", "left", "--no-edit"]);
+    } catch {
+      // Expected: content conflict leaves the worktree unmerged.
+    }
+
+    const result = changeSetSnapshot(runGitCapturing, {
+      worktreePath: dir,
+      baseBranch: "main",
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.files.find((f) => f.path === "conflict.ts")).toMatchObject({
+      status: "conflicted",
+    });
   });
 });
