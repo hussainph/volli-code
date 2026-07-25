@@ -9,7 +9,7 @@ import {
   type ThemeStatePayload,
 } from "@volli/shared";
 
-import { createThemeStore, effectiveTheme, type ThemeGateway } from "./theme";
+import { appliedTheme, createThemeStore, effectiveTheme, type ThemeGateway } from "./theme";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
@@ -330,6 +330,39 @@ describe("terminal appearance", () => {
 
     expect(store.getState().terminal).toEqual(next);
   });
+
+  it("adopts the config-changed broadcast when the store is on the global scope", () => {
+    const { store, gateway } = freshStore();
+    const next: GhosttyAppearancePayload = { ...TERMINAL, provenance: { theme: "ghostty" } };
+
+    store.getState().acceptGlobalTerminal(next);
+
+    expect(store.getState().terminal).toEqual(next);
+    expect(gateway.state).not.toHaveBeenCalled();
+  });
+
+  it("re-requests the scoped resolution instead, when a project scope is loaded", async () => {
+    // The broadcast carries no project layer (main/ghostty-config.ts), so
+    // adopting it would relabel a project's rows with global provenance.
+    const projectPayload: GhosttyAppearancePayload = {
+      ...TERMINAL,
+      provenance: { theme: "volli-project" },
+      overlayPaths: { global: TERMINAL.overlayPaths.global, project: "/data/volli/p1/config" },
+    };
+    const { store, gateway } = freshStore({
+      state: vi.fn(async () => ({
+        ok: true as const,
+        value: statePayload({ projectId: "p1", terminal: projectPayload }),
+      })),
+    });
+    await store.getState().hydrate("p1");
+
+    store.getState().acceptGlobalTerminal({ ...TERMINAL, provenance: { theme: "ghostty" } });
+    await vi.waitFor(() => expect(gateway.state).toHaveBeenCalledTimes(2));
+
+    expect(gateway.state).toHaveBeenLastCalledWith({ projectId: "p1" });
+    expect(store.getState().terminal).toEqual(projectPayload);
+  });
 });
 
 describe("effectiveTheme", () => {
@@ -348,6 +381,63 @@ describe("effectiveTheme", () => {
       projectOverride: { ...EMPTY_PROJECT_THEME_OVERRIDE, seed: "#3f9142" },
     });
     expect(tinted.seed).toBe("#3f9142");
+  });
+
+  it("returns the IDENTICAL reference for unchanged state, on every path", () => {
+    // The invariant, not the value: this is read as a zustand v5 selector,
+    // i.e. through `useSyncExternalStore`, which compares snapshots with
+    // `Object.is` on every render. Any path that builds a fresh object here is
+    // an infinite render loop, not a wasted allocation. The auto-tint path is
+    // the one that has to build one, so it is the one that must be pinned.
+    const tinting = {
+      preview: null,
+      global: DEFAULT_THEME,
+      projectOverride: { ...EMPTY_PROJECT_THEME_OVERRIDE, seed: "#3f9142" },
+    };
+    expect(effectiveTheme(tinting)).toBe(effectiveTheme(tinting));
+
+    const previewing = { preview: MIDNIGHT, global: DEFAULT_THEME, projectOverride: null };
+    expect(effectiveTheme(previewing)).toBe(effectiveTheme(previewing));
+
+    const plain = { preview: null, global: MIDNIGHT, projectOverride: null };
+    expect(effectiveTheme(plain)).toBe(effectiveTheme(plain));
+
+    const named = {
+      preview: null,
+      global: DEFAULT_THEME,
+      projectOverride: { ...EMPTY_PROJECT_THEME_OVERRIDE, appThemeSlug: DEFAULT_THEME.slug },
+    };
+    expect(effectiveTheme(named)).toBe(effectiveTheme(named));
+  });
+});
+
+describe("appliedTheme", () => {
+  const TINTED = { ...EMPTY_PROJECT_THEME_OVERRIDE, seed: "#3f9142" };
+
+  it("is the global theme for the global scope, whatever a project overrides", () => {
+    const state = { global: MIDNIGHT, projectId: "p1", projectOverride: TINTED };
+
+    expect(appliedTheme(state, { kind: "global" })).toBe(MIDNIGHT);
+  });
+
+  it("resolves the project's own override for its scope", () => {
+    const state = { global: DEFAULT_THEME, projectId: "p1", projectOverride: TINTED };
+
+    expect(appliedTheme(state, { kind: "project", projectId: "p1" }).seed).toBe("#3f9142");
+  });
+
+  it("never borrows another project's override", () => {
+    const state = { global: MIDNIGHT, projectId: "p1", projectOverride: TINTED };
+
+    expect(appliedTheme(state, { kind: "project", projectId: "p2" })).toBe(MIDNIGHT);
+  });
+
+  it("ignores a running preview — it reports what is stored, not what is on screen", () => {
+    const { store } = freshStore();
+    store.getState().startPreview(MIDNIGHT);
+
+    expect(appliedTheme(store.getState(), { kind: "global" })).toEqual(DEFAULT_THEME);
+    expect(effectiveTheme(store.getState())).toEqual(MIDNIGHT);
   });
 });
 

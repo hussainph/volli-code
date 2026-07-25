@@ -49,8 +49,11 @@ async function main() {
   // hasn't landed yet. Settings' provenance labels track later config edits
   // through the same push the terminals re-theme from.
   void useThemeStore.getState().hydrate();
+  // The broadcast is global-scope by contract (main/ghostty-config.ts), so it
+  // is handed to the store as such — a project scope re-reads its own layered
+  // resolution instead of adopting global values under a project's label.
   window.api.terminal.onGhosttyConfigChanged((payload) => {
-    useThemeStore.getState().acceptTerminal(payload);
+    useThemeStore.getState().acceptGlobalTerminal(payload);
   });
 
   // boot() returns { ok: false } for a failed bootstrap; the catch covers the

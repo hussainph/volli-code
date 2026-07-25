@@ -92,6 +92,7 @@ interface ThemeState {
 
   hydrate(projectId?: string | null): Promise<void>;
   acceptTerminal(payload: GhosttyAppearancePayload): void;
+  acceptGlobalTerminal(payload: GhosttyAppearancePayload): void;
   startPreview(theme: ThemeDefinition): void;
   cancelPreview(): void;
   commitPreview(scope: ThemeScope): Promise<boolean>;
@@ -106,6 +107,12 @@ type EffectiveThemeInput = Pick<ThemeState, "preview" | "global" | "projectOverr
  * The app-surface theme currently in force: the preview if one is running,
  * otherwise the per-surface global → project resolution. Derived on every read
  * rather than stored, which is what keeps the authored intent authoritative.
+ *
+ * Read as a zustand selector, so every path has to return a STABLE reference
+ * for unchanged state — v5 reads selectors through `useSyncExternalStore` and
+ * an `Object.is`-fresh snapshot each render loops forever. Three of the paths
+ * hand back an object the state already holds; the fourth (#72's derived tint)
+ * is memoized on its inputs in theme/apply.ts.
  */
 export function effectiveTheme({
   preview,
@@ -113,6 +120,26 @@ export function effectiveTheme({
   projectOverride,
 }: EffectiveThemeInput): ThemeDefinition {
   if (preview !== null) return preview;
+  return resolveActiveTheme(global, projectOverride, BUILTIN_THEMES).app.value;
+}
+
+/** What a scope has STORED — as opposed to what a preview is showing. */
+type AppliedThemeInput = Pick<ThemeState, "global" | "projectId" | "projectOverride">;
+
+/**
+ * The theme actually persisted for `scope`, ignoring any running preview —
+ * what the picker tags as "Current", and what Escape puts back. Tagging the
+ * *effective* theme instead would walk the tag down the list with the cursor,
+ * hiding the one thing the tag exists to state.
+ */
+export function appliedTheme(
+  { global, projectId, projectOverride }: AppliedThemeInput,
+  scope: ThemeScope,
+): ThemeDefinition {
+  // The store holds exactly one scope's override at a time; a picker scoped to
+  // a project the store isn't showing has no override to read, and must not
+  // borrow another project's.
+  if (scope.kind === "global" || scope.projectId !== projectId) return global;
   return resolveActiveTheme(global, projectOverride, BUILTIN_THEMES).app.value;
 }
 
@@ -219,8 +246,29 @@ export function createThemeStore({
             accept(result.value);
           },
 
+          /** Adopt an appearance resolved for THIS store's scope — e.g. the one main hands back from an overlay write. */
           acceptTerminal(payload) {
             set({ terminal: payload });
+          },
+
+          /**
+           * The `volli:ghostty-config-changed` broadcast, which main resolves
+           * for the GLOBAL scope only (see `registerGhosttyConfigIpc`): that
+           * channel has no project context and the watch fires at every window
+           * at once. Swallowing it whole while a project scope is loaded would
+           * overwrite that project's provenance, overlay path and layered
+           * values with global ones — and fail silently, the row just quietly
+           * stops saying `Set by this project`. So a project scope re-requests
+           * its own resolution through `volli:theme-state`, which CAN map a
+           * project to its layer, and the payload is dropped.
+           */
+          acceptGlobalTerminal(payload) {
+            const { projectId } = get();
+            if (projectId === null) {
+              set({ terminal: payload });
+              return;
+            }
+            void get().hydrate(projectId);
           },
 
           startPreview(theme) {

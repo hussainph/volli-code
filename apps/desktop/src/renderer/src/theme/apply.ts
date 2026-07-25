@@ -82,6 +82,47 @@ function inherited<T>(value: T): ResolvedThemeSurface<T> {
 }
 
 /**
+ * The auto-tint (#72) is the one resolution path that has to BUILD a theme
+ * rather than pick one, and the built value is read as a zustand selector
+ * result (`effectiveTheme`). zustand v5 routes selectors through React's
+ * `useSyncExternalStore`, which compares each render's snapshot with
+ * `Object.is` — so a freshly-constructed object there is not a wasted
+ * allocation, it is an infinite render loop ("The result of getSnapshot should
+ * be cached").
+ *
+ * So the derived theme is memoized on the exact pair it is derived from: the
+ * same `{global theme, project override}` REFERENCES in, the identical theme
+ * reference out. Both keys are weak, so a discarded theme or override takes
+ * its entry with it, and nothing is shared between unrelated input pairs —
+ * stability is a property of the inputs, not of call ordering.
+ */
+const tintCache = new WeakMap<ThemeDefinition, WeakMap<ProjectThemeOverride, ThemeDefinition>>();
+
+function tintedTheme(
+  global: ThemeDefinition,
+  override: ProjectThemeOverride,
+  seed: string,
+): ThemeDefinition {
+  let byOverride = tintCache.get(global);
+  if (byOverride === undefined) {
+    byOverride = new WeakMap<ProjectThemeOverride, ThemeDefinition>();
+    tintCache.set(global, byOverride);
+  }
+  const cached = byOverride.get(override);
+  if (cached !== undefined) return cached;
+  // Only the seed moves: grain, canvas and the authored overrides stay the
+  // user's global choices, so a tinted project still looks like their app.
+  const tinted: ThemeDefinition = {
+    ...global,
+    name: `${global.name} (tinted)`,
+    slug: PROJECT_TINT_SLUG,
+    seed,
+  };
+  byOverride.set(override, tinted);
+  return tinted;
+}
+
+/**
  * Resolves what a scope actually renders with: the global theme, with each
  * surface a project set replacing its inherited value.
  *
@@ -114,17 +155,7 @@ export function resolveActiveTheme(
   if (named !== undefined) {
     app = { value: named, scope: "project" };
   } else if (projectOverride.seed !== null) {
-    // Only the seed moves: grain, canvas and the authored overrides stay the
-    // user's global choices, so a tinted project still looks like their app.
-    app = {
-      value: {
-        ...global,
-        name: `${global.name} (tinted)`,
-        slug: PROJECT_TINT_SLUG,
-        seed: projectOverride.seed,
-      },
-      scope: "project",
-    };
+    app = { value: tintedTheme(global, projectOverride, projectOverride.seed), scope: "project" };
   } else {
     app = inherited(global);
   }

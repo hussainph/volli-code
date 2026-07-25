@@ -124,6 +124,36 @@ describe("resolveActiveTheme", () => {
     expect(active.app.value.canvas).toEqual(DEFAULT_THEME.canvas);
   });
 
+  it("returns the identical derived-tint object for the same inputs, twice", () => {
+    // Not a performance nicety: this value is read through a zustand selector,
+    // and zustand v5 compares each render's snapshot with `Object.is`. A fresh
+    // object per call is an infinite render loop, so reference stability is
+    // the contract — assert it directly rather than via the value.
+    const override = { ...EMPTY_PROJECT_THEME_OVERRIDE, seed: "#3f9142" };
+
+    const first = resolveActiveTheme(DEFAULT_THEME, override, catalog).app.value;
+    const second = resolveActiveTheme(DEFAULT_THEME, override, catalog).app.value;
+
+    expect(second).toBe(first);
+  });
+
+  it("derives a distinct tint per global theme and per override", () => {
+    const override = { ...EMPTY_PROJECT_THEME_OVERRIDE, seed: "#3f9142" };
+    const otherOverride = { ...EMPTY_PROJECT_THEME_OVERRIDE, seed: "#b5651d" };
+
+    const base = resolveActiveTheme(DEFAULT_THEME, override, catalog).app.value;
+    // Same global, second override: the per-global cache exists but misses.
+    const other = resolveActiveTheme(DEFAULT_THEME, otherOverride, catalog).app.value;
+    // Same override, second global: a tint follows the theme it tints, so a
+    // changed global theme must not serve the previous theme's tint back.
+    const onMidnight = resolveActiveTheme(MIDNIGHT, override, catalog).app.value;
+
+    expect(other.seed).toBe("#b5651d");
+    expect(onMidnight).not.toBe(base);
+    expect(onMidnight.name).toBe("Midnight (tinted)");
+    expect(resolveActiveTheme(MIDNIGHT, override, catalog).app.value).toBe(onMidnight);
+  });
+
   it("prefers an explicitly named theme over the derived tint", () => {
     const active = resolveActiveTheme(
       DEFAULT_THEME,

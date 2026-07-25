@@ -326,15 +326,44 @@ function FontFamilyRow({ row }: { row: TerminalSettingRow }) {
 /** Font size bounds. Below 6pt the grid stops being legible; above 32 a pane holds almost nothing. */
 const FONT_SIZE_RANGE = { min: 6, max: 32 } as const;
 
-/** A stepper rather than a free number field: every step lands on a valid size. */
+/**
+ * A stepper rather than a free number field: every step lands on a valid size.
+ *
+ * Clicks arrive far faster than the overlay round-trip, so a step counts from
+ * its own pending target rather than from the last resolved value — reading the
+ * store would make the second of two fast clicks recompute the same number and
+ * silently drop it. The pending target also drives the display, so the stepper
+ * responds to the click rather than to the file write, and it is handed back to
+ * the store once the last write in a burst settles (including a failed one:
+ * `writeOverlay` has toasted, and the number must go back to what is stored).
+ *
+ * The writes are CHAINED, never concurrent: each is a read-modify-write of one
+ * config file, and two in flight at once can interleave into a file that says
+ * neither.
+ */
 function FontSizeRow({ row }: { row: TerminalSettingRow }) {
   const current = useThemeStore((state) => state.terminal?.prefs.fontSize ?? null);
-  const size = current ?? DEFAULT_TERMINAL_FONT_SIZE;
+  const [pending, setPending] = React.useState<number | null>(null);
+  // The same target as `pending`, readable synchronously — two clicks in one
+  // tick share a render, and so would share a stale `pending`.
+  const target = React.useRef<number | null>(null);
+  const queue = React.useRef<Promise<void>>(Promise.resolve());
+  const size = pending ?? current ?? DEFAULT_TERMINAL_FONT_SIZE;
 
   const step = (delta: 1 | -1): void => {
-    const next = Math.min(FONT_SIZE_RANGE.max, Math.max(FONT_SIZE_RANGE.min, size + delta));
-    if (next === size) return;
-    void writeOverlay({ "font-size": String(next) });
+    const from = target.current ?? current ?? DEFAULT_TERMINAL_FONT_SIZE;
+    const next = Math.min(FONT_SIZE_RANGE.max, Math.max(FONT_SIZE_RANGE.min, from + delta));
+    if (next === from) return;
+    target.current = next;
+    setPending(next);
+    queue.current = queue.current.then(async () => {
+      await writeOverlay({ "font-size": String(next) });
+      // Only the last click of a burst gives the display back — an earlier one
+      // would flash the size the file had two clicks ago.
+      if (target.current !== next) return;
+      target.current = null;
+      setPending(null);
+    });
   };
 
   return (
