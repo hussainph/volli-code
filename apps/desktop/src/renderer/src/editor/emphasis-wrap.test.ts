@@ -43,4 +43,15 @@ describe("planEmphasisWrap", () => {
     // Offsets 2..7 — the words, not the marks.
     expect(plan.selections).toEqual([span(1, 3, 1, 8)]);
   });
+
+  it("strips the flanking marks when the selection is already wrapped", () => {
+    const plan = planEmphasisWrap({
+      text: "**hello**",
+      selection: [{ from: 2, to: 7 }],
+      mark: "**",
+    });
+
+    expect(plan.text).toBe("hello");
+    expect(plan.selections).toEqual([span(1, 1, 1, 6)]);
+  });
 });
