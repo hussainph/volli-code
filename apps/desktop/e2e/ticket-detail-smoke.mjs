@@ -108,7 +108,6 @@ import {
   makeGitRepo,
   readDocumentLine,
   readMonacoState,
-  readMonacoText,
   typeIntoMonaco,
 } from "./lib/smoke-kit.mjs";
 

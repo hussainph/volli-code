@@ -460,8 +460,8 @@ async function main() {
         await page.keyboard.type(ARTIFACT_EDITED);
         const expectedEdited = ARTIFACT_EDITED.replaceAll("\r\n", "\n").replace(/\n$/, "");
         await waitUntil("edited artifact text to land in Monaco", async () => {
-          const actual = await readMonacoText(page);
-          return actual.includes(expectedEdited) ? actual : null;
+          const landed = await readMonacoText(page);
+          return landed.includes(expectedEdited) ? landed : null;
         });
         // Blur onto the Doc tab to flush the debounced autosave.
         await docTab(page).click();
