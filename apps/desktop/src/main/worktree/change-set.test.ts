@@ -69,4 +69,26 @@ describe("changeSetSnapshot — NUL-delimited path safety", () => {
     expect(result.value.insertions).toBe(2);
     expect(result.value.deletions).toBe(1);
   });
+
+  it("keeps a modified path that contains Unicode characters intact", () => {
+    const path = "src/café/日本語.ts";
+    const { git } = scriptedChangeSetGit({
+      nameStatus: `M\0${path}\0`,
+      numstat: `1\t0\0${path}\0`,
+    });
+
+    const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.files).toEqual([
+      {
+        path,
+        status: "modified",
+        insertions: 1,
+        deletions: 0,
+        binary: false,
+      },
+    ]);
+  });
 });
