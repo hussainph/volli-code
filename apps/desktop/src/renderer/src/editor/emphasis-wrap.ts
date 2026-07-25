@@ -77,6 +77,10 @@ export function planEmphasisWrap(input: EmphasisWrapInput): EmphasisWrapPlan {
 
   const edits: OffsetEdit[] = [];
   const spans: SelRange[] = [];
+  // How far the EARLIER ranges' edits have moved the rest of the document. Edits
+  // keep original coordinates (Monaco re-bases them itself); resulting positions
+  // do not, so this is the one running total the plan has to carry.
+  let shift = 0;
   for (const range of input.selection) {
     const before = text.slice(Math.max(0, range.from - m), range.from);
     const after = text.slice(range.to, Math.min(text.length, range.to + m));
@@ -84,14 +88,16 @@ export function planEmphasisWrap(input: EmphasisWrapInput): EmphasisWrapPlan {
       // Strip the flanking pair; both ends shift left by the removed leading mark.
       edits.push({ from: range.from - m, to: range.from, text: "" });
       edits.push({ from: range.to, to: range.to + m, text: "" });
-      spans.push({ from: range.from - m, to: range.to - m });
+      spans.push({ from: range.from - m + shift, to: range.to - m + shift });
+      shift -= 2 * m;
       continue;
     }
     // Insert the pair; both ends shift right by the leading mark, which — for an
     // empty range — leaves the caret BETWEEN the two inserted marks.
     edits.push({ from: range.from, to: range.from, text: mark });
     edits.push({ from: range.to, to: range.to, text: mark });
-    spans.push({ from: range.from + m, to: range.to + m });
+    spans.push({ from: range.from + m + shift, to: range.to + m + shift });
+    shift += 2 * m;
   }
 
   const resulting = applyEdits(text, edits);

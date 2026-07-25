@@ -61,4 +61,19 @@ describe("planEmphasisWrap", () => {
     expect(plan.text).toBe("");
     expect(plan.selections).toEqual([caret(1, 1)]);
   });
+
+  it("wraps every range of a multi-cursor selection independently", () => {
+    const plan = planEmphasisWrap({
+      text: "a b",
+      selection: [
+        { from: 0, to: 0 },
+        { from: 3, to: 3 },
+      ],
+      mark: "*",
+    });
+
+    expect(plan.text).toBe("**a b**");
+    // Each caret lands between ITS own pair: `*|*a b*|*` → offsets 1 and 6.
+    expect(plan.selections).toEqual([caret(1, 2), caret(1, 7)]);
+  });
 });
