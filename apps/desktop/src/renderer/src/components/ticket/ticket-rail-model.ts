@@ -48,3 +48,19 @@ export function selectRailMode(chrome: TicketRailChrome, mode: TicketRailMode): 
 export function selectRailDestination(chrome: TicketRailChrome, tabId: string): TicketRailChrome {
   return { mode: chrome.mode, activeTabId: tabId };
 }
+
+/**
+ * Rehydrate the active rail mode from persisted UI state.
+ *
+ * Prefers an explicit `railMode`. When absent (pre-icon-rail builds), a legacy
+ * `detailsExpanded: true` maps to Properties — the user had the Details drawer
+ * open. Everything else defaults to Sessions.
+ */
+export function resolvePersistedRailMode(stored: {
+  railMode?: unknown;
+  detailsExpanded?: unknown;
+}): TicketRailMode {
+  if (isTicketRailMode(stored.railMode)) return stored.railMode;
+  if (stored.detailsExpanded === true) return "properties";
+  return DEFAULT_TICKET_RAIL_MODE;
+}
