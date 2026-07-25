@@ -2,11 +2,14 @@ import { describe, expect, it } from "vite-plus/test";
 import type { ChangeSetFile } from "@volli/shared";
 
 import {
+  applyChangeSetRefresh,
   formatChangeCounts,
   formatChangeStatus,
   presentChangeRow,
+  selectChangeRow,
   sortChangeSetFiles,
   splitChangePath,
+  type ChangesNavigatorState,
 } from "./ticket-changes-model";
 
 function file(overrides: Partial<ChangeSetFile> & Pick<ChangeSetFile, "path">): ChangeSetFile {
@@ -113,5 +116,69 @@ describe("sortChangeSetFiles", () => {
       file({ path: "a.ts" }),
     ]);
     expect(sorted.map((f) => f.path)).toEqual(["a.ts", "a/b.ts", "z.ts"]);
+  });
+});
+
+function navigatorState(overrides: Partial<ChangesNavigatorState> = {}): ChangesNavigatorState {
+  return {
+    revision: null,
+    files: [],
+    activeTabId: "doc",
+    listFocusPath: null,
+    ...overrides,
+  };
+}
+
+describe("applyChangeSetRefresh", () => {
+  it("updates rows from the snapshot without opening, closing, or focusing a tab", () => {
+    const before = navigatorState({
+      activeTabId: "doc",
+      listFocusPath: "src/a.ts",
+      revision: "rev-1",
+      files: [file({ path: "src/a.ts" })],
+    });
+    const after = applyChangeSetRefresh(before, {
+      baseRevision: "base",
+      headRevision: "head",
+      revision: "rev-2",
+      insertions: 5,
+      deletions: 1,
+      files: [file({ path: "src/a.ts", insertions: 5, deletions: 1 }), file({ path: "src/b.ts" })],
+    });
+
+    expect(after.revision).toBe("rev-2");
+    expect(after.files.map((f) => f.path)).toEqual(["src/a.ts", "src/b.ts"]);
+    // The single most important behavioral contract in #108:
+    expect(after.activeTabId).toBe(before.activeTabId);
+    expect(after.listFocusPath).toBe(before.listFocusPath);
+  });
+
+  it("is a no-op when the opaque revision is unchanged", () => {
+    const before = navigatorState({
+      revision: "same",
+      files: [file({ path: "a.ts" })],
+      activeTabId: "file:a.ts",
+    });
+    const after = applyChangeSetRefresh(before, {
+      baseRevision: "base",
+      headRevision: "head",
+      revision: "same",
+      insertions: 99,
+      deletions: 99,
+      files: [file({ path: "z.ts", insertions: 99, deletions: 99 })],
+    });
+    expect(after).toBe(before);
+  });
+});
+
+describe("selectChangeRow", () => {
+  it("records a deliberate open intent for the path without stealing list focus", () => {
+    const before = navigatorState({ activeTabId: "doc", listFocusPath: null });
+    const { state, openPath } = selectChangeRow(before, "src/a.ts");
+    expect(openPath).toBe("src/a.ts");
+    expect(state.listFocusPath).toBe("src/a.ts");
+    // Host opens the tab; the navigator itself does not mutate activeTabId
+    // (decision #48 — initial keyboard focus stays in the Changes list).
+    expect(state.activeTabId).toBe("doc");
   });
 });

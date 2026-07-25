@@ -7,7 +7,13 @@
  * in this module so the React panel stays a thin shell.
  */
 
-import { baseNameOf, dirNameOf, type ChangeSetFile, type ChangeSetFileStatus } from "@volli/shared";
+import {
+  baseNameOf,
+  dirNameOf,
+  type ChangeSetFile,
+  type ChangeSetFileStatus,
+  type ChangeSetSnapshot,
+} from "@volli/shared";
 
 const STATUS_LABELS: Record<ChangeSetFileStatus, string> = {
   added: "Added",
@@ -66,4 +72,48 @@ export function presentChangeRow(file: ChangeSetFile): ChangeRowPresentation {
 /** Stable path-ordered flat list (decision #53 — never a tree). */
 export function sortChangeSetFiles(files: readonly ChangeSetFile[]): ChangeSetFile[] {
   return [...files].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+}
+
+/**
+ * Navigator state the panel mirrors. `activeTabId` is observed only so refresh
+ * can be proven never to touch the main strip; the list keeps its own focus.
+ */
+export interface ChangesNavigatorState {
+  revision: string | null;
+  files: ChangeSetFile[];
+  /** Main-strip active tab id — refresh must leave this identical. */
+  activeTabId: string;
+  /** Path whose row holds keyboard focus in the Changes list (decision #48). */
+  listFocusPath: string | null;
+}
+
+/**
+ * Apply a fresh Change Set snapshot to the navigator. Updates rows and the
+ * opaque revision fingerprint — and **nothing else**. Never opens, closes,
+ * replaces, or focuses a main-view tab; never moves list focus. A matching
+ * `revision` is a no-op (same object identity) so React can skip re-renders.
+ */
+export function applyChangeSetRefresh(
+  state: ChangesNavigatorState,
+  snapshot: ChangeSetSnapshot,
+): ChangesNavigatorState {
+  if (state.revision === snapshot.revision) return state;
+  return {
+    ...state,
+    revision: snapshot.revision,
+    files: sortChangeSetFiles(snapshot.files),
+  };
+}
+
+/**
+ * Deliberate row selection. Returns an `openPath` the host should open via
+ * `openTicketFile` today (issue #109 swaps that one call to a diff-tab opener).
+ * List focus moves to the row; `activeTabId` is intentionally unchanged so
+ * initial keyboard focus stays in the Changes list (decision #48).
+ */
+export function selectChangeRow(
+  state: ChangesNavigatorState,
+  path: string,
+): { state: ChangesNavigatorState; openPath: string } {
+  return { state: { ...state, listFocusPath: path }, openPath: path };
 }
