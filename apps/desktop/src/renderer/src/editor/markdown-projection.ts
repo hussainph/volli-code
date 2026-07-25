@@ -233,6 +233,48 @@ export function projectMarkdown(input: ProjectionInput): readonly ProjectionOp[]
         return false;
       }
 
+      // --- Fenced code: block background; hide the ``` lines off-cursor. -----
+      if (node.name === "FencedCode") {
+        const reveal = selectionTouches(selection, node.from, node.to);
+        const startLine = lineAt(index, node.from);
+        // `to - 1` steps back off the terminator the block ends past, so the
+        // last line of the block is the last line that HOLDS something.
+        const endLine = lineAt(index, Math.max(node.from, Math.min(node.to - 1, index.length)));
+        for (let n = startLine.number; n <= endLine.number; n += 1) {
+          let className = "volli-md-fence";
+          if (n === startLine.number) className += " volli-md-fence-open";
+          if (n === endLine.number) className += " volli-md-fence-close";
+          ops.push({ kind: "line-class", line: n, className });
+        }
+        // A one-line block is all fence and no content: collapsing it would
+        // leave nothing on screen to put the caret back into.
+        if (!reveal && endLine.number > startLine.number) {
+          // The opening line always holds its ``` run, so it is never empty.
+          ops.push({ kind: "hide", from: startLine.from, to: startLine.to });
+          // The closing line can be: an unterminated block runs to a blank line.
+          if (endLine.to > endLine.from) {
+            ops.push({ kind: "hide", from: endLine.from, to: endLine.to });
+          }
+        }
+        return false;
+      }
+
+      // --- Horizontal rule --------------------------------------------------
+      if (node.name === "HorizontalRule") {
+        if (lineTouched(node.from)) {
+          // Still line-scale styling: an un-styled `***` would jump in size the
+          // moment the caret lands on it.
+          ops.push({
+            kind: "line-class",
+            line: lineAt(index, node.from).number,
+            className: "volli-md-hr-reveal",
+          });
+        } else {
+          ops.push({ kind: "widget", from: node.from, to: node.to, widget: { type: "rule" } });
+        }
+        return;
+      }
+
       return;
     },
   });

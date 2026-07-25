@@ -233,3 +233,68 @@ describe("projectMarkdown — images", () => {
     expect(projectMarkdown({ text: "![alt]", selection: [], focused: false })).toEqual([]);
   });
 });
+
+describe("projectMarkdown — fenced code", () => {
+  it("classes every line of the block and hides the fence lines", () => {
+    const ops = projectMarkdown({ text: "```js\ncode\n```", selection: [], focused: false });
+
+    expect(ops).toEqual([
+      { kind: "line-class", line: 1, className: "volli-md-fence volli-md-fence-open" },
+      { kind: "line-class", line: 2, className: "volli-md-fence" },
+      { kind: "line-class", line: 3, className: "volli-md-fence volli-md-fence-close" },
+      { kind: "hide", from: 0, to: 5 },
+      { kind: "hide", from: 11, to: 14 },
+    ]);
+  });
+
+  it("shows the fence lines again while the caret is anywhere in the block", () => {
+    const text = "```js\ncode\n```";
+    const ops = projectMarkdown({ text, selection: [{ from: 8, to: 8 }], focused: true });
+
+    expect(ops).toEqual([
+      { kind: "line-class", line: 1, className: "volli-md-fence volli-md-fence-open" },
+      { kind: "line-class", line: 2, className: "volli-md-fence" },
+      { kind: "line-class", line: 3, className: "volli-md-fence volli-md-fence-close" },
+    ]);
+  });
+
+  it("never hides a one-line block, which would erase the block entirely", () => {
+    const ops = projectMarkdown({ text: "```", selection: [], focused: false });
+
+    expect(ops).toEqual([
+      {
+        kind: "line-class",
+        line: 1,
+        className: "volli-md-fence volli-md-fence-open volli-md-fence-close",
+      },
+    ]);
+  });
+
+  it("skips the closing hide when an unterminated block ends on a blank line", () => {
+    const ops = projectMarkdown({ text: "```js\ncode\n\n", selection: [], focused: false });
+
+    expect(ops).toEqual([
+      { kind: "line-class", line: 1, className: "volli-md-fence volli-md-fence-open" },
+      { kind: "line-class", line: 2, className: "volli-md-fence" },
+      { kind: "line-class", line: 3, className: "volli-md-fence volli-md-fence-close" },
+      { kind: "hide", from: 0, to: 5 },
+    ]);
+  });
+});
+
+describe("projectMarkdown — horizontal rules", () => {
+  it("replaces the break with a rule widget", () => {
+    const ops = projectMarkdown({ text: "a\n\n***\n\nb", selection: [], focused: false });
+
+    expect(ops).toEqual([{ kind: "widget", from: 3, to: 6, widget: { type: "rule" } }]);
+  });
+
+  it("shows the raw break, marked as revealed, when the caret is on its line", () => {
+    const text = "a\n\n***\n\nb";
+    const ops = projectMarkdown({ text, selection: [{ from: 5, to: 5 }], focused: true });
+
+    // The line still needs a class: an un-styled `***` would jump in size the
+    // moment the caret arrives.
+    expect(ops).toEqual([{ kind: "line-class", line: 3, className: "volli-md-hr-reveal" }]);
+  });
+});
