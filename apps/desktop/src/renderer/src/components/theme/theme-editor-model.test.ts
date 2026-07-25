@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { DEFAULT_THEME, type ThemeDefinition } from "@volli/shared";
+import { DEFAULT_THEME, slugify, type ThemeDefinition } from "@volli/shared";
 
 import {
   beginThemeDuplicate,
@@ -166,5 +166,23 @@ describe("duplicateTheme", () => {
     expect(first.slug).not.toBe(source.slug);
     expect(second.slug).not.toBe(first.slug);
     expect(second.slug).not.toBe(source.slug);
+  });
+
+  it("falls back to a timestamp slug when every numbered candidate is taken", () => {
+    const source = { ...DEFAULT_THEME, name: "X", slug: "x" };
+    const base = "X Copy";
+    const stem = slugify(base).replace(/-+$/, "").slice(0, 40);
+    const catalog: ThemeDefinition[] = [{ ...DEFAULT_THEME, name: base, slug: slugify(base) }];
+    for (let n = 2; n < 100; n += 1) {
+      catalog.push({ ...DEFAULT_THEME, name: `${base} ${n}`, slug: slugify(`${base} ${n}`) });
+    }
+    for (let n = 2; n < 1000; n += 1) {
+      catalog.push({ ...DEFAULT_THEME, name: `stem ${n}`, slug: `${stem}-${n}` });
+    }
+
+    const copy = duplicateTheme(source, catalog);
+
+    expect(copy.slug).toMatch(new RegExp(`^${slugify(base).slice(0, 36)}-\\d+$`));
+    expect(copy.name).toBe(base);
   });
 });
