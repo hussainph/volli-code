@@ -21,6 +21,7 @@ import { FileView } from "@renderer/components/ticket/file-view";
 import { RailResizeHandle } from "@renderer/components/ticket/rail-resize-handle";
 import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab";
 import { TicketBodyPanel } from "@renderer/components/ticket/ticket-body-panel";
+import { TicketChangesPanel } from "@renderer/components/ticket/ticket-changes-panel";
 import { TicketRail } from "@renderer/components/ticket/ticket-rail";
 import { TicketSessionPlane } from "@renderer/components/ticket/ticket-session-plane";
 import { TicketTabStrip, type TicketTabDescriptor } from "@renderer/components/ticket/ticket-tabs";
@@ -571,6 +572,13 @@ export function TicketDetail({
                 creating={creating}
                 onNewSession={() => void createSession()}
                 onActivateSession={setActiveTab}
+                changesContent={
+                  <TicketChangesPanel
+                    ticket={ticket}
+                    activeTabId={activeTabId}
+                    onOpenFile={openFile}
+                  />
+                }
               />
             </aside>
           )}
