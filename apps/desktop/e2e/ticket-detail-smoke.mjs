@@ -346,6 +346,30 @@ async function dismissOverlays(page) {
   await blurToNeutral(page);
 }
 
+/**
+ * Exit terminal-focus mode if it is still engaged (tab strip + rail are
+ * unmounted while focused). ⌘Escape is the only exit chord — bare Escape
+ * goes to the PTY. Safe to call when already restored.
+ */
+async function ensureTerminalFocusExited(page) {
+  const focused = await page.evaluate(() => {
+    const tablists = Array.from(document.querySelectorAll('[role="tablist"]')).filter(
+      (element) =>
+        element instanceof HTMLElement &&
+        element.offsetParent !== null &&
+        element.getBoundingClientRect().height > 0,
+    ).length;
+    return tablists === 0 && document.querySelectorAll("aside").length === 0;
+  });
+  if (!focused) return;
+  await page.keyboard.press("Meta+Escape");
+  await waitUntil("terminal focus exited", async () => {
+    return (
+      (await page.getByRole("tablist").count()) >= 1 || (await page.locator("aside").count()) === 1
+    );
+  }).catch(() => null);
+}
+
 // ---- terminal (canvas — side-effect assertions only) -----------------------
 
 /** Focus the single VISIBLE terminal canvas by clicking its centre. */
@@ -974,89 +998,95 @@ async function main() {
       "6b",
       "Terminal focus reclaims sidebars/tab rail, keeps one thin chrome row, preserves the live canvas, and ⌘Escape restores the workspace",
       async () => {
-        const marked = await page.evaluate(() => {
-          const canvas = Array.from(document.querySelectorAll("canvas")).find(
-            (candidate) =>
-              candidate.offsetParent !== null &&
-              candidate.clientWidth > 0 &&
-              candidate.clientHeight > 0,
+        try {
+          const marked = await page.evaluate(() => {
+            const canvas = Array.from(document.querySelectorAll("canvas")).find(
+              (candidate) =>
+                candidate.offsetParent !== null &&
+                candidate.clientWidth > 0 &&
+                candidate.clientHeight > 0,
+            );
+            if (!canvas) return false;
+            canvas.dataset.e2eFocus = "focus-1";
+            return true;
+          });
+          await page.getByRole("button", { name: "Enter terminal focus" }).click();
+          const focused = await waitUntil("terminal focus geometry", async () =>
+            page.evaluate(() => {
+              const sidebar = document.querySelector('[data-sidebar="sidebar"]');
+              const inset = document.querySelector('[data-slot="sidebar-inset"]');
+              const chrome = document.querySelector(".app-region-drag");
+              const markedCanvas = document.querySelector('canvas[data-e2e-focus="focus-1"]');
+              const state = {
+                sidebarHidden: sidebar?.closest('[aria-hidden="true"]') !== null,
+                insetLeft: inset?.getBoundingClientRect().left ?? -1,
+                chromeHeight: chrome?.getBoundingClientRect().height ?? -1,
+                tablists: Array.from(document.querySelectorAll('[role="tablist"]')).filter(
+                  (element) =>
+                    element instanceof HTMLElement &&
+                    element.offsetParent !== null &&
+                    element.getBoundingClientRect().height > 0,
+                ).length,
+                asides: document.querySelectorAll("aside").length,
+                canvasVisible:
+                  markedCanvas instanceof HTMLCanvasElement && markedCanvas.offsetParent !== null,
+              };
+              return state.sidebarHidden && state.insetLeft === 0 && state.canvasVisible
+                ? state
+                : false;
+            }),
           );
-          if (!canvas) return false;
-          canvas.dataset.e2eFocus = "focus-1";
-          return true;
-        });
-        await page.getByRole("button", { name: "Enter terminal focus" }).click();
-        const focused = await waitUntil("terminal focus geometry", async () =>
-          page.evaluate(() => {
-            const sidebar = document.querySelector('[data-sidebar="sidebar"]');
-            const inset = document.querySelector('[data-slot="sidebar-inset"]');
-            const chrome = document.querySelector(".app-region-drag");
-            const markedCanvas = document.querySelector('canvas[data-e2e-focus="focus-1"]');
-            const state = {
-              sidebarHidden: sidebar?.closest('[aria-hidden="true"]') !== null,
-              insetLeft: inset?.getBoundingClientRect().left ?? -1,
-              chromeHeight: chrome?.getBoundingClientRect().height ?? -1,
-              tablists: Array.from(document.querySelectorAll('[role="tablist"]')).filter(
-                (element) =>
-                  element instanceof HTMLElement &&
-                  element.offsetParent !== null &&
-                  element.getBoundingClientRect().height > 0,
-              ).length,
-              asides: document.querySelectorAll("aside").length,
-              canvasVisible:
-                markedCanvas instanceof HTMLCanvasElement && markedCanvas.offsetParent !== null,
-            };
-            return state.sidebarHidden && state.insetLeft === 0 && state.canvasVisible
-              ? state
-              : false;
-          }),
-        );
-        const focusGeometry =
-          focused.sidebarHidden &&
-          focused.insetLeft === 0 &&
-          focused.chromeHeight === 40 &&
-          focused.tablists === 0 &&
-          focused.asides === 0 &&
-          focused.canvasVisible;
+          const focusGeometry =
+            focused.sidebarHidden &&
+            focused.insetLeft === 0 &&
+            focused.chromeHeight === 40 &&
+            focused.tablists === 0 &&
+            focused.asides === 0 &&
+            focused.canvasVisible;
 
-        // ⌘Escape, NOT bare Escape. Terminal focus deliberately leaves plain Esc
-        // to the PTY (Claude Code interrupts on it, vim and friends lean on it
-        // constantly), so the exit is a chord no terminal app consumes — see the
-        // `exitTerminalFocus` listener in ticket-detail.tsx. This check pressed
-        // bare Escape and had been asserting the pre-#78 behavior; it never
-        // caught it because the non-git fixture failed 6b long before this line.
-        await page.keyboard.press("Meta+Escape");
-        const restored = await waitUntil("workspace geometry restored", async () =>
-          page.evaluate(() => {
-            const inset = document.querySelector('[data-slot="sidebar-inset"]');
-            const markedCanvas = document.querySelector('canvas[data-e2e-focus="focus-1"]');
-            const state = {
-              insetLeft: inset?.getBoundingClientRect().left ?? 0,
-              tablists: Array.from(document.querySelectorAll('[role="tablist"]')).filter(
-                (element) =>
-                  element instanceof HTMLElement &&
-                  element.offsetParent !== null &&
-                  element.getBoundingClientRect().height > 0,
-              ).length,
-              asides: document.querySelectorAll("aside").length,
-              canvasVisible:
-                markedCanvas instanceof HTMLCanvasElement && markedCanvas.offsetParent !== null,
-            };
-            return state.insetLeft > 0 && state.canvasVisible ? state : false;
-          }),
-        );
-        const restoredGeometry =
-          restored.insetLeft > 0 &&
-          restored.tablists === 1 &&
-          restored.asides === 1 &&
-          restored.canvasVisible;
-        const ticketStillOpen = await detailOpen(page);
+          // ⌘Escape, NOT bare Escape. Terminal focus deliberately leaves plain Esc
+          // to the PTY (Claude Code interrupts on it, vim and friends lean on it
+          // constantly), so the exit is a chord no terminal app consumes — see the
+          // `exitTerminalFocus` listener in ticket-detail.tsx. This check pressed
+          // bare Escape and had been asserting the pre-#78 behavior; it never
+          // caught it because the non-git fixture failed 6b long before this line.
+          await page.keyboard.press("Meta+Escape");
+          const restored = await waitUntil("workspace geometry restored", async () =>
+            page.evaluate(() => {
+              const inset = document.querySelector('[data-slot="sidebar-inset"]');
+              const markedCanvas = document.querySelector('canvas[data-e2e-focus="focus-1"]');
+              const state = {
+                insetLeft: inset?.getBoundingClientRect().left ?? 0,
+                tablists: Array.from(document.querySelectorAll('[role="tablist"]')).filter(
+                  (element) =>
+                    element instanceof HTMLElement &&
+                    element.offsetParent !== null &&
+                    element.getBoundingClientRect().height > 0,
+                ).length,
+                asides: document.querySelectorAll("aside").length,
+                canvasVisible:
+                  markedCanvas instanceof HTMLCanvasElement && markedCanvas.offsetParent !== null,
+              };
+              return state.insetLeft > 0 && state.canvasVisible ? state : false;
+            }),
+          );
+          const restoredGeometry =
+            restored.insetLeft > 0 &&
+            restored.tablists === 1 &&
+            restored.asides === 1 &&
+            restored.canvasVisible;
+          const ticketStillOpen = await detailOpen(page);
 
-        const ok = marked && focusGeometry && restoredGeometry && ticketStillOpen;
-        return {
-          ok,
-          detail: `marked=${marked} focused=${JSON.stringify(focused)} restored=${JSON.stringify(restored)} ticketOpen=${ticketStillOpen}`,
-        };
+          const ok = marked && focusGeometry && restoredGeometry && ticketStillOpen;
+          return {
+            ok,
+            detail: `marked=${marked} focused=${JSON.stringify(focused)} restored=${JSON.stringify(restored)} ticketOpen=${ticketStillOpen}`,
+          };
+        } finally {
+          // Never leave the suite stranded in terminal focus — tab strip + rail
+          // are unmounted there, so later checks would time out on missing tabs.
+          await ensureTerminalFocusExited(page);
+        }
       },
     );
 
@@ -1067,6 +1097,8 @@ async function main() {
       7,
       "Session rename: double-click the session tab, type, Enter; the new title shows on the tab and the rail row",
       async () => {
+        await ensureTerminalFocusExited(page);
+        await dismissOverlays(page);
         const sessionTab = page.getByRole("tab", { name: SESSION_INITIAL, exact: true });
         await sessionTab.dblclick();
         const renameInput = page.getByRole("textbox", { name: `Rename ${SESSION_INITIAL}` });
@@ -1098,6 +1130,7 @@ async function main() {
       8,
       "Rail: icon-mode Sessions default with Properties metadata in-rail; no Harness row anywhere; board filter bar has no Harness chip",
       async () => {
+        await ensureTerminalFocusExited(page);
         await dismissOverlays(page);
         if (!(await detailOpen(page))) await openTicketViaCard(page);
         await dismissOverlays(page);
@@ -1148,6 +1181,7 @@ async function main() {
       "8b",
       "Rail mode switch never changes the active main-view tab (decision #46)",
       async () => {
+        await ensureTerminalFocusExited(page);
         await dismissOverlays(page);
         if (!(await detailOpen(page))) await openTicketViaCard(page);
         await dismissOverlays(page);
@@ -1195,6 +1229,7 @@ async function main() {
       "8c",
       'Persisted active:"doc" still restores the Ticket Body tab after rename',
       async () => {
+        await ensureTerminalFocusExited(page);
         await dismissOverlays(page);
         if (!(await detailOpen(page))) await openTicketViaCard(page);
         await dismissOverlays(page);
