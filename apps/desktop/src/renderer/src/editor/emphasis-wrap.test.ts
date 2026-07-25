@@ -76,4 +76,21 @@ describe("planEmphasisWrap", () => {
     // Each caret lands between ITS own pair: `*|*a b*|*` → offsets 1 and 6.
     expect(plan.selections).toEqual([caret(1, 2), caret(1, 7)]);
   });
+
+  it("handles ranges given out of document order, and answers in the order given", () => {
+    // Monaco's `getSelections()` is primary-first, not document-order — "add
+    // cursor above" hands back exactly this shape.
+    const plan = planEmphasisWrap({
+      text: "a b",
+      selection: [
+        { from: 3, to: 3 },
+        { from: 0, to: 0 },
+      ],
+      mark: "*",
+    });
+
+    expect(plan.text).toBe("**a b**");
+    // Same two carets as above, reported against the same two input ranges.
+    expect(plan.selections).toEqual([caret(1, 7), caret(1, 2)]);
+  });
 });

@@ -75,29 +75,24 @@ export function planEmphasisWrap(input: EmphasisWrapInput): EmphasisWrapPlan {
   const { text, mark } = input;
   const m = mark.length;
 
+  // Decide each range against the ORIGINAL text, then walk them in document
+  // order: `getSelections()` is primary-first, not sorted, and both the running
+  // shift and the linear text build below need ascending positions to be right.
+  const planned = input.selection.map((range, index) => planRange(text, range, mark, m, index));
+  const ordered = [...planned].sort((a, b) => a.opening.from - b.opening.from);
+
   const edits: OffsetEdit[] = [];
-  const spans: SelRange[] = [];
+  // Indexed by the range's position in the INPUT, so the answer comes back in
+  // the order the caller asked — Monaco's first selection is its primary one.
+  const spans: SelRange[] = new Array<SelRange>(planned.length);
   // How far the EARLIER ranges' edits have moved the rest of the document. Edits
-  // keep original coordinates (Monaco re-bases them itself); resulting positions
-  // do not, so this is the one running total the plan has to carry.
+  // keep original coordinates (Monaco re-bases the batch itself); resulting
+  // positions do not, so this is the one running total the plan has to carry.
   let shift = 0;
-  for (const range of input.selection) {
-    const before = text.slice(Math.max(0, range.from - m), range.from);
-    const after = text.slice(range.to, Math.min(text.length, range.to + m));
-    if (before === mark && after === mark) {
-      // Strip the flanking pair; both ends shift left by the removed leading mark.
-      edits.push({ from: range.from - m, to: range.from, text: "" });
-      edits.push({ from: range.to, to: range.to + m, text: "" });
-      spans.push({ from: range.from - m + shift, to: range.to - m + shift });
-      shift -= 2 * m;
-      continue;
-    }
-    // Insert the pair; both ends shift right by the leading mark, which — for an
-    // empty range — leaves the caret BETWEEN the two inserted marks.
-    edits.push({ from: range.from, to: range.from, text: mark });
-    edits.push({ from: range.to, to: range.to, text: mark });
-    spans.push({ from: range.from + m + shift, to: range.to + m + shift });
-    shift += 2 * m;
+  for (const item of ordered) {
+    edits.push(item.opening, item.closing);
+    spans[item.index] = { from: item.span.from + shift, to: item.span.to + shift };
+    shift += item.delta;
   }
 
   const resulting = applyEdits(text, edits);
@@ -110,6 +105,52 @@ export function planEmphasisWrap(input: EmphasisWrapInput): EmphasisWrapPlan {
     })),
     selections: spans.map((span) => spanToRange(after, span.from, span.to)),
     text: resulting,
+  };
+}
+
+/** One range's decision, before the other ranges' shifts are folded in. */
+interface RangePlan {
+  /** Where this range sat in the input, so the answer keeps that order. */
+  readonly index: number;
+  readonly opening: OffsetEdit;
+  readonly closing: OffsetEdit;
+  /** Resulting span, shifted by this range's own edit only. */
+  readonly span: SelRange;
+  /** How much this range lengthens (insert) or shortens (strip) the document. */
+  readonly delta: number;
+}
+
+/**
+ * Toggle one range, decided in isolation against the original text — exactly as
+ * CodeMirror's `changeByRange` decided each of its ranges.
+ */
+function planRange(
+  text: string,
+  range: SelRange,
+  mark: string,
+  m: number,
+  index: number,
+): RangePlan {
+  const before = text.slice(Math.max(0, range.from - m), range.from);
+  const after = text.slice(range.to, Math.min(text.length, range.to + m));
+  if (before === mark && after === mark) {
+    // Strip the flanking pair; both ends shift left by the removed leading mark.
+    return {
+      index,
+      opening: { from: range.from - m, to: range.from, text: "" },
+      closing: { from: range.to, to: range.to + m, text: "" },
+      span: { from: range.from - m, to: range.to - m },
+      delta: -2 * m,
+    };
+  }
+  // Insert the pair; both ends shift right by the leading mark, which — for an
+  // empty range — leaves the caret BETWEEN the two inserted marks.
+  return {
+    index,
+    opening: { from: range.from, to: range.from, text: mark },
+    closing: { from: range.to, to: range.to, text: mark },
+    span: { from: range.from + m, to: range.to + m },
+    delta: 2 * m,
   };
 }
 
