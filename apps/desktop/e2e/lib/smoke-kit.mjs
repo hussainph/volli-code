@@ -125,16 +125,21 @@ export function worktreeHomeFor(dbPath, extraEnv = {}) {
  */
 export function launch({ dbPath, userDataDir, extraEnv = {} }) {
   const worktreeHome = worktreeHomeFor(dbPath, extraEnv);
+  // Cursor / some agent shells set ELECTRON_RUN_AS_NODE=1, which makes the
+  // Electron binary run as plain Node and immediately crash on protocol APIs.
+  // Match scripts/start-electron.mjs and strip it for every smoke launch.
+  const env = {
+    ...process.env,
+    VOLLI_DB_PATH: dbPath,
+    VOLLI_SKIP_CLOSE_CONFIRM: "1",
+    ...extraEnv,
+    VOLLI_WORKTREE_HOME_DIR: worktreeHome,
+  };
+  delete env.ELECTRON_RUN_AS_NODE;
   return _electron.launch({
     executablePath: ELECTRON,
     args: [APP_DIR, `--user-data-dir=${userDataDir}`],
-    env: {
-      ...process.env,
-      VOLLI_DB_PATH: dbPath,
-      VOLLI_SKIP_CLOSE_CONFIRM: "1",
-      ...extraEnv,
-      VOLLI_WORKTREE_HOME_DIR: worktreeHome,
-    },
+    env,
   });
 }
 

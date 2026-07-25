@@ -254,14 +254,16 @@ async function readFileSafe(path) {
 // ---- launch ----------------------------------------------------------------
 
 function launch(dbPath) {
+  const env = {
+    ...process.env,
+    VOLLI_DB_PATH: dbPath,
+    VOLLI_WORKTREE_HOME_DIR: WORKTREE_HOME,
+  };
+  delete env.ELECTRON_RUN_AS_NODE;
   return _electron.launch({
     executablePath: ELECTRON,
     args: [APP_DIR, `--user-data-dir=${USER_DATA_DIR}`],
-    env: {
-      ...process.env,
-      VOLLI_DB_PATH: dbPath,
-      VOLLI_WORKTREE_HOME_DIR: WORKTREE_HOME,
-    },
+    env,
   });
 }
 
@@ -1199,7 +1201,7 @@ async function main() {
           const ui = byProject[projectId];
           const existing = ui.ticketTabs?.[ticketId] ?? { files: [] };
           ui.ticketTabs = {
-            ...(ui.ticketTabs ?? {}),
+            ...ui.ticketTabs,
             // Literal legacy wire value — what real upgrades still have on disk.
             [ticketId]: { files: existing.files ?? [], active: "doc" },
           };
