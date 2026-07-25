@@ -33,8 +33,9 @@
  *   • monacoEditor()/clickMonaco()/readMonacoText()/typeIntoMonaco() — the same
  *                      encoding, scoped to one host, for surfaces that mount
  *                      several editors. Typing is click-then-keyboard (Monaco's
- *                      input surface is not a textarea) and always waits for the
- *                      characters to land.
+ *                      input surface is not a textarea): clickMonaco polls
+ *                      `data-monaco-status === "ready"` before focusing, and
+ *                      typeIntoMonaco always waits for the characters to land.
  *   • readDocumentLine()/readDocumentView() — Document Mode's rendered text split
  *                      into what is SEEN and what is COLLAPSED, by COMPUTED
  *                      STYLE. textContent still returns `display:none` text, so
@@ -347,10 +348,25 @@ export function monacoEditor(scope) {
  * than a textarea (see {@link readMonacoState}), so there is nothing to `fill()`
  * and nothing to `focus()` by role — typing is always click-then-keyboard.
  *
+ * Polls `data-monaco-status === "ready"` first: the host can mount with a
+ * `.monaco-editor` child a tick before the model is actually receptive, and a
+ * click+type in that window drops the leading keystrokes.
+ *
  * @param {import("playwright-core").Page | import("playwright-core").Locator} scope
  */
 export async function clickMonaco(scope) {
-  await monacoEditor(scope).click();
+  const editor = monacoEditor(scope);
+  await waitUntil("Monaco editor to be ready", async () => {
+    try {
+      const status = await editor.evaluate(
+        (el) => el.closest("[data-monaco-status]")?.getAttribute("data-monaco-status") ?? null,
+      );
+      return status === "ready" ? status : null;
+    } catch {
+      return null;
+    }
+  });
+  await editor.click();
 }
 
 /** The Page behind a Page-or-Locator scope. */
@@ -362,12 +378,14 @@ function pageOf(scope) {
  * Click into `scope`'s Monaco editor, type `text`, and WAIT for the document to
  * actually hold it.
  *
- * The wait is not decoration. Monaco's `native-edit-context` applies keystrokes
- * on asynchronous `textupdate` events, so with Playwright's zero-delay typing
- * the last characters are still in flight when the next action runs — a probe
- * that typed a body and immediately pressed the kickoff hotkey created its
- * ticket with the final three characters missing. Polling the rendered document
- * is both the fix and a stronger assertion than the bare type it replaces.
+ * The waits are not decoration. {@link clickMonaco} first polls
+ * `data-monaco-status === "ready"`, then Monaco's `native-edit-context` applies
+ * keystrokes on asynchronous `textupdate` events — so with Playwright's
+ * zero-delay typing the last characters are still in flight when the next
+ * action runs. A probe that typed a body and immediately pressed the kickoff
+ * hotkey created its ticket with the final three characters missing. Polling
+ * the rendered document is both the fix and a stronger assertion than the bare
+ * type it replaces.
  *
  * @param {import("playwright-core").Page | import("playwright-core").Locator} scope
  * @param {string} text
@@ -376,7 +394,10 @@ export async function typeIntoMonaco(scope, text) {
   const page = pageOf(scope);
   await clickMonaco(scope);
   await page.keyboard.type(text);
-  const expected = text.replaceAll("\r\n", "\n");
+  // `readMonacoText` joins rendered view-lines with `\n` and does not invent a
+  // trailing newline for the final line, so a typed string that ends in `\n`
+  // (file contents, etc.) must be matched without that terminator.
+  const expected = text.replaceAll("\r\n", "\n").replace(/\n$/, "");
   await waitUntil(`typed text to land in Monaco (${JSON.stringify(text.slice(-24))})`, async () => {
     const actual = await readMonacoText(scope);
     return actual.includes(expected) ? actual : null;

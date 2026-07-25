@@ -109,6 +109,7 @@ import {
   readDocumentLine,
   readMonacoState,
   readMonacoText,
+  typeIntoMonaco,
 } from "./lib/smoke-kit.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -676,20 +677,10 @@ async function main() {
 
         // Type markdown into the editor. Line 1 is a plain paragraph so the
         // heading below renders collapsed even with the caret at the doc start.
-        await clickMonaco(page);
-        await page.keyboard.type(BODY_INTRO);
-        await page.keyboard.press("Enter");
-        await page.keyboard.press("Enter");
-        await page.keyboard.type(`# ${BODY_HEADING}`);
-        await page.keyboard.press("Enter");
-        await page.keyboard.press("Enter");
-        await page.keyboard.type(BODY_CODE);
-        // Monaco's native-edit-context applies keystrokes on asynchronous
-        // `textupdate` events, so with zero-delay typing the last characters are
-        // still in flight here (a read one tick early sees "text `code` her").
-        await waitUntil("typed body to land in the document", async () =>
-          (await readMonacoText(page)).includes(BODY_CODE),
-        );
+        // Land-wait the FULL body (not just the trailing code span) before the
+        // reveal/blur steps — native-edit-context applies keystrokes async, and
+        // a suffix-only wait can pass while earlier lines are still in flight.
+        await typeIntoMonaco(page, EXPECTED_BODY);
 
         // Caret sits at the end (code line). The heading line renders as a styled
         // h1 with the `#` COLLAPSED — present in the DOM, zero-width on screen,

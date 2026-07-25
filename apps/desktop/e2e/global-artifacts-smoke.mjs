@@ -65,6 +65,7 @@ import {
   readDocumentLine,
   readMonacoState,
   readMonacoText,
+  typeIntoMonaco,
 } from "./lib/smoke-kit.mjs";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -371,12 +372,9 @@ async function main() {
       "@-picker: typing @probe offers the seeded artifact; picking inserts the plain-text ref which chips once the caret leaves",
       async () => {
         // Type an intro line first so the chip's line isn't the caret's
-        // post-insert line-start reveal target.
-        await clickMonaco(page);
-        await page.keyboard.type(BODY_INTRO);
-        await page.keyboard.press("Enter");
-        await page.keyboard.press("Enter");
-        await page.keyboard.type("See ");
+        // post-insert line-start reveal target. Land-wait before the `@` query
+        // so the picker keystrokes can't race the trailing "See " characters.
+        await typeIntoMonaco(page, `${BODY_INTRO}\n\nSee `);
 
         await pickCompletion(page, `@${ARTIFACT_NAME.slice(0, 5)}`, ARTIFACT_NAME);
 
@@ -456,7 +454,15 @@ async function main() {
           (await page.getByRole("button", { name: "Save", exact: true }).count()) === 0;
         await clickMonaco(page);
         await page.keyboard.press("Meta+a");
+        // Select-all then retype: can't route through typeIntoMonaco (it re-clicks
+        // and drops the selection), so type + land-wait before the blur that
+        // flushes autosave — otherwise the disk write races in-flight keystrokes.
         await page.keyboard.type(ARTIFACT_EDITED);
+        const expectedEdited = ARTIFACT_EDITED.replaceAll("\r\n", "\n").replace(/\n$/, "");
+        await waitUntil("edited artifact text to land in Monaco", async () => {
+          const actual = await readMonacoText(page);
+          return actual.includes(expectedEdited) ? actual : null;
+        });
         // Blur onto the Doc tab to flush the debounced autosave.
         await docTab(page).click();
         const saved = await waitUntil("edited artifact on disk", async () => {
