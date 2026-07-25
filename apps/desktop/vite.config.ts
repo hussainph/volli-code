@@ -81,6 +81,7 @@ export default defineConfig({
         "src/editor/autosave-plan.ts",
         "src/editor/document-identity.ts",
         "src/editor/document-registry.ts",
+        "src/editor/link-open.ts",
         "src/editor/markdown-projection.ts",
         "src/editor/monaco-theme.ts",
         "src/editor/reveal.ts",
