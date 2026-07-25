@@ -1553,12 +1553,15 @@ async function main() {
       "8c",
       'Persisted active:"doc" still restores the Ticket Body tab after rename',
       async () => {
-        // Prefer the already-open detail (check 12 leaves it open). Fall back to
-        // the board card only if needed.
+        // Prefer the already-open detail (check 12 leaves it open). The reload
+        // below restores the detail from the persisted openTicketId, so opening
+        // one here is a convenience rather than a precondition — a board-card
+        // fallback must never fail this check just because an earlier failure
+        // (6b) left the app in terminal-focus mode with the board unreachable.
         if (!(await detailOpen(page))) {
           await page.keyboard.press("Escape").catch(() => {});
           await sleep(200);
-          if (!(await detailOpen(page))) await openTicketViaCard(page);
+          if (!(await detailOpen(page))) await openTicketViaCard(page).catch(() => {});
         }
 
         // Write the legacy wire value into app_state and reload immediately so
