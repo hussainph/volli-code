@@ -20,7 +20,7 @@ import { createTerminalSession } from "@renderer/components/sessions/session-cre
 import { FileView } from "@renderer/components/ticket/file-view";
 import { RailResizeHandle } from "@renderer/components/ticket/rail-resize-handle";
 import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab";
-import { TicketDocTab } from "@renderer/components/ticket/ticket-doc-tab";
+import { TicketBodyPanel } from "@renderer/components/ticket/ticket-body-panel";
 import { TicketRail } from "@renderer/components/ticket/ticket-rail";
 import { TicketSessionPlane } from "@renderer/components/ticket/ticket-session-plane";
 import { TicketTabStrip, type TicketTabDescriptor } from "@renderer/components/ticket/ticket-tabs";
@@ -313,7 +313,7 @@ export function TicketDetail({
   // below is keyed off `kind`, not id, so the plane and content branch
   // generically.
   const tabs: TicketTabDescriptor[] = [
-    { id: BODY_TAB_ID, kind: "doc", label: displayId },
+    { id: BODY_TAB_ID, kind: "body", label: displayId },
     ...openFiles.map(
       (relPath): TicketTabDescriptor => ({
         id: `file:${relPath}`,
@@ -517,10 +517,10 @@ export function TicketDetail({
           <div
             className={cn(
               "flex min-h-0 flex-1 flex-col overflow-hidden",
-              activeTab.kind === "doc" && "pt-8",
+              activeTab.kind === "body" && "pt-8",
             )}
           >
-            {activeTab.kind === "doc" && (
+            {activeTab.kind === "body" && (
               <ContentColumn>
                 <TicketTitle ticket={ticket} />
               </ContentColumn>
@@ -530,12 +530,12 @@ export function TicketDetail({
             <div
               className={cn(
                 "relative flex min-h-0 flex-1 flex-col",
-                activeTab.kind === "doc" && "mt-3",
+                activeTab.kind === "body" && "mt-3",
               )}
             >
-              {activeTab.kind === "doc" ? (
+              {activeTab.kind === "body" ? (
                 <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
-                  <TicketDocTab ticket={ticket} fileRefs={fileRefs} />
+                  <TicketBodyPanel ticket={ticket} fileRefs={fileRefs} />
                 </div>
               ) : null}
               {activeTab.kind === "file" && activeTab.relPath !== undefined ? (
