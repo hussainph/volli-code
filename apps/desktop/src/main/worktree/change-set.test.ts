@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
@@ -282,7 +282,7 @@ describe("changeSetSnapshot — untracked", () => {
       },
     ]);
     const statusCall = calls.find((c) => c.args[0] === "status");
-    expect(statusCall?.args).toEqual(["status", "--porcelain=v2", "-z"]);
+    expect(statusCall?.args).toEqual(["status", "--porcelain=v2", "-z", "-uall"]);
   });
 });
 
@@ -451,9 +451,14 @@ describe("changeSetSnapshot — real git repository", () => {
     runRepoGit(dir, ["mv", "rename-me.ts", "renamed.ts"]);
     runRepoGit(dir, ["rm", "-q", "delete-me.ts"]);
 
-    // Untracked with space + Unicode; binary untracked.
-    writeFileSync(join(dir, "my notes 日本語.txt"), "untracked\n");
-    writeFileSync(join(dir, "logo.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01]));
+    // Untracked with space + Unicode; nested so -uall must expand the directory.
+    mkdirSync(join(dir, "docs"), { recursive: true });
+    writeFileSync(join(dir, "docs", "my notes 日本語.txt"), "untracked\n");
+    mkdirSync(join(dir, "assets"), { recursive: true });
+    writeFileSync(
+      join(dir, "assets", "logo.png"),
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01]),
+    );
 
     // Tracked binary addition (numstat emits -/-).
     writeFileSync(join(dir, "asset.bin"), Buffer.from([0x00, 0x01, 0xff]));
@@ -475,12 +480,12 @@ describe("changeSetSnapshot — real git repository", () => {
       previousPath: "rename-me.ts",
     });
     expect(byPath.get("delete-me.ts")?.status).toBe("deleted");
-    expect(byPath.get("my notes 日本語.txt")).toMatchObject({
+    expect(byPath.get("docs/my notes 日本語.txt")).toMatchObject({
       status: "untracked",
       insertions: null,
       deletions: null,
     });
-    expect(byPath.get("logo.png")?.status).toBe("untracked");
+    expect(byPath.get("assets/logo.png")?.status).toBe("untracked");
     expect(byPath.get("asset.bin")).toMatchObject({
       status: "added",
       binary: true,

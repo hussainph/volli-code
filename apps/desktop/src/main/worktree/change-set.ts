@@ -75,7 +75,7 @@ export function changeSetSnapshot(
       input.worktreePath,
     );
     const numstatOut = git(["diff", "--numstat", "-z", "-M", baseRevision], input.worktreePath);
-    const statusOut = git(["status", "--porcelain=v2", "-z"], input.worktreePath);
+    const statusOut = git(["status", "--porcelain=v2", "-z", "-uall"], input.worktreePath);
 
     const tracked = composeFiles(parseNameStatus(nameStatusOut), parseNumstat(numstatOut));
     // `git diff <base>` reports conflicted paths as M; porcelain v2 `u` lines

@@ -168,12 +168,14 @@ export function TicketFilesPanel({
   const [cwd, setCwd] = React.useState("");
   const [entries, setEntries] = React.useState<TicketWorktreeEntry[]>([]);
   const [error, setError] = React.useState<string | null>(null);
+  const [loaded, setLoaded] = React.useState(ticket.worktreePath === null);
 
   const loadDir = React.useCallback(
     async (nextCwd: string) => {
       if (ticket.worktreePath === null) {
         setEntries([]);
         setError(null);
+        setLoaded(true);
         return;
       }
       const abs = nextCwd === "" ? ticket.worktreePath : `${ticket.worktreePath}/${nextCwd}`;
@@ -182,15 +184,18 @@ export function TicketFilesPanel({
         if (!result.ok) {
           setError(result.error);
           toastError(`Couldn't list worktree files: ${result.error}`);
+          setLoaded(true);
           return;
         }
         setError(null);
         setEntries(toWorktreeEntries(nextCwd, result.entries));
         setCwd(nextCwd);
+        setLoaded(true);
       } catch (err) {
         const message = errorMessage(err);
         setError(message);
         toastError(`Couldn't list worktree files: ${message}`);
+        setLoaded(true);
       }
     },
     [ticket.worktreePath],
@@ -205,6 +210,17 @@ export function TicketFilesPanel({
     attachments,
     worktreeEntries: entries,
   });
+
+  if (!loaded && ticket.worktreePath !== null) {
+    return (
+      <div
+        data-testid="ticket-files-loading"
+        className="flex min-h-0 flex-1 items-center justify-center px-4 py-8"
+      >
+        <p className="text-ui text-muted-foreground">Loading files…</p>
+      </div>
+    );
+  }
 
   if (ticket.worktreePath === null && nav.referenced.length === 0) {
     return (
