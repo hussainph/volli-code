@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { Result, WorktreeChangedEvent } from "@volli/shared";
+import type { Result, WorktreeChangedEvent, WorktreeWatchErrorEvent } from "@volli/shared";
 
 import { subscribeWorktreeChanges, type WorktreeChangeWatchApi } from "./worktree-change-watch";
 
@@ -9,6 +9,7 @@ interface FakeApi extends WorktreeChangeWatchApi {
   /** Resolves the pending `watchChangeSet` promise for the given ticket. */
   settleWatch(ticketId: string, result: Result): void;
   emit(event: WorktreeChangedEvent): void;
+  emitWatchError(event: WorktreeWatchErrorEvent): void;
   listenerCount(): number;
 }
 
@@ -17,6 +18,7 @@ function fakeApi(): FakeApi {
   const unwatched: string[] = [];
   const pending = new Map<string, (result: Result) => void>();
   const listeners = new Set<(event: WorktreeChangedEvent) => void>();
+  const errorListeners = new Set<(event: WorktreeWatchErrorEvent) => void>();
 
   return {
     watched,
@@ -33,6 +35,10 @@ function fakeApi(): FakeApi {
       listeners.add(callback);
       return () => listeners.delete(callback);
     },
+    onWatchError(callback) {
+      errorListeners.add(callback);
+      return () => errorListeners.delete(callback);
+    },
     settleWatch(ticketId, result) {
       pending.get(ticketId)?.(result);
       pending.delete(ticketId);
@@ -40,7 +46,10 @@ function fakeApi(): FakeApi {
     emit(event) {
       for (const listener of listeners) listener(event);
     },
-    listenerCount: () => listeners.size,
+    emitWatchError(event) {
+      for (const listener of errorListeners) listener(event);
+    },
+    listenerCount: () => listeners.size + errorListeners.size,
   };
 }
 
@@ -100,6 +109,18 @@ describe("subscribeWorktreeChanges", () => {
     expect(api.unwatched).toEqual(["t1"]);
     api.emit({ ticketId: "t1" });
     expect(second.changes).toHaveLength(1);
+  });
+
+  it("reports a watcher fault for this ticket only", () => {
+    const api = fakeApi();
+    const spy = handlers();
+
+    subscribeWorktreeChanges(api, "t1", spy);
+    api.emitWatchError({ ticketId: "t2", error: "someone else's problem" });
+    expect(spy.errors).toEqual([]);
+
+    api.emitWatchError({ ticketId: "t1", error: "EMFILE" });
+    expect(spy.errors).toEqual(["EMFILE"]);
   });
 
   it("reports a failed watch, and stays quiet once torn down", async () => {

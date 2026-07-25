@@ -8,7 +8,12 @@
 import { statSync, watch as fsWatch } from "node:fs";
 import { join } from "node:path";
 import type { WebContents } from "electron";
-import type { Result, WorktreeChangedEvent, VolliIpcEvent } from "@volli/shared";
+import type {
+  Result,
+  WorktreeChangedEvent,
+  WorktreeWatchErrorEvent,
+  VolliIpcEvent,
+} from "@volli/shared";
 
 /** Same debounce as FileWatchManager / DirWatchManager (volli-fs.ts). */
 export const WATCH_DEBOUNCE_MS = 250;
@@ -120,7 +125,11 @@ export class WorktreeChangeWatchManager {
       if (existing.worktreePath === worktreePath) return { ok: true };
       this.teardown(key);
     }
-    if (webContents.isDestroyed()) return { ok: true };
+    // A destroyed window can neither hold a watch nor receive its events, so
+    // reporting success would tell the caller it is subscribed when it is not.
+    if (webContents.isDestroyed()) {
+      return { ok: false, error: "This window is closing, so its worktree watch was not started." };
+    }
 
     const sub: WorktreeWatchSubscription = {
       webContents,
@@ -139,8 +148,12 @@ export class WorktreeChangeWatchManager {
         this.scheduleBroadcast(sub);
       });
       sub.watcher = watcher;
-      watcher.on("error", () => {
-        // An async watch fault must never crash main — drop this subscription.
+      watcher.on("error", (error: Error) => {
+        // An async watch fault must never crash main — but it must not vanish
+        // either: once we drop the subscription no further `worktree-changed`
+        // arrives, and a frozen Change Set is indistinguishable from a quiet
+        // worktree. Tell the renderer first, then tear down.
+        this.emitWatchError(sub, error.message);
         this.teardown(key);
       });
     } catch (error) {
@@ -164,9 +177,11 @@ export class WorktreeChangeWatchManager {
    * nothing happened, the ticket simply stopped having a worktree.
    */
   unwatchTicket(ticketId: string): void {
-    for (const [key, sub] of [...this.subs]) {
-      if (sub.ticketId === ticketId) this.teardown(key);
+    const keys: string[] = [];
+    for (const [key, sub] of this.subs) {
+      if (sub.ticketId === ticketId) keys.push(key);
     }
+    for (const key of keys) this.teardown(key);
   }
 
   /**
@@ -188,6 +203,12 @@ export class WorktreeChangeWatchManager {
       const payload: WorktreeChangedEvent = { ticketId: sub.ticketId };
       sub.webContents.send("volli:worktree-changed" satisfies VolliIpcEvent, payload);
     }, delay);
+  }
+
+  private emitWatchError(sub: WorktreeWatchSubscription, message: string): void {
+    if (sub.webContents.isDestroyed()) return;
+    const payload: WorktreeWatchErrorEvent = { ticketId: sub.ticketId, error: message };
+    sub.webContents.send("volli:worktree-watch-error" satisfies VolliIpcEvent, payload);
   }
 
   private teardown(key: string): void {

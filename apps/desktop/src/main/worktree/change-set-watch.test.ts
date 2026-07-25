@@ -11,6 +11,8 @@ import {
 interface FakeWatcher {
   close: ReturnType<typeof vi.fn<() => void>>;
   on: ReturnType<typeof vi.fn<(event: "error", listener: (error: Error) => void) => void>>;
+  /** Fires the "error" listener the manager registered. */
+  fail(error: Error): void;
 }
 
 interface WatchCall {
@@ -21,9 +23,15 @@ interface WatchCall {
 }
 
 function makeFakeWatcher(): FakeWatcher {
+  let onError: ((error: Error) => void) | null = null;
   return {
     close: vi.fn<() => void>(),
-    on: vi.fn<(event: "error", listener: (error: Error) => void) => void>(),
+    on: vi.fn<(event: "error", listener: (error: Error) => void) => void>((_event, listener) => {
+      onError = listener;
+    }),
+    fail(error: Error) {
+      onError?.(error);
+    },
   };
 }
 
@@ -198,6 +206,37 @@ describe("WorktreeChangeWatchManager", () => {
     watchCalls[2]!.cb("change", "still-here.ts");
     vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
     expect(windowA.send).toHaveBeenCalledWith("volli:worktree-changed", { ticketId: "t2" });
+  });
+
+  it("tells the renderer a watcher faulted, then tears the subscription down", () => {
+    vi.useFakeTimers();
+    manager = makeManager();
+    const webContents = makeWebContents();
+
+    manager.watch(webContents as never, "t1", "/wt/t1");
+    watchCalls[0]!.watcher.fail(new Error("EMFILE: too many open files"));
+
+    expect(webContents.send).toHaveBeenCalledWith("volli:worktree-watch-error", {
+      ticketId: "t1",
+      error: "EMFILE: too many open files",
+    });
+    expect(watchCalls[0]!.watcher.close).toHaveBeenCalled();
+
+    // Dead for good — no further change events from this subscription.
+    watchCalls[0]!.cb("change", "after.ts");
+    vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
+    expect(webContents.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses to report a watch on a destroyed window as started", () => {
+    manager = makeManager();
+    const webContents = makeWebContents();
+    webContents.destroyed = true;
+
+    const result = manager.watch(webContents as never, "t1", "/wt/t1");
+
+    expect(result.ok).toBe(false);
+    expect(watchCalls).toHaveLength(0);
   });
 
   it("does not leak a watcher across tickets after unwatch", () => {

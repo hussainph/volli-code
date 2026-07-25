@@ -103,6 +103,31 @@ export function TicketChangesList({
 }
 
 /**
+ * The watch is dead — the list below is a frozen snapshot, not a live one. An
+ * inline banner rather than a replacement: the rows shown are still accurate as
+ * of the last refresh, so hiding them would lose real information. Retry
+ * re-subscribes and re-reads.
+ */
+function ChangesWatchErrorBanner({ error, onRetry }: { error: string; onRetry(): void }) {
+  return (
+    <div
+      data-testid="ticket-changes-watch-error"
+      role="alert"
+      className="flex shrink-0 items-baseline justify-between gap-2 border-b border-destructive/30 bg-destructive/5 px-3 py-2"
+    >
+      <span className="min-w-0 text-xs text-destructive">Changes stopped updating: {error}</span>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="shrink-0 text-xs text-primary-text hover:underline"
+      >
+        Retry
+      </button>
+    </div>
+  );
+}
+
+/**
  * Loads the Change Set, watches the worktree, and refreshes on debounced
  * `onChanged` events. Row click is the only path that asks the host to open a
  * tab — refresh handlers never call `onOpenFile`.
@@ -129,6 +154,9 @@ export function TicketChangesPanel({
   }));
   const [error, setError] = React.useState<string | null>(null);
   const [loaded, setLoaded] = React.useState(false);
+  const [watchError, setWatchError] = React.useState<string | null>(null);
+  // Bumped by Retry to re-run the watch effect after a fault tore it down.
+  const [watchAttempt, setWatchAttempt] = React.useState(0);
 
   // Mirror the host's active tab into navigator state for the refresh contract
   // without ever letting a refresh write it back.
@@ -191,12 +219,21 @@ export function TicketChangesPanel({
   // teardown always unwatches, so watches cannot leak.
   React.useEffect(() => {
     if (ticket.worktreePath === null) return;
+    setWatchError(null);
     return subscribeWorktreeChanges(window.api.worktree, ticket.id, {
       // Refresh ONLY — never open/focus a tab from a filesystem event.
       onChanged: () => void loadChangeSet(),
-      onWatchError: (message) => toastError(`Couldn't watch changes: ${message}`),
+      // Inline, not a toast: this is a persistent condition ("the list you are
+      // looking at has stopped updating"), and it needs its own retry.
+      onWatchError: setWatchError,
     });
-  }, [ticket.id, ticket.worktreePath, loadChangeSet]);
+  }, [ticket.id, ticket.worktreePath, loadChangeSet, watchAttempt]);
+
+  const retryWatch = React.useCallback(() => {
+    setWatchError(null);
+    setWatchAttempt((attempt) => attempt + 1);
+    void loadChangeSet();
+  }, [loadChangeSet]);
 
   const handleSelect = React.useCallback(
     (path: string) => {
@@ -233,6 +270,9 @@ export function TicketChangesPanel({
   const rows = nav.files.map(presentChangeRow);
   return (
     <div data-testid="ticket-changes-panel" className="flex min-h-0 flex-1 flex-col">
+      {watchError !== null ? (
+        <ChangesWatchErrorBanner error={watchError} onRetry={retryWatch} />
+      ) : null}
       <TicketChangesList
         rows={rows}
         focusPath={nav.listFocusPath}

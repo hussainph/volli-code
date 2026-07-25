@@ -586,6 +586,10 @@ export type VolliIpcEvent =
   // worktree/change-set-watch.ts. Carries only the ticketId; the renderer
   // refetches the Change Set snapshot.
   | "volli:worktree-changed"
+  // A ticket's worktree watch FAULTED and was dropped — see
+  // worktree/change-set-watch.ts. The Change Set the renderer is showing is now
+  // frozen, so it must say so rather than quietly going stale forever.
+  | "volli:worktree-watch-error"
   // Transient worktree-ensure phase transitions (never persisted; the renderer
   // mirrors them in a keyed store map, the `starting[ticketId]` pattern).
   | "volli:worktree-phase";
@@ -820,6 +824,19 @@ export interface WorktreePhaseEvent {
  */
 export interface WorktreeChangedEvent {
   ticketId: string;
+}
+
+/**
+ * A ticket's worktree watch faulted and has been torn down
+ * (`volli:worktree-watch-error`). Emitted exactly once per fault, right before
+ * teardown: after this the renderer will receive no further
+ * `volli:worktree-changed` for the ticket, so its Change Set is frozen until
+ * something re-establishes the watch. Surfaced, never swallowed — a silently
+ * dead watch looks identical to a worktree nobody is touching.
+ */
+export interface WorktreeWatchErrorEvent {
+  ticketId: string;
+  error: string;
 }
 
 /** Where a worktree dir stands relative to what git knows — the live half of worktree state. */

@@ -8,19 +8,29 @@
  * plain function over an injected api surface is testable; a `useEffect` body
  * is not.
  */
-import { errorMessage, type Result, type WorktreeChangedEvent } from "@volli/shared";
+import {
+  errorMessage,
+  type Result,
+  type WorktreeChangedEvent,
+  type WorktreeWatchErrorEvent,
+} from "@volli/shared";
 
 /** The `window.api.worktree` subset a subscription needs — injected so tests drive it. */
 export interface WorktreeChangeWatchApi {
   watchChangeSet(ticketId: string): Promise<Result>;
   unwatchChangeSet(ticketId: string): Promise<Result>;
   onChanged(callback: (event: WorktreeChangedEvent) => void): () => void;
+  onWatchError(callback: (event: WorktreeWatchErrorEvent) => void): () => void;
 }
 
 export interface WorktreeChangeWatchHandlers {
   /** A debounced filesystem change landed for this ticket. Refresh only — never open a tab. */
   onChanged(): void;
-  /** The watch could not be established. */
+  /**
+   * The watch could not be established, or faulted after the fact. Either way
+   * no further `onChanged` will arrive for this ticket until something
+   * re-subscribes, so the caller must say so rather than look up-to-date.
+   */
   onWatchError(message: string): void;
 }
 
@@ -51,14 +61,22 @@ export function subscribeWorktreeChanges(
     },
   );
 
-  const unsubscribe = api.onChanged((event) => {
+  const unsubscribeChanged = api.onChanged((event) => {
     if (event.ticketId !== ticketId) return;
     handlers.onChanged();
   });
 
+  const unsubscribeError = api.onWatchError((event) => {
+    if (event.ticketId !== ticketId) return;
+    // Main has already torn its side down; ours is now inert.
+    cancelled = true;
+    handlers.onWatchError(event.error);
+  });
+
   return () => {
     cancelled = true;
-    unsubscribe();
+    unsubscribeChanged();
+    unsubscribeError();
     void api.unwatchChangeSet(ticketId);
   };
 }

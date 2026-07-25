@@ -70,6 +70,7 @@ import type {
   WorktreeBaseReadResult,
   WorktreeChangeSetResult,
   WorktreeChangedEvent,
+  WorktreeWatchErrorEvent,
   WorktreeCommitResult,
   WorktreeDiffMode,
   WorktreeDiffResult,
@@ -302,6 +303,18 @@ const api = {
       ipcRenderer.on("volli:worktree-changed" satisfies VolliIpcEvent, listener);
       return () =>
         ipcRenderer.removeListener("volli:worktree-changed" satisfies VolliIpcEvent, listener);
+    },
+    /**
+     * Subscribes to worktree watch FAULTS. After one of these the ticket sends
+     * no further `onChanged`, so a listener must surface the stall rather than
+     * keep showing a Change Set that can no longer refresh.
+     */
+    onWatchError: (callback: (event: WorktreeWatchErrorEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: WorktreeWatchErrorEvent) =>
+        callback(payload);
+      ipcRenderer.on("volli:worktree-watch-error" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:worktree-watch-error" satisfies VolliIpcEvent, listener);
     },
     /** Done flow: the one-click "commit remaining work" safety net (fixed chore message). */
     commit: (ticketId: string): Promise<WorktreeCommitResult> =>
