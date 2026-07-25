@@ -80,6 +80,7 @@ export default defineConfig({
         "src/lib/escape-guard.ts",
         "src/editor/document-identity.ts",
         "src/editor/document-registry.ts",
+        "src/editor/markdown-projection.ts",
         "src/editor/monaco-theme.ts",
         "src/editor/reveal.ts",
         "src/editor/text-position.ts",
