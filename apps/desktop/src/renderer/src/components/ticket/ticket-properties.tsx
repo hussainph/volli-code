@@ -33,6 +33,7 @@ import {
   type PrimaryActionKind,
   type WorktreeStatusSnapshot,
 } from "@renderer/components/ticket/worktree-done-flow-model";
+import { subscribeWorktreeChanges } from "@renderer/components/ticket/worktree-change-watch";
 import {
   ARCHIVE_CLEAN_LABEL,
   DISMISS_LABEL,
@@ -450,6 +451,9 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
   const [status, setStatus] = React.useState<WorktreeStatusSnapshot | null>(null);
   const [diff, setDiff] = React.useState<DiffStat | null>(null);
   const [loadError, setLoadError] = React.useState<string | null>(null);
+  const [watchError, setWatchError] = React.useState<string | null>(null);
+  // Bumped by Retry to re-run the watch effect after a fault tore it down.
+  const [watchAttempt, setWatchAttempt] = React.useState(0);
   const [stage, setStage] = React.useState<DoneFlowStage>("idle");
   // The global Done-TTL, only needed to name the "In Done for N+ days" line.
   const [ttlDays, setTtlDays] = React.useState<number | null>(null);
@@ -500,6 +504,27 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
   React.useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // The summary is projected from the same Change Set the Changes navigator
+  // reads, so it must move when the worktree does — the planning broadcast
+  // below only fires on planning mutations, and an agent editing files makes
+  // none. Without this the line sat stale until something unrelated happened.
+  // The rail is exclusive (one mode at a time), so this never doubles up with
+  // the Changes panel's own watch.
+  React.useEffect(() => {
+    if (ticket.worktreePath === null) return;
+    setWatchError(null);
+    return subscribeWorktreeChanges(window.api.worktree, ticket.id, {
+      onChanged: () => void refreshStatusAndDiff(),
+      onWatchError: setWatchError,
+    });
+  }, [ticket.id, ticket.worktreePath, refreshStatusAndDiff, watchAttempt]);
+
+  function retryWatch() {
+    setWatchError(null);
+    setWatchAttempt((attempt) => attempt + 1);
+    void refreshStatusAndDiff();
+  }
 
   // K4 (review): a data-changed broadcast used to be scopeless, so this rail had
   // to debounce a git refresh on EVERY bump (another ticket moving, a retention
@@ -752,6 +777,17 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
           {mergeBaseSummary ?? "No changes vs base yet"}
         </span>
       )}
+      {/* The watch died, so the summary above is frozen — say so, and offer the
+          way back rather than letting it quietly drift. */}
+      {watchError !== null ? (
+        <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <WarningIcon />
+          Stopped updating: {watchError}
+          <button type="button" onClick={retryWatch} className="text-primary-text hover:underline">
+            Retry
+          </button>
+        </span>
+      ) : null}
       {/* The archive-reason context line — why the wrap-up is being offered. */}
       {retentionView.archiveReady && retentionView.reasonLine ? (
         <span className="flex items-center gap-1.5 text-xs text-foreground">
