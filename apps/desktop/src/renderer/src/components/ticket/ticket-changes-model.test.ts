@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { ChangeSetFile } from "@volli/shared";
 
-import { formatChangeCounts, formatChangeStatus, splitChangePath } from "./ticket-changes-model";
+import {
+  formatChangeCounts,
+  formatChangeStatus,
+  presentChangeRow,
+  sortChangeSetFiles,
+  splitChangePath,
+} from "./ticket-changes-model";
 
 function file(overrides: Partial<ChangeSetFile> & Pick<ChangeSetFile, "path">): ChangeSetFile {
   return {
@@ -62,5 +68,50 @@ describe("formatChangeCounts", () => {
         }),
       ),
     ).toBeNull();
+  });
+});
+
+describe("presentChangeRow", () => {
+  it("presents a normal file with filename, parent, status, and counts", () => {
+    expect(presentChangeRow(file({ path: "src/a.ts", insertions: 3, deletions: 1 }))).toEqual({
+      path: "src/a.ts",
+      filename: "a.ts",
+      parentPath: "src",
+      statusLabel: "Modified",
+      countsLabel: "+3 −1",
+      renameFrom: null,
+    });
+  });
+
+  it("surfaces both rename paths (previousPath → path)", () => {
+    expect(
+      presentChangeRow(
+        file({
+          path: "src/new-name.ts",
+          previousPath: "src/old-name.ts",
+          status: "renamed",
+          insertions: 0,
+          deletions: 0,
+        }),
+      ),
+    ).toEqual({
+      path: "src/new-name.ts",
+      filename: "new-name.ts",
+      parentPath: "src",
+      statusLabel: "Renamed",
+      countsLabel: "+0 −0",
+      renameFrom: "src/old-name.ts",
+    });
+  });
+});
+
+describe("sortChangeSetFiles", () => {
+  it("sorts by path for a stable flat list", () => {
+    const sorted = sortChangeSetFiles([
+      file({ path: "z.ts" }),
+      file({ path: "a/b.ts" }),
+      file({ path: "a.ts" }),
+    ]);
+    expect(sorted.map((f) => f.path)).toEqual(["a.ts", "a/b.ts", "z.ts"]);
   });
 });
