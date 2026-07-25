@@ -20,7 +20,12 @@
 import { createHash } from "node:crypto";
 import { isAbsolute, normalize, sep } from "node:path";
 
-import type { ChangeSetFile, ChangeSetFileStatus, ChangeSetSnapshot } from "@volli/shared";
+import {
+  CHANGE_SET_FILE_CAP,
+  type ChangeSetFile,
+  type ChangeSetFileStatus,
+  type ChangeSetSnapshot,
+} from "@volli/shared";
 
 import { resolveChangeSetBaseRevision } from "./comparison-ref";
 import { stderrOf } from "./git";
@@ -109,10 +114,22 @@ export async function changeSetSnapshot(
     const withConflicts = applyUnmerged(tracked, parseUnmergedPaths(statusOut));
     const presentPaths = new Set(withConflicts.map((f) => f.path));
     const untracked = parseUntracked(statusOut).filter((f) => !presentPaths.has(f.path));
-    const files = [...withConflicts, ...untracked];
-    const insertions = total(files, "insertions");
-    const deletions = total(files, "deletions");
-    const revision = snapshotRevision(baseRevision, headRevision, files, insertions, deletions);
+    const composed = [...withConflicts, ...untracked];
+    // Totals are counted over the whole Change Set, then the list is cut — the
+    // summary stays honest about a worktree whose file list we refuse to ship.
+    const insertions = total(composed, "insertions");
+    const deletions = total(composed, "deletions");
+    const totalCount = composed.length;
+    const truncated = totalCount > CHANGE_SET_FILE_CAP;
+    const files = truncated ? composed.slice(0, CHANGE_SET_FILE_CAP) : composed;
+    const revision = snapshotRevision(
+      baseRevision,
+      headRevision,
+      files,
+      insertions,
+      deletions,
+      totalCount,
+    );
     return ok({
       baseRevision,
       headRevision,
@@ -120,6 +137,8 @@ export async function changeSetSnapshot(
       insertions,
       deletions,
       revision,
+      truncated,
+      totalCount,
     });
   } catch (caught) {
     return err(stderrOf(caught));
@@ -385,6 +404,7 @@ function snapshotRevision(
   files: readonly ChangeSetFile[],
   insertions: number,
   deletions: number,
+  totalCount: number,
 ): string {
   const hash = createHash("sha1");
   hash.update(baseRevision);
@@ -394,6 +414,10 @@ function snapshotRevision(
   hash.update(String(insertions));
   hash.update("\0");
   hash.update(String(deletions));
+  // Files past the cap are unobservable in `files`; without the count, growth
+  // beyond it would look like no change at all.
+  hash.update("\0");
+  hash.update(String(totalCount));
   for (const file of files) {
     hash.update("\0");
     hash.update(file.path);

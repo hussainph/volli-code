@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
+import { CHANGE_SET_FILE_CAP } from "@volli/shared";
+
 import { changeSetSnapshot, readChangeSetBaseFile } from "./change-set";
 import { GitError, runGitCapturingAsync } from "./git";
 import { scriptedGit } from "./scripted-git";
@@ -367,6 +369,67 @@ describe("changeSetSnapshot — unified outcome", () => {
     ]);
     expect(result.value.insertions).toBe(8);
     expect(result.value.deletions).toBe(1);
+  });
+});
+
+describe("changeSetSnapshot — file cap", () => {
+  it("keeps the whole list when it fits under the cap", async () => {
+    const paths = Array.from({ length: 3 }, (_, i) => `f${i}.txt`);
+    const { gitAsync } = scriptedChangeSetGit({
+      status: z(...paths.map((p) => `? ${p}`)),
+    });
+
+    const result = await changeSetSnapshot(gitAsync, { worktreePath: "/wt", baseBranch: "main" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.truncated).toBe(false);
+    expect(result.value.totalCount).toBe(3);
+    expect(result.value.files).toHaveLength(3);
+  });
+
+  it("cuts a runaway untracked tree to the cap and reports the real total", async () => {
+    const overflow = 25;
+    const untracked = Array.from(
+      { length: CHANGE_SET_FILE_CAP + overflow },
+      (_, i) => `? node_modules/pkg/f${i}.js`,
+    );
+    const { gitAsync } = scriptedChangeSetGit({
+      nameStatus: z("M", "src/real.ts"),
+      numstat: z("4\t2\tsrc/real.ts"),
+      status: z(...untracked),
+    });
+
+    const result = await changeSetSnapshot(gitAsync, { worktreePath: "/wt", baseBranch: "main" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.truncated).toBe(true);
+    expect(result.value.files).toHaveLength(CHANGE_SET_FILE_CAP);
+    expect(result.value.totalCount).toBe(CHANGE_SET_FILE_CAP + overflow + 1);
+    // The tracked entry composes first, so the cut only ever loses untracked tail.
+    expect(result.value.files[0]?.path).toBe("src/real.ts");
+    // Totals are counted before the cut — the summary still describes everything.
+    expect(result.value.insertions).toBe(4);
+    expect(result.value.deletions).toBe(2);
+  });
+
+  it("moves the revision when files grow past the cap", async () => {
+    const snapshotWith = async (count: number) => {
+      const { gitAsync } = scriptedChangeSetGit({
+        status: z(...Array.from({ length: count }, (_, i) => `? f${i}.txt`)),
+      });
+      const result = await changeSetSnapshot(gitAsync, { worktreePath: "/wt", baseBranch: "main" });
+      expect(result.ok).toBe(true);
+      return result.ok ? result.value.revision : "";
+    };
+
+    // Both snapshots carry an identical capped `files`; only the hidden tail
+    // differs, so without the total in the fingerprint this would read as "no
+    // change" and the list would never refresh.
+    const first = await snapshotWith(CHANGE_SET_FILE_CAP + 1);
+    const second = await snapshotWith(CHANGE_SET_FILE_CAP + 2);
+    expect(first).not.toBe(second);
   });
 });
 

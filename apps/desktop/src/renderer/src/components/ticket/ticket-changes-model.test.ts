@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { ChangeSetFile } from "@volli/shared";
+import type { ChangeSetFile, ChangeSetSnapshot } from "@volli/shared";
 
 import {
   applyChangeSetRefresh,
@@ -125,7 +125,23 @@ function navigatorState(overrides: Partial<ChangesNavigatorState> = {}): Changes
     files: [],
     activeTabId: "doc",
     listFocusPath: null,
+    hiddenCount: 0,
     ...overrides,
+  };
+}
+
+function snapshot(over: Partial<ChangeSetSnapshot> = {}): ChangeSetSnapshot {
+  const files = over.files ?? [];
+  return {
+    baseRevision: "base",
+    headRevision: "head",
+    revision: "rev",
+    insertions: 0,
+    deletions: 0,
+    truncated: false,
+    totalCount: files.length,
+    ...over,
+    files,
   };
 }
 
@@ -137,14 +153,18 @@ describe("applyChangeSetRefresh", () => {
       revision: "rev-1",
       files: [file({ path: "src/a.ts" })],
     });
-    const after = applyChangeSetRefresh(before, {
-      baseRevision: "base",
-      headRevision: "head",
-      revision: "rev-2",
-      insertions: 5,
-      deletions: 1,
-      files: [file({ path: "src/a.ts", insertions: 5, deletions: 1 }), file({ path: "src/b.ts" })],
-    });
+    const after = applyChangeSetRefresh(
+      before,
+      snapshot({
+        revision: "rev-2",
+        insertions: 5,
+        deletions: 1,
+        files: [
+          file({ path: "src/a.ts", insertions: 5, deletions: 1 }),
+          file({ path: "src/b.ts" }),
+        ],
+      }),
+    );
 
     expect(after.revision).toBe("rev-2");
     expect(after.files.map((f) => f.path)).toEqual(["src/a.ts", "src/b.ts"]);
@@ -159,15 +179,37 @@ describe("applyChangeSetRefresh", () => {
       files: [file({ path: "a.ts" })],
       activeTabId: "file:a.ts",
     });
-    const after = applyChangeSetRefresh(before, {
-      baseRevision: "base",
-      headRevision: "head",
-      revision: "same",
-      insertions: 99,
-      deletions: 99,
-      files: [file({ path: "z.ts", insertions: 99, deletions: 99 })],
-    });
+    const after = applyChangeSetRefresh(
+      before,
+      snapshot({
+        revision: "same",
+        insertions: 99,
+        deletions: 99,
+        files: [file({ path: "z.ts", insertions: 99, deletions: 99 })],
+      }),
+    );
     expect(after).toBe(before);
+  });
+
+  it("carries the count the snapshot's cap left out", () => {
+    const after = applyChangeSetRefresh(
+      navigatorState(),
+      snapshot({
+        revision: "capped",
+        files: [file({ path: "a.ts" }), file({ path: "b.ts" })],
+        truncated: true,
+        totalCount: 4002,
+      }),
+    );
+    expect(after.hiddenCount).toBe(4000);
+  });
+
+  it("reports nothing hidden for an uncapped snapshot", () => {
+    const after = applyChangeSetRefresh(
+      navigatorState({ hiddenCount: 4000 }),
+      snapshot({ revision: "full", files: [file({ path: "a.ts" })] }),
+    );
+    expect(after.hiddenCount).toBe(0);
   });
 });
 

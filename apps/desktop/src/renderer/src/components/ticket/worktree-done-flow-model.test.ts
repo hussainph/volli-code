@@ -289,6 +289,8 @@ describe("formatMergeBaseSummary", () => {
             binary: false,
           },
         ],
+        truncated: false,
+        totalCount: 2,
       }),
     );
     expect(summary).toBe("2 files · +11 −2");

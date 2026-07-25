@@ -61,4 +61,21 @@ describe("TicketChangesList", () => {
     );
     expect(html).toContain("No changes vs base");
   });
+
+  it("says how many files the cap left out rather than silently dropping them", () => {
+    const rows = [file({ path: "src/a.ts" })].map(presentChangeRow);
+    const html = renderToStaticMarkup(
+      <TicketChangesList rows={rows} focusPath={null} onSelectRow={noop} hiddenCount={4000} />,
+    );
+    expect(html).toContain('data-testid="ticket-changes-truncated"');
+    expect(html).toContain("more files not shown");
+  });
+
+  it("has no trailing row when nothing was cut", () => {
+    const rows = [file({ path: "src/a.ts" })].map(presentChangeRow);
+    const html = renderToStaticMarkup(
+      <TicketChangesList rows={rows} focusPath={null} onSelectRow={noop} />,
+    );
+    expect(html).not.toContain('data-testid="ticket-changes-truncated"');
+  });
 });

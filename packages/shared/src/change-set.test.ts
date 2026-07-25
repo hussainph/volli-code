@@ -10,6 +10,8 @@ function snapshot(over: Partial<ChangeSetSnapshot> = {}): ChangeSetSnapshot {
     insertions: 0,
     deletions: 0,
     revision: "rev",
+    truncated: false,
+    totalCount: 0,
     ...over,
   };
 }

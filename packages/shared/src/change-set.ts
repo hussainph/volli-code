@@ -31,9 +31,25 @@ export interface ChangeSetFile {
 }
 
 /**
+ * Ceiling on the `files` a snapshot carries.
+ *
+ * `git status -uall` expands untracked directories entry by entry, so a single
+ * stray `node_modules` or build output an agent forgot to ignore is six figures
+ * of paths — an IPC payload and a list render nobody asked for, for a Change
+ * Set that is unreadable at that size anyway. Beyond this the list is cut and
+ * the snapshot says so; the totals are still counted over everything.
+ */
+export const CHANGE_SET_FILE_CAP = 1000;
+
+/**
  * A composed Change Set snapshot: the resolved base SHA, current HEAD SHA, the
  * unified file list, text-only line totals, and an opaque `revision` the
  * renderer can use to detect staleness without deep-comparing `files`.
+ *
+ * `files` is capped at {@link CHANGE_SET_FILE_CAP}. When it was cut,
+ * `truncated` is true and `totalCount` is how many paths the Change Set really
+ * has — `insertions`/`deletions` always cover all of them, cut or not, so the
+ * summary line never disagrees with the diff.
  */
 export interface ChangeSetSnapshot {
   baseRevision: string;
@@ -42,6 +58,10 @@ export interface ChangeSetSnapshot {
   insertions: number;
   deletions: number;
   revision: string;
+  /** True when `files` is a prefix of the real list (see {@link CHANGE_SET_FILE_CAP}). */
+  truncated: boolean;
+  /** Total changed paths, which is `files.length` unless `truncated`. */
+  totalCount: number;
 }
 
 /**

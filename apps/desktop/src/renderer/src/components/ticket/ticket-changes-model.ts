@@ -85,6 +85,8 @@ export interface ChangesNavigatorState {
   activeTabId: string;
   /** Path whose row holds keyboard focus in the Changes list (decision #48). */
   listFocusPath: string | null;
+  /** Paths the snapshot's cap left out of `files`, so the list can say so. */
+  hiddenCount: number;
 }
 
 /**
@@ -102,6 +104,7 @@ export function applyChangeSetRefresh(
     ...state,
     revision: snapshot.revision,
     files: sortChangeSetFiles(snapshot.files),
+    hiddenCount: Math.max(0, snapshot.totalCount - snapshot.files.length),
   };
 }
 

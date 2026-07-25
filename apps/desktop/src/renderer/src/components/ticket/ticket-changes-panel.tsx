@@ -25,11 +25,14 @@ export function TicketChangesList({
   focusPath,
   onSelectRow,
   error,
+  hiddenCount = 0,
 }: {
   rows: readonly ChangeRowPresentation[];
   focusPath: string | null;
   onSelectRow(path: string): void;
   error?: string | null;
+  /** Paths the snapshot cap left out — surfaced as a trailing row, never hidden. */
+  hiddenCount?: number;
 }) {
   if (error) {
     return (
@@ -98,6 +101,16 @@ export function TicketChangesList({
           </li>
         );
       })}
+      {hiddenCount > 0 ? (
+        <li
+          data-testid="ticket-changes-truncated"
+          data-hidden-count={hiddenCount}
+          className="px-2 py-1.5 text-xs text-muted-foreground/80"
+          role="presentation"
+        >
+          {hiddenCount.toLocaleString()} more {hiddenCount === 1 ? "file" : "files"} not shown
+        </li>
+      ) : null}
     </ul>
   );
 }
@@ -151,6 +164,7 @@ export function TicketChangesPanel({
     files: [] as ChangeSetFile[],
     activeTabId,
     listFocusPath: null,
+    hiddenCount: 0,
   }));
   const [error, setError] = React.useState<string | null>(null);
   const [loaded, setLoaded] = React.useState(false);
@@ -289,6 +303,7 @@ export function TicketChangesPanel({
         focusPath={nav.listFocusPath}
         onSelectRow={handleSelect}
         error={error}
+        hiddenCount={nav.hiddenCount}
       />
     </div>
   );
