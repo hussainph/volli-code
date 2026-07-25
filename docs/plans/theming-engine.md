@@ -1,6 +1,6 @@
 # Theming Engine — Terminal · Editor · App Surface
 
-**Status**: design settled (exploration + grill session, July 2026) · **Branch**: `ui/theming-engine` · **Decisions**: proposed CONCEPT #66–#78 · **Implementation**: not started
+**Status**: design settled (exploration + grill session, July 2026) · **Branch**: `ui/theming-engine` · **Decisions**: CONCEPT #66–#78, recorded here (the log carries a pointer row) · **Implementation**: **PR 1 shipped** — spine + terminal surface; PRs 2–5 open
 
 Volli gets one theming system spanning three surfaces: the **terminal** (restty/Ghostty), the **code editor** (Monaco), and the **app surface** (chrome, rail, board canvas). The app surface is an Arc-style generative engine — you pick a color, the token set is derived — and a **Project** may override any surface, so appearance becomes an ambient "which project am I in" signal.
 
@@ -42,18 +42,18 @@ Each row was decided explicitly with the owner. "Owner call" marks the two where
 
 ## Surface 1 — Terminal
 
-**Today.** `src/main/ghostty-config.ts` reads the user's real config from both macOS locations, merges with ghostty's precedence, resolves the named theme's source, watches for edits, and broadcasts over IPC. It is strictly read-only. `src/renderer/src/terminal/appearance-model.ts` already implements `overlayGhosttyTheme(base, overlay)` and `resolveGhosttyThemeChoice`, falling back to a theme built from the app's design tokens. `restty` exports `listBuiltinThemeNames`, `getBuiltinTheme`, `getBuiltinThemeSource`, `isBuiltinThemeName` — **ghostty's full theme catalog is already in the bundle**. Verified present by name: Catppuccin Mocha, Dracula, Nord, One Dark, Solarized, Monokai.
+**Before PR 1.** `src/main/ghostty-config.ts` read the user's real config from both macOS locations, merged with ghostty's precedence, resolved the named theme's source, watched for edits, and broadcast over IPC — strictly read-only. It still never writes that file; PR 1 added Volli's own overlay layers on top, and the watch now covers those too, so a hand-edit to an overlay re-themes live terminals exactly like an edit to the real config does. `src/renderer/src/terminal/appearance-model.ts` already implements `overlayGhosttyTheme(base, overlay)` and `resolveGhosttyThemeChoice`, falling back to a theme built from the app's design tokens. `restty` exports `listBuiltinThemeNames`, `getBuiltinTheme`, `getBuiltinThemeSource`, `isBuiltinThemeName` — **ghostty's full theme catalog is already in the bundle**. Verified present by name: Catppuccin Mocha, Dracula, Nord, One Dark, Solarized, Monokai.
 
-**To build.**
+**Built in PR 1.**
 
-- **Overlay files**, symmetric across scopes and both hand-editable:
+- **Overlay files**, symmetric across scopes and both hand-editable (`packages/shared/src/theme/ghostty-overlay.ts`):
   - global — `<userData>/volli/ghostty/config`
-  - per project — `<userData>/volli/ghostty/projects/<prefix>.config`
-- **Resolution chain**: user's real ghostty config → Volli global overlay → Volli project overlay. Same `overlayGhosttyTheme` merge at each step, so the semantics the user already knows hold at every layer.
-- **Write path in main** — the first time Volli writes any config file. Must be atomic (write-temp + rename), must preserve hand-written keys and comments, and must never touch the user's own config.
-- **Picker** over `listBuiltinThemeNames()` with true apply-then-revert preview (we render the terminal, so this is a real palette swap, not a sample panel).
-- **Typography controls** — font family from the Local Font Access list already wired for restty, font size stepper.
-- Settings rows label each value `Inherited from Ghostty` / `Set by Volli` with revert, plus "Open Ghostty config" and "Open Volli overlay".
+  - per project — `<userData>/volli/ghostty/projects/<prefix>.config`, the prefix validated with the app's own `isValidPrefix` so a traversal segment is structurally unrepresentable
+- **Resolution chain**: user's real ghostty config → Volli global overlay → Volli project overlay, merged with the same last-wins semantics ghostty applies to its own two config locations. The payload carries a per-key `provenance` map, so Settings labels each row without the renderer re-deriving it by diffing layers.
+- **Write path in main** (`apps/desktop/src/main/theme-overlay.ts`) — atomic (temp file + same-directory rename), preserves hand-written keys, comments and blank lines, and refuses any path outside `<userData>/volli/ghostty/` **before any filesystem call**. The IPC request names a *scope*, never a path.
+- **Picker** over `listBuiltinThemeNames()` with true apply-then-revert preview.
+- **Typography controls** — font family from the Local Font Access list, font size stepper.
+- Settings rows label each value `Inherited from Ghostty` / `Set by Volli` with revert, plus "Open Ghostty config" and "Open Volli overlay" (using paths that are valid before the file exists).
 
 ---
 
@@ -96,14 +96,18 @@ Real TextMate grammars and real VS Code fidelity. `textmateThemeToMonacoTheme()`
 
 ### Data model
 
+As shipped — `ThemeDefinition` in `packages/shared/src/theme/definition.ts`:
+
 ```jsonc
 {
   "name": "Ember",
-  "seed": "#E8652A",          // hue + chroma; lightness is discarded
+  "slug": "ember",            // stable identity in persistence + the file name
+  "seed": "#e8652a",          // hue + chroma; lightness is discarded
   "accent": null,             // null = follows seed; a hex unlocks it (#75)
   "grain": 0.35,
-  "canvas": { "kind": "mesh", "stops": ["#2A1207", "#0D0D0D"] },
-  "overrides": { "--border-strong": "#4A3227" }   // sparse; usually empty
+  "canvas": { "kind": "solid" },   // or { kind: "gradient" | "mesh", stops: [...] }
+  "overrides": {},            // sparse token map; usually empty
+  "appearance": "dark"        // lets the picker group and filter
 }
 ```
 
@@ -116,19 +120,22 @@ Pure function in `@volli/shared` — no DOM, fully unit-tested. Emits the **exis
 3. **Neutral chroma**: `Cn = clamp(Cs * 0.06, 0.004, 0.014)` — the muddy-black guard.
 4. **Neutral ladder** at fixed `L` with a chroma multiplier `k`, gamut-mapping chroma down at constant `(L, h)` (never RGB-clipping, which shifts hue and lightness):
 
-   | token | L | k | ember h=42 | blue h=255 |
-   |---|---|---|---|---|
-   | `--rail` | 0.155 | 0.8 | `#0f0b0a` | `#0a0c10` |
-   | `--background` | 0.178 | 1.0 | `#15100e` | `#0e1116` |
-   | `--card` | 0.200 | 1.1 | `#1b1412` | `#13161b` |
-   | `--popover` | 0.218 | 1.1 | `#1f1916` | `#171a1f` |
-   | `--secondary` / `--muted` | 0.226 | 1.2 | `#211a18` | `#181c22` |
-   | `--accent` | 0.252 | 1.3 | `#28201d` | `#1e2228` |
-   | `--border` / `--input` | 0.269 | 1.4 | `#2c2421` | `#22272d` |
-   | `--border-hover` | 0.321 | 1.5 | `#3a312d` | `#2e343b` |
-   | `--border-strong` | 0.349 | 1.5 | `#413834` | `#353b42` |
+   The ember column below is the generator's **actual shipped output**, not a hand-computed estimate; the original estimates matched it exactly on three rungs and within one 8-bit step everywhere else.
 
-5. **Foregrounds — solve, don't guess.** Binary-search `L` at fixed `(h, C)` for an APCA target against `--background`: `--foreground` → **Lc ≥ 90**; `--muted-foreground` → **Lc ≥ 60**.
+   | token | L | k | ember (shipped) |
+   |---|---|---|---|
+   | `--rail` | 0.155 | 0.8 | `#0f0b09` |
+   | `--background` | 0.178 | 1.0 | `#15100e` |
+   | `--card` / `--sidebar` | 0.200 | 1.1 | `#1b1412` |
+   | `--popover` | 0.218 | 1.1 | `#1f1816` |
+   | `--secondary` / `--muted` | 0.226 | 1.2 | `#211a17` |
+   | `--accent` / `--sidebar-accent` | 0.252 | 1.3 | `#28201d` |
+   | `--sidebar-border` | 0.255 | 1.4 | `#29211d` |
+   | `--border` / `--input` | 0.269 | 1.4 | `#2d2421` |
+   | `--border-hover` | 0.321 | 1.5 | `#3b312d` |
+   | `--border-strong` | 0.349 | 1.5 | `#423834` |
+
+5. **Foregrounds — solve, don't guess.** Binary-search `L` at fixed `(h, C)` for an APCA target against its own surface: `--foreground` → **Lc ≥ 90** and `--muted-foreground` → **Lc ≥ 60**, both against `--background`; `--sidebar-foreground` → **Lc ≥ 75** against `--sidebar` (dimmer than `--foreground`, as it ships today). `--card-foreground`, `--popover-foreground`, `--secondary-foreground`, `--accent-foreground` and `--sidebar-accent-foreground` alias `--foreground`.
 6. **Accent**: `--primary = oklch(0.661 Caccent h)`, gamut-mapped. `--ring = --primary`. **Ember `#E8652A` is an exact fixed point** — the current brand color falls out of the math.
 7. **`--primary-foreground`**: whichever of white / `oklch(0.20 0.05 h)` scores higher APCA on `--primary`, requiring **Lc ≥ 60**. The white/black crossover is L ≈ 0.72.
 8. **`--destructive`** stays hue-locked at h ≈ 23, plus the rest of the semantic escape list.
@@ -171,9 +178,9 @@ Tooltip copy names the real tradeoff: *"Animated backgrounds run continuously on
 
 ## Persistence, application, IPC
 
-- **Global theme** → `app_state` kv (#29). **Project override** → columns on `projects`. Custom themes → one JSON file each under `<userData>/volli/themes/<slug>.json`, so "Open file" and "Reveal in Finder" work and a theme stays a shareable artifact (Slack's pasteable-string lesson).
-- **Application**: the generator's output is written as CSS custom properties on `document.documentElement`. `globals.css` keeps its current values as the literal fallback. `index.html` stays `class="dark"`; `color-scheme: dark` stays pinned under #70.
-- The main process duplicates `--background` as `BrowserWindow` `backgroundColor` (`"#111111"`, `src/main/index.ts:147`) — it must follow the resolved theme, or window edges flash the old color on resize and launch.
+- **Global theme** → `app_state` kv (#29), key `theme`. **Project override** → four nullable per-surface columns on `projects` (migration 13). *Still to build (PR 2):* custom themes as one JSON file each under `<userData>/volli/themes/<slug>.json`, so "Open file" and "Reveal in Finder" work and a theme stays a shareable artifact (Slack's pasteable-string lesson).
+- **Application**: the generator's output is written as CSS custom properties on `document.documentElement`. `globals.css` **authors the generated Ember set** as the literal first-paint fallback — regenerate it, never hand-tune it. `index.html` stays `class="dark"`; `color-scheme: dark` stays pinned under #70.
+- The main process runs the **same generator** over the same stored theme for `BrowserWindow` `backgroundColor`, rather than duplicating a literal — so the two cannot drift, and window edges no longer flash the old color on resize and launch.
 - **Preview is memory-only.** Moving through the picker applies to the live DOM and **writes nothing**; Enter commits, Escape restores the pre-preview theme. Terminal preview swaps restty's palette; editor preview calls `monaco.editor.setTheme`.
 - Themes carry an `appearance` field so the picker can group and filter (Warp's failure to group by its own `details` field is a live user complaint).
 
@@ -181,7 +188,9 @@ Tooltip copy names the real tradeoff: *"Animated backgrounds run continuously on
 
 ## Staging
 
-**PR 1 — Spine + terminal.** Generator + APCA/ΔL assertions in `@volli/shared`; CSS-variable application layer; main-process `backgroundColor` follow; persistence (global + project columns, resolved value never stored); the shared picker with live preview/revert, Favorites, Recent, tags, ⌘K entry; ghostty overlay files (global + per-project) with the atomic write path; terminal theme picker over restty's catalog; font family + size. Ships a complete vertical slice on a catalog that already exists.
+**PR 1 — Spine + terminal. ✅ Shipped.** Generator + APCA/ΔL assertions in `@volli/shared`; CSS-variable application layer; main-process `backgroundColor` follow; persistence (global `app_state` + project columns via migration 13, resolved value never stored); the shared picker with live preview/revert, Favorites, Recent, tags, ⌘K entry; ghostty overlay files (global + per-project) with the atomic write path; terminal theme picker over restty's catalog; font family + size.
+
+Landed with 891 shared + 1778 desktop tests at 100% coverage in both packages, and `apps/desktop/e2e/theming-smoke.mjs` — 11 checks against the real app covering the golden token set, the contrast floors read back out of the live DOM, preview/revert/commit, overlay persistence across relaunch, and the invariant that the user's own ghostty config is byte-identical afterwards.
 
 **PR 2 — App engine + presets.** Theme editor (seed, accent unlock, grain, gradient canvas); the sparse override map; theme JSON files; Volli-original presets; Settings → Theme category.
 
@@ -197,17 +206,28 @@ Per CLAUDE.md: branch + PR, never commit to `main`; `vp run -r typecheck` · `vp
 
 ## Fold-ins and bugs found
 
-- **`--muted-foreground: #9a9a9a` is APCA Lc 47 against `#111111`** — below the Lc 60 floor for non-body text. Should be ≈ `#b8b8b8` (OKLCH L 0.762). This ships today and is independent of theming; fix it in PR 1 as the generator's own target makes it inevitable anyway.
-- **`--primary` as text on `--background` is Lc 41** — fine for large or bold text, not for body. Worth an audit of where the accent is currently used as body-sized text.
-- Register any new type/color tokens as classGroups in `cn()` — `twMerge` silently drops unregistered tokens.
+- ~~**`--muted-foreground: #9a9a9a` is APCA Lc 47 against `#111111`**~~ — **fixed in PR 1.** The generator solves it to `#b9b0ad` at exactly Lc 60. (The prediction of OKLCH L 0.762 was almost exact; the solver lands at 0.7636.)
+- **`--primary` as text on `--background` is Lc 41** — fine for large or bold text, not for body. **Still open**: the generator pins `--primary` for its role as a *fill*, so this needs an audit of where the accent is used as body-sized *text*. Not addressed by PR 1.
+- Register any new type/color tokens as classGroups in `cn()` — `twMerge` silently drops unregistered tokens. (PR 1 added no new token *names*, so no change was needed; this stays true for PR 2's editor.)
 
 ---
+
+## Corrections found while implementing PR 1
+
+The spec above was accurate enough to build from almost verbatim. Four places needed a judgement call; they are recorded here so the next session does not re-derive them, and the resolutions are the shipped behavior.
+
+- **The ladder and the monotonicity test contradict each other.** § Tests asks for ΔL ≥ 0.015 between adjacent surfaces, but the ladder puts `--popover` at 0.218 and `--secondary` at 0.226 — a step of 0.008. **The ladder wins**: it is given explicitly with worked hexes for two hues, and it reproduces what shipped before (`#1a1a1a`/`#1c1c1c` are likewise 2/255 apart). The floor is enforced between surfaces that actually *stack* (rail → background → card → popover) and between every state/edge token and `--background`. `--popover` and `--secondary` never touch: one is a floating surface, the other a control fill. Relatedly, `--accent` (0.252) and `--sidebar-border` (0.255) are below one 8-bit step apart, so the assertion is **non-decreasing**, not strictly increasing — an inversion is the real bug.
+- **`--primary-foreground` Lc ≥ 60 is unreachable at some hues.** On a saturated mid-green, white tops out at Lc 59.98 and the dark candidate at 49.4 — *no* label clears the floor. Step 9's "adjust lightness only" is the resolution: the accent's own lightness moves, never its hue or chroma (the two things the user chose). Measured, this fires for **6 seeds in 1800** and never moves more than ΔL 0.0035 — about one 8-bit step. Ember is untouched.
+- **The white/dark label choice has no dark branch at the shipped lightness.** `PRIMARY_LIGHTNESS` (0.661) sits below the white/dark crossover (L ≈ 0.72), so white wins at **every** hue and chroma — 0 of 1800 sampled. The repair search is therefore downward-only, with L 0 as a known-legible bound. `pickAccentLabel` is exported and tested in both directions anyway: the dark branch is not dead code, it is what keeps step 7 correct for a light-mode ladder under #70.
+- **"Never persist a `--` key" is the wrong formulation of the storage rule.** A theme's sparse `overrides` map is *authored intent* (#71) and legitimately contains token keys. The rule is "never persist the **resolved** set", enforced structurally: `serializeGlobalTheme` rebuilds the payload field by field, so no caller can smuggle a resolved set into storage.
+
+Two smaller facts worth keeping: APCA 0.1.9 gives **107.88 Lc white-on-black / 106.04 black-on-white** (the asymmetry is real, and older reference values circulate); and culori's `clampChroma` is not a cusp finder — it accepts a clipped color once ΔE is small — so the gamut cross-check bisects against culori's converter instead.
 
 ## Open questions
 
 - **Do preset *families* need per-family hand-picked app seeds, or is deriving from the family's own accent good enough?** Recommendation: hand-pick for ~12 families; it is an afternoon and the quality difference is visible.
 - **Light mode** — deliberately out of scope (#70). The generator is parameterized for it; shipping it is a separate design pass.
-- **Does the ⌘K theme entry need a surface selector** (app / editor / terminal), or should it default to the app surface with the others reachable from Settings? Defer until the picker exists.
+- ~~**Does the ⌘K theme entry need a surface selector**~~ — **answered in PR 1 by building it**: ⌘K's *Change theme…* opens the app-surface picker, with the terminal (and later the editor) reachable from Settings → Appearance. No selector was needed; revisit only if the editor surface makes the single entry feel ambiguous.
 - **Sharing themes** — the file is already a shareable artifact. Whether to add explicit export/import, or a pasteable string (Slack's model), is deferred until anyone asks.
 
 ---
