@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { changeSetSnapshot, readChangeSetBaseFile } from "./change-set";
-import { GitError, runGitCapturing } from "./git";
+import { GitError, runGitCapturingAsync } from "./git";
 import { scriptedGit } from "./scripted-git";
 
 /** Join NUL-terminated git -z fields without octal-escape hazards (`\03` ≠ NUL+"3"). */
@@ -50,10 +50,10 @@ function scriptedChangeSetGit(opts: {
 }
 
 describe("changeSetSnapshot — merge-base stamping", () => {
-  it("stamps the merge base and diffs both reads against it, never the base tip", () => {
-    const { git, calls } = scriptedChangeSetGit({});
+  it("stamps the merge base and diffs both reads against it, never the base tip", async () => {
+    const { gitAsync, calls } = scriptedChangeSetGit({});
 
-    const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
+    const result = await changeSetSnapshot(gitAsync, { worktreePath: "/wt", baseBranch: "main" });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -68,8 +68,28 @@ describe("changeSetSnapshot — merge-base stamping", () => {
     }
   });
 
-  it("falls back to the comparison ref tip when merge-base cannot be computed", () => {
-    const { git } = scriptedGit((args) => {
+  it("reuses the remote-tracking probe's SHA rather than re-resolving the tip", async () => {
+    const { gitAsync, calls } = scriptedGit((args) => {
+      // `rev-parse --verify` PRINTS the SHA it verified.
+      if (args[0] === "rev-parse" && args[1] === "--verify") return "remotetip\n";
+      if (args[0] === "merge-base") throw new GitError("failed", "fatal: no merge base", args);
+      if (args[0] === "rev-parse" && args[1] === "HEAD") return "headsha\n";
+      return "";
+    });
+
+    const result = await changeSetSnapshot(gitAsync, { worktreePath: "/wt", baseBranch: "main" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.baseRevision).toBe("remotetip");
+    const tipResolves = calls.filter(
+      (c) => c.args[0] === "rev-parse" && c.args[1] === "origin/main",
+    );
+    expect(tipResolves).toHaveLength(0);
+  });
+
+  it("falls back to the comparison ref tip when merge-base cannot be computed", async () => {
+    const { gitAsync } = scriptedGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no such ref");
       if (args[0] === "merge-base") throw new GitError("failed", "fatal: no merge base", args);
       if (args[0] === "rev-parse" && args[1] === "main") return "tipsha\n";
@@ -77,7 +97,7 @@ describe("changeSetSnapshot — merge-base stamping", () => {
       return "";
     });
 
-    const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
+    const result = await changeSetSnapshot(gitAsync, { worktreePath: "/wt", baseBranch: "main" });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -86,10 +106,10 @@ describe("changeSetSnapshot — merge-base stamping", () => {
 });
 
 describe("changeSetSnapshot — clean worktree", () => {
-  it("stamps resolved base and HEAD SHAs with an empty file list", () => {
-    const { git, calls } = scriptedChangeSetGit({});
+  it("stamps resolved base and HEAD SHAs with an empty file list", async () => {
+    const { gitAsync, calls } = scriptedChangeSetGit({});
 
-    const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
+    const result = await changeSetSnapshot(gitAsync, { worktreePath: "/wt", baseBranch: "main" });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -111,14 +131,14 @@ describe("changeSetSnapshot — clean worktree", () => {
 });
 
 describe("changeSetSnapshot — NUL-delimited path safety", () => {
-  it("keeps a modified path that contains spaces intact", () => {
+  it("keeps a modified path that contains spaces intact", async () => {
     const path = "docs/my notes.md";
-    const { git } = scriptedChangeSetGit({
+    const { gitAsync } = scriptedChangeSetGit({
       nameStatus: `M\0${path}\0`,
       numstat: `2\t1\t${path}\0`,
     });
 
-    const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
+    const result = await changeSetSnapshot(gitAsync, { worktreePath: "/wt", baseBranch: "main" });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -135,14 +155,14 @@ describe("changeSetSnapshot — NUL-delimited path safety", () => {
     expect(result.value.deletions).toBe(1);
   });
 
-  it("keeps a modified path that contains Unicode characters intact", () => {
+  it("keeps a modified path that contains Unicode characters intact", async () => {
     const path = "src/café/日本語.ts";
-    const { git } = scriptedChangeSetGit({
+    const { gitAsync } = scriptedChangeSetGit({
       nameStatus: `M\0${path}\0`,
       numstat: `1\t0\t${path}\0`,
     });
 
-    const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
+    const result = await changeSetSnapshot(gitAsync, { worktreePath: "/wt", baseBranch: "main" });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -159,13 +179,13 @@ describe("changeSetSnapshot — NUL-delimited path safety", () => {
 });
 
 describe("changeSetSnapshot — renames, binaries, additions, deletions", () => {
-  it("retains both path and previousPath for a rename", () => {
-    const { git } = scriptedChangeSetGit({
+  it("retains both path and previousPath for a rename", async () => {
+    const { gitAsync } = scriptedChangeSetGit({
       nameStatus: "R100\0src/old.ts\0src/new.ts\0",
       numstat: "1\t1\t\0src/old.ts\0src/new.ts\0",
     });
 
-    const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
+    const result = await changeSetSnapshot(gitAsync, { worktreePath: "/wt", baseBranch: "main" });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -181,13 +201,13 @@ describe("changeSetSnapshot — renames, binaries, additions, deletions", () => 
     ]);
   });
 
-  it("marks binary files with null counts and binary: true", () => {
-    const { git } = scriptedChangeSetGit({
+  it("marks binary files with null counts and binary: true", async () => {
+    const { gitAsync } = scriptedChangeSetGit({
       nameStatus: "A\0assets/logo.png\0",
       numstat: "-\t-\tassets/logo.png\0",
     });
 
-    const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
+    const result = await changeSetSnapshot(gitAsync, { worktreePath: "/wt", baseBranch: "main" });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -204,13 +224,13 @@ describe("changeSetSnapshot — renames, binaries, additions, deletions", () => 
     expect(result.value.deletions).toBe(0);
   });
 
-  it("classifies additions and deletions", () => {
-    const { git } = scriptedChangeSetGit({
+  it("classifies additions and deletions", async () => {
+    const { gitAsync } = scriptedChangeSetGit({
       nameStatus: z("A", "src/new.ts", "D", "src/gone.ts"),
       numstat: z("4\t0\tsrc/new.ts", "0\t3\tsrc/gone.ts"),
     });
 
-    const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
+    const result = await changeSetSnapshot(gitAsync, { worktreePath: "/wt", baseBranch: "main" });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -236,13 +256,13 @@ describe("changeSetSnapshot — renames, binaries, additions, deletions", () => 
 });
 
 describe("changeSetSnapshot — conflicted / unrecognized status", () => {
-  it("surfaces unmerged (U) paths as conflicted instead of dropping them", () => {
-    const { git } = scriptedChangeSetGit({
+  it("surfaces unmerged (U) paths as conflicted instead of dropping them", async () => {
+    const { gitAsync } = scriptedChangeSetGit({
       nameStatus: z("U", "src/conflict.ts"),
       numstat: z("1\t1\tsrc/conflict.ts"),
     });
 
-    const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
+    const result = await changeSetSnapshot(gitAsync, { worktreePath: "/wt", baseBranch: "main" });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -257,13 +277,13 @@ describe("changeSetSnapshot — conflicted / unrecognized status", () => {
     ]);
   });
 
-  it("never silently drops an unrecognized name-status code", () => {
-    const { git } = scriptedChangeSetGit({
+  it("never silently drops an unrecognized name-status code", async () => {
+    const { gitAsync } = scriptedChangeSetGit({
       nameStatus: z("X", "src/weird.ts"),
       numstat: z("0\t0\tsrc/weird.ts"),
     });
 
-    const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
+    const result = await changeSetSnapshot(gitAsync, { worktreePath: "/wt", baseBranch: "main" });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -278,15 +298,15 @@ describe("changeSetSnapshot — conflicted / unrecognized status", () => {
     ]);
   });
 
-  it("upgrades a path to conflicted when porcelain v2 reports it unmerged", () => {
+  it("upgrades a path to conflicted when porcelain v2 reports it unmerged", async () => {
     // Real `git diff <base>` emits M for conflicted files; honesty comes from status.
-    const { git } = scriptedChangeSetGit({
+    const { gitAsync } = scriptedChangeSetGit({
       nameStatus: z("M", "src/conflict.ts"),
       numstat: z("1\t1\tsrc/conflict.ts"),
       status: z("u UU N... 100644 100644 100644 100644 aaa bbb ccc src/conflict.ts"),
     });
 
-    const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
+    const result = await changeSetSnapshot(gitAsync, { worktreePath: "/wt", baseBranch: "main" });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -303,13 +323,13 @@ describe("changeSetSnapshot — conflicted / unrecognized status", () => {
 });
 
 describe("changeSetSnapshot — untracked", () => {
-  it("appends untracked paths from porcelain v2 with null counts", () => {
+  it("appends untracked paths from porcelain v2 with null counts", async () => {
     const path = "new file.txt";
-    const { git, calls } = scriptedChangeSetGit({
+    const { gitAsync, calls } = scriptedChangeSetGit({
       status: `? ${path}\0`,
     });
 
-    const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
+    const result = await changeSetSnapshot(gitAsync, { worktreePath: "/wt", baseBranch: "main" });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -328,15 +348,15 @@ describe("changeSetSnapshot — untracked", () => {
 });
 
 describe("changeSetSnapshot — unified outcome", () => {
-  it("lists committed, dirty, and untracked outcomes together in one snapshot", () => {
+  it("lists committed, dirty, and untracked outcomes together in one snapshot", async () => {
     // Simulates: a committed add (relative to base), a dirty modify, and an untracked file.
-    const { git } = scriptedChangeSetGit({
+    const { gitAsync } = scriptedChangeSetGit({
       nameStatus: z("A", "src/committed.ts", "M", "src/dirty.ts"),
       numstat: z("5\t0\tsrc/committed.ts", "3\t1\tsrc/dirty.ts"),
       status: z("? untracked.txt"),
     });
 
-    const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
+    const result = await changeSetSnapshot(gitAsync, { worktreePath: "/wt", baseBranch: "main" });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -351,9 +371,9 @@ describe("changeSetSnapshot — unified outcome", () => {
 });
 
 describe("changeSetSnapshot — failures", () => {
-  it("errs when no base branch is known", () => {
-    const { git, calls } = scriptedGit(() => "");
-    const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: null });
+  it("errs when no base branch is known", async () => {
+    const { gitAsync, calls } = scriptedGit(() => "");
+    const result = await changeSetSnapshot(gitAsync, { worktreePath: "/wt", baseBranch: null });
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toMatch(/base branch/i);
@@ -361,7 +381,7 @@ describe("changeSetSnapshot — failures", () => {
   });
 
   it("surfaces real git stderr when a read fails", async () => {
-    const { git } = scriptedGit((args) => {
+    const { gitAsync } = scriptedGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no such ref");
       if (args[0] === "merge-base" || (args[0] === "rev-parse" && args[1] === "main")) {
         throw new GitError("failed", "fatal: bad object main", args);
@@ -369,7 +389,7 @@ describe("changeSetSnapshot — failures", () => {
       return "";
     });
 
-    const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
+    const result = await changeSetSnapshot(gitAsync, { worktreePath: "/wt", baseBranch: "main" });
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toContain("bad object");
@@ -377,14 +397,14 @@ describe("changeSetSnapshot — failures", () => {
 });
 
 describe("readChangeSetBaseFile", () => {
-  it("reads file contents at the base revision via git show", () => {
-    const { git, calls } = scriptedGit((args) => {
+  it("reads file contents at the base revision via git show", async () => {
+    const { gitAsync, calls } = scriptedGit((args) => {
       if (args[0] === "cat-file") return "";
       if (args[0] === "show") return "hello from base\n";
       return "";
     });
 
-    const result = readChangeSetBaseFile(git, {
+    const result = await readChangeSetBaseFile(gitAsync, {
       worktreePath: "/wt",
       baseRevision: "basesha",
       path: "src/a.ts",
@@ -399,9 +419,9 @@ describe("readChangeSetBaseFile", () => {
     ]);
   });
 
-  it("rejects path traversal outside the worktree", () => {
-    const { git, calls } = scriptedGit(() => "secret");
-    const result = readChangeSetBaseFile(git, {
+  it("rejects path traversal outside the worktree", async () => {
+    const { gitAsync, calls } = scriptedGit(() => "secret");
+    const result = await readChangeSetBaseFile(gitAsync, {
       worktreePath: "/wt",
       baseRevision: "basesha",
       path: "../secret.txt",
@@ -412,8 +432,8 @@ describe("readChangeSetBaseFile", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("returns missing via cat-file probe without depending on stderr locale", () => {
-    const { git, calls } = scriptedGit((args) => {
+  it("returns missing via cat-file probe without depending on stderr locale", async () => {
+    const { gitAsync, calls } = scriptedGit((args) => {
       if (args[0] === "cat-file" && args[2]?.includes(":")) {
         // Non-English / nonsense stderr — must not be required for missing detection.
         throw new GitError("failed", "fatal: Pfad existiert nicht in 'basesha'", args);
@@ -421,7 +441,7 @@ describe("readChangeSetBaseFile", () => {
       if (args[0] === "cat-file") return ""; // revision itself exists
       return "";
     });
-    const result = readChangeSetBaseFile(git, {
+    const result = await readChangeSetBaseFile(gitAsync, {
       worktreePath: "/wt",
       baseRevision: "basesha",
       path: "src/new.ts",
@@ -433,11 +453,11 @@ describe("readChangeSetBaseFile", () => {
     expect(calls.some((c) => c.args[0] === "show")).toBe(false);
   });
 
-  it("surfaces real git stderr when the base revision itself is invalid", () => {
-    const { git } = scriptedGit((args) => {
+  it("surfaces real git stderr when the base revision itself is invalid", async () => {
+    const { gitAsync } = scriptedGit((args) => {
       throw new GitError("failed", "fatal: bad object basesha", args);
     });
-    const result = readChangeSetBaseFile(git, {
+    const result = await readChangeSetBaseFile(gitAsync, {
       worktreePath: "/wt",
       baseRevision: "basesha",
       path: "src/a.ts",
@@ -472,7 +492,7 @@ describe("changeSetSnapshot — real git repository", () => {
     return dir;
   }
 
-  it("composes committed, staged, unstaged, untracked, rename, delete, binary, and special paths", () => {
+  it("composes committed, staged, unstaged, untracked, rename, delete, binary, and special paths", async () => {
     const dir = makeRepo();
 
     // Committed change on a branch (relative to main / base).
@@ -505,7 +525,7 @@ describe("changeSetSnapshot — real git repository", () => {
     writeFileSync(join(dir, "asset.bin"), Buffer.from([0x00, 0x01, 0xff]));
     runRepoGit(dir, ["add", "asset.bin"]);
 
-    const result = changeSetSnapshot(runGitCapturing, {
+    const result = await changeSetSnapshot(runGitCapturingAsync, {
       worktreePath: dir,
       baseBranch: "main",
     });
@@ -536,7 +556,7 @@ describe("changeSetSnapshot — real git repository", () => {
 
     // Base read must not mutate the working tree.
     const before = readFileSync(join(dir, "tracked.ts"));
-    const baseRead = readChangeSetBaseFile(runGitCapturing, {
+    const baseRead = await readChangeSetBaseFile(runGitCapturingAsync, {
       worktreePath: dir,
       baseRevision: result.value.baseRevision,
       path: "tracked.ts",
@@ -551,7 +571,7 @@ describe("changeSetSnapshot — real git repository", () => {
     expect(status.length).toBeGreaterThan(0);
   });
 
-  it("ignores commits that landed on the base after the fork", () => {
+  it("ignores commits that landed on the base after the fork", async () => {
     const dir = makeRepo();
 
     runRepoGit(dir, ["checkout", "-b", "ticket"]);
@@ -569,7 +589,7 @@ describe("changeSetSnapshot — real git repository", () => {
     runRepoGit(dir, ["commit", "-q", "-m", "teammate work"]);
     runRepoGit(dir, ["checkout", "-q", "ticket"]);
 
-    const result = changeSetSnapshot(runGitCapturing, {
+    const result = await changeSetSnapshot(runGitCapturingAsync, {
       worktreePath: dir,
       baseBranch: "main",
     });
@@ -586,7 +606,7 @@ describe("changeSetSnapshot — real git repository", () => {
     expect(result.value.baseRevision).not.toBe(runRepoGit(dir, ["rev-parse", "main"]).trim());
   });
 
-  it("marks a real merge conflict as conflicted relative to the base", () => {
+  it("marks a real merge conflict as conflicted relative to the base", async () => {
     const dir = mkdtempSync(join(tmpdir(), "volli-changeset-conflict-"));
     tempDirs.push(dir);
     runRepoGit(dir, ["init", "-q"]);
@@ -612,7 +632,7 @@ describe("changeSetSnapshot — real git repository", () => {
       // Expected: content conflict leaves the worktree unmerged.
     }
 
-    const result = changeSetSnapshot(runGitCapturing, {
+    const result = await changeSetSnapshot(runGitCapturingAsync, {
       worktreePath: dir,
       baseBranch: "main",
     });

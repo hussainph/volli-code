@@ -38,7 +38,7 @@ function fakeApi(): FakeApi {
       pending.delete(ticketId);
     },
     emit(event) {
-      for (const listener of [...listeners]) listener(event);
+      for (const listener of listeners) listener(event);
     },
     listenerCount: () => listeners.size,
   };

@@ -26,9 +26,9 @@ import { getTicketRow } from "../db/tickets-repo";
 import { changeSetSnapshot, readChangeSetBaseFile, type ChangeSetBaseFile } from "./change-set";
 import { resolveChangeSetBaseRevision } from "./comparison-ref";
 import { diffStat, type DiffMode } from "./diff";
-import { stderrOf } from "./git";
+import { runGitCapturingAsync, stderrOf } from "./git";
 import { getWorktreeStatus, type WorktreeStatusReport } from "./status";
-import type { RunGit } from "./types";
+import type { RunGit, RunGitAsync } from "./types";
 
 /**
  * The narrow deps the read verbs need — a structural subset of {@link
@@ -40,6 +40,12 @@ import type { RunGit } from "./types";
 export interface WorktreeReadDeps {
   db: Database.Database;
   git: RunGit;
+  /**
+   * The non-blocking runner the Change Set verbs use. Defaults to the real
+   * {@link runGitCapturingAsync} — never to a wrapper around `git`, which
+   * would quietly put those reads back on the main thread.
+   */
+  gitAsync?: RunGitAsync;
   worktreeExists?: (path: string) => boolean;
 }
 
@@ -180,14 +186,14 @@ export function readWorktreeDiff(
  * Composes the unified Change Set snapshot for a ticket: resolves identity,
  * discriminates no-worktree / missing-on-disk, then runs {@link changeSetSnapshot}.
  */
-export function readWorktreeChangeSet(
+export async function readWorktreeChangeSet(
   deps: WorktreeReadDeps,
   ticketId: string,
-): WorktreeChangeSetRead {
+): Promise<WorktreeChangeSetRead> {
   const resolved = resolveReadTarget(deps, ticketId);
   if (resolved.kind !== "ok") return resolved;
   const { target } = resolved;
-  const result = changeSetSnapshot(deps.git, {
+  const result = await changeSetSnapshot(deps.gitAsync ?? runGitCapturingAsync, {
     worktreePath: target.worktreePath,
     baseBranch: target.baseBranch,
   });
@@ -204,11 +210,12 @@ export function readWorktreeChangeSet(
  * the two must agree on the merge base, or the diff a caller renders would be
  * taken against a revision the Change Set never measured.
  */
-export function readWorktreeBaseFile(
+export async function readWorktreeBaseFile(
   deps: WorktreeReadDeps,
   ticketId: string,
   path: string,
-): WorktreeBaseFileRead {
+): Promise<WorktreeBaseFileRead> {
+  const git = deps.gitAsync ?? runGitCapturingAsync;
   const resolved = resolveReadTarget(deps, ticketId);
   if (resolved.kind !== "ok") return resolved;
   const { target } = resolved;
@@ -221,8 +228,8 @@ export function readWorktreeBaseFile(
   }
   let baseRevision: string;
   try {
-    const resolvedBase = resolveChangeSetBaseRevision(
-      deps.git,
+    const resolvedBase = await resolveChangeSetBaseRevision(
+      git,
       target.worktreePath,
       target.baseBranch,
     );
@@ -237,7 +244,7 @@ export function readWorktreeBaseFile(
   } catch (caught) {
     return { kind: "base-read-error", displayId: target.displayId, error: stderrOf(caught) };
   }
-  const file = readChangeSetBaseFile(deps.git, {
+  const file = await readChangeSetBaseFile(git, {
     worktreePath: target.worktreePath,
     baseRevision,
     path,

@@ -6,7 +6,7 @@
  * module so the injected-git seam every pipeline step relies on is exercised
  * with a fake, never real git.
  */
-import type { RunGit } from "./types";
+import type { RunGit, RunGitAsync } from "./types";
 
 export interface GitCall {
   args: readonly string[];
@@ -15,6 +15,12 @@ export interface GitCall {
 
 export interface ScriptedGit {
   git: RunGit;
+  /**
+   * The same scripted handler behind the async runner seam, for the verbs that
+   * moved off `execFileSync` (change-set.ts). Suites keep scripting one
+   * synchronous handler; a `throw` becomes a rejection.
+   */
+  gitAsync: RunGitAsync;
   calls: GitCall[];
   /** Count of recorded calls whose args start with `prefix`. */
   countMatching: (prefix: readonly string[]) => number;
@@ -35,6 +41,7 @@ export function scriptedGit(
   };
   return {
     git,
+    gitAsync: async (args, cwd) => git(args, cwd),
     calls,
     countMatching: (prefix) =>
       calls.filter((call) => prefix.every((token, i) => call.args[i] === token)).length,

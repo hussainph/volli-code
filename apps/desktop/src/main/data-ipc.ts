@@ -129,6 +129,7 @@ import {
   type DiffMode,
 } from "./worktree";
 import { WorktreeChangeWatchManager } from "./worktree/change-set-watch";
+import { createCoalescer } from "./worktree/coalesce";
 import { getRetentionWatcher } from "./retention-runtime";
 import {
   canonicalize as canonicalizeWorktreePath,
@@ -212,6 +213,7 @@ export function registerDataIpcHandlers(
 
   const db = handle.db;
   const changeWatchManager = new WorktreeChangeWatchManager();
+  const coalesceChangeSet = createCoalescer();
 
   const handlers: IpcHandlerTable<DataIpcChannel> = {
     "volli:data-bootstrap": (): BootstrapResult => {
@@ -615,8 +617,13 @@ export function registerDataIpcHandlers(
       }
     },
 
-    "volli:worktree-change-set": (input: TicketIdInput): WorktreeChangeSetResult => {
-      const read = readWorktreeChangeSet(worktreeDeps(db), input.ticketId);
+    "volli:worktree-change-set": async (input: TicketIdInput): Promise<WorktreeChangeSetResult> => {
+      // Coalesced per ticket: a burst of filesystem events can have several
+      // panels and windows asking at once, and each snapshot is five git
+      // commands over the whole worktree.
+      const read = await coalesceChangeSet(input.ticketId, () =>
+        readWorktreeChangeSet(worktreeDeps(db), input.ticketId),
+      );
       switch (read.kind) {
         case "missing-ticket":
           return { ok: false, error: "Unknown ticket" };
@@ -631,8 +638,10 @@ export function registerDataIpcHandlers(
       }
     },
 
-    "volli:worktree-base-read": (input: WorktreeBaseReadInput): WorktreeBaseReadResult => {
-      const read = readWorktreeBaseFile(worktreeDeps(db), input.ticketId, input.path);
+    "volli:worktree-base-read": async (
+      input: WorktreeBaseReadInput,
+    ): Promise<WorktreeBaseReadResult> => {
+      const read = await readWorktreeBaseFile(worktreeDeps(db), input.ticketId, input.path);
       switch (read.kind) {
         case "missing-ticket":
           return { ok: false, error: "Unknown ticket" };

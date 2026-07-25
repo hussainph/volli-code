@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
   WATCH_DEBOUNCE_MS,
+  WATCH_MAX_WAIT_MS,
   WorktreeChangeWatchManager,
+  type WorktreeChangeWatchOptions,
   type WorktreeWatchFn,
 } from "./change-set-watch";
 
@@ -55,13 +57,23 @@ describe("WorktreeChangeWatchManager", () => {
     vi.useRealTimers();
   });
 
-  function makeManager(): WorktreeChangeWatchManager {
+  function makeManager(
+    overrides: Omit<WorktreeChangeWatchOptions, "watch"> = {},
+  ): WorktreeChangeWatchManager {
     const watchFn: WorktreeWatchFn = (path, options, cb) => {
       const watcher = makeFakeWatcher();
       watchCalls.push({ path, options, cb, watcher });
       return watcher;
     };
-    return new WorktreeChangeWatchManager({ watch: watchFn, debounceMs: WATCH_DEBOUNCE_MS });
+    return new WorktreeChangeWatchManager({
+      watch: watchFn,
+      debounceMs: WATCH_DEBOUNCE_MS,
+      maxWaitMs: WATCH_MAX_WAIT_MS,
+      // Linked ticket worktrees have `.git` as a file — the default for tests.
+      gitPathIsDirectory: () => false,
+      now: () => Date.now(),
+      ...overrides,
+    });
   }
 
   it("debounces filesystem events and emits volli:worktree-changed for the ticket", () => {
@@ -82,6 +94,59 @@ describe("WorktreeChangeWatchManager", () => {
     vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
     expect(webContents.send).toHaveBeenCalledTimes(1);
     expect(webContents.send).toHaveBeenCalledWith("volli:worktree-changed", { ticketId: "t1" });
+  });
+
+  it("fires at the maxWait ceiling even while events keep arriving", () => {
+    vi.useFakeTimers();
+    manager = makeManager();
+    const webContents = makeWebContents();
+
+    manager.watch(webContents as never, "t1", "/wt/t1");
+    const cb = watchCalls[0]!.cb;
+
+    // An agent writing faster than the debounce window never leaves a 250ms
+    // gap, so a pure trailing debounce would defer forever.
+    for (let elapsed = 0; elapsed < WATCH_MAX_WAIT_MS; elapsed += WATCH_DEBOUNCE_MS - 50) {
+      cb("change", "src/generated.ts");
+      vi.advanceTimersByTime(WATCH_DEBOUNCE_MS - 50);
+    }
+    expect(webContents.send).toHaveBeenCalledTimes(1);
+
+    // The ceiling resets with the burst, so the next quiet gap fires normally.
+    cb("change", "src/generated.ts");
+    vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
+    expect(webContents.send).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores .git events when the watched tree is a main repo", () => {
+    vi.useFakeTimers();
+    manager = makeManager({ gitPathIsDirectory: () => true });
+    const webContents = makeWebContents();
+
+    manager.watch(webContents as never, "t1", "/repo");
+    const cb = watchCalls[0]!.cb;
+
+    // Our own snapshot's index/lock writes come straight back through the
+    // recursive watch — feeding them on would never settle.
+    cb("change", ".git/index");
+    cb("rename", ".git");
+    vi.advanceTimersByTime(WATCH_MAX_WAIT_MS);
+    expect(webContents.send).not.toHaveBeenCalled();
+
+    cb("change", "src/a.ts");
+    vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
+    expect(webContents.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps .git events when the worktree is linked (.git is a file)", () => {
+    vi.useFakeTimers();
+    manager = makeManager({ gitPathIsDirectory: () => false });
+    const webContents = makeWebContents();
+
+    manager.watch(webContents as never, "t1", "/wt/t1");
+    watchCalls[0]!.cb("change", ".gitignore");
+    vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
+    expect(webContents.send).toHaveBeenCalledTimes(1);
   });
 
   it("does not leak a watcher across tickets after unwatch", () => {

@@ -5,12 +5,23 @@
  * {@link WATCH_DEBOUNCE_MS} cadence and window-scoped subscription lifecycle
  * (teardown on unwatch / `destroyed` — never leaks across tickets).
  */
-import { watch as fsWatch } from "node:fs";
+import { statSync, watch as fsWatch } from "node:fs";
+import { join } from "node:path";
 import type { WebContents } from "electron";
 import type { Result, WorktreeChangedEvent, VolliIpcEvent } from "@volli/shared";
 
 /** Same debounce as FileWatchManager / DirWatchManager (volli-fs.ts). */
 export const WATCH_DEBOUNCE_MS = 250;
+
+/**
+ * Ceiling on how long the trailing debounce may keep deferring. An agent
+ * writing a file every ~200ms — a long codegen run, a watch-mode build — never
+ * leaves a 250ms gap, so a pure trailing debounce would postpone the refresh
+ * for the entire run and the Changes rail would sit frozen exactly when the
+ * user most wants to watch it move. Past this bound the pending burst fires
+ * regardless and the debounce starts over.
+ */
+export const WATCH_MAX_WAIT_MS = 1000;
 
 interface WorktreeWatchHandle {
   close(): void;
@@ -30,12 +41,45 @@ interface WorktreeWatchSubscription {
   worktreePath: string;
   watcher: WorktreeWatchHandle | null;
   debounceTimer: NodeJS.Timeout | null;
+  /** Deadline for the current burst; null when no burst is pending. */
+  maxWaitAt: number | null;
+  /** True when `.git` is a real directory here — see {@link isSelfFedGitEvent}. */
+  skipGitEvents: boolean;
   onDestroyed: () => void;
 }
 
 export interface WorktreeChangeWatchOptions {
   watch?: WorktreeWatchFn;
   debounceMs?: number;
+  maxWaitMs?: number;
+  /** Injectable `.git`-is-a-directory probe (see {@link isSelfFedGitEvent}). */
+  gitPathIsDirectory?: (worktreePath: string) => boolean;
+  /** Injectable clock, so the maxWait bound is testable with fake timers. */
+  now?: () => number;
+}
+
+/** Default `.git`-is-a-directory probe; a missing/unreadable path is "not a directory". */
+function statGitPathIsDirectory(worktreePath: string): boolean {
+  try {
+    return statSync(join(worktreePath, ".git")).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether an event names something inside `.git`.
+ *
+ * A linked ticket worktree has `.git` as a FILE pointing into the main repo, so
+ * its own git bookkeeping happens outside the watched tree and never reaches
+ * us. A watch rooted at a MAIN repo is different: every snapshot we run writes
+ * index/lock/log files under `.git`, which the recursive watch reports back as
+ * changes, which schedule another snapshot — a loop that never settles. Those
+ * events carry no information the Change Set can use anyway, so drop them.
+ */
+function isSelfFedGitEvent(filename: string | null): boolean {
+  if (filename === null) return false;
+  return filename === ".git" || filename.startsWith(".git/") || filename.startsWith(".git\\");
 }
 
 /**
@@ -46,10 +90,16 @@ export class WorktreeChangeWatchManager {
   private readonly subs = new Map<string, WorktreeWatchSubscription>();
   private readonly watchFn: WorktreeWatchFn;
   private readonly debounceMs: number;
+  private readonly maxWaitMs: number;
+  private readonly gitPathIsDirectory: (worktreePath: string) => boolean;
+  private readonly now: () => number;
 
   constructor(options: WorktreeChangeWatchOptions = {}) {
     this.watchFn = options.watch ?? ((path, opts, listener) => fsWatch(path, opts, listener));
     this.debounceMs = options.debounceMs ?? WATCH_DEBOUNCE_MS;
+    this.maxWaitMs = options.maxWaitMs ?? WATCH_MAX_WAIT_MS;
+    this.gitPathIsDirectory = options.gitPathIsDirectory ?? statGitPathIsDirectory;
+    this.now = options.now ?? Date.now;
   }
 
   private keyFor(webContents: WebContents, ticketId: string): string {
@@ -68,11 +118,14 @@ export class WorktreeChangeWatchManager {
       worktreePath,
       watcher: null,
       debounceTimer: null,
+      maxWaitAt: null,
+      skipGitEvents: this.gitPathIsDirectory(worktreePath),
       onDestroyed: () => this.teardown(key),
     };
     this.subs.set(key, sub);
     try {
-      const watcher = this.watchFn(worktreePath, { recursive: true }, () => {
+      const watcher = this.watchFn(worktreePath, { recursive: true }, (_eventType, filename) => {
+        if (sub.skipGitEvents && isSelfFedGitEvent(filename)) return;
         this.scheduleBroadcast(sub);
       });
       sub.watcher = watcher;
@@ -94,16 +147,25 @@ export class WorktreeChangeWatchManager {
     this.teardown(this.keyFor(webContents, ticketId));
   }
 
+  /**
+   * Trailing debounce with a {@link WATCH_MAX_WAIT_MS} ceiling: each event
+   * pushes the timer out by `debounceMs`, but never past the deadline the
+   * burst's first event set.
+   */
   private scheduleBroadcast(sub: WorktreeWatchSubscription): void {
+    const now = this.now();
+    if (sub.maxWaitAt === null) sub.maxWaitAt = now + this.maxWaitMs;
     if (sub.debounceTimer !== null) clearTimeout(sub.debounceTimer);
+    const delay = Math.max(0, Math.min(this.debounceMs, sub.maxWaitAt - now));
     sub.debounceTimer = setTimeout(() => {
       sub.debounceTimer = null;
+      sub.maxWaitAt = null;
       if (sub.webContents.isDestroyed()) return;
       // Only fire if this subscription is still the live one for its key.
       if (this.subs.get(this.keyFor(sub.webContents, sub.ticketId)) !== sub) return;
       const payload: WorktreeChangedEvent = { ticketId: sub.ticketId };
       sub.webContents.send("volli:worktree-changed" satisfies VolliIpcEvent, payload);
-    }, this.debounceMs);
+    }, delay);
   }
 
   private teardown(key: string): void {
@@ -114,6 +176,7 @@ export class WorktreeChangeWatchManager {
       clearTimeout(sub.debounceTimer);
       sub.debounceTimer = null;
     }
+    sub.maxWaitAt = null;
     sub.watcher?.close();
     sub.watcher = null;
     if (!sub.webContents.isDestroyed()) {

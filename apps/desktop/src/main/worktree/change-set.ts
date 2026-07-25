@@ -10,6 +10,12 @@
  * everything that landed on the base after the fork into the ticket's own
  * outcome. Diffs use NUL-delimited (`-z`) output and explicit rename detection
  * (`-M`) so paths with spaces/quotes/Unicode and renames parse safely.
+ *
+ * Every git call here goes through the ASYNC runner ({@link RunGitAsync}). A
+ * snapshot is five commands over the whole worktree and re-runs on every
+ * debounced filesystem event, so on `execFileSync` it froze the main process
+ * — cursor, menus, and all other IPC — for its whole duration while an agent
+ * was writing files.
  */
 import { createHash } from "node:crypto";
 import { isAbsolute, normalize, sep } from "node:path";
@@ -18,7 +24,7 @@ import type { ChangeSetFile, ChangeSetFileStatus, ChangeSetSnapshot } from "@vol
 
 import { resolveChangeSetBaseRevision } from "./comparison-ref";
 import { stderrOf } from "./git";
-import { err, ok, type RunGit, type WorktreeResult } from "./types";
+import { err, ok, type RunGitAsync, type WorktreeResult } from "./types";
 
 export interface ChangeSetInput {
   worktreePath: string;
@@ -56,28 +62,35 @@ interface ParsedNumstat {
  * Builds a {@link ChangeSetSnapshot} for the worktree. Failures surface real
  * git stderr (never a silent empty snapshot). Missing base fails fast.
  */
-export function changeSetSnapshot(
-  git: RunGit,
+export async function changeSetSnapshot(
+  git: RunGitAsync,
   input: ChangeSetInput,
-): WorktreeResult<ChangeSetSnapshot> {
+): Promise<WorktreeResult<ChangeSetSnapshot>> {
   if (!input.baseBranch) {
     return err("No base branch is known for this worktree, so its Change Set cannot be computed.");
   }
   try {
-    const baseRevision = resolveChangeSetBaseRevision(git, input.worktreePath, input.baseBranch);
+    const baseRevision = await resolveChangeSetBaseRevision(
+      git,
+      input.worktreePath,
+      input.baseBranch,
+    );
     if (!baseRevision) {
       return err(
         "No base branch is known for this worktree, so its Change Set cannot be computed.",
       );
     }
-    const headRevision = git(["rev-parse", "HEAD"], input.worktreePath).trim();
+    const headRevision = (await git(["rev-parse", "HEAD"], input.worktreePath)).trim();
 
-    const nameStatusOut = git(
-      ["diff", "--name-status", "-z", "-M", baseRevision],
-      input.worktreePath,
-    );
-    const numstatOut = git(["diff", "--numstat", "-z", "-M", baseRevision], input.worktreePath);
-    const statusOut = git(["status", "--porcelain=v2", "-z", "-uall"], input.worktreePath);
+    // The three reads are independent of each other and each spawns git, so
+    // they overlap rather than queue — the snapshot costs one round trip, not
+    // three (and the working tree can't move between them any more than it
+    // could between three sequential spawns).
+    const [nameStatusOut, numstatOut, statusOut] = await Promise.all([
+      git(["diff", "--name-status", "-z", "-M", baseRevision], input.worktreePath),
+      git(["diff", "--numstat", "-z", "-M", baseRevision], input.worktreePath),
+      git(["status", "--porcelain=v2", "-z", "-uall"], input.worktreePath),
+    ]);
 
     const tracked = composeFiles(parseNameStatus(nameStatusOut), parseNumstat(numstatOut));
     // `git diff <base>` reports conflicted paths as M; porcelain v2 `u` lines
@@ -110,27 +123,27 @@ export function changeSetSnapshot(
  * matching, which breaks under non-C locales). Other git failures surface real
  * stderr.
  */
-export function readChangeSetBaseFile(
-  git: RunGit,
+export async function readChangeSetBaseFile(
+  git: RunGitAsync,
   input: ChangeSetBaseFileInput,
-): WorktreeResult<ChangeSetBaseFile> {
+): Promise<WorktreeResult<ChangeSetBaseFile>> {
   if (!isSafeRepoRelativePath(input.path)) {
     return err("Path is outside the worktree.");
   }
   const object = `${input.baseRevision}:${input.path}`;
   try {
-    git(["cat-file", "-e", object], input.worktreePath);
+    await git(["cat-file", "-e", object], input.worktreePath);
   } catch (probeError) {
     // Path probe failed — distinguish "rev ok, path absent" from "rev invalid".
     try {
-      git(["cat-file", "-e", input.baseRevision], input.worktreePath);
+      await git(["cat-file", "-e", input.baseRevision], input.worktreePath);
       return ok({ missing: true });
     } catch {
       return err(stderrOf(probeError));
     }
   }
   try {
-    const content = git(["show", object], input.worktreePath);
+    const content = await git(["show", object], input.worktreePath);
     return ok({ content });
   } catch (caught) {
     return err(stderrOf(caught));

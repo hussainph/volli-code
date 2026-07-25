@@ -10,6 +10,15 @@ import type { DirtyWorktreeOrphan, WorktreePhase } from "@volli/shared";
 import type { RunGit } from "../project-base-branch";
 
 export type { RunGit } from "../project-base-branch";
+
+/**
+ * The async git runner seam. Same discipline as {@link RunGit} — args array,
+ * never a shell string, stderr captured into a `GitError` — but over
+ * `execFile` so a read cannot block the main process. Used by the Change Set
+ * verbs, which run several commands over the whole worktree on every debounced
+ * filesystem event.
+ */
+export type RunGitAsync = (args: readonly string[], cwd: string) => Promise<string>;
 // The phase vocabulary is DEFINED in @volli/shared (ipc.ts) because the
 // renderer consumes it over `volli:worktree-phase`; the module re-exports it
 // so internal callers keep one import site.
@@ -26,6 +35,12 @@ export type { WorktreeIdentity, WorktreePhase } from "@volli/shared";
 export interface WorktreeDeps {
   db: Database.Database;
   git: RunGit;
+  /**
+   * The non-blocking runner for the Change Set reads. Omitted callers fall back
+   * to the real `runGitCapturingAsync` — never to `git`, which would silently
+   * put those reads back on the main thread.
+   */
+  gitAsync?: RunGitAsync;
   home?: string;
   onPhase?: (ticketId: string, phase: WorktreePhase) => void;
   attachmentsRoot: string;

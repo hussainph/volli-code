@@ -9,7 +9,7 @@
  * both directions. When it does not (never-fetched repo, no remote, base is
  * itself a remote-tracking name), the local base branch is all there is.
  */
-import type { RunGit } from "./types";
+import type { RunGit, RunGitAsync } from "./types";
 
 /**
  * `origin/<base>` when that remote-tracking ref exists, else `baseBranch`
@@ -49,20 +49,38 @@ export function resolveComparisonRef(
  * HEAD commit or when the base ref is unrelated history. There the ref's tip is
  * the only answer available and is strictly better than failing the whole
  * snapshot — diffs stay honest for the common case and degrade to the old
- * behaviour in the pathological one.
+ * behaviour in the pathological one. That tip comes free: `rev-parse --verify`
+ * PRINTS the SHA it verified, so the remote-tracking probe above already
+ * fetched it and the fallback reuses it rather than spawning git again.
+ *
+ * Async because it fronts the Change Set reads, which must not block main.
  */
-export function resolveChangeSetBaseRevision(
-  git: RunGit,
+export async function resolveChangeSetBaseRevision(
+  git: RunGitAsync,
   cwd: string,
   baseBranch: string | null,
-): string | null {
-  const comparisonRef = resolveComparisonRef(git, cwd, baseBranch);
-  if (!comparisonRef) return null;
+): Promise<string | null> {
+  if (!baseBranch) return null;
+
+  const remoteRef = `origin/${baseBranch}`;
+  let comparisonRef = baseBranch;
+  let probedTip: string | null = null;
   try {
-    const mergeBase = git(["merge-base", comparisonRef, "HEAD"], cwd).trim();
+    const probed = (
+      await git(["rev-parse", "--verify", "--quiet", `refs/remotes/${remoteRef}`], cwd)
+    ).trim();
+    comparisonRef = remoteRef;
+    if (probed.length > 0) probedTip = probed;
+  } catch {
+    // No remote-tracking ref — the local base branch is all there is.
+  }
+
+  try {
+    const mergeBase = (await git(["merge-base", comparisonRef, "HEAD"], cwd)).trim();
     if (mergeBase.length > 0) return mergeBase;
   } catch {
     // Fall through to the tip — see the unrelated-history / no-HEAD cases above.
   }
-  return git(["rev-parse", comparisonRef], cwd).trim();
+  if (probedTip !== null) return probedTip;
+  return (await git(["rev-parse", comparisonRef], cwd)).trim();
 }

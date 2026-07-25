@@ -136,6 +136,14 @@ export function TicketChangesPanel({
     setNav((prev) => (prev.activeTabId === activeTabId ? prev : { ...prev, activeTabId }));
   }, [activeTabId]);
 
+  // A snapshot is five git commands over the whole worktree, and a write storm
+  // can outpace it. Never stack overlapping loads: a request arriving mid-load
+  // just marks one trailing re-run, so the panel always settles on the latest
+  // state without queueing a subprocess pile behind it.
+  const loading = React.useRef(false);
+  const reloadPending = React.useRef(false);
+  const loadRef = React.useRef<() => Promise<void>>(async () => {});
+
   const loadChangeSet = React.useCallback(async () => {
     if (ticket.worktreePath === null) {
       setError(null);
@@ -143,24 +151,37 @@ export function TicketChangesPanel({
       setLoaded(true);
       return;
     }
+    if (loading.current) {
+      reloadPending.current = true;
+      return;
+    }
+    loading.current = true;
     try {
       const result = await window.api.worktree.changeSet(ticket.id);
       if (!result.ok) {
         setError(result.error);
         toastError(`Couldn't load changes: ${result.error}`);
-        setLoaded(true);
         return;
       }
       setError(null);
       setNav((prev) => applyChangeSetRefresh(prev, result.changeSet));
-      setLoaded(true);
     } catch (err) {
       const message = errorMessage(err);
       setError(message);
       toastError(`Couldn't load changes: ${message}`);
+    } finally {
+      loading.current = false;
       setLoaded(true);
     }
+    if (reloadPending.current) {
+      reloadPending.current = false;
+      await loadRef.current();
+    }
   }, [ticket.id, ticket.worktreePath]);
+
+  React.useEffect(() => {
+    loadRef.current = loadChangeSet;
+  }, [loadChangeSet]);
 
   React.useEffect(() => {
     void loadChangeSet();
