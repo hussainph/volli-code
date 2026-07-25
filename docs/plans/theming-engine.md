@@ -1,6 +1,6 @@
 # Theming Engine — Terminal · Editor · App Surface
 
-**Status**: design settled (exploration + grill session, July 2026) · **Branch**: `ui/theming-engine` · **Decisions**: CONCEPT #66–#78, recorded here (the log carries a pointer row) · **Implementation**: **PR 1 shipped** — spine + terminal surface; PRs 2–5 open
+**Status**: design settled (exploration + grill session, July 2026) · **Branch**: `ui/theming-engine` · **Decisions**: CONCEPT #66–#78, recorded here (the log carries a pointer row) · **Implementation**: **PR 1 shipped** (#119) — spine + terminal surface; PRs 2–5 open and **re-scoped against the code in a July 2026 validation pass** (see § Staging)
 
 Volli gets one theming system spanning three surfaces: the **terminal** (restty/Ghostty), the **code editor** (Monaco), and the **app surface** (chrome, rail, board canvas). The app surface is an Arc-style generative engine — you pick a color, the token set is derived — and a **Project** may override any surface, so appearance becomes an ambient "which project am I in" signal.
 
@@ -75,18 +75,18 @@ Real TextMate grammars and real VS Code fidelity. `textmateThemeToMonacoTheme()`
 
 **Language workers are untouched.** `setTokensProvider` is orthogonal to `typescript.worker`; IntelliSense, hovers, diagnostics, folding and bracket matching are unaffected. (Shiki [#776](https://github.com/shikijs/shiki/issues/776) concerns `monaco-editor-core`, which ships no workers — we use full `monaco-editor@0.56`.)
 
-**Traps to write into the implementation.**
+**Traps to write into the implementation.** Re-verified against the published `dist/index.mjs` of **`shiki@4.3.1` / `@shikijs/monaco@4.3.1`** (both MIT; the adapter is 9 KB unpacked). Both traps below are still live at that version.
 
-- `shikiToMonaco` snapshots `getLoadedThemes()` and re-wraps `setTheme` on **every** call — calling it once per lazily-loaded theme stacks wrappers. Call it once; register later themes via the exported `textmateThemeToMonacoTheme()` + `defineTheme()`, or vendor the ~120 MIT lines and own one `themeMap`. Budget half a day.
+- `shikiToMonaco` builds a fresh local `themeMap` and re-wraps `setTheme` on **every** call — calling it once per lazily-loaded theme stacks wrappers. Call it once; register later themes via the exported `textmateThemeToMonacoTheme()` + `defineTheme()`, or vendor the ~120 MIT lines and own one `themeMap`. Budget half a day. **If you vendor, preserve its `monaco.editor.create` patch** — `monaco-file-editor.tsx:269` passes `theme: "volli-dark"` in create options and depends on that patch to route through shiki's `setTheme`.
 - `createDiffEditor` is **not** patched. Always call `monaco.editor.setTheme(id)` explicitly instead of passing `theme` in diff-editor options.
-- Import grammars as ES modules (`@shikijs/langs/*` are `.mjs`) so the bundler inlines them — no runtime `fetch()` under the custom app protocol (#65).
+- Import grammars as ES modules (`@shikijs/langs/*` are `.mjs`) so the bundler inlines them. *Nuance found while validating:* the renderer CSP is `default-src 'self'` with no network origins, so external fetch is already impossible — but `volli-app://bundle` is registered `supportFetchAPI` **without** `bypassCSP`, so a *same-origin* fetch would technically succeed. The real reason for static imports is bundling and `base: "./"` correctness, not a hard block (#65). Monaco's own workers are already bundled via Vite `?worker`, not fetched.
 - Tune `tokenizeMaxLineLength` (default 20 000) and `tokenizeTimeLimit` (500 ms) so huge or minified files cannot stall the main thread.
 - Shiki's per-token color→scope reverse lookup means the emitted scope *string* is arbitrary among same-colored scopes. Colors and font styles are correct; only matters if we ever write CSS against token classes.
 
 **Licensing — resolve before bundling.**
 
 - **Safe (MIT):** Catppuccin, Dracula, One Dark Pro, Nord, Rosé Pine, Ayu, Night Owl, GitHub themes, Vitesse, Cobalt2, Synthwave '84, Shades of Purple; Monokai / Solarized / Dark+ ship inside `microsoft/vscode` (MIT).
-- **Flag:** **Tokyo Night** declares MIT in `package.json` but ships **no LICENSE file**. **Gruvbox** — unverified on both common sources; verify or drop.
+- ~~**Flag:** Tokyo Night declares MIT but ships no LICENSE file; Gruvbox unverified~~ — **both resolved, and the whole audit is now automatable.** `shikijs/textmate-grammars-themes` ships `packages/tm-themes/NOTICE` (1597 lines) carrying per-theme SPDX identifiers and license URLs: **Tokyo Night is MIT** with a real `LICENSE.txt`, and **Gruvbox** (jdinhify) is **MIT**, © 2017 JD. Generate `THIRD-PARTY-NOTICES` from that upstream file rather than re-auditing by hand.
 - **Do not bundle:** **Monokai Pro** (paid). **Material Theme** — use only antfu's Apache-2.0 fork `antfu/vsc-material-theme`, never the original (Feb 2025 relicensing).
 - Ship `THIRD-PARTY-NOTICES` with per-theme copyright lines. Theme *names* are brand marks; nominative use is fine, implying endorsement is not.
 
@@ -163,7 +163,7 @@ Chrome caps live WebGL contexts at **~16 and evicts the *oldest*** on overflow (
 
 Live animation requires **all** of these simultaneously:
 
-- **Hard block when any terminal reports `backend === "webgl2"`.** Non-negotiable; readable today.
+- **Hard block when any terminal reports `backend === "webgl2"`.** Non-negotiable — but **not readable today**, contrary to what this section first claimed. `restty-engine.ts` records `backend` privately and types it `string | null` rather than the `"webgpu" | "webgl2"` union; it is absent from the `TerminalEngine` interface; and the registry exports only `getOrCreateEngine` / `getEngine` / `disposeEngine` — no enumeration, no count, no change event (and the backend resolves *asynchronously* after mount, so a change event is required, not optional). That seam is renderer-internal, needs no IPC, and is PR 5's first commit rather than an afterthought.
 - Auto-degrade to the baked still above N live GPU contexts (start at 8) — degrade, never error.
 - `prefers-reduced-motion` forces the baked still, no exceptions.
 - `minPixelRatio: 1` and `maxPixelCount` well under the 8.3M default (the library ships `minPixelRatio: 2`, i.e. double-resolution, by default).
@@ -192,13 +192,15 @@ Tooltip copy names the real tradeoff: *"Animated backgrounds run continuously on
 
 Landed with 891 shared + 1778 desktop tests at 100% coverage in both packages, and `apps/desktop/e2e/theming-smoke.mjs` — 11 checks against the real app covering the golden token set, the contrast floors read back out of the live DOM, preview/revert/commit, overlay persistence across relaunch, and the invariant that the user's own ghostty config is byte-identical afterwards.
 
-**PR 2 — App engine + presets.** Theme editor (seed, accent unlock, grain, gradient canvas); the sparse override map; theme JSON files; Volli-original presets; Settings → Theme category.
+> **Re-scoped by the post-PR-1 validation pass (July 2026).** PR 1 landed more than its own staging line promised, so PRs 2 and 4 below are smaller than first written and PR 5 is larger. The bullets are what is *genuinely* unbuilt, verified against the code. Each remaining PR is tracked as an issue carrying the same scope, so the work is followable without opening this document: **PR 2 → #121 · PR 3 → #122 · PR 4 → #123 · PR 5 → #124.**
 
-**PR 3 — Editor.** `@shikijs/monaco` + JS RegExp engine, lazy grammars and themes; ~30 bundled themes with `THIRD-PARTY-NOTICES`; the `shikiToMonaco` single-call fix; explicit `setTheme` for diff editors. **Family presets become complete across all three surfaces here.**
+**PR 2 — App engine + presets.** *(#121)* *Already shipped in PR 1, contrary to the original line:* the sparse override map (`generate.ts` applies it last, after verify/repair, and `isTokenOverrideMap` guards it at the storage boundary), the Volli originals — six of them: Ember, Midnight, Moss, Iris, Rose, Graphite — and the Settings → Appearance category that already hosts the picker. Accent unlock is generator-complete too; only its disclosure control is missing. **What remains:** the theme **editor** UI (seed input, accent-unlock disclosure, grain slider); custom themes as one JSON file each under `<userData>/volli/themes/<slug>.json`, behind a new IPC verb and a path guard mirroring `theme-overlay.ts`'s, feeding `ThemePicker`'s already-declared but never-supplied `themes` prop; the `⋯` row actions (Duplicate / Rename / Delete / Open file), which no host wires today so the menu never appears; and actually *rendering* `grain`, which is persisted and read by nothing.
 
-**PR 4 — Per-project override.** Project → Configure → Appearance with inherit / custom / auto-tint-from-project-color; per-surface inherit toggles; the animated repaint on project switch.
+**PR 3 — Editor.** *(#122)* `shiki` + `@shikijs/monaco` (both `4.3.1`, MIT) with the JS RegExp engine; lazy grammars and themes as static `.mjs` ES-module imports; bundled themes with a `THIRD-PARTY-NOTICES` generated from `tm-themes`' upstream `NOTICE`; the `shikiToMonaco` single-call fix; explicit `setTheme` for diff editors. **Family presets become complete across all three surfaces here.** Two gaps PR 1 opened fold in: nothing consumes the already-persisted `editorThemeId` / `theme_editor_id` / `ActiveTheme.editor`, and `applyThemeTokens` refreshes only the terminal — so a theme switch leaves Monaco on the old palette until relaunch. Both legs belong at that same choke point.
 
-**PR 5 — Canvas.** Curated images, custom image + scrim, Paper Shaders baked stills, then the gated live-animation toggle.
+**PR 4 — Per-project override.** *(#123)* *Already shipped in PR 1:* the entire data half — migration 13's four columns, the repo layer, IPC, the preload verb, and `resolveActiveTheme` including auto-tint memoization. **What remains is wiring and UI**, starting with a live defect: `hydrate()` is called with no `projectId` and project selection never notifies the theme store, so `projectOverride` is `null` in every real session and the whole per-project path is dead code today. Then: Configure → Appearance as a third category; a project-scope entry point for `ThemePicker` (which hardcodes the global scope and is never called otherwise); the inherit / custom / auto-tint tri-state that finally *writes* a seed derived from `projectColor(colorIndex)`; setters for the terminal and editor surfaces plus a clear-to-inherit action; consumers for `ActiveTheme.terminal` / `.editor`, which are resolved and dropped; and the animated repaint on project switch.
+
+**PR 5 — Canvas.** *(#124)* Curated images, custom image + scrim, Paper Shaders baked stills (`@paper-design/shaders` is still at `0.0.77`, so the exact pin holds and it is not yet a dependency), then the gated live-animation toggle. `theme.canvas` is typed, validated and persisted but has no reader. Blocked on two pieces of groundwork with no precedent in the repo: the shader guard's plumbing (see § Shader guards) and a static-asset pipeline — the renderer has no `public/`/`assets/` directory and imports zero images today. `prefers-reduced-motion` is likewise unreferenced anywhere in the desktop renderer.
 
 Per CLAUDE.md: branch + PR, never commit to `main`; `vp run -r typecheck` · `vp run -r test` · `vp check`; and **run the relevant `apps/desktop/e2e/*.mjs` smokes locally** — CI does not.
 
@@ -207,7 +209,7 @@ Per CLAUDE.md: branch + PR, never commit to `main`; `vp run -r typecheck` · `vp
 ## Fold-ins and bugs found
 
 - ~~**`--muted-foreground: #9a9a9a` is APCA Lc 47 against `#111111`**~~ — **fixed in PR 1.** The generator solves it to `#b9b0ad` at exactly Lc 60. (The prediction of OKLCH L 0.762 was almost exact; the solver lands at 0.7636.)
-- **`--primary` as text on `--background` is Lc 41** — fine for large or bold text, not for body. **Still open**: the generator pins `--primary` for its role as a *fill*, so this needs an audit of where the accent is used as body-sized *text*. Not addressed by PR 1.
+- **`--primary` as text on `--background` is Lc 41** — fine for large or bold text, not for body. **Still open, but the audit it asked for is now done.** Five genuine body-sized sites: `typeset.css:96` (`.typeset a` — *every* markdown body link, by far the biggest), `archive-dialog.tsx:93`, `ticket-properties.tsx:851`, `button.tsx:19` (the `link` variant), and `appearance-settings.tsx:145` (label-sized, so worse than body); plus `live-preview.ts:391` and `file-refs.ts:345-350` in editor CSS. The rest of the `text-primary` hits are icons, where Lc 41 is fine. Remaining decision is the remedy: a separate generated `--primary-text` token solved to Lc 60 (needs a `THEME_TOKEN_NAMES` entry **and** a `cn()` classGroup registration — see the bullet below) versus restyling those sites.
 - Register any new type/color tokens as classGroups in `cn()` — `twMerge` silently drops unregistered tokens. (PR 1 added no new token *names*, so no change was needed; this stays true for PR 2's editor.)
 
 ---
@@ -229,6 +231,25 @@ Two smaller facts worth keeping: APCA 0.1.9 gives **107.88 Lc white-on-black / 1
 - **Light mode** — deliberately out of scope (#70). The generator is parameterized for it; shipping it is a separate design pass.
 - ~~**Does the ⌘K theme entry need a surface selector**~~ — **answered in PR 1 by building it**: ⌘K's *Change theme…* opens the app-surface picker, with the terminal (and later the editor) reachable from Settings → Appearance. No selector was needed; revisit only if the editor surface makes the single entry feel ambiguous.
 - **Sharing themes** — the file is already a shareable artifact. Whether to add explicit export/import, or a pasteable string (Slack's model), is deferred until anyone asks.
+
+### Raised by the post-PR-1 validation pass
+
+Four were put to the owner and answered; they are settled and should not be relitigated. The rest still block their PR.
+
+**Answered (July 2026):**
+
+- **The canvas boundary is PR 5, entirely.** PR 2 ships `grain` only. The canvas layer element has one owner, and PR 5 has to build both it and the static-asset pipeline regardless — splitting it would build the layer twice. *(Grain still establishes the asset pipeline first, in PR 2.)*
+- **The per-project ghostty overlay file is the source of truth for the terminal surface**, at every scope. It is hand-editable, live-watched and in ghostty's own format, so a hand-edit re-themes live terminals — which is exactly #67/#68. `projects.theme_terminal_name` is therefore redundant: leave it unread and drop it in a later migration rather than teaching two writers to share one file.
+- **The Lc 41 fix is a generated `--primary-text` token**, solved to Lc 60 against `--background` by the same binary search that already solves `--foreground` and `--muted-foreground` (step 5). It fixes all seven sites at once and keeps the constraint in the generator rather than in review discipline. Lands in PR 2, with the required `THEME_TOKEN_NAMES` entry and `cn()` classGroup registration.
+- **Ship order holds: PR 2 next.** PR 4's *Custom* path reuses PR 2's seed editor, so inverting them would build that control twice.
+
+**Still open:**
+
+- **PR 2 — does editing a built-in theme force a Duplicate first, or mutate in place?** The `onDuplicate` row action implies the former. *Assumed for implementation:* duplicate-on-edit for built-ins; built-ins stay immutable.
+- **PR 3 — how many themes ship, and which?** 132 exist upstream; this document says ~30 while #76 says 10–12 families. At ~6 KB gz each, 30 static imports is ~180 KB gz, so the answer also decides bundled-vs-lazy.
+- **PR 3 — is the diff editor in scope?** There are zero `createDiffEditor` call sites today, so the trap above is purely prophylactic; it may belong with #48/#51 instead.
+- **PR 3 — where does the editor's theme picker live?** Settings → Appearance beside the terminal picker, or a third ⌘K surface. `theme-picker.tsx:47` deliberately left the seam open.
+- **PR 5 — which curated images ship**, and is the backend-exposure groundwork its own PR?
 
 ---
 
