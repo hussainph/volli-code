@@ -206,3 +206,30 @@ describe("projectMarkdown — links", () => {
     expect(projectMarkdown({ text: "<http://x.com>", selection: [], focused: false })).toEqual([]);
   });
 });
+
+describe("projectMarkdown — images", () => {
+  it("replaces the whole node with an image widget", () => {
+    const ops = projectMarkdown({ text: "![alt](img.png)", selection: [], focused: false });
+
+    expect(ops).toEqual([
+      { kind: "widget", from: 0, to: 15, widget: { type: "image", src: "img.png", alt: "alt" } },
+    ]);
+  });
+
+  it("renders an image with no alt text", () => {
+    const ops = projectMarkdown({ text: "![](img.png)", selection: [], focused: false });
+
+    expect(ops).toEqual([
+      { kind: "widget", from: 0, to: 12, widget: { type: "image", src: "img.png", alt: "" } },
+    ]);
+  });
+
+  it("shows the raw syntax instead while the caret is inside the image", () => {
+    const text = "![alt](img.png)";
+    expect(projectMarkdown({ text, selection: [{ from: 4, to: 4 }], focused: true })).toEqual([]);
+  });
+
+  it("renders nothing for a reference image with no source to load", () => {
+    expect(projectMarkdown({ text: "![alt]", selection: [], focused: false })).toEqual([]);
+  });
+});

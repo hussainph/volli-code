@@ -80,7 +80,20 @@ export type ProjectionOp =
    * editing it, so a click must not navigate) and for reference links, which
    * carry no inline destination.
    */
-  | { kind: "link"; from: number; to: number; className: string; href: string | null };
+  | { kind: "link"; from: number; to: number; className: string; href: string | null }
+  /** Replace a span with rendered output instead of text. */
+  | { kind: "widget"; from: number; to: number; widget: ProjectionWidget };
+
+/** The rendered stand-ins a `widget` op can ask for. */
+export type ProjectionWidget =
+  /** A `[ ]`/`[x]` task marker, rendered as a real checkbox. */
+  | { type: "checkbox"; checked: boolean }
+  /** A `-`/`*`/`+` list marker, rendered as a bullet glyph. */
+  | { type: "bullet" }
+  /** A `---`/`***`/`___` thematic break, rendered as a horizontal rule. */
+  | { type: "rule" }
+  /** An inline image, rendered from its source URL. */
+  | { type: "image"; src: string; alt: string };
 
 /** What `projectMarkdown` needs to know about the document's current condition. */
 export interface ProjectionInput {
@@ -195,6 +208,28 @@ export function projectMarkdown(input: ProjectionInput): readonly ProjectionOp[]
         }
         // Fully handled: the label is one styled span, so re-decorating markup
         // inside it would collapse text the link still has to show.
+        return false;
+      }
+
+      // --- Images: render the image when the caret is elsewhere. ------------
+      if (node.name === "Image") {
+        if (!selectionTouches(selection, node.from, node.to)) {
+          const image = node.node;
+          const urlNode = image.getChild("URL");
+          const src = urlNode === null ? "" : text.slice(urlNode.from, urlNode.to);
+          const [openMark, closeMark] = image.getChildren("LinkMark");
+          const alt = text.slice(openMark.to, closeMark.from);
+          // A reference image (`![alt]`) has nothing to load; showing its raw
+          // syntax is more useful than an empty box.
+          if (src !== "") {
+            ops.push({
+              kind: "widget",
+              from: node.from,
+              to: node.to,
+              widget: { type: "image", src, alt },
+            });
+          }
+        }
         return false;
       }
 
