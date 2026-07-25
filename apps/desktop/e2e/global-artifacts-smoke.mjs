@@ -18,11 +18,14 @@
  *      `Create artifact "newnote.md"` row; picking it creates
  *      `.volli/artifacts/newnote.md` on disk (templated `# newnote`), inserts
  *      the @ref, opens its tab, and `.volli/.gitignore` is `*` (self-ignored).
- *   5. Repo-file ref opens READ-ONLY — `@src/monaco-probe.ts` resolves in the
- *      picker and its tab shows the content in a read-only Monaco editor under
- *      `volli-app://bundle/`. The TypeScript language worker completes a real
- *      public-API handshake without a fallback warning. And the dead ticket
- *      tier is truly dead: `.volli/tickets/` was never created on disk.
+ *   5. Repo-file ref opens an EDITABLE source editor — `@src/monaco-probe.ts`
+ *      resolves in the picker and its tab shows the content in an explicit-save
+ *      (⌘S) Monaco editor under `volli-app://bundle/`. A repository file is an
+ *      editable document (CONCEPT #49: only images, binary and truncated reads
+ *      stay read-only), so nothing here is read-only. The TypeScript language
+ *      worker completes a real public-API handshake without a fallback warning.
+ *      And the dead ticket tier is truly dead: `.volli/tickets/` was never
+ *      created on disk.
  *   6. Tab persistence — relaunch against the SAME app-data dir: the detail
  *      reopens with the file tabs restored and the last-active file tab
  *      selected (persisted `ticketTabs` in workspace ui state).
@@ -46,6 +49,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { _electron } from "playwright-core";
+
+// This probe predates smoke-kit and keeps its own launch/harness scaffolding,
+// but the Monaco readers are shared: how THIS build is interrogated (input
+// surface, read-only contract, rendered aria-label) is encoded once there, so a
+// change to Monaco's input strategy is a one-file fix.
+import { isMonacoEditable, readMonacoState } from "./lib/smoke-kit.mjs";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const APP_DIR = join(REPO, "apps", "desktop");
@@ -81,7 +90,7 @@ const ARTIFACTS_DIR = join(VOLLI_DIR, "artifacts");
 const GITIGNORE_PATH = join(VOLLI_DIR, ".gitignore");
 
 // Pre-seeded before launch: one artifact (the @-ref target) and one plain repo
-// file (the read-only path). Their basenames are the picker queries.
+// file (the explicit-save Monaco path). Their basenames are the picker queries.
 const ARTIFACT_NAME = "probe.md";
 const ARTIFACT_REL = `.volli/artifacts/${ARTIFACT_NAME}`;
 const ARTIFACT_MARKDOWN = "Probe intro line\n\n# Probe Artifact\n\nBody with `code`.\n";
@@ -457,11 +466,11 @@ async function main() {
     );
 
     // ===================================================================
-    // 5. REPO FILE OPENS READ-ONLY IN MONACO + LANGUAGE WORKER + APP ORIGIN
+    // 5. REPO FILE OPENS EDITABLE IN MONACO + LANGUAGE WORKER + APP ORIGIN
     // ===================================================================
     await attempt(
       5,
-      "Repo-file ref opens a read-only Monaco TypeScript model under the app origin, completes a real language-worker handshake, and never creates .volli/tickets/",
+      "Repo-file ref opens an EDITABLE (explicit-save) Monaco TypeScript model under the app origin, completes a real language-worker handshake, and never creates .volli/tickets/",
       async () => {
         await page.locator(".cm-content").click();
         await page.keyboard.press("Meta+ArrowDown");
@@ -479,39 +488,25 @@ async function main() {
           async () => (await tab.getAttribute("aria-selected")) === "true",
         );
         const monacoReady = await waitUntil(
-          "read-only Monaco editor with worker",
+          "editable Monaco editor with worker",
           async () => {
-            const el = await page.evaluate(() => {
-              const host = document.querySelector("[data-monaco-status]");
-              const editor = host?.querySelector(".monaco-editor");
-              const input = editor?.querySelector("textarea");
-              const fallback = document.querySelector("[data-monaco-fallback]");
-              return host
-                ? {
-                    status: host.getAttribute("data-monaco-status"),
-                    language: host.getAttribute("data-monaco-language"),
-                    worker: host.getAttribute("data-monaco-worker"),
-                    readOnlyConfigured: host.getAttribute("data-monaco-read-only") === "true",
-                    inputReadOnly: input?.hasAttribute("readonly") ?? null,
-                    editor: editor !== null,
-                    text: editor?.textContent ?? "",
-                    fallback: fallback?.getAttribute("title") ?? null,
-                  }
-                : { status: null, fallback: fallback?.getAttribute("title") ?? null };
-            });
+            const el = await readMonacoState(page);
+            // CONCEPT #49: a repository .ts file is an explicit-save EDITABLE
+            // document, so `isMonacoEditable` must hold — our own read-only
+            // contract attribute AND Monaco's rendered accessible name, both
+            // checked in smoke-kit so neither copy can drift.
             if (
               el.status === "ready" &&
               el.language === "typescript" &&
               el.worker === "ready" &&
-              el.readOnlyConfigured &&
-              el.inputReadOnly &&
-              el.editor &&
+              isMonacoEditable(el) &&
+              el.hasEditor &&
               el.text.includes("monacoProbe")
             ) {
               return el;
             }
             throw new Error(
-              `state=${JSON.stringify(el)} runtimeFailures=${JSON.stringify(monacoRuntimeFailures)}`,
+              `state=${JSON.stringify({ ...el, text: el.text.slice(0, 120), lines: undefined })} runtimeFailures=${JSON.stringify(monacoRuntimeFailures)}`,
             );
           },
           { timeout: 20000 },
@@ -524,7 +519,7 @@ async function main() {
         const ok = !!monacoReady && appOrigin && noFallback && noTicketTier;
         return {
           ok,
-          detail: `monaco=${!!monacoReady} readOnly=${monacoReady?.inputReadOnly === true} origin=${appOrigin} worker=${monacoReady?.worker ?? "missing"} noFallback=${noFallback} noTicketTier=${noTicketTier}${noFallback ? "" : ` failures=${JSON.stringify(monacoRuntimeFailures)}`}`,
+          detail: `monaco=${!!monacoReady} editable=${JSON.stringify(monacoReady?.editorAriaLabel ?? null)} origin=${appOrigin} worker=${monacoReady?.worker ?? "missing"} noFallback=${noFallback} noTicketTier=${noTicketTier}${noFallback ? "" : ` failures=${JSON.stringify(monacoRuntimeFailures)}`}`,
         };
       },
     );

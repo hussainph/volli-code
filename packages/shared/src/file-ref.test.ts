@@ -26,7 +26,9 @@ describe("classifyFileKind", () => {
     ["photo.jpeg", "image"],
     ["photo.gif", "image"],
     ["photo.webp", "image"],
-    ["diagram.svg", "image"],
+    // Markup, not raster bytes — it belongs in the editor (see IMAGE_EXTENSIONS).
+    ["diagram.svg", "other"],
+    ["diagram.SVG", "other"],
     ["data.json", "other"],
     ["archive.tar.gz", "other"],
     ["no-extension", "other"],
@@ -61,7 +63,14 @@ describe("imageMimeType", () => {
     expect(imageMimeType("a.jpeg")).toBe("image/jpeg");
     expect(imageMimeType("a.gif")).toBe("image/gif");
     expect(imageMimeType("a.webp")).toBe("image/webp");
+  });
+
+  it("still renders SVG as an image even though it classifies as editable text", () => {
+    // The two questions are deliberately separate: `classifyFileKind` decides
+    // whether the bytes are text, `imageMimeType` decides whether they can be
+    // shown as a picture. SVG answers yes to both.
     expect(imageMimeType("a.svg")).toBe("image/svg+xml");
+    expect(classifyFileKind("a.svg")).toBe("other");
   });
 
   it("accepts a full relPath", () => {

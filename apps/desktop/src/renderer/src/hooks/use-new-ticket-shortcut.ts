@@ -10,7 +10,7 @@ import { useUiStore } from "@renderer/stores/ui";
  * guard tracks the latest settings/dialog/selection state. Bails when: the
  * event was already handled (`defaultPrevented`), the keypress itself isn't a
  * bare "c" (see {@link isNewTicketKeyEvent}), the keydown originated in text
- * entry / a live terminal / an already-open modal (see
+ * entry / a Monaco editor / a live terminal / an already-open modal (see
  * {@link isTextEntryTarget}), Settings or the New-ticket dialog is already
  * open, or there is no selected project (the dialog needs one to attach the
  * ticket to).

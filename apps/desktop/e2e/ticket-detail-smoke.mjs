@@ -46,6 +46,28 @@
  *      renamed session is tucked into the collapsed History drawer, then remains
  *      findable when expanded with its Shell + ended-ago metadata. Back returns to
  *      the board even though the in-memory nav history starts fresh.
+ *  12. File-tab save guard — a repository file opened as a ticket file tab is an
+ *      explicit-⌘S Monaco document (CONCEPT #49), so an unsaved draft must be
+ *      VISIBLE on its tab and DEFENDED on close: typing shows the dirty dot, the
+ *      dot survives leaving the ticket and coming back (the draft outlives its
+ *      view — only the active file tab is ever mounted), and closing the tab
+ *      raises the Save / Discard / Cancel guard. Cancel keeps the tab open and
+ *      dirty and writes NOTHING; Save puts the typed bytes on disk (read back
+ *      with `fs`, never trusted from the UI) and closes; Discard closes and
+ *      leaves disk untouched. Because the ticket has a live worktree by then,
+ *      "disk" means its WORKTREE copy (decision #6) — the tab says so with its
+ *      worktree badge, and the bytes are read back from there. The ticket twin
+ *      of project-files-smoke check 9. It also proves two window-level keyboard
+ *      guards over Monaco's `native-edit-context` surface: a word containing
+ *      "c" types into the editor instead of opening the New-ticket dialog
+ *      (lib/new-ticket-shortcut.ts), and Escape belongs to the editor rather
+ *      than closing the whole ticket detail (lib/escape-guard.ts +
+ *      lib/monaco-surface.ts).
+ *
+ * Check 12 runs LAST on purpose: the only UI path that opens a ticket file tab
+ * is an `@ref` chip in the ticket body, and inserting that ref would break the
+ * exact-body assertions checks 3 and 11 make. It needs no session, so it stands
+ * on its own.
  *
  * The terminal is a WebGPU/WebGL2 canvas — its text is NOT in the DOM — so shell
  * behaviour is asserted through SIDE EFFECTS (keystrokes → a file the shell
@@ -62,12 +84,23 @@
  *   Requires: playwright-core (devDependency of @volli/desktop).
  *   Exit code is non-zero if any numbered check fails.
  */
+import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 import { _electron } from "playwright-core";
+
+// This probe predates smoke-kit and keeps its own launch/harness scaffolding,
+// but two pieces are shared: the Monaco reader (how THIS build is interrogated —
+// input surface, status/dirty contract, rendered lines — encoded once there, so
+// a change to Monaco's input strategy is a one-file fix) and `makeGitRepo` (the
+// project fixture must be a REAL repo, see the note on PROJECT_DIR below).
+import { makeGitRepo, readMonacoState } from "./lib/smoke-kit.mjs";
+
+const execFileAsync = promisify(execFile);
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const APP_DIR = join(REPO, "apps", "desktop");
@@ -90,11 +123,23 @@ const USER_DATA_DIR = join(SCRATCH, "user-data");
 const DB_PATH = join(SCRATCH, "volli.db");
 await fs.mkdir(USER_DATA_DIR, { recursive: true });
 
-// A real, writable project directory (realpath'd so the seeded path matches the
+// A real, writable GIT REPOSITORY (realpath'd so the seeded path matches the
 // shell's $PWD and node's resolve() — macOS temp dirs can be symlinked). This is
 // where the app writes `.volli/`; a temp dir keeps the smoke from polluting the
 // repo the way pointing it at REPO would.
-const PROJECT_DIR = await fs.realpath(await fs.mkdtemp(join(SCRATCH, "project-")));
+//
+// It has to be a repo, not a bare temp dir: since worktree-per-ticket (#83) a
+// ticket session's PTY only spawns AFTER `ensure()` has created the ticket's
+// worktree (decision #38 — there is deliberately no fall back to the main
+// checkout), and `git worktree add` in a non-repo fails with "fatal: not a git
+// repository", so check 5 could never boot a shell and 6/6b/7/11 cascaded off
+// the missing session tab. Same fixture shape as project-files-smoke.
+const PROJECT_DIR = await makeGitRepo(SCRATCH, "project-");
+// The `~` the app hangs `.volli/worktrees/**` off. Overridden so the worktrees
+// this run creates land inside SCRATCH (removed by the cleanup below) and never
+// under the developer's real home directory.
+const WORKTREE_HOME = join(SCRATCH, "worktree-home");
+await fs.mkdir(WORKTREE_HOME, { recursive: true });
 const PROJECT_SEED_ID = "ticket-detail-project";
 const TICKET_PREFIX = "VC";
 const DISPLAY_ID = `${TICKET_PREFIX}-1`;
@@ -123,6 +168,23 @@ const COMMENT_ONE_EDITED = "Edited work log note";
 const COMMENT_TWO = "Second note to delete";
 const SESSION_INITIAL = "Session 1";
 const SESSION_RENAMED = "Renamed session";
+
+// ---- check 12: the ticket file tab's dirty-close guard ---------------------
+// A repository (non-artifact) Markdown file, so `fileSavePolicy` puts it on the
+// explicit-⌘S Monaco path — the surface whose drafts the guard defends.
+const README_NAME = "README.md";
+const README_BODY_LINE = "Original body line.";
+const README_CONTENT = `# Ticket file guard probe\n\n${README_BODY_LINE}\n`;
+// Typed through the real keyboard, so they may hold no character Monaco would
+// auto-close or auto-indent (quotes, brackets, list bullets) — and no "c"/"C",
+// which the app-wide plain-"c" new-ticket shortcut still swallows inside a
+// Monaco editor (its `native-edit-context` input surface is neither a textarea
+// nor contenteditable, so NEW_TICKET_GUARD_SELECTOR misses it and the composer
+// dialog steals the rest of the keystrokes).
+const GUARD_MARKER = "VOLLI-GUARD-MARKER-1";
+const DROP_MARKER = "VOLLI-DROP-MARKER-2";
+/** Typed on its own to prove the guard above actually holds (see check 12b). */
+const C_WORD = "class";
 
 // ---- tiny test harness -----------------------------------------------------
 
@@ -182,7 +244,11 @@ function launch(dbPath) {
   return _electron.launch({
     executablePath: ELECTRON,
     args: [APP_DIR, `--user-data-dir=${USER_DATA_DIR}`],
-    env: { ...process.env, VOLLI_DB_PATH: dbPath },
+    env: {
+      ...process.env,
+      VOLLI_DB_PATH: dbPath,
+      VOLLI_WORKTREE_HOME_DIR: WORKTREE_HOME,
+    },
   });
 }
 
@@ -292,9 +358,113 @@ async function runInTerminal(page, command) {
   await page.keyboard.press("Enter");
 }
 
+// ---- ticket file tabs (check 12) -------------------------------------------
+
+/** A file tab, whose accessible name is its basename. */
+function fileTab(page, basename) {
+  return page.getByRole("tab", { name: basename, exact: true });
+}
+
+/** The unsaved-work dot a dirty file tab shows in place of its × (ticket-tabs.tsx). */
+function dirtyDot(page) {
+  return page.locator('[data-testid="ticket-tab-dirty"]');
+}
+
+function saveGuard(page) {
+  return page.locator('[data-testid="file-save-guard"]');
+}
+
+/**
+ * Type an `@` query into the focused body editor and click the completion row
+ * whose `.cm-completionLabel` matches `label`. The @-picker is the only UI path
+ * that opens a ticket file tab, so check 12 goes through it rather than reaching
+ * into the store. (Same driver as global-artifacts-smoke.)
+ */
+async function pickCompletion(page, query, label) {
+  await page.keyboard.type(query);
+  const tooltip = page.locator(".cm-tooltip-autocomplete");
+  await waitUntil(`completion popup for ${query}`, async () => (await tooltip.count()) === 1, {
+    timeout: 8000,
+  });
+  const option = tooltip.locator(".cm-completionLabel", { hasText: label }).first();
+  await waitUntil(
+    `completion option ${JSON.stringify(label)}`,
+    async () => (await option.count()) >= 1,
+  );
+  await option.click();
+  await waitUntil("completion popup to close", async () => (await tooltip.count()) === 0, {
+    timeout: 8000,
+  });
+}
+
+/** Park the caret on the doc's first line so a just-inserted @-token collapses into its chip. */
+async function parkCaretOnFirstLine(page) {
+  await page.locator(".cm-content .cm-line").first().click();
+}
+
+/**
+ * Wait for the active file tab's editor to boot into a usable Monaco. `needle`,
+ * when given, additionally waits for that text to be RENDERED —
+ * `data-monaco-status` flips to "ready" a tick before the first paint, so
+ * asserting on line text without this races the renderer.
+ */
+async function waitForMonacoReady(page, label, needle = null) {
+  return waitUntil(
+    `Monaco ready (${label})${needle === null ? "" : ` showing ${JSON.stringify(needle)}`}`,
+    async () => {
+      const state = await readMonacoState(page);
+      const rendered = needle === null || state.lines.includes(needle);
+      if (state.status === "ready" && state.hasEditor && state.fallbacks === 0 && rendered) {
+        return state;
+      }
+      throw new Error(`state=${JSON.stringify({ ...state, text: undefined })}`);
+    },
+    { timeout: 30000 },
+  );
+}
+
+/** Put the caret in the Monaco editor via a real click, and prove focus landed there. */
+async function focusMonaco(page) {
+  const lines = page.locator("[data-monaco-status] .monaco-editor .view-lines");
+  await waitUntil("Monaco view-lines", async () => (await lines.count()) >= 1);
+  await lines.first().click();
+  await waitUntil("keyboard focus inside Monaco", () =>
+    page.evaluate(() => {
+      const active = document.activeElement;
+      return active instanceof HTMLElement && active.closest(".monaco-editor") !== null;
+    }),
+  );
+}
+
+/** Type `marker` as a new first line of the focused Monaco editor (deterministic caret). */
+async function typeMarkerAtTop(page, marker) {
+  await focusMonaco(page);
+  await page.keyboard.press("Meta+ArrowUp"); // cursorTop
+  await page.keyboard.type(marker);
+  await page.keyboard.press("Enter");
+}
+
+/**
+ * Move the pointer off the tab strip. A dirty tab's dot is deliberately swapped
+ * for the × while its own control is hovered, and Playwright leaves the mouse
+ * where it last clicked — so a visibility read straight after clicking the close
+ * button would report the hover state, not the dirty state.
+ */
+async function unhover(page) {
+  await page.mouse.move(0, 0);
+}
+
 // ---- main ------------------------------------------------------------------
 
 async function main() {
+  // Seeded before launch so the @-picker's file index already knows it: the
+  // repository file check 12 opens as a ticket file tab. COMMITTED, because
+  // check 12 reads it back out of the ticket's worktree checkout — an
+  // uncommitted edit in the main checkout would simply not exist there.
+  await fs.writeFile(join(PROJECT_DIR, README_NAME), README_CONTENT, "utf8");
+  await execFileAsync("git", ["add", "-A"], { cwd: PROJECT_DIR });
+  await execFileAsync("git", ["commit", "-q", "-m", "seed README"], { cwd: PROJECT_DIR });
+
   let app = await launch(DB_PATH);
 
   try {
@@ -749,7 +919,7 @@ async function main() {
     // ===================================================================
     await attempt(
       "6b",
-      "Terminal focus reclaims sidebars/tab rail, keeps one thin chrome row, preserves the live canvas, and Escape restores the workspace",
+      "Terminal focus reclaims sidebars/tab rail, keeps one thin chrome row, preserves the live canvas, and ⌘Escape restores the workspace",
       async () => {
         const marked = await page.evaluate(() => {
           const canvas = Array.from(document.querySelectorAll("canvas")).find(
@@ -796,7 +966,13 @@ async function main() {
           focused.asides === 0 &&
           focused.canvasVisible;
 
-        await page.keyboard.press("Escape");
+        // ⌘Escape, NOT bare Escape. Terminal focus deliberately leaves plain Esc
+        // to the PTY (Claude Code interrupts on it, vim and friends lean on it
+        // constantly), so the exit is a chord no terminal app consumes — see the
+        // `exitTerminalFocus` listener in ticket-detail.tsx. This check pressed
+        // bare Escape and had been asserting the pre-#78 behavior; it never
+        // caught it because the non-git fixture failed 6b long before this line.
+        await page.keyboard.press("Meta+Escape");
         const restored = await waitUntil("workspace geometry restored", async () =>
           page.evaluate(() => {
             const inset = document.querySelector('[data-slot="sidebar-inset"]');
@@ -1071,6 +1247,196 @@ async function main() {
         return {
           ok,
           detail: `docTab=${JSON.stringify(docTabId)} title=${titleOk} body=${!!bodyOk} railCollapsed=${railCollapsedPersisted} comment=${!!commentOk} historyCollapsed=${historyCollapsed} session=${!!sessionOk} restartBack=${!!boardViaRestartBack}`,
+        };
+      },
+    );
+
+    // ===================================================================
+    // 12. FILE-TAB DIRTY DOT + SAVE GUARD (Cancel / Save / Discard)
+    // ===================================================================
+    // The ticket twin of project-files-smoke check 9. Since CONCEPT #49 a
+    // repository file (Markdown included) reaches disk only on ⌘S, so a ticket
+    // file tab that closed silently would drop the only copy of the draft — the
+    // document registry keeps it alive, but no surface can reach it again. The
+    // "did it save?" questions are answered by reading the file back with `fs`,
+    // never from the UI. No session is involved, so this stands independent of
+    // the PTY checks above.
+    await attempt(
+      12,
+      "File tab save guard: typing marks the tab dirty (the dot survives leaving the ticket); close raises the guard — Cancel keeps it dirty and writes nothing, Save writes the bytes to disk and closes, Discard closes and leaves disk untouched",
+      async () => {
+        if (!(await detailOpen(page))) await openTicketViaCard(page);
+
+        // Where a repo file resolves for a ticket that HAS a worktree: its
+        // worktree copy, not the main checkout (decision #6). Check 5 booted a
+        // worktree-backed session, so the row must carry a worktreePath by now —
+        // reading disk anywhere else would be reading a file the app never wrote.
+        const ticketRow = await readTicket(page, TICKET_ID);
+        const worktreePath = ticketRow?.worktreePath ?? null;
+        const hasWorktree = typeof worktreePath === "string" && worktreePath.length > 0;
+        const readmePath = join(hasWorktree ? worktreePath : PROJECT_DIR, README_NAME);
+
+        // --- (a) open README.md as a file tab through a real @ref chip ---
+        await docTab(page).click();
+        await page.locator(".cm-content").click();
+        await page.keyboard.press("Meta+ArrowDown"); // end of the body
+        await page.keyboard.press("Enter");
+        await pickCompletion(page, "@READ", README_NAME);
+        await parkCaretOnFirstLine(page);
+        const chip = page.locator(`.cm-file-chip[data-file-ref="${README_NAME}"]`);
+        await waitUntil("README.md chip", async () => (await chip.count()) === 1);
+        await chip.click();
+
+        const tab = fileTab(page, README_NAME);
+        await waitUntil(
+          "README.md tab active",
+          async () => (await tab.getAttribute("aria-selected")) === "true",
+        );
+        await waitForMonacoReady(page, README_NAME, README_BODY_LINE);
+        const cleanAtFirst = (await dirtyDot(page).count()) === 0;
+        // The tab marks it as the ticket's worktree copy — the visible half of
+        // the resolution `readmePath` above depends on.
+        const worktreeBadge = (await tab.getByLabel("Worktree copy").count()) === 1;
+
+        // --- (a2) Escape inside Monaco belongs to the EDITOR, not the view ---
+        // Monaco owns Escape (suggest widget, find, multi-cursor, snippet mode),
+        // but a plain Escape it has nothing to dismiss for goes
+        // un-`preventDefault`ed and bubbles to the window — where ticket-detail's
+        // listener used to read it as "close the view" and eject the user out of
+        // the file they were editing. `isEscapeExempt` now covers the Monaco
+        // surface, so the detail must stay open with the file tab still active.
+        await focusMonaco(page);
+        await page.keyboard.press("Escape");
+        await sleep(600); // let a (wrong) close actually land before asserting
+        const survivedEscape =
+          (await detailOpen(page)) && (await tab.getAttribute("aria-selected")) === "true";
+
+        // --- (b) typing marks the tab dirty ---
+        await typeMarkerAtTop(page, GUARD_MARKER);
+        // Typing a word with a "c" in it must reach the editor and nothing else.
+        // The app-wide plain-"c" new-ticket shortcut used to fire here — Monaco's
+        // `native-edit-context` input surface is neither a textarea nor
+        // contenteditable, so NEW_TICKET_GUARD_SELECTOR missed it and the
+        // composer dialog opened mid-word and ate the rest of the keystrokes.
+        // Now that the selector covers Monaco, this is its e2e regression guard.
+        await page.keyboard.type(C_WORD);
+        await page.keyboard.press("Enter");
+        const composerStayedShut = await waitUntil(
+          "the c-word lands in Monaco with no dialog opening",
+          async () => {
+            const dialogs = await page.locator('[role="dialog"], [role="alertdialog"]').count();
+            const state = await readMonacoState(page);
+            return dialogs === 0 && state.lines.includes(C_WORD) ? true : null;
+          },
+        );
+        await waitUntil("dirty dot on the README.md tab", async () => {
+          const state = await readMonacoState(page);
+          return (await dirtyDot(page).count()) === 1 && state.dirty === "true";
+        });
+        await unhover(page);
+        const dotVisible = await dirtyDot(page).isVisible();
+
+        // --- (c) the dot survives leaving the ticket and coming back ---
+        // The draft outlives its view: switching to Doc unmounts the FileView and
+        // Escape unmounts the whole detail, so on return the dirty flag can only
+        // come from the document registry (ticket-detail.tsx's re-seed).
+        await escapeToBoard(page);
+        await openTicketViaCard(page);
+        const dotAfterNav = await waitUntil(
+          "dirty dot restored after returning to the ticket",
+          async () => (await dirtyDot(page).count()) === 1,
+        );
+        await tab.click();
+        const draftRestored = await waitForMonacoReady(page, README_NAME, GUARD_MARKER);
+
+        // --- (d) Cancel: the tab stays open and dirty, and disk is untouched ---
+        const closeButton = page.getByRole("button", {
+          name: `Close ${README_NAME}`,
+          exact: true,
+        });
+        await closeButton.click();
+        await waitUntil("save guard shown", async () => (await saveGuard(page).count()) === 1);
+        await page.locator('[data-testid="file-save-guard-cancel"]').click();
+        await waitUntil("save guard dismissed", async () => (await saveGuard(page).count()) === 0);
+        await unhover(page);
+        const keptOpen = await waitUntil("tab kept open and dirty after Cancel", async () => {
+          const open = (await tab.count()) === 1;
+          const dirty = (await dirtyDot(page).count()) === 1;
+          return open && dirty;
+        });
+        const afterCancel = await fs.readFile(readmePath, "utf8");
+        const cancelWroteNothing = afterCancel === README_CONTENT;
+
+        // --- (e) Save: the bytes land on disk, then the tab closes ---
+        await closeButton.click();
+        await waitUntil(
+          "save guard shown again",
+          async () => (await saveGuard(page).count()) === 1,
+        );
+        await page.locator('[data-testid="file-save-guard-save"]').click();
+        const closedAfterSave = await waitUntil(
+          "README.md tab closed after Save",
+          async () => (await tab.count()) === 0,
+          { timeout: 15000 },
+        );
+        const afterSave = await fs.readFile(readmePath, "utf8");
+        const savedToDisk =
+          afterSave.includes(GUARD_MARKER) &&
+          afterSave.includes(C_WORD) &&
+          afterSave.includes(README_BODY_LINE);
+
+        // --- (f) Discard: the tab closes and disk stays exactly as saved ---
+        await docTab(page).click();
+        await waitUntil("README.md chip again", async () => (await chip.count()) === 1);
+        await chip.click();
+        await waitUntil(
+          "README.md tab reopened",
+          async () => (await tab.getAttribute("aria-selected")) === "true",
+        );
+        await waitForMonacoReady(page, README_NAME, GUARD_MARKER);
+        await typeMarkerAtTop(page, DROP_MARKER);
+        await waitUntil(
+          "dirty dot before Discard",
+          async () => (await dirtyDot(page).count()) === 1,
+        );
+        await closeButton.click();
+        await waitUntil(
+          "save guard shown for Discard",
+          async () => (await saveGuard(page).count()) === 1,
+        );
+        await page.locator('[data-testid="file-save-guard-discard"]').click();
+        const closedAfterDiscard = await waitUntil(
+          "README.md tab closed after Discard",
+          async () => (await tab.count()) === 0,
+          { timeout: 15000 },
+        );
+        const afterDiscard = await fs.readFile(readmePath, "utf8");
+        const discardWroteNothing = afterDiscard === afterSave;
+
+        const ok =
+          hasWorktree &&
+          worktreeBadge &&
+          cleanAtFirst &&
+          survivedEscape &&
+          !!composerStayedShut &&
+          dotVisible &&
+          !!dotAfterNav &&
+          !!draftRestored &&
+          !!keptOpen &&
+          cancelWroteNothing &&
+          !!closedAfterSave &&
+          savedToDisk &&
+          !!closedAfterDiscard &&
+          discardWroteNothing;
+        return {
+          ok,
+          detail:
+            `worktree=${JSON.stringify(worktreePath)} worktreeBadge=${worktreeBadge} ` +
+            `cleanAtFirst=${cleanAtFirst} survivedEscape=${survivedEscape} composerStayedShut=${!!composerStayedShut} dotVisible=${dotVisible} dotAfterNav=${!!dotAfterNav} ` +
+            `draftRestored=${!!draftRestored} cancelKeptDirty=${!!keptOpen} cancelWroteNothing=${cancelWroteNothing} ` +
+            `closedAfterSave=${!!closedAfterSave} diskHasMarker=${savedToDisk} ` +
+            `closedAfterDiscard=${!!closedAfterDiscard} discardWroteNothing=${discardWroteNothing} ` +
+            `disk=${JSON.stringify(afterDiscard.slice(0, 80))}`,
         };
       },
     );

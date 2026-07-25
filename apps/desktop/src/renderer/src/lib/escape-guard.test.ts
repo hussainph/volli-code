@@ -49,3 +49,30 @@ describe("isEscapeExempt", () => {
     expect(isEscapeExempt(asTarget(new FakeElement([selector])))).toBe(true);
   });
 });
+
+/**
+ * Real `Element#closest` matches when ANY comma-separated compound in the
+ * selector hits the element OR one of its ancestors, so naming an anchor here
+ * models a caret sitting deep inside a Monaco editor — in the
+ * `div.native-edit-context` input surface, which matches none of the generic
+ * text-entry tokens above. This is the regression guard for the bug where
+ * pressing Escape in a file tab closed the whole ticket detail.
+ */
+describe("isEscapeExempt over the Monaco anchors", () => {
+  it("exempts a target inside Monaco's own editor root", () => {
+    expect(isEscapeExempt(asTarget(new FakeElement([".monaco-editor"])))).toBe(true);
+  });
+
+  it("exempts a target inside our Monaco host, even without Monaco's own root", () => {
+    expect(isEscapeExempt(asTarget(new FakeElement(["[data-monaco-status]"])))).toBe(true);
+  });
+
+  it("does not anchor on Monaco's input surface class", () => {
+    // `.native-edit-context` is deliberately NOT an anchor: that class is the
+    // thing that already changed once (`textarea.inputarea` before it), so
+    // matching it would re-encode the assumption that broke. In the app it is
+    // always nested inside both anchors above, which is what carries the
+    // exemption.
+    expect(isEscapeExempt(asTarget(new FakeElement([".native-edit-context"])))).toBe(false);
+  });
+});
