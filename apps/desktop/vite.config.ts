@@ -79,6 +79,7 @@ export default defineConfig({
         "src/lib/debounce.ts",
         "src/lib/escape-guard.ts",
         "src/editor/autosave-plan.ts",
+        "src/editor/document-decorations.ts",
         "src/editor/document-identity.ts",
         "src/editor/document-registry.ts",
         "src/editor/link-open.ts",
