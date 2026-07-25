@@ -30,6 +30,15 @@
  *                      interrogate this Monaco build (input surface, read-only
  *                      contract, rendered aria-label), shared by every probe
  *                      that opens an editor.
+ *   • monacoEditor()/clickMonaco()/readMonacoText()/typeIntoMonaco() — the same
+ *                      encoding, scoped to one host, for surfaces that mount
+ *                      several editors. Typing is click-then-keyboard (Monaco's
+ *                      input surface is not a textarea) and always waits for the
+ *                      characters to land.
+ *   • readHiddenMarks()/isCollapsed()/marksFor() — Document Mode's collapsed
+ *                      punctuation, read through COMPUTED STYLE (textContent
+ *                      still returns `display:none` text, so it cannot answer
+ *                      "is this delimiter visible?").
  *   • cardById()/columnCount() — the board DOM readers both composer probes need.
  *
  * These smokes are NOT wired into `vp test`; they need a display + the built app.
@@ -312,6 +321,128 @@ export async function readSeededProjects(page) {
 }
 
 // ---- Monaco DOM readers ----------------------------------------------------
+
+/**
+ * The mounted Monaco editor host. `[data-monaco-status]` is set imperatively by
+ * `components/editor/monaco-{file,document}-editor.tsx`; `.monaco-editor` is
+ * Monaco's own root inside it. Nothing in the app renders one without the other,
+ * so this pair is the ONE selector every smoke uses to reach an editor.
+ */
+export const MONACO_EDITOR_SELECTOR = "[data-monaco-status] .monaco-editor";
+
+/**
+ * The Monaco editor inside `scope` (a Page or a Locator — a dialog, a tab panel).
+ * Scoped rather than page-global because several surfaces mount more than one
+ * editor at a time (ticket detail's body + a file tab).
+ *
+ * @param {import("playwright-core").Page | import("playwright-core").Locator} scope
+ */
+export function monacoEditor(scope) {
+  return scope.locator(MONACO_EDITOR_SELECTOR).first();
+}
+
+/**
+ * Put the caret in `scope`'s Monaco editor, ready for `page.keyboard.type()`.
+ * Monaco's input surface in this build is a `native-edit-context` div rather
+ * than a textarea (see {@link readMonacoState}), so there is nothing to `fill()`
+ * and nothing to `focus()` by role — typing is always click-then-keyboard.
+ *
+ * @param {import("playwright-core").Page | import("playwright-core").Locator} scope
+ */
+export async function clickMonaco(scope) {
+  await monacoEditor(scope).click();
+}
+
+/** The Page behind a Page-or-Locator scope. */
+function pageOf(scope) {
+  return typeof scope.page === "function" ? scope.page() : scope;
+}
+
+/**
+ * Click into `scope`'s Monaco editor, type `text`, and WAIT for the document to
+ * actually hold it.
+ *
+ * The wait is not decoration. Monaco's `native-edit-context` applies keystrokes
+ * on asynchronous `textupdate` events, so with Playwright's zero-delay typing
+ * the last characters are still in flight when the next action runs — a probe
+ * that typed a body and immediately pressed the kickoff hotkey created its
+ * ticket with the final three characters missing. Polling the rendered document
+ * is both the fix and a stronger assertion than the bare type it replaces.
+ *
+ * @param {import("playwright-core").Page | import("playwright-core").Locator} scope
+ * @param {string} text
+ */
+export async function typeIntoMonaco(scope, text) {
+  const page = pageOf(scope);
+  await clickMonaco(scope);
+  await page.keyboard.type(text);
+  const expected = text.replaceAll("\r\n", "\n");
+  await waitUntil(`typed text to land in Monaco (${JSON.stringify(text.slice(-24))})`, async () => {
+    const actual = await readMonacoText(scope);
+    return actual.includes(expected) ? actual : null;
+  });
+}
+
+/**
+ * The rendered text of `scope`'s Monaco editor, newline-joined per view line and
+ * with Monaco's non-breaking spaces normalized back to spaces — the scoped twin
+ * of {@link readMonacoState}'s `lines`.
+ *
+ * NOTE: this is `textContent`, so it INCLUDES text Document Mode has collapsed
+ * with `display:none` (`volli-md-hidden`). That makes it the right reader for
+ * "does the buffer contain X" and the WRONG one for "is X visible" — for the
+ * latter use {@link readHiddenMarks}, which consults computed style.
+ *
+ * @param {import("playwright-core").Page | import("playwright-core").Locator} scope
+ */
+export async function readMonacoText(scope) {
+  return monacoEditor(scope).evaluate((editor) =>
+    Array.from(editor.querySelectorAll(".view-line"))
+      .map((line) => (line.textContent ?? "").replace(/\u00a0/g, " "))
+      .join("\n"),
+  );
+}
+
+/**
+ * Every `volli-md-hidden` span currently in the page, with the computed style
+ * that decides whether it is actually collapsed.
+ *
+ * This exists because `textContent` returns CSS-hidden text: Document Mode
+ * collapses markdown punctuation with a `display:none` inline class rather than
+ * removing it from the model (Monaco has no `Decoration.replace`), so asserting
+ * `!text.includes("## ")` FAILS even when the reveal rule is working perfectly.
+ * The only honest signal is geometry.
+ *
+ * @param {import("playwright-core").Page} page
+ * @returns {Promise<{text: string, display: string, width: number}[]>}
+ */
+export async function readHiddenMarks(page) {
+  return page.evaluate(() =>
+    Array.from(document.querySelectorAll(".volli-md-hidden")).map((el) => ({
+      text: el.textContent ?? "",
+      display: getComputedStyle(el).display,
+      width: el.getBoundingClientRect().width,
+    })),
+  );
+}
+
+/** Is `mark` (from {@link readHiddenMarks}) genuinely invisible? */
+export function isCollapsed(mark) {
+  return mark.display === "none" || mark.width === 0;
+}
+
+/**
+ * Are the marks whose text is exactly `text` (e.g. `"## "`, `"**"`) present and
+ * ALL collapsed? `null` means no such mark exists at all, which callers must
+ * treat as a failure rather than a pass — a projection that never ran also
+ * renders nothing hidden.
+ *
+ * @param {{text: string, display: string, width: number}[]} marks
+ * @param {string} text
+ */
+export function marksFor(marks, text) {
+  return marks.filter((mark) => mark.text === text);
+}
 
 /**
  * Read the mounted Monaco editor(s) straight out of the page. THE one place the
