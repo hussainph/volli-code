@@ -161,11 +161,9 @@ export function CommandPalette({ open, onOpenChange, onChangeTheme }: CommandPal
               keywords={[item.displayId, item.title, item.projectName]}
               onSelect={() => {
                 useProjectsStore.getState().select(item.projectId);
-                useWorkspaceStore
-                  .getState()
-                  .openTicketWorkspace(item.projectId, item.ticketId, {
-                    tabId: TICKET_BODY_TAB_ID,
-                  });
+                useWorkspaceStore.getState().openTicketWorkspace(item.projectId, item.ticketId, {
+                  tabId: TICKET_BODY_TAB_ID,
+                });
                 finishNavigation();
               }}
               className="flex cursor-pointer items-center gap-3 rounded-lg px-2.5 py-2 outline-none data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground"
