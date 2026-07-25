@@ -185,7 +185,15 @@ export function TicketDetail({
       .then((runtime) => {
         if (cancelled) return;
         const parked = openFiles.filter((relPath) =>
-          peekFileDocuments(runtime.registry, relPath).some((handle) => handle.snapshot().dirty),
+          peekFileDocuments(runtime.registry, relPath).some((handle) => {
+            const snap = handle.snapshot();
+            // Autosave artifacts report dirty through FileView's onDirtyChange
+            // and clear it via markSaved after write. Only EXPLICIT-save drafts
+            // are re-seeded from a parked registry entry — an autosave dirty
+            // left behind by a missed markSaved must not sticky-badge the tab
+            // into a Save-on-close that then fails on a null revision.
+            return snap.dirty && snap.savePolicy === "explicit";
+          }),
         );
         if (parked.length > 0) setDirtyFiles((previous) => new Set([...previous, ...parked]));
       })
@@ -214,12 +222,14 @@ export function TicketDetail({
         const model = handle?.model ?? null;
         // No live document (or nothing to write) — closing is safe.
         if (handle === null || model === null || !handle.snapshot().dirty) return true;
-        const expectedMtime = handle.snapshot().externalRevision;
+        const snapshot = handle.snapshot();
+        const expectedMtime = snapshot.externalRevision;
         if (typeof expectedMtime !== "number") {
-          // A file document's revision IS its mtime, so this shouldn't happen —
-          // but writing without the conflict guard is the one failure mode that
-          // could silently destroy someone else's newer bytes, so refuse rather
-          // than guess. The tab stays open with its draft intact.
+          // A file document's revision IS its mtime. Autosave artifacts seed
+          // with the load mtime; if we still lack one, writing without the
+          // conflict guard is the one failure mode that could silently destroy
+          // someone else's newer bytes — refuse rather than guess. The tab
+          // stays open with its draft intact.
           toastError(`Could not save ${name}: its version on disk is unknown.`);
           return false;
         }

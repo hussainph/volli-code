@@ -10,10 +10,11 @@ import {
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import {
   type DocumentFileRefs,
+  type MonacoDocumentEditorHandle,
   MonacoDocumentEditor,
 } from "@renderer/components/editor/monaco-document-editor";
 import { Button } from "@renderer/components/ui/button";
-import { AUTOSAVE_IDLE_MS } from "@renderer/editor/autosave-plan";
+import { AUTOSAVE_IDLE_MS, planAutosave } from "@renderer/editor/autosave-plan";
 import { documentIdentityKey, fileDocumentIdentity } from "@renderer/editor/document-identity";
 import { toastError } from "@renderer/lib/toast";
 import { useDebouncedCallback } from "@renderer/lib/use-debounced-callback";
@@ -119,6 +120,8 @@ export function FileView({
   // the one decision this component still makes with it: whether a deletion
   // event may replace the view with the read-only error state.
   const sourceDirtyRef = React.useRef(false);
+  const writingRef = React.useRef(false);
+  const documentEditorRef = React.useRef<MonacoDocumentEditorHandle>(null);
   const mountedRef = React.useRef(true);
   // Mirrors `state` for the fs-watch subscription (set up once, so it can't
   // read the current `state` off a render closure) — only its `.status` and
@@ -191,82 +194,100 @@ export function FileView({
     void load();
   }, [load]);
 
-  // Guarded autosave: never write while paused by a conflict or when nothing
-  // changed. A rejected write (or drifted mtime) means an agent edited the file
-  // underneath us — re-read to distinguish a real conflict from a hard error,
-  // and raise the banner rather than clobbering their edit.
+  // Guarded autosave: never write while paused by a conflict, while another
+  // write is in flight, or when nothing changed. A rejected write (or drifted
+  // mtime) means an agent edited the file underneath us — re-read to distinguish
+  // a real conflict from a hard error, and raise the banner rather than
+  // clobbering their edit.
   const commit = React.useCallback(async () => {
-    if (conflictRef.current !== null) return;
     const next = draftRef.current;
-    if (next === syncedRef.current) return;
-    // Up to two attempts: a write rejected by a stale mtime baseline whose disk
-    // content still matches ours (an agent rewrote identical bytes, or touched
-    // the file) is a no-op drift — adopt the fresh mtime and retry once so the
-    // edit lands. A genuine content divergence raises the conflict banner.
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const result = await window.api.files.write({
-        projectId,
-        ticketId,
-        relPath,
-        content: next,
-        expectedMtime: syncedMtimeRef.current,
-      });
-      if (result.ok) {
-        syncedRef.current = next;
-        syncedMtimeRef.current = result.mtime;
-        return;
-      }
-      const disk = await readFile();
-      if (!(disk.ok && disk.content.type === "text")) {
-        toastError(`Couldn't save ${name}: ${result.error}`);
-        return;
-      }
-      if (
-        fileSavePolicy({ relPath, binary: false, truncated: disk.content.truncated }) !== "autosave"
-      ) {
-        // The file grew past the 1 MiB read cap underneath us — that re-read is
-        // a truncated prefix, not a valid editable baseline. Offering it as a
-        // Reload target would autosave the prefix back and destroy everything
-        // past the cap, so don't raise the conflict banner: drop into the
-        // read-only 'code' state instead, matching the load and onChanged paths.
-        // `debouncer` is declared below but stable for the component's whole
-        // lifetime (see use-debounced-callback.ts), so it's safe to close
-        // over here despite the declaration order — deliberately left out of
-        // the deps array below rather than reordering the two.
-        debouncer.cancel();
-        syncedRef.current = disk.content.text;
-        syncedMtimeRef.current = disk.mtime;
-        if (mountedRef.current) {
-          setState({
-            status: "code",
-            text: disk.content.text,
-            truncated: disk.content.truncated,
-            source: disk.source,
-            revision: disk.mtime,
-            editable: false,
-          });
-          toastError(`${name} changed on disk and is no longer editable. Editing stopped.`);
-        } else {
-          toastError(`${name} changed on disk. Your last edits were not saved.`);
+    const action = planAutosave({
+      value: next,
+      baseline: syncedRef.current,
+      conflicted: conflictRef.current !== null,
+      writing: writingRef.current,
+    });
+    if (action !== "save") return;
+    writingRef.current = true;
+    try {
+      // Up to two attempts: a write rejected by a stale mtime baseline whose disk
+      // content still matches ours (an agent rewrote identical bytes, or touched
+      // the file) is a no-op drift — adopt the fresh mtime and retry once so the
+      // edit lands. A genuine content divergence raises the conflict banner.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const result = await window.api.files.write({
+          projectId,
+          ticketId,
+          relPath,
+          content: next,
+          expectedMtime: syncedMtimeRef.current,
+        });
+        if (result.ok) {
+          syncedRef.current = next;
+          syncedMtimeRef.current = result.mtime;
+          // Clear registry dirty + record the on-disk mtime. Without this,
+          // peek().dirty stays true with externalRevision null and Save-on-close
+          // refuses with "version on disk is unknown".
+          documentEditorRef.current?.markSaved(result.mtime);
+          onDirtyChange?.(false);
+          return;
         }
-        return;
+        const disk = await readFile();
+        if (!(disk.ok && disk.content.type === "text")) {
+          toastError(`Couldn't save ${name}: ${result.error}`);
+          return;
+        }
+        if (
+          fileSavePolicy({ relPath, binary: false, truncated: disk.content.truncated }) !==
+          "autosave"
+        ) {
+          // The file grew past the 1 MiB read cap underneath us — that re-read is
+          // a truncated prefix, not a valid editable baseline. Offering it as a
+          // Reload target would autosave the prefix back and destroy everything
+          // past the cap, so don't raise the conflict banner: drop into the
+          // read-only 'code' state instead, matching the load and onChanged paths.
+          // `debouncer` is declared below but stable for the component's whole
+          // lifetime (see use-debounced-callback.ts), so it's safe to close
+          // over here despite the declaration order — deliberately left out of
+          // the deps array below rather than reordering the two.
+          debouncer.cancel();
+          syncedRef.current = disk.content.text;
+          syncedMtimeRef.current = disk.mtime;
+          if (mountedRef.current) {
+            setState({
+              status: "code",
+              text: disk.content.text,
+              truncated: disk.content.truncated,
+              source: disk.source,
+              revision: disk.mtime,
+              editable: false,
+            });
+            toastError(`${name} changed on disk and is no longer editable. Editing stopped.`);
+          } else {
+            toastError(`${name} changed on disk. Your last edits were not saved.`);
+          }
+          return;
+        }
+        if (disk.content.text !== syncedRef.current) {
+          if (mountedRef.current) setConflict({ text: disk.content.text, mtime: disk.mtime });
+          else toastError(`${name} changed on disk. Your last edits were not saved.`);
+          return;
+        }
+        // Same content, drifted mtime — adopt it and retry the write.
+        syncedMtimeRef.current = disk.mtime;
+        documentEditorRef.current?.markSaved(disk.mtime);
       }
-      if (disk.content.text !== syncedRef.current) {
-        if (mountedRef.current) setConflict({ text: disk.content.text, mtime: disk.mtime });
-        else toastError(`${name} changed on disk. Your last edits were not saved.`);
-        return;
-      }
-      // Same content, drifted mtime — adopt it and retry the write.
-      syncedMtimeRef.current = disk.mtime;
+      // Both attempts hit an mtime drift with identical content (rapid external
+      // touches) — give up quietly this cycle; the next edit reschedules a save.
+      toastError(`Couldn't save ${name}: the file is being modified externally.`);
+    } finally {
+      writingRef.current = false;
     }
-    // Both attempts hit an mtime drift with identical content (rapid external
-    // touches) — give up quietly this cycle; the next edit reschedules a save.
-    toastError(`Couldn't save ${name}: the file is being modified externally.`);
     // `debouncer` is referenced above but declared after this callback (see
     // note there) — deliberately omitted from deps; its identity never
     // changes for the component's lifetime.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, ticketId, relPath, readFile, name]);
+  }, [projectId, ticketId, relPath, readFile, name, onDirtyChange]);
 
   const debouncer = useDebouncedCallback(() => void commit(), AUTOSAVE_IDLE_MS);
 
@@ -365,10 +386,12 @@ export function FileView({
         // Markdown Artifact, no real change vs the content baseline (also the
         // echo of our own write) — still land on the editor if the tab was showing
         // 'error'/'code' (recovering from a prior deletion/truncation), even
-        // though there's nothing to adopt content-wise.
+        // though there's nothing to adopt content-wise. Advancing the mtime into
+        // the registry keeps Save-on-close's conflict guard current.
         if (disk.content.text === syncedRef.current) {
+          syncedMtimeRef.current = disk.mtime;
+          documentEditorRef.current?.markSaved(disk.mtime);
           if (stateRef.current.status !== "markdown") {
-            syncedMtimeRef.current = disk.mtime;
             draftRef.current = disk.content.text;
             setDocValue(disk.content.text);
             setState({ status: "markdown", source: disk.source });
@@ -448,6 +471,13 @@ export function FileView({
     [onDirtyChange],
   );
 
+  const handleDocumentDirtyChange = React.useCallback(
+    (next: boolean) => {
+      onDirtyChange?.(next);
+    },
+    [onDirtyChange],
+  );
+
   function reload() {
     const disk = conflictRef.current;
     if (disk === null) return;
@@ -510,7 +540,7 @@ export function FileView({
             </div>
           )}
           <div
-            className="min-h-64"
+            className="min-h-full"
             onFocus={() => {
               focusedRef.current = true;
             }}
@@ -519,13 +549,16 @@ export function FileView({
             }}
           >
             <MonacoDocumentEditor
+              ref={documentEditorRef}
               identity={documentIdentity}
               viewId={`file:${projectId}:${ticketId ?? "main"}:${relPath}:document`}
               value={docValue}
+              revision={syncedMtimeRef.current}
               onChange={handleChange}
+              onDirtyChange={handleDocumentDirtyChange}
               onBlur={() => debouncer.flush()}
               ariaLabel={`${name} contents`}
-              className="min-h-64"
+              className="min-h-full"
               fileRefs={fileRefs}
             />
           </div>

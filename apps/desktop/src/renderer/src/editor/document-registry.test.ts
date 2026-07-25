@@ -545,4 +545,40 @@ describe("DocumentRegistry", () => {
 
     expect(entryCount(registry)).toBe(0);
   });
+
+  it("clears autosave dirty and records the disk mtime after markSaved", () => {
+    // Mirrors the Markdown Artifact path: acquire with revision null (or a
+    // load mtime), edit, then markSaved(mtime) after FileView autosave so
+    // peek().dirty is false and Save-on-close sees a known externalRevision.
+    const { registry } = makeRegistry();
+    const artifact = registry.acquire({
+      identity: {
+        kind: "file",
+        projectId: "project-1",
+        checkout: { kind: "main" },
+        relPath: ".volli/artifacts/notes.md",
+      },
+      viewId: "artifact",
+      seed: { value: "hello", revision: 10 },
+      savePolicy: "autosave",
+    });
+
+    artifact.model.setValue("hello world");
+    expect(artifact.snapshot()).toMatchObject({
+      dirty: true,
+      baseline: "hello",
+      externalRevision: 10,
+      savePolicy: "autosave",
+    });
+
+    artifact.markSaved(11);
+
+    expect(artifact.snapshot()).toMatchObject({
+      dirty: false,
+      baseline: "hello world",
+      baselineRevision: 11,
+      externalRevision: 11,
+    });
+    expect(registry.peek(artifact.snapshot().identity)?.snapshot().dirty).toBe(false);
+  });
 });

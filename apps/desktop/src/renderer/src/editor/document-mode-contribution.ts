@@ -338,7 +338,8 @@ export function attachDocumentMode(
       id: "volli.documentMode.leave",
       label: "Leave the document",
       keybindings: [monaco.KeyCode.Escape],
-      precondition: "!suggestWidgetVisible && !findWidgetVisible",
+      precondition:
+        "!suggestWidgetVisible && !findWidgetVisible && !editorHasMultipleSelections && !inSnippetMode",
       run: () => {
         // Monaco has no `blur()`; the focused node is its input surface, and
         // dropping focus there is what lets the NEXT Escape bubble to the view.

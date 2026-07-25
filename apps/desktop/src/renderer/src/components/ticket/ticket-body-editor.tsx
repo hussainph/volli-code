@@ -4,6 +4,7 @@ import type { Ticket } from "@volli/shared";
 
 import {
   type DocumentFileRefs,
+  type MonacoDocumentEditorHandle,
   MonacoDocumentEditor,
 } from "@renderer/components/editor/monaco-document-editor";
 import { Button } from "@renderer/components/ui/button";
@@ -42,6 +43,7 @@ export function TicketBodyEditor({
   fileRefs?: DocumentFileRefs;
 }) {
   const updateTicket = useBoardStore((state) => state.updateTicket);
+  const editorRef = React.useRef<MonacoDocumentEditorHandle>(null);
 
   // The value that seeds / resets the editor doc; changing it re-syncs the
   // editor's buffer when it isn't focused (or, if focused-but-untouched, on blur
@@ -90,6 +92,9 @@ export function TicketBodyEditor({
     });
     if (action !== "save") return;
     lastSavedRef.current = next;
+    // Keep the registry baseline in step with the store write so a later peek
+    // does not see a permanently dirty ticket-body document.
+    editorRef.current?.markSaved(null);
     void updateTicket({ ticketId: ticket.id, body: next });
   }, [updateTicket, ticket.id]);
 
@@ -131,6 +136,7 @@ export function TicketBodyEditor({
           box (see MonacoDocumentEditor). */}
       <div className="-mx-3 rounded-md px-3">
         <MonacoDocumentEditor
+          ref={editorRef}
           identity={{ kind: "ticket-body", projectId: ticket.projectId, ticketId: ticket.id }}
           viewId={`ticket-body:${ticket.id}`}
           value={docValue}
