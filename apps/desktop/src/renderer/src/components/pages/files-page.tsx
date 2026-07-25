@@ -128,12 +128,15 @@ function FilesWorkbench({ project }: { project: Project }) {
         if (cancelled) return;
         const parked = tabs
           .map((tab) => tab.relPath)
-          .filter(
-            (relPath) =>
-              runtime.registry
-                .peek(fileDocumentIdentity({ projectId, relPath, source: "main" }))
-                ?.snapshot().dirty === true,
-          );
+          .filter((relPath) => {
+            const snap = runtime.registry
+              .peek(fileDocumentIdentity({ projectId, relPath, source: "main" }))
+              ?.snapshot();
+            // Same rule as ticket-detail: only EXPLICIT-save drafts are re-seeded
+            // from a parked registry entry. Autosave artifacts clear dirty via
+            // markSaved after write and must not sticky-badge into Save-on-close.
+            return snap?.dirty === true && snap.savePolicy === "explicit";
+          });
         if (parked.length > 0) setDirtyPaths((previous) => new Set([...previous, ...parked]));
       })
       .catch(() => {

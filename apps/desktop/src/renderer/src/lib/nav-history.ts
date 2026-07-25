@@ -21,6 +21,8 @@
  */
 import type { NavKey } from "@renderer/stores/workspace";
 
+import { MONACO_SURFACE_SELECTOR } from "./monaco-surface";
+
 /** A single navigable location: selected project + nav page + open ticket. */
 export interface NavSnapshot {
   /** The selected project, or `null` when no project is selected (empty app). */
@@ -179,9 +181,17 @@ export function isRailToggleKeyEvent(event: NavKeyEvent): boolean {
 /**
  * Selector for editing contexts where ⌘[ / ⌘] must stay hands-off — it means
  * "outdent" in a text field or code editor, not "go back". Covers form fields,
- * contenteditable regions, and CodeMirror (`.cm-editor`).
+ * contenteditable regions, CodeMirror (`.cm-editor`, still mounted until the
+ * CodeMirror removal lands), and Monaco.
+ *
+ * Monaco needs its own entries because it matches NONE of the generic tokens:
+ * its input surface in this build is a `div.native-edit-context`, not an
+ * `input`/`textarea`/`[contenteditable]`. The union comes from the shared
+ * `MONACO_SURFACE_SELECTOR` so this guard, the Escape guard, and the plain-"c"
+ * shortcut all recognise a Monaco surface the same way — see that module for
+ * why it takes two anchors.
  */
-export const NAV_SUPPRESS_SELECTOR = "input, textarea, [contenteditable], .cm-editor";
+export const NAV_SUPPRESS_SELECTOR = `input, textarea, [contenteditable], .cm-editor, ${MONACO_SURFACE_SELECTOR}`;
 
 /**
  * True when a keydown originated inside an editing context (see

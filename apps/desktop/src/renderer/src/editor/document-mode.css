@@ -1,0 +1,205 @@
+/*
+ * Document Mode's rendered look — the CSS half of `document-decorations.ts`.
+ *
+ * The CodeMirror live-preview layer kept these rules in a JS `EditorView.theme`
+ * object, which CodeMirror injected as a scoped stylesheet. Monaco has no
+ * equivalent (decoration classes are plain global class names), so the rules
+ * are authored here as real CSS and imported by the editor component.
+ *
+ * Everything is scoped under `.volli-document-mode`, the class on the editor
+ * host, for one non-cosmetic reason: Monaco injects its OWN stylesheet at
+ * runtime, when its module is lazily imported — i.e. AFTER this file is in the
+ * document. A bare `.volli-md-link` would tie on specificity with Monaco's
+ * `.mtk1` token colours and lose on source order. The extra ancestor class wins
+ * the cascade without a single `!important`.
+ *
+ * Sizes follow docs/DESIGN.md: the body step (14px / `text-sm`) is the document
+ * measure, and headings scale in `em` off it, matching typeset.css — the
+ * rendered-markdown stylesheet this surface is the editable twin of. Anything
+ * that changes a LINE's height is duplicated as a `lineHeight` multiplier in
+ * document-decorations.ts, because Monaco lays lines out itself and cannot read
+ * a stylesheet to find out.
+ */
+
+.volli-document-mode {
+  /* The one place the document's own type size is named; `::before` glyphs on
+     zero-width spans need an explicit size to escape their parent's collapse. */
+  --volli-doc-font-size: 14px;
+}
+
+/*
+ * The collapse. Monaco has no `Decoration.replace`; an inline class whose CSS
+ * removes the span from layout is the mechanism (see document-decorations.ts).
+ * Paired with `inlineClassNameAffectsLetterSpacing`, which makes Monaco measure
+ * the real DOM instead of assuming a uniform character grid.
+ */
+.volli-document-mode .volli-md-hidden {
+  display: none;
+}
+
+/* --- headings ------------------------------------------------------------ */
+
+.volli-document-mode .volli-md-h1,
+.volli-document-mode .volli-md-h2,
+.volli-document-mode .volli-md-h3,
+.volli-document-mode .volli-md-h4,
+.volli-document-mode .volli-md-h5,
+.volli-document-mode .volli-md-h6 {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--foreground);
+}
+.volli-document-mode .volli-md-h1 {
+  font-size: 1.6em;
+}
+.volli-document-mode .volli-md-h2 {
+  font-size: 1.35em;
+}
+.volli-document-mode .volli-md-h3 {
+  font-size: 1.15em;
+}
+.volli-document-mode .volli-md-h4 {
+  font-size: 1em;
+}
+.volli-document-mode .volli-md-h5,
+.volli-document-mode .volli-md-h6 {
+  font-size: 0.9em;
+  color: var(--muted-foreground);
+}
+
+/* --- inline emphasis ----------------------------------------------------- */
+
+.volli-document-mode .volli-md-strong {
+  font-weight: 600;
+  color: var(--foreground);
+}
+.volli-document-mode .volli-md-em {
+  font-style: italic;
+}
+.volli-document-mode .volli-md-strike {
+  text-decoration: line-through;
+  color: var(--muted-foreground);
+}
+.volli-document-mode .volli-md-code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  padding: 0.1em 0.3em;
+  border-radius: var(--radius-sm);
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+/* --- links --------------------------------------------------------------- */
+
+.volli-document-mode .volli-md-link {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+/* Only a link whose destination is currently followable offers the affordance;
+   a revealed link (caret inside, being edited) keeps the text caret. */
+.volli-document-mode .volli-md-link-open {
+  cursor: pointer;
+}
+
+/* --- lists --------------------------------------------------------------- */
+
+.volli-document-mode .volli-md-list-mark {
+  color: var(--muted-foreground);
+}
+/* Injected text (Monaco's `before`), standing in for a collapsed `-`/`*`/`+`. */
+.volli-document-mode .volli-md-bullet {
+  color: var(--muted-foreground);
+}
+
+/*
+ * Task checkboxes. The `[ ]` / `[x]` characters collapse inside the span and the
+ * box is drawn by `::before`, which is what keeps the marker one clickable unit
+ * the width of a checkbox rather than three characters wide.
+ */
+.volli-document-mode .volli-md-checkbox {
+  font-size: 0;
+  cursor: pointer;
+}
+.volli-document-mode .volli-md-checkbox::before {
+  content: "";
+  display: inline-block;
+  box-sizing: border-box;
+  width: 0.85em;
+  height: 0.85em;
+  font-size: var(--volli-doc-font-size);
+  line-height: 0.8em;
+  text-align: center;
+  vertical-align: -0.08em;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+.volli-document-mode .volli-md-checkbox-on::before {
+  content: "✓";
+  font-size: calc(var(--volli-doc-font-size) * 0.72);
+  color: var(--primary-foreground);
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+/* --- blocks -------------------------------------------------------------- */
+
+.volli-document-mode .volli-md-blockquote {
+  border-left: 3px solid var(--border-strong);
+  color: var(--muted-foreground);
+}
+
+.volli-document-mode .volli-md-fence {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--card);
+}
+.volli-document-mode .volli-md-fence-open {
+  border-top-left-radius: var(--radius-md);
+  border-top-right-radius: var(--radius-md);
+}
+.volli-document-mode .volli-md-fence-close {
+  border-bottom-left-radius: var(--radius-md);
+  border-bottom-right-radius: var(--radius-md);
+}
+
+/* A thematic break: the `---` collapses and the line itself carries the rule. */
+.volli-document-mode .volli-md-hr {
+  border-top: 1px solid var(--border);
+  height: 0;
+  margin-top: 0.6em;
+}
+/* Revealed (the caret is on it) — style the characters instead of ruling. */
+.volli-document-mode .volli-md-hr-reveal {
+  color: var(--muted-foreground);
+}
+
+/* Images live in a view zone under their line — Monaco cannot place DOM inline. */
+.volli-document-mode-image {
+  display: flex;
+  padding: 0.35em 0;
+}
+.volli-document-mode-image img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-md);
+}
+
+/* --- @file chips --------------------------------------------------------- */
+
+/*
+ * Decoration, not replacement (global-artifacts decision #8): the `@path` text
+ * stays in the line and stays editable; the chip is chrome around it. Padding
+ * is kept tiny because it shifts the glyphs it wraps, and every column Monaco
+ * has to measure rather than compute costs it work on every render.
+ */
+.volli-document-mode .volli-md-file-chip {
+  padding: 0.1em 0.3em;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--foreground);
+  cursor: pointer;
+}
+.volli-document-mode .volli-md-file-chip:hover {
+  background: var(--muted);
+}

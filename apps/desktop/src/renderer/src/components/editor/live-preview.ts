@@ -15,6 +15,7 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 
+import { shouldOpenLink } from "@renderer/editor/link-open";
 import { type SelRange, selectionTouches } from "@renderer/editor/reveal";
 
 import { BulletWidget, CheckboxWidget, ImageWidget, RuleWidget } from "./widgets";
@@ -315,14 +316,12 @@ function toggleWrap(view: EditorView, mark: string): boolean {
 }
 
 /**
- * Whether a mousedown on a collapsed link should open it externally: only a
- * plain PRIMARY (left) click. Right-click (button 2) and middle-click (button 1)
- * — and the macOS ctrl-click context-menu chord — fall through to default
- * behaviour instead of navigating.
+ * Re-exported from `@renderer/editor/link-open`, where the rule now lives so
+ * the Monaco Document Mode renderer shares it (and PR 3 can delete this file
+ * without deleting the rule). Kept exported here so this module's own consumers
+ * are untouched while both editors coexist.
  */
-export function shouldOpenLink(event: { button: number; ctrlKey: boolean }): boolean {
-  return event.button === 0 && !event.ctrlKey;
-}
+export { shouldOpenLink } from "@renderer/editor/link-open";
 
 /** ⌘B / ⌘I emphasis toggles + Escape-to-blur (the caller keeps its own key handling). */
 export const markdownFormatKeymap: readonly KeyBinding[] = [

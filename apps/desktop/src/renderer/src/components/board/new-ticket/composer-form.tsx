@@ -13,10 +13,10 @@ import {
   type SubmitDeps,
 } from "@renderer/components/board/new-ticket/submit";
 import {
-  MarkdownLiveEditor,
-  type MarkdownFileRefs,
-  type MarkdownLiveEditorHandle,
-} from "@renderer/components/editor/markdown-live-editor";
+  type DocumentFileRefs,
+  MonacoDocumentEditor,
+  type MonacoDocumentEditorHandle,
+} from "@renderer/components/editor/monaco-document-editor";
 import { createTerminalSession } from "@renderer/components/sessions/session-create";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { cn } from "@renderer/lib/utils";
@@ -39,6 +39,12 @@ import { useWorkspaceStore } from "@renderer/stores/workspace";
  * currently selected project). Every field change re-saves the draft; a
  * successful create clears it.
  */
+/**
+ * The reserved ticket id the not-yet-created draft body's document identity
+ * uses. Real ids are UUIDs, so nothing can collide with it.
+ */
+const COMPOSER_DRAFT_TICKET_ID = "__composer_draft__";
+
 export function ComposerForm({
   initialProject,
   expanded,
@@ -77,13 +83,13 @@ export function ComposerForm({
   }, [target.id, status, priority, title, body, labels, usesWorktree]);
 
   const titleRef = React.useRef<HTMLInputElement>(null);
-  const editorRef = React.useRef<MarkdownLiveEditorHandle>(null);
+  const editorRef = React.useRef<MonacoDocumentEditorHandle>(null);
 
   // The `@file` index + create/open wiring for the description editor, keyed to
   // the (retargetable) target project — mirrors ticket-detail's fileRefs, minus
   // an open-file surface (no ticket exists yet, so opening is deferred).
   const fileIndex = useFileIndex(target.id);
-  const fileRefs = React.useMemo<MarkdownFileRefs>(
+  const fileRefs = React.useMemo<DocumentFileRefs>(
     () => ({
       getIndex: fileIndex.getIndex,
       refreshIndex: fileIndex.refresh,
@@ -173,8 +179,12 @@ export function ComposerForm({
   }, [title, submitting, currentFields, deps, createMore, lastHarnessId, resetForm, onClose]);
 
   // ⌘+Enter → Create, ⌘+Shift+Enter → Create & start. Captured on the composer
-  // root so the shortcut fires before CodeMirror or the title input can act on
-  // the Enter — plain Enter is left alone (title moves focus to the body).
+  // root so the shortcut fires before Monaco or the title input can act on the
+  // Enter — plain Enter is left alone (title moves focus to the body). React
+  // dispatches capture-phase handlers from a native listener on the app root,
+  // which is an ANCESTOR of Monaco's DOM, so `stopPropagation` here stops the
+  // event before it ever reaches Monaco's own keydown listener. That ordering is
+  // the whole reason this handler is `onKeyDownCapture` and not `onKeyDown`.
   const handleKeyDownCapture = React.useCallback(
     (event: React.KeyboardEvent) => {
       if (event.key !== "Enter" || !(event.metaKey || event.ctrlKey)) return;
@@ -216,17 +226,25 @@ export function ComposerForm({
           placeholder="Ticket title"
           className="w-full border-none bg-transparent text-heading font-medium text-foreground outline-none placeholder:text-muted-foreground"
         />
-        <MarkdownLiveEditor
+        <MonacoDocumentEditor
           ref={editorRef}
+          // No ticket exists yet, so the draft body borrows a ticket-body
+          // identity under a reserved id. Ticket ids are UUIDs, so this can
+          // never collide with a real body's model.
+          identity={{
+            kind: "ticket-body",
+            projectId: target.id,
+            ticketId: COMPOSER_DRAFT_TICKET_ID,
+          }}
+          viewId="composer:body"
           value={body}
           onChange={setBody}
           placeholder="Add description…"
           ariaLabel="Ticket description"
           fileRefs={fileRefs}
-          className={cn(
-            "overflow-y-auto text-sm [&_.cm-content]:px-0 [&_.cm-editor]:bg-transparent [&_.cm-editor]:outline-none [&_.cm-focused]:outline-none",
-            expanded ? "max-h-[50vh] min-h-[280px]" : "max-h-[40vh] min-h-[140px]",
-          )}
+          // Bounded growth: the body grows with what you type and then scrolls
+          // inside itself rather than pushing the footer off the dialog.
+          className={cn(expanded ? "max-h-[50vh] min-h-[280px]" : "max-h-[40vh] min-h-[140px]")}
         />
       </div>
 

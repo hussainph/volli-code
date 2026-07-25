@@ -215,6 +215,15 @@ describe("isEditingTarget", () => {
     expect(isEditingTarget(target)).toBe(true);
   });
 
+  it("matches a Monaco surface, which is none of the generic editing tokens", () => {
+    // Monaco's input element is a `div.native-edit-context`; both anchors of the
+    // shared surface selector must suppress ⌘[ / ⌘], which mean "outdent" there.
+    for (const anchor of [".monaco-editor", "[data-monaco-status]"]) {
+      const target = { closest: (selector: string) => (selector.includes(anchor) ? {} : null) };
+      expect(isEditingTarget(target)).toBe(true);
+    }
+  });
+
   it("matches contenteditable exposed via the property", () => {
     const target = { closest: () => null, isContentEditable: true };
     expect(isEditingTarget(target)).toBe(true);

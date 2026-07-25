@@ -1,7 +1,7 @@
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vite-plus/test";
 
-import { shouldOpenLink, wrapTransaction } from "./live-preview";
+import { wrapTransaction } from "./live-preview";
 
 /** Apply `wrapTransaction` to a fresh state and read back the doc + main selection. */
 function applyWrap(doc: string, selection: { anchor: number; head: number }, mark: string) {
@@ -61,20 +61,5 @@ describe("wrapTransaction", () => {
     expect(tr.state.doc.toString()).toBe("**a b**");
     // Each caret lands between ITS own pair: `*|*a b*|*` → new positions 1 and 6.
     expect(tr.state.selection.ranges.map((r) => r.from)).toEqual([1, 6]);
-  });
-});
-
-describe("shouldOpenLink", () => {
-  it("opens on a plain left-click", () => {
-    expect(shouldOpenLink({ button: 0, ctrlKey: false })).toBe(true);
-  });
-
-  it("does not open on middle- or right-click", () => {
-    expect(shouldOpenLink({ button: 1, ctrlKey: false })).toBe(false);
-    expect(shouldOpenLink({ button: 2, ctrlKey: false })).toBe(false);
-  });
-
-  it("does not open on a ctrl-click (macOS context-menu chord)", () => {
-    expect(shouldOpenLink({ button: 0, ctrlKey: true })).toBe(false);
   });
 });
