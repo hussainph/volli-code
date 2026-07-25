@@ -15,7 +15,8 @@ import { registerIpcHandlers } from "./ipc";
 import { registerAppMenu } from "./menu";
 import { confirmDestructiveClose, registerTerminalIpcHandlers } from "./pty";
 import type { PtyManager } from "./pty";
-import { registerThemeIpcHandlers, themeIpcDeps } from "./theme-ipc";
+import { registerThemeIpcHandlers } from "./theme-ipc";
+import { defaultFsDeps } from "./fs-deps";
 import { getGlobalTheme } from "./db/theme-repo";
 import { windowBackgroundColor } from "./window-theme";
 import { registerFileIpcHandlers } from "./volli-fs";
@@ -290,11 +291,17 @@ app.whenReady().then(async () => {
   );
 
   registerIpcHandlers();
+  // The ONE filesystem seam the config surfaces share (fs-deps.ts) — ghostty
+  // resolution and the terminal-overlay writer both pull their slice from this
+  // single value, so there is no second `readFile` or second `userData` root to
+  // keep in agreement. Built here because this is the one place that may
+  // resolve `app.getPath("userData")`, the same injection stance as the db path
+  // and the attachment store below.
+  const fsDeps = defaultFsDeps(app.getPath("userData"));
   // Ghostty config read + live-reload watch, feeding restty's appearance. The
   // `userData` root is where Volli's own ghostty OVERLAY files live (decision
-  // #67) — passed in rather than resolved inside, the same injection stance as
-  // the db path and the attachment store below.
-  registerGhosttyConfigIpc(app.getPath("userData"));
+  // #67).
+  registerGhosttyConfigIpc(fsDeps);
 
   // Open (creating + migrating if needed) the SQLite db before the window
   // exists, so the renderer's boot-time volli:data-bootstrap call always has
@@ -373,12 +380,16 @@ app.whenReady().then(async () => {
   // The window background follows the global theme: every window repaints its
   // edge the moment the theme is persisted, so a resize right after a theme
   // change can't reveal the previous palette.
-  registerThemeIpcHandlers(dbHandle, themeIpcDeps(app.getPath("userData")), {
-    onGlobalThemeChanged: (theme) => {
-      const color = windowBackgroundColor(theme);
-      for (const window of BrowserWindow.getAllWindows()) window.setBackgroundColor(color);
+  registerThemeIpcHandlers(
+    dbHandle,
+    { fs: fsDeps, now: Date.now },
+    {
+      onGlobalThemeChanged: (theme) => {
+        const color = windowBackgroundColor(theme);
+        for (const window of BrowserWindow.getAllWindows()) window.setBackgroundColor(color);
+      },
     },
-  });
+  );
   // Boots the PTY multiplexer (persists a durable record per session) and its
   // before-quit teardown (kills all PTYs, gated on busy sessions); needs the
   // db, so it registers here. The returned manager feeds each window's own

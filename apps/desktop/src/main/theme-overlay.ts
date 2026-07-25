@@ -23,8 +23,6 @@
  * like any other failed mutation.
  */
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { randomUUID } from "node:crypto";
 import {
   applyOverlayEdits,
   errorMessage,
@@ -33,54 +31,23 @@ import {
   volliGhosttyOverlayDir,
 } from "@volli/shared";
 import type { OverlayEdits } from "@volli/shared";
-
-/** Injected filesystem access, so the write path is testable and the guard is provable (see `trippedDeps` in the tests). */
-export interface ThemeOverlayDeps {
-  /** Electron's `userData` dir — the ONLY root under which an overlay may be written. */
-  userDataDir: string;
-  /** Sync file reader; null on any error (missing file, permission, …). */
-  readFile(absPath: string): string | null;
-  /** `mkdir -p` for an overlay's parent directory. */
-  mkdirp(dir: string): void;
-  writeFile(absPath: string, text: string): void;
-  rename(from: string, to: string): void;
-  /** Names the same-directory temp file a write lands in before its rename. */
-  tempName(targetPath: string): string;
-}
-
-function defaultReadFile(absPath: string): string | null {
-  try {
-    return readFileSync(absPath, "utf8");
-  } catch {
-    return null;
-  }
-}
+import type { FsDeps } from "./fs-deps";
 
 /**
- * The real filesystem, bound to one `userData` root. `apps/desktop/src/main/index.ts`
- * is the single call site that resolves `app.getPath("userData")` — the same
- * injection stance as `db/index.ts`'s `dbPath` and `attachment-store.ts`'s root.
+ * The write path's slice of {@link FsDeps} (`defaultFsDeps` supplies the real
+ * one), so the guard below is provable against a fake root — see `trippedDeps`
+ * in the tests.
+ *
+ * The omissions are the point. `exists`, `env` and `homeDir` are NOT in this
+ * slice, so nothing on the write path can probe for — let alone resolve — the
+ * user's own `~/.config/ghostty/config`. Decision #67 is enforced twice over:
+ * once by {@link isVolliOverlayPath} at runtime, and once here by a type that
+ * never hands this module the means to find the file it must not touch.
  */
-export function defaultThemeOverlayDeps(userDataDir: string): ThemeOverlayDeps {
-  return {
-    userDataDir,
-    readFile: defaultReadFile,
-    mkdirp: (dir) => {
-      mkdirSync(dir, { recursive: true });
-    },
-    writeFile: (absPath, text) => {
-      writeFileSync(absPath, text, "utf8");
-    },
-    rename: renameSync,
-    // Dot-prefixed and uniquely suffixed: a crashed write leaves an inert
-    // hidden file rather than something ghostty's directory watch or a
-    // curious user would mistake for a real overlay.
-    tempName: (targetPath) => {
-      const slash = targetPath.lastIndexOf("/");
-      return `${targetPath.slice(0, slash)}/.${targetPath.slice(slash + 1)}.${randomUUID()}.tmp`;
-    },
-  };
-}
+export type ThemeOverlayDeps = Pick<
+  FsDeps,
+  "userDataDir" | "readFile" | "ensureDir" | "writeFile" | "rename" | "tempName"
+>;
 
 /** Collapses `.`/`..` segments so a traversal cannot hide from the containment check below. */
 function normalize(path: string): string {
@@ -129,7 +96,7 @@ export function writeTerminalOverlay(
   try {
     const text = applyOverlayEdits(deps.readFile(absPath), edits);
     const tempPath = deps.tempName(absPath);
-    deps.mkdirp(absPath.slice(0, absPath.lastIndexOf("/")));
+    deps.ensureDir(absPath.slice(0, absPath.lastIndexOf("/")));
     deps.writeFile(tempPath, text);
     deps.rename(tempPath, absPath);
     return { ok: true, path: absPath };

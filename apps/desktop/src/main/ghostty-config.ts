@@ -13,8 +13,7 @@
 // the user's config is structural: the write path is theme-overlay.ts, which
 // can only touch <userData>/volli/ghostty/.
 
-import { existsSync, mkdirSync, readFileSync, watch as fsWatch } from "node:fs";
-import { homedir } from "node:os";
+import { watch as fsWatch } from "node:fs";
 import { BrowserWindow, ipcMain } from "electron";
 import {
   errorMessage,
@@ -34,42 +33,23 @@ import type {
   VolliIpcChannel,
   VolliIpcEvent,
 } from "@volli/shared";
+import type { FsDeps } from "./fs-deps";
 
-/** Injected filesystem/environment access, so the resolution logic is testable without touching disk. */
-export interface GhosttyConfigDeps {
-  /** Sync file reader; null on any error (missing file, permission, etc). */
-  readFile(absPath: string): string | null;
-  /** File existence probe, used for theme resolution. */
-  exists(absPath: string): boolean;
-  /** `mkdir -p` — used ONLY to create Volli's own overlay directories so their watch can arm at boot. */
-  ensureDir(dir: string): void;
-  env: Record<string, string | undefined>;
-  homeDir: string;
-  /** Electron's `userData` dir, under which Volli's overlay files live. */
-  userDataDir: string;
-}
-
-function defaultReadFile(absPath: string): string | null {
-  try {
-    return readFileSync(absPath, "utf8");
-  } catch {
-    return null;
-  }
-}
-
-/** The real filesystem/environment, bound to one `userData` root. Exported for theme-ipc.ts, which resolves the same chain for a project scope. */
-export function defaultGhosttyConfigDeps(userDataDir: string): GhosttyConfigDeps {
-  return {
-    readFile: defaultReadFile,
-    exists: existsSync,
-    ensureDir: (dir) => {
-      mkdirSync(dir, { recursive: true });
-    },
-    env: process.env,
-    homeDir: homedir(),
-    userDataDir,
-  };
-}
+/**
+ * The resolution path's slice of {@link FsDeps} (`defaultFsDeps` supplies the
+ * real one), so this logic is testable without touching disk.
+ *
+ * `writeFile`, `rename` and `tempName` are deliberately NOT in this slice:
+ * this module resolves the user's own ghostty config, and decision #67 says
+ * Volli never writes it. Leaving the writing verbs out means that is not a
+ * rule this file has to remember — it has no way to write anything. `ensureDir`
+ * is the one exception, used ONLY to create Volli's own overlay directories so
+ * their watch can arm at boot.
+ */
+export type GhosttyConfigDeps = Pick<
+  FsDeps,
+  "readFile" | "exists" | "ensureDir" | "env" | "homeDir" | "userDataDir"
+>;
 
 /** The two ghostty config directories, macOS precedence order (later wins). */
 function ghosttyDirs(deps: GhosttyConfigDeps): { xdgDir: string; appSupportDir: string } {
@@ -127,6 +107,25 @@ function projectOverlayPathFor(
 }
 
 /**
+ * Reads one config file and resolves its `config-file` includes, logging any
+ * warning rather than surfacing it.
+ *
+ * EVERY layer goes through here — ghostty's own entry configs and Volli's two
+ * overlays alike. `OVERLAY_HEADER` promises the user that "any ghostty key
+ * works" in an overlay, and `config-file` is a ghostty key: reading an overlay
+ * with a bare `readFile` would make it the one directive that works in
+ * Ghostty.app and silently does nothing in Volli — exactly the surprise
+ * decision #68 exists to prevent.
+ */
+function resolveConfigText(entryPath: string, deps: GhosttyConfigDeps): string | null {
+  const { text, warnings } = resolveGhosttyConfigText(entryPath, deps.readFile);
+  for (const warning of warnings) {
+    console.warn(`[ghostty-config] ${warning}`);
+  }
+  return text;
+}
+
+/**
  * Resolves the full appearance chain for a scope and maps it onto restty's
  * model: both of ghostty's entry configs (its macOS precedence — the
  * Application Support config overrides the XDG one on scalar conflicts), then
@@ -142,13 +141,7 @@ export function readGhosttyAppearance(
   ticketPrefix: string | null = null,
 ): GhosttyAppearancePayload {
   const entryPaths = entryConfigPaths(deps);
-  const ghosttyTexts = entryPaths.map((entryPath) => {
-    const { text, warnings } = resolveGhosttyConfigText(entryPath, deps.readFile);
-    for (const warning of warnings) {
-      console.warn(`[ghostty-config] ${warning}`);
-    }
-    return text;
-  });
+  const ghosttyTexts = entryPaths.map((entryPath) => resolveConfigText(entryPath, deps));
 
   const globalOverlayPath = globalGhosttyOverlayPath(deps.userDataDir);
   const projectOverlayPath = projectOverlayPathFor(deps, ticketPrefix);
@@ -156,10 +149,15 @@ export function readGhosttyAppearance(
     // The user's own config, already include-resolved, collapsed to one layer:
     // ghostty's two locations are its own precedence, not Volli's.
     { origin: "ghostty", text: mergeGhosttyConfigTexts(ghosttyTexts) },
-    { origin: "volli-global", text: deps.readFile(globalOverlayPath) },
+    // Overlays resolve their own includes too, and an included file's keys stay
+    // attributed to the layer that included them: `resolveGhosttyConfigText`
+    // emits an include's text BEFORE the including file's, so within a layer
+    // the overlay itself still wins, and `resolveGhosttyLayers` sees one text
+    // per origin exactly as before.
+    { origin: "volli-global", text: resolveConfigText(globalOverlayPath, deps) },
     {
       origin: "volli-project",
-      text: projectOverlayPath === null ? null : deps.readFile(projectOverlayPath),
+      text: projectOverlayPath === null ? null : resolveConfigText(projectOverlayPath, deps),
     },
   ];
 
@@ -288,17 +286,17 @@ function watchForChanges(deps: GhosttyConfigDeps): void {
  * prefix through the db — so a renderer showing a project's terminal
  * re-requests that on a `volli:ghostty-config-changed` event.
  */
-export function registerGhosttyConfigIpc(userDataDir: string): void {
+export function registerGhosttyConfigIpc(deps: GhosttyConfigDeps): void {
   ipcMain.handle(
     "volli:ghostty-config-get" satisfies VolliIpcChannel,
     (_event): GhosttyConfigResult => {
       try {
-        return { ok: true, value: readGhosttyAppearance(defaultGhosttyConfigDeps(userDataDir)) };
+        return { ok: true, value: readGhosttyAppearance(deps) };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }
     },
   );
 
-  watchForChanges(defaultGhosttyConfigDeps(userDataDir));
+  watchForChanges(deps);
 }

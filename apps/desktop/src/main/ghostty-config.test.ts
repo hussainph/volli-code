@@ -22,10 +22,15 @@ vi.mock("electron", () => ({
   BrowserWindow: { getAllWindows },
 }));
 
-// defaultDeps() reads node:fs/node:os directly (unlike pty.ts's lazy
-// node-pty import, these are plain sync Node builtins) — mocked the same way
-// ipc.test.ts avoids vi.importActual for a package whose real form doesn't
-// suit plain-node tests.
+// This module reaches node:fs/node:os only through the injected slice, except
+// for the one genuinely untestable call — the raw fs.watch — which is why the
+// mock exists at all. These are plain sync Node builtins (unlike pty.ts's lazy
+// node-pty import), mocked the same way ipc.test.ts avoids vi.importActual for
+// a package whose real form doesn't suit plain-node tests.
+//
+// Only the verbs a GhosttyConfigDeps slice can reach are mocked. `writeFile`
+// and `rename` are deliberately absent: they are not in that slice, so a read
+// path that ever grew a write would fail here loudly rather than pass quietly.
 vi.mock("node:fs", () => ({
   readFileSync: readFileSyncMock,
   existsSync: existsSyncMock,
@@ -203,6 +208,32 @@ describe("readGhosttyAppearance", () => {
 
 const IPC_USER_DATA = "/Users/test/Library/Application Support/Volli Code";
 
+/**
+ * The real-filesystem `GhosttyConfigDeps` slice, over the mocked `node:fs`
+ * above — the shape `src/main/index.ts` passes in, built from the same node
+ * builtins `defaultFsDeps` binds. Constructed as the SLICE rather than via
+ * `defaultFsDeps` so this suite depends only on the capabilities the read path
+ * is actually granted.
+ */
+function ipcDeps(): GhosttyConfigDeps {
+  return {
+    readFile: (absPath) => {
+      try {
+        return readFileSyncMock(absPath, "utf8") as string;
+      } catch {
+        return null;
+      }
+    },
+    exists: (absPath) => existsSyncMock(absPath) as boolean,
+    ensureDir: (dir) => {
+      mkdirSyncMock(dir, { recursive: true });
+    },
+    env: process.env,
+    homeDir: "/Users/test",
+    userDataDir: IPC_USER_DATA,
+  };
+}
+
 describe("registerGhosttyConfigIpc", () => {
   let originalXdg: string | undefined;
 
@@ -247,7 +278,7 @@ describe("registerGhosttyConfigIpc", () => {
       throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
     });
 
-    registerGhosttyConfigIpc(IPC_USER_DATA);
+    registerGhosttyConfigIpc(ipcDeps());
     const result = invokeGet();
 
     expect(result).toEqual({
@@ -275,14 +306,14 @@ describe("registerGhosttyConfigIpc", () => {
       throw new Error("EACCES: permission denied");
     });
 
-    registerGhosttyConfigIpc(IPC_USER_DATA);
+    registerGhosttyConfigIpc(ipcDeps());
     const result = invokeGet();
 
     expect(result).toEqual({ ok: false, error: "EACCES: permission denied" });
   });
 
   it("watches both entry config paths' parent directories", () => {
-    registerGhosttyConfigIpc(IPC_USER_DATA);
+    registerGhosttyConfigIpc(ipcDeps());
 
     const watchedDirs = watchMock.mock.calls.map((call) => call[0]);
     expect(watchedDirs).toEqual([
@@ -297,7 +328,7 @@ describe("registerGhosttyConfigIpc", () => {
     existsSyncMock.mockReturnValue(false);
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
-    registerGhosttyConfigIpc(IPC_USER_DATA);
+    registerGhosttyConfigIpc(ipcDeps());
 
     expect(watchMock).not.toHaveBeenCalled();
     expect(warnSpy).not.toHaveBeenCalled();
@@ -310,7 +341,7 @@ describe("registerGhosttyConfigIpc", () => {
       throw new Error("ENOENT: no such directory");
     });
 
-    expect(() => registerGhosttyConfigIpc(IPC_USER_DATA)).not.toThrow();
+    expect(() => registerGhosttyConfigIpc(ipcDeps())).not.toThrow();
     expect(watchMock).toHaveBeenCalledTimes(4);
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining("[ghostty-config] could not watch"),
@@ -324,7 +355,7 @@ describe("registerGhosttyConfigIpc", () => {
       throw new Error("EACCES: permission denied");
     });
 
-    expect(() => registerGhosttyConfigIpc(IPC_USER_DATA)).not.toThrow();
+    expect(() => registerGhosttyConfigIpc(ipcDeps())).not.toThrow();
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining("[ghostty-config] could not create"),
     );
@@ -341,7 +372,7 @@ describe("registerGhosttyConfigIpc", () => {
 
     it("ignores changes to files other than config", () => {
       vi.useFakeTimers();
-      registerGhosttyConfigIpc(IPC_USER_DATA);
+      registerGhosttyConfigIpc(ipcDeps());
       const win = { isDestroyed: () => false, webContents: { send: vi.fn() } };
       getAllWindows.mockReturnValue([win]);
 
@@ -353,7 +384,7 @@ describe("registerGhosttyConfigIpc", () => {
 
     it("reloads for any hand-edited project overlay, but not for other files there", () => {
       vi.useFakeTimers();
-      registerGhosttyConfigIpc(IPC_USER_DATA);
+      registerGhosttyConfigIpc(ipcDeps());
       const win = { isDestroyed: () => false, webContents: { send: vi.fn() } };
       getAllWindows.mockReturnValue([win]);
 
@@ -374,7 +405,7 @@ describe("registerGhosttyConfigIpc", () => {
         if (path === "/Users/test/.config/ghostty/config") return "font-size = 22";
         throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
       });
-      registerGhosttyConfigIpc(IPC_USER_DATA);
+      registerGhosttyConfigIpc(ipcDeps());
       const destroyedWin = { isDestroyed: () => true, webContents: { send: vi.fn() } };
       const liveWin = { isDestroyed: () => false, webContents: { send: vi.fn() } };
       getAllWindows.mockReturnValue([destroyedWin, liveWin]);
@@ -492,5 +523,89 @@ describe("readGhosttyAppearance — the Volli overlay chain", () => {
 
     expect(result.prefs.themeName).toBe("Nord");
     expect(result.overlayPaths.project).toBeNull();
+  });
+
+  // OVERLAY_HEADER tells the user, in the file itself, that "any ghostty key
+  // works" in an overlay. `config-file` is a ghostty key: reading an overlay
+  // with a bare readFile would make it the one directive that works in
+  // Ghostty.app and silently does nothing here — the exact class of surprise
+  // #68 exists to prevent. Every layer goes through the same resolver.
+  describe("config-file includes inside a Volli overlay", () => {
+    const OVERLAY_DIR = `${USER_DATA}/volli/ghostty`;
+    const PROJECTS_DIR = `${OVERLAY_DIR}/projects`;
+
+    it("resolves a global overlay's include, with the overlay itself still winning", () => {
+      const result = readGhosttyAppearance(
+        makeDeps({
+          [XDG_ENTRY]: "theme = Nord\nfont-size = 12",
+          [GLOBAL_OVERLAY]: "config-file = shared.conf\nfont-size = 14",
+          [`${OVERLAY_DIR}/shared.conf`]: "cursor-style = bar\nfont-size = 99",
+        }),
+      );
+
+      // The included file's own keys land…
+      expect(result.prefs.themeName).toBe("Nord");
+      expect(result.configText).toContain("cursor-style = bar");
+      // …but an include never overrides the file that included it (ghostty's
+      // own rule), so the overlay's font-size wins over the include's.
+      expect(result.prefs.fontSize).toBe(14);
+    });
+
+    it("attributes an included key to the layer that included it", () => {
+      const result = readGhosttyAppearance(
+        makeDeps({
+          [XDG_ENTRY]: "theme = Nord",
+          [GLOBAL_OVERLAY]: "config-file = shared.conf",
+          [`${OVERLAY_DIR}/shared.conf`]: "cursor-style = bar",
+          [PROJECT_OVERLAY]: "config-file = project-extras.conf",
+          [`${PROJECTS_DIR}/project-extras.conf`]: "font-size = 15",
+        }),
+        "VC",
+      );
+
+      expect(result.provenance).toEqual({
+        theme: "ghostty",
+        "config-file": "volli-project",
+        "cursor-style": "volli-global",
+        "font-size": "volli-project",
+      });
+      expect(result.prefs.fontSize).toBe(15);
+    });
+
+    it("warns but does not throw when an overlay's include is missing", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+      const result = readGhosttyAppearance(
+        makeDeps({
+          [GLOBAL_OVERLAY]: "config-file = gone.conf\nfont-size = 14",
+          [PROJECT_OVERLAY]: "config-file = also-gone.conf\ntheme = Ayu",
+        }),
+        "VC",
+      );
+
+      // Both layers still resolve their own keys.
+      expect(result.prefs.fontSize).toBe(14);
+      expect(result.prefs.themeName).toBe("Ayu");
+      // Warned per layer, in the same shape the entry configs already log.
+      expect(warnSpy).toHaveBeenCalledWith(
+        `[ghostty-config] config-file not found: ${OVERLAY_DIR}/gone.conf`,
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        `[ghostty-config] config-file not found: ${PROJECTS_DIR}/also-gone.conf`,
+      );
+      warnSpy.mockRestore();
+    });
+
+    it("stays silent for a missing optional (?-prefixed) include", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+      const result = readGhosttyAppearance(
+        makeDeps({ [GLOBAL_OVERLAY]: "config-file = ?optional.conf\nfont-size = 14" }),
+      );
+
+      expect(result.prefs.fontSize).toBe(14);
+      expect(warnSpy).not.toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
   });
 });

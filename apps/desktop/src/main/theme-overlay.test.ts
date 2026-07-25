@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { OVERLAY_HEADER } from "@volli/shared";
 
+import { defaultFsDeps } from "./fs-deps";
 import {
-  defaultThemeOverlayDeps,
   readTerminalOverlays,
   writeGlobalTerminalOverlay,
   writeProjectTerminalOverlay,
@@ -23,7 +23,7 @@ afterEach(() => {
 /** A real temp `userData` dir plus the real fs deps — this module's whole job is touching disk. */
 function realDeps(): ThemeOverlayDeps {
   dir = mkdtempSync(join(tmpdir(), "volli-overlay-test-"));
-  return defaultThemeOverlayDeps(dir);
+  return defaultFsDeps(dir);
 }
 
 /** Every fs op in {@link trippedDeps} — a call is a test failure by construction. */
@@ -36,7 +36,7 @@ function trippedDeps(userDataDir: string): ThemeOverlayDeps {
   return {
     userDataDir,
     readFile: boom,
-    mkdirp: boom,
+    ensureDir: boom,
     writeFile: boom,
     rename: boom,
     tempName: boom,

@@ -84,6 +84,7 @@ export default defineConfig({
         "src/theme/apply.ts",
         "src/theme/catalog.ts",
         "src/terminal/css-color.ts",
+        "src/terminal/appearance.ts",
         "src/terminal/appearance-model.ts",
         "src/terminal/local-fonts.ts",
         "src/terminal/option-as-alt.ts",
@@ -94,9 +95,13 @@ export default defineConfig({
         "**/src/main/project-roots.ts",
         "**/src/main/pty.ts",
         "**/src/main/park.ts",
+        "**/src/main/fs-deps.ts",
         "**/src/main/ghostty-config.ts",
         "**/src/main/window-theme.ts",
+        "**/src/main/theme-ipc.ts",
+        "**/src/main/theme-overlay.ts",
         "**/src/main/db/export.ts",
+        "**/src/main/db/theme-repo.ts",
       ],
       // Global bar only — vitest applies global thresholds to every included
       // file even when per-glob entries exist, so partial carve-outs can't

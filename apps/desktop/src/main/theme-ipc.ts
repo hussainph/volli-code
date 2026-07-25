@@ -40,21 +40,25 @@ import type {
 import type { DbHandle } from "./data-ipc";
 import { getProjectById, updateProjectThemeOverride } from "./db/projects-repo";
 import { getGlobalTheme, setGlobalTheme } from "./db/theme-repo";
-import { defaultGhosttyConfigDeps, readGhosttyAppearance } from "./ghostty-config";
-import type { GhosttyConfigDeps } from "./ghostty-config";
+import { readGhosttyAppearance } from "./ghostty-config";
+import type { FsDeps } from "./fs-deps";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";
-import {
-  defaultThemeOverlayDeps,
-  writeGlobalTerminalOverlay,
-  writeProjectTerminalOverlay,
-} from "./theme-overlay";
-import type { OverlayWriteResult, ThemeOverlayDeps } from "./theme-overlay";
+import { writeGlobalTerminalOverlay, writeProjectTerminalOverlay } from "./theme-overlay";
+import type { OverlayWriteResult } from "./theme-overlay";
 
-/** Injected filesystem seams, so the whole surface is testable against a temp `userData` dir and a fake home. */
+/**
+ * The injected seams, so the whole surface is testable against a temp
+ * `userData` dir and a fake home.
+ *
+ * One `fs`, not one per collaborator: this module reads the ghostty chain and
+ * writes Volli's overlay, and those used to arrive as two separately-built dep
+ * bags carrying duplicate `readFile`/`userDataDir` fields that nothing kept in
+ * agreement. `FsDeps` is a superset of both slices, so `readGhosttyAppearance`
+ * and the overlay writers each still see only what their own `Pick` allows.
+ */
 export interface ThemeIpcDeps {
-  ghostty: GhosttyConfigDeps;
-  overlay: ThemeOverlayDeps;
+  fs: FsDeps;
   now: () => number;
 }
 
@@ -71,15 +75,6 @@ export interface ThemeIpcHooks {
    * at exactly the moments the user notices.
    */
   onGlobalThemeChanged?(theme: ThemeDefinition): void;
-}
-
-/** The real deps for one `userData` root — `src/main/index.ts` is the single call site that resolves it. */
-export function themeIpcDeps(userDataDir: string): ThemeIpcDeps {
-  return {
-    ghostty: defaultGhosttyConfigDeps(userDataDir),
-    overlay: defaultThemeOverlayDeps(userDataDir),
-    now: Date.now,
-  };
 }
 
 /** A project's ticket prefix (the per-project overlay's file name), or a typed error. */
@@ -105,7 +100,7 @@ function buildThemeState(
   let terminal: GhosttyAppearancePayload;
   let payload: ThemeStatePayload;
   if (projectId === null) {
-    terminal = readGhosttyAppearance(deps.ghostty, null);
+    terminal = readGhosttyAppearance(deps.fs, null);
     payload = {
       // No stored theme (or an unreadable one) degrades to the shipped default
       // rather than failing to paint — a theme is read before any UI exists to
@@ -120,7 +115,7 @@ function buildThemeState(
 
   const project = getProjectById(db, projectId);
   if (project === undefined) return { ok: false, error: "Unknown project" };
-  terminal = readGhosttyAppearance(deps.ghostty, project.ticketPrefix);
+  terminal = readGhosttyAppearance(deps.fs, project.ticketPrefix);
   payload = {
     theme: getGlobalTheme(db) ?? DEFAULT_THEME,
     projectOverride: project.themeOverride ?? null,
@@ -179,12 +174,12 @@ export function registerThemeIpcHandlers(
       let written: OverlayWriteResult;
       let prefix: string | null = null;
       if (input.scope === "global") {
-        written = writeGlobalTerminalOverlay(deps.overlay, input.edits);
+        written = writeGlobalTerminalOverlay(deps.fs, input.edits);
       } else {
         const resolved = resolvePrefix(db, input.projectId);
         if (!resolved.ok) return resolved;
         prefix = resolved.prefix;
-        written = writeProjectTerminalOverlay(deps.overlay, prefix, input.edits);
+        written = writeProjectTerminalOverlay(deps.fs, prefix, input.edits);
       }
       if (!written.ok) return written;
       // Re-read rather than predict: the renderer repaints from the same
@@ -193,7 +188,7 @@ export function registerThemeIpcHandlers(
       return {
         ok: true,
         path: written.path,
-        terminal: readGhosttyAppearance(deps.ghostty, prefix),
+        terminal: readGhosttyAppearance(deps.fs, prefix),
       };
     },
   };
