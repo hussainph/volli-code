@@ -92,3 +92,80 @@ describe("changeSetSnapshot — NUL-delimited path safety", () => {
     ]);
   });
 });
+
+describe("changeSetSnapshot — renames, binaries, additions, deletions", () => {
+  it("retains both path and previousPath for a rename", () => {
+    const { git } = scriptedChangeSetGit({
+      nameStatus: "R100\0src/old.ts\0src/new.ts\0",
+      numstat: "1\t1\0src/old.ts\0src/new.ts\0",
+    });
+
+    const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.files).toEqual([
+      {
+        path: "src/new.ts",
+        previousPath: "src/old.ts",
+        status: "renamed",
+        insertions: 1,
+        deletions: 1,
+        binary: false,
+      },
+    ]);
+  });
+
+  it("marks binary files with null counts and binary: true", () => {
+    const { git } = scriptedChangeSetGit({
+      nameStatus: "A\0assets/logo.png\0",
+      numstat: "-\t-\0assets/logo.png\0",
+    });
+
+    const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.files).toEqual([
+      {
+        path: "assets/logo.png",
+        status: "added",
+        insertions: null,
+        deletions: null,
+        binary: true,
+      },
+    ]);
+    expect(result.value.insertions).toBe(0);
+    expect(result.value.deletions).toBe(0);
+  });
+
+  it("classifies additions and deletions", () => {
+    const { git } = scriptedChangeSetGit({
+      nameStatus: "A\0src/new.ts\0D\0src/gone.ts\0",
+      numstat: "4\t0\0src/new.ts\0" + "0\t3\0src/gone.ts\0",
+    });
+
+    const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.files).toEqual([
+      {
+        path: "src/new.ts",
+        status: "added",
+        insertions: 4,
+        deletions: 0,
+        binary: false,
+      },
+      {
+        path: "src/gone.ts",
+        status: "deleted",
+        insertions: 0,
+        deletions: 3,
+        binary: false,
+      },
+    ]);
+    expect(result.value.insertions).toBe(4);
+    expect(result.value.deletions).toBe(3);
+  });
+});
