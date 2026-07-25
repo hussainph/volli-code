@@ -65,6 +65,15 @@ describe("the slug guard", () => {
       expect(result.ok === false && result.error).toMatch(/invalid theme slug/i);
     }
   });
+
+  it("refuses to write a theme whose slug is reserved for a built-in", () => {
+    const result = writeCustomTheme(trippedDeps(), theme({ slug: "ember" }));
+
+    expect(result).toEqual({
+      ok: false,
+      error: 'Theme slug "ember" is reserved for a built-in theme',
+    });
+  });
 });
 
 describe("writeCustomTheme + listCustomThemes", () => {
@@ -86,6 +95,10 @@ describe("writeCustomTheme + listCustomThemes", () => {
     const themesDir = join(deps.userDataDir, "volli/themes");
     writeFileSync(join(themesDir, "broken.json"), "{ not json");
     writeFileSync(join(themesDir, "not-a-theme.json"), JSON.stringify({ name: "X" }));
+    writeFileSync(
+      join(themesDir, "bad-seed.json"),
+      JSON.stringify({ ...theme({ slug: "bad-seed" }), seed: "not-a-color" }),
+    );
     writeFileSync(join(themesDir, "notes.txt"), JSON.stringify(theme({ slug: "notes" })));
     writeFileSync(join(themesDir, ".DS_Store"), "");
 
@@ -103,6 +116,19 @@ describe("writeCustomTheme + listCustomThemes", () => {
         .map((entry) => entry.slug)
         .toSorted(),
     ).toEqual(["my-sunset", "sunset"]);
+  });
+
+  it("skips a custom file whose slug collides with a built-in", () => {
+    const deps = realDeps();
+    const themesDir = join(deps.userDataDir, "volli/themes");
+    deps.ensureDir(themesDir);
+    writeFileSync(
+      join(themesDir, "ember.json"),
+      JSON.stringify({ ...theme({ slug: "ember" }), seed: "#000000" }, null, 2),
+    );
+    writeCustomTheme(deps, theme());
+
+    expect(listCustomThemes(deps).map((entry) => entry.slug)).toEqual(["sunset"]);
   });
 
   it("lists themes by display name, so the picker's order never depends on readdir", () => {

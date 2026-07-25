@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { DEFAULT_THEME, type ThemeDefinition } from "@volli/shared";
 
 import {
+  beginThemeDuplicate,
   beginThemeEdit,
   duplicateTheme,
   GRAIN_RANGE,
@@ -47,6 +48,29 @@ describe("beginThemeEdit", () => {
 
     expect(draft.theme).not.toBe(MINE);
     expect(draft.theme.overrides).not.toBe(MINE.overrides);
+  });
+
+  it("duplicates a built-in even when a custom file shares its slug", () => {
+    const forged = { ...DEFAULT_THEME, name: "Forged Ember", seed: "#000000" };
+    const draft = beginThemeEdit({
+      source: DEFAULT_THEME,
+      owned: [forged],
+      catalog: [DEFAULT_THEME, forged],
+    });
+
+    expect(draft.duplicated).toBe(true);
+    expect(draft.theme.slug).not.toBe(DEFAULT_THEME.slug);
+    expect(draft.theme.seed).toBe(DEFAULT_THEME.seed);
+  });
+});
+
+describe("beginThemeDuplicate", () => {
+  it("always produces a new slug, even for a theme the user owns", () => {
+    const draft = beginThemeDuplicate({ source: MINE, catalog: [DEFAULT_THEME, MINE] });
+
+    expect(draft.duplicated).toBe(true);
+    expect(draft.theme.slug).not.toBe(MINE.slug);
+    expect(draft.theme.seed).toBe(MINE.seed);
   });
 });
 
@@ -131,5 +155,16 @@ describe("duplicateTheme", () => {
     expect(second.slug).toBe("ember-copy-2");
     expect(second.name).toBe("Ember Copy 2");
     expect(third.slug).toBe("ember-copy-3");
+  });
+
+  it("finds a unique slug when long names collapse under slugify's length cap", () => {
+    const longName = "A".repeat(60);
+    const source = { ...DEFAULT_THEME, name: longName, slug: "a".repeat(48) };
+    const first = duplicateTheme(source, [source]);
+    const second = duplicateTheme(source, [source, first]);
+
+    expect(first.slug).not.toBe(source.slug);
+    expect(second.slug).not.toBe(first.slug);
+    expect(second.slug).not.toBe(source.slug);
   });
 });

@@ -44,7 +44,7 @@ import {
   toggleFavoriteTheme,
 } from "@renderer/components/theme/theme-picker-model";
 import { applyTheme as applyThemeToDom, resolveActiveTheme } from "@renderer/theme/apply";
-import { BUILTIN_THEMES } from "@renderer/theme/catalog";
+import { BUILTIN_THEMES, mergeThemeCatalog } from "@renderer/theme/catalog";
 import { writeThrough } from "@renderer/stores/mutate";
 
 /** Which scope a commit writes to (#69). The per-project entry point ships with Configure. */
@@ -122,8 +122,16 @@ interface ThemeState {
   toggleFavorite(slug: string): void;
 }
 
+/** Built-ins plus customs — colliding shipped slugs omitted (same rule as the picker). */
+function themeCatalog(customThemes: ThemeDefinition[]): readonly ThemeDefinition[] {
+  return mergeThemeCatalog(BUILTIN_THEMES, customThemes);
+}
+
 /** The inputs that decide what is on screen right now. */
-type EffectiveThemeInput = Pick<ThemeState, "preview" | "global" | "projectOverride">;
+type EffectiveThemeInput = Pick<
+  ThemeState,
+  "preview" | "global" | "projectOverride" | "customThemes"
+>;
 
 /**
  * The app-surface theme currently in force: the preview if one is running,
@@ -140,13 +148,17 @@ export function effectiveTheme({
   preview,
   global,
   projectOverride,
+  customThemes,
 }: EffectiveThemeInput): ThemeDefinition {
   if (preview !== null) return preview;
-  return resolveActiveTheme(global, projectOverride, BUILTIN_THEMES).app.value;
+  return resolveActiveTheme(global, projectOverride, themeCatalog(customThemes)).app.value;
 }
 
 /** What a scope has STORED — as opposed to what a preview is showing. */
-type AppliedThemeInput = Pick<ThemeState, "global" | "projectId" | "projectOverride">;
+type AppliedThemeInput = Pick<
+  ThemeState,
+  "global" | "projectId" | "projectOverride" | "customThemes"
+>;
 
 /**
  * The theme actually persisted for `scope`, ignoring any running preview —
@@ -155,14 +167,14 @@ type AppliedThemeInput = Pick<ThemeState, "global" | "projectId" | "projectOverr
  * hiding the one thing the tag exists to state.
  */
 export function appliedTheme(
-  { global, projectId, projectOverride }: AppliedThemeInput,
+  { global, projectId, projectOverride, customThemes }: AppliedThemeInput,
   scope: ThemeScope,
 ): ThemeDefinition {
   // The store holds exactly one scope's override at a time; a picker scoped to
   // a project the store isn't showing has no override to read, and must not
   // borrow another project's.
   if (scope.kind === "global" || scope.projectId !== projectId) return global;
-  return resolveActiveTheme(global, projectOverride, BUILTIN_THEMES).app.value;
+  return resolveActiveTheme(global, projectOverride, themeCatalog(customThemes)).app.value;
 }
 
 /** Persisted slice: the library's memory of your taste, not the theme itself. */
@@ -308,7 +320,11 @@ export function createThemeStore({
             // same write as committing a picked one — including its optimistic
             // paint and its rollback.
             get().startPreview(theme);
-            return await get().commitPreview(scope);
+            const committed = await get().commitPreview(scope);
+            // The file is already on disk — keep the editor and live app on the
+            // draft the user was saving rather than snapping back to stored.
+            if (!committed) get().startPreview(theme);
+            return committed;
           },
 
           /** Deletes a theme file, adopting the catalog the delete hands back. */

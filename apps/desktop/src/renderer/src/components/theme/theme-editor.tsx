@@ -2,6 +2,7 @@ import * as React from "react";
 import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
 
 import {
+  beginThemeDuplicate,
   beginThemeEdit,
   GRAIN_RANGE,
   swatchColor,
@@ -18,8 +19,8 @@ import { Input } from "@renderer/components/ui/input";
 import { Switch } from "@renderer/components/ui/switch";
 import { cn } from "@renderer/lib/utils";
 import { useThemeStore, type ThemeScope } from "@renderer/stores/theme";
-import { BUILTIN_THEMES } from "@renderer/theme/catalog";
-import type { ThemeDefinition } from "@volli/shared";
+import { BUILTIN_THEMES, mergeThemeCatalog } from "@renderer/theme/catalog";
+import { isBuiltinThemeSlug, type ThemeDefinition } from "@volli/shared";
 
 /**
  * The theme editor (#71/#75): a seed, an unlockable accent, grain, a name.
@@ -70,17 +71,28 @@ export interface ThemeEditorProps {
   scope: ThemeScope;
   /** Rename opens the editor with the name field selected. */
   focusName?: boolean;
+  /** Duplicate always opens on a new copy; edit may reuse an owned theme's slug. */
+  mode?: "edit" | "duplicate";
   /** Save (after a successful write) and Cancel both land here. */
   onClose(): void;
 }
 
-export function ThemeEditor({ source, scope, focusName = false, onClose }: ThemeEditorProps) {
+export function ThemeEditor({
+  source,
+  scope,
+  focusName = false,
+  mode = "edit",
+  onClose,
+}: ThemeEditorProps) {
   const owned = useThemeStore((state) => state.customThemes);
+  const catalog = React.useMemo(() => mergeThemeCatalog(BUILTIN_THEMES, owned), [owned]);
   // The catalog is read ONCE, when the edit opens: a duplicate's name is chosen
   // against the library as it stood, and a save landing mid-edit must not
   // rename the draft under the user.
   const [draft, setDraft] = React.useState<ThemeDraft>(() =>
-    beginThemeEdit({ source, owned, catalog: [...BUILTIN_THEMES, ...owned] }),
+    mode === "duplicate"
+      ? beginThemeDuplicate({ source, catalog })
+      : beginThemeEdit({ source, owned, catalog }),
   );
   // The hex fields hold TEXT, not color: `#00aa` is a legal thing to be typing
   // and an illegal thing to paint, so the draft only moves once it parses.
@@ -228,9 +240,11 @@ export function ThemeEditor({ source, scope, focusName = false, onClose }: Theme
 
       <div className="mt-4 flex items-center justify-between gap-3 border-t border-border/60 pt-4">
         <p className="min-w-0 text-xs text-muted-foreground">
-          {draft.duplicated
+          {isBuiltinThemeSlug(draft.source.slug) && draft.duplicated
             ? `${draft.source.name} ships with Volli, so this is a copy you own.`
-            : "Saved to your themes folder."}
+            : draft.duplicated
+              ? "This is a new copy — save to add it to your themes folder."
+              : "Saved to your themes folder."}
         </p>
         <div className="flex shrink-0 items-center gap-2">
           <Button variant="ghost" size="sm" onClick={onClose}>

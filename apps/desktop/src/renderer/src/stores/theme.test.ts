@@ -402,19 +402,37 @@ describe("terminal appearance", () => {
 describe("effectiveTheme", () => {
   it("prefers the preview, then the project override, then the global theme", () => {
     expect(
-      effectiveTheme({ preview: MIDNIGHT, global: DEFAULT_THEME, projectOverride: null }),
+      effectiveTheme({
+        preview: MIDNIGHT,
+        global: DEFAULT_THEME,
+        projectOverride: null,
+        customThemes: [],
+      }),
     ).toEqual(MIDNIGHT);
 
-    expect(effectiveTheme({ preview: null, global: MIDNIGHT, projectOverride: null })).toEqual(
-      MIDNIGHT,
-    );
+    expect(
+      effectiveTheme({ preview: null, global: MIDNIGHT, projectOverride: null, customThemes: [] }),
+    ).toEqual(MIDNIGHT);
 
     const tinted = effectiveTheme({
       preview: null,
       global: DEFAULT_THEME,
       projectOverride: { ...EMPTY_PROJECT_THEME_OVERRIDE, seed: "#3f9142" },
+      customThemes: [],
     });
     expect(tinted.seed).toBe("#3f9142");
+  });
+
+  it("resolves a project appThemeSlug against custom themes in the catalog", () => {
+    const state = {
+      preview: null,
+      global: DEFAULT_THEME,
+      projectOverride: { ...EMPTY_PROJECT_THEME_OVERRIDE, appThemeSlug: "sunset" },
+      customThemes: [SUNSET],
+    };
+
+    expect(effectiveTheme(state)).toBe(SUNSET);
+    expect(effectiveTheme(state)).toBe(SUNSET);
   });
 
   it("returns the IDENTICAL reference for unchanged state, on every path", () => {
@@ -427,19 +445,26 @@ describe("effectiveTheme", () => {
       preview: null,
       global: DEFAULT_THEME,
       projectOverride: { ...EMPTY_PROJECT_THEME_OVERRIDE, seed: "#3f9142" },
+      customThemes: [],
     };
     expect(effectiveTheme(tinting)).toBe(effectiveTheme(tinting));
 
-    const previewing = { preview: MIDNIGHT, global: DEFAULT_THEME, projectOverride: null };
+    const previewing = {
+      preview: MIDNIGHT,
+      global: DEFAULT_THEME,
+      projectOverride: null,
+      customThemes: [],
+    };
     expect(effectiveTheme(previewing)).toBe(effectiveTheme(previewing));
 
-    const plain = { preview: null, global: MIDNIGHT, projectOverride: null };
+    const plain = { preview: null, global: MIDNIGHT, projectOverride: null, customThemes: [] };
     expect(effectiveTheme(plain)).toBe(effectiveTheme(plain));
 
     const named = {
       preview: null,
       global: DEFAULT_THEME,
       projectOverride: { ...EMPTY_PROJECT_THEME_OVERRIDE, appThemeSlug: DEFAULT_THEME.slug },
+      customThemes: [],
     };
     expect(effectiveTheme(named)).toBe(effectiveTheme(named));
   });
@@ -449,19 +474,45 @@ describe("appliedTheme", () => {
   const TINTED = { ...EMPTY_PROJECT_THEME_OVERRIDE, seed: "#3f9142" };
 
   it("is the global theme for the global scope, whatever a project overrides", () => {
-    const state = { global: MIDNIGHT, projectId: "p1", projectOverride: TINTED };
+    const state = {
+      global: MIDNIGHT,
+      projectId: "p1",
+      projectOverride: TINTED,
+      customThemes: [],
+    };
 
     expect(appliedTheme(state, { kind: "global" })).toBe(MIDNIGHT);
   });
 
   it("resolves the project's own override for its scope", () => {
-    const state = { global: DEFAULT_THEME, projectId: "p1", projectOverride: TINTED };
+    const state = {
+      global: DEFAULT_THEME,
+      projectId: "p1",
+      projectOverride: TINTED,
+      customThemes: [],
+    };
 
     expect(appliedTheme(state, { kind: "project", projectId: "p1" }).seed).toBe("#3f9142");
   });
 
+  it("resolves a project appThemeSlug against custom themes in the catalog", () => {
+    const state = {
+      global: DEFAULT_THEME,
+      projectId: "p1",
+      projectOverride: { ...EMPTY_PROJECT_THEME_OVERRIDE, appThemeSlug: "sunset" },
+      customThemes: [SUNSET],
+    };
+
+    expect(appliedTheme(state, { kind: "project", projectId: "p1" })).toBe(SUNSET);
+  });
+
   it("never borrows another project's override", () => {
-    const state = { global: MIDNIGHT, projectId: "p1", projectOverride: TINTED };
+    const state = {
+      global: MIDNIGHT,
+      projectId: "p1",
+      projectOverride: TINTED,
+      customThemes: [],
+    };
 
     expect(appliedTheme(state, { kind: "project", projectId: "p2" })).toBe(MIDNIGHT);
   });
@@ -598,6 +649,27 @@ describe("the user's own themes", () => {
 
     expect(saved).toBe(false);
     expect(gateway.setGlobal).not.toHaveBeenCalled();
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      "Couldn't save the theme: disk full",
+      expect.anything(),
+    );
+  });
+
+  it("keeps customThemes and restores preview when the file write succeeds but apply fails", async () => {
+    const { store, gateway, paint } = freshStore({
+      setGlobal: vi.fn(async () => ({ ok: false as const, error: "disk full" })),
+    });
+
+    const saved = await store.getState().saveCustomTheme(MINE, { kind: "global" });
+
+    expect(saved).toBe(false);
+    expect(gateway.saveCustomTheme).toHaveBeenCalledWith(MINE);
+    expect(gateway.setGlobal).toHaveBeenCalledWith(MINE);
+    expect(store.getState().customThemes).toEqual([MINE]);
+    expect(store.getState().preview).toEqual(MINE);
+    expect(store.getState().global).toEqual(DEFAULT_THEME);
+    expect(effectiveTheme(store.getState())).toEqual(MINE);
+    expect(paint.applied.at(-1)).toEqual(MINE);
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
       "Couldn't save the theme: disk full",
       expect.anything(),

@@ -7,7 +7,12 @@ import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { StarIcon } from "@phosphor-icons/react/dist/csr/Star";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import { Command } from "cmdk";
-import { generateThemeTokens, type ThemeDefinition, type ThemeTokens } from "@volli/shared";
+import {
+  generateThemeTokens,
+  isBuiltinThemeSlug,
+  type ThemeDefinition,
+  type ThemeTokens,
+} from "@volli/shared";
 
 import {
   buildThemePickerGroups,
@@ -26,7 +31,7 @@ import {
 import { Dialog, DialogContent, DialogTitle } from "@renderer/components/ui/dialog";
 import { cn } from "@renderer/lib/utils";
 import { useThemeStore, appliedTheme, type ThemeScope } from "@renderer/stores/theme";
-import { BUILTIN_THEMES } from "@renderer/theme/catalog";
+import { BUILTIN_THEMES, mergeThemeCatalog } from "@renderer/theme/catalog";
 
 /**
  * The one theme picker (decision #73), used identically from global Settings,
@@ -88,10 +93,13 @@ export function ThemePicker({
   const stored = useThemeStore((state) => state.customThemes);
 
   const own = themes ?? stored;
-  const catalog = React.useMemo(() => [...BUILTIN_THEMES, ...own], [own]);
+  const catalog = React.useMemo(() => mergeThemeCatalog(BUILTIN_THEMES, own), [own]);
   // Which rows the user OWNS, which is what decides each row's ⋯ menu: a
   // shipped theme has no file to rename, open or delete.
-  const customSlugs = React.useMemo(() => own.map((theme) => theme.slug), [own]);
+  const customSlugs = React.useMemo(
+    () => own.filter((theme) => !isBuiltinThemeSlug(theme.slug)).map((theme) => theme.slug),
+    [own],
+  );
   const groups = React.useMemo(
     () => buildThemePickerGroups({ themes: catalog, favorites, recents, query, customSlugs }),
     [catalog, customSlugs, favorites, recents, query],

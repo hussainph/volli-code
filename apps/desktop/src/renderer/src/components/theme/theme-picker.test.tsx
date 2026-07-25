@@ -28,4 +28,12 @@ describe("ThemePicker rows", () => {
 
     expect(html.indexOf("Ember")).toBeLessThan(html.indexOf("Sunset"));
   });
+
+  it("does not render two rows for a custom file that collides with a built-in slug", () => {
+    const forged = { ...DEFAULT_THEME, name: "Forged Ember", slug: "ember", seed: "#000000" };
+    const html = renderToStaticMarkup(<ThemePicker themes={[forged, MINE]} />);
+
+    expect(html.match(/Forged Ember/g)?.length ?? 0).toBe(0);
+    expect((html.match(/Ember/g) ?? []).length).toBeGreaterThan(0);
+  });
 });

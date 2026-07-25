@@ -46,7 +46,7 @@ export const GRAIN_TILE_PX = 128;
 
 /**
  * Maps a theme's authored `grain` (0–1) onto that window — the multiplier
- * across it, so Ember's 0.35 lands at 0.022.
+ * across it, so a grain of 0.35 lands at 0.022.
  *
  * Zero is not the bottom of the window, it is OFF: it returns 0 so the caller
  * renders no layer at all. A grain of 0 means "I don't want this", and the

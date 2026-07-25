@@ -65,6 +65,16 @@ describe("global theme persistence", () => {
     expect(isThemeDefinition({ ...DEFAULT_THEME, appearance: "sepia" })).toBe(false);
     expect(isThemeDefinition(null)).toBe(false);
   });
+
+  it("rejects a seed or accent that is not a hex color", () => {
+    const badSeed = { ...DEFAULT_THEME, seed: "blue" };
+    const badAccent = { ...DEFAULT_THEME, accent: "not-a-color" };
+
+    expect(isThemeDefinition(badSeed)).toBe(false);
+    expect(isThemeDefinition(badAccent)).toBe(false);
+    expect(parseThemeJson(JSON.stringify(badSeed))).toBeNull();
+    expect(parseThemeJson(JSON.stringify(badAccent))).toBeNull();
+  });
 });
 
 describe("project theme override", () => {

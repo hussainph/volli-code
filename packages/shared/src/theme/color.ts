@@ -33,6 +33,11 @@ export interface Oklch {
 
 const HEX_PATTERN = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i;
 
+/** Whether `value` is `#rgb` or `#rrggbb`, with or without a leading `#` — same acceptance as {@link hexToRgb}. */
+export function isHexColor(value: string): boolean {
+  return HEX_PATTERN.test(value.trim());
+}
+
 /** Parses `#rgb` or `#rrggbb` (with or without `#`) into 0–1 sRGB channels. */
 export function hexToRgb(hex: string): Rgb {
   const match = HEX_PATTERN.exec(hex.trim());

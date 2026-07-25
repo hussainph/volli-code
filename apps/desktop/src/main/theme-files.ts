@@ -25,7 +25,9 @@
 import {
   customThemePath,
   errorMessage,
+  isBuiltinThemeSlug,
   parseThemeJson,
+  rejectReservedThemeSlug,
   serializeThemeFile,
   themeSlugFromFileName,
   volliThemesDir,
@@ -72,7 +74,7 @@ export function listCustomThemes(deps: ThemeFileDeps): ThemeDefinition[] {
   const themes: ThemeDefinition[] = [];
   for (const entry of deps.readDir(dir)) {
     const slug = themeSlugFromFileName(entry);
-    if (slug === null) continue;
+    if (slug === null || isBuiltinThemeSlug(slug)) continue;
     const theme = parseThemeJson(deps.readFile(`${dir}/${entry}`));
     if (theme === null) continue;
     themes.push({ ...theme, slug });
@@ -133,6 +135,11 @@ export function writeCustomTheme(
   deps: ThemeFileDeps,
   theme: ThemeDefinition,
 ): ThemeFileWriteResult {
+  try {
+    rejectReservedThemeSlug(theme.slug);
+  } catch (error) {
+    return { ok: false, error: errorMessage(error) };
+  }
   const resolved = resolveThemeFile(deps, theme.slug);
   if (!resolved.ok) return resolved;
   try {

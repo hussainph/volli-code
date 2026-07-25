@@ -114,10 +114,11 @@ export function AppearanceSettings() {
 /** Settings edits the theme every project inherits, so its scope is the global one. */
 const GLOBAL_SCOPE: ThemeScope = { kind: "global" };
 
-/** What the editor is open on: which theme, and whether the name is the point. */
+/** What the editor is open on: which theme, how, and whether the name is the point. */
 interface OpenEdit {
   source: ThemeDefinition;
   focusName: boolean;
+  mode: "edit" | "duplicate";
 }
 
 /**
@@ -140,8 +141,15 @@ function AppThemeSection() {
     void useThemeStore.getState().loadCustomThemes();
   }, []);
 
-  const edit = (source: ThemeDefinition, focusName = false): void =>
-    setEditing({ source, focusName });
+  const edit = (
+    source: ThemeDefinition,
+    options: { focusName?: boolean; duplicate?: boolean } = {},
+  ): void =>
+    setEditing({
+      source,
+      focusName: options.focusName ?? false,
+      mode: options.duplicate ? "duplicate" : "edit",
+    });
 
   return (
     <SettingsSection
@@ -160,20 +168,19 @@ function AppThemeSection() {
         <div className="overflow-hidden rounded-lg border border-border bg-background">
           <ThemePicker
             autoFocus={false}
-            // Duplicate and Rename are both "open the editor on this" — Rename
-            // just lands on the name field. There is no rename verb to call:
-            // the slug is the identity, so a rename is an ordinary save.
-            onDuplicate={(theme) => edit(theme)}
-            onRename={(theme) => edit(theme, true)}
+            // Duplicate always opens on a new copy; Rename lands on the name field.
+            onDuplicate={(theme) => edit(theme, { duplicate: true })}
+            onRename={(theme) => edit(theme, { focusName: true })}
             onDelete={setDeleting}
             onOpenFile={(theme) => void useThemeStore.getState().openCustomThemeFile(theme.slug)}
           />
         </div>
       ) : (
         <ThemeEditor
-          key={editing.source.slug}
+          key={`${editing.mode}:${editing.source.slug}`}
           source={editing.source}
           focusName={editing.focusName}
+          mode={editing.mode}
           scope={GLOBAL_SCOPE}
           onClose={() => setEditing(null)}
         />

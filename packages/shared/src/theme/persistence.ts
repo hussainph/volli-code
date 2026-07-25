@@ -19,6 +19,7 @@
  * Pure: JSON + shape guards only, no Node/DOM.
  */
 
+import { isHexColor } from "./color";
 import type { ThemeCanvas, ThemeDefinition } from "./definition";
 import { isThemeTokenName } from "./tokens";
 
@@ -106,6 +107,10 @@ function isTokenOverrideMap(value: unknown): value is ThemeDefinition["overrides
   );
 }
 
+function isNullableHexColor(value: unknown): value is string | null {
+  return value === null || (typeof value === "string" && isHexColor(value));
+}
+
 /** Runtime guard for a whole authored theme — used by the IPC descriptor and by {@link parseThemeJson}. */
 export function isThemeDefinition(value: unknown): value is ThemeDefinition {
   return (
@@ -113,7 +118,8 @@ export function isThemeDefinition(value: unknown): value is ThemeDefinition {
     typeof value["name"] === "string" &&
     typeof value["slug"] === "string" &&
     typeof value["seed"] === "string" &&
-    isNullableString(value["accent"]) &&
+    isHexColor(value["seed"]) &&
+    isNullableHexColor(value["accent"]) &&
     typeof value["grain"] === "number" &&
     Number.isFinite(value["grain"]) &&
     isThemeCanvas(value["canvas"]) &&

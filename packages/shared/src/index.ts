@@ -30,6 +30,7 @@ export * from "./theme/color";
 export * from "./theme/generate";
 export * from "./theme/ghostty-overlay";
 export * from "./theme/persistence";
+export * from "./theme/builtin-themes";
 export * from "./theme/custom-themes";
 export type * from "./ipc";
 export * from "./ipc-descriptors";

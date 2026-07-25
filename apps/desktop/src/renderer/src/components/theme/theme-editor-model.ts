@@ -14,14 +14,18 @@
  * Pure: no DOM, no store, no persistence.
  */
 
-import { persistedTheme, slugify } from "@volli/shared";
+import {
+  isHexColor as isParseableHexColor,
+  isBuiltinThemeSlug,
+  persistedTheme,
+  slugify,
+} from "@volli/shared";
 import type { ThemeDefinition } from "@volli/shared";
+
+export { isHexColor } from "@volli/shared";
 
 /** Grain is an opacity multiplier (#71), so its slider spans the whole of it. */
 export const GRAIN_RANGE = { min: 0, max: 1, step: 0.01 } as const;
-
-/** `#rgb` / `#rrggbb`, matching what `hexToRgb` accepts — it THROWS on anything else. */
-const HEX_COLOR = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
 
 /** An open edit: what is being changed, what it came from, and whether it is new. */
 export interface ThemeDraft {
@@ -40,9 +44,14 @@ export interface ThemeDraft {
   lastAccent: string | null;
 }
 
-/** Whether the generator could parse `value` as a color. */
-export function isHexColor(value: string): boolean {
-  return HEX_COLOR.test(value.trim());
+/**
+ * Whether a color field has a complete `#rgb` / `#rrggbb` the generator can
+ * parse. Bare digits without `#` are mid-typing, not a color — even though
+ * {@link isParseableHexColor} would accept them on disk.
+ */
+function isEditorHexColor(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed.startsWith("#") && isParseableHexColor(trimmed);
 }
 
 /**
@@ -55,7 +64,7 @@ export function isHexColor(value: string): boolean {
  */
 export function swatchColor(value: string): string {
   const trimmed = value.trim();
-  if (!isHexColor(trimmed)) return "#000000";
+  if (!isEditorHexColor(trimmed)) return "#000000";
   const digits = trimmed.slice(1).toLowerCase();
   return digits.length === 3 ? `#${digits.replace(/./g, (digit) => digit + digit)}` : `#${digits}`;
 }
@@ -74,12 +83,12 @@ function edited(draft: ThemeDraft, theme: ThemeDefinition): ThemeDraft {
  * or crash the render.
  */
 export function withSeed(draft: ThemeDraft, seed: string): ThemeDraft | null {
-  return isHexColor(seed) ? edited(draft, { ...draft.theme, seed }) : null;
+  return isEditorHexColor(seed) ? edited(draft, { ...draft.theme, seed }) : null;
 }
 
 /** A new unlocked accent, or `null` while the entry isn't a color yet. */
 export function withAccent(draft: ThemeDraft, accent: string): ThemeDraft | null {
-  if (!isHexColor(accent)) return null;
+  if (!isEditorHexColor(accent)) return null;
   return { ...draft, theme: { ...draft.theme, accent }, lastAccent: accent };
 }
 
@@ -130,17 +139,46 @@ export interface ThemeEditInput {
 }
 
 /**
- * Opens an edit on `source`, duplicating first when it is not the user's.
+ * Whether `source` can be edited in place — owned by the user and not a shipped slug.
+ *
+ * A custom file named `ember.json` must not make Customize on the built-in Ember
+ * open that file for overwrite; built-ins always duplicate first.
+ */
+function isEditableInPlace(source: ThemeDefinition, owned: readonly ThemeDefinition[]): boolean {
+  if (isBuiltinThemeSlug(source.slug)) return false;
+  return owned.some((theme) => theme.slug === source.slug);
+}
+
+/**
+ * Opens an edit on `source`, duplicating first when it is not the user's to
+ * change in place.
  *
  * The duplicate is silent and immediate rather than a confirmation prompt: the
  * user asked to change a color, and "you can't, here's a dialog" is a worse
  * answer than handing them the copy they were going to have to make anyway.
  * The view says which it did — `duplicated` is what it reads off.
+ *
+ * For an explicit Duplicate action, use {@link beginThemeDuplicate} instead —
+ * that always produces a new owned copy, even when `source` is already the user's.
  */
 export function beginThemeEdit({ source, owned, catalog }: ThemeEditInput): ThemeDraft {
-  const mine = owned.some((theme) => theme.slug === source.slug);
-  const theme = mine ? persistedTheme(source) : duplicateTheme(source, catalog);
-  return { theme, source, duplicated: !mine, lastAccent: source.accent };
+  const inPlace = isEditableInPlace(source, owned);
+  const theme = inPlace ? persistedTheme(source) : duplicateTheme(source, catalog);
+  return { theme, source, duplicated: !inPlace, lastAccent: source.accent };
+}
+
+/**
+ * Opens a duplicate of `source` — always a new slug, never an in-place edit.
+ *
+ * Duplicate on a theme the user already owns must not overwrite the original;
+ * Rename and Customize keep {@link beginThemeEdit}'s in-place semantics.
+ */
+export function beginThemeDuplicate({
+  source,
+  catalog,
+}: Pick<ThemeEditInput, "source" | "catalog">): ThemeDraft {
+  const theme = duplicateTheme(source, catalog);
+  return { theme, source, duplicated: true, lastAccent: source.accent };
 }
 
 /**
@@ -156,9 +194,38 @@ export function duplicateTheme(
 ): ThemeDefinition {
   const taken = new Set(catalog.map((theme) => theme.slug));
   const base = `${source.name} Copy`;
-  // Counts on the SLUG, not the name: the slug is the identity, and two names
-  // that differ only in punctuation slugify to the same file.
+  const slugForName = (name: string): string => slugify(name);
+
+  const available = (name: string): string | null => {
+    const slug = slugForName(name);
+    return taken.has(slug) ? null : slug;
+  };
+
   let name = base;
-  for (let n = 2; taken.has(slugify(name)); n += 1) name = `${base} ${n}`;
-  return { ...persistedTheme(source), name, slug: slugify(name) };
+  let slug = available(name);
+  if (slug === null) {
+    for (let n = 2; n < 100; n += 1) {
+      name = `${base} ${n}`;
+      slug = available(name);
+      if (slug !== null) break;
+    }
+  }
+  // slugify truncates to 48 chars — long names can collapse distinct "Copy N"
+  // labels to the same slug. Suffix directly on a trimmed stem when that happens.
+  if (slug === null) {
+    const stem = slugForName(base).replace(/-+$/, "").slice(0, 40);
+    for (let n = 2; n < 1000; n += 1) {
+      const candidate = `${stem}-${n}`;
+      if (!taken.has(candidate)) {
+        slug = candidate;
+        name = `${base} ${n}`;
+        break;
+      }
+    }
+  }
+  if (slug === null) {
+    slug = `${slugForName(base).slice(0, 36)}-${Date.now()}`;
+    name = base;
+  }
+  return { ...persistedTheme(source), name, slug };
 }
