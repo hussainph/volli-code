@@ -204,11 +204,16 @@ export function createThemeStore({
           theme: ThemeDefinition,
         ): Promise<boolean> => {
           const base = get().projectOverride ?? EMPTY_PROJECT_THEME_OVERRIDE;
-          set({ recents: noteRecentTheme(get().recents, theme.slug) });
+          const previousRecents = get().recents;
+          set({ recents: noteRecentTheme(previousRecents, theme.slug) });
           const result = await writeThrough("save the theme", () =>
             deps.gateway.setProject(projectId, { ...base, appThemeSlug: theme.slug }),
           );
           if (result === null) {
+            // A theme that did not save was not applied — Recent must describe
+            // what is stored, not what was attempted. (And it PERSISTS, so an
+            // un-rolled-back entry would outlive the session that failed.)
+            set({ recents: previousRecents });
             repaint();
             return false;
           }
@@ -297,10 +302,11 @@ export function createThemeStore({
             // Optimistic: the picker's whole point is that the app is already
             // wearing the theme by the time you press Enter.
             const previous = get().global;
+            const previousRecents = get().recents;
             set({
               preview: null,
               global: theme,
-              recents: noteRecentTheme(get().recents, theme.slug),
+              recents: noteRecentTheme(previousRecents, theme.slug),
             });
             repaint();
             const result = await writeThrough("save the theme", () =>
@@ -308,9 +314,10 @@ export function createThemeStore({
             );
             if (result === null) {
               // Put the user back on the theme that is actually stored rather
-              // than leaving them looking at one that isn't. `writeThrough`
-              // has already surfaced the failure.
-              set({ global: previous });
+              // than leaving them looking at one that isn't — Recent included,
+              // or a theme that never saved would still rank as the last one
+              // applied. `writeThrough` has already surfaced the failure.
+              set({ global: previous, recents: previousRecents });
               repaint();
               return false;
             }

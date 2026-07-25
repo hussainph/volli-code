@@ -81,6 +81,7 @@ import type {
   RetentionPollResult,
   RetentionStateResult,
   RetentionTtlResult,
+  OverlayEdits,
   ProjectThemeOverride,
   ThemeDefinition,
   ThemeSetProjectResult,
@@ -420,14 +421,12 @@ const api = {
       override: ProjectThemeOverride | null,
     ): Promise<ThemeSetProjectResult> => invoke("volli:theme-set-project", { projectId, override }),
     /** Rewrites keys in Volli's global ghostty overlay (`null` removes a key). */
-    writeGlobalOverlay: (
-      edits: Record<string, string | null>,
-    ): Promise<TerminalOverlayWriteResult> =>
+    writeGlobalOverlay: (edits: OverlayEdits): Promise<TerminalOverlayWriteResult> =>
       invoke("volli:theme-terminal-overlay-write", { scope: "global", edits }),
     /** Rewrites keys in one project's ghostty overlay. */
     writeProjectOverlay: (
       projectId: string,
-      edits: Record<string, string | null>,
+      edits: OverlayEdits,
     ): Promise<TerminalOverlayWriteResult> =>
       invoke("volli:theme-terminal-overlay-write", { scope: "project", projectId, edits }),
   },

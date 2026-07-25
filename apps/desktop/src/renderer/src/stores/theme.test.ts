@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import {
   DEFAULT_THEME,
   EMPTY_PROJECT_THEME_OVERRIDE,
+  generateThemeTokens,
   type GhosttyAppearancePayload,
   type ProjectThemeOverride,
   type ThemeDefinition,
@@ -241,10 +242,27 @@ describe("commit", () => {
 
     expect(store.getState().global).toEqual(DEFAULT_THEME);
     expect(paint.applied).toEqual([MIDNIGHT, DEFAULT_THEME]);
+    // The optimistic Recent entry rolls back with the theme: Recent means
+    // "applied", and this one never made it to disk.
+    expect(store.getState().recents).toEqual([]);
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
       "Could not save the theme: disk full",
       expect.anything(),
     );
+  });
+
+  it("rolls the optimistic Recent entry back when a project write fails too", async () => {
+    const { store } = freshStore({
+      setProject: vi.fn(async () => ({ ok: false as const, error: "disk full" })),
+    });
+    store.setState({ recents: ["ember"] });
+    store.getState().startPreview(MIDNIGHT);
+
+    await expect(
+      store.getState().commitPreview({ kind: "project", projectId: "p1" }),
+    ).resolves.toBe(false);
+
+    expect(store.getState().recents).toEqual(["ember"]);
   });
 
   it("writes a project's app-surface override for a project scope", async () => {
@@ -463,8 +481,10 @@ describe("createThemeStore() with the default deps", () => {
     await store.getState().hydrate();
 
     expect(state).toHaveBeenCalledWith({});
-    // #0f1117 is Midnight's generated --background.
-    expect(written.get("--background")).toBe("#0f1117");
+    // Exactly Midnight's generated --background — asserted against the
+    // generator (as window-theme.test.ts does) so the two can't drift, and
+    // still meaningful because nothing writes this key unless the store paints.
+    expect(written.get("--background")).toBe(generateThemeTokens(MIDNIGHT)["--background"]);
 
     await store.getState().setGlobalTheme(DEFAULT_THEME);
     expect(setGlobal).toHaveBeenCalledWith(DEFAULT_THEME);

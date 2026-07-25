@@ -385,7 +385,18 @@ app.whenReady().then(async () => {
     { fs: fsDeps, now: Date.now },
     {
       onGlobalThemeChanged: (theme) => {
-        const color = windowBackgroundColor(theme);
+        // The theme is already persisted by the time this runs, so a generator
+        // failure must not turn a successful write into a rejected set-global.
+        // Leave the windows on their current edge color rather than repainting
+        // to the default: a theme that can't generate never reached the
+        // renderer's own surfaces either, so the old color is the honest one.
+        let color: string;
+        try {
+          color = windowBackgroundColor(theme);
+        } catch (error) {
+          console.warn("[volli] failed to derive the window background:", errorMessage(error));
+          return;
+        }
         for (const window of BrowserWindow.getAllWindows()) window.setBackgroundColor(color);
       },
     },

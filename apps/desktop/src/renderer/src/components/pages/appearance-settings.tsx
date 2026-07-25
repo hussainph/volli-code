@@ -53,7 +53,16 @@ export function AppearanceSettings() {
     if (!hydrated) void useThemeStore.getState().hydrate();
   }, [hydrated]);
 
-  const rows = React.useMemo(() => buildTerminalSettingRows(terminal), [terminal]);
+  // Keyed, not indexed: which row goes in which slot is a property of the key,
+  // not of the model's array order.
+  const rows = React.useMemo(
+    () =>
+      Object.fromEntries(buildTerminalSettingRows(terminal).map((row) => [row.key, row])) as Record<
+        TerminalSettingKey,
+        TerminalSettingRow
+      >,
+    [terminal],
+  );
 
   return (
     <>
@@ -72,9 +81,9 @@ export function AppearanceSettings() {
         icon={TerminalWindowIcon}
         description="Volli layers its own settings on top of your Ghostty config and never edits that file. Anything set here wins; reverting hands the key back to Ghostty."
       >
-        <TerminalThemeRow row={rows[0]!} />
-        <FontFamilyRow row={rows[1]!} />
-        <FontSizeRow row={rows[2]!} />
+        <TerminalThemeRow row={rows.theme} />
+        <FontFamilyRow row={rows["font-family"]} />
+        <FontSizeRow row={rows["font-size"]} />
         <SettingsRow
           label="Configuration files"
           description="The overlay accepts any Ghostty key by hand — Volli preserves your lines and comments when it rewrites the keys it manages."
@@ -169,7 +178,11 @@ function RevertButton({ settingKey }: { settingKey: TerminalSettingKey }) {
   );
 }
 
-/** Repaints every live terminal in `name`'s palette, writing nothing. */
+/**
+ * Repaints every live terminal in `name`'s palette, writing nothing. A name the
+ * catalog doesn't have (cmdk hands back `""` when the selection empties) ends
+ * the preview rather than painting nothing.
+ */
 const preview = (name: string): void => previewTerminalTheme(getBuiltinTheme(name));
 
 /** Puts the resolved palette back, ending a preview. */
@@ -185,6 +198,10 @@ const endPreview = (): void => previewTerminalTheme(null);
  */
 function TerminalThemeRow({ row }: { row: TerminalSettingRow }) {
   const [open, setOpen] = React.useState(false);
+  // cmdk only calls `onValueChange` when the root is CONTROLLED — uncontrolled
+  // it just updates its own store and returns (see its `setState`), so an
+  // uncontrolled picker here would silently never preview anything.
+  const [selected, setSelected] = React.useState("");
   const names = React.useMemo(() => listBuiltinThemeNames(), []);
 
   // Leaving the surface with a preview running would strand every terminal on
@@ -214,7 +231,11 @@ function TerminalThemeRow({ row }: { row: TerminalSettingRow }) {
         <PopoverContent align="end" className="w-64 p-0">
           <Command
             loop
-            onValueChange={preview}
+            value={selected}
+            onValueChange={(name) => {
+              setSelected(name);
+              preview(name);
+            }}
             className="flex flex-col overflow-hidden rounded-md"
           >
             <Command.Input
@@ -356,14 +377,20 @@ function FontSizeRow({ row }: { row: TerminalSettingRow }) {
     if (next === from) return;
     target.current = next;
     setPending(next);
-    queue.current = queue.current.then(async () => {
-      await writeOverlay({ "font-size": String(next) });
+    const settle = (): void => {
       // Only the last click of a burst gives the display back — an earlier one
       // would flash the size the file had two clicks ago.
       if (target.current !== next) return;
       target.current = null;
       setPending(null);
-    });
+    };
+    // Settled on BOTH paths: `writeOverlay` toasts and resolves rather than
+    // rejecting, but one rejected link would be inherited by every later click
+    // — the chain would stop running and the stepper would freeze on a pending
+    // number forever. `.then(settle, settle)` also heals it.
+    queue.current = queue.current
+      .then(() => writeOverlay({ "font-size": String(next) }))
+      .then(settle, settle);
   };
 
   return (

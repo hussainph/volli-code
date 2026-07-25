@@ -228,22 +228,19 @@ function ipcDeps(): GhosttyConfigDeps {
     ensureDir: (dir) => {
       mkdirSyncMock(dir, { recursive: true });
     },
-    env: process.env,
+    // Empty rather than `process.env`, like `makeDeps`: entry-path resolution
+    // reads XDG_CONFIG_HOME, so a developer with it set would otherwise resolve
+    // a different config path than the one these assertions hardcode.
+    env: {},
     homeDir: "/Users/test",
     userDataDir: IPC_USER_DATA,
   };
 }
 
 describe("registerGhosttyConfigIpc", () => {
-  let originalXdg: string | undefined;
-
   beforeEach(() => {
     vi.clearAllMocks();
     handlers.clear();
-    // Deterministic across dev/CI hosts: readGhosttyAppearance's default deps
-    // read process.env directly, so the ambient XDG_CONFIG_HOME must not leak in.
-    originalXdg = process.env["XDG_CONFIG_HOME"];
-    delete process.env["XDG_CONFIG_HOME"];
     readFileSyncMock.mockImplementation(() => {
       throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
     });
@@ -260,8 +257,6 @@ describe("registerGhosttyConfigIpc", () => {
   });
 
   afterEach(() => {
-    if (originalXdg === undefined) delete process.env["XDG_CONFIG_HOME"];
-    else process.env["XDG_CONFIG_HOME"] = originalXdg;
     vi.useRealTimers();
   });
 

@@ -7,7 +7,7 @@ import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { StarIcon } from "@phosphor-icons/react/dist/csr/Star";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import { Command } from "cmdk";
-import { generateThemeTokens, type ThemeDefinition } from "@volli/shared";
+import { generateThemeTokens, type ThemeDefinition, type ThemeTokens } from "@volli/shared";
 
 import {
   buildThemePickerGroups,
@@ -367,9 +367,27 @@ function ThemeRow({
   );
 }
 
+/**
+ * Generated tokens per theme, cached at module level rather than per mount.
+ * Filtering the list drops rows from the tree entirely (the model owns
+ * filtering — see `shouldFilter={false}` above), so every row REMOUNTS on every
+ * keystroke and a `useMemo` would re-run the OKLCH/APCA generation for each
+ * visible theme each time. Keyed weakly on the catalog's own theme objects, so
+ * a discarded custom theme takes its entry with it.
+ */
+const swatchTokens = new WeakMap<ThemeDefinition, ThemeTokens>();
+
+function themeSwatchTokens(theme: ThemeDefinition): ThemeTokens {
+  const cached = swatchTokens.get(theme);
+  if (cached !== undefined) return cached;
+  const tokens = generateThemeTokens(theme);
+  swatchTokens.set(theme, tokens);
+  return tokens;
+}
+
 /** A four-stripe preview of the theme's own generated surfaces and accent. */
 function ThemeSwatch({ theme }: { theme: ThemeDefinition }) {
-  const tokens = React.useMemo(() => generateThemeTokens(theme), [theme]);
+  const tokens = themeSwatchTokens(theme);
   return (
     <span
       aria-hidden

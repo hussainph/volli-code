@@ -29,6 +29,7 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 /**
@@ -83,9 +84,7 @@ export function defaultFsDeps(userDataDir: string): FsDeps {
     // Dot-prefixed and uniquely suffixed: a crashed write leaves an inert
     // hidden file rather than something ghostty's directory watch or a
     // curious user would mistake for a real overlay.
-    tempName: (targetPath) => {
-      const slash = targetPath.lastIndexOf("/");
-      return `${targetPath.slice(0, slash)}/.${targetPath.slice(slash + 1)}.${randomUUID()}.tmp`;
-    },
+    tempName: (targetPath) =>
+      join(dirname(targetPath), `.${basename(targetPath)}.${randomUUID()}.tmp`),
   };
 }

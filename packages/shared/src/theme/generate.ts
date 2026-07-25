@@ -49,7 +49,12 @@ const PRIMARY_LIGHTNESS = 0.661;
  * of color as surfaces lighten — the lighter rungs need more of it to feel
  * like the same family.
  *
- * Order is darkest → lightest and is asserted: `L` must strictly increase.
+ * Order is darkest → lightest and is asserted: `L` must never decrease.
+ * Non-decreasing rather than strictly increasing because `--accent` (L 0.252)
+ * and `--sidebar-border` (L 0.255) sit under one 8-bit step apart and quantise
+ * to the same hex at some hues — harmless for a surface and an edge that never
+ * meet. An *inversion* is the real bug, and that is what the assertion rules
+ * out.
  */
 const LADDER: readonly { tokens: readonly ThemeTokenName[]; L: number; k: number }[] = [
   { tokens: ["--rail"], L: 0.155, k: 0.8 },
@@ -233,21 +238,6 @@ export function generateThemeTokens(theme: ThemeDefinition): ThemeTokens {
 const PRIMARY_FOREGROUND_LC = 60;
 
 /**
- * Solves `--primary` and `--primary-foreground` together, because at some
- * hues they cannot be solved apart.
- *
- * The label comes from {@link pickAccentLabel}.
- *
- * The awkward case is a saturated mid-green: at L 0.661 white reaches Lc ~60
- * and a dark label tops out near Lc 49, so *no* label clears the floor. The
- * only axis left is the button's own lightness, and step 9 of the spec says
- * exactly that — on failure adjust lightness, never chroma. So the accent is
- * nudged the smallest distance from PRIMARY_LIGHTNESS that makes its label
- * legible. Hue and chroma, the two things the user actually chose, are
- * untouched; the extremes (L 0 with white, L 1 with dark) always clear, so
- * the search always terminates on a legible pair.
- */
-/**
  * Step 7's label choice: whichever of white or a near-black tint of the accent
  * hue reads better ON the button, with the APCA score that won.
  *
@@ -264,6 +254,21 @@ export function pickAccentLabel(primaryHex: string, hue: number): { hex: string;
     .reduce((best, next) => (next.lc > best.lc ? next : best));
 }
 
+/**
+ * Solves `--primary` and `--primary-foreground` together, because at some
+ * hues they cannot be solved apart.
+ *
+ * The label comes from {@link pickAccentLabel}.
+ *
+ * The awkward case is a saturated mid-green: at L 0.661 white reaches Lc ~60
+ * and a dark label tops out near Lc 49, so *no* label clears the floor. The
+ * only axis left is the button's own lightness, and step 9 of the spec says
+ * exactly that — on failure adjust lightness, never chroma. So the accent is
+ * nudged the smallest distance from PRIMARY_LIGHTNESS that makes its label
+ * legible. Hue and chroma, the two things the user actually chose, are
+ * untouched; the extremes (L 0 with white, L 1 with dark) always clear, so
+ * the search always terminates on a legible pair.
+ */
 function solveAccentPair(
   chroma: number,
   hue: number,

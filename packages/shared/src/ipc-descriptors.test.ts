@@ -1189,7 +1189,7 @@ describe("THEME_IPC descriptor table", () => {
   const theme = DEFAULT_THEME;
 
   describe("volli:theme-state", () => {
-    const { guard } = THEME_IPC["volli:theme-state"];
+    const { guard, invalidError } = THEME_IPC["volli:theme-state"];
 
     it("accepts a global request and a project-scoped one", () => {
       expect(guard([{}])).toBe(true);
@@ -1201,10 +1201,14 @@ describe("THEME_IPC descriptor table", () => {
       expect(guard([])).toBe(false);
       expect(guard([null])).toBe(false);
     });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid theme request");
+    });
   });
 
   describe("volli:theme-set-global", () => {
-    const { guard } = THEME_IPC["volli:theme-set-global"];
+    const { guard, invalidError } = THEME_IPC["volli:theme-set-global"];
 
     it("accepts a well-formed authored definition", () => {
       expect(guard([{ theme }])).toBe(true);
@@ -1225,10 +1229,14 @@ describe("THEME_IPC descriptor table", () => {
       );
       expect(guard([{ theme: { ...theme, overrides: { "--not-a-token": "#000" } } }])).toBe(false);
     });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid theme");
+    });
   });
 
   describe("volli:theme-set-project", () => {
-    const { guard } = THEME_IPC["volli:theme-set-project"];
+    const { guard, invalidError } = THEME_IPC["volli:theme-set-project"];
     const override = {
       appThemeSlug: null,
       terminalThemeName: "Nord",
@@ -1250,10 +1258,14 @@ describe("THEME_IPC descriptor table", () => {
       expect(guard([])).toBe(false);
       expect(guard([{ projectId: "p1", override }, "stray"])).toBe(false);
     });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid project theme override");
+    });
   });
 
   describe("volli:theme-terminal-overlay-write", () => {
-    const { guard } = THEME_IPC["volli:theme-terminal-overlay-write"];
+    const { guard, invalidError } = THEME_IPC["volli:theme-terminal-overlay-write"];
 
     it("accepts a global scope and a project scope", () => {
       expect(guard([{ scope: "global", edits: { theme: "Nord" } }])).toBe(true);
@@ -1292,6 +1304,10 @@ describe("THEME_IPC descriptor table", () => {
     it("still accepts a value whose spaces, `#` or `=` are literal", () => {
       expect(guard([{ scope: "global", edits: { "font-family": " Berkeley Mono " } }])).toBe(true);
       expect(guard([{ scope: "global", edits: { "window-title": "a = b # c" } }])).toBe(true);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid terminal overlay write");
     });
   });
 

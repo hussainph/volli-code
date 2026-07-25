@@ -133,9 +133,10 @@ function tintedTheme(
  * intent, and the seed is retained so a later switch back to auto-tint doesn't
  * have to re-derive it.
  *
- * An unresolvable slug (a custom theme file the user deleted) falls back to the
- * global theme rather than throwing — a missing theme must degrade to the
- * shipped look, never to a blank window.
+ * An unresolvable slug (a custom theme file the user deleted) never throws: it
+ * lands exactly where a project that named no theme lands — its seed tint if it
+ * carries one, and only otherwise the global theme. A missing theme must
+ * degrade to a look the project already asked for, never to a blank window.
  */
 export function resolveActiveTheme(
   global: ThemeDefinition,
