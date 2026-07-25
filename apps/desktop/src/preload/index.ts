@@ -90,6 +90,9 @@ import type {
   ThemeStateInput,
   ThemeStateResult,
   TerminalOverlayWriteResult,
+  CustomThemeListResult,
+  CustomThemeReadResult,
+  CustomThemeWriteResult,
 } from "@volli/shared";
 
 /** Typed `ipcRenderer.invoke` bound to the shared contract: the channel literal fixes both the argument tuple and the result type, so a wrong pairing is a compile error. */
@@ -442,6 +445,26 @@ const api = {
       edits: OverlayEdits,
     ): Promise<TerminalOverlayWriteResult> =>
       invoke("volli:theme-terminal-overlay-write", { scope: "project", projectId, edits }),
+    /**
+     * The user's own themes — one JSON file each under
+     * `<userData>/volli/themes/<slug>.json` (#71), so a theme stays an openable,
+     * shareable artifact. Every verb names a SLUG; main resolves the path, so
+     * nothing here can reach a file outside that directory. `save` and
+     * `deleteCustomTheme` answer with the fresh catalog, which is why there is
+     * no separate refetch (or change event) to wire up.
+     */
+    listCustomThemes: (): Promise<CustomThemeListResult> => invoke("volli:theme-file-list"),
+    readCustomTheme: (slug: string): Promise<CustomThemeReadResult> =>
+      invoke("volli:theme-file-read", { slug }),
+    saveCustomTheme: (theme: ThemeDefinition): Promise<CustomThemeWriteResult> =>
+      invoke("volli:theme-file-write", { theme }),
+    deleteCustomTheme: (slug: string): Promise<CustomThemeListResult> =>
+      invoke("volli:theme-file-delete", { slug }),
+    /** Reveals the theme's file in Finder. */
+    revealCustomTheme: (slug: string): Promise<Result> =>
+      invoke("volli:theme-file-reveal", { slug }),
+    /** Opens the theme's file in the user's default editor. */
+    openCustomTheme: (slug: string): Promise<Result> => invoke("volli:theme-file-open", { slug }),
   },
 };
 

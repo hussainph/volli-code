@@ -7,12 +7,20 @@ import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { StarIcon } from "@phosphor-icons/react/dist/csr/Star";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import { Command } from "cmdk";
-import { generateThemeTokens, type ThemeDefinition, type ThemeTokens } from "@volli/shared";
+import {
+  generateThemeTokens,
+  isBuiltinThemeSlug,
+  type ThemeDefinition,
+  type ThemeTokens,
+} from "@volli/shared";
 
 import {
   buildThemePickerGroups,
   themeForRowKey,
+  themeRowActionKeys,
   type ThemePickerRow,
+  type ThemeRowActionKey,
+  type ThemeRowActions,
 } from "@renderer/components/theme/theme-picker-model";
 import {
   ContextMenu,
@@ -23,7 +31,7 @@ import {
 import { Dialog, DialogContent, DialogTitle } from "@renderer/components/ui/dialog";
 import { cn } from "@renderer/lib/utils";
 import { useThemeStore, appliedTheme, type ThemeScope } from "@renderer/stores/theme";
-import { BUILTIN_THEMES } from "@renderer/theme/catalog";
+import { BUILTIN_THEMES, mergeThemeCatalog } from "@renderer/theme/catalog";
 
 /**
  * The one theme picker (decision #73), used identically from global Settings,
@@ -41,20 +49,6 @@ import { BUILTIN_THEMES } from "@renderer/theme/catalog";
 /** Hoisted so the default `scope` is a stable reference across renders. */
 const GLOBAL_SCOPE: ThemeScope = { kind: "global" };
 
-/**
- * Row actions (#73). Each is OMITTED from the ⋯ menu until a host supplies its
- * handler, and with none supplied there is no menu at all — a menu of dead
- * items promises an editor that doesn't exist yet.
- */
-export interface ThemeRowActions {
-  /** Copy a theme into an editable one of your own. */
-  onDuplicate?(theme: ThemeDefinition): void;
-  onRename?(theme: ThemeDefinition): void;
-  onDelete?(theme: ThemeDefinition): void;
-  /** Reveal the theme's JSON file — a theme is meant to stay a shareable artifact. */
-  onOpenFile?(theme: ThemeDefinition): void;
-}
-
 export interface ThemePickerProps extends ThemeRowActions {
   /**
    * Where a commit is written (#69). Defaults to the global scope; the
@@ -64,8 +58,11 @@ export interface ThemePickerProps extends ThemeRowActions {
    */
   scope?: ThemeScope;
   /**
-   * Themes beyond the shipped catalog — the user's own theme files land here.
-   * Merged after {@link BUILTIN_THEMES}, so shipped themes stay on top.
+   * Themes beyond the shipped catalog. Defaults to the user's own theme files
+   * as the store last read them, so EVERY entry point (⌘K included) lists the
+   * whole library without its host having to know the library exists; pass this
+   * only to show a different set. Merged after {@link BUILTIN_THEMES}, so
+   * shipped themes stay on top.
    */
   themes?: readonly ThemeDefinition[];
   /** After a successful commit. The ⌘K host closes itself here. */
@@ -93,14 +90,19 @@ export function ThemePicker({
   // effective theme is the row under the cursor, so tagging that one "Current"
   // would drag the tag down the list and hide where Escape goes back to.
   const applied = useThemeStore((state) => appliedTheme(state, scope));
+  const stored = useThemeStore((state) => state.customThemes);
 
-  const catalog = React.useMemo(
-    () => (themes === undefined ? BUILTIN_THEMES : [...BUILTIN_THEMES, ...themes]),
-    [themes],
+  const own = themes ?? stored;
+  const catalog = React.useMemo(() => mergeThemeCatalog(BUILTIN_THEMES, own), [own]);
+  // Which rows the user OWNS, which is what decides each row's ⋯ menu: a
+  // shipped theme has no file to rename, open or delete.
+  const customSlugs = React.useMemo(
+    () => own.filter((theme) => !isBuiltinThemeSlug(theme.slug)).map((theme) => theme.slug),
+    [own],
   );
   const groups = React.useMemo(
-    () => buildThemePickerGroups({ themes: catalog, favorites, recents, query }),
-    [catalog, favorites, recents, query],
+    () => buildThemePickerGroups({ themes: catalog, favorites, recents, query, customSlugs }),
+    [catalog, customSlugs, favorites, recents, query],
   );
 
   // Leaving the picker at all — Escape, closing the dialog, navigating away —
@@ -246,6 +248,44 @@ export function ThemePickerDialog({
 }
 
 /**
+ * How each ⋯ action presents and what it calls, in one table — so the menu is
+ * `.map()`ed from {@link themeRowActionKeys}'s answer rather than four
+ * near-identical conditional blocks that can drift apart. Every item carries a
+ * neighboring Phosphor icon, per CLAUDE.md.
+ */
+const ROW_ACTION_ITEMS: Record<
+  ThemeRowActionKey,
+  {
+    label: string;
+    icon: typeof CopyIcon;
+    variant?: "destructive";
+    run(actions: ThemeRowActions, theme: ThemeDefinition): void;
+  }
+> = {
+  duplicate: {
+    label: "Duplicate",
+    icon: CopyIcon,
+    run: (actions, theme) => actions.onDuplicate?.(theme),
+  },
+  rename: {
+    label: "Rename",
+    icon: PencilSimpleIcon,
+    run: (actions, theme) => actions.onRename?.(theme),
+  },
+  "open-file": {
+    label: "Open file",
+    icon: FileTextIcon,
+    run: (actions, theme) => actions.onOpenFile?.(theme),
+  },
+  delete: {
+    label: "Delete",
+    icon: TrashIcon,
+    variant: "destructive",
+    run: (actions, theme) => actions.onDelete?.(theme),
+  },
+};
+
+/**
  * One theme row: a generated swatch, the name, its derived chips, the favorite
  * star, and — only when a host actually supplied actions — the ⋯ menu.
  *
@@ -274,12 +314,8 @@ function ThemeRow({
 }) {
   const triggerRef = React.useRef<HTMLDivElement>(null);
   const { theme } = row;
-  const { onDuplicate, onRename, onOpenFile, onDelete } = actions;
-  const hasMenu =
-    onDuplicate !== undefined ||
-    onRename !== undefined ||
-    onOpenFile !== undefined ||
-    onDelete !== undefined;
+  const menu = themeRowActionKeys(actions, row.custom);
+  const hasMenu = menu.length > 0;
 
   const openMenu = (event: React.MouseEvent): void => {
     event.preventDefault();
@@ -359,26 +395,19 @@ function ThemeRow({
         {item}
       </ContextMenuTrigger>
       <ContextMenuContent className="w-44">
-        {onDuplicate === undefined ? null : (
-          <ContextMenuItem icon={CopyIcon} onSelect={() => onDuplicate(theme)}>
-            Duplicate
-          </ContextMenuItem>
-        )}
-        {onRename === undefined ? null : (
-          <ContextMenuItem icon={PencilSimpleIcon} onSelect={() => onRename(theme)}>
-            Rename
-          </ContextMenuItem>
-        )}
-        {onOpenFile === undefined ? null : (
-          <ContextMenuItem icon={FileTextIcon} onSelect={() => onOpenFile(theme)}>
-            Open file
-          </ContextMenuItem>
-        )}
-        {onDelete === undefined ? null : (
-          <ContextMenuItem icon={TrashIcon} variant="destructive" onSelect={() => onDelete(theme)}>
-            Delete
-          </ContextMenuItem>
-        )}
+        {menu.map((key) => {
+          const { icon: Icon, label, variant } = ROW_ACTION_ITEMS[key];
+          return (
+            <ContextMenuItem
+              key={key}
+              icon={Icon}
+              variant={variant}
+              onSelect={() => ROW_ACTION_ITEMS[key].run(actions, theme)}
+            >
+              {label}
+            </ContextMenuItem>
+          );
+        })}
       </ContextMenuContent>
     </ContextMenu>
   );

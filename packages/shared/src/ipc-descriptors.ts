@@ -10,6 +10,7 @@ import type {
   ThemeIpcChannel,
   VolliInvokeContract,
 } from "./ipc";
+import { isValidThemeSlug } from "./theme/custom-themes";
 import { isValidOverlayKey, isValidOverlayValue } from "./theme/ghostty-overlay";
 import { isProjectThemeOverride, isThemeDefinition } from "./theme/persistence";
 import { isHarnessId, isTicketPriority, isTicketStatus } from "./ticket";
@@ -537,6 +538,17 @@ function isOverlayEdits(value: unknown): value is Record<string, string | null> 
   );
 }
 
+/** `[{ slug }]` where the slug can actually name a file in the themes directory. */
+function isThemeSlugArgs(args: unknown[]): boolean {
+  const [input] = args;
+  return (
+    args.length === 1 &&
+    isRecord(input) &&
+    typeof input["slug"] === "string" &&
+    isValidThemeSlug(input["slug"])
+  );
+}
+
 export const THEME_IPC: { readonly [C in ThemeIpcChannel]: IpcRequestDescriptor<C> } = {
   "volli:theme-state": {
     guard: (args): args is IpcArgs<"volli:theme-state"> => {
@@ -575,6 +587,35 @@ export const THEME_IPC: { readonly [C in ThemeIpcChannel]: IpcRequestDescriptor<
       return input["scope"] === "project" && typeof input["projectId"] === "string";
     },
     invalidError: "Invalid terminal overlay write",
+  },
+  // The custom-theme catalog names a SLUG, never a path. `isValidThemeSlug` is
+  // imported rather than restated, so the IPC boundary cannot drift from the
+  // path builder it guards: a traversal is refused here, before main runs, as
+  // well as in `customThemePath`.
+  "volli:theme-file-list": {
+    guard: (args): args is IpcArgs<"volli:theme-file-list"> => args.length === 0,
+    invalidError: "Invalid theme request",
+  },
+  "volli:theme-file-read": {
+    guard: (args): args is IpcArgs<"volli:theme-file-read"> => isThemeSlugArgs(args),
+    invalidError: "Invalid theme slug",
+  },
+  "volli:theme-file-write": {
+    guard: (args): args is IpcArgs<"volli:theme-file-write"> =>
+      args.length === 1 && isRecord(args[0]) && isThemeDefinition(args[0]["theme"]),
+    invalidError: "Invalid theme",
+  },
+  "volli:theme-file-delete": {
+    guard: (args): args is IpcArgs<"volli:theme-file-delete"> => isThemeSlugArgs(args),
+    invalidError: "Invalid theme slug",
+  },
+  "volli:theme-file-reveal": {
+    guard: (args): args is IpcArgs<"volli:theme-file-reveal"> => isThemeSlugArgs(args),
+    invalidError: "Invalid theme slug",
+  },
+  "volli:theme-file-open": {
+    guard: (args): args is IpcArgs<"volli:theme-file-open"> => isThemeSlugArgs(args),
+    invalidError: "Invalid theme slug",
   },
 };
 

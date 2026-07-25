@@ -1,15 +1,53 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  attachEditorContribution,
   classifyExternalChange,
   fileEditorAriaLabel,
   fileEditorConstructionOptions,
   MonacoFileEditor,
   type MonacoDocumentOptions,
+  type MonacoEditorContext,
   planExplicitSave,
   saveFailureMessage,
 } from "./monaco-file-editor";
+
+/**
+ * The mount effect calls `attachEditorContribution` once after the editor is
+ * created and disposes whatever it returns on teardown. Renderer tests run
+ * under Node with no DOM, so the seam is exercised here with a fake context —
+ * no real Monaco, matching how the pure helpers above are tested.
+ */
+describe("attachEditorContribution", () => {
+  const context = {
+    editor: { id: "editor" },
+    model: { id: "model" },
+    monaco: { KeyCode: {} },
+  } as unknown as MonacoEditorContext;
+
+  it("runs contribute once on attach and its disposer on teardown", () => {
+    const dispose = vi.fn();
+    const contribute = vi.fn(() => ({ dispose }));
+
+    const contribution = attachEditorContribution(contribute, context);
+
+    expect(contribute).toHaveBeenCalledTimes(1);
+    expect(contribute).toHaveBeenCalledWith(context);
+    expect(dispose).not.toHaveBeenCalled();
+
+    contribution?.dispose();
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("is a no-op when the host did not pass a contribution", () => {
+    expect(attachEditorContribution(undefined, context)).toBeNull();
+  });
+
+  it("tolerates a contribution that attaches nothing disposable", () => {
+    expect(attachEditorContribution(() => undefined, context)).toBeNull();
+  });
+});
 
 describe("fileEditorConstructionOptions", () => {
   const base = { readOnly: false, ariaLabel: "notes.md" };

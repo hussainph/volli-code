@@ -13,8 +13,10 @@
  * picker needs in order to exist at all, plus the Volli originals #76 names.
  */
 
-import { DEFAULT_THEME } from "@volli/shared";
+import { BUILTIN_THEME_SLUGS, DEFAULT_THEME, isBuiltinThemeSlug } from "@volli/shared";
 import type { ThemeDefinition } from "@volli/shared";
+
+export { BUILTIN_THEME_SLUGS };
 
 /** One Volli original: a name, a seed, and the shared defaults. */
 function original(name: string, slug: string, seed: string): ThemeDefinition {
@@ -39,3 +41,15 @@ export const BUILTIN_THEMES: readonly ThemeDefinition[] = [
   // the accent (#75) is how a theme asks for color on grey chrome instead.
   original("Graphite", "graphite", "#8a8a8a"),
 ];
+
+/** Built-ins first; custom themes whose slug collides with a shipped one are omitted. */
+export function mergeThemeCatalog(
+  builtins: readonly ThemeDefinition[],
+  custom: readonly ThemeDefinition[],
+): ThemeDefinition[] {
+  const builtinSlugs = new Set(builtins.map((theme) => theme.slug));
+  const own = custom.filter(
+    (theme) => !builtinSlugs.has(theme.slug) && !isBuiltinThemeSlug(theme.slug),
+  );
+  return [...builtins, ...own];
+}

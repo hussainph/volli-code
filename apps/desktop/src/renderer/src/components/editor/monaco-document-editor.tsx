@@ -8,7 +8,7 @@ import {
   type DocumentModeAttachment,
 } from "@renderer/editor/document-mode-contribution";
 import { documentModeOptions } from "@renderer/editor/document-mode";
-import type { DocumentLease } from "@renderer/editor/document-registry";
+import type { DocumentLease, DocumentRevision } from "@renderer/editor/document-registry";
 import { type FileRefsConfig, refInsertion } from "@renderer/editor/file-refs";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { cn } from "@renderer/lib/utils";
@@ -33,6 +33,13 @@ export interface MonacoDocumentEditorHandle {
    * boundary (see `refInsertion`).
    */
   insertAtCursor(text: string): void;
+  /**
+   * Record that the host has persisted the model's current value. Clears the
+   * registry dirty flag and advances the baseline revision — the FileView
+   * autosave path calls this after a successful write so close-guard never
+   * sees a stuck dirty autosave document with `externalRevision === null`.
+   */
+  markSaved(revision: DocumentRevision): void;
 }
 
 export interface MonacoDocumentEditorProps {
@@ -46,8 +53,19 @@ export interface MonacoDocumentEditorProps {
   viewId: string;
   /** The markdown buffer. External changes reset the doc only while unfocused. */
   value: string;
+  /**
+   * Disk/store revision that seeds the registry baseline. File artifacts pass
+   * the on-disk mtime so a mid-edit close still has a known `expectedMtime`;
+   * the ticket body leaves this `null` (no mtime to conflict-guard on).
+   */
+  revision?: DocumentRevision;
   /** Fired on every document edit with the full markdown string. */
   onChange(value: string): void;
+  /**
+   * Every dirty transition of the shared registry model. Artifact tabs feed
+   * this into the workbench close-guard; the ticket body leaves it unset.
+   */
+  onDirtyChange?(dirty: boolean): void;
   placeholder?: string;
   autoFocus?: boolean;
   /**
@@ -107,7 +125,9 @@ export const MonacoDocumentEditor = React.forwardRef<
     identity,
     viewId,
     value,
+    revision = null,
     onChange,
+    onDirtyChange,
     placeholder,
     autoFocus,
     className,
@@ -126,8 +146,26 @@ export const MonacoDocumentEditor = React.forwardRef<
 
   // Latest-callback refs: the mount effect runs once per document and must never
   // close over a stale render's callbacks.
-  const liveRef = React.useRef({ identity, onChange, onBlur, placeholder, ariaLabel, autoFocus });
-  liveRef.current = { identity, onChange, onBlur, placeholder, ariaLabel, autoFocus };
+  const liveRef = React.useRef({
+    identity,
+    revision,
+    onChange,
+    onDirtyChange,
+    onBlur,
+    placeholder,
+    ariaLabel,
+    autoFocus,
+  });
+  liveRef.current = {
+    identity,
+    revision,
+    onChange,
+    onDirtyChange,
+    onBlur,
+    placeholder,
+    ariaLabel,
+    autoFocus,
+  };
   const fileRefsRef = React.useRef(fileRefs);
   fileRefsRef.current = fileRefs;
 
@@ -138,21 +176,47 @@ export const MonacoDocumentEditor = React.forwardRef<
   // An external value that arrived while the editor was focused and so could not
   // be applied without moving the caret; adopted on blur if still untouched.
   const pendingRef = React.useRef<string | null>(null);
+  // Suppress host onChange while we rewrite the model from outside — otherwise
+  // discard→adopt (or any multi-step baseline swap) would briefly schedule
+  // autosave against a stale intermediate baseline.
+  const suppressChangeRef = React.useRef(false);
+  const emittedDirtyRef = React.useRef(false);
 
-  /** Replace the document with `next`, keeping the viewport where it was. */
-  const applyExternal = React.useCallback((next: string) => {
-    const lease = leaseRef.current;
-    if (lease === null) return;
-    const view = editorRef.current;
-    const viewState = view?.saveViewState() ?? null;
-    // Drop the draft first: `adoptCleanBaseline` refuses to touch a dirty model
-    // by design, and every caller here has already decided to take `next`.
-    lease.discard();
-    lease.adoptCleanBaseline({ value: next, revision: null });
-    if (viewState !== null) view?.restoreViewState(viewState);
-    lastSyncedRef.current = next;
-    pendingRef.current = null;
+  const emitDirty = React.useCallback((dirty: boolean) => {
+    if (emittedDirtyRef.current === dirty) return;
+    emittedDirtyRef.current = dirty;
+    liveRef.current.onDirtyChange?.(dirty);
   }, []);
+
+  /**
+   * Replace the document with `next` in a single host-visible update. The
+   * registry's `adoptCleanBaseline` refuses a dirty model, so a dirty draft is
+   * first cleared via `markSaved` (keeps the current bytes as baseline — one
+   * subsequent setValue from adopt) rather than `discard` (which would setValue
+   * back to the old baseline first and fire a spurious onChange).
+   */
+  const applyExternal = React.useCallback(
+    (next: string, nextRevision: DocumentRevision) => {
+      const lease = leaseRef.current;
+      if (lease === null) return;
+      const view = editorRef.current;
+      const viewState = view?.saveViewState() ?? null;
+      suppressChangeRef.current = true;
+      try {
+        if (lease.snapshot().dirty) {
+          lease.markSaved(lease.snapshot().baselineRevision);
+        }
+        lease.adoptCleanBaseline({ value: next, revision: nextRevision });
+      } finally {
+        suppressChangeRef.current = false;
+      }
+      if (viewState !== null) view?.restoreViewState(viewState);
+      lastSyncedRef.current = next;
+      pendingRef.current = null;
+      emitDirty(false);
+    },
+    [emitDirty],
+  );
 
   React.useImperativeHandle(
     ref,
@@ -177,8 +241,15 @@ export const MonacoDocumentEditor = React.forwardRef<
         view.revealPositionInCenterIfOutsideViewport(position);
         view.focus();
       },
+      markSaved(nextRevision) {
+        const lease = leaseRef.current;
+        if (lease === null) return;
+        lease.markSaved(nextRevision);
+        lastSyncedRef.current = lease.model.getValue();
+        emitDirty(false);
+      },
     }),
-    [],
+    [emitDirty],
   );
 
   React.useEffect(() => {
@@ -196,10 +267,11 @@ export const MonacoDocumentEditor = React.forwardRef<
       .then((runtime) => {
         if (cancelled) return;
         const seed = seedRef.current;
+        const seedRevision = liveRef.current.revision ?? null;
         lease = runtime.registry.acquire({
           identity: liveRef.current.identity,
           viewId,
-          seed: { value: seed, revision: null },
+          seed: { value: seed, revision: seedRevision },
           savePolicy: "autosave",
         });
         if (cancelled) {
@@ -212,10 +284,19 @@ export const MonacoDocumentEditor = React.forwardRef<
         // reappear without the host's `draftRef` knowing about it, and autosave
         // would never fire for text nobody typed this session.
         if (lease.model.getValue() !== seed) {
-          lease.discard();
-          lease.adoptCleanBaseline({ value: seed, revision: null });
+          suppressChangeRef.current = true;
+          try {
+            if (lease.snapshot().dirty) {
+              lease.markSaved(lease.snapshot().baselineRevision);
+            }
+            lease.adoptCleanBaseline({ value: seed, revision: seedRevision });
+          } finally {
+            suppressChangeRef.current = false;
+          }
         }
         leaseRef.current = lease;
+        emittedDirtyRef.current = lease.snapshot().dirty;
+        if (emittedDirtyRef.current) liveRef.current.onDirtyChange?.(true);
 
         view = runtime.monaco.editor.create(host, {
           ...documentModeOptions({ placeholder: liveRef.current.placeholder }),
@@ -247,7 +328,9 @@ export const MonacoDocumentEditor = React.forwardRef<
         const model = lease.model;
         subscriptions.push(
           model.onDidChangeContent(() => {
+            if (suppressChangeRef.current) return;
             liveRef.current.onChange(model.getValue());
+            emitDirty(lease !== null && lease.snapshot().dirty);
           }),
           view.onDidBlurEditorText(() => {
             liveRef.current.onBlur?.();
@@ -258,7 +341,9 @@ export const MonacoDocumentEditor = React.forwardRef<
             pendingRef.current = null;
             if (pending === null) return;
             const current = model.getValue();
-            if (current === lastSyncedRef.current && current !== pending) applyExternal(pending);
+            if (current === lastSyncedRef.current && current !== pending) {
+              applyExternal(pending, liveRef.current.revision ?? null);
+            }
           }),
         );
 
@@ -287,15 +372,24 @@ export const MonacoDocumentEditor = React.forwardRef<
       view?.dispose();
       editorRef.current = null;
       if (lease !== null) {
-        // The host flushed its autosave on unmount; leaving the model dirty
-        // would park it in the registry forever (a dirty document is never
-        // cleaned up), so hand the entry back clean unless another view holds it.
-        if (lease.snapshot().viewReferences <= 1) lease.discard();
+        // React runs child cleanups BEFORE parent cleanups. Hosts
+        // (FileView / TicketBodyEditor) flush pending autosave in a parent
+        // `useDebouncedCallback` unmount effect — that flush has NOT run yet
+        // when we get here. Discarding the last-view autosave lease would wipe
+        // the draft (and its dirty bit) before the host can write +
+        // `registry.peek(...).markSaved`. Leave dirty parked for that flush;
+        // `cleanupReleasedEntry` retains dirty zero-view entries, and autosave
+        // dirties are intentionally not re-seeded into Save-on-close
+        // (explicit-only). A successful host flush clears via markSaved.
         lease.release(viewState);
       }
       leaseRef.current = null;
+      if (emittedDirtyRef.current) {
+        emittedDirtyRef.current = false;
+        liveRef.current.onDirtyChange?.(false);
+      }
     };
-  }, [applyExternal, key, viewId]);
+  }, [applyExternal, emitDirty, key, viewId]);
 
   // External value → document sync. While focused we can't move the caret, so
   // remember it and let the blur handler adopt it if the buffer is untouched.
@@ -310,10 +404,15 @@ export const MonacoDocumentEditor = React.forwardRef<
     }
     if (current === value) {
       lastSyncedRef.current = value;
+      // Bytes match; still advance the revision when the host learned a fresher
+      // mtime (echo of our own autosave, or a bare touch).
+      if (!Object.is(lease.snapshot().externalRevision, revision)) {
+        lease.adoptCleanBaseline({ value, revision });
+      }
       return;
     }
-    applyExternal(value);
-  }, [applyExternal, value]);
+    applyExternal(value, revision);
+  }, [applyExternal, revision, value]);
 
   // A fresh index can change which `@` refs resolve without the document
   // changing at all. Keyed on the version alone: depending on the whole

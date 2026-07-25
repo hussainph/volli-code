@@ -7,6 +7,7 @@ import {
   gamutMap,
   hexToOklch,
   hexToRgb,
+  isHexColor,
   isInGamut,
   linearToSrgb,
   oklabToOklch,
@@ -34,6 +35,20 @@ describe("hexToRgb", () => {
   it("names the offending value when the input is not a hex color", () => {
     expect(() => hexToRgb("rebeccapurple")).toThrow(/rebeccapurple/);
     expect(() => hexToRgb("#ff00")).toThrow(/#rgb or #rrggbb/);
+  });
+});
+
+describe("isHexColor", () => {
+  it("accepts the same shapes as hexToRgb", () => {
+    for (const hex of ["#e8652a", "e8652a", "#abc", "abc", "  #fff  "]) {
+      expect(isHexColor(hex)).toBe(true);
+    }
+  });
+
+  it("rejects anything hexToRgb would throw on", () => {
+    for (const value of ["blue", "#ff00", "", " #00aa "]) {
+      expect(isHexColor(value)).toBe(false);
+    }
   });
 });
 

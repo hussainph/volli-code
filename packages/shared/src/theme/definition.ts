@@ -59,13 +59,23 @@ export interface ThemeDefinition {
  * generator rather than being pinned by hand — and its hue tints the neutral
  * ladder to the warm near-blacks specified in
  * docs/plans/theming-engine.md § Surface 3.
+ *
+ * **Grain ships OFF**, and every built-in inherits that. Dogfooding the layer
+ * at its original 0.35 made the app measurably harder to read, and the reason
+ * is not the mean lift § Grain quantifies (0.15 Lc — imperceptible) but the
+ * VARIANCE: per-pixel luminance jitter in the gaps around antialiased glyph
+ * edges. "Never above text" is not sufficient protection, because text drawn
+ * over a textured backdrop still has noise in every counter and sidebearing.
+ * The slider keeps the effect one click away for anyone who wants it, and its
+ * natural home is over PR 5's canvas layer — a gradient or image behind the
+ * framed card (#31) — rather than under body copy.
  */
 export const DEFAULT_THEME: ThemeDefinition = {
   name: "Ember",
   slug: "ember",
   seed: "#e8652a",
   accent: null,
-  grain: 0.35,
+  grain: 0,
   canvas: { kind: "solid" },
   overrides: {},
   appearance: "dark",

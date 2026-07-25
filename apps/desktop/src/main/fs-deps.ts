@@ -27,7 +27,15 @@
  * shares nothing with this.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -50,10 +58,14 @@ export interface FsDeps {
   readFile(absPath: string): string | null;
   /** File existence probe, used for ghostty theme resolution. */
   exists(absPath: string): boolean;
+  /** Entry names in `dir`; empty for a directory that doesn't exist — an empty catalog is normal, not a failure. */
+  readDir(dir: string): string[];
   /** `mkdir -p`. */
   ensureDir(dir: string): void;
   writeFile(absPath: string, text: string): void;
   rename(from: string, to: string): void;
+  /** Deletes a file; a file that is already gone is not an error (`rm -f`). */
+  removeFile(absPath: string): void;
   /** Names the same-directory temp file an atomic write lands in before its rename. */
   tempName(targetPath: string): string;
 }
@@ -66,6 +78,14 @@ function defaultReadFile(absPath: string): string | null {
   }
 }
 
+function defaultReadDir(dir: string): string[] {
+  try {
+    return readdirSync(dir);
+  } catch {
+    return [];
+  }
+}
+
 /** The real filesystem and environment, bound to one `userData` root. */
 export function defaultFsDeps(userDataDir: string): FsDeps {
   return {
@@ -74,6 +94,7 @@ export function defaultFsDeps(userDataDir: string): FsDeps {
     env: process.env,
     readFile: defaultReadFile,
     exists: existsSync,
+    readDir: defaultReadDir,
     ensureDir: (dir) => {
       mkdirSync(dir, { recursive: true });
     },
@@ -81,6 +102,9 @@ export function defaultFsDeps(userDataDir: string): FsDeps {
       writeFileSync(absPath, text, "utf8");
     },
     rename: renameSync,
+    removeFile: (absPath) => {
+      rmSync(absPath, { force: true });
+    },
     // Dot-prefixed and uniquely suffixed: a crashed write leaves an inert
     // hidden file rather than something ghostty's directory watch or a
     // curious user would mistake for a real overlay.

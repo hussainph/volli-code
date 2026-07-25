@@ -21,6 +21,14 @@ const MIDNIGHT: ThemeDefinition = {
   seed: "#4c6ef5",
 };
 
+/** A theme of the user's own — one with a file behind it. */
+const SUNSET: ThemeDefinition = {
+  ...DEFAULT_THEME,
+  name: "Sunset",
+  slug: "sunset",
+  seed: "#ff8a3d",
+};
+
 const TERMINAL: GhosttyAppearancePayload = {
   prefs: {
     themeName: null,
@@ -78,6 +86,14 @@ function fakeGateway(over: Partial<ThemeGateway> = {}): ThemeGateway {
       project: { id: projectId } as never,
       value: statePayload({ projectId, projectOverride: override }),
     })),
+    listCustomThemes: vi.fn(async () => ({ ok: true as const, themes: [SUNSET] })),
+    saveCustomTheme: vi.fn(async (theme: ThemeDefinition) => ({
+      ok: true as const,
+      path: `/data/volli/themes/${theme.slug}.json`,
+      themes: [theme],
+    })),
+    deleteCustomTheme: vi.fn(async () => ({ ok: true as const, themes: [] })),
+    openCustomTheme: vi.fn(async () => ({ ok: true as const })),
     ...over,
   };
 }
@@ -386,19 +402,37 @@ describe("terminal appearance", () => {
 describe("effectiveTheme", () => {
   it("prefers the preview, then the project override, then the global theme", () => {
     expect(
-      effectiveTheme({ preview: MIDNIGHT, global: DEFAULT_THEME, projectOverride: null }),
+      effectiveTheme({
+        preview: MIDNIGHT,
+        global: DEFAULT_THEME,
+        projectOverride: null,
+        customThemes: [],
+      }),
     ).toEqual(MIDNIGHT);
 
-    expect(effectiveTheme({ preview: null, global: MIDNIGHT, projectOverride: null })).toEqual(
-      MIDNIGHT,
-    );
+    expect(
+      effectiveTheme({ preview: null, global: MIDNIGHT, projectOverride: null, customThemes: [] }),
+    ).toEqual(MIDNIGHT);
 
     const tinted = effectiveTheme({
       preview: null,
       global: DEFAULT_THEME,
       projectOverride: { ...EMPTY_PROJECT_THEME_OVERRIDE, seed: "#3f9142" },
+      customThemes: [],
     });
     expect(tinted.seed).toBe("#3f9142");
+  });
+
+  it("resolves a project appThemeSlug against custom themes in the catalog", () => {
+    const state = {
+      preview: null,
+      global: DEFAULT_THEME,
+      projectOverride: { ...EMPTY_PROJECT_THEME_OVERRIDE, appThemeSlug: "sunset" },
+      customThemes: [SUNSET],
+    };
+
+    expect(effectiveTheme(state)).toBe(SUNSET);
+    expect(effectiveTheme(state)).toBe(SUNSET);
   });
 
   it("returns the IDENTICAL reference for unchanged state, on every path", () => {
@@ -411,19 +445,26 @@ describe("effectiveTheme", () => {
       preview: null,
       global: DEFAULT_THEME,
       projectOverride: { ...EMPTY_PROJECT_THEME_OVERRIDE, seed: "#3f9142" },
+      customThemes: [],
     };
     expect(effectiveTheme(tinting)).toBe(effectiveTheme(tinting));
 
-    const previewing = { preview: MIDNIGHT, global: DEFAULT_THEME, projectOverride: null };
+    const previewing = {
+      preview: MIDNIGHT,
+      global: DEFAULT_THEME,
+      projectOverride: null,
+      customThemes: [],
+    };
     expect(effectiveTheme(previewing)).toBe(effectiveTheme(previewing));
 
-    const plain = { preview: null, global: MIDNIGHT, projectOverride: null };
+    const plain = { preview: null, global: MIDNIGHT, projectOverride: null, customThemes: [] };
     expect(effectiveTheme(plain)).toBe(effectiveTheme(plain));
 
     const named = {
       preview: null,
       global: DEFAULT_THEME,
       projectOverride: { ...EMPTY_PROJECT_THEME_OVERRIDE, appThemeSlug: DEFAULT_THEME.slug },
+      customThemes: [],
     };
     expect(effectiveTheme(named)).toBe(effectiveTheme(named));
   });
@@ -433,19 +474,45 @@ describe("appliedTheme", () => {
   const TINTED = { ...EMPTY_PROJECT_THEME_OVERRIDE, seed: "#3f9142" };
 
   it("is the global theme for the global scope, whatever a project overrides", () => {
-    const state = { global: MIDNIGHT, projectId: "p1", projectOverride: TINTED };
+    const state = {
+      global: MIDNIGHT,
+      projectId: "p1",
+      projectOverride: TINTED,
+      customThemes: [],
+    };
 
     expect(appliedTheme(state, { kind: "global" })).toBe(MIDNIGHT);
   });
 
   it("resolves the project's own override for its scope", () => {
-    const state = { global: DEFAULT_THEME, projectId: "p1", projectOverride: TINTED };
+    const state = {
+      global: DEFAULT_THEME,
+      projectId: "p1",
+      projectOverride: TINTED,
+      customThemes: [],
+    };
 
     expect(appliedTheme(state, { kind: "project", projectId: "p1" }).seed).toBe("#3f9142");
   });
 
+  it("resolves a project appThemeSlug against custom themes in the catalog", () => {
+    const state = {
+      global: DEFAULT_THEME,
+      projectId: "p1",
+      projectOverride: { ...EMPTY_PROJECT_THEME_OVERRIDE, appThemeSlug: "sunset" },
+      customThemes: [SUNSET],
+    };
+
+    expect(appliedTheme(state, { kind: "project", projectId: "p1" })).toBe(SUNSET);
+  });
+
   it("never borrows another project's override", () => {
-    const state = { global: MIDNIGHT, projectId: "p1", projectOverride: TINTED };
+    const state = {
+      global: MIDNIGHT,
+      projectId: "p1",
+      projectOverride: TINTED,
+      customThemes: [],
+    };
 
     expect(appliedTheme(state, { kind: "project", projectId: "p2" })).toBe(MIDNIGHT);
   });
@@ -470,7 +537,27 @@ describe("createThemeStore() with the default deps", () => {
     }));
     const setGlobal = vi.fn(async () => ({ ok: true as const, value: statePayload() }));
     const setProject = vi.fn(async () => ({ ok: false as const, error: "unused" }));
-    vi.stubGlobal("window", { api: { theme: { state, setGlobal, setProject } } });
+    const listCustomThemes = vi.fn(async () => ({ ok: true as const, themes: [SUNSET] }));
+    const saveCustomTheme = vi.fn(async () => ({
+      ok: true as const,
+      path: "/data/volli/themes/sunset.json",
+      themes: [SUNSET],
+    }));
+    const deleteCustomTheme = vi.fn(async () => ({ ok: true as const, themes: [] }));
+    const openCustomTheme = vi.fn(async () => ({ ok: true as const }));
+    vi.stubGlobal("window", {
+      api: {
+        theme: {
+          state,
+          setGlobal,
+          setProject,
+          listCustomThemes,
+          saveCustomTheme,
+          deleteCustomTheme,
+          openCustomTheme,
+        },
+      },
+    });
     vi.stubGlobal("document", {
       documentElement: {
         style: { setProperty: (name: string, value: string) => void written.set(name, value) },
@@ -492,5 +579,154 @@ describe("createThemeStore() with the default deps", () => {
     store.setState({ preview: MIDNIGHT });
     await store.getState().commitPreview({ kind: "project", projectId: "p1" });
     expect(setProject).toHaveBeenCalled();
+
+    // The theme-file verbs go through the same bridge — each names a SLUG (or
+    // the whole definition), never a path.
+    expect(listCustomThemes).toHaveBeenCalled();
+    expect(store.getState().customThemes).toEqual([SUNSET]);
+    await store.getState().saveCustomTheme(SUNSET, { kind: "global" });
+    expect(saveCustomTheme).toHaveBeenCalledWith(SUNSET);
+    await store.getState().deleteCustomTheme(SUNSET.slug);
+    expect(deleteCustomTheme).toHaveBeenCalledWith(SUNSET.slug);
+    await store.getState().openCustomThemeFile(SUNSET.slug);
+    expect(openCustomTheme).toHaveBeenCalledWith(SUNSET.slug);
+  });
+});
+
+describe("the user's own themes", () => {
+  const MINE = SUNSET;
+
+  it("loads the catalog when the authored state is hydrated", async () => {
+    const { store, gateway } = freshStore();
+
+    await store.getState().hydrate();
+
+    expect(gateway.listCustomThemes).toHaveBeenCalled();
+    expect(store.getState().customThemes).toEqual([MINE]);
+  });
+
+  it("previews a draft without writing anything, however far the seed moves", () => {
+    const { store, gateway, paint } = freshStore();
+
+    for (const seed of ["#ff0000", "#00ff00", "#0000ff"]) {
+      store.getState().startPreview({ ...MINE, seed });
+    }
+
+    expect(paint.applied.map((theme) => theme.seed)).toEqual(["#ff0000", "#00ff00", "#0000ff"]);
+    expect(gateway.saveCustomTheme).not.toHaveBeenCalled();
+    expect(gateway.setGlobal).not.toHaveBeenCalled();
+  });
+
+  it("restores the pre-edit theme when the edit is abandoned", () => {
+    const { store, paint } = freshStore();
+
+    store.getState().startPreview({ ...MINE, seed: "#ff0000" });
+    store.getState().cancelPreview();
+
+    expect(paint.applied.at(-1)).toEqual(DEFAULT_THEME);
+    expect(store.getState().global).toEqual(DEFAULT_THEME);
+  });
+
+  it("saves a theme to its file AND applies it, adopting the catalog the write hands back", async () => {
+    const { store, gateway } = freshStore();
+    store.getState().startPreview(MINE);
+
+    const saved = await store.getState().saveCustomTheme(MINE, { kind: "global" });
+
+    expect(saved).toBe(true);
+    expect(gateway.saveCustomTheme).toHaveBeenCalledWith(MINE);
+    expect(gateway.setGlobal).toHaveBeenCalledWith(MINE);
+    expect(store.getState().customThemes).toEqual([MINE]);
+  });
+
+  it("surfaces a failed save and leaves the theme unapplied", async () => {
+    const { store, gateway } = freshStore({
+      saveCustomTheme: vi.fn(async () => ({ ok: false as const, error: "disk full" })),
+    });
+    store.getState().startPreview(MINE);
+
+    const saved = await store.getState().saveCustomTheme(MINE, { kind: "global" });
+
+    expect(saved).toBe(false);
+    expect(gateway.setGlobal).not.toHaveBeenCalled();
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      "Couldn't save the theme: disk full",
+      expect.anything(),
+    );
+  });
+
+  it("keeps customThemes and restores preview when the file write succeeds but apply fails", async () => {
+    const { store, gateway, paint } = freshStore({
+      setGlobal: vi.fn(async () => ({ ok: false as const, error: "disk full" })),
+    });
+
+    const saved = await store.getState().saveCustomTheme(MINE, { kind: "global" });
+
+    expect(saved).toBe(false);
+    expect(gateway.saveCustomTheme).toHaveBeenCalledWith(MINE);
+    expect(gateway.setGlobal).toHaveBeenCalledWith(MINE);
+    expect(store.getState().customThemes).toEqual([MINE]);
+    expect(store.getState().preview).toEqual(MINE);
+    expect(store.getState().global).toEqual(DEFAULT_THEME);
+    expect(effectiveTheme(store.getState())).toEqual(MINE);
+    expect(paint.applied.at(-1)).toEqual(MINE);
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      "Couldn't save the theme: disk full",
+      expect.anything(),
+    );
+  });
+
+  it("deletes through the slug and adopts the fresh catalog", async () => {
+    const { store, gateway } = freshStore({
+      deleteCustomTheme: vi.fn(async () => ({ ok: true as const, themes: [] })),
+    });
+    await store.getState().hydrate();
+
+    const deleted = await store.getState().deleteCustomTheme("sunset");
+
+    expect(deleted).toBe(true);
+    expect(gateway.deleteCustomTheme).toHaveBeenCalledWith("sunset");
+    expect(store.getState().customThemes).toEqual([]);
+  });
+
+  it("surfaces a failed delete and keeps the theme in the catalog", async () => {
+    const { store } = freshStore({
+      deleteCustomTheme: vi.fn(async () => ({ ok: false as const, error: "file locked" })),
+    });
+    await store.getState().hydrate();
+
+    expect(await store.getState().deleteCustomTheme("sunset")).toBe(false);
+    expect(store.getState().customThemes).toEqual([MINE]);
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      "Couldn't delete the theme: file locked",
+      expect.anything(),
+    );
+  });
+
+  it("opens a theme's file through its slug, surfacing a failure to open", async () => {
+    const { store, gateway } = freshStore({
+      openCustomTheme: vi.fn(async () => ({ ok: false as const, error: "no editor" })),
+    });
+
+    expect(await store.getState().openCustomThemeFile("sunset")).toBe(false);
+    expect(gateway.openCustomTheme).toHaveBeenCalledWith("sunset");
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      "Couldn't open the theme file: no editor",
+      expect.anything(),
+    );
+  });
+
+  it("toasts a catalog read failure rather than quietly showing no themes", async () => {
+    const { store } = freshStore({
+      listCustomThemes: vi.fn(async () => ({ ok: false as const, error: "unreadable" })),
+    });
+
+    await store.getState().loadCustomThemes();
+
+    expect(store.getState().customThemes).toEqual([]);
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      "Couldn't load your themes: unreadable",
+      expect.anything(),
+    );
   });
 });

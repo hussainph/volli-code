@@ -15,7 +15,7 @@
  *    caller falls back to the shipped default rather than failing to paint.
  */
 import type Database from "better-sqlite3";
-import { parseGlobalTheme, serializeGlobalTheme, THEME_APP_STATE_KEY } from "@volli/shared";
+import { parseThemeJson, serializeGlobalTheme, THEME_APP_STATE_KEY } from "@volli/shared";
 import type { ThemeDefinition } from "@volli/shared";
 import { setAppState } from "./app-state-repo";
 import { prepared } from "./prepared";
@@ -35,7 +35,7 @@ export function getRawGlobalTheme(db: Database.Database): string | null {
 
 /** The authored global theme, or null when unset/unreadable (the caller falls back to `DEFAULT_THEME`). */
 export function getGlobalTheme(db: Database.Database): ThemeDefinition | null {
-  return parseGlobalTheme(getRawGlobalTheme(db));
+  return parseThemeJson(getRawGlobalTheme(db));
 }
 
 /** Upserts the authored global theme. */

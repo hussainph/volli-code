@@ -70,6 +70,7 @@ export default defineConfig({
         "src/components/board/new-ticket/draft.ts",
         "src/components/board/new-ticket/submit.ts",
         "src/components/sidebar/listing.ts",
+        "src/components/theme/theme-editor-model.ts",
         "src/components/theme/theme-picker-model.ts",
         "src/components/theme/terminal-settings-model.ts",
         "src/components/ticket/activity.ts",
@@ -92,6 +93,7 @@ export default defineConfig({
         "src/editor/text-position.ts",
         "src/theme/apply.ts",
         "src/theme/catalog.ts",
+        "src/theme/grain.ts",
         "src/terminal/css-color.ts",
         "src/terminal/appearance.ts",
         "src/terminal/appearance-model.ts",
@@ -108,6 +110,7 @@ export default defineConfig({
         "**/src/main/ghostty-config.ts",
         "**/src/main/window-theme.ts",
         "**/src/main/theme-ipc.ts",
+        "**/src/main/theme-files.ts",
         "**/src/main/theme-overlay.ts",
         "**/src/main/db/export.ts",
         "**/src/main/db/theme-repo.ts",
@@ -122,6 +125,21 @@ export default defineConfig({
     // Absolute — `outDir` otherwise resolves relative to `root` (src/renderer).
     outDir: fileURLToPath(new URL("./dist", import.meta.url)),
     emptyOutDir: true,
+    // STATIC ASSETS (established with the grain tile; PR 5's curated canvas
+    // images inherit this). Every asset is imported through the module graph
+    // from src/renderer/src/assets/ — NEVER a public/ directory: public assets
+    // are referenced by a root-absolute /path, and this renderer is served
+    // from volli-app://bundle/ with `base: "./"`, so a root-absolute URL is
+    // exactly the class of thing that works in dev and 404s once packaged.
+    // Module-graph imports get content-hashed, relative URLs instead.
+    //
+    // assetsInlineLimit 0 makes every asset a real emitted file rather than a
+    // base64 data: URI. Vite would otherwise inline anything under 4 KB, which
+    // (a) puts the boundary between "works packaged" and "silently bypasses
+    // the app protocol" on the FILE SIZE, so the packaged path stops being
+    // exercised by small assets, and (b) costs ~33% in base64 expansion inside
+    // a JS chunk that is parsed on every boot.
+    assetsInlineLimit: 0,
   },
 
   // Electron main + preload are packed as CJS with tsdown. ONE config with two

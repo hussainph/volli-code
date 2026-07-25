@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
+import { APCAcontrast, sRGBtoY } from "apca-w3";
 
-import { apcaLc, hexToOklch, oklchToHex } from "./color";
+import { apcaLc, hexToOklch, hexToRgb, oklchToHex } from "./color";
 import { DEFAULT_THEME, type ThemeDefinition } from "./definition";
 import { generateThemeTokens, pickAccentLabel, solveLightnessForContrast } from "./generate";
 import { THEME_TOKEN_NAMES, type ThemeTokens } from "./tokens";
@@ -9,6 +10,14 @@ describe("generateThemeTokens", () => {
   it("emits exactly the themeable token set", () => {
     const tokens = generateThemeTokens(DEFAULT_THEME);
     expect(Object.keys(tokens).toSorted()).toEqual(THEME_TOKEN_NAMES.toSorted());
+  });
+
+  it("emits --primary-text, the accent solved for body copy", () => {
+    // --primary is pinned at PRIMARY_LIGHTNESS for its job as a *fill*, which
+    // leaves it at Lc 41 as text on --background — fine for icons, below the
+    // floor for body copy. --primary-text is the second accent lightness that
+    // fixes every such site at once (docs/plans/theming-engine.md § Fold-ins).
+    expect(generateThemeTokens(DEFAULT_THEME)["--primary-text"]).toMatch(/^#[0-9a-f]{6}$/);
   });
 });
 
@@ -41,6 +50,7 @@ describe("the ember golden", () => {
     "--sidebar-border": "#29211d",
     "--primary": "#e8652a",
     "--primary-foreground": "#ffffff",
+    "--primary-text": "#ff966c",
     "--ring": "#e8652a",
     "--sidebar-primary": "#e8652a",
     "--sidebar-primary-foreground": "#ffffff",
@@ -224,6 +234,137 @@ describe("the generator's guarantees, over 360 hues × 5 chromas", () => {
         `--primary for seed ${seed}`,
       ).toBeLessThan(0.004);
     }
+  });
+});
+
+/** 8-bit channel triple, the form apca-w3 takes. */
+function toBytes(hex: string): [number, number, number] {
+  const { r, g, b } = hexToRgb(hex);
+  return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+}
+
+/**
+ * Lc computed by `apca-w3` itself — the independent oracle. The design doc is
+ * explicit that APCA must never be verified against the math under test, and
+ * `--primary-text` exists *only* because of an APCA number, so the oracle
+ * matters more for it than anywhere else in this file.
+ */
+function referenceLc(text: string, background: string): number {
+  return Math.abs(Number(APCAcontrast(sRGBtoY(toBytes(text)), sRGBtoY(toBytes(background)))));
+}
+
+describe("--primary-text, the accent at body-copy contrast", () => {
+  it("clears Lc 60 on --background, for every seed", () => {
+    // The contract. Measured minimum over the sweep is 60.0001 at seed
+    // #bf558e — the solver lands *on* the floor by construction, so there is
+    // no headroom here to lose and any regression shows up immediately.
+    for (const { seed, tokens } of sweep) {
+      expect(
+        referenceLc(tokens["--primary-text"], tokens["--background"]),
+        `--primary-text for seed ${seed}`,
+      ).toBeGreaterThanOrEqual(60);
+    }
+  });
+
+  it("stays legible on the lighter surfaces it is also drawn on", () => {
+    // The token is solved against --background, but body copy carrying it also
+    // lands on cards, popovers and control fills, which sit one to three rungs
+    // lighter. Those cannot reach 60 from a solve aimed at --background; what
+    // matters is that they stay within a hair of it rather than falling away.
+    // Measured minima: --card 59.57, --popover 59.10, --secondary 58.87 (the
+    // last two at seed #009a42). The 58.5 floor is that worst case with room
+    // for 8-bit quantisation, not a target.
+    for (const { seed, tokens } of sweep) {
+      for (const surface of ["--card", "--popover", "--secondary"] as const) {
+        expect(
+          referenceLc(tokens["--primary-text"], tokens[surface]),
+          `--primary-text on ${surface} for seed ${seed}`,
+        ).toBeGreaterThan(58.5);
+      }
+    }
+  });
+
+  it("is the accent brightened — same hue and chroma, never a different color", () => {
+    // The point of a second token rather than a brighter --primary: the fill
+    // keeps its pinned lightness (and ember keeps being a fixed point), while
+    // text gets the lightness it needs. Anything that moved hue would make an
+    // accent link stop matching the accent button beside it.
+    for (const { seed, tokens } of sweep) {
+      const text = hexToOklch(tokens["--primary-text"]);
+      const fill = hexToOklch(tokens["--primary"]);
+      expect(text.L, `--primary-text for seed ${seed}`).toBeGreaterThan(fill.L);
+      // Chroma is the axis gamut mapping is allowed to spend, and a lighter
+      // rung has less of it available — so hue is what must survive intact.
+      // (An achromatic accent has no hue to compare; C 0 is asserted instead.)
+      //
+      // Compared as a circular distance so hues either side of 0° are not read
+      // as 359° apart. Measured maximum is 2.19° at seed #9c766e, which is
+      // 8-bit quantisation of a barely-tinted color resolving hue coarsely —
+      // the same slop the unlocked-accent test allows for --background.
+      if (fill.C < 1e-6) {
+        expect(text.C, `--primary-text for seed ${seed}`).toBeLessThan(1e-6);
+      } else {
+        expect(
+          Math.abs(((text.h - fill.h + 540) % 360) - 180),
+          `--primary-text for seed ${seed}`,
+        ).toBeLessThan(3);
+      }
+    }
+  });
+
+  it("never washes out to white", () => {
+    // A solve that could only reach the floor by heading for #ffffff would be
+    // a legible token that no longer reads as the accent at all. Measured L
+    // range over the sweep is 0.741–0.786, so the whole family sits well
+    // inside a recognisable tint of the seed.
+    for (const { seed, tokens } of sweep) {
+      const { L } = hexToOklch(tokens["--primary-text"]);
+      expect(L, `--primary-text for seed ${seed}`).toBeLessThan(0.85);
+    }
+  });
+
+  it("stays legible on the grey-seed path", () => {
+    // Cs < 0.02 zeroes the accent's chroma, so --primary-text has no color to
+    // lean on and is carried entirely by lightness. It must still clear the
+    // floor — a monochrome theme's links are links.
+    const tokens = generateThemeTokens(themeFor("#808080"));
+    expect(tokens["--primary-text"]).toBe("#b2b2b2");
+    expect(referenceLc(tokens["--primary-text"], tokens["--background"])).toBeGreaterThanOrEqual(
+      60,
+    );
+  });
+
+  it("fixes the Lc 41 finding that motivated it", () => {
+    // docs/plans/theming-engine.md § Fold-ins: ember's --primary is Lc 41 as
+    // body copy. Both halves are pinned so the gap cannot silently close from
+    // the wrong end — --primary must stay the fill it is.
+    const tokens = generateThemeTokens(DEFAULT_THEME);
+    expect(referenceLc(tokens["--primary"], tokens["--background"])).toBeCloseTo(41, 0);
+    expect(referenceLc(tokens["--primary-text"], tokens["--background"])).toBeGreaterThanOrEqual(
+      60,
+    );
+  });
+
+  it("follows an unlocked accent rather than the seed", () => {
+    // #75's pairing: cool chrome, warm accent. The text token belongs to the
+    // accent family, so it has to track the accent, not the neutrals.
+    const tokens = generateThemeTokens({ ...DEFAULT_THEME, seed: "#3b82f6", accent: "#e8652a" });
+    expect(hexToOklch(tokens["--primary-text"]).h).toBeCloseTo(hexToOklch("#e8652a").h, 0);
+  });
+
+  it("is deterministic and independent of the non-color fields", () => {
+    const base = generateThemeTokens(DEFAULT_THEME)["--primary-text"];
+    expect(generateThemeTokens(DEFAULT_THEME)["--primary-text"]).toBe(base);
+    expect(generateThemeTokens({ ...DEFAULT_THEME, grain: 0.9 })["--primary-text"]).toBe(base);
+  });
+
+  it("can be overridden like any other token", () => {
+    const tokens = generateThemeTokens({
+      ...DEFAULT_THEME,
+      overrides: { "--primary-text": "#ffd7c4" },
+    });
+    expect(tokens["--primary-text"]).toBe("#ffd7c4");
+    expect(tokens["--primary"]).toBe("#e8652a");
   });
 });
 
