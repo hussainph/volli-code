@@ -47,6 +47,7 @@ import {
   renderProjection,
   targetAt,
 } from "./document-decorations";
+import { type EmphasisMark, planEmphasisWrap } from "./emphasis-wrap";
 import {
   fileRefTokenAt,
   type FileRefsConfig,
@@ -343,6 +344,53 @@ export function attachDocumentMode(
         // dropping focus there is what lets the NEXT Escape bubble to the view.
         const active = document.activeElement;
         if (active instanceof HTMLElement) active.blur();
+      },
+    }),
+  );
+
+  /**
+   * ⌘B / ⌘I, restored from the CodeMirror keymap (issue #107). Monaco ships no
+   * markdown formatting commands of its own, so without this the two chords do
+   * nothing at all on a document surface. Everything that decides anything is in
+   * `planEmphasisWrap`; this is the apply.
+   */
+  function toggleEmphasis(mark: EmphasisMark): void {
+    const selection = selectionOffsets();
+    // `setSelections` throws on an empty array, and an editor with no cursor has
+    // nothing to wrap anyway.
+    if (selection.length === 0) return;
+    const plan = planEmphasisWrap({ text: model.getValue(), selection, mark });
+    // One batch, in original coordinates: Monaco re-bases the edits against each
+    // other, so a multi-cursor toggle stays a single undo step.
+    editor.executeEdits(
+      "volli.documentMode.emphasis",
+      plan.edits.map((edit) => ({ range: edit.range, text: edit.text })),
+    );
+    editor.setSelections(
+      plan.selections.map((range) => ({
+        selectionStartLineNumber: range.startLineNumber,
+        selectionStartColumn: range.startColumn,
+        positionLineNumber: range.endLineNumber,
+        positionColumn: range.endColumn,
+      })),
+    );
+  }
+
+  subscriptions.push(
+    editor.addAction({
+      id: "volli.documentMode.toggleBold",
+      label: "Toggle bold",
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyB],
+      run: () => {
+        toggleEmphasis("**");
+      },
+    }),
+    editor.addAction({
+      id: "volli.documentMode.toggleItalic",
+      label: "Toggle italic",
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyI],
+      run: () => {
+        toggleEmphasis("*");
       },
     }),
   );

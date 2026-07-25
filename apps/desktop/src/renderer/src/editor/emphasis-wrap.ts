@@ -28,7 +28,8 @@
  * is the one place multi-cursor arithmetic is unavoidable, since every earlier
  * range's insert or strip moves a later one.
  */
-import { buildLineIndex, type SelRange, spanToRange, type TextRange } from "./text-position";
+import type { SelRange } from "./reveal";
+import { buildLineIndex, spanToRange, type TextRange } from "./text-position";
 
 /** The marks the two bindings toggle. The math below is length-generic. */
 export type EmphasisMark = "**" | "*";
@@ -79,12 +80,12 @@ export function planEmphasisWrap(input: EmphasisWrapInput): EmphasisWrapPlan {
   // order: `getSelections()` is primary-first, not sorted, and both the running
   // shift and the linear text build below need ascending positions to be right.
   const planned = input.selection.map((range, index) => planRange(text, range, mark, m, index));
-  const ordered = [...planned].sort((a, b) => a.opening.from - b.opening.from);
+  const ordered = planned.toSorted((a, b) => a.opening.from - b.opening.from);
 
   const edits: OffsetEdit[] = [];
   // Indexed by the range's position in the INPUT, so the answer comes back in
   // the order the caller asked — Monaco's first selection is its primary one.
-  const spans: SelRange[] = new Array<SelRange>(planned.length);
+  const spans: SelRange[] = Array.from<SelRange>({ length: planned.length });
   // How far the EARLIER ranges' edits have moved the rest of the document. Edits
   // keep original coordinates (Monaco re-bases the batch itself); resulting
   // positions do not, so this is the one running total the plan has to carry.
