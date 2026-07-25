@@ -15,13 +15,23 @@
  *
  * *Measured, so it is a known tradeoff rather than an oversight:* the tile is
  * mid-grey noise composited normally, so it lifts the surface underneath it by
- * `opacity × (127.5 − surface)` — 2.4 of 255 on `--background` at Ember's
- * 0.022, and 3.9 at the 0.035 ceiling. Read back through `apca-w3` that costs
- * **0.15 Lc** for every foreground on the card (`--muted-foreground` 60.01 →
- * 59.86, `--foreground` 90.17 → 90.02). Zero-mean noise would need the tile's
- * mean to equal the surface it lands on, which one static raster cannot do for
- * a generated palette; a low-mean tile buys the 0.15 back but turns fine grain
- * into sparse speckle. The ceiling is where it stays worth it.
+ * `opacity × (127.5 − surface)` — 2.4 of 255 on `--background` at 0.022, and
+ * 3.9 at the 0.035 ceiling. Read back through `apca-w3` that costs **0.15 Lc**
+ * for every foreground on the card (`--muted-foreground` 60.01 → 59.86,
+ * `--foreground` 90.17 → 90.02).
+ *
+ * **That measurement is real and it is not the one that mattered.** Dogfooding
+ * the layer made the app harder to read at an intensity 0.15 Lc cannot explain,
+ * because the mean lift is the wrong statistic: what costs legibility is the
+ * **variance**. Noise puts per-pixel luminance jitter in every counter and
+ * sidebearing of every glyph, and an antialiased edge resolved against a field
+ * that changes pixel to pixel reads as softer than the same edge on a flat
+ * surface. "Never above text" (§ Grain) turned out not to be far enough below
+ * it. So every shipped theme now carries `grain: 0` (see `DEFAULT_THEME`) and
+ * this window only describes what the slider reaches when someone asks for it.
+ *
+ * The lesson generalizes to PR 5's canvas: texture belongs behind the framed
+ * card (#31), not under the body copy inside it.
  */
 export const GRAIN_MIN_OPACITY = 0.015;
 export const GRAIN_MAX_OPACITY = 0.035;

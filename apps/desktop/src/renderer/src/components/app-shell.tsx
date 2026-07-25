@@ -153,6 +153,11 @@ export function AppShell() {
             clips it, and every popover/dialog portals to the body), so the
             isolation costs nothing. */}
         <SidebarInset
+          // Names the surface the grain layer mounts on. Grain ships off, so
+          // `e2e/grain-smoke.mjs` has no layer to wait for and needs the HOST
+          // to anchor on — and its "never above text" check reads this element
+          // rather than assuming the layer's parentElement is the card.
+          data-volli-surface=""
           className={cn(
             "isolate overflow-hidden",
             terminalFocused ? "m-0 rounded-none border-0" : "m-2 rounded-xl border border-border",
