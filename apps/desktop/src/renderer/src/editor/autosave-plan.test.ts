@@ -28,7 +28,9 @@ describe("planAutosave", () => {
     expect(planAutosave({ ...dirty, conflicted: true, writing: true })).toBe("skip-conflicted");
   });
 
-  it("debounces on the same idle interval both surfaces already use", () => {
+  it("exports the shared idle interval both surfaces will import (PR 127)", () => {
+    // Surfaces still hardcode 1500 locally in this PR on purpose; this constant
+    // is the single source of truth they must converge on — never invent another.
     expect(AUTOSAVE_IDLE_MS).toBe(1500);
   });
 });

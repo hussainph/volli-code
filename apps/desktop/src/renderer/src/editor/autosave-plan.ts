@@ -20,7 +20,11 @@
  * knows how to read the other.
  */
 
-/** The debounce both document surfaces autosave on, in milliseconds. */
+/**
+ * Shared source of truth for the debounce both document surfaces autosave on
+ * (milliseconds). Surfaces still carry a local `1500` literal until PR 127
+ * imports this constant; do not invent a second value elsewhere.
+ */
 export const AUTOSAVE_IDLE_MS = 1500;
 
 /** What a fired autosave should actually do, given the document's condition. */

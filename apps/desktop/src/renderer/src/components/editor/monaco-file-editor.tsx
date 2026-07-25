@@ -53,6 +53,18 @@ export type MonacoEditorContribution = (
   context: MonacoEditorContext,
 ) => { dispose(): void } | undefined;
 
+/**
+ * The mount effect's contribution call site, extracted so the once-on-mount /
+ * dispose-on-teardown contract can be unit-tested without a real Monaco (or a
+ * DOM). The effect still owns *when* this runs; this owns *how*.
+ */
+export function attachEditorContribution(
+  contribute: MonacoEditorContribution | undefined,
+  context: MonacoEditorContext,
+): { dispose(): void } | null {
+  return contribute?.(context) ?? null;
+}
+
 /** The source-mode look: a code file, with its gutter and monospace measure. */
 const SOURCE_MODE_OPTIONS: MonacoDocumentOptions = {
   automaticLayout: true,
@@ -396,12 +408,11 @@ export function MonacoFileEditor({
         // Document Mode and friends attach here — after the view state is
         // restored (so a contribution measuring the viewport sees the real
         // scroll position) and before the first external reconcile.
-        contribution =
-          liveRef.current.contribute?.({
-            editor: editorView,
-            model: lease.model,
-            monaco: runtime.monaco,
-          }) ?? null;
+        contribution = attachEditorContribution(liveRef.current.contribute, {
+          editor: editorView,
+          model: lease.model,
+          monaco: runtime.monaco,
+        });
 
         changeSubscription = lease.model.onDidChangeContent(() => {
           syncDirty();
