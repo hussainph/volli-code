@@ -134,6 +134,27 @@ export function ThemePicker({
     onCancelled?.();
   };
 
+  /**
+   * A hover-preview has no natural end. Keyboard previews are bounded — Escape
+   * reverts, Enter commits — but the pointer just wanders off, and on a
+   * surface that stays mounted (Settings) the abandoned preview would sit
+   * there looking exactly like the applied theme. So the pointer leaving IS
+   * the "never mind": revert to what is stored.
+   *
+   * Only `cancelPreview`, never `cancel` — `onCancelled` closes the ⌘K dialog,
+   * and moving the mouse off the list must not dismiss the picker.
+   *
+   * The selection is cleared too. cmdk no-ops on an unchanged value, so a row
+   * left highlighted would swallow the re-entry and never preview again; and
+   * a highlight with nothing previewed reads as a lie about what is on screen.
+   * Clearing is safe: the controlled-value effect assigns the value directly
+   * rather than going through `setState`, so this cannot re-enter as a preview.
+   */
+  const endHoverPreview = (): void => {
+    setSelected("");
+    useThemeStore.getState().cancelPreview();
+  };
+
   return (
     <Command
       label="Themes"
@@ -143,6 +164,7 @@ export function ThemePicker({
       shouldFilter={false}
       value={selected}
       onValueChange={previewSelection}
+      onPointerLeave={endHoverPreview}
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.preventDefault();

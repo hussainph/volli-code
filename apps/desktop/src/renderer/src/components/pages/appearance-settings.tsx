@@ -236,6 +236,14 @@ function TerminalThemeRow({ row }: { row: TerminalSettingRow }) {
               setSelected(name);
               preview(name);
             }}
+            // The pointer wandering off the list ends the preview, same as in
+            // the app-theme picker: a hover has no Escape. Clearing the
+            // selection keeps cmdk from swallowing the re-entry onto the row
+            // it left highlighted.
+            onPointerLeave={() => {
+              setSelected("");
+              endPreview();
+            }}
             className="flex flex-col overflow-hidden rounded-md"
           >
             <Command.Input

@@ -246,14 +246,38 @@ try {
     };
   });
 
-  await attempt(6, "picking a theme commits it", async () => {
+  await attempt(6, "the pointer leaving the picker ends a hover-preview", async () => {
+    // Moss, not the Midnight of checks 4-5: Escape leaves that row SELECTED,
+    // and cmdk no-ops on an unchanged value, so re-hovering it would preview
+    // nothing and this check would grade a revert that never had anything to
+    // revert. Hence the mid-state assertion too — half a check is worse here
+    // than none, because it would pass whether or not hover still works.
+    await page.getByRole("option", { name: /Moss/ }).first().hover();
+    const previewed = await waitForToken(page, "--background", MOSS["--background"]);
+    // A hover has no Escape: walking away IS the "never mind". The corner is
+    // outside the Command root, so this is the real pointerleave, not a click.
+    await page.mouse.move(8, 8);
+    const applied = await waitForToken(page, "--background", EMBER["--background"]);
+    // The highlight has to go with it — a row left selected both lies about
+    // what is on screen and makes cmdk swallow the re-entry onto that row.
+    const stillSelected = await page.locator('[role="option"][aria-selected="true"]').count();
+    return {
+      ok:
+        previewed === MOSS["--background"] &&
+        applied === EMBER["--background"] &&
+        stillSelected === 0,
+      detail: `hover=${previewed} left=${applied} selected=${stillSelected}`,
+    };
+  });
+
+  await attempt(7, "picking a theme commits it", async () => {
     await page.getByRole("option", { name: /Moss/ }).first().click();
     const applied = await waitForToken(page, "--background", MOSS["--background"]);
     return { ok: applied === MOSS["--background"], detail: `--background=${applied}` };
   });
 
   // ---- 4. the terminal overlay ---------------------------------------------
-  await attempt(7, "committing a terminal theme writes Volli's own overlay", async () => {
+  await attempt(8, "committing a terminal theme writes Volli's own overlay", async () => {
     await openTerminalThemeMenu(page);
     await themeSearch(page).fill(PREVIEW_THEME);
     await page.getByRole("option", { name: PREVIEW_THEME, exact: true }).first().click();
@@ -270,7 +294,7 @@ try {
   });
 
   // ---- 4. the user's own config is never touched ----------------------------
-  await attempt(8, "the user's own ghostty config is byte-identical (#67)", async () => {
+  await attempt(9, "the user's own ghostty config is byte-identical (#67)", async () => {
     const after = await fs.readFile(userConfigPath, "utf8");
     return {
       ok: after === userConfigBefore,
@@ -278,7 +302,7 @@ try {
     };
   });
 
-  await attempt(9, "a Volli write preserves hand-written keys and comments (#68)", async () => {
+  await attempt(10, "a Volli write preserves hand-written keys and comments (#68)", async () => {
     // Hand-edit the overlay the way a user would, then make Volli rewrite one key.
     const handEdited = `${(await readFileSafe(overlayPath)) ?? ""}
 # my own note
@@ -309,7 +333,7 @@ cursor-style = block
   page = await app.firstWindow();
   await page.waitForLoadState("domcontentloaded");
 
-  await attempt(10, "the committed terminal theme survives a relaunch", async () => {
+  await attempt(11, "the committed terminal theme survives a relaunch", async () => {
     await openAppearanceSettings(page);
     const label = await terminalThemeTrigger(page).textContent();
     return {
@@ -318,7 +342,7 @@ cursor-style = block
     };
   });
 
-  await attempt(11, "the committed app theme survives a relaunch", async () => {
+  await attempt(12, "the committed app theme survives a relaunch", async () => {
     // Moss, not Ember: proof that the commit persisted AND that the abandoned
     // Midnight preview never reached storage.
     const applied = await readAppliedTokens(page, ["--background", "--primary"]);
