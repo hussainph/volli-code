@@ -45,6 +45,28 @@ const markdownParser = parser.configure([GFM, Subscript, Superscript, Emoji]);
 
 const HEADING_RE = /^ATXHeading([1-6])$/;
 
+/** Inline containers that keep their text but get styled: node name → class. */
+const INLINE_CLASSES: Readonly<Record<string, string | undefined>> = {
+  StrongEmphasis: "volli-md-strong",
+  Emphasis: "volli-md-em",
+  Strikethrough: "volli-md-strike",
+  InlineCode: "volli-md-code",
+};
+
+/**
+ * The delimiter child each inline container collapses when the caret is away.
+ * Looking marks up from the container (rather than handling the mark nodes on
+ * their own) is what keeps `CodeMark` unambiguous: the identically-named fence
+ * marks of a `FencedCode` block are never reached this way, and stay owned by
+ * the fenced-code rule.
+ */
+const INLINE_MARKS: Readonly<Record<string, string>> = {
+  StrongEmphasis: "EmphasisMark",
+  Emphasis: "EmphasisMark",
+  Strikethrough: "StrikethroughMark",
+  InlineCode: "CodeMark",
+};
+
 /** One instruction for the renderer. Offsets are character offsets into the text. */
 export type ProjectionOp =
   /** Style a whole line (heading scale, blockquote, fenced-code block). */
@@ -120,6 +142,22 @@ export function projectMarkdown(input: ProjectionInput): readonly ProjectionOp[]
           ops.push({ kind: "hide", from: node.from, to: throughTrailingSpace(node.from, node.to) });
         }
         return;
+      }
+
+      // --- Inline emphasis: style the span, hide the delimiters off-cursor. --
+      const inlineClass = INLINE_CLASSES[node.name];
+      if (inlineClass !== undefined) {
+        ops.push({ kind: "inline-class", from: node.from, to: node.to, className: inlineClass });
+        if (!selectionTouches(selection, node.from, node.to)) {
+          // The delimiters are hidden from HERE rather than when the mark node
+          // itself is entered, so the reveal test reads the container's span
+          // without a parent lookup. Nested spans still reveal independently:
+          // each container asks the question about its own [from, to].
+          for (const mark of node.node.getChildren(INLINE_MARKS[node.name])) {
+            ops.push({ kind: "hide", from: mark.from, to: mark.to });
+          }
+        }
+        return; // descend: emphasis can nest, and can contain links/code
       }
       return;
     },
