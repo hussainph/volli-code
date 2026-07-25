@@ -50,6 +50,12 @@ export interface MonacoDocumentEditorProps {
   onChange(value: string): void;
   placeholder?: string;
   autoFocus?: boolean;
+  /**
+   * Classes for the editor host. Min/max height belong here and are honoured
+   * (see the auto-height note on the component); PADDING does not — the host's
+   * box is what the editor is laid out into, so pad with a wrapper or with the
+   * editor's own inset instead.
+   */
   className?: string;
   onBlur?(): void;
   /** Accessible name for the editable region. */
@@ -81,6 +87,17 @@ type DocumentMonacoLease = DocumentLease<editor.ITextModel, editor.ICodeEditorVi
  * `value` seeds the model and, on later external changes, resets it ONLY while
  * unfocused (or on blur, if the buffer was never touched), so an agent's edit or
  * a store rehydrate can never stomp the user mid-keystroke.
+ *
+ * ## Height
+ *
+ * A document grows with its text. Monaco does not do that on its own — it fills
+ * whatever box it is given and scrolls inside it, which is right for a file tab
+ * and wrong for a ticket body sitting in a scrolling column. So the host's
+ * height tracks `getContentHeight()`, and the editor is then laid out into the
+ * host's `clientHeight` rather than into that number directly: `clientHeight` is
+ * the CSS-CLAMPED box, so a caller's `min-h-*` / `max-h-*` classes keep working
+ * (the composer bounds its body at 40vh and scrolls inside; the ticket body has
+ * a floor and no ceiling) without this component knowing anything about them.
  */
 export const MonacoDocumentEditor = React.forwardRef<
   MonacoDocumentEditorHandle,
@@ -216,6 +233,16 @@ export const MonacoDocumentEditor = React.forwardRef<
           { getFileRefs: () => fileRefsRef.current },
         );
         attachmentRef.current = attachment;
+
+        // The host owns the height; the editor is laid out into whatever CSS
+        // then allows (see the component note).
+        const editorView = view;
+        const fitToContent = (): void => {
+          host.style.height = `${editorView.getContentHeight()}px`;
+          editorView.layout({ width: host.clientWidth, height: host.clientHeight });
+        };
+        subscriptions.push(editorView.onDidContentSizeChange(fitToContent));
+        fitToContent();
 
         const model = lease.model;
         subscriptions.push(

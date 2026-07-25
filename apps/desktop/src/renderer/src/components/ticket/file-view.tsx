@@ -9,15 +9,14 @@ import {
 } from "@renderer/components/editor/monaco-file-editor";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import {
-  MarkdownLiveEditor,
-  type MarkdownFileRefs,
-} from "@renderer/components/editor/markdown-live-editor";
+  type DocumentFileRefs,
+  MonacoDocumentEditor,
+} from "@renderer/components/editor/monaco-document-editor";
 import { Button } from "@renderer/components/ui/button";
+import { AUTOSAVE_IDLE_MS } from "@renderer/editor/autosave-plan";
 import { documentIdentityKey, fileDocumentIdentity } from "@renderer/editor/document-identity";
 import { toastError } from "@renderer/lib/toast";
 import { useDebouncedCallback } from "@renderer/lib/use-debounced-callback";
-
-const AUTOSAVE_IDLE_MS = 1500;
 
 interface FileViewProps {
   projectId: string;
@@ -25,7 +24,7 @@ interface FileViewProps {
   ticketId?: string;
   relPath: string;
   /** `@file` wiring so an open markdown file can itself reference other files. */
-  fileRefs?: MarkdownFileRefs;
+  fileRefs?: DocumentFileRefs;
   /** Reports the resolved source (with the file's relPath) so the tab can show a worktree badge. */
   onSource?(relPath: string, source: FileSource): void;
   /**
@@ -50,8 +49,13 @@ interface FileViewProps {
 type LoadState =
   | { status: "loading" }
   | { status: "error"; error: string }
-  /** An autosaving document: a Markdown Artifact under `.volli/artifacts/`. */
-  | { status: "markdown" }
+  /**
+   * An autosaving document: a Markdown Artifact under `.volli/artifacts/`. The
+   * resolved source rides along because Document Mode is registry-backed now,
+   * and identity must come from where main actually read the file — never from
+   * the request context (see `fileDocumentIdentity`).
+   */
+  | { status: "markdown"; source: FileSource }
   | {
       status: "code";
       text: string;
@@ -164,7 +168,7 @@ export function FileView({
       syncedMtimeRef.current = result.mtime;
       draftRef.current = content.text;
       setDocValue(content.text);
-      setState({ status: "markdown" });
+      setState({ status: "markdown", source: result.source });
       return;
     }
     // Source mode: an explicit-⌘S Monaco editor, or the read-only peek when the
@@ -367,7 +371,7 @@ export function FileView({
             syncedMtimeRef.current = disk.mtime;
             draftRef.current = disk.content.text;
             setDocValue(disk.content.text);
-            setState({ status: "markdown" });
+            setState({ status: "markdown", source: disk.source });
           }
           return;
         }
@@ -387,7 +391,7 @@ export function FileView({
           syncedMtimeRef.current = disk.mtime;
           draftRef.current = disk.content.text;
           setDocValue(disk.content.text);
-          setState({ status: "markdown" });
+          setState({ status: "markdown", source: disk.source });
           if (conflictRef.current !== null) setConflict(null);
         } else {
           setConflict({ text: disk.content.text, mtime: disk.mtime });
@@ -487,6 +491,12 @@ export function FileView({
   // The document surface → Tier A reading measure; source mode and everything
   // else is workbench-fluid.
   if (state.status === "markdown") {
+    const documentIdentity = fileDocumentIdentity({
+      projectId,
+      ticketId,
+      relPath,
+      source: state.source,
+    });
     return (
       <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
         <ContentColumn className="flex flex-col gap-2 py-6">
@@ -508,12 +518,14 @@ export function FileView({
               focusedRef.current = false;
             }}
           >
-            <MarkdownLiveEditor
+            <MonacoDocumentEditor
+              identity={documentIdentity}
+              viewId={`file:${projectId}:${ticketId ?? "main"}:${relPath}:document`}
               value={docValue}
               onChange={handleChange}
               onBlur={() => debouncer.flush()}
               ariaLabel={`${name} contents`}
-              className="min-h-full"
+              className="min-h-64"
               fileRefs={fileRefs}
             />
           </div>

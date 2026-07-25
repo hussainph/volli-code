@@ -1,6 +1,6 @@
 import type { Ticket } from "@volli/shared";
 
-import type { MarkdownFileRefs } from "@renderer/components/editor/markdown-live-editor";
+import type { DocumentFileRefs } from "@renderer/components/editor/monaco-document-editor";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import { TicketActivityFeed } from "@renderer/components/ticket/ticket-activity-feed";
 import { TicketBodyEditor } from "@renderer/components/ticket/ticket-body-editor";
@@ -16,7 +16,7 @@ export function TicketDocTab({
   fileRefs,
 }: {
   ticket: Ticket;
-  fileRefs?: MarkdownFileRefs;
+  fileRefs?: DocumentFileRefs;
 }) {
   return (
     <ContentColumn className="flex flex-col gap-8 pt-3 pb-16">

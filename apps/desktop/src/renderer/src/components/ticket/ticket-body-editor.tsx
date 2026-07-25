@@ -3,27 +3,29 @@ import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwis
 import type { Ticket } from "@volli/shared";
 
 import {
-  MarkdownLiveEditor,
-  type MarkdownFileRefs,
-} from "@renderer/components/editor/markdown-live-editor";
+  type DocumentFileRefs,
+  MonacoDocumentEditor,
+} from "@renderer/components/editor/monaco-document-editor";
 import { Button } from "@renderer/components/ui/button";
+import { AUTOSAVE_IDLE_MS, planAutosave } from "@renderer/editor/autosave-plan";
 import { useDebouncedCallback } from "@renderer/lib/use-debounced-callback";
 import { useBoardStore } from "@renderer/stores/board";
 
-const AUTOSAVE_IDLE_MS = 1500;
-
 /**
- * The Doc tab's body: an always-mounted Obsidian-style live-preview editor
- * (see components/editor). The markdown buffer IS the document — syntax renders
- * in place and there's no read/edit flip. Edits autosave ~1.5s after the last
- * keystroke via the board store's `updateTicket({ body })`, and the pending save
- * flushes immediately on blur and on unmount so the last ~1.5s of typing is
- * never lost. `lastSavedRef` guards a redundant IPC/event when nothing changed
- * since the previous write; a failed save surfaces via the store's own toast.
- * Escape blurs the editor (handled inside the editor keymap) and — because the
- * focused `.cm-content` is contenteditable, which the detail shell's
- * Escape-to-close guard already exempts — never closes the view; once unfocused,
- * Escape bubbles and closes as usual.
+ * The Doc tab's body: an always-mounted Monaco Document Mode editor. The
+ * markdown buffer IS the document — syntax renders in place and there's no
+ * read/edit flip. Edits autosave ~1.5s after the last keystroke via the board
+ * store's `updateTicket({ body })`, and the pending save flushes immediately on
+ * blur and on unmount so the last ~1.5s of typing is never lost. `lastSavedRef`
+ * guards a redundant IPC/event when nothing changed since the previous write; a
+ * failed save surfaces via the store's own toast. Escape inside the editor is
+ * Monaco's (its suggest widget, multi-cursor); the detail shell's
+ * Escape-to-close guard exempts the Monaco surface by selector, so it never
+ * closes the view out from under a caret (issue #116).
+ *
+ * This is the surface that finally uses the `ticket-body` document identity: the
+ * body gets a registry-owned Monaco model keyed by project + ticket, so a second
+ * view of the same body would share it rather than fork it.
  *
  * Because agents (and other views) edit the same body, autosave is
  * conflict-guarded exactly like the FileView: an external `ticket.body`
@@ -37,7 +39,7 @@ export function TicketBodyEditor({
   fileRefs,
 }: {
   ticket: Ticket;
-  fileRefs?: MarkdownFileRefs;
+  fileRefs?: DocumentFileRefs;
 }) {
   const updateTicket = useBoardStore((state) => state.updateTicket);
 
@@ -76,9 +78,17 @@ export function TicketBodyEditor({
   }, [ticket.body]);
 
   const save = React.useCallback(() => {
-    if (conflictRef.current !== null) return; // paused until reload
     const next = draftRef.current;
-    if (next === lastSavedRef.current) return;
+    // `writing: false` — `updateTicket` is fire-and-forget through the store, so
+    // there is no in-flight write for this surface to coalesce against; the
+    // conflict pause and the clean-document skip are the live rules here.
+    const action = planAutosave({
+      value: next,
+      baseline: lastSavedRef.current,
+      conflicted: conflictRef.current !== null,
+      writing: false,
+    });
+    if (action !== "save") return;
     lastSavedRef.current = next;
     void updateTicket({ ticketId: ticket.id, body: next });
   }, [updateTicket, ticket.id]);
@@ -115,17 +125,23 @@ export function TicketBodyEditor({
           </Button>
         </div>
       )}
-      <MarkdownLiveEditor
-        value={docValue}
-        onChange={handleChange}
-        onBlur={() => debouncer.flush()}
-        placeholder="Add description…"
-        ariaLabel="Ticket description"
-        fileRefs={fileRefs}
-        // -mx-3 bleeds the hover block into the gutter (Notion-style) so the
-        // body TEXT left-aligns with the title on the column edge.
-        className="-mx-3 min-h-32 rounded-md px-3 py-2"
-      />
+      {/* -mx-3/px-3 bleeds the block into the gutter (Notion-style) so the body
+          TEXT left-aligns with the title on the column edge. The padding is on
+          the wrapper, never on the editor host, which IS the editor's layout
+          box (see MonacoDocumentEditor). */}
+      <div className="-mx-3 rounded-md px-3">
+        <MonacoDocumentEditor
+          identity={{ kind: "ticket-body", projectId: ticket.projectId, ticketId: ticket.id }}
+          viewId={`ticket-body:${ticket.id}`}
+          value={docValue}
+          onChange={handleChange}
+          onBlur={() => debouncer.flush()}
+          placeholder="Add description…"
+          ariaLabel="Ticket description"
+          fileRefs={fileRefs}
+          className="min-h-32"
+        />
+      </div>
     </div>
   );
 }

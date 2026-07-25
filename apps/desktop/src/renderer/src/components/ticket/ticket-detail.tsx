@@ -14,7 +14,7 @@ import {
 } from "@renderer/components/files/close-guard";
 import { FileSaveGuardDialog } from "@renderer/components/files/save-guard-dialog";
 import { ContentColumn } from "@renderer/components/layout/content-column";
-import type { MarkdownFileRefs } from "@renderer/components/editor/markdown-live-editor";
+import type { DocumentFileRefs } from "@renderer/components/editor/monaco-document-editor";
 import { ConfirmCloseDialog } from "@renderer/components/sessions/confirm-close-dialog";
 import { createTerminalSession } from "@renderer/components/sessions/session-create";
 import { FileView } from "@renderer/components/ticket/file-view";
@@ -296,7 +296,7 @@ export function TicketDetail({
     (relPath: string) => openTicketFile(projectId, ticket.id, relPath),
     [openTicketFile, projectId, ticket.id],
   );
-  const fileRefs = React.useMemo<MarkdownFileRefs>(
+  const fileRefs = React.useMemo<DocumentFileRefs>(
     () => ({
       getIndex: fileIndex.getIndex,
       refreshIndex: fileIndex.refresh,
