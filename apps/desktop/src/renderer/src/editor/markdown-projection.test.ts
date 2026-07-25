@@ -148,3 +148,61 @@ describe("projectMarkdown — inline emphasis", () => {
     ]);
   });
 });
+
+describe("projectMarkdown — links", () => {
+  it("styles the label, hides the syntax and carries the href", () => {
+    const ops = projectMarkdown({ text: "[label](http://x)", selection: [], focused: false });
+
+    expect(ops).toEqual([
+      { kind: "link", from: 1, to: 6, className: "volli-md-link", href: "http://x" },
+      { kind: "hide", from: 0, to: 1 },
+      { kind: "hide", from: 6, to: 17 },
+    ]);
+  });
+
+  it("drops the href and restores the syntax while the caret is in the link", () => {
+    const text = "[label](http://x)";
+    const ops = projectMarkdown({ text, selection: [{ from: 3, to: 3 }], focused: true });
+
+    // A revealed link is being edited, not followed — an href here would make a
+    // click navigate away mid-edit.
+    expect(ops).toEqual([{ kind: "link", from: 1, to: 6, className: "volli-md-link", href: null }]);
+  });
+
+  it("styles a reference link with no inline URL but carries no href", () => {
+    const ops = projectMarkdown({ text: "[label]", selection: [], focused: false });
+
+    expect(ops).toEqual([
+      { kind: "link", from: 1, to: 6, className: "volli-md-link", href: null },
+      { kind: "hide", from: 0, to: 1 },
+      { kind: "hide", from: 6, to: 7 },
+    ]);
+  });
+
+  it("emits no label op for an empty label, and collapses the whole link", () => {
+    const ops = projectMarkdown({ text: "[](http://x)", selection: [], focused: false });
+
+    expect(ops).toEqual([
+      { kind: "hide", from: 0, to: 1 },
+      { kind: "hide", from: 1, to: 12 },
+    ]);
+  });
+
+  it("does not re-decorate markup inside a link label", () => {
+    // The label is replaced wholesale by one styled span, so inline emphasis
+    // inside it must not also be collapsed — that would eat the link's text.
+    const ops = projectMarkdown({ text: "[**bold**](u)", selection: [], focused: false });
+
+    expect(ops).toEqual([
+      { kind: "link", from: 1, to: 9, className: "volli-md-link", href: "u" },
+      { kind: "hide", from: 0, to: 1 },
+      { kind: "hide", from: 9, to: 13 },
+    ]);
+  });
+
+  it("leaves an autolink alone", () => {
+    // `<http://x>` parses as an Autolink, which the CodeMirror layer never
+    // decorated either — the raw text already reads as the URL.
+    expect(projectMarkdown({ text: "<http://x.com>", selection: [], focused: false })).toEqual([]);
+  });
+});

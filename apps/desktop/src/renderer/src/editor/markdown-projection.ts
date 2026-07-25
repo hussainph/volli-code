@@ -74,7 +74,13 @@ export type ProjectionOp =
   /** Style an inline span in place, leaving its text visible. */
   | { kind: "inline-class"; from: number; to: number; className: string }
   /** Collapse a span to nothing — raw syntax the caret is currently away from. */
-  | { kind: "hide"; from: number; to: number };
+  | { kind: "hide"; from: number; to: number }
+  /**
+   * A link's label. `href` is null while the link is revealed (the user is
+   * editing it, so a click must not navigate) and for reference links, which
+   * carry no inline destination.
+   */
+  | { kind: "link"; from: number; to: number; className: string; href: string | null };
 
 /** What `projectMarkdown` needs to know about the document's current condition. */
 export interface ProjectionInput {
@@ -159,6 +165,39 @@ export function projectMarkdown(input: ProjectionInput): readonly ProjectionOp[]
         }
         return; // descend: emphasis can nest, and can contain links/code
       }
+
+      // --- Links: styled label, `[…](url)` hidden off-cursor, href carried. --
+      if (node.name === "Link") {
+        const link = node.node;
+        const reveal = selectionTouches(selection, node.from, node.to);
+        // A Link's first two direct LinkMark children are always its `[` and
+        // `]`, in that order — the parser will not admit a Link without both,
+        // and `getChildren` skips the marks of any nested image/link.
+        const [openMark, closeMark] = link.getChildren("LinkMark");
+        const labelFrom = openMark.to;
+        const labelTo = closeMark.from;
+        const urlNode = link.getChild("URL");
+        const url = urlNode === null ? "" : text.slice(urlNode.from, urlNode.to);
+        if (labelTo > labelFrom) {
+          ops.push({
+            kind: "link",
+            from: labelFrom,
+            to: labelTo,
+            className: "volli-md-link",
+            // A revealed link is being edited, not followed; and a reference
+            // link has no inline destination to follow in the first place.
+            href: !reveal && url !== "" ? url : null,
+          });
+        }
+        if (!reveal) {
+          ops.push({ kind: "hide", from: node.from, to: labelFrom });
+          ops.push({ kind: "hide", from: labelTo, to: node.to });
+        }
+        // Fully handled: the label is one styled span, so re-decorating markup
+        // inside it would collapse text the link still has to show.
+        return false;
+      }
+
       return;
     },
   });
