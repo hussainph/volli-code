@@ -4,6 +4,12 @@
  * does a node's syntax reveal?" rule is unit-testable without a DOM or an
  * editor instance.
  *
+ * It lives here, beside the editor-engine modules, rather than in the
+ * CodeMirror component dir, because it is now the shared reveal rule for BOTH
+ * renderers: the CodeMirror live-preview plugin and the Monaco Document Mode
+ * projection engine (`markdown-projection.ts`) apply the exact same predicate,
+ * which is what makes the migration a swap of renderers and not of behaviour.
+ *
  * The rule, everywhere: a node's formatting marks are hidden until the
  * selection (cursor or range) *touches* the node — for inline nodes that means
  * the node's own [from, to] span; for block nodes it means the block's line

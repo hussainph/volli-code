@@ -15,7 +15,8 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 
-import { type SelRange, selectionTouches } from "./reveal";
+import { type SelRange, selectionTouches } from "@renderer/editor/reveal";
+
 import { BulletWidget, CheckboxWidget, ImageWidget, RuleWidget } from "./widgets";
 
 /**
