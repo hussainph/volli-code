@@ -83,6 +83,7 @@ export default defineConfig({
         "src/editor/document-identity.ts",
         "src/editor/document-mode.ts",
         "src/editor/document-registry.ts",
+        "src/editor/file-refs.ts",
         "src/editor/link-open.ts",
         "src/editor/markdown-projection.ts",
         "src/editor/monaco-theme.ts",
