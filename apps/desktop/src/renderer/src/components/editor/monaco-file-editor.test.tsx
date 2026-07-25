@@ -4,10 +4,62 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   classifyExternalChange,
   fileEditorAriaLabel,
+  fileEditorConstructionOptions,
   MonacoFileEditor,
+  type MonacoDocumentOptions,
   planExplicitSave,
   saveFailureMessage,
 } from "./monaco-file-editor";
+
+describe("fileEditorConstructionOptions", () => {
+  const base = { readOnly: false, ariaLabel: "notes.md" };
+
+  it("builds the source-mode look plus the state the component owns", () => {
+    expect(fileEditorConstructionOptions(base)).toMatchObject({
+      lineNumbers: "on",
+      fontFamily: "var(--font-mono)",
+      minimap: { enabled: false },
+      theme: "volli-dark",
+      readOnly: false,
+      domReadOnly: false,
+      ariaLabel: "notes.md",
+    });
+  });
+
+  it("lets a host restyle the document — Document Mode drops the gutter", () => {
+    const options = fileEditorConstructionOptions({
+      ...base,
+      overrides: { lineNumbers: "off", glyphMargin: false, padding: { top: 32, bottom: 96 } },
+    });
+
+    expect(options).toMatchObject({
+      lineNumbers: "off",
+      glyphMargin: false,
+      padding: { top: 32, bottom: 96 },
+      // Untouched defaults still come through.
+      automaticLayout: true,
+    });
+  });
+
+  it("keeps the component-owned keys out of a host's reach", () => {
+    // The type omits them; this proves the runtime guarantee behind that type,
+    // since a host reaching for `as` would otherwise silently win.
+    const hostile = {
+      theme: "someone-elses-theme",
+      readOnly: false,
+      ariaLabel: "wrong",
+    } as unknown as MonacoDocumentOptions;
+
+    expect(
+      fileEditorConstructionOptions({ readOnly: true, ariaLabel: "notes.md", overrides: hostile }),
+    ).toMatchObject({
+      theme: "volli-dark",
+      readOnly: true,
+      domReadOnly: true,
+      ariaLabel: "notes.md",
+    });
+  });
+});
 
 describe("planExplicitSave", () => {
   it("saves a dirty, idle, writable document", () => {

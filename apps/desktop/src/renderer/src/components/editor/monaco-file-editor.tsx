@@ -1,4 +1,5 @@
 import * as React from "react";
+import type * as Monaco from "monaco-editor";
 import type { editor } from "monaco-editor";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { errorMessage } from "@volli/shared";
@@ -14,6 +15,80 @@ export type MonacoFileSaveResult =
   | { ok: true; revision: DocumentRevision }
   | { ok: false; error: string };
 
+/**
+ * Monaco options a host may set per document, on top of the source-mode look
+ * below. Document Mode is the reason this exists: the same editor, the same
+ * model and the same save contract, but no line numbers, no gutter, and a
+ * reading measure's padding.
+ *
+ * The keys the component owns are omitted, not merely overridden last: `model`
+ * comes from the shared registry, `theme` is owned by the theming engine (issue
+ * #122), and `readOnly`/`domReadOnly`/`ariaLabel` are re-applied from props on
+ * every change — a host that set them here would watch them silently revert.
+ */
+export type MonacoDocumentOptions = Omit<
+  editor.IStandaloneEditorConstructionOptions,
+  "model" | "value" | "language" | "theme" | "readOnly" | "domReadOnly" | "ariaLabel"
+>;
+
+/** The live editor a contribution attaches to, and what it needs to do so. */
+export interface MonacoEditorContext {
+  editor: editor.IStandaloneCodeEditor;
+  /** The registry-owned model. Shared with every other view of this document. */
+  model: editor.ITextModel;
+  /** The loaded namespace — the only way to reach `languages.*` registration. */
+  monaco: typeof Monaco;
+}
+
+/**
+ * Attaches behaviour to a freshly created editor: decorations, content widgets,
+ * view zones, a completion provider. Called exactly once per editor, after its
+ * view state is restored and before the first external reconcile.
+ *
+ * Whatever it returns is disposed when the editor is torn down — the seam that
+ * makes it safe to register globals like a completion provider here, which
+ * would otherwise leak one registration per mount.
+ */
+export type MonacoEditorContribution = (
+  context: MonacoEditorContext,
+) => { dispose(): void } | undefined;
+
+/** The source-mode look: a code file, with its gutter and monospace measure. */
+const SOURCE_MODE_OPTIONS: MonacoDocumentOptions = {
+  automaticLayout: true,
+  fontFamily: "var(--font-mono)",
+  fontSize: 13,
+  lineHeight: 21,
+  lineNumbers: "on",
+  minimap: { enabled: false },
+  overviewRulerLanes: 0,
+  hideCursorInOverviewRuler: true,
+  scrollBeyondLastLine: false,
+  wordWrap: "on",
+  padding: { top: 12, bottom: 12 },
+};
+
+/**
+ * The option set one editor is created with. Host overrides land between the
+ * source-mode defaults and the component-owned keys, so a host can restyle the
+ * document freely without being able to take over the state this component is
+ * responsible for keeping true.
+ */
+export function fileEditorConstructionOptions(input: {
+  readOnly: boolean;
+  ariaLabel: string;
+  overrides?: MonacoDocumentOptions;
+}): editor.IStandaloneEditorConstructionOptions {
+  return {
+    ...SOURCE_MODE_OPTIONS,
+    ...input.overrides,
+    theme: "volli-dark",
+    readOnly: input.readOnly,
+    domReadOnly: input.readOnly,
+    ariaLabel: input.ariaLabel,
+  };
+}
+
 export interface MonacoFileEditorProps {
   identity: DocumentIdentity;
   /** Disk content at load — the registry seed and the clean baseline. */
@@ -28,6 +103,14 @@ export interface MonacoFileEditorProps {
   onSave(text: string): Promise<MonacoFileSaveResult>;
   /** Fires on every dirty transition so the workbench can pin/guard the tab. */
   onDirtyChange?(dirty: boolean): void;
+  /**
+   * Per-document Monaco option overrides. Applied at creation only: a view that
+   * needs to restyle mid-life is a different document, and remounting it is
+   * cheaper to reason about than diffing an editor's whole option set.
+   */
+  options?: MonacoDocumentOptions;
+  /** Attaches Document Mode (or anything else) to this view's editor. */
+  contribute?: MonacoEditorContribution;
   /** Cursor/folding/scroll persisted by the store, used when the registry has none. */
   initialViewState?: unknown;
   /** Emitted when this view releases, so the store can persist the view state. */
@@ -120,6 +203,8 @@ export function MonacoFileEditor({
   readOnly,
   onSave,
   onDirtyChange,
+  options,
+  contribute,
   initialViewState,
   onViewStateChange,
 }: MonacoFileEditorProps) {
@@ -152,8 +237,18 @@ export function MonacoFileEditor({
     onSave,
     onViewStateChange,
     initialViewState,
+    options,
+    contribute,
   });
-  liveRef.current = { readOnly, ariaLabel, onSave, onViewStateChange, initialViewState };
+  liveRef.current = {
+    readOnly,
+    ariaLabel,
+    onSave,
+    onViewStateChange,
+    initialViewState,
+    options,
+    contribute,
+  };
 
   const syncDirty = React.useCallback(() => {
     const active = leaseRef.current;
@@ -235,6 +330,7 @@ export function MonacoFileEditor({
     let editorView: editor.IStandaloneCodeEditor | null = null;
     let lease: MonacoLease | null = null;
     let changeSubscription: { dispose(): void } | null = null;
+    let contribution: { dispose(): void } | null = null;
     host.dataset.monacoStatus = "loading";
 
     void loadMonacoRuntime()
@@ -265,26 +361,16 @@ export function MonacoFileEditor({
         }
 
         editorView = runtime.monaco.editor.create(host, {
-          model: lease.model,
-          theme: "volli-dark",
-          readOnly: liveRef.current.readOnly,
-          domReadOnly: liveRef.current.readOnly,
-          ariaLabel: fileEditorAriaLabel({
-            label: liveRef.current.ariaLabel,
+          ...fileEditorConstructionOptions({
             readOnly: liveRef.current.readOnly,
-            dirty: lease.snapshot().dirty,
+            ariaLabel: fileEditorAriaLabel({
+              label: liveRef.current.ariaLabel,
+              readOnly: liveRef.current.readOnly,
+              dirty: lease.snapshot().dirty,
+            }),
+            overrides: liveRef.current.options,
           }),
-          automaticLayout: true,
-          fontFamily: "var(--font-mono)",
-          fontSize: 13,
-          lineHeight: 21,
-          lineNumbers: "on",
-          minimap: { enabled: false },
-          overviewRulerLanes: 0,
-          hideCursorInOverviewRuler: true,
-          scrollBeyondLastLine: false,
-          wordWrap: "on",
-          padding: { top: 12, bottom: 12 },
+          model: lease.model,
         });
         editorRef.current = editorView;
 
@@ -306,6 +392,16 @@ export function MonacoFileEditor({
           | undefined;
         const viewState = restored ?? fallbackViewState ?? null;
         if (viewState !== null) editorView.restoreViewState(viewState);
+
+        // Document Mode and friends attach here — after the view state is
+        // restored (so a contribution measuring the viewport sees the real
+        // scroll position) and before the first external reconcile.
+        contribution =
+          liveRef.current.contribute?.({
+            editor: editorView,
+            model: lease.model,
+            monaco: runtime.monaco,
+          }) ?? null;
 
         changeSubscription = lease.model.onDidChangeContent(() => {
           syncDirty();
@@ -334,6 +430,8 @@ export function MonacoFileEditor({
       })
       .catch((error: unknown) => {
         if (cancelled) return;
+        contribution?.dispose();
+        contribution = null;
         changeSubscription?.dispose();
         changeSubscription = null;
         editorView?.dispose();
@@ -350,6 +448,9 @@ export function MonacoFileEditor({
 
     return () => {
       cancelled = true;
+      // Before the editor goes: a contribution's widgets and view zones belong
+      // to it, and its provider registrations are global.
+      contribution?.dispose();
       changeSubscription?.dispose();
       if (leaseRef.current?.key === key) leaseRef.current = null;
       editorRef.current = null;
