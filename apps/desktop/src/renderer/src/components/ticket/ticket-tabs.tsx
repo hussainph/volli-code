@@ -60,6 +60,12 @@ export interface TicketTabDescriptor {
   relPath?: string;
   /** A `"file"` tab whose file resolved from the ticket's worktree copy shows a subtle badge (decision #6). */
   badge?: "worktree";
+  /**
+   * A `"file"` tab whose editor holds unsaved work. Repository files save only
+   * on ⌘S (CONCEPT #49), so the draft has to be visible from across the strip —
+   * and ticket-detail.tsx guards the close on the same flag.
+   */
+  dirty?: boolean;
 }
 
 interface TicketTabStripProps {
@@ -107,6 +113,7 @@ function TicketTab({
 }) {
   const isSession = tab.kind === "session";
   const closable = tab.kind === "session" || tab.kind === "file";
+  const dirty = tab.dirty === true;
 
   const inner = (
     // The tab itself is the focusable role="tab" — the direct child of the
@@ -190,9 +197,26 @@ function TicketTab({
             event.stopPropagation();
             onClose();
           }}
-          className="ml-1.5 flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground opacity-0 outline-none transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-border hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50"
+          className={cn(
+            "group/close ml-1.5 flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-none transition-opacity hover:bg-border hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50",
+            // Same idiom as the Project Files strip: a dirty tab's control is
+            // always present because it IS the unsaved dot, and turns back into
+            // an × on hover so the tab still closes in one click. A clean tab's
+            // × stays out of the way until the tab is pointed at.
+            dirty
+              ? "opacity-100"
+              : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
+          )}
         >
-          <XIcon className="size-3" />
+          {dirty ? (
+            <span
+              data-testid="ticket-tab-dirty"
+              title="Unsaved changes"
+              aria-label="Unsaved changes"
+              className="size-2 rounded-full bg-primary group-hover/close:hidden"
+            />
+          ) : null}
+          <XIcon className={cn("size-3", dirty && "hidden group-hover/close:block")} />
         </button>
       ) : null}
     </div>

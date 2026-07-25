@@ -171,6 +171,18 @@ export interface FilePathInput {
   relPath: string;
 }
 
+/**
+ * One expanded directory of the Project Files tree, watched for changes
+ * (issue #106). Project Files is always MAIN-rooted (CONCEPT #54), so there is
+ * deliberately no `ticketId`: the subscription can't drift to a worktree copy.
+ * `relPath` is the project-relative directory, with the empty string meaning
+ * the project root itself — `"."` is rejected, so there is exactly one spelling.
+ */
+export interface DirPathInput {
+  projectId: string;
+  relPath: string;
+}
+
 /** `write`'s extra fields: the new content, and an optional mtime conflict guard (decision #7). */
 export interface FileWriteInput extends FilePathInput {
   content: string;
@@ -299,15 +311,16 @@ export interface VolliDataIpcContract {
 export type DataIpcChannel = keyof VolliDataIpcContract;
 
 /**
- * Global artifacts + `@file` refs (docs/plans/global-artifacts.md) — the 7
- * file channels `src/main/volli-fs.ts` owns.
+ * Global artifacts + `@file` refs (docs/plans/global-artifacts.md) plus the
+ * Project Files workspace (issue #106) — the file channels
+ * `src/main/volli-fs.ts` owns.
  */
 export interface VolliFileIpcContract {
   /** The whole-project file index the `@` picker ranks over (git-listed + `.volli/artifacts/`). Fetched fresh per picker open. */
   "volli:file-index": { args: [input: FileIndexInput]; result: FileIndexResult };
   /** Reads any repo/artifact file worktree-awarely: text (capped), image (data URI), or binary stub. */
   "volli:file-read": { args: [input: FilePathInput]; result: FileReadResult };
-  /** Writes markdown content; markdown-only, `expectedMtime` conflict-guarded. Resolves with the fresh mtime. */
+  /** Writes utf8 text to an existing file (images/binary/oversize refused), `expectedMtime` conflict-guarded. Resolves with the fresh mtime. */
   "volli:file-write": { args: [input: FileWriteInput]; result: FileWriteResult };
   /** Creates a new, minimally-templated `.md` in `.volli/artifacts/`. Resolves with its `@ref`-able relPath. */
   "volli:artifact-create": { args: [input: ArtifactCreateInput]; result: ArtifactCreateResult };
@@ -316,6 +329,13 @@ export interface VolliFileIpcContract {
   /** Watches one open file tab (debounced main→renderer change events); pair with `unwatch` on unmount. */
   "volli:file-watch": { args: [input: FilePathInput]; result: Result };
   "volli:file-unwatch": { args: [input: FilePathInput]; result: Result };
+  /**
+   * Watches ONE expanded Project Files directory (non-recursive, main checkout)
+   * so the tree can re-list just what changed instead of hydrating the repo;
+   * pair with `dir-unwatch` on collapse.
+   */
+  "volli:dir-watch": { args: [input: DirPathInput]; result: Result };
+  "volli:dir-unwatch": { args: [input: DirPathInput]; result: Result };
 }
 
 export type FileIpcChannel = keyof VolliFileIpcContract;
@@ -413,6 +433,10 @@ export type VolliIpcEvent =
   // Debounced fs.watch broadcast (~250ms) for a single watched file tab —
   // see volli-fs.ts's FileWatchManager.
   | "volli:file-changed"
+  // The same debounced broadcast for one expanded Project Files directory —
+  // see volli-fs.ts's DirWatchManager. Carries no listing: the renderer
+  // re-reads the one directory it owns, so the tree never mirrors the repo.
+  | "volli:dir-changed"
   // Transient worktree-ensure phase transitions (never persisted; the renderer
   // mirrors them in a keyed store map, the `starting[ticketId]` pattern).
   | "volli:worktree-phase";
@@ -613,6 +637,16 @@ export interface FileChangedEvent {
   projectId: string;
   relPath: string;
   source: FileSource;
+}
+
+/**
+ * The single watched directory a `volli:dir-changed` push event fired for
+ * (`relPath: ""` is the project root). Always the MAIN checkout, so unlike
+ * {@link FileChangedEvent} there is no `source` to disambiguate.
+ */
+export interface DirChangedEvent {
+  projectId: string;
+  relPath: string;
 }
 
 // ---- ticket worktrees (docs/plans/worktree-support.md) ---------------------

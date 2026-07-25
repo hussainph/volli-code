@@ -7,6 +7,12 @@ import {
   type Ticket,
 } from "@volli/shared";
 
+import {
+  planTabClose,
+  resolveTabClose,
+  type TabCloseResolution,
+} from "@renderer/components/files/close-guard";
+import { FileSaveGuardDialog } from "@renderer/components/files/save-guard-dialog";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import type { MarkdownFileRefs } from "@renderer/components/editor/markdown-live-editor";
 import { ConfirmCloseDialog } from "@renderer/components/sessions/confirm-close-dialog";
@@ -20,8 +26,11 @@ import { TicketSessionPlane } from "@renderer/components/ticket/ticket-session-p
 import { TicketSessionsPanel } from "@renderer/components/ticket/ticket-sessions-panel";
 import { TicketTabStrip, type TicketTabDescriptor } from "@renderer/components/ticket/ticket-tabs";
 import { TicketTitle } from "@renderer/components/ticket/ticket-title";
+import { fileDocumentIdentity } from "@renderer/editor/document-identity";
+import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { isEscapeExempt } from "@renderer/lib/escape-guard";
+import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { sessionPanes, ticketScope, useSessionsStore } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
@@ -33,6 +42,9 @@ import { getEngine } from "@renderer/terminal/registry";
 /** The always-present Doc tab's id — the fallback every persisted/live tab id
  * resets to once it no longer names a renderable tab (doc/file/session). */
 const DOC_TAB_ID = "doc";
+
+/** Stable empty tab list, so "no open files" isn't a new array every render. */
+const NO_OPEN_FILES: readonly string[] = [];
 
 /**
  * The right rail's bottom "Details" drawer (status/priority/labels/worktree).
@@ -98,7 +110,7 @@ export function TicketDetail({
 
   const displayId = displayTicketId(ticketPrefix, ticket.ticketNumber);
 
-  const openFiles = ticketTabsState?.files ?? [];
+  const openFiles = ticketTabsState?.files ?? NO_OPEN_FILES;
   const activeTabId = ticketTabsState?.active ?? DOC_TAB_ID;
 
   // The per-tab worktree badge is driven by each file's resolved source, which
@@ -107,6 +119,170 @@ export function TicketDetail({
   const reportFileSource = React.useCallback((relPath: string, source: FileSource) => {
     setFileSources((prev) => (prev[relPath] === source ? prev : { ...prev, [relPath]: source }));
   }, []);
+
+  /**
+   * Which open file tabs hold unsaved work. Repository files (Markdown very
+   * much included) reach disk only on ⌘S since CONCEPT #49, so a draft has to
+   * be BOTH visible on its tab and defended on close — otherwise closing a tab
+   * silently orphans the only copy of that work in the document registry, where
+   * no surface can reach it. Fed by the active editor's dirty reports and
+   * re-seeded from the registry, because a dirty document deliberately outlives
+   * its view: only the active file tab is mounted here, and leaving the ticket
+   * unmounts even that while the draft stays parked.
+   */
+  const [dirtyFiles, setDirtyFiles] = React.useState<ReadonlySet<string>>(() => new Set());
+  /** The file tab the Save / Discard / Cancel guard is currently asking about. */
+  const [pendingClose, setPendingClose] = React.useState<string | null>(null);
+
+  const markFileDirty = React.useCallback((relPath: string, dirty: boolean) => {
+    setDirtyFiles((previous) => {
+      if (previous.has(relPath) === dirty) return previous;
+      const next = new Set(previous);
+      if (dirty) next.add(relPath);
+      else next.delete(relPath);
+      return next;
+    });
+  }, []);
+
+  /**
+   * The registry handles a ticket file tab could be backed by. A repo path
+   * opened from a ticket resolves to the ticket's WORKTREE copy or to Main
+   * (`.volli/**`, and tickets without a materialized worktree), and the guard
+   * runs for tabs whose view may never have mounted this session — so both
+   * identities are probed rather than guessed from `fileSources`.
+   */
+  const peekFileDocuments = React.useCallback(
+    (registry: Awaited<ReturnType<typeof loadMonacoRuntime>>["registry"], relPath: string) =>
+      (["worktree", "main"] as const).flatMap((source) => {
+        const handle = registry.peek(
+          fileDocumentIdentity({ projectId, ticketId: ticket.id, relPath, source }),
+        );
+        return handle === null ? [] : [handle];
+      }),
+    [projectId, ticket.id],
+  );
+
+  /** The handle holding this tab's draft, or any open one, or `null`. */
+  const peekFileDocument = React.useCallback(
+    async (relPath: string) => {
+      const runtime = await loadMonacoRuntime();
+      const handles = peekFileDocuments(runtime.registry, relPath);
+      return handles.find((handle) => handle.snapshot().dirty) ?? handles[0] ?? null;
+    },
+    [peekFileDocuments],
+  );
+
+  // `openFiles` is the persisted tab list, iterated directly rather than joined
+  // into a delimited key: a relPath may legally contain a newline on macOS, and
+  // splitting one back apart would invent two paths that are open in no tab —
+  // so the real tab's parked draft never re-enters `dirtyFiles` and its close
+  // guard is silently skipped. `NO_OPEN_FILES` keeps the empty case a stable
+  // identity so this effect doesn't re-run every render.
+  React.useEffect(() => {
+    if (openFiles.length === 0) return;
+    let cancelled = false;
+    void loadMonacoRuntime()
+      .then((runtime) => {
+        if (cancelled) return;
+        const parked = openFiles.filter((relPath) =>
+          peekFileDocuments(runtime.registry, relPath).some((handle) => handle.snapshot().dirty),
+        );
+        if (parked.length > 0) setDirtyFiles((previous) => new Set([...previous, ...parked]));
+      })
+      .catch(() => {
+        // Monaco failing to load is surfaced by the editor itself; there is
+        // simply no registry to reconcile against here.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [openFiles, peekFileDocuments]);
+
+  /**
+   * Writes a tab's draft, conflict-guarded on the FRESHEST revision the
+   * document has seen on disk (`externalRevision`, advanced by every re-read) —
+   * not the baseline it was last saved at, which an agent touching the file
+   * under an open draft would leave stale, wedging every close on a rejected
+   * `expectedMtime`. This is the same mtime the editor's own ⌘S carries.
+   * `false` means nothing reached disk, so the caller must NOT close the tab.
+   */
+  const saveFileDocument = React.useCallback(
+    async (relPath: string): Promise<boolean> => {
+      const name = baseNameOf(relPath);
+      try {
+        const handle = await peekFileDocument(relPath);
+        const model = handle?.model ?? null;
+        // No live document (or nothing to write) — closing is safe.
+        if (handle === null || model === null || !handle.snapshot().dirty) return true;
+        const expectedMtime = handle.snapshot().externalRevision;
+        if (typeof expectedMtime !== "number") {
+          // A file document's revision IS its mtime, so this shouldn't happen —
+          // but writing without the conflict guard is the one failure mode that
+          // could silently destroy someone else's newer bytes, so refuse rather
+          // than guess. The tab stays open with its draft intact.
+          toastError(`Could not save ${name}: its version on disk is unknown.`);
+          return false;
+        }
+        const result = await window.api.files.write({
+          projectId,
+          ticketId: ticket.id,
+          relPath,
+          content: model.getValue(),
+          expectedMtime,
+        });
+        if (!result.ok) {
+          toastError(`Could not save ${name}: ${result.error}`);
+          return false;
+        }
+        handle.markSaved(result.mtime);
+        return true;
+      } catch (error) {
+        toastError(`Could not save ${name}: ${errorMessage(error)}`);
+        return false;
+      }
+    },
+    [peekFileDocument, projectId, ticket.id],
+  );
+
+  const closeFileTab = React.useCallback(
+    (relPath: string) => {
+      closeTicketFile(projectId, ticket.id, relPath);
+      markFileDirty(relPath, false);
+      // Otherwise a reopened tab can briefly show the last-known worktree/main
+      // badge from before the close, until the new FileView's own read reports
+      // back — the record is keyed by relPath only and never pruned on its own.
+      setFileSources((prev) => {
+        if (!(relPath in prev)) return prev;
+        const next = { ...prev };
+        delete next[relPath];
+        return next;
+      });
+    },
+    [closeTicketFile, markFileDirty, projectId, ticket.id],
+  );
+
+  const requestCloseFileTab = React.useCallback(
+    (relPath: string) => {
+      if (planTabClose({ dirty: dirtyFiles.has(relPath) }) === "close") closeFileTab(relPath);
+      else setPendingClose(relPath);
+    },
+    [closeFileTab, dirtyFiles],
+  );
+
+  /**
+   * Applies the user's answer. Cancel keeps the tab, and so does a FAILED save
+   * — closing over a write that never landed would discard the only copy.
+   */
+  const resolvePendingClose = React.useCallback(
+    async (relPath: string, choice: TabCloseResolution["choice"]) => {
+      const resolution: TabCloseResolution =
+        choice === "save" ? { choice: "save", saved: await saveFileDocument(relPath) } : { choice };
+      if (resolution.choice === "discard") (await peekFileDocument(relPath))?.discard();
+      setPendingClose(null);
+      if (resolveTabClose(resolution) === "close") closeFileTab(relPath);
+    },
+    [closeFileTab, peekFileDocument, saveFileDocument],
+  );
 
   const setActiveTab = React.useCallback(
     (tabId: string) => setTicketActiveTab(projectId, ticket.id, tabId),
@@ -153,6 +329,7 @@ export function TicketDetail({
         label: baseNameOf(relPath),
         relPath,
         badge: fileSources[relPath] === "worktree" ? "worktree" : undefined,
+        dirty: dirtyFiles.has(relPath),
       }),
     ),
     ...(sessionTabs ?? []).map(
@@ -175,6 +352,17 @@ export function TicketDetail({
     terminalFocusTarget.ticketId === ticket.id &&
     terminalFocusTarget.sessionId === activeTab.id &&
     activeSessionTab !== undefined;
+
+  // Only the active file tab mounts a FileView, so its dirty reports are for
+  // exactly one path — the one below it in the tab strip.
+  const activeFileRelPath = activeTab.kind === "file" ? (activeTab.relPath ?? null) : null;
+  const handleFileDirtyChange = React.useCallback(
+    (dirty: boolean) => {
+      if (activeFileRelPath === null) return;
+      markFileDirty(activeFileRelPath, dirty);
+    },
+    [activeFileRelPath, markFileDirty],
+  );
 
   // The fallback above is purely visual — it renders Doc without writing the
   // store, so a persisted `active` naming a session that's since closed (or
@@ -305,18 +493,9 @@ export function TicketDetail({
             onSelectTab={setActiveTab}
             onCloseTab={(tab) => {
               if (tab.kind === "file" && tab.relPath !== undefined) {
-                const relPath = tab.relPath;
-                closeTicketFile(projectId, ticket.id, relPath);
-                // Otherwise a reopened tab can briefly show the last-known
-                // worktree/main badge from before the close, until the new
-                // FileView's own read reports back — the record is keyed by
-                // relPath only and never pruned on its own.
-                setFileSources((prev) => {
-                  if (!(relPath in prev)) return prev;
-                  const next = { ...prev };
-                  delete next[relPath];
-                  return next;
-                });
+                // A file tab with an unsaved draft routes through the Save /
+                // Discard / Cancel guard first (CONCEPT #49).
+                requestCloseFileTab(tab.relPath);
                 return;
               }
               const sessionId = tab.id;
@@ -375,6 +554,7 @@ export function TicketDetail({
                   relPath={activeTab.relPath}
                   fileRefs={fileRefs}
                   onSource={reportFileSource}
+                  onDirtyChange={handleFileDirtyChange}
                 />
               ) : null}
               <TicketSessionPlane
@@ -410,6 +590,13 @@ export function TicketDetail({
         pending={closeGuard.pending}
         onConfirm={closeGuard.confirm}
         onCancel={closeGuard.cancel}
+      />
+      <FileSaveGuardDialog
+        relPath={pendingClose}
+        onCancel={() => setPendingClose(null)}
+        onChoose={(choice) => {
+          if (pendingClose !== null) void resolvePendingClose(pendingClose, choice);
+        }}
       />
     </>
   );

@@ -1,3 +1,5 @@
+import { MONACO_SURFACE_SELECTOR } from "./monaco-surface";
+
 /** The subset of `KeyboardEvent` the plain-"c" new-ticket shortcut cares about. */
 export interface NewTicketKeyEvent {
   metaKey: boolean;
@@ -27,12 +29,18 @@ export function isNewTicketKeyEvent(event: NewTicketKeyEvent): boolean {
  * controls and contenteditable regions (so plain typing isn't hijacked),
  * `[data-terminal-renderer]` (the attribute on every live terminal host, see
  * components/sessions/terminal-view.tsx — a terminal session must receive its
- * own "c" keystrokes untouched), and `[role="dialog"]`/`[role="alertdialog"]`
+ * own "c" keystrokes untouched), `[role="dialog"]`/`[role="alertdialog"]`
  * (keeps "c" inert while any modal, including the New-ticket dialog itself, is
- * already open).
+ * already open), and the Monaco source editor.
+ *
+ * Monaco is spliced in via the shared `MONACO_SURFACE_SELECTOR` (that module
+ * owns the two-anchor reasoning, and is also what the Escape guard uses).
+ * Without it, typing `const`/`class`/`function` inside a file tab opened the
+ * New-ticket dialog and swallowed the rest of the word, because Monaco's input
+ * surface is a `div.native-edit-context` — not a `<textarea>`, not
+ * `[contenteditable]` — so it matched none of the generic entries above.
  */
-export const NEW_TICKET_GUARD_SELECTOR =
-  'input, textarea, select, [contenteditable], [data-terminal-renderer], [role="dialog"], [role="alertdialog"]';
+export const NEW_TICKET_GUARD_SELECTOR = `input, textarea, select, [contenteditable], [data-terminal-renderer], [role="dialog"], [role="alertdialog"], ${MONACO_SURFACE_SELECTOR}`;
 
 /**
  * True when a keydown originated somewhere the new-ticket shortcut must
