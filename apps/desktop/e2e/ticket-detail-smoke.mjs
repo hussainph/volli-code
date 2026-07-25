@@ -1034,6 +1034,12 @@ async function main() {
         const noAutoFile = fileTabs.every(
           (label) => label === DISPLAY_ID || label === SESSION_INITIAL || label === SESSION_RENAMED,
         );
+
+        // Restore the session tab as active so later session-dependent checks
+        // (6b terminal focus, 7 rename) keep the precondition they had on baseline.
+        const sessionTab = page.getByRole("tab", { name: SESSION_INITIAL, exact: true });
+        if ((await sessionTab.count()) === 1) await sessionTab.click();
+
         return {
           ok: noAutoFile,
           detail: `modes=${modes.join(",")} tabs=${JSON.stringify(fileTabs)} noAutoFile=${noAutoFile}`,
@@ -1547,7 +1553,13 @@ async function main() {
       "8c",
       'Persisted active:"doc" still restores the Ticket Body tab after rename',
       async () => {
-        if (!(await detailOpen(page))) await openTicketViaCard(page);
+        // Prefer the already-open detail (check 12 leaves it open). Fall back to
+        // the board card only if needed.
+        if (!(await detailOpen(page))) {
+          await page.keyboard.press("Escape").catch(() => {});
+          await sleep(200);
+          if (!(await detailOpen(page))) await openTicketViaCard(page);
+        }
 
         // Write the legacy wire value into app_state and reload immediately so
         // an in-memory zustand flush cannot overwrite it. Keep a non-empty
