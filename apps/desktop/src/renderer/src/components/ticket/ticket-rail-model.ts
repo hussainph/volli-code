@@ -15,6 +15,14 @@ export type TicketRailMode = (typeof TICKET_RAIL_MODES)[number];
 /** Default mode when nothing is persisted — Sessions dominate the rail. */
 export const DEFAULT_TICKET_RAIL_MODE: TicketRailMode = "sessions";
 
+/** Accessible labels for the icon-mode strip (also used as button aria-labels). */
+export const TICKET_RAIL_MODE_LABELS: Record<TicketRailMode, string> = {
+  sessions: "Sessions",
+  files: "Files",
+  changes: "Changes",
+  properties: "Properties",
+};
+
 /**
  * Couples rail mode with the main strip's active tab solely so mode switches
  * can be proven not to touch the tab. The store keeps these fields separate;
