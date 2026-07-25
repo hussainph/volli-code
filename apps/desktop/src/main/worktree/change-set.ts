@@ -9,6 +9,7 @@
  * detection (`-M`) so paths with spaces/quotes/Unicode and renames parse safely.
  */
 import { createHash } from "node:crypto";
+import { isAbsolute, normalize, sep } from "node:path";
 
 import type { ChangeSetFile, ChangeSetFileStatus, ChangeSetSnapshot } from "@volli/shared";
 
@@ -21,6 +22,18 @@ export interface ChangeSetInput {
   /** The ticket's recorded base branch name; resolved live, never a stored SHA. */
   baseBranch: string | null;
 }
+
+export interface ChangeSetBaseFileInput {
+  worktreePath: string;
+  baseRevision: string;
+  /** Worktree-relative path; absolute and `..` traversal are rejected. */
+  path: string;
+}
+
+/** Present content at the base revision, or `missing` when the path was absent there. */
+export type ChangeSetBaseFile =
+  | { content: string; missing?: undefined }
+  | { missing: true; content?: undefined };
 
 interface ParsedNameStatus {
   status: ChangeSetFileStatus;
@@ -82,6 +95,49 @@ export function changeSetSnapshot(
   } catch (caught) {
     return err(stderrOf(caught));
   }
+}
+
+/**
+ * Reads a file's contents at `baseRevision` without mutating the checkout
+ * (`git show <rev>:<path>` — never `git checkout`). Path containment rejects
+ * absolute paths and `..` traversal. A path absent at the base returns
+ * `{ missing: true }` (added/untracked originals); other git failures surface
+ * real stderr.
+ */
+export function readChangeSetBaseFile(
+  git: RunGit,
+  input: ChangeSetBaseFileInput,
+): WorktreeResult<ChangeSetBaseFile> {
+  if (!isSafeRepoRelativePath(input.path)) {
+    return err("Path is outside the worktree.");
+  }
+  try {
+    const content = git(["show", `${input.baseRevision}:${input.path}`], input.worktreePath);
+    return ok({ content });
+  } catch (caught) {
+    const message = stderrOf(caught);
+    if (isMissingAtRevision(message)) return ok({ missing: true });
+    return err(message);
+  }
+}
+
+/** Rejects absolute paths and any `..` segment after normalization. */
+function isSafeRepoRelativePath(path: string): boolean {
+  if (path.length === 0 || isAbsolute(path)) return false;
+  const normalized = normalize(path);
+  if (isAbsolute(normalized)) return false;
+  const parts = normalized.split(sep);
+  return !parts.some((part) => part === "..");
+}
+
+/** git show's "path does not exist in 'rev'" (and close cousins). */
+function isMissingAtRevision(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("does not exist") ||
+    lower.includes("exists on disk, but not in") ||
+    lower.includes("path not in")
+  );
 }
 
 function composeFiles(

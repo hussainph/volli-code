@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { changeSetSnapshot } from "./change-set";
+import { changeSetSnapshot, readChangeSetBaseFile } from "./change-set";
+import { GitError } from "./git";
 import { scriptedGit } from "./scripted-git";
 
 /** Scripted git that resolves local `main` and returns the given NUL payloads. */
@@ -229,7 +230,6 @@ describe("changeSetSnapshot — failures", () => {
   });
 
   it("surfaces real git stderr when a read fails", async () => {
-    const { GitError } = await import("./git");
     const { git } = scriptedGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no such ref");
       if (args[0] === "rev-parse" && args[1] === "main") {
@@ -239,6 +239,67 @@ describe("changeSetSnapshot — failures", () => {
     });
 
     const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("bad object");
+  });
+});
+
+describe("readChangeSetBaseFile", () => {
+  it("reads file contents at the base revision via git show", () => {
+    const { git, calls } = scriptedGit((args) => {
+      if (args[0] === "show") return "hello from base\n";
+      return "";
+    });
+
+    const result = readChangeSetBaseFile(git, {
+      worktreePath: "/wt",
+      baseRevision: "basesha",
+      path: "src/a.ts",
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toEqual({ content: "hello from base\n" });
+    expect(calls[0]?.args).toEqual(["show", "basesha:src/a.ts"]);
+  });
+
+  it("rejects path traversal outside the worktree", () => {
+    const { git, calls } = scriptedGit(() => "secret");
+    const result = readChangeSetBaseFile(git, {
+      worktreePath: "/wt",
+      baseRevision: "basesha",
+      path: "../secret.txt",
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toMatch(/path/i);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("returns missing when the path is absent at the base revision", () => {
+    const { git } = scriptedGit((args) => {
+      throw new GitError("failed", "fatal: path 'src/new.ts' does not exist in 'basesha'", args);
+    });
+    const result = readChangeSetBaseFile(git, {
+      worktreePath: "/wt",
+      baseRevision: "basesha",
+      path: "src/new.ts",
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toEqual({ missing: true });
+  });
+
+  it("surfaces real git stderr for non-missing failures", () => {
+    const { git } = scriptedGit((args) => {
+      throw new GitError("failed", "fatal: bad object basesha", args);
+    });
+    const result = readChangeSetBaseFile(git, {
+      worktreePath: "/wt",
+      baseRevision: "basesha",
+      path: "src/a.ts",
+    });
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toContain("bad object");
