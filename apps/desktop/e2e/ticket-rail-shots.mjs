@@ -1,12 +1,7 @@
 /**
  * Visual proof for the VC-108 icon-mode ticket rail.
  *
- * Boots the BUILT app, opens a ticket with a live session, screenshots each
- * of the four rail modes, then exits. Not a pass/fail contract suite — that
- * lives in ticket-detail-smoke.mjs checks 8 / 8b / 8c.
- *
- *   pnpm run build
- *   node apps/desktop/e2e/ticket-rail-shots.mjs
+ *   env -u ELECTRON_RUN_AS_NODE node apps/desktop/e2e/ticket-rail-shots.mjs
  */
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
@@ -41,45 +36,41 @@ try {
   );
 
   await seedProjects(page, [
-    {
-      id: "rail-proj",
-      name: "Rail Shots",
-      path: projectDir,
-      prefix: "RS",
-    },
+    { id: "rail-proj", name: "Rail Shots", path: projectDir, prefix: "RS" },
   ]);
 
-  // Create a ticket via the New-ticket composer so we land in a real detail.
-  await page.getByRole("button", { name: "New ticket", exact: true }).click();
-  const title = page.getByRole("textbox", { name: /title/i }).or(page.locator("input").first());
-  await waitUntil("composer open", async () => (await title.count()) >= 1);
-  // Prefer accessible name; fall back to the first visible input in the dialog.
-  const titleField =
-    (await page.getByPlaceholder(/title|Ticket/i).count()) >= 1
-      ? page.getByPlaceholder(/title|Ticket/i).first()
-      : page.locator('[role="dialog"] input').first();
-  await titleField.fill("Icon-mode rail visual proof");
-  // Create (not Create & start) — we boot a shell ourselves for the live shot.
-  const createBtn = page.getByRole("button", { name: /^Create$/i });
-  if ((await createBtn.count()) >= 1) await createBtn.click();
-  else
-    await page
-      .getByRole("button", { name: /Create/i })
-      .first()
-      .click();
-
-  await waitUntil("ticket detail open", async () => {
-    return (await page.getByRole("tablist").count()) >= 1;
+  const ticket = await page.evaluate(async () => {
+    const boot = await window.api.data.bootstrap();
+    if (!boot.ok) throw new Error(boot.error);
+    const project = boot.data.projects[0];
+    if (!project) throw new Error("no project");
+    const created = await window.api.tickets.create({
+      projectId: project.id,
+      status: "todo",
+      title: "Icon-mode rail visual proof",
+      priority: "medium",
+    });
+    if (!created.ok) throw new Error(created.error);
+    return { displayId: `${project.ticketPrefix}-${created.ticket.ticketNumber}` };
   });
+
+  await page.reload();
+  await page.waitForLoadState("domcontentloaded");
+  const card = page.locator("article").filter({
+    has: page.locator("span.font-mono", { hasText: new RegExp(`^${ticket.displayId}$`) }),
+  });
+  await waitUntil("card", async () => (await card.count()) === 1);
+  await card.dblclick();
+  await waitUntil("detail", async () => (await page.getByRole("tablist").count()) >= 1);
 
   const aside = page.locator("aside");
   await waitUntil("rail visible", async () => (await aside.count()) === 1);
 
-  // Boot a live session so the Sessions mode shot isn't an empty list.
   await aside.getByRole("button", { name: "New session" }).click();
-  await waitUntil("session tab", async () => {
-    return (await page.getByRole("tab", { name: "Session 1", exact: true }).count()) === 1;
-  }).catch(() => null);
+  await waitUntil(
+    "session tab",
+    async () => (await page.getByRole("tab", { name: "Session 1", exact: true }).count()) === 1,
+  ).catch(() => null);
 
   for (const mode of MODES) {
     await attempt(mode, `screenshot rail-${mode}.png`, async () => {
@@ -90,8 +81,7 @@ try {
           "true"
         );
       });
-      // Settle layout before capture.
-      await page.waitForTimeout(250);
+      await page.waitForTimeout(300);
       const path = join(SHOT_DIR, `rail-${mode}.png`);
       await page.screenshot({ path, fullPage: false });
       const stat = await fs.stat(path);
@@ -99,7 +89,6 @@ try {
     });
   }
 
-  // One wider shot with the live session tab selected.
   await attempt("live", "screenshot rail-live-session.png", async () => {
     const sessionTab = page.getByRole("tab", { name: "Session 1", exact: true });
     if ((await sessionTab.count()) === 1) await sessionTab.click();
