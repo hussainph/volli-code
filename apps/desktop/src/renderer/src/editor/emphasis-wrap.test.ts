@@ -7,8 +7,17 @@ import { planEmphasisWrap } from "./emphasis-wrap";
  * `offset + 1` — which keeps these assertions readable next to the CodeMirror-era
  * offsets they were ported from.
  */
+function span(
+  startLineNumber: number,
+  startColumn: number,
+  endLineNumber: number,
+  endColumn: number,
+) {
+  return { startLineNumber, startColumn, endLineNumber, endColumn };
+}
+
 function caret(line: number, column: number) {
-  return { startLineNumber: line, startColumn: column, endLineNumber: line, endColumn: column };
+  return span(line, column, line, column);
 }
 
 describe("planEmphasisWrap", () => {
@@ -25,5 +34,13 @@ describe("planEmphasisWrap", () => {
 
     expect(plan.text).toBe("a**b");
     expect(plan.selections).toEqual([caret(1, 3)]);
+  });
+
+  it("wraps a non-empty selection and keeps the selection around the text", () => {
+    const plan = planEmphasisWrap({ text: "hello", selection: [{ from: 0, to: 5 }], mark: "**" });
+
+    expect(plan.text).toBe("**hello**");
+    // Offsets 2..7 — the words, not the marks.
+    expect(plan.selections).toEqual([span(1, 3, 1, 8)]);
   });
 });
