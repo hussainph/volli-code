@@ -40,8 +40,8 @@
  *      status/priority in the rail; NO harness row anywhere, and the board
  *      filter bar has NO Harness chip. Mode switches never steal the active
  *      main-view tab (decision #46). A persisted active:"doc" still restores
- *      the Ticket Body tab. (Checks 8/8b/8c run before 6b so they are not
- *      stranded by the pre-existing terminal-focus restore failure.)
+ *      the Ticket Body tab. Checks 8/8b run before 6b; 8c (reload) runs
+ *      after session-dependent checks so it cannot tear down the live PTY.
  *   9. Nav history — the chrome bar's ←/→ buttons (and ⌘[ / ⌘]) traverse
  *      ticket open/close snapshots.
  *  10. Rail toggle — the chrome bar's mirrored rail button and ⌥⌘B hide/show the
@@ -1042,80 +1042,6 @@ async function main() {
     );
 
     // ===================================================================
-    // 8c. LEGACY "doc" WIRE KEY — Ticket Body still restores
-    // ===================================================================
-    await attempt(
-      "8c",
-      'Persisted active:"doc" still restores the Ticket Body tab after rename',
-      async () => {
-        if (!(await detailOpen(page))) await openTicketViaCard(page);
-
-        // Switch away from the body when a session tab exists so restore is observable.
-        const sessionTab = page.getByRole("tab", { name: SESSION_INITIAL, exact: true });
-        if ((await sessionTab.count()) === 1) {
-          await sessionTab.click();
-          await waitUntil("session tab selected before legacy write", async () => {
-            return (await sessionTab.getAttribute("aria-selected")) === "true";
-          });
-        }
-
-        const wrote = await page.evaluate(async (ticketId) => {
-          const boot = await window.api.data.bootstrap();
-          if (!boot.ok) return { ok: false, error: boot.error };
-          const raw = boot.data.appState["volli:workspace"];
-          if (typeof raw !== "string") return { ok: false, error: "no workspace state" };
-          const parsed = JSON.parse(raw);
-          const byProject = parsed?.state?.byProject;
-          if (!byProject || typeof byProject !== "object") {
-            return { ok: false, error: "no byProject" };
-          }
-          const projectId = Object.keys(byProject)[0];
-          if (!projectId) return { ok: false, error: "empty byProject" };
-          const ui = byProject[projectId];
-          const existing = ui.ticketTabs?.[ticketId] ?? { files: [] };
-          ui.ticketTabs = {
-            ...(ui.ticketTabs ?? {}),
-            // Literal legacy wire value — what real upgrades still have on disk.
-            [ticketId]: { files: existing.files ?? [], active: "doc" },
-          };
-          ui.openTicketId = ticketId;
-          const next = JSON.stringify(parsed);
-          const set = await window.api.appState.set("volli:workspace", next);
-          return { ok: set.ok, error: set.ok ? undefined : set.error };
-        }, TICKET_ID);
-
-        if (!wrote.ok) return { ok: false, detail: `write failed: ${wrote.error}` };
-
-        await page.reload();
-        await page.waitForLoadState("domcontentloaded");
-        const restored = await waitUntil(
-          "Ticket Body tab after legacy doc rehydrate",
-          async () => {
-            if (!(await detailOpen(page))) return false;
-            return (await docTab(page).getAttribute("aria-selected")) === "true";
-          },
-          { timeout: 20000 },
-        );
-
-        const active = await page.evaluate(async (ticketId) => {
-          const boot = await window.api.data.bootstrap();
-          if (!boot.ok) return null;
-          const raw = boot.data.appState["volli:workspace"];
-          if (typeof raw !== "string") return null;
-          const parsed = JSON.parse(raw);
-          for (const ui of Object.values(parsed?.state?.byProject ?? {})) {
-            const tabs = ui?.ticketTabs?.[ticketId];
-            if (tabs) return tabs.active;
-          }
-          return null;
-        }, TICKET_ID);
-
-        const ok = !!restored && active === "doc";
-        return { ok, detail: `restored=${!!restored} active=${JSON.stringify(active)}` };
-      },
-    );
-
-    // ===================================================================
     // 6b. TERMINAL FOCUS — thin chrome, no sidebars, same resident canvas
     // ===================================================================
     await attempt(
@@ -1610,6 +1536,78 @@ async function main() {
             `closedAfterDiscard=${!!closedAfterDiscard} discardWroteNothing=${discardWroteNothing} ` +
             `disk=${JSON.stringify(afterDiscard.slice(0, 80))}`,
         };
+      },
+    );
+
+    // ===================================================================
+    // 8c. LEGACY "doc" WIRE KEY — Ticket Body still restores
+    //     (after session-dependent checks; reload would kill the live PTY)
+    // ===================================================================
+    await attempt(
+      "8c",
+      'Persisted active:"doc" still restores the Ticket Body tab after rename',
+      async () => {
+        if (!(await detailOpen(page))) await openTicketViaCard(page);
+
+        // Write the legacy wire value into app_state and reload immediately so
+        // an in-memory zustand flush cannot overwrite it. Keep a non-empty
+        // files list so sanitizeTicketTabs retains the record.
+        const wrote = await page.evaluate(async (ticketId) => {
+          const boot = await window.api.data.bootstrap();
+          if (!boot.ok) return { ok: false, error: boot.error };
+          const raw = boot.data.appState["volli:workspace"];
+          if (typeof raw !== "string") return { ok: false, error: "no workspace state" };
+          const parsed = JSON.parse(raw);
+          const byProject = parsed?.state?.byProject;
+          if (!byProject || typeof byProject !== "object") {
+            return { ok: false, error: "no byProject" };
+          }
+          const projectId = Object.keys(byProject)[0];
+          if (!projectId) return { ok: false, error: "empty byProject" };
+          const ui = byProject[projectId];
+          const existing = ui.ticketTabs?.[ticketId] ?? { files: [] };
+          ui.ticketTabs = {
+            ...(ui.ticketTabs ?? {}),
+            // Literal legacy wire value — what real upgrades still have on disk.
+            [ticketId]: {
+              files: existing.files?.length ? existing.files : ["README.md"],
+              active: "doc",
+            },
+          };
+          ui.openTicketId = ticketId;
+          const next = JSON.stringify(parsed);
+          const set = await window.api.appState.set("volli:workspace", next);
+          return { ok: set.ok, error: set.ok ? undefined : set.error };
+        }, TICKET_ID);
+
+        if (!wrote.ok) return { ok: false, detail: `write failed: ${wrote.error}` };
+
+        await page.reload();
+        await page.waitForLoadState("domcontentloaded");
+
+        const restored = await waitUntil(
+          'Ticket Body tab + persisted active:"doc"',
+          async () => {
+            if (!(await detailOpen(page))) return false;
+            if ((await docTab(page).getAttribute("aria-selected")) !== "true") return false;
+            const active = await page.evaluate(async (ticketId) => {
+              const boot = await window.api.data.bootstrap();
+              if (!boot.ok) return null;
+              const raw = boot.data.appState["volli:workspace"];
+              if (typeof raw !== "string") return null;
+              const parsed = JSON.parse(raw);
+              for (const ui of Object.values(parsed?.state?.byProject ?? {})) {
+                const tabs = ui?.ticketTabs?.[ticketId];
+                if (tabs) return tabs.active;
+              }
+              return null;
+            }, TICKET_ID);
+            return active === "doc" ? active : false;
+          },
+          { timeout: 20000 },
+        );
+
+        return { ok: restored === "doc", detail: `active=${JSON.stringify(restored)}` };
       },
     );
   } finally {
