@@ -44,6 +44,20 @@ const NEUTRAL_CHROMA_RATIO = 0.06;
 const PRIMARY_LIGHTNESS = 0.661;
 
 /**
+ * Lc floor for the accent used as *text* on `--background`.
+ *
+ * `--primary` cannot simply be brightened to meet this: its lightness is
+ * pinned at {@link PRIMARY_LIGHTNESS} because that is what it takes to read as
+ * a button fill and to keep ember an exact fixed point of the accent math. At
+ * that lightness it scores Lc 41 as body copy — fine for an icon, below the
+ * floor for a paragraph link. So the accent gets a *second* lightness rather
+ * than a compromised single one, and body-sized accent text uses that
+ * (docs/plans/theming-engine.md § Fold-ins). The floor matches
+ * `--muted-foreground`'s, because these are the same job.
+ */
+const PRIMARY_TEXT_LC = 60;
+
+/**
  * The neutral ladder: a fixed lightness plus a chroma multiplier per rung.
  * Chroma rises with lightness because a constant chroma reads as *draining*
  * of color as surfaces lighten — the lighter rungs need more of it to feel
@@ -199,6 +213,16 @@ export function generateThemeTokens(theme: ThemeDefinition): ThemeTokens {
   // 6–7. The accent and its label, solved together (see solveAccentPair).
   const { primary, primaryForeground } = solveAccentPair(accentChroma, accentSource.h);
 
+  // The accent a second time, at the lightness *text* needs rather than the
+  // one a button fill needs. Same solver as step 5, same floor as
+  // `--muted-foreground`, just at the accent's hue and chroma instead of the
+  // neutrals'.
+  const primaryText = oklchToHex(
+    solveLightnessForContrast(PRIMARY_TEXT_LC, accentChroma, accentSource.h, background),
+    accentChroma,
+    accentSource.h,
+  );
+
   const tokens: ThemeTokens = {
     ...ladder,
     // 8. Hue-locked semantics — these ignore the seed entirely.
@@ -210,6 +234,7 @@ export function generateThemeTokens(theme: ThemeDefinition): ThemeTokens {
     "--sidebar-foreground": sidebarForeground,
     "--primary": primary,
     "--primary-foreground": primaryForeground,
+    "--primary-text": primaryText,
 
     // Aliases. Each mirrors a relationship authored in globals.css today:
     // the sidebar panel is a card, its hover state is the accent surface, and

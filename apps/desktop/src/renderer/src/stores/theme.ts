@@ -23,8 +23,11 @@
 
 import { DEFAULT_THEME, EMPTY_PROJECT_THEME_OVERRIDE, errorMessage } from "@volli/shared";
 import type {
+  CustomThemeListResult,
+  CustomThemeWriteResult,
   GhosttyAppearancePayload,
   ProjectThemeOverride,
+  Result,
   ThemeDefinition,
   ThemeSetProjectResult,
   ThemeStatePayload,
@@ -41,7 +44,7 @@ import {
   toggleFavoriteTheme,
 } from "@renderer/components/theme/theme-picker-model";
 import { applyTheme as applyThemeToDom, resolveActiveTheme } from "@renderer/theme/apply";
-import { BUILTIN_THEMES } from "@renderer/theme/catalog";
+import { BUILTIN_THEMES, mergeThemeCatalog } from "@renderer/theme/catalog";
 import { writeThrough } from "@renderer/stores/mutate";
 
 /** Which scope a commit writes to (#69). The per-project entry point ships with Configure. */
@@ -55,6 +58,15 @@ export interface ThemeGateway {
     projectId: string,
     override: ProjectThemeOverride | null,
   ): Promise<ThemeSetProjectResult>;
+  /**
+   * The user's own theme files (#71). Every verb names a SLUG — main owns the
+   * path — and the two writers answer with the FRESH catalog, so this store
+   * adopts what the directory now holds instead of predicting it.
+   */
+  listCustomThemes(): Promise<CustomThemeListResult>;
+  saveCustomTheme(theme: ThemeDefinition): Promise<CustomThemeWriteResult>;
+  deleteCustomTheme(slug: string): Promise<CustomThemeListResult>;
+  openCustomTheme(slug: string): Promise<Result>;
 }
 
 /** The seams the store drives: the IPC bridge, and the DOM repaint. */
@@ -69,6 +81,10 @@ const defaultDeps: ThemeStoreDeps = {
     state: (input) => window.api.theme.state(input),
     setGlobal: (theme) => window.api.theme.setGlobal(theme),
     setProject: (projectId, override) => window.api.theme.setProject(projectId, override),
+    listCustomThemes: () => window.api.theme.listCustomThemes(),
+    saveCustomTheme: (theme) => window.api.theme.saveCustomTheme(theme),
+    deleteCustomTheme: (slug) => window.api.theme.deleteCustomTheme(slug),
+    openCustomTheme: (slug) => window.api.theme.openCustomTheme(slug),
   },
   applyTheme: (theme) => applyThemeToDom(theme),
 };
@@ -86,11 +102,17 @@ interface ThemeState {
   terminal: GhosttyAppearancePayload | null;
   /** In-flight preview. Memory-only: it is painted, never written. */
   preview: ThemeDefinition | null;
+  /** The user's own themes, as last read from `<userData>/volli/themes`. */
+  customThemes: ThemeDefinition[];
   favorites: string[];
   /** Applied theme slugs, most recent first. */
   recents: string[];
 
   hydrate(projectId?: string | null): Promise<void>;
+  loadCustomThemes(): Promise<void>;
+  saveCustomTheme(theme: ThemeDefinition, scope: ThemeScope): Promise<boolean>;
+  deleteCustomTheme(slug: string): Promise<boolean>;
+  openCustomThemeFile(slug: string): Promise<boolean>;
   acceptTerminal(payload: GhosttyAppearancePayload): void;
   acceptGlobalTerminal(payload: GhosttyAppearancePayload): void;
   startPreview(theme: ThemeDefinition): void;
@@ -100,8 +122,16 @@ interface ThemeState {
   toggleFavorite(slug: string): void;
 }
 
+/** Built-ins plus customs — colliding shipped slugs omitted (same rule as the picker). */
+function themeCatalog(customThemes: ThemeDefinition[]): readonly ThemeDefinition[] {
+  return mergeThemeCatalog(BUILTIN_THEMES, customThemes);
+}
+
 /** The inputs that decide what is on screen right now. */
-type EffectiveThemeInput = Pick<ThemeState, "preview" | "global" | "projectOverride">;
+type EffectiveThemeInput = Pick<
+  ThemeState,
+  "preview" | "global" | "projectOverride" | "customThemes"
+>;
 
 /**
  * The app-surface theme currently in force: the preview if one is running,
@@ -118,13 +148,17 @@ export function effectiveTheme({
   preview,
   global,
   projectOverride,
+  customThemes,
 }: EffectiveThemeInput): ThemeDefinition {
   if (preview !== null) return preview;
-  return resolveActiveTheme(global, projectOverride, BUILTIN_THEMES).app.value;
+  return resolveActiveTheme(global, projectOverride, themeCatalog(customThemes)).app.value;
 }
 
 /** What a scope has STORED — as opposed to what a preview is showing. */
-type AppliedThemeInput = Pick<ThemeState, "global" | "projectId" | "projectOverride">;
+type AppliedThemeInput = Pick<
+  ThemeState,
+  "global" | "projectId" | "projectOverride" | "customThemes"
+>;
 
 /**
  * The theme actually persisted for `scope`, ignoring any running preview —
@@ -133,14 +167,14 @@ type AppliedThemeInput = Pick<ThemeState, "global" | "projectId" | "projectOverr
  * hiding the one thing the tag exists to state.
  */
 export function appliedTheme(
-  { global, projectId, projectOverride }: AppliedThemeInput,
+  { global, projectId, projectOverride, customThemes }: AppliedThemeInput,
   scope: ThemeScope,
 ): ThemeDefinition {
   // The store holds exactly one scope's override at a time; a picker scoped to
   // a project the store isn't showing has no override to read, and must not
   // borrow another project's.
   if (scope.kind === "global" || scope.projectId !== projectId) return global;
-  return resolveActiveTheme(global, projectOverride, BUILTIN_THEMES).app.value;
+  return resolveActiveTheme(global, projectOverride, themeCatalog(customThemes)).app.value;
 }
 
 /** Persisted slice: the library's memory of your taste, not the theme itself. */
@@ -228,6 +262,7 @@ export function createThemeStore({
           projectOverride: null,
           terminal: null,
           preview: null,
+          customThemes: [],
           favorites: [],
           recents: [],
 
@@ -249,6 +284,66 @@ export function createThemeStore({
               return;
             }
             accept(result.value);
+            // The library is part of the theme state: a picker that opened
+            // before this landed would show the shipped six and silently omit
+            // every theme the user made.
+            await get().loadCustomThemes();
+          },
+
+          /** Re-reads `<userData>/volli/themes`. The files are hand-editable, so this is never assumed to be current. */
+          async loadCustomThemes() {
+            const result = await writeThrough("load your themes", () =>
+              deps.gateway.listCustomThemes(),
+            );
+            if (result !== null) set({ customThemes: result.themes });
+          },
+
+          /**
+           * Explicit save (#73): the draft becomes a file of the user's own,
+           * and then becomes the applied theme.
+           *
+           * Order matters. The file is written FIRST, and the theme is applied
+           * only if that succeeded — applying a theme whose file failed to
+           * write would leave the app wearing something that exists nowhere,
+           * which is the same lie the preview path exists to avoid. Applying at
+           * all is the honest half: the user has been looking at this theme the
+           * whole time they were editing it, so a save that dropped them back
+           * onto the old one would read as the save having failed.
+           */
+          async saveCustomTheme(theme, scope) {
+            const written = await writeThrough("save the theme", () =>
+              deps.gateway.saveCustomTheme(theme),
+            );
+            if (written === null) return false;
+            set({ customThemes: written.themes });
+            // Through the preview path, so committing an edited theme is the
+            // same write as committing a picked one — including its optimistic
+            // paint and its rollback.
+            get().startPreview(theme);
+            const committed = await get().commitPreview(scope);
+            // The file is already on disk — keep the editor and live app on the
+            // draft the user was saving rather than snapping back to stored.
+            if (!committed) get().startPreview(theme);
+            return committed;
+          },
+
+          /** Deletes a theme file, adopting the catalog the delete hands back. */
+          async deleteCustomTheme(slug) {
+            const result = await writeThrough("delete the theme", () =>
+              deps.gateway.deleteCustomTheme(slug),
+            );
+            if (result === null) return false;
+            set({ customThemes: result.themes });
+            return true;
+          },
+
+          /** Opens a theme's JSON in the user's editor — #71's "the file is the full interface". */
+          async openCustomThemeFile(slug) {
+            return (
+              (await writeThrough("open the theme file", () =>
+                deps.gateway.openCustomTheme(slug),
+              )) !== null
+            );
           },
 
           /** Adopt an appearance resolved for THIS store's scope — e.g. the one main hands back from an overlay write. */

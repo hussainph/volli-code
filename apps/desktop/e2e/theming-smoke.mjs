@@ -70,6 +70,7 @@ const EMBER = {
   "--sidebar-border": "#29211d",
   "--primary": "#e8652a",
   "--primary-foreground": "#ffffff",
+  "--primary-text": "#ff966c",
   "--ring": "#e8652a",
   "--sidebar-primary": "#e8652a",
   "--sidebar-primary-foreground": "#ffffff",
@@ -214,6 +215,7 @@ try {
     floor("muted-foreground Lc", lc(t["--muted-foreground"], t["--background"]), 60);
     floor("sidebar-foreground Lc", lc(t["--sidebar-foreground"], t["--sidebar"]), 75);
     floor("primary-foreground Lc", lc(t["--primary-foreground"], t["--primary"]), 60);
+    floor("primary-text Lc", lc(t["--primary-text"], t["--background"]), 60);
     floor("border ΔL", oklchL(t["--border"]) - oklchL(t["--background"]), 0.07);
     return { ok: failures.length === 0, detail: failures.join(" · ") };
   });

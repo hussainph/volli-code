@@ -90,7 +90,7 @@ export function ArchiveRow({
               <button
                 type="button"
                 onClick={() => openExternalUrl(prUrl)}
-                className="inline-flex shrink-0 items-center gap-1 text-primary hover:underline"
+                className="inline-flex shrink-0 items-center gap-1 text-primary-text hover:underline"
               >
                 <GitPullRequestIcon className="size-3" />
                 PR

@@ -7,7 +7,7 @@ import {
   isProjectThemeOverride,
   isProjectThemeOverrideEmpty,
   isThemeDefinition,
-  parseGlobalTheme,
+  parseThemeJson,
   serializeGlobalTheme,
   THEME_APP_STATE_KEY,
 } from "./persistence";
@@ -18,7 +18,7 @@ describe("global theme persistence", () => {
   });
 
   it("round-trips an authored definition", () => {
-    expect(parseGlobalTheme(serializeGlobalTheme(DEFAULT_THEME))).toEqual(DEFAULT_THEME);
+    expect(parseThemeJson(serializeGlobalTheme(DEFAULT_THEME))).toEqual(DEFAULT_THEME);
   });
 
   // docs/plans/theming-engine.md § Derived rules, first bullet: the resolved
@@ -45,16 +45,16 @@ describe("global theme persistence", () => {
       ...DEFAULT_THEME,
       overrides: { "--border-strong": "#4a3227" },
     };
-    const parsed = parseGlobalTheme(serializeGlobalTheme(authored));
+    const parsed = parseThemeJson(serializeGlobalTheme(authored));
     expect(parsed?.overrides).toEqual({ "--border-strong": "#4a3227" });
   });
 
   it("reports null for a missing, malformed, or wrong-shaped value", () => {
-    expect(parseGlobalTheme(undefined)).toBeNull();
-    expect(parseGlobalTheme("")).toBeNull();
-    expect(parseGlobalTheme("{ not json")).toBeNull();
-    expect(parseGlobalTheme('{"name":"X"}')).toBeNull();
-    expect(parseGlobalTheme("[]")).toBeNull();
+    expect(parseThemeJson(undefined)).toBeNull();
+    expect(parseThemeJson("")).toBeNull();
+    expect(parseThemeJson("{ not json")).toBeNull();
+    expect(parseThemeJson('{"name":"X"}')).toBeNull();
+    expect(parseThemeJson("[]")).toBeNull();
   });
 
   it("guards a definition's shape", () => {
@@ -64,6 +64,16 @@ describe("global theme persistence", () => {
     expect(isThemeDefinition({ ...DEFAULT_THEME, overrides: { "--border": 3 } })).toBe(false);
     expect(isThemeDefinition({ ...DEFAULT_THEME, appearance: "sepia" })).toBe(false);
     expect(isThemeDefinition(null)).toBe(false);
+  });
+
+  it("rejects a seed or accent that is not a hex color", () => {
+    const badSeed = { ...DEFAULT_THEME, seed: "blue" };
+    const badAccent = { ...DEFAULT_THEME, accent: "not-a-color" };
+
+    expect(isThemeDefinition(badSeed)).toBe(false);
+    expect(isThemeDefinition(badAccent)).toBe(false);
+    expect(parseThemeJson(JSON.stringify(badSeed))).toBeNull();
+    expect(parseThemeJson(JSON.stringify(badAccent))).toBeNull();
   });
 });
 
@@ -118,7 +128,7 @@ describe("the canvas guard", () => {
       ...DEFAULT_THEME,
       canvas: { kind: "gradient", stops: ["#2a1207", "#0d0d0d"] },
     };
-    expect(parseGlobalTheme(serializeGlobalTheme(themed))).toEqual(themed);
+    expect(parseThemeJson(serializeGlobalTheme(themed))).toEqual(themed);
   });
 
   // The canvas was the one field serializeGlobalTheme copied by REFERENCE, and
@@ -154,7 +164,7 @@ describe("the canvas guard", () => {
     const stops = ["#1", "#2", "#3", "#4"];
     const themed: ThemeDefinition = { ...DEFAULT_THEME, canvas: { kind: "gradient", stops } };
 
-    expect(parseGlobalTheme(serializeGlobalTheme(themed))?.canvas).toEqual({
+    expect(parseThemeJson(serializeGlobalTheme(themed))?.canvas).toEqual({
       kind: "gradient",
       stops,
     });

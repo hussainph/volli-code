@@ -388,7 +388,8 @@ const liveTheme = EditorView.theme(
       background: "var(--muted)",
     },
     ".cm-md-link": {
-      color: "var(--primary)",
+      // Matches `.typeset a` — the same link at body size, in the editor.
+      color: "var(--primary-text)",
       textDecoration: "underline",
       textUnderlineOffset: "2px",
       cursor: "pointer",

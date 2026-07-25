@@ -49,6 +49,10 @@ export const THEME_TOKEN_NAMES = [
   // Accent family.
   "--primary",
   "--primary-foreground",
+  // The accent again, at the lightness body copy needs. --primary is pinned at
+  // the accent's fill lightness, where it reads as text at only Lc 41; this is
+  // the same hue and chroma solved to Lc 60 on --background.
+  "--primary-text",
   "--ring",
   "--sidebar-primary",
   "--sidebar-primary-foreground",

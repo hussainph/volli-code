@@ -1352,15 +1352,65 @@ describe("THEME_IPC descriptor table", () => {
     });
   });
 
+  describe("the custom-theme-file channels", () => {
+    // The renderer names a SLUG, never a path — and the slug rule is imported
+    // from the path builder, not restated, so this boundary cannot drift from
+    // the directory it protects.
+    const slugChannels = [
+      "volli:theme-file-read",
+      "volli:theme-file-delete",
+      "volli:theme-file-reveal",
+      "volli:theme-file-open",
+    ] as const;
+
+    it("accepts a slug a theme file could actually be named for", () => {
+      for (const channel of slugChannels) {
+        expect(THEME_IPC[channel].guard([{ slug: "tokyo-night" }])).toBe(true);
+      }
+    });
+
+    it("refuses any slug that could escape the themes directory", () => {
+      for (const channel of slugChannels) {
+        const { guard, invalidError } = THEME_IPC[channel];
+        for (const slug of ["", "..", "../evil", "/etc/passwd", "..\\evil", "a/b", "Ember"]) {
+          expect(guard([{ slug }])).toBe(false);
+        }
+        expect(guard([{ slug: 7 }])).toBe(false);
+        expect(guard([])).toBe(false);
+        expect(guard([{ slug: "ember" }, "stray"])).toBe(false);
+        expect(invalidError).toBe("Invalid theme slug");
+      }
+    });
+
+    it("takes no arguments to list the catalog", () => {
+      const { guard, invalidError } = THEME_IPC["volli:theme-file-list"];
+
+      expect(guard([])).toBe(true);
+      expect(guard([{}])).toBe(false);
+      expect(invalidError).toBe("Invalid theme request");
+    });
+
+    it("requires a whole authored theme to write one", () => {
+      const { guard, invalidError } = THEME_IPC["volli:theme-file-write"];
+
+      expect(guard([{ theme: DEFAULT_THEME }])).toBe(true);
+      expect(guard([{ theme: { name: "X" } }])).toBe(false);
+      expect(guard([])).toBe(false);
+      expect(invalidError).toBe("Invalid theme");
+    });
+  });
+
   describe("THEME_CHANNELS derivation", () => {
     it("derives from the descriptor table's keys", () => {
       expect(THEME_CHANNELS).toEqual(Object.keys(THEME_IPC));
     });
 
     it("covers the whole theme surface", () => {
-      expect(THEME_CHANNELS).toHaveLength(4);
+      expect(THEME_CHANNELS).toHaveLength(10);
       expect(THEME_CHANNELS).toContain("volli:theme-state");
       expect(THEME_CHANNELS).toContain("volli:theme-terminal-overlay-write");
+      expect(THEME_CHANNELS).toContain("volli:theme-file-list");
+      expect(THEME_CHANNELS).toContain("volli:theme-file-open");
     });
   });
 });
