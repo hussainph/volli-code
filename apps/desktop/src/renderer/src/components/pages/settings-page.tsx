@@ -6,14 +6,9 @@ import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
 import { useCallback, useEffect, useState } from "react";
-import {
-  errorMessage,
-  HARNESS_IDS,
-  HARNESS_LABELS,
-  type DirtyWorktreeOrphan,
-  type GhosttyTerminalPrefs,
-} from "@volli/shared";
+import { errorMessage, HARNESS_IDS, HARNESS_LABELS, type DirtyWorktreeOrphan } from "@volli/shared";
 
+import { AppearanceSettings } from "@renderer/components/pages/appearance-settings";
 import {
   SettingsRow,
   SettingsSection,
@@ -53,7 +48,7 @@ export function SettingsPage() {
       key: "appearance",
       label: "Appearance",
       icon: PaletteIcon,
-      description: "Terminal appearance, driven by your external Ghostty configuration.",
+      description: "App theme and terminal appearance, layered over your Ghostty config.",
       content: <AppearanceSettings />,
     },
     {
@@ -173,114 +168,6 @@ function DoneTtlField() {
       <Button disabled={!loaded || saving} onClick={() => void save()}>
         {saving ? "Saving…" : "Save"}
       </Button>
-    </SettingsRow>
-  );
-}
-
-type AppearanceState =
-  | { status: "loading" }
-  | { status: "ready"; prefs: GhosttyTerminalPrefs; hasConfig: boolean }
-  | { status: "error"; error: string };
-
-const APPEARANCE_EXPLAINER =
-  "Terminal appearance is read from your external Ghostty config file (CONCEPT decision #27) — edit it there and Volli picks up the change live. These values are read-only here.";
-
-/**
- * Appearance category: a read-only view of the terminal appearance Volli
- * resolves from the user's Ghostty config (decision #27 — the external config
- * is the single source of truth, there is no in-app editor). Best-effort: a
- * missing or unreadable config is normal (Ghostty need not be installed), so it
- * falls back to an explanatory panel rather than surfacing a failed-mutation
- * toast — nothing here writes.
- */
-function AppearanceSettings() {
-  const [state, setState] = useState<AppearanceState>({ status: "loading" });
-
-  useEffect(() => {
-    let cancelled = false;
-    void window.api.terminal
-      .ghosttyConfig()
-      .then((result) => {
-        if (cancelled) return;
-        if (result.ok) {
-          setState({
-            status: "ready",
-            prefs: result.value.prefs,
-            hasConfig: result.value.configText !== null,
-          });
-        } else {
-          setState({ status: "error", error: result.error });
-        }
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        setState({ status: "error", error: errorMessage(error) });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  if (state.status === "error") {
-    return (
-      <SettingsSection
-        title="Terminal appearance"
-        icon={PaletteIcon}
-        description={APPEARANCE_EXPLAINER}
-      >
-        <p className="text-xs leading-5 text-muted-foreground">
-          Could not read your Ghostty config ({state.error}). Volli falls back to its built-in
-          terminal appearance.
-        </p>
-      </SettingsSection>
-    );
-  }
-
-  if (state.status === "loading") {
-    return (
-      <SettingsSection
-        title="Terminal appearance"
-        icon={PaletteIcon}
-        description={APPEARANCE_EXPLAINER}
-      >
-        <p className="text-xs text-muted-foreground">Reading Ghostty config…</p>
-      </SettingsSection>
-    );
-  }
-
-  const { prefs, hasConfig } = state;
-  return (
-    <SettingsSection
-      title="Terminal appearance"
-      icon={PaletteIcon}
-      description={APPEARANCE_EXPLAINER}
-    >
-      {!hasConfig ? (
-        <p className="mb-1 text-xs leading-5 text-muted-foreground">
-          No Ghostty config file found — Volli uses its built-in terminal defaults.
-        </p>
-      ) : null}
-      <AppearanceValueRow label="Theme" value={prefs.themeName} />
-      <AppearanceValueRow label="Font family" value={prefs.fontFamilies[0] ?? null} />
-      <AppearanceValueRow
-        label="Font size"
-        value={prefs.fontSize !== null ? `${prefs.fontSize} pt` : null}
-      />
-    </SettingsSection>
-  );
-}
-
-/** One read-only Ghostty appearance value; falls back to the built-in default when unset. */
-function AppearanceValueRow({ label, value }: { label: string; value: string | null }) {
-  return (
-    <SettingsRow label={label}>
-      {value !== null ? (
-        <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">
-          {value}
-        </code>
-      ) : (
-        <span className="text-xs text-muted-foreground">Built-in default</span>
-      )}
     </SettingsRow>
   );
 }

@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
-import { DATA_CHANNELS, DATA_IPC, FILE_CHANNELS, FILE_IPC } from "./ipc-descriptors";
+import { DEFAULT_THEME } from "./theme/definition";
+import {
+  DATA_CHANNELS,
+  DATA_IPC,
+  FILE_CHANNELS,
+  FILE_IPC,
+  THEME_CHANNELS,
+  THEME_IPC,
+} from "./ipc-descriptors";
 
 describe("DATA_IPC descriptor table", () => {
   describe("volli:data-bootstrap (no-arg request)", () => {
@@ -1173,6 +1181,110 @@ describe("FILE_IPC descriptor table", () => {
       expect(FILE_CHANNELS).toHaveLength(7);
       expect(FILE_CHANNELS).toContain("volli:file-index");
       expect(FILE_CHANNELS).toContain("volli:file-unwatch");
+    });
+  });
+});
+
+describe("THEME_IPC descriptor table", () => {
+  const theme = DEFAULT_THEME;
+
+  describe("volli:theme-state", () => {
+    const { guard } = THEME_IPC["volli:theme-state"];
+
+    it("accepts a global request and a project-scoped one", () => {
+      expect(guard([{}])).toBe(true);
+      expect(guard([{ projectId: "p1" }])).toBe(true);
+    });
+
+    it("rejects a non-string projectId or a missing payload", () => {
+      expect(guard([{ projectId: 7 }])).toBe(false);
+      expect(guard([])).toBe(false);
+      expect(guard([null])).toBe(false);
+    });
+  });
+
+  describe("volli:theme-set-global", () => {
+    const { guard } = THEME_IPC["volli:theme-set-global"];
+
+    it("accepts a well-formed authored definition", () => {
+      expect(guard([{ theme }])).toBe(true);
+    });
+
+    it("rejects a definition with a bad canvas, seed, or appearance", () => {
+      expect(guard([{ theme: { ...theme, canvas: { kind: "hologram" } } }])).toBe(false);
+      expect(guard([{ theme: { ...theme, seed: 42 } }])).toBe(false);
+      expect(guard([{ theme: { ...theme, appearance: "sepia" } }])).toBe(false);
+    });
+
+    // The resolved token set is derived, never sent or stored — but an
+    // authored SPARSE override map is legitimate intent (#71), so the guard
+    // must accept the latter while the repo layer strips the former.
+    it("accepts a sparse authored override map and rejects a non-token key", () => {
+      expect(guard([{ theme: { ...theme, overrides: { "--border-strong": "#4a3227" } } }])).toBe(
+        true,
+      );
+      expect(guard([{ theme: { ...theme, overrides: { "--not-a-token": "#000" } } }])).toBe(false);
+    });
+  });
+
+  describe("volli:theme-set-project", () => {
+    const { guard } = THEME_IPC["volli:theme-set-project"];
+    const override = {
+      appThemeSlug: null,
+      terminalThemeName: "Nord",
+      editorThemeId: null,
+      seed: null,
+    };
+
+    it("accepts a per-surface override and a null (clear-to-inherit)", () => {
+      expect(guard([{ projectId: "p1", override }])).toBe(true);
+      expect(guard([{ projectId: "p1", override: null }])).toBe(true);
+    });
+
+    it("rejects a partial override shape or a missing project", () => {
+      expect(guard([{ projectId: "p1", override: { appThemeSlug: "x" } }])).toBe(false);
+      expect(guard([{ override }])).toBe(false);
+    });
+
+    it("rejects a wrong arity", () => {
+      expect(guard([])).toBe(false);
+      expect(guard([{ projectId: "p1", override }, "stray"])).toBe(false);
+    });
+  });
+
+  describe("volli:theme-terminal-overlay-write", () => {
+    const { guard } = THEME_IPC["volli:theme-terminal-overlay-write"];
+
+    it("accepts a global scope and a project scope", () => {
+      expect(guard([{ scope: "global", edits: { theme: "Nord" } }])).toBe(true);
+      expect(guard([{ scope: "project", projectId: "p1", edits: { theme: null } }])).toBe(true);
+    });
+
+    it("requires a projectId for a project-scoped write", () => {
+      expect(guard([{ scope: "project", edits: { theme: "Nord" } }])).toBe(false);
+    });
+
+    it("rejects a wrong arity", () => {
+      expect(guard([])).toBe(false);
+      expect(guard([{ scope: "global", edits: {} }, "stray"])).toBe(false);
+    });
+
+    it("rejects an unknown scope or a non-string/null edit value", () => {
+      expect(guard([{ scope: "everything", edits: {} }])).toBe(false);
+      expect(guard([{ scope: "global", edits: { "font-size": 15 } }])).toBe(false);
+      expect(guard([{ scope: "global" }])).toBe(false);
+    });
+  });
+
+  describe("THEME_CHANNELS derivation", () => {
+    it("derives from the descriptor table's keys", () => {
+      expect(THEME_CHANNELS).toEqual(Object.keys(THEME_IPC));
+    });
+
+    it("covers the whole theme surface", () => {
+      expect(THEME_CHANNELS).toHaveLength(4);
+      expect(THEME_CHANNELS).toContain("volli:theme-state");
+      expect(THEME_CHANNELS).toContain("volli:theme-terminal-overlay-write");
     });
   });
 });

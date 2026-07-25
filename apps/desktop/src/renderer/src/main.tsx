@@ -15,6 +15,7 @@ import { boot, refreshPlanningData } from "./lib/boot";
 import { toastError } from "./lib/toast";
 import { useBoardStore } from "./stores/board";
 import { useProjectsStore } from "./stores/projects";
+import { useThemeStore } from "./stores/theme";
 import { useWorkspaceStore } from "./stores/workspace";
 import { initTerminalAppearance } from "./terminal/appearance";
 
@@ -41,6 +42,16 @@ async function main() {
   // boot round-trip needlessly widens the window where a terminal's first
   // paint lands on the token fallback (they re-theme live either way).
   void initTerminalAppearance();
+
+  // Same reasoning for the theme: it is a db read with no dependency on the
+  // bootstrap payload, and globals.css already paints the shipped default, so
+  // fetching it concurrently only narrows the window where a non-default theme
+  // hasn't landed yet. Settings' provenance labels track later config edits
+  // through the same push the terminals re-theme from.
+  void useThemeStore.getState().hydrate();
+  window.api.terminal.onGhosttyConfigChanged((payload) => {
+    useThemeStore.getState().acceptTerminal(payload);
+  });
 
   // boot() returns { ok: false } for a failed bootstrap; the catch covers the
   // unexpected throw (e.g. a corrupt pref blob exploding during rehydrate) so

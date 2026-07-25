@@ -22,10 +22,11 @@ type ThemeColor = { r: number; g: number; b: number; a?: number };
 
 const rgb = (r: number, g: number, b: number): ThemeColor => ({ r, g, b });
 
-// Literal fallbacks mirroring globals.css, used only when a token is missing
-// or unparseable (e.g. the stylesheet has not applied yet).
-const FALLBACK_BACKGROUND = rgb(0x11, 0x11, 0x11); // --background
-const FALLBACK_FOREGROUND = rgb(0xf5, 0xf5, 0xf5); // --foreground
+// Literal fallbacks mirroring globals.css (i.e. the generated Ember theme),
+// used only when a token is missing or unparseable — e.g. the stylesheet has
+// not applied yet.
+const FALLBACK_BACKGROUND = rgb(0x15, 0x10, 0x0e); // --background
+const FALLBACK_FOREGROUND = rgb(0xeb, 0xe3, 0xdf); // --foreground
 const FALLBACK_CURSOR = rgb(0xe8, 0x65, 0x2a); // --primary (ember orange)
 const FALLBACK_ANSI_RED = rgb(0xe5, 0x48, 0x4d); // --destructive
 
@@ -109,9 +110,18 @@ function tokenTheme(): GhosttyTheme {
 
 let payload: GhosttyAppearancePayload | null = null;
 let cachedAppearance: TerminalAppearance | null = null;
+let previewedTheme: GhosttyTheme | null = null;
+let cachedPreviewAppearance: TerminalAppearance | null = null;
 let initStarted = false;
 
 const changeListeners = new Set<() => void>();
+
+/** Drop every derived appearance and tell live terminals to re-read it. */
+function invalidateAndNotify(): void {
+  cachedAppearance = null;
+  cachedPreviewAppearance = null;
+  for (const listener of changeListeners) listener();
+}
 
 /**
  * The appearance every terminal renders with right now. Safe to call before
@@ -120,7 +130,9 @@ const changeListeners = new Set<() => void>();
  */
 export function getCurrentAppearance(): TerminalAppearance {
   cachedAppearance ??= resolveAppearance(payload, tokenTheme());
-  return cachedAppearance;
+  if (previewedTheme === null) return cachedAppearance;
+  cachedPreviewAppearance ??= { ...cachedAppearance, theme: previewedTheme };
+  return cachedPreviewAppearance;
 }
 
 /** Subscribe to appearance changes (initial config load + live file edits). */
@@ -133,8 +145,38 @@ export function onTerminalAppearanceChanged(listener: () => void): () => void {
 
 function acceptPayload(next: GhosttyAppearancePayload): void {
   payload = next;
-  cachedAppearance = null;
-  for (const listener of changeListeners) listener();
+  invalidateAndNotify();
+}
+
+/**
+ * Drops the cached token-derived palette and republishes the appearance.
+ *
+ * `tokenTheme`'s cache is permanent by design — design tokens used to be
+ * authored once in globals.css and never move — which the theming engine makes
+ * false: once the app theme changes at runtime, every config-less terminal
+ * would keep rendering the palette it happened to read at boot. Called from the
+ * theme apply path (`renderer/src/theme/apply.ts`), the single place app tokens
+ * change, so this stays an invalidation hook rather than a polling read.
+ */
+export function refreshTerminalTokenTheme(): void {
+  cachedTokenTheme = null;
+  invalidateAndNotify();
+}
+
+/**
+ * Paints every live terminal with `theme` without persisting anything; `null`
+ * puts the resolved config chain back in charge.
+ *
+ * We render the terminal, so a theme preview here is a REAL palette swap
+ * rather than a sample panel — the same standard the app-surface picker holds
+ * itself to. Memory-only by construction: the overlay file is only ever
+ * touched by an explicit save, so an abandoned preview leaves the user's
+ * config exactly as it was.
+ */
+export function previewTerminalTheme(theme: GhosttyTheme | null): void {
+  if (previewedTheme === theme) return;
+  previewedTheme = theme;
+  invalidateAndNotify();
 }
 
 /**

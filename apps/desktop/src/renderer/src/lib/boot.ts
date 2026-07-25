@@ -23,6 +23,7 @@ import {
   useProjectsStore,
 } from "@renderer/stores/projects";
 import { useBoardStore } from "@renderer/stores/board";
+import { useThemeStore } from "@renderer/stores/theme";
 import { useUiStore } from "@renderer/stores/ui";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
@@ -269,7 +270,14 @@ export async function boot(
   useProjectsStore.getState().hydrate(payload.projects, selectedProjectId);
   useBoardStore.getState().hydrate(payload.ticketsByProject, payload.labelsByProject);
 
-  await Promise.all([useUiStore.persist.rehydrate(), useWorkspaceStore.persist.rehydrate()]);
+  await Promise.all([
+    useUiStore.persist.rehydrate(),
+    useWorkspaceStore.persist.rehydrate(),
+    // Favorites/recents only — the theme itself lives in SQLite behind
+    // window.api.theme, because main reads it too (the window background
+    // follows it, before any renderer exists).
+    useThemeStore.persist.rehydrate(),
+  ]);
 
   // Fire-and-forget — never awaited, so it can't delay the app's first paint,
   // and its own try/catch means it can't fail boot either.

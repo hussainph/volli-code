@@ -81,6 +81,12 @@ import type {
   RetentionPollResult,
   RetentionStateResult,
   RetentionTtlResult,
+  ProjectThemeOverride,
+  ThemeDefinition,
+  ThemeSetProjectResult,
+  ThemeStateInput,
+  ThemeStateResult,
+  TerminalOverlayWriteResult,
 } from "@volli/shared";
 
 /** Typed `ipcRenderer.invoke` bound to the shared contract: the channel literal fixes both the argument tuple and the result type, so a wrong pairing is a compile error. */
@@ -394,6 +400,36 @@ const api = {
           listener,
         );
     },
+  },
+  /**
+   * Theming (docs/plans/theming-engine.md). Only AUTHORED inputs cross this
+   * door: the resolved token set is generated in the renderer at render time
+   * and stored nowhere. A terminal overlay write names a SCOPE, never a path,
+   * so no renderer request can reach the user's own ghostty config (#67).
+   */
+  theme: {
+    /** The authored global theme + a project's per-surface override + the resolved terminal chain. */
+    state: (input: ThemeStateInput = {}): Promise<ThemeStateResult> =>
+      invoke("volli:theme-state", input),
+    /** Persists the authored global theme; resolves with the fresh state. */
+    setGlobal: (theme: ThemeDefinition): Promise<ThemeStateResult> =>
+      invoke("volli:theme-set-global", { theme }),
+    /** Persists one project's per-surface override; `null` clears it back to inheriting. */
+    setProject: (
+      projectId: string,
+      override: ProjectThemeOverride | null,
+    ): Promise<ThemeSetProjectResult> => invoke("volli:theme-set-project", { projectId, override }),
+    /** Rewrites keys in Volli's global ghostty overlay (`null` removes a key). */
+    writeGlobalOverlay: (
+      edits: Record<string, string | null>,
+    ): Promise<TerminalOverlayWriteResult> =>
+      invoke("volli:theme-terminal-overlay-write", { scope: "global", edits }),
+    /** Rewrites keys in one project's ghostty overlay. */
+    writeProjectOverlay: (
+      projectId: string,
+      edits: Record<string, string | null>,
+    ): Promise<TerminalOverlayWriteResult> =>
+      invoke("volli:theme-terminal-overlay-write", { scope: "project", projectId, edits }),
   },
 };
 

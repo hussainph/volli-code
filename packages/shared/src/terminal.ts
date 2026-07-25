@@ -6,6 +6,7 @@
 import type { SessionRecord } from "./session";
 import type { HarnessId } from "./ticket";
 import type { GhosttyTerminalPrefs } from "./ghostty-config";
+import type { GhosttyValueOrigin } from "./theme/ghostty-overlay";
 
 /** Renderer → main request to boot a PTY session inside a workspace. */
 export interface CreateTerminalSessionRequest {
@@ -104,6 +105,28 @@ export interface GhosttyAppearancePayload {
   configText: string | null;
   /** Raw text of the resolved custom theme file when `theme` named one; null when builtin/absent. */
   themeSource: string | null;
+  /**
+   * Where each resolved key came from across the chain (real ghostty config →
+   * Volli global overlay → Volli project overlay). Settings labels every row
+   * `Inherited from Ghostty` / `Set by Volli` from this (#67) — computed next
+   * to the merge in main, never re-derived by the renderer diffing layers,
+   * which would drift from what the terminal is actually painted with.
+   */
+  provenance: Record<string, GhosttyValueOrigin>;
+  /**
+   * Where Volli's overlays live, so "Open Volli overlay" works BEFORE one
+   * exists — these are the paths a write would land at, not paths proven to
+   * exist. `project` is null when no project was in scope.
+   */
+  overlayPaths: { global: string; project: string | null };
+  /**
+   * The user's OWN ghostty config — the read-only base of the chain. Settings
+   * offers to open both files (#67), and the renderer cannot resolve `~`, so
+   * the path is resolved next to the read. The config Volli actually loaded
+   * when one exists; otherwise ghostty's canonical location, so the affordance
+   * still works before the user has written one.
+   */
+  ghosttyConfigPath: string;
 }
 
 export type GhosttyConfigResult =

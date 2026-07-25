@@ -13,10 +13,13 @@ import type { SessionRecord } from "./session";
 import type {
   CreateTerminalSessionRequest,
   CreateTerminalSessionResult,
+  GhosttyAppearancePayload,
   GhosttyConfigResult,
   TerminalBusyResult,
   TerminalIoResult,
 } from "./terminal";
+import type { ThemeDefinition } from "./theme/definition";
+import type { ProjectThemeOverride } from "./theme/persistence";
 import type { ArchivedTicket, HarnessId, Ticket, TicketPriority, TicketStatus } from "./ticket";
 import type { TicketComment } from "./ticket-comment";
 import type { DiffStat, LatestSessionSignal, TicketEvent } from "./ticket-events";
@@ -320,6 +323,78 @@ export interface VolliFileIpcContract {
 
 export type FileIpcChannel = keyof VolliFileIpcContract;
 
+// ---- theming (docs/plans/theming-engine.md) --------------------------------
+
+/** `{ projectId? }` — a theme read is global unless a project scopes it (#69). */
+export interface ThemeStateInput {
+  projectId?: string;
+}
+
+export interface ThemeSetGlobalInput {
+  /** The AUTHORED definition. The resolved token set is derived at render time and never crosses this boundary. */
+  theme: ThemeDefinition;
+}
+
+export interface ThemeSetProjectInput {
+  projectId: string;
+  /** Per-surface override; `null` clears every surface back to inheriting the global theme. */
+  override: ProjectThemeOverride | null;
+}
+
+/**
+ * A terminal-overlay write. `scope` picks WHICH overlay file — never a path:
+ * the renderer cannot name a file to write, so decision #67's "Volli never
+ * writes the user's ghostty config" holds at the boundary as well as at the
+ * write path.
+ */
+export type TerminalOverlayWriteInput = {
+  edits: Record<string, string | null>;
+} & ({ scope: "global" } | { scope: "project"; projectId: string });
+
+/**
+ * Everything needed to resolve the three surfaces for a scope. The AUTHORED
+ * inputs only — `{global theme, project override}` is authoritative and the
+ * token set is generated from it in the renderer at render time.
+ */
+export interface ThemeStatePayload {
+  /** The authored global theme (the shipped default when none has been chosen). */
+  theme: ThemeDefinition;
+  /** The scoping project's per-surface override; null when unscoped or fully inheriting. */
+  projectOverride: ProjectThemeOverride | null;
+  /** The project the state was resolved for, echoed back; null for the global scope. */
+  projectId: string | null;
+  /** The terminal appearance with the full overlay chain (and provenance) applied for that scope. */
+  terminal: GhosttyAppearancePayload;
+}
+
+export type ThemeStateResult = Result<{ value: ThemeStatePayload }>;
+export type ThemeSetProjectResult = Result<{ project: Project; value: ThemeStatePayload }>;
+/** Resolves with the overlay file written and the freshly re-resolved terminal appearance, so the renderer can repaint without a second round trip. */
+export type TerminalOverlayWriteResult = Result<{
+  path: string;
+  terminal: GhosttyAppearancePayload;
+}>;
+
+/**
+ * The 4 theming channels `src/main/theme-ipc.ts` owns
+ * (docs/plans/theming-engine.md § Persistence, application, IPC).
+ */
+export interface VolliThemeIpcContract {
+  /** The authored global theme + a project's override + the resolved terminal chain. The renderer derives tokens from this. */
+  "volli:theme-state": { args: [input: ThemeStateInput]; result: ThemeStateResult };
+  /** Persists the authored global theme (`app_state.theme`). Resolves with the fresh state. */
+  "volli:theme-set-global": { args: [input: ThemeSetGlobalInput]; result: ThemeStateResult };
+  /** Persists one project's per-surface override (migration 013); `null` clears it. */
+  "volli:theme-set-project": { args: [input: ThemeSetProjectInput]; result: ThemeSetProjectResult };
+  /** Rewrites keys in a Volli ghostty overlay — global or per-project. Never the user's own config. */
+  "volli:theme-terminal-overlay-write": {
+    args: [input: TerminalOverlayWriteInput];
+    result: TerminalOverlayWriteResult;
+  };
+}
+
+export type ThemeIpcChannel = keyof VolliThemeIpcContract;
+
 /**
  * Type-only entries for every remaining invoke channel — these live outside
  * `src/main/data-ipc.ts`/`volli-fs.ts` (in `src/main/ipc.ts`/`pty.ts`/
@@ -379,7 +454,11 @@ export interface VolliSendContract {
 
 /** Every invoke channel with a contract entry — the full catalog. */
 export interface VolliInvokeContract
-  extends VolliDataIpcContract, VolliFileIpcContract, VolliSystemIpcContract {}
+  extends
+    VolliDataIpcContract,
+    VolliFileIpcContract,
+    VolliThemeIpcContract,
+    VolliSystemIpcContract {}
 
 export type IpcArgs<C extends keyof VolliInvokeContract> = VolliInvokeContract[C]["args"];
 export type IpcResult<C extends keyof VolliInvokeContract> = VolliInvokeContract[C]["result"];

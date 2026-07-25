@@ -39,6 +39,12 @@ const payload = (
   prefs: prefs(prefsOverrides),
   configText: null,
   themeSource: null,
+  // Overlay chain fields (theming engine, decision #67) — this suite predates
+  // them and exercises the prefs/theme mapping, so the fixture supplies the
+  // "nothing overlaid" state.
+  provenance: {},
+  overlayPaths: { global: "/userData/volli/ghostty/config", project: null },
+  ghosttyConfigPath: "/home/u/.config/ghostty/config",
   ...rest,
 });
 
