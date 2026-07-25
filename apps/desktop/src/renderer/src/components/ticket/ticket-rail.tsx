@@ -70,7 +70,8 @@ export function TicketRailModeStrip({
             onClick={() => onSelectMode(key)}
             className={cn(
               "rounded-md text-muted-foreground",
-              active && "bg-accent text-accent-foreground",
+              active &&
+                "bg-primary/15 text-primary ring-1 ring-inset ring-primary/40 hover:bg-primary/20 hover:text-primary",
             )}
           >
             <Icon weight="fill" className="size-3.5" />
