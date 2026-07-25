@@ -1103,6 +1103,45 @@ describe("FILE_IPC descriptor table", () => {
     }
   });
 
+  describe("volli:dir-watch / volli:dir-unwatch (shared DirPathInput shape)", () => {
+    const channels = ["volli:dir-watch", "volli:dir-unwatch"] as const;
+
+    for (const channel of channels) {
+      describe(channel, () => {
+        const { guard, invalidError } = FILE_IPC[channel];
+        const valid = { projectId: "p1", relPath: "src" };
+
+        it("accepts a valid payload", () => {
+          expect(guard([valid])).toBe(true);
+        });
+
+        it("accepts the empty relPath (the project root)", () => {
+          expect(guard([{ ...valid, relPath: "" }])).toBe(true);
+        });
+
+        it("rejects a non-object payload", () => {
+          expect(guard([null])).toBe(false);
+        });
+
+        it("rejects a non-string projectId", () => {
+          expect(guard([{ ...valid, projectId: 1 }])).toBe(false);
+        });
+
+        it("rejects a missing relPath (main must be told which directory)", () => {
+          expect(guard([{ projectId: "p1" }])).toBe(false);
+        });
+
+        it("rejects a wrong arity", () => {
+          expect(guard([])).toBe(false);
+        });
+
+        it("carries the handler's exact invalid-input message", () => {
+          expect(invalidError).toBe("Invalid request");
+        });
+      });
+    }
+  });
+
   describe("volli:file-write", () => {
     const { guard, invalidError } = FILE_IPC["volli:file-write"];
     const valid = { projectId: "p1", relPath: "notes.md", content: "# hi" };
@@ -1169,10 +1208,12 @@ describe("FILE_IPC descriptor table", () => {
       expect(FILE_CHANNELS).toEqual(Object.keys(FILE_IPC));
     });
 
-    it("covers all 7 file channels", () => {
-      expect(FILE_CHANNELS).toHaveLength(7);
+    it("covers all 9 file channels", () => {
+      expect(FILE_CHANNELS).toHaveLength(9);
       expect(FILE_CHANNELS).toContain("volli:file-index");
       expect(FILE_CHANNELS).toContain("volli:file-unwatch");
+      expect(FILE_CHANNELS).toContain("volli:dir-watch");
+      expect(FILE_CHANNELS).toContain("volli:dir-unwatch");
     });
   });
 });

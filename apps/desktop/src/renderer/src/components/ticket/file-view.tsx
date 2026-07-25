@@ -1,16 +1,19 @@
 import * as React from "react";
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
-import { baseNameOf, errorMessage, type FileSource } from "@volli/shared";
+import { baseNameOf, errorMessage, fileSavePolicy, type FileSource } from "@volli/shared";
 
-import { MonacoCodeView } from "@renderer/components/editor/monaco-code-view";
+import {
+  MonacoFileEditor,
+  type MonacoFileSaveResult,
+} from "@renderer/components/editor/monaco-file-editor";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import {
   MarkdownLiveEditor,
   type MarkdownFileRefs,
 } from "@renderer/components/editor/markdown-live-editor";
 import { Button } from "@renderer/components/ui/button";
-import { fileDocumentIdentity } from "@renderer/editor/document-identity";
+import { documentIdentityKey, fileDocumentIdentity } from "@renderer/editor/document-identity";
 import { toastError } from "@renderer/lib/toast";
 import { useDebouncedCallback } from "@renderer/lib/use-debounced-callback";
 
@@ -25,11 +28,29 @@ interface FileViewProps {
   fileRefs?: MarkdownFileRefs;
   /** Reports the resolved source (with the file's relPath) so the tab can show a worktree badge. */
   onSource?(relPath: string, source: FileSource): void;
+  /**
+   * Editor view state (cursor/selection/folding/scroll) to seed the explicit-
+   * save editor with, for a host that persists it per tab — the Project Files
+   * workbench, whose tabs must land where you left them after their contents
+   * reload lazily (decision #55). Opaque here: it is Monaco's own JSON and this
+   * component never inspects it. Omitted by the ticket workspace, which lets the
+   * in-memory document registry remember view state for the session instead.
+   */
+  initialViewState?: unknown;
+  /** Emitted when the explicit-save editor releases, so a host can persist the view state. */
+  onViewStateChange?(viewState: unknown): void;
+  /**
+   * Every dirty transition of the explicit-save editor. The Project Files
+   * workbench needs it for two things the tab strip owns: pinning a preview tab
+   * on its first edit (decision #56) and guarding its close.
+   */
+  onDirtyChange?(dirty: boolean): void;
 }
 
 type LoadState =
   | { status: "loading" }
   | { status: "error"; error: string }
+  /** An autosaving document: a Markdown Artifact under `.volli/artifacts/`. */
   | { status: "markdown" }
   | {
       status: "code";
@@ -37,24 +58,45 @@ type LoadState =
       truncated: boolean;
       source: FileSource;
       revision: number;
+      /** `true` = explicit-save Monaco editor; `false` = the read-only peek. */
+      editable: boolean;
     }
   | { status: "image"; dataUrl: string }
   | { status: "binary" };
 
 /**
  * A `file` tab's content pane (global-artifacts decision #7), generalized from
- * the old ArtifactViewer onto `api.files`. Markdown opens in the always-mounted
- * live-preview editor with 1.5s debounced autosave, conflict-guarded by the
- * on-disk mtime: each write carries the last-seen mtime as `expectedMtime`, and
- * a rejected write (agent edit underneath) raises a non-destructive "Changed on
- * disk" banner rather than overwriting. Everything else is read-only — code/text
- * in a language-aware Monaco view, images inline, binary/oversize a Reveal-in-Finder
- * stub. Re-reads on the tab's `api.files.onChanged` subscription: read-only
- * views adopt silently, the markdown editor keeps the dirty/focus-aware logic.
+ * the old ArtifactViewer onto `api.files`. Which editor a file gets — and how
+ * its edits reach disk — is decided by `fileSavePolicy` (CONCEPT #49), never by
+ * re-asking "is this markdown?":
+ *
+ *  - `autosave` — a Markdown Artifact, the app's own document surface: the
+ *    always-mounted live-preview editor with 1.5s debounced autosave.
+ *  - `explicit` — everything else editable, REPOSITORY MARKDOWN INCLUDED: a
+ *    Monaco source editor that writes only on ⌘S.
+ *  - `read-only` — images, binary, and truncated reads (saving a capped prefix
+ *    back would destroy everything past the cap): the SAME Monaco source editor
+ *    with `readOnly` set (so a mid-draft flip past the cap keeps the editing
+ *    surface and the draft), an inline image, or a Reveal-in-Finder stub.
+ *
+ * Both editable paths are conflict-guarded by the on-disk mtime: each write
+ * carries the last-seen mtime as `expectedMtime`, and disk moving under a dirty
+ * buffer raises a non-destructive "Changed on disk" banner rather than
+ * overwriting. Re-reads on the tab's `api.files.onChanged` subscription:
+ * read-only views adopt silently, the two editors stay dirty-aware.
  *
  * Mount with `key={relPath}` so switching files remounts it fresh.
  */
-export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: FileViewProps) {
+export function FileView({
+  projectId,
+  ticketId,
+  relPath,
+  fileRefs,
+  onSource,
+  initialViewState,
+  onViewStateChange,
+  onDirtyChange,
+}: FileViewProps) {
   const [state, setState] = React.useState<LoadState>({ status: "loading" });
   const [docValue, setDocValue] = React.useState("");
   // Disk content+mtime captured when a conflict is detected. The mtime rides
@@ -63,15 +105,21 @@ export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: F
   // `expectedMtime`. `null` = no conflict, autosave live.
   const [conflict, setConflict] = React.useState<{ text: string; mtime: number } | null>(null);
 
-  const draftRef = React.useRef(""); // current editor content
+  const draftRef = React.useRef(""); // current autosave-editor content
   const syncedRef = React.useRef(""); // last content loaded or saved (disk baseline)
   const syncedMtimeRef = React.useRef(0); // mtime of that baseline — the write conflict guard
   const conflictRef = React.useRef<{ text: string; mtime: number } | null>(null);
   const focusedRef = React.useRef(false);
+  // Dirty state of the explicit-save Monaco editor. It lives in the shared
+  // document registry, not in `draftRef`, so the editor reports it up here for
+  // the one decision this component still makes with it: whether a deletion
+  // event may replace the view with the read-only error state.
+  const sourceDirtyRef = React.useRef(false);
   const mountedRef = React.useRef(true);
   // Mirrors `state` for the fs-watch subscription (set up once, so it can't
-  // read the current `state` off a render closure) — only its `.status` is
-  // read, to decide whether a conflict banner (markdown-only) can even render.
+  // read the current `state` off a render closure) — only its `.status` and
+  // `.editable` are read, to decide which editor (if any) is live and therefore
+  // whether the autosave conflict banner can even render.
   const stateRef = React.useRef<LoadState>(state);
   const name = baseNameOf(relPath);
 
@@ -104,27 +152,35 @@ export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: F
     const { content } = result;
     if (content.type === "image") {
       setState({ status: "image", dataUrl: content.dataUrl });
-    } else if (content.type === "binary") {
+      return;
+    }
+    if (content.type === "binary") {
       setState({ status: "binary" });
-    } else if (result.kind === "markdown" && !content.truncated) {
+      return;
+    }
+    const policy = fileSavePolicy({ relPath, binary: false, truncated: content.truncated });
+    if (policy === "autosave") {
       syncedRef.current = content.text;
       syncedMtimeRef.current = result.mtime;
       draftRef.current = content.text;
       setDocValue(content.text);
       setState({ status: "markdown" });
-    } else {
-      // Non-markdown, or a markdown file past the 1 MiB read cap — editing the
-      // latter would autosave back only the truncated prefix, so it stays
-      // read-only.
-      syncedMtimeRef.current = result.mtime;
-      setState({
-        status: "code",
-        text: content.text,
-        truncated: content.truncated,
-        source: result.source,
-        revision: result.mtime,
-      });
+      return;
     }
+    // Source mode: an explicit-⌘S Monaco editor, or the read-only peek when the
+    // read was capped (saving a truncated prefix back would destroy everything
+    // past the cap). `syncedRef` carries the disk baseline in both cases — the
+    // explicit path compares against it to recognize its own write echo.
+    syncedRef.current = content.text;
+    syncedMtimeRef.current = result.mtime;
+    setState({
+      status: "code",
+      text: content.text,
+      truncated: content.truncated,
+      source: result.source,
+      revision: result.mtime,
+      editable: policy === "explicit",
+    });
   }, [readFile, onSource, relPath]);
 
   React.useEffect(() => {
@@ -161,18 +217,20 @@ export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: F
         toastError(`Could not save ${name}: ${result.error}`);
         return;
       }
-      if (disk.kind !== "markdown" || disk.content.truncated) {
-        // The file grew past the 1 MiB read cap (or stopped being markdown)
-        // underneath us — that re-read is a truncated/foreign prefix, not a
-        // valid editable baseline. Offering it as a Reload target would
-        // autosave the prefix back and destroy everything past the cap, so
-        // don't raise the conflict banner: drop into the read-only 'code'
-        // state instead, matching the load and onChanged paths.
+      if (
+        fileSavePolicy({ relPath, binary: false, truncated: disk.content.truncated }) !== "autosave"
+      ) {
+        // The file grew past the 1 MiB read cap underneath us — that re-read is
+        // a truncated prefix, not a valid editable baseline. Offering it as a
+        // Reload target would autosave the prefix back and destroy everything
+        // past the cap, so don't raise the conflict banner: drop into the
+        // read-only 'code' state instead, matching the load and onChanged paths.
         // `debouncer` is declared below but stable for the component's whole
         // lifetime (see use-debounced-callback.ts), so it's safe to close
         // over here despite the declaration order — deliberately left out of
         // the deps array below rather than reordering the two.
         debouncer.cancel();
+        syncedRef.current = disk.content.text;
         syncedMtimeRef.current = disk.mtime;
         if (mountedRef.current) {
           setState({
@@ -181,9 +239,10 @@ export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: F
             truncated: disk.content.truncated,
             source: disk.source,
             revision: disk.mtime,
+            editable: false,
           });
           toastError(
-            `${name} changed on disk and grew past the editable 1 MiB cap (or is no longer markdown) — editing stopped.`,
+            `${name} changed on disk and grew past the editable 1 MiB cap — editing stopped.`,
           );
         } else {
           toastError(`${name} changed on disk — your last edits were not saved.`);
@@ -210,7 +269,8 @@ export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: F
   const debouncer = useDebouncedCallback(() => void commit(), AUTOSAVE_IDLE_MS);
 
   // fs-watch subscription for this tab's lifetime. `onChanged` fires debounced;
-  // read-only views adopt silently, the markdown editor stays dirty/focus-aware.
+  // read-only views adopt silently, the autosave editor stays dirty/focus-aware,
+  // and the source editor reconciles the fresh read against its own draft.
   React.useEffect(() => {
     void window.api.files.watch({ projectId, ticketId, relPath }).then((result) => {
       if (!result.ok) {
@@ -225,15 +285,20 @@ export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: F
         const disk = await readFile();
         if (!mountedRef.current) return;
         if (!disk.ok) {
-          // The file was deleted (or is now unreadable) under an open tab. A
-          // dirty markdown draft (unsaved user work) is worth protecting — a
-          // read error can't destroy a buffer that isn't visible anywhere
-          // else, so just toast and leave the editor up. Anything else (a
-          // clean markdown tab, or a tab that was never editable to begin
-          // with) transitions to the read-only 'error' view so the deletion
-          // is actually visible instead of rendering stale content forever.
-          const dirty = draftRef.current !== syncedRef.current;
-          if (stateRef.current.status === "markdown" && dirty) {
+          // The file was deleted (or is now unreadable) under an open tab. An
+          // unsaved draft — the autosave editor's or the source editor's — is
+          // worth protecting: a read error can't destroy a buffer that isn't
+          // visible anywhere else, so just toast and leave the editor up.
+          // Anything else (a clean editor, or a tab that was never editable to
+          // begin with) transitions to the read-only 'error' view so the
+          // deletion is actually visible instead of rendering stale content
+          // forever.
+          const current = stateRef.current;
+          const dirty =
+            current.status === "markdown"
+              ? draftRef.current !== syncedRef.current
+              : current.status === "code" && current.editable && sourceDirtyRef.current;
+          if (dirty) {
             toastError(`${name} changed on disk (now unreadable) — your unsaved edits were kept.`);
           } else {
             setState({ status: "error", error: disk.error });
@@ -249,9 +314,41 @@ export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: F
           setState({ status: "binary" });
           return;
         }
-        // Read-only text (non-markdown, or truncated markdown): swap it in
-        // unconditionally — nothing to protect.
-        if (disk.kind !== "markdown" || disk.content.truncated) {
+        const policy = fileSavePolicy({
+          relPath,
+          binary: false,
+          truncated: disk.content.truncated,
+        });
+        if (policy !== "autosave") {
+          // Source mode. A read-only view has nothing to protect, so it swaps
+          // in unconditionally. The explicit editor gets the fresh disk content
+          // pushed down as props and decides for itself whether to adopt it or
+          // raise its own "Changed on disk" banner over a dirty draft — except
+          // when the bytes match our own last write (the echo of a ⌘S, or a
+          // bare mtime touch), where re-rendering the same text with a new
+          // revision would only hand it a change to reconcile.
+          if (
+            policy === "explicit" &&
+            stateRef.current.status === "code" &&
+            disk.content.text === syncedRef.current
+          ) {
+            syncedMtimeRef.current = disk.mtime;
+            // The bytes are ours, but the MTIME moved. Push the fresh revision
+            // down anyway, because `syncedMtimeRef` is not the only conflict
+            // guard in play: the registry's `externalRevision` is what the
+            // tab-close guard writes with, and leaving it behind disk wedges
+            // that save on a stale `expectedMtime` while ⌘S here still
+            // succeeds. This cannot look like an external edit to the user —
+            // the content is identical, so `classifyExternalChange` reports
+            // "unchanged" and raises no banner, and `adoptCleanBaseline`
+            // advances `externalRevision` even over a dirty draft without
+            // touching the draft itself.
+            setState((previous) =>
+              previous.status === "code" ? { ...previous, revision: disk.mtime } : previous,
+            );
+            return;
+          }
+          syncedRef.current = disk.content.text;
           syncedMtimeRef.current = disk.mtime;
           setState({
             status: "code",
@@ -259,11 +356,12 @@ export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: F
             truncated: disk.content.truncated,
             source: disk.source,
             revision: disk.mtime,
+            editable: policy === "explicit",
           });
           return;
         }
-        // Markdown, no real change vs the content baseline (also the echo of
-        // our own write) — still land on the editor if the tab was showing
+        // Markdown Artifact, no real change vs the content baseline (also the
+        // echo of our own write) — still land on the editor if the tab was showing
         // 'error'/'code' (recovering from a prior deletion/truncation), even
         // though there's nothing to adopt content-wise.
         if (disk.content.text === syncedRef.current) {
@@ -276,14 +374,13 @@ export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: F
           return;
         }
         const dirty = draftRef.current !== syncedRef.current;
-        // A conflict banner only means something over a live editor. A tab
-        // that wasn't already 'markdown' has no editor and nothing to
-        // protect — draftRef/syncedRef only ever diverge while editing, so
-        // `dirty` is always false coming from 'error'/'code' — but guard on
-        // status explicitly anyway so a stale conflict flag from a state this
-        // tab has since left can't wedge it: always take the full-transition
-        // adopt path in that case rather than raising a banner that can't
-        // render outside 'markdown'.
+        // The autosave conflict banner only means something over the autosave
+        // editor. A tab that wasn't already 'markdown' has no draft here to
+        // protect (`draftRef` is only ever written by that editor, while
+        // `syncedRef` tracks disk for every mode, so the two can disagree
+        // meaninglessly on the way in from 'error'/'code'): always take the
+        // full-transition adopt path in that case rather than raising a banner
+        // that can't render outside 'markdown'.
         if (
           stateRef.current.status !== "markdown" ||
           (!dirty && !focusedRef.current && conflictRef.current === null)
@@ -310,6 +407,44 @@ export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: F
     if (conflictRef.current !== null) return; // paused until reload
     debouncer.schedule();
   }
+
+  /**
+   * The source editor's ⌘S, conflict-guarded on the last mtime this tab saw on
+   * disk. The editor never writes for itself; a failure comes back typed and it
+   * surfaces the reason without clearing its dirty flag. On success the state's
+   * text/revision advance in step with `syncedRef`, so a remount (or a second
+   * view of the same file) seeds the shared document with what was actually
+   * saved rather than reverting it to the content this tab first loaded.
+   */
+  const saveSource = React.useCallback(
+    async (text: string): Promise<MonacoFileSaveResult> => {
+      const result = await window.api.files.write({
+        projectId,
+        ticketId,
+        relPath,
+        content: text,
+        expectedMtime: syncedMtimeRef.current,
+      });
+      if (!result.ok) return { ok: false, error: result.error };
+      syncedRef.current = text;
+      syncedMtimeRef.current = result.mtime;
+      if (mountedRef.current) {
+        setState((previous) =>
+          previous.status === "code" ? { ...previous, text, revision: result.mtime } : previous,
+        );
+      }
+      return { ok: true, revision: result.mtime };
+    },
+    [projectId, ticketId, relPath],
+  );
+
+  const handleSourceDirtyChange = React.useCallback(
+    (next: boolean) => {
+      sourceDirtyRef.current = next;
+      onDirtyChange?.(next);
+    },
+    [onDirtyChange],
+  );
 
   function reload() {
     const disk = conflictRef.current;
@@ -351,7 +486,8 @@ export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: F
     return <p className="px-gutter py-4 text-xs text-destructive">{state.error}</p>;
   }
 
-  // Markdown → Tier A reading measure; everything else is workbench-fluid.
+  // The document surface → Tier A reading measure; source mode and everything
+  // else is workbench-fluid.
   if (state.status === "markdown") {
     return (
       <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
@@ -389,6 +525,18 @@ export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: F
   }
 
   if (state.status === "code") {
+    // ONE editor component for both source modes, editable or not. The
+    // read-only sibling (MonacoCodeView) acquires the same document under a
+    // `read-only` save policy, and a file that grows past the 1 MiB cap while
+    // its editor holds unsaved work flips `editable` false MID-DRAFT — swapping
+    // components there made the registry reject the policy change over a dirty
+    // document, and the caught error degraded the whole pane to the <pre>
+    // fallback with the draft stranded behind it. MonacoFileEditor already
+    // renders read-only faithfully (`planExplicitSave` refuses to write a
+    // truncated prefix back), so the surface simply stays put and keeps the
+    // draft. It also keeps the `:source` viewId to one view, rather than two
+    // that overwrite each other's remembered cursor.
+    const identity = fileDocumentIdentity({ projectId, ticketId, relPath, source: state.source });
     return (
       <div className="flex min-h-0 flex-1 flex-col gap-2 px-gutter py-4">
         {state.truncated && (
@@ -398,17 +546,22 @@ export function FileView({ projectId, ticketId, relPath, fileRefs, onSource }: F
           </div>
         )}
         <div className="min-h-0 flex-1 overflow-hidden rounded-md border border-border bg-background">
-          <MonacoCodeView
-            identity={fileDocumentIdentity({
-              projectId,
-              ticketId,
-              relPath,
-              source: state.source,
-            })}
+          <MonacoFileEditor
+            // The editor's own dirty/saving/stale/failure state is per-document,
+            // so a change of identity (a repo path that starts resolving from
+            // the ticket's worktree copy, or the reverse) has to remount it —
+            // exactly why this view itself is documented as `key={relPath}`.
+            key={documentIdentityKey(identity)}
+            identity={identity}
             value={state.text}
             revision={state.revision}
             viewId={`file:${projectId}:${ticketId ?? "main"}:${relPath}:source`}
             ariaLabel={`${name} contents`}
+            readOnly={!state.editable}
+            onSave={saveSource}
+            onDirtyChange={handleSourceDirtyChange}
+            initialViewState={initialViewState}
+            onViewStateChange={onViewStateChange}
           />
         </div>
       </div>

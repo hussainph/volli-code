@@ -1,4 +1,6 @@
 export * from "./file-ref";
+export * from "./file-save-policy";
+export * from "./file-workspace";
 export * from "./board";
 export * from "./ticket";
 export * from "./harness-command";

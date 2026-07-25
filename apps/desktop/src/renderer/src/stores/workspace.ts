@@ -8,17 +8,36 @@
  * everything a workspace remembers lives and dies together: `forget` stays a
  * single delete no matter how many fields the record grows.
  *
- * Persistence is FIELD-SELECTIVE: `boardView`, `boardSort`, and `openTicketId`
- * survive relaunch (they're deliberate per-project state — a view preference,
- * or the ticket-detail-mvp decision that the open ticket persists across
- * restart, decision #3), while `nav` and `expandedDirs` stay session-only —
- * nav resetting to Board on relaunch is a settled decision (see ui.ts's
- * history) and now applies per workspace. The partialize below prunes each
- * record down to the persisted trio; merge rehydrates them back over
- * `DEFAULT_WORKSPACE_UI`, sanitizing stale values so old localStorage can
- * never smuggle in an invalid view/sort/ticket id.
+ * Persistence is FIELD-SELECTIVE: `boardView`, `boardSort`, `openTicketId`,
+ * `ticketTabs`, and the Project Files pair (`projectFiles` +
+ * `projectFileViewStates`) survive relaunch (they're deliberate per-project
+ * state — a view preference, the ticket-detail-mvp decision that the open
+ * ticket persists across restart, decision #3, or the Project Files workspace
+ * that must resume where you left it, decisions #55/#56), while `nav` and
+ * `expandedDirs` stay session-only — nav resetting to Board on relaunch is a
+ * settled decision (see ui.ts's history) and now applies per workspace. The
+ * partialize below prunes each record down to that persisted set; merge
+ * rehydrates them back over `DEFAULT_WORKSPACE_UI`, sanitizing stale values so
+ * old localStorage can never smuggle in an invalid view/sort/ticket id — or an
+ * unusable tab record.
+ *
+ * What is persisted for Project Files is deliberately only IDENTITY (relPath),
+ * the preview flag, and the editor's own opaque view state: file CONTENTS are
+ * never stored, they reload lazily from the checkout on return (decision #55).
  */
-import { DEFAULT_TICKET_SORT, TICKET_SORT_KEYS, type TicketSort } from "@volli/shared";
+import {
+  activateFile,
+  closeFile,
+  DEFAULT_TICKET_SORT,
+  EMPTY_FILE_WORKSPACE,
+  markFileEdited,
+  pinFile,
+  previewFile,
+  sanitizeFileWorkspace,
+  TICKET_SORT_KEYS,
+  type FileWorkspaceState,
+  type TicketSort,
+} from "@volli/shared";
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
@@ -72,6 +91,21 @@ export interface WorkspaceUiState {
   openTicketId: string | null;
   /** Open file tabs + active tab, per ticket (global-artifacts decision #5). Persisted. */
   ticketTabs: Record<string, TicketTabsState>;
+  /**
+   * The Project Files tab workspace for this project (decisions #55/#56) —
+   * always rooted in the project's Main checkout. Persisted, so the strip
+   * survives navigation, project switches, and relaunch; contents reload
+   * lazily on return.
+   */
+  projectFiles: FileWorkspaceState;
+  /**
+   * Serialized Monaco per-tab view state (cursor, selection, folding, scroll),
+   * keyed by relPath — what makes returning to a tab land exactly where you
+   * left it after the contents reload lazily (decision #55). Persisted, and
+   * NEVER file contents: only the editor's own opaque snapshot. Typed
+   * `unknown` on purpose so this store stays editor-agnostic.
+   */
+  projectFileViewStates: Record<string, unknown>;
 }
 
 export const DEFAULT_WORKSPACE_UI: WorkspaceUiState = {
@@ -81,6 +115,8 @@ export const DEFAULT_WORKSPACE_UI: WorkspaceUiState = {
   boardSort: DEFAULT_TICKET_SORT,
   openTicketId: null,
   ticketTabs: {},
+  projectFiles: EMPTY_FILE_WORKSPACE,
+  projectFileViewStates: {},
 };
 
 /** The active-tab id of the always-present Doc tab — the fallback when a file/session tab closes. */
@@ -157,6 +193,42 @@ interface WorkspaceState {
   closeTicketFile(projectId: string, ticketId: string, relPath: string): void;
   /** Sets the active tab for `ticketId` (`"doc"`, a `file:<relPath>`, or a session id). */
   setTicketActiveTab(projectId: string, ticketId: string, tabId: string): void;
+  /**
+   * Single-click in the Project Files navigator: open `relPath` in the
+   * replaceable preview slot and focus it (decision #56). Thin delegation to
+   * `previewFile` — every tab rule lives in @volli/shared, never here.
+   */
+  previewProjectFile(projectId: string, relPath: string): void;
+  /**
+   * Double-click or an explicit Pin action: make `relPath` a persistent tab
+   * (opening it when it isn't open yet). Delegates to `pinFile`.
+   */
+  pinProjectFile(projectId: string, relPath: string): void;
+  /**
+   * The first edit of a preview tab promotes it to persistent (decision #56:
+   * a dirty tab is never replaced). Safe to fire on every keystroke — the pure
+   * `markFileEdited` returns unchanged state once the tab is persistent.
+   */
+  markProjectFileEdited(projectId: string, relPath: string): void;
+  /** Tab-strip click: focus an already-open tab. Delegates to `activateFile`. */
+  activateProjectFile(projectId: string, relPath: string): void;
+  /**
+   * Close `relPath`'s tab (focus falls to its neighbour, per `closeFile`) and
+   * drop its remembered view state — a closed tab's cursor is meaningless, and
+   * keeping it would let the persisted map grow without bound as tabs churn.
+   */
+  closeProjectFile(projectId: string, relPath: string): void;
+  /**
+   * Remember the editor's serialized view state for `relPath` (cursor,
+   * selection, folding, scroll). `viewState` stays `unknown`: it is Monaco's
+   * opaque JSON, written back verbatim on return, and this store never
+   * inspects it — nor does it ever hold file contents.
+   *
+   * Ignored for a path that is not an open tab, which upholds the same
+   * invariant `closeProjectFile` and the rehydrate sanitizer do: view state
+   * exists only for tabs that exist.
+   */
+  setProjectFileViewState(projectId: string, relPath: string, viewState: unknown): void;
   /** Drop a removed project's record so re-adding it starts fresh. */
   forget(projectId: string): void;
   /**
@@ -181,7 +253,12 @@ interface WorkspaceState {
 /** The slice of a workspace record that survives relaunch. */
 type PersistedWorkspaceUi = Pick<
   WorkspaceUiState,
-  "boardView" | "boardSort" | "openTicketId" | "ticketTabs"
+  | "boardView"
+  | "boardSort"
+  | "openTicketId"
+  | "ticketTabs"
+  | "projectFiles"
+  | "projectFileViewStates"
 >;
 
 interface PersistedWorkspaceState {
@@ -202,7 +279,10 @@ interface PersistedWorkspaceState {
  */
 function sanitizeTicketTabs(raw: unknown): Record<string, TicketTabsState> {
   if (typeof raw !== "object" || raw === null) return {};
-  const out: Record<string, TicketTabsState> = {};
+  // Null-prototype accumulator: persisted keys come straight from JSON, and a
+  // `__proto__` key assigned onto an object literal hits Object.prototype's
+  // setter instead of becoming an own property.
+  const out = Object.create(null) as Record<string, TicketTabsState>;
   for (const [ticketId, value] of Object.entries(raw)) {
     if (typeof value !== "object" || value === null) continue;
     const record = value as { files?: unknown; active?: unknown };
@@ -212,6 +292,33 @@ function sanitizeTicketTabs(raw: unknown): Record<string, TicketTabsState> {
     const active = typeof record.active === "string" ? record.active : DOC_TAB_ID;
     if (files.length === 0 && active === DOC_TAB_ID) continue;
     out[ticketId] = { files, active };
+  }
+  return out;
+}
+
+/**
+ * Validate a rehydrated `projectFileViewStates` map against the workspace's
+ * surviving tabs. Every value here is Monaco's opaque JSON, so the guard can
+ * only check shape: a non-object raw map degrades to `{}`, and an entry is
+ * kept only when its value is a plain object (a string/number/array is not a
+ * serialized view state, and feeding one back to `restoreViewState` is how the
+ * editor throws on the restore path). Entries with no surviving tab are pruned
+ * — a closed tab's cursor is dead weight, and dropping it here also cleans up
+ * anything an older build leaked. Keys always arrive as strings from JSON;
+ * `Object.entries` skips symbols, so a non-string key cannot survive either.
+ */
+function sanitizeFileViewStates(
+  raw: unknown,
+  workspace: FileWorkspaceState,
+): Record<string, unknown> {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
+  // See sanitizeTicketTabs: a `__proto__` key out of persisted JSON must land
+  // as an own property, not on the accumulator's prototype.
+  const out = Object.create(null) as Record<string, unknown>;
+  for (const [relPath, value] of Object.entries(raw)) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) continue;
+    if (!workspace.tabs.some((tab) => tab.relPath === relPath)) continue;
+    out[relPath] = value;
   }
   return out;
 }
@@ -231,6 +338,10 @@ function sanitizePersistedUi(persisted: Partial<PersistedWorkspaceUi>): Persiste
     TICKET_SORT_KEYS.includes(sort.key) &&
     (sort.direction === "asc" || sort.direction === "desc");
   const openTicketId = persisted.openTicketId;
+  // Tab validation belongs to the pure core (@volli/shared), which degrades an
+  // unusable shape to EMPTY_FILE_WORKSPACE rather than throwing — a corrupt
+  // record must never keep Project Files (or the renderer) from starting.
+  const projectFiles = sanitizeFileWorkspace(persisted.projectFiles);
   return {
     boardView: view,
     // Rebuild rather than spread so stray keys in old JSON never enter state.
@@ -242,6 +353,8 @@ function sanitizePersistedUi(persisted: Partial<PersistedWorkspaceUi>): Persiste
         ? openTicketId
         : DEFAULT_WORKSPACE_UI.openTicketId,
     ticketTabs: sanitizeTicketTabs(persisted.ticketTabs),
+    projectFiles,
+    projectFileViewStates: sanitizeFileViewStates(persisted.projectFileViewStates, projectFiles),
   };
 }
 
@@ -252,7 +365,9 @@ function isDefaultPersistedUi(ui: WorkspaceUiState): boolean {
     ui.boardSort.key === DEFAULT_TICKET_SORT.key &&
     ui.boardSort.direction === DEFAULT_TICKET_SORT.direction &&
     ui.openTicketId === DEFAULT_WORKSPACE_UI.openTicketId &&
-    Object.keys(ui.ticketTabs).length === 0
+    Object.keys(ui.ticketTabs).length === 0 &&
+    ui.projectFiles.tabs.length === 0 &&
+    Object.keys(ui.projectFileViewStates).length === 0
   );
 }
 
@@ -264,6 +379,24 @@ function patchWorkspace(
 ): Pick<WorkspaceState, "byProject"> {
   const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
   return { byProject: { ...state.byProject, [projectId]: { ...current, ...changes } } };
+}
+
+/**
+ * Run one pure Project Files transition (@volli/shared's `previewFile` &co)
+ * over `projectId`'s workspace. All five tab actions are the same three lines,
+ * and a transition that returns its input by identity (a redundant pin, a
+ * close of a file that isn't open) must leave the store untouched so
+ * subscribers don't re-render for a no-op.
+ */
+function applyProjectFiles(
+  state: WorkspaceState,
+  projectId: string,
+  transition: (files: FileWorkspaceState) => FileWorkspaceState,
+): WorkspaceState | Pick<WorkspaceState, "byProject"> {
+  const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+  const projectFiles = transition(current.projectFiles);
+  if (projectFiles === current.projectFiles) return state;
+  return patchWorkspace(state, projectId, { projectFiles });
 }
 
 /**
@@ -395,6 +528,54 @@ export function createWorkspaceStore(storage?: StateStorage) {
           });
         },
 
+        previewProjectFile(projectId, relPath) {
+          set((state) =>
+            applyProjectFiles(state, projectId, (files) => previewFile(files, relPath)),
+          );
+        },
+
+        pinProjectFile(projectId, relPath) {
+          set((state) => applyProjectFiles(state, projectId, (files) => pinFile(files, relPath)));
+        },
+
+        markProjectFileEdited(projectId, relPath) {
+          set((state) =>
+            applyProjectFiles(state, projectId, (files) => markFileEdited(files, relPath)),
+          );
+        },
+
+        activateProjectFile(projectId, relPath) {
+          set((state) =>
+            applyProjectFiles(state, projectId, (files) => activateFile(files, relPath)),
+          );
+        },
+
+        closeProjectFile(projectId, relPath) {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const projectFiles = closeFile(current.projectFiles, relPath);
+            if (projectFiles === current.projectFiles) return state;
+            const projectFileViewStates = { ...current.projectFileViewStates };
+            delete projectFileViewStates[relPath];
+            return patchWorkspace(state, projectId, { projectFiles, projectFileViewStates });
+          });
+        },
+
+        setProjectFileViewState(projectId, relPath, viewState) {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            // Only an OPEN tab may hold view state. A closing tab's editor
+            // unmounts AFTER `closeProjectFile` has already dropped its entry
+            // and emits one last view state bound to the path it was showing;
+            // accepting that write would re-insert exactly what the close just
+            // pruned, and the map would grow without bound as tabs churn.
+            if (!current.projectFiles.tabs.some((tab) => tab.relPath === relPath)) return state;
+            return patchWorkspace(state, projectId, {
+              projectFileViewStates: { ...current.projectFileViewStates, [relPath]: viewState },
+            });
+          });
+        },
+
         forget(projectId) {
           set((state) => {
             if (!(projectId in state.byProject)) return state;
@@ -447,6 +628,11 @@ export function createWorkspaceStore(storage?: StateStorage) {
                   boardSort: ui.boardSort,
                   openTicketId: ui.openTicketId,
                   ticketTabs: ui.ticketTabs,
+                  // Tab identities + flags + the editor's own view state only —
+                  // file CONTENTS are never persisted (decision #55: a returning
+                  // tab reloads its text lazily from the checkout).
+                  projectFiles: ui.projectFiles,
+                  projectFileViewStates: ui.projectFileViewStates,
                 },
               ]),
           ),
@@ -454,7 +640,11 @@ export function createWorkspaceStore(storage?: StateStorage) {
         // Rebuild full records from the pruned persisted pair: everything not
         // persisted (nav, expandedDirs) rehydrates to the defaults.
         merge: (persisted, current) => {
-          const byProject: Record<string, WorkspaceUiState> = {};
+          // Null-prototype for the same reason the sanitizers use one: project
+          // ids are persisted JSON keys, and `__proto__` among them must not
+          // reach an object literal's prototype (nor may a lookup of an
+          // unvisited project ever resolve to an inherited member).
+          const byProject = Object.create(null) as Record<string, WorkspaceUiState>;
           const persistedByProject = (persisted as PersistedWorkspaceState | undefined)?.byProject;
           for (const [projectId, ui] of Object.entries(persistedByProject ?? {})) {
             // A non-object record (null from a corrupt write) would throw

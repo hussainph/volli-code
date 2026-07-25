@@ -14,6 +14,8 @@ import type {
   CreateTerminalSessionRequest,
   CreateTerminalSessionResult,
   DataChangedEvent,
+  DirChangedEvent,
+  DirPathInput,
   FileChangedEvent,
   FileIndexInput,
   FileIndexResult,
@@ -211,7 +213,7 @@ const api = {
     index: (input: FileIndexInput): Promise<FileIndexResult> => invoke("volli:file-index", input),
     /** Reads any repo/artifact file worktree-awarely: text (capped), image (data URI), or binary stub. */
     read: (input: FilePathInput): Promise<FileReadResult> => invoke("volli:file-read", input),
-    /** Writes markdown content; markdown-only, `expectedMtime` conflict-guarded. Resolves with the fresh mtime. */
+    /** Writes utf8 text to an EXISTING file (images/binary/oversize refused), `expectedMtime` conflict-guarded. Resolves with the fresh mtime. */
     write: (input: FileWriteInput): Promise<FileWriteResult> => invoke("volli:file-write", input),
     /** Creates a new, minimally-templated `.md` in `.volli/artifacts/`; `name` is forced to `.md`. Resolves with its `@ref`-able relPath. */
     createArtifact: (input: ArtifactCreateInput): Promise<ArtifactCreateResult> =>
@@ -228,6 +230,17 @@ const api = {
       ipcRenderer.on("volli:file-changed" satisfies VolliIpcEvent, listener);
       return () =>
         ipcRenderer.removeListener("volli:file-changed" satisfies VolliIpcEvent, listener);
+    },
+    /** Watches ONE expanded Project Files directory (non-recursive, main checkout); `relPath: ""` is the project root. Pair with `unwatchDir` on collapse. */
+    watchDir: (input: DirPathInput): Promise<Result> => invoke("volli:dir-watch", input),
+    unwatchDir: (input: DirPathInput): Promise<Result> => invoke("volli:dir-unwatch", input),
+    /** Subscribes to debounced per-directory change events; returns the unsubscribe function. */
+    onDirChanged: (callback: (event: DirChangedEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: DirChangedEvent) =>
+        callback(payload);
+      ipcRenderer.on("volli:dir-changed" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:dir-changed" satisfies VolliIpcEvent, listener);
     },
   },
   appState: {

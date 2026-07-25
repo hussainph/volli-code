@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -11,7 +12,7 @@ import {
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { FileChangedEvent, VolliIpcChannel } from "@volli/shared";
+import type { DirChangedEvent, FileChangedEvent, VolliIpcChannel } from "@volli/shared";
 import { FILE_CHANNELS, VOLLI_GITIGNORE_CONTENT } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -337,6 +338,20 @@ describe("readFile", () => {
     expect(result.content.dataUrl.startsWith("data:image/png;base64,")).toBe(true);
   });
 
+  it("returns an .svg as editable text, not a data URI", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "icon.svg"), '<svg viewBox="0 0 16 16"/>', "utf8");
+    const result = await readFsFile(project, null, "icon.svg");
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected a successful read");
+    expect(result.kind).toBe("other");
+    expect(result.content).toEqual({
+      type: "text",
+      text: '<svg viewBox="0 0 16 16"/>',
+      truncated: false,
+    });
+  });
+
   it("classifies a NUL-containing file as binary", async () => {
     const project = makeTempProjectDir();
     await writeFile(join(project, "data.bin"), Buffer.from([0x41, 0x00, 0x42]));
@@ -409,11 +424,86 @@ describe("writeFile", () => {
     expect(await readFile(join(project, "notes.md"), "utf8")).toBe("# New");
   });
 
-  it("rejects a non-markdown file", async () => {
+  it("writes a non-markdown utf8 text file and returns the fresh post-write mtime", async () => {
     const project = makeTempProjectDir();
-    await writeFile(join(project, "code.ts"), "x", "utf8");
-    const result = await writeFsFile(project, null, "code.ts", "y");
-    expect(result).toEqual({ ok: false, error: "Only markdown files can be edited" });
+    await writeFile(join(project, "app.ts"), "export const a = 1;\n", "utf8");
+    const result = await writeFsFile(project, null, "app.ts", "export const a = 2;\n");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(await readFile(join(project, "app.ts"), "utf8")).toBe("export const a = 2;\n");
+    expect(result.mtime).toBe((await stat(join(project, "app.ts"))).mtimeMs);
+  });
+
+  it("refuses to overwrite a file whose on-disk bytes are binary (NUL-sniffed), leaving it intact", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "data.txt"), Buffer.from([0x41, 0x00, 0x42]));
+    const result = await writeFsFile(project, null, "data.txt", "clobber");
+    expect(result).toEqual({ ok: false, error: "Binary files cannot be edited" });
+    expect(await readFile(join(project, "data.txt"))).toEqual(Buffer.from([0x41, 0x00, 0x42]));
+  });
+
+  it.each([["logo.png"], ["shot.webp"], ["anim.gif"]])(
+    "rejects an image-kind path (%j) by extension, before touching disk",
+    async (relPath) => {
+      const project = makeTempProjectDir();
+      await writeFile(join(project, relPath), "not really an image", "utf8");
+      const result = await writeFsFile(project, null, relPath, "clobber");
+      expect(result).toEqual({ ok: false, error: "Images cannot be edited" });
+      expect(await readFile(join(project, relPath), "utf8")).toBe("not really an image");
+    },
+  );
+
+  it("writes an .svg like any other source file — it is markup, not raster bytes", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "icon.svg"), "<svg/>", "utf8");
+    const result = await writeFsFile(project, null, "icon.svg", '<svg width="16"/>');
+    expect(result.ok).toBe(true);
+    expect(await readFile(join(project, "icon.svg"), "utf8")).toBe('<svg width="16"/>');
+  });
+
+  it("rejects writing back a file that was served truncated (over the 1 MiB read cap)", async () => {
+    const project = makeTempProjectDir();
+    const onDisk = "a".repeat(1024 * 1024 + 1);
+    await writeFile(join(project, "huge.md"), onDisk, "utf8");
+    const result = await writeFsFile(project, null, "huge.md", "the truncated buffer");
+    expect(result).toEqual({ ok: false, error: "File is too large to edit (over 1 MiB)" });
+    expect((await stat(join(project, "huge.md"))).size).toBe(onDisk.length);
+  });
+
+  it("still allows editing a file exactly at the 1 MiB cap (over the cap, not at it, is refused)", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "exact.md"), "a".repeat(1024 * 1024), "utf8");
+    const result = await writeFsFile(project, null, "exact.md", "trimmed");
+    expect(result.ok).toBe(true);
+    expect(await readFile(join(project, "exact.md"), "utf8")).toBe("trimmed");
+  });
+
+  // The write guard NUL-sniffs a bounded leading window rather than re-reading
+  // the whole file on every autosave commit; a clean file past that window is
+  // still perfectly writable.
+  it("writes a text file larger than the binary-sniff window", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "big.ts"), `// ${"a".repeat(200 * 1024)}\n`, "utf8");
+    const result = await writeFsFile(project, null, "big.ts", "export {}\n");
+    expect(result.ok).toBe(true);
+    expect(await readFile(join(project, "big.ts"), "utf8")).toBe("export {}\n");
+  });
+
+  it("still refuses a file whose NUL sits deep inside the sniff window", async () => {
+    const project = makeTempProjectDir();
+    const bytes = Buffer.concat([Buffer.alloc(32 * 1024, 0x41), Buffer.from([0x00, 0x42])]);
+    await writeFile(join(project, "data.txt"), bytes);
+    const result = await writeFsFile(project, null, "data.txt", "clobber");
+    expect(result).toEqual({ ok: false, error: "Binary files cannot be edited" });
+    expect(await readFile(join(project, "data.txt"))).toEqual(bytes);
+  });
+
+  it("rejects incoming content past the 1 MiB cap without touching the file", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "notes.md"), "small", "utf8");
+    const result = await writeFsFile(project, null, "notes.md", "a".repeat(1024 * 1024 + 1));
+    expect(result).toEqual({ ok: false, error: "Content is too large to save (over 1 MiB)" });
+    expect(await readFile(join(project, "notes.md"), "utf8")).toBe("small");
   });
 
   it("passes the expectedMtime guard when it matches the current mtime", async () => {
@@ -432,6 +522,26 @@ describe("writeFile", () => {
     if (result.ok) return;
     expect(result.error).toContain("changed on disk");
     expect(await readFile(join(project, "notes.md"), "utf8")).toBe("on disk");
+  });
+
+  it("refuses to create a repo file that does not exist yet (editing only, never creation)", async () => {
+    const project = makeTempProjectDir();
+    const result = await writeFsFile(project, null, "brand-new.ts", "export {}");
+    expect(result).toEqual({ ok: false, error: "File does not exist on disk" });
+    expect(existsSync(join(project, "brand-new.ts"))).toBe(false);
+  });
+
+  it("refuses to write to a directory with the same message the read path uses", async () => {
+    const project = makeTempProjectDir();
+    await mkdir(join(project, "src"));
+    const result = await writeFsFile(project, null, "src", "x");
+    expect(result).toEqual({ ok: false, error: "Not a file" });
+  });
+
+  it("reports a file that vanished under an armed conflict guard", async () => {
+    const project = makeTempProjectDir();
+    const result = await writeFsFile(project, null, "gone.md", "x", 12345);
+    expect(result).toEqual({ ok: false, error: "File no longer exists on disk" });
   });
 
   it("self-heals a deleted .volli/ before writing an artifact (recreates the dir + gitignore)", async () => {
@@ -453,6 +563,42 @@ describe("writeFile", () => {
     const result = await writeFsFile(project, null, "missing/dir/file.md", "x");
     expect(result.ok).toBe(false);
     expect(existsSync(join(project, "missing"))).toBe(false);
+  });
+
+  // Containment is asserted against the WIDENED path (issue #106): the guards
+  // used to be reachable only for `.md`, so a code path escaping the root would
+  // not have been caught by the markdown-only suite above.
+  it.each([["../../etc/hosts"], ["/etc/hosts"], ["src/../../escape.ts"], [""]])(
+    "rejects the unsafe relPath %j on write",
+    async (relPath) => {
+      const project = makeTempProjectDir();
+      const result = await writeFsFile(project, null, relPath, "pwned");
+      expect(result).toEqual({ ok: false, error: "Invalid file path" });
+    },
+  );
+
+  it("refuses to write through a symlinked code file, leaving the target untouched", async () => {
+    const project = makeTempProjectDir();
+    const outside = makeTempProjectDir();
+    const target = join(outside, "secret.ts");
+    writeFileSync(target, "untouched", "utf8");
+    symlinkSync(target, join(project, "link.ts"), "file");
+    const result = await writeFsFile(project, null, "link.ts", "pwned");
+    expect(result).toEqual({ ok: false, error: "Path is a symlink" });
+    expect(readFileSync(target, "utf8")).toBe("untouched");
+  });
+
+  it("refuses to write through a directory symlink that escapes the root", async () => {
+    const project = makeTempProjectDir();
+    const outside = makeTempProjectDir();
+    const target = join(outside, "secret.ts");
+    writeFileSync(target, "untouched", "utf8");
+    symlinkSync(outside, join(project, "escape"), "dir");
+    const result = await writeFsFile(project, null, "escape/secret.ts", "pwned");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("escapes");
+    expect(readFileSync(target, "utf8")).toBe("untouched");
   });
 
   it("writes to the worktree copy for a non-.volli path when a worktree root is given", async () => {
@@ -667,6 +813,31 @@ describe("FileWatchManager", () => {
     } satisfies FileChangedEvent);
   });
 
+  it("sends one final broadcast when the re-arm itself throws, instead of going silent", async () => {
+    const project = makeTempProjectDir();
+    const manager = new FileWatchManager(0);
+    const webContents = makeWebContents();
+    await watchFile(manager, webContents, project);
+
+    // The dir is still there, so the re-arm takes the synchronous rewire path —
+    // but arming fails outright (fd exhaustion). Torn down either way, the
+    // subscription owes the tab the same nudge the retry-exhausted path sends.
+    watchMock.mockImplementationOnce(() => {
+      throw new Error("EMFILE: too many open files");
+    });
+    watchCalls[0]?.watcher.emitError(new Error("boom"));
+
+    expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
+      projectId: "proj-1",
+      relPath: "notes.md",
+      source: "main",
+    } satisfies FileChangedEvent);
+    // Torn down: a subsequent unwatch is a harmless no-op.
+    expect(() =>
+      manager.unwatch(webContents as never, "proj-1", "ticket-1", "notes.md"),
+    ).not.toThrow();
+  });
+
   it("retries a vanished non-.volli watch dir, then tears down + sends one final broadcast", async () => {
     const project = makeTempProjectDir();
     const manager = new FileWatchManager(0);
@@ -776,14 +947,13 @@ describe("FileWatchManager", () => {
 
 // ---- IPC handler integration (real db + real temp project dirs) --------------
 
-function setupDbAndHandlers(): {
+function setupDbAndHandlers(projectPath: string = makeGitRepoDir()): {
   ctx: TestDb;
   projectId: string;
   ticketId: string;
   projectPath: string;
 } {
   const ctx = openTestDb();
-  const projectPath = makeGitRepoDir();
   const project = testProject({ path: projectPath });
   insertProject(ctx.db, project);
   const ticket = testTicket(project.id, { ticketNumber: 7 });
@@ -797,6 +967,304 @@ function invoke<T>(channel: VolliIpcChannel, sender: unknown, ...args: unknown[]
   if (handler === undefined) throw new Error(`no handler registered for ${channel}`);
   return (handler as (...callArgs: unknown[]) => T)({ sender }, ...args);
 }
+
+// The Project Files tree refreshes only the directories the user has expanded
+// (issue #106) — these exercise that subscription through its IPC channels, the
+// public interface, rather than the manager class behind them.
+describe("directory watch channels", () => {
+  let ctx: TestDb | null = null;
+
+  afterEach(() => {
+    ctx?.cleanup();
+    ctx = null;
+  });
+
+  it("watches one expanded directory and broadcasts a debounced volli:dir-changed", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    await mkdir(join(setup.projectPath, "src"));
+    const webContents = makeWebContents();
+
+    const watched = await invoke<{ ok: boolean }>("volli:dir-watch", webContents, {
+      projectId: setup.projectId,
+      relPath: "src",
+    });
+    expect(watched).toEqual({ ok: true });
+    expect(watchCalls.map((c) => c.dir)).toEqual([join(setup.projectPath, "src")]);
+
+    vi.useFakeTimers();
+    watchCalls[0]?.cb("rename", "added.ts");
+    vi.advanceTimersByTime(250);
+    expect(webContents.send).toHaveBeenCalledWith("volli:dir-changed", {
+      projectId: setup.projectId,
+      relPath: "src",
+    } satisfies DirChangedEvent);
+  });
+
+  it("watches the project root as the empty relPath, non-recursively", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const webContents = makeWebContents();
+
+    const watched = await invoke<{ ok: boolean }>("volli:dir-watch", webContents, {
+      projectId: setup.projectId,
+      relPath: "",
+    });
+    expect(watched).toEqual({ ok: true });
+    // Canonicalized (a temp dir on macOS already sits under a symlinked /var).
+    expect(watchCalls.map((c) => c.dir)).toEqual([realpathSync(setup.projectPath)]);
+    // Exactly `(dir, listener)` — no `{ recursive: true }`, which would hydrate
+    // the whole repo into one watcher (the explicit non-goal of issue #106).
+    expect(watchMock.mock.calls[0]).toHaveLength(2);
+
+    vi.useFakeTimers();
+    watchCalls[0]?.cb("rename", "README.md");
+    vi.advanceTimersByTime(250);
+    expect(webContents.send).toHaveBeenCalledWith("volli:dir-changed", {
+      projectId: setup.projectId,
+      relPath: "",
+    } satisfies DirChangedEvent);
+  });
+
+  // A project folder is whatever path the user picked, and picking a symlink to
+  // the real checkout is ordinary (`~/code/app` → an external volume). The root
+  // watch canonicalizes it; rejecting it as "Path is a symlink" would have
+  // killed live updates for the whole project.
+  it("watches the root of a project folder that is itself a symlink", async () => {
+    const real = makeGitRepoDir();
+    const link = join(makeTempProjectDir(), "project-link");
+    symlinkSync(real, link, "dir");
+    const setup = setupDbAndHandlers(link);
+    ctx = setup.ctx;
+    const webContents = makeWebContents();
+
+    const watched = await invoke<{ ok: boolean }>("volli:dir-watch", webContents, {
+      projectId: setup.projectId,
+      relPath: "",
+    });
+    expect(watched).toEqual({ ok: true });
+    expect(watchCalls.map((c) => c.dir)).toEqual([realpathSync(real)]);
+
+    // Deeper paths keep both safety layers: the symlinked root resolves through.
+    await writeFile(join(real, "README.md"), "# hi", "utf8");
+    expect(
+      await invoke<{ ok: boolean; error?: string }>("volli:dir-watch", makeWebContents(2), {
+        projectId: setup.projectId,
+        relPath: "README.md",
+      }),
+    ).toEqual({ ok: false, error: "Not a directory" });
+  });
+
+  it("reports a project folder that is gone when the root watch is armed", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    rmSync(setup.projectPath, { recursive: true, force: true });
+    const result = await invoke<{ ok: boolean; error?: string }>(
+      "volli:dir-watch",
+      makeWebContents(),
+      { projectId: setup.projectId, relPath: "" },
+    );
+    expect(result).toEqual({ ok: false, error: "Project folder was not found" });
+    expect(watchMock).not.toHaveBeenCalled();
+  });
+
+  // The root watch stays armed for the whole life of the sidebar tree, so a
+  // repo under an agent would otherwise re-list the root every debounce window
+  // purely from git's own bookkeeping — which the tree never shows.
+  it("ignores .git and deep node_modules churn, but not the node_modules row itself", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const webContents = makeWebContents();
+    await invoke("volli:dir-watch", webContents, { projectId: setup.projectId, relPath: "" });
+
+    vi.useFakeTimers();
+    watchCalls[0]?.cb("change", ".git");
+    watchCalls[0]?.cb("rename", ".git/index.lock");
+    watchCalls[0]?.cb("change", "node_modules/.package-lock.json");
+    vi.advanceTimersByTime(250);
+    expect(webContents.send).not.toHaveBeenCalled();
+
+    // The entry itself IS a visible row — installing/removing it must refresh.
+    watchCalls[0]?.cb("rename", "node_modules");
+    vi.advanceTimersByTime(250);
+    expect(webContents.send).toHaveBeenCalledTimes(1);
+
+    // A null filename is unfilterable, so it still broadcasts conservatively.
+    watchCalls[0]?.cb("rename", null);
+    vi.advanceTimersByTime(250);
+    expect(webContents.send).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects '.' as a spelling of the root — the empty string is the only one", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const result = await invoke<{ ok: boolean; error?: string }>(
+      "volli:dir-watch",
+      makeWebContents(),
+      { projectId: setup.projectId, relPath: "." },
+    );
+    expect(result).toEqual({ ok: false, error: "Invalid file path" });
+    expect(watchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([["../.."], ["/etc"], ["src/../.."]])(
+    "rejects the unsafe directory %j",
+    async (relPath) => {
+      const setup = setupDbAndHandlers();
+      ctx = setup.ctx;
+      const result = await invoke<{ ok: boolean; error?: string }>(
+        "volli:dir-watch",
+        makeWebContents(),
+        { projectId: setup.projectId, relPath },
+      );
+      expect(result).toEqual({ ok: false, error: "Invalid file path" });
+      expect(watchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects a symlinked directory that escapes the project root", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const outside = makeTempProjectDir();
+    symlinkSync(outside, join(setup.projectPath, "escape"), "dir");
+    const result = await invoke<{ ok: boolean; error?: string }>(
+      "volli:dir-watch",
+      makeWebContents(),
+      { projectId: setup.projectId, relPath: "escape" },
+    );
+    expect(result).toEqual({ ok: false, error: "Path is a symlink" });
+    expect(watchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a file path and a directory that does not exist", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    await writeFile(join(setup.projectPath, "README.md"), "# hi", "utf8");
+
+    expect(
+      await invoke<{ ok: boolean; error?: string }>("volli:dir-watch", makeWebContents(), {
+        projectId: setup.projectId,
+        relPath: "README.md",
+      }),
+    ).toEqual({ ok: false, error: "Not a directory" });
+    expect(
+      await invoke<{ ok: boolean; error?: string }>("volli:dir-watch", makeWebContents(), {
+        projectId: setup.projectId,
+        relPath: "nope",
+      }),
+    ).toEqual({ ok: false, error: "Directory was not found" });
+  });
+
+  it("rejects an unknown project", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const result = await invoke<{ ok: boolean; error?: string }>(
+      "volli:dir-watch",
+      makeWebContents(),
+      { projectId: "nope", relPath: "" },
+    );
+    expect(result).toEqual({ ok: false, error: "Unknown project" });
+  });
+
+  it("is idempotent: watching the same directory twice wires one watcher", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const webContents = makeWebContents();
+    const input = { projectId: setup.projectId, relPath: "" };
+    expect(await invoke<{ ok: boolean }>("volli:dir-watch", webContents, input)).toEqual({
+      ok: true,
+    });
+    expect(await invoke<{ ok: boolean }>("volli:dir-watch", webContents, input)).toEqual({
+      ok: true,
+    });
+    expect(watchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("unwatch closes the watcher and drops a pending broadcast", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const webContents = makeWebContents();
+    const input = { projectId: setup.projectId, relPath: "" };
+    await invoke("volli:dir-watch", webContents, input);
+
+    vi.useFakeTimers();
+    watchCalls[0]?.cb("rename", "added.ts");
+    expect(invoke<{ ok: boolean }>("volli:dir-unwatch", webContents, input)).toEqual({ ok: true });
+    vi.advanceTimersByTime(1000);
+
+    expect(watchCalls[0]?.watcher.close).toHaveBeenCalledTimes(1);
+    expect(webContents.send).not.toHaveBeenCalled();
+  });
+
+  it("unwatching a directory that was never watched is a harmless no-op", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const result = invoke<{ ok: boolean }>("volli:dir-unwatch", makeWebContents(), {
+      projectId: setup.projectId,
+      relPath: "never/watched",
+    });
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("delivers only to the subscribing window, and tears down when it is destroyed", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const subscriber = makeWebContents(101);
+    const bystander = makeWebContents(202);
+    await invoke("volli:dir-watch", subscriber, { projectId: setup.projectId, relPath: "" });
+
+    vi.useFakeTimers();
+    watchCalls[0]?.cb("rename", "added.ts");
+    vi.advanceTimersByTime(250);
+    expect(subscriber.send).toHaveBeenCalledTimes(1);
+    expect(bystander.send).not.toHaveBeenCalled();
+
+    subscriber.fireDestroyed();
+    expect(watchCalls[0]?.watcher.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-arms on a watcher fault and nudges the tree to re-list", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const webContents = makeWebContents();
+    await invoke("volli:dir-watch", webContents, { projectId: setup.projectId, relPath: "" });
+
+    vi.useFakeTimers();
+    watchCalls[0]?.watcher.emitError(new Error("kqueue fd pressure"));
+    expect(watchCalls[0]?.watcher.close).toHaveBeenCalledTimes(1);
+    expect(watchMock).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(250);
+
+    expect(webContents.send).toHaveBeenCalledWith("volli:dir-changed", {
+      projectId: setup.projectId,
+      relPath: "",
+    } satisfies DirChangedEvent);
+  });
+
+  it("retries a deleted-and-recreated directory, re-homing onto the new inode", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const webContents = makeWebContents();
+    const built = join(setup.projectPath, "dist");
+    mkdirSync(built);
+    await invoke("volli:dir-watch", webContents, { projectId: setup.projectId, relPath: "dist" });
+
+    // A build wipes and regenerates the directory under the expanded row.
+    rmSync(built, { recursive: true, force: true });
+    vi.useFakeTimers();
+    watchCalls[0]?.watcher.emitError(new Error("boom"));
+    expect(webContents.send).not.toHaveBeenCalled();
+
+    mkdirSync(built);
+    vi.advanceTimersByTime(1000);
+    expect(watchMock).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(250);
+    expect(webContents.send).toHaveBeenCalledWith("volli:dir-changed", {
+      projectId: setup.projectId,
+      relPath: "dist",
+    } satisfies DirChangedEvent);
+  });
+});
 
 describe("registerFileIpcHandlers", () => {
   let ctx: TestDb | null = null;
@@ -876,7 +1344,7 @@ describe("registerFileIpcHandlers", () => {
     expect(unwatched).toEqual({ ok: true });
   });
 
-  it("accepts a ticketId and resolves to main today (no worktree infra populates worktree_path)", async () => {
+  it("falls back to the main checkout for a ticket with no live worktree", async () => {
     const setup = setupDbAndHandlers();
     ctx = setup.ctx;
     await invoke("volli:artifact-create", {}, { projectId: setup.projectId, name: "t" });
@@ -888,6 +1356,44 @@ describe("registerFileIpcHandlers", () => {
     expect(read.ok && read.source).toBe("main");
   });
 
+  // `worktree_path` IS populated in production (pty/manager.ts stamps it when a
+  // ticket's worktree is created), so main-vs-ticket resolution is live behavior,
+  // not future work — asserted end-to-end through the read channel.
+  it("resolves a repo path to the ticket's live worktree while .volli stays on main", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const worktree = makeTempProjectDir();
+    await writeFile(join(setup.projectPath, "app.ts"), "main copy", "utf8");
+    await writeFile(join(worktree, "app.ts"), "worktree copy", "utf8");
+    const ticket = testTicket(setup.projectId, { worktreePath: worktree });
+    insertTicket(ctx.db, ticket);
+    await invoke("volli:artifact-create", {}, { projectId: setup.projectId, name: "shared" });
+
+    const code = await invoke<
+      { ok: true; source: string; content: { type: string; text?: string } } | { ok: false }
+    >(
+      "volli:file-read",
+      {},
+      { projectId: setup.projectId, ticketId: ticket.id, relPath: "app.ts" },
+    );
+    expect(code.ok).toBe(true);
+    if (code.ok) {
+      expect(code.source).toBe("worktree");
+      expect(code.content).toEqual({ type: "text", text: "worktree copy", truncated: false });
+    }
+
+    const artifact = await invoke<{ ok: true; source: string } | { ok: false }>(
+      "volli:file-read",
+      {},
+      {
+        projectId: setup.projectId,
+        ticketId: ticket.id,
+        relPath: ".volli/artifacts/shared.md",
+      },
+    );
+    expect(artifact.ok && artifact.source).toBe("main");
+  });
+
   it.each([
     "volli:file-index",
     "volli:file-read",
@@ -896,6 +1402,8 @@ describe("registerFileIpcHandlers", () => {
     "volli:file-reveal",
     "volli:file-watch",
     "volli:file-unwatch",
+    "volli:dir-watch",
+    "volli:dir-unwatch",
   ] satisfies VolliIpcChannel[])("rejects a malformed %s payload", async (channel) => {
     const setup = setupDbAndHandlers();
     ctx = setup.ctx;

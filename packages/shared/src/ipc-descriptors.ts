@@ -430,6 +430,18 @@ function isFilePathInput(
   return value["ticketId"] === undefined || typeof value["ticketId"] === "string";
 }
 
+/**
+ * The dir-watch shape. `relPath` is accepted EMPTY here (the project root) —
+ * main runs the containment check, which rejects every other unsafe spelling.
+ */
+function isDirPathInput(value: unknown): value is { projectId: string; relPath: string } {
+  return (
+    isRecord(value) &&
+    typeof value["projectId"] === "string" &&
+    typeof value["relPath"] === "string"
+  );
+}
+
 export const FILE_IPC: { readonly [C in FileIpcChannel]: IpcRequestDescriptor<C> } = {
   "volli:file-index": {
     guard: (args): args is IpcArgs<"volli:file-index"> =>
@@ -475,6 +487,16 @@ export const FILE_IPC: { readonly [C in FileIpcChannel]: IpcRequestDescriptor<C>
   "volli:file-unwatch": {
     guard: (args): args is IpcArgs<"volli:file-unwatch"> =>
       args.length === 1 && isFilePathInput(args[0]),
+    invalidError: "Invalid request",
+  },
+  "volli:dir-watch": {
+    guard: (args): args is IpcArgs<"volli:dir-watch"> =>
+      args.length === 1 && isDirPathInput(args[0]),
+    invalidError: "Invalid request",
+  },
+  "volli:dir-unwatch": {
+    guard: (args): args is IpcArgs<"volli:dir-unwatch"> =>
+      args.length === 1 && isDirPathInput(args[0]),
     invalidError: "Invalid request",
   },
 };

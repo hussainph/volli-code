@@ -10,8 +10,11 @@
  */
 
 /**
- * `.md`/`.markdown` edit in the live editor; images render inline; everything
- * else is read-only (code/text in CodeMirror, or a reveal-in-Finder stub).
+ * How a file's BYTES are handled: `"markdown"` and `"other"` are utf8 text the
+ * editor round-trips (`.md`/`.markdown` get the document treatment; everything
+ * else is source), while `"image"` means raster bytes — rendered inline, never
+ * served or written as text. SVG is text, not `"image"`: see
+ * {@link IMAGE_EXTENSIONS}.
  */
 export type FileKind = "markdown" | "image" | "other";
 
@@ -38,7 +41,22 @@ export function isArtifactRelPath(relPath: string): boolean {
 }
 
 const MARKDOWN_EXTENSIONS = new Set(["md", "markdown"]);
-const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg"]);
+/**
+ * RASTER image extensions. `"image"` is the kind that means "these bytes are
+ * not text": it is the single gate that makes main serve a `data:` URI instead
+ * of utf8 (`readContent`), makes `writeFile` refuse the path outright, and
+ * makes {@link import("./file-save-policy").fileSavePolicy} return `read-only`.
+ *
+ * SVG is deliberately NOT here. It is markup — utf8 the editor can show, edit
+ * and write back losslessly — and in a general-purpose file workbench that is
+ * the affordance that matters: an `<img>` of your icon with no way to touch the
+ * path data is a dead end. (Monaco already agreed: `document-identity.ts` has
+ * mapped `svg → "xml"` since the editor landed, a branch that was unreachable
+ * while this set claimed SVG was an image.) It stays in
+ * {@link IMAGE_MIME_TYPES}, so any surface that wants to PREVIEW one can still
+ * build its data URI.
+ */
+const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp"]);
 
 /** The basename of a `/`-separated path (or the whole string when there's no separator). */
 export function baseNameOf(pathOrName: string): string {
@@ -74,6 +92,12 @@ export function classifyFileKind(pathOrName: string): FileKind {
   return "other";
 }
 
+/**
+ * MIME types for rendering a file AS an image. Wider than
+ * {@link IMAGE_EXTENSIONS} by exactly one entry: SVG classifies as text (so it
+ * opens in the editor) but is still a perfectly good `<img>` source, and this
+ * map is what any preview surface needs to build its data URI.
+ */
 const IMAGE_MIME_TYPES: Record<string, string> = {
   png: "image/png",
   jpg: "image/jpeg",
@@ -83,7 +107,7 @@ const IMAGE_MIME_TYPES: Record<string, string> = {
   svg: "image/svg+xml",
 };
 
-/** The MIME type for an image file's inline `data:` URI, or `null` when it isn't a recognized image extension. */
+/** The MIME type for rendering a path as an image, or `null` when it names no image format. */
 export function imageMimeType(pathOrName: string): string | null {
   const ext = extensionOf(pathOrName);
   return ext === null ? null : (IMAGE_MIME_TYPES[ext] ?? null);
