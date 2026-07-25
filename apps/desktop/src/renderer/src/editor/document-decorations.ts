@@ -46,7 +46,14 @@
  * of the stylesheet and are asserted against it by nothing but review.
  */
 import type { ProjectionOp } from "./markdown-projection";
-import { buildLineIndex, lineAt, lineNumbered, spanToRange, type TextRange } from "./text-position";
+import {
+  buildLineIndex,
+  lineAt,
+  lineNumbered,
+  spanToRange,
+  type TextPosition,
+  type TextRange,
+} from "./text-position";
 
 /**
  * `monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges`. Inlined as
@@ -320,4 +327,36 @@ export function renderProjection(input: RenderProjectionInput): DocumentRender {
   }
 
   return { decorations, links, checkboxes, images };
+}
+
+/**
+ * The target a click landed on, or null.
+ *
+ * Monaco's mouse events report a model POSITION, not the decoration under the
+ * pointer: `IMouseTarget` exposes the element only for its own built-in
+ * decorations, and injected text/inline classes are not among them. So the
+ * editor asks this instead, against the ranges the current projection produced —
+ * which are never stale, because a projection pass runs on every content change
+ * and no edit can happen between one and a click.
+ *
+ * The end column is exclusive: it is where the character AFTER the span starts,
+ * so a click there belongs to whatever comes next, not to this target. The start
+ * column is inclusive, matching how a caret sitting on a boundary is treated
+ * everywhere else in this layer.
+ */
+export function targetAt<Target extends { readonly range: TextRange }>(
+  targets: readonly Target[],
+  position: TextPosition,
+): Target | null {
+  for (const target of targets) {
+    const { range } = target;
+    if (position.lineNumber < range.startLineNumber) continue;
+    if (position.lineNumber > range.endLineNumber) continue;
+    if (position.lineNumber === range.startLineNumber && position.column < range.startColumn) {
+      continue;
+    }
+    if (position.lineNumber === range.endLineNumber && position.column >= range.endColumn) continue;
+    return target;
+  }
+  return null;
 }
