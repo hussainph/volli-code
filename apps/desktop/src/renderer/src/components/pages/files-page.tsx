@@ -341,7 +341,7 @@ function NoOpenFile() {
     >
       <FoldersIcon weight="fill" className="size-8 text-muted-foreground" />
       <h2 className="text-heading font-semibold">Files</h2>
-      <p className="text-sm text-muted-foreground">Select a file in the sidebar to open it here.</p>
+      <p className="text-sm text-muted-foreground">Select a file in the sidebar.</p>
     </div>
   );
 }
