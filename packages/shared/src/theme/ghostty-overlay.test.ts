@@ -4,6 +4,8 @@ import {
   applyOverlayEdits,
   resolveGhosttyLayers,
   globalGhosttyOverlayPath,
+  isValidOverlayKey,
+  isValidOverlayValue,
   OVERLAY_HEADER,
   projectGhosttyOverlayDir,
   projectGhosttyOverlayPath,
@@ -149,6 +151,58 @@ window-padding-x = 8
 
   it("treats a blank existing file as a fresh overlay", () => {
     expect(applyOverlayEdits("\n\n", { theme: "Nord" })).toBe(`${OVERLAY_HEADER}theme = Nord\n`);
+  });
+});
+
+// One edit must produce at most one ghostty directive. A value runs to
+// end-of-line and cannot escape a line break, so `\n` in one is not a
+// formatting bug: ghostty's `command` key sets the program the terminal runs.
+// Today's callers only pass theme names, font families and integers — these
+// assert the guard holds anyway, since the overlay's whole stance (#67/#68) is
+// "unrepresentable", not "unlikely".
+describe("applyOverlayEdits — refusing an injected directive", () => {
+  it("refuses a value that would append a second directive", () => {
+    expect(() =>
+      applyOverlayEdits(null, { theme: "Nord\ncommand = /bin/sh -c 'echo pwned'" }),
+    ).toThrow(/value for key "theme"/);
+    expect(() => applyOverlayEdits(null, { theme: "Nord\rcommand = /bin/sh" })).toThrow(
+      /line break/,
+    );
+  });
+
+  it("refuses a key that would write junk lines into a file it promised to preserve", () => {
+    expect(() => applyOverlayEdits("# hi\ntheme = Nord\n", { "a\nb": "x" })).toThrow(/key "a\\nb"/);
+    expect(() => applyOverlayEdits(null, { "a\rb": "x" })).toThrow(/line break/);
+  });
+
+  it("refuses a key containing `=` (ambiguous) or `#` (would comment the line out)", () => {
+    expect(() => applyOverlayEdits(null, { "theme = Nord\nfont-size": "12" })).toThrow(/key/);
+    expect(() => applyOverlayEdits(null, { "theme=x": "Nord" })).toThrow(/key "theme=x"/);
+    expect(() => applyOverlayEdits(null, { "#theme": "Nord" })).toThrow(/key "#theme"/);
+  });
+
+  it("refuses before writing anything, so no partial edit is applied", () => {
+    // The valid key is ordered first on purpose: a check done per line as it
+    // is emitted would have already written it.
+    expect(() => applyOverlayEdits("theme = Nord\n", { "font-size": "12", "a\nb": "x" })).toThrow();
+  });
+
+  it("still writes a value whose leading/trailing spaces are significant", () => {
+    expect(applyOverlayEdits(null, { "font-family": " Berkeley Mono " })).toContain(
+      'font-family = " Berkeley Mono "\n',
+    );
+    // `#` and `=` inside a VALUE are literal to ghostty and stay unrejected.
+    expect(applyOverlayEdits(null, { "window-title": "a = b # c" })).toContain(
+      "window-title = a = b # c\n",
+    );
+  });
+
+  it("applies the key rule to a removal too, and reports it directly", () => {
+    expect(() => applyOverlayEdits("theme = Nord\n", { "a\nb": null })).toThrow(/key/);
+    expect(isValidOverlayKey("font-family")).toBe(true);
+    expect(isValidOverlayKey("a\nb")).toBe(false);
+    expect(isValidOverlayValue("Berkeley Mono")).toBe(true);
+    expect(isValidOverlayValue("Nord\ncommand = x")).toBe(false);
   });
 });
 

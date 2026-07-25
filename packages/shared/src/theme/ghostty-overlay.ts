@@ -119,10 +119,63 @@ function keyedLine(line: string): KeyedLine | null {
  * significant (`font-family = " Mono"`). Everything else — spaces inside the
  * value, `#`, `=` — is literal and must NOT be quoted, or ghostty would read
  * the quotes as part of the value.
+ *
+ * Because the value runs to end-of-line, a line break inside one is not
+ * escapable — it is a second directive. {@link isValidOverlayValue} is what
+ * keeps that unrepresentable; this function assumes it already ran.
  */
 function overlayLine(key: string, value: string, indent = ""): string {
   const needsQuotes = value !== value.trim();
   return `${indent}${key} = ${needsQuotes ? `"${value}"` : value}`;
+}
+
+/**
+ * Whether `key` can be written as an overlay key without changing the meaning
+ * of the FILE rather than of its own line.
+ *
+ * A `\n` or `\r` would split one edit into two config lines; a `#` would turn
+ * the line into a comment (silently dropping the directive); an `=` would make
+ * the key/value boundary ambiguous — and the key Volli reads back would not be
+ * the key it wrote, so the "rewritten in place, exactly once" contract breaks.
+ * Every ghostty key is `[a-z-]`, so nothing legitimate is excluded.
+ */
+export function isValidOverlayKey(key: string): boolean {
+  return !/[\n\r=#]/.test(key);
+}
+
+/**
+ * Whether `value` can be written as an overlay value. Only line breaks are
+ * refused: a value runs to end-of-line and cannot escape one, so a `\n` here
+ * appends an arbitrary extra directive — and ghostty's `command` key sets the
+ * program the terminal runs, which makes that a code-execution primitive, not
+ * a formatting bug. Spaces, `#`, `=` and leading/trailing whitespace all stay
+ * legal (the last is what {@link overlayLine}'s quoting branch exists for).
+ */
+export function isValidOverlayValue(value: string): boolean {
+  return !/[\n\r]/.test(value);
+}
+
+/**
+ * Refuses a whole edit set before a single line is built, so a rejected write
+ * is a write nothing was ever attempted for — the same stance
+ * {@link projectGhosttyOverlayPath} takes on a bad ticket prefix, and the same
+ * one `writeTerminalOverlay` takes on a path outside the overlay root. That
+ * caller wraps this in try/catch and returns `{ ok: false, error }`, so the
+ * throw surfaces in the UI rather than being swallowed.
+ */
+function assertWritableEdits(edits: OverlayEdits): void {
+  for (const [key, value] of Object.entries(edits)) {
+    if (!isValidOverlayKey(key)) {
+      throw new Error(
+        `Invalid ghostty overlay key ${JSON.stringify(key)}: a key may not contain a line break, "=", or "#"`,
+      );
+    }
+    if (value !== null && !isValidOverlayValue(value)) {
+      throw new Error(
+        `Invalid ghostty overlay value for key ${JSON.stringify(key)}: a value may not contain a line break`,
+      );
+    }
+  }
 }
 
 /**
@@ -141,10 +194,20 @@ function overlayLine(key: string, value: string, indent = ""): string {
  *    is preserved verbatim, in order.
  *  - A file that does not exist yet (or is blank) is created with
  *    {@link OVERLAY_HEADER}.
+ *  - An edit whose key or value contains a **line break** — or whose key
+ *    contains `=` or `#` — is refused, by THROWING, before any line is built
+ *    (see {@link isValidOverlayKey} / {@link isValidOverlayValue}). One edit
+ *    must produce at most one directive: otherwise a value could append
+ *    `command = …` (which sets the program the terminal runs), and a key could
+ *    write junk lines into a file this contract promises to preserve
+ *    byte-for-byte. A value's leading/trailing SPACES remain legal — those are
+ *    quoted, not rejected.
  *
  * The result always ends in exactly one newline.
  */
 export function applyOverlayEdits(existingText: string | null, edits: OverlayEdits): string {
+  assertWritableEdits(edits);
+
   const base =
     existingText === null || existingText.trim().length === 0 ? OVERLAY_HEADER : existingText;
 

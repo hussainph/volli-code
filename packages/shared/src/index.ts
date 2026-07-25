@@ -26,8 +26,6 @@ export * from "./theme/tokens";
 export * from "./theme/definition";
 export * from "./theme/color";
 export * from "./theme/generate";
-export * from "./theme/tokens";
-export * from "./theme/definition";
 export * from "./theme/ghostty-overlay";
 export * from "./theme/persistence";
 export type * from "./ipc";

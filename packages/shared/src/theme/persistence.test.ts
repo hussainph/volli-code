@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { DEFAULT_THEME } from "./definition";
-import type { ThemeDefinition } from "./definition";
+import type { ThemeCanvas, ThemeDefinition } from "./definition";
 import {
   EMPTY_PROJECT_THEME_OVERRIDE,
   isProjectThemeOverride,
@@ -119,5 +119,44 @@ describe("the canvas guard", () => {
       canvas: { kind: "gradient", stops: ["#2a1207", "#0d0d0d"] },
     };
     expect(parseGlobalTheme(serializeGlobalTheme(themed))).toEqual(themed);
+  });
+
+  // The canvas was the one field serializeGlobalTheme copied by REFERENCE, and
+  // every guard here tolerates extra properties — so it was a live route for
+  // exactly the resolved-token smuggling the field-by-field rebuild exists to
+  // stop. The rebuild has to go all the way down, not one level.
+  it("cannot smuggle a resolved token set through the canvas either", () => {
+    const smuggled = {
+      ...DEFAULT_THEME,
+      canvas: { kind: "solid", tokens: { "--background": "#000000" } },
+    } as ThemeDefinition;
+    const json = serializeGlobalTheme(smuggled);
+
+    expect(json).not.toContain("--");
+    expect(JSON.parse(json)).toMatchObject({ canvas: { kind: "solid" } });
+    expect(Object.keys((JSON.parse(json) as { canvas: object }).canvas)).toEqual(["kind"]);
+  });
+
+  it("strips extras from a gradient/mesh canvas while keeping its authored stops", () => {
+    const smuggled = {
+      ...DEFAULT_THEME,
+      canvas: { kind: "mesh", stops: ["#2a1207", "#0d0d0d"], tokens: { "--ring": "#fff" } },
+    } as ThemeDefinition;
+    const parsed = JSON.parse(serializeGlobalTheme(smuggled)) as { canvas: ThemeCanvas };
+
+    expect(parsed.canvas).toEqual({ kind: "mesh", stops: ["#2a1207", "#0d0d0d"] });
+  });
+
+  // Deliberately NOT capped at the three stops ThemeCanvas's comment names:
+  // that number describes what the generator derives, and storage silently
+  // dropping an authored stop is this module's own cardinal sin.
+  it("keeps every authored stop rather than truncating to the derived three", () => {
+    const stops = ["#1", "#2", "#3", "#4"];
+    const themed: ThemeDefinition = { ...DEFAULT_THEME, canvas: { kind: "gradient", stops } };
+
+    expect(parseGlobalTheme(serializeGlobalTheme(themed))?.canvas).toEqual({
+      kind: "gradient",
+      stops,
+    });
   });
 });

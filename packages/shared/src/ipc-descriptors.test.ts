@@ -1274,6 +1274,25 @@ describe("THEME_IPC descriptor table", () => {
       expect(guard([{ scope: "global", edits: { "font-size": 15 } }])).toBe(false);
       expect(guard([{ scope: "global" }])).toBe(false);
     });
+
+    // Defense in depth with applyOverlayEdits, which throws on the same
+    // shapes: one edit may never become two ghostty directives, and `command`
+    // sets the program the terminal runs.
+    it("rejects an edit that would inject a second ghostty directive", () => {
+      expect(
+        guard([{ scope: "global", edits: { theme: "Nord\ncommand = /bin/sh -c 'echo pwned'" } }]),
+      ).toBe(false);
+      expect(guard([{ scope: "global", edits: { theme: "Nord\rcommand = x" } }])).toBe(false);
+      expect(guard([{ scope: "global", edits: { "a\nb": "x" } }])).toBe(false);
+      expect(guard([{ scope: "project", projectId: "p1", edits: { "a\nb": null } }])).toBe(false);
+      expect(guard([{ scope: "global", edits: { "theme=x": "Nord" } }])).toBe(false);
+      expect(guard([{ scope: "global", edits: { "#theme": "Nord" } }])).toBe(false);
+    });
+
+    it("still accepts a value whose spaces, `#` or `=` are literal", () => {
+      expect(guard([{ scope: "global", edits: { "font-family": " Berkeley Mono " } }])).toBe(true);
+      expect(guard([{ scope: "global", edits: { "window-title": "a = b # c" } }])).toBe(true);
+    });
   });
 
   describe("THEME_CHANNELS derivation", () => {

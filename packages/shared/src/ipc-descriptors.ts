@@ -10,6 +10,7 @@ import type {
   ThemeIpcChannel,
   VolliInvokeContract,
 } from "./ipc";
+import { isValidOverlayKey, isValidOverlayValue } from "./theme/ghostty-overlay";
 import { isProjectThemeOverride, isThemeDefinition } from "./theme/persistence";
 import { isHarnessId, isTicketPriority, isTicketStatus } from "./ticket";
 import { isValidBranchName } from "./ticket-branch";
@@ -494,12 +495,23 @@ export const FILE_CHANNELS = Object.keys(FILE_IPC) as readonly FileIpcChannel[];
 // `src/main/theme-ipc.ts` owns). The theme/override shape guards live next to
 // the persistence rules they enforce (`theme/persistence.ts`), imported above.
 
-/** Whether every value is a string or null — the overlay edit-set shape (`null` removes the key). */
+/**
+ * Whether every value is a string or null — the overlay edit-set shape (`null`
+ * removes the key) — AND every key/value is one `applyOverlayEdits` will
+ * actually write. The character rule is imported, not restated, so the IPC
+ * boundary cannot drift from the writer it guards: an edit that would inject a
+ * second ghostty directive (`command = …` sets the program the terminal runs)
+ * is refused here, before main runs, as well as there.
+ */
 function isOverlayEdits(value: unknown): value is Record<string, string | null> {
   return (
     isRecord(value) &&
     !Array.isArray(value) &&
-    Object.values(value).every((entry) => entry === null || typeof entry === "string")
+    Object.entries(value).every(
+      ([key, entry]) =>
+        isValidOverlayKey(key) &&
+        (entry === null || (typeof entry === "string" && isValidOverlayValue(entry))),
+    )
   );
 }
 

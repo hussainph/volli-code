@@ -123,9 +123,34 @@ export function isThemeDefinition(value: unknown): value is ThemeDefinition {
 }
 
 /**
+ * Rebuilds the canvas from its OWN authored fields, per variant.
+ *
+ * Copying `theme.canvas` by reference would have been the one hole in
+ * {@link serializeGlobalTheme}'s "nothing but the authored shape reaches
+ * storage" claim: `isThemeCanvas` (like every guard here) allows extra
+ * properties, so `{ kind: "solid", tokens: { … } }` round-tripped intact —
+ * exactly the resolved-token smuggling the field-by-field rebuild exists to
+ * prevent, just one level down.
+ *
+ * `stops` is copied, not truncated. The three-stop ceiling in
+ * {@link ThemeCanvas}'s comment describes what the generator DERIVES (both
+ * variants are documented as derived, and only one names a number); silently
+ * dropping a stop the user authored would be this module's own cardinal sin —
+ * storage rewriting intent — so the cap belongs to the generator, not here.
+ */
+function persistedCanvas(canvas: ThemeCanvas): ThemeCanvas {
+  return canvas.kind === "solid"
+    ? { kind: "solid" }
+    : { kind: canvas.kind, stops: [...canvas.stops] };
+}
+
+/**
  * The JSON stored in `app_state`. Built field by field — NOT `JSON.stringify`
  * of the argument — so nothing beyond the authored shape can reach storage,
- * whatever the caller passes. See this module's header for why that matters.
+ * whatever the caller passes. That rebuild goes all the way down: nested
+ * objects are rebuilt too (see {@link persistedCanvas}), because a guard that
+ * tolerates extra properties makes any by-reference copy a smuggling route.
+ * See this module's header for why that matters.
  */
 export function serializeGlobalTheme(theme: ThemeDefinition): string {
   const persisted: ThemeDefinition = {
@@ -134,7 +159,7 @@ export function serializeGlobalTheme(theme: ThemeDefinition): string {
     seed: theme.seed,
     accent: theme.accent,
     grain: theme.grain,
-    canvas: theme.canvas,
+    canvas: persistedCanvas(theme.canvas),
     overrides: { ...theme.overrides },
     appearance: theme.appearance,
   };
