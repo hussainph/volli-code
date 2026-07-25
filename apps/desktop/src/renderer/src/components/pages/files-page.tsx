@@ -32,17 +32,8 @@ import {
   resolveTabClose,
   type TabCloseResolution,
 } from "@renderer/components/files/close-guard";
+import { FileSaveGuardDialog } from "@renderer/components/files/save-guard-dialog";
 import { FileView } from "@renderer/components/ticket/file-view";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@renderer/components/ui/alert-dialog";
 import { fileDocumentIdentity } from "@renderer/editor/document-identity";
 import type { DocumentSnapshot } from "@renderer/editor/document-registry";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
@@ -330,10 +321,12 @@ function FilesWorkbench({ project }: { project: Project }) {
         />
       )}
 
-      <SaveGuardDialog
-        pending={pending}
+      <FileSaveGuardDialog
+        relPath={pending?.relPath ?? null}
         onCancel={() => setPending(null)}
-        onChoose={(target, choice) => void resolvePending(target, choice)}
+        onChoose={(choice) => {
+          if (pending !== null) void resolvePending(pending, choice);
+        }}
       />
     </div>
   );
@@ -350,59 +343,5 @@ function NoOpenFile() {
       <h2 className="text-heading font-semibold">Files</h2>
       <p className="text-sm text-muted-foreground">Select a file in the sidebar to open it here.</p>
     </div>
-  );
-}
-
-/**
- * The dirty-close guard. Discard is the destructive answer and is styled as
- * such; Save is the default action. Dismissing by Esc or the overlay is a
- * Cancel — the answer that changes nothing.
- */
-function SaveGuardDialog({
-  pending,
-  onCancel,
-  onChoose,
-}: {
-  pending: PendingClose | null;
-  onCancel(): void;
-  onChoose(target: PendingClose, choice: TabCloseResolution["choice"]): void;
-}) {
-  const name = pending === null ? "" : baseNameOf(pending.relPath);
-  return (
-    <AlertDialog
-      open={pending !== null}
-      onOpenChange={(next) => {
-        if (!next) onCancel();
-      }}
-    >
-      <AlertDialogContent data-testid="file-save-guard">
-        <AlertDialogHeader>
-          <AlertDialogTitle>Save changes to {name}?</AlertDialogTitle>
-          <AlertDialogDescription>
-            {name} has unsaved changes. Closing it without saving discards them.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel data-testid="file-save-guard-cancel">Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            variant="destructive"
-            data-testid="file-save-guard-discard"
-            onClick={() => {
-              if (pending !== null) onChoose(pending, "discard");
-            }}
-          >
-            Discard
-          </AlertDialogAction>
-          <AlertDialogAction
-            data-testid="file-save-guard-save"
-            onClick={() => {
-              if (pending !== null) onChoose(pending, "save");
-            }}
-          >
-            Save
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
   );
 }

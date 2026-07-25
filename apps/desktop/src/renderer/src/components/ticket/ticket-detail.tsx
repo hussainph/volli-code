@@ -12,6 +12,7 @@ import {
   resolveTabClose,
   type TabCloseResolution,
 } from "@renderer/components/files/close-guard";
+import { FileSaveGuardDialog } from "@renderer/components/files/save-guard-dialog";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import type { MarkdownFileRefs } from "@renderer/components/editor/markdown-live-editor";
 import { ConfirmCloseDialog } from "@renderer/components/sessions/confirm-close-dialog";
@@ -25,16 +26,6 @@ import { TicketSessionPlane } from "@renderer/components/ticket/ticket-session-p
 import { TicketSessionsPanel } from "@renderer/components/ticket/ticket-sessions-panel";
 import { TicketTabStrip, type TicketTabDescriptor } from "@renderer/components/ticket/ticket-tabs";
 import { TicketTitle } from "@renderer/components/ticket/ticket-title";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@renderer/components/ui/alert-dialog";
 import { fileDocumentIdentity } from "@renderer/editor/document-identity";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
@@ -51,6 +42,9 @@ import { getEngine } from "@renderer/terminal/registry";
 /** The always-present Doc tab's id — the fallback every persisted/live tab id
  * resets to once it no longer names a renderable tab (doc/file/session). */
 const DOC_TAB_ID = "doc";
+
+/** Stable empty tab list, so "no open files" isn't a new array every render. */
+const NO_OPEN_FILES: readonly string[] = [];
 
 /**
  * The right rail's bottom "Details" drawer (status/priority/labels/worktree).
@@ -116,7 +110,7 @@ export function TicketDetail({
 
   const displayId = displayTicketId(ticketPrefix, ticket.ticketNumber);
 
-  const openFiles = ticketTabsState?.files ?? [];
+  const openFiles = ticketTabsState?.files ?? NO_OPEN_FILES;
   const activeTabId = ticketTabsState?.active ?? DOC_TAB_ID;
 
   // The per-tab worktree badge is driven by each file's resolved source, which
@@ -178,18 +172,21 @@ export function TicketDetail({
     [peekFileDocuments],
   );
 
-  const openFileKey = openFiles.join("\n");
+  // `openFiles` is the persisted tab list, iterated directly rather than joined
+  // into a delimited key: a relPath may legally contain a newline on macOS, and
+  // splitting one back apart would invent two paths that are open in no tab —
+  // so the real tab's parked draft never re-enters `dirtyFiles` and its close
+  // guard is silently skipped. `NO_OPEN_FILES` keeps the empty case a stable
+  // identity so this effect doesn't re-run every render.
   React.useEffect(() => {
-    if (openFileKey === "") return;
+    if (openFiles.length === 0) return;
     let cancelled = false;
     void loadMonacoRuntime()
       .then((runtime) => {
         if (cancelled) return;
-        const parked = openFileKey
-          .split("\n")
-          .filter((relPath) =>
-            peekFileDocuments(runtime.registry, relPath).some((handle) => handle.snapshot().dirty),
-          );
+        const parked = openFiles.filter((relPath) =>
+          peekFileDocuments(runtime.registry, relPath).some((handle) => handle.snapshot().dirty),
+        );
         if (parked.length > 0) setDirtyFiles((previous) => new Set([...previous, ...parked]));
       })
       .catch(() => {
@@ -199,7 +196,7 @@ export function TicketDetail({
     return () => {
       cancelled = true;
     };
-  }, [openFileKey, peekFileDocuments]);
+  }, [openFiles, peekFileDocuments]);
 
   /**
    * Writes a tab's draft, conflict-guarded on the FRESHEST revision the
@@ -597,64 +594,10 @@ export function TicketDetail({
       <FileSaveGuardDialog
         relPath={pendingClose}
         onCancel={() => setPendingClose(null)}
-        onChoose={(relPath, choice) => void resolvePendingClose(relPath, choice)}
+        onChoose={(choice) => {
+          if (pendingClose !== null) void resolvePendingClose(pendingClose, choice);
+        }}
       />
     </>
-  );
-}
-
-/**
- * The dirty-close guard for file tabs — the same three answers Project Files
- * offers, decided by the same pure `close-guard` helpers, because closing a tab
- * is the one moment an explicit-save draft can be lost for good. Discard is the
- * destructive answer and is styled as such; Save is the default. Dismissing by
- * Esc or the overlay is a Cancel — the answer that changes nothing.
- */
-function FileSaveGuardDialog({
-  relPath,
-  onCancel,
-  onChoose,
-}: {
-  relPath: string | null;
-  onCancel(): void;
-  onChoose(relPath: string, choice: TabCloseResolution["choice"]): void;
-}) {
-  const name = relPath === null ? "" : baseNameOf(relPath);
-  return (
-    <AlertDialog
-      open={relPath !== null}
-      onOpenChange={(next) => {
-        if (!next) onCancel();
-      }}
-    >
-      <AlertDialogContent data-testid="file-save-guard">
-        <AlertDialogHeader>
-          <AlertDialogTitle>Save changes to {name}?</AlertDialogTitle>
-          <AlertDialogDescription>
-            {name} has unsaved changes. Closing it without saving discards them.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel data-testid="file-save-guard-cancel">Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            variant="destructive"
-            data-testid="file-save-guard-discard"
-            onClick={() => {
-              if (relPath !== null) onChoose(relPath, "discard");
-            }}
-          >
-            Discard
-          </AlertDialogAction>
-          <AlertDialogAction
-            data-testid="file-save-guard-save"
-            onClick={() => {
-              if (relPath !== null) onChoose(relPath, "save");
-            }}
-          >
-            Save
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
   );
 }

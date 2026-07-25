@@ -525,17 +525,19 @@ export function FileView({
   }
 
   if (state.status === "code") {
-    // ONE editor component for both source modes, editable or not. The
-    // read-only sibling (MonacoCodeView) acquires the same document under a
-    // `read-only` save policy, and a file that grows past the 1 MiB cap while
-    // its editor holds unsaved work flips `editable` false MID-DRAFT — swapping
-    // components there made the registry reject the policy change over a dirty
-    // document, and the caught error degraded the whole pane to the <pre>
-    // fallback with the draft stranded behind it. MonacoFileEditor already
-    // renders read-only faithfully (`planExplicitSave` refuses to write a
-    // truncated prefix back), so the surface simply stays put and keeps the
-    // draft. It also keeps the `:source` viewId to one view, rather than two
-    // that overwrite each other's remembered cursor.
+    // ONE editor component for both source modes, editable or not — never a
+    // pair swapped on `state.editable`. This view used to render a separate
+    // read-only component that acquired the same document under a `read-only`
+    // save policy, which broke the case the flag exists for: a file that grows
+    // past the 1 MiB cap while its editor holds unsaved work flips `editable`
+    // false MID-DRAFT, and the swap asked the registry to change save policy
+    // over a dirty document. It refuses to, and the caught error degraded the
+    // whole pane to the <pre> fallback with the draft stranded behind it.
+    // MonacoFileEditor renders `readOnly` faithfully on its own
+    // (`planExplicitSave` refuses to write a truncated prefix back), so the
+    // surface stays put and keeps the draft — and the `:source` viewId stays
+    // bound to one view, rather than two that overwrite each other's
+    // remembered cursor.
     const identity = fileDocumentIdentity({ projectId, ticketId, relPath, source: state.source });
     return (
       <div className="flex min-h-0 flex-1 flex-col gap-2 px-gutter py-4">

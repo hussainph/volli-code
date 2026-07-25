@@ -101,11 +101,11 @@ interface DiskSnapshot {
 }
 
 /**
- * An editable Monaco view over one file, with explicit Cmd-S save. Sibling of
- * the read-only {@link import("./monaco-code-view").MonacoCodeView}: the shared
- * registry owns the model, the baseline and the dirty flag; this component owns
- * only the disposable editor DOM and never writes to disk itself — every save
- * goes out through `onSave` and comes back as a revision to record.
+ * The Monaco view over one file — the ONE source-mode editor, editable or
+ * `readOnly`, for every surface that shows file contents. The shared registry
+ * owns the model, the baseline and the dirty flag; this component owns only the
+ * disposable editor DOM and never writes to disk itself — every save goes out
+ * through `onSave` and comes back as a revision to record.
  *
  * When disk moves under an unsaved draft, both versions are preserved: the
  * draft stays untouched and a passive banner offers Reload. There is no

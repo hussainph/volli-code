@@ -54,10 +54,15 @@
  *      raises the Save / Discard / Cancel guard. Cancel keeps the tab open and
  *      dirty and writes NOTHING; Save puts the typed bytes on disk (read back
  *      with `fs`, never trusted from the UI) and closes; Discard closes and
- *      leaves disk untouched. The ticket twin of project-files-smoke check 9.
- *      It also proves a word containing "c" types into Monaco instead of
- *      opening the New-ticket dialog (the plain-"c" shortcut's Monaco blind
- *      spot, fixed in lib/new-ticket-shortcut.ts).
+ *      leaves disk untouched. Because the ticket has a live worktree by then,
+ *      "disk" means its WORKTREE copy (decision #6) — the tab says so with its
+ *      worktree badge, and the bytes are read back from there. The ticket twin
+ *      of project-files-smoke check 9. It also proves two window-level keyboard
+ *      guards over Monaco's `native-edit-context` surface: a word containing
+ *      "c" types into the editor instead of opening the New-ticket dialog
+ *      (lib/new-ticket-shortcut.ts), and Escape belongs to the editor rather
+ *      than closing the whole ticket detail (lib/escape-guard.ts +
+ *      lib/monaco-surface.ts).
  *
  * Check 12 runs LAST on purpose: the only UI path that opens a ticket file tab
  * is an `@ref` chip in the ticket body, and inserting that ref would break the
@@ -79,18 +84,23 @@
  *   Requires: playwright-core (devDependency of @volli/desktop).
  *   Exit code is non-zero if any numbered check fails.
  */
+import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 import { _electron } from "playwright-core";
 
 // This probe predates smoke-kit and keeps its own launch/harness scaffolding,
-// but the Monaco reader is shared: how THIS build is interrogated (input
-// surface, status/dirty contract, rendered lines) is encoded once there, so a
-// change to Monaco's input strategy is a one-file fix.
-import { readMonacoState } from "./lib/smoke-kit.mjs";
+// but two pieces are shared: the Monaco reader (how THIS build is interrogated —
+// input surface, status/dirty contract, rendered lines — encoded once there, so
+// a change to Monaco's input strategy is a one-file fix) and `makeGitRepo` (the
+// project fixture must be a REAL repo, see the note on PROJECT_DIR below).
+import { makeGitRepo, readMonacoState } from "./lib/smoke-kit.mjs";
+
+const execFileAsync = promisify(execFile);
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const APP_DIR = join(REPO, "apps", "desktop");
@@ -113,11 +123,23 @@ const USER_DATA_DIR = join(SCRATCH, "user-data");
 const DB_PATH = join(SCRATCH, "volli.db");
 await fs.mkdir(USER_DATA_DIR, { recursive: true });
 
-// A real, writable project directory (realpath'd so the seeded path matches the
+// A real, writable GIT REPOSITORY (realpath'd so the seeded path matches the
 // shell's $PWD and node's resolve() — macOS temp dirs can be symlinked). This is
 // where the app writes `.volli/`; a temp dir keeps the smoke from polluting the
 // repo the way pointing it at REPO would.
-const PROJECT_DIR = await fs.realpath(await fs.mkdtemp(join(SCRATCH, "project-")));
+//
+// It has to be a repo, not a bare temp dir: since worktree-per-ticket (#83) a
+// ticket session's PTY only spawns AFTER `ensure()` has created the ticket's
+// worktree (decision #38 — there is deliberately no fall back to the main
+// checkout), and `git worktree add` in a non-repo fails with "fatal: not a git
+// repository", so check 5 could never boot a shell and 6/6b/7/11 cascaded off
+// the missing session tab. Same fixture shape as project-files-smoke.
+const PROJECT_DIR = await makeGitRepo(SCRATCH, "project-");
+// The `~` the app hangs `.volli/worktrees/**` off. Overridden so the worktrees
+// this run creates land inside SCRATCH (removed by the cleanup below) and never
+// under the developer's real home directory.
+const WORKTREE_HOME = join(SCRATCH, "worktree-home");
+await fs.mkdir(WORKTREE_HOME, { recursive: true });
 const PROJECT_SEED_ID = "ticket-detail-project";
 const TICKET_PREFIX = "VC";
 const DISPLAY_ID = `${TICKET_PREFIX}-1`;
@@ -222,7 +244,11 @@ function launch(dbPath) {
   return _electron.launch({
     executablePath: ELECTRON,
     args: [APP_DIR, `--user-data-dir=${USER_DATA_DIR}`],
-    env: { ...process.env, VOLLI_DB_PATH: dbPath },
+    env: {
+      ...process.env,
+      VOLLI_DB_PATH: dbPath,
+      VOLLI_WORKTREE_HOME_DIR: WORKTREE_HOME,
+    },
   });
 }
 
@@ -432,8 +458,12 @@ async function unhover(page) {
 
 async function main() {
   // Seeded before launch so the @-picker's file index already knows it: the
-  // repository file check 12 opens as a ticket file tab.
+  // repository file check 12 opens as a ticket file tab. COMMITTED, because
+  // check 12 reads it back out of the ticket's worktree checkout — an
+  // uncommitted edit in the main checkout would simply not exist there.
   await fs.writeFile(join(PROJECT_DIR, README_NAME), README_CONTENT, "utf8");
+  await execFileAsync("git", ["add", "-A"], { cwd: PROJECT_DIR });
+  await execFileAsync("git", ["commit", "-q", "-m", "seed README"], { cwd: PROJECT_DIR });
 
   let app = await launch(DB_PATH);
 
@@ -889,7 +919,7 @@ async function main() {
     // ===================================================================
     await attempt(
       "6b",
-      "Terminal focus reclaims sidebars/tab rail, keeps one thin chrome row, preserves the live canvas, and Escape restores the workspace",
+      "Terminal focus reclaims sidebars/tab rail, keeps one thin chrome row, preserves the live canvas, and ⌘Escape restores the workspace",
       async () => {
         const marked = await page.evaluate(() => {
           const canvas = Array.from(document.querySelectorAll("canvas")).find(
@@ -936,7 +966,13 @@ async function main() {
           focused.asides === 0 &&
           focused.canvasVisible;
 
-        await page.keyboard.press("Escape");
+        // ⌘Escape, NOT bare Escape. Terminal focus deliberately leaves plain Esc
+        // to the PTY (Claude Code interrupts on it, vim and friends lean on it
+        // constantly), so the exit is a chord no terminal app consumes — see the
+        // `exitTerminalFocus` listener in ticket-detail.tsx. This check pressed
+        // bare Escape and had been asserting the pre-#78 behavior; it never
+        // caught it because the non-git fixture failed 6b long before this line.
+        await page.keyboard.press("Meta+Escape");
         const restored = await waitUntil("workspace geometry restored", async () =>
           page.evaluate(() => {
             const inset = document.querySelector('[data-slot="sidebar-inset"]');
@@ -1229,8 +1265,16 @@ async function main() {
       12,
       "File tab save guard: typing marks the tab dirty (the dot survives leaving the ticket); close raises the guard — Cancel keeps it dirty and writes nothing, Save writes the bytes to disk and closes, Discard closes and leaves disk untouched",
       async () => {
-        const readmePath = join(PROJECT_DIR, README_NAME);
         if (!(await detailOpen(page))) await openTicketViaCard(page);
+
+        // Where a repo file resolves for a ticket that HAS a worktree: its
+        // worktree copy, not the main checkout (decision #6). Check 5 booted a
+        // worktree-backed session, so the row must carry a worktreePath by now —
+        // reading disk anywhere else would be reading a file the app never wrote.
+        const ticketRow = await readTicket(page, TICKET_ID);
+        const worktreePath = ticketRow?.worktreePath ?? null;
+        const hasWorktree = typeof worktreePath === "string" && worktreePath.length > 0;
+        const readmePath = join(hasWorktree ? worktreePath : PROJECT_DIR, README_NAME);
 
         // --- (a) open README.md as a file tab through a real @ref chip ---
         await docTab(page).click();
@@ -1250,6 +1294,22 @@ async function main() {
         );
         await waitForMonacoReady(page, README_NAME, README_BODY_LINE);
         const cleanAtFirst = (await dirtyDot(page).count()) === 0;
+        // The tab marks it as the ticket's worktree copy — the visible half of
+        // the resolution `readmePath` above depends on.
+        const worktreeBadge = (await tab.getByLabel("Worktree copy").count()) === 1;
+
+        // --- (a2) Escape inside Monaco belongs to the EDITOR, not the view ---
+        // Monaco owns Escape (suggest widget, find, multi-cursor, snippet mode),
+        // but a plain Escape it has nothing to dismiss for goes
+        // un-`preventDefault`ed and bubbles to the window — where ticket-detail's
+        // listener used to read it as "close the view" and eject the user out of
+        // the file they were editing. `isEscapeExempt` now covers the Monaco
+        // surface, so the detail must stay open with the file tab still active.
+        await focusMonaco(page);
+        await page.keyboard.press("Escape");
+        await sleep(600); // let a (wrong) close actually land before asserting
+        const survivedEscape =
+          (await detailOpen(page)) && (await tab.getAttribute("aria-selected")) === "true";
 
         // --- (b) typing marks the tab dirty ---
         await typeMarkerAtTop(page, GUARD_MARKER);
@@ -1354,7 +1414,10 @@ async function main() {
         const discardWroteNothing = afterDiscard === afterSave;
 
         const ok =
+          hasWorktree &&
+          worktreeBadge &&
           cleanAtFirst &&
+          survivedEscape &&
           !!composerStayedShut &&
           dotVisible &&
           !!dotAfterNav &&
@@ -1368,7 +1431,8 @@ async function main() {
         return {
           ok,
           detail:
-            `cleanAtFirst=${cleanAtFirst} composerStayedShut=${!!composerStayedShut} dotVisible=${dotVisible} dotAfterNav=${!!dotAfterNav} ` +
+            `worktree=${JSON.stringify(worktreePath)} worktreeBadge=${worktreeBadge} ` +
+            `cleanAtFirst=${cleanAtFirst} survivedEscape=${survivedEscape} composerStayedShut=${!!composerStayedShut} dotVisible=${dotVisible} dotAfterNav=${!!dotAfterNav} ` +
             `draftRestored=${!!draftRestored} cancelKeptDirty=${!!keptOpen} cancelWroteNothing=${cancelWroteNothing} ` +
             `closedAfterSave=${!!closedAfterSave} diskHasMarker=${savedToDisk} ` +
             `closedAfterDiscard=${!!closedAfterDiscard} discardWroteNothing=${discardWroteNothing} ` +
