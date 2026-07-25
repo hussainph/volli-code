@@ -26,7 +26,7 @@ import { PriorityIndicator } from "@renderer/components/board/priority-indicator
 import { createTerminalSession } from "@renderer/components/sessions/session-create";
 import { TicketLabelEditor } from "@renderer/components/ticket/ticket-label-editor";
 import {
-  formatMergeBaseSummary,
+  formatChangeSetSummary,
   resolveDoneFlow,
   type DoneFlowStage,
   type MenuAction,
@@ -436,7 +436,7 @@ function RetentionNoticeLine({ notice }: { notice: RetentionNotice }) {
 
 /**
  * The Details rail's Done-flow block (docs/plans/done-flow.md "UI", decision
- * #45): one merge-base context line plus one adaptive split button — a primary
+ * #45): one Change Set context line plus one adaptive split button — a primary
  * action whose label is the whole next step, and a chevron menu unbundling the
  * individual verbs. Rendered only once the ticket has a worktree. Lazy-loads
  * `status` + the composed Change Set on mount (the `BaseBranchField` precedent —
@@ -713,7 +713,7 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
 
   const view = resolveDoneFlow(status, ticket.prUrl, stage);
   const retentionView = resolveRetention(retention, ttlDays);
-  const mergeBaseSummary = diff ? formatMergeBaseSummary(diff) : null;
+  const changeSetSummary = diff ? formatChangeSetSummary(diff) : null;
 
   function runPrimary() {
     switch (view.primary.kind) {
@@ -774,7 +774,7 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
         </span>
       ) : (
         <span className="text-xs text-muted-foreground">
-          {mergeBaseSummary ?? "No changes vs base yet"}
+          {changeSetSummary ?? "No changes vs base yet"}
         </span>
       )}
       {/* The watch died, so the summary above is frozen — say so, and offer the

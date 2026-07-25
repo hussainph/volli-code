@@ -3,7 +3,7 @@ import { changeSetToDiffStat } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  formatMergeBaseSummary,
+  formatChangeSetSummary,
   resolveDoneFlow,
   type DoneFlowStage,
   type WorktreeStatusSnapshot,
@@ -219,13 +219,13 @@ describe("resolveDoneFlow — chevron menu", () => {
   });
 });
 
-describe("formatMergeBaseSummary", () => {
+describe("formatChangeSetSummary", () => {
   it("returns null when there are no changes vs base", () => {
-    expect(formatMergeBaseSummary(diff())).toBeNull();
+    expect(formatChangeSetSummary(diff())).toBeNull();
   });
 
   it("summarizes file count and line deltas", () => {
-    const summary = formatMergeBaseSummary(
+    const summary = formatChangeSetSummary(
       diff({
         files: [
           { path: "a.ts", insertions: 10, deletions: 2, untracked: false },
@@ -239,7 +239,7 @@ describe("formatMergeBaseSummary", () => {
   });
 
   it("uses singular 'file' for exactly one file", () => {
-    const summary = formatMergeBaseSummary(
+    const summary = formatChangeSetSummary(
       diff({
         files: [{ path: "a.ts", insertions: 1, deletions: 0, untracked: false }],
         insertions: 1,
@@ -250,7 +250,7 @@ describe("formatMergeBaseSummary", () => {
   });
 
   it("calls out binary/untracked files separately since they carry no line counts", () => {
-    const summary = formatMergeBaseSummary(
+    const summary = formatChangeSetSummary(
       diff({
         files: [
           { path: "a.ts", insertions: 1, deletions: 0, untracked: false },
@@ -266,7 +266,7 @@ describe("formatMergeBaseSummary", () => {
 
   it("agrees with a Change Set snapshot projected through changeSetToDiffStat", () => {
     // Properties and Changes must share one composed model (#108 AC).
-    const summary = formatMergeBaseSummary(
+    const summary = formatChangeSetSummary(
       changeSetToDiffStat({
         baseRevision: "base",
         headRevision: "head",

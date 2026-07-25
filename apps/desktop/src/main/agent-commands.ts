@@ -31,6 +31,7 @@ import type {
   TicketEventActor,
   TicketBodyMutation,
   Ticket,
+  WorktreeDiffMode,
 } from "@volli/shared";
 
 import { listAttachments } from "./db/attachments-repo";
@@ -41,7 +42,7 @@ import { listProjects } from "./db/projects-repo";
 import { getSession, listSessions, setHarnessSessionId } from "./db/sessions-repo";
 import { getTicket, listArchivedTicketsByProject, listTicketsByProject } from "./db/tickets-repo";
 import { readWorktreeDiff, readWorktreeStatus, runGitCapturing } from "./worktree";
-import type { DiffMode, RunGit } from "./worktree";
+import type { RunGit } from "./worktree";
 import { isInside } from "./worktree/paths";
 import {
   archiveTicketCommand,
@@ -959,7 +960,8 @@ export function createAgentCommandService(
         if (!resolved.ok) return resolved.response;
         // Merge-base ("what the PR would contain") is the default; --working-tree
         // switches to the uncommitted view. Same two-mode diff.ts the rail uses.
-        const mode: DiffMode = request.args["workingTree"] === true ? "working-tree" : "merge-base";
+        const mode: WorktreeDiffMode =
+          request.args["workingTree"] === true ? "working-tree" : "merge-base";
         const read = readWorktreeDiff(
           { db: options.db, git, worktreeExists },
           resolved.ticket.id,

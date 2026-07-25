@@ -19,13 +19,18 @@
 import { existsSync } from "node:fs";
 
 import type Database from "better-sqlite3";
-import { displayTicketId, type ChangeSetSnapshot, type DiffStat } from "@volli/shared";
+import {
+  displayTicketId,
+  type ChangeSetSnapshot,
+  type DiffStat,
+  type WorktreeDiffMode,
+} from "@volli/shared";
 
 import { getProjectById } from "../db/projects-repo";
 import { getTicketRow } from "../db/tickets-repo";
 import { changeSetSnapshot, readChangeSetBaseFile, type ChangeSetBaseFile } from "./change-set";
 import { resolveChangeSetBaseRevision } from "./comparison-ref";
-import { diffStat, type DiffMode } from "./diff";
+import { diffStat } from "./diff";
 import { runGitCapturingAsync, stderrOf } from "./git";
 import { getWorktreeStatus, type WorktreeStatusReport } from "./status";
 import type { RunGit, RunGitAsync } from "./types";
@@ -161,7 +166,7 @@ export function readWorktreeStatus(deps: WorktreeReadDeps, ticketId: string): Wo
 export function readWorktreeDiff(
   deps: WorktreeReadDeps,
   ticketId: string,
-  mode: DiffMode,
+  mode: WorktreeDiffMode,
 ): WorktreeDiffRead {
   const resolved = resolveReadTarget(deps, ticketId);
   if (resolved.kind !== "ok") return resolved;

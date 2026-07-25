@@ -211,12 +211,16 @@ export function resolveDoneFlow(
 
 /**
  * "2 files · +11 −2", with a trailing "· +2 binary/untracked" clause when the
- * merge-base diff has files whose line counts are null (binary or untracked —
+ * Change Set has files whose line counts are null (binary or untracked —
  * `DiffFileStat`'s convention, ticket-events.ts). `null` when there are no
  * changes vs base yet, so the caller can show its own "no changes" copy
  * instead of a hollow "0 files · +0 −0".
+ *
+ * This summarizes the Change Set, not `git diff base...HEAD`: it counts the
+ * worktree's whole current outcome, uncommitted and untracked work included,
+ * which is why it can differ from what a PR would contain.
  */
-export function formatMergeBaseSummary(diff: DiffStat): string | null {
+export function formatChangeSetSummary(diff: DiffStat): string | null {
   if (diff.files.length === 0) return null;
   const specialCount = diff.files.filter((file) => file.insertions === null).length;
   const fileCount = diff.files.length;

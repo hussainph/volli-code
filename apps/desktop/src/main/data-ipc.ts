@@ -126,9 +126,8 @@ import {
   remove as removeWorktree,
   runNet,
   setRetentionTtlDays,
-  type DiffMode,
+  WorktreeChangeWatchManager,
 } from "./worktree";
-import { WorktreeChangeWatchManager } from "./worktree/change-set-watch";
 import { createCoalescer } from "./worktree/coalesce";
 import { getRetentionWatcher } from "./retention-runtime";
 import {
@@ -606,7 +605,7 @@ export function registerDataIpcHandlers(
     },
 
     "volli:worktree-diff": (input: WorktreeDiffInput): WorktreeDiffResult => {
-      const read = readWorktreeDiff(worktreeDeps(db), input.ticketId, input.mode as DiffMode);
+      const read = readWorktreeDiff(worktreeDeps(db), input.ticketId, input.mode);
       switch (read.kind) {
         case "missing-ticket":
           return { ok: false, error: "Unknown ticket" };

@@ -16,7 +16,7 @@ export { sweepOrphans } from "./sweep";
 export { getWorktreeStatus } from "./status";
 export type { WorktreeStatusInput, WorktreeStatusReport } from "./status";
 export { diffStat } from "./diff";
-export type { DiffMode, DiffStatInput } from "./diff";
+export type { DiffStatInput } from "./diff";
 
 // TicketId-in read verbs (CONCEPT #42): resolve ticket→identity, discriminate
 // no-worktree / stamped-but-deleted, then compose status.ts/diff.ts. The single

@@ -243,6 +243,12 @@ function parseNameStatus(out: string): ParsedNameStatus[] {
     i += 1;
     if (code.length === 0) continue;
     const kind = code[0]!;
+    // R and C are the two-token codes: `<code>\0<from>\0<to>\0`. `-M` on the
+    // command line turns copy detection OFF whatever `diff.renames` says, so C
+    // should never arrive — it is consumed anyway because the alternative is
+    // reading its `<from>` as this entry's path and its `<to>` as the next
+    // status code, desyncing the rest of the stream. A copy is an added file
+    // that happens to know where its content came from.
     if (kind === "R" || kind === "C") {
       const previousPath = tokens[i++] ?? "";
       const path = tokens[i++] ?? "";
