@@ -260,7 +260,7 @@ describe("addTicket", () => {
 
     expect(result).toBeNull();
     expect(store.getState().ticketsByProject.p1).toBeUndefined();
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not create ticket: db locked", {
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Couldn't create ticket: db locked", {
       duration: 8000,
       closeButton: true,
     });
@@ -277,7 +277,7 @@ describe("addTicket", () => {
     const result = await store.getState().addTicket("p1", "todo", "New");
 
     expect(result).toBeNull();
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not create ticket: ipc gone", {
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Couldn't create ticket: ipc gone", {
       duration: 8000,
       closeButton: true,
     });
@@ -354,7 +354,7 @@ describe("moveTicket", () => {
     await store.getState().moveTicket("p1", "a", "doing", 0);
 
     expect(store.getState().ticketsByProject.p1).toEqual(before);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not move ticket: conflict", {
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Couldn't move ticket: conflict", {
       duration: 8000,
       closeButton: true,
     });
@@ -374,7 +374,7 @@ describe("moveTicket", () => {
     await store.getState().moveTicket("p1", "a", "doing", 0);
 
     expect(store.getState().ticketsByProject.p1).toEqual(before);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not move ticket: ipc gone", {
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Couldn't move ticket: ipc gone", {
       duration: 8000,
       closeButton: true,
     });
@@ -508,7 +508,7 @@ describe("setTicketPriority", () => {
     await store.getState().setTicketPriority("p1", "a", "high");
 
     expect(store.getState().ticketsByProject.p1).toEqual(before);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not update priority: conflict", {
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Couldn't update priority: conflict", {
       duration: 8000,
       closeButton: true,
     });
@@ -548,7 +548,7 @@ describe("setTicketPriority", () => {
     await store.getState().setTicketPriority("p1", "a", "high");
 
     expect(store.getState().ticketsByProject.p1).toEqual(before);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not update priority: ipc gone", {
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Couldn't update priority: ipc gone", {
       duration: 8000,
       closeButton: true,
     });
@@ -670,7 +670,7 @@ describe("updateTicket", () => {
     await store.getState().updateTicket({ ticketId: "a", title: "New" });
 
     expect(store.getState().ticketsByProject.p1?.[0]).toEqual(a);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not update ticket: conflict", {
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Couldn't update ticket: conflict", {
       duration: 8000,
       closeButton: true,
     });
@@ -689,7 +689,7 @@ describe("updateTicket", () => {
     await store.getState().updateTicket({ ticketId: "a", title: "New" });
 
     expect(store.getState().ticketsByProject.p1?.[0]).toEqual(a);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not update ticket: ipc gone", {
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Couldn't update ticket: ipc gone", {
       duration: 8000,
       closeButton: true,
     });
@@ -791,7 +791,7 @@ describe("setLabels", () => {
     await store.getState().setLabels("a", ["bug", "urgent"]);
 
     expect(store.getState().ticketsByProject.p1?.[0]?.labels).toEqual(["bug"]);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not update labels: conflict", {
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Couldn't update labels: conflict", {
       duration: 8000,
       closeButton: true,
     });
@@ -810,7 +810,7 @@ describe("setLabels", () => {
     await store.getState().setLabels("a", ["bug", "urgent"]);
 
     expect(store.getState().ticketsByProject.p1?.[0]?.labels).toEqual(["bug"]);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not update labels: ipc gone", {
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Couldn't update labels: ipc gone", {
       duration: 8000,
       closeButton: true,
     });
@@ -933,7 +933,7 @@ describe("setLabelColor", () => {
     await store.getState().setLabelColor("p1", "l1", "#123456");
 
     expect(store.getState().labelsByProject.p1).toEqual([bug]);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not update label color: conflict", {
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Couldn't update label color: conflict", {
       duration: 8000,
       closeButton: true,
     });
@@ -952,7 +952,7 @@ describe("setLabelColor", () => {
     await store.getState().setLabelColor("p1", "l1", "#123456");
 
     expect(store.getState().labelsByProject.p1).toEqual([bug]);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not update label color: ipc gone", {
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Couldn't update label color: ipc gone", {
       duration: 8000,
       closeButton: true,
     });
@@ -1010,7 +1010,7 @@ describe("loadArchived", () => {
 
     expect(ok).toBe(false);
     expect(store.getState().archivedByProject.p1).toBeUndefined();
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not load archive: db locked", {
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Couldn't load archive: db locked", {
       duration: 8000,
       closeButton: true,
     });
@@ -1087,7 +1087,7 @@ describe("archiveTicket", () => {
     await store.getState().archiveTicket("p1", "a");
 
     expect(store.getState().ticketsByProject.p1!.map((t) => t.id)).toEqual(["a"]);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not archive ticket: conflict", {
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Couldn't archive ticket: conflict", {
       duration: 8000,
       closeButton: true,
     });
@@ -1189,7 +1189,7 @@ describe("unarchiveTicket", () => {
 
     expect(store.getState().archivedByProject.p1!.map((t) => t.id)).toEqual(["a"]);
     expect(store.getState().ticketsByProject.p1).toEqual([]);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not unarchive ticket: conflict", {
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Couldn't unarchive ticket: conflict", {
       duration: 8000,
       closeButton: true,
     });
@@ -1298,7 +1298,7 @@ describe("deleteArchivedTicket", () => {
     await store.getState().deleteArchivedTicket("p1", "a");
 
     expect(store.getState().archivedByProject.p1!.map((t) => t.id)).toEqual(["a"]);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not delete ticket: db locked", {
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Couldn't delete ticket: db locked", {
       duration: 8000,
       closeButton: true,
     });

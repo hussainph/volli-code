@@ -110,10 +110,7 @@ export async function materializeFileArguments(
   try {
     text = await readText(path);
   } catch (error) {
-    throw new AgentClientError(
-      "FILE_READ_FAILED",
-      `Could not read ${path}: ${errorMessage(error)}`,
-    );
+    throw new AgentClientError("FILE_READ_FAILED", `Couldn't read ${path}: ${errorMessage(error)}`);
   }
 
   const args = { ...invocation.args };

@@ -143,7 +143,7 @@ describe("hydrate", () => {
     expect(store.getState().global).toEqual(DEFAULT_THEME);
     expect(store.getState().hydrated).toBe(false);
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
-      "Could not load the theme: db closed",
+      "Couldn't load the theme: db closed",
       expect.anything(),
     );
   });
@@ -156,7 +156,7 @@ describe("hydrate", () => {
     await store.getState().hydrate();
 
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
-      "Could not load the theme: ipc gone",
+      "Couldn't load the theme: ipc gone",
       expect.anything(),
     );
   });
@@ -246,7 +246,7 @@ describe("commit", () => {
     // "applied", and this one never made it to disk.
     expect(store.getState().recents).toEqual([]);
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
-      "Could not save the theme: disk full",
+      "Couldn't save the theme: disk full",
       expect.anything(),
     );
   });

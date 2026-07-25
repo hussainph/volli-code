@@ -489,7 +489,7 @@ app.whenReady().then(async () => {
       .join("\n\n");
     await dialog.showMessageBox(mainWindow, {
       type: "warning",
-      message: "Some Volli skill files were edited and were left untouched.",
+      message: "You edited some skill files, so Volli left them alone.",
       detail,
     });
   };
@@ -541,7 +541,7 @@ app.whenReady().then(async () => {
       type: "warning",
       message: "Remove the Volli CLI and agent skills?",
       detail:
-        "This removes the bundled skill pack and the /usr/local/bin/volli link. Files you edited yourself are left in place.",
+        "Removes the bundled skill pack and the /usr/local/bin/volli link. Files you edited yourself stay.",
       buttons: ["Remove", "Cancel"],
       defaultId: 1,
       cancelId: 1,
@@ -577,12 +577,12 @@ app.whenReady().then(async () => {
     }
     const preservedNote =
       removal.preserved.length > 0
-        ? `\n\nLeft in place because you edited them:\n${removal.preserved.join("\n")}`
+        ? `\n\nKept, because you edited them:\n${removal.preserved.join("\n")}`
         : "";
     await dialog.showMessageBox(mainWindow, {
       type: "info",
       message: "Volli CLI and agent skills removed.",
-      detail: `Removed ${removal.removed.length} managed item(s).${preservedNote}`,
+      detail: `Removed ${removal.removed.length} item(s).${preservedNote}`,
     });
   };
 
@@ -642,7 +642,7 @@ app.whenReady().then(async () => {
     console.error("[volli] failed to start agent socket:", errorMessage(error));
     new Notification({
       title: "Volli CLI unavailable",
-      body: "The volli agent socket failed to start, so CLI/agent commands won't work this launch.",
+      body: "The agent socket failed to start. CLI commands won't work this launch.",
     }).show();
   }
 
@@ -686,7 +686,7 @@ app.whenReady().then(async () => {
             type: "question",
             message: "Install the Volli CLI and agent skills?",
             detail:
-              "Volli will expose its CLI in /usr/local/bin and install the bundled skill only for detected agent harnesses. You can do this later from the File menu.",
+              "Adds the volli command to /usr/local/bin and installs its skill for the agents you already have. You can do this later from the File menu.",
             buttons: ["Install", "Not Now"],
             defaultId: 0,
             cancelId: 1,

@@ -35,9 +35,7 @@ export function ConfigurePage() {
             <SlidersHorizontalIcon className="size-5 text-muted-foreground" weight="fill" />
           </div>
           <h1 className="text-heading font-semibold">Nothing to configure</h1>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            Select a project to edit its worktree defaults and maintenance.
-          </p>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">Select a project first.</p>
         </div>
       </div>
     );
@@ -48,7 +46,6 @@ export function ConfigurePage() {
       key: "general",
       label: "General",
       icon: GearSixIcon,
-      description: "Automation defaults for new ticket worktrees in this project.",
       content: (
         <ConfigureGeneralSection
           project={project}
@@ -61,7 +58,6 @@ export function ConfigurePage() {
       key: "worktrees",
       label: "Worktrees",
       icon: TreeStructureIcon,
-      description: "What gets copied from this project's root into every new ticket worktree.",
       content: <ConfigureWorktreesSection />,
     },
   ];
@@ -107,7 +103,7 @@ function BaseBranchField({
     setSaving(true);
     try {
       const ok = await onSave(project.id, baseBranch.trim() || null);
-      if (!ok) toastError("Could not save base branch");
+      if (!ok) toastError("Couldn't save base branch");
     } finally {
       setSaving(false);
     }
@@ -117,7 +113,7 @@ function BaseBranchField({
     <SettingsRow
       label="Default base branch"
       htmlFor="project-base-branch"
-      description="New ticket worktrees branch from this ref unless the CLI supplies --base."
+      description="New worktrees branch from here."
     >
       <Input
         id="project-base-branch"
@@ -157,7 +153,7 @@ function SetupCommandField({
     setSaving(true);
     try {
       const ok = await onSave(project.id, setupCommand.trim() || null);
-      if (!ok) toastError("Could not save setup command");
+      if (!ok) toastError("Couldn't save setup command");
     } finally {
       setSaving(false);
     }
@@ -167,7 +163,7 @@ function SetupCommandField({
     <SettingsRow
       label="Setup command"
       htmlFor="project-setup-command"
-      description="Runs once in the session terminal right after a ticket's worktree is created."
+      description="Runs once, right after the worktree is created."
     >
       <Input
         id="project-setup-command"
@@ -200,20 +196,15 @@ export function ConfigureWorktreesSection() {
 /** Read-only documentation of the default worktree copy set and how a repo-root `.worktreeinclude` extends it. */
 function CopySetInfo() {
   return (
-    <SettingsSection
-      title="Copied files"
-      icon={TreeStructureIcon}
-      description="What gets copied from the project root into every new ticket worktree."
-    >
+    <SettingsSection title="Copied files" icon={TreeStructureIcon}>
       <p className="text-xs leading-5 text-muted-foreground">
-        By default, <code className="rounded bg-muted px-1 py-0.5 font-mono">.env*</code> and{" "}
-        <code className="rounded bg-muted px-1 py-0.5 font-mono">.claude/settings.local.json</code>{" "}
-        are copied from the project root into every new ticket worktree.
+        By default: <code className="rounded bg-muted px-1 py-0.5 font-mono">.env*</code> and{" "}
+        <code className="rounded bg-muted px-1 py-0.5 font-mono">.claude/settings.local.json</code>.
       </p>
       <p className="mt-2 text-xs leading-5 text-muted-foreground">
-        A repo-root <code className="rounded bg-muted px-1 py-0.5 font-mono">.worktreeinclude</code>{" "}
-        file (gitignore syntax — <code className="rounded bg-muted px-1 py-0.5 font-mono">!</code>{" "}
-        negates) extends or overrides this set.
+        Add a <code className="rounded bg-muted px-1 py-0.5 font-mono">.worktreeinclude</code> at
+        the repo root to change the set. Gitignore syntax;{" "}
+        <code className="rounded bg-muted px-1 py-0.5 font-mono">!</code> negates.
       </p>
     </SettingsSection>
   );

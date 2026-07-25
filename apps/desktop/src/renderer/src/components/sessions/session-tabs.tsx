@@ -174,7 +174,7 @@ export function SessionTabs({
                     exited
                       ? `Exited (${exitCode})`
                       : parked
-                        ? "Parked — memory reclaimed; wakes on click or keypress"
+                        ? "Parked to save memory. Click to wake."
                         : tab.title
                   }
                   className={cn(

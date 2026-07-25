@@ -32,12 +32,12 @@ export function createTicketSessionRecordsStore() {
       try {
         const result = await window.api.sessions.listForTicket({ ticketId });
         if (!result.ok) {
-          toastError(`Could not load sessions: ${result.error}`);
+          toastError(`Couldn't load sessions: ${result.error}`);
           return;
         }
         set((state) => ({ byTicket: { ...state.byTicket, [ticketId]: result.sessions } }));
       } catch (error) {
-        toastError(`Could not load sessions: ${errorMessage(error)}`);
+        toastError(`Couldn't load sessions: ${errorMessage(error)}`);
       }
     },
 

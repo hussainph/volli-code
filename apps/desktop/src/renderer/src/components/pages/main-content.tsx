@@ -70,7 +70,7 @@ function EmptyProjectsState() {
         </div>
         <h1 className="text-title font-semibold">Add your first project</h1>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
-          Choose a local codebase to start planning work.
+          Pick a folder with a git repo.
         </p>
         <Button className="mt-6 app-region-no-drag" onClick={() => void pickAndAdd()}>
           Add Project…

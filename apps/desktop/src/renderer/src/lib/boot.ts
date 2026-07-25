@@ -195,7 +195,7 @@ async function notifyOrphanedWorktrees(): Promise<void> {
   try {
     const result = await window.api.worktree.orphans();
     if (result.ok && result.dirty.length > 0) {
-      toast.info(`${result.dirty.length} worktree folder(s) need attention — see Settings`);
+      toast.info(`${result.dirty.length} leftover worktree folder(s). See Settings.`);
     }
   } catch {
     // Best-effort only — swallow silently.
@@ -237,7 +237,7 @@ export async function boot(
         // yet, so stash the message; AppShell surfaces it on mount.
         preserveSource = true;
         setBootNotice(
-          `Couldn't import your existing data (${importResult.error}). It's been left untouched — relaunch to try again.`,
+          `Couldn't import your existing data (${importResult.error}). Nothing was changed. Relaunch to try again.`,
         );
       } else {
         payload = importResult.data;
@@ -247,9 +247,7 @@ export async function boot(
         // below is safe — but tell the user their data couldn't be read rather
         // than discarding it silently.
         if (built.sourceUnreadable && importResult.imported === 0) {
-          setBootNotice(
-            "Found existing project data we couldn't read. It's been backed up but not imported — reach out if you need it recovered.",
-          );
+          setBootNotice("Found project data we couldn't read. It's backed up, not imported.");
         }
       }
     }

@@ -66,11 +66,7 @@ export function AppearanceSettings() {
 
   return (
     <>
-      <SettingsSection
-        title="App theme"
-        icon={PaletteIcon}
-        description="One color drives the whole surface — the neutral ladder, the accent, and every border is derived from it, so no theme can be unreadable. Move through the list to preview; Enter applies."
-      >
+      <SettingsSection title="App theme" icon={PaletteIcon}>
         <div className="overflow-hidden rounded-lg border border-border bg-background">
           <ThemePicker autoFocus={false} />
         </div>
@@ -79,15 +75,12 @@ export function AppearanceSettings() {
       <SettingsSection
         title="Terminal"
         icon={TerminalWindowIcon}
-        description="Volli layers its own settings on top of your Ghostty config and never edits that file. Anything set here wins; reverting hands the key back to Ghostty."
+        description="Layered over your Ghostty config. Volli never edits that file."
       >
         <TerminalThemeRow row={rows.theme} />
         <FontFamilyRow row={rows["font-family"]} />
         <FontSizeRow row={rows["font-size"]} />
-        <SettingsRow
-          label="Configuration files"
-          description="The overlay accepts any Ghostty key by hand — Volli preserves your lines and comments when it rewrites the keys it manages."
-        >
+        <SettingsRow label="Config files">
           <Button
             variant="outline"
             size="sm"
@@ -113,14 +106,14 @@ export function AppearanceSettings() {
 /** Reveal a config file in Finder; a missing path or a failed reveal toasts. */
 async function revealPath(path: string | null): Promise<void> {
   if (path === null) {
-    toastError("Volli hasn't resolved the terminal configuration yet.");
+    toastError("Terminal config hasn't loaded yet.");
     return;
   }
   try {
     const result = await window.api.fs.revealInFinder(path);
-    if (!result.ok) toastError(`Could not reveal ${path}: ${result.error}`);
+    if (!result.ok) toastError(`Couldn't reveal ${path}: ${result.error}`);
   } catch (error) {
-    toastError(`Could not reveal ${path}: ${errorMessage(error)}`);
+    toastError(`Couldn't reveal ${path}: ${errorMessage(error)}`);
   }
 }
 
@@ -170,7 +163,7 @@ function RevertButton({ settingKey }: { settingKey: TerminalSettingKey }) {
       variant="ghost"
       size="icon-xs"
       aria-label={`Revert ${settingKey}`}
-      title="Remove Volli's setting and inherit from Ghostty"
+      title="Revert to Ghostty"
       onClick={() => void writeOverlay({ [settingKey]: null })}
     >
       <ArrowCounterClockwiseIcon />
@@ -209,7 +202,7 @@ function TerminalThemeRow({ row }: { row: TerminalSettingRow }) {
   React.useEffect(() => endPreview, []);
 
   return (
-    <SettingsRow label={row.label} description="Ghostty's full theme catalog, bundled with Volli.">
+    <SettingsRow label={row.label}>
       <OriginBadge row={row} />
       <Popover
         open={open}
@@ -303,10 +296,7 @@ function FontFamilyRow({ row }: { row: TerminalSettingRow }) {
   }, [open, families]);
 
   return (
-    <SettingsRow
-      label={row.label}
-      description="Installed fonts, resolved the same way Ghostty resolves them."
-    >
+    <SettingsRow label={row.label}>
       <OriginBadge row={row} />
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
@@ -324,9 +314,9 @@ function FontFamilyRow({ row }: { row: TerminalSettingRow }) {
             <Command.List className="max-h-64 overflow-y-auto p-1">
               <Command.Empty className="py-6 text-center text-sm text-muted-foreground">
                 {families === null
-                  ? "Reading installed fonts…"
+                  ? "Loading fonts…"
                   : families.length === 0
-                    ? "No installed fonts available — set font-family in the overlay file."
+                    ? "No fonts found. Set font-family in the overlay file."
                     : "No matching font."}
               </Command.Empty>
               {(families ?? []).map((family) => (
@@ -402,7 +392,7 @@ function FontSizeRow({ row }: { row: TerminalSettingRow }) {
   };
 
   return (
-    <SettingsRow label={row.label} description="Points, as Ghostty measures them.">
+    <SettingsRow label={row.label}>
       <OriginBadge row={row} />
       <div className="flex items-center gap-1">
         <Button

@@ -259,7 +259,7 @@ describe("addProject", () => {
     await store.getState().addProject({ path: "/a", defaultName: "A" });
 
     expect(store.getState().projects).toEqual([]);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not add project: disk full", {
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Couldn't add project: disk full", {
       duration: 8000,
       closeButton: true,
     });
@@ -288,7 +288,7 @@ describe("addProject", () => {
     await store.getState().addProject({ path: "/a", defaultName: "A" });
 
     expect(store.getState().projects).toEqual([]);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not add project: ipc gone", {
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Couldn't add project: ipc gone", {
       duration: 8000,
       closeButton: true,
     });
@@ -462,7 +462,7 @@ describe("removeProject", () => {
     await store.getState().removeProject(only.id);
 
     expect(store.getState().projects).toEqual([only]);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not remove project: locked", {
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Couldn't remove project: locked", {
       duration: 8000,
       closeButton: true,
     });
@@ -481,7 +481,7 @@ describe("removeProject", () => {
     await store.getState().removeProject(only.id);
 
     expect(store.getState().projects).toEqual([only]);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not remove project: ipc gone", {
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Couldn't remove project: ipc gone", {
       duration: 8000,
       closeButton: true,
     });
@@ -596,7 +596,7 @@ describe("commitReorder", () => {
     await store.getState().commitReorder(previousOrder);
 
     expect(store.getState().projects).toEqual(previousOrder);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not save project order: conflict", {
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Couldn't save project order: conflict", {
       duration: 8000,
       closeButton: true,
     });
@@ -617,7 +617,7 @@ describe("commitReorder", () => {
     await store.getState().commitReorder(previousOrder);
 
     expect(store.getState().projects).toEqual(previousOrder);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not save project order: ipc gone", {
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Couldn't save project order: ipc gone", {
       duration: 8000,
       closeButton: true,
     });
@@ -691,7 +691,7 @@ describe("select", () => {
     store.getState().select(only.id);
     await flush();
 
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Could not save selected project: locked", {
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Couldn't save selected project: locked", {
       duration: 8000,
       closeButton: true,
     });
@@ -711,7 +711,7 @@ describe("select", () => {
     await flush();
 
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
-      "Could not save selected project: ipc gone",
+      "Couldn't save selected project: ipc gone",
       { duration: 8000, closeButton: true },
     );
   });

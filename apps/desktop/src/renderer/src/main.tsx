@@ -111,11 +111,11 @@ async function main() {
     void refreshPlanningData({ ticketId: event.ticketId, projectId: event.projectId })
       .then((refreshResult) => {
         if (!refreshResult.ok) {
-          toastError(`Could not refresh agent changes: ${refreshResult.error}`);
+          toastError(`Couldn't refresh agent changes: ${refreshResult.error}`);
         }
       })
       .catch((error: unknown) => {
-        toastError(`Could not refresh agent changes: ${errorMessage(error)}`);
+        toastError(`Couldn't refresh agent changes: ${errorMessage(error)}`);
       });
   });
 }

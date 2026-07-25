@@ -56,7 +56,7 @@ describe("refresh", () => {
 
     expect(store.getState().byTicket["t1"]).toBeUndefined();
     expect(toast.error).toHaveBeenCalledWith(
-      "Could not load sessions: db locked",
+      "Couldn't load sessions: db locked",
       expect.anything(),
     );
   });
@@ -68,10 +68,7 @@ describe("refresh", () => {
     await store.getState().refresh("t1");
 
     expect(store.getState().byTicket["t1"]).toBeUndefined();
-    expect(toast.error).toHaveBeenCalledWith(
-      "Could not load sessions: ipc gone",
-      expect.anything(),
-    );
+    expect(toast.error).toHaveBeenCalledWith("Couldn't load sessions: ipc gone", expect.anything());
   });
 });
 

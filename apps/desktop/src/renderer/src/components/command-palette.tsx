@@ -101,12 +101,7 @@ export function CommandPalette({ open, onOpenChange, onChangeTheme }: CommandPal
             <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-card text-muted-foreground">
               <PaletteIcon weight="fill" className="size-3.5" />
             </span>
-            <span className="flex min-w-0 flex-1 flex-col">
-              <span className="truncate text-sm font-medium">Change theme…</span>
-              <span className="truncate text-xs text-muted-foreground">
-                Preview as you move; Enter applies
-              </span>
-            </span>
+            <span className="min-w-0 flex-1 truncate text-sm font-medium">Change theme…</span>
             <span className="shrink-0 text-label text-muted-foreground">Appearance</span>
           </Command.Item>
         </Command.Group>

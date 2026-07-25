@@ -41,28 +41,24 @@ export function SettingsPage() {
       key: "general",
       label: "General",
       icon: GearSixIcon,
-      description: "Preferences that apply across every project.",
       content: <GeneralSettings />,
     },
     {
       key: "appearance",
       label: "Appearance",
       icon: PaletteIcon,
-      description: "App theme and terminal appearance, layered over your Ghostty config.",
       content: <AppearanceSettings />,
     },
     {
       key: "harness",
       label: "Harness Runtimes",
       icon: CpuIcon,
-      description: "CLI agent runtimes that boot a ticket's coding agent.",
       content: <HarnessRuntimesSettings />,
     },
     {
       key: "worktrees",
       label: "Worktrees",
       icon: TreeStructureIcon,
-      description: "Leftover worktree folders, across every project.",
       content: <WorktreesSettings />,
     },
   ];
@@ -73,7 +69,7 @@ export function SettingsPage() {
 /** General category: app-wide retention (Done-ticket archiving). */
 function GeneralSettings() {
   return (
-    <SettingsSection title="Retention" description="Applies to tickets in every project.">
+    <SettingsSection title="Retention">
       <DoneTtlField />
     </SettingsSection>
   );
@@ -109,12 +105,12 @@ function DoneTtlField() {
       .then((result) => {
         if (cancelled) return;
         if (result.ok) setDays(String(result.days));
-        else toastError(`Could not load the Done TTL: ${result.error}`);
+        else toastError(`Couldn't load the retention setting: ${result.error}`);
         setLoaded(true);
       })
       .catch((error: unknown) => {
         if (cancelled) return;
-        toastError(`Could not load the Done TTL: ${errorMessage(error)}`);
+        toastError(`Couldn't load the retention setting: ${errorMessage(error)}`);
         setLoaded(true);
       });
     return () => {
@@ -126,20 +122,20 @@ function DoneTtlField() {
     if (saving) return;
     const parsed = parseTtlDaysInput(days);
     if (parsed === null) {
-      toastError("The Done TTL must be a whole number of days, at least 1.");
+      toastError("Enter a whole number of days, at least 1.");
       return;
     }
     setSaving(true);
     try {
       const result = await window.api.retention.setTtlDays(parsed);
       if (!result.ok) {
-        toastError(`Could not save the Done TTL: ${result.error}`);
+        toastError(`Couldn't save the retention setting: ${result.error}`);
         return;
       }
       // Reflect the clamped, stored value main returns.
       setDays(String(result.days));
     } catch (error) {
-      toastError(`Could not save the Done TTL: ${errorMessage(error)}`);
+      toastError(`Couldn't save the retention setting: ${errorMessage(error)}`);
     } finally {
       setSaving(false);
     }
@@ -149,7 +145,7 @@ function DoneTtlField() {
     <SettingsRow
       label="Archive Done tickets after"
       htmlFor="done-ttl-days"
-      description="A ticket left in Done this many days with no open PR is offered for archive & clean, in every project. Defaults to 14 days."
+      description="Only tickets with no open PR."
     >
       <Input
         id="done-ttl-days"
@@ -181,9 +177,9 @@ function DoneTtlField() {
 function HarnessRuntimesSettings() {
   return (
     <SettingsSection
-      title="CLI agent runtimes"
+      title="Runtimes"
       icon={CpuIcon}
-      description="Manage CLI agent runtimes (Claude Code · Codex · Opencode · custom) — coming soon."
+      description="Custom commands and resume flags are coming soon."
     >
       {HARNESS_IDS.map((id) => (
         <SettingsRow key={id} label={HARNESS_LABELS[id]}>
@@ -222,9 +218,9 @@ function truncateMiddle(value: string, max = 56): string {
 async function revealOrphan(path: string): Promise<void> {
   try {
     const result = await window.api.fs.revealInFinder(path);
-    if (!result.ok) toastError(`Could not reveal in Finder: ${result.error}`);
+    if (!result.ok) toastError(`Couldn't reveal in Finder: ${result.error}`);
   } catch (error) {
-    toastError(`Could not reveal in Finder: ${errorMessage(error)}`);
+    toastError(`Couldn't reveal in Finder: ${errorMessage(error)}`);
   }
 }
 
@@ -248,13 +244,13 @@ function DirtyWorktreesList() {
     try {
       const result = await window.api.worktree.orphans(rescan ? { rescan: true } : {});
       if (!result.ok) {
-        toastError(`Could not check orphaned worktrees: ${result.error}`);
+        toastError(`Couldn't check orphaned worktrees: ${result.error}`);
         setState({ status: "error" });
         return;
       }
       setState({ status: "loaded", dirty: result.dirty });
     } catch (error) {
-      toastError(`Could not check orphaned worktrees: ${errorMessage(error)}`);
+      toastError(`Couldn't check orphaned worktrees: ${errorMessage(error)}`);
       setState({ status: "error" });
     }
   }, []);
@@ -269,14 +265,14 @@ function DirtyWorktreesList() {
     try {
       const result = await window.api.worktree.deleteOrphan(pendingDelete.path);
       if (!result.ok) {
-        toastError(`Could not delete worktree: ${result.error}`);
+        toastError(`Couldn't delete worktree: ${result.error}`);
         return;
       }
       setPendingDelete(null);
       // A delete invalidates the cached report, so this one re-sweeps.
       await load(true);
     } catch (error) {
-      toastError(`Could not delete worktree: ${errorMessage(error)}`);
+      toastError(`Couldn't delete worktree: ${errorMessage(error)}`);
     } finally {
       setDeleting(false);
     }
@@ -299,7 +295,7 @@ function DirtyWorktreesList() {
   return (
     <SettingsSection
       title="Orphaned worktrees"
-      description="Worktree folders with uncommitted work left over from a removed ticket, in any project — never deleted automatically."
+      description="Uncommitted work left behind by removed tickets. Never deleted automatically."
       action={refreshAction}
     >
       <div className="flex flex-col gap-1.5">
@@ -352,9 +348,8 @@ function DirtyWorktreesList() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete this worktree?</AlertDialogTitle>
             <AlertDialogDescription>
-              This permanently deletes{" "}
-              <span className="font-mono text-foreground">{pendingDelete?.path}</span> and any
-              uncommitted work inside it. This can't be undone.
+              Deletes <span className="font-mono text-foreground">{pendingDelete?.path}</span> and
+              the uncommitted work inside it. Can't be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

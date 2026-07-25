@@ -77,7 +77,7 @@ function rotate(): void {
   session = createResttyRuntimeSession();
   watching = false;
   // Surface it — silent recovery would leave truncated scrollback unexplained.
-  toast.warning("Display driver reset — terminals recovered, older scrollback trimmed");
+  toast.warning("Display driver reset. Terminals recovered, old scrollback trimmed.");
   for (const listener of rotationListeners) listener();
 }
 

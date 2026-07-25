@@ -20,12 +20,7 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from "@renderer/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle } from "@renderer/components/ui/dialog";
 import { cn } from "@renderer/lib/utils";
 import { useThemeStore, appliedTheme, type ThemeScope } from "@renderer/stores/theme";
 import { BUILTIN_THEMES } from "@renderer/theme/catalog";
@@ -185,7 +180,7 @@ export function ThemePicker({
       </div>
       <Command.List className="max-h-[min(420px,55vh)] overflow-y-auto p-2 [scrollbar-gutter:stable]">
         <Command.Empty className="py-8 text-center text-sm text-muted-foreground">
-          No themes match “{query}”.
+          No themes match.
         </Command.Empty>
         {groups.map((group) => (
           <Command.Group
@@ -228,12 +223,12 @@ export function ThemePickerDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         showCloseButton={false}
+        // The picker's own footer states the key bindings on screen; a
+        // description here would only repeat them into the a11y tree.
+        aria-describedby={undefined}
         className="top-[18%] max-w-[min(560px,calc(100vw-32px))] translate-y-0 gap-0 overflow-hidden p-0"
       >
         <DialogTitle className="sr-only">Change theme</DialogTitle>
-        <DialogDescription className="sr-only">
-          Preview themes as you move; press Enter to apply or Escape to revert.
-        </DialogDescription>
         <ThemePicker
           {...props}
           onCommitted={(theme) => {

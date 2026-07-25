@@ -66,14 +66,14 @@ export function RemoveWorktreeDialog({
       // toast, never a "discard work" offer whose force flag could destroy
       // exactly what the failure left unprotected.
       if (!result.error.startsWith(WORKTREE_DIRTY_REFUSAL_PREFIX)) {
-        toastError(`Could not remove worktree: ${result.error}`);
+        toastError(`Couldn't remove worktree: ${result.error}`);
         onOpenChange(false);
         return;
       }
       setDirtyReason(result.error);
       setStep("dirty");
     } catch (error) {
-      toastError(`Could not remove worktree: ${errorMessage(error)}`);
+      toastError(`Couldn't remove worktree: ${errorMessage(error)}`);
       onOpenChange(false);
     } finally {
       setPending(false);
@@ -89,9 +89,9 @@ export function RemoveWorktreeDialog({
         onOpenChange(false);
         return;
       }
-      toastError(`Could not remove worktree: ${result.error}`);
+      toastError(`Couldn't remove worktree: ${result.error}`);
     } catch (error) {
-      toastError(`Could not remove worktree: ${errorMessage(error)}`);
+      toastError(`Couldn't remove worktree: ${errorMessage(error)}`);
     } finally {
       setPending(false);
     }
@@ -105,9 +105,7 @@ export function RemoveWorktreeDialog({
             {step === "confirm" ? "Remove worktree?" : "Worktree has uncommitted work"}
           </AlertDialogTitle>
           <AlertDialogDescription>
-            {step === "confirm"
-              ? "The branch is kept — only the worktree directory is removed."
-              : dirtyReason}
+            {step === "confirm" ? "The branch is kept. Only the folder is removed." : dirtyReason}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

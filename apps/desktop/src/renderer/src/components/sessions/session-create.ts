@@ -96,7 +96,7 @@ function abandon(sessionId: string): void {
  * can't land, and the `finally` that clears `starting` — lives here exactly
  * once. `land` performs the surface-specific placement against FRESH store
  * state and returns whether it landed (false ⇒ the tab/source pane vanished
- * mid-flight, so abandon the orphaned PTY). `verb` fills `Could not ${verb}:`.
+ * mid-flight, so abandon the orphaned PTY). `verb` fills `Couldn't ${verb}:`.
  * `kickoff`/`resume` are mutually exclusive launch intents (only ticket
  * scopes ever pass either). Resolves the booted sessionId, or null on any
  * guard/failure.
@@ -121,7 +121,7 @@ async function bootSession(
       createRequest(scope, project.path, placement, kickoff, resume),
     );
     if (!result.ok) {
-      toastError(`Could not ${verb}: ${result.error}`);
+      toastError(`Couldn't ${verb}: ${result.error}`);
       return null;
     }
     getOrCreateEngine(result.sessionId);
@@ -137,7 +137,7 @@ async function bootSession(
     }
     return result.sessionId;
   } catch (error) {
-    toastError(`Could not ${verb}: ${errorMessage(error)}`);
+    toastError(`Couldn't ${verb}: ${errorMessage(error)}`);
     return null;
   } finally {
     useSessionsStore.getState().setStarting(id, false);

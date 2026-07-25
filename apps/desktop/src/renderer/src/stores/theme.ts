@@ -241,11 +241,11 @@ export function createThemeStore({
               // A theme read failure is not fatal — the shipped default is
               // already painted by globals.css — but it is still a failure the
               // user must see, or their chosen theme silently "resets".
-              toastError(`Could not load the theme: ${errorMessage(error)}`);
+              toastError(`Couldn't load the theme: ${errorMessage(error)}`);
               return;
             }
             if (!result.ok) {
-              toastError(`Could not load the theme: ${result.error}`);
+              toastError(`Couldn't load the theme: ${result.error}`);
               return;
             }
             accept(result.value);

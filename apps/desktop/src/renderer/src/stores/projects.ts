@@ -152,10 +152,10 @@ export function createProjectsStore(gateway: ProjectsGateway = defaultGateway) {
     gateway
       .setSelection(selectedProjectId)
       .then((result) => {
-        if (!result.ok) toastError(`Could not save selected project: ${result.error}`);
+        if (!result.ok) toastError(`Couldn't save selected project: ${result.error}`);
       })
       .catch((error: unknown) => {
-        toastError(`Could not save selected project: ${errorMessage(error)}`);
+        toastError(`Couldn't save selected project: ${errorMessage(error)}`);
       });
   }
 

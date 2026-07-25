@@ -108,7 +108,7 @@ export function TicketBodyEditor({
     <div className="flex flex-col gap-2">
       {conflict !== null && (
         <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-          <span>Changed elsewhere — autosave paused to avoid overwriting.</span>
+          <span>Changed elsewhere. Autosave paused.</span>
           <Button size="sm" variant="secondary" onClick={reload}>
             <ArrowClockwiseIcon />
             Reload

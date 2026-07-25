@@ -134,7 +134,7 @@ function friendlyGhMessage(failure: GhFailure): string {
     case "no-remote":
       return "No GitHub repository is configured for this worktree. Add a GitHub remote, then try again.";
     case "network":
-      return "Could not reach GitHub. Check your connection, then try again.";
+      return "Couldn't reach GitHub. Check your connection, then try again.";
     case "pr-exists":
       return "A pull request already exists for this branch, but its URL could not be read.";
     case "unknown":
@@ -220,7 +220,7 @@ export async function publishTicketBranch(
 
   // (e) create — needs a base. If none resolved, we can go no further.
   if (!identity.baseBranch) {
-    const message = "Could not resolve a base branch to open the pull request against.";
+    const message = "Couldn't resolve a base branch to open the pull request against.";
     recordFailure(deps, ticketId, "pr", message);
     return err(message);
   }

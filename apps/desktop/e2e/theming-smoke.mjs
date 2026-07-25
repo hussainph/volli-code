@@ -153,7 +153,9 @@ async function openTerminalThemeMenu(page) {
 async function openAppearanceSettings(page) {
   await page.getByRole("button", { name: "Settings", exact: true }).first().click();
   await page.getByRole("button", { name: "Appearance", exact: true }).click();
-  await page.getByText("Ghostty's full theme catalog", { exact: false }).first().waitFor();
+  // The pane is up once its terminal half has rendered; assert on the control
+  // itself rather than helper copy, which is free to be rewritten.
+  await terminalThemeTrigger(page).waitFor();
 }
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("volli-theming-smoke-");

@@ -267,14 +267,14 @@ export function ActiveSessions({ project }: { project: Project }) {
       .then((result) => {
         if (!sessionsFetch.isCurrent(token)) return;
         if (!result.ok) {
-          toastError(`Could not load active sessions: ${result.error}`);
+          toastError(`Couldn't load active sessions: ${result.error}`);
           return;
         }
         setRecords(result.sessions);
       })
       .catch((error: unknown) => {
         if (sessionsFetch.isCurrent(token))
-          toastError(`Could not load active sessions: ${errorMessage(error)}`);
+          toastError(`Couldn't load active sessions: ${errorMessage(error)}`);
       });
     return () => sessionsFetch.invalidate();
   }, [project.id, liveSignature, sessionsFetch]);
@@ -291,14 +291,14 @@ export function ActiveSessions({ project }: { project: Project }) {
       .then((result) => {
         if (!signalsFetch.isCurrent(token)) return;
         if (!result.ok) {
-          toastError(`Could not load session attention: ${result.error}`);
+          toastError(`Couldn't load session attention: ${result.error}`);
           return;
         }
         setEventsByTicket(signalsToEventsByTicket(result.signals));
       })
       .catch((error: unknown) => {
         if (signalsFetch.isCurrent(token))
-          toastError(`Could not load session attention: ${errorMessage(error)}`);
+          toastError(`Couldn't load session attention: ${errorMessage(error)}`);
       });
   }, [needsReviewIds, project.id, signalsFetch]);
 

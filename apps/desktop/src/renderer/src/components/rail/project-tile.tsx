@@ -36,9 +36,9 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
   async function revealInFinder() {
     try {
       const result = await window.api.fs.revealInFinder(project.path);
-      if (!result.ok) toastError(`Could not reveal in Finder: ${result.error}`);
+      if (!result.ok) toastError(`Couldn't reveal in Finder: ${result.error}`);
     } catch (error) {
-      toastError(`Could not reveal in Finder: ${errorMessage(error)}`);
+      toastError(`Couldn't reveal in Finder: ${errorMessage(error)}`);
     }
   }
 

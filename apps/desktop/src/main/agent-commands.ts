@@ -932,7 +932,7 @@ export function createAgentCommandService(
           case "no-worktree":
             return failure(
               "INVALID_REQUEST",
-              `Ticket ${read.displayId} has no worktree yet — move it to Doing to create one.`,
+              `Ticket ${read.displayId} has no worktree. Move it to Doing to create one.`,
             );
           case "missing-on-disk":
             return failure(
@@ -971,7 +971,7 @@ export function createAgentCommandService(
           case "no-worktree":
             return failure(
               "INVALID_REQUEST",
-              `Ticket ${read.displayId} has no worktree yet — move it to Doing to create one.`,
+              `Ticket ${read.displayId} has no worktree. Move it to Doing to create one.`,
             );
           case "missing-on-disk":
             return failure(
