@@ -4,16 +4,19 @@
  * recorded base — committed, staged, unstaged, and untracked together.
  *
  * Comparison base is resolve-and-stamp (no `base_sha` column):
- * {@link resolveComparisonRef} → concrete SHA at snapshot time → stamped into
- * `baseRevision`. Diffs use NUL-delimited (`-z`) output and explicit rename
- * detection (`-M`) so paths with spaces/quotes/Unicode and renames parse safely.
+ * {@link resolveChangeSetBaseRevision} → the MERGE BASE of the comparison ref
+ * and HEAD at snapshot time → stamped into `baseRevision`, then diffed two-dot
+ * against the working tree. Measuring from the ref's tip instead would fold
+ * everything that landed on the base after the fork into the ticket's own
+ * outcome. Diffs use NUL-delimited (`-z`) output and explicit rename detection
+ * (`-M`) so paths with spaces/quotes/Unicode and renames parse safely.
  */
 import { createHash } from "node:crypto";
 import { isAbsolute, normalize, sep } from "node:path";
 
 import type { ChangeSetFile, ChangeSetFileStatus, ChangeSetSnapshot } from "@volli/shared";
 
-import { resolveComparisonRef } from "./comparison-ref";
+import { resolveChangeSetBaseRevision } from "./comparison-ref";
 import { stderrOf } from "./git";
 import { err, ok, type RunGit, type WorktreeResult } from "./types";
 
@@ -61,13 +64,12 @@ export function changeSetSnapshot(
     return err("No base branch is known for this worktree, so its Change Set cannot be computed.");
   }
   try {
-    const comparisonRef = resolveComparisonRef(git, input.worktreePath, input.baseBranch);
-    if (!comparisonRef) {
+    const baseRevision = resolveChangeSetBaseRevision(git, input.worktreePath, input.baseBranch);
+    if (!baseRevision) {
       return err(
         "No base branch is known for this worktree, so its Change Set cannot be computed.",
       );
     }
-    const baseRevision = git(["rev-parse", comparisonRef], input.worktreePath).trim();
     const headRevision = git(["rev-parse", "HEAD"], input.worktreePath).trim();
 
     const nameStatusOut = git(

@@ -32,3 +32,37 @@ export function resolveComparisonRef(
     return baseBranch;
   }
 }
+
+/**
+ * The concrete SHA a Change Set is stamped against: the MERGE BASE of the
+ * comparison ref and HEAD, never the ref's tip.
+ *
+ * The Change Set answers "what has this ticket done", so it must be measured
+ * from where the branch forked. Stamping the tip instead makes every commit
+ * that landed on the base AFTER the fork show up as the ticket's own inverted
+ * work — a file someone else added reads as Deleted, one they deleted reads as
+ * Added — and the counts silently include the whole rest of the team's day.
+ * (Tip is still the right operand for behind-base, which asks the opposite
+ * question: how far the base has moved past us.)
+ *
+ * `merge-base` needs two reachable commits, so it fails in a fresh repo with no
+ * HEAD commit or when the base ref is unrelated history. There the ref's tip is
+ * the only answer available and is strictly better than failing the whole
+ * snapshot — diffs stay honest for the common case and degrade to the old
+ * behaviour in the pathological one.
+ */
+export function resolveChangeSetBaseRevision(
+  git: RunGit,
+  cwd: string,
+  baseBranch: string | null,
+): string | null {
+  const comparisonRef = resolveComparisonRef(git, cwd, baseBranch);
+  if (!comparisonRef) return null;
+  try {
+    const mergeBase = git(["merge-base", comparisonRef, "HEAD"], cwd).trim();
+    if (mergeBase.length > 0) return mergeBase;
+  } catch {
+    // Fall through to the tip — see the unrelated-history / no-HEAD cases above.
+  }
+  return git(["rev-parse", comparisonRef], cwd).trim();
+}

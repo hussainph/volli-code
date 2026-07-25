@@ -27,7 +27,11 @@ function runRepoGit(cwd: string, args: readonly string[]): string {
   });
 }
 
-/** Scripted git that resolves local `main` and returns the given NUL payloads. */
+/**
+ * Scripted git that resolves local `main` and returns the given NUL payloads.
+ * The merge base (`basesha`) and `main`'s tip (`tipsha`) are deliberately
+ * DIFFERENT so every assertion on `baseRevision` proves which one was stamped.
+ */
 function scriptedChangeSetGit(opts: {
   nameStatus?: string;
   numstat?: string;
@@ -35,7 +39,8 @@ function scriptedChangeSetGit(opts: {
 }): ReturnType<typeof scriptedGit> {
   return scriptedGit((args) => {
     if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no such ref");
-    if (args[0] === "rev-parse" && args[1] === "main") return "basesha\n";
+    if (args[0] === "merge-base") return "basesha\n";
+    if (args[0] === "rev-parse" && args[1] === "main") return "tipsha\n";
     if (args[0] === "rev-parse" && args[1] === "HEAD") return "headsha\n";
     if (args[0] === "diff" && args.includes("--name-status")) return opts.nameStatus ?? "";
     if (args[0] === "diff" && args.includes("--numstat")) return opts.numstat ?? "";
@@ -43,6 +48,42 @@ function scriptedChangeSetGit(opts: {
     return "";
   });
 }
+
+describe("changeSetSnapshot — merge-base stamping", () => {
+  it("stamps the merge base and diffs both reads against it, never the base tip", () => {
+    const { git, calls } = scriptedChangeSetGit({});
+
+    const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.baseRevision).toBe("basesha");
+    expect(calls.some((c) => c.args[0] === "merge-base")).toBe(true);
+
+    const diffs = calls.filter((c) => c.args[0] === "diff");
+    expect(diffs).toHaveLength(2);
+    for (const diff of diffs) {
+      expect(diff.args).toContain("basesha");
+      expect(diff.args).not.toContain("tipsha");
+    }
+  });
+
+  it("falls back to the comparison ref tip when merge-base cannot be computed", () => {
+    const { git } = scriptedGit((args) => {
+      if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no such ref");
+      if (args[0] === "merge-base") throw new GitError("failed", "fatal: no merge base", args);
+      if (args[0] === "rev-parse" && args[1] === "main") return "tipsha\n";
+      if (args[0] === "rev-parse" && args[1] === "HEAD") return "headsha\n";
+      return "";
+    });
+
+    const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.baseRevision).toBe("tipsha");
+  });
+});
 
 describe("changeSetSnapshot — clean worktree", () => {
   it("stamps resolved base and HEAD SHAs with an empty file list", () => {
@@ -322,7 +363,7 @@ describe("changeSetSnapshot — failures", () => {
   it("surfaces real git stderr when a read fails", async () => {
     const { git } = scriptedGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no such ref");
-      if (args[0] === "rev-parse" && args[1] === "main") {
+      if (args[0] === "merge-base" || (args[0] === "rev-parse" && args[1] === "main")) {
         throw new GitError("failed", "fatal: bad object main", args);
       }
       return "";
@@ -508,6 +549,41 @@ describe("changeSetSnapshot — real git repository", () => {
     // Status still dirty after the base read (prove we didn't checkout).
     const status = runRepoGit(dir, ["status", "--porcelain"]);
     expect(status.length).toBeGreaterThan(0);
+  });
+
+  it("ignores commits that landed on the base after the fork", () => {
+    const dir = makeRepo();
+
+    runRepoGit(dir, ["checkout", "-b", "ticket"]);
+    writeFileSync(join(dir, "ticket-work.ts"), "ticket work\n");
+    runRepoGit(dir, ["add", "ticket-work.ts"]);
+    runRepoGit(dir, ["commit", "-q", "-m", "ticket work"]);
+
+    // Someone else moves main forward AFTER the fork: a new file and a deletion.
+    // Measured from main's tip these invert into the ticket's own outcome — the
+    // teammate's addition reads as Deleted, their deletion reads as Added.
+    runRepoGit(dir, ["checkout", "-q", "main"]);
+    writeFileSync(join(dir, "teammate.ts"), "not ours\n");
+    runRepoGit(dir, ["add", "teammate.ts"]);
+    runRepoGit(dir, ["rm", "-q", "keep.ts"]);
+    runRepoGit(dir, ["commit", "-q", "-m", "teammate work"]);
+    runRepoGit(dir, ["checkout", "-q", "ticket"]);
+
+    const result = changeSetSnapshot(runGitCapturing, {
+      worktreePath: dir,
+      baseBranch: "main",
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.files.map((f) => [f.path, f.status])).toEqual([
+      ["ticket-work.ts", "added"],
+    ]);
+    expect(result.value.insertions).toBe(1);
+    expect(result.value.deletions).toBe(0);
+    // The stamp is the fork point, not main's tip.
+    expect(result.value.baseRevision).toBe(runRepoGit(dir, ["merge-base", "main", "HEAD"]).trim());
+    expect(result.value.baseRevision).not.toBe(runRepoGit(dir, ["rev-parse", "main"]).trim());
   });
 
   it("marks a real merge conflict as conflicted relative to the base", () => {

@@ -24,7 +24,7 @@ import { displayTicketId, type ChangeSetSnapshot, type DiffStat } from "@volli/s
 import { getProjectById } from "../db/projects-repo";
 import { getTicketRow } from "../db/tickets-repo";
 import { changeSetSnapshot, readChangeSetBaseFile, type ChangeSetBaseFile } from "./change-set";
-import { resolveComparisonRef } from "./comparison-ref";
+import { resolveChangeSetBaseRevision } from "./comparison-ref";
 import { diffStat, type DiffMode } from "./diff";
 import { stderrOf } from "./git";
 import { getWorktreeStatus, type WorktreeStatusReport } from "./status";
@@ -199,9 +199,10 @@ export function readWorktreeChangeSet(
 
 /**
  * Reads one path at the ticket Change Set's stamped base revision. Resolves
- * the same identity/disk checks as the other read verbs, resolve-and-stamps
- * the comparison base (same as {@link changeSetSnapshot}), then runs
- * {@link readChangeSetBaseFile} without mutating the checkout.
+ * the same identity/disk checks as the other read verbs, then resolves the base
+ * through the very same {@link resolveChangeSetBaseRevision} the snapshot uses —
+ * the two must agree on the merge base, or the diff a caller renders would be
+ * taken against a revision the Change Set never measured.
  */
 export function readWorktreeBaseFile(
   deps: WorktreeReadDeps,
@@ -220,15 +221,19 @@ export function readWorktreeBaseFile(
   }
   let baseRevision: string;
   try {
-    const comparisonRef = resolveComparisonRef(deps.git, target.worktreePath, target.baseBranch);
-    if (!comparisonRef) {
+    const resolvedBase = resolveChangeSetBaseRevision(
+      deps.git,
+      target.worktreePath,
+      target.baseBranch,
+    );
+    if (!resolvedBase) {
       return {
         kind: "base-read-error",
         displayId: target.displayId,
         error: "No base branch is known for this worktree, so its Change Set cannot be computed.",
       };
     }
-    baseRevision = deps.git(["rev-parse", comparisonRef], target.worktreePath).trim();
+    baseRevision = resolvedBase;
   } catch (caught) {
     return { kind: "base-read-error", displayId: target.displayId, error: stderrOf(caught) };
   }
