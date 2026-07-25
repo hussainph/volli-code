@@ -205,3 +205,38 @@ export function renderFileRefChips(input: {
   }
   return { decorations, chips };
 }
+
+/** The result of creating an artifact from the picker — `api.files.createArtifact`'s shape. */
+export type CreateArtifactResult = { ok: true; relPath: string } | { ok: false; error: string };
+
+/**
+ * The host-supplied hooks the `@file` layer needs. Held behind an accessor by
+ * the editor (latest-callback pattern) so an index refresh or a callback
+ * identity change never forces the editor to remount.
+ */
+export interface FileRefsConfig {
+  /** The current cached project file index — chip resolution and picker ranking. */
+  getIndex(): readonly IndexedFile[];
+  /** Kick a cache-gated background refresh; invoked when the picker opens. */
+  refreshIndex(): void;
+  /** Open (or focus) a file tab for a clicked chip / freshly created artifact. */
+  onOpenFile(relPath: string): void;
+  /** Create a templated `.md` artifact for the "Create artifact" picker row. */
+  createArtifact(name: string): Promise<CreateArtifactResult>;
+}
+
+/**
+ * What to actually insert at the caret for a ref the user picked from outside
+ * the editor (the composer's paperclip).
+ *
+ * A space is prepended when the caret is pressed up against a word, because
+ * `parseFileRefs` only recognises an `@` at a ref boundary — start-of-text,
+ * whitespace, or `(`. Without it the insert would look like it worked and then
+ * never resolve, which is the failure mode this whole grammar is built to
+ * avoid. `(` is excluded because it is already a boundary: `(@a.md)` parses.
+ */
+export function refInsertion(input: { precedingChar: string; text: string }): string {
+  const { precedingChar } = input;
+  const needsSpace = precedingChar !== "" && !/\s/.test(precedingChar) && precedingChar !== "(";
+  return needsSpace ? ` ${input.text}` : input.text;
+}

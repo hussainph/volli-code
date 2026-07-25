@@ -1,10 +1,15 @@
 import type { IndexedFile } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
-import { fileRefTokenAt, rankFileRefCompletions, renderFileRefChips } from "./file-refs";
+import {
+  fileRefTokenAt,
+  rankFileRefCompletions,
+  refInsertion,
+  renderFileRefChips,
+} from "./file-refs";
 
 function indexed(relPath: string, artifact = false): IndexedFile {
-  return { relPath, artifact };
+  return { relPath, kind: "other", artifact };
 }
 
 describe("fileRefTokenAt", () => {
@@ -147,5 +152,21 @@ describe("renderFileRefChips", () => {
     });
     expect(render.chips).toEqual([]);
     expect(render.decorations).toEqual([]);
+  });
+});
+
+describe("refInsertion", () => {
+  it("inserts as-is at the start of the document", () => {
+    expect(refInsertion({ precedingChar: "", text: "@a.md" })).toBe("@a.md");
+  });
+
+  it("inserts as-is after whitespace or an opening paren — both are ref boundaries", () => {
+    expect(refInsertion({ precedingChar: " ", text: "@a.md" })).toBe("@a.md");
+    expect(refInsertion({ precedingChar: "\n", text: "@a.md" })).toBe("@a.md");
+    expect(refInsertion({ precedingChar: "(", text: "@a.md" })).toBe("@a.md");
+  });
+
+  it("opens a boundary when the caret is pressed against a word", () => {
+    expect(refInsertion({ precedingChar: "e", text: "@a.md" })).toBe(" @a.md");
   });
 });
