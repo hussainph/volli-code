@@ -8,6 +8,25 @@ import { changeSetSnapshot, readChangeSetBaseFile } from "./change-set";
 import { GitError, runGitCapturing } from "./git";
 import { scriptedGit } from "./scripted-git";
 
+/** Join NUL-terminated git -z fields without octal-escape hazards (`\03` ≠ NUL+"3"). */
+function z(...fields: string[]): string {
+  return fields.length === 0 ? "" : `${fields.join("\0")}\0`;
+}
+
+function runRepoGit(cwd: string, args: readonly string[]): string {
+  return execFileSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: "Volli Test",
+      GIT_AUTHOR_EMAIL: "test@volli.local",
+      GIT_COMMITTER_NAME: "Volli Test",
+      GIT_COMMITTER_EMAIL: "test@volli.local",
+    },
+  });
+}
+
 /** Scripted git that resolves local `main` and returns the given NUL payloads. */
 function scriptedChangeSetGit(opts: {
   nameStatus?: string;
@@ -146,8 +165,8 @@ describe("changeSetSnapshot — renames, binaries, additions, deletions", () => 
 
   it("classifies additions and deletions", () => {
     const { git } = scriptedChangeSetGit({
-      nameStatus: "A\0src/new.ts\0D\0src/gone.ts\0",
-      numstat: "4\t0\tsrc/new.ts\0" + "0\t3\tsrc/gone.ts\0",
+      nameStatus: z("A", "src/new.ts", "D", "src/gone.ts"),
+      numstat: z("4\t0\tsrc/new.ts", "0\t3\tsrc/gone.ts"),
     });
 
     const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
@@ -204,9 +223,9 @@ describe("changeSetSnapshot — unified outcome", () => {
   it("lists committed, dirty, and untracked outcomes together in one snapshot", () => {
     // Simulates: a committed add (relative to base), a dirty modify, and an untracked file.
     const { git } = scriptedChangeSetGit({
-      nameStatus: "A\0src/committed.ts\0M\0src/dirty.ts\0",
-      numstat: "5\t0\tsrc/committed.ts\0" + "3\t1\tsrc/dirty.ts\0",
-      status: "? untracked.txt\0",
+      nameStatus: z("A", "src/committed.ts", "M", "src/dirty.ts"),
+      numstat: z("5\t0\tsrc/committed.ts", "3\t1\tsrc/dirty.ts"),
+      status: z("? untracked.txt"),
     });
 
     const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
@@ -319,32 +338,18 @@ describe("changeSetSnapshot — real git repository", () => {
     }
   });
 
-  function git(cwd: string, args: readonly string[]): string {
-    return execFileSync("git", args, {
-      cwd,
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        GIT_AUTHOR_NAME: "Volli Test",
-        GIT_AUTHOR_EMAIL: "test@volli.local",
-        GIT_COMMITTER_NAME: "Volli Test",
-        GIT_COMMITTER_EMAIL: "test@volli.local",
-      },
-    });
-  }
-
   function makeRepo(): string {
     const dir = mkdtempSync(join(tmpdir(), "volli-changeset-"));
     tempDirs.push(dir);
-    git(dir, ["init", "-q"]);
+    runRepoGit(dir, ["init", "-q"]);
     // Ensure the default branch is `main` regardless of the host's init.defaultBranch.
-    git(dir, ["checkout", "-b", "main"]);
+    runRepoGit(dir, ["checkout", "-b", "main"]);
     writeFileSync(join(dir, "tracked.ts"), "line one\n");
     writeFileSync(join(dir, "keep.ts"), "keep\n");
     writeFileSync(join(dir, "rename-me.ts"), "rename body\n");
     writeFileSync(join(dir, "delete-me.ts"), "delete me\n");
-    git(dir, ["add", "."]);
-    git(dir, ["commit", "-q", "-m", "base"]);
+    runRepoGit(dir, ["add", "."]);
+    runRepoGit(dir, ["commit", "-q", "-m", "base"]);
     return dir;
   }
 
@@ -352,21 +357,21 @@ describe("changeSetSnapshot — real git repository", () => {
     const dir = makeRepo();
 
     // Committed change on a branch (relative to main / base).
-    git(dir, ["checkout", "-b", "ticket"]);
+    runRepoGit(dir, ["checkout", "-b", "ticket"]);
     writeFileSync(join(dir, "tracked.ts"), "line one\nline two\n");
-    git(dir, ["add", "tracked.ts"]);
-    git(dir, ["commit", "-q", "-m", "commit change"]);
+    runRepoGit(dir, ["add", "tracked.ts"]);
+    runRepoGit(dir, ["commit", "-q", "-m", "commit change"]);
 
     // Staged modify.
     writeFileSync(join(dir, "keep.ts"), "keep\nstaged\n");
-    git(dir, ["add", "keep.ts"]);
+    runRepoGit(dir, ["add", "keep.ts"]);
 
     // Unstaged further modify of the committed file.
     writeFileSync(join(dir, "tracked.ts"), "line one\nline two\nline three\n");
 
     // Rename (staged) + delete (staged).
-    git(dir, ["mv", "rename-me.ts", "renamed.ts"]);
-    git(dir, ["rm", "-q", "delete-me.ts"]);
+    runRepoGit(dir, ["mv", "rename-me.ts", "renamed.ts"]);
+    runRepoGit(dir, ["rm", "-q", "delete-me.ts"]);
 
     // Untracked with space + Unicode; binary untracked.
     writeFileSync(join(dir, "my notes 日本語.txt"), "untracked\n");
@@ -374,7 +379,7 @@ describe("changeSetSnapshot — real git repository", () => {
 
     // Tracked binary addition (numstat emits -/-).
     writeFileSync(join(dir, "asset.bin"), Buffer.from([0x00, 0x01, 0xff]));
-    git(dir, ["add", "asset.bin"]);
+    runRepoGit(dir, ["add", "asset.bin"]);
 
     const result = changeSetSnapshot(runGitCapturing, {
       worktreePath: dir,
@@ -418,7 +423,7 @@ describe("changeSetSnapshot — real git repository", () => {
     expect(readFileSync(join(dir, "tracked.ts"))).toEqual(before);
 
     // Status still dirty after the base read (prove we didn't checkout).
-    const status = git(dir, ["status", "--porcelain"]);
+    const status = runRepoGit(dir, ["status", "--porcelain"]);
     expect(status.length).toBeGreaterThan(0);
   });
 });
