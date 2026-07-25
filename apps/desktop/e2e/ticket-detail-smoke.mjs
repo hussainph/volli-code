@@ -13,11 +13,14 @@
  *      of leaving the ticket stranded open.
  *   2. Title edit   — click-to-edit the heading, Enter commits + renders, and
  *      the board card shows the new title after Escape-back.
- *   3. Body editor  — an always-mounted CodeMirror 6 live-preview editor
- *      (`.cm-editor`/contenteditable `.cm-content`, no textarea, no click-to-edit
- *      flip). Typed markdown renders in place (`.cm-md-h1` with the `#` hidden
- *      off-line, `.cm-md-code`); the `#` REVEALS when the caret lands on the
- *      heading line; edits autosave (debounce + blur-flush) to SQLite.
+ *   3. Body editor  — an always-mounted Monaco DOCUMENT MODE editor (CONCEPT
+ *      #49/#60: `data-monaco-status="ready"`, editable, no textarea, no
+ *      click-to-edit flip). Typed markdown renders in place (`volli-md-h1` with
+ *      the `#` COLLAPSED off-line, `volli-md-code`); the `#` REVEALS when the
+ *      caret lands on the heading line; edits autosave (debounce + blur-flush)
+ *      to SQLite as canonical Markdown. Because Monaco has no
+ *      `Decoration.replace`, "collapsed" is asserted through computed style —
+ *      `textContent` still returns `display:none` text (see `readDocumentLine`).
  *   4. Activity     — consecutive events BUNCH into one row fronted by the
  *      highest-signal event ("created the ticket") with a "+N more" caret BEFORE
  *      the timestamp; expanding reveals the indented `renamed to "…"` one-liner.
@@ -94,11 +97,18 @@ import { promisify } from "node:util";
 import { _electron } from "playwright-core";
 
 // This probe predates smoke-kit and keeps its own launch/harness scaffolding,
-// but two pieces are shared: the Monaco reader (how THIS build is interrogated —
-// input surface, status/dirty contract, rendered lines — encoded once there, so
-// a change to Monaco's input strategy is a one-file fix) and `makeGitRepo` (the
-// project fixture must be a REAL repo, see the note on PROJECT_DIR below).
-import { makeGitRepo, readMonacoState } from "./lib/smoke-kit.mjs";
+// but the editor pieces are shared: the Monaco readers (how THIS build is
+// interrogated — input surface, status/dirty contract, rendered lines, and the
+// seen/collapsed split Document Mode needs — encoded once there, so a change to
+// Monaco's input strategy is a one-file fix) and `makeGitRepo` (the project
+// fixture must be a REAL repo, see the note on PROJECT_DIR below).
+import {
+  clickMonaco,
+  isMonacoEditable,
+  makeGitRepo,
+  readDocumentLine,
+  readMonacoState,
+} from "./lib/smoke-kit.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -375,31 +385,47 @@ function saveGuard(page) {
 }
 
 /**
- * Type an `@` query into the focused body editor and click the completion row
- * whose `.cm-completionLabel` matches `label`. The @-picker is the only UI path
+ * Type an `@` query into the focused body editor and click the Monaco suggest
+ * row whose rendered label is exactly `label`. The @-picker is the only UI path
  * that opens a ticket file tab, so check 12 goes through it rather than reaching
  * into the store. (Same driver as global-artifacts-smoke.)
+ *
+ * `.suggest-widget` is always in the DOM; `visible` is what marks it open.
+ * `.label-name` is matched rather than the row's text or `aria-label`, because
+ * those carry Monaco's kind suffix ("README.md, File") and because a
+ * `Create artifact "…"` row would otherwise substring-match a file's name.
  */
 async function pickCompletion(page, query, label) {
   await page.keyboard.type(query);
-  const tooltip = page.locator(".cm-tooltip-autocomplete");
-  await waitUntil(`completion popup for ${query}`, async () => (await tooltip.count()) === 1, {
+  const widget = page.locator(".suggest-widget.visible");
+  await waitUntil(`completion popup for ${query}`, async () => (await widget.count()) === 1, {
     timeout: 8000,
   });
-  const option = tooltip.locator(".cm-completionLabel", { hasText: label }).first();
+  const exact = new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
+  const option = widget
+    .locator(".monaco-list-row")
+    .filter({ has: page.locator(".label-name", { hasText: exact }) })
+    .first();
   await waitUntil(
     `completion option ${JSON.stringify(label)}`,
     async () => (await option.count()) >= 1,
   );
   await option.click();
-  await waitUntil("completion popup to close", async () => (await tooltip.count()) === 0, {
+  await waitUntil("completion popup to close", async () => (await widget.count()) === 0, {
     timeout: 8000,
   });
 }
 
-/** Park the caret on the doc's first line so a just-inserted @-token collapses into its chip. */
+/**
+ * Park the caret on the doc's first line, away from the just-inserted `@` token.
+ *
+ * Unlike CodeMirror's replace-widget chip, Monaco's chip is an inline class over
+ * the token itself and has no reveal rule — but a click on the chip is only a
+ * chip click when the caret is not already sitting in it, so this keeps the
+ * check exercising the real affordance.
+ */
 async function parkCaretOnFirstLine(page) {
-  await page.locator(".cm-content .cm-line").first().click();
+  await page.locator("[data-monaco-status] .view-line").first().click();
 }
 
 /**
@@ -618,29 +644,38 @@ async function main() {
     // ===================================================================
     await attempt(
       3,
-      "Body editor: contenteditable CM6 (no textarea); typed # renders styled with # hidden off-line + reveals on-caret; inline code; autosave persists",
+      "Body editor: always-mounted editable Monaco Document Mode (no textarea); typed # renders styled with # collapsed off-line + reveals on-caret; inline code; autosave persists canonical Markdown",
       async () => {
         await openTicketViaCard(page);
 
-        // The description surface is a contenteditable CM content div, not a textarea.
-        const descEl = await page.evaluate(() => {
-          const el = document.querySelector('[aria-label="Ticket description"]');
-          return el
-            ? {
-                tag: el.tagName,
-                ce: el.getAttribute("contenteditable"),
-                role: el.getAttribute("role"),
-              }
+        // Always-mounted and editable with no click-to-edit flip: the editor is
+        // read BEFORE anything is clicked. `isMonacoEditable` consults both our
+        // own read-only contract attribute and Monaco's RENDERED accessible name
+        // (either alone can lie — see smoke-kit).
+        const state = await waitUntil("body Document Mode editor to boot", async () => {
+          const current = await readMonacoState(page);
+          return current.status === "ready" && current.hasEditor && current.fallbacks === 0
+            ? current
             : null;
         });
+        // Monaco's only <textarea> is its permanently-readonly IME helper, so
+        // "no textarea" is asserted where it means something: nothing but the
+        // Monaco input surface carries the description's accessible name.
+        const descSurfaces = await page.evaluate(() =>
+          Array.from(document.querySelectorAll('[aria-label="Ticket description"]')).map((el) => ({
+            tag: el.tagName,
+            insideMonaco: el.closest(".monaco-editor") !== null,
+          })),
+        );
         const isLiveEditor =
-          descEl?.tag === "DIV" &&
-          descEl.ce === "true" &&
-          (await page.locator(".cm-editor").count()) >= 1;
+          isMonacoEditable(state) &&
+          state.editorAriaLabel === "Ticket description" &&
+          descSurfaces.length >= 1 &&
+          descSurfaces.every((el) => el.tag !== "TEXTAREA" && el.insideMonaco);
 
-        // Type markdown into the editor. Line 0 is a plain paragraph so the
+        // Type markdown into the editor. Line 1 is a plain paragraph so the
         // heading below renders collapsed even with the caret at the doc start.
-        await page.locator(".cm-content").click();
+        await clickMonaco(page);
         await page.keyboard.type(BODY_INTRO);
         await page.keyboard.press("Enter");
         await page.keyboard.press("Enter");
@@ -650,39 +685,42 @@ async function main() {
         await page.keyboard.type(BODY_CODE);
 
         // Caret sits at the end (code line). The heading line renders as a styled
-        // h1 with the `#` hidden; inline code renders too.
-        const headingHidden = await waitUntil("heading renders with # hidden", async () => {
-          if ((await page.locator(".cm-md-h1").count()) < 1) return false;
-          const text = (await page.locator(".cm-md-h1").first().textContent())?.trim();
-          return text === BODY_HEADING ? text : false;
+        // h1 with the `#` COLLAPSED — present in the DOM, zero-width on screen,
+        // which `textContent` alone cannot distinguish from "never projected".
+        const headingHidden = await waitUntil("heading renders with # collapsed", async () => {
+          const line = await readDocumentLine(page, BODY_HEADING);
+          if (line === null) return false;
+          return line.visible.trim() === BODY_HEADING &&
+            line.collapsed.includes("#") &&
+            line.classes.includes("volli-md-h1")
+            ? line
+            : false;
         });
-        const codeRendered = (await page.locator(".cm-md-code").count()) >= 1;
+        const codeLine = await readDocumentLine(page, "code");
+        const codeRendered = codeLine !== null && codeLine.classes.includes("volli-md-code");
 
         // Reveal: clicking the heading line places the caret on it and the `#`
         // delimiter reappears (Obsidian-style live preview).
-        await page.locator(".cm-md-h1").first().click();
+        await page.locator(".view-line").filter({ hasText: BODY_HEADING }).first().click();
         const headingRevealed = await waitUntil("heading reveals # on caret", async () => {
-          const text = (await page.locator(".cm-md-h1").first().textContent())?.trim();
-          return text?.startsWith("#") ? text : false;
+          const line = await readDocumentLine(page, BODY_HEADING);
+          if (line === null) return false;
+          return line.visible.trim().startsWith("#") && line.collapsed.trim() === "" ? line : false;
         });
 
-        // Autosave: blur (→ debounced flush) then confirm the body reached SQLite.
+        // Autosave: blur (→ debounced flush) then confirm the body reached SQLite
+        // as canonical Markdown, byte for byte.
         await blurToNeutral(page);
         const persisted = await waitUntil("body autosaved to SQLite", async () => {
           const ticket = await readTicket(page, TICKET_ID);
-          const body = ticket?.body ?? "";
-          return body.includes(`# ${BODY_HEADING}`) &&
-            body.includes("`code`") &&
-            body.includes(BODY_INTRO)
-            ? body
-            : null;
+          return ticket?.body === EXPECTED_BODY ? ticket.body : null;
         });
 
         const ok =
           isLiveEditor && !!headingHidden && codeRendered && !!headingRevealed && !!persisted;
         return {
           ok,
-          detail: `liveEditor=${isLiveEditor} hidden=${JSON.stringify(headingHidden)} code=${codeRendered} revealed=${JSON.stringify(headingRevealed)} persisted=${persisted === EXPECTED_BODY}`,
+          detail: `liveEditor=${isLiveEditor} (aria=${JSON.stringify(state.editorAriaLabel)} surfaces=${JSON.stringify(descSurfaces)}) hidden=${JSON.stringify(headingHidden)} code=${JSON.stringify(codeLine)} revealed=${JSON.stringify(headingRevealed)} persisted=${persisted === EXPECTED_BODY}`,
         };
       },
     );
@@ -1181,13 +1219,23 @@ async function main() {
         const docTabId = (await docTab(page).textContent())?.trim();
         const titleOk = (await page.locator("h1", { hasText: RENAMED_TITLE }).count()) === 1;
 
-        // Body markdown survived (rendered live on the default Doc tab; line-0
-        // paragraph keeps the heading collapsed with the caret at doc start).
+        // Body markdown survived: the SQLite row is byte-identical canonical
+        // Markdown AND Document Mode re-renders it (styled h1 with its `#` still
+        // collapsed, styled inline code) — the line-1 paragraph keeps the
+        // heading off-caret with the caret at doc start.
         const bodyOk = await waitUntil("persisted body render", async () => {
-          const h1 = await page.locator(".cm-md-h1").count();
-          const code = await page.locator(".cm-md-code").count();
+          const heading = await readDocumentLine(page, BODY_HEADING);
+          const code = await readDocumentLine(page, "code");
           const ticket = await readTicket(page, TICKET_ID);
-          return h1 >= 1 && code >= 1 && ticket?.body === EXPECTED_BODY;
+          return (
+            heading !== null &&
+            heading.classes.includes("volli-md-h1") &&
+            !heading.visible.includes("#") &&
+            heading.collapsed.includes("#") &&
+            code !== null &&
+            code.classes.includes("volli-md-code") &&
+            ticket?.body === EXPECTED_BODY
+          );
         });
 
         // Rail collapsed state persisted across restart (no rail rendered yet).
@@ -1278,12 +1326,18 @@ async function main() {
 
         // --- (a) open README.md as a file tab through a real @ref chip ---
         await docTab(page).click();
-        await page.locator(".cm-content").click();
+        await clickMonaco(page);
         await page.keyboard.press("Meta+ArrowDown"); // end of the body
         await page.keyboard.press("Enter");
         await pickCompletion(page, "@READ", README_NAME);
         await parkCaretOnFirstLine(page);
-        const chip = page.locator(`.cm-file-chip[data-file-ref="${README_NAME}"]`);
+        // The Monaco chip decorates the `@path` token in place rather than
+        // replacing it (global-artifacts decision #8), so the chip's own text IS
+        // the ref — there is no `data-file-ref` attribute to match on.
+        const chip = page
+          .locator(".volli-md-file-chip")
+          .filter({ hasText: `@${README_NAME}` })
+          .first();
         await waitUntil("README.md chip", async () => (await chip.count()) === 1);
         await chip.click();
 
