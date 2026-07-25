@@ -73,6 +73,7 @@ function FileTab({
   preview,
   dirty,
   active,
+  tabStop,
   onSelect,
   onPin,
   onClose,
@@ -84,6 +85,8 @@ function FileTab({
   preview: boolean;
   dirty: boolean;
   active: boolean;
+  /** This tab is the strip's single roving-tabindex entry point (see {@link FileTabStrip}). */
+  tabStop: boolean;
   onSelect(): void;
   onPin(): void;
   onClose(): void;
@@ -102,7 +105,7 @@ function FileTab({
           // close button's "Close <name>" and read doubled.
           aria-label={name}
           aria-selected={active}
-          tabIndex={active ? 0 : -1}
+          tabIndex={tabStop ? 0 : -1}
           onClick={onSelect}
           onDoubleClick={preview ? onPin : undefined}
           onKeyDown={(event) => {
@@ -207,6 +210,16 @@ export function FileTabStrip({
   // fresh array on most updates anyway, so a memo keyed on it would never hit.
   const labels = fileTabLabels(tabs.map((tab) => tab.relPath));
 
+  // Roving tabindex: exactly ONE tab is in the document's tab order, and the
+  // arrows move between them from there. It is normally the active tab — but a
+  // strip can be open with nothing active (nothing selected yet, or an
+  // activeRelPath that no longer names an open tab), and keying that solely off
+  // `active` would drop the whole strip out of the tab order and make it
+  // unreachable by keyboard. Fall back to the first tab so there is always an
+  // entry point.
+  const activeIndex = tabs.findIndex((tab) => tab.relPath === activeRelPath);
+  const tabStopIndex = activeIndex === -1 ? 0 : activeIndex;
+
   if (tabs.length === 0) return null;
 
   return (
@@ -227,6 +240,7 @@ export function FileTabStrip({
                 preview={!tab.pinned}
                 dirty={dirtyPaths.has(tab.relPath)}
                 active={tab.relPath === activeRelPath}
+                tabStop={index === tabStopIndex}
                 onSelect={() => onSelect(tab.relPath)}
                 onPin={() => onPin(tab.relPath)}
                 onClose={() => onClose(tab.relPath)}

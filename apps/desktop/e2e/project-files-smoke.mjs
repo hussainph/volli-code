@@ -43,11 +43,18 @@
  * wired into `vp test` and does NOT run in CI (CI minutes are rationed — see
  * CLAUDE.md). It is local proof for desktop-touching PRs.
  *
- *   Run:
+ *   Run (macOS ONLY — see below):
  *     vp run --filter @volli/desktop build   # produce dist/ + dist-electron/
  *     node apps/desktop/e2e/project-files-smoke.mjs
  *
- *   Requires: playwright-core (devDependency of @volli/desktop).
+ *   Requires: playwright-core (devDependency of @volli/desktop), and macOS.
+ *   Checks 5, 6 and 9 drive the ⌘↑ (cursorTop) and ⌘S (save) chords, which are
+ *   macOS keybindings — on Linux/Windows they resolve to nothing, so the edit
+ *   never lands and those checks would sit out their poll timeout instead of
+ *   reporting anything useful. (smoke-kit's ELECTRON path is a macOS
+ *   `Electron.app` bundle too, so every smoke here is macOS-bound anyway.) The
+ *   platform guard below turns that into an immediate, explanatory failure.
+ *
  *   Exit code is non-zero if any numbered check fails.
  */
 import { execFile } from "node:child_process";
@@ -58,15 +65,27 @@ import { promisify } from "node:util";
 import {
   assertProfileIsolated,
   createRunner,
+  isMonacoEditable,
   launch,
   makeGitRepo,
   makeScratch,
+  readMonacoState,
   seedProjects,
   sleep,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
 
 const execFileAsync = promisify(execFile);
+
+// Fail fast rather than half-run: checks 5, 6 and 9 type through ⌘↑ / ⌘S, which
+// only mean cursorTop/save on macOS. Bail before any scratch dir is allocated.
+if (process.platform !== "darwin") {
+  console.error(
+    `project-files-smoke is macOS-only (got platform "${process.platform}"): checks 5, 6 and 9 drive ` +
+      "the ⌘↑ (cursorTop) and ⌘S (save) keybindings, which do not exist on this platform.",
+  );
+  process.exit(1);
+}
 
 const { userDataDir, dbPath, scratch, cleanup } = await makeScratch("volli-project-files-smoke-");
 
@@ -141,44 +160,15 @@ function tabSignature(tabs) {
 }
 
 /**
- * Every mounted Monaco host plus the fallback signal. `hostCount` is the lazy-
- * restoration probe (check 8) and `fallbacks` is a hard failure signal anywhere
- * it appears — the degraded `<pre data-monaco-fallback="true">` means the real
- * editor never booted.
+ * Every mounted Monaco host plus the fallback signal — the shared
+ * {@link readMonacoState} reader in smoke-kit, which is where this build's
+ * Monaco interrogation (input surface, read-only contract, rendered
+ * aria-label) is encoded ONCE for every probe that opens an editor.
+ * `hostCount` is the lazy-restoration probe (check 8) and `fallbacks` is a hard
+ * failure signal anywhere it appears — the degraded
+ * `<pre data-monaco-fallback="true">` means the real editor never booted.
  */
-async function readMonaco(page) {
-  return page.evaluate(() => {
-    const hosts = Array.from(document.querySelectorAll("[data-monaco-status]"));
-    const host = hosts[0] ?? null;
-    const editor = host?.querySelector(".monaco-editor") ?? null;
-    // Monaco's input surface in this build is a `native-edit-context` div (the
-    // only <textarea> under .monaco-editor is the permanently-readonly IME
-    // helper, so its `readonly` attribute says nothing about the document).
-    // `textarea.inputarea` covers the older input strategy.
-    const input = editor?.querySelector(".native-edit-context, textarea.inputarea") ?? null;
-    return {
-      hostCount: hosts.length,
-      fallbacks: document.querySelectorAll("[data-monaco-fallback]").length,
-      status: host?.getAttribute("data-monaco-status") ?? null,
-      language: host?.getAttribute("data-monaco-language") ?? null,
-      worker: host?.getAttribute("data-monaco-worker") ?? null,
-      readOnly: host?.getAttribute("data-monaco-read-only") ?? null,
-      dirty: host?.getAttribute("data-monaco-dirty") ?? null,
-      saving: host?.getAttribute("data-monaco-saving") ?? null,
-      stale: host?.getAttribute("data-monaco-stale") ?? null,
-      hasEditor: editor !== null,
-      // The editor's RENDERED accessible name — `fileEditorAriaLabel` appends
-      // ", read-only" only for a read-only view, so this is the honest
-      // editability signal from Monaco's own DOM rather than from our props.
-      editorAriaLabel: input?.getAttribute("aria-label") ?? null,
-      // Monaco renders spaces as non-breaking spaces, so the rendered line text
-      // never string-matches source bytes until they are normalized back.
-      lines: Array.from(editor?.querySelectorAll(".view-line") ?? [])
-        .map((line) => (line.textContent ?? "").replace(/\u00a0/g, " "))
-        .join("\n"),
-    };
-  });
-}
+const readMonaco = readMonacoState;
 
 /**
  * Wait for the active tab's editor to boot into a usable Monaco. `needle`, when
@@ -349,11 +339,8 @@ async function main() {
         const showsContent = monaco.lines.includes("src app");
         // CONCEPT #49: a repository file is an explicit-save EDITABLE document,
         // so neither our own contract attribute nor Monaco's rendered
-        // accessible name may claim read-only.
-        const editable =
-          monaco.readOnly === "false" &&
-          monaco.editorAriaLabel !== null &&
-          !monaco.editorAriaLabel.endsWith(", read-only");
+        // accessible name may claim read-only (both signals, one predicate).
+        const editable = isMonacoEditable(monaco);
 
         const ok =
           previewed && active && noFallback && showsContent && editable && monaco.hostCount === 1;

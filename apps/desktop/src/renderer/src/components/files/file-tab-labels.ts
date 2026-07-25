@@ -10,6 +10,8 @@
  * strip order and gets one descriptor back per tab, in the same order.
  */
 
+import { baseNameOf } from "@volli/shared";
+
 /** One tab's rendered name plus the parent slice that separates it from its twins. */
 export interface FileTabLabel {
   relPath: string;
@@ -53,7 +55,7 @@ function disambiguatingDepth(group: readonly string[][]): number {
 export function fileTabLabels(relPaths: readonly string[]): FileTabLabel[] {
   const byName = new Map<string, string[]>();
   for (const relPath of relPaths) {
-    const name = relPath.slice(relPath.lastIndexOf("/") + 1);
+    const name = baseNameOf(relPath);
     const bucket = byName.get(name);
     if (bucket === undefined) byName.set(name, [relPath]);
     else bucket.push(relPath);
@@ -66,7 +68,7 @@ export function fileTabLabels(relPaths: readonly string[]): FileTabLabel[] {
   }
 
   return relPaths.map((relPath) => {
-    const name = relPath.slice(relPath.lastIndexOf("/") + 1);
+    const name = baseNameOf(relPath);
     const depth = depthByName.get(name);
     return {
       relPath,

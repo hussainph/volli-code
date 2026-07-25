@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -337,6 +338,20 @@ describe("readFile", () => {
     expect(result.content.dataUrl.startsWith("data:image/png;base64,")).toBe(true);
   });
 
+  it("returns an .svg as editable text, not a data URI", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "icon.svg"), '<svg viewBox="0 0 16 16"/>', "utf8");
+    const result = await readFsFile(project, null, "icon.svg");
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected a successful read");
+    expect(result.kind).toBe("other");
+    expect(result.content).toEqual({
+      type: "text",
+      text: '<svg viewBox="0 0 16 16"/>',
+      truncated: false,
+    });
+  });
+
   it("classifies a NUL-containing file as binary", async () => {
     const project = makeTempProjectDir();
     await writeFile(join(project, "data.bin"), Buffer.from([0x41, 0x00, 0x42]));
@@ -427,16 +442,24 @@ describe("writeFile", () => {
     expect(await readFile(join(project, "data.txt"))).toEqual(Buffer.from([0x41, 0x00, 0x42]));
   });
 
-  it.each([["logo.png"], ["diagram.svg"]])(
+  it.each([["logo.png"], ["shot.webp"], ["anim.gif"]])(
     "rejects an image-kind path (%j) by extension, before touching disk",
     async (relPath) => {
       const project = makeTempProjectDir();
-      await writeFile(join(project, relPath), "<svg/>", "utf8");
+      await writeFile(join(project, relPath), "not really an image", "utf8");
       const result = await writeFsFile(project, null, relPath, "clobber");
       expect(result).toEqual({ ok: false, error: "Images cannot be edited" });
-      expect(await readFile(join(project, relPath), "utf8")).toBe("<svg/>");
+      expect(await readFile(join(project, relPath), "utf8")).toBe("not really an image");
     },
   );
+
+  it("writes an .svg like any other source file — it is markup, not raster bytes", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "icon.svg"), "<svg/>", "utf8");
+    const result = await writeFsFile(project, null, "icon.svg", '<svg width="16"/>');
+    expect(result.ok).toBe(true);
+    expect(await readFile(join(project, "icon.svg"), "utf8")).toBe('<svg width="16"/>');
+  });
 
   it("rejects writing back a file that was served truncated (over the 1 MiB read cap)", async () => {
     const project = makeTempProjectDir();
@@ -445,6 +468,34 @@ describe("writeFile", () => {
     const result = await writeFsFile(project, null, "huge.md", "the truncated buffer");
     expect(result).toEqual({ ok: false, error: "File is too large to edit (over 1 MiB)" });
     expect((await stat(join(project, "huge.md"))).size).toBe(onDisk.length);
+  });
+
+  it("still allows editing a file exactly at the 1 MiB cap (over the cap, not at it, is refused)", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "exact.md"), "a".repeat(1024 * 1024), "utf8");
+    const result = await writeFsFile(project, null, "exact.md", "trimmed");
+    expect(result.ok).toBe(true);
+    expect(await readFile(join(project, "exact.md"), "utf8")).toBe("trimmed");
+  });
+
+  // The write guard NUL-sniffs a bounded leading window rather than re-reading
+  // the whole file on every autosave commit; a clean file past that window is
+  // still perfectly writable.
+  it("writes a text file larger than the binary-sniff window", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "big.ts"), `// ${"a".repeat(200 * 1024)}\n`, "utf8");
+    const result = await writeFsFile(project, null, "big.ts", "export {}\n");
+    expect(result.ok).toBe(true);
+    expect(await readFile(join(project, "big.ts"), "utf8")).toBe("export {}\n");
+  });
+
+  it("still refuses a file whose NUL sits deep inside the sniff window", async () => {
+    const project = makeTempProjectDir();
+    const bytes = Buffer.concat([Buffer.alloc(32 * 1024, 0x41), Buffer.from([0x00, 0x42])]);
+    await writeFile(join(project, "data.txt"), bytes);
+    const result = await writeFsFile(project, null, "data.txt", "clobber");
+    expect(result).toEqual({ ok: false, error: "Binary files cannot be edited" });
+    expect(await readFile(join(project, "data.txt"))).toEqual(bytes);
   });
 
   it("rejects incoming content past the 1 MiB cap without touching the file", async () => {
@@ -762,6 +813,31 @@ describe("FileWatchManager", () => {
     } satisfies FileChangedEvent);
   });
 
+  it("sends one final broadcast when the re-arm itself throws, instead of going silent", async () => {
+    const project = makeTempProjectDir();
+    const manager = new FileWatchManager(0);
+    const webContents = makeWebContents();
+    await watchFile(manager, webContents, project);
+
+    // The dir is still there, so the re-arm takes the synchronous rewire path —
+    // but arming fails outright (fd exhaustion). Torn down either way, the
+    // subscription owes the tab the same nudge the retry-exhausted path sends.
+    watchMock.mockImplementationOnce(() => {
+      throw new Error("EMFILE: too many open files");
+    });
+    watchCalls[0]?.watcher.emitError(new Error("boom"));
+
+    expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
+      projectId: "proj-1",
+      relPath: "notes.md",
+      source: "main",
+    } satisfies FileChangedEvent);
+    // Torn down: a subsequent unwatch is a harmless no-op.
+    expect(() =>
+      manager.unwatch(webContents as never, "proj-1", "ticket-1", "notes.md"),
+    ).not.toThrow();
+  });
+
   it("retries a vanished non-.volli watch dir, then tears down + sends one final broadcast", async () => {
     const project = makeTempProjectDir();
     const manager = new FileWatchManager(0);
@@ -871,14 +947,13 @@ describe("FileWatchManager", () => {
 
 // ---- IPC handler integration (real db + real temp project dirs) --------------
 
-function setupDbAndHandlers(): {
+function setupDbAndHandlers(projectPath: string = makeGitRepoDir()): {
   ctx: TestDb;
   projectId: string;
   ticketId: string;
   projectPath: string;
 } {
   const ctx = openTestDb();
-  const projectPath = makeGitRepoDir();
   const project = testProject({ path: projectPath });
   insertProject(ctx.db, project);
   const ticket = testTicket(project.id, { ticketNumber: 7 });
@@ -936,7 +1011,8 @@ describe("directory watch channels", () => {
       relPath: "",
     });
     expect(watched).toEqual({ ok: true });
-    expect(watchCalls.map((c) => c.dir)).toEqual([setup.projectPath]);
+    // Canonicalized (a temp dir on macOS already sits under a symlinked /var).
+    expect(watchCalls.map((c) => c.dir)).toEqual([realpathSync(setup.projectPath)]);
     // Exactly `(dir, listener)` — no `{ recursive: true }`, which would hydrate
     // the whole repo into one watcher (the explicit non-goal of issue #106).
     expect(watchMock.mock.calls[0]).toHaveLength(2);
@@ -948,6 +1024,75 @@ describe("directory watch channels", () => {
       projectId: setup.projectId,
       relPath: "",
     } satisfies DirChangedEvent);
+  });
+
+  // A project folder is whatever path the user picked, and picking a symlink to
+  // the real checkout is ordinary (`~/code/app` → an external volume). The root
+  // watch canonicalizes it; rejecting it as "Path is a symlink" would have
+  // killed live updates for the whole project.
+  it("watches the root of a project folder that is itself a symlink", async () => {
+    const real = makeGitRepoDir();
+    const link = join(makeTempProjectDir(), "project-link");
+    symlinkSync(real, link, "dir");
+    const setup = setupDbAndHandlers(link);
+    ctx = setup.ctx;
+    const webContents = makeWebContents();
+
+    const watched = await invoke<{ ok: boolean }>("volli:dir-watch", webContents, {
+      projectId: setup.projectId,
+      relPath: "",
+    });
+    expect(watched).toEqual({ ok: true });
+    expect(watchCalls.map((c) => c.dir)).toEqual([realpathSync(real)]);
+
+    // Deeper paths keep both safety layers: the symlinked root resolves through.
+    await writeFile(join(real, "README.md"), "# hi", "utf8");
+    expect(
+      await invoke<{ ok: boolean; error?: string }>("volli:dir-watch", makeWebContents(2), {
+        projectId: setup.projectId,
+        relPath: "README.md",
+      }),
+    ).toEqual({ ok: false, error: "Not a directory" });
+  });
+
+  it("reports a project folder that is gone when the root watch is armed", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    rmSync(setup.projectPath, { recursive: true, force: true });
+    const result = await invoke<{ ok: boolean; error?: string }>(
+      "volli:dir-watch",
+      makeWebContents(),
+      { projectId: setup.projectId, relPath: "" },
+    );
+    expect(result).toEqual({ ok: false, error: "Project folder was not found" });
+    expect(watchMock).not.toHaveBeenCalled();
+  });
+
+  // The root watch stays armed for the whole life of the sidebar tree, so a
+  // repo under an agent would otherwise re-list the root every debounce window
+  // purely from git's own bookkeeping — which the tree never shows.
+  it("ignores .git and deep node_modules churn, but not the node_modules row itself", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const webContents = makeWebContents();
+    await invoke("volli:dir-watch", webContents, { projectId: setup.projectId, relPath: "" });
+
+    vi.useFakeTimers();
+    watchCalls[0]?.cb("change", ".git");
+    watchCalls[0]?.cb("rename", ".git/index.lock");
+    watchCalls[0]?.cb("change", "node_modules/.package-lock.json");
+    vi.advanceTimersByTime(250);
+    expect(webContents.send).not.toHaveBeenCalled();
+
+    // The entry itself IS a visible row — installing/removing it must refresh.
+    watchCalls[0]?.cb("rename", "node_modules");
+    vi.advanceTimersByTime(250);
+    expect(webContents.send).toHaveBeenCalledTimes(1);
+
+    // A null filename is unfilterable, so it still broadcasts conservatively.
+    watchCalls[0]?.cb("rename", null);
+    vi.advanceTimersByTime(250);
+    expect(webContents.send).toHaveBeenCalledTimes(2);
   });
 
   it("rejects '.' as a spelling of the root — the empty string is the only one", async () => {

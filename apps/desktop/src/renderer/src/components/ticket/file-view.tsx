@@ -3,7 +3,6 @@ import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { baseNameOf, errorMessage, fileSavePolicy, type FileSource } from "@volli/shared";
 
-import { MonacoCodeView } from "@renderer/components/editor/monaco-code-view";
 import {
   MonacoFileEditor,
   type MonacoFileSaveResult,
@@ -14,7 +13,7 @@ import {
   type MarkdownFileRefs,
 } from "@renderer/components/editor/markdown-live-editor";
 import { Button } from "@renderer/components/ui/button";
-import { fileDocumentIdentity } from "@renderer/editor/document-identity";
+import { documentIdentityKey, fileDocumentIdentity } from "@renderer/editor/document-identity";
 import { toastError } from "@renderer/lib/toast";
 import { useDebouncedCallback } from "@renderer/lib/use-debounced-callback";
 
@@ -76,8 +75,9 @@ type LoadState =
  *  - `explicit` — everything else editable, REPOSITORY MARKDOWN INCLUDED: a
  *    Monaco source editor that writes only on ⌘S.
  *  - `read-only` — images, binary, and truncated reads (saving a capped prefix
- *    back would destroy everything past the cap): the Monaco peek, an inline
- *    image, or a Reveal-in-Finder stub.
+ *    back would destroy everything past the cap): the SAME Monaco source editor
+ *    with `readOnly` set (so a mid-draft flip past the cap keeps the editing
+ *    surface and the draft), an inline image, or a Reveal-in-Finder stub.
  *
  * Both editable paths are conflict-guarded by the on-disk mtime: each write
  * carries the last-seen mtime as `expectedMtime`, and disk moving under a dirty
@@ -333,6 +333,19 @@ export function FileView({
             disk.content.text === syncedRef.current
           ) {
             syncedMtimeRef.current = disk.mtime;
+            // The bytes are ours, but the MTIME moved. Push the fresh revision
+            // down anyway, because `syncedMtimeRef` is not the only conflict
+            // guard in play: the registry's `externalRevision` is what the
+            // tab-close guard writes with, and leaving it behind disk wedges
+            // that save on a stale `expectedMtime` while ⌘S here still
+            // succeeds. This cannot look like an external edit to the user —
+            // the content is identical, so `classifyExternalChange` reports
+            // "unchanged" and raises no banner, and `adoptCleanBaseline`
+            // advances `externalRevision` even over a dirty draft without
+            // touching the draft itself.
+            setState((previous) =>
+              previous.status === "code" ? { ...previous, revision: disk.mtime } : previous,
+            );
             return;
           }
           syncedRef.current = disk.content.text;
@@ -512,6 +525,18 @@ export function FileView({
   }
 
   if (state.status === "code") {
+    // ONE editor component for both source modes, editable or not. The
+    // read-only sibling (MonacoCodeView) acquires the same document under a
+    // `read-only` save policy, and a file that grows past the 1 MiB cap while
+    // its editor holds unsaved work flips `editable` false MID-DRAFT — swapping
+    // components there made the registry reject the policy change over a dirty
+    // document, and the caught error degraded the whole pane to the <pre>
+    // fallback with the draft stranded behind it. MonacoFileEditor already
+    // renders read-only faithfully (`planExplicitSave` refuses to write a
+    // truncated prefix back), so the surface simply stays put and keeps the
+    // draft. It also keeps the `:source` viewId to one view, rather than two
+    // that overwrite each other's remembered cursor.
+    const identity = fileDocumentIdentity({ projectId, ticketId, relPath, source: state.source });
     return (
       <div className="flex min-h-0 flex-1 flex-col gap-2 px-gutter py-4">
         {state.truncated && (
@@ -521,38 +546,23 @@ export function FileView({
           </div>
         )}
         <div className="min-h-0 flex-1 overflow-hidden rounded-md border border-border bg-background">
-          {state.editable ? (
-            <MonacoFileEditor
-              identity={fileDocumentIdentity({
-                projectId,
-                ticketId,
-                relPath,
-                source: state.source,
-              })}
-              value={state.text}
-              revision={state.revision}
-              viewId={`file:${projectId}:${ticketId ?? "main"}:${relPath}:source`}
-              ariaLabel={`${name} contents`}
-              readOnly={false}
-              onSave={saveSource}
-              onDirtyChange={handleSourceDirtyChange}
-              initialViewState={initialViewState}
-              onViewStateChange={onViewStateChange}
-            />
-          ) : (
-            <MonacoCodeView
-              identity={fileDocumentIdentity({
-                projectId,
-                ticketId,
-                relPath,
-                source: state.source,
-              })}
-              value={state.text}
-              revision={state.revision}
-              viewId={`file:${projectId}:${ticketId ?? "main"}:${relPath}:source`}
-              ariaLabel={`${name} contents`}
-            />
-          )}
+          <MonacoFileEditor
+            // The editor's own dirty/saving/stale/failure state is per-document,
+            // so a change of identity (a repo path that starts resolving from
+            // the ticket's worktree copy, or the reverse) has to remount it —
+            // exactly why this view itself is documented as `key={relPath}`.
+            key={documentIdentityKey(identity)}
+            identity={identity}
+            value={state.text}
+            revision={state.revision}
+            viewId={`file:${projectId}:${ticketId ?? "main"}:${relPath}:source`}
+            ariaLabel={`${name} contents`}
+            readOnly={!state.editable}
+            onSave={saveSource}
+            onDirtyChange={handleSourceDirtyChange}
+            initialViewState={initialViewState}
+            onViewStateChange={onViewStateChange}
+          />
         </div>
       </div>
     );

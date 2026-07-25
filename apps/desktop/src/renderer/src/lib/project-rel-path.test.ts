@@ -27,10 +27,16 @@ describe("toProjectRelPath", () => {
     expect(toProjectRelPath("/Users/me/repo", "/etc/passwd")).toBeNull();
   });
 
-  it("normalizes backslash separators to forward slashes", () => {
-    expect(toProjectRelPath("C:\\Users\\me\\repo", "C:\\Users\\me\\repo\\src\\index.ts")).toBe(
-      "src/index.ts",
-    );
+  it("returns null when the project path is empty", () => {
+    expect(toProjectRelPath("", "/Users/me/repo/src/index.ts")).toBeNull();
+    // A bare separator normalizes to the empty root and must be rejected too,
+    // or every absolute path on the machine would look "inside" the project.
+    expect(toProjectRelPath("/", "/Users/me/repo")).toBeNull();
+  });
+
+  it("keeps a backslash in a macOS filename instead of treating it as a separator", () => {
+    // `a\b.txt` at the repo root is one file, not `b.txt` inside `a/`.
+    expect(toProjectRelPath("/Users/me/repo", "/Users/me/repo/a\\b.txt")).toBe("a\\b.txt");
   });
 
   it("collapses repeated separators inside the relative remainder", () => {

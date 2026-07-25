@@ -551,6 +551,9 @@ describe("project file workspace", () => {
 
   it("setProjectFileViewState keeps one opaque view state per relPath, per project", () => {
     const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().pinProjectFile("project-a", "one.ts");
+    store.getState().pinProjectFile("project-a", "two.ts");
+    store.getState().pinProjectFile("project-b", "one.ts");
     store.getState().setProjectFileViewState("project-a", "one.ts", { cursor: 3 });
     store.getState().setProjectFileViewState("project-a", "two.ts", { cursor: 9 });
     store.getState().setProjectFileViewState("project-b", "one.ts", { cursor: 1 });
@@ -583,6 +586,33 @@ describe("project file workspace", () => {
     expect(store.getState().byProject["project-a"]?.projectFileViewStates).toEqual({
       "two.ts": { cursor: 9 },
     });
+  });
+
+  it("setProjectFileViewState ignores a path with no open tab, so a close cannot be undone", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().pinProjectFile("project-a", "one.ts");
+    store.getState().pinProjectFile("project-a", "two.ts");
+    store.getState().setProjectFileViewState("project-a", "one.ts", { cursor: 3 });
+    store.getState().closeProjectFile("project-a", "one.ts");
+
+    // The closing tab's editor unmounts AFTER the close and emits one last view
+    // state for the path it was showing. Accepting it would re-insert the entry
+    // the close just pruned, and it would then survive all session (only the
+    // rehydrate sanitizer prunes orphans) — the unbounded growth closeProjectFile
+    // exists to prevent.
+    const before = store.getState().byProject["project-a"];
+    store.getState().setProjectFileViewState("project-a", "one.ts", { cursor: 3 });
+    expect(store.getState().byProject["project-a"]).toBe(before);
+    expect(store.getState().byProject["project-a"]?.projectFileViewStates).toEqual({});
+
+    // A path that was never open is refused for the same reason.
+    store.getState().setProjectFileViewState("project-a", "never-opened.ts", { cursor: 1 });
+    expect(store.getState().byProject["project-a"]?.projectFileViewStates).toEqual({});
+
+    // And a project with no workspace record at all: there is no open tab to
+    // attach to, so this must not conjure the record into existence.
+    store.getState().setProjectFileViewState("unknown-project", "one.ts", { cursor: 1 });
+    expect(store.getState().byProject["unknown-project"]).toBeUndefined();
   });
 
   it("closeProjectFile leaves the record untouched for a file that is not open", () => {
@@ -740,6 +770,42 @@ describe("project file workspace persistence", () => {
       "src/one.ts": { scrollTop: 40 },
     });
     expect(store.getState().byProject["project-b"]?.projectFileViewStates).toEqual({});
+  });
+
+  it("keeps a persisted __proto__ key an own property instead of a prototype", () => {
+    const storage = createMemoryStorage();
+    // Computed keys (like JSON.parse) create OWN `__proto__` properties, so the
+    // key reaches the sanitizers' `Object.entries` loops and is assigned like
+    // any other. Onto an object literal that assignment hits Object.prototype's
+    // `__proto__` setter instead: the entry silently vanishes and the map's own
+    // prototype becomes whatever the persisted JSON said.
+    storage.setItem(
+      "volli:workspace",
+      JSON.stringify({
+        state: {
+          byProject: {
+            ["__proto__"]: { boardView: "list" },
+            "project-a": {
+              projectFiles: { tabs: [{ relPath: "__proto__", pinned: true }] },
+              projectFileViewStates: { ["__proto__"]: { scrollTop: 40 } },
+              ticketTabs: { ["__proto__"]: { files: ["a.ts"], active: "doc" } },
+            },
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    const store = createWorkspaceStore(storage);
+    const { byProject } = store.getState();
+    expect(Object.keys(byProject)).toContain("__proto__");
+    expect(Object.getPrototypeOf(byProject)).toBeNull();
+
+    const ui = byProject["project-a"];
+    expect(Object.keys(ui?.projectFileViewStates ?? {})).toEqual(["__proto__"]);
+    expect(Object.getPrototypeOf(ui?.projectFileViewStates)).toBeNull();
+    expect(Object.keys(ui?.ticketTabs ?? {})).toEqual(["__proto__"]);
+    expect(Object.getPrototypeOf(ui?.ticketTabs)).toBeNull();
   });
 });
 

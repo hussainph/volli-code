@@ -25,6 +25,10 @@
  *                      SQLite. (Driving the native folder picker isn't feasible
  *                      under Playwright; this is the established seeding path — see
  *                      board-smoke.mjs / global-artifacts-smoke.mjs.)
+ *   • readMonacoState()/isMonacoEditable() — the ONE encoding of how to
+ *                      interrogate this Monaco build (input surface, read-only
+ *                      contract, rendered aria-label), shared by every probe
+ *                      that opens an editor.
  *   • cardById()/columnCount() — the board DOM readers both composer probes need.
  *
  * These smokes are NOT wired into `vp test`; they need a display + the built app.
@@ -288,6 +292,79 @@ export async function readSeededProjects(page) {
     for (const p of boot.data.projects) byName[p.name] = p;
     return { projects: boot.data.projects, byName };
   });
+}
+
+// ---- Monaco DOM readers ----------------------------------------------------
+
+/**
+ * Read the mounted Monaco editor(s) straight out of the page. THE one place the
+ * smokes encode how to interrogate this Monaco build — both the Files workbench
+ * probe and the global-artifacts probe go through it, so an input-strategy
+ * change is a one-file fix instead of two copies with one silently stale.
+ *
+ * The `[data-monaco-status]` host attributes are OUR contract (what the app
+ * configured); `editorAriaLabel` is Monaco's own RENDERED accessible name (what
+ * the user actually gets). Editability assertions must consult both — see
+ * {@link isMonacoEditable}.
+ *
+ * Reads the FIRST host; `hostCount` is what a lazy-mount probe asserts on.
+ *
+ * @param {import("playwright-core").Page} page
+ */
+export async function readMonacoState(page) {
+  return page.evaluate(() => {
+    const hosts = Array.from(document.querySelectorAll("[data-monaco-status]"));
+    const host = hosts[0] ?? null;
+    const editor = host?.querySelector(".monaco-editor") ?? null;
+    // Monaco's input surface in this build is a `native-edit-context` div: the
+    // only <textarea> under .monaco-editor is the permanently-readonly IME
+    // helper, so ITS `readonly` attribute says nothing about the document (a
+    // `textarea[readonly]` assertion here silently tests nothing).
+    // `textarea.inputarea` covers the older input strategy.
+    const input = editor?.querySelector(".native-edit-context, textarea.inputarea") ?? null;
+    const fallbacks = Array.from(document.querySelectorAll("[data-monaco-fallback]"));
+    return {
+      hostCount: hosts.length,
+      // The degraded `<pre data-monaco-fallback="true">` means the real editor
+      // never booted — a hard failure signal anywhere it appears.
+      fallbacks: fallbacks.length,
+      fallbackTitle: fallbacks[0]?.getAttribute("title") ?? null,
+      status: host?.getAttribute("data-monaco-status") ?? null,
+      language: host?.getAttribute("data-monaco-language") ?? null,
+      worker: host?.getAttribute("data-monaco-worker") ?? null,
+      readOnly: host?.getAttribute("data-monaco-read-only") ?? null,
+      dirty: host?.getAttribute("data-monaco-dirty") ?? null,
+      saving: host?.getAttribute("data-monaco-saving") ?? null,
+      stale: host?.getAttribute("data-monaco-stale") ?? null,
+      hasEditor: editor !== null,
+      editorAriaLabel: input?.getAttribute("aria-label") ?? null,
+      text: editor?.textContent ?? "",
+      // Monaco renders spaces as non-breaking spaces, so rendered line text
+      // never string-matches source bytes until they are normalized back.
+      lines: Array.from(editor?.querySelectorAll(".view-line") ?? [])
+        .map((line) => (line.textContent ?? "").replace(/\u00a0/g, " "))
+        .join("\n"),
+    };
+  });
+}
+
+/**
+ * Is the read editor genuinely editable (CONCEPT #49's explicit-save document)?
+ *
+ * Two independent signals, because either alone can lie: our own
+ * `data-monaco-read-only` contract attribute must say "false", AND Monaco's
+ * rendered accessible name must not carry the ", read-only" suffix that
+ * `fileEditorAriaLabel` appends only for a read-only view. A `null` label means
+ * no input surface was found at all, which is a failure, not a pass.
+ *
+ * @param {Awaited<ReturnType<typeof readMonacoState>>} state
+ */
+export function isMonacoEditable(state) {
+  return (
+    state.readOnly === "false" &&
+    state.editorAriaLabel !== null &&
+    !state.editorAriaLabel.endsWith(", read-only")
+  );
 }
 
 // ---- board DOM readers -----------------------------------------------------

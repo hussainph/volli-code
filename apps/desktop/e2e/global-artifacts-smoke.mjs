@@ -50,6 +50,12 @@ import { fileURLToPath } from "node:url";
 
 import { _electron } from "playwright-core";
 
+// This probe predates smoke-kit and keeps its own launch/harness scaffolding,
+// but the Monaco readers are shared: how THIS build is interrogated (input
+// surface, read-only contract, rendered aria-label) is encoded once there, so a
+// change to Monaco's input strategy is a one-file fix.
+import { isMonacoEditable, readMonacoState } from "./lib/smoke-kit.mjs";
+
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const APP_DIR = join(REPO, "apps", "desktop");
 const ELECTRON = join(
@@ -484,48 +490,23 @@ async function main() {
         const monacoReady = await waitUntil(
           "editable Monaco editor with worker",
           async () => {
-            const el = await page.evaluate(() => {
-              const host = document.querySelector("[data-monaco-status]");
-              const editor = host?.querySelector(".monaco-editor");
-              // Monaco's input surface here is a `native-edit-context` div; the
-              // only <textarea> under .monaco-editor is the permanently-readonly
-              // IME helper, whose `readonly` attribute says nothing about the
-              // document. `textarea.inputarea` covers the older input strategy.
-              const input = editor?.querySelector(".native-edit-context, textarea.inputarea");
-              const fallback = document.querySelector("[data-monaco-fallback]");
-              return host
-                ? {
-                    status: host.getAttribute("data-monaco-status"),
-                    language: host.getAttribute("data-monaco-language"),
-                    worker: host.getAttribute("data-monaco-worker"),
-                    // CONCEPT #49: a repository .ts file is explicit-save
-                    // editable, so the editor must NOT be configured read-only…
-                    editableConfigured: host.getAttribute("data-monaco-read-only") === "false",
-                    // …and Monaco's own RENDERED accessible name must not say so
-                    // either (`fileEditorAriaLabel` appends ", read-only" only
-                    // for a read-only view). `null` = no input surface found at
-                    // all, which is a failure.
-                    editorAriaLabel: input?.getAttribute("aria-label") ?? null,
-                    editor: editor !== null,
-                    text: editor?.textContent ?? "",
-                    fallback: fallback?.getAttribute("title") ?? null,
-                  }
-                : { status: null, fallback: fallback?.getAttribute("title") ?? null };
-            });
+            const el = await readMonacoState(page);
+            // CONCEPT #49: a repository .ts file is an explicit-save EDITABLE
+            // document, so `isMonacoEditable` must hold — our own read-only
+            // contract attribute AND Monaco's rendered accessible name, both
+            // checked in smoke-kit so neither copy can drift.
             if (
               el.status === "ready" &&
               el.language === "typescript" &&
               el.worker === "ready" &&
-              el.editableConfigured &&
-              el.editorAriaLabel !== null &&
-              !el.editorAriaLabel.endsWith(", read-only") &&
-              el.editor &&
+              isMonacoEditable(el) &&
+              el.hasEditor &&
               el.text.includes("monacoProbe")
             ) {
               return el;
             }
             throw new Error(
-              `state=${JSON.stringify(el)} runtimeFailures=${JSON.stringify(monacoRuntimeFailures)}`,
+              `state=${JSON.stringify({ ...el, text: el.text.slice(0, 120), lines: undefined })} runtimeFailures=${JSON.stringify(monacoRuntimeFailures)}`,
             );
           },
           { timeout: 20000 },

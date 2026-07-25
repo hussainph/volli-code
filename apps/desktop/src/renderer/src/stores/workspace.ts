@@ -223,6 +223,10 @@ interface WorkspaceState {
    * selection, folding, scroll). `viewState` stays `unknown`: it is Monaco's
    * opaque JSON, written back verbatim on return, and this store never
    * inspects it — nor does it ever hold file contents.
+   *
+   * Ignored for a path that is not an open tab, which upholds the same
+   * invariant `closeProjectFile` and the rehydrate sanitizer do: view state
+   * exists only for tabs that exist.
    */
   setProjectFileViewState(projectId: string, relPath: string, viewState: unknown): void;
   /** Drop a removed project's record so re-adding it starts fresh. */
@@ -275,7 +279,10 @@ interface PersistedWorkspaceState {
  */
 function sanitizeTicketTabs(raw: unknown): Record<string, TicketTabsState> {
   if (typeof raw !== "object" || raw === null) return {};
-  const out: Record<string, TicketTabsState> = {};
+  // Null-prototype accumulator: persisted keys come straight from JSON, and a
+  // `__proto__` key assigned onto an object literal hits Object.prototype's
+  // setter instead of becoming an own property.
+  const out = Object.create(null) as Record<string, TicketTabsState>;
   for (const [ticketId, value] of Object.entries(raw)) {
     if (typeof value !== "object" || value === null) continue;
     const record = value as { files?: unknown; active?: unknown };
@@ -305,7 +312,9 @@ function sanitizeFileViewStates(
   workspace: FileWorkspaceState,
 ): Record<string, unknown> {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
-  const out: Record<string, unknown> = {};
+  // See sanitizeTicketTabs: a `__proto__` key out of persisted JSON must land
+  // as an own property, not on the accumulator's prototype.
+  const out = Object.create(null) as Record<string, unknown>;
   for (const [relPath, value] of Object.entries(raw)) {
     if (typeof value !== "object" || value === null || Array.isArray(value)) continue;
     if (!workspace.tabs.some((tab) => tab.relPath === relPath)) continue;
@@ -555,6 +564,12 @@ export function createWorkspaceStore(storage?: StateStorage) {
         setProjectFileViewState(projectId, relPath, viewState) {
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            // Only an OPEN tab may hold view state. A closing tab's editor
+            // unmounts AFTER `closeProjectFile` has already dropped its entry
+            // and emits one last view state bound to the path it was showing;
+            // accepting that write would re-insert exactly what the close just
+            // pruned, and the map would grow without bound as tabs churn.
+            if (!current.projectFiles.tabs.some((tab) => tab.relPath === relPath)) return state;
             return patchWorkspace(state, projectId, {
               projectFileViewStates: { ...current.projectFileViewStates, [relPath]: viewState },
             });
@@ -625,7 +640,11 @@ export function createWorkspaceStore(storage?: StateStorage) {
         // Rebuild full records from the pruned persisted pair: everything not
         // persisted (nav, expandedDirs) rehydrates to the defaults.
         merge: (persisted, current) => {
-          const byProject: Record<string, WorkspaceUiState> = {};
+          // Null-prototype for the same reason the sanitizers use one: project
+          // ids are persisted JSON keys, and `__proto__` among them must not
+          // reach an object literal's prototype (nor may a lookup of an
+          // unvisited project ever resolve to an inherited member).
+          const byProject = Object.create(null) as Record<string, WorkspaceUiState>;
           const persistedByProject = (persisted as PersistedWorkspaceState | undefined)?.byProject;
           for (const [projectId, ui] of Object.entries(persistedByProject ?? {})) {
             // A non-object record (null from a corrupt write) would throw

@@ -72,9 +72,24 @@ describe("fileSavePolicy precedence", () => {
     ).toBe("read-only");
   });
 
-  it("gives an image no editor even when the caller forgot to flag it binary", () => {
+  it("gives a raster image no editor even when the caller forgot to flag it binary", () => {
     expect(fileSavePolicy({ ...readable, relPath: "docs/logo.png" })).toBe("read-only");
+    expect(fileSavePolicy({ ...readable, relPath: "docs/shot.webp" })).toBe("read-only");
+  });
+
+  it("gives SVG the ordinary explicit-save editor — it is markup, not raster bytes", () => {
+    expect(fileSavePolicy({ ...readable, relPath: "assets/icon.svg" })).toBe("explicit");
+    // Even inside the artifacts tier, where only MARKDOWN autosaves.
     expect(fileSavePolicy({ ...readable, relPath: ".volli/artifacts/diagram.svg" })).toBe(
+      "explicit",
+    );
+  });
+
+  it("still refuses SVG an editor when the read itself said binary or truncated", () => {
+    expect(fileSavePolicy({ relPath: "assets/icon.svg", binary: true, truncated: false })).toBe(
+      "read-only",
+    );
+    expect(fileSavePolicy({ relPath: "assets/icon.svg", binary: false, truncated: true })).toBe(
       "read-only",
     );
   });

@@ -73,6 +73,8 @@ const execFileAsync = promisify(execFile);
 const TEXT_CAP_BYTES = 1024 * 1024;
 /** Images past this are treated as binary (a data-URI that large is not worth inlining). */
 const IMAGE_CAP_BYTES = 10 * 1024 * 1024;
+/** Leading window the write guard NUL-sniffs an existing file over (see {@link assertTextWritable}). */
+const BINARY_SNIFF_BYTES = 64 * 1024;
 /** File-index entry cap (~20k, decision on `truncated`). */
 const INDEX_CAP = 20_000;
 /** Directory names never descended into by the fallback walk (and the git list already excludes `.volli`). */
@@ -215,9 +217,18 @@ async function resolveSafeDir(
 ): Promise<{ ok: true; dirPath: string } | { ok: false; error: string }> {
   let dirPath: string;
   if (relPath === "") {
-    const check = await assertWithinRoot(projectPath, projectPath);
-    if (!check.ok) return check;
-    dirPath = projectPath;
+    // The root is CANONICALIZED, not symlink-checked: a project folder the user
+    // picked may legitimately BE a symlink (`~/code/app` → `/Volumes/…`), and
+    // `assertWithinRoot` — whose symlink rejection exists to catch a link
+    // swapped in UNDER the root — would refuse the root against itself, killing
+    // the sidebar's root watch for the whole project. Containment is vacuous
+    // here (the root IS the root); every deeper path below still runs both
+    // safety layers, resolved against this same root.
+    try {
+      dirPath = await fsp.realpath(projectPath);
+    } catch {
+      return { ok: false, error: "Project folder was not found" };
+    }
   } else {
     const resolved = await resolveSafePath(projectPath, null, relPath);
     if (!resolved.ok) return resolved;
@@ -380,6 +391,28 @@ async function readCapped(
   }
 }
 
+/**
+ * Reads up to `length` LEADING bytes. Loops over short reads for the same
+ * reason {@link readCapped} does (a single `read()` can legitimately return
+ * fewer bytes than asked on NFS/FUSE), but never grows: the caller wants a
+ * bounded prefix, not the file.
+ */
+async function readPrefix(filePath: string, length: number): Promise<Buffer> {
+  const handle = await fsp.open(filePath, "r");
+  try {
+    const buffer = Buffer.alloc(length);
+    let total = 0;
+    while (total < length) {
+      const { bytesRead } = await handle.read(buffer, total, length - total, total);
+      if (bytesRead === 0) break; // EOF
+      total += bytesRead;
+    }
+    return buffer.subarray(0, total);
+  } finally {
+    await handle.close();
+  }
+}
+
 /** Reads a resolved file into a render-ready {@link FileContent}: text (utf8, capped), image (data URI), or binary. */
 async function readContent(filePath: string, relPath: string, size: number): Promise<FileContent> {
   const kind = classifyFileKind(relPath);
@@ -433,21 +466,30 @@ async function statOrNull(path: string): Promise<import("node:fs").Stats | null>
 /**
  * The text-writability policy for an EXISTING file (issue #106): the editor
  * round-trips utf8 text, so a file it could not have faithfully shown the user
- * must never be written back over.
+ * must never be written back over. Two refusals — a file past
+ * {@link TEXT_CAP_BYTES} was served TRUNCATED (writing the buffer back would
+ * silently drop its tail; large-file editing stays deliberately unsupported),
+ * and on-disk binary was rendered as a stub, never as text.
  *
- * Sniffed exactly the way {@link readContent} reads, so the two can't disagree:
- * a NUL byte anywhere in the capped prefix means binary (the tab rendered a
- * stub, not text), and a file past {@link TEXT_CAP_BYTES} was served TRUNCATED
- * (writing the buffer back would silently drop its tail). Large-file editing
- * stays deliberately unsupported until a real design exists for it.
+ * Deliberately CHEAP, because it runs on every write and autosave commits every
+ * ~1.5s: the size verdict comes from the `stat` the caller already took (no
+ * read at all), and the NUL sniff reads a bounded prefix rather than re-reading
+ * up to a megabyte per keystroke-batch. For any file under
+ * {@link BINARY_SNIFF_BYTES} — every artifact, essentially every source file —
+ * the prefix IS the whole file, so the guard is byte-for-byte as strong as a
+ * full scan; past that it narrows to the same leading-window heuristic git
+ * itself uses for binary detection (git sniffs an even shorter 8000 bytes).
+ * The residual gap is a file whose first NUL sits past the window, which
+ * {@link readContent} (full-buffer sniff) would still refuse to show as text,
+ * so no such tab can exist to save from.
  */
 async function assertTextWritable(
   filePath: string,
   size: number,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const { buf, truncated } = await readCapped(filePath, TEXT_CAP_BYTES, size);
-  if (truncated) return { ok: false, error: "File is too large to edit (over 1 MiB)" };
-  if (buf.includes(0)) return { ok: false, error: "Binary files cannot be edited" };
+  if (size > TEXT_CAP_BYTES) return { ok: false, error: "File is too large to edit (over 1 MiB)" };
+  const prefix = await readPrefix(filePath, BINARY_SNIFF_BYTES);
+  if (prefix.includes(0)) return { ok: false, error: "Binary files cannot be edited" };
   return { ok: true };
 }
 
@@ -758,7 +800,11 @@ abstract class WatchManagerBase<S extends WatchSubscription> {
       try {
         this.wireWatcher(key, sub);
       } catch {
+        // Same contract as the retry-exhausted path below: this subscription
+        // ends up watcher-less either way, so it owes the subscriber one final
+        // event — silence would leave the tab/tree believing updates flow.
         this.teardown(key);
+        if (!sub.webContents.isDestroyed()) this.sendChanged(sub);
         return;
       }
       sub.reArming = false;
@@ -865,9 +911,10 @@ export class FileWatchManager extends WatchManagerBase<FileWatchSubscription> {
  * debounced `volli:dir-changed` so the tree re-lists just that directory.
  * Non-recursive by construction — `fs.watch` is armed without `recursive`, so a
  * deep repo costs one watcher per open row rather than a hydrated subtree — and
- * main-checkout-scoped (CONCEPT #54), hence no ticketId in the key. Every event
- * in the directory counts: unlike a file tab there is no basename to filter to,
- * and the payload names only the directory, never its listing.
+ * main-checkout-scoped (CONCEPT #54), hence no ticketId in the key. Unlike a
+ * file tab there is no basename to filter to — the payload names only the
+ * directory, never its listing — so nearly every event counts; see
+ * {@link DirWatchManager.matches} for the one exclusion.
  */
 export class DirWatchManager extends WatchManagerBase<WatchSubscription> {
   private keyFor(webContents: WebContents, projectId: string, relPath: string): string {
@@ -902,8 +949,23 @@ export class DirWatchManager extends WatchManagerBase<WatchSubscription> {
     this.teardown(this.keyFor(webContents, projectId, relPath));
   }
 
-  protected override matches(): boolean {
-    return true;
+  /**
+   * Everything counts EXCEPT `.git`, which `volli:list-directory` filters out of
+   * every level of the tree — so no amount of git churn (and a repo under an
+   * agent produces a great deal of it, index locks and refs on every command)
+   * can change what the user is looking at. Re-listing for it would be pure
+   * main-process + IPC waste, and the sidebar's root watch stays armed for the
+   * whole life of the tree, including while Files is off screen.
+   *
+   * `node_modules` is deliberately NOT excluded by name: it IS a visible row, so
+   * its creation/removal must still refresh the level. Only writes DEEPER inside
+   * it are dropped, which cannot change the listing either. A null filename
+   * (coalesced/platform event) is unfilterable, so it broadcasts conservatively.
+   */
+  protected override matches(_sub: WatchSubscription, filename: string | null): boolean {
+    if (filename === null) return true;
+    if (filename === ".git" || filename.startsWith(`.git${sep}`)) return false;
+    return !filename.startsWith(`node_modules${sep}`);
   }
 
   protected override sendChanged(sub: WatchSubscription): void {

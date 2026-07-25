@@ -12,9 +12,18 @@
  * `/repo-old/src` into `/repo` and would then read the wrong repository's file.
  */
 
-/** Forward slashes throughout, with repeated and trailing separators collapsed. */
+/**
+ * Repeated and trailing separators collapsed.
+ *
+ * Backslash is deliberately left alone. This is a macOS-only app, where `\` is
+ * an ordinary filename character: rewriting it would alias a root file named
+ * `a\b.txt` onto the relPath `a/b.txt` — a DIFFERENT file, which may well
+ * exist. Kept literal, such a name is rejected outright by `isSafeRelPath` in
+ * main (backslash is not a legal relPath character there), so the tree row
+ * fails honestly instead of quietly opening the wrong file.
+ */
 function normalize(path: string): string {
-  return path.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/\/+$/, "");
+  return path.replace(/\/+/g, "/").replace(/\/+$/, "");
 }
 
 /**

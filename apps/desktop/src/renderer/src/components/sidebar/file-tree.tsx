@@ -99,10 +99,24 @@ function useDirectoryWatch(projectId: string, relPath: string | null, refresh: (
     if (relPath === null) return;
     const label = relPath === "" ? "the project root" : relPath;
     let live = true;
+    // Teardown is deliberately fire-and-forget: a failed unwatch means the
+    // watcher was never installed or has already died with the window, neither
+    // of which the user can act on. Swallowing keeps it off the unhandled-
+    // rejection channel instead of leaving a bare `void` promise.
+    const dropWatch = (): void => {
+      void window.api.files.unwatchDir({ projectId, relPath }).catch(() => {});
+    };
     void window.api.files
       .watchDir({ projectId, relPath })
       .then((result) => {
-        if (live && !result.ok) {
+        if (!live) {
+          // `watchDir` is async in main, so it can install its watcher AFTER
+          // this effect's cleanup already sent the unwatch — that watcher would
+          // then belong to nobody and live until the window dies. Undo it.
+          if (result.ok) dropWatch();
+          return;
+        }
+        if (!result.ok) {
           toastError(`Live updates for ${label} are unavailable: ${result.error}`);
         }
       })
@@ -115,9 +129,26 @@ function useDirectoryWatch(projectId: string, relPath: string | null, refresh: (
     return () => {
       live = false;
       unsubscribe();
-      void window.api.files.unwatchDir({ projectId, relPath });
+      dropWatch();
     };
   }, [projectId, relPath]);
+}
+
+/**
+ * Fetches ONE level into the caller's state — the shape every listing read
+ * shares (a level expanding, and every watch-driven refresh). The caller owns
+ * the skeleton: this only ever writes the settled result, so a refresh can
+ * replace a live listing in place without flashing "loading".
+ */
+function loadListing(path: string, setListing: (listing: Listing) => void): void {
+  window.api.fs
+    .listDirectory(path)
+    .then((result) => {
+      setListing(toListing(result));
+    })
+    .catch((error: unknown) => {
+      setListing(errorListing(error));
+    });
 }
 
 /**
@@ -135,6 +166,13 @@ function useDirectoryWatch(projectId: string, relPath: string | null, refresh: (
  */
 export function FileTree({ project }: FileTreeProps) {
   const [root, setRoot] = React.useState<Listing>("loading");
+  // Gates the root WATCH on the same root-sync the root listing waits for.
+  // `watchDir` resolves its path against the main-process allowlist too, so
+  // arming it first would toast a spurious "live updates are unavailable" for a
+  // freshly added project and leave the level permanently unwatched — the watch
+  // effect has nothing that would retry it. Flipping this true re-runs that
+  // effect with a real relPath, which is what actually arms the watcher.
+  const [rootsSynced, setRootsSynced] = React.useState(false);
 
   React.useEffect(() => {
     // No run-once guard here: StrictMode's dev-only mount→cleanup→mount cycle
@@ -156,6 +194,10 @@ export function FileTree({ project }: FileTreeProps) {
       } catch {
         // A failed sync just surfaces as the listing error below — nothing to do.
       }
+      // Released even when the sync threw: AppShell mirrors the same roots, so
+      // the allowlist may well be current regardless. Arming the watch and
+      // reporting a real failure beats never watching at all.
+      if (!cancelled) setRootsSynced(true);
       try {
         const result = await window.api.fs.listDirectory(project.path);
         if (!cancelled) setRoot(toListing(result));
@@ -169,13 +211,11 @@ export function FileTree({ project }: FileTreeProps) {
     };
   }, [project.path]);
 
-  // The root level is always open, so it is always watched. `""` is the root
-  // relPath the dir-watch API expects (main rejects ".").
-  useDirectoryWatch(project.id, "", () => {
-    void window.api.fs
-      .listDirectory(project.path)
-      .then((result) => setRoot(toListing(result)))
-      .catch((error: unknown) => setRoot(errorListing(error)));
+  // The root level is always open, so it is always watched once the roots are
+  // synced. `""` is the root relPath the dir-watch API expects (main rejects
+  // "."); `null` until then means "watch nothing yet".
+  useDirectoryWatch(project.id, rootsSynced ? "" : null, () => {
+    loadListing(project.path, setRoot);
   });
 
   return (
@@ -308,29 +348,18 @@ function DirectoryNode({ name, path, project }: { name: string; path: string; pr
   React.useEffect(() => {
     if (!shouldFetch) return;
     setChildren("loading");
-    window.api.fs
-      .listDirectory(path)
-      .then((result) => {
-        setChildren(toListing(result));
-      })
-      .catch((error: unknown) => {
-        setChildren(errorListing(error));
-      });
+    loadListing(path, setChildren);
   }, [shouldFetch, path]);
 
   // Only an OPEN level is watched — a collapsed one has nothing on screen to
   // keep fresh, and it refetches from scratch when it reopens anyway. The
   // refresh deliberately skips the "loading" skeleton: replacing a live listing
   // in place is what makes a file appearing on disk feel like a live tree.
+  // No root-sync gate is needed here (unlike the root level): a nested node only
+  // exists once the root listing resolved, which happens after FileTree awaited
+  // syncRoots — so the allowlist is already current by the time this mounts.
   useDirectoryWatch(projectId, expanded ? relPath : null, () => {
-    window.api.fs
-      .listDirectory(path)
-      .then((result) => {
-        setChildren(toListing(result));
-      })
-      .catch((error: unknown) => {
-        setChildren(errorListing(error));
-      });
+    loadListing(path, setChildren);
   });
 
   function handleOpenChange(open: boolean) {

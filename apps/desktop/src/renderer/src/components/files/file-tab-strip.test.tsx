@@ -53,6 +53,31 @@ describe("FileTabStrip", () => {
     // Exactly one tab is reachable by Tab; the arrows move between them.
     expect(html.match(/tabindex="0"/g)).toHaveLength(1);
     expect(html.match(/tabindex="-1"/g)).toHaveLength(1);
+    // …and it is the ACTIVE tab that holds the tab stop.
+    expect(html).toMatch(/data-rel-path="b\.ts"[^>]*tabindex="0"/);
+  });
+
+  it("keeps the strip keyboard-reachable when no tab is active — the first tab takes the tab stop", () => {
+    // A strip can be open with nothing active (nothing selected yet, or an
+    // activeRelPath naming a tab that is no longer open). Keying the roving
+    // tabindex solely off `active` would leave every tab at -1 and drop the
+    // whole strip out of the document's tab order.
+    for (const active of [null, "gone.ts"]) {
+      const html = render(
+        [
+          { relPath: "a.ts", pinned: true },
+          { relPath: "b.ts", pinned: true },
+        ],
+        active,
+      );
+
+      expect(html.match(/tabindex="0"/g)).toHaveLength(1);
+      expect(html.match(/tabindex="-1"/g)).toHaveLength(1);
+      // The fallback entry point is the FIRST tab…
+      expect(html).toMatch(/data-rel-path="a\.ts"[^>]*tabindex="0"/);
+      // …and a tab stop is not a selection: nothing is marked active.
+      expect(html).not.toContain('aria-selected="true"');
+    }
   });
 
   it("renders a preview tab's label in italics — the unpinned/replaceable convention", () => {

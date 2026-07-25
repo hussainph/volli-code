@@ -44,6 +44,7 @@ import {
   AlertDialogTitle,
 } from "@renderer/components/ui/alert-dialog";
 import { fileDocumentIdentity } from "@renderer/editor/document-identity";
+import type { DocumentSnapshot } from "@renderer/editor/document-registry";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { toastError } from "@renderer/lib/toast";
@@ -56,6 +57,24 @@ const NO_VIEW_STATES: Record<string, unknown> = {};
 interface PendingClose {
   relPath: string;
   rest: readonly string[];
+}
+
+/**
+ * The mtime a close-guard save must carry as `expectedMtime`, or `null` when
+ * the document's version on disk is unknown.
+ *
+ * `externalRevision`, NOT `baselineRevision` — the two diverge in exactly the
+ * case the guard exists for. `DocumentRegistry.adoptCleanBaseline` advances
+ * `baselineRevision` only for a CLEAN document; over a dirty one (disk moved
+ * under an unsaved draft — the editor's "Changed on disk" banner) it advances
+ * `externalRevision` alone. Guarding on the stale baseline would make main
+ * reject every Save-then-close of such a tab while ⌘S in the very same editor
+ * succeeds, trapping the draft. `externalRevision` tracks the freshest mtime
+ * this renderer has seen, which is what ⌘S carries too (file-view.tsx's
+ * `syncedMtimeRef`), so both save paths agree.
+ */
+export function closeGuardExpectedMtime(snapshot: DocumentSnapshot): number | null {
+  return typeof snapshot.externalRevision === "number" ? snapshot.externalRevision : null;
 }
 
 export function FilesPage() {
@@ -80,11 +99,15 @@ function FilesWorkbench({ project }: { project: Project }) {
   const setProjectFileViewState = useWorkspaceStore((state) => state.setProjectFileViewState);
 
   /**
-   * Which tabs hold unsaved work. Fed by the active editor's dirty reports and
-   * re-seeded on mount from the document registry, because a dirty document
-   * deliberately outlives its view: navigating away from Files and back must
-   * not lose the dot — closing a tab whose draft we'd forgotten would discard
-   * it silently.
+   * Which tabs the STRIP renders a dirty dot for. Fed by the active editor's
+   * dirty reports and re-seeded on mount from the document registry, because a
+   * dirty document deliberately outlives its view: navigating away from Files
+   * and back must not lose the dot.
+   *
+   * Render mirror only — never the close guard's input. That seeding is
+   * asynchronous (Monaco loads lazily), so a × clicked inside the seed window
+   * would read an empty set and close a parked draft with no prompt; the guard
+   * asks the registry itself instead (see `hasUnsavedWork`).
    */
   const [dirtyPaths, setDirtyPaths] = React.useState<ReadonlySet<string>>(() => new Set());
   const [pending, setPending] = React.useState<PendingClose | null>(null);
@@ -100,15 +123,20 @@ function FilesWorkbench({ project }: { project: Project }) {
     });
   }, []);
 
-  const openRelPaths = files.tabs.map((tab) => tab.relPath).join("\n");
+  // `tabs` is the pure workspace's own array, returned by identity across
+  // no-op transitions — a stable effect dependency. It is iterated directly
+  // rather than joined into a delimited key: a relPath may legally contain a
+  // newline on macOS, and splitting one back apart would invent two paths that
+  // are open in no tab.
+  const tabs = files.tabs;
   React.useEffect(() => {
-    if (openRelPaths === "") return;
+    if (tabs.length === 0) return;
     let cancelled = false;
     void loadMonacoRuntime()
       .then((runtime) => {
         if (cancelled) return;
-        const parked = openRelPaths
-          .split("\n")
+        const parked = tabs
+          .map((tab) => tab.relPath)
           .filter(
             (relPath) =>
               runtime.registry
@@ -124,7 +152,7 @@ function FilesWorkbench({ project }: { project: Project }) {
     return () => {
       cancelled = true;
     };
-  }, [openRelPaths, projectId]);
+  }, [projectId, tabs]);
 
   /** The registry handle for one open Main-checkout document, or `null`. */
   const peekDocument = React.useCallback(
@@ -136,8 +164,27 @@ function FilesWorkbench({ project }: { project: Project }) {
   );
 
   /**
-   * Writes the tab's draft to the Main checkout, conflict-guarded on the mtime
-   * the document was last baselined at (exactly what ⌘S in the editor carries).
+   * Whether `relPath` holds unsaved work RIGHT NOW, asked of the document
+   * registry — the same authority the editor reports its own dirty flag from,
+   * and the only one that is correct before `dirtyPaths` has been seeded.
+   */
+  const hasUnsavedWork = React.useCallback(
+    async (relPath: string): Promise<boolean> => {
+      try {
+        return (await peekDocument(relPath))?.snapshot().dirty === true;
+      } catch {
+        // Monaco never loaded, so no editor ever opened this tab and there is
+        // no draft to protect. The failure itself is surfaced by the editor.
+        return false;
+      }
+    },
+    [peekDocument],
+  );
+
+  /**
+   * Writes the tab's draft to the Main checkout, conflict-guarded on the
+   * freshest mtime this renderer has seen for the file (see
+   * {@link closeGuardExpectedMtime}) — exactly what ⌘S in the editor carries.
    * `false` means nothing reached disk — the caller must NOT close the tab.
    */
   const saveDocument = React.useCallback(
@@ -148,8 +195,8 @@ function FilesWorkbench({ project }: { project: Project }) {
         const model = handle?.model ?? null;
         // No live document (or nothing to write) — closing is safe.
         if (handle === null || model === null || !handle.snapshot().dirty) return true;
-        const baselineRevision = handle.snapshot().baselineRevision;
-        if (typeof baselineRevision !== "number") {
+        const expectedMtime = closeGuardExpectedMtime(handle.snapshot());
+        if (expectedMtime === null) {
           // A file document's revision IS its mtime, so this shouldn't happen —
           // but writing without the conflict guard is the one failure mode that
           // could silently destroy someone else's newer bytes, so refuse rather
@@ -161,7 +208,7 @@ function FilesWorkbench({ project }: { project: Project }) {
           projectId,
           relPath,
           content: model.getValue(),
-          expectedMtime: baselineRevision,
+          expectedMtime,
         });
         if (!result.ok) {
           toastError(`Could not save ${name}: ${result.error}`);
@@ -192,24 +239,27 @@ function FilesWorkbench({ project }: { project: Project }) {
   }, []);
 
   const requestClose = React.useCallback(
-    (relPath: string) => {
-      if (planTabClose({ dirty: dirtyPaths.has(relPath) }) === "close") closeTab(relPath);
+    async (relPath: string) => {
+      if (planTabClose({ dirty: await hasUnsavedWork(relPath) }) === "close") closeTab(relPath);
       else setPending({ relPath, rest: [] });
     },
-    [closeTab, dirtyPaths],
+    [closeTab, hasUnsavedWork],
   );
 
   const requestCloseOthers = React.useCallback(
-    (keep: string) => {
-      const plan = planCloseOthers({
-        relPaths: files.tabs.map((tab) => tab.relPath),
-        keep,
-        isDirty: (relPath) => dirtyPaths.has(relPath),
-      });
+    async (keep: string) => {
+      const relPaths = tabs.map((tab) => tab.relPath);
+      const dirty = new Set<string>();
+      await Promise.all(
+        relPaths.map(async (relPath) => {
+          if (await hasUnsavedWork(relPath)) dirty.add(relPath);
+        }),
+      );
+      const plan = planCloseOthers({ relPaths, keep, isDirty: (relPath) => dirty.has(relPath) });
       for (const relPath of plan.close) closeTab(relPath);
       confirmNext(plan.confirm);
     },
-    [closeTab, confirmNext, dirtyPaths, files.tabs],
+    [closeTab, confirmNext, hasUnsavedWork, tabs],
   );
 
   /**
@@ -256,13 +306,13 @@ function FilesWorkbench({ project }: { project: Project }) {
   return (
     <div data-testid="files-workbench" className="flex min-h-0 flex-1 flex-col">
       <FileTabStrip
-        tabs={files.tabs}
+        tabs={tabs}
         activeRelPath={activeRelPath}
         dirtyPaths={dirtyPaths}
         onSelect={(relPath) => activateProjectFile(projectId, relPath)}
         onPin={(relPath) => pinProjectFile(projectId, relPath)}
-        onClose={requestClose}
-        onCloseOthers={requestCloseOthers}
+        onClose={(relPath) => void requestClose(relPath)}
+        onCloseOthers={(keep) => void requestCloseOthers(keep)}
       />
 
       {activeRelPath === null ? (
