@@ -220,7 +220,7 @@ describe("terminal focus", () => {
 });
 
 describe("persistence", () => {
-  it("persists sidebarWidth + railWidth + uiScale + workspaceRailHidden + railCollapsed + detailsExpanded — settingsOpen resets each launch", () => {
+  it("persists sidebarWidth + railWidth + uiScale + workspaceRailHidden + railCollapsed + railMode — settingsOpen resets each launch", () => {
     const storage = createMemoryStorage();
     const store = createUiStore(storage);
     store.getState().setSettingsOpen(true);
@@ -229,7 +229,7 @@ describe("persistence", () => {
     store.getState().stepUiScale(1);
     store.getState().toggleWorkspaceRailHidden();
     store.getState().toggleRailCollapsed();
-    store.getState().toggleDetailsExpanded();
+    store.getState().setRailMode("properties");
 
     const persisted = JSON.parse(storage.getItem("volli:ui")!) as {
       state: Record<string, unknown>;
@@ -240,9 +240,10 @@ describe("persistence", () => {
       uiScale: UI_SCALE_STEPS[3],
       workspaceRailHidden: true,
       railCollapsed: true,
-      detailsExpanded: true,
+      railMode: "properties",
       lastHarnessId: "claude-code",
     });
+    expect(persisted.state).not.toHaveProperty("detailsExpanded");
   });
 
   it("persists lastHarnessId and rehydrates it; missing/unknown ids default to claude-code", async () => {
@@ -317,31 +318,41 @@ describe("persistence", () => {
     expect(createUiStore(corrupt).getState().railCollapsed).toBe(false);
   });
 
-  it("rehydrates detailsExpanded from storage; corrupt/missing values default to collapsed", async () => {
+  it("rehydrates railMode from storage; legacy detailsExpanded:true migrates to properties", async () => {
     const storage = createMemoryStorage();
-    createUiStore(storage).getState().setDetailsExpanded(true);
+    createUiStore(storage).getState().setRailMode("files");
     const reloaded = createUiStore(storage);
     await reloaded.persist.rehydrate();
-    expect(reloaded.getState().detailsExpanded).toBe(true);
+    expect(reloaded.getState().railMode).toBe("files");
 
-    // A missing key (older persisted state) folds to the collapsed default.
+    // Pre-icon-rail builds wrote detailsExpanded instead of railMode.
+    const legacy = createMemoryStorage();
+    legacy.setItem(
+      "volli:ui",
+      JSON.stringify({
+        state: { sidebarWidth: 320, uiScale: 1, detailsExpanded: true },
+        version: 1,
+      }),
+    );
+    expect(createUiStore(legacy).getState().railMode).toBe("properties");
+
+    // Missing/corrupt railMode with Details closed defaults to sessions.
     const missing = createMemoryStorage();
     missing.setItem(
       "volli:ui",
       JSON.stringify({ state: { sidebarWidth: 320, uiScale: 1 }, version: 1 }),
     );
-    expect(createUiStore(missing).getState().detailsExpanded).toBe(false);
+    expect(createUiStore(missing).getState().railMode).toBe("sessions");
 
-    // A non-boolean persisted value falls back to the safe, collapsed default.
     const corrupt = createMemoryStorage();
     corrupt.setItem(
       "volli:ui",
       JSON.stringify({
-        state: { sidebarWidth: 320, uiScale: 1, detailsExpanded: "yes" },
+        state: { sidebarWidth: 320, uiScale: 1, railMode: "bogus" },
         version: 1,
       }),
     );
-    expect(createUiStore(corrupt).getState().detailsExpanded).toBe(false);
+    expect(createUiStore(corrupt).getState().railMode).toBe("sessions");
   });
 
   it("rehydrates sidebarWidth from storage into a fresh store", async () => {

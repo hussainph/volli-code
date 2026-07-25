@@ -43,6 +43,10 @@ import { createJSONStorage, persist, type StateStorage } from "zustand/middlewar
 
 import { appStateStorage } from "@renderer/lib/app-state-storage";
 import {
+  TICKET_BODY_TAB_ID,
+  normalizeTicketBodyTabId,
+} from "@renderer/components/ticket/ticket-body-tab";
+import {
   EMPTY_NAV_HISTORY,
   goBack,
   goForward,
@@ -67,9 +71,9 @@ export type BoardView = "board" | "list";
 /**
  * A ticket's open `@file` tabs and its active tab (global-artifacts decision
  * #5). `files` is the ordered list of open relPaths; `active` is the active tab
- * id — `"doc"`, a `file:<relPath>`, or a session id (sessions rehydrate
- * separately, so a persisted session id that no longer exists falls back to Doc
- * in ticket-detail).
+ * id — the Ticket Body wire id (`"doc"`), a `file:<relPath>`, or a session id
+ * (sessions rehydrate separately, so a persisted session id that no longer
+ * exists falls back to the Ticket Body in ticket-detail).
  */
 export interface TicketTabsState {
   files: string[];
@@ -119,8 +123,9 @@ export const DEFAULT_WORKSPACE_UI: WorkspaceUiState = {
   projectFileViewStates: {},
 };
 
-/** The active-tab id of the always-present Doc tab — the fallback when a file/session tab closes. */
-const DOC_TAB_ID = "doc";
+/** The active-tab id of the always-present Ticket Body tab — the fallback when a
+ * file/session tab closes. Persisted wire value is still `"doc"`. */
+const BODY_TAB_ID = TICKET_BODY_TAB_ID;
 
 /** A file tab's id from its relPath (`file:<relPath>`) — the persisted `active` form. */
 function fileTabId(relPath: string): string {
@@ -157,7 +162,7 @@ interface WorkspaceState {
    * ticket's full-page detail, and selects the same ticket in the board
    * store (same ordering `openTicketSession` below already used internally).
    *
-   * `opts.tabId`, when given, also activates that tab (`"doc"`, a
+   * `opts.tabId`, when given, also activates that tab (Ticket Body / `"doc"`, a
    * `file:<relPath>`, or a session id). Omit it to leave the ticket's
    * current tab untouched — e.g. Active Sessions activating a ticket with no
    * live session to focus. For a SESSION tab specifically, call
@@ -191,7 +196,7 @@ interface WorkspaceState {
    * Prunes the ticket's record entirely once nothing but Doc remains.
    */
   closeTicketFile(projectId: string, ticketId: string, relPath: string): void;
-  /** Sets the active tab for `ticketId` (`"doc"`, a `file:<relPath>`, or a session id). */
+  /** Sets the active tab for `ticketId` (Ticket Body / `"doc"`, a `file:<relPath>`, or a session id). */
   setTicketActiveTab(projectId: string, ticketId: string, tabId: string): void;
   /**
    * Single-click in the Project Files navigator: open `relPath` in the
@@ -273,9 +278,10 @@ interface PersistedWorkspaceState {
 /**
  * Validate a rehydrated `ticketTabs` map: keep only records whose `files` is a
  * string[] and `active` a string, and prune anything carrying nothing worth
- * restoring (no open files and Doc active) so the map never accretes empty
- * entries. A persisted `active` that's a session id is preserved — ticket-detail
- * falls back to Doc when it matches no live tab.
+ * restoring (no open files and Ticket Body active) so the map never accretes
+ * empty entries. A persisted `active` that's a session id is preserved —
+ * ticket-detail falls back to the Ticket Body when it matches no live tab.
+ * Legacy `"doc"` values are normalized through {@link normalizeTicketBodyTabId}.
  */
 function sanitizeTicketTabs(raw: unknown): Record<string, TicketTabsState> {
   if (typeof raw !== "object" || raw === null) return {};
@@ -289,8 +295,9 @@ function sanitizeTicketTabs(raw: unknown): Record<string, TicketTabsState> {
     const files = Array.isArray(record.files)
       ? record.files.filter((file): file is string => typeof file === "string")
       : [];
-    const active = typeof record.active === "string" ? record.active : DOC_TAB_ID;
-    if (files.length === 0 && active === DOC_TAB_ID) continue;
+    const active =
+      typeof record.active === "string" ? normalizeTicketBodyTabId(record.active) : BODY_TAB_ID;
+    if (files.length === 0 && active === BODY_TAB_ID) continue;
     out[ticketId] = { files, active };
   }
   return out;
@@ -461,7 +468,7 @@ export function createWorkspaceStore(storage?: StateStorage) {
             if (tabId === undefined) {
               return patchWorkspace(state, projectId, { nav: "board", openTicketId: ticketId });
             }
-            const existing = current.ticketTabs[ticketId] ?? { files: [], active: DOC_TAB_ID };
+            const existing = current.ticketTabs[ticketId] ?? { files: [], active: BODY_TAB_ID };
             return patchWorkspace(state, projectId, {
               nav: "board",
               openTicketId: ticketId,
@@ -488,7 +495,7 @@ export function createWorkspaceStore(storage?: StateStorage) {
         openTicketFile(projectId, ticketId, relPath) {
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
-            const existing = current.ticketTabs[ticketId] ?? { files: [], active: DOC_TAB_ID };
+            const existing = current.ticketTabs[ticketId] ?? { files: [], active: BODY_TAB_ID };
             const files = existing.files.includes(relPath)
               ? existing.files
               : [...existing.files, relPath];
@@ -509,9 +516,9 @@ export function createWorkspaceStore(storage?: StateStorage) {
             const files = existing.files.filter((file) => file !== relPath);
             // Closing the active file tab lands back on Doc; other closes keep
             // the current selection (which may itself be Doc or a session tab).
-            const active = existing.active === fileTabId(relPath) ? DOC_TAB_ID : existing.active;
+            const active = existing.active === fileTabId(relPath) ? BODY_TAB_ID : existing.active;
             const nextTabs = { ...current.ticketTabs };
-            if (files.length === 0 && active === DOC_TAB_ID) delete nextTabs[ticketId];
+            if (files.length === 0 && active === BODY_TAB_ID) delete nextTabs[ticketId];
             else nextTabs[ticketId] = { files, active };
             return patchWorkspace(state, projectId, { ticketTabs: nextTabs });
           });
@@ -520,7 +527,7 @@ export function createWorkspaceStore(storage?: StateStorage) {
         setTicketActiveTab(projectId, ticketId, tabId) {
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
-            const existing = current.ticketTabs[ticketId] ?? { files: [], active: DOC_TAB_ID };
+            const existing = current.ticketTabs[ticketId] ?? { files: [], active: BODY_TAB_ID };
             if (existing.active === tabId) return state; // no-op keeps empty records from forming
             return patchWorkspace(state, projectId, {
               ticketTabs: { ...current.ticketTabs, [ticketId]: { ...existing, active: tabId } },

@@ -49,7 +49,7 @@ function moveTabFocus(from: HTMLElement, to: "prev" | "next" | "first" | "last")
   target?.focus();
 }
 
-export type TicketTabKind = "doc" | "session" | "file";
+export type TicketTabKind = "body" | "session" | "file";
 
 export interface TicketTabDescriptor {
   /** Stable tab identity — a session tab's id is its session id; a file tab's is `file:<relPath>`. */

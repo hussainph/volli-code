@@ -18,12 +18,11 @@ import type { DocumentFileRefs } from "@renderer/components/editor/monaco-docume
 import { ConfirmCloseDialog } from "@renderer/components/sessions/confirm-close-dialog";
 import { createTerminalSession } from "@renderer/components/sessions/session-create";
 import { FileView } from "@renderer/components/ticket/file-view";
-import { RailDrawer } from "@renderer/components/ticket/rail-drawer";
 import { RailResizeHandle } from "@renderer/components/ticket/rail-resize-handle";
-import { TicketDocTab } from "@renderer/components/ticket/ticket-doc-tab";
-import { TicketProperties } from "@renderer/components/ticket/ticket-properties";
+import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab";
+import { TicketBodyPanel } from "@renderer/components/ticket/ticket-body-panel";
+import { TicketRail } from "@renderer/components/ticket/ticket-rail";
 import { TicketSessionPlane } from "@renderer/components/ticket/ticket-session-plane";
-import { TicketSessionsPanel } from "@renderer/components/ticket/ticket-sessions-panel";
 import { TicketTabStrip, type TicketTabDescriptor } from "@renderer/components/ticket/ticket-tabs";
 import { TicketTitle } from "@renderer/components/ticket/ticket-title";
 import { fileDocumentIdentity } from "@renderer/editor/document-identity";
@@ -39,31 +38,13 @@ import { useCloseGuard } from "@renderer/terminal/close-guard";
 import { closeTicketSession, renameTerminalSession } from "@renderer/terminal/session-lifecycle";
 import { getEngine } from "@renderer/terminal/registry";
 
-/** The always-present Doc tab's id — the fallback every persisted/live tab id
- * resets to once it no longer names a renderable tab (doc/file/session). */
-const DOC_TAB_ID = "doc";
+/** The always-present Ticket Body tab's id — the fallback every persisted/live
+ * tab id resets to once it no longer names a renderable tab (body/file/session).
+ * Wire value remains `"doc"` (see ticket-body-tab.ts). */
+const BODY_TAB_ID = TICKET_BODY_TAB_ID;
 
 /** Stable empty tab list, so "no open files" isn't a new array every render. */
 const NO_OPEN_FILES: readonly string[] = [];
-
-/**
- * The right rail's bottom "Details" drawer (status/priority/labels/worktree).
- * Sessions dominate the rail; Details is collapsed by default and pinned
- * beneath them (below the sessions panel's own History drawer — the three
- * stack as Sessions / History / Details), its open/closed state persisted
- * app-wide via `useUiStore` (mirrors the `railCollapsed` chrome preference).
- */
-function TicketDetailsDrawer({ projectId, ticket }: { projectId: string; ticket: Ticket }) {
-  const expanded = useUiStore((state) => state.detailsExpanded);
-  const setExpanded = useUiStore((state) => state.setDetailsExpanded);
-  return (
-    <RailDrawer label="Details" open={expanded} onOpenChange={setExpanded}>
-      <div className="max-h-80 overflow-y-auto px-4 pb-4">
-        <TicketProperties projectId={projectId} ticket={ticket} />
-      </div>
-    </RailDrawer>
-  );
-}
 
 /**
  * The full-page ticket detail view (ticket-detail-mvp decision #1), rendered
@@ -72,12 +53,13 @@ function TicketDetailsDrawer({ projectId, ticket }: { projectId: string; ticket:
  * higher up the tree, in main-content.tsx/app-shell.tsx). Layout follows the
  * browser-window metaphor: ONE full-width Chrome-style tab row at the very top,
  * spanning above both the main column (title → content plane) and the right
- * rail (sessions → collapsible Details). Navigation is the chrome bar's ←/→
- * history plus Escape; there's no breadcrumb. The tab plane hosts the ticket's
- * live terminals; those stay resident (engines outlive the view via the module
- * registry, decision #8) and are positioned by the always-mounted overlay onto
- * the plane's measured box in the main column — so the rail collapsing (which
- * hands the plane the full width) never unmounts a terminal.
+ * rail (icon-mode Sessions/Files/Changes/Properties navigator). Navigation is
+ * the chrome bar's ←/→ history plus Escape; there's no breadcrumb. The tab
+ * plane hosts the ticket's live terminals; those stay resident (engines outlive
+ * the view via the module registry, decision #8) and are positioned by the
+ * always-mounted overlay onto the plane's measured box in the main column — so
+ * the rail collapsing (which hands the plane the full width) never unmounts a
+ * terminal.
  */
 export function TicketDetail({
   projectId,
@@ -111,7 +93,7 @@ export function TicketDetail({
   const displayId = displayTicketId(ticketPrefix, ticket.ticketNumber);
 
   const openFiles = ticketTabsState?.files ?? NO_OPEN_FILES;
-  const activeTabId = ticketTabsState?.active ?? DOC_TAB_ID;
+  const activeTabId = ticketTabsState?.active ?? BODY_TAB_ID;
 
   // The per-tab worktree badge is driven by each file's resolved source, which
   // only the FileView knows after reading — it reports back via `onSource`.
@@ -331,7 +313,7 @@ export function TicketDetail({
   // below is keyed off `kind`, not id, so the plane and content branch
   // generically.
   const tabs: TicketTabDescriptor[] = [
-    { id: DOC_TAB_ID, kind: "doc", label: displayId },
+    { id: BODY_TAB_ID, kind: "body", label: displayId },
     ...openFiles.map(
       (relPath): TicketTabDescriptor => ({
         id: `file:${relPath}`,
@@ -374,18 +356,18 @@ export function TicketDetail({
     [activeFileRelPath, markFileDirty],
   );
 
-  // The fallback above is purely visual — it renders Doc without writing the
-  // store, so a persisted `active` naming a session that's since closed (or
-  // one restored from a previous launch, which never repopulates: sessions
-  // don't survive an app restart) stays wedged in workspace.ts forever
-  // (`sanitizeTicketTabs` keeps any record whose `active !== "doc"`). Reset it
-  // to Doc for real once we're sure it's actually stale rather than just not
-  // hydrated yet — `creating` covers the one in-flight window where a new
-  // session tab has been asked for but hasn't landed in the sessions store,
-  // so `tabs` doesn't include it yet even though it's about to.
+  // The fallback above is purely visual — it renders the Ticket Body without
+  // writing the store, so a persisted `active` naming a session that's since
+  // closed (or one restored from a previous launch, which never repopulates:
+  // sessions don't survive an app restart) stays wedged in workspace.ts forever
+  // (`sanitizeTicketTabs` keeps any record whose `active` isn't the body tab).
+  // Reset it to the Ticket Body for real once we're sure it's actually stale
+  // rather than just not hydrated yet — `creating` covers the one in-flight
+  // window where a new session tab has been asked for but hasn't landed in the
+  // sessions store, so `tabs` doesn't include it yet even though it's about to.
   React.useEffect(() => {
     if (creating || activeTabIsRenderable) return;
-    setTicketActiveTab(projectId, ticket.id, DOC_TAB_ID);
+    setTicketActiveTab(projectId, ticket.id, BODY_TAB_ID);
   }, [creating, activeTabIsRenderable, setTicketActiveTab, projectId, ticket.id]);
 
   // A focus target names one concrete ticket-session tab. If tab selection or an
@@ -535,10 +517,10 @@ export function TicketDetail({
           <div
             className={cn(
               "flex min-h-0 flex-1 flex-col overflow-hidden",
-              activeTab.kind === "doc" && "pt-8",
+              activeTab.kind === "body" && "pt-8",
             )}
           >
-            {activeTab.kind === "doc" && (
+            {activeTab.kind === "body" && (
               <ContentColumn>
                 <TicketTitle ticket={ticket} />
               </ContentColumn>
@@ -548,12 +530,12 @@ export function TicketDetail({
             <div
               className={cn(
                 "relative flex min-h-0 flex-1 flex-col",
-                activeTab.kind === "doc" && "mt-3",
+                activeTab.kind === "body" && "mt-3",
               )}
             >
-              {activeTab.kind === "doc" ? (
+              {activeTab.kind === "body" ? (
                 <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
-                  <TicketDocTab ticket={ticket} fileRefs={fileRefs} />
+                  <TicketBodyPanel ticket={ticket} fileRefs={fileRefs} />
                 </div>
               ) : null}
               {activeTab.kind === "file" && activeTab.relPath !== undefined ? (
@@ -577,21 +559,19 @@ export function TicketDetail({
             // Resizable details rail: a grip on its inner (left) edge widens it
             // leftward, mirroring the left sidebar's outer-edge handle. `relative`
             // makes the aside the grip's positioning context; the width persists
-            // app-wide via the ui store.
+            // app-wide via the ui store. Icon-mode content lives in TicketRail.
             <aside
               className="relative flex shrink-0 flex-col border-l border-sidebar-border bg-sidebar"
               style={{ width: railWidth }}
             >
               <RailResizeHandle />
-              {/* The panel owns the scrollable working set AND the pinned History
-                drawer, so History and Details stack as RailDrawer siblings. */}
-              <TicketSessionsPanel
-                ticketId={ticket.id}
+              <TicketRail
+                projectId={projectId}
+                ticket={ticket}
                 creating={creating}
                 onNewSession={() => void createSession()}
                 onActivateSession={setActiveTab}
               />
-              <TicketDetailsDrawer projectId={projectId} ticket={ticket} />
             </aside>
           )}
         </div>

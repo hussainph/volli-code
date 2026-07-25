@@ -23,6 +23,7 @@ import {
   type ActiveSessionRow,
   type SessionOutcome,
 } from "@renderer/components/sidebar/active-session-listing";
+import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { relativeTime } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
@@ -349,7 +350,8 @@ export function ActiveSessions({ project }: { project: Project }) {
     [tickets, containers, eventsByTicket, records, lastOutputAt, parkState, now],
   );
   const rowCount = listing.needsYou.length + listing.active.length;
-  const activeTabId = openTicketId === null ? null : (ticketTabs[openTicketId]?.active ?? "doc");
+  const activeTabId =
+    openTicketId === null ? null : (ticketTabs[openTicketId]?.active ?? TICKET_BODY_TAB_ID);
 
   const activate = (row: ActiveSessionRow) => {
     if (row.target !== null) {
