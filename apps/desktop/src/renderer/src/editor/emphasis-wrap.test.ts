@@ -19,4 +19,11 @@ describe("planEmphasisWrap", () => {
     // Caret sits between the two `**` marks (offset 2), so typing yields `**text**`.
     expect(plan.selections).toEqual([caret(1, 3)]);
   });
+
+  it("keeps an empty caret between marks mid-document", () => {
+    const plan = planEmphasisWrap({ text: "ab", selection: [{ from: 1, to: 1 }], mark: "*" });
+
+    expect(plan.text).toBe("a**b");
+    expect(plan.selections).toEqual([caret(1, 3)]);
+  });
 });
