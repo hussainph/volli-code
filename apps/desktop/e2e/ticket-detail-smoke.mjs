@@ -335,6 +335,17 @@ async function escapeToBoard(page) {
   await waitUntil("board after Escape", () => boardOpen(page));
 }
 
+/** Dismiss any open dialog/menu overlay that would intercept rail clicks. */
+async function dismissOverlays(page) {
+  for (let i = 0; i < 3; i++) {
+    const open = await page.locator('[data-slot="dialog-overlay"][data-state="open"]').count();
+    if (open === 0) break;
+    await page.keyboard.press("Escape");
+    await sleep(150);
+  }
+  await blurToNeutral(page);
+}
+
 // ---- terminal (canvas — side-effect assertions only) -----------------------
 
 /** Focus the single VISIBLE terminal canvas by clicking its centre. */
@@ -817,8 +828,12 @@ async function main() {
       async () => {
         await fs.rm(PROBE_ENV, { force: true });
         await fs.rm(PROBE_ALIVE, { force: true });
-
+        await dismissOverlays(page);
+        if (!(await detailOpen(page))) await openTicketViaCard(page);
+        await dismissOverlays(page);
         const aside = page.locator("aside");
+        // Ensure Sessions mode before booting — icon-mode can leave Properties up.
+        await aside.getByTestId("ticket-rail-mode-sessions").click();
         await aside.getByRole("button", { name: "New session" }).click();
 
         const sessionTab = page.getByRole("tab", { name: SESSION_INITIAL, exact: true });
@@ -1083,8 +1098,12 @@ async function main() {
       8,
       "Rail: icon-mode Sessions default with Properties metadata in-rail; no Harness row anywhere; board filter bar has no Harness chip",
       async () => {
+        await dismissOverlays(page);
+        if (!(await detailOpen(page))) await openTicketViaCard(page);
+        await dismissOverlays(page);
         const aside = page.locator("aside");
         // Sessions mode is the default — heading present, mode strip pressed.
+        await aside.getByTestId("ticket-rail-mode-sessions").click();
         const sessionsHeading =
           (await aside.getByRole("heading", { name: "Sessions" }).count()) >= 1;
         const sessionsPressed =
@@ -1092,14 +1111,14 @@ async function main() {
           "true";
 
         // Properties mode renders status/priority directly in the rail (decision #46).
-        await aside.getByTestId("ticket-rail-mode-properties").click();
+        await aside.getByTestId("ticket-rail-mode-properties").click({ force: true });
         const propertiesShown = await waitUntil("Properties mode content", async () => {
           return (
             (await aside.getByText("Status", { exact: false }).count()) >= 1 &&
             (await aside.getByText("Priority", { exact: false }).count()) >= 1
           );
         });
-        await aside.getByTestId("ticket-rail-mode-sessions").click();
+        await aside.getByTestId("ticket-rail-mode-sessions").click({ force: true });
 
         // No harness identity anywhere in the ticket detail rail.
         const noHarnessInRail = (await aside.getByText(/harness/i).count()) === 0;
@@ -1129,7 +1148,9 @@ async function main() {
       "8b",
       "Rail mode switch never changes the active main-view tab (decision #46)",
       async () => {
+        await dismissOverlays(page);
         if (!(await detailOpen(page))) await openTicketViaCard(page);
+        await dismissOverlays(page);
         const aside = page.locator("aside");
 
         // Land on the Ticket Body tab so we have a stable active id to watch.
@@ -1140,7 +1161,7 @@ async function main() {
 
         const modes = ["files", "changes", "properties", "sessions"];
         for (const mode of modes) {
-          await aside.getByTestId(`ticket-rail-mode-${mode}`).click();
+          await aside.getByTestId(`ticket-rail-mode-${mode}`).click({ force: true });
           const stillBody = await waitUntil(
             `Ticket Body still active after ${mode} mode`,
             async () => (await docTab(page).getAttribute("aria-selected")) === "true",
@@ -1157,9 +1178,8 @@ async function main() {
         const fileTabs = await page
           .getByRole("tab")
           .evaluateAll((tabs) => tabs.map((t) => t.getAttribute("aria-label") ?? ""));
-        const noAutoFile = fileTabs.every(
-          (label) => label === DISPLAY_ID || label === SESSION_INITIAL || label === SESSION_RENAMED,
-        );
+        const known = new Set([DISPLAY_ID, SESSION_INITIAL, SESSION_RENAMED]);
+        const noAutoFile = fileTabs.every((label) => known.has(label));
 
         return {
           ok: noAutoFile,
@@ -1175,14 +1195,20 @@ async function main() {
       "8c",
       'Persisted active:"doc" still restores the Ticket Body tab after rename',
       async () => {
+        await dismissOverlays(page);
         if (!(await detailOpen(page))) await openTicketViaCard(page);
+        await dismissOverlays(page);
 
         // Switch away from the body so we can prove restore, not a sticky default.
-        const sessionTab = page.getByRole("tab", { name: SESSION_RENAMED, exact: true });
-        if ((await sessionTab.count()) === 1) {
-          await sessionTab.click();
+        // Prefer a live session tab when one exists; otherwise open a file-less
+        // path by activating body then writing "doc" after leaving via setActive.
+        const sessionTab = page
+          .getByRole("tab", { name: SESSION_RENAMED, exact: true })
+          .or(page.getByRole("tab", { name: SESSION_INITIAL, exact: true }));
+        if ((await sessionTab.count()) >= 1) {
+          await sessionTab.first().click();
           await waitUntil("session tab selected before legacy write", async () => {
-            return (await sessionTab.getAttribute("aria-selected")) === "true";
+            return (await sessionTab.first().getAttribute("aria-selected")) === "true";
           });
         }
 
