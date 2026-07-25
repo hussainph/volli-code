@@ -54,6 +54,8 @@ import {
   launch,
   makeScratch,
   monacoEditor,
+  readDocumentLine,
+  readDocumentView,
   readMonacoState,
   seedProjects,
   waitUntil,
@@ -87,70 +89,6 @@ const BODY = [
   "",
   "Tail line.",
 ].join("\n");
-
-// ---- Document Mode DOM readers ---------------------------------------------
-
-/**
- * Split one rendered document line into what is SEEN and what is COLLAPSED.
- *
- * Monaco renders a view line as leaf spans, one per decoration range, so a
- * collapsed delimiter is its own span carrying `volli-md-hidden`. Partitioning
- * the leaves by computed style is the only honest reading of "is this visible?"
- * — see the file header. Returns null when no rendered line contains `needle`
- * (a virtualized line that has not been rendered yet).
- *
- * @returns {Promise<{text:string, visible:string, collapsed:string,
- *                    classes:string[]}|null>}
- */
-function readDocumentLine(page, needle) {
-  return page.evaluate((search) => {
-    const plain = (value) => (value ?? "").replace(/\u00a0/g, " ");
-    const line = Array.from(document.querySelectorAll(".view-line")).find((el) =>
-      plain(el.textContent).includes(search),
-    );
-    if (!line) return null;
-    // Monaco nests one wrapper span around the per-decoration leaves; only the
-    // leaves hold text.
-    const leaves = Array.from(line.querySelectorAll("span")).filter(
-      (span) => span.children.length === 0,
-    );
-    const isCollapsed = (span) =>
-      getComputedStyle(span).display === "none" || span.getBoundingClientRect().width === 0;
-    const join = (spans) => plain(spans.map((span) => span.textContent ?? "").join(""));
-    const classes = new Set();
-    for (const el of line.querySelectorAll("[class]")) {
-      for (const name of el.classList) if (name.startsWith("volli-md-")) classes.add(name);
-    }
-    return {
-      text: plain(line.textContent),
-      visible: join(leaves.filter((span) => !isCollapsed(span))),
-      collapsed: join(leaves.filter(isCollapsed)),
-      classes: Array.from(classes).sort(),
-    };
-  }, needle);
-}
-
-/**
- * The same partition across EVERY rendered line at once — what check 2 needs,
- * since "no delimiter visible anywhere" is a statement about the whole view.
- *
- * @returns {Promise<{visible:string, collapsed:string}>}
- */
-function readDocumentView(page) {
-  return page.evaluate(() => {
-    const plain = (value) => (value ?? "").replace(/\u00a0/g, " ");
-    const leaves = Array.from(document.querySelectorAll(".view-line span")).filter(
-      (span) => span.children.length === 0,
-    );
-    const isCollapsed = (span) =>
-      getComputedStyle(span).display === "none" || span.getBoundingClientRect().width === 0;
-    const join = (spans) => plain(spans.map((span) => span.textContent ?? "").join(""));
-    return {
-      visible: join(leaves.filter((span) => !isCollapsed(span))),
-      collapsed: join(leaves.filter(isCollapsed)),
-    };
-  });
-}
 
 const docTab = (page) => page.getByRole("tab", { name: DISPLAY_ID, exact: true });
 const headingLine = (page) => page.locator(".view-line").filter({ hasText: HEADING_TEXT }).first();

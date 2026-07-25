@@ -35,10 +35,10 @@
  *                      several editors. Typing is click-then-keyboard (Monaco's
  *                      input surface is not a textarea) and always waits for the
  *                      characters to land.
- *   • readHiddenMarks()/isCollapsed()/marksFor() — Document Mode's collapsed
- *                      punctuation, read through COMPUTED STYLE (textContent
- *                      still returns `display:none` text, so it cannot answer
- *                      "is this delimiter visible?").
+ *   • readDocumentLine()/readDocumentView() — Document Mode's rendered text split
+ *                      into what is SEEN and what is COLLAPSED, by COMPUTED
+ *                      STYLE. textContent still returns `display:none` text, so
+ *                      it cannot answer "is this delimiter visible?".
  *   • cardById()/columnCount() — the board DOM readers both composer probes need.
  *
  * These smokes are NOT wired into `vp test`; they need a display + the built app.
@@ -391,7 +391,7 @@ export async function typeIntoMonaco(scope, text) {
  * NOTE: this is `textContent`, so it INCLUDES text Document Mode has collapsed
  * with `display:none` (`volli-md-hidden`). That makes it the right reader for
  * "does the buffer contain X" and the WRONG one for "is X visible" — for the
- * latter use {@link readHiddenMarks}, which consults computed style.
+ * latter use {@link readDocumentLine}, which consults computed style.
  *
  * @param {import("playwright-core").Page | import("playwright-core").Locator} scope
  */
@@ -404,44 +404,75 @@ export async function readMonacoText(scope) {
 }
 
 /**
- * Every `volli-md-hidden` span currently in the page, with the computed style
- * that decides whether it is actually collapsed.
+ * Split ONE rendered Document Mode line into what a human SEES and what is
+ * COLLAPSED, plus the `volli-md-*` classes it carries. Returns null when no
+ * rendered line contains `needle` (a virtualized line Monaco has not drawn yet).
  *
- * This exists because `textContent` returns CSS-hidden text: Document Mode
- * collapses markdown punctuation with a `display:none` inline class rather than
- * removing it from the model (Monaco has no `Decoration.replace`), so asserting
- * `!text.includes("## ")` FAILS even when the reveal rule is working perfectly.
- * The only honest signal is geometry.
+ * This partition is the only honest reading of "is this delimiter visible?".
+ * Monaco has no `Decoration.replace`, so Document Mode collapses markdown
+ * punctuation with an `inlineClassName` whose CSS is `display:none`: the
+ * characters stay in the DOM and `textContent` still returns them, which means
+ * `!line.includes("## ")` FAILS even when the reveal rule is working perfectly.
+ * Reading computed style is also strictly STRONGER than the CodeMirror-era text
+ * assertions it replaces — it proves the mark is present AND invisible, where a
+ * projection that never ran at all used to pass.
+ *
+ * Monaco renders a view line as leaf spans, one per decoration range, so a
+ * collapsed delimiter is always its own span.
  *
  * @param {import("playwright-core").Page} page
- * @returns {Promise<{text: string, display: string, width: number}[]>}
+ * @param {string} needle
+ * @returns {Promise<{text:string, visible:string, collapsed:string, classes:string[]}|null>}
  */
-export async function readHiddenMarks(page) {
-  return page.evaluate(() =>
-    Array.from(document.querySelectorAll(".volli-md-hidden")).map((el) => ({
-      text: el.textContent ?? "",
-      display: getComputedStyle(el).display,
-      width: el.getBoundingClientRect().width,
-    })),
-  );
-}
-
-/** Is `mark` (from {@link readHiddenMarks}) genuinely invisible? */
-export function isCollapsed(mark) {
-  return mark.display === "none" || mark.width === 0;
+export function readDocumentLine(page, needle) {
+  return page.evaluate((search) => {
+    const plain = (value) => (value ?? "").replace(/\u00a0/g, " ");
+    const line = Array.from(document.querySelectorAll(".view-line")).find((el) =>
+      plain(el.textContent).includes(search),
+    );
+    if (!line) return null;
+    const leaves = Array.from(line.querySelectorAll("span")).filter(
+      (span) => span.children.length === 0,
+    );
+    const isCollapsed = (span) =>
+      getComputedStyle(span).display === "none" || span.getBoundingClientRect().width === 0;
+    const join = (spans) => plain(spans.map((span) => span.textContent ?? "").join(""));
+    const classes = new Set();
+    for (const el of line.querySelectorAll("[class]")) {
+      for (const name of el.classList) if (name.startsWith("volli-md-")) classes.add(name);
+    }
+    return {
+      text: plain(line.textContent),
+      visible: join(leaves.filter((span) => !isCollapsed(span))),
+      collapsed: join(leaves.filter(isCollapsed)),
+      classes: Array.from(classes).sort(),
+    };
+  }, needle);
 }
 
 /**
- * Are the marks whose text is exactly `text` (e.g. `"## "`, `"**"`) present and
- * ALL collapsed? `null` means no such mark exists at all, which callers must
- * treat as a failure rather than a pass — a projection that never ran also
- * renders nothing hidden.
+ * The same seen/collapsed partition across EVERY rendered line at once — what
+ * "no delimiter is visible ANYWHERE" needs, since that is a statement about the
+ * whole view rather than one line. See {@link readDocumentLine} for why computed
+ * style is the only valid signal.
  *
- * @param {{text: string, display: string, width: number}[]} marks
- * @param {string} text
+ * @param {import("playwright-core").Page} page
+ * @returns {Promise<{visible:string, collapsed:string}>}
  */
-export function marksFor(marks, text) {
-  return marks.filter((mark) => mark.text === text);
+export function readDocumentView(page) {
+  return page.evaluate(() => {
+    const plain = (value) => (value ?? "").replace(/\u00a0/g, " ");
+    const leaves = Array.from(document.querySelectorAll(".view-line span")).filter(
+      (span) => span.children.length === 0,
+    );
+    const isCollapsed = (span) =>
+      getComputedStyle(span).display === "none" || span.getBoundingClientRect().width === 0;
+    const join = (spans) => plain(spans.map((span) => span.textContent ?? "").join(""));
+    return {
+      visible: join(leaves.filter((span) => !isCollapsed(span))),
+      collapsed: join(leaves.filter(isCollapsed)),
+    };
+  });
 }
 
 /**
