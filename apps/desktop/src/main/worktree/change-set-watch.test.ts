@@ -149,6 +149,57 @@ describe("WorktreeChangeWatchManager", () => {
     expect(webContents.send).toHaveBeenCalledTimes(1);
   });
 
+  it("restarts the watch when the ticket's worktree moved", () => {
+    vi.useFakeTimers();
+    manager = makeManager();
+    const webContents = makeWebContents();
+
+    manager.watch(webContents as never, "t1", "/wt/old");
+    manager.watch(webContents as never, "t1", "/wt/old");
+    expect(watchCalls).toHaveLength(1);
+
+    // Removed and re-ensured at a fresh path inside one window's lifetime.
+    manager.watch(webContents as never, "t1", "/wt/new");
+    expect(watchCalls).toHaveLength(2);
+    expect(watchCalls[0]!.watcher.close).toHaveBeenCalled();
+    expect(watchCalls[1]?.path).toBe("/wt/new");
+
+    watchCalls[0]!.cb("change", "stale.ts");
+    vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
+    expect(webContents.send).not.toHaveBeenCalled();
+
+    watchCalls[1]!.cb("change", "fresh.ts");
+    vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
+    expect(webContents.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("unwatchTicket drops every window's watch on that ticket", () => {
+    vi.useFakeTimers();
+    manager = makeManager();
+    const windowA = makeWebContents(1);
+    const windowB = makeWebContents(2);
+
+    manager.watch(windowA as never, "t1", "/wt/t1");
+    manager.watch(windowB as never, "t1", "/wt/t1");
+    manager.watch(windowA as never, "t2", "/wt/t2");
+
+    manager.unwatchTicket("t1");
+    expect(watchCalls[0]!.watcher.close).toHaveBeenCalled();
+    expect(watchCalls[1]!.watcher.close).toHaveBeenCalled();
+    expect(watchCalls[2]!.watcher.close).not.toHaveBeenCalled();
+
+    watchCalls[0]!.cb("change", "gone.ts");
+    watchCalls[1]!.cb("change", "gone.ts");
+    vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
+    expect(windowA.send).not.toHaveBeenCalled();
+    expect(windowB.send).not.toHaveBeenCalled();
+
+    // The untouched ticket keeps working.
+    watchCalls[2]!.cb("change", "still-here.ts");
+    vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
+    expect(windowA.send).toHaveBeenCalledWith("volli:worktree-changed", { ticketId: "t2" });
+  });
+
   it("does not leak a watcher across tickets after unwatch", () => {
     vi.useFakeTimers();
     manager = makeManager();

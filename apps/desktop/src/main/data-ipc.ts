@@ -497,6 +497,10 @@ export function registerDataIpcHandlers(
         force: input.force,
       });
       if (!result.ok) return { ok: false, error: result.error };
+      // The directory is gone; every window's recursive watch on it must go
+      // with it. Renderers never unwatch here — from their side the ticket
+      // simply stopped having a worktree.
+      changeWatchManager.unwatchTicket(input.ticketId);
       // The worktree identity changed (path cleared) for THIS ticket — re-hydrate
       // every board, and let this ticket's own surfaces refresh promptly.
       broadcastDataChanged({
@@ -754,6 +758,9 @@ export function registerDataIpcHandlers(
       }
       const result = await archiveAndClean(worktreeDeps(db), input.ticketId);
       if (!result.ok) return { ok: false, error: result.error };
+      // Same as worktree-remove: the archived worktree's directory is gone, so
+      // no window may keep a recursive watch pinned to it.
+      changeWatchManager.unwatchTicket(input.ticketId);
       // The ticket archived + its worktree was removed — target it so its own
       // still-open surfaces refresh (the full re-hydrate drops the card).
       broadcastDataChanged({ ticketId: input.ticketId, kind: "retention" });

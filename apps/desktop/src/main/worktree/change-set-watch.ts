@@ -106,10 +106,20 @@ export class WorktreeChangeWatchManager {
     return `${webContents.id}:${ticketId}`;
   }
 
-  /** Idempotent: watching an already-watched ticket for this window is a no-op. */
+  /**
+   * Idempotent: watching an already-watched ticket for this window is a no-op —
+   * UNLESS the ticket's worktree has moved. A ticket can be removed and re-ensured
+   * at a fresh path within one window's lifetime, and the old subscription would
+   * then be watching a directory that no longer belongs to it, so a differing
+   * path restarts the watch rather than silently keeping the stale one.
+   */
   watch(webContents: WebContents, ticketId: string, worktreePath: string): Result {
     const key = this.keyFor(webContents, ticketId);
-    if (this.subs.has(key)) return { ok: true };
+    const existing = this.subs.get(key);
+    if (existing) {
+      if (existing.worktreePath === worktreePath) return { ok: true };
+      this.teardown(key);
+    }
     if (webContents.isDestroyed()) return { ok: true };
 
     const sub: WorktreeWatchSubscription = {
@@ -145,6 +155,18 @@ export class WorktreeChangeWatchManager {
   /** Tears down the watch; safe if never watched. */
   unwatch(webContents: WebContents, ticketId: string): void {
     this.teardown(this.keyFor(webContents, ticketId));
+  }
+
+  /**
+   * Tears down EVERY window's watch on a ticket. The remove/archive paths call
+   * this: a recursive `fs.watch` keeps a handle on a directory that is about to
+   * be deleted, and the renderer has no reason to unwatch — from its side
+   * nothing happened, the ticket simply stopped having a worktree.
+   */
+  unwatchTicket(ticketId: string): void {
+    for (const [key, sub] of [...this.subs]) {
+      if (sub.ticketId === ticketId) this.teardown(key);
+    }
   }
 
   /**
