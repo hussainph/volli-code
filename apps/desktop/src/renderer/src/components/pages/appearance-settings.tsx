@@ -5,24 +5,36 @@ import { FileTextIcon } from "@phosphor-icons/react/dist/csr/FileText";
 import { MinusIcon } from "@phosphor-icons/react/dist/csr/Minus";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import { SlidersIcon } from "@phosphor-icons/react/dist/csr/Sliders";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { Command } from "cmdk";
 import { getBuiltinTheme, listBuiltinThemeNames } from "restty";
-import { errorMessage } from "@volli/shared";
+import { errorMessage, type ThemeDefinition } from "@volli/shared";
 
 import { SettingsRow, SettingsSection } from "@renderer/components/pages/settings-shell";
+import { ThemeEditor } from "@renderer/components/theme/theme-editor";
 import { ThemePicker } from "@renderer/components/theme/theme-picker";
 import {
   buildTerminalSettingRows,
   type TerminalSettingKey,
   type TerminalSettingRow,
 } from "@renderer/components/theme/terminal-settings-model";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@renderer/components/ui/alert-dialog";
 import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { writeThrough } from "@renderer/stores/mutate";
-import { useThemeStore } from "@renderer/stores/theme";
+import { useThemeStore, type ThemeScope } from "@renderer/stores/theme";
 import { previewTerminalTheme } from "@renderer/terminal/appearance";
 import { DEFAULT_TERMINAL_FONT_SIZE } from "@renderer/terminal/appearance-model";
 import { listLocalFontFamilies } from "@renderer/terminal/local-fonts";
@@ -66,11 +78,7 @@ export function AppearanceSettings() {
 
   return (
     <>
-      <SettingsSection title="App theme" icon={PaletteIcon}>
-        <div className="overflow-hidden rounded-lg border border-border bg-background">
-          <ThemePicker autoFocus={false} />
-        </div>
-      </SettingsSection>
+      <AppThemeSection />
 
       <SettingsSection
         title="Terminal"
@@ -100,6 +108,135 @@ export function AppearanceSettings() {
         </SettingsRow>
       </SettingsSection>
     </>
+  );
+}
+
+/** Settings edits the theme every project inherits, so its scope is the global one. */
+const GLOBAL_SCOPE: ThemeScope = { kind: "global" };
+
+/** What the editor is open on: which theme, and whether the name is the point. */
+interface OpenEdit {
+  source: ThemeDefinition;
+  focusName: boolean;
+}
+
+/**
+ * The app-surface library: the picker, and the editor behind it.
+ *
+ * The two are one surface in two modes rather than two panels side by side.
+ * Both drive the SAME live preview — the whole app repaints — so showing them
+ * together would mean two controls arguing over what is on screen: moving the
+ * picker's cursor would stomp the seed you were dragging, and hovering away
+ * would revert it. One at a time makes "what am I looking at" answerable.
+ */
+function AppThemeSection() {
+  const applied = useThemeStore((state) => state.global);
+  const [editing, setEditing] = React.useState<OpenEdit | null>(null);
+  const [deleting, setDeleting] = React.useState<ThemeDefinition | null>(null);
+
+  // The theme files are hand-editable (#71), so entering this pane re-reads
+  // them rather than trusting whatever boot last saw.
+  React.useEffect(() => {
+    void useThemeStore.getState().loadCustomThemes();
+  }, []);
+
+  const edit = (source: ThemeDefinition, focusName = false): void =>
+    setEditing({ source, focusName });
+
+  return (
+    <SettingsSection
+      title="App theme"
+      icon={PaletteIcon}
+      action={
+        editing === null ? (
+          <Button variant="outline" size="sm" onClick={() => edit(applied)}>
+            <SlidersIcon weight="fill" />
+            Customize
+          </Button>
+        ) : null
+      }
+    >
+      {editing === null ? (
+        <div className="overflow-hidden rounded-lg border border-border bg-background">
+          <ThemePicker
+            autoFocus={false}
+            // Duplicate and Rename are both "open the editor on this" — Rename
+            // just lands on the name field. There is no rename verb to call:
+            // the slug is the identity, so a rename is an ordinary save.
+            onDuplicate={(theme) => edit(theme)}
+            onRename={(theme) => edit(theme, true)}
+            onDelete={setDeleting}
+            onOpenFile={(theme) => void useThemeStore.getState().openCustomThemeFile(theme.slug)}
+          />
+        </div>
+      ) : (
+        <ThemeEditor
+          key={editing.source.slug}
+          source={editing.source}
+          focusName={editing.focusName}
+          scope={GLOBAL_SCOPE}
+          onClose={() => setEditing(null)}
+        />
+      )}
+      <DeleteThemeDialog theme={deleting} onOpenChange={() => setDeleting(null)} />
+    </SettingsSection>
+  );
+}
+
+/**
+ * Deleting a theme deletes a FILE the user wrote, and the ⋯ menu it is reached
+ * from is one mis-aimed click away from Open file — so it confirms, and names
+ * the theme it is about to remove.
+ */
+function DeleteThemeDialog({
+  theme,
+  onOpenChange,
+}: {
+  theme: ThemeDefinition | null;
+  onOpenChange(open: boolean): void;
+}) {
+  const [pending, setPending] = React.useState(false);
+
+  return (
+    <AlertDialog
+      open={theme !== null}
+      onOpenChange={(open) => {
+        if (!open) setPending(false);
+        onOpenChange(open);
+      }}
+    >
+      <AlertDialogContent size="sm">
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete {theme?.name}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Its file is removed from your themes folder. Anything already wearing this theme keeps
+            the colors it has.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            disabled={pending}
+            onClick={(event) => {
+              // Kept open across the write, so a failed delete leaves the
+              // confirm (and its toast) rather than closing as if it worked.
+              event.preventDefault();
+              if (theme === null) return;
+              setPending(true);
+              void useThemeStore
+                .getState()
+                .deleteCustomTheme(theme.slug)
+                .then((deleted) => {
+                  setPending(false);
+                  if (deleted) onOpenChange(false);
+                });
+            }}
+          >
+            Delete theme
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 

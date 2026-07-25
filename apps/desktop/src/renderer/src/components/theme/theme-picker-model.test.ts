@@ -8,6 +8,7 @@ import {
   noteRecentTheme,
   themeHueFamily,
   themeForRowKey,
+  themeRowActionKeys,
   toggleFavoriteTheme,
 } from "./theme-picker-model";
 
@@ -193,5 +194,48 @@ describe("noteRecentTheme", () => {
 
     expect(noted).toHaveLength(MAX_RECENT_THEMES);
     expect(noted[0]).toBe("fresh");
+  });
+});
+
+describe("themeRowActionKeys", () => {
+  const all = {
+    onDuplicate: () => {},
+    onRename: () => {},
+    onDelete: () => {},
+    onOpenFile: () => {},
+  };
+
+  it("offers nothing until a host supplies handlers", () => {
+    expect(themeRowActionKeys({}, true)).toEqual([]);
+  });
+
+  it("offers only what was supplied", () => {
+    expect(themeRowActionKeys({ onDuplicate: () => {} }, true)).toEqual(["duplicate"]);
+  });
+
+  it("offers a shipped theme only Duplicate — it has no file to rename, open or delete", () => {
+    expect(themeRowActionKeys(all, false)).toEqual(["duplicate"]);
+  });
+
+  it("offers a theme of the user's own all four, in menu order", () => {
+    expect(themeRowActionKeys(all, true)).toEqual(["duplicate", "rename", "open-file", "delete"]);
+  });
+});
+
+describe("custom themes in the catalog", () => {
+  const MINE = theme("Sunset", "sunset", "#ff8a3d");
+
+  it("marks the rows whose theme the user owns, and only those", () => {
+    const [all] = build({ themes: [...THEMES, MINE], customSlugs: ["sunset"] });
+    const rows = all!.rows;
+
+    expect(rows.find((row) => row.theme.slug === "sunset")?.custom).toBe(true);
+    expect(rows.find((row) => row.theme.slug === "ember")?.custom).toBe(false);
+  });
+
+  it("treats every theme as shipped when no custom slugs are supplied", () => {
+    const [all] = build({ themes: [...THEMES, MINE] });
+
+    expect(all!.rows.every((row) => !row.custom)).toBe(true);
   });
 });

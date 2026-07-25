@@ -71,6 +71,45 @@ export function deriveThemeTags(theme: ThemeDefinition): ThemeTag[] {
   ];
 }
 
+/**
+ * Row actions (#73). Each is OMITTED from the ⋯ menu until a host supplies its
+ * handler, and with none supplied there is no menu at all — a menu of dead
+ * items promises an editor that doesn't exist.
+ */
+export interface ThemeRowActions {
+  /** Copy a theme into an editable one of your own. */
+  onDuplicate?(theme: ThemeDefinition): void;
+  onRename?(theme: ThemeDefinition): void;
+  onDelete?(theme: ThemeDefinition): void;
+  /** Open the theme's JSON file — a theme is meant to stay a shareable artifact. */
+  onOpenFile?(theme: ThemeDefinition): void;
+}
+
+/** One ⋯ item, in the order the menu lists them. */
+export type ThemeRowActionKey = "duplicate" | "rename" | "open-file" | "delete";
+
+const ROW_ACTIONS: readonly { key: ThemeRowActionKey; handler: keyof ThemeRowActions }[] = [
+  { key: "duplicate", handler: "onDuplicate" },
+  { key: "rename", handler: "onRename" },
+  { key: "open-file", handler: "onOpenFile" },
+  { key: "delete", handler: "onDelete" },
+];
+
+/**
+ * The ⋯ items a row actually offers: what the host supplied, narrowed by what
+ * the theme can do.
+ *
+ * A shipped theme is immutable and has no file on disk, so Rename, Open file
+ * and Delete are not disabled for it — they are absent. Duplicate is the one
+ * that always applies, and it is also the way to get an editable version of a
+ * built-in, which is exactly what the omitted three would have been for.
+ */
+export function themeRowActionKeys(actions: ThemeRowActions, custom: boolean): ThemeRowActionKey[] {
+  return ROW_ACTIONS.filter(
+    ({ key, handler }) => actions[handler] !== undefined && (custom || key === "duplicate"),
+  ).map(({ key }) => key);
+}
+
 /** The three sections, in the order #73 pins them. */
 export type ThemePickerGroupKey = "favorites" | "recent" | "all";
 
@@ -80,6 +119,8 @@ export interface ThemePickerRow {
   key: string;
   theme: ThemeDefinition;
   favorite: boolean;
+  /** True for a theme of the user's own — which is what decides its ⋯ menu. */
+  custom: boolean;
   tags: ThemeTag[];
 }
 
@@ -97,6 +138,8 @@ export interface ThemePickerInput {
   /** Recently applied slugs, most recent first. */
   recents: readonly string[];
   query: string;
+  /** Slugs of the user's OWN themes — the ones with a file behind them. */
+  customSlugs?: readonly string[];
   /** Overridable for tests; defaults to {@link MAX_RECENT_THEMES}. */
   recentLimit?: number;
 }
@@ -134,15 +177,18 @@ export function buildThemePickerGroups({
   favorites,
   recents,
   query,
+  customSlugs = [],
   recentLimit = MAX_RECENT_THEMES,
 }: ThemePickerInput): ThemePickerGroup[] {
   const favoriteSlugs = new Set(favorites);
+  const ownSlugs = new Set(customSlugs);
   const bySlug = new Map(themes.map((theme) => [theme.slug, theme]));
 
   const row = (groupKey: ThemePickerGroupKey, theme: ThemeDefinition): ThemePickerRow => ({
     key: `${groupKey}:${theme.slug}`,
     theme,
     favorite: favoriteSlugs.has(theme.slug),
+    custom: ownSlugs.has(theme.slug),
     tags: deriveThemeTags(theme),
   });
 
