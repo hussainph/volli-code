@@ -139,6 +139,14 @@ export interface WorktreeDiffInput {
 export interface WorktreeBaseReadInput {
   ticketId: string;
   path: string;
+  /**
+   * Pin the read to a specific base revision — normally the `baseRevision` of
+   * the snapshot the caller is rendering. Without it main re-resolves the merge
+   * base, which can have moved since (the agent committed, someone fetched), so
+   * a diff would show one side from one revision and the other from another.
+   * Omit to read against whatever the base resolves to right now.
+   */
+  baseRevision?: string;
 }
 
 /** `{ rescan: true }` forces a fresh orphan sweep (Settings → Worktrees rescan); omitted/`false` returns the launch's cached report. */
@@ -905,11 +913,16 @@ export type WorktreeDiffResult = Result<{ diff: DiffStat }>;
 export type WorktreeChangeSetResult = Result<{ changeSet: ChangeSetSnapshot }>;
 
 /**
- * Base-revision file contents for `volli:worktree-base-read`. `missing: true`
- * is success (the path was absent at the base), not an error.
+ * Base-revision file contents for `volli:worktree-base-read`. Three success
+ * arms, none of them an error: `content` is decodable text, `missing: true`
+ * means the path was absent at the base (a file the ticket added), and
+ * `binary: true` means the blob is not text — returning its bytes as a string
+ * would hand the caller mojibake to render as a diff.
  */
 export type WorktreeBaseReadResult = Result<
-  { content: string; missing?: undefined } | { missing: true; content?: undefined }
+  | { content: string; missing?: undefined; binary?: undefined }
+  | { missing: true; content?: undefined; binary?: undefined }
+  | { binary: true; content?: undefined; missing?: undefined }
 >;
 
 /**

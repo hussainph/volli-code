@@ -378,7 +378,8 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       return (
         isRecord(input) &&
         typeof input["ticketId"] === "string" &&
-        typeof input["path"] === "string"
+        typeof input["path"] === "string" &&
+        (input["baseRevision"] === undefined || typeof input["baseRevision"] === "string")
       );
     },
     invalidError: "Invalid worktree base read request",

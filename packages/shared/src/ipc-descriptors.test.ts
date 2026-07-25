@@ -943,6 +943,16 @@ describe("DATA_IPC descriptor table", () => {
       expect(guard([{ ticketId: "t1", path: 1 }])).toBe(false);
     });
 
+    it("accepts a pinned baseRevision, present or absent", () => {
+      expect(guard([{ ticketId: "t1", path: "src/a.ts", baseRevision: "abc123" }])).toBe(true);
+      expect(guard([{ ticketId: "t1", path: "src/a.ts", baseRevision: undefined }])).toBe(true);
+    });
+
+    it("rejects a non-string baseRevision", () => {
+      expect(guard([{ ticketId: "t1", path: "src/a.ts", baseRevision: 1 }])).toBe(false);
+      expect(guard([{ ticketId: "t1", path: "src/a.ts", baseRevision: null }])).toBe(false);
+    });
+
     it("rejects a wrong arity", () => {
       expect(guard([])).toBe(false);
     });

@@ -39,10 +39,21 @@ export interface ChangeSetBaseFileInput {
   path: string;
 }
 
-/** Present content at the base revision, or `missing` when the path was absent there. */
+/**
+ * The blob at the base revision: decodable text, `missing` when the path was
+ * absent there, or `binary` when it is not text at all.
+ */
 export type ChangeSetBaseFile =
-  | { content: string; missing?: undefined }
-  | { missing: true; content?: undefined };
+  | { content: string; missing?: undefined; binary?: undefined }
+  | { missing: true; content?: undefined; binary?: undefined }
+  | { binary: true; content?: undefined; missing?: undefined };
+
+/**
+ * Prefix a base blob is NUL-sniffed over, matching volli-fs's
+ * `BINARY_SNIFF_BYTES` so the same file is never text in one surface and
+ * binary in another.
+ */
+const BINARY_SNIFF_CHARS = 64 * 1024;
 
 interface ParsedNameStatus {
   status: ChangeSetFileStatus;
@@ -144,10 +155,27 @@ export async function readChangeSetBaseFile(
   }
   try {
     const content = await git(["show", object], input.worktreePath);
+    if (isBinaryText(content)) return ok({ binary: true });
     return ok({ content });
   } catch (caught) {
     return err(stderrOf(caught));
   }
+}
+
+/**
+ * NUL-sniff over the leading window, the same verdict volli-fs reaches for the
+ * working-tree side of the pair (`readContent`), so one half of a diff is never
+ * text while the other is a binary stub.
+ *
+ * The blob arrives utf8-decoded rather than as bytes, which costs nothing for
+ * this test: a 0x00 byte decodes to U+0000 and nothing else does, so a NUL in
+ * the window survives the decode exactly. Only the bytes of a file we are about
+ * to refuse to render are lossy.
+ */
+function isBinaryText(content: string): boolean {
+  const window =
+    content.length > BINARY_SNIFF_CHARS ? content.slice(0, BINARY_SNIFF_CHARS) : content;
+  return window.includes("\0");
 }
 
 /** Rejects absolute paths and any `..` segment after normalization. */

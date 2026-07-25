@@ -645,7 +645,12 @@ export function registerDataIpcHandlers(
     "volli:worktree-base-read": async (
       input: WorktreeBaseReadInput,
     ): Promise<WorktreeBaseReadResult> => {
-      const read = await readWorktreeBaseFile(worktreeDeps(db), input.ticketId, input.path);
+      const read = await readWorktreeBaseFile(
+        worktreeDeps(db),
+        input.ticketId,
+        input.path,
+        input.baseRevision,
+      );
       switch (read.kind) {
         case "missing-ticket":
           return { ok: false, error: "Unknown ticket" };
@@ -656,9 +661,9 @@ export function registerDataIpcHandlers(
         case "base-read-error":
           return { ok: false, error: read.error };
         case "ok":
-          return read.file.missing === true
-            ? { ok: true, missing: true }
-            : { ok: true, content: read.file.content };
+          if (read.file.missing === true) return { ok: true, missing: true };
+          if (read.file.binary === true) return { ok: true, binary: true };
+          return { ok: true, content: read.file.content };
       }
     },
 

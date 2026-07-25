@@ -288,9 +288,17 @@ const api = {
     /** Composed Change Set snapshot relative to the ticket's recorded base. */
     changeSet: (ticketId: string): Promise<WorktreeChangeSetResult> =>
       invoke("volli:worktree-change-set", { ticketId }),
-    /** Reads one path at the Change Set base revision without mutating the checkout. */
-    baseRead: (ticketId: string, path: string): Promise<WorktreeBaseReadResult> =>
-      invoke("volli:worktree-base-read", { ticketId, path }),
+    /**
+     * Reads one path at the Change Set base revision without mutating the
+     * checkout. Pass the `baseRevision` of the snapshot being rendered to pin
+     * the read to it; omit it to read against the base as it resolves now.
+     */
+    baseRead: (
+      ticketId: string,
+      path: string,
+      baseRevision?: string,
+    ): Promise<WorktreeBaseReadResult> =>
+      invoke("volli:worktree-base-read", { ticketId, path, baseRevision }),
     /** Debounced recursive watch on the ticket worktree; pair with `unwatchChangeSet` on leave. */
     watchChangeSet: (ticketId: string): Promise<Result> =>
       invoke("volli:worktree-change-watch", { ticketId }),

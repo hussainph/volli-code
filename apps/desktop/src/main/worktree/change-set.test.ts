@@ -606,6 +606,49 @@ describe("changeSetSnapshot — real git repository", () => {
     expect(result.value.baseRevision).not.toBe(runRepoGit(dir, ["rev-parse", "main"]).trim());
   });
 
+  it("reports a NUL-bearing base blob as binary rather than mojibake", async () => {
+    const dir = makeRepo();
+    writeFileSync(join(dir, "asset.bin"), Buffer.from([0x01, 0x02, 0x00, 0x03, 0xff]));
+    runRepoGit(dir, ["add", "asset.bin"]);
+    runRepoGit(dir, ["commit", "-q", "-m", "binary"]);
+    const head = runRepoGit(dir, ["rev-parse", "HEAD"]).trim();
+
+    const read = await readChangeSetBaseFile(runGitCapturingAsync, {
+      worktreePath: dir,
+      baseRevision: head,
+      path: "asset.bin",
+    });
+
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.value).toEqual({ binary: true });
+  });
+
+  it("reads the pinned revision even after the merge base moves", async () => {
+    const dir = makeRepo();
+    const forkPoint = runRepoGit(dir, ["rev-parse", "HEAD"]).trim();
+
+    runRepoGit(dir, ["checkout", "-b", "ticket"]);
+    writeFileSync(join(dir, "tracked.ts"), "line one\nline two\n");
+    runRepoGit(dir, ["add", "tracked.ts"]);
+    runRepoGit(dir, ["commit", "-q", "-m", "ticket work"]);
+    // main catches up to the ticket, so the merge base is no longer the fork.
+    runRepoGit(dir, ["checkout", "-q", "main"]);
+    runRepoGit(dir, ["merge", "-q", "--ff-only", "ticket"]);
+    runRepoGit(dir, ["checkout", "-q", "ticket"]);
+    expect(runRepoGit(dir, ["merge-base", "main", "HEAD"]).trim()).not.toBe(forkPoint);
+
+    const pinned = await readChangeSetBaseFile(runGitCapturingAsync, {
+      worktreePath: dir,
+      baseRevision: forkPoint,
+      path: "tracked.ts",
+    });
+
+    expect(pinned.ok).toBe(true);
+    if (!pinned.ok) return;
+    expect(pinned.value).toEqual({ content: "line one\n" });
+  });
+
   it("marks a real merge conflict as conflicted relative to the base", async () => {
     const dir = mkdtempSync(join(tmpdir(), "volli-changeset-conflict-"));
     tempDirs.push(dir);

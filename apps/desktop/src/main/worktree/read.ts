@@ -209,16 +209,25 @@ export async function readWorktreeChangeSet(
  * through the very same {@link resolveChangeSetBaseRevision} the snapshot uses —
  * the two must agree on the merge base, or the diff a caller renders would be
  * taken against a revision the Change Set never measured.
+ *
+ * `pinnedRevision` short-circuits that resolve. A caller rendering a snapshot
+ * already knows the revision it was stamped on, and the merge base can move
+ * between the snapshot and this read (the agent commits, someone fetches), so
+ * re-resolving would silently pair one side of a diff with a different base.
  */
 export async function readWorktreeBaseFile(
   deps: WorktreeReadDeps,
   ticketId: string,
   path: string,
+  pinnedRevision?: string,
 ): Promise<WorktreeBaseFileRead> {
   const git = deps.gitAsync ?? runGitCapturingAsync;
   const resolved = resolveReadTarget(deps, ticketId);
   if (resolved.kind !== "ok") return resolved;
   const { target } = resolved;
+  if (pinnedRevision !== undefined && pinnedRevision.length > 0) {
+    return readAtRevision(git, target, pinnedRevision, path);
+  }
   if (!target.baseBranch) {
     return {
       kind: "base-read-error",
@@ -244,6 +253,16 @@ export async function readWorktreeBaseFile(
   } catch (caught) {
     return { kind: "base-read-error", displayId: target.displayId, error: stderrOf(caught) };
   }
+  return readAtRevision(git, target, baseRevision, path);
+}
+
+/** The blob read itself, shared by the pinned and the freshly-resolved paths. */
+async function readAtRevision(
+  git: RunGitAsync,
+  target: ReadTarget,
+  baseRevision: string,
+  path: string,
+): Promise<WorktreeBaseFileRead> {
   const file = await readChangeSetBaseFile(git, {
     worktreePath: target.worktreePath,
     baseRevision,
