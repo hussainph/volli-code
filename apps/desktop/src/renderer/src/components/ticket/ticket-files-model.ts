@@ -69,8 +69,8 @@ export function buildTicketFilesNavigator(input: TicketFilesNavigatorInput): Tic
     });
   }
 
-  const referenced = [...byPath.values()].sort((a, b) => comparePath(a.relPath, b.relPath));
-  const worktree = [...input.worktreeEntries].sort((a, b) => comparePath(a.relPath, b.relPath));
+  const referenced = [...byPath.values()].toSorted((a, b) => comparePath(a.relPath, b.relPath));
+  const worktree = input.worktreeEntries.toSorted((a, b) => comparePath(a.relPath, b.relPath));
 
   return { referenced, worktree };
 }

@@ -149,6 +149,8 @@ export function TicketFilesList({
   );
 }
 
+const NO_ATTACHMENTS: readonly TicketAttachment[] = [];
+
 /**
  * Ticket Files panel: body refs + optional attachments + worktree directory
  * listing. Attachments are accepted as a prop because the renderer has no
@@ -156,7 +158,7 @@ export function TicketFilesList({
  */
 export function TicketFilesPanel({
   ticket,
-  attachments = [],
+  attachments = NO_ATTACHMENTS,
   onOpenFile,
 }: {
   ticket: Ticket;

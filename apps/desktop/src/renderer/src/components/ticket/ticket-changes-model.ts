@@ -71,7 +71,7 @@ export function presentChangeRow(file: ChangeSetFile): ChangeRowPresentation {
 
 /** Stable path-ordered flat list (decision #53 — never a tree). */
 export function sortChangeSetFiles(files: readonly ChangeSetFile[]): ChangeSetFile[] {
-  return [...files].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  return files.toSorted((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
 
 /**
