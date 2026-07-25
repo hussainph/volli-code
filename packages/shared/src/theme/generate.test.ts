@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { apcaLc, hexToOklch, oklchToHex } from "./color";
 import { DEFAULT_THEME, type ThemeDefinition } from "./definition";
-import { generateThemeTokens, pickAccentLabel } from "./generate";
+import { generateThemeTokens, pickAccentLabel, solveLightnessForContrast } from "./generate";
 import { THEME_TOKEN_NAMES, type ThemeTokens } from "./tokens";
 
 describe("generateThemeTokens", () => {
@@ -148,6 +148,33 @@ describe("the generator's guarantees, over 360 hues × 5 chromas", () => {
           hexToOklch(tokens[border]).L - backgroundL,
           `${border} for seed ${seed}`,
         ).toBeGreaterThanOrEqual(0.07);
+      }
+    }
+  });
+
+  it("keeps every border a visible edge on --card too, for every seed", () => {
+    // The pair the edge-separation argument actually rests on: borders are
+    // drawn on cards far more often than on the page, and --card sits a rung
+    // above --background, so this is the tighter of the two tests — passing the
+    // one above says nothing about this one.
+    //
+    // The floor is 0.062 against a measured sweep minimum of 0.0656, at seed
+    // #997964 (--border/--input, the lowest border rung); the headroom is
+    // 8-bit quantisation of two rungs, same as the --background test's.
+    //
+    // --sidebar-border is deliberately absent. Its rung (L 0.255) is only 0.055
+    // above --card's by construction, so it *cannot* meet this floor — measured
+    // minimum 0.0517 at seed #71886b. Moving the ladder to fix that would
+    // repaint every shipped theme, so it stays as authored and stays asserted
+    // against --background, where it clears comfortably.
+    const borders = ["--border", "--input", "--border-hover", "--border-strong"] as const;
+    for (const { seed, tokens } of sweep) {
+      const cardL = hexToOklch(tokens["--card"]).L;
+      for (const border of borders) {
+        expect(
+          hexToOklch(tokens[border]).L - cardL,
+          `${border} on --card for seed ${seed}`,
+        ).toBeGreaterThanOrEqual(0.062);
       }
     }
   });
@@ -298,36 +325,36 @@ describe("the clamps", () => {
   });
 
   it("floors a barely-tinted seed's accent chroma at 0.06", () => {
-    const tokens = generateThemeTokens(themeFor("#808080"));
+    // Cs 0.025 — tinted enough to clear the grey guard (the guard's own path
+    // is asserted below), still far under the accent window's floor.
+    const tokens = generateThemeTokens(themeFor("#8e7c75"));
     expect(hexToOklch(tokens["--primary"]).C).toBeCloseTo(0.06, 3);
   });
 
-  it("takes the grey path for a grey seed, leaving neutrals untinted", () => {
-    // Cs < 0.02 ⇒ Cn = 0: the muddy-black guard. Every neutral must come out
-    // a true grey (r == g == b), while the accent still gets its floor
-    // chroma — a --primary with no chroma at all would stop reading as a
-    // control.
+  it("takes the grey path for a grey seed, leaving the whole theme untinted", () => {
+    // Cs < 0.02 ⇒ Cn = 0: the muddy-black guard. It covers the accent too, and
+    // has to. A colorless seed's hue is float residue — #808080 reports
+    // h 89.88° with C 2e-8 — so flooring the accent at C 0.06 would have paid
+    // out a muddy olive `--primary` at a hue that jumps somewhere unrelated
+    // when the seed changes by one bit. Grey in, grey out: every generated
+    // token comes back a true grey (r == g == b), `--primary` included.
     const tokens = generateThemeTokens(themeFor("#808080"));
-    const neutrals = [
-      "--rail",
-      "--background",
-      "--card",
-      "--popover",
-      "--secondary",
-      "--muted",
-      "--accent",
-      "--border",
-      "--border-hover",
-      "--border-strong",
-      "--foreground",
-      "--muted-foreground",
-      "--sidebar-foreground",
-    ] as const;
-    for (const name of neutrals) {
-      const hex = tokens[name];
+    for (const [name, hex] of Object.entries(tokens)) {
+      // --destructive is hue-locked and ignores the seed by design (step 8).
+      if (name.startsWith("--destructive")) continue;
       expect(hex.slice(1, 3), name).toBe(hex.slice(3, 5));
       expect(hex.slice(3, 5), name).toBe(hex.slice(5, 7));
     }
+  });
+
+  it("keeps the achromatic accent legible and at its fixed lightness", () => {
+    // A neutral --primary is still a button: its label must clear the same
+    // Lc 60 floor, and it must sit on the ladder's accent rung like any other.
+    const tokens = generateThemeTokens(themeFor("#808080"));
+    expect(tokens["--primary"]).toBe("#929292");
+    expect(tokens["--primary-foreground"]).toBe("#ffffff");
+    expect(apcaLc(tokens["--primary-foreground"], tokens["--primary"])).toBeGreaterThanOrEqual(60);
+    expect(hexToOklch(tokens["--primary"]).L).toBeCloseTo(0.661, 2);
   });
 
   it("still solves a readable foreground from a near-black seed", () => {
@@ -457,6 +484,19 @@ describe("the unlocked accent (#75)", () => {
     );
   });
 
+  it("still colors the accent when the seed itself is grey", () => {
+    // The grey guard zeroes the accent's chroma for a colorless seed, but only
+    // because that seed has no hue to honor. An authored accent does, and it
+    // outranks the guard: saturated accent on genuinely achromatic chrome is
+    // the exact pairing #75 exists to make expressible.
+    const tokens = generateThemeTokens({
+      ...themeFor("#808080"),
+      accent: "#e8652a",
+    });
+    expect(tokens["--primary"]).toBe("#e8652a");
+    expect(tokens["--background"]).toBe(generateThemeTokens(themeFor("#808080"))["--background"]);
+  });
+
   it("leaves the neutral ladder identical to the locked theme", () => {
     const locked = generateThemeTokens(themeFor("#3b82f6"));
     const unlocked = generateThemeTokens({
@@ -467,6 +507,47 @@ describe("the unlocked accent (#75)", () => {
     expect(unlocked["--card"]).toBe(locked["--card"]);
     expect(unlocked["--border"]).toBe(locked["--border"]);
     expect(unlocked["--primary"]).not.toBe(locked["--primary"]);
+  });
+});
+
+describe("solveLightnessForContrast", () => {
+  // Lc is a magnitude, so contrast is V-shaped in the text's lightness: it is
+  // ~0 where the text matches the background and rises along both arms. Which
+  // arm holds the answer depends on the background, and every background the
+  // generator feeds this today is a fixed constant below L 0.5 — so the light
+  // arm and the failure mode are only reachable from here. They are what a
+  // light-mode ladder (#70) would land on first.
+
+  it("goes lighter than a dark background", () => {
+    const solved = solveLightnessForContrast(90, 0.011, 40, "#15100e");
+    expect(solved).toBeGreaterThan(hexToOklch("#15100e").L);
+    expect(apcaLc(oklchToHex(solved, 0.011, 40), "#15100e")).toBeGreaterThanOrEqual(90);
+  });
+
+  it("goes darker than a light background", () => {
+    // The case the old search got silently wrong: it probed L 0.5 first, found
+    // it lighter-than-required by its own reversed test, and walked *up* to
+    // #ffffff — Lc ~0 on a near-white page, returned as though it had solved.
+    const solved = solveLightnessForContrast(60, 0.011, 40, "#faf7f5");
+    expect(solved).toBeLessThan(hexToOklch("#faf7f5").L);
+    expect(apcaLc(oklchToHex(solved, 0.011, 40), "#faf7f5")).toBeGreaterThanOrEqual(60);
+  });
+
+  it("finds the smallest step that clears the target, not the extreme", () => {
+    // The answer is the lightness *nearest* the background that still passes:
+    // asking for less contrast must never hand back a more extreme color.
+    const strict = solveLightnessForContrast(90, 0.011, 40, "#15100e");
+    const loose = solveLightnessForContrast(60, 0.011, 40, "#15100e");
+    expect(loose).toBeLessThan(strict);
+    expect(loose).toBeGreaterThan(hexToOklch("#15100e").L);
+  });
+
+  it("throws rather than returning an unsolved bound", () => {
+    // Lc 110 is past what even black-on-white reaches. Failing loudly is the
+    // point: the old search returned its bound either way, so an impossible
+    // target and a solved one were indistinguishable at the call site.
+    expect(() => solveLightnessForContrast(110, 0.011, 40, "#faf7f5")).toThrow(/Lc 110/);
+    expect(() => solveLightnessForContrast(110, 0.011, 40, "#15100e")).toThrow(/#15100e/);
   });
 });
 

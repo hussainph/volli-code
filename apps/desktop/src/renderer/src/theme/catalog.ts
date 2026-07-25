@@ -32,7 +32,10 @@ export const BUILTIN_THEMES: readonly ThemeDefinition[] = [
   original("Moss", "moss", "#3f9142"),
   original("Iris", "iris", "#8b5cf6"),
   original("Rose", "rose", "#f43f5e"),
-  // A near-grey seed takes the generator's neutral path (C = 0): true
-  // achromatic chrome, with the accent still carrying the hue.
+  // A colorless seed takes the generator's grey path (C = 0) for the accent as
+  // well as the neutrals, so Graphite is monochrome the whole way through:
+  // achromatic chrome and a true-neutral --primary (#929292). That is the
+  // point of the entry — a seed with no hue has none to give, and unlocking
+  // the accent (#75) is how a theme asks for color on grey chrome instead.
   original("Graphite", "graphite", "#8a8a8a"),
 ];

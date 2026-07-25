@@ -78,29 +78,56 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 /**
- * Finds the lowest lightness at which `C`/`h` text clears `targetLc` on
- * `background`. Solving beats guessing: the answer moves with the seed's
+ * Finds the lightness *nearest the background* at which `C`/`h` text clears
+ * `targetLc` on it. Solving beats guessing: the answer moves with the seed's
  * chroma and with the background rung, and a hand-picked foreground that
  * happens to pass for ember silently fails for a saturated blue.
  *
  * The search evaluates the **emitted 8-bit hex**, not the continuous color,
  * so the floor holds for the value that actually reaches the DOM rather than
  * for an ideal that rounding then breaks.
+ *
+ * {@link apcaLc} returns a magnitude, so Lc as a function of text lightness is
+ * V-shaped around the background's own lightness rather than monotonic: it is
+ * ~0 at the vertex and rises along *both* arms. Only one arm exists for a given
+ * background — a dark background can only be written on in something lighter —
+ * so the arm is chosen from the background instead of assumed. Assuming it is
+ * what would break the day #70's parameterized lightness gets pointed at a
+ * light-mode ladder, and it would break *silently*: the old search returned its
+ * upper bound whether or not anything cleared the target, so `#ffffff` at Lc 0
+ * came back looking exactly like a solution. Hence the throw.
+ *
+ * Exported for the tests: both arms and the failure are unreachable through
+ * {@link generateThemeTokens} today (every ladder background is a fixed
+ * constant below L 0.5), which is precisely why they need testing directly.
+ * Not part of the package's intended surface.
  */
-function solveLightnessForContrast(
+export function solveLightnessForContrast(
   targetLc: number,
   C: number,
   h: number,
   background: string,
 ): number {
-  let low = 0;
-  let high = 1;
-  for (let i = 0; i < 40; i += 1) {
-    const mid = (low + high) / 2;
-    if (apcaLc(oklchToHex(mid, C, h), background) >= targetLc) high = mid;
-    else low = mid;
+  // The vertex, and the far end of the arm leading away from it: white for a
+  // dark background, black for a light one.
+  const vertex = hexToOklch(background).L;
+  const bound = vertex < 0.5 ? 1 : 0;
+  if (apcaLc(oklchToHex(bound, C, h), background) < targetLc) {
+    throw new Error(
+      `No lightness of oklch(L ${C.toFixed(4)} ${h.toFixed(2)}) reaches Lc ${targetLc} on ${background}.`,
+    );
   }
-  return high;
+
+  // Walk in from the vertex (where Lc is 0) toward the known-passing bound,
+  // keeping the nearest lightness that clears the target.
+  let fail = vertex;
+  let pass = bound;
+  for (let i = 0; i < 40; i += 1) {
+    const mid = (fail + pass) / 2;
+    if (apcaLc(oklchToHex(mid, C, h), background) >= targetLc) pass = mid;
+    else fail = mid;
+  }
+  return pass;
 }
 
 /**
@@ -122,8 +149,21 @@ export function generateThemeTokens(theme: ThemeDefinition): ThemeTokens {
 
   // The accent follows the seed unless it has been unlocked (#75) — the one
   // thing a single seed cannot express is cool grey chrome with a warm accent.
-  const accentSource = theme.accent === null ? seed : hexToOklch(theme.accent);
-  const accentChroma = clamp(accentSource.C, ACCENT_CHROMA_RANGE.min, ACCENT_CHROMA_RANGE.max);
+  const unlockedAccent = theme.accent === null ? null : hexToOklch(theme.accent);
+  const accentSource = unlockedAccent ?? seed;
+  // The muddy-black guard again, and for the same reason. A colorless seed has
+  // no hue — what `hexToOklch` reports for it is float residue — so forcing the
+  // accent floor onto it paints --primary an arbitrary tint (grey #8a8a8a came
+  // out a muddy olive) that jumps somewhere unrelated when the seed moves by
+  // one bit. Grey in, grey out: a monochrome theme is a legitimate thing to
+  // want, and the chroma floor exists to stop an accent looking washed out, not
+  // to invent a color nobody asked for. An unlocked accent is always honored as
+  // authored, saturated accent on grey chrome included — that pairing is the
+  // entire point of #75.
+  const accentChroma =
+    unlockedAccent === null && seed.C < GREY_SEED_CHROMA
+      ? 0
+      : clamp(accentSource.C, ACCENT_CHROMA_RANGE.min, ACCENT_CHROMA_RANGE.max);
 
   // 4. The neutral ladder.
   const ladder = {} as Record<ThemeTokenName, string>;
