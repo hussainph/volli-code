@@ -22,10 +22,11 @@
  * like the sidebar width: it's a global chrome preference, not per-workspace,
  * so every ticket you open honors the same choice.
  *
- * `detailsExpanded` — whether the right rail's bottom "Details" section (status/
- * priority/labels/worktree) is open. Sessions dominate the rail; Details is a
- * collapsed-by-default drawer pinned beneath them, and its open/closed choice
- * persists app-wide by the same reasoning as `railCollapsed`.
+ * `railMode` — which icon-mode navigator the ticket rail shows (Sessions /
+ * Files / Changes / Properties). Persisted app-wide like `railCollapsed`.
+ * Pre-icon-rail builds stored `detailsExpanded` for the old Details drawer;
+ * rehydration maps an open drawer onto Properties via `resolvePersistedRailMode`
+ * and stops writing `detailsExpanded`.
  *
  * `terminalFocusTarget` — the ticket terminal tab temporarily owning the app
  * canvas. It is deliberately session-only: live PTYs do not survive relaunch,
@@ -43,6 +44,11 @@ import { DEFAULT_HARNESS_ID, type HarnessId, isHarnessId } from "@volli/shared";
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
+import {
+  DEFAULT_TICKET_RAIL_MODE,
+  type TicketRailMode,
+  resolvePersistedRailMode,
+} from "@renderer/components/ticket/ticket-rail-model";
 import { appStateStorage } from "@renderer/lib/app-state-storage";
 
 export const SIDEBAR_DEFAULT_WIDTH = 318;
@@ -139,8 +145,8 @@ interface UiState {
   workspaceRailHidden: boolean;
   /** Ticket-detail right rail collapsed? Persisted app-wide (see module doc). */
   railCollapsed: boolean;
-  /** Ticket-detail rail "Details" drawer expanded? Persisted app-wide (see module doc). */
-  detailsExpanded: boolean;
+  /** Active ticket-rail icon mode. Persisted app-wide (see module doc). */
+  railMode: TicketRailMode;
   /** Session-only terminal focus target; never persisted. */
   terminalFocusTarget: TerminalFocusTarget | null;
   /**
@@ -160,8 +166,7 @@ interface UiState {
   setWorkspaceRailHidden(hidden: boolean): void;
   toggleRailCollapsed(): void;
   setRailCollapsed(collapsed: boolean): void;
-  toggleDetailsExpanded(): void;
-  setDetailsExpanded(expanded: boolean): void;
+  setRailMode(mode: TicketRailMode): void;
   setTerminalFocusTarget(target: TerminalFocusTarget | null): void;
   /**
    * Clear the focus target if it belongs to `ticketId` — used when that ticket's
@@ -187,9 +192,12 @@ type PersistedUiState = Pick<
   | "uiScale"
   | "workspaceRailHidden"
   | "railCollapsed"
-  | "detailsExpanded"
+  | "railMode"
   | "lastHarnessId"
->;
+> & {
+  /** Legacy pre-icon-rail key; read on merge only, never written again. */
+  detailsExpanded?: boolean;
+};
 
 /**
  * Factory so tests can supply an in-memory storage instead of the real
@@ -211,7 +219,7 @@ export function createUiStore(storage?: StateStorage) {
         newTicketOpen: false,
         workspaceRailHidden: false,
         railCollapsed: false,
-        detailsExpanded: false,
+        railMode: DEFAULT_TICKET_RAIL_MODE,
         terminalFocusTarget: null,
         lastHarnessId: DEFAULT_HARNESS_ID,
         setSidebarWidth: (width) => set({ sidebarWidth: clampSidebarWidth(width) }),
@@ -225,8 +233,7 @@ export function createUiStore(storage?: StateStorage) {
         setWorkspaceRailHidden: (hidden) => set({ workspaceRailHidden: hidden }),
         toggleRailCollapsed: () => set((state) => ({ railCollapsed: !state.railCollapsed })),
         setRailCollapsed: (collapsed) => set({ railCollapsed: collapsed }),
-        toggleDetailsExpanded: () => set((state) => ({ detailsExpanded: !state.detailsExpanded })),
-        setDetailsExpanded: (expanded) => set({ detailsExpanded: expanded }),
+        setRailMode: (mode) => set({ railMode: mode }),
         setTerminalFocusTarget: (target) => set({ terminalFocusTarget: target }),
         clearTerminalFocusForTicket: (ticketId) =>
           set((state) =>
@@ -252,7 +259,7 @@ export function createUiStore(storage?: StateStorage) {
           uiScale: state.uiScale,
           workspaceRailHidden: state.workspaceRailHidden,
           railCollapsed: state.railCollapsed,
-          detailsExpanded: state.detailsExpanded,
+          railMode: state.railMode,
           lastHarnessId: state.lastHarnessId,
         }),
         // Rehydrated values come from JSON a past build wrote — sanitize
@@ -273,8 +280,11 @@ export function createUiStore(storage?: StateStorage) {
             // Any non-`true` persisted value (missing key, corrupt JSON) means
             // the rail stays expanded — the safe, visible default.
             railCollapsed: stored.railCollapsed === true,
-            // Details drawer defaults closed; only an explicit `true` opens it.
-            detailsExpanded: stored.detailsExpanded === true,
+            // Icon-mode rail: prefer railMode; migrate legacy detailsExpanded.
+            railMode: resolvePersistedRailMode({
+              railMode: stored.railMode,
+              detailsExpanded: stored.detailsExpanded,
+            }),
             // A missing/unknown persisted harness (older build, corrupt JSON,
             // or a since-removed custom id) falls back to the first-class default.
             lastHarnessId: isHarnessId(stored.lastHarnessId)
