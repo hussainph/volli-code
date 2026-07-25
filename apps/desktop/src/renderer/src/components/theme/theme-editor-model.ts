@@ -194,10 +194,9 @@ export function duplicateTheme(
 ): ThemeDefinition {
   const taken = new Set(catalog.map((theme) => theme.slug));
   const base = `${source.name} Copy`;
-  const slugForName = (name: string): string => slugify(name);
 
   const available = (name: string): string | null => {
-    const slug = slugForName(name);
+    const slug = slugify(name);
     return taken.has(slug) ? null : slug;
   };
 
@@ -213,7 +212,7 @@ export function duplicateTheme(
   // slugify truncates to 48 chars — long names can collapse distinct "Copy N"
   // labels to the same slug. Suffix directly on a trimmed stem when that happens.
   if (slug === null) {
-    const stem = slugForName(base).replace(/-+$/, "").slice(0, 40);
+    const stem = slugify(base).replace(/-+$/, "").slice(0, 40);
     for (let n = 2; n < 1000; n += 1) {
       const candidate = `${stem}-${n}`;
       if (!taken.has(candidate)) {
@@ -224,7 +223,7 @@ export function duplicateTheme(
     }
   }
   if (slug === null) {
-    slug = `${slugForName(base).slice(0, 36)}-${Date.now()}`;
+    slug = `${slugify(base).slice(0, 36)}-${Date.now()}`;
     name = base;
   }
   return { ...persistedTheme(source), name, slug };

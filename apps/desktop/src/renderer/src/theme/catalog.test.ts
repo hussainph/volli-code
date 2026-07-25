@@ -3,6 +3,10 @@ import { BUILTIN_THEME_SLUGS, DEFAULT_THEME, type ThemeDefinition } from "@volli
 
 import { BUILTIN_THEMES, mergeThemeCatalog } from "./catalog";
 
+function custom(slug: string): ThemeDefinition {
+  return { ...DEFAULT_THEME, name: slug, slug };
+}
+
 describe("BUILTIN_THEMES", () => {
   it("lists the same slugs as the shared reserved set", () => {
     expect(BUILTIN_THEMES.map((theme) => theme.slug).toSorted()).toEqual(
@@ -12,8 +16,6 @@ describe("BUILTIN_THEMES", () => {
 });
 
 describe("mergeThemeCatalog", () => {
-  const custom = (slug: string): ThemeDefinition => ({ ...DEFAULT_THEME, name: slug, slug });
-
   it("appends custom themes after built-ins", () => {
     const merged = mergeThemeCatalog(BUILTIN_THEMES, [custom("sunset")]);
 
