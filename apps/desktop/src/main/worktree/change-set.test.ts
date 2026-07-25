@@ -169,3 +169,28 @@ describe("changeSetSnapshot — renames, binaries, additions, deletions", () => 
     expect(result.value.deletions).toBe(3);
   });
 });
+
+describe("changeSetSnapshot — untracked", () => {
+  it("appends untracked paths from porcelain v2 with null counts", () => {
+    const path = "new file.txt";
+    const { git, calls } = scriptedChangeSetGit({
+      status: `? ${path}\0`,
+    });
+
+    const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.files).toEqual([
+      {
+        path,
+        status: "untracked",
+        insertions: null,
+        deletions: null,
+        binary: false,
+      },
+    ]);
+    const statusCall = calls.find((c) => c.args[0] === "status");
+    expect(statusCall?.args).toEqual(["status", "--porcelain=v2", "-z"]);
+  });
+});

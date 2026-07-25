@@ -62,10 +62,12 @@ export function changeSetSnapshot(
       input.worktreePath,
     );
     const numstatOut = git(["diff", "--numstat", "-z", "-M", baseRevision], input.worktreePath);
-    // Untracked scoop — porcelain v2 is NUL-safe; wired in a later slice.
-    git(["status", "--porcelain=v2", "-z"], input.worktreePath);
+    const statusOut = git(["status", "--porcelain=v2", "-z"], input.worktreePath);
 
-    const files = composeFiles(parseNameStatus(nameStatusOut), parseNumstat(numstatOut));
+    const tracked = composeFiles(parseNameStatus(nameStatusOut), parseNumstat(numstatOut));
+    const trackedPaths = new Set(tracked.map((f) => f.path));
+    const untracked = parseUntracked(statusOut).filter((f) => !trackedPaths.has(f.path));
+    const files = [...tracked, ...untracked];
     const insertions = total(files, "insertions");
     const deletions = total(files, "deletions");
     const revision = snapshotRevision(baseRevision, headRevision, files, insertions, deletions);
@@ -179,6 +181,28 @@ function parseNumstat(out: string): ParsedNumstat[] {
     }
   }
   return entries;
+}
+
+/**
+ * Parses untracked entries from `git status --porcelain=v2 -z`.
+ * Format: `? <path>\0` (literal space after `?`).
+ */
+function parseUntracked(out: string): ChangeSetFile[] {
+  const tokens = splitNul(out);
+  const files: ChangeSetFile[] = [];
+  for (const token of tokens) {
+    if (!token.startsWith("? ")) continue;
+    const path = token.slice(2);
+    if (path.length === 0) continue;
+    files.push({
+      path,
+      status: "untracked",
+      insertions: null,
+      deletions: null,
+      binary: false,
+    });
+  }
+  return files;
 }
 
 function statusFromCode(kind: string): ChangeSetFileStatus | null {
