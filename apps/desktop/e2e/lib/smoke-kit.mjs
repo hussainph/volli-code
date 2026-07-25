@@ -420,32 +420,40 @@ export async function readMonacoText(scope) {
  * Monaco renders a view line as leaf spans, one per decoration range, so a
  * collapsed delimiter is always its own span.
  *
+ * The partition below is written out longhand inside the `evaluate` callback
+ * rather than factored into helpers: the body is serialized into the renderer,
+ * so nothing here can reference anything defined outside it.
+ *
  * @param {import("playwright-core").Page} page
  * @param {string} needle
  * @returns {Promise<{text:string, visible:string, collapsed:string, classes:string[]}|null>}
  */
 export function readDocumentLine(page, needle) {
   return page.evaluate((search) => {
-    const plain = (value) => (value ?? "").replace(/\u00a0/g, " ");
+    const nbsp = /\u00a0/g;
     const line = Array.from(document.querySelectorAll(".view-line")).find((el) =>
-      plain(el.textContent).includes(search),
+      (el.textContent ?? "").replace(nbsp, " ").includes(search),
     );
     if (!line) return null;
-    const leaves = Array.from(line.querySelectorAll("span")).filter(
-      (span) => span.children.length === 0,
-    );
-    const isCollapsed = (span) =>
-      getComputedStyle(span).display === "none" || span.getBoundingClientRect().width === 0;
-    const join = (spans) => plain(spans.map((span) => span.textContent ?? "").join(""));
+    const visible = [];
+    const collapsed = [];
+    for (const span of line.querySelectorAll("span")) {
+      if (span.children.length > 0) continue; // only leaf spans hold text
+      const bucket =
+        getComputedStyle(span).display === "none" || span.getBoundingClientRect().width === 0
+          ? collapsed
+          : visible;
+      bucket.push((span.textContent ?? "").replace(nbsp, " "));
+    }
     const classes = new Set();
     for (const el of line.querySelectorAll("[class]")) {
       for (const name of el.classList) if (name.startsWith("volli-md-")) classes.add(name);
     }
     return {
-      text: plain(line.textContent),
-      visible: join(leaves.filter((span) => !isCollapsed(span))),
-      collapsed: join(leaves.filter(isCollapsed)),
-      classes: Array.from(classes).sort(),
+      text: (line.textContent ?? "").replace(nbsp, " "),
+      visible: visible.join(""),
+      collapsed: collapsed.join(""),
+      classes: [...classes].toSorted(),
     };
   }, needle);
 }
@@ -461,17 +469,18 @@ export function readDocumentLine(page, needle) {
  */
 export function readDocumentView(page) {
   return page.evaluate(() => {
-    const plain = (value) => (value ?? "").replace(/\u00a0/g, " ");
-    const leaves = Array.from(document.querySelectorAll(".view-line span")).filter(
-      (span) => span.children.length === 0,
-    );
-    const isCollapsed = (span) =>
-      getComputedStyle(span).display === "none" || span.getBoundingClientRect().width === 0;
-    const join = (spans) => plain(spans.map((span) => span.textContent ?? "").join(""));
-    return {
-      visible: join(leaves.filter((span) => !isCollapsed(span))),
-      collapsed: join(leaves.filter(isCollapsed)),
-    };
+    const nbsp = /\u00a0/g;
+    const visible = [];
+    const collapsed = [];
+    for (const span of document.querySelectorAll(".view-line span")) {
+      if (span.children.length > 0) continue; // only leaf spans hold text
+      const bucket =
+        getComputedStyle(span).display === "none" || span.getBoundingClientRect().width === 0
+          ? collapsed
+          : visible;
+      bucket.push((span.textContent ?? "").replace(nbsp, " "));
+    }
+    return { visible: visible.join(""), collapsed: collapsed.join("") };
   });
 }
 

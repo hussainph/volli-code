@@ -302,8 +302,8 @@ async function readTicket(page, ticketId) {
 
 /**
  * Click a neutral, non-editable spot (the Doc tab) so a following Escape isn't
- * swallowed by a focused input / CodeMirror content, and any pending editor
- * autosave flushes on blur.
+ * swallowed by a focused input / the Monaco document surface, and any pending
+ * editor autosave flushes on blur.
  */
 async function blurToNeutral(page) {
   await docTab(page).click();

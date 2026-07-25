@@ -8,8 +8,8 @@
  *     data-testid="composer-project-chip") → static "New ticket" text, plus
  *     Expand and Close buttons; clicking the chip opens a project menu that
  *     RETARGETS which project the ticket is created in;
- *   • a title input (placeholder "Ticket title") + a CodeMirror markdown
- *     description editor (placeholder "Add description…");
+ *   • a title input (placeholder "Ticket title") + a Monaco Document Mode
+ *     markdown description editor (placeholder "Add description…");
  *   • a metadata chip row: Status ("Backlog"), Priority ("Medium"),
  *     Labels ("Labels"), and a Worktree toggle (role switch, default on);
  *   • a footer with a "Create more" switch, a "Choose agent" harness picker,
