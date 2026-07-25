@@ -152,6 +152,33 @@ export function TicketFilesList({
 const NO_ATTACHMENTS: readonly TicketAttachment[] = [];
 
 /**
+ * A failed directory read, shown ABOVE the navigator rather than instead of it.
+ * A listing can fail for one folder (permissions, a directory the agent deleted
+ * mid-browse) while the rest of the tree is fine — replacing the whole panel
+ * threw away the breadcrumb and the Up control too, so the only way out of a
+ * bad folder was to leave the ticket entirely. The last good listing stays on
+ * screen and navigable; this just says the requested read didn't land.
+ */
+function FilesErrorBanner({ error, onRetry }: { error: string; onRetry(): void }) {
+  return (
+    <div
+      data-testid="ticket-files-error"
+      role="alert"
+      className="flex shrink-0 items-baseline justify-between gap-2 border-b border-destructive/30 bg-destructive/5 px-3 py-2"
+    >
+      <span className="min-w-0 text-xs text-destructive">{error}</span>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="shrink-0 text-xs text-primary-text hover:underline"
+      >
+        Retry
+      </button>
+    </div>
+  );
+}
+
+/**
  * Ticket Files panel: body refs + optional attachments + worktree directory
  * listing. Attachments are accepted as a prop because the renderer has no
  * attachments IPC yet — hosts that can supply them (or tests) pass them in.
@@ -236,16 +263,9 @@ export function TicketFilesPanel({
     );
   }
 
-  if (error) {
-    return (
-      <div data-testid="ticket-files-error" className="px-4 py-5" role="alert">
-        <p className="text-ui text-destructive">{error}</p>
-      </div>
-    );
-  }
-
   return (
     <div data-testid="ticket-files-panel" className="flex min-h-0 flex-1 flex-col">
+      {error !== null ? <FilesErrorBanner error={error} onRetry={() => void loadDir(cwd)} /> : null}
       <TicketFilesList
         referenced={nav.referenced}
         worktree={nav.worktree}
