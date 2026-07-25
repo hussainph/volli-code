@@ -194,3 +194,53 @@ describe("changeSetSnapshot — untracked", () => {
     expect(statusCall?.args).toEqual(["status", "--porcelain=v2", "-z"]);
   });
 });
+
+describe("changeSetSnapshot — unified outcome", () => {
+  it("lists committed, dirty, and untracked outcomes together in one snapshot", () => {
+    // Simulates: a committed add (relative to base), a dirty modify, and an untracked file.
+    const { git } = scriptedChangeSetGit({
+      nameStatus: "A\0src/committed.ts\0M\0src/dirty.ts\0",
+      numstat: "5\t0\0src/committed.ts\0" + "3\t1\0src/dirty.ts\0",
+      status: "? untracked.txt\0",
+    });
+
+    const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.files.map((f) => [f.path, f.status])).toEqual([
+      ["src/committed.ts", "added"],
+      ["src/dirty.ts", "modified"],
+      ["untracked.txt", "untracked"],
+    ]);
+    expect(result.value.insertions).toBe(8);
+    expect(result.value.deletions).toBe(1);
+  });
+});
+
+describe("changeSetSnapshot — failures", () => {
+  it("errs when no base branch is known", () => {
+    const { git, calls } = scriptedGit(() => "");
+    const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: null });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toMatch(/base branch/i);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("surfaces real git stderr when a read fails", async () => {
+    const { GitError } = await import("./git");
+    const { git } = scriptedGit((args) => {
+      if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no such ref");
+      if (args[0] === "rev-parse" && args[1] === "main") {
+        throw new GitError("failed", "fatal: bad object main", args);
+      }
+      return "";
+    });
+
+    const result = changeSetSnapshot(git, { worktreePath: "/wt", baseBranch: "main" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("bad object");
+  });
+});
