@@ -75,6 +75,11 @@ const IMAGE_ZONE_MAX_PX = 420;
  */
 const configsByModelUri = new Map<string, () => FileRefsConfig | undefined>();
 
+/** Identity of one image view zone: the same picture on the same line is the same zone. */
+function zoneKey(image: DocumentImage): string {
+  return `${image.afterLineNumber} ${image.src}`;
+}
+
 let globalsRegistered = false;
 
 /**
@@ -136,16 +141,13 @@ function ensureGlobalRegistrations(monaco: typeof Monaco): void {
         query: token.query,
         index: config.getIndex(),
       }).map((entry): Monaco.languages.CompletionItem => {
-        const base = {
-          label: entry.label,
-          insertText: entry.insertText,
-          filterText: entry.filterText,
-          sortText: entry.sortText,
-          range,
-        };
         if (entry.kind === "create") {
           return {
-            ...base,
+            label: entry.label,
+            insertText: entry.insertText,
+            filterText: entry.filterText,
+            sortText: entry.sortText,
+            range,
             kind: monaco.languages.CompletionItemKind.Event,
             command: {
               id: CREATE_ARTIFACT_COMMAND,
@@ -155,7 +157,11 @@ function ensureGlobalRegistrations(monaco: typeof Monaco): void {
           };
         }
         return {
-          ...base,
+          label: entry.label,
+          insertText: entry.insertText,
+          filterText: entry.filterText,
+          sortText: entry.sortText,
+          range,
           detail: entry.detail,
           // Artifacts read apart from ordinary repo files at a glance.
           kind: entry.artifact
@@ -215,7 +221,6 @@ export function attachDocumentMode(
   // Image view zones, keyed by line+source so a keystroke elsewhere does not
   // tear down and re-request every image in the document.
   const zones = new Map<string, { id: string; zone: MonacoEditor.IViewZone }>();
-  const zoneKey = (image: DocumentImage): string => `${image.afterLineNumber} ${image.src}`;
 
   let disposed = false;
   let scheduled = false;
