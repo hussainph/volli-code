@@ -264,6 +264,11 @@ export const MonacoDocumentEditor = React.forwardRef<
 
         host.dataset.monacoStatus = "ready";
         host.dataset.monacoLanguage = lease.snapshot().language;
+        // A document surface is never read-only (CONCEPT #49 gives it autosave,
+        // not a policy flag), but the attribute is the shared contract the e2e
+        // kit's `isMonacoEditable` reads, and a MISSING attribute reads as "not
+        // editable" there rather than "not applicable".
+        host.dataset.monacoReadOnly = "false";
         if (liveRef.current.autoFocus) view.focus();
       })
       .catch((error: unknown) => {

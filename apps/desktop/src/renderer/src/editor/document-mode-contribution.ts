@@ -326,6 +326,27 @@ export function attachDocumentMode(
     editor.onDidBlurEditorText(schedule),
   );
 
+  // Escape leaves the document, the way it did under CodeMirror's keymap: the
+  // ticket detail's own Escape-to-close is exempted for any Monaco surface
+  // (issue #116), so without this the caret would be a one-way door — you could
+  // get into the body but only a mouse click could get you out of it. The
+  // precondition hands Escape back to Monaco whenever Monaco has something of
+  // its own to dismiss, which is the only reason it owns the key at all.
+  subscriptions.push(
+    editor.addAction({
+      id: "volli.documentMode.leave",
+      label: "Leave the document",
+      keybindings: [monaco.KeyCode.Escape],
+      precondition: "!suggestWidgetVisible && !findWidgetVisible",
+      run: () => {
+        // Monaco has no `blur()`; the focused node is its input surface, and
+        // dropping focus there is what lets the NEXT Escape bubble to the view.
+        const active = document.activeElement;
+        if (active instanceof HTMLElement) active.blur();
+      },
+    }),
+  );
+
   subscriptions.push(
     editor.onMouseDown((event) => {
       const position = event.target.position;
