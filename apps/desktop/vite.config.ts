@@ -81,6 +81,7 @@ export default defineConfig({
         "src/editor/document-identity.ts",
         "src/editor/document-registry.ts",
         "src/editor/monaco-theme.ts",
+        "src/editor/reveal.ts",
         "src/theme/apply.ts",
         "src/theme/catalog.ts",
         "src/terminal/css-color.ts",

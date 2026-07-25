@@ -46,9 +46,8 @@ import {
   withMarkdownExtension,
 } from "@volli/shared";
 
+import { selectionTouches, type SelRange } from "@renderer/editor/reveal";
 import { toastError } from "@renderer/lib/toast";
-
-import { selectionTouches, type SelRange } from "./reveal";
 
 /** The result of creating a new artifact from the picker — the shape of `api.files.createArtifact`. */
 export type CreateArtifactResult = { ok: true; relPath: string } | { ok: false; error: string };
