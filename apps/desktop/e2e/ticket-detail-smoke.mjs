@@ -108,6 +108,7 @@ import {
   makeGitRepo,
   readDocumentLine,
   readMonacoState,
+  readMonacoText,
 } from "./lib/smoke-kit.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -683,6 +684,12 @@ async function main() {
         await page.keyboard.press("Enter");
         await page.keyboard.press("Enter");
         await page.keyboard.type(BODY_CODE);
+        // Monaco's native-edit-context applies keystrokes on asynchronous
+        // `textupdate` events, so with zero-delay typing the last characters are
+        // still in flight here (a read one tick early sees "text `code` her").
+        await waitUntil("typed body to land in the document", async () =>
+          (await readMonacoText(page)).includes(BODY_CODE),
+        );
 
         // Caret sits at the end (code line). The heading line renders as a styled
         // h1 with the `#` COLLAPSED — present in the DOM, zero-width on screen,
