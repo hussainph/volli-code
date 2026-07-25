@@ -601,8 +601,9 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
     }
   }
 
-  // Reuses the app's one sanctioned external-open seam (live-preview.ts's
-  // markdown link handler): a `window.open` of an http(s) target never
+  // Reuses the app's one sanctioned external-open seam (the same one the
+  // markdown link handler uses, `editor/link-open.ts`): a `window.open` of an
+  // http(s) target never
   // actually opens a new BrowserWindow — main's `setWindowOpenHandler` denies
   // it and routes the url to `shell.openExternal` instead. No new IPC needed.
   function openPr() {

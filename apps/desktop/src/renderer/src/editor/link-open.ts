@@ -1,12 +1,11 @@
 /**
- * The "does this click follow a link?" rule, shared by both markdown renderers.
+ * The "does this click follow a link?" rule for the markdown surfaces.
  *
- * It started life inside the CodeMirror live-preview plugin, which is the wrong
- * home for it now: the rule is about a MouseEvent, not about an editor engine,
- * and Monaco's Document Mode has to answer exactly the same question for the
- * same reason. Keeping it here means the CodeMirror surface and the Monaco one
- * cannot drift on which clicks navigate while both exist, and PR 3 can delete
- * `components/editor/` without taking a behavioural rule down with it.
+ * It started life inside the old CodeMirror live-preview plugin, which was the
+ * wrong home for it: the rule is about a MouseEvent, not about an editor
+ * engine. Hoisting it here is what let that plugin be deleted without taking a
+ * behavioural rule down with it — Monaco's Document Mode answers exactly the
+ * same question, unchanged.
  *
  * The rule is deliberately narrow. A collapsed link only carries a target while
  * the caret is OUTSIDE it (see `markdown-projection.ts`, which nulls the href on

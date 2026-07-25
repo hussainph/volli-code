@@ -45,7 +45,7 @@ export function TicketBodyEditor({
 
   // The value that seeds / resets the editor doc; changing it re-syncs the
   // editor's buffer when it isn't focused (or, if focused-but-untouched, on blur
-  // — see markdown-live-editor).
+  // — see monaco-document-editor).
   const [docValue, setDocValue] = React.useState(ticket.body);
   // The external body captured when a conflict is detected — drives the banner
   // and Reload. `null` = no conflict, autosave live.

@@ -160,7 +160,7 @@ describe("isTextEntryTarget over the real guard selector", () => {
     expect(isTextEntryTarget(targetWithin("[data-monaco-status]"))).toBe(true);
   });
 
-  it("guards the CodeMirror body editor (contenteditable) and a live terminal", () => {
+  it("guards a generic contenteditable region and a live terminal", () => {
     expect(isTextEntryTarget(targetWithin("[contenteditable]"))).toBe(true);
     expect(isTextEntryTarget(targetWithin("[data-terminal-renderer]"))).toBe(true);
   });
