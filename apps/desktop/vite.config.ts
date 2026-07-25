@@ -99,6 +99,7 @@ export default defineConfig({
         "**/src/main/ghostty-config.ts",
         "**/src/main/window-theme.ts",
         "**/src/main/theme-ipc.ts",
+        "**/src/main/theme-files.ts",
         "**/src/main/theme-overlay.ts",
         "**/src/main/db/export.ts",
         "**/src/main/db/theme-repo.ts",

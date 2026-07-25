@@ -1,7 +1,8 @@
 /**
  * The theming IPC surface (docs/plans/theming-engine.md § Persistence,
  * application, IPC): read the resolved state, set the global theme, set a
- * project's per-surface override, and write terminal overlay edits.
+ * project's per-surface override, write terminal overlay edits, and manage the
+ * user's own theme FILES (`<userData>/volli/themes/<slug>.json`, #71).
  *
  * Two shapes worth naming up front, because they are what keep the design's
  * rules true at the boundary rather than only inside it:
@@ -10,11 +11,12 @@
  *    `{global theme, project override}` and the resolved *terminal* config; it
  *    never carries a generated token set, because the generator runs in the
  *    renderer at render time and the resolved set is stored nowhere.
- *  - **The renderer names a SCOPE, never a path.** An overlay write says
- *    "global" or "this project"; main maps that to a file under
- *    `<userData>/volli/ghostty/`. Combined with `theme-overlay.ts`'s guard,
- *    there is no request the renderer can send that reaches the user's own
- *    ghostty config (decision #67).
+ *  - **The renderer names a SCOPE or a SLUG, never a path.** An overlay write
+ *    says "global" or "this project"; a theme-file verb says which slug. Main
+ *    maps either onto a file under `<userData>/volli/`, and the write paths
+ *    (`theme-overlay.ts`, `theme-files.ts`) guard it again. There is no request
+ *    the renderer can send that reaches the user's own ghostty config
+ *    (decision #67) or any file outside the themes directory.
  *
  * Registered through the shared guard→body→envelope registry (issue #98):
  * `THEME_IPC` (@volli/shared) supplies the validators, this module supplies
@@ -22,11 +24,18 @@
  * typed `{ ok: false, error }` — same stance as data-ipc.ts and volli-fs.ts.
  */
 
+import { shell } from "electron";
 import type Database from "better-sqlite3";
-import { DEFAULT_THEME, THEME_CHANNELS, THEME_IPC } from "@volli/shared";
+import { customThemePath, DEFAULT_THEME, THEME_CHANNELS, THEME_IPC } from "@volli/shared";
 import type {
+  CustomThemeListResult,
+  CustomThemeReadResult,
+  CustomThemeWriteInput,
+  CustomThemeWriteResult,
   GhosttyAppearancePayload,
+  Result,
   ThemeDefinition,
+  ThemeSlugInput,
   ThemeIpcChannel,
   ThemeSetGlobalInput,
   ThemeSetProjectInput,
@@ -44,6 +53,12 @@ import { readGhosttyAppearance } from "./ghostty-config";
 import type { FsDeps } from "./fs-deps";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";
+import {
+  deleteCustomTheme,
+  listCustomThemes,
+  readCustomTheme,
+  writeCustomTheme,
+} from "./theme-files";
 import { writeGlobalTerminalOverlay, writeProjectTerminalOverlay } from "./theme-overlay";
 import type { OverlayWriteResult } from "./theme-overlay";
 
@@ -126,7 +141,7 @@ function buildThemeState(
 }
 
 /**
- * Registers the 4 theming channels. A degraded db answers all of them with the
+ * Registers every theming channel. A degraded db answers all of them with the
  * open failure: theming reads the projects table and `app_state`, so there is
  * no honest partial mode, and a hanging `invoke()` is never acceptable.
  */
@@ -164,6 +179,48 @@ export function registerThemeIpcHandlers(
       const state = buildThemeState(db, deps, input.projectId);
       if (!state.ok) return state;
       return { ok: true, project, value: state.value };
+    },
+
+    // ── custom theme files (#71) ──────────────────────────────────────────
+    // The renderer names a SLUG; main turns it into the one path it is allowed
+    // to name, and `theme-files.ts` guards that again. Write and delete answer
+    // with the fresh catalog — re-read, not predicted — so the caller repaints
+    // without a second round trip.
+    "volli:theme-file-list": (): CustomThemeListResult => ({
+      ok: true,
+      themes: listCustomThemes(deps.fs),
+    }),
+
+    "volli:theme-file-read": (input: ThemeSlugInput): CustomThemeReadResult =>
+      readCustomTheme(deps.fs, input.slug),
+
+    "volli:theme-file-write": (input: CustomThemeWriteInput): CustomThemeWriteResult => {
+      const written = writeCustomTheme(deps.fs, input.theme);
+      if (!written.ok) return written;
+      return { ok: true, path: written.path, themes: listCustomThemes(deps.fs) };
+    },
+
+    "volli:theme-file-delete": (input: ThemeSlugInput): CustomThemeListResult => {
+      const deleted = deleteCustomTheme(deps.fs, input.slug);
+      if (!deleted.ok) return deleted;
+      return { ok: true, themes: listCustomThemes(deps.fs) };
+    },
+
+    // Reveal and open resolve the slug with `customThemePath` directly: it
+    // THROWS on anything that isn't a valid slug, and the registry envelope
+    // turns that into `{ ok: false, error }` — the same "refuse before a path
+    // exists" shape `writeProjectTerminalOverlay` uses for a ticket prefix.
+    "volli:theme-file-reveal": (input: ThemeSlugInput): Result => {
+      shell.showItemInFolder(customThemePath(deps.fs.userDataDir, input.slug));
+      return { ok: true };
+    },
+
+    // `shell.openPath` reports failure as a non-empty string rather than by
+    // rejecting, so an unchecked call is a menu item that silently does
+    // nothing — surface it like any other failed action (CLAUDE.md).
+    "volli:theme-file-open": async (input: ThemeSlugInput): Promise<Result> => {
+      const failure = await shell.openPath(customThemePath(deps.fs.userDataDir, input.slug));
+      return failure === "" ? { ok: true } : { ok: false, error: failure };
     },
 
     "volli:theme-terminal-overlay-write": (

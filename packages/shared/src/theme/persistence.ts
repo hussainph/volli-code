@@ -106,7 +106,7 @@ function isTokenOverrideMap(value: unknown): value is ThemeDefinition["overrides
   );
 }
 
-/** Runtime guard for a whole authored theme — used by the IPC descriptor and by {@link parseGlobalTheme}. */
+/** Runtime guard for a whole authored theme — used by the IPC descriptor and by {@link parseThemeJson}. */
 export function isThemeDefinition(value: unknown): value is ThemeDefinition {
   return (
     isRecord(value) &&
@@ -145,15 +145,19 @@ function persistedCanvas(canvas: ThemeCanvas): ThemeCanvas {
 }
 
 /**
- * The JSON stored in `app_state`. Built field by field — NOT `JSON.stringify`
- * of the argument — so nothing beyond the authored shape can reach storage,
- * whatever the caller passes. That rebuild goes all the way down: nested
- * objects are rebuilt too (see {@link persistedCanvas}), because a guard that
- * tolerates extra properties makes any by-reference copy a smuggling route.
- * See this module's header for why that matters.
+ * A theme rebuilt field by field from the authored shape — NOT a copy of the
+ * argument — so nothing beyond that shape can reach storage, whatever the
+ * caller passes. The rebuild goes all the way down: nested objects are rebuilt
+ * too (see {@link persistedCanvas}), because a guard that tolerates extra
+ * properties makes any by-reference copy a smuggling route. See this module's
+ * header for why that matters.
+ *
+ * Shared by BOTH storage surfaces — the `app_state` value below and the custom
+ * theme file (`theme/custom-themes.ts`) — so a second place to persist a theme
+ * cannot be a second place to lose that guarantee.
  */
-export function serializeGlobalTheme(theme: ThemeDefinition): string {
-  const persisted: ThemeDefinition = {
+export function persistedTheme(theme: ThemeDefinition): ThemeDefinition {
+  return {
     name: theme.name,
     slug: theme.slug,
     seed: theme.seed,
@@ -163,15 +167,21 @@ export function serializeGlobalTheme(theme: ThemeDefinition): string {
     overrides: { ...theme.overrides },
     appearance: theme.appearance,
   };
-  return JSON.stringify(persisted);
+}
+
+/** The JSON stored in `app_state`, built through {@link persistedTheme}. */
+export function serializeGlobalTheme(theme: ThemeDefinition): string {
+  return JSON.stringify(persistedTheme(theme));
 }
 
 /**
- * Reads a stored global theme back. Null for absent, malformed, or
- * wrong-shaped JSON — an unreadable stored theme must degrade to the shipped
- * default, never crash boot or half-apply.
+ * Reads an authored theme back out of stored JSON — the `app_state` value or a
+ * custom theme file alike. Null for absent, malformed, or wrong-shaped JSON:
+ * every reader of a theme is a reader of something a user can hand-edit, so an
+ * unreadable one must degrade (to the shipped default, or to a skipped catalog
+ * entry) rather than crash boot or half-apply.
  */
-export function parseGlobalTheme(json: string | undefined | null): ThemeDefinition | null {
+export function parseThemeJson(json: string | undefined | null): ThemeDefinition | null {
   if (json === undefined || json === null || json.length === 0) return null;
   let parsed: unknown;
   try {

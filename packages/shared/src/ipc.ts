@@ -387,6 +387,22 @@ export interface ThemeStatePayload {
   terminal: GhosttyAppearancePayload;
 }
 
+/** `{ slug }` — every custom-theme-file verb names a SLUG, never a path (see {@link VolliThemeIpcContract}). */
+export interface ThemeSlugInput {
+  slug: string;
+}
+
+/** `{ theme }` — the authored definition; its own `slug` names the file it lands in. */
+export interface CustomThemeWriteInput {
+  theme: ThemeDefinition;
+}
+
+/** The custom-theme catalog: every readable `<userData>/volli/themes/*.json`, by display name. */
+export type CustomThemeListResult = Result<{ themes: ThemeDefinition[] }>;
+export type CustomThemeReadResult = Result<{ theme: ThemeDefinition }>;
+/** Resolves with the file written AND the fresh catalog, so the picker repaints without a second round trip. */
+export type CustomThemeWriteResult = Result<{ path: string; themes: ThemeDefinition[] }>;
+
 export type ThemeStateResult = Result<{ value: ThemeStatePayload }>;
 export type ThemeSetProjectResult = Result<{ project: Project; value: ThemeStatePayload }>;
 /** Resolves with the overlay file written and the freshly re-resolved terminal appearance, so the renderer can repaint without a second round trip. */
@@ -396,8 +412,16 @@ export type TerminalOverlayWriteResult = Result<{
 }>;
 
 /**
- * The 4 theming channels `src/main/theme-ipc.ts` owns
+ * The theming channels `src/main/theme-ipc.ts` owns
  * (docs/plans/theming-engine.md § Persistence, application, IPC).
+ *
+ * The `volli:theme-file-*` half is the custom-theme catalog (#71): one JSON
+ * file per theme under `<userData>/volli/themes/<slug>.json`. Like the overlay
+ * write above, the renderer names an IDENTITY — here a slug — and never a
+ * path, so no request it can send reaches a file outside that directory. Write
+ * and delete answer with the FRESH catalog rather than a bare ack, which is
+ * also why there is no change broadcast: the window that mutated already has
+ * the new truth, and the catalog is read when a picker opens, not held live.
  */
 export interface VolliThemeIpcContract {
   /** The authored global theme + a project's override + the resolved terminal chain. The renderer derives tokens from this. */
@@ -411,6 +435,21 @@ export interface VolliThemeIpcContract {
     args: [input: TerminalOverlayWriteInput];
     result: TerminalOverlayWriteResult;
   };
+  /** Every custom theme on disk. A file that isn't a readable theme is skipped, never fatal. */
+  "volli:theme-file-list": { args: []; result: CustomThemeListResult };
+  /** One custom theme by slug; a hand-broken file comes back as a typed error. */
+  "volli:theme-file-read": { args: [input: ThemeSlugInput]; result: CustomThemeReadResult };
+  /** Writes (or replaces) one theme file atomically. Resolves with its path + the fresh catalog. */
+  "volli:theme-file-write": {
+    args: [input: CustomThemeWriteInput];
+    result: CustomThemeWriteResult;
+  };
+  /** Deletes one theme file. Already gone counts as deleted. Resolves with the fresh catalog. */
+  "volli:theme-file-delete": { args: [input: ThemeSlugInput]; result: CustomThemeListResult };
+  /** Reveals one theme file in Finder — main resolves the slug, the renderer never sends a path. */
+  "volli:theme-file-reveal": { args: [input: ThemeSlugInput]; result: Result };
+  /** Opens one theme file in the user's default editor (#71: a theme is a plain file). */
+  "volli:theme-file-open": { args: [input: ThemeSlugInput]; result: Result };
 }
 
 export type ThemeIpcChannel = keyof VolliThemeIpcContract;
