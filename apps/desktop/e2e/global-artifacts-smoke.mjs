@@ -6,11 +6,16 @@
  *
  *   1. @-picker insert + chip — a pre-seeded `.volli/artifacts/probe.md` shows
  *      up in the ticket-body `@` autocomplete (typed `@probe`); picking it
- *      inserts the plain-text `@.volli/artifacts/probe.md` ref, which renders
- *      as a clickable chip (`.cm-file-chip`) once the caret leaves the token.
+ *      inserts the plain-text `@.volli/artifacts/probe.md` ref, which renders as
+ *      a clickable chip (`volli-md-file-chip`). Under Monaco the chip is an
+ *      inline decoration over the token itself rather than a replace widget
+ *      (decision #8: decorate without replacing), so the markdown stays on
+ *      screen and editable and there is no reveal rule for the chip to get
+ *      wrong — the raw ref must be BOTH in the buffer and chipped at once.
  *   2. Chip opens a file tab — clicking the chip opens a closable `file` tab
- *      labeled `probe.md` next to Doc, rendering the markdown in the SAME CM6
- *      live editor (`.cm-md-h1`).
+ *      labeled `probe.md` next to Doc, rendering the markdown in the SAME Monaco
+ *      Document Mode editor (`volli-md-h1` with its `#` collapsed,
+ *      `volli-md-code`).
  *   3. File-tab edit autosaves to disk — select-all + retype in the file tab,
  *      blur → the edit lands in `.volli/artifacts/probe.md` (mtime-guarded
  *      autosave, no Save button).
@@ -54,7 +59,13 @@ import { _electron } from "playwright-core";
 // but the Monaco readers are shared: how THIS build is interrogated (input
 // surface, read-only contract, rendered aria-label) is encoded once there, so a
 // change to Monaco's input strategy is a one-file fix.
-import { isMonacoEditable, readMonacoState } from "./lib/smoke-kit.mjs";
+import {
+  clickMonaco,
+  isMonacoEditable,
+  readDocumentLine,
+  readMonacoState,
+  readMonacoText,
+} from "./lib/smoke-kit.mjs";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const APP_DIR = join(REPO, "apps", "desktop");
@@ -209,30 +220,54 @@ async function openTicketViaCard(page) {
 }
 
 /**
- * Type an `@` query into the focused body editor and click the completion row
- * whose `.cm-completionLabel` matches `label` exactly. Returns once the popup
- * has closed (the pick applied).
+ * Type an `@` query into the focused body editor and click the Monaco suggest
+ * row whose rendered label is exactly `label`. Returns once the popup has closed
+ * (the pick applied).
+ *
+ * `.suggest-widget` is always in the DOM; `visible` is what marks it open.
+ * `.label-name` is matched rather than the row's text or `aria-label`, because
+ * those carry Monaco's kind suffix ("probe.md, Snippet") and because a
+ * `Create artifact "…"` row would otherwise substring-match a file's name.
  */
 async function pickCompletion(page, query, label) {
   await page.keyboard.type(query);
-  const tooltip = page.locator(".cm-tooltip-autocomplete");
-  await waitUntil(`completion popup for ${query}`, async () => (await tooltip.count()) === 1, {
+  const widget = page.locator(".suggest-widget.visible");
+  await waitUntil(`completion popup for ${query}`, async () => (await widget.count()) === 1, {
     timeout: 8000,
   });
-  const option = tooltip.locator(".cm-completionLabel", { hasText: label }).first();
+  const exact = new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
+  const option = widget
+    .locator(".monaco-list-row")
+    .filter({ has: page.locator(".label-name", { hasText: exact }) })
+    .first();
   await waitUntil(
     `completion option ${JSON.stringify(label)}`,
     async () => (await option.count()) >= 1,
   );
   await option.click();
-  await waitUntil("completion popup to close", async () => (await tooltip.count()) === 0, {
+  await waitUntil("completion popup to close", async () => (await widget.count()) === 0, {
     timeout: 8000,
   });
 }
 
-/** Park the caret on the doc's first line so any @-token chip collapses (caret-off reveal rule). */
+/**
+ * Park the caret on the doc's first line, away from the just-inserted `@` token.
+ *
+ * Monaco's chip has no reveal rule to wait out (see the header), but a click on
+ * a chip the caret already sits inside is not the affordance a user exercises,
+ * so the checks still move away first.
+ */
 async function parkCaretOnFirstLine(page) {
-  await page.locator(".cm-content .cm-line").first().click();
+  await page.locator("[data-monaco-status] .view-line").first().click();
+}
+
+/** The chip for `relPath`. The Monaco chip decorates the `@path` token in place,
+ * so the chip's own text IS the ref — there is no `data-file-ref` attribute. */
+function fileChip(page, relPath) {
+  return page
+    .locator(".volli-md-file-chip")
+    .filter({ hasText: `@${relPath}` })
+    .first();
 }
 
 // ---- main ------------------------------------------------------------------
@@ -337,7 +372,7 @@ async function main() {
       async () => {
         // Type an intro line first so the chip's line isn't the caret's
         // post-insert line-start reveal target.
-        await page.locator(".cm-content").click();
+        await clickMonaco(page);
         await page.keyboard.type(BODY_INTRO);
         await page.keyboard.press("Enter");
         await page.keyboard.press("Enter");
@@ -345,24 +380,30 @@ async function main() {
 
         await pickCompletion(page, `@${ARTIFACT_NAME.slice(0, 5)}`, ARTIFACT_NAME);
 
-        // The inserted form is the raw path token (revealed while the caret
-        // touches it) — assert the buffer holds the plain-text ref.
+        // The inserted form is the raw path token — assert the buffer holds the
+        // plain-text ref, which under Monaco stays true whether or not the caret
+        // is on it (the chip decorates rather than replaces, decision #8).
         const rawInserted = await waitUntil("raw @ref in buffer", async () => {
-          const text = await page.locator(".cm-content").innerText();
+          const text = await readMonacoText(page);
           return text.includes(`@${ARTIFACT_REL}`) ? true : null;
         });
 
-        // Move the caret off the token → the chip decoration replaces it.
         await parkCaretOnFirstLine(page);
-        const chip = page.locator(`.cm-file-chip[data-file-ref="${ARTIFACT_REL}"]`);
+        const chip = fileChip(page, ARTIFACT_REL);
         const chipShown = await waitUntil(
           "file chip to render",
           async () => (await chip.count()) === 1,
         );
         const chipLabel = (await chip.textContent())?.includes(ARTIFACT_NAME);
+        // The chip is a decoration, not a replacement: the ref text is still
+        // rendered (and so still editable) underneath it.
+        const refStillRendered = (await readMonacoText(page)).includes(`@${ARTIFACT_REL}`);
 
-        const ok = !!rawInserted && !!chipShown && !!chipLabel;
-        return { ok, detail: `raw=${!!rawInserted} chip=${!!chipShown} label=${!!chipLabel}` };
+        const ok = !!rawInserted && !!chipShown && !!chipLabel && refStillRendered;
+        return {
+          ok,
+          detail: `raw=${!!rawInserted} chip=${!!chipShown} label=${!!chipLabel} refStillRendered=${refStillRendered}`,
+        };
       },
     );
 
@@ -373,18 +414,27 @@ async function main() {
       2,
       "Chip click opens a closable file tab (probe.md) rendering markdown in the live editor",
       async () => {
-        await page.locator(`.cm-file-chip[data-file-ref="${ARTIFACT_REL}"]`).click();
+        await fileChip(page, ARTIFACT_REL).click();
         const tab = fileTab(page, ARTIFACT_NAME);
         await waitUntil("file tab to appear", async () => (await tab.count()) === 1);
         const active = await waitUntil(
           "file tab active",
           async () => (await tab.getAttribute("aria-selected")) === "true",
         );
-        // The seeded markdown renders in the same CM6 live-preview editor.
+        // The seeded markdown renders in the same Monaco Document Mode editor:
+        // a styled h1 whose `#` is present-but-collapsed (computed style, since
+        // textContent still returns display:none text) and styled inline code.
         const rendered = await waitUntil("artifact markdown render", async () => {
-          const h1 = (await page.locator(".cm-md-h1").count()) >= 1;
-          const code = (await page.locator(".cm-md-code").count()) >= 1;
-          return h1 && code;
+          const heading = await readDocumentLine(page, "Probe Artifact");
+          const code = await readDocumentLine(page, "Body with");
+          return (
+            heading !== null &&
+            heading.classes.includes("volli-md-h1") &&
+            !heading.visible.includes("#") &&
+            heading.collapsed.includes("#") &&
+            code !== null &&
+            code.classes.includes("volli-md-code")
+          );
         });
         // File tabs are closable (the × affordance session tabs have).
         const closable =
@@ -404,7 +454,7 @@ async function main() {
       async () => {
         const noSaveButton =
           (await page.getByRole("button", { name: "Save", exact: true }).count()) === 0;
-        await page.locator(".cm-content").click();
+        await clickMonaco(page);
         await page.keyboard.press("Meta+a");
         await page.keyboard.type(ARTIFACT_EDITED);
         // Blur onto the Doc tab to flush the debounced autosave.
@@ -426,7 +476,7 @@ async function main() {
       "Create via picker: @newnote offers 'Create artifact', creating the templated .md on disk, inserting the ref, opening its tab; .volli/.gitignore is *",
       async () => {
         // Back on the Doc tab (blur landed there); append on a fresh line.
-        await page.locator(".cm-content").click();
+        await clickMonaco(page);
         await page.keyboard.press("Meta+ArrowDown");
         await page.keyboard.press("Enter");
         await pickCompletion(page, `@${CREATED_NAME}`, `Create artifact "${CREATED_NAME}.md"`);
@@ -472,13 +522,13 @@ async function main() {
       5,
       "Repo-file ref opens an EDITABLE (explicit-save) Monaco TypeScript model under the app origin, completes a real language-worker handshake, and never creates .volli/tickets/",
       async () => {
-        await page.locator(".cm-content").click();
+        await clickMonaco(page);
         await page.keyboard.press("Meta+ArrowDown");
         await page.keyboard.press("Enter");
         await pickCompletion(page, `@${REPO_FILE_NAME.slice(0, 5)}`, REPO_FILE_NAME);
         await parkCaretOnFirstLine(page);
 
-        const chip = page.locator(`.cm-file-chip[data-file-ref="${REPO_FILE_REL}"]`);
+        const chip = fileChip(page, REPO_FILE_REL);
         await waitUntil("repo-file chip", async () => (await chip.count()) === 1);
         await chip.click();
 
@@ -563,7 +613,8 @@ async function main() {
         );
         // The restored active tab renders its (edited) markdown.
         const contentRestored = await waitUntil("restored tab renders content", async () => {
-          return (await page.locator(".cm-md-h1").count()) >= 1;
+          const heading = await readDocumentLine(page, "Probe Edited");
+          return heading !== null && heading.classes.includes("volli-md-h1");
         });
 
         const ok = !!tabsRestored && !!activeRestored && !!contentRestored;
