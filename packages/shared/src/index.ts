@@ -10,6 +10,7 @@ export * from "./ticket-branch";
 export * from "./ticket-comment";
 export * from "./ticket-attachment";
 export * from "./ticket-events";
+export * from "./change-set";
 export * from "./ticket-filter";
 export * from "./ticket-sort";
 export * from "./project-identity";
