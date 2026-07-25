@@ -1579,7 +1579,7 @@ async function main() {
           const ui = byProject[projectId];
           const existing = ui.ticketTabs?.[ticketId] ?? { files: [] };
           ui.ticketTabs = {
-            ...(ui.ticketTabs ?? {}),
+            ...ui.ticketTabs,
             // Literal legacy wire value — what real upgrades still have on disk.
             [ticketId]: {
               files: existing.files?.length ? existing.files : ["README.md"],
