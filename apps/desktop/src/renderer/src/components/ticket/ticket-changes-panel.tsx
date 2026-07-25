@@ -172,47 +172,58 @@ export function TicketChangesPanel({
   const reloadPending = React.useRef(false);
   const loadRef = React.useRef<() => Promise<void>>(async () => {});
 
-  const loadChangeSet = React.useCallback(async () => {
-    if (ticket.worktreePath === null) {
-      setError(null);
-      setNav((prev) => ({ ...prev, revision: null, files: [] }));
-      setLoaded(true);
-      return;
-    }
-    if (loading.current) {
-      reloadPending.current = true;
-      return;
-    }
-    loading.current = true;
-    try {
-      const result = await window.api.worktree.changeSet(ticket.id);
-      if (!result.ok) {
-        setError(result.error);
-        toastError(`Couldn't load changes: ${result.error}`);
+  /**
+   * `notify` toasts the failure, and ONLY the loads the user personally asked
+   * for set it. A broken worktree fails identically on every filesystem event,
+   * and a watch-driven refresh fires per debounce window — toasting those
+   * buried the screen in the same sentence while the user was still reading
+   * the first one. The inline error always updates either way, so nothing is
+   * swallowed; it just says it once.
+   */
+  const loadChangeSet = React.useCallback(
+    async (notify = false) => {
+      if (ticket.worktreePath === null) {
+        setError(null);
+        setNav((prev) => ({ ...prev, revision: null, files: [] }));
+        setLoaded(true);
         return;
       }
-      setError(null);
-      setNav((prev) => applyChangeSetRefresh(prev, result.changeSet));
-    } catch (err) {
-      const message = errorMessage(err);
-      setError(message);
-      toastError(`Couldn't load changes: ${message}`);
-    } finally {
-      loading.current = false;
-      setLoaded(true);
-    }
-    if (reloadPending.current) {
-      reloadPending.current = false;
-      await loadRef.current();
-    }
-  }, [ticket.id, ticket.worktreePath]);
+      if (loading.current) {
+        reloadPending.current = true;
+        return;
+      }
+      loading.current = true;
+      try {
+        const result = await window.api.worktree.changeSet(ticket.id);
+        if (!result.ok) {
+          setError(result.error);
+          if (notify) toastError(`Couldn't load changes: ${result.error}`);
+          return;
+        }
+        setError(null);
+        setNav((prev) => applyChangeSetRefresh(prev, result.changeSet));
+      } catch (err) {
+        const message = errorMessage(err);
+        setError(message);
+        if (notify) toastError(`Couldn't load changes: ${message}`);
+      } finally {
+        loading.current = false;
+        setLoaded(true);
+      }
+      if (reloadPending.current) {
+        reloadPending.current = false;
+        await loadRef.current();
+      }
+    },
+    [ticket.id, ticket.worktreePath],
+  );
 
   React.useEffect(() => {
     loadRef.current = loadChangeSet;
   }, [loadChangeSet]);
 
   React.useEffect(() => {
-    void loadChangeSet();
+    void loadChangeSet(true);
   }, [loadChangeSet]);
 
   // Watch lifecycle: start when the ticket has a live worktree; the returned
@@ -232,7 +243,7 @@ export function TicketChangesPanel({
   const retryWatch = React.useCallback(() => {
     setWatchError(null);
     setWatchAttempt((attempt) => attempt + 1);
-    void loadChangeSet();
+    void loadChangeSet(true);
   }, [loadChangeSet]);
 
   const handleSelect = React.useCallback(
