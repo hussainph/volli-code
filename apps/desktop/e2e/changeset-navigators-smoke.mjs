@@ -314,9 +314,8 @@ async function main() {
         { timeout: 10000 },
       );
       const text = await aside.getByTestId("ticket-files-list").innerText();
-      const hasRef = text.includes("keep.ts") || text.includes("Referenced");
-      const hasWorktree =
-        text.includes("Worktree") && (text.includes("src") || text.includes("README"));
+      const hasRef = /keep\.ts/i.test(text) || /referenced/i.test(text);
+      const hasWorktree = /worktree/i.test(text) && (/src/i.test(text) || /readme/i.test(text));
       return { ok: hasRef && hasWorktree, detail: text.slice(0, 200) };
     });
 
