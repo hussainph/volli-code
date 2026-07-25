@@ -54,4 +54,11 @@ describe("planEmphasisWrap", () => {
     expect(plan.text).toBe("hello");
     expect(plan.selections).toEqual([span(1, 1, 1, 6)]);
   });
+
+  it("strips marks around an empty caret sitting between them", () => {
+    const plan = planEmphasisWrap({ text: "****", selection: [{ from: 2, to: 2 }], mark: "**" });
+
+    expect(plan.text).toBe("");
+    expect(plan.selections).toEqual([caret(1, 1)]);
+  });
 });
