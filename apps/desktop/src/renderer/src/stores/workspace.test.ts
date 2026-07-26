@@ -348,6 +348,18 @@ describe("ticket diff tabs", () => {
     });
   });
 
+  it("openTicketDiff persists the Change Set binary flag on diffMeta", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicketDiff("project-a", "ticket-1", "logo.png", {
+      status: "added",
+      binary: true,
+    });
+
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.diffMeta).toEqual({
+      "logo.png": { status: "added", binary: true },
+    });
+  });
+
   it("closeTicketDiff removes the diff and falls back to Doc when it was active", () => {
     const store = createWorkspaceStore(createMemoryStorage());
     store.getState().openTicketFile("project-a", "ticket-1", "notes.md");
@@ -714,6 +726,39 @@ describe("ticket file tab persistence", () => {
     expect(diffMeta?.["__proto__"]).toEqual({ status: "modified" });
     // Corruption check: Object.prototype must not gain a `status` from the map.
     expect(Object.prototype).not.toHaveProperty("status");
+  });
+
+  it("rehydrates a boolean binary flag on diffMeta and drops non-booleans", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:workspace",
+      JSON.stringify({
+        state: {
+          byProject: {
+            "project-a": {
+              ticketTabs: {
+                "ticket-1": {
+                  files: [],
+                  diffs: ["logo.png", "notes.md"],
+                  diffMeta: {
+                    "logo.png": { status: "added", binary: true },
+                    "notes.md": { status: "modified", binary: "yes" },
+                  },
+                  active: "diff:logo.png",
+                },
+              },
+            },
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    const store = createWorkspaceStore(storage);
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.diffMeta).toEqual({
+      "logo.png": { status: "added", binary: true },
+      "notes.md": { status: "modified" },
+    });
   });
 
   it("falls active diff:missing.ts back to Doc when the path is not open", () => {

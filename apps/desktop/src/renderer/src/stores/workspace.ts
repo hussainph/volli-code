@@ -78,12 +78,15 @@ export type BoardView = "board" | "list";
 export interface TicketDiffTabMeta {
   previousPath?: string | null;
   status?: string;
+  /** Change Set binary flag from the row that opened the tab (issue #109). */
+  binary?: boolean;
 }
 
 /** Options accepted by {@link WorkspaceState.openTicketDiff}. */
 export interface OpenTicketDiffOpts {
   previousPath?: string | null;
   status?: string;
+  binary?: boolean;
 }
 
 /**
@@ -399,17 +402,16 @@ function sanitizeDiffMeta(
   const open = new Set(diffs);
   for (const [path, value] of Object.entries(raw)) {
     if (!open.has(path) || typeof value !== "object" || value === null) continue;
-    const entry = value as { previousPath?: unknown; status?: unknown };
+    const entry = value as { previousPath?: unknown; status?: unknown; binary?: unknown };
     const meta: TicketDiffTabMeta = {};
-    if (
-      entry.previousPath === null ||
-      entry.previousPath === undefined ||
-      typeof entry.previousPath === "string"
-    ) {
-      meta.previousPath = entry.previousPath as string | null | undefined;
+    if (entry.previousPath === null || typeof entry.previousPath === "string") {
+      meta.previousPath = entry.previousPath;
     }
     if (typeof entry.status === "string") meta.status = entry.status;
-    if (meta.previousPath !== undefined || meta.status !== undefined) out[path] = meta;
+    if (typeof entry.binary === "boolean") meta.binary = entry.binary;
+    if (meta.previousPath !== undefined || meta.status !== undefined || meta.binary !== undefined) {
+      out[path] = meta;
+    }
   }
   return out;
 }
@@ -667,11 +669,14 @@ export function createWorkspaceStore(storage?: StateStorage) {
             let diffMeta = existing.diffMeta;
             if (
               opts !== undefined &&
-              (opts.previousPath !== undefined || opts.status !== undefined)
+              (opts.previousPath !== undefined ||
+                opts.status !== undefined ||
+                opts.binary !== undefined)
             ) {
               const meta: TicketDiffTabMeta = { ...diffMeta[relPath] };
               if (opts.previousPath !== undefined) meta.previousPath = opts.previousPath;
               if (opts.status !== undefined) meta.status = opts.status;
+              if (opts.binary !== undefined) meta.binary = opts.binary;
               diffMeta = { ...diffMeta, [relPath]: meta };
             }
             return patchWorkspace(state, projectId, {

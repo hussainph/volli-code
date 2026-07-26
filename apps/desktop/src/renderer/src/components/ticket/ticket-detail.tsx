@@ -374,6 +374,7 @@ export function TicketDetail({
       openTicketDiff(projectId, ticket.id, file.path, {
         previousPath: file.previousPath ?? null,
         status: file.status,
+        binary: file.binary,
       }),
     [openTicketDiff, projectId, ticket.id],
   );
@@ -656,6 +657,7 @@ export function TicketDetail({
                   relPath={activeTab.relPath}
                   previousPath={activeTab.previousPath ?? diffMeta[activeTab.relPath]?.previousPath}
                   status={diffMeta[activeTab.relPath]?.status}
+                  binary={diffMeta[activeTab.relPath]?.binary}
                   onDirtyChange={handleFileDirtyChange}
                   initialViewState={ticketDiffViewStates?.[activeTab.relPath]}
                   onViewStateChange={handleDiffViewStateChange}
