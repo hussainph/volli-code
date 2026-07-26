@@ -4,6 +4,7 @@ import type { ChangeSetFile } from "@volli/shared";
 
 import {
   DiffStub,
+  isDiffLeaseCurrent,
   mapBaseReadResult,
   planDiffDiskReconcile,
   planDiffView,
@@ -234,5 +235,32 @@ describe("DiffStub", () => {
     expect(html).toContain("logo.png");
     expect(html).toContain('data-testid="ticket-diff-stub"');
     expect(html).not.toContain("data-monaco-diff");
+  });
+});
+
+describe("isDiffLeaseCurrent", () => {
+  const leases = { id: "a" };
+
+  it("allows mutation only while mounted and the captured lease is still current", () => {
+    expect(isDiffLeaseCurrent({ captured: leases, current: leases, mounted: true })).toBe(true);
+  });
+
+  it("bails after await when the load effect replaced the leases", () => {
+    expect(
+      isDiffLeaseCurrent({
+        captured: leases,
+        current: { id: "b" },
+        mounted: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("bails after await when the component unmounted", () => {
+    expect(isDiffLeaseCurrent({ captured: leases, current: leases, mounted: false })).toBe(false);
+  });
+
+  it("bails when either side is null", () => {
+    expect(isDiffLeaseCurrent({ captured: null, current: leases, mounted: true })).toBe(false);
+    expect(isDiffLeaseCurrent({ captured: leases, current: null, mounted: true })).toBe(false);
   });
 });

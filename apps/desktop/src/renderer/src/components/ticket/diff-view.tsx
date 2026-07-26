@@ -204,6 +204,19 @@ export function planDiffDiskReconcile(input: {
   };
 }
 
+/**
+ * After an `await` in DiffView's onChanged reconcile, bail unless the captured
+ * leases are still the ones `leasesRef` holds (load effect may have released
+ * and replaced them) and the component is still mounted.
+ */
+export function isDiffLeaseCurrent(input: {
+  captured: object | null;
+  current: object | null;
+  mounted: boolean;
+}): boolean {
+  return input.mounted && input.captured !== null && input.captured === input.current;
+}
+
 /** Immutable-base + live-file identities for one DiffView. */
 export function diffViewIdentities(input: {
   projectId: string;
@@ -511,7 +524,16 @@ export function DiffView({
           ticketId: ticket.id,
           relPath,
         });
-        if (!mountedRef.current) return;
+        // Load effect may have released+replaced leases while we awaited.
+        if (
+          !isDiffLeaseCurrent({
+            captured: leases,
+            current: leasesRef.current,
+            mounted: mountedRef.current,
+          })
+        ) {
+          return;
+        }
 
         let disk: DiffLiveRead;
         if (!read.ok) {
@@ -535,6 +557,17 @@ export function DiffView({
           lastWrite: lastWriteRef.current,
           disk,
         });
+
+        // Re-check before mutating — adopt/discard must not touch a replaced lease.
+        if (
+          !isDiffLeaseCurrent({
+            captured: leases,
+            current: leasesRef.current,
+            mounted: mountedRef.current,
+          })
+        ) {
+          return;
+        }
 
         if (plan.kind === "adopt") {
           leases.modified.adoptCleanBaseline({
