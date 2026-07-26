@@ -815,8 +815,24 @@ export type FileWriteResult = Result<{ mtime: number }>;
  */
 export type ArtifactCreateResult = Result<{ relPath: string }>;
 
+/**
+ * The last word a watch subscription gets: main has torn the subscription down
+ * and will never send for it again (issue #134). Every holder of that watch owes
+ * itself a re-arm or an honest "live updates are off" — its `watch()` hold is
+ * now a hold on nothing. Only ever `true`; ORDINARY change events omit the field
+ * entirely, so `event.final === true` is the whole test.
+ *
+ * It cannot be inferred from the payload: the dominant teardown (the watched
+ * directory is gone for good) does carry `revision: null`, but a watcher that
+ * fails to REWIRE over a directory still present sends a final event that reads
+ * exactly like ordinary news.
+ */
+interface FinalWatchEvent {
+  final?: true;
+}
+
 /** The single watched file a `volli:file-changed` push event fired for. */
-export interface FileChangedEvent {
+export interface FileChangedEvent extends FinalWatchEvent {
   projectId: string;
   /** The worktree owner; Main-checkout files always normalize this to null. */
   ticketId: string | null;
@@ -831,7 +847,7 @@ export interface FileChangedEvent {
  * (`relPath: ""` is the project root). Always the MAIN checkout, so unlike
  * {@link FileChangedEvent} there is no `source` to disambiguate.
  */
-export interface DirChangedEvent {
+export interface DirChangedEvent extends FinalWatchEvent {
   projectId: string;
   relPath: string;
 }

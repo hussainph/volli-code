@@ -48,10 +48,9 @@ export interface TicketRecencyWatchOwner {
   /**
    * Feeds every `volli:file-changed` event back to the owner so it can notice
    * main tearing a watch down. Main owes a watch-less subscription one final
-   * event (see `WatchManagerBase.finishReArm`), and when the watched directory
-   * is gone that event carries `revision: null` — the only teardown signal the
-   * renderer gets. Without this the `held` latch below would short-circuit every
-   * later `watch()` with `{ ok: true }` and recency would die silently.
+   * event (see `WatchManagerBase.finishReArm`), flagged `final` — without acting
+   * on it the `held` latch below would short-circuit every later `watch()` with
+   * `{ ok: true }` and recency would die silently.
    */
   noteChangedEvent(event: FileChangedEvent): void;
   dispose(): void;
@@ -102,7 +101,10 @@ export function createTicketRecencyWatchOwner(
       return arm(key, input);
     },
     noteChangedEvent(event) {
-      if (disposed || event.revision !== null) return;
+      // `final` is main saying the subscription is gone, whatever the payload
+      // looks like — a deleted file under a watcher that is still armed reports
+      // `revision: null` too, and needs no re-arm at all (issue #134).
+      if (disposed || event.final !== true) return;
       // Held inputs always carry this ticket's id, while a `main`-resolved event
       // reports `ticketId: null` — so match on the (project, path) pair rather
       // than the composite watch key.
