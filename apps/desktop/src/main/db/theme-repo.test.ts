@@ -86,6 +86,15 @@ describe("global editor theme id (app_state kv)", () => {
     setGlobalEditorThemeId(ctx.db, null, 2000);
     expect(getGlobalEditorThemeId(ctx.db)).toBeNull();
   });
+
+  it("degrades to null on a stored non-catalog editor theme id", () => {
+    ctx = openTestDb();
+    ctx.db
+      .prepare("INSERT INTO app_state (key, value, updated_at) VALUES ('theme_editor', ?, 0)")
+      .run("volli-dark");
+
+    expect(getGlobalEditorThemeId(ctx.db)).toBeNull();
+  });
 });
 
 describe("project theme override", () => {

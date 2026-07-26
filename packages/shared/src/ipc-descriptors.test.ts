@@ -1388,6 +1388,21 @@ describe("THEME_IPC descriptor table", () => {
       expect(guard([{ override }])).toBe(false);
     });
 
+    it("accepts a shipped catalog editorThemeId and rejects a non-catalog id", () => {
+      expect(guard([{ projectId: "p1", override: { ...override, editorThemeId: "nord" } }])).toBe(
+        true,
+      );
+      expect(
+        guard([{ projectId: "p1", override: { ...override, editorThemeId: "volli-dark" } }]),
+      ).toBe(false);
+      expect(
+        guard([{ projectId: "p1", override: { ...override, editorThemeId: "not-a-theme" } }]),
+      ).toBe(false);
+      expect(guard([{ projectId: "p1", override: { ...override, editorThemeId: "" } }])).toBe(
+        false,
+      );
+    });
+
     it("rejects a wrong arity", () => {
       expect(guard([])).toBe(false);
       expect(guard([{ projectId: "p1", override }, "stray"])).toBe(false);

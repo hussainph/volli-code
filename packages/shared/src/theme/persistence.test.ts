@@ -32,6 +32,12 @@ describe("global theme persistence", () => {
     expect(parseGlobalEditorThemeId("")).toBeNull();
   });
 
+  it("treats a non-catalog editor theme id as derive-from-app", () => {
+    expect(parseGlobalEditorThemeId("volli-dark")).toBeNull();
+    expect(parseGlobalEditorThemeId("not-a-theme")).toBeNull();
+    expect(parseGlobalEditorThemeId("vs-dark")).toBeNull();
+  });
+
   it("round-trips an authored definition", () => {
     expect(parseThemeJson(serializeGlobalTheme(DEFAULT_THEME))).toEqual(DEFAULT_THEME);
   });
@@ -111,9 +117,27 @@ describe("project theme override", () => {
     expect(
       isProjectThemeOverride({ ...EMPTY_PROJECT_THEME_OVERRIDE, appThemeSlug: "catppuccin-mocha" }),
     ).toBe(true);
+    expect(isProjectThemeOverride({ ...EMPTY_PROJECT_THEME_OVERRIDE, editorThemeId: "nord" })).toBe(
+      true,
+    );
     expect(isProjectThemeOverride({ appThemeSlug: "x" })).toBe(false);
     expect(isProjectThemeOverride({ ...EMPTY_PROJECT_THEME_OVERRIDE, seed: 7 })).toBe(false);
     expect(isProjectThemeOverride(null)).toBe(false);
+  });
+
+  it("rejects a non-catalog editorThemeId while still allowing null inherit", () => {
+    expect(isProjectThemeOverride({ ...EMPTY_PROJECT_THEME_OVERRIDE, editorThemeId: null })).toBe(
+      true,
+    );
+    expect(
+      isProjectThemeOverride({ ...EMPTY_PROJECT_THEME_OVERRIDE, editorThemeId: "volli-dark" }),
+    ).toBe(false);
+    expect(
+      isProjectThemeOverride({ ...EMPTY_PROJECT_THEME_OVERRIDE, editorThemeId: "not-a-theme" }),
+    ).toBe(false);
+    expect(isProjectThemeOverride({ ...EMPTY_PROJECT_THEME_OVERRIDE, editorThemeId: "" })).toBe(
+      false,
+    );
   });
 });
 

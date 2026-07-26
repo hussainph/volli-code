@@ -21,6 +21,7 @@
 
 import { isHexColor } from "./color";
 import type { ThemeCanvas, ThemeDefinition } from "./definition";
+import { isShippedEditorThemeId } from "./editor-themes";
 import { isThemeTokenName } from "./tokens";
 
 /** The `app_state` key the authored global theme lives under (#29's kv table). */
@@ -44,12 +45,14 @@ export function serializeGlobalEditorThemeId(editorThemeId: string | null): stri
 
 /**
  * Reads the authored global editor theme id back out of `app_state`. Null for
- * absent, empty, or “clear back to derive” — the renderer maps that through
- * `resolveEditorThemeId` against the active app theme slug.
+ * absent, empty, “clear back to derive”, or a non-catalog value (corrupt /
+ * hand-edited row) — the renderer maps that through `resolveEditorThemeId`
+ * against the active app theme slug. Only {@link isShippedEditorThemeId}
+ * values survive.
  */
 export function parseGlobalEditorThemeId(raw: string | undefined | null): string | null {
   if (raw === undefined || raw === null || raw.length === 0) return null;
-  return raw;
+  return isShippedEditorThemeId(raw) ? raw : null;
 }
 
 // ── project override (migration 013) ─────────────────────────────────────────
@@ -102,13 +105,23 @@ function isNullableString(value: unknown): value is string | null {
   return value === null || typeof value === "string";
 }
 
-/** Runtime guard for the IPC boundary: every surface field present and nullable-string. */
+/** Null inherits global; a non-null id must be a shipped Monaco/shiki catalog id. */
+function isNullableShippedEditorThemeId(value: unknown): value is string | null {
+  return value === null || (typeof value === "string" && isShippedEditorThemeId(value));
+}
+
+/**
+ * Runtime guard for the IPC boundary: every surface field present and
+ * nullable-string, with `editorThemeId` further restricted to the shipped
+ * catalog (or null to inherit) — matching {@link parseGlobalEditorThemeId}
+ * and `volli:theme-set-global-editor`.
+ */
 export function isProjectThemeOverride(value: unknown): value is ProjectThemeOverride {
   return (
     isRecord(value) &&
     isNullableString(value["appThemeSlug"]) &&
     isNullableString(value["terminalThemeName"]) &&
-    isNullableString(value["editorThemeId"]) &&
+    isNullableShippedEditorThemeId(value["editorThemeId"]) &&
     isNullableString(value["seed"])
   );
 }
