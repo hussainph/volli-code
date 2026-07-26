@@ -90,6 +90,7 @@ export default defineConfig({
         "src/editor/markdown-projection.ts",
         "src/editor/monaco-theme.ts",
         "src/editor/reveal.ts",
+        "src/editor/shiki-langs.ts",
         "src/editor/shiki-monaco.ts",
         "src/editor/text-position.ts",
         "src/theme/apply.ts",

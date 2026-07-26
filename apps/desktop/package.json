@@ -23,6 +23,7 @@
     "@fontsource-variable/mona-sans": "^5.3.0",
     "@lezer/markdown": "^1.7.2",
     "@phosphor-icons/react": "^2.1.10",
+    "@shikijs/langs": "4.3.1",
     "@shikijs/monaco": "4.3.1",
     "@volli/shared": "workspace:*",
     "better-sqlite3": "^12.4.1",
