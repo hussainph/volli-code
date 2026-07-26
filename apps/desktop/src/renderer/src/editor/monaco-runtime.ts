@@ -6,7 +6,7 @@ import {
   readVolliMonacoTokens,
   type VolliMonacoTokens,
 } from "./monaco-theme";
-import { ensureShikiLanguage, type ShikiLanguageHost } from "./shiki-langs";
+import { ensureShikiLanguage, allShikiLangImporters, type ShikiLanguageHost } from "./shiki-langs";
 import { bootstrapShikiMonaco, type ShikiMonacoBootstrap } from "./shiki-monaco";
 
 export function createLazyInitializer<Value>(
@@ -67,7 +67,7 @@ export async function waitForLanguageWorkerRegistration<Worker>(
 export interface MonacoRuntime {
   monaco: typeof Monaco;
   registry: DocumentRegistry<Monaco.editor.ITextModel, Monaco.editor.ICodeEditorViewState>;
-  /** Shiki session from bootstrap — grammars load lazily via the model factory. */
+  /** Shiki session from bootstrap — grammars are eagerly loaded for document langs. */
   shiki: ShikiMonacoBootstrap;
 }
 
@@ -81,8 +81,9 @@ type MonacoModelHost = {
 };
 
 /**
- * Document-registry model factory that kicks off a lazy shiki grammar load for
- * the model's Monaco language id, then creates the Monaco text model.
+ * Document-registry model factory that ensures the shiki grammar for the
+ * model's Monaco language id (no-op when already loaded at bootstrap), then
+ * creates the Monaco text model.
  */
 export function createShikiBackedModelFactory(
   monaco: MonacoModelHost,
@@ -97,14 +98,15 @@ export function createShikiBackedModelFactory(
 }
 
 /**
- * Wire shiki once, then keep `volli-dark` as the active theme so editors still
+ * Wire shiki once with every document-identity language loaded before
+ * `shikiToMonaco`, then keep `volli-dark` as the active theme so editors still
  * boot until the catalog/picker slice replaces it.
  */
 export async function prepareMonacoEditorThemes(
   monaco: typeof Monaco,
   tokens: VolliMonacoTokens = readVolliMonacoTokens(),
 ): Promise<ShikiMonacoBootstrap> {
-  const shiki = await bootstrapShikiMonaco(monaco);
+  const shiki = await bootstrapShikiMonaco(monaco, { langs: allShikiLangImporters() });
   monaco.editor.defineTheme("volli-dark", createVolliMonacoTheme(tokens));
   monaco.editor.setTheme("volli-dark");
   return shiki;

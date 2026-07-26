@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-const { bootstrapShikiMonaco, ensureShikiLanguage } = vi.hoisted(() => ({
+const { bootstrapShikiMonaco, ensureShikiLanguage, allShikiLangImporters } = vi.hoisted(() => ({
   bootstrapShikiMonaco: vi.fn(),
   ensureShikiLanguage: vi.fn(async () => true),
+  allShikiLangImporters: vi.fn(() => [] as Array<() => Promise<unknown>>),
 }));
 
 vi.mock("./shiki-monaco", () => ({ bootstrapShikiMonaco }));
-vi.mock("./shiki-langs", () => ({ ensureShikiLanguage }));
+vi.mock("./shiki-langs", () => ({ ensureShikiLanguage, allShikiLangImporters }));
 
 import {
   createLazyInitializer,
@@ -23,17 +24,20 @@ beforeEach(() => {
     registerTheme: vi.fn(),
   });
   ensureShikiLanguage.mockResolvedValue(true);
+  allShikiLangImporters.mockReturnValue([]);
 });
 
 describe("prepareMonacoEditorThemes", () => {
-  it("bootstraps shiki once then keeps volli-dark as the active Monaco theme", async () => {
+  it("bootstraps shiki once with every document lang then keeps volli-dark active", async () => {
     const defineTheme = vi.fn();
     const setTheme = vi.fn();
     const monaco = {
       editor: { defineTheme, setTheme },
     };
     const shiki = { highlighter: { id: "shiki" }, registerTheme: vi.fn() };
+    const langs = [() => Promise.resolve({ id: "typescript" })];
     bootstrapShikiMonaco.mockResolvedValue(shiki);
+    allShikiLangImporters.mockReturnValue(langs);
 
     const result = await prepareMonacoEditorThemes(monaco as never, {
       background: "#111111",
@@ -45,8 +49,9 @@ describe("prepareMonacoEditorThemes", () => {
       destructive: "#e5484d",
     });
 
+    expect(allShikiLangImporters).toHaveBeenCalledTimes(1);
     expect(bootstrapShikiMonaco).toHaveBeenCalledTimes(1);
-    expect(bootstrapShikiMonaco).toHaveBeenCalledWith(monaco);
+    expect(bootstrapShikiMonaco).toHaveBeenCalledWith(monaco, { langs });
     expect(defineTheme).toHaveBeenCalledWith(
       "volli-dark",
       expect.objectContaining({
