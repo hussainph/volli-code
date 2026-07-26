@@ -48,7 +48,12 @@ export function planLiveDocumentReconciliation(input: {
     };
   }
   if (input.disk.truncated) {
-    throw new Error("Unreadable live reconciliation is not implemented");
+    return {
+      kind: "unreadable",
+      error: "File is too large to reconcile safely.",
+      keepDraft: input.local !== input.baseline,
+      revision: input.disk.revision,
+    };
   }
   if (input.lastWrite !== null && input.disk.text === input.lastWrite) {
     return {
