@@ -208,4 +208,36 @@ describe("applyLiveDocumentReconciliation", () => {
       revision: 8,
     });
   });
+
+  it("advances only the external revision for a conflict while retaining baseline A", () => {
+    const applyExternalUpdate = vi.fn();
+    const adoptCleanBaseline = vi.fn();
+    const lease = {
+      model: { getValue: () => "human\n" },
+      snapshot: () => ({ baseline: "before\n" }),
+      applyExternalUpdate,
+      adoptCleanBaseline,
+    };
+
+    const result = applyLiveDocumentReconciliation({
+      lease,
+      lastWrite: null,
+      disk: {
+        ok: true,
+        text: "agent\n",
+        revision: 9,
+        truncated: false,
+      },
+    });
+
+    expect(result).toMatchObject({
+      kind: "conflict",
+      local: "human\n",
+      disk: "agent\n",
+      revision: 9,
+    });
+    expect(adoptCleanBaseline).toHaveBeenCalledWith({ value: "agent\n", revision: 9 });
+    expect(applyExternalUpdate).not.toHaveBeenCalled();
+    expect(lease.snapshot().baseline).toBe("before\n");
+  });
 });
