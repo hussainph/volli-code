@@ -4,6 +4,7 @@
 // runtime export here is fine for main, but preload must never import it at
 // runtime.
 
+import type { ChangeSetSnapshot } from "./change-set";
 import type { FileKind, FileSource, IndexedFile } from "./file-ref";
 import type { DirEntry } from "./fs-entries";
 import type { Label } from "./label";
@@ -132,6 +133,20 @@ export interface WorktreeRemoveInput {
 export interface WorktreeDiffInput {
   ticketId: string;
   mode: WorktreeDiffMode;
+}
+
+/** `{ ticketId, path }` — a worktree-relative path to read at the Change Set base. */
+export interface WorktreeBaseReadInput {
+  ticketId: string;
+  path: string;
+  /**
+   * Pin the read to a specific base revision — normally the `baseRevision` of
+   * the snapshot the caller is rendering. Without it main re-resolves the merge
+   * base, which can have moved since (the agent committed, someone fetched), so
+   * a diff would show one side from one revision and the other from another.
+   * Omit to read against whatever the base resolves to right now.
+   */
+  baseRevision?: string;
 }
 
 /** `{ rescan: true }` forces a fresh orphan sweep (Settings → Worktrees rescan); omitted/`false` returns the launch's cached report. */
@@ -286,6 +301,26 @@ export interface VolliDataIpcContract {
   "volli:worktree-status": { args: [input: TicketIdInput]; result: WorktreeStatusResult };
   /** `"working-tree"` (uncommitted now) or `"merge-base"` (the PR delta). */
   "volli:worktree-diff": { args: [input: WorktreeDiffInput]; result: WorktreeDiffResult };
+  /**
+   * The composed Change Set snapshot (CONCEPT #47): the ticket worktree's
+   * complete current outcome relative to its recorded base.
+   */
+  "volli:worktree-change-set": {
+    args: [input: TicketIdInput];
+    result: WorktreeChangeSetResult;
+  };
+  /**
+   * Reads one file's contents at the Change Set's stamped base revision without
+   * mutating the checkout (`git show`). `{ missing: true }` when the path was
+   * absent at the base (added/untracked originals).
+   */
+  "volli:worktree-base-read": {
+    args: [input: WorktreeBaseReadInput];
+    result: WorktreeBaseReadResult;
+  };
+  /** Starts a debounced recursive watch on the ticket worktree for Change Set refresh. */
+  "volli:worktree-change-watch": { args: [input: TicketIdInput]; result: Result };
+  "volli:worktree-change-unwatch": { args: [input: TicketIdInput]; result: Result };
   /** The one-click "commit remaining work" safety net (fixed chore message). */
   "volli:worktree-commit": { args: [input: TicketIdInput]; result: WorktreeCommitResult };
   /** Push the branch and open (or re-discover) its draft PR; persists `pr_url`. */
@@ -555,6 +590,14 @@ export type VolliIpcEvent =
   // see volli-fs.ts's DirWatchManager. Carries no listing: the renderer
   // re-reads the one directory it owns, so the tree never mirrors the repo.
   | "volli:dir-changed"
+  // Debounced recursive watch over a live ticket worktree — see
+  // worktree/change-set-watch.ts. Carries only the ticketId; the renderer
+  // refetches the Change Set snapshot.
+  | "volli:worktree-changed"
+  // A ticket's worktree watch FAULTED and was dropped — see
+  // worktree/change-set-watch.ts. The Change Set the renderer is showing is now
+  // frozen, so it must say so rather than quietly going stale forever.
+  | "volli:worktree-watch-error"
   // Transient worktree-ensure phase transitions (never persisted; the renderer
   // mirrors them in a keyed store map, the `starting[ticketId]` pattern).
   | "volli:worktree-phase";
@@ -782,6 +825,28 @@ export interface WorktreePhaseEvent {
   phase: WorktreePhase;
 }
 
+/**
+ * Debounced signal that a live ticket worktree's filesystem changed
+ * (`volli:worktree-changed`). The renderer refetches the Change Set; the
+ * payload carries only the ticket id (no file list).
+ */
+export interface WorktreeChangedEvent {
+  ticketId: string;
+}
+
+/**
+ * A ticket's worktree watch faulted and has been torn down
+ * (`volli:worktree-watch-error`). Emitted exactly once per fault, right before
+ * teardown: after this the renderer will receive no further
+ * `volli:worktree-changed` for the ticket, so its Change Set is frozen until
+ * something re-establishes the watch. Surfaced, never swallowed — a silently
+ * dead watch looks identical to a worktree nobody is touching.
+ */
+export interface WorktreeWatchErrorEvent {
+  ticketId: string;
+  error: string;
+}
+
 /** Where a worktree dir stands relative to what git knows — the live half of worktree state. */
 export type WorktreeDiskState = "present" | "missing" | "unregistered";
 
@@ -843,6 +908,22 @@ export type WorktreeStatusResult = Result<{
  */
 export type WorktreeDiffMode = "working-tree" | "merge-base";
 export type WorktreeDiffResult = Result<{ diff: DiffStat }>;
+
+/** The composed Change Set for `volli:worktree-change-set`. */
+export type WorktreeChangeSetResult = Result<{ changeSet: ChangeSetSnapshot }>;
+
+/**
+ * Base-revision file contents for `volli:worktree-base-read`. Three success
+ * arms, none of them an error: `content` is decodable text, `missing: true`
+ * means the path was absent at the base (a file the ticket added), and
+ * `binary: true` means the blob is not text — returning its bytes as a string
+ * would hand the caller mojibake to render as a diff.
+ */
+export type WorktreeBaseReadResult = Result<
+  | { content: string; missing?: undefined; binary?: undefined }
+  | { missing: true; content?: undefined; binary?: undefined }
+  | { binary: true; content?: undefined; missing?: undefined }
+>;
 
 /**
  * Ack for `volli:worktree-commit`. `committed: true` carries the safety-net

@@ -9,7 +9,7 @@
  * both directions. When it does not (never-fetched repo, no remote, base is
  * itself a remote-tracking name), the local base branch is all there is.
  */
-import type { RunGit } from "./types";
+import type { RunGit, RunGitAsync } from "./types";
 
 /**
  * `origin/<base>` when that remote-tracking ref exists, else `baseBranch`
@@ -31,4 +31,56 @@ export function resolveComparisonRef(
   } catch {
     return baseBranch;
   }
+}
+
+/**
+ * The concrete SHA a Change Set is stamped against: the MERGE BASE of the
+ * comparison ref and HEAD, never the ref's tip.
+ *
+ * The Change Set answers "what has this ticket done", so it must be measured
+ * from where the branch forked. Stamping the tip instead makes every commit
+ * that landed on the base AFTER the fork show up as the ticket's own inverted
+ * work — a file someone else added reads as Deleted, one they deleted reads as
+ * Added — and the counts silently include the whole rest of the team's day.
+ * (Tip is still the right operand for behind-base, which asks the opposite
+ * question: how far the base has moved past us.)
+ *
+ * `merge-base` needs two reachable commits, so it fails in a fresh repo with no
+ * HEAD commit or when the base ref is unrelated history. There the ref's tip is
+ * the only answer available and is strictly better than failing the whole
+ * snapshot — diffs stay honest for the common case and degrade to the old
+ * behaviour in the pathological one. That tip comes free: `rev-parse --verify`
+ * PRINTS the SHA it verified, so the remote-tracking probe above already
+ * fetched it and the fallback reuses it rather than spawning git again.
+ *
+ * Async because it fronts the Change Set reads, which must not block main.
+ */
+export async function resolveChangeSetBaseRevision(
+  git: RunGitAsync,
+  cwd: string,
+  baseBranch: string | null,
+): Promise<string | null> {
+  if (!baseBranch) return null;
+
+  const remoteRef = `origin/${baseBranch}`;
+  let comparisonRef = baseBranch;
+  let probedTip: string | null = null;
+  try {
+    const probed = (
+      await git(["rev-parse", "--verify", "--quiet", `refs/remotes/${remoteRef}`], cwd)
+    ).trim();
+    comparisonRef = remoteRef;
+    if (probed.length > 0) probedTip = probed;
+  } catch {
+    // No remote-tracking ref — the local base branch is all there is.
+  }
+
+  try {
+    const mergeBase = (await git(["merge-base", comparisonRef, "HEAD"], cwd)).trim();
+    if (mergeBase.length > 0) return mergeBase;
+  } catch {
+    // Fall through to the tip — see the unrelated-history / no-HEAD cases above.
+  }
+  if (probedTip !== null) return probedTip;
+  return (await git(["rev-parse", comparisonRef], cwd)).trim();
 }

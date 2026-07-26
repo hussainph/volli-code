@@ -7,9 +7,23 @@
  * libgit2/native bindings (#40). The runner stays injectable so every pipeline
  * step is unit-testable with a scripted fake.
  */
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
+import { promisify } from "node:util";
 
 import type { RunGit } from "../project-base-branch";
+import type { RunGitAsync } from "./types";
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * stdout ceiling for the async runner. Node's 1 MB default is far too small for
+ * the reads that go through it: a `--name-status -z` listing of a few thousand
+ * paths, or a `git show` of one large file, both blow past it — and execFile
+ * signals that as a KILLED process, which would surface as a mysterious empty
+ * failure rather than "your diff is big". 64 MB is generous enough that hitting
+ * it means something genuinely pathological.
+ */
+export const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
 /** A git invocation that exited non-zero, carrying its captured `stderr`. */
 export class GitError extends Error {
@@ -35,6 +49,30 @@ export const runGitCapturing: RunGit = (args, cwd) => {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     });
+  } catch (caught) {
+    const e = caught as { stderr?: Buffer | string; message?: string };
+    const stderr = e.stderr ? e.stderr.toString() : "";
+    throw new GitError(e.message ?? "git command failed", stderr, args);
+  }
+};
+
+/**
+ * The async twin of {@link runGitCapturing}, for reads that must not block the
+ * main process. `changeSetSnapshot` runs five git commands over a whole
+ * worktree and is re-triggered by every debounced filesystem event, so running
+ * it synchronously froze the UI for the duration on a busy agent worktree —
+ * the same reasoning that put the network verbs behind `RunNet` (net.ts).
+ * Failures carry the captured stderr in a {@link GitError}, exactly as the
+ * sync runner does, so callers classify them identically.
+ */
+export const runGitCapturingAsync: RunGitAsync = async (args, cwd) => {
+  try {
+    const { stdout } = await execFileAsync("git", [...args], {
+      cwd,
+      encoding: "utf8",
+      maxBuffer: GIT_MAX_BUFFER,
+    });
+    return stdout;
   } catch (caught) {
     const e = caught as { stderr?: Buffer | string; message?: string };
     const stderr = e.stderr ? e.stderr.toString() : "";

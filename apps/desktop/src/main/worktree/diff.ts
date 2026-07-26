@@ -16,13 +16,11 @@
  * line totals), and RENAMES print the path with `=>` markers (`old => new` or
  * `pre/{old => new}/suf`) — we keep the NEW path, the thing that exists now.
  */
-import { DiffFileStat, DiffStat } from "@volli/shared";
+import { DiffFileStat, DiffStat, type WorktreeDiffMode } from "@volli/shared";
 
 import { resolveComparisonRef } from "./comparison-ref";
 import { stderrOf } from "./git";
 import { err, ok, type RunGit, type WorktreeResult } from "./types";
-
-export type DiffMode = "working-tree" | "merge-base";
 
 export interface DiffStatInput {
   worktreePath: string;
@@ -96,7 +94,7 @@ function total(files: readonly DiffFileStat[], key: "insertions" | "deletions"):
 export function diffStat(
   git: RunGit,
   input: DiffStatInput,
-  mode: DiffMode,
+  mode: WorktreeDiffMode,
 ): WorktreeResult<DiffStat> {
   if (mode === "merge-base" && !input.baseBranch) {
     return err("No base branch is known for this worktree, so its PR diff cannot be computed.");

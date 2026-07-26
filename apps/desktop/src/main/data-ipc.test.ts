@@ -72,6 +72,14 @@ vi.mock("./worktree", () => ({
   // Referenced (not called) by `worktree-runtime`'s `worktreeDeps` — needs a
   // stub export so that value import doesn't throw under strict ESM mocking.
   runGitCapturing: vi.fn(),
+  runGitCapturingAsync: vi.fn(),
+  // Constructed at registration time; these tests exercise no watch channel, so
+  // a no-op stand-in keeps real `fs.watch` handles out of the suite.
+  WorktreeChangeWatchManager: class {
+    watch = vi.fn(() => ({ ok: true as const }));
+    unwatch = vi.fn();
+    unwatchTicket = vi.fn();
+  },
 }));
 
 import { registerDataIpcHandlers } from "./data-ipc";

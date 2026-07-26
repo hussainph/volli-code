@@ -12,6 +12,13 @@ import type {
 // The project-roots registry lives in ./project-roots so main-process
 // consumers (this file, pty.ts) share one instance.
 import { isPathWithinRoots, syncProjectRoots } from "./project-roots";
+import { isInside } from "./worktree/paths";
+import { worktreesHome } from "./worktree-runtime";
+
+/** Project checkouts OR the app-owned worktree home (ticket Files navigator). */
+function isBrowsableFsPath(absPath: string): boolean {
+  return isPathWithinRoots(absPath) || isInside(worktreesHome(), absPath);
+}
 
 // Failures travel back as typed result objects, never as rejections —
 // ipcMain.handle rejections serialize into useless "Error invoking remote
@@ -50,7 +57,7 @@ export function registerIpcHandlers(): void {
         return { ok: false, error: "Invalid path" };
       }
       const resolved = resolve(absPath);
-      if (!isPathWithinRoots(resolved)) {
+      if (!isBrowsableFsPath(resolved)) {
         return { ok: false, error: "Path is outside known projects" };
       }
       try {
@@ -81,7 +88,7 @@ export function registerIpcHandlers(): void {
         return { ok: false, error: "Invalid path" };
       }
       const resolved = resolve(absPath);
-      if (!isPathWithinRoots(resolved)) {
+      if (!isBrowsableFsPath(resolved)) {
         return { ok: false, error: "Path is outside known projects" };
       }
       shell.showItemInFolder(resolved);

@@ -1,6 +1,6 @@
 # Monaco Migration
 
-**Status**: in progress — §12 slices 1–4 delivered, slices 5–8 outstanding · **Decisions**: `docs/CONCEPT.md` #46–#65
+**Status**: in progress — §12 slices 1–4 delivered, slice 5 delivered except Monaco diff tabs (#109), slices 6–8 outstanding · **Decisions**: `docs/CONCEPT.md` #46–#65
 
 This plan replaced every CodeMirror surface with Monaco and turns the existing Files navigation into a real repository workspace. It also adds the ticket-scoped Change Set needed for quick review and occasional human intervention.
 
@@ -325,9 +325,19 @@ Each slice should be independently reviewable and land with its own focused test
    - Preserve autosave and byte fidelity.
    - Remove CodeMirror packages/imports and obsolete adapter files.
    - Not carried over: the `Mod-b`/`Mod-i` emphasis-wrapping keymap. Document Mode ships without it; re-adding it as a Monaco action is tracked separately, not silently owed by this slice.
-5. **Ticket rail and Change Set**
-   - Icon-mode rail shell, Files/Changes navigators, composed git backend, Monaco diff tabs.
-   - Shared modified models, inline/side-by-side preference, updated indicators.
+5. **Ticket rail and Change Set** — ✅ navigator and backend delivered (#108); diff tabs tracked in #109
+   - Icon-mode rail shell, Files/Changes navigators, composed git backend. **(Delivered.)**
+   - The composed snapshot is `changeSetSnapshot()` in `main/worktree/change-set.ts`: one list of
+     committed, staged, unstaged, untracked, renamed, deleted, binary, and conflicted outcomes
+     against a resolve-and-stamp base SHA. There is no `base_sha` column — `resolveComparisonRef()`
+     is resolved per snapshot, so the recorded base stays the ticket's `base_branch`.
+   - The Properties summary is projected from the same snapshot through `changeSetToDiffStat()`,
+     so Properties and Changes cannot disagree. The legacy two-mode `worktree.diff` channel
+     remains for the CLI and is no longer a second source of truth for the rail.
+   - Selecting a Changes row opens the ordinary ticket **file** tab for that path; #109 swaps that
+     one call for a diff-tab opener.
+   - Monaco diff tabs, shared modified models, and the inline/side-by-side preference are **not**
+     in this slice — they are #109.
 6. **Reconciliation hardening**
    - Identity-complete watch events, non-overlapping automatic merge, rare conflict affordance.
    - Agent-write and local-save race tests.

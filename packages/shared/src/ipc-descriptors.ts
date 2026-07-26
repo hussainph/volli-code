@@ -366,6 +366,34 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     },
     invalidError: "Invalid worktree diff request",
   },
+  "volli:worktree-change-set": {
+    guard: (args): args is IpcArgs<"volli:worktree-change-set"> =>
+      args.length === 1 && isTicketIdInput(args[0]),
+    invalidError: "Invalid ticket",
+  },
+  "volli:worktree-base-read": {
+    guard: (args): args is IpcArgs<"volli:worktree-base-read"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      return (
+        isRecord(input) &&
+        typeof input["ticketId"] === "string" &&
+        typeof input["path"] === "string" &&
+        (input["baseRevision"] === undefined || typeof input["baseRevision"] === "string")
+      );
+    },
+    invalidError: "Invalid worktree base read request",
+  },
+  "volli:worktree-change-watch": {
+    guard: (args): args is IpcArgs<"volli:worktree-change-watch"> =>
+      args.length === 1 && isTicketIdInput(args[0]),
+    invalidError: "Invalid ticket",
+  },
+  "volli:worktree-change-unwatch": {
+    guard: (args): args is IpcArgs<"volli:worktree-change-unwatch"> =>
+      args.length === 1 && isTicketIdInput(args[0]),
+    invalidError: "Invalid ticket",
+  },
   "volli:worktree-commit": {
     guard: (args): args is IpcArgs<"volli:worktree-commit"> =>
       args.length === 1 && isTicketIdInput(args[0]),

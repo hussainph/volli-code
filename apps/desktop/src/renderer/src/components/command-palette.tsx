@@ -9,6 +9,7 @@ import {
   buildCommandPaletteItems,
   type CommandPaletteItems,
 } from "@renderer/components/command-palette-model";
+import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab";
 import { useBoardStore } from "@renderer/stores/board";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useSessionsStore } from "@renderer/stores/sessions";
@@ -160,9 +161,9 @@ export function CommandPalette({ open, onOpenChange, onChangeTheme }: CommandPal
               keywords={[item.displayId, item.title, item.projectName]}
               onSelect={() => {
                 useProjectsStore.getState().select(item.projectId);
-                useWorkspaceStore
-                  .getState()
-                  .openTicketWorkspace(item.projectId, item.ticketId, { tabId: "doc" });
+                useWorkspaceStore.getState().openTicketWorkspace(item.projectId, item.ticketId, {
+                  tabId: TICKET_BODY_TAB_ID,
+                });
                 finishNavigation();
               }}
               className="flex cursor-pointer items-center gap-3 rounded-lg px-2.5 py-2 outline-none data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground"

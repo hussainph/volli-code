@@ -10,6 +10,7 @@ import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import { toast } from "sonner";
 import {
+  changeSetToDiffStat,
   errorMessage,
   TICKET_PRIORITIES,
   TICKET_PRIORITY_LABELS,
@@ -25,13 +26,14 @@ import { PriorityIndicator } from "@renderer/components/board/priority-indicator
 import { createTerminalSession } from "@renderer/components/sessions/session-create";
 import { TicketLabelEditor } from "@renderer/components/ticket/ticket-label-editor";
 import {
-  formatMergeBaseSummary,
+  formatChangeSetSummary,
   resolveDoneFlow,
   type DoneFlowStage,
   type MenuAction,
   type PrimaryActionKind,
   type WorktreeStatusSnapshot,
 } from "@renderer/components/ticket/worktree-done-flow-model";
+import { subscribeWorktreeChanges } from "@renderer/components/ticket/worktree-change-watch";
 import {
   ARCHIVE_CLEAN_LABEL,
   DISMISS_LABEL,
@@ -434,19 +436,24 @@ function RetentionNoticeLine({ notice }: { notice: RetentionNotice }) {
 
 /**
  * The Details rail's Done-flow block (docs/plans/done-flow.md "UI", decision
- * #45): one merge-base context line plus one adaptive split button — a primary
+ * #45): one Change Set context line plus one adaptive split button — a primary
  * action whose label is the whole next step, and a chevron menu unbundling the
  * individual verbs. Rendered only once the ticket has a worktree. Lazy-loads
- * `status` + the merge-base diff on mount (the `BaseBranchField` precedent —
+ * `status` + the composed Change Set on mount (the `BaseBranchField` precedent —
  * fetch on first appearance rather than riding along in the boot payload) and
- * refetches after every action so the summary never goes stale. All fetch/busy
- * state is component-local (dialog-state-local convention: no global store)
- * since it's read fresh whenever this section is visible.
+ * refetches after every action so the summary never goes stale. The summary is
+ * projected from the same Change Set snapshot the Changes navigator reads
+ * (`changeSetToDiffStat`) so Properties and Changes cannot disagree (#108).
+ * All fetch/busy state is component-local (dialog-state-local convention: no
+ * global store) since it's read fresh whenever this section is visible.
  */
 function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
   const [status, setStatus] = React.useState<WorktreeStatusSnapshot | null>(null);
   const [diff, setDiff] = React.useState<DiffStat | null>(null);
   const [loadError, setLoadError] = React.useState<string | null>(null);
+  const [watchError, setWatchError] = React.useState<string | null>(null);
+  // Bumped by Retry to re-run the watch effect after a fault tore it down.
+  const [watchAttempt, setWatchAttempt] = React.useState(0);
   const [stage, setStage] = React.useState<DoneFlowStage>("idle");
   // The global Done-TTL, only needed to name the "In Done for N+ days" line.
   const [ttlDays, setTtlDays] = React.useState<number | null>(null);
@@ -457,24 +464,24 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
   const { state: retention, reload: reloadRetention } = useTicketRetention(ticket.id, true);
   const planningChange = useBoardStore((store) => store.lastPlanningChange);
 
-  /** The git-spawning half of the summary: `worktree.status` + the merge-base diff. */
+  /** The git-spawning half of the summary: `worktree.status` + composed Change Set. */
   const refreshStatusAndDiff = React.useCallback(async () => {
     try {
-      const [statusResult, diffResult] = await Promise.all([
+      const [statusResult, changeSetResult] = await Promise.all([
         window.api.worktree.status(ticket.id),
-        window.api.worktree.diff(ticket.id, "merge-base"),
+        window.api.worktree.changeSet(ticket.id),
       ]);
       if (!statusResult.ok) {
         setLoadError(statusResult.error);
         return;
       }
-      if (!diffResult.ok) {
-        setLoadError(diffResult.error);
+      if (!changeSetResult.ok) {
+        setLoadError(changeSetResult.error);
         return;
       }
       setLoadError(null);
       setStatus(statusResult.status);
-      setDiff(diffResult.diff);
+      setDiff(changeSetToDiffStat(changeSetResult.changeSet));
     } catch (error) {
       setLoadError(errorMessage(error));
     }
@@ -497,6 +504,27 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
   React.useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // The summary is projected from the same Change Set the Changes navigator
+  // reads, so it must move when the worktree does — the planning broadcast
+  // below only fires on planning mutations, and an agent editing files makes
+  // none. Without this the line sat stale until something unrelated happened.
+  // The rail is exclusive (one mode at a time), so this never doubles up with
+  // the Changes panel's own watch.
+  React.useEffect(() => {
+    if (ticket.worktreePath === null) return;
+    setWatchError(null);
+    return subscribeWorktreeChanges(window.api.worktree, ticket.id, {
+      onChanged: () => void refreshStatusAndDiff(),
+      onWatchError: setWatchError,
+    });
+  }, [ticket.id, ticket.worktreePath, refreshStatusAndDiff, watchAttempt]);
+
+  function retryWatch() {
+    setWatchError(null);
+    setWatchAttempt((attempt) => attempt + 1);
+    void refreshStatusAndDiff();
+  }
 
   // K4 (review): a data-changed broadcast used to be scopeless, so this rail had
   // to debounce a git refresh on EVERY bump (another ticket moving, a retention
@@ -685,7 +713,7 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
 
   const view = resolveDoneFlow(status, ticket.prUrl, stage);
   const retentionView = resolveRetention(retention, ttlDays);
-  const mergeBaseSummary = diff ? formatMergeBaseSummary(diff) : null;
+  const changeSetSummary = diff ? formatChangeSetSummary(diff) : null;
 
   function runPrimary() {
     switch (view.primary.kind) {
@@ -746,9 +774,20 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
         </span>
       ) : (
         <span className="text-xs text-muted-foreground">
-          {mergeBaseSummary ?? "No changes vs base yet"}
+          {changeSetSummary ?? "No changes vs base yet"}
         </span>
       )}
+      {/* The watch died, so the summary above is frozen — say so, and offer the
+          way back rather than letting it quietly drift. */}
+      {watchError !== null ? (
+        <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <WarningIcon />
+          Stopped updating: {watchError}
+          <button type="button" onClick={retryWatch} className="text-primary-text hover:underline">
+            Retry
+          </button>
+        </span>
+      ) : null}
       {/* The archive-reason context line — why the wrap-up is being offered. */}
       {retentionView.archiveReady && retentionView.reasonLine ? (
         <span className="flex items-center gap-1.5 text-xs text-foreground">

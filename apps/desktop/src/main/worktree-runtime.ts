@@ -13,7 +13,7 @@ import type Database from "better-sqlite3";
 import type { VolliIpcEvent, WorktreePhaseEvent } from "@volli/shared";
 
 import { attachmentsRoot } from "./attachment-store";
-import { runGitCapturing } from "./worktree";
+import { runGitCapturing, runGitCapturingAsync } from "./worktree";
 import type { WorktreeDeps, WorktreePhase } from "./worktree";
 
 /** Pushes a phase transition to every open window (renderer mirrors it in a keyed store map). */
@@ -49,6 +49,7 @@ export function worktreeDeps(db: Database.Database): WorktreeDeps {
   return {
     db,
     git: runGitCapturing,
+    gitAsync: runGitCapturingAsync,
     home: resolveHome(),
     onPhase: broadcastPhase,
     attachmentsRoot: attachmentsRoot(app.getPath("userData")),

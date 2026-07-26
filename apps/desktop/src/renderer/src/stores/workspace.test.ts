@@ -1,5 +1,7 @@
 import { DEFAULT_TICKET_SORT, EMPTY_FILE_WORKSPACE } from "@volli/shared";
 import { afterEach, describe, expect, it } from "vite-plus/test";
+
+import { TICKET_BODY_TAB_ID, isTicketBodyTabId } from "@renderer/components/ticket/ticket-body-tab";
 import { useBoardStore } from "./board";
 import { ticketScope, useSessionsStore } from "./sessions";
 import { createWorkspaceStore, DEFAULT_WORKSPACE_UI, type NavKey } from "./workspace";
@@ -426,6 +428,31 @@ describe("ticket file tabs", () => {
 });
 
 describe("ticket file tab persistence", () => {
+  it('rehydrates a legacy active:"doc" value as the Ticket Body tab', () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:workspace",
+      JSON.stringify({
+        state: {
+          byProject: {
+            "project-a": {
+              ticketTabs: {
+                // Real users still have this literal on disk from pre-rename builds.
+                "ticket-1": { files: ["notes.md"], active: "doc" },
+              },
+            },
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    const store = createWorkspaceStore(storage);
+    const tabs = store.getState().byProject["project-a"]?.ticketTabs["ticket-1"];
+    expect(tabs).toEqual({ files: ["notes.md"], active: TICKET_BODY_TAB_ID });
+    expect(isTicketBodyTabId(tabs!.active)).toBe(true);
+  });
+
   it("persists ticketTabs and rehydrates them", () => {
     const storage = createMemoryStorage();
     const store = createWorkspaceStore(storage);

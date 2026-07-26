@@ -60,6 +60,9 @@ import type {
   TicketStatus,
   TicketUpdateInput,
   WorktreeBranchesResult,
+  WorktreeChangeSetResult,
+  WorktreeBaseReadInput,
+  WorktreeBaseReadResult,
   WorktreeCommitResult,
   WorktreeDiffInput,
   WorktreeDiffResult,
@@ -116,13 +119,16 @@ import {
   getRetentionTtlDays,
   listBranches,
   publishTicketBranch,
+  readWorktreeBaseFile,
+  readWorktreeChangeSet,
   readWorktreeDiff,
   readWorktreeStatus,
   remove as removeWorktree,
   runNet,
   setRetentionTtlDays,
-  type DiffMode,
+  WorktreeChangeWatchManager,
 } from "./worktree";
+import { createCoalescer } from "./worktree/coalesce";
 import { getRetentionWatcher } from "./retention-runtime";
 import {
   canonicalize as canonicalizeWorktreePath,
@@ -205,6 +211,8 @@ export function registerDataIpcHandlers(
   }
 
   const db = handle.db;
+  const changeWatchManager = new WorktreeChangeWatchManager();
+  const coalesceChangeSet = createCoalescer();
 
   const handlers: IpcHandlerTable<DataIpcChannel> = {
     "volli:data-bootstrap": (): BootstrapResult => {
@@ -488,6 +496,10 @@ export function registerDataIpcHandlers(
         force: input.force,
       });
       if (!result.ok) return { ok: false, error: result.error };
+      // The directory is gone; every window's recursive watch on it must go
+      // with it. Renderers never unwatch here — from their side the ticket
+      // simply stopped having a worktree.
+      changeWatchManager.unwatchTicket(input.ticketId);
       // The worktree identity changed (path cleared) for THIS ticket — re-hydrate
       // every board, and let this ticket's own surfaces refresh promptly.
       broadcastDataChanged({
@@ -593,7 +605,7 @@ export function registerDataIpcHandlers(
     },
 
     "volli:worktree-diff": (input: WorktreeDiffInput): WorktreeDiffResult => {
-      const read = readWorktreeDiff(worktreeDeps(db), input.ticketId, input.mode as DiffMode);
+      const read = readWorktreeDiff(worktreeDeps(db), input.ticketId, input.mode);
       switch (read.kind) {
         case "missing-ticket":
           return { ok: false, error: "Unknown ticket" };
@@ -606,6 +618,71 @@ export function registerDataIpcHandlers(
         case "ok":
           return { ok: true, diff: read.diff };
       }
+    },
+
+    "volli:worktree-change-set": async (input: TicketIdInput): Promise<WorktreeChangeSetResult> => {
+      // Coalesced per ticket: a burst of filesystem events can have several
+      // panels and windows asking at once, and each snapshot is five git
+      // commands over the whole worktree.
+      const read = await coalesceChangeSet(input.ticketId, () =>
+        readWorktreeChangeSet(worktreeDeps(db), input.ticketId),
+      );
+      switch (read.kind) {
+        case "missing-ticket":
+          return { ok: false, error: "Unknown ticket" };
+        case "no-worktree":
+          return { ok: false, error: "This ticket has no worktree." };
+        case "missing-on-disk":
+          return { ok: false, error: "This ticket's worktree directory is missing on disk." };
+        case "change-set-error":
+          return { ok: false, error: read.error };
+        case "ok":
+          return { ok: true, changeSet: read.changeSet };
+      }
+    },
+
+    "volli:worktree-base-read": async (
+      input: WorktreeBaseReadInput,
+    ): Promise<WorktreeBaseReadResult> => {
+      const read = await readWorktreeBaseFile(
+        worktreeDeps(db),
+        input.ticketId,
+        input.path,
+        input.baseRevision,
+      );
+      switch (read.kind) {
+        case "missing-ticket":
+          return { ok: false, error: "Unknown ticket" };
+        case "no-worktree":
+          return { ok: false, error: "This ticket has no worktree." };
+        case "missing-on-disk":
+          return { ok: false, error: "This ticket's worktree directory is missing on disk." };
+        case "base-read-error":
+          return { ok: false, error: read.error };
+        case "ok":
+          if (read.file.missing === true) return { ok: true, missing: true };
+          if (read.file.binary === true) return { ok: true, binary: true };
+          return { ok: true, content: read.file.content };
+      }
+    },
+
+    "volli:worktree-change-watch": (input: TicketIdInput, sender): Result => {
+      const status = readWorktreeStatus(worktreeDeps(db), input.ticketId);
+      switch (status.kind) {
+        case "missing-ticket":
+          return { ok: false, error: "Unknown ticket" };
+        case "no-worktree":
+          return { ok: false, error: "This ticket has no worktree." };
+        case "missing-on-disk":
+          return { ok: false, error: "This ticket's worktree directory is missing on disk." };
+        case "ok":
+          return changeWatchManager.watch(sender, input.ticketId, status.worktreePath);
+      }
+    },
+
+    "volli:worktree-change-unwatch": (input: TicketIdInput, sender): Result => {
+      changeWatchManager.unwatch(sender, input.ticketId);
+      return { ok: true };
     },
 
     "volli:worktree-commit": async (input: TicketIdInput): Promise<WorktreeCommitResult> => {
@@ -685,6 +762,9 @@ export function registerDataIpcHandlers(
       }
       const result = await archiveAndClean(worktreeDeps(db), input.ticketId);
       if (!result.ok) return { ok: false, error: result.error };
+      // Same as worktree-remove: the archived worktree's directory is gone, so
+      // no window may keep a recursive watch pinned to it.
+      changeWatchManager.unwatchTicket(input.ticketId);
       // The ticket archived + its worktree was removed — target it so its own
       // still-open surfaces refresh (the full re-hydrate drops the card).
       broadcastDataChanged({ ticketId: input.ticketId, kind: "retention" });

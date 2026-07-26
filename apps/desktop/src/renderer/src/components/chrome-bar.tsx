@@ -147,7 +147,7 @@ function TerminalFocusControls() {
         className="app-region-no-drag mr-1 translate-y-px"
         onClick={() => useUiStore.getState().setTerminalFocusTarget(null)}
         aria-label="Exit terminal focus"
-        title="Exit terminal focus (Esc)"
+        title="Exit terminal focus"
       >
         <CornersInIcon weight="bold" />
         <span className="sr-only">Exit terminal focus</span>

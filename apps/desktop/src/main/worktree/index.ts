@@ -16,14 +16,34 @@ export { sweepOrphans } from "./sweep";
 export { getWorktreeStatus } from "./status";
 export type { WorktreeStatusInput, WorktreeStatusReport } from "./status";
 export { diffStat } from "./diff";
-export type { DiffMode, DiffStatInput } from "./diff";
+export type { DiffStatInput } from "./diff";
 
 // TicketId-in read verbs (CONCEPT #42): resolve ticket→identity, discriminate
 // no-worktree / stamped-but-deleted, then compose status.ts/diff.ts. The single
 // door both the IPC and CLI status/diff paths go through — never the shallow
 // pair directly — so the disk-existence contract can't drift between them again.
-export { readWorktreeStatus, readWorktreeDiff } from "./read";
-export type { WorktreeReadDeps, WorktreeStatusRead, WorktreeDiffRead } from "./read";
+export {
+  readWorktreeStatus,
+  readWorktreeDiff,
+  readWorktreeChangeSet,
+  readWorktreeBaseFile,
+} from "./read";
+export type {
+  WorktreeReadDeps,
+  WorktreeStatusRead,
+  WorktreeDiffRead,
+  WorktreeChangeSetRead,
+  WorktreeBaseFileRead,
+} from "./read";
+export { changeSetSnapshot, readChangeSetBaseFile } from "./change-set";
+export type { ChangeSetInput, ChangeSetBaseFileInput, ChangeSetBaseFile } from "./change-set";
+export {
+  WorktreeChangeWatchManager,
+  WATCH_DEBOUNCE_MS,
+  WATCH_MAX_WAIT_MS,
+} from "./change-set-watch";
+export { createCoalescer } from "./coalesce";
+export type { Coalescer } from "./coalesce";
 export { commitRemaining } from "./commit";
 export type { CommitOutcome, CommitRemainingInput } from "./commit";
 export {
@@ -76,8 +96,10 @@ export { buildSetupSentinelLine, parseSetupSentinel } from "./setup";
 export { createSetupRun } from "./setup-run";
 export type { SetupRun, SetupRunDeps, SetupRunParams, SetupFeedResult } from "./setup-run";
 
-// The default git runner (captures stderr) — callers build `deps.git` from this.
-export { runGitCapturing, GitError } from "./git";
+// The default git runners (both capture stderr) — callers build `deps.git` /
+// `deps.gitAsync` from these. The async one exists because the Change Set reads
+// must never block main; see git.ts.
+export { runGitCapturing, runGitCapturingAsync, GitError } from "./git";
 
 export type {
   WorktreeDeps,
@@ -86,4 +108,5 @@ export type {
   SweepReport,
   WorktreeIdentity,
   RunGit,
+  RunGitAsync,
 } from "./types";
