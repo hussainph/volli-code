@@ -2,8 +2,9 @@
  * Shipped Monaco/shiki editor theme catalog.
  *
  * Themes are static `@shikijs/themes/<id>` imports so the bundler inlines them
- * (same pattern as `shiki-langs.ts`). Pass every importer into
- * `bootstrapShikiMonaco({ themes })` before the single `shikiToMonaco` call.
+ * (same pattern as `shiki-langs.ts`). Bootstrap loads only
+ * {@link DEFAULT_EDITOR_THEME_ID}; other catalog ids load on demand via
+ * {@link editorThemeImporterFor} + `registerTheme`.
  */
 
 import {
@@ -202,10 +203,19 @@ export function listEditorThemes(): EditorThemeEntry[] {
 
 /**
  * Every static `@shikijs/themes` importer for the catalog.
- * Pass into `bootstrapShikiMonaco` before `shikiToMonaco` so themeMap populates.
+ * Prefer {@link editorThemeImporterFor} for lazy loads; bootstrap should only
+ * take the default theme importer.
  */
 export function allEditorThemeImporters(): ThemeInput[] {
   return EDITOR_THEMES.map((theme) => theme.load);
+}
+
+/**
+ * Static importer for a catalog theme id, or `null` when the id is not shipped.
+ */
+export function editorThemeImporterFor(id: string): EditorThemeImporter | null {
+  const entry = EDITOR_THEMES.find((theme) => theme.id === id);
+  return entry?.load ?? null;
 }
 
 /**

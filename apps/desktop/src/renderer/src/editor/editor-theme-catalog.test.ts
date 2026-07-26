@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { SHIPPED_EDITOR_THEME_IDS } from "@volli/shared";
 
 import {
   allEditorThemeImporters,
   DEFAULT_EDITOR_THEME_ID,
+  editorThemeImporterFor,
   listEditorThemes,
   resolveEditorThemeId,
 } from "./editor-theme-catalog";
@@ -58,6 +59,28 @@ describe("allEditorThemeImporters", () => {
   });
 });
 
+describe("editorThemeImporterFor", () => {
+  it("returns the static importer for a shipped catalog id", async () => {
+    const load = editorThemeImporterFor("nord");
+    expect(load).not.toBeNull();
+    expect(typeof load).toBe("function");
+    expect(await load!()).toBeTruthy();
+  });
+
+  it("returns null for unknown ids", () => {
+    expect(editorThemeImporterFor("volli-dark")).toBeNull();
+    expect(editorThemeImporterFor("")).toBeNull();
+  });
+
+  it("matches allEditorThemeImporters entries by id", () => {
+    for (const theme of listEditorThemes()) {
+      const load = editorThemeImporterFor(theme.id);
+      expect(load).not.toBeNull();
+      expect(allEditorThemeImporters()).toContain(load);
+    }
+  });
+});
+
 describe("resolveEditorThemeId", () => {
   it("defaults ember (and the shared default constant) to one-dark-pro", () => {
     expect(DEFAULT_EDITOR_THEME_ID).toBe("one-dark-pro");
@@ -103,5 +126,27 @@ describe("resolveEditorThemeId", () => {
     expect(resolveEditorThemeId({ editorThemeId: "", appThemeSlug: "moss" })).toBe(
       "everforest-dark",
     );
+  });
+});
+
+describe("catalog alignment", () => {
+  it("throws when EDITOR_THEMES ids drift from SHIPPED_EDITOR_THEME_IDS", async () => {
+    vi.resetModules();
+    vi.doMock("@volli/shared", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("@volli/shared")>();
+      return {
+        ...actual,
+        SHIPPED_EDITOR_THEME_IDS: [
+          "drifted-id",
+        ] as unknown as typeof actual.SHIPPED_EDITOR_THEME_IDS,
+      };
+    });
+
+    await expect(import("./editor-theme-catalog")).rejects.toThrow(
+      /EDITOR_THEMES ids must match SHIPPED_EDITOR_THEME_IDS exactly/,
+    );
+
+    vi.doUnmock("@volli/shared");
+    vi.resetModules();
   });
 });

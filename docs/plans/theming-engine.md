@@ -61,7 +61,7 @@ Each row was decided explicitly with the owner. "Owner call" marks the two where
 
 **Today — and a correction worth recording.** `monaco-theme.ts` synthesizes one theme from CSS variables with four rules (`comment`, `keyword`, `number`, `string`). Those are **theme rules over an inherited `vs-dark`**, not tokenizer rules: `monaco-runtime.ts` registers **no** custom Monarch tokenizer, so Monaco's full built-in grammars are already active. We are not crippling the tokenizer, we are under-specifying the theme. A cheap intermediate improvement therefore exists (a fuller rule set against Monaco's own token types) if shiki ever slips.
 
-**Decision: `@shikijs/monaco` + shiki's JavaScript RegExp engine, fine-grained and lazy.**
+**Decision: `@shikijs/monaco` + shiki's JavaScript RegExp engine, fine-grained and lazy.** Bootstrap loads only the default catalog theme and empty langs; late langs/themes bind through a thin MIT-vendored adapter that owns one `themeMap`/`colorMap` and exposes `registerLanguage` / `defineTheme`.
 
 Real TextMate grammars and real VS Code fidelity. `textmateThemeToMonacoTheme()` carries `theme.colors` through to `defineTheme`, so `editor.background`, gutter, selection and **`diffEditor.*`** all come from the theme JSON — the diff editor themes correctly for free, which matters given #48/#51.
 

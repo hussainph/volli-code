@@ -6,6 +6,10 @@
  * only remembers the desired catalog id and pushes it into Monaco once the
  * runtime is bound. Calls before bootstrap are safe no-ops that queue the id
  * for the next {@link bindMonacoEditorThemeHost}.
+ *
+ * Catalog themes beyond the bootstrap default load on demand: refresh queues
+ * the id, awaits {@link ensureMonacoEditorThemeLoaded}, then `setTheme` so
+ * Appearance preview never flashes an undefined theme.
  */
 
 import { DEFAULT_EDITOR_THEME_ID, resolveEditorThemeId } from "./editor-theme-catalog";
@@ -17,16 +21,50 @@ export interface MonacoEditorThemeHost {
   };
 }
 
+/** Load + define a catalog theme before `setTheme` (bound at Monaco bootstrap). */
+export type MonacoEditorThemeEnsure = (themeId: string) => Promise<void>;
+
 let host: MonacoEditorThemeHost | null = null;
+let themeEnsure: MonacoEditorThemeEnsure | null = null;
 let pendingThemeId: string | null = null;
+/** Bumps on every refresh so superseded async applies do not paint a stale id. */
+let applyGeneration = 0;
+
+/**
+ * Bind the catalog-theme loader used before `setTheme`. Call before
+ * {@link bindMonacoEditorThemeHost} so a queued pending id can load first.
+ */
+export function bindMonacoEditorThemeEnsure(ensure: MonacoEditorThemeEnsure): void {
+  themeEnsure = ensure;
+}
+
+/**
+ * Ensure a catalog theme is loaded into the highlighter and defined in Monaco.
+ * No-op when the ensure seam is unbound (tests / pre-bootstrap).
+ */
+export async function ensureMonacoEditorThemeLoaded(themeId: string): Promise<void> {
+  await themeEnsure?.(themeId);
+}
+
+async function applyPendingTheme(themeId: string): Promise<void> {
+  const generation = ++applyGeneration;
+  await themeEnsure?.(themeId);
+  // A newer refresh bumps applyGeneration — do not paint a superseded id.
+  if (generation !== applyGeneration) return;
+  host?.editor.setTheme(themeId);
+}
 
 /**
  * Activate a Monaco/shiki catalog theme. Safe before Monaco loads: the id is
  * remembered and applied on the next {@link bindMonacoEditorThemeHost}.
+ *
+ * When a host is bound, loads the theme (if needed) then `setTheme`s — never
+ * activates an undefined theme id.
  */
 export function refreshMonacoEditorTheme(themeId: string): void {
   pendingThemeId = themeId;
-  host?.editor.setTheme(themeId);
+  if (host === null) return;
+  void applyPendingTheme(themeId);
 }
 
 /**
@@ -59,24 +97,27 @@ export function ensureMonacoEditorTheme(fallbackId: string): void {
 
 /**
  * Bind the live Monaco API. Applies any theme queued by
- * {@link refreshMonacoEditorTheme} before the runtime existed.
+ * {@link refreshMonacoEditorTheme} before the runtime existed (after ensure).
  */
 export function bindMonacoEditorThemeHost(monaco: MonacoEditorThemeHost): void {
   host = monaco;
   if (pendingThemeId !== null) {
-    monaco.editor.setTheme(pendingThemeId);
+    void applyPendingTheme(pendingThemeId);
   }
 }
 
 /**
  * DiffEditor ignores construction-time `theme` (`createDiffEditor` is not
- * patched by shikiToMonaco). Always call this before `createDiffEditor` so the
- * active catalog id is applied via `setTheme` — never pass `theme` in options,
- * and never `"volli-dark"` (#109 / #122).
+ * patched by the shiki adapter). Always call this before `createDiffEditor` so
+ * the active catalog id is applied via `setTheme` — never pass `theme` in
+ * options, and never `"volli-dark"` (#109 / #122).
  *
  * Uses `themeId` when provided (unknown ids fall through
  * {@link resolveEditorThemeId}); otherwise the pending refresh id, else
  * {@link DEFAULT_EDITOR_THEME_ID} via {@link ensureMonacoEditorTheme}.
+ *
+ * Kick ensure+setTheme on both the module host and the handed-in monaco so a
+ * DiffEditor created before the theme chunk lands still receives the id.
  */
 export function applyMonacoThemeForDiffEditor(
   monaco: MonacoEditorThemeHost,
@@ -91,12 +132,17 @@ export function applyMonacoThemeForDiffEditor(
     resolved = activeMonacoEditorThemeId();
   }
 
-  monaco.editor.setTheme(resolved);
+  const target = resolved;
+  void (async () => {
+    await ensureMonacoEditorThemeLoaded(target);
+    if (pendingThemeId !== null && pendingThemeId !== target) return;
+    monaco.editor.setTheme(target);
+  })();
 }
 
 /**
- * Catalog id for `editor.create` construction options. shikiToMonaco patches
- * `create` to honor `theme`, so hardcoding {@link DEFAULT_EDITOR_THEME_ID}
+ * Catalog id for `editor.create` construction options. The shiki adapter
+ * patches `create` to honor `theme`, so hardcoding {@link DEFAULT_EDITOR_THEME_ID}
  * would clobber a committed Appearance selection on every remount.
  */
 export function activeMonacoEditorThemeId(): string {
@@ -106,5 +152,7 @@ export function activeMonacoEditorThemeId(): string {
 /** Test-only: clear module state between cases. */
 export function resetMonacoEditorThemeForTests(): void {
   host = null;
+  themeEnsure = null;
   pendingThemeId = null;
+  applyGeneration = 0;
 }
