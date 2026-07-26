@@ -62,7 +62,13 @@ export type ThemeScope = { kind: "global" } | { kind: "project"; projectId: stri
 /** The preload theming surface this store needs — narrow, and fake-able in tests. */
 export interface ThemeGateway {
   state(input: { projectId?: string }): Promise<ThemeStateResult>;
-  setGlobal(theme: ThemeDefinition): Promise<ThemeStateResult>;
+  /**
+   * Writes the GLOBAL theme, and answers with the state of the scope named by
+   * `projectId` — the one the store is showing (#123). The scope is not a
+   * second write target: it is what keeps a project that overrides the app
+   * surface wearing its own theme while the app-wide one changes underneath.
+   */
+  setGlobal(theme: ThemeDefinition, projectId: string | null): Promise<ThemeStateResult>;
   setGlobalEditor(editorThemeId: ShippedEditorThemeId | null): Promise<ThemeStateResult>;
   setProject(
     projectId: string,
@@ -97,7 +103,7 @@ export interface ThemeStoreDeps {
 const defaultDeps: ThemeStoreDeps = {
   gateway: {
     state: (input) => window.api.theme.state(input),
-    setGlobal: (theme) => window.api.theme.setGlobal(theme),
+    setGlobal: (theme, projectId) => window.api.theme.setGlobal(theme, projectId),
     setGlobalEditor: (editorThemeId) => window.api.theme.setGlobalEditor(editorThemeId),
     setProject: (projectId, override) => window.api.theme.setProject(projectId, override),
     listCustomThemes: () => window.api.theme.listCustomThemes(),
@@ -560,8 +566,11 @@ export function createThemeStore({
               recents: noteRecentTheme(previousRecents, theme.slug),
             });
             repaint();
+            // The write is global; the ANSWER has to describe the scope this
+            // window is in, or adopting it drops the project out of the store
+            // and repaints an overriding project to the new global (#123).
             const result = await writeThrough("save the theme", () =>
-              deps.gateway.setGlobal(theme),
+              deps.gateway.setGlobal(theme, get().projectId),
             );
             if (result === null) {
               // Put the user back on the theme that is actually stored rather

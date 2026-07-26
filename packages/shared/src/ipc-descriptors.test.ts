@@ -1323,6 +1323,12 @@ describe("THEME_IPC descriptor table", () => {
       expect(guard([{ theme }])).toBe(true);
     });
 
+    // The scope the write is MADE FROM, so the answer can describe it (#123).
+    it("accepts the caller's project scope and rejects a non-string one", () => {
+      expect(guard([{ theme, projectId: "p1" }])).toBe(true);
+      expect(guard([{ theme, projectId: 7 }])).toBe(false);
+    });
+
     it("rejects a definition with a bad canvas, seed, or appearance", () => {
       expect(guard([{ theme: { ...theme, canvas: { kind: "hologram" } } }])).toBe(false);
       expect(guard([{ theme: { ...theme, seed: 42 } }])).toBe(false);

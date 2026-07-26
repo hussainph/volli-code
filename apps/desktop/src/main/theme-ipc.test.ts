@@ -188,14 +188,63 @@ describe("volli:theme-state", () => {
 });
 
 describe("volli:theme-set-global", () => {
-  it("persists the authored definition and resolves with the fresh state", () => {
+  const SEA: ThemeDefinition = { ...DEFAULT_THEME, name: "Sea", slug: "sea", seed: "#3a7d9a" };
+
+  /** The project override the caller's scope must still be wearing afterwards. */
+  const ROSE: ProjectThemeOverride = {
+    appThemeSlug: null,
+    terminalThemeName: null,
+    editorThemeId: null,
+    seed: "#c4526f",
+  };
+
+  it("persists the authored definition and resolves with the fresh global state", () => {
     setup();
-    const theme: ThemeDefinition = { ...DEFAULT_THEME, name: "Sea", slug: "sea", seed: "#3a7d9a" };
 
-    const result = invoke<ThemeStateResult>("volli:theme-set-global", { theme });
+    const result = invoke<ThemeStateResult>("volli:theme-set-global", { theme: SEA });
 
-    expect(result.ok && result.value.theme).toEqual(theme);
-    expect(getGlobalTheme(ctx.db)).toEqual(theme);
+    expect(result.ok && result.value.theme).toEqual(SEA);
+    // No caller scope named: the global scope IS the caller's scope.
+    expect(result.ok && result.value.projectId).toBeNull();
+    expect(result.ok && result.value.projectOverride).toBeNull();
+    expect(getGlobalTheme(ctx.db)).toEqual(SEA);
+  });
+
+  // The write is global from every scope; the ANSWER is what tells the renderer
+  // which project it is still showing. Answering `projectId: null` here dropped
+  // the scope out of the store and repainted an overriding project to the new
+  // global theme (#123).
+  it("writes globally but answers in the caller's project scope (#123)", () => {
+    const { projectId } = setup();
+    invoke("volli:theme-set-project", { projectId, override: ROSE });
+
+    const result = invoke<ThemeStateResult>("volli:theme-set-global", { theme: SEA, projectId });
+
+    expect(getGlobalTheme(ctx.db)).toEqual(SEA);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.theme).toEqual(SEA);
+    expect(result.value.projectId).toBe(projectId);
+    expect(result.value.projectOverride).toEqual(ROSE);
+    expect(result.value.terminal.overlayPaths.project).toBe(
+      join(userDataDir, "volli/ghostty/projects/VC.config"),
+    );
+  });
+
+  // A scope that has gone (the project was deleted while the window still
+  // showed it) must not fail a write that already landed — the renderer would
+  // roll back to a theme that is no longer what is stored.
+  it("degrades a vanished caller scope to the global one, keeping the write", () => {
+    setup();
+
+    const result = invoke<ThemeStateResult>("volli:theme-set-global", {
+      theme: SEA,
+      projectId: "gone",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.value.projectId).toBeNull();
+    expect(getGlobalTheme(ctx.db)).toEqual(SEA);
   });
 });
 

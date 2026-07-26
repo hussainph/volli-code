@@ -567,6 +567,16 @@ function isOverlayEdits(value: unknown): value is Record<string, string | null> 
   );
 }
 
+/**
+ * The optional `projectId` that names the scope a theme request is MADE FROM.
+ * Absent is the global scope; a project id asks for that project's resolution.
+ * Shared by the read and by the global writes, which answer in the caller's
+ * scope rather than the one they wrote to (#123).
+ */
+function isCallerScope(value: unknown): boolean {
+  return value === undefined || typeof value === "string";
+}
+
 /** `[{ slug }]` where the slug can actually name a file in the themes directory. */
 function isThemeSlugArgs(args: unknown[]): boolean {
   const [input] = args;
@@ -583,16 +593,18 @@ export const THEME_IPC: { readonly [C in ThemeIpcChannel]: IpcRequestDescriptor<
     guard: (args): args is IpcArgs<"volli:theme-state"> => {
       if (args.length !== 1) return false;
       const [input] = args;
-      return (
-        isRecord(input) &&
-        (input["projectId"] === undefined || typeof input["projectId"] === "string")
-      );
+      return isRecord(input) && isCallerScope(input["projectId"]);
     },
     invalidError: "Invalid theme request",
   },
   "volli:theme-set-global": {
+    // `projectId` names the CALLER's scope, never a second write target — it
+    // decides which scope's state the answer describes (#123).
     guard: (args): args is IpcArgs<"volli:theme-set-global"> =>
-      args.length === 1 && isRecord(args[0]) && isThemeDefinition(args[0]["theme"]),
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      isThemeDefinition(args[0]["theme"]) &&
+      isCallerScope(args[0]["projectId"]),
     invalidError: "Invalid theme",
   },
   "volli:theme-set-global-editor": {
