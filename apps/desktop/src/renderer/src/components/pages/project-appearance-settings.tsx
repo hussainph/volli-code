@@ -84,9 +84,20 @@ export function ProjectAppearanceSettings({ project }: { project: Project }) {
   }, [project.id]);
 
   if (!inScope) {
+    // The effect fires once per project, and the store toasts a failed read
+    // rather than retrying — so without this button a read that lost (bridge
+    // hiccup, a locked database) would leave the pane on "Loading…" for as
+    // long as it stays open, with nothing to press.
     return (
       <SettingsSection title={project.name}>
         <InheritNote>Loading this project&rsquo;s appearance…</InheritNote>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => void useThemeStore.getState().hydrate(project.id)}
+        >
+          Retry
+        </Button>
       </SettingsSection>
     );
   }
@@ -419,7 +430,14 @@ function ProjectTerminalThemeSection({ projectId }: { projectId: string }) {
     }
     const seed = terminalCustomSeed(terminal);
     setPending(true);
-    if (seed !== null) void write({ kind: "theme", name: seed });
+    if (seed !== null) {
+      // A write that didn't land stored nothing, so Inherit is still the truth
+      // — roll the section back rather than leave it claiming Custom over an
+      // overlay that has no key in it.
+      void write({ kind: "theme", name: seed }).then((saved) => {
+        if (!saved) setPending(false);
+      });
+    }
   };
 
   return (
