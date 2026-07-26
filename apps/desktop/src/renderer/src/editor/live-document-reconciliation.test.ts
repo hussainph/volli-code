@@ -68,4 +68,26 @@ describe("planLiveDocumentReconciliation", () => {
       revision: 3,
     });
   });
+
+  it("advances a local-save echo baseline without losing typing made during the save", () => {
+    expect(
+      planLiveDocumentReconciliation({
+        baseline: "before\n",
+        local: "saved\nnew typing\n",
+        lastWrite: "saved\n",
+        disk: {
+          ok: true,
+          text: "saved\n",
+          revision: 4,
+          truncated: false,
+        },
+      }),
+    ).toEqual({
+      kind: "apply",
+      outcome: "save-echo",
+      baseline: "saved\n",
+      value: "saved\nnew typing\n",
+      revision: 4,
+    });
+  });
 });
