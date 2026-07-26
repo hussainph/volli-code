@@ -138,6 +138,13 @@ function sanitizeRailWidth(width: unknown): number {
   return clampRailWidth(width);
 }
 
+/** A persisted Monaco diff layout; unknown/missing values fall back to inline. */
+function sanitizeDiffPresentation(presentation: unknown): DiffPresentation {
+  return presentation === "inline" || presentation === "side-by-side"
+    ? presentation
+    : DEFAULT_DIFF_PRESENTATION;
+}
+
 interface UiState {
   sidebarWidth: number;
   /** Ticket-detail right rail width; resizable via its grip, persisted app-wide. */
@@ -201,6 +208,7 @@ type PersistedUiState = Pick<
   | "workspaceRailHidden"
   | "railCollapsed"
   | "railMode"
+  | "diffPresentation"
   | "lastHarnessId"
 > & {
   /** Legacy pre-icon-rail key; read on merge only, never written again. */
@@ -270,6 +278,7 @@ export function createUiStore(storage?: StateStorage) {
           workspaceRailHidden: state.workspaceRailHidden,
           railCollapsed: state.railCollapsed,
           railMode: state.railMode,
+          diffPresentation: state.diffPresentation,
           lastHarnessId: state.lastHarnessId,
         }),
         // Rehydrated values come from JSON a past build wrote — sanitize
@@ -295,6 +304,9 @@ export function createUiStore(storage?: StateStorage) {
               railMode: stored.railMode,
               detailsExpanded: stored.detailsExpanded,
             }),
+            // Missing/unknown presentation (older build, corrupt JSON) keeps
+            // the CONCEPT #51 default of inline.
+            diffPresentation: sanitizeDiffPresentation(stored.diffPresentation),
             // A missing/unknown persisted harness (older build, corrupt JSON,
             // or a since-removed custom id) falls back to the first-class default.
             lastHarnessId: isHarnessId(stored.lastHarnessId)
