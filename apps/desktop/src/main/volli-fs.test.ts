@@ -1459,6 +1459,35 @@ describe("registerFileIpcHandlers", () => {
     expect(read.ok && read.source).toBe("main");
   });
 
+  it("normalizes a Main file event to null ticket identity when a ticket view requested it", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    await invoke("volli:artifact-create", {}, { projectId: setup.projectId, name: "shared" });
+    const subscriber = makeWebContents();
+    const relPath = ".volli/artifacts/shared.md";
+    const revision = (await stat(join(setup.projectPath, relPath))).mtimeMs;
+
+    expect(
+      await invoke<{ ok: boolean }>("volli:file-watch", subscriber, {
+        projectId: setup.projectId,
+        ticketId: setup.ticketId,
+        relPath,
+      }),
+    ).toEqual({ ok: true });
+
+    vi.useFakeTimers();
+    watchCalls[0]?.cb("change", "shared.md");
+    vi.advanceTimersByTime(250);
+
+    expect(subscriber.send).toHaveBeenCalledWith("volli:file-changed", {
+      projectId: setup.projectId,
+      ticketId: null,
+      relPath,
+      source: "main",
+      revision,
+    } satisfies FileChangedEvent);
+  });
+
   // `worktree_path` IS populated in production (pty/manager.ts stamps it when a
   // ticket's worktree is created), so main-vs-ticket resolution is live behavior,
   // not future work — asserted end-to-end through the read channel.
