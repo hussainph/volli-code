@@ -973,12 +973,15 @@ describe("FileWatchManager", () => {
     });
     watchCalls[0]?.watcher.emitError(new Error("boom"));
 
+    // The file outlived the watcher, so `revision` reads like ordinary news
+    // (issue #134): only `final` tells the holders their watch is gone.
     expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
       projectId: "proj-1",
       ticketId: null,
       relPath: "notes.md",
       source: "main",
       revision: expect.any(Number),
+      final: true,
     } satisfies FileChangedEvent);
     // Torn down: a subsequent unwatch is a harmless no-op.
     expect(() =>
@@ -1021,6 +1024,7 @@ describe("FileWatchManager", () => {
       relPath: "sub/notes.md",
       source: "main",
       revision: null,
+      final: true,
     } satisfies FileChangedEvent);
     // Torn down: a subsequent unwatch is a harmless no-op.
     expect(() =>
@@ -1390,6 +1394,27 @@ describe("directory watch channels", () => {
     expect(webContents.send).toHaveBeenCalledWith("volli:dir-changed", {
       projectId: setup.projectId,
       relPath: "",
+    } satisfies DirChangedEvent);
+  });
+
+  it("flags the last broadcast when the re-arm throws over a directory that is still there", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const webContents = makeWebContents();
+    await invoke("volli:dir-watch", webContents, { projectId: setup.projectId, relPath: "" });
+
+    // Nothing about the payload distinguishes this from ordinary news — the
+    // directory is intact and its listing is still worth refetching — so the
+    // expanded row learns its watch is gone from `final` alone (issue #134).
+    watchMock.mockImplementationOnce(() => {
+      throw new Error("EMFILE: too many open files");
+    });
+    watchCalls[0]?.watcher.emitError(new Error("boom"));
+
+    expect(webContents.send).toHaveBeenCalledWith("volli:dir-changed", {
+      projectId: setup.projectId,
+      relPath: "",
+      final: true,
     } satisfies DirChangedEvent);
   });
 

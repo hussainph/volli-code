@@ -698,8 +698,13 @@ abstract class WatchManagerBase<S extends WatchSubscription> {
   /** Whether a raw `fs.watch` filename (null on coalesced/platform events) concerns this subscription. */
   protected abstract matches(sub: S, filename: string | null): boolean;
 
-  /** Sends this subscription's change event; the caller has already checked the sender is alive. */
-  protected abstract sendChanged(sub: S): void;
+  /**
+   * Sends this subscription's change event; the caller has already checked the
+   * sender is alive. `final` marks the one event a torn-down subscription is
+   * owed — the renderer cannot tell that apart from ordinary news on its own
+   * (issue #134), so it is stated rather than implied.
+   */
+  protected abstract sendChanged(sub: S, final: boolean): void;
 
   /**
    * Registers and wires a fully-built subscription. A second watch on the same
@@ -745,7 +750,7 @@ abstract class WatchManagerBase<S extends WatchSubscription> {
     sub.debounceTimer = setTimeout(() => {
       sub.debounceTimer = null;
       if (sub.webContents.isDestroyed()) return;
-      this.sendChanged(sub);
+      this.sendChanged(sub, false);
     }, this.debounceMs);
   }
 
@@ -838,9 +843,11 @@ abstract class WatchManagerBase<S extends WatchSubscription> {
       } catch {
         // Same contract as the retry-exhausted path below: this subscription
         // ends up watcher-less either way, so it owes the subscriber one final
-        // event — silence would leave the tab/tree believing updates flow.
+        // event — silence would leave the tab/tree believing updates flow. This
+        // is the path where the dir (and usually the file) is STILL THERE, so
+        // only the `final` flag distinguishes the event from ordinary news.
         this.teardown(key);
-        if (!sub.webContents.isDestroyed()) this.sendChanged(sub);
+        if (!sub.webContents.isDestroyed()) this.sendChanged(sub, true);
         return;
       }
       sub.reArming = false;
@@ -855,7 +862,7 @@ abstract class WatchManagerBase<S extends WatchSubscription> {
       return;
     }
     this.teardown(key);
-    if (!sub.webContents.isDestroyed()) this.sendChanged(sub);
+    if (!sub.webContents.isDestroyed()) this.sendChanged(sub, true);
   }
 
   protected teardown(key: string): void {
@@ -935,7 +942,7 @@ export class FileWatchManager extends WatchManagerBase<FileWatchSubscription> {
     return filename === null || filename === sub.base;
   }
 
-  protected override sendChanged(sub: FileWatchSubscription): void {
+  protected override sendChanged(sub: FileWatchSubscription, final: boolean): void {
     const payload: FileChangedEvent = {
       projectId: sub.projectId,
       ticketId: sub.ticketId,
@@ -945,6 +952,7 @@ export class FileWatchManager extends WatchManagerBase<FileWatchSubscription> {
       // identify the final inode, not the file present when watch was armed.
       revision: this.currentRevision(join(sub.dir, sub.base)),
     };
+    if (final) payload.final = true;
     sub.webContents.send("volli:file-changed" satisfies VolliIpcEvent, payload);
   }
 
@@ -1020,8 +1028,9 @@ export class DirWatchManager extends WatchManagerBase<WatchSubscription> {
     return !filename.startsWith(`node_modules${sep}`);
   }
 
-  protected override sendChanged(sub: WatchSubscription): void {
+  protected override sendChanged(sub: WatchSubscription, final: boolean): void {
     const payload: DirChangedEvent = { projectId: sub.projectId, relPath: sub.relPath };
+    if (final) payload.final = true;
     sub.webContents.send("volli:dir-changed" satisfies VolliIpcEvent, payload);
   }
 }

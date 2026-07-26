@@ -27,7 +27,8 @@ function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
 }
 
 /** Main's teardown signal: a final change event carrying no revision. */
-function tornDownEvent(overrides: Partial<FileChangedEvent> = {}): FileChangedEvent {
+/** Ordinary news from a watcher that is still armed — nobody should re-arm for it. */
+function ordinaryEvent(overrides: Partial<FileChangedEvent> = {}): FileChangedEvent {
   return {
     projectId: "project-1",
     // Main reports `null` for a Main-resolved file even though the held watch
@@ -35,9 +36,18 @@ function tornDownEvent(overrides: Partial<FileChangedEvent> = {}): FileChangedEv
     ticketId: null,
     relPath: "src/app.ts",
     source: "main",
-    revision: null,
+    revision: 12,
     ...overrides,
   };
+}
+
+/**
+ * The one event main owes a subscription it has torn down (issue #134). The
+ * dominant teardown loses the file with its directory, hence `revision: null` —
+ * but `final` is what carries the meaning, not the missing revision.
+ */
+function tornDownEvent(overrides: Partial<FileChangedEvent> = {}): FileChangedEvent {
+  return { ...ordinaryEvent(), revision: null, final: true, ...overrides };
 }
 
 describe("reduceTicketRecencyOwner", () => {
@@ -283,6 +293,23 @@ describe("createTicketRecencyWatchOwner", () => {
     expect(onWatchLost).toHaveBeenCalledWith(input);
   });
 
+  it("re-arms on a teardown whose payload still reads like ordinary news", async () => {
+    const watch = vi.fn(async () => ({ ok: true }) as const);
+    const unwatch = vi.fn(async () => ({ ok: true }) as const);
+    const owner = createTicketRecencyWatchOwner({ watch, unwatch });
+
+    await owner.watch(input);
+    // The `wireWatcher`-throw teardown (issue #134): the directory — and the
+    // file with it — outlived the watcher, so the final event carries a real
+    // mtime. Before `final` this was indistinguishable from a normal write, and
+    // the held latch stranded silently for the rest of the ticket's life.
+    owner.noteChangedEvent(tornDownEvent({ revision: 1_700_000_000_000 }));
+    await settle();
+
+    expect(unwatch).toHaveBeenCalledWith(input);
+    expect(watch).toHaveBeenCalledTimes(2);
+  });
+
   it("ignores teardown signals for paths it never armed, and after dispose", async () => {
     const watch = vi.fn(async () => ({ ok: true }) as const);
     const unwatch = vi.fn(async () => ({ ok: true }) as const);
@@ -292,8 +319,11 @@ describe("createTicketRecencyWatchOwner", () => {
     await owner.watch(input);
     owner.noteChangedEvent(tornDownEvent({ relPath: "src/other.ts" }));
     owner.noteChangedEvent(tornDownEvent({ projectId: "project-2" }));
-    // A revision-bearing event is ordinary news, not a teardown.
-    owner.noteChangedEvent(tornDownEvent({ revision: 12 }));
+    // Unflagged events are ordinary news whatever the revision says: a file
+    // deleted under a watcher that is still armed reports `revision: null` too,
+    // and re-arming for it would only churn main's refCount.
+    owner.noteChangedEvent(ordinaryEvent());
+    owner.noteChangedEvent(ordinaryEvent({ revision: null }));
     await settle();
     expect(unwatch).not.toHaveBeenCalled();
     expect(watch).toHaveBeenCalledTimes(1);

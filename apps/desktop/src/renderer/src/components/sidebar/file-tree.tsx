@@ -2,7 +2,13 @@ import * as React from "react";
 import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
 import { FileIcon } from "@phosphor-icons/react/dist/csr/File";
 import { FolderIcon } from "@phosphor-icons/react/dist/csr/Folder";
-import { errorMessage, type DirEntry, type Project } from "@volli/shared";
+import {
+  errorMessage,
+  type DirChangedEvent,
+  type DirEntry,
+  type DirPathInput,
+  type Project,
+} from "@volli/shared";
 
 import {
   Collapsible,
@@ -19,6 +25,7 @@ import {
   SidebarMenuSkeleton,
   SidebarMenuSub,
 } from "@renderer/components/ui/sidebar";
+import { rearmWatch } from "@renderer/editor/rearm-watch";
 import { toastError } from "@renderer/lib/toast";
 import { toProjectRelPath } from "@renderer/lib/project-rel-path";
 import { useProjectsStore } from "@renderer/stores/projects";
@@ -46,7 +53,9 @@ function dirKey(projectId: string, relPath: string): string {
   return `${projectId} ${relPath}`;
 }
 
-const dirListeners = new Map<string, Set<() => void>>();
+type DirChangedListener = (event: DirChangedEvent) => void;
+
+const dirListeners = new Map<string, Set<DirChangedListener>>();
 let dirChangedSubscription: (() => void) | null = null;
 
 /**
@@ -58,13 +67,19 @@ let dirChangedSubscription: (() => void) | null = null;
  * subscription is created with the first watched level and torn down with the
  * last.
  */
-function subscribeDirChanged(projectId: string, relPath: string, listener: () => void): () => void {
+function subscribeDirChanged(
+  projectId: string,
+  relPath: string,
+  listener: DirChangedListener,
+): () => void {
   const key = dirKey(projectId, relPath);
-  const listeners = dirListeners.get(key) ?? new Set<() => void>();
+  const listeners = dirListeners.get(key) ?? new Set<DirChangedListener>();
   listeners.add(listener);
   dirListeners.set(key, listeners);
   dirChangedSubscription ??= window.api.files.onDirChanged((event) => {
-    for (const notify of dirListeners.get(dirKey(event.projectId, event.relPath)) ?? []) notify();
+    for (const notify of dirListeners.get(dirKey(event.projectId, event.relPath)) ?? []) {
+      notify(event);
+    }
   });
 
   return () => {
@@ -125,7 +140,28 @@ function useDirectoryWatch(projectId: string, relPath: string | null, refresh: (
           toastError(`Live updates for ${label} are unavailable: ${errorMessage(error)}`);
         }
       });
-    const unsubscribe = subscribeDirChanged(projectId, relPath, () => refreshRef.current());
+    const unsubscribe = subscribeDirChanged(projectId, relPath, (event) => {
+      refreshRef.current();
+      // Main tore this level's watcher down (issue #134). The listing above is
+      // still current — it was just refreshed — but nothing more will arrive
+      // unless the watch is re-armed, so try, and say so if it cannot be.
+      if (event.final !== true) return;
+      void rearmWatch<DirPathInput>(
+        {
+          watch: (input) => window.api.files.watchDir(input),
+          unwatch: (input) => window.api.files.unwatchDir(input),
+        },
+        { projectId, relPath },
+      ).then((result) => {
+        if (!live) {
+          if (result.ok) dropWatch();
+          return;
+        }
+        if (!result.ok) {
+          toastError(`Live updates for ${label} are unavailable: ${result.error}`);
+        }
+      });
+    });
     return () => {
       live = false;
       unsubscribe();

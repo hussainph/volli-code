@@ -17,6 +17,7 @@ import { AUTOSAVE_IDLE_MS, planAutosave } from "@renderer/editor/autosave-plan";
 import { documentIdentityKey, fileDocumentIdentity } from "@renderer/editor/document-identity";
 import { matchesFileChangeIdentity } from "@renderer/editor/file-change-identity";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
+import { rearmWatch } from "@renderer/editor/rearm-watch";
 import { toastError } from "@renderer/lib/toast";
 import { useDebouncedCallback } from "@renderer/lib/use-debounced-callback";
 
@@ -386,6 +387,17 @@ export function FileView({
       void (async () => {
         const disk = await readFile();
         if (!mountedRef.current) return;
+        // Main tore this subscription down (issue #134). Hand the stale hold
+        // back and re-arm; the tab only hears about it when that fails AND the
+        // file is still readable, because an unreadable file already speaks for
+        // itself below and does not need a second sentence.
+        if (event.final === true) {
+          void rearmWatch(window.api.files, { projectId, ticketId, relPath }).then((result) => {
+            if (!result.ok && mountedRef.current && disk.ok) {
+              toastError(`Live updates for ${name} are off. Reopen the file to refresh it.`);
+            }
+          });
+        }
         if (!disk.ok) {
           // The file was deleted (or is now unreadable) under an open tab. An
           // unsaved draft — the autosave editor's or the source editor's — is

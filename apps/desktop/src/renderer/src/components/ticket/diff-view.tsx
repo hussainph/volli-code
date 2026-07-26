@@ -37,6 +37,7 @@ import type { DocumentLease } from "@renderer/editor/document-registry";
 import { matchesFileChangeIdentity } from "@renderer/editor/file-change-identity";
 import type { LocalWriteReceipt } from "@renderer/editor/live-document-reconciliation";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
+import { rearmWatch } from "@renderer/editor/rearm-watch";
 import { toastError } from "@renderer/lib/toast";
 import { useUiStore } from "@renderer/stores/ui";
 
@@ -362,6 +363,17 @@ export function DiffView({
         })
       ) {
         return;
+      }
+      // Main tore this subscription down (issue #134): hand the stale hold back
+      // and re-arm, or say that the pane has stopped following disk.
+      if (event.final === true) {
+        void rearmWatch(window.api.files, { projectId, ticketId: ticket.id, relPath }).then(
+          (result) => {
+            if (!result.ok && mountedRef.current) {
+              toastError(`Live updates for ${name} are off. Reopen the diff to refresh it.`);
+            }
+          },
+        );
       }
       void (async () => {
         const leases = leasesRef.current;
