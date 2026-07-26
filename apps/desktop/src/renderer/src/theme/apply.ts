@@ -22,7 +22,12 @@
  * writes are a no-op until the user picks something else.
  */
 
-import { generateThemeTokens, THEME_TOKEN_NAMES } from "@volli/shared";
+import {
+  generateThemeTokens,
+  generateVeilTokens,
+  THEME_TOKEN_NAMES,
+  THEME_VEIL_TOKEN_NAMES,
+} from "@volli/shared";
 import type { ProjectThemeOverride, ThemeDefinition, ThemeTokens } from "@volli/shared";
 
 import { refreshTerminalTokenTheme } from "@renderer/terminal/appearance";
@@ -42,6 +47,12 @@ import { refreshTerminalTokenTheme } from "@renderer/terminal/appearance";
 export function applyThemeTokens(tokens: ThemeTokens, root?: HTMLElement): void {
   const target = root ?? document.documentElement;
   for (const name of THEME_TOKEN_NAMES) target.style.setProperty(name, tokens[name]);
+  // The veils (#74) are solved FROM the set above, so they move with it. A
+  // surface that gave up its fill to sit on the canvas composites through one
+  // of these; leaving them behind would freeze the sidebar on the previous
+  // theme's rung while the rail beneath it repaints.
+  const veils = generateVeilTokens(tokens);
+  for (const name of THEME_VEIL_TOKEN_NAMES) target.style.setProperty(name, veils[name]);
   refreshTerminalTokenTheme();
 }
 
