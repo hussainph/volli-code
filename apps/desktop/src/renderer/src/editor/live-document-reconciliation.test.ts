@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
-import { planLiveDocumentReconciliation } from "./live-document-reconciliation";
+import {
+  applyLiveDocumentReconciliation,
+  planLiveDocumentReconciliation,
+} from "./live-document-reconciliation";
 
 describe("planLiveDocumentReconciliation", () => {
   it("adopts disk quietly when the live model is clean", () => {
@@ -173,6 +176,36 @@ describe("planLiveDocumentReconciliation", () => {
       baseline: "saved\n",
       value: "saved\n",
       revision: 7,
+    });
+  });
+});
+
+describe("applyLiveDocumentReconciliation", () => {
+  it("applies a disjoint result through one registry transaction", () => {
+    const applyExternalUpdate = vi.fn();
+    const lease = {
+      model: { getValue: () => "human first\nkeep\nlast\n" },
+      snapshot: () => ({ baseline: "first\nkeep\nlast\n" }),
+      applyExternalUpdate,
+      adoptCleanBaseline: vi.fn(),
+    };
+
+    const result = applyLiveDocumentReconciliation({
+      lease,
+      lastWrite: null,
+      disk: {
+        ok: true,
+        text: "first\nkeep\nagent last\n",
+        revision: 8,
+        truncated: false,
+      },
+    });
+
+    expect(result).toMatchObject({ kind: "apply", outcome: "merge" });
+    expect(applyExternalUpdate).toHaveBeenCalledWith({
+      baseline: "first\nkeep\nagent last\n",
+      value: "human first\nkeep\nagent last\n",
+      revision: 8,
     });
   });
 });
