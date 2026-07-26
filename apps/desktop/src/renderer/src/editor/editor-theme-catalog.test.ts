@@ -5,7 +5,6 @@ import { SHIPPED_EDITOR_THEME_IDS } from "@volli/shared";
 import {
   allEditorThemeImporters,
   DEFAULT_EDITOR_THEME_ID,
-  editorThemeIdForAppSlug,
   listEditorThemes,
   resolveEditorThemeId,
 } from "./editor-theme-catalog";
@@ -14,8 +13,7 @@ describe("listEditorThemes", () => {
   it("returns a catalog entry for each shipped editor theme", () => {
     const themes = listEditorThemes();
 
-    expect(themes.length).toBeGreaterThanOrEqual(18);
-    expect(themes.length).toBeLessThanOrEqual(22);
+    expect(themes.map((theme) => theme.id)).toEqual([...SHIPPED_EDITOR_THEME_IDS]);
     expect(themes[0]).toEqual(
       expect.objectContaining({
         id: expect.any(String),
@@ -40,6 +38,7 @@ describe("allEditorThemeImporters", () => {
     const importers = allEditorThemeImporters();
 
     expect(importers).toHaveLength(themes.length);
+    expect(importers).toHaveLength(SHIPPED_EDITOR_THEME_IDS.length);
 
     for (const importer of importers) {
       expect(typeof importer).toBe("function");
@@ -104,10 +103,5 @@ describe("resolveEditorThemeId", () => {
     expect(resolveEditorThemeId({ editorThemeId: "", appThemeSlug: "moss" })).toBe(
       "everforest-dark",
     );
-  });
-
-  it("exposes editorThemeIdForAppSlug as the null-override convenience", () => {
-    expect(editorThemeIdForAppSlug("iris")).toBe("catppuccin-mocha");
-    expect(editorThemeIdForAppSlug(null)).toBe(DEFAULT_EDITOR_THEME_ID);
   });
 });

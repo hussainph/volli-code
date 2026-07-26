@@ -1,8 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import { listEditorThemes } from "@renderer/editor/editor-theme-catalog";
-
 import { AppearanceSettings } from "./appearance-settings";
 
 describe("Settings → Appearance", () => {
@@ -35,7 +33,5 @@ describe("Settings → Appearance", () => {
     expect(html).toContain("Matches app theme");
     // Reset only appears when an explicit id is pinned (covered in the model).
     expect(html).not.toContain("Reset editor theme to match app theme");
-    // Catalog is what the picker lists once opened (~22 dark themes).
-    expect(listEditorThemes().length).toBeGreaterThanOrEqual(20);
   });
 });

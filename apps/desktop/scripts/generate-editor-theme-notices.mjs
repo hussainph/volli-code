@@ -8,39 +8,43 @@
  * Upstream source:
  *   https://github.com/shikijs/textmate-grammars-themes/blob/main/packages/tm-themes/NOTICE
  *
- * Theme ids are kept in sync with editor-theme-catalog.ts by listing the same
- * set here — update both when the catalog changes.
+ * Theme ids are read from `SHIPPED_EDITOR_THEME_IDS` in
+ * `packages/shared/src/theme/editor-themes.ts` so this script cannot drift from
+ * the IPC vocabulary / renderer catalog.
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** Must match `SHIPPED_EDITOR_THEME_IDS` in `@volli/shared` (and listEditorThemes). */
-const SHIPPED_THEME_IDS = [
-  "catppuccin-mocha",
-  "catppuccin-macchiato",
-  "catppuccin-frappe",
-  "tokyo-night",
-  "rose-pine",
-  "rose-pine-moon",
-  "nord",
-  "gruvbox-dark-medium",
-  "dracula",
-  "one-dark-pro",
-  "ayu-dark",
-  "ayu-mirage",
-  "solarized-dark",
-  "night-owl",
-  "github-dark",
-  "vitesse-dark",
-  "everforest-dark",
-  "kanagawa-wave",
-  "kanagawa-dragon",
-  "monokai",
-  "dark-plus",
-  "material-theme-palenight",
-];
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = resolve(root, "../..");
+const sharedEditorThemesPath = resolve(repoRoot, "packages/shared/src/theme/editor-themes.ts");
+
+/**
+ * Parse `SHIPPED_EDITOR_THEME_IDS` from shared source (plain Node, no TS loader).
+ * @returns {string[]}
+ */
+function readShippedEditorThemeIdsFromShared() {
+  const source = readFileSync(sharedEditorThemesPath, "utf8");
+  const match = source.match(
+    /export const SHIPPED_EDITOR_THEME_IDS\s*=\s*\[([\s\S]*?)\]\s*as const/,
+  );
+  if (match === null) {
+    throw new Error(`Could not find SHIPPED_EDITOR_THEME_IDS in ${sharedEditorThemesPath}`);
+  }
+  const ids = [...match[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  if (ids.length === 0) {
+    throw new Error(`SHIPPED_EDITOR_THEME_IDS parsed empty from ${sharedEditorThemesPath}`);
+  }
+  if (new Set(ids).size !== ids.length) {
+    throw new Error(`SHIPPED_EDITOR_THEME_IDS in ${sharedEditorThemesPath} contains duplicate ids`);
+  }
+  return ids;
+}
+
+/** Sole theme-id source — must stay identical to `@volli/shared`'s export. */
+const SHIPPED_THEME_IDS = readShippedEditorThemeIdsFromShared();
 
 const noticePath = process.argv[2];
 if (!noticePath) {
@@ -50,7 +54,6 @@ if (!noticePath) {
   process.exit(1);
 }
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outPath = resolve(root, "THIRD-PARTY-NOTICES");
 const text = readFileSync(resolve(noticePath), "utf8");
 const blocks = text
@@ -79,6 +82,26 @@ const missing = SHIPPED_THEME_IDS.filter(
 );
 if (missing.length > 0) {
   throw new Error(`Missing NOTICE coverage for: ${missing.join(", ")}`);
+}
+
+// Hard assert: NOTICE Files: lines cover exactly the shared id set.
+const covered = new Set();
+for (const block of selected) {
+  const filesLine = block.split("\n").find((line) => line.startsWith("Files: "));
+  if (filesLine === undefined) continue;
+  for (const file of filesLine.slice("Files: ".length).split(",")) {
+    covered.add(file.trim().replace(/\.json$/, ""));
+  }
+}
+const sharedSet = new Set(SHIPPED_THEME_IDS);
+if (
+  covered.size !== sharedSet.size ||
+  [...sharedSet].some((id) => !covered.has(id)) ||
+  [...covered].some((id) => !sharedSet.has(id))
+) {
+  throw new Error(
+    "NOTICE theme ids must equal SHIPPED_EDITOR_THEME_IDS from @volli/shared exactly",
+  );
 }
 
 const header = `THIRD-PARTY SOFTWARE NOTICES AND INFORMATION

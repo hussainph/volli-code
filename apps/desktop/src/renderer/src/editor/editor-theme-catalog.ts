@@ -30,8 +30,7 @@ interface EditorThemeDefinition extends EditorThemeEntry {
 /**
  * Metadata + static importer per theme. Ids must match
  * {@link SHIPPED_EDITOR_THEME_IDS} exactly (asserted below) so the IPC guard
- * and this picker cannot drift. Keep
- * `apps/desktop/scripts/generate-editor-theme-notices.mjs` in sync too.
+ * and this picker cannot drift. The notices script reads the same shared list.
  */
 const EDITOR_THEMES: readonly EditorThemeDefinition[] = [
   {
@@ -225,9 +224,4 @@ export function resolveEditorThemeId(input: {
 
   const slug = input.appThemeSlug ?? "";
   return APP_SLUG_TO_EDITOR_THEME[slug] ?? DEFAULT_EDITOR_THEME_ID;
-}
-
-/** Map a Volli app theme slug to its default editor theme (null → ember default). */
-export function editorThemeIdForAppSlug(appThemeSlug: string | null | undefined): string {
-  return resolveEditorThemeId({ editorThemeId: null, appThemeSlug });
 }
