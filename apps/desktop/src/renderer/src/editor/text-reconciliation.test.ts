@@ -119,4 +119,17 @@ describe("reconcileText", () => {
       nextBaseline: "one\r\ntwo\r\nagent three\r\n",
     });
   });
+
+  it("returns a deterministic lossless conflict when a rewrite exceeds the diff budget", () => {
+    const baseline = "a".repeat(10_000);
+    const local = "b".repeat(10_000);
+    const disk = "c".repeat(10_000);
+
+    expect(reconcileText({ baseline, local, disk })).toEqual({
+      kind: "conflict",
+      reason: "budget",
+      local,
+      disk,
+    });
+  });
 });
