@@ -54,7 +54,7 @@ class FakeModel implements RegistryModel {
   }
 }
 
-function makeRegistry() {
+function makeRegistry(coldLimit?: number) {
   const models: FakeModel[] = [];
   const factory: RegistryModelFactory<FakeModel> = {
     createModel({ value, language, uri }) {
@@ -66,7 +66,10 @@ function makeRegistry() {
       model.applyEdit(value);
     },
   };
-  return { registry: new DocumentRegistry<FakeModel, { cursor: number }>(factory), models };
+  return {
+    registry: new DocumentRegistry<FakeModel, { cursor: number }>(factory, coldLimit),
+    models,
+  };
 }
 
 function entryCount(registry: DocumentRegistry<FakeModel, { cursor: number }>): number {
@@ -722,5 +725,104 @@ describe("DocumentRegistry", () => {
 
     expect(entryCount(registry)).toBe(0);
     expect(registry.peek(identity)).toBeNull();
+  });
+});
+
+// A viewless, clean entry that remembers a cursor is retained — issue #133: it
+// must be retained BOUNDEDLY, or a session's worth of baselines never leaves.
+describe("DocumentRegistry cold retention", () => {
+  const fileIdentity = (relPath: string): DocumentIdentity => ({ ...mainIdentity, relPath });
+
+  /** Opens `relPath`, leaves a cursor behind, and releases it into the cold set. */
+  function openAndPark(
+    registry: DocumentRegistry<FakeModel, { cursor: number }>,
+    relPath: string,
+  ): void {
+    const view = registry.acquire({
+      identity: fileIdentity(relPath),
+      viewId: "file",
+      seed: { value: `// ${relPath}\n`, revision: 1 },
+      savePolicy: "explicit",
+    });
+    view.release({ cursor: 1 });
+  }
+
+  it("evicts the least recently parked document once the cap is exceeded", () => {
+    const { registry } = makeRegistry(2);
+
+    openAndPark(registry, "a.ts");
+    openAndPark(registry, "b.ts");
+    openAndPark(registry, "c.ts");
+
+    expect(entryCount(registry)).toBe(2);
+    expect(registry.peek(fileIdentity("a.ts"))).toBeNull();
+    expect(registry.peek(fileIdentity("b.ts"))).not.toBeNull();
+    expect(registry.peek(fileIdentity("c.ts"))).not.toBeNull();
+  });
+
+  it("reopening a parked document makes it the most recent, not the next evicted", () => {
+    const { registry } = makeRegistry(2);
+
+    openAndPark(registry, "a.ts");
+    openAndPark(registry, "b.ts");
+    openAndPark(registry, "a.ts"); // touched: `b.ts` is now the oldest
+    openAndPark(registry, "c.ts");
+
+    expect(registry.peek(fileIdentity("b.ts"))).toBeNull();
+    expect(registry.peek(fileIdentity("a.ts"))?.snapshot().identity).toEqual(fileIdentity("a.ts"));
+    expect(registry.peek(fileIdentity("c.ts"))).not.toBeNull();
+  });
+
+  it("evicting a cold entry costs only its view state, and the reopened document re-seeds", () => {
+    const { registry } = makeRegistry(1);
+
+    openAndPark(registry, "a.ts");
+    openAndPark(registry, "b.ts");
+
+    const reopened = registry.acquire({
+      identity: fileIdentity("a.ts"),
+      viewId: "file",
+      seed: { value: "// a.ts, edited by an agent\n", revision: 2 },
+      savePolicy: "explicit",
+    });
+
+    expect(reopened.restoreViewState()).toBeNull();
+    expect(reopened.model.getValue()).toBe("// a.ts, edited by an agent\n");
+    expect(reopened.snapshot().baselineRevision).toBe(2);
+  });
+
+  it("never evicts a document that still has a view or an unsaved draft", () => {
+    const { registry } = makeRegistry(1);
+
+    const live = registry.acquire({
+      identity: fileIdentity("live.ts"),
+      viewId: "file",
+      seed: { value: "live\n", revision: 1 },
+      savePolicy: "explicit",
+    });
+    const draft = registry.acquire({
+      identity: fileIdentity("draft.ts"),
+      viewId: "file",
+      seed: { value: "draft\n", revision: 1 },
+      savePolicy: "explicit",
+    });
+    draft.model.setValue("unsaved work");
+    draft.release({ cursor: 3 });
+
+    // Well past the cap of 1 — none of these may take the draft or the open tab.
+    openAndPark(registry, "a.ts");
+    openAndPark(registry, "b.ts");
+    openAndPark(registry, "c.ts");
+
+    expect(registry.peek(fileIdentity("live.ts"))?.snapshot().viewReferences).toBe(1);
+    expect(registry.peek(fileIdentity("draft.ts"))?.model?.getValue()).toBe("unsaved work");
+    expect(entryCount(registry)).toBe(3); // live + dirty + one cold survivor
+
+    // Saving the draft returns it to the cold set, where the cap applies again.
+    registry.peek(fileIdentity("draft.ts"))?.markSaved(2);
+    openAndPark(registry, "d.ts");
+
+    expect(registry.peek(fileIdentity("draft.ts"))).toBeNull();
+    live.release(null);
   });
 });
