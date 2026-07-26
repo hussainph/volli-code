@@ -460,6 +460,23 @@ export function DiffView({
     [onViewStateChange],
   );
 
+  const handleEditorInitFailed = React.useCallback(
+    (message: string) => {
+      if (!mountedRef.current) return;
+      if (leasesRef.current !== null) {
+        releaseDiffLeases(leasesRef.current, lastViewStateRef.current);
+        leasesRef.current = null;
+      }
+      setState({
+        status: "stub",
+        stubReason: message,
+        path: relPath,
+        previousPath,
+      });
+    },
+    [previousPath, relPath],
+  );
+
   const reloadFromDisk = React.useCallback(() => {
     const leases = leasesRef.current;
     if (leases === null || conflict === null) return;
@@ -509,6 +526,7 @@ export function DiffView({
         onDirtyChange={onDirtyChange}
         initialViewState={initialViewState}
         onViewStateChange={handleViewStateChange}
+        onInitFailed={handleEditorInitFailed}
       />
     </div>
   );

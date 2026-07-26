@@ -4,7 +4,13 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { TICKET_BODY_TAB_ID, isTicketBodyTabId } from "@renderer/components/ticket/ticket-body-tab";
 import { useBoardStore } from "./board";
 import { ticketScope, useSessionsStore } from "./sessions";
-import { createWorkspaceStore, DEFAULT_WORKSPACE_UI, type NavKey } from "./workspace";
+import {
+  applyTicketFileTransition,
+  createWorkspaceStore,
+  DEFAULT_WORKSPACE_UI,
+  type NavKey,
+  type TicketTabsState,
+} from "./workspace";
 
 function createMemoryStorage() {
   const data = new Map<string, string>();
@@ -360,6 +366,17 @@ describe("ticket diff tabs", () => {
     });
   });
 
+  it("openTicketDiff accepts binary-only metadata without inventing a status", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicketDiff("project-a", "ticket-1", "logo.png", {
+      binary: true,
+    });
+
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.diffMeta).toEqual({
+      "logo.png": { binary: true },
+    });
+  });
+
   it("openTicketDiff keeps runtime diffMeta on a null prototype", () => {
     const store = createWorkspaceStore(createMemoryStorage());
     store.getState().openTicketDiff("project-a", "ticket-1", "__proto__", {
@@ -396,6 +413,15 @@ describe("ticket diff tabs", () => {
     });
   });
 
+  it("closeTicketDiff is a no-op for a ticket with no record", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    const before = store.getState().byProject;
+
+    store.getState().closeTicketDiff("project-a", "ticket-1", "src/app.ts");
+
+    expect(store.getState().byProject).toBe(before);
+  });
+
   it("keeps files and diffs as independent ordered lists with a shared active id", () => {
     const store = createWorkspaceStore(createMemoryStorage());
     store.getState().openTicketFile("project-a", "ticket-1", "a.md");
@@ -416,6 +442,27 @@ describe("ticket diff tabs", () => {
 });
 
 describe("ticket file tabs", () => {
+  it("maps a transition that clears file focus back to Ticket Body", () => {
+    const existing: TicketTabsState = {
+      files: [{ relPath: "a.md", pinned: true }],
+      diffs: [],
+      diffMeta: {},
+      active: "file:a.md",
+    };
+
+    expect(
+      applyTicketFileTransition(existing, () => ({
+        tabs: [],
+        activeRelPath: null,
+      })),
+    ).toEqual({
+      files: [],
+      diffs: [],
+      diffMeta: {},
+      active: "doc",
+    });
+  });
+
   it("openTicketFile appends a pinned file and makes it active", () => {
     const store = createWorkspaceStore(createMemoryStorage());
     store.getState().openTicketFile("project-a", "ticket-1", "docs/plan.md");
@@ -443,6 +490,10 @@ describe("ticket file tabs", () => {
       diffMeta: {},
       active: "file:a.md",
     });
+
+    const before = store.getState().byProject;
+    store.getState().openTicketFile("project-a", "ticket-1", "a.md");
+    expect(store.getState().byProject).toBe(before);
   });
 
   it("tracks open files independently per ticket and per project", () => {
@@ -505,6 +556,16 @@ describe("ticket file tabs", () => {
     expect(store.getState().byProject).toBe(before);
   });
 
+  it("closeTicketFile is a no-op when the ticket exists but the path is not open", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicketFile("project-a", "ticket-1", "a.md");
+    const before = store.getState().byProject;
+
+    store.getState().closeTicketFile("project-a", "ticket-1", "missing.md");
+
+    expect(store.getState().byProject).toBe(before);
+  });
+
   it("setTicketActiveTab switches the active tab, including to a session id", () => {
     const store = createWorkspaceStore(createMemoryStorage());
     store.getState().openTicketFile("project-a", "ticket-1", "a.md");
@@ -536,6 +597,22 @@ describe("ticket file tabs", () => {
 });
 
 describe("ticket file preview/pin (decision #56)", () => {
+  it("pinTicketFile opens a pinned tab while markTicketFileEdited ignores an unknown ticket", () => {
+    const pinStore = createWorkspaceStore(createMemoryStorage());
+    pinStore.getState().pinTicketFile("missing-project", "missing-ticket", "src/app.ts");
+    expect(
+      pinStore.getState().byProject["missing-project"]?.ticketTabs["missing-ticket"],
+    ).toMatchObject({
+      files: [{ relPath: "src/app.ts", pinned: true }],
+      active: "file:src/app.ts",
+    });
+
+    const markStore = createWorkspaceStore(createMemoryStorage());
+    const before = markStore.getState().byProject;
+    markStore.getState().markTicketFileEdited("missing-project", "missing-ticket", "src/app.ts");
+    expect(markStore.getState().byProject).toBe(before);
+  });
+
   it("previewTicketFile opens a replaceable preview tab", () => {
     const store = createWorkspaceStore(createMemoryStorage());
     store.getState().previewTicketFile("project-a", "ticket-1", "src/app.ts");
@@ -546,6 +623,10 @@ describe("ticket file preview/pin (decision #56)", () => {
       diffMeta: {},
       active: "file:src/app.ts",
     });
+
+    const before = store.getState().byProject;
+    store.getState().previewTicketFile("project-a", "ticket-1", "src/app.ts");
+    expect(store.getState().byProject).toBe(before);
   });
 
   it("a second preview replaces the preview slot in place", () => {
@@ -579,6 +660,11 @@ describe("ticket file preview/pin (decision #56)", () => {
       { relPath: "one.ts", pinned: true },
       { relPath: "two.ts", pinned: true },
     ]);
+
+    const before = store.getState().byProject;
+    store.getState().pinTicketFile("project-a", "ticket-1", "two.ts");
+    store.getState().markTicketFileEdited("project-a", "ticket-1", "two.ts");
+    expect(store.getState().byProject).toBe(before);
   });
 
   it("openTicketDiff stays always-persistent and does not use the File preview slot", () => {
@@ -607,6 +693,8 @@ describe("ticket file preview/pin (decision #56)", () => {
                   files: [
                     { relPath: "pinned.ts", pinned: true },
                     { relPath: "preview.ts", pinned: false },
+                    { relPath: 7, pinned: true },
+                    { relPath: "bad.ts", pinned: "yes" },
                   ],
                   active: "file:preview.ts",
                 },
@@ -860,10 +948,12 @@ describe("ticket file tab persistence", () => {
               ticketTabs: {
                 "ticket-1": {
                   files: [],
-                  diffs: ["logo.png", "notes.md"],
+                  diffs: ["logo.png", "notes.md", "binary-only.bin", "empty.ts"],
                   diffMeta: {
                     "logo.png": { status: "added", binary: true },
                     "notes.md": { status: "modified", binary: "yes" },
+                    "binary-only.bin": { binary: true },
+                    "empty.ts": {},
                   },
                   active: "diff:logo.png",
                 },
@@ -879,6 +969,7 @@ describe("ticket file tab persistence", () => {
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.diffMeta).toEqual({
       "logo.png": { status: "added", binary: true },
       "notes.md": { status: "modified" },
+      "binary-only.bin": { binary: true },
     });
   });
 
@@ -896,6 +987,33 @@ describe("ticket file tab persistence", () => {
                   diffs: ["ok.ts"],
                   diffMeta: {},
                   active: "diff:missing.ts",
+                },
+              },
+            },
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    const store = createWorkspaceStore(storage);
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.active).toBe("doc");
+  });
+
+  it("falls active file:missing.ts back to Doc when the path is not open", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:workspace",
+      JSON.stringify({
+        state: {
+          byProject: {
+            "project-a": {
+              ticketTabs: {
+                "ticket-1": {
+                  files: ["keep.md"],
+                  diffs: ["ok.ts"],
+                  diffMeta: {},
+                  active: "file:missing.ts",
                 },
               },
             },
@@ -1054,8 +1172,18 @@ describe("ticket diff view-state persistence", () => {
               ticketTabs: {
                 "ticket-1": {
                   files: [],
-                  diffs: ["src/open.ts"],
+                  diffs: ["src/open.ts", "src/junk.ts", "src/null.ts", "src/array.ts"],
                   active: "diff:src/open.ts",
+                },
+                "ticket-2": {
+                  files: [],
+                  diffs: ["src/invalid.ts"],
+                  active: "diff:src/invalid.ts",
+                },
+                "ticket-3": {
+                  files: [],
+                  diffs: ["src/unreadable.ts"],
+                  active: "diff:src/unreadable.ts",
                 },
               },
               ticketDiffViewStates: {
@@ -1063,10 +1191,16 @@ describe("ticket diff view-state persistence", () => {
                   "src/open.ts": { scrollTop: 10 },
                   "src/closed.ts": { scrollTop: 90 },
                   "src/junk.ts": "not-a-view-state",
+                  "src/null.ts": null,
+                  "src/array.ts": [],
                 },
                 "ticket-gone": {
                   "src/x.ts": { scrollTop: 1 },
                 },
+                "ticket-2": {
+                  "src/invalid.ts": "not-a-view-state",
+                },
+                "ticket-3": "not-a-ticket-map",
               },
             },
             "project-b": { ticketDiffViewStates: "junk" },
@@ -1081,6 +1215,17 @@ describe("ticket diff view-state persistence", () => {
       "ticket-1": { "src/open.ts": { scrollTop: 10 } },
     });
     expect(store.getState().byProject["project-b"]?.ticketDiffViewStates).toEqual({});
+  });
+
+  it("setTicketDiffViewState is a no-op when the project has no workspace record", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    const before = store.getState().byProject;
+
+    store
+      .getState()
+      .setTicketDiffViewState("missing-project", "ticket-1", "src/app.ts", { scrollTop: 1 });
+
+    expect(store.getState().byProject).toBe(before);
   });
 });
 

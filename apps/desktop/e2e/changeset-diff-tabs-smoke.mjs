@@ -70,6 +70,13 @@ async function readTicketTabs(page, ticketId) {
   }, ticketId);
 }
 
+/** Current persisted File tabs are objects; accept legacy string entries too. */
+function persistedFilesInclude(files, relPath) {
+  return files.some((entry) =>
+    typeof entry === "string" ? entry === relPath : entry?.relPath === relPath,
+  );
+}
+
 async function readDiffMonaco(page) {
   return page.evaluate(() => {
     const host = document.querySelector("[data-monaco-diff-status]");
@@ -338,7 +345,7 @@ async function main() {
           const one =
             (tabs.diffs?.filter((p) => p === TARGET).length ?? 0) === 1 &&
             tabs.active === `diff:${TARGET}` &&
-            !(tabs.files ?? []).includes(TARGET);
+            !persistedFilesInclude(tabs.files ?? [], TARGET);
           const ui =
             (await page.getByTestId("ticket-diff-presentation").count()) === 1 &&
             (await page.locator('[data-monaco-diff-status="ready"]').count()) === 1;
@@ -433,7 +440,7 @@ async function main() {
         async () => {
           const tabs = await readTicketTabs(page, ticketId);
           if (!tabs) return null;
-          const fileOpen = (tabs.files ?? []).includes(TARGET);
+          const fileOpen = persistedFilesInclude(tabs.files ?? [], TARGET);
           const diffStill = (tabs.diffs ?? []).includes(TARGET);
           const activeFile = tabs.active === `file:${TARGET}`;
           const monaco = await readFileMonaco(page);

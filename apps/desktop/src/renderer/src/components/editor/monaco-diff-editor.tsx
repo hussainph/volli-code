@@ -104,7 +104,7 @@ export interface MonacoDiffEditorProps {
    * DiffEditor construction failed — parent should swap to an in-pane stub and
    * drop Inline/Side-by-side chrome (file-editor in-pane fallback spirit).
    */
-  onInitFailed?(message: string): void;
+  onInitFailed(message: string): void;
 }
 
 /**
@@ -260,7 +260,7 @@ export function MonacoDiffEditor({
         console.error("Monaco diff editor failed", error);
         // Parent (DiffView) swaps to DiffStub — in-pane like MonacoFileEditor's
         // <pre> fallback, not an empty host under presentation chrome.
-        liveRef.current.onInitFailed?.(message);
+        liveRef.current.onInitFailed(message);
       });
 
     return () => {

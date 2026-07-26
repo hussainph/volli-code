@@ -209,7 +209,7 @@ function ticketFilesWorkspace(tabs: TicketTabsState): FileWorkspaceState {
  * synced to `file:<relPath>` (or Doc when cleared); pin-without-focus leaves
  * `active` alone.
  */
-function applyTicketFileTransition(
+export function applyTicketFileTransition(
   existing: TicketTabsState,
   transition: (files: FileWorkspaceState) => FileWorkspaceState,
 ): TicketTabsState | null {
