@@ -1,12 +1,16 @@
 import * as React from "react";
 import type * as Monaco from "monaco-editor";
 import type { editor } from "monaco-editor";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { errorMessage } from "@volli/shared";
 
-import { Button } from "@renderer/components/ui/button";
+import { LiveReconciliationAffordance } from "@renderer/components/editor/live-reconciliation-affordance";
 import { documentIdentityKey, type DocumentIdentity } from "@renderer/editor/document-identity";
 import type { DocumentLease, DocumentRevision } from "@renderer/editor/document-registry";
+import {
+  applyLiveDocumentReconciliation,
+  type LiveDocumentReconciliationPlan,
+  type LiveReconciliationLease,
+} from "@renderer/editor/live-document-reconciliation";
 import { activeMonacoEditorThemeId } from "@renderer/editor/monaco-theme";
 import { loadMonacoRuntime, startModelLanguageWorker } from "@renderer/editor/monaco-runtime";
 import { toastError } from "@renderer/lib/toast";
@@ -196,6 +200,37 @@ interface DiskSnapshot {
   revision: DocumentRevision;
 }
 
+/** Minimal Monaco view-state seam needed around an external model mutation. */
+export interface ReconciliationEditorView {
+  saveViewState(): unknown;
+  restoreViewState(viewState: unknown): void;
+}
+
+/**
+ * Apply one disk seed through the shared File/Diff policy while preserving the
+ * mounted editor's cursor, selection, folding, and scroll snapshot.
+ */
+export function applyExternalSeedPreservingViewState(input: {
+  lease: LiveReconciliationLease;
+  editorView: ReconciliationEditorView | null;
+  lastWrite: string | null;
+  seed: Pick<DiskSnapshot, "value" | "revision">;
+}): LiveDocumentReconciliationPlan {
+  const viewState = input.editorView?.saveViewState() ?? null;
+  const plan = applyLiveDocumentReconciliation({
+    lease: input.lease,
+    lastWrite: input.lastWrite,
+    disk: {
+      ok: true,
+      text: input.seed.value,
+      revision: input.seed.revision,
+      truncated: false,
+    },
+  });
+  if (viewState !== null) input.editorView?.restoreViewState(viewState);
+  return plan;
+}
+
 /**
  * The Monaco view over one file — the ONE source-mode editor, editable or
  * `readOnly`, for every surface that shows file contents. The shared registry
@@ -269,25 +304,16 @@ export function MonacoFileEditor({
     setDirty(active.lease.snapshot().dirty);
   }, []);
 
-  /**
-   * Applies a fresh disk read to the shared document. An adoptable change is
-   * swapped in silently; the view state is saved and restored around it because
-   * the registry replaces the model's whole value, which would otherwise drop
-   * the caret and scroll position.
-   */
+  /** Applies a fresh disk read through the shared File/Diff A/L/D policy. */
   const reconcileExternal = React.useCallback(
     (lease: MonacoLease, seed: DiskSnapshot) => {
-      const before = lease.snapshot();
-      const decision = classifyExternalChange({
-        baseline: before.baseline,
-        dirty: before.dirty,
-        incoming: seed.value,
+      const plan = applyExternalSeedPreservingViewState({
+        lease,
+        editorView: editorRef.current,
         lastWrite: lastWriteRef.current,
+        seed,
       });
-      const viewState = editorRef.current?.saveViewState() ?? null;
-      lease.adoptCleanBaseline({ value: seed.value, revision: seed.revision });
-      if (viewState !== null) editorRef.current?.restoreViewState(viewState);
-      setStale(decision === "diverged" ? seed : null);
+      setStale(plan.kind === "conflict" ? seed : null);
       syncDirty();
     },
     [syncDirty],
@@ -322,6 +348,14 @@ export function MonacoFileEditor({
         // `markSaved` adopts the model's *current* value as the baseline, which
         // would silently mark edits made during the write as already-saved.
         lease.markSaved(result.revision);
+      } else {
+        // Typing resumed while the guarded write was in flight. The written
+        // bytes are the new disk baseline; the newer model value stays dirty.
+        lease.applyExternalUpdate({
+          baseline: text,
+          value: lease.model.getValue(),
+          revision: result.revision,
+        });
       }
       setStale(null);
       syncDirty();
@@ -509,20 +543,20 @@ export function MonacoFileEditor({
     });
   }, [ariaLabel, dirty, readOnly]);
 
-  function reloadFromDisk() {
+  function useDiskAndDiscardDraft() {
     const active = leaseRef.current;
     if (active === null || currentStale === null) return;
     const editorView = editorRef.current;
     const viewState = editorView?.saveViewState() ?? null;
-    // Drop the draft first so the document is clean, then take disk truth —
-    // `adoptCleanBaseline` refuses to touch a dirty model by design.
-    active.lease.discard();
-    active.lease.adoptCleanBaseline({ value: currentStale.value, revision: currentStale.revision });
+    active.lease.applyExternalUpdate({
+      baseline: currentStale.value,
+      value: currentStale.value,
+      revision: currentStale.revision,
+    });
     if (viewState !== null) editorView?.restoreViewState(viewState);
     lastWriteRef.current = null;
     setStale(null);
     syncDirty();
-    editorView?.focus();
   }
 
   if (currentFailure !== null) {
@@ -541,19 +575,11 @@ export function MonacoFileEditor({
   return (
     <div className="flex h-full min-h-0 w-full flex-col">
       {currentStale !== null && (
-        <div className="mx-2 mt-2 flex items-center justify-between gap-3 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-          {/* The second sentence is the part users need before they reflexively
-              hit ⌘S: there is no merge here (issue #110), so an explicit save
-              from this state replaces whatever landed on disk. */}
-          <span>
-            Changed on disk — your unsaved edits were kept. Saving now overwrites the newer version
-            on disk.
-          </span>
-          <Button size="sm" variant="secondary" onClick={reloadFromDisk}>
-            <ArrowClockwiseIcon />
-            Reload
-          </Button>
-        </div>
+        <LiveReconciliationAffordance
+          kind="conflict"
+          onUseDisk={useDiskAndDiscardDraft}
+          onOverwriteDisk={() => void runSaveRef.current()}
+        />
       )}
       <div ref={hostRef} className="min-h-0 w-full flex-1 overflow-hidden" />
     </div>
