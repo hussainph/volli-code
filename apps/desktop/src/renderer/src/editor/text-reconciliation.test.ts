@@ -36,4 +36,18 @@ describe("reconcileText", () => {
       nextBaseline: "first\nkeep\nagent last\n",
     });
   });
+
+  it("merges multiple disjoint edits from each side", () => {
+    expect(
+      reconcileText({
+        baseline: "one\ntwo\nthree\nfour\nfive\n",
+        local: "human one\ntwo\nthree\nhuman four\nfive\n",
+        disk: "one\nagent two\nagent three\nfour\nfive\n",
+      }),
+    ).toEqual({
+      kind: "merge",
+      value: "human one\nagent two\nagent three\nhuman four\nfive\n",
+      nextBaseline: "one\nagent two\nagent three\nfour\nfive\n",
+    });
+  });
 });
