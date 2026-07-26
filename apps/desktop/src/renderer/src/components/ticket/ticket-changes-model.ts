@@ -54,6 +54,10 @@ export interface ChangeRowPresentation {
   countsLabel: string | null;
   /** Prior path for renames; null otherwise. */
   renameFrom: string | null;
+  /** Visible passive-awareness copy, omitted until recency events are wired. */
+  updatedLabel?: "Updated";
+  /** Accessible explanation accompanying {@link updatedLabel}. */
+  updatedDescription?: "Updated since you last opened this file";
 }
 
 /** Compose the full row presentation from a Change Set file. */

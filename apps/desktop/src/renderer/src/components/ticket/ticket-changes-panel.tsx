@@ -83,6 +83,15 @@ export function TicketChangesList({
               <span className="flex min-w-0 items-baseline justify-between gap-2">
                 <span className="truncate text-ui font-medium text-foreground">{row.filename}</span>
                 <span className="flex shrink-0 items-baseline gap-1.5 text-xs text-muted-foreground">
+                  {row.updatedLabel !== undefined && row.updatedDescription !== undefined ? (
+                    <span
+                      data-testid="ticket-changes-updated"
+                      aria-label={row.updatedDescription}
+                      className="font-medium text-primary-text"
+                    >
+                      {row.updatedLabel}
+                    </span>
+                  ) : null}
                   <span>{row.statusLabel}</span>
                   {row.countsLabel !== null ? (
                     <span className="font-mono tabular-nums">{row.countsLabel}</span>
