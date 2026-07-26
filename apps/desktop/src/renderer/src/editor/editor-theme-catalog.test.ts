@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { SHIPPED_EDITOR_THEME_IDS } from "@volli/shared";
 
 import {
-  allEditorThemeImporters,
   DEFAULT_EDITOR_THEME_ID,
   editorThemeImporterFor,
   listEditorThemes,
@@ -33,32 +32,6 @@ describe("listEditorThemes", () => {
   });
 });
 
-describe("allEditorThemeImporters", () => {
-  it("returns one static importer per catalog id", async () => {
-    const themes = listEditorThemes();
-    const importers = allEditorThemeImporters();
-
-    expect(importers).toHaveLength(themes.length);
-    expect(importers).toHaveLength(SHIPPED_EDITOR_THEME_IDS.length);
-
-    for (const importer of importers) {
-      expect(typeof importer).toBe("function");
-    }
-
-    // Every catalog id must resolve to a loadable @shikijs/themes module.
-    const loaded = await Promise.all(
-      importers.map(async (load) => {
-        if (typeof load !== "function") throw new Error("expected dynamic theme importer");
-        return load();
-      }),
-    );
-    expect(loaded).toHaveLength(themes.length);
-    for (const module of loaded) {
-      expect(module).toBeTruthy();
-    }
-  });
-});
-
 describe("editorThemeImporterFor", () => {
   it("returns the static importer for a shipped catalog id", async () => {
     const load = editorThemeImporterFor("nord");
@@ -72,11 +45,11 @@ describe("editorThemeImporterFor", () => {
     expect(editorThemeImporterFor("")).toBeNull();
   });
 
-  it("matches allEditorThemeImporters entries by id", () => {
+  it("returns a static importer for every catalog entry", async () => {
     for (const theme of listEditorThemes()) {
       const load = editorThemeImporterFor(theme.id);
       expect(load).not.toBeNull();
-      expect(allEditorThemeImporters()).toContain(load);
+      expect(await load!()).toBeTruthy();
     }
   });
 });
@@ -142,11 +115,13 @@ describe("catalog alignment", () => {
       };
     });
 
-    await expect(import("./editor-theme-catalog")).rejects.toThrow(
-      /EDITOR_THEMES ids must match SHIPPED_EDITOR_THEME_IDS exactly/,
-    );
-
-    vi.doUnmock("@volli/shared");
-    vi.resetModules();
+    try {
+      await expect(import("./editor-theme-catalog")).rejects.toThrow(
+        /EDITOR_THEMES ids must match SHIPPED_EDITOR_THEME_IDS exactly/,
+      );
+    } finally {
+      vi.doUnmock("@volli/shared");
+      vi.resetModules();
+    }
   });
 });

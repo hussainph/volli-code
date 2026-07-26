@@ -267,8 +267,10 @@ describe("prepareMonacoEditorThemes", () => {
     expect(loadTheme).toHaveBeenCalledWith(loadNord);
   });
 
-  it("ignores a late theme that has no catalog importer", async () => {
+  it("skips loading and registration for a late id with no catalog importer", async () => {
     const setTheme = vi.fn();
+    const loadTheme = vi.fn(async () => undefined);
+    const registerTheme = vi.fn(async () => undefined);
     const monaco = {
       editor: { defineTheme: vi.fn(), setTheme },
       languages: { getLanguages: () => [], register: vi.fn() },
@@ -276,12 +278,25 @@ describe("prepareMonacoEditorThemes", () => {
     editorThemeImporterFor.mockImplementation((id: string) =>
       id === "one-dark-pro" ? loadOneDarkPro : null,
     );
+    bootstrapShikiMonaco.mockResolvedValue({
+      highlighter: {
+        getLoadedThemes: () => ["one-dark-pro"],
+        loadTheme,
+        getTheme: vi.fn((name: string) => ({ name })),
+      },
+      registerTheme,
+      registerLanguage: vi.fn(),
+    });
 
     await prepareMonacoEditorThemes(monaco as never);
+    loadTheme.mockClear();
+    registerTheme.mockClear();
     const { refreshMonacoEditorTheme } = await import("./monaco-theme");
     refreshMonacoEditorTheme("missing");
 
     await vi.waitFor(() => expect(setTheme).toHaveBeenCalledWith("missing"));
+    expect(loadTheme).not.toHaveBeenCalled();
+    expect(registerTheme).not.toHaveBeenCalled();
   });
 });
 
@@ -342,6 +357,38 @@ describe("createShikiBackedModelFactory", () => {
       "const x = 1",
       "typescript",
       expect.objectContaining({ path: "volli-document://file/p/main/src/index.ts" }),
+    );
+  });
+
+  it("reports a rejected grammar load without rejecting the synchronous model create", async () => {
+    const failure = new Error("grammar chunk missing");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    ensureShikiLanguageBound.mockRejectedValue(failure);
+    const model = { id: "model-1" };
+    const monaco = {
+      editor: { createModel: vi.fn(() => model) },
+      Uri: { parse: vi.fn((uri: string) => ({ path: uri })) },
+      languages: { getLanguages: () => [], register: vi.fn() },
+    };
+    const session = {
+      highlighter: {},
+      registerTheme: vi.fn(),
+      registerLanguage: vi.fn(),
+    };
+    const factory = createShikiBackedModelFactory(monaco as never, session as never);
+
+    expect(
+      factory.createModel({
+        value: "const x = 1",
+        language: "typescript",
+        uri: "volli-document://file/p/main/src/index.ts",
+      }),
+    ).toBe(model);
+    await vi.waitFor(() =>
+      expect(warn).toHaveBeenCalledWith(
+        '[volli] failed to load Shiki grammar "typescript":',
+        failure,
+      ),
     );
   });
 });

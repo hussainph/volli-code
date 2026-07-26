@@ -105,7 +105,9 @@ export function createShikiBackedModelFactory(
 ): RegistryModelFactory<Monaco.editor.ITextModel> {
   return {
     createModel({ value, language, uri }) {
-      void ensureShikiLanguageBound(session, monaco, language);
+      void ensureShikiLanguageBound(session, monaco, language).catch((error: unknown) => {
+        console.warn(`[volli] failed to load Shiki grammar "${language}":`, error);
+      });
       return monaco.editor.createModel(value, language, monaco.Uri.parse(uri));
     },
   };

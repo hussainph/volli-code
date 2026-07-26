@@ -307,5 +307,12 @@ export function MonacoDiffEditor({
     host.dataset.monacoDiffPresentation = presentation;
   }, [dirty, saving, modifiedReadOnly, presentation]);
 
-  return <div ref={hostRef} className="min-h-0 w-full flex-1 overflow-hidden" />;
+  return (
+    <div
+      ref={hostRef}
+      role="group"
+      aria-label={ariaLabel}
+      className="min-h-0 w-full flex-1 overflow-hidden"
+    />
+  );
 }

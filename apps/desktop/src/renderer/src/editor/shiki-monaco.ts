@@ -73,11 +73,7 @@ class TokenizerState implements Monaco.languages.IState {
   }
 
   equals(other: Monaco.languages.IState): boolean {
-    if (
-      !(other instanceof TokenizerState) ||
-      other !== this ||
-      other.ruleStackValue !== this.ruleStackValue
-    ) {
+    if (!(other instanceof TokenizerState) || other.ruleStackValue !== this.ruleStackValue) {
       return false;
     }
     return true;

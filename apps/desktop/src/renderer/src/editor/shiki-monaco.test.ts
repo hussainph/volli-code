@@ -357,7 +357,8 @@ describe("bootstrapShikiMonaco", () => {
     const provider = monaco.languages.setTokensProvider.mock.calls[0]![1] as TokensProvider;
     const initial = provider.getInitialState();
     expect(initial.equals(initial)).toBe(true);
-    expect(initial.equals(provider.getInitialState() as never)).toBe(false);
+    expect(initial.equals(provider.getInitialState() as never)).toBe(true);
+    expect(initial.equals({} as never)).toBe(false);
     expect(initial.clone().ruleStack).toBe(INITIAL);
 
     const long = "x".repeat(SHIKI_TOKENIZE_MAX_LINE_LENGTH);
@@ -369,6 +370,7 @@ describe("bootstrapShikiMonaco", () => {
 
     monaco.editor.setTheme("one-dark-pro");
     const result = provider.tokenize("code", initial);
+    expect(initial.equals(result.endState as never)).toBe(false);
     expect(tokenizeLine2).toHaveBeenCalledWith("code", INITIAL, 12);
     expect(warn).toHaveBeenCalled();
     expect(result.tokens[0]).toEqual({

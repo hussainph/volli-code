@@ -12,7 +12,7 @@ import {
   SHIPPED_EDITOR_THEME_IDS,
   type ShippedEditorThemeId,
 } from "@volli/shared";
-import type { DynamicImportThemeRegistration, ThemeInput } from "shiki";
+import type { DynamicImportThemeRegistration } from "shiki";
 
 export interface EditorThemeEntry {
   id: ShippedEditorThemeId;
@@ -199,15 +199,6 @@ if (
 /** Every shipped editor theme for pickers and bootstrap. */
 export function listEditorThemes(): EditorThemeEntry[] {
   return EDITOR_THEMES.map(({ id, label, family }) => ({ id, label, family }));
-}
-
-/**
- * Every static `@shikijs/themes` importer for the catalog.
- * Prefer {@link editorThemeImporterFor} for lazy loads; bootstrap should only
- * take the default theme importer.
- */
-export function allEditorThemeImporters(): ThemeInput[] {
-  return EDITOR_THEMES.map((theme) => theme.load);
 }
 
 /**

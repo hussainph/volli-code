@@ -20,7 +20,13 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(root, "../..");
 const sharedEditorThemesPath = resolve(repoRoot, "packages/shared/src/theme/editor-themes.ts");
-const SHIKI_RUNTIME_PACKAGES = ["shiki", "@shikijs/monaco"];
+const SHIKI_RUNTIME_PACKAGES = [
+  { name: "shiki", licenseFile: "LICENSE" },
+  { name: "@shikijs/monaco", licenseFile: "LICENSE" },
+  { name: "@shikijs/langs", licenseFile: "LICENSE" },
+  { name: "@shikijs/themes", licenseFile: "LICENSE" },
+  { name: "@shikijs/vscode-textmate", licenseFile: "LICENSE.md" },
+];
 
 /**
  * Parse `SHIPPED_EDITOR_THEME_IDS` from shared source (plain Node, no TS loader).
@@ -119,23 +125,21 @@ Shipped theme ids:
 ${SHIPPED_THEME_IDS.map((id) => `  - ${id}`).join("\n")}
 `;
 
-const runtimeLicenses = SHIKI_RUNTIME_PACKAGES.map((packageName) => ({
-  packageName,
-  text: readFileSync(resolve(root, "node_modules", packageName, "LICENSE"), "utf8").trim(),
-}));
-const runtimeLicense = runtimeLicenses[0]?.text;
-if (
-  runtimeLicense === undefined ||
-  runtimeLicenses.some(({ text: licenseText }) => licenseText !== runtimeLicense)
-) {
-  throw new Error("Bundled Shiki runtime packages must have the same checked-in MIT notice");
+const runtimeLicenseGroups = new Map();
+for (const { name, licenseFile } of SHIKI_RUNTIME_PACKAGES) {
+  const licenseText = readFileSync(resolve(root, "node_modules", name, licenseFile), "utf8").trim();
+  const packageNames = runtimeLicenseGroups.get(licenseText) ?? [];
+  packageNames.push(name);
+  runtimeLicenseGroups.set(licenseText, packageNames);
 }
-const runtimeBlock = `Packages: ${SHIKI_RUNTIME_PACKAGES.join(", ")}
+const runtimeBlocks = [...runtimeLicenseGroups].map(
+  ([licenseText, packageNames]) => `Packages: ${packageNames.join(", ")}
 SPDX: MIT
 ---------------------------------------------------------------------------------------------------------
-${runtimeLicense}`;
+${licenseText}`,
+);
 
-const body = [runtimeBlock, ...selected]
+const body = [...runtimeBlocks, ...selected]
   .map(
     (block) =>
       `=========================================================================================================\n${block}\n`,

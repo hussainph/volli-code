@@ -87,6 +87,8 @@ async function readDiffMonaco(page) {
         dirty: null,
         saving: null,
         readOnly: null,
+        role: null,
+        ariaLabel: null,
         hasDiffEditor: false,
         lines: "",
         sideBySide: null,
@@ -116,6 +118,8 @@ async function readDiffMonaco(page) {
       dirty: host.getAttribute("data-monaco-diff-dirty"),
       saving: host.getAttribute("data-monaco-diff-saving"),
       readOnly: host.getAttribute("data-monaco-diff-read-only"),
+      role: host.getAttribute("role"),
+      ariaLabel: host.getAttribute("aria-label"),
       presentation: host.getAttribute("data-monaco-diff-presentation"),
       hasDiffEditor: diffEditor !== null,
       lines,
@@ -385,11 +389,13 @@ async function main() {
         state.status === "ready" &&
         state.hasDiffEditor &&
         state.hostCount === 1 &&
+        state.role === "group" &&
+        state.ariaLabel === "edit-me.ts diff" &&
         hasModified &&
         hasOriginal;
       return {
         ok,
-        detail: `status=${state.status} diffEditor=${state.hasDiffEditor} original=${hasOriginal} modified=${hasModified} lines=${JSON.stringify(state.lines.slice(0, 120))}`,
+        detail: `status=${state.status} diffEditor=${state.hasDiffEditor} label=${JSON.stringify(state.ariaLabel)} original=${hasOriginal} modified=${hasModified} lines=${JSON.stringify(state.lines.slice(0, 120))}`,
       };
     });
 

@@ -91,11 +91,15 @@ describe("refreshMonacoEditorTheme", () => {
 
   it("does not paint a superseded theme after a slower ensure", async () => {
     let resolveNord!: () => void;
+    let nordEnsureFinished = false;
     const nordGate = new Promise<void>((resolve) => {
       resolveNord = resolve;
     });
     const ensure = vi.fn(async (id: string) => {
-      if (id === "nord") await nordGate;
+      if (id === "nord") {
+        await nordGate;
+        nordEnsureFinished = true;
+      }
     });
     const setTheme = vi.fn();
     bindMonacoEditorThemeEnsure(ensure);
@@ -106,7 +110,22 @@ describe("refreshMonacoEditorTheme", () => {
     await vi.waitFor(() => expect(setTheme).toHaveBeenCalledWith("dracula"));
     setTheme.mockClear();
     resolveNord();
-    await Promise.resolve();
+    await vi.waitFor(() => expect(nordEnsureFinished).toBe(true));
+    expect(setTheme).not.toHaveBeenCalledWith("nord");
+  });
+
+  it("reports a lazy theme-load failure without an unhandled rejection or stale paint", async () => {
+    const failure = new Error("theme chunk missing");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const setTheme = vi.fn();
+    bindMonacoEditorThemeEnsure(vi.fn(async () => Promise.reject(failure)));
+    bindMonacoEditorThemeHost({ editor: { setTheme } });
+
+    refreshMonacoEditorTheme("nord");
+
+    await vi.waitFor(() =>
+      expect(warn).toHaveBeenCalledWith('[volli] failed to load Monaco theme "nord":', failure),
+    );
     expect(setTheme).not.toHaveBeenCalledWith("nord");
   });
 });
@@ -194,6 +213,20 @@ describe("applyMonacoThemeForDiffEditor", () => {
       expect(setTheme.mock.calls.some((call) => call[0] === "dracula")).toBe(true);
     });
     expect(setTheme.mock.calls.some((call) => call[0] === "nord")).toBe(false);
+  });
+
+  it("reports a lazy load failure and leaves the DiffEditor on its current theme", async () => {
+    const failure = new Error("theme import failed");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const setTheme = vi.fn();
+    bindMonacoEditorThemeEnsure(vi.fn(async () => Promise.reject(failure)));
+
+    applyMonacoThemeForDiffEditor({ editor: { setTheme } }, "nord");
+
+    await vi.waitFor(() =>
+      expect(warn).toHaveBeenCalledWith('[volli] failed to load Monaco theme "nord":', failure),
+    );
+    expect(setTheme).not.toHaveBeenCalled();
   });
 });
 

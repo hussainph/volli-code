@@ -46,9 +46,18 @@ export async function ensureMonacoEditorThemeLoaded(themeId: string): Promise<vo
   await themeEnsure?.(themeId);
 }
 
+function reportThemeLoadFailure(themeId: string, error: unknown): void {
+  console.warn(`[volli] failed to load Monaco theme "${themeId}":`, error);
+}
+
 async function applyPendingTheme(themeId: string): Promise<void> {
   const generation = ++applyGeneration;
-  await themeEnsure?.(themeId);
+  try {
+    await themeEnsure?.(themeId);
+  } catch (error) {
+    reportThemeLoadFailure(themeId, error);
+    return;
+  }
   // A newer refresh bumps applyGeneration — do not paint a superseded id.
   if (generation !== applyGeneration) return;
   host?.editor.setTheme(themeId);
@@ -134,7 +143,12 @@ export function applyMonacoThemeForDiffEditor(
 
   const target = resolved;
   void (async () => {
-    await ensureMonacoEditorThemeLoaded(target);
+    try {
+      await ensureMonacoEditorThemeLoaded(target);
+    } catch (error) {
+      reportThemeLoadFailure(target, error);
+      return;
+    }
     if (pendingThemeId !== null && pendingThemeId !== target) return;
     monaco.editor.setTheme(target);
   })();
