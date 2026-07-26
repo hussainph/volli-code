@@ -82,10 +82,33 @@ export interface DocumentLease<Model extends RegistryModel, ViewState> {
   release(viewState?: ViewState | null): void;
 }
 
+/**
+ * How many COLD documents the registry keeps before evicting the least recently
+ * used (issue #133). A cold entry has no live view and no unsaved draft — its
+ * model is already disposed and the only thing left is the remembered
+ * cursor/scroll of a view that has gone, plus the baseline text held to compare
+ * against. That is a bounded convenience, not state anyone can lose work to:
+ * every editor falls back to the host-persisted view state (issue #109) when the
+ * registry has nothing, and the baseline is re-seeded from a fresh read on the
+ * next `acquire`. Without a cap the baseline of every file opened in a session
+ * is retained for the life of the process.
+ */
+const DEFAULT_COLD_DOCUMENT_LIMIT = 24;
+
 export class DocumentRegistry<Model extends RegistryModel, ViewState> {
   private readonly entries = new Map<string, DocumentEntry<Model, ViewState>>();
+  /**
+   * Keys of the evictable entries, least-recently-used first (insertion order).
+   * Membership is exactly the cold set: `acquire` removes a key the moment a
+   * view takes it back, and only `cleanupReleasedEntry` — which has just proven
+   * the entry viewless and clean — puts one in.
+   */
+  private readonly cold = new Set<string>();
 
-  constructor(private readonly factory: RegistryModelFactory<Model>) {}
+  constructor(
+    private readonly factory: RegistryModelFactory<Model>,
+    private readonly coldLimit: number = DEFAULT_COLD_DOCUMENT_LIMIT,
+  ) {}
 
   acquire(input: {
     identity: DocumentIdentity;
@@ -138,6 +161,10 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
         }
       }
     }
+
+    // Live again: no longer a candidate for cold eviction, and its next stint in
+    // the cold set starts at the back of the queue.
+    this.cold.delete(key);
 
     const reference = Symbol(input.viewId);
     const model = this.ensureModel(entry);
@@ -275,10 +302,31 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
     entry.model = null;
   }
 
+  /**
+   * A viewless, clean entry has nothing live left to hold: the model goes, and
+   * the entry itself goes with it UNLESS some view left state behind. Those
+   * survivors are the cold set — retained for the cursor they remember, and
+   * bounded by {@link DEFAULT_COLD_DOCUMENT_LIMIT} so a long session cannot
+   * accumulate the text of every file it ever opened.
+   */
   private cleanupReleasedEntry(key: string, entry: DocumentEntry<Model, ViewState>): void {
     if (entry.references.size > 0 || entry.dirty) return;
     this.disposeModel(entry);
-    if (entry.viewStates.size === 0 && this.entries.get(key) === entry) {
+    if (this.entries.get(key) !== entry) return; // superseded; already unreachable
+    this.cold.delete(key);
+    if (entry.viewStates.size === 0) {
+      this.entries.delete(key);
+      return;
+    }
+    this.cold.add(key); // most recently used, at the back of the queue
+    this.evictColdEntries();
+  }
+
+  /** Drops the oldest cold entries until the retention cap holds. */
+  private evictColdEntries(): void {
+    for (const key of this.cold) {
+      if (this.cold.size <= this.coldLimit) return;
+      this.cold.delete(key);
       this.entries.delete(key);
     }
   }
