@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { planCloseOthers, planTabClose, resolveTabClose } from "./close-guard";
+import {
+  planCloseOthers,
+  planTabClose,
+  resolveTabClose,
+  shouldDiscardSharedDraft,
+} from "./close-guard";
 
 describe("planTabClose", () => {
   it("closes a clean tab without confirmation", () => {
@@ -9,6 +14,24 @@ describe("planTabClose", () => {
 
   it("confirms before closing a dirty tab", () => {
     expect(planTabClose({ dirty: true })).toBe("confirm");
+  });
+
+  it("closes a dirty tab immediately when another representation of the same path remains open", () => {
+    // File + Diff share one draft by relPath. Closing Diff while File is still
+    // open (or vice versa) must not prompt Discard — that would wipe the draft
+    // the remaining tab still shows.
+    expect(planTabClose({ dirty: true, siblingOpen: true })).toBe("close");
+  });
+
+  it("still confirms a dirty tab when it is the last open representation", () => {
+    expect(planTabClose({ dirty: true, siblingOpen: false })).toBe("confirm");
+  });
+});
+
+describe("shouldDiscardSharedDraft", () => {
+  it("discards only when no sibling representation remains open", () => {
+    expect(shouldDiscardSharedDraft({ siblingOpen: false })).toBe(true);
+    expect(shouldDiscardSharedDraft({ siblingOpen: true })).toBe(false);
   });
 });
 

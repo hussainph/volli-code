@@ -914,15 +914,16 @@ export type WorktreeChangeSetResult = Result<{ changeSet: ChangeSetSnapshot }>;
 
 /**
  * Base-revision file contents for `volli:worktree-base-read`. Three success
- * arms, none of them an error: `content` is decodable text, `missing: true`
- * means the path was absent at the base (a file the ticket added), and
- * `binary: true` means the blob is not text — returning its bytes as a string
- * would hand the caller mojibake to render as a diff.
+ * arms, none of them an error: `content` is decodable text (`truncated` when
+ * the ~1 MiB cap matching live file reads was hit — original side stays
+ * read-only), `missing: true` means the path was absent at the base (a file
+ * the ticket added), and `binary: true` means the blob is not text — returning
+ * its bytes as a string would hand the caller mojibake to render as a diff.
  */
 export type WorktreeBaseReadResult = Result<
-  | { content: string; missing?: undefined; binary?: undefined }
-  | { missing: true; content?: undefined; binary?: undefined }
-  | { binary: true; content?: undefined; missing?: undefined }
+  | { content: string; truncated: boolean; missing?: undefined; binary?: undefined }
+  | { missing: true; content?: undefined; binary?: undefined; truncated?: undefined }
+  | { binary: true; content?: undefined; missing?: undefined; truncated?: undefined }
 >;
 
 /**

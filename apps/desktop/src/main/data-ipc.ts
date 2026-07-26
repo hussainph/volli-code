@@ -659,10 +659,12 @@ export function registerDataIpcHandlers(
           return { ok: false, error: "This ticket's worktree directory is missing on disk." };
         case "base-read-error":
           return { ok: false, error: read.error };
-        case "ok":
-          if (read.file.missing === true) return { ok: true, missing: true };
-          if (read.file.binary === true) return { ok: true, binary: true };
-          return { ok: true, content: read.file.content };
+        case "ok": {
+          const file = read.file;
+          if (file.missing === true) return { ok: true, missing: true };
+          if (file.binary === true) return { ok: true, binary: true };
+          return { ok: true, content: file.content, truncated: file.truncated };
+        }
       }
     },
 

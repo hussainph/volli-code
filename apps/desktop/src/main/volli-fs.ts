@@ -666,6 +666,12 @@ interface WatchSubscription {
   reArming: boolean;
   /** Pending bounded-retry timer for a missing watch dir (cleared on teardown). */
   retryTimer: NodeJS.Timeout | null;
+  /**
+   * How many live watch() callers share this subscription. FileView + DiffView
+   * (and StrictMode remounts) can hold the same key; unwatch only tears down
+   * when the count hits zero.
+   */
+  refCount: number;
 }
 
 interface FileWatchSubscription extends WatchSubscription {
@@ -694,11 +700,20 @@ abstract class WatchManagerBase<S extends WatchSubscription> {
   /** Sends this subscription's change event; the caller has already checked the sender is alive. */
   protected abstract sendChanged(sub: S): void;
 
-  /** Registers and wires a fully-built subscription. Idempotent per key; a destroyed sender is a no-op. */
+  /**
+   * Registers and wires a fully-built subscription. A second watch on the same
+   * key increments {@link WatchSubscription.refCount} and returns ok without
+   * rewiring; a destroyed sender is a no-op.
+   */
   protected install(key: string, sub: S): Result {
-    if (this.subs.has(key)) return { ok: true };
+    const existing = this.subs.get(key);
+    if (existing !== undefined) {
+      existing.refCount += 1;
+      return { ok: true };
+    }
     if (sub.webContents.isDestroyed()) return { ok: true };
 
+    sub.refCount = 1;
     this.subs.set(key, sub);
     try {
       this.wireWatcher(key, sub);
@@ -711,6 +726,17 @@ abstract class WatchManagerBase<S extends WatchSubscription> {
     }
     sub.webContents.once("destroyed", sub.onDestroyed);
     return { ok: true };
+  }
+
+  /**
+   * Drops one watch() hold. Tears down only when the last holder releases;
+   * unknown keys are a harmless no-op (collapse/unmount racing a prior teardown).
+   */
+  protected release(key: string): void {
+    const sub = this.subs.get(key);
+    if (sub === undefined) return;
+    sub.refCount -= 1;
+    if (sub.refCount <= 0) this.teardown(key);
   }
 
   private scheduleBroadcast(sub: S): void {
@@ -860,7 +886,7 @@ export class FileWatchManager extends WatchManagerBase<FileWatchSubscription> {
     return `${webContents.id}:${projectId}:${ticketId ?? ""}:${relPath}`;
   }
 
-  /** Idempotent: watching an already-watched tab is a no-op. `dir`/`base`/`source`/`projectPath` come from the caller's resolution. */
+  /** Idempotent wiring: a second watch on the same tab bumps refCount. `dir`/`base`/`source`/`projectPath` come from the caller's resolution. */
   watch(
     webContents: WebContents,
     projectId: string,
@@ -885,16 +911,18 @@ export class FileWatchManager extends WatchManagerBase<FileWatchSubscription> {
       onDestroyed: () => this.teardown(key),
       reArming: false,
       retryTimer: null,
+      refCount: 1,
     });
   }
 
+  /** Drops one hold; tears down only when the last FileView/DiffView (etc.) releases. */
   unwatch(
     webContents: WebContents,
     projectId: string,
     ticketId: string | null,
     relPath: string,
   ): void {
-    this.teardown(this.keyFor(webContents, projectId, ticketId, relPath));
+    this.release(this.keyFor(webContents, projectId, ticketId, relPath));
   }
 
   /**
@@ -930,7 +958,7 @@ export class DirWatchManager extends WatchManagerBase<WatchSubscription> {
     return `${webContents.id}:${projectId}:${relPath}`;
   }
 
-  /** Idempotent: watching an already-watched directory is a no-op. `dir` is the caller's resolved absolute path. */
+  /** Idempotent wiring: a second watch on the same directory bumps refCount. `dir` is the caller's resolved absolute path. */
   watch(
     webContents: WebContents,
     projectId: string,
@@ -950,12 +978,13 @@ export class DirWatchManager extends WatchManagerBase<WatchSubscription> {
       onDestroyed: () => this.teardown(key),
       reArming: false,
       retryTimer: null,
+      refCount: 1,
     });
   }
 
-  /** Safe for a directory that was never watched (a collapse racing a teardown). */
+  /** Drops one hold; safe for a directory that was never watched (a collapse racing a teardown). */
   unwatch(webContents: WebContents, projectId: string, relPath: string): void {
-    this.teardown(this.keyFor(webContents, projectId, relPath));
+    this.release(this.keyFor(webContents, projectId, relPath));
   }
 
   /**

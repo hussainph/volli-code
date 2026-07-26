@@ -804,6 +804,54 @@ describe("FileWatchManager", () => {
     expect(watchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the watcher alive when one of two holders unwatches", async () => {
+    const project = makeTempProjectDir();
+    const manager = new FileWatchManager(250);
+    const webContents = makeWebContents();
+    await watchFile(manager, webContents, project);
+    await watchFile(manager, webContents, project);
+    expect(watchMock).toHaveBeenCalledTimes(1);
+
+    manager.unwatch(webContents as never, "proj-1", "ticket-1", "notes.md");
+    expect(watchCalls[0]?.watcher.close).not.toHaveBeenCalled();
+
+    // The remaining holder still receives broadcasts.
+    vi.useFakeTimers();
+    watchCalls[0]?.cb("change", "notes.md");
+    vi.advanceTimersByTime(250);
+    expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
+      projectId: "proj-1",
+      relPath: "notes.md",
+      source: "main",
+    } satisfies FileChangedEvent);
+  });
+
+  it("tears down only after the last of two holders unwatches", async () => {
+    const project = makeTempProjectDir();
+    const manager = new FileWatchManager(250);
+    const webContents = makeWebContents();
+    await watchFile(manager, webContents, project);
+    await watchFile(manager, webContents, project);
+
+    manager.unwatch(webContents as never, "proj-1", "ticket-1", "notes.md");
+    expect(watchCalls[0]?.watcher.close).not.toHaveBeenCalled();
+
+    vi.useFakeTimers();
+    watchCalls[0]?.cb("change", "notes.md");
+    manager.unwatch(webContents as never, "proj-1", "ticket-1", "notes.md");
+    vi.advanceTimersByTime(1000);
+
+    expect(watchCalls[0]?.watcher.close).toHaveBeenCalledTimes(1);
+    expect(webContents.send).not.toHaveBeenCalled();
+  });
+
+  it("unwatching a key that was never watched is a harmless no-op", () => {
+    const manager = new FileWatchManager();
+    expect(() =>
+      manager.unwatch(makeWebContents() as never, "proj-1", "ticket-1", "never.md"),
+    ).not.toThrow();
+  });
+
   it("re-arms the watcher on a watcher 'error' (never crashes) and nudges a refetch", async () => {
     const project = makeTempProjectDir();
     const manager = new FileWatchManager(0);

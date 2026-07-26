@@ -45,13 +45,20 @@ export interface ChangeSetBaseFileInput {
 }
 
 /**
- * The blob at the base revision: decodable text, `missing` when the path was
- * absent there, or `binary` when it is not text at all.
+ * The blob at the base revision: decodable text (utf8, capped like live
+ * reads — `truncated` when the ~1 MiB cap was hit), `missing` when the path
+ * was absent there, or `binary` when it is not text at all.
  */
 export type ChangeSetBaseFile =
-  | { content: string; missing?: undefined; binary?: undefined }
-  | { missing: true; content?: undefined; binary?: undefined }
-  | { binary: true; content?: undefined; missing?: undefined };
+  | { content: string; truncated: boolean; missing?: undefined; binary?: undefined }
+  | { missing: true; content?: undefined; binary?: undefined; truncated?: undefined }
+  | { binary: true; content?: undefined; missing?: undefined; truncated?: undefined };
+
+/**
+ * Matches volli-fs `TEXT_CAP_BYTES` (decision #7): utf8 past this is truncated
+ * + flagged so Monaco's original side never receives an unbounded blob.
+ */
+const TEXT_CAP_BYTES = 1024 * 1024;
 
 /**
  * Prefix a base blob is NUL-sniffed over, matching volli-fs's
@@ -175,10 +182,25 @@ export async function readChangeSetBaseFile(
   try {
     const content = await git(["show", object], input.worktreePath);
     if (isBinaryText(content)) return ok({ binary: true });
-    return ok({ content });
+    return ok(capUtf8Text(content));
   } catch (caught) {
     return err(stderrOf(caught));
   }
+}
+
+/**
+ * Caps a utf8 string to {@link TEXT_CAP_BYTES}, matching volli-fs live reads:
+ * return the leading prefix and flag `truncated` when a real past-cap byte
+ * existed. Original (base) content is read-only in DiffView, so serving a
+ * truncated prefix is safe — never OOM Monaco with a multi-MiB original.
+ */
+function capUtf8Text(content: string): { content: string; truncated: boolean } {
+  const byteLength = Buffer.byteLength(content, "utf8");
+  if (byteLength <= TEXT_CAP_BYTES) return { content, truncated: false };
+  return {
+    content: Buffer.from(content, "utf8").subarray(0, TEXT_CAP_BYTES).toString("utf8"),
+    truncated: true,
+  };
 }
 
 /**

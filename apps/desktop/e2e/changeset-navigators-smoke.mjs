@@ -5,7 +5,7 @@
  * deleted / untracked / binary changes — plus a path with a space and a
  * non-ASCII character — then asserts:
  *   1. The Changes flat list renders each status honestly.
- *   2. Clicking a row opens (or focuses) a file tab.
+ *   2. Clicking a row opens (or focuses) a Diff tab (`diff:<relPath>`), not a file tab.
  *   3. A filesystem change refreshes rows WITHOUT opening a tab or moving focus.
  *   4. The Files navigator lists worktree entries and body refs.
  *
@@ -44,6 +44,22 @@ const DEFAULT_HARNESS_ID = "claude-code";
 
 async function git(cwd, args) {
   return execFileAsync("git", args, { cwd });
+}
+
+/** Persisted ticket tab strip for `ticketId` from workspace app state. */
+async function readTicketTabs(page, ticketId) {
+  return page.evaluate(async (tid) => {
+    const boot = await window.api.data.bootstrap();
+    if (!boot.ok) return null;
+    const raw = boot.data.appState["volli:workspace"];
+    if (typeof raw !== "string") return null;
+    const parsed = JSON.parse(raw);
+    for (const ui of Object.values(parsed?.state?.byProject ?? {})) {
+      const tabs = ui?.ticketTabs?.[tid];
+      if (tabs) return tabs;
+    }
+    return null;
+  }, ticketId);
 }
 
 async function main() {
@@ -219,22 +235,48 @@ async function main() {
       },
     );
 
-    // ---- 2. Click opens a file tab ------------------------------------------
-    await attempt(2, "clicking a Changes row opens a file tab", async () => {
-      const beforeTabs = await page.getByRole("tab").allTextContents();
+    // ---- 2. Click opens a Diff tab (issue #109; was file tab in #108) --------
+    await attempt(2, "clicking a Changes row opens one Diff tab (not file:)", async () => {
       const rowBtn = aside.locator(
         '[data-testid="ticket-changes-row"][data-path="src/edit-me.ts"]',
       );
       await waitUntil("edit-me row", async () => (await rowBtn.count()) === 1);
       await rowBtn.click();
-      await waitUntil(
-        "file tab for edit-me.ts",
-        async () => (await page.getByRole("tab", { name: "edit-me.ts" }).count()) === 1,
+
+      const opened = await waitUntil(
+        "diff tab active for edit-me.ts",
+        async () => {
+          const tabs = await readTicketTabs(page, ticketId);
+          if (!tabs) return null;
+          const oneDiff =
+            Array.isArray(tabs.diffs) &&
+            tabs.diffs.filter((p) => p === "src/edit-me.ts").length === 1;
+          const activeDiff = tabs.active === "diff:src/edit-me.ts";
+          const noFile = !Array.isArray(tabs.files) || !tabs.files.includes("src/edit-me.ts");
+          const presentation = (await page.getByTestId("ticket-diff-presentation").count()) === 1;
+          const diffReady = (await page.locator('[data-monaco-diff-status="ready"]').count()) === 1;
+          return oneDiff && activeDiff && noFile && presentation && diffReady ? tabs : null;
+        },
+        { timeout: 20000 },
       );
-      const afterTabs = await page.getByRole("tab").allTextContents();
+
+      // Re-click must focus the same Diff tab — never spawn a duplicate.
+      await rowBtn.click();
+      const afterReclick = await waitUntil(
+        "re-click keeps a single diff: tab",
+        async () => {
+          const tabs = await readTicketTabs(page, ticketId);
+          if (!tabs) return null;
+          const count = tabs.diffs?.filter((p) => p === "src/edit-me.ts").length ?? 0;
+          return count === 1 && tabs.active === "diff:src/edit-me.ts" ? tabs : null;
+        },
+        { timeout: 10000 },
+      );
+
+      const hasDiffEditor = (await page.locator(".monaco-diff-editor").count()) >= 1;
       return {
-        ok: afterTabs.some((t) => t.includes("edit-me.ts")),
-        detail: `before=${beforeTabs.length} after=${afterTabs.length}`,
+        ok: !!opened && !!afterReclick && hasDiffEditor,
+        detail: `active=${opened?.active} diffs=${JSON.stringify(opened?.diffs)} files=${JSON.stringify(opened?.files)} reclickActive=${afterReclick?.active} monacoDiff=${hasDiffEditor}`,
       };
     });
 

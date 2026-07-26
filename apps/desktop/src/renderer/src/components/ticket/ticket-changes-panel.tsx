@@ -1,9 +1,9 @@
 /**
  * Changes navigator — compact flat Change Set list (decision #53).
  *
- * Selecting a row opens/focuses a ticket file tab via the host callback
- * (`openTicketFile` today; #109 swaps that one call to a diff tab). Debounced
- * worktree events only refresh rows — never open, close, or focus a tab.
+ * Selecting a row asks the host to open/focus a Monaco diff tab via
+ * `onOpenDiff` (`openTicketDiff`, CONCEPT #48/#51). Refresh handlers never
+ * open, close, or focus a tab. Files navigator uses preview/pin (decision #56).
  */
 import * as React from "react";
 import { errorMessage, type ChangeSetFile, type Ticket } from "@volli/shared";
@@ -140,24 +140,27 @@ function ChangesWatchErrorBanner({ error, onRetry }: { error: string; onRetry():
   );
 }
 
+/** Row payload the host needs to open a persistent diff tab. */
+export type OpenChangeDiffTarget = Pick<
+  ChangeSetFile,
+  "path" | "previousPath" | "status" | "binary"
+>;
+
 /**
  * Loads the Change Set, watches the worktree, and refreshes on debounced
  * `onChanged` events. Row click is the only path that asks the host to open a
- * tab — refresh handlers never call `onOpenFile`.
+ * tab — refresh handlers never call `onOpenDiff`.
  */
 export function TicketChangesPanel({
   ticket,
   activeTabId,
-  onOpenFile,
+  onOpenDiff,
 }: {
   ticket: Ticket;
   /** Observed so refresh can be proven never to mutate it (decision #46/#48). */
   activeTabId: string;
-  /**
-   * Deliberate open. Host wires `openTicketFile` for #108; #109 swaps this to
-   * the Monaco diff-tab opener — a one-line change at the call site.
-   */
-  onOpenFile(relPath: string): void;
+  /** Deliberate open — host wires `openTicketDiff` (CONCEPT #48/#51). */
+  onOpenDiff(file: OpenChangeDiffTarget): void;
 }) {
   const [nav, setNav] = React.useState<ChangesNavigatorState>(() => ({
     revision: null,
@@ -260,13 +263,17 @@ export function TicketChangesPanel({
     void loadChangeSet(true);
   }, [loadChangeSet]);
 
+  const filesRef = React.useRef(nav.files);
+  filesRef.current = nav.files;
+
   const handleSelect = React.useCallback(
     (path: string) => {
       setNav((prev) => selectChangeRow(prev, path).state);
+      const row = filesRef.current.find((file) => file.path === path);
       // Deliberate click — the only place we ask the host to open a tab.
-      onOpenFile(path);
+      if (row !== undefined) onOpenDiff(row);
     },
-    [onOpenFile],
+    [onOpenDiff],
   );
 
   if (!loaded && ticket.worktreePath !== null) {

@@ -475,7 +475,7 @@ describe("readChangeSetBaseFile", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value).toEqual({ content: "hello from base\n" });
+    expect(result.value).toEqual({ content: "hello from base\n", truncated: false });
     expect(calls.map((c) => c.args)).toEqual([
       ["cat-file", "-e", "basesha:src/a.ts"],
       ["show", "basesha:src/a.ts"],
@@ -528,6 +528,47 @@ describe("readChangeSetBaseFile", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toContain("bad object");
+  });
+
+  it("caps oversized utf8 blobs and flags truncated", async () => {
+    const oversized = "x".repeat(1024 * 1024 + 64);
+    const { gitAsync } = scriptedGit((args) => {
+      if (args[0] === "cat-file") return "";
+      if (args[0] === "show") return oversized;
+      return "";
+    });
+
+    const result = await readChangeSetBaseFile(gitAsync, {
+      worktreePath: "/wt",
+      baseRevision: "basesha",
+      path: "src/huge.ts",
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toEqual({
+      content: "x".repeat(1024 * 1024),
+      truncated: true,
+    });
+  });
+
+  it("returns content at exactly the 1 MiB cap without truncating", async () => {
+    const exact = "y".repeat(1024 * 1024);
+    const { gitAsync } = scriptedGit((args) => {
+      if (args[0] === "cat-file") return "";
+      if (args[0] === "show") return exact;
+      return "";
+    });
+
+    const result = await readChangeSetBaseFile(gitAsync, {
+      worktreePath: "/wt",
+      baseRevision: "basesha",
+      path: "src/exact.ts",
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toEqual({ content: exact, truncated: false });
   });
 });
 
@@ -626,7 +667,7 @@ describe("changeSetSnapshot — real git repository", () => {
     });
     expect(baseRead.ok).toBe(true);
     if (!baseRead.ok) return;
-    expect(baseRead.value).toEqual({ content: "line one\n" });
+    expect(baseRead.value).toEqual({ content: "line one\n", truncated: false });
     expect(readFileSync(join(dir, "tracked.ts"))).toEqual(before);
 
     // Status still dirty after the base read (prove we didn't checkout).
@@ -709,7 +750,7 @@ describe("changeSetSnapshot — real git repository", () => {
 
     expect(pinned.ok).toBe(true);
     if (!pinned.ok) return;
-    expect(pinned.value).toEqual({ content: "line one\n" });
+    expect(pinned.value).toEqual({ content: "line one\n", truncated: false });
   });
 
   it("marks a real merge conflict as conflicted relative to the base", async () => {
