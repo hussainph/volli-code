@@ -32,12 +32,23 @@ export const VEIL_ALPHA = 0.1;
 
 /**
  * Each veil, and the surface it composites over. Order matters: a veil may be
- * stacked on another veil's *result*, and never more than two deep — Apple's
- * rule that a light translucent surface never sits on another one.
+ * stacked on another veil's *result*, and never more than two SURFACES deep —
+ * Apple's rule that a light translucent surface never sits on another one.
+ * (`--sidebar-border-veil` is an edge rather than a surface, so it does not
+ * spend a level; it is one hairline drawn on the second one.)
+ *
+ * The hairline is a veil for the same reason as everything else here, and the
+ * alternative is worth naming because it is the obvious one: a flat white at
+ * 7% — what macOS actually draws — would hold its weight over the ramp just as
+ * well, but it composites to `#2b2423` rather than `--sidebar-border`'s
+ * `#29211d`, and that two-step drift would be the one thing in the whole layer
+ * that made `canvas: solid` stop being pixel-identical. Solving it instead
+ * keeps both properties at once.
  */
 const VEILS = [
   { name: "--sidebar-veil", target: "--sidebar", base: "--rail" },
   { name: "--sidebar-accent-veil", target: "--sidebar-accent", base: "--sidebar" },
+  { name: "--sidebar-border-veil", target: "--sidebar-border", base: "--sidebar" },
 ] as const satisfies readonly { name: string; target: ThemeTokenName; base: ThemeTokenName }[];
 
 /** The veil custom-property names, mirroring `globals.css` exactly as {@link ThemeTokenName} does. */

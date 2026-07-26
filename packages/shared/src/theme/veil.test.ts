@@ -79,6 +79,7 @@ describe("generateVeilTokens", () => {
     expect(generateVeilTokens(generateThemeTokens(DEFAULT_THEME))).toEqual({
       "--sidebar-veil": "rgb(135 101 99 / 0.1)",
       "--sidebar-accent-veil": "rgb(157 140 128 / 0.1)",
+      "--sidebar-border-veil": "rgb(167 150 128 / 0.1)",
     });
   });
 });

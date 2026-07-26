@@ -407,11 +407,12 @@ function SidebarSeparator({ className, ...props }: React.ComponentProps<typeof S
     <Separator
       data-slot="sidebar-separator"
       data-sidebar="separator"
-      // A white hairline, not `--sidebar-border` (#74): a 1px OPAQUE stroke
-      // over a lightness ramp is the most visible instance of the fixed-tint
-      // problem — a bright line at the dark end, invisible at the light one —
-      // and a white hairline is what macOS itself draws.
-      className={cn("mx-2 w-auto bg-sidebar-hairline", className)}
+      // A VEILED hairline, not an opaque `--sidebar-border` (#74): a 1px opaque
+      // stroke over a lightness ramp is the most visible instance of the
+      // fixed-tint problem — a bright line at the dark end, invisible at the
+      // light one. Solved rather than flat white, so it still composites to
+      // exactly `--sidebar-border` while `canvas: solid`.
+      className={cn("mx-2 w-auto bg-sidebar-border-veil", className)}
       {...props}
     />
   );
@@ -681,9 +682,9 @@ function SidebarMenuSub({ className, ...props }: React.ComponentProps<"ul">) {
       data-slot="sidebar-menu-sub"
       data-sidebar="menu-sub"
       className={cn(
-        // The nesting rule is a hairline over the canvas too — same white, same
+        // The nesting rule is a hairline over the canvas too — same veil, same
         // reason as SidebarSeparator's.
-        "mx-3.5 flex min-w-0 translate-x-px flex-col gap-1 border-l border-sidebar-hairline px-2.5 py-0.5",
+        "mx-3.5 flex min-w-0 translate-x-px flex-col gap-1 border-l border-sidebar-border-veil px-2.5 py-0.5",
         "group-data-[collapsible=icon]:hidden",
         className,
       )}

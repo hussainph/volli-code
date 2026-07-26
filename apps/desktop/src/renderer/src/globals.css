@@ -88,18 +88,16 @@
    * but it is a LIGHTER rung than the rail, so plain transparency would darken
    * it. Each veil is the color that, at 10% over the surface named beside it,
    * composites to the opaque token above byte-exactly: `--sidebar-veil` over
-   * `--rail` is `#1b1412`, `--sidebar-accent-veil` over that is `#28201d`. So
-   * `canvas: solid` is pixel-identical to a build without the layer, and over a
-   * gradient the surface keeps its relative lift instead of a fixed one.
+   * `--rail` is `#1b1412`, and `--sidebar-accent-veil` / `--sidebar-border-veil`
+   * over that are `#28201d` / `#29211d`. So `canvas: solid` is pixel-identical
+   * to a build without the layer, and over a gradient each surface and edge
+   * keeps its relative lift instead of a fixed absolute one — which for the 1px
+   * hairline is the difference between holding its weight and reading as a
+   * bright line at the dark end of the ramp and vanishing at the light end.
    * Generated like everything above — regenerate, never hand-tune. */
   --sidebar-veil: rgb(135 101 99 / 0.1);
   --sidebar-accent-veil: rgb(157 140 128 / 0.1);
-  /* The one color here that does NOT follow the seed, and deliberately: a 1px
-   * opaque stroke over a lightness ramp is the most visible instance of the
-   * fixed-tint problem, reading as a bright line at the dark end and vanishing
-   * at the light end. A white hairline at 7% is what macOS itself draws, and it
-   * holds its weight over every stop because it is a material, not a color. */
-  --sidebar-hairline: rgb(255 255 255 / 0.07);
+  --sidebar-border-veil: rgb(167 150 128 / 0.1);
 }
 
 @theme inline {
@@ -136,7 +134,7 @@
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-veil: var(--sidebar-veil);
   --color-sidebar-accent-veil: var(--sidebar-accent-veil);
-  --color-sidebar-hairline: var(--sidebar-hairline);
+  --color-sidebar-border-veil: var(--sidebar-border-veil);
   /* macOS-feel motion: fast start, long gentle settle (the iOS sheet curve).
    * Used for structural transitions like the sidebar collapse. */
   --ease-swift: cubic-bezier(0.32, 0.72, 0, 1);
