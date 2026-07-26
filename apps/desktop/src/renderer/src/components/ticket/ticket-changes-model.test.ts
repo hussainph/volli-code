@@ -7,6 +7,7 @@ import {
   formatChangeCounts,
   formatChangeStatus,
   presentChangeRow,
+  presentChangeRowWithRecency,
   selectChangeRow,
   sortChangeSetFiles,
   splitChangePath,
@@ -118,7 +119,7 @@ describe("presentChangeRow", () => {
       { type: "external-revision", path: "src/a.ts", revision: "revision-2" },
     );
 
-    expect(presentChangeRow(file({ path: "src/a.ts" }), recency)).toMatchObject({
+    expect(presentChangeRowWithRecency(file({ path: "src/a.ts" }), recency)).toMatchObject({
       updatedLabel: "Updated",
       updatedDescription: "Updated since you last opened this file",
     });

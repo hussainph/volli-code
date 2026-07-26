@@ -25,6 +25,12 @@ export const EMPTY_CHANGE_RECENCY_STATE: ChangeRecencyState = {
   paths: Object.freeze({}) as Readonly<Record<string, ChangeRecencyRecord>>,
 };
 
+/** Whether a deliberately inspected path has a later external revision. */
+export function isChangeUpdated(state: ChangeRecencyState, path: string): boolean {
+  const record = state.paths[path];
+  return record !== undefined && record.updatedRevision !== null;
+}
+
 /**
  * Identity-complete events consumed by the recency reducer.
  *
