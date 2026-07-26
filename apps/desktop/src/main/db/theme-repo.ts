@@ -23,7 +23,7 @@ import {
   THEME_APP_STATE_KEY,
   THEME_EDITOR_APP_STATE_KEY,
 } from "@volli/shared";
-import type { ThemeDefinition } from "@volli/shared";
+import type { ShippedEditorThemeId, ThemeDefinition } from "@volli/shared";
 import { setAppState } from "./app-state-repo";
 import { prepared } from "./prepared";
 
@@ -51,7 +51,7 @@ export function setGlobalTheme(db: Database.Database, theme: ThemeDefinition, no
 }
 
 /** The authored global editor theme id, or null when unset (derive from the app theme slug). */
-export function getGlobalEditorThemeId(db: Database.Database): string | null {
+export function getGlobalEditorThemeId(db: Database.Database): ShippedEditorThemeId | null {
   const row = prepared<[string], { value: string }>(
     db,
     "SELECT value FROM app_state WHERE key = ?",
@@ -65,7 +65,7 @@ export function getGlobalEditorThemeId(db: Database.Database): string | null {
  */
 export function setGlobalEditorThemeId(
   db: Database.Database,
-  editorThemeId: string | null,
+  editorThemeId: ShippedEditorThemeId | null,
   now: number,
 ): void {
   setAppState(db, THEME_EDITOR_APP_STATE_KEY, serializeGlobalEditorThemeId(editorThemeId), now);

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { DEFAULT_THEME } from "./definition";
 import type { ThemeCanvas, ThemeDefinition } from "./definition";
+import type { ShippedEditorThemeId } from "./editor-themes";
 import {
   EMPTY_PROJECT_THEME_OVERRIDE,
   isProjectThemeOverride,
@@ -36,6 +37,8 @@ describe("global theme persistence", () => {
     expect(parseGlobalEditorThemeId("volli-dark")).toBeNull();
     expect(parseGlobalEditorThemeId("not-a-theme")).toBeNull();
     expect(parseGlobalEditorThemeId("vs-dark")).toBeNull();
+    expect(serializeGlobalEditorThemeId("volli-dark" as ShippedEditorThemeId)).toBe("");
+    expect(serializeGlobalEditorThemeId("not-a-theme" as ShippedEditorThemeId)).toBe("");
   });
 
   it("round-trips an authored definition", () => {

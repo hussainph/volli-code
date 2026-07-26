@@ -90,6 +90,7 @@ export default defineConfig({
         "src/editor/link-open.ts",
         "src/editor/markdown-projection.ts",
         "src/editor/editor-theme-catalog.ts",
+        "src/editor/monaco-runtime.ts",
         "src/editor/monaco-theme.ts",
         "src/editor/reveal.ts",
         "src/editor/shiki-langs.ts",

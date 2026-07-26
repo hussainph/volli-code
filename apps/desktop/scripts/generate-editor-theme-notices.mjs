@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(root, "../..");
 const sharedEditorThemesPath = resolve(repoRoot, "packages/shared/src/theme/editor-themes.ts");
+const SHIKI_RUNTIME_PACKAGES = ["shiki", "@shikijs/monaco"];
 
 /**
  * Parse `SHIPPED_EDITOR_THEME_IDS` from shared source (plain Node, no TS loader).
@@ -107,9 +108,10 @@ if (
 const header = `THIRD-PARTY SOFTWARE NOTICES AND INFORMATION
 
 This file lists license notices for TextMate themes bundled with Volli Code's
-Monaco editor (via @shikijs/themes). Notices are extracted from the upstream
-shikijs/textmate-grammars-themes packages/tm-themes/NOTICE for only the themes
-Volli ships. Regenerate with:
+Monaco editor (via @shikijs/themes), plus the Shiki runtime packages used to
+load them. Theme notices are extracted from the upstream shikijs/textmate-
+grammars-themes packages/tm-themes/NOTICE for only the themes Volli ships.
+Regenerate with:
 
   node apps/desktop/scripts/generate-editor-theme-notices.mjs <path-to-upstream-NOTICE>
 
@@ -117,7 +119,23 @@ Shipped theme ids:
 ${SHIPPED_THEME_IDS.map((id) => `  - ${id}`).join("\n")}
 `;
 
-const body = selected
+const runtimeLicenses = SHIKI_RUNTIME_PACKAGES.map((packageName) => ({
+  packageName,
+  text: readFileSync(resolve(root, "node_modules", packageName, "LICENSE"), "utf8").trim(),
+}));
+const runtimeLicense = runtimeLicenses[0]?.text;
+if (
+  runtimeLicense === undefined ||
+  runtimeLicenses.some(({ text: licenseText }) => licenseText !== runtimeLicense)
+) {
+  throw new Error("Bundled Shiki runtime packages must have the same checked-in MIT notice");
+}
+const runtimeBlock = `Packages: ${SHIKI_RUNTIME_PACKAGES.join(", ")}
+SPDX: MIT
+---------------------------------------------------------------------------------------------------------
+${runtimeLicense}`;
+
+const body = [runtimeBlock, ...selected]
   .map(
     (block) =>
       `=========================================================================================================\n${block}\n`,
@@ -126,5 +144,5 @@ const body = selected
 
 writeFileSync(outPath, `${header}\n${body}`);
 console.log(
-  `Wrote ${outPath} (${selected.length} license blocks, ${SHIPPED_THEME_IDS.length} themes)`,
+  `Wrote ${outPath} (${selected.length} theme license blocks, ${SHIPPED_THEME_IDS.length} themes, ${SHIKI_RUNTIME_PACKAGES.length} runtime packages)`,
 );

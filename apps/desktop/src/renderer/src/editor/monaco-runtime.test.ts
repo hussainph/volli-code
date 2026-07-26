@@ -8,6 +8,8 @@ const {
   editorThemeImporterFor,
   resolveEditorThemeId,
   DEFAULT_EDITOR_THEME_ID,
+  workerClasses,
+  monacoModule,
 } = vi.hoisted(() => ({
   bootstrapShikiMonaco: vi.fn(),
   ensureMonacoLanguagesRegistered: vi.fn(),
@@ -18,6 +20,41 @@ const {
   ),
   resolveEditorThemeId: vi.fn(() => "one-dark-pro"),
   DEFAULT_EDITOR_THEME_ID: "one-dark-pro",
+  workerClasses: {
+    editor: class EditorWorker {
+      constructor(readonly options?: WorkerOptions) {}
+    },
+    json: class JsonWorker {
+      constructor(readonly options?: WorkerOptions) {}
+    },
+    css: class CssWorker {
+      constructor(readonly options?: WorkerOptions) {}
+    },
+    html: class HtmlWorker {
+      constructor(readonly options?: WorkerOptions) {}
+    },
+    typescript: class TypeScriptWorker {
+      constructor(readonly options?: WorkerOptions) {}
+    },
+  },
+  monacoModule: {
+    editor: {
+      defineTheme: vi.fn(),
+      setTheme: vi.fn(),
+      createModel: vi.fn(),
+    },
+    languages: {
+      getLanguages: vi.fn(() => []),
+      register: vi.fn(),
+    },
+    Uri: {
+      parse: vi.fn((value: string) => ({ path: value })),
+    },
+    typescript: {
+      getTypeScriptWorker: vi.fn(),
+      getJavaScriptWorker: vi.fn(),
+    },
+  },
 }));
 
 vi.mock("./shiki-monaco", () => ({
@@ -31,15 +68,58 @@ vi.mock("./editor-theme-catalog", () => ({
   resolveEditorThemeId,
   DEFAULT_EDITOR_THEME_ID,
 }));
+vi.mock("monaco-editor/editor/editor.worker?worker", () => ({
+  default: workerClasses.editor,
+}));
+vi.mock("monaco-editor/language/json/json.worker?worker", () => ({
+  default: workerClasses.json,
+}));
+vi.mock("monaco-editor/language/css/css.worker?worker", () => ({
+  default: workerClasses.css,
+}));
+vi.mock("monaco-editor/language/html/html.worker?worker", () => ({
+  default: workerClasses.html,
+}));
+vi.mock("monaco-editor/language/typescript/ts.worker?worker", () => ({
+  default: workerClasses.typescript,
+}));
+vi.mock("monaco-editor", () => monacoModule);
 
 import {
   createLazyInitializer,
   createShikiBackedModelFactory,
+  initializeMonacoRuntime,
   prepareMonacoEditorThemes,
+  startModelLanguageWorker,
   waitForLanguageWorkerRegistration,
   workerKindForLabel,
 } from "./monaco-runtime";
 import { resetMonacoEditorThemeForTests } from "./monaco-theme";
+
+const loadOneDarkPro = () => Promise.resolve({ name: "one-dark-pro" });
+const loadNord = () => Promise.resolve({ name: "nord" });
+
+function runtimeWithWorkers() {
+  const typeScriptWorker = vi.fn(async () => undefined);
+  const javaScriptWorker = vi.fn(async () => undefined);
+  const typeScriptFactory = vi.fn(async () => typeScriptWorker);
+  const javaScriptFactory = vi.fn(async () => javaScriptWorker);
+  const runtime = {
+    monaco: {
+      typescript: {
+        getTypeScriptWorker: typeScriptFactory,
+        getJavaScriptWorker: javaScriptFactory,
+      },
+    },
+  };
+  return {
+    runtime,
+    typeScriptWorker,
+    javaScriptWorker,
+    typeScriptFactory,
+    javaScriptFactory,
+  };
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -59,6 +139,8 @@ beforeEach(() => {
     id === "one-dark-pro" ? () => Promise.resolve({ name: "one-dark-pro" }) : null,
   );
   resolveEditorThemeId.mockReturnValue("one-dark-pro");
+  monacoModule.editor.setTheme.mockClear();
+  monacoModule.languages.register.mockClear();
 });
 
 describe("prepareMonacoEditorThemes", () => {
@@ -69,8 +151,7 @@ describe("prepareMonacoEditorThemes", () => {
       editor: { defineTheme, setTheme },
       languages: { getLanguages: () => [], register: vi.fn() },
     };
-    const defaultLoad = () => Promise.resolve({ name: "one-dark-pro" });
-    editorThemeImporterFor.mockReturnValue(defaultLoad);
+    editorThemeImporterFor.mockReturnValue(loadOneDarkPro);
     const shiki = {
       highlighter: {
         getLoadedThemes: () => ["one-dark-pro"],
@@ -89,7 +170,7 @@ describe("prepareMonacoEditorThemes", () => {
     expect(editorThemeImporterFor).toHaveBeenCalledWith(DEFAULT_EDITOR_THEME_ID);
     expect(bootstrapShikiMonaco).toHaveBeenCalledTimes(1);
     expect(bootstrapShikiMonaco).toHaveBeenCalledWith(monaco, {
-      themes: [defaultLoad],
+      themes: [loadOneDarkPro],
       langs: [],
     });
     expect(resolveEditorThemeId).toHaveBeenCalledWith({
@@ -117,6 +198,21 @@ describe("prepareMonacoEditorThemes", () => {
     });
     expect(defineTheme.mock.calls.some((call) => call[0] === "volli-dark")).toBe(false);
     expect(setTheme.mock.calls.some((call) => call[0] === "volli-dark")).toBe(false);
+  });
+
+  it("bootstraps with no theme when the default importer is unavailable", async () => {
+    editorThemeImporterFor.mockReturnValue(null);
+    const monaco = {
+      editor: { defineTheme: vi.fn(), setTheme: vi.fn() },
+      languages: { getLanguages: () => [], register: vi.fn() },
+    };
+
+    await prepareMonacoEditorThemes(monaco as never);
+
+    expect(bootstrapShikiMonaco).toHaveBeenCalledWith(monaco, {
+      themes: [],
+      langs: [],
+    });
   });
 
   it("keeps a theme queued before bootstrap instead of forcing the ember default", async () => {
@@ -153,10 +249,9 @@ describe("prepareMonacoEditorThemes", () => {
       registerTheme,
       registerLanguage: vi.fn(),
     });
-    const nordLoad = () => Promise.resolve({ name: "nord" });
     editorThemeImporterFor.mockImplementation((id: string) => {
-      if (id === "one-dark-pro") return () => Promise.resolve({ name: "one-dark-pro" });
-      if (id === "nord") return nordLoad;
+      if (id === "one-dark-pro") return loadOneDarkPro;
+      if (id === "nord") return loadNord;
       return null;
     });
 
@@ -169,7 +264,49 @@ describe("prepareMonacoEditorThemes", () => {
       expect(registerTheme).toHaveBeenCalled();
       expect(setTheme).toHaveBeenCalledWith("nord");
     });
-    expect(loadTheme).toHaveBeenCalledWith(nordLoad);
+    expect(loadTheme).toHaveBeenCalledWith(loadNord);
+  });
+
+  it("ignores a late theme that has no catalog importer", async () => {
+    const setTheme = vi.fn();
+    const monaco = {
+      editor: { defineTheme: vi.fn(), setTheme },
+      languages: { getLanguages: () => [], register: vi.fn() },
+    };
+    editorThemeImporterFor.mockImplementation((id: string) =>
+      id === "one-dark-pro" ? loadOneDarkPro : null,
+    );
+
+    await prepareMonacoEditorThemes(monaco as never);
+    const { refreshMonacoEditorTheme } = await import("./monaco-theme");
+    refreshMonacoEditorTheme("missing");
+
+    await vi.waitFor(() => expect(setTheme).toHaveBeenCalledWith("missing"));
+  });
+});
+
+describe("initializeMonacoRuntime", () => {
+  it("configures every Vite worker and returns a Shiki-backed registry", async () => {
+    const runtime = await initializeMonacoRuntime();
+    const environment = globalThis.MonacoEnvironment as {
+      getWorker(workerId: string, label: string): Worker & { options?: WorkerOptions };
+    };
+
+    for (const [label, WorkerClass] of [
+      ["plaintext", workerClasses.editor],
+      ["json", workerClasses.json],
+      ["scss", workerClasses.css],
+      ["html", workerClasses.html],
+      ["typescript", workerClasses.typescript],
+    ] as const) {
+      const worker = environment.getWorker("worker-id", label);
+      expect(worker).toBeInstanceOf(WorkerClass);
+      expect(worker.options).toEqual({ name: `volli-monaco-${label}` });
+    }
+    expect(runtime.monaco.editor).toBe(monacoModule.editor);
+    expect(runtime.monaco.languages).toBe(monacoModule.languages);
+    expect(runtime.registry).toBeDefined();
+    expect(runtime.shiki).toBeDefined();
   });
 });
 
@@ -268,5 +405,51 @@ describe("waitForLanguageWorkerRegistration", () => {
     ).rejects.toBe(failure);
     expect(getWorker).toHaveBeenCalledTimes(1);
     expect(waitForNextAttempt).not.toHaveBeenCalled();
+  });
+
+  it("uses its default retry yield and eventually returns the worker", async () => {
+    const worker = vi.fn();
+    const getWorker = vi
+      .fn<() => Promise<typeof worker>>()
+      .mockRejectedValueOnce(new Error("JavaScript not registered!"))
+      .mockResolvedValue(worker);
+
+    await expect(waitForLanguageWorkerRegistration(getWorker)).resolves.toBe(worker);
+    expect(getWorker).toHaveBeenCalledTimes(2);
+  });
+
+  it("rethrows the registration error after the final permitted attempt", async () => {
+    const failure = new Error("TypeScript not registered!");
+    const getWorker = vi.fn<() => Promise<never>>().mockRejectedValue(failure);
+
+    await expect(waitForLanguageWorkerRegistration(getWorker, { attempts: 1 })).rejects.toBe(
+      failure,
+    );
+  });
+});
+
+describe("startModelLanguageWorker", () => {
+  it("does not start a rich worker for non-JavaScript models", async () => {
+    const { runtime, typeScriptFactory, javaScriptFactory } = runtimeWithWorkers();
+    const model = { getLanguageId: () => "json", uri: { path: "/data.json" } };
+
+    await expect(startModelLanguageWorker(runtime as never, model as never)).resolves.toBeNull();
+    expect(typeScriptFactory).not.toHaveBeenCalled();
+    expect(javaScriptFactory).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["typescript", "typeScriptWorker", "typeScriptFactory"],
+    ["javascript", "javaScriptWorker", "javaScriptFactory"],
+  ] as const)("starts the %s worker for the model URI", async (language, workerKey, factoryKey) => {
+    const seams = runtimeWithWorkers();
+    const uri = { path: `/src/file.${language}` };
+    const model = { getLanguageId: () => language, uri };
+
+    await expect(startModelLanguageWorker(seams.runtime as never, model as never)).resolves.toBe(
+      "typescript",
+    );
+    expect(seams[factoryKey]).toHaveBeenCalledTimes(1);
+    expect(seams[workerKey]).toHaveBeenCalledWith(uri);
   });
 });

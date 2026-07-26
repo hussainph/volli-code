@@ -151,7 +151,7 @@ export async function prepareMonacoEditorThemes(
   return shiki;
 }
 
-async function initializeMonacoRuntime(): Promise<MonacoRuntime> {
+export async function initializeMonacoRuntime(): Promise<MonacoRuntime> {
   // Vite turns each ?worker import into a same-origin worker constructor. Load
   // those wrappers first so MonacoEnvironment is configured before Monaco's
   // public ESM entry evaluates.

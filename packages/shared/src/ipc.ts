@@ -20,6 +20,7 @@ import type {
   TerminalIoResult,
 } from "./terminal";
 import type { ThemeDefinition } from "./theme/definition";
+import type { ShippedEditorThemeId } from "./theme/editor-themes";
 import type { ProjectThemeOverride } from "./theme/persistence";
 import type { ArchivedTicket, HarnessId, Ticket, TicketPriority, TicketStatus } from "./ticket";
 import type { TicketComment } from "./ticket-comment";
@@ -395,7 +396,7 @@ export interface ThemeSetGlobalInput {
  * `null` clears it so the editor derives from the active app theme slug.
  */
 export interface ThemeSetGlobalEditorInput {
-  editorThemeId: string | null;
+  editorThemeId: ShippedEditorThemeId | null;
 }
 
 export interface ThemeSetProjectInput {
@@ -426,7 +427,7 @@ export interface ThemeStatePayload {
    * Global Monaco/shiki theme id from `app_state`. `null` means derive from the
    * active app theme slug — never a resolved token set.
    */
-  editorThemeId: string | null;
+  editorThemeId: ShippedEditorThemeId | null;
   /** The scoping project's per-surface override; null when unscoped or fully inheriting. */
   projectOverride: ProjectThemeOverride | null;
   /** The project the state was resolved for, echoed back; null for the global scope. */

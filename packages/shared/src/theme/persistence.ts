@@ -21,7 +21,7 @@
 
 import { isHexColor } from "./color";
 import type { ThemeCanvas, ThemeDefinition } from "./definition";
-import { isShippedEditorThemeId } from "./editor-themes";
+import { isShippedEditorThemeId, type ShippedEditorThemeId } from "./editor-themes";
 import { isThemeTokenName } from "./tokens";
 
 /** The `app_state` key the authored global theme lives under (#29's kv table). */
@@ -39,8 +39,8 @@ export const THEME_EDITOR_APP_STATE_KEY = "theme_editor";
  * “derive from app” (same as a missing row); a non-empty value is the
  * authored catalog id.
  */
-export function serializeGlobalEditorThemeId(editorThemeId: string | null): string {
-  return editorThemeId ?? "";
+export function serializeGlobalEditorThemeId(editorThemeId: ShippedEditorThemeId | null): string {
+  return editorThemeId !== null && isShippedEditorThemeId(editorThemeId) ? editorThemeId : "";
 }
 
 /**
@@ -50,7 +50,9 @@ export function serializeGlobalEditorThemeId(editorThemeId: string | null): stri
  * against the active app theme slug. Only {@link isShippedEditorThemeId}
  * values survive.
  */
-export function parseGlobalEditorThemeId(raw: string | undefined | null): string | null {
+export function parseGlobalEditorThemeId(
+  raw: string | undefined | null,
+): ShippedEditorThemeId | null {
   if (raw === undefined || raw === null || raw.length === 0) return null;
   return isShippedEditorThemeId(raw) ? raw : null;
 }

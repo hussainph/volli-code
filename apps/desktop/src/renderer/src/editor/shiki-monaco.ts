@@ -62,21 +62,21 @@ interface ShikiMonacoWire {
 }
 
 class TokenizerState implements Monaco.languages.IState {
-  constructor(private readonly _ruleStack: StateStack) {}
+  constructor(private readonly ruleStackValue: StateStack) {}
 
   get ruleStack(): StateStack {
-    return this._ruleStack;
+    return this.ruleStackValue;
   }
 
   clone(): TokenizerState {
-    return new TokenizerState(this._ruleStack);
+    return new TokenizerState(this.ruleStackValue);
   }
 
   equals(other: Monaco.languages.IState): boolean {
     if (
       !(other instanceof TokenizerState) ||
       other !== this ||
-      other._ruleStack !== this._ruleStack
+      other.ruleStackValue !== this.ruleStackValue
     ) {
       return false;
     }
@@ -177,7 +177,7 @@ export function wireShikiToMonaco(
 
   const colorMap: string[] = [];
   const colorStyleToScopeMap = new Map<string, string>();
-  const _setTheme = monaco.editor.setTheme.bind(monaco.editor);
+  const originalSetTheme = monaco.editor.setTheme.bind(monaco.editor);
   monaco.editor.setTheme = (themeName: string) => {
     const ret = highlighter.setTheme(themeName);
     const theme = themeMap.get(themeName);
@@ -190,17 +190,17 @@ export function wireShikiToMonaco(
       const key = getColorStyleKey(c, normalizeFontStyleString(rule.fontStyle));
       if (!colorStyleToScopeMap.has(key)) colorStyleToScopeMap.set(key, rule.token);
     });
-    _setTheme(themeName);
+    originalSetTheme(themeName);
   };
 
-  const _create = monaco.editor.create.bind(monaco.editor);
+  const originalCreate = monaco.editor.create.bind(monaco.editor);
   monaco.editor.create = ((
     element: HTMLElement,
     createOptions?: Monaco.editor.IStandaloneEditorConstructionOptions,
     override?: Monaco.editor.IEditorOverrideServices,
   ) => {
     if (createOptions?.theme) monaco.editor.setTheme(createOptions.theme);
-    return _create(element, createOptions, override);
+    return originalCreate(element, createOptions, override);
   }) as typeof monaco.editor.create;
 
   if (themeIds[0] !== undefined) {
@@ -327,7 +327,9 @@ export async function bootstrapShikiMonaco(
     highlighter,
     registerLanguage: wire.registerLanguage,
     async registerTheme(theme) {
-      await highlighter.loadTheme(theme);
+      if (!highlighter.getLoadedThemes().includes(theme.name)) {
+        await highlighter.loadTheme(theme);
+      }
       const resolved = highlighter.getTheme(theme.name);
       wire.defineTheme(resolved);
     },

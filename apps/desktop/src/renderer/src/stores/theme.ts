@@ -28,6 +28,7 @@ import type {
   GhosttyAppearancePayload,
   ProjectThemeOverride,
   Result,
+  ShippedEditorThemeId,
   ThemeDefinition,
   ThemeSetProjectResult,
   ThemeStatePayload,
@@ -56,7 +57,7 @@ export type ThemeScope = { kind: "global" } | { kind: "project"; projectId: stri
 export interface ThemeGateway {
   state(input: { projectId?: string }): Promise<ThemeStateResult>;
   setGlobal(theme: ThemeDefinition): Promise<ThemeStateResult>;
-  setGlobalEditor(editorThemeId: string | null): Promise<ThemeStateResult>;
+  setGlobalEditor(editorThemeId: ShippedEditorThemeId | null): Promise<ThemeStateResult>;
   setProject(
     projectId: string,
     override: ProjectThemeOverride | null,
@@ -105,7 +106,7 @@ interface ThemeState {
    * Global Monaco/shiki theme id from `app_state`. `null` means derive from
    * the active app theme slug via {@link resolveEditorThemeId}.
    */
-  editorThemeId: string | null;
+  editorThemeId: ShippedEditorThemeId | null;
   /** The project the current override belongs to; null for the global scope. */
   projectId: string | null;
   /** That project's per-surface override, or null when it inherits everything. */
@@ -142,7 +143,7 @@ interface ThemeState {
    */
   endEditorPreview(): void;
   setGlobalTheme(theme: ThemeDefinition): Promise<boolean>;
-  setEditorTheme(editorThemeId: string | null): Promise<boolean>;
+  setEditorTheme(editorThemeId: ShippedEditorThemeId | null): Promise<boolean>;
   toggleFavorite(slug: string): void;
 }
 
@@ -237,6 +238,9 @@ export function createThemeStore({
          */
         let painted: string | null = null;
         let paintedEditor: string | null = null;
+        let persistedEditorThemeId: ShippedEditorThemeId | null = null;
+        let editorWriteGeneration = 0;
+        let editorWriteQueue: Promise<void> = Promise.resolve();
         const repaint = (): void => {
           const state = get();
           const theme = effectiveTheme(state);
@@ -264,6 +268,7 @@ export function createThemeStore({
 
         /** Adopt a fresh authoritative payload from main and repaint from it. */
         const accept = (value: ThemeStatePayload): void => {
+          persistedEditorThemeId = value.editorThemeId;
           set({
             global: value.theme,
             editorThemeId: value.editorThemeId,
@@ -493,14 +498,24 @@ export function createThemeStore({
           },
 
           async setEditorTheme(editorThemeId) {
-            const previous = get().editorThemeId;
+            const generation = ++editorWriteGeneration;
             set({ editorThemeId });
             repaint();
-            const result = await writeThrough("save the editor theme", () =>
-              deps.gateway.setGlobalEditor(editorThemeId),
+            const write = editorWriteQueue.then(() =>
+              writeThrough("save the editor theme", () =>
+                deps.gateway.setGlobalEditor(editorThemeId),
+              ),
             );
+            editorWriteQueue = write.then(() => undefined);
+            const result = await write;
+            if (result !== null) {
+              persistedEditorThemeId = result.value.editorThemeId;
+            }
+            if (generation !== editorWriteGeneration) {
+              return result !== null;
+            }
             if (result === null) {
-              set({ editorThemeId: previous });
+              set({ editorThemeId: persistedEditorThemeId });
               repaint();
               return false;
             }

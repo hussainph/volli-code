@@ -101,7 +101,7 @@ function fakeMonaco(existingLanguageIds: string[] = []) {
       defineTheme: vi.fn(),
       setTheme: vi.fn(),
       create: originalCreate,
-      _originalCreate: originalCreate,
+      originalCreate,
     },
     languages: {
       getLanguages: () => languages,
@@ -242,6 +242,19 @@ describe("bootstrapShikiMonaco", () => {
     expect(highlighter.setTheme).toHaveBeenCalledWith("catppuccin-mocha");
   });
 
+  it("does not reload a theme that the highlighter already has", async () => {
+    const highlighter = fakeHighlighter([], ["one-dark-pro", "nord"]);
+    createHighlighterCore.mockResolvedValue(highlighter);
+    const monaco = fakeMonaco();
+    const { bootstrapShikiMonaco } = await import("./shiki-monaco");
+    const session = await bootstrapShikiMonaco(monaco as never);
+
+    await session.registerTheme(highlighter.getTheme("nord"));
+
+    expect(highlighter.loadTheme).not.toHaveBeenCalled();
+    expect(monaco.editor.defineTheme).toHaveBeenCalledWith("nord", expect.anything());
+  });
+
   it("installs a tokens provider for a language loaded after bootstrap", async () => {
     const highlighter = fakeHighlighter([], ["one-dark-pro"]);
     createHighlighterCore.mockResolvedValue(highlighter);
@@ -294,7 +307,7 @@ describe("bootstrapShikiMonaco", () => {
     );
 
     expect(setThemeSpy).toHaveBeenCalledWith("one-dark-pro");
-    expect(monaco.editor._originalCreate).toHaveBeenCalledWith(
+    expect(monaco.editor.originalCreate).toHaveBeenCalledWith(
       element,
       { theme: "one-dark-pro" },
       undefined,

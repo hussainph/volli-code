@@ -6,8 +6,10 @@ import {
   generateThemeTokens,
   type GhosttyAppearancePayload,
   type ProjectThemeOverride,
+  type ShippedEditorThemeId,
   type ThemeDefinition,
   type ThemeStatePayload,
+  type ThemeStateResult,
 } from "@volli/shared";
 
 import { appliedTheme, createThemeStore, effectiveTheme, type ThemeGateway } from "./theme";
@@ -88,7 +90,7 @@ function fakeGateway(over: Partial<ThemeGateway> = {}): ThemeGateway {
       ok: true as const,
       value: statePayload({ theme }),
     })),
-    setGlobalEditor: vi.fn(async (editorThemeId: string | null) => ({
+    setGlobalEditor: vi.fn(async (editorThemeId: ShippedEditorThemeId | null) => ({
       ok: true as const,
       value: statePayload({ editorThemeId }),
     })),
@@ -122,6 +124,14 @@ function freshStore(over: Partial<ThemeGateway> = {}) {
     storage: memory.storage,
   });
   return { store, gateway, paint, memory };
+}
+
+function deferred<Value>() {
+  let resolve!: (value: Value) => void;
+  const promise = new Promise<Value>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 beforeEach(() => {
@@ -253,6 +263,56 @@ describe("setEditorTheme", () => {
     // optimistic nord, then rollback to ember-derived one-dark-pro
     expect(paint.editorThemes).toEqual(["nord", "one-dark-pro"]);
   });
+
+  it("serializes rapid writes and keeps the newest optimistic selection", async () => {
+    const first = deferred<ThemeStateResult>();
+    const second = deferred<ThemeStateResult>();
+    const setGlobalEditor = vi
+      .fn<(editorThemeId: ShippedEditorThemeId | null) => Promise<ThemeStateResult>>()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const { store } = freshStore({ setGlobalEditor });
+
+    const nordWrite = store.getState().setEditorTheme("nord");
+    const draculaWrite = store.getState().setEditorTheme("dracula");
+
+    expect(store.getState().editorThemeId).toBe("dracula");
+    await vi.waitFor(() => expect(setGlobalEditor).toHaveBeenCalledTimes(1));
+    first.resolve({
+      ok: true,
+      value: statePayload({ editorThemeId: "nord" }),
+    });
+    await nordWrite;
+    await vi.waitFor(() => expect(setGlobalEditor).toHaveBeenCalledTimes(2));
+    expect(store.getState().editorThemeId).toBe("dracula");
+
+    second.resolve({
+      ok: true,
+      value: statePayload({ editorThemeId: "dracula" }),
+    });
+    await expect(draculaWrite).resolves.toBe(true);
+    expect(store.getState().editorThemeId).toBe("dracula");
+  });
+
+  it("does not let a superseded failure roll back the newest selection", async () => {
+    const first = deferred<ThemeStateResult>();
+    const setGlobalEditor = vi
+      .fn<(editorThemeId: ShippedEditorThemeId | null) => Promise<ThemeStateResult>>()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce({
+        ok: true,
+        value: statePayload({ editorThemeId: "dracula" }),
+      });
+    const { store } = freshStore({ setGlobalEditor });
+
+    const nordWrite = store.getState().setEditorTheme("nord");
+    const draculaWrite = store.getState().setEditorTheme("dracula");
+    first.resolve({ ok: false, error: "db closed" });
+
+    await expect(nordWrite).resolves.toBe(false);
+    await expect(draculaWrite).resolves.toBe(true);
+    expect(store.getState().editorThemeId).toBe("dracula");
+  });
 });
 
 describe("preview", () => {
@@ -338,6 +398,17 @@ describe("preview", () => {
     store.getState().startPreview(MIDNIGHT);
 
     expect(paint.editorThemes).toEqual(["tokyo-night"]);
+  });
+});
+
+describe("editor preview", () => {
+  it("treats an empty editor preview id as restore", () => {
+    const { store, paint } = freshStore();
+    store.getState().startEditorPreview("nord");
+
+    store.getState().startEditorPreview("");
+
+    expect(paint.editorThemes).toEqual(["nord", "one-dark-pro"]);
   });
 });
 
@@ -657,7 +728,7 @@ describe("createThemeStore() with the default deps", () => {
       value: statePayload({ theme: MIDNIGHT }),
     }));
     const setGlobal = vi.fn(async () => ({ ok: true as const, value: statePayload() }));
-    const setGlobalEditor = vi.fn(async (editorThemeId: string | null) => ({
+    const setGlobalEditor = vi.fn(async (editorThemeId: ShippedEditorThemeId | null) => ({
       ok: true as const,
       value: statePayload({ editorThemeId }),
     }));

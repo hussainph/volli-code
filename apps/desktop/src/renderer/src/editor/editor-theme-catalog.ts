@@ -15,7 +15,7 @@ import {
 import type { DynamicImportThemeRegistration, ThemeInput } from "shiki";
 
 export interface EditorThemeEntry {
-  id: string;
+  id: ShippedEditorThemeId;
   label: string;
   family?: string;
 }
