@@ -12,7 +12,7 @@ export type LiveDiskRead =
 
 export type LiveDocumentReconciliationPlan = {
   kind: "apply";
-  outcome: "adopt" | "keep-local" | "merge";
+  outcome: "adopt" | "keep-local" | "merge" | "save-echo";
   baseline: string;
   value: string;
   revision: DocumentRevision;
@@ -27,6 +27,15 @@ export function planLiveDocumentReconciliation(input: {
 }): LiveDocumentReconciliationPlan {
   if (!input.disk.ok || input.disk.truncated) {
     throw new Error("Unreadable live reconciliation is not implemented");
+  }
+  if (input.lastWrite !== null && input.disk.text === input.lastWrite) {
+    return {
+      kind: "apply",
+      outcome: "save-echo",
+      baseline: input.disk.text,
+      value: input.local,
+      revision: input.disk.revision,
+    };
   }
   const result = reconcileText({
     baseline: input.baseline,
