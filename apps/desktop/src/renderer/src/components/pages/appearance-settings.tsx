@@ -186,7 +186,13 @@ function AppThemeSection() {
       }
     >
       {editing === null ? (
-        <div className="overflow-hidden rounded-lg border border-border bg-background">
+        // Named so a test can say WHICH picker it means: this pane mounts the
+        // editor and terminal combo boxes too, and their lists carry options
+        // with the same theme names.
+        <div
+          data-testid="appearance-theme-picker"
+          className="overflow-hidden rounded-lg border border-border bg-background"
+        >
           <ThemePicker
             autoFocus={false}
             // Duplicate always opens on a new copy; Rename lands on the name field.

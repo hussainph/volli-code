@@ -534,6 +534,12 @@ cursor-style = block
   const { byName } = await readSeededProjects(page);
   const projectAId = byName[PROJECT_A.name]?.id ?? null;
   const projectBId = byName[PROJECT_B.name]?.id ?? null;
+  // Fail here rather than inside the first check: a seed that didn't boot would
+  // otherwise reach main as `state({projectId: null})` and be reported as a
+  // theme-read failure, naming the wrong cause.
+  if (projectAId === null || projectBId === null) {
+    throw new Error(`seeded projects did not boot: ${JSON.stringify(Object.keys(byName))}`);
+  }
 
   await attempt(13, "two seeded projects both start out inheriting the global theme", async () => {
     const applied = await waitForToken(page, "--background", MOSS["--background"]);
@@ -542,12 +548,7 @@ cursor-style = block
       themeStateFor(page, projectBId),
     ]);
     return {
-      ok:
-        projectAId !== null &&
-        projectBId !== null &&
-        applied === MOSS["--background"] &&
-        a.override === null &&
-        b.override === null,
+      ok: applied === MOSS["--background"] && a.override === null && b.override === null,
       detail: `--background=${applied} overrides=${JSON.stringify([a.override, b.override])}`,
     };
   });
@@ -752,14 +753,19 @@ cursor-style = block
         .click();
       await waitForToken(page, "--background", MIDNIGHT["--background"]);
 
+      await openAppearanceSettings(page);
       // Record the paints and the crossfade rather than sampling the end state:
       // the regression was a BOUNCE, and a final-value check alone would grade a
-      // window that visibly flickered as passing.
+      // window that visibly flickered as passing. Armed AFTER the pane is up, so
+      // the trace is the theme pick alone and not whatever navigating here did.
       await watchBackgroundPaints(page);
       await watchScopeTransition(page);
 
-      await openAppearanceSettings(page);
-      await page.getByRole("option", { name: /Ember/ }).first().click();
+      // Scoped to the app-theme picker: this pane also mounts the editor and
+      // terminal pickers, whose lists carry a row of the same name.
+      const globalPicker = page.getByTestId("appearance-theme-picker");
+      await globalPicker.waitFor();
+      await globalPicker.getByRole("option", { name: /Ember/ }).first().click();
       // The write is what this check waits on — once it lands the window is
       // supposed to be doing nothing, so there is no repaint to poll for.
       const globalSlug = await waitUntil("the global theme to change", async () => {
@@ -771,18 +777,21 @@ cursor-style = block
       const paints = await readBackgroundPaints(page);
       const armed = await readScopeTransition(page);
       const stored = await themeStateFor(page, projectAId);
-      // ONE excursion into Ember is expected and is not the bug: highlighting a
+      // An excursion into Ember is expected and is not the bug: highlighting a
       // row in the picker previews it live (check 4), and reaching the row to
-      // click it highlights it. What the bug looked like is a SECOND one, after
-      // the commit, that never came back — the scope-less payload landing on top
-      // of the correct re-resolve (observed as rose → moss → rose → moss).
+      // click it highlights it. The bug is a TERMINAL excursion — a non-Midnight
+      // paint after the commit that never comes back, the scope-less payload
+      // landing on top of the correct re-resolve (observed as rose → moss →
+      // rose → moss). So: the trace ends on Midnight, and every departure from
+      // it was the previewed theme rather than some third look. Counting the
+      // excursions instead would fail on an extra hover the click passed over.
       const excursions = paints.filter((value) => value !== MIDNIGHT["--background"]);
       return {
         ok:
           globalSlug === "ember" &&
           paints.at(-1) === MIDNIGHT["--background"] &&
-          excursions.length === 1 &&
-          excursions[0] === EMBER["--background"] &&
+          excursions.length >= 1 &&
+          excursions.every((value) => value === EMBER["--background"]) &&
           // The scope never changed, so the crossfade has no business arming.
           !armed.seen &&
           stored.override?.appThemeSlug === "midnight",
