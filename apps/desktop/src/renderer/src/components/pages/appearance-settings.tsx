@@ -328,8 +328,14 @@ function EditorThemeRow() {
   const endPreview = (): void => paintPreview("");
 
   // Leaving the surface with a preview running would strand Monaco on a theme
-  // that is not stored anywhere.
-  React.useEffect(() => endPreview, [display.resolvedId]);
+  // that is not stored anywhere. Cleanup closes over the resolved id from this
+  // effect run so a mid-preview remount restores the right catalog theme.
+  React.useEffect(() => {
+    const resolvedId = display.resolvedId;
+    return () => {
+      refreshMonacoEditorTheme(planEditorThemePreview({ selection: "", resolvedId }).themeId);
+    };
+  }, [display.resolvedId]);
 
   return (
     <SettingsRow label="Theme">

@@ -62,11 +62,13 @@ const selected = [];
 for (const block of blocks) {
   const filesLine = block.split("\n").find((line) => line.startsWith("Files: "));
   if (filesLine === undefined) continue;
-  const files = filesLine
-    .slice("Files: ".length)
-    .split(",")
-    .map((file) => file.trim().replace(/\.json$/, ""));
-  const hits = SHIPPED_THEME_IDS.filter((id) => files.includes(id));
+  const files = new Set(
+    filesLine
+      .slice("Files: ".length)
+      .split(",")
+      .map((file) => file.trim().replace(/\.json$/, "")),
+  );
+  const hits = SHIPPED_THEME_IDS.filter((id) => files.has(id));
   if (hits.length === 0) continue;
   const narrowedFiles = hits.map((id) => `${id}.json`).join(", ");
   selected.push(block.replace(/^Files:.*$/m, `Files: ${narrowedFiles}`));
