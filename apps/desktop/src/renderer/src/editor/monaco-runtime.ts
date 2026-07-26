@@ -110,6 +110,9 @@ export function createShikiBackedModelFactory(
       });
       return monaco.editor.createModel(value, language, monaco.Uri.parse(uri));
     },
+    applyExternalEdit(model, value) {
+      model.pushEditOperations([], [{ range: model.getFullModelRange(), text: value }], () => null);
+    },
   };
 }
 

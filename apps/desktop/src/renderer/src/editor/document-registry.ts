@@ -17,6 +17,8 @@ export interface RegistryModel {
 
 export interface RegistryModelFactory<Model extends RegistryModel> {
   createModel(input: { value: string; language: string; uri: string }): Model;
+  /** Mutate an existing live model without resetting its editor/undo state. */
+  applyExternalEdit(model: Model, value: string): void;
 }
 
 export interface DocumentSeed {
@@ -242,7 +244,7 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
       entry.baselineRevision = update.revision;
       entry.externalRevision = update.revision;
       if (entry.model !== null && entry.model.getValue() !== update.value) {
-        entry.model.setValue(update.value);
+        this.factory.applyExternalEdit(entry.model, update.value);
       }
       entry.dirty = update.value !== update.baseline;
     } finally {

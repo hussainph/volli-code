@@ -43,6 +43,9 @@ function makeRegistry() {
       models.push(model);
       return model;
     },
+    applyExternalEdit(model, value) {
+      model.setValue(value);
+    },
   };
   return { registry: new DocumentRegistry<FakeModel, { cursor: number }>(factory), models };
 }
