@@ -50,4 +50,18 @@ describe("reconcileText", () => {
       nextBaseline: "one\nagent two\nagent three\nfour\nfive\n",
     });
   });
+
+  it("merges insertions at file boundaries with an edit between them", () => {
+    expect(
+      reconcileText({
+        baseline: "one\ntwo\nthree\n",
+        local: "human header\none\ntwo\nthree\nhuman footer\n",
+        disk: "one\nagent two\nthree\n",
+      }),
+    ).toEqual({
+      kind: "merge",
+      value: "human header\none\nagent two\nthree\nhuman footer\n",
+      nextBaseline: "one\nagent two\nthree\n",
+    });
+  });
 });
