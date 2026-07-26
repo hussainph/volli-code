@@ -360,6 +360,33 @@ describe("createShikiBackedModelFactory", () => {
     );
   });
 
+  it("applies external text through Monaco edit operations without setValue", () => {
+    const fullRange = { startLineNumber: 1, startColumn: 1, endLineNumber: 2, endColumn: 1 };
+    const pushEditOperations = vi.fn();
+    const setValue = vi.fn();
+    const model = { getFullModelRange: () => fullRange, pushEditOperations, setValue };
+    const monaco = {
+      editor: { createModel: vi.fn(() => model) },
+      Uri: { parse: vi.fn((uri: string) => ({ path: uri })) },
+      languages: { getLanguages: () => [], register: vi.fn() },
+    };
+    const session = {
+      highlighter: {},
+      registerTheme: vi.fn(),
+      registerLanguage: vi.fn(),
+    };
+    const factory = createShikiBackedModelFactory(monaco as never, session as never);
+
+    factory.applyExternalEdit(model as never, "agent update\n");
+
+    expect(pushEditOperations).toHaveBeenCalledWith(
+      [],
+      [{ range: fullRange, text: "agent update\n" }],
+      expect.any(Function),
+    );
+    expect(setValue).not.toHaveBeenCalled();
+  });
+
   it("reports a rejected grammar load without rejecting the synchronous model create", async () => {
     const failure = new Error("grammar chunk missing");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
