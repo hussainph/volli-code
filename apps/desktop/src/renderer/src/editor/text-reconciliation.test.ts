@@ -23,6 +23,14 @@ describe("reconcileText", () => {
     });
   });
 
+  it("treats matching local-save echo bytes as unchanged", () => {
+    expect(reconcileText({ baseline: "before\n", local: "saved\n", disk: "saved\n" })).toEqual({
+      kind: "unchanged",
+      value: "saved\n",
+      nextBaseline: "saved\n",
+    });
+  });
+
   it("merges one human and one agent edit in separate regions", () => {
     expect(
       reconcileText({
