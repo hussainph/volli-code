@@ -76,6 +76,24 @@ describe("resolveActiveTheme", () => {
     expect(active.editor).toEqual({ value: null, scope: "global" });
   });
 
+  it("inherits the global editor theme id when the project does not override it", () => {
+    const active = resolveActiveTheme(DEFAULT_THEME, null, catalog, "nord");
+
+    expect(active.editor).toEqual({ value: "nord", scope: "global" });
+  });
+
+  it("keeps inheriting the global editor id when only another surface is overridden", () => {
+    const active = resolveActiveTheme(
+      DEFAULT_THEME,
+      { ...EMPTY_PROJECT_THEME_OVERRIDE, terminalThemeName: "Nord" },
+      catalog,
+      "dracula",
+    );
+
+    expect(active.editor).toEqual({ value: "dracula", scope: "global" });
+    expect(active.terminal).toEqual({ value: "Nord", scope: "project" });
+  });
+
   it("inherits per surface — an override of one surface leaves the others global", () => {
     const active = resolveActiveTheme(
       DEFAULT_THEME,

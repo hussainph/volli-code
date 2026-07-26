@@ -142,9 +142,14 @@ export function resolveActiveTheme(
   global: ThemeDefinition,
   projectOverride: ProjectThemeOverride | null,
   catalog: readonly ThemeDefinition[] = [],
+  globalEditorThemeId: string | null = null,
 ): ActiveTheme {
   if (projectOverride === null) {
-    return { app: inherited(global), terminal: inherited(null), editor: inherited(null) };
+    return {
+      app: inherited(global),
+      terminal: inherited(null),
+      editor: inherited(globalEditorThemeId),
+    };
   }
 
   const named =
@@ -169,7 +174,7 @@ export function resolveActiveTheme(
         : { value: projectOverride.terminalThemeName, scope: "project" },
     editor:
       projectOverride.editorThemeId === null
-        ? inherited(null)
+        ? inherited(globalEditorThemeId)
         : { value: projectOverride.editorThemeId, scope: "project" },
   };
 }
