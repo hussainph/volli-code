@@ -199,11 +199,35 @@ describe("the canvas guard", () => {
     expect(parsed.canvas).toEqual({ kind: "mesh", stops: ["#2a1207", "#0d0d0d"] });
   });
 
-  // Deliberately NOT capped at the three stops ThemeCanvas's comment names:
-  // that number describes what the generator derives, and storage silently
-  // dropping an authored stop is this module's own cardinal sin.
-  it("keeps every authored stop rather than truncating to the derived three", () => {
-    const stops = ["#1", "#2", "#3", "#4"];
+  // The three-stop ceiling is Arc's own, and the point past which adjacent
+  // stops fall under the anti-banding floor (see theme/canvas.ts). It was
+  // documented on ThemeCanvas from the start and enforced nowhere — this is the
+  // boundary it belongs at, because a fourth stop has no position to sit at and
+  // would be dropped silently further downstream.
+  it("rejects a canvas carrying more stops than a canvas can have", () => {
+    expect(
+      isThemeDefinition(withCanvas({ kind: "gradient", stops: ["#160d0a", "#0d0705", "#060303"] })),
+    ).toBe(true);
+    expect(
+      isThemeDefinition(
+        withCanvas({ kind: "gradient", stops: ["#160d0a", "#0d0705", "#060303", "#040202"] }),
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects a stop that is not a color", () => {
+    // Every stop is painted, and `hexToOklch` throws on anything it cannot
+    // parse — so an unparseable stop would take the whole render down rather
+    // than degrade. A theme file is hand-editable; this is where that is caught.
+    expect(isThemeDefinition(withCanvas({ kind: "gradient", stops: ["#1", "#2"] }))).toBe(false);
+    expect(isThemeDefinition(withCanvas({ kind: "mesh", stops: ["rebeccapurple"] }))).toBe(false);
+  });
+
+  it("keeps an in-range set of authored stops exactly as authored", () => {
+    // The cap is a ceiling on COUNT, not a licence to rewrite intent: what a
+    // theme file says is what storage holds, and the legibility band is
+    // enforced on read instead (theme/canvas.ts).
+    const stops = ["#ffffff", "#0d0705", "#060303"];
     const themed: ThemeDefinition = { ...DEFAULT_THEME, canvas: { kind: "gradient", stops } };
 
     expect(parseThemeJson(serializeGlobalTheme(themed))?.canvas).toEqual({

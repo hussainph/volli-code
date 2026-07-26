@@ -33,7 +33,7 @@ const ACCENT_CHROMA_RANGE = { min: 0.06, max: 0.2 } as const;
 /** The neutrals' chroma window: enough tint to be felt, never enough to read
  * as a color. `--background` at C 0.014 is a near-black you can *sense* is
  * warm; at C 0.03 it is a brown. */
-const NEUTRAL_CHROMA_RANGE = { min: 0.004, max: 0.014 } as const;
+export const NEUTRAL_CHROMA_RANGE = { min: 0.004, max: 0.014 } as const;
 
 /** How much of the seed's chroma survives into the neutrals. */
 const NEUTRAL_CHROMA_RATIO = 0.06;
@@ -94,6 +94,23 @@ const DESTRUCTIVE = { L: 0.6256, C: 0.1933, h: 23.026 } as const;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+/**
+ * How much chroma a seed lends the neutrals — the ladder's `Cn`, and the same
+ * number the canvas layer ramps its stops against (see ./canvas.ts), so the
+ * backdrop can never carry more color than the surfaces standing on it.
+ *
+ * Zero below {@link GREY_SEED_CHROMA}: a colorless seed has no hue to lend, and
+ * what `hexToOklch` reports for one is float residue.
+ */
+export function neutralChroma(seedChroma: number): number {
+  if (seedChroma < GREY_SEED_CHROMA) return 0;
+  return clamp(
+    seedChroma * NEUTRAL_CHROMA_RATIO,
+    NEUTRAL_CHROMA_RANGE.min,
+    NEUTRAL_CHROMA_RANGE.max,
+  );
 }
 
 /**
@@ -161,10 +178,7 @@ export function generateThemeTokens(theme: ThemeDefinition): ThemeTokens {
   // 1–3. Seed → hue and a clamped chroma. The seed's LIGHTNESS IS DISCARDED.
   const seed = hexToOklch(theme.seed);
   const neutralHue = seed.h;
-  const neutralChroma =
-    seed.C < GREY_SEED_CHROMA
-      ? 0
-      : clamp(seed.C * NEUTRAL_CHROMA_RATIO, NEUTRAL_CHROMA_RANGE.min, NEUTRAL_CHROMA_RANGE.max);
+  const neutrals = neutralChroma(seed.C);
 
   // The accent follows the seed unless it has been unlocked (#75) — the one
   // thing a single seed cannot express is cool grey chrome with a warm accent.
@@ -187,7 +201,7 @@ export function generateThemeTokens(theme: ThemeDefinition): ThemeTokens {
   // 4. The neutral ladder.
   const ladder = {} as Record<ThemeTokenName, string>;
   for (const { tokens, L, k } of LADDER) {
-    const hex = oklchToHex(L, neutralChroma * k, neutralHue);
+    const hex = oklchToHex(L, neutrals * k, neutralHue);
     for (const token of tokens) ladder[token] = hex;
   }
   const background = ladder["--background"]!;
@@ -195,18 +209,18 @@ export function generateThemeTokens(theme: ThemeDefinition): ThemeTokens {
 
   // 5. Foregrounds — solved against the surface they are actually drawn on.
   const foreground = oklchToHex(
-    solveLightnessForContrast(90, neutralChroma, neutralHue, background),
-    neutralChroma,
+    solveLightnessForContrast(90, neutrals, neutralHue, background),
+    neutrals,
     neutralHue,
   );
   const mutedForeground = oklchToHex(
-    solveLightnessForContrast(60, neutralChroma, neutralHue, background),
-    neutralChroma,
+    solveLightnessForContrast(60, neutrals, neutralHue, background),
+    neutrals,
     neutralHue,
   );
   const sidebarForeground = oklchToHex(
-    solveLightnessForContrast(75, neutralChroma, neutralHue, sidebar),
-    neutralChroma,
+    solveLightnessForContrast(75, neutrals, neutralHue, sidebar),
+    neutrals,
     neutralHue,
   );
 
