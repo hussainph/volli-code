@@ -7,6 +7,7 @@ import { errorMessage } from "@volli/shared";
 import { Button } from "@renderer/components/ui/button";
 import { documentIdentityKey, type DocumentIdentity } from "@renderer/editor/document-identity";
 import type { DocumentLease, DocumentRevision } from "@renderer/editor/document-registry";
+import { activeMonacoEditorThemeId } from "@renderer/editor/monaco-theme";
 import { loadMonacoRuntime, startModelLanguageWorker } from "@renderer/editor/monaco-runtime";
 import { toastError } from "@renderer/lib/toast";
 
@@ -94,7 +95,7 @@ export function fileEditorConstructionOptions(input: {
   return {
     ...SOURCE_MODE_OPTIONS,
     ...input.overrides,
-    theme: "volli-dark",
+    theme: activeMonacoEditorThemeId(),
     readOnly: input.readOnly,
     domReadOnly: input.readOnly,
     ariaLabel: input.ariaLabel,

@@ -37,6 +37,7 @@ import type {
   ThemeDefinition,
   ThemeSlugInput,
   ThemeIpcChannel,
+  ThemeSetGlobalEditorInput,
   ThemeSetGlobalInput,
   ThemeSetProjectInput,
   ThemeSetProjectResult,
@@ -48,7 +49,12 @@ import type {
 } from "@volli/shared";
 import type { DbHandle } from "./data-ipc";
 import { getProjectById, updateProjectThemeOverride } from "./db/projects-repo";
-import { getGlobalTheme, setGlobalTheme } from "./db/theme-repo";
+import {
+  getGlobalEditorThemeId,
+  getGlobalTheme,
+  setGlobalEditorThemeId,
+  setGlobalTheme,
+} from "./db/theme-repo";
 import { readGhosttyAppearance } from "./ghostty-config";
 import type { FsDeps } from "./fs-deps";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
@@ -114,6 +120,7 @@ function buildThemeState(
 ): ThemeStateResult {
   let terminal: GhosttyAppearancePayload;
   let payload: ThemeStatePayload;
+  const editorThemeId = getGlobalEditorThemeId(db);
   if (projectId === null) {
     terminal = readGhosttyAppearance(deps.fs, null);
     payload = {
@@ -121,6 +128,7 @@ function buildThemeState(
       // rather than failing to paint — a theme is read before any UI exists to
       // surface a failure in.
       theme: getGlobalTheme(db) ?? DEFAULT_THEME,
+      editorThemeId,
       projectOverride: null,
       projectId: null,
       terminal,
@@ -133,6 +141,7 @@ function buildThemeState(
   terminal = readGhosttyAppearance(deps.fs, project.ticketPrefix);
   payload = {
     theme: getGlobalTheme(db) ?? DEFAULT_THEME,
+    editorThemeId,
     projectOverride: project.themeOverride ?? null,
     projectId,
     terminal,
@@ -170,6 +179,11 @@ export function registerThemeIpcHandlers(
       // persist — and the renderer's own repaint is driven by its optimistic
       // apply, not by this.
       hooks.onGlobalThemeChanged?.(input.theme);
+      return buildThemeState(db, deps, null);
+    },
+
+    "volli:theme-set-global-editor": (input: ThemeSetGlobalEditorInput): ThemeStateResult => {
+      setGlobalEditorThemeId(db, input.editorThemeId, deps.now());
       return buildThemeState(db, deps, null);
     },
 

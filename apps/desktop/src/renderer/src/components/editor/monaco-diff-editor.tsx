@@ -18,6 +18,7 @@ import {
 } from "@renderer/components/editor/monaco-file-editor";
 import type { DocumentLease } from "@renderer/editor/document-registry";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
+import { applyMonacoThemeForDiffEditor } from "@renderer/editor/monaco-theme";
 import { toastError } from "@renderer/lib/toast";
 import type { DiffPresentation } from "@renderer/stores/ui";
 
@@ -198,7 +199,7 @@ export function MonacoDiffEditor({
         if (cancelled) return;
 
         // DiffEditor ignores construction-time `theme`; set it explicitly.
-        runtime.monaco.editor.setTheme("volli-dark");
+        applyMonacoThemeForDiffEditor(runtime.monaco);
 
         // CONCEPT #48: keep keyboard focus in the Changes list after open —
         // Monaco focuses the modified editor on create unless we restore.
@@ -306,5 +307,12 @@ export function MonacoDiffEditor({
     host.dataset.monacoDiffPresentation = presentation;
   }, [dirty, saving, modifiedReadOnly, presentation]);
 
-  return <div ref={hostRef} className="min-h-0 w-full flex-1 overflow-hidden" />;
+  return (
+    <div
+      ref={hostRef}
+      role="group"
+      aria-label={ariaLabel}
+      className="min-h-0 w-full flex-1 overflow-hidden"
+    />
+  );
 }

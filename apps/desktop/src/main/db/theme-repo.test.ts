@@ -2,7 +2,13 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { DEFAULT_THEME, THEME_TOKEN_NAMES } from "@volli/shared";
 import type { ThemeDefinition } from "@volli/shared";
 
-import { getGlobalTheme, getRawGlobalTheme, setGlobalTheme } from "./theme-repo";
+import {
+  getGlobalTheme,
+  getRawGlobalTheme,
+  setGlobalTheme,
+  getGlobalEditorThemeId,
+  setGlobalEditorThemeId,
+} from "./theme-repo";
 import { getProjectById, insertProject, updateProjectThemeOverride } from "./projects-repo";
 import { openTestDb, testProject } from "./test-helpers";
 import type { TestDb } from "./test-helpers";
@@ -62,6 +68,32 @@ describe("global theme (app_state kv)", () => {
       .run("{ not json");
 
     expect(getGlobalTheme(ctx.db)).toBeNull();
+  });
+});
+
+describe("global editor theme id (app_state kv)", () => {
+  it("reports null until an editor theme has been chosen", () => {
+    ctx = openTestDb();
+    expect(getGlobalEditorThemeId(ctx.db)).toBeNull();
+  });
+
+  it("round-trips an authored catalog id and clears back to derive-from-app", () => {
+    ctx = openTestDb();
+
+    setGlobalEditorThemeId(ctx.db, "nord", 1000);
+    expect(getGlobalEditorThemeId(ctx.db)).toBe("nord");
+
+    setGlobalEditorThemeId(ctx.db, null, 2000);
+    expect(getGlobalEditorThemeId(ctx.db)).toBeNull();
+  });
+
+  it("degrades to null on a stored non-catalog editor theme id", () => {
+    ctx = openTestDb();
+    ctx.db
+      .prepare("INSERT INTO app_state (key, value, updated_at) VALUES ('theme_editor', ?, 0)")
+      .run("volli-dark");
+
+    expect(getGlobalEditorThemeId(ctx.db)).toBeNull();
   });
 });
 

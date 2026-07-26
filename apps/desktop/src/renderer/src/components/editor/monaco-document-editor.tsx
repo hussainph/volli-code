@@ -9,6 +9,7 @@ import {
 } from "@renderer/editor/document-mode-contribution";
 import { documentModeOptions } from "@renderer/editor/document-mode";
 import type { DocumentLease, DocumentRevision } from "@renderer/editor/document-registry";
+import { activeMonacoEditorThemeId } from "@renderer/editor/monaco-theme";
 import { type FileRefsConfig, refInsertion } from "@renderer/editor/file-refs";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { cn } from "@renderer/lib/utils";
@@ -300,7 +301,7 @@ export const MonacoDocumentEditor = React.forwardRef<
 
         view = runtime.monaco.editor.create(host, {
           ...documentModeOptions({ placeholder: liveRef.current.placeholder }),
-          theme: "volli-dark",
+          theme: activeMonacoEditorThemeId(),
           ariaLabel: liveRef.current.ariaLabel,
           model: lease.model,
         });

@@ -1,7 +1,23 @@
 import type * as Monaco from "monaco-editor";
 
-import { DocumentRegistry } from "./document-registry";
-import { createVolliMonacoTheme, readVolliMonacoTokens } from "./monaco-theme";
+import {
+  DEFAULT_EDITOR_THEME_ID,
+  editorThemeImporterFor,
+  resolveEditorThemeId,
+} from "./editor-theme-catalog";
+import { DocumentRegistry, type RegistryModelFactory } from "./document-registry";
+import { allShikiLanguageIds } from "./shiki-langs";
+import {
+  bootstrapShikiMonaco,
+  ensureMonacoLanguagesRegistered,
+  ensureShikiLanguageBound,
+  type ShikiMonacoBootstrap,
+} from "./shiki-monaco";
+import {
+  bindMonacoEditorThemeEnsure,
+  bindMonacoEditorThemeHost,
+  ensureMonacoEditorTheme,
+} from "./monaco-theme";
 
 export function createLazyInitializer<Value>(
   initialize: () => Promise<Value>,
@@ -61,11 +77,83 @@ export async function waitForLanguageWorkerRegistration<Worker>(
 export interface MonacoRuntime {
   monaco: typeof Monaco;
   registry: DocumentRegistry<Monaco.editor.ITextModel, Monaco.editor.ICodeEditorViewState>;
+  /** Shiki session from bootstrap — langs/themes beyond the default load on demand. */
+  shiki: ShikiMonacoBootstrap;
 }
 
 type WorkerConstructor = new (options?: WorkerOptions) => Worker;
 
-async function initializeMonacoRuntime(): Promise<MonacoRuntime> {
+type MonacoModelHost = {
+  editor: {
+    createModel: (value: string, language?: string, uri?: Monaco.Uri) => Monaco.editor.ITextModel;
+  };
+  Uri: { parse: (value: string) => Monaco.Uri };
+  languages: Pick<typeof Monaco.languages, "getLanguages" | "register">;
+};
+
+/**
+ * Document-registry model factory: creates the Monaco text model and kicks a
+ * best-effort grammar+provider bind.
+ *
+ * `createModel` stays sync (DocumentRegistry requires it). The ensure is
+ * fire-and-forget: the model may paint unhighlighted until the grammar loads
+ * and `setTokensProvider` lands — Monaco re-tokenizes when the provider appears.
+ */
+export function createShikiBackedModelFactory(
+  monaco: MonacoModelHost,
+  session: ShikiMonacoBootstrap,
+): RegistryModelFactory<Monaco.editor.ITextModel> {
+  return {
+    createModel({ value, language, uri }) {
+      void ensureShikiLanguageBound(session, monaco, language).catch((error: unknown) => {
+        console.warn(`[volli] failed to load Shiki grammar "${language}":`, error);
+      });
+      return monaco.editor.createModel(value, language, monaco.Uri.parse(uri));
+    },
+  };
+}
+
+/**
+ * Wire shiki once with the default catalog theme and empty langs, then register
+ * every document language id as an empty Monaco shell so late providers can
+ * attach. Call `wireShikiToMonaco` / bootstrap exactly once — late langs use
+ * `registerLanguage`, late themes use `registerTheme` (shared themeMap/colorMap).
+ * Catalog themes beyond the default load via the theme-ensure seam before
+ * `setTheme` (no flash of an undefined theme).
+ */
+export async function prepareMonacoEditorThemes(
+  monaco: typeof Monaco,
+): Promise<ShikiMonacoBootstrap> {
+  // Empty shells first so the one-shot wire (and later registerLanguage) can
+  // see every document-identity id in monaco.languages.getLanguages().
+  ensureMonacoLanguagesRegistered(monaco, allShikiLanguageIds());
+
+  const defaultThemeLoad = editorThemeImporterFor(DEFAULT_EDITOR_THEME_ID);
+  const shiki = await bootstrapShikiMonaco(monaco, {
+    themes: defaultThemeLoad === null ? [] : [defaultThemeLoad],
+    langs: [],
+  });
+
+  bindMonacoEditorThemeEnsure(async (themeId) => {
+    if (shiki.highlighter.getLoadedThemes().includes(themeId)) return;
+    const load = editorThemeImporterFor(themeId);
+    if (load === null) return;
+    await shiki.highlighter.loadTheme(load);
+    await shiki.registerTheme(shiki.highlighter.getTheme(themeId));
+  });
+  bindMonacoEditorThemeHost(monaco);
+  // If the theme store already refreshed before runtime init, bind applied it.
+  // Otherwise activate the shipped default so the first editor isn't unthemed.
+  ensureMonacoEditorTheme(
+    resolveEditorThemeId({
+      editorThemeId: null,
+      appThemeSlug: "ember",
+    }),
+  );
+  return shiki;
+}
+
+export async function initializeMonacoRuntime(): Promise<MonacoRuntime> {
   // Vite turns each ?worker import into a same-origin worker constructor. Load
   // those wrappers first so MonacoEnvironment is configured before Monaco's
   // public ESM entry evaluates.
@@ -104,18 +192,13 @@ async function initializeMonacoRuntime(): Promise<MonacoRuntime> {
   };
 
   const monaco = await import("monaco-editor");
-  monaco.editor.defineTheme("volli-dark", createVolliMonacoTheme(readVolliMonacoTokens()));
-  monaco.editor.setTheme("volli-dark");
+  const shiki = await prepareMonacoEditorThemes(monaco);
 
   const registry = new DocumentRegistry<
     Monaco.editor.ITextModel,
     Monaco.editor.ICodeEditorViewState
-  >({
-    createModel({ value, language, uri }) {
-      return monaco.editor.createModel(value, language, monaco.Uri.parse(uri));
-    },
-  });
-  return { monaco, registry };
+  >(createShikiBackedModelFactory(monaco, shiki));
+  return { monaco, registry, shiki };
 }
 
 export const loadMonacoRuntime = createLazyInitializer(initializeMonacoRuntime);

@@ -13,4 +13,25 @@ describe("Settings → Appearance", () => {
     // presence here IS the assertion that this host supplies them.
     expect(html).toContain("More actions for Ember");
   });
+
+  it("hosts an Editor section beside the Terminal theme picker", () => {
+    const html = renderToStaticMarkup(<AppearanceSettings />);
+
+    expect(html).toContain("Editor");
+    expect(html).toContain("Terminal");
+    // Section order: App theme → Editor → Terminal (picker beside Terminal).
+    expect(html.indexOf("Editor")).toBeGreaterThan(html.indexOf("App theme"));
+    expect(html.indexOf("Terminal")).toBeGreaterThan(html.indexOf("Editor"));
+  });
+
+  it("shows the derived editor theme when none is pinned, labeled as matching the app", () => {
+    // Default store: editorThemeId null + Ember → One Dark Pro (catalog).
+    const html = renderToStaticMarkup(<AppearanceSettings />);
+
+    expect(html).toContain('aria-label="Editor theme"');
+    expect(html).toContain("One Dark Pro");
+    expect(html).toContain("Matches app theme");
+    // Reset only appears when an explicit id is pinned (covered in the model).
+    expect(html).not.toContain("Reset editor theme to match app theme");
+  });
 });

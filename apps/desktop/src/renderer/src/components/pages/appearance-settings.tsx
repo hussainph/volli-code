@@ -1,5 +1,6 @@
 import * as React from "react";
 import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
+import { BracketsCurlyIcon } from "@phosphor-icons/react/dist/csr/BracketsCurly";
 import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
 import { FileTextIcon } from "@phosphor-icons/react/dist/csr/FileText";
 import { MinusIcon } from "@phosphor-icons/react/dist/csr/Minus";
@@ -20,6 +21,11 @@ import {
   type TerminalSettingRow,
 } from "@renderer/components/theme/terminal-settings-model";
 import {
+  buildEditorThemeDisplay,
+  planEditorThemePreview,
+  type EditorThemeDisplay,
+} from "@renderer/components/theme/editor-settings-model";
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -31,6 +37,7 @@ import {
 } from "@renderer/components/ui/alert-dialog";
 import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
+import { listEditorThemes, type EditorThemeEntry } from "@renderer/editor/editor-theme-catalog";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { writeThrough } from "@renderer/stores/mutate";
@@ -40,7 +47,8 @@ import { DEFAULT_TERMINAL_FONT_SIZE } from "@renderer/terminal/appearance-model"
 import { listLocalFontFamilies } from "@renderer/terminal/local-fonts";
 
 /**
- * Settings → Appearance: the app surface's theme picker, and the terminal's.
+ * Settings → Appearance: the app surface's theme picker, the Monaco editor
+ * theme, and the terminal's.
  *
  * The terminal half is where decision #67 becomes visible. Volli NEVER writes
  * the user's own ghostty config; it writes an overlay file in ghostty's own
@@ -52,7 +60,10 @@ import { listLocalFontFamilies } from "@renderer/terminal/local-fonts";
  *
  * Preview here is a real palette swap, not a sample panel: we render the
  * terminal, so highlighting a theme repaints every live session and closing
- * the menu puts it back.
+ * the menu puts it back. The Editor picker does the same for Monaco through
+ * the theme store ({@link useThemeStore.startEditorPreview} /
+ * {@link useThemeStore.endEditorPreview}) so `paintedEditor` stays coherent
+ * with App-theme preview.
  */
 export function AppearanceSettings() {
   const terminal = useThemeStore((state) => state.terminal);
@@ -79,6 +90,14 @@ export function AppearanceSettings() {
   return (
     <>
       <AppThemeSection />
+
+      <SettingsSection
+        title="Editor"
+        icon={BracketsCurlyIcon}
+        description="Monaco syntax highlighting theme for file and document editors."
+      >
+        <EditorThemeRow />
+      </SettingsSection>
 
       <SettingsSection
         title="Terminal"
@@ -246,6 +265,169 @@ function DeleteThemeDialog({
     </AlertDialog>
   );
 }
+
+/** Provenance chip for the Editor theme row, plus reset when explicitly pinned. */
+function EditorThemeOriginBadge({ display }: { display: EditorThemeDisplay }) {
+  return (
+    <span className="flex items-center gap-1.5">
+      <span
+        className={cn(
+          "rounded-full border px-2 py-0.5 text-label",
+          display.source === "automatic"
+            ? "border-border text-muted-foreground"
+            : "border-primary/40 text-primary-text",
+        )}
+      >
+        {display.sourceLabel}
+      </span>
+      {display.resettable ? (
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label="Reset editor theme to match app theme"
+          title="Reset to match app theme"
+          onClick={() => void useThemeStore.getState().setEditorTheme(null)}
+        >
+          <ArrowCounterClockwiseIcon />
+        </Button>
+      ) : null}
+    </span>
+  );
+}
+
+/**
+ * Monaco/shiki theme picker over the shipped catalog.
+ *
+ * Apply-then-revert preview (same contract as TerminalThemeRow): highlighting
+ * a row paints Monaco via {@link useThemeStore.startEditorPreview} and writes
+ * nothing; picking one persists through {@link useThemeStore.setEditorTheme};
+ * closing the menu any other way restores through
+ * {@link useThemeStore.endEditorPreview} — preview-aware (`effectiveTheme`),
+ * never a stale closure over the pre-commit resolved id, and never a direct
+ * Monaco call that would desync `paintedEditor`.
+ */
+function EditorThemeRow() {
+  const editorThemeId = useThemeStore((state) => state.editorThemeId);
+  const appThemeSlug = useThemeStore((state) => state.global.slug);
+  const [open, setOpen] = React.useState(false);
+  // cmdk only calls `onValueChange` when the root is CONTROLLED — uncontrolled
+  // it just updates its own store and returns, so an uncontrolled picker here
+  // would silently never preview anything.
+  const [selected, setSelected] = React.useState("");
+  const themes = React.useMemo(() => listEditorThemes(), []);
+
+  const display = React.useMemo(
+    () => buildEditorThemeDisplay({ editorThemeId, appThemeSlug, themes }),
+    [editorThemeId, appThemeSlug, themes],
+  );
+
+  const paintPreview = (selection: string): void => {
+    const plan = planEditorThemePreview({
+      selection,
+      resolvedId: display.resolvedId,
+    });
+    if (plan.kind === "restore") {
+      endEditorPreview();
+      return;
+    }
+    useThemeStore.getState().startEditorPreview(plan.themeId);
+  };
+
+  // Leaving the surface with a preview running would strand Monaco on a theme
+  // that is not stored anywhere. Unmount-only, same as TerminalThemeRow —
+  // endEditorPreview reads live store state so a commit-then-restore lands on
+  // the committed id rather than a stale pre-commit closure.
+  React.useEffect(() => endEditorPreview, []);
+
+  return (
+    <SettingsRow label="Theme">
+      <EditorThemeOriginBadge display={display} />
+      <Popover
+        open={open}
+        onOpenChange={(next) => {
+          setOpen(next);
+          if (!next) endEditorPreview();
+        }}
+      >
+        <PopoverTrigger asChild>
+          <Button
+            variant="outline"
+            size="sm"
+            aria-label="Editor theme"
+            className="w-52 justify-between"
+          >
+            <span className="truncate">{display.label}</span>
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="end" className="w-64 p-0">
+          <Command
+            loop
+            value={selected}
+            onValueChange={(id) => {
+              setSelected(id);
+              paintPreview(id);
+            }}
+            // The pointer wandering off the list ends the preview, same as the
+            // terminal picker: a hover has no Escape.
+            onPointerLeave={() => {
+              setSelected("");
+              endEditorPreview();
+            }}
+            className="flex flex-col overflow-hidden rounded-md"
+          >
+            <Command.Input
+              autoFocus
+              aria-label="Search editor themes"
+              placeholder="Search themes…"
+              className="h-9 border-b border-border bg-transparent px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground"
+            />
+            <Command.List className="max-h-64 overflow-y-auto p-1">
+              <Command.Empty className="py-6 text-center text-sm text-muted-foreground">
+                No matching theme.
+              </Command.Empty>
+              {themes.map((theme: EditorThemeEntry) => (
+                <Command.Item
+                  key={theme.id}
+                  value={theme.id}
+                  keywords={[theme.label, theme.family ?? ""]}
+                  onSelect={() => {
+                    // Commit first, then drop the preview: setEditorTheme
+                    // refreshes Monaco to the same id, so there is no flash.
+                    // endEditorPreview reads the updated store so restore
+                    // paints the committed catalog id, not the pre-commit one.
+                    void useThemeStore
+                      .getState()
+                      .setEditorTheme(theme.id)
+                      .then((saved) => {
+                        if (saved) setOpen(false);
+                        endEditorPreview();
+                      });
+                  }}
+                  className="flex cursor-pointer items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-sm outline-none data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground"
+                >
+                  <span className="truncate">{theme.label}</span>
+                  {theme.id === display.resolvedId ? (
+                    <CheckIcon weight="bold" className="size-3.5" />
+                  ) : null}
+                </Command.Item>
+              ))}
+            </Command.List>
+          </Command>
+        </PopoverContent>
+      </Popover>
+    </SettingsRow>
+  );
+}
+
+/**
+ * Puts Monaco back on the theme implied by the **current** theme store —
+ * effective (preview-aware) app slug + committed editorThemeId. Module-level
+ * so the unmount-only effect stays exhaustive-deps clean (mirrors
+ * TerminalThemeRow's `endPreview`).
+ */
+const endEditorPreview = (): void => {
+  useThemeStore.getState().endEditorPreview();
+};
 
 /** Reveal a config file in Finder; a missing path or a failed reveal toasts. */
 async function revealPath(path: string | null): Promise<void> {

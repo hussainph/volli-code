@@ -6,8 +6,10 @@ import {
   generateThemeTokens,
   type GhosttyAppearancePayload,
   type ProjectThemeOverride,
+  type ShippedEditorThemeId,
   type ThemeDefinition,
   type ThemeStatePayload,
+  type ThemeStateResult,
 } from "@volli/shared";
 
 import { appliedTheme, createThemeStore, effectiveTheme, type ThemeGateway } from "./theme";
@@ -49,6 +51,7 @@ const TERMINAL: GhosttyAppearancePayload = {
 function statePayload(over: Partial<ThemeStatePayload> = {}): ThemeStatePayload {
   return {
     theme: DEFAULT_THEME,
+    editorThemeId: null,
     projectOverride: null,
     projectId: null,
     terminal: TERMINAL,
@@ -59,7 +62,13 @@ function statePayload(over: Partial<ThemeStatePayload> = {}): ThemeStatePayload 
 /** Records what the DOM would have been repainted with, in order. */
 function recorder() {
   const applied: ThemeDefinition[] = [];
-  return { applied, applyTheme: (theme: ThemeDefinition) => void applied.push(theme) };
+  const editorThemes: string[] = [];
+  return {
+    applied,
+    editorThemes,
+    applyTheme: (theme: ThemeDefinition) => void applied.push(theme),
+    refreshEditorTheme: (themeId: string) => void editorThemes.push(themeId),
+  };
 }
 
 function memoryStorage() {
@@ -80,6 +89,10 @@ function fakeGateway(over: Partial<ThemeGateway> = {}): ThemeGateway {
     setGlobal: vi.fn(async (theme: ThemeDefinition) => ({
       ok: true as const,
       value: statePayload({ theme }),
+    })),
+    setGlobalEditor: vi.fn(async (editorThemeId: ShippedEditorThemeId | null) => ({
+      ok: true as const,
+      value: statePayload({ editorThemeId }),
     })),
     setProject: vi.fn(async (projectId: string, override: ProjectThemeOverride | null) => ({
       ok: true as const,
@@ -103,10 +116,22 @@ function freshStore(over: Partial<ThemeGateway> = {}) {
   const paint = recorder();
   const memory = memoryStorage();
   const store = createThemeStore({
-    deps: { gateway, applyTheme: paint.applyTheme },
+    deps: {
+      gateway,
+      applyTheme: paint.applyTheme,
+      refreshEditorTheme: paint.refreshEditorTheme,
+    },
     storage: memory.storage,
   });
   return { store, gateway, paint, memory };
+}
+
+function deferred<Value>() {
+  let resolve!: (value: Value) => void;
+  const promise = new Promise<Value>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 beforeEach(() => {
@@ -126,9 +151,26 @@ describe("hydrate", () => {
     await store.getState().hydrate();
 
     expect(store.getState().global).toEqual(MIDNIGHT);
+    expect(store.getState().editorThemeId).toBeNull();
     expect(store.getState().terminal).toEqual(TERMINAL);
     expect(store.getState().hydrated).toBe(true);
     expect(paint.applied).toEqual([MIDNIGHT]);
+    // null editorThemeId → derive from midnight → tokyo-night
+    expect(paint.editorThemes).toEqual(["tokyo-night"]);
+  });
+
+  it("adopts a persisted global editor theme id and refreshes Monaco with it", async () => {
+    const { store, paint } = freshStore({
+      state: vi.fn(async () => ({
+        ok: true as const,
+        value: statePayload({ editorThemeId: "nord" }),
+      })),
+    });
+
+    await store.getState().hydrate();
+
+    expect(store.getState().editorThemeId).toBe("nord");
+    expect(paint.editorThemes).toEqual(["nord"]);
   });
 
   it("scopes the read to a project when asked (#69)", async () => {
@@ -178,6 +220,101 @@ describe("hydrate", () => {
   });
 });
 
+describe("setEditorTheme", () => {
+  it("persists the global editor id and refreshes Monaco without rewriting the app theme", async () => {
+    const { store, gateway, paint } = freshStore();
+
+    await expect(store.getState().setEditorTheme("nord")).resolves.toBe(true);
+
+    expect(gateway.setGlobalEditor).toHaveBeenCalledWith("nord");
+    expect(gateway.setGlobal).not.toHaveBeenCalled();
+    expect(store.getState().editorThemeId).toBe("nord");
+    expect(paint.editorThemes).toEqual(["nord"]);
+  });
+
+  it("clears back to derive-from-app and remaps Monaco from the active app slug", async () => {
+    const { store, paint } = freshStore({
+      state: vi.fn(async () => ({
+        ok: true as const,
+        value: statePayload({ theme: MIDNIGHT, editorThemeId: "nord" }),
+      })),
+      setGlobalEditor: vi.fn(async () => ({
+        ok: true as const,
+        value: statePayload({ theme: MIDNIGHT, editorThemeId: null }),
+      })),
+    });
+    await store.getState().hydrate();
+    paint.editorThemes.length = 0;
+
+    await expect(store.getState().setEditorTheme(null)).resolves.toBe(true);
+
+    expect(store.getState().editorThemeId).toBeNull();
+    expect(paint.editorThemes).toEqual(["tokyo-night"]);
+  });
+
+  it("rolls back the optimistic editor id when persistence fails", async () => {
+    const { store, paint } = freshStore({
+      setGlobalEditor: vi.fn(async () => ({ ok: false as const, error: "db closed" })),
+    });
+
+    await expect(store.getState().setEditorTheme("nord")).resolves.toBe(false);
+
+    expect(store.getState().editorThemeId).toBeNull();
+    // optimistic nord, then rollback to ember-derived one-dark-pro
+    expect(paint.editorThemes).toEqual(["nord", "one-dark-pro"]);
+  });
+
+  it("serializes rapid writes and keeps the newest optimistic selection", async () => {
+    const first = deferred<ThemeStateResult>();
+    const second = deferred<ThemeStateResult>();
+    const setGlobalEditor = vi
+      .fn<(editorThemeId: ShippedEditorThemeId | null) => Promise<ThemeStateResult>>()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const { store } = freshStore({ setGlobalEditor });
+
+    const nordWrite = store.getState().setEditorTheme("nord");
+    const draculaWrite = store.getState().setEditorTheme("dracula");
+
+    expect(store.getState().editorThemeId).toBe("dracula");
+    await vi.waitFor(() => expect(setGlobalEditor).toHaveBeenCalledTimes(1));
+    first.resolve({
+      ok: true,
+      value: statePayload({ editorThemeId: "nord" }),
+    });
+    await nordWrite;
+    await vi.waitFor(() => expect(setGlobalEditor).toHaveBeenCalledTimes(2));
+    expect(store.getState().editorThemeId).toBe("dracula");
+
+    second.resolve({
+      ok: true,
+      value: statePayload({ editorThemeId: "dracula" }),
+    });
+    await expect(draculaWrite).resolves.toBe(true);
+    expect(store.getState().editorThemeId).toBe("dracula");
+  });
+
+  it("does not let a superseded failure roll back the newest selection", async () => {
+    const first = deferred<ThemeStateResult>();
+    const setGlobalEditor = vi
+      .fn<(editorThemeId: ShippedEditorThemeId | null) => Promise<ThemeStateResult>>()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce({
+        ok: true,
+        value: statePayload({ editorThemeId: "dracula" }),
+      });
+    const { store } = freshStore({ setGlobalEditor });
+
+    const nordWrite = store.getState().setEditorTheme("nord");
+    const draculaWrite = store.getState().setEditorTheme("dracula");
+    first.resolve({ ok: false, error: "db closed" });
+
+    await expect(nordWrite).resolves.toBe(false);
+    await expect(draculaWrite).resolves.toBe(true);
+    expect(store.getState().editorThemeId).toBe("dracula");
+  });
+});
+
 describe("preview", () => {
   it("repaints the live DOM and writes NOTHING", () => {
     const { store, gateway, paint, memory } = freshStore();
@@ -223,6 +360,55 @@ describe("preview", () => {
     store.getState().cancelPreview();
 
     expect(paint.applied).toEqual([MIDNIGHT, DEFAULT_THEME]);
+  });
+
+  it("keeps Monaco on the App-preview editor theme when ending an Editor preview", () => {
+    // Regression: endEditorPreview used to restore from global.slug (ember →
+    // one-dark-pro) while App preview was still Midnight, desyncing Monaco
+    // from paintedEditor (tokyo-night).
+    const { store, paint, gateway } = freshStore();
+    store.getState().startPreview(MIDNIGHT);
+    expect(paint.editorThemes.at(-1)).toBe("tokyo-night");
+    paint.editorThemes.length = 0;
+
+    store.getState().startEditorPreview("nord");
+    expect(paint.editorThemes).toEqual(["nord"]);
+    paint.editorThemes.length = 0;
+
+    store.getState().endEditorPreview();
+
+    expect(paint.editorThemes).toEqual(["tokyo-night"]);
+    expect(store.getState().preview).toEqual(MIDNIGHT);
+    expect(gateway.setGlobal).not.toHaveBeenCalled();
+    expect(gateway.setGlobalEditor).not.toHaveBeenCalled();
+  });
+
+  it("re-previewing the same App theme refreshes Monaco after an editor desync", () => {
+    // Stuck case: paintedEditor still tokyo-night after an out-of-band paint
+    // left Monaco on one-dark-pro. Re-highlighting Midnight must refresh, not
+    // skip because the tracker already says tokyo-night.
+    const { store, paint } = freshStore();
+    store.getState().startPreview(MIDNIGHT);
+    expect(paint.editorThemes.at(-1)).toBe("tokyo-night");
+
+    // Bypass the store the way the old Appearance Editor restore did.
+    paint.refreshEditorTheme("one-dark-pro");
+    paint.editorThemes.length = 0;
+
+    store.getState().startPreview(MIDNIGHT);
+
+    expect(paint.editorThemes).toEqual(["tokyo-night"]);
+  });
+});
+
+describe("editor preview", () => {
+  it("treats an empty editor preview id as restore", () => {
+    const { store, paint } = freshStore();
+    store.getState().startEditorPreview("nord");
+
+    store.getState().startEditorPreview("");
+
+    expect(paint.editorThemes).toEqual(["nord", "one-dark-pro"]);
   });
 });
 
@@ -320,6 +506,8 @@ describe("commit", () => {
 
     expect(gateway.setGlobal).toHaveBeenCalledWith(MIDNIGHT);
     expect(paint.applied).toEqual([MIDNIGHT]);
+    // null editorThemeId remaps Monaco when the app slug changes
+    expect(paint.editorThemes).toEqual(["tokyo-night"]);
   });
 });
 
@@ -343,7 +531,11 @@ describe("favorites and recents", () => {
       JSON.stringify({ state: { favorites: ["moss", 7], recents: "nope" }, version: 1 }),
     );
     const store = createThemeStore({
-      deps: { gateway: fakeGateway(), applyTheme: () => {} },
+      deps: {
+        gateway: fakeGateway(),
+        applyTheme: () => {},
+        refreshEditorTheme: () => {},
+      },
       storage: memory.storage,
     });
 
@@ -536,6 +728,10 @@ describe("createThemeStore() with the default deps", () => {
       value: statePayload({ theme: MIDNIGHT }),
     }));
     const setGlobal = vi.fn(async () => ({ ok: true as const, value: statePayload() }));
+    const setGlobalEditor = vi.fn(async (editorThemeId: ShippedEditorThemeId | null) => ({
+      ok: true as const,
+      value: statePayload({ editorThemeId }),
+    }));
     const setProject = vi.fn(async () => ({ ok: false as const, error: "unused" }));
     const listCustomThemes = vi.fn(async () => ({ ok: true as const, themes: [SUNSET] }));
     const saveCustomTheme = vi.fn(async () => ({
@@ -550,6 +746,7 @@ describe("createThemeStore() with the default deps", () => {
         theme: {
           state,
           setGlobal,
+          setGlobalEditor,
           setProject,
           listCustomThemes,
           saveCustomTheme,
@@ -575,6 +772,9 @@ describe("createThemeStore() with the default deps", () => {
 
     await store.getState().setGlobalTheme(DEFAULT_THEME);
     expect(setGlobal).toHaveBeenCalledWith(DEFAULT_THEME);
+
+    await store.getState().setEditorTheme("nord");
+    expect(setGlobalEditor).toHaveBeenCalledWith("nord");
 
     store.setState({ preview: MIDNIGHT });
     await store.getState().commitPreview({ kind: "project", projectId: "p1" });

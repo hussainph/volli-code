@@ -73,6 +73,18 @@ importers:
       '@phosphor-icons/react':
         specifier: ^2.1.10
         version: 2.1.10(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@shikijs/langs':
+        specifier: 4.3.1
+        version: 4.3.1
+      '@shikijs/monaco':
+        specifier: 4.3.1
+        version: 4.3.1
+      '@shikijs/themes':
+        specifier: 4.3.1
+        version: 4.3.1
+      '@shikijs/vscode-textmate':
+        specifier: 10.0.2
+        version: 10.0.2
       '@volli/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -115,6 +127,9 @@ importers:
       restty:
         specifier: ^0.2.0
         version: 0.2.0(patch_hash=a46f6a7e25a538e5e66f5926232dce77460fd3d08a2af7424ca0148f2ee242af)(typescript@7.0.2)
+      shiki:
+        specifier: 4.3.1
+        version: 4.3.1
       sonner:
         specifier: ^2.0.7
         version: 2.0.7(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -2262,6 +2277,10 @@ packages:
 
   '@shikijs/langs@4.3.1':
     resolution: {integrity: sha512-m0l9nsDqgBHvbZbk7A0/kXz/impK3uB/c6rAn6Gpg/uPtdZRQ+alsN/17MU5thb68XTj/4DxkZAotrM0GGSpDQ==}
+    engines: {node: '>=20'}
+
+  '@shikijs/monaco@4.3.1':
+    resolution: {integrity: sha512-A8lB7DKVMWmT+EgzBQkw7pqMsc1NUogRM+CEyv3ldl0CcTctPd0oz7Lcb0d1iZmWYO3WJdpMUuISS4GAexHvhA==}
     engines: {node: '>=20'}
 
   '@shikijs/primitive@4.3.1':
@@ -6434,6 +6453,12 @@ snapshots:
   '@shikijs/langs@4.3.1':
     dependencies:
       '@shikijs/types': 4.3.1
+
+  '@shikijs/monaco@4.3.1':
+    dependencies:
+      '@shikijs/core': 4.3.1
+      '@shikijs/types': 4.3.1
+      '@shikijs/vscode-textmate': 10.0.2
 
   '@shikijs/primitive@4.3.1':
     dependencies:

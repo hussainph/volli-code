@@ -11,6 +11,7 @@ import type {
   VolliInvokeContract,
 } from "./ipc";
 import { isValidThemeSlug } from "./theme/custom-themes";
+import { isShippedEditorThemeId } from "./theme/editor-themes";
 import { isValidOverlayKey, isValidOverlayValue } from "./theme/ghostty-overlay";
 import { isProjectThemeOverride, isThemeDefinition } from "./theme/persistence";
 import { isHarnessId, isTicketPriority, isTicketStatus } from "./ticket";
@@ -593,6 +594,18 @@ export const THEME_IPC: { readonly [C in ThemeIpcChannel]: IpcRequestDescriptor<
     guard: (args): args is IpcArgs<"volli:theme-set-global"> =>
       args.length === 1 && isRecord(args[0]) && isThemeDefinition(args[0]["theme"]),
     invalidError: "Invalid theme",
+  },
+  "volli:theme-set-global-editor": {
+    // null = derive from app theme; otherwise only a shipped catalog id.
+    // `isShippedEditorThemeId` is the shared vocabulary the renderer catalog
+    // asserts against — an unknown string never reaches SQLite.
+    guard: (args): args is IpcArgs<"volli:theme-set-global-editor"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      (args[0]["editorThemeId"] === null ||
+        (typeof args[0]["editorThemeId"] === "string" &&
+          isShippedEditorThemeId(args[0]["editorThemeId"]))),
+    invalidError: "Invalid editor theme",
   },
   "volli:theme-set-project": {
     guard: (args): args is IpcArgs<"volli:theme-set-project"> => {

@@ -1344,6 +1344,31 @@ describe("THEME_IPC descriptor table", () => {
     });
   });
 
+  describe("volli:theme-set-global-editor", () => {
+    const { guard, invalidError } = THEME_IPC["volli:theme-set-global-editor"];
+
+    it("accepts an authored catalog id or null to derive from the app theme", () => {
+      expect(guard([{ editorThemeId: "nord" }])).toBe(true);
+      expect(guard([{ editorThemeId: null }])).toBe(true);
+    });
+
+    it("rejects a missing or non-nullable-string editorThemeId", () => {
+      expect(guard([{}])).toBe(false);
+      expect(guard([{ editorThemeId: 7 }])).toBe(false);
+      expect(guard([])).toBe(false);
+    });
+
+    it("rejects a non-catalog string id", () => {
+      expect(guard([{ editorThemeId: "volli-dark" }])).toBe(false);
+      expect(guard([{ editorThemeId: "not-a-theme" }])).toBe(false);
+      expect(guard([{ editorThemeId: "" }])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid editor theme");
+    });
+  });
+
   describe("volli:theme-set-project", () => {
     const { guard, invalidError } = THEME_IPC["volli:theme-set-project"];
     const override = {
@@ -1361,6 +1386,21 @@ describe("THEME_IPC descriptor table", () => {
     it("rejects a partial override shape or a missing project", () => {
       expect(guard([{ projectId: "p1", override: { appThemeSlug: "x" } }])).toBe(false);
       expect(guard([{ override }])).toBe(false);
+    });
+
+    it("accepts a shipped catalog editorThemeId and rejects a non-catalog id", () => {
+      expect(guard([{ projectId: "p1", override: { ...override, editorThemeId: "nord" } }])).toBe(
+        true,
+      );
+      expect(
+        guard([{ projectId: "p1", override: { ...override, editorThemeId: "volli-dark" } }]),
+      ).toBe(false);
+      expect(
+        guard([{ projectId: "p1", override: { ...override, editorThemeId: "not-a-theme" } }]),
+      ).toBe(false);
+      expect(guard([{ projectId: "p1", override: { ...override, editorThemeId: "" } }])).toBe(
+        false,
+      );
     });
 
     it("rejects a wrong arity", () => {
@@ -1474,8 +1514,9 @@ describe("THEME_IPC descriptor table", () => {
     });
 
     it("covers the whole theme surface", () => {
-      expect(THEME_CHANNELS).toHaveLength(10);
+      expect(THEME_CHANNELS).toHaveLength(11);
       expect(THEME_CHANNELS).toContain("volli:theme-state");
+      expect(THEME_CHANNELS).toContain("volli:theme-set-global-editor");
       expect(THEME_CHANNELS).toContain("volli:theme-terminal-overlay-write");
       expect(THEME_CHANNELS).toContain("volli:theme-file-list");
       expect(THEME_CHANNELS).toContain("volli:theme-file-open");

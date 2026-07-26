@@ -20,6 +20,7 @@ import type {
   TerminalIoResult,
 } from "./terminal";
 import type { ThemeDefinition } from "./theme/definition";
+import type { ShippedEditorThemeId } from "./theme/editor-themes";
 import type { ProjectThemeOverride } from "./theme/persistence";
 import type { ArchivedTicket, HarnessId, Ticket, TicketPriority, TicketStatus } from "./ticket";
 import type { TicketComment } from "./ticket-comment";
@@ -390,6 +391,14 @@ export interface ThemeSetGlobalInput {
   theme: ThemeDefinition;
 }
 
+/**
+ * Persists the global Monaco/shiki theme id (`app_state.theme_editor`).
+ * `null` clears it so the editor derives from the active app theme slug.
+ */
+export interface ThemeSetGlobalEditorInput {
+  editorThemeId: ShippedEditorThemeId | null;
+}
+
 export interface ThemeSetProjectInput {
   projectId: string;
   /** Per-surface override; `null` clears every surface back to inheriting the global theme. */
@@ -414,6 +423,11 @@ export type TerminalOverlayWriteInput = {
 export interface ThemeStatePayload {
   /** The authored global theme (the shipped default when none has been chosen). */
   theme: ThemeDefinition;
+  /**
+   * Global Monaco/shiki theme id from `app_state`. `null` means derive from the
+   * active app theme slug — never a resolved token set.
+   */
+  editorThemeId: ShippedEditorThemeId | null;
   /** The scoping project's per-surface override; null when unscoped or fully inheriting. */
   projectOverride: ProjectThemeOverride | null;
   /** The project the state was resolved for, echoed back; null for the global scope. */
@@ -463,6 +477,14 @@ export interface VolliThemeIpcContract {
   "volli:theme-state": { args: [input: ThemeStateInput]; result: ThemeStateResult };
   /** Persists the authored global theme (`app_state.theme`). Resolves with the fresh state. */
   "volli:theme-set-global": { args: [input: ThemeSetGlobalInput]; result: ThemeStateResult };
+  /**
+   * Persists the global editor theme id (`app_state.theme_editor`). `null` clears
+   * it so Monaco derives from the active app theme slug. Resolves with fresh state.
+   */
+  "volli:theme-set-global-editor": {
+    args: [input: ThemeSetGlobalEditorInput];
+    result: ThemeStateResult;
+  };
   /** Persists one project's per-surface override (migration 013); `null` clears it. */
   "volli:theme-set-project": { args: [input: ThemeSetProjectInput]; result: ThemeSetProjectResult };
   /** Rewrites keys in a Volli ghostty overlay — global or per-project. Never the user's own config. */

@@ -15,8 +15,15 @@
  *    caller falls back to the shipped default rather than failing to paint.
  */
 import type Database from "better-sqlite3";
-import { parseThemeJson, serializeGlobalTheme, THEME_APP_STATE_KEY } from "@volli/shared";
-import type { ThemeDefinition } from "@volli/shared";
+import {
+  parseGlobalEditorThemeId,
+  parseThemeJson,
+  serializeGlobalEditorThemeId,
+  serializeGlobalTheme,
+  THEME_APP_STATE_KEY,
+  THEME_EDITOR_APP_STATE_KEY,
+} from "@volli/shared";
+import type { ShippedEditorThemeId, ThemeDefinition } from "@volli/shared";
 import { setAppState } from "./app-state-repo";
 import { prepared } from "./prepared";
 
@@ -41,4 +48,25 @@ export function getGlobalTheme(db: Database.Database): ThemeDefinition | null {
 /** Upserts the authored global theme. */
 export function setGlobalTheme(db: Database.Database, theme: ThemeDefinition, now: number): void {
   setAppState(db, THEME_APP_STATE_KEY, serializeGlobalTheme(theme), now);
+}
+
+/** The authored global editor theme id, or null when unset (derive from the app theme slug). */
+export function getGlobalEditorThemeId(db: Database.Database): ShippedEditorThemeId | null {
+  const row = prepared<[string], { value: string }>(
+    db,
+    "SELECT value FROM app_state WHERE key = ?",
+  ).get(THEME_EDITOR_APP_STATE_KEY);
+  return parseGlobalEditorThemeId(row?.value ?? null);
+}
+
+/**
+ * Upserts the global editor theme id. `null` clears it so Monaco derives from
+ * the active app theme slug.
+ */
+export function setGlobalEditorThemeId(
+  db: Database.Database,
+  editorThemeId: ShippedEditorThemeId | null,
+  now: number,
+): void {
+  setAppState(db, THEME_EDITOR_APP_STATE_KEY, serializeGlobalEditorThemeId(editorThemeId), now);
 }
