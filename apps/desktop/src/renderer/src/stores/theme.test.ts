@@ -49,6 +49,7 @@ const TERMINAL: GhosttyAppearancePayload = {
 function statePayload(over: Partial<ThemeStatePayload> = {}): ThemeStatePayload {
   return {
     theme: DEFAULT_THEME,
+    editorThemeId: null,
     projectOverride: null,
     projectId: null,
     terminal: TERMINAL,
@@ -59,7 +60,13 @@ function statePayload(over: Partial<ThemeStatePayload> = {}): ThemeStatePayload 
 /** Records what the DOM would have been repainted with, in order. */
 function recorder() {
   const applied: ThemeDefinition[] = [];
-  return { applied, applyTheme: (theme: ThemeDefinition) => void applied.push(theme) };
+  const editorThemes: string[] = [];
+  return {
+    applied,
+    editorThemes,
+    applyTheme: (theme: ThemeDefinition) => void applied.push(theme),
+    refreshEditorTheme: (themeId: string) => void editorThemes.push(themeId),
+  };
 }
 
 function memoryStorage() {
@@ -80,6 +87,10 @@ function fakeGateway(over: Partial<ThemeGateway> = {}): ThemeGateway {
     setGlobal: vi.fn(async (theme: ThemeDefinition) => ({
       ok: true as const,
       value: statePayload({ theme }),
+    })),
+    setGlobalEditor: vi.fn(async (editorThemeId: string | null) => ({
+      ok: true as const,
+      value: statePayload({ editorThemeId }),
     })),
     setProject: vi.fn(async (projectId: string, override: ProjectThemeOverride | null) => ({
       ok: true as const,
@@ -103,7 +114,11 @@ function freshStore(over: Partial<ThemeGateway> = {}) {
   const paint = recorder();
   const memory = memoryStorage();
   const store = createThemeStore({
-    deps: { gateway, applyTheme: paint.applyTheme },
+    deps: {
+      gateway,
+      applyTheme: paint.applyTheme,
+      refreshEditorTheme: paint.refreshEditorTheme,
+    },
     storage: memory.storage,
   });
   return { store, gateway, paint, memory };
@@ -126,9 +141,26 @@ describe("hydrate", () => {
     await store.getState().hydrate();
 
     expect(store.getState().global).toEqual(MIDNIGHT);
+    expect(store.getState().editorThemeId).toBeNull();
     expect(store.getState().terminal).toEqual(TERMINAL);
     expect(store.getState().hydrated).toBe(true);
     expect(paint.applied).toEqual([MIDNIGHT]);
+    // null editorThemeId → derive from midnight → tokyo-night
+    expect(paint.editorThemes).toEqual(["tokyo-night"]);
+  });
+
+  it("adopts a persisted global editor theme id and refreshes Monaco with it", async () => {
+    const { store, paint } = freshStore({
+      state: vi.fn(async () => ({
+        ok: true as const,
+        value: statePayload({ editorThemeId: "nord" }),
+      })),
+    });
+
+    await store.getState().hydrate();
+
+    expect(store.getState().editorThemeId).toBe("nord");
+    expect(paint.editorThemes).toEqual(["nord"]);
   });
 
   it("scopes the read to a project when asked (#69)", async () => {
@@ -175,6 +207,51 @@ describe("hydrate", () => {
       "Couldn't load the theme: ipc gone",
       expect.anything(),
     );
+  });
+});
+
+describe("setEditorTheme", () => {
+  it("persists the global editor id and refreshes Monaco without rewriting the app theme", async () => {
+    const { store, gateway, paint } = freshStore();
+
+    await expect(store.getState().setEditorTheme("nord")).resolves.toBe(true);
+
+    expect(gateway.setGlobalEditor).toHaveBeenCalledWith("nord");
+    expect(gateway.setGlobal).not.toHaveBeenCalled();
+    expect(store.getState().editorThemeId).toBe("nord");
+    expect(paint.editorThemes).toEqual(["nord"]);
+  });
+
+  it("clears back to derive-from-app and remaps Monaco from the active app slug", async () => {
+    const { store, paint } = freshStore({
+      state: vi.fn(async () => ({
+        ok: true as const,
+        value: statePayload({ theme: MIDNIGHT, editorThemeId: "nord" }),
+      })),
+      setGlobalEditor: vi.fn(async () => ({
+        ok: true as const,
+        value: statePayload({ theme: MIDNIGHT, editorThemeId: null }),
+      })),
+    });
+    await store.getState().hydrate();
+    paint.editorThemes.length = 0;
+
+    await expect(store.getState().setEditorTheme(null)).resolves.toBe(true);
+
+    expect(store.getState().editorThemeId).toBeNull();
+    expect(paint.editorThemes).toEqual(["tokyo-night"]);
+  });
+
+  it("rolls back the optimistic editor id when persistence fails", async () => {
+    const { store, paint } = freshStore({
+      setGlobalEditor: vi.fn(async () => ({ ok: false as const, error: "db closed" })),
+    });
+
+    await expect(store.getState().setEditorTheme("nord")).resolves.toBe(false);
+
+    expect(store.getState().editorThemeId).toBeNull();
+    // optimistic nord, then rollback to ember-derived one-dark-pro
+    expect(paint.editorThemes).toEqual(["nord", "one-dark-pro"]);
   });
 });
 

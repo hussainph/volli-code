@@ -45,6 +45,8 @@ import {
 } from "@renderer/components/theme/theme-picker-model";
 import { applyTheme as applyThemeToDom, resolveActiveTheme } from "@renderer/theme/apply";
 import { BUILTIN_THEMES, mergeThemeCatalog } from "@renderer/theme/catalog";
+import { resolveEditorThemeId } from "@renderer/editor/editor-theme-catalog";
+import { refreshMonacoEditorTheme } from "@renderer/editor/monaco-theme";
 import { writeThrough } from "@renderer/stores/mutate";
 
 /** Which scope a commit writes to (#69). The per-project entry point ships with Configure. */
@@ -54,6 +56,7 @@ export type ThemeScope = { kind: "global" } | { kind: "project"; projectId: stri
 export interface ThemeGateway {
   state(input: { projectId?: string }): Promise<ThemeStateResult>;
   setGlobal(theme: ThemeDefinition): Promise<ThemeStateResult>;
+  setGlobalEditor(editorThemeId: string | null): Promise<ThemeStateResult>;
   setProject(
     projectId: string,
     override: ProjectThemeOverride | null,
@@ -69,17 +72,20 @@ export interface ThemeGateway {
   openCustomTheme(slug: string): Promise<Result>;
 }
 
-/** The seams the store drives: the IPC bridge, and the DOM repaint. */
+/** The seams the store drives: the IPC bridge, and the DOM / Monaco repaint. */
 export interface ThemeStoreDeps {
   gateway: ThemeGateway;
   /** Generates and writes the CSS custom properties. Injected so the store stays testable headlessly. */
   applyTheme(theme: ThemeDefinition): void;
+  /** Activates a Monaco/shiki catalog id (queued until Monaco boots). */
+  refreshEditorTheme(themeId: string): void;
 }
 
 const defaultDeps: ThemeStoreDeps = {
   gateway: {
     state: (input) => window.api.theme.state(input),
     setGlobal: (theme) => window.api.theme.setGlobal(theme),
+    setGlobalEditor: (editorThemeId) => window.api.theme.setGlobalEditor(editorThemeId),
     setProject: (projectId, override) => window.api.theme.setProject(projectId, override),
     listCustomThemes: () => window.api.theme.listCustomThemes(),
     saveCustomTheme: (theme) => window.api.theme.saveCustomTheme(theme),
@@ -87,6 +93,7 @@ const defaultDeps: ThemeStoreDeps = {
     openCustomTheme: (slug) => window.api.theme.openCustomTheme(slug),
   },
   applyTheme: (theme) => applyThemeToDom(theme),
+  refreshEditorTheme: (themeId) => refreshMonacoEditorTheme(themeId),
 };
 
 interface ThemeState {
@@ -94,6 +101,11 @@ interface ThemeState {
   hydrated: boolean;
   /** The authored global theme — authoritative, never a resolved token set. */
   global: ThemeDefinition;
+  /**
+   * Global Monaco/shiki theme id from `app_state`. `null` means derive from
+   * the active app theme slug via {@link resolveEditorThemeId}.
+   */
+  editorThemeId: string | null;
   /** The project the current override belongs to; null for the global scope. */
   projectId: string | null;
   /** That project's per-surface override, or null when it inherits everything. */
@@ -119,6 +131,7 @@ interface ThemeState {
   cancelPreview(): void;
   commitPreview(scope: ThemeScope): Promise<boolean>;
   setGlobalTheme(theme: ThemeDefinition): Promise<boolean>;
+  setEditorTheme(editorThemeId: string | null): Promise<boolean>;
   toggleFavorite(slug: string): void;
 }
 
@@ -130,7 +143,7 @@ function themeCatalog(customThemes: ThemeDefinition[]): readonly ThemeDefinition
 /** The inputs that decide what is on screen right now. */
 type EffectiveThemeInput = Pick<
   ThemeState,
-  "preview" | "global" | "projectOverride" | "customThemes"
+  "preview" | "global" | "projectOverride" | "customThemes" | "editorThemeId"
 >;
 
 /**
@@ -149,15 +162,17 @@ export function effectiveTheme({
   global,
   projectOverride,
   customThemes,
+  editorThemeId,
 }: EffectiveThemeInput): ThemeDefinition {
   if (preview !== null) return preview;
-  return resolveActiveTheme(global, projectOverride, themeCatalog(customThemes)).app.value;
+  return resolveActiveTheme(global, projectOverride, themeCatalog(customThemes), editorThemeId).app
+    .value;
 }
 
 /** What a scope has STORED — as opposed to what a preview is showing. */
 type AppliedThemeInput = Pick<
   ThemeState,
-  "global" | "projectId" | "projectOverride" | "customThemes"
+  "global" | "projectId" | "projectOverride" | "customThemes" | "editorThemeId"
 >;
 
 /**
@@ -167,14 +182,15 @@ type AppliedThemeInput = Pick<
  * hiding the one thing the tag exists to state.
  */
 export function appliedTheme(
-  { global, projectId, projectOverride, customThemes }: AppliedThemeInput,
+  { global, projectId, projectOverride, customThemes, editorThemeId }: AppliedThemeInput,
   scope: ThemeScope,
 ): ThemeDefinition {
   // The store holds exactly one scope's override at a time; a picker scoped to
   // a project the store isn't showing has no override to read, and must not
   // borrow another project's.
   if (scope.kind === "global" || scope.projectId !== projectId) return global;
-  return resolveActiveTheme(global, projectOverride, themeCatalog(customThemes)).app.value;
+  return resolveActiveTheme(global, projectOverride, themeCatalog(customThemes), editorThemeId).app
+    .value;
 }
 
 /** Persisted slice: the library's memory of your taste, not the theme itself. */
@@ -206,20 +222,43 @@ export function createThemeStore({
          * redundant one makes every live terminal re-theme for nothing; and
          * the paths below deliberately overlap (an optimistic paint followed
          * by the authoritative payload echoing the same theme back).
+         *
+         * Monaco follows the same choke point: resolve the active editor id
+         * (project override → global authored → derive from app slug) and
+         * refresh whenever that resolved id changes.
          */
         let painted: string | null = null;
+        let paintedEditor: string | null = null;
         const repaint = (): void => {
-          const theme = effectiveTheme(get());
+          const state = get();
+          const theme = effectiveTheme(state);
           const key = JSON.stringify(theme);
-          if (key === painted) return;
-          painted = key;
-          deps.applyTheme(theme);
+          if (key !== painted) {
+            painted = key;
+            deps.applyTheme(theme);
+          }
+
+          const active = resolveActiveTheme(
+            state.global,
+            state.projectOverride,
+            themeCatalog(state.customThemes),
+            state.editorThemeId,
+          );
+          const editorId = resolveEditorThemeId({
+            editorThemeId: active.editor.value,
+            appThemeSlug: theme.slug,
+          });
+          if (editorId !== paintedEditor) {
+            paintedEditor = editorId;
+            deps.refreshEditorTheme(editorId);
+          }
         };
 
         /** Adopt a fresh authoritative payload from main and repaint from it. */
         const accept = (value: ThemeStatePayload): void => {
           set({
             global: value.theme,
+            editorThemeId: value.editorThemeId,
             projectId: value.projectId,
             projectOverride: value.projectOverride,
             terminal: value.terminal,
@@ -258,6 +297,7 @@ export function createThemeStore({
         return {
           hydrated: false,
           global: DEFAULT_THEME,
+          editorThemeId: null,
           projectId: null,
           projectOverride: null,
           terminal: null,
@@ -413,6 +453,22 @@ export function createThemeStore({
               // or a theme that never saved would still rank as the last one
               // applied. `writeThrough` has already surfaced the failure.
               set({ global: previous, recents: previousRecents });
+              repaint();
+              return false;
+            }
+            accept(result.value);
+            return true;
+          },
+
+          async setEditorTheme(editorThemeId) {
+            const previous = get().editorThemeId;
+            set({ editorThemeId });
+            repaint();
+            const result = await writeThrough("save the editor theme", () =>
+              deps.gateway.setGlobalEditor(editorThemeId),
+            );
+            if (result === null) {
+              set({ editorThemeId: previous });
               repaint();
               return false;
             }
