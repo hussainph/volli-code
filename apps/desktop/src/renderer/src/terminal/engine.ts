@@ -12,6 +12,25 @@
  */
 import type { GhosttyTheme } from "restty";
 
+/**
+ * Which renderer a live terminal actually got. A closed union because callers
+ * branch on it: the WebGL2 fallback gives every terminal its own GL context,
+ * where WebGPU shares one device across all of them (see gpu-session.ts).
+ */
+export type TerminalBackend = "webgpu" | "webgl2";
+
+/**
+ * The only sanctioned way into `TerminalBackend`. Renderers report their
+ * backend as a bare string, so anything unrecognised becomes `null` ("not
+ * resolved") rather than leaking past the union — a future backend name must
+ * never be mistaken for one whose context accounting we know.
+ */
+export function toTerminalBackend(value: string | null): TerminalBackend | null {
+  if (value === "webgpu") return "webgpu";
+  if (value === "webgl2") return "webgl2";
+  return null;
+}
+
 /** Terminal grid dimensions in character cells. */
 export interface TerminalDimensions {
   cols: number;
@@ -97,6 +116,22 @@ export interface TerminalEngine {
 
   /** Reset only this pane to the current Ghostty-config font size. */
   resetFontSize(): void;
+
+  /**
+   * The renderer this engine actually got, or `null` while it is still
+   * unresolved — backend selection finishes asynchronously, well after the
+   * engine is constructed and often after it is attached.
+   */
+  readonly backend: TerminalBackend | null;
+
+  /**
+   * Subscribe to backend resolution (and to its return to `null` on a
+   * rebuild or dispose). Reading `backend` alone races the async selection,
+   * so this event — not the getter — is what a caller counting live GPU
+   * contexts must key off. Multi-subscriber; returns the unsubscribe
+   * function (see onData).
+   */
+  onBackendChanged(listener: (backend: TerminalBackend | null) => void): () => void;
 
   /**
    * Re-apply a changed appearance to the LIVE renderer (theme, font size,
