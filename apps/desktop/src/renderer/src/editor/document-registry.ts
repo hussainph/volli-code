@@ -17,9 +17,19 @@ export interface RegistryModel {
 
 export interface RegistryModelFactory<Model extends RegistryModel> {
   createModel(input: { value: string; language: string; uri: string }): Model;
+  /** Mutate an existing live model without resetting its editor/undo state. */
+  applyExternalEdit(model: Model, value: string): void;
 }
 
 export interface DocumentSeed {
+  value: string;
+  revision: DocumentRevision;
+}
+
+export interface DocumentExternalUpdate {
+  /** The newly-read disk value that becomes the synchronized baseline. */
+  baseline: string;
+  /** The resulting live model value after reconciliation. */
   value: string;
   revision: DocumentRevision;
 }
@@ -65,6 +75,7 @@ export interface DocumentLease<Model extends RegistryModel, ViewState> {
   readonly model: Model;
   snapshot(): DocumentSnapshot;
   restoreViewState(): ViewState | null;
+  applyExternalUpdate(update: DocumentExternalUpdate): void;
   adoptCleanBaseline(seed: DocumentSeed): "adopted" | "dirty";
   markSaved(revision: DocumentRevision): void;
   discard(): void;
@@ -140,6 +151,7 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
         const state = entry.viewStates.get(input.viewId);
         return state === undefined ? null : structuredClone(state);
       },
+      applyExternalUpdate: (update) => this.applyExternalUpdate(entry, update),
       adoptCleanBaseline: (seed) => this.adoptCleanBaseline(entry, seed),
       markSaved: (revision) => this.markEntrySaved(key, entry, revision),
       discard: () => this.discardEntry(key, entry),
@@ -220,6 +232,24 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
       entry.applyingBaseline = false;
     }
     return "adopted";
+  }
+
+  private applyExternalUpdate(
+    entry: DocumentEntry<Model, ViewState>,
+    update: DocumentExternalUpdate,
+  ): void {
+    entry.applyingBaseline = true;
+    try {
+      entry.baseline = update.baseline;
+      entry.baselineRevision = update.revision;
+      entry.externalRevision = update.revision;
+      if (entry.model !== null && entry.model.getValue() !== update.value) {
+        this.factory.applyExternalEdit(entry.model, update.value);
+      }
+      entry.dirty = update.value !== update.baseline;
+    } finally {
+      entry.applyingBaseline = false;
+    }
   }
 
   private ensureModel(entry: DocumentEntry<Model, ViewState>): Model {

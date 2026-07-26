@@ -7,8 +7,15 @@ import {
   type RegistryModelFactory,
 } from "./document-registry";
 
+/**
+ * Mirrors the one Monaco distinction this registry depends on: `setValue`
+ * replaces the buffer and drops its undo history, while an edit pushed onto the
+ * stack keeps it. `applyExternalEdit` must be the second kind, or an agent write
+ * would silently cost the user every ⌘Z they had banked.
+ */
 class FakeModel implements RegistryModel {
   private value: string;
+  private readonly undoStack: string[] = [];
   private readonly listeners = new Set<() => void>();
   readonly dispose = vi.fn();
 
@@ -25,8 +32,20 @@ class FakeModel implements RegistryModel {
   }
 
   setValue(value: string): void {
+    this.undoStack.length = 0;
     this.value = value;
     for (const listener of this.listeners) listener();
+  }
+
+  /** An undoable edit — what typing and what an external write both go through. */
+  applyEdit(value: string): void {
+    this.undoStack.push(this.value);
+    this.value = value;
+    for (const listener of this.listeners) listener();
+  }
+
+  canUndo(): boolean {
+    return this.undoStack.length > 0;
   }
 
   onDidChangeContent(listener: () => void): { dispose(): void } {
@@ -42,6 +61,9 @@ function makeRegistry() {
       const model = new FakeModel(value, language, uri);
       models.push(model);
       return model;
+    },
+    applyExternalEdit(model, value) {
+      model.applyEdit(value);
     },
   };
   return { registry: new DocumentRegistry<FakeModel, { cursor: number }>(factory), models };
@@ -345,6 +367,87 @@ describe("DocumentRegistry", () => {
       externalRevision: "r2",
       dirty: false,
     });
+  });
+
+  it("applies one clean external update transaction to baseline, revision, and live model", () => {
+    const { registry } = makeRegistry();
+    const file = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "baseline", revision: "r1" },
+      savePolicy: "explicit",
+    });
+
+    file.applyExternalUpdate({
+      baseline: "agent update",
+      value: "agent update",
+      revision: "r2",
+    });
+
+    expect(file.model.getValue()).toBe("agent update");
+    expect(file.snapshot()).toMatchObject({
+      baseline: "agent update",
+      baselineRevision: "r2",
+      externalRevision: "r2",
+      dirty: false,
+    });
+  });
+
+  it("records a clean external revision without rewriting an already-current model", () => {
+    const { registry } = makeRegistry();
+    const file = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "agent update", revision: "r1" },
+      savePolicy: "explicit",
+    });
+    const setValue = vi.spyOn(file.model, "setValue");
+
+    file.applyExternalUpdate({
+      baseline: "agent update",
+      value: "agent update",
+      revision: "r2",
+    });
+
+    expect(setValue).not.toHaveBeenCalled();
+    expect(file.snapshot()).toMatchObject({
+      baseline: "agent update",
+      baselineRevision: "r2",
+      externalRevision: "r2",
+      dirty: false,
+    });
+  });
+
+  it("lands a merge into a dirty draft as an undoable edit that stays dirty", () => {
+    // The A/L/D merge case: disk moved on, the draft is still unsaved, and the
+    // reconciled value is neither. The draft's own undo history has to survive —
+    // it is the only way back from an agent write the user did not want.
+    const { registry } = makeRegistry();
+    const file = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "first\nkeep\nlast\n", revision: "r1" },
+      savePolicy: "explicit",
+    });
+    const model = file.model as FakeModel;
+    model.applyEdit("human first\nkeep\nlast\n");
+    const setValue = vi.spyOn(model, "setValue");
+
+    file.applyExternalUpdate({
+      baseline: "first\nkeep\nagent last\n",
+      value: "human first\nkeep\nagent last\n",
+      revision: "r2",
+    });
+
+    expect(model.getValue()).toBe("human first\nkeep\nagent last\n");
+    expect(file.snapshot()).toMatchObject({
+      baseline: "first\nkeep\nagent last\n",
+      baselineRevision: "r2",
+      externalRevision: "r2",
+      dirty: true,
+    });
+    expect(setValue).not.toHaveBeenCalled();
+    expect(model.canUndo()).toBe(true);
   });
 
   it("records the latest external revision without overwriting a dirty draft", () => {

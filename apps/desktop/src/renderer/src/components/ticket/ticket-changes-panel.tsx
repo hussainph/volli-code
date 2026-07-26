@@ -10,11 +10,12 @@ import { errorMessage, type ChangeSetFile, type Ticket } from "@volli/shared";
 
 import {
   applyChangeSetRefresh,
-  presentChangeRow,
+  presentChangeRowWithRecency,
   selectChangeRow,
   type ChangeRowPresentation,
   type ChangesNavigatorState,
 } from "@renderer/components/ticket/ticket-changes-model";
+import type { ChangeRecencyState } from "@renderer/components/ticket/ticket-change-recency";
 import { subscribeWorktreeChanges } from "@renderer/components/ticket/worktree-change-watch";
 import { cn } from "@renderer/lib/utils";
 import { toastError } from "@renderer/lib/toast";
@@ -83,6 +84,15 @@ export function TicketChangesList({
               <span className="flex min-w-0 items-baseline justify-between gap-2">
                 <span className="truncate text-ui font-medium text-foreground">{row.filename}</span>
                 <span className="flex shrink-0 items-baseline gap-1.5 text-xs text-muted-foreground">
+                  {row.updatedLabel !== undefined && row.updatedDescription !== undefined ? (
+                    <span
+                      data-testid="ticket-changes-updated"
+                      aria-label={row.updatedDescription}
+                      className="font-medium text-primary-text"
+                    >
+                      {row.updatedLabel}
+                    </span>
+                  ) : null}
                   <span>{row.statusLabel}</span>
                   {row.countsLabel !== null ? (
                     <span className="font-mono tabular-nums">{row.countsLabel}</span>
@@ -154,11 +164,14 @@ export type OpenChangeDiffTarget = Pick<
 export function TicketChangesPanel({
   ticket,
   activeTabId,
+  recency,
   onOpenDiff,
 }: {
   ticket: Ticket;
   /** Observed so refresh can be proven never to mutate it (decision #46/#48). */
   activeTabId: string;
+  /** Ticket-owned passive awareness shared by every File/Diff representation. */
+  recency: ChangeRecencyState;
   /** Deliberate open — host wires `openTicketDiff` (CONCEPT #48/#51). */
   onOpenDiff(file: OpenChangeDiffTarget): void;
 }) {
@@ -299,7 +312,7 @@ export function TicketChangesPanel({
     );
   }
 
-  const rows = nav.files.map(presentChangeRow);
+  const rows = nav.files.map((file) => presentChangeRowWithRecency(file, recency));
   return (
     <div data-testid="ticket-changes-panel" className="flex min-h-0 flex-1 flex-col">
       {watchError !== null ? (

@@ -88,6 +88,7 @@ vi.mock("monaco-editor", () => monacoModule);
 import {
   createLazyInitializer,
   createShikiBackedModelFactory,
+  externalEditOperations,
   initializeMonacoRuntime,
   prepareMonacoEditorThemes,
   startModelLanguageWorker,
@@ -98,6 +99,164 @@ import { resetMonacoEditorThemeForTests } from "./monaco-theme";
 
 const loadOneDarkPro = () => Promise.resolve({ name: "one-dark-pro" });
 const loadNord = () => Promise.resolve({ name: "nord" });
+
+interface FakeRange {
+  startLineNumber: number;
+  startColumn: number;
+  endLineNumber: number;
+  endColumn: number;
+}
+
+/**
+ * A text-model double implementing exactly the Monaco contract this seam leans
+ * on: offsets and positions over the model's own text, one `pushEditOperations`
+ * batch whose ranges all resolve against the PRE-edit text, a caret mapped
+ * through those ranges, and `pushStackElement` closing the open undo element.
+ *
+ * A real model would be better, but renderer tests run under Node with no DOM
+ * and monaco-editor's ESM entry dereferences `window` at import time, so one
+ * cannot be constructed here. The packaged smokes drive the live editor.
+ */
+class FakeTextModel {
+  private text: string;
+  private caret = 0;
+  /** Text as it stood when the currently open undo element began. */
+  private openElementBefore: string | null = null;
+  private readonly undoStack: string[] = [];
+  readonly operationBatches: { range: FakeRange; text: string | null }[][] = [];
+  readonly calls: string[] = [];
+
+  constructor(text: string) {
+    this.text = text;
+  }
+
+  getValue(): string {
+    return this.text;
+  }
+
+  /** Where the caret sits, as an offset into the CURRENT text. */
+  caretOffset(): number {
+    return this.caret;
+  }
+
+  /** Put the caret immediately after the first occurrence of `marker`. */
+  placeCaretAfter(marker: string): void {
+    this.caret = this.text.indexOf(marker) + marker.length;
+  }
+
+  /** A user keystroke: an edit with no stack boundary of its own. */
+  type(text: string): void {
+    this.pushEditOperations(
+      [],
+      [{ range: this.rangeAt(this.caret, this.caret), text }],
+      () => null,
+    );
+  }
+
+  getFullModelRange(): FakeRange {
+    return this.rangeAt(0, this.text.length);
+  }
+
+  getPositionAt(offset: number): { lineNumber: number; column: number } {
+    const starts = this.lineStarts();
+    let line = 0;
+    while (line + 1 < starts.length && starts[line + 1] <= offset) line += 1;
+    return { lineNumber: line + 1, column: offset - starts[line] + 1 };
+  }
+
+  getOffsetAt(position: { lineNumber: number; column: number }): number {
+    return this.lineStarts()[position.lineNumber - 1] + position.column - 1;
+  }
+
+  pushStackElement(): void {
+    this.calls.push("pushStackElement");
+    if (this.openElementBefore !== null && this.openElementBefore !== this.text) {
+      this.undoStack.push(this.openElementBefore);
+    }
+    this.openElementBefore = null;
+  }
+
+  pushEditOperations(
+    _cursors: unknown[],
+    operations: { range: FakeRange; text: string | null }[],
+    cursorComputer: () => unknown,
+  ): void {
+    this.calls.push("pushEditOperations");
+    this.operationBatches.push(operations);
+    cursorComputer();
+    this.openElementBefore ??= this.text;
+    const edits = operations
+      .map((operation) => ({
+        start: this.getOffsetAt({
+          lineNumber: operation.range.startLineNumber,
+          column: operation.range.startColumn,
+        }),
+        end: this.getOffsetAt({
+          lineNumber: operation.range.endLineNumber,
+          column: operation.range.endColumn,
+        }),
+        text: operation.text ?? "",
+      }))
+      .toSorted((left, right) => left.start - right.start);
+
+    // Every range resolves against the pre-edit text, and the caret is carried
+    // through them: shifted by whatever the edits before it grew or shrank, and
+    // moved to the end of the replacement only if an edit consumed it.
+    let shift = 0;
+    let consumed: number | null = null;
+    let next = "";
+    let cursor = 0;
+    for (const edit of edits) {
+      next += this.text.slice(cursor, edit.start) + edit.text;
+      cursor = edit.end;
+      if (edit.end <= this.caret) shift += edit.text.length - (edit.end - edit.start);
+      else if (edit.start < this.caret && consumed === null) {
+        consumed = edit.start + shift + edit.text.length;
+      }
+    }
+    this.text = next + this.text.slice(cursor);
+    this.caret = consumed ?? this.caret + shift;
+  }
+
+  undo(): void {
+    this.pushStackElement();
+    const previous = this.undoStack.pop();
+    if (previous !== undefined) this.text = previous;
+  }
+
+  private rangeAt(start: number, end: number): FakeRange {
+    const from = this.getPositionAt(start);
+    const to = this.getPositionAt(end);
+    return {
+      startLineNumber: from.lineNumber,
+      startColumn: from.column,
+      endLineNumber: to.lineNumber,
+      endColumn: to.column,
+    };
+  }
+
+  private lineStarts(): number[] {
+    const starts = [0];
+    for (
+      let index = this.text.indexOf("\n");
+      index !== -1;
+      index = this.text.indexOf("\n", index + 1)
+    ) {
+      starts.push(index + 1);
+    }
+    return starts;
+  }
+}
+
+function externalEditFactory() {
+  const monaco = {
+    editor: { createModel: vi.fn() },
+    Uri: { parse: vi.fn((uri: string) => ({ path: uri })) },
+    languages: { getLanguages: () => [], register: vi.fn() },
+  };
+  const session = { highlighter: {}, registerTheme: vi.fn(), registerLanguage: vi.fn() };
+  return createShikiBackedModelFactory(monaco as never, session as never);
+}
 
 function runtimeWithWorkers() {
   const typeScriptWorker = vi.fn(async () => undefined);
@@ -360,6 +519,86 @@ describe("createShikiBackedModelFactory", () => {
     );
   });
 
+  it("carries the caret with its own text when an agent inserts lines above it", () => {
+    const model = new FakeTextModel("alpha\nbravo\n");
+    model.placeCaretAfter("bra");
+
+    externalEditFactory().applyExternalEdit(model as never, "inserted\nalpha\nbravo\n");
+
+    expect(model.getValue()).toBe("inserted\nalpha\nbravo\n");
+    // One insertion at the very top: the caret's own line is inside no range at
+    // all, which is exactly what lets Monaco map it down with its text.
+    expect(model.operationBatches).toEqual([
+      [
+        {
+          range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 },
+          text: "inserted\n",
+        },
+      ],
+    ]);
+    expect(model.getValue().slice(0, model.caretOffset())).toBe("inserted\nalpha\nbra");
+  });
+
+  it("edits only the changed span rather than replacing the whole model", () => {
+    const model = new FakeTextModel("one\ntwo\nthree\n");
+
+    externalEditFactory().applyExternalEdit(model as never, "one\nTWO\nthree\n");
+
+    expect(model.getValue()).toBe("one\nTWO\nthree\n");
+    expect(model.operationBatches[0]).toEqual([
+      {
+        range: { startLineNumber: 2, startColumn: 1, endLineNumber: 2, endColumn: 4 },
+        text: "TWO",
+      },
+    ]);
+  });
+
+  it("isolates the external write in its own undo element, above the user's typing", () => {
+    const model = new FakeTextModel("alpha\nbravo\n");
+    model.placeCaretAfter("alpha");
+    model.type(" typed");
+    model.calls.length = 0; // only the external write's own calls from here
+
+    externalEditFactory().applyExternalEdit(model as never, "alpha typed\nbravo\nagent tail\n");
+
+    expect(model.calls).toEqual(["pushStackElement", "pushEditOperations", "pushStackElement"]);
+    expect(model.getValue()).toBe("alpha typed\nbravo\nagent tail\n");
+
+    // One ⌘Z takes back the agent's write and nothing else…
+    model.undo();
+    expect(model.getValue()).toBe("alpha typed\nbravo\n");
+    // …and only the next one takes back what the user typed.
+    model.undo();
+    expect(model.getValue()).toBe("alpha\nbravo\n");
+  });
+
+  it("falls back to a bracketed full-range replace when the diff exceeds its budget", () => {
+    const model = new FakeTextModel("a".repeat(10_000));
+
+    externalEditFactory().applyExternalEdit(model as never, "b".repeat(10_000));
+
+    expect(model.getValue()).toBe("b".repeat(10_000));
+    expect(model.operationBatches[0]).toEqual([
+      {
+        range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 10_001 },
+        text: "b".repeat(10_000),
+      },
+    ]);
+    // Even the fallback stays its own undo element, and never uses setValue
+    // (which would drop the model's whole undo history).
+    expect(model.calls).toEqual(["pushStackElement", "pushEditOperations", "pushStackElement"]);
+  });
+
+  it("passes a cursor computer that leaves Monaco's own cursor mapping alone", () => {
+    const model = new FakeTextModel("one\n");
+    const pushEditOperations = vi.spyOn(model, "pushEditOperations");
+
+    externalEditFactory().applyExternalEdit(model as never, "one\ntwo\n");
+
+    const cursorComputer = pushEditOperations.mock.calls[0][2];
+    expect(cursorComputer()).toBeNull();
+  });
+
   it("reports a rejected grammar load without rejecting the synchronous model create", async () => {
     const failure = new Error("grammar chunk missing");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -390,6 +629,34 @@ describe("createShikiBackedModelFactory", () => {
         failure,
       ),
     );
+  });
+});
+
+describe("externalEditOperations", () => {
+  it("keeps every range of a multi-edit batch in pre-edit coordinates, in order", () => {
+    const model = new FakeTextModel("one\ntwo\nthree\nfour\n");
+
+    const operations = externalEditOperations(model as never, "ONE\ntwo\nthree\nFOUR\n");
+
+    // Two edits, sorted and non-overlapping, both addressed against the text as
+    // it stands BEFORE either lands — the only coordinate space Monaco resolves
+    // a single `pushEditOperations` batch in.
+    expect(operations).toEqual([
+      {
+        range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 4 },
+        text: "ONE",
+      },
+      {
+        range: { startLineNumber: 4, startColumn: 1, endLineNumber: 4, endColumn: 5 },
+        text: "FOUR",
+      },
+    ]);
+  });
+
+  it("reports null rather than a guess once the change is past the diff budget", () => {
+    const model = new FakeTextModel("a".repeat(10_000));
+
+    expect(externalEditOperations(model as never, "b".repeat(10_000))).toBeNull();
   });
 });
 

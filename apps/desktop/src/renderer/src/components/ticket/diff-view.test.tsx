@@ -4,13 +4,14 @@ import type { ChangeSetFile } from "@volli/shared";
 
 import { DiffStub } from "./diff-stub";
 import {
-  applyDiffDiskReconcilePlan,
+  applyDiffLiveReconciliation,
+  reconcileAcquiredDiffModel,
   isDiffLeaseCurrent,
   isMissingFileReadError,
   mapBaseReadResult,
   mapFilesReadFailure,
-  planDiffDiskReconcile,
   planDiffView,
+  presentLiveUnreadable,
   type DiffLiveRead,
 } from "./diff-view-plan";
 import { diffEditorInitFailureMessage } from "@renderer/components/editor/monaco-diff-editor";
@@ -67,168 +68,135 @@ describe("isMissingFileReadError / mapFilesReadFailure", () => {
   });
 });
 
-describe("planDiffDiskReconcile", () => {
-  const liveOk: DiffLiveRead = {
-    ok: true,
-    text: "agent\n",
-    mtime: 99,
-    source: "worktree",
-    truncated: false,
-  };
+describe("applyDiffLiveReconciliation", () => {
+  it("uses the shared File/Diff policy and registry transaction for disjoint edits", () => {
+    const applyExternalUpdate = vi.fn();
+    const lease = {
+      model: { getValue: () => "human first\nkeep\nlast\n" },
+      snapshot: () => ({ baseline: "first\nkeep\nlast\n" }),
+      applyExternalUpdate,
+      adoptCleanBaseline: vi.fn(),
+    };
 
-  it("adopts a clean baseline when disk moved and the draft is clean", () => {
-    expect(
-      planDiffDiskReconcile({
-        dirty: false,
-        baseline: "old\n",
-        lastWrite: null,
-        disk: liveOk,
-      }),
-    ).toEqual({
-      kind: "adopt",
-      text: "agent\n",
-      revision: 99,
-      source: "worktree",
+    const result = applyDiffLiveReconciliation({
+      lease,
+      lastWrite: null,
+      disk: {
+        ok: true,
+        text: "first\nkeep\nagent last\n",
+        mtime: 21,
+        source: "worktree",
+        truncated: false,
+      },
+      unreadableRevision: null,
+    });
+
+    expect(result).toMatchObject({ kind: "apply", outcome: "merge" });
+    expect(applyExternalUpdate).toHaveBeenCalledWith({
+      baseline: "first\nkeep\nagent last\n",
+      value: "human first\nkeep\nagent last\n",
+      revision: 21,
     });
   });
 
-  it("adopts when disk matches baseline so mtime can advance", () => {
-    expect(
-      planDiffDiskReconcile({
-        dirty: false,
-        baseline: "agent\n",
-        lastWrite: null,
-        disk: liveOk,
-      }),
-    ).toEqual({
-      kind: "adopt",
-      text: "agent\n",
-      revision: 99,
-      source: "worktree",
+  it("reconciles the live disk value when Diff acquires an existing dirty file model", () => {
+    const adoptCleanBaseline = vi.fn();
+    const lease = {
+      model: { getValue: () => "human line\n" },
+      snapshot: () => ({ baseline: "baseline\n" }),
+      applyExternalUpdate: vi.fn(),
+      adoptCleanBaseline,
+    };
+
+    const result = reconcileAcquiredDiffModel({
+      lease,
+      existing: true,
+      lastWrite: null,
+      disk: {
+        ok: true,
+        text: "agent line\n",
+        mtime: 24,
+        source: "worktree",
+        truncated: false,
+      },
     });
-  });
 
-  it("adopts the echo of our own write even when dirty against newer typing", () => {
-    expect(
-      planDiffDiskReconcile({
-        dirty: true,
-        baseline: "old\n",
-        lastWrite: "agent\n",
-        disk: liveOk,
-      }),
-    ).toEqual({
-      kind: "adopt",
-      text: "agent\n",
-      revision: 99,
-      source: "worktree",
+    expect(result).toMatchObject({
+      kind: "conflict",
+      local: "human line\n",
+      disk: "agent line\n",
+      revision: 24,
     });
-  });
-
-  it("diverges when disk moved under a dirty draft that is not our write echo", () => {
-    expect(
-      planDiffDiskReconcile({
-        dirty: true,
-        baseline: "old\n",
-        lastWrite: null,
-        disk: liveOk,
-      }),
-    ).toEqual({
-      kind: "diverged",
-      text: "agent\n",
-      revision: 99,
-    });
-  });
-
-  it("keeps a dirty draft when the live file becomes unreadable", () => {
-    expect(
-      planDiffDiskReconcile({
-        dirty: true,
-        baseline: "old\n",
-        lastWrite: null,
-        disk: { ok: false, error: "Permission denied" },
-      }),
-    ).toEqual({ kind: "unreadable", error: "Permission denied", keepDraft: true });
-  });
-
-  it("surfaces a clean missing file as an error transition", () => {
-    expect(
-      planDiffDiskReconcile({
-        dirty: false,
-        baseline: "old\n",
-        lastWrite: null,
-        disk: { ok: false, missing: true },
-      }),
-    ).toEqual({ kind: "missing" });
-  });
-
-  it("treats a dirty missing file as an unreadable keep-draft", () => {
-    expect(
-      planDiffDiskReconcile({
-        dirty: true,
-        baseline: "old\n",
-        lastWrite: null,
-        disk: { ok: false, missing: true },
-      }),
-    ).toEqual({
-      kind: "unreadable",
-      error: "File was deleted on disk.",
-      keepDraft: true,
-    });
+    expect(adoptCleanBaseline).toHaveBeenCalledWith({ value: "agent line\n", revision: 24 });
   });
 });
 
-describe("applyDiffDiskReconcilePlan", () => {
-  it("adopts on adopt and clears conflict", () => {
-    const adoptCleanBaseline = vi.fn();
-    expect(
-      applyDiffDiskReconcilePlan({
-        plan: { kind: "adopt", text: "new\n", revision: 7, source: "worktree" },
-        adoptCleanBaseline,
-      }),
-    ).toEqual({ kind: "clear-conflict" });
-    expect(adoptCleanBaseline).toHaveBeenCalledWith({ value: "new\n", revision: 7 });
+describe("live unreadable degradation", () => {
+  it("degrades a clean tab whose live file grew past the read cap without tearing the pane down", () => {
+    // Clean modified side: local value equals the registry baseline.
+    const lease = {
+      model: { getValue: () => "same\n" },
+      snapshot: () => ({ baseline: "same\n" }),
+      applyExternalUpdate: vi.fn(),
+      adoptCleanBaseline: vi.fn(),
+    };
+
+    const plan = applyDiffLiveReconciliation({
+      lease,
+      lastWrite: null,
+      // Post-mount `onChanged` re-read: the file is now over the 1 MiB cap, so
+      // what came back is a prefix that must never be reconciled or saved.
+      disk: { ok: true, text: "prefix…", mtime: 77, source: "worktree", truncated: true },
+      unreadableRevision: 77,
+    });
+
+    if (plan.kind !== "unreadable") throw new Error(`expected unreadable, got ${plan.kind}`);
+    expect(plan).toEqual({
+      kind: "unreadable",
+      error: "File is too large to reconcile safely.",
+      keepDraft: false,
+      revision: 77,
+    });
+    expect(lease.applyExternalUpdate).not.toHaveBeenCalled();
+    // No draft to reassure about — but the read SUCCEEDED, so the pane stays up
+    // (read-only) with this inline reason instead of collapsing to the bare
+    // error view, exactly as it did before the reconciliation rewrite.
+    expect(presentLiveUnreadable({ plan, readable: true })).toEqual({
+      kind: "inline",
+      message: "File is too large to reconcile safely.",
+    });
   });
 
-  it("adopts externalRevision on diverged before raising the conflict banner", () => {
-    const adoptCleanBaseline = vi.fn();
-    expect(
-      applyDiffDiskReconcilePlan({
-        plan: { kind: "diverged", text: "disk\n", revision: 42 },
-        adoptCleanBaseline,
-      }),
-    ).toEqual({ kind: "conflict", conflict: { text: "disk\n", mtime: 42 } });
-    // Without this adopt, handleSave would still send the stale expectedMtime
-    // even though the banner says "Saving now overwrites".
-    expect(adoptCleanBaseline).toHaveBeenCalledWith({ value: "disk\n", revision: 42 });
-  });
-
-  it("toasts when unreadable keeps a dirty draft", () => {
-    const adoptCleanBaseline = vi.fn();
-    expect(
-      applyDiffDiskReconcilePlan({
-        plan: { kind: "unreadable", error: "gone", keepDraft: true },
-        adoptCleanBaseline,
-      }),
-    ).toEqual({ kind: "toast-unreadable" });
-    expect(adoptCleanBaseline).not.toHaveBeenCalled();
-  });
-
-  it("errors when unreadable and the draft was clean", () => {
-    expect(
-      applyDiffDiskReconcilePlan({
-        plan: { kind: "unreadable", error: "gone", keepDraft: false },
+  it("keeps the draft reassurance for a dirty modified side", () => {
+    const plan = applyDiffLiveReconciliation({
+      lease: {
+        model: { getValue: () => "human draft\n" },
+        snapshot: () => ({ baseline: "same\n" }),
+        applyExternalUpdate: vi.fn(),
         adoptCleanBaseline: vi.fn(),
-      }),
-    ).toEqual({ kind: "error", error: "gone" });
+      },
+      lastWrite: null,
+      disk: { ok: false, error: "File was deleted on disk." },
+      unreadableRevision: null,
+    });
+
+    if (plan.kind !== "unreadable") throw new Error(`expected unreadable, got ${plan.kind}`);
+    expect(plan).toMatchObject({ kind: "unreadable", keepDraft: true });
+    expect(presentLiveUnreadable({ plan, readable: false })).toEqual({
+      kind: "inline",
+      message: "File was deleted on disk. Your unsaved draft is still open.",
+    });
   });
 
-  it("surfaces missing while clean", () => {
+  it("still replaces the pane when a clean tab's file can no longer be read at all", () => {
+    // The one case that must NOT render stale content: nothing came back from
+    // disk and there is no draft to protect, so the deletion has to be visible.
     expect(
-      applyDiffDiskReconcilePlan({
-        plan: { kind: "missing" },
-        adoptCleanBaseline: vi.fn(),
+      presentLiveUnreadable({
+        plan: { error: "File was deleted on disk.", keepDraft: false },
+        readable: false,
       }),
-    ).toEqual({ kind: "missing" });
+    ).toEqual({ kind: "pane-error", error: "File was deleted on disk." });
   });
 });
 

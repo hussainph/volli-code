@@ -1,5 +1,5 @@
 /**
- * The ticket-scoped Change Set (CONCEPT #47, monaco-migration §9): the worktree's
+ * The ticket-scoped Change Set (CONCEPT #47): the worktree's
  * complete current outcome relative to its recorded base — committed, staged,
  * unstaged, and untracked together. Crosses the IPC boundary (main computes it;
  * the Changes rail and Properties summary consume it), so the shapes live here.
@@ -66,7 +66,7 @@ export interface ChangeSetSnapshot {
 
 /**
  * Projects a Change Set into the legacy {@link DiffStat} shape so the Details
- * Properties summary and the Changes rail cannot disagree (monaco-migration §9).
+ * Properties summary and the Changes rail cannot disagree (CONCEPT #47).
  * Binary and untracked entries keep null counts and never contribute to totals.
  */
 export function changeSetToDiffStat(snapshot: ChangeSetSnapshot): DiffStat {

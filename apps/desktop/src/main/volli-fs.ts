@@ -16,7 +16,7 @@
  * inside the resolved root ({@link assertWithinRoot}) — guarding a symlink
  * swapped in for a directory (or the target file itself).
  */
-import { existsSync, promises as fsp, watch as fsWatch } from "node:fs";
+import { existsSync, promises as fsp, statSync, watch as fsWatch } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { basename, dirname, join, sep } from "node:path";
@@ -676,6 +676,7 @@ interface WatchSubscription {
 
 interface FileWatchSubscription extends WatchSubscription {
   source: FileSource;
+  ticketId: string | null;
   /** The file's basename — dir events for any other name are ignored. */
   base: string;
 }
@@ -904,6 +905,7 @@ export class FileWatchManager extends WatchManagerBase<FileWatchSubscription> {
       projectPath,
       relPath,
       source,
+      ticketId: source === "worktree" ? ticketId : null,
       dir,
       base,
       watcher: null,
@@ -936,10 +938,22 @@ export class FileWatchManager extends WatchManagerBase<FileWatchSubscription> {
   protected override sendChanged(sub: FileWatchSubscription): void {
     const payload: FileChangedEvent = {
       projectId: sub.projectId,
+      ticketId: sub.ticketId,
       relPath: sub.relPath,
       source: sub.source,
+      // Resolve after the debounce: an editor's temp-write + rename must
+      // identify the final inode, not the file present when watch was armed.
+      revision: this.currentRevision(join(sub.dir, sub.base)),
     };
     sub.webContents.send("volli:file-changed" satisfies VolliIpcEvent, payload);
+  }
+
+  private currentRevision(filePath: string): number | null {
+    try {
+      return statSync(filePath).mtimeMs;
+    } catch {
+      return null;
+    }
   }
 }
 

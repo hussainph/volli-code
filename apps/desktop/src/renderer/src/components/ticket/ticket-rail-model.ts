@@ -1,5 +1,5 @@
 /**
- * Pure ticket-rail mode contract (decision #46 / monaco-migration §8).
+ * Pure ticket-rail mode contract (decision #46).
  *
  * The rail is a navigator: its four icon modes only switch what the contextual
  * rail indexes. Changing mode must never open, close, replace, or steal focus

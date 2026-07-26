@@ -818,8 +818,12 @@ export type ArtifactCreateResult = Result<{ relPath: string }>;
 /** The single watched file a `volli:file-changed` push event fired for. */
 export interface FileChangedEvent {
   projectId: string;
+  /** The worktree owner; Main-checkout files always normalize this to null. */
+  ticketId: string | null;
   relPath: string;
   source: FileSource;
+  /** Current on-disk mtime after the debounce, or null when the file is unreadable. */
+  revision: number | null;
 }
 
 /**

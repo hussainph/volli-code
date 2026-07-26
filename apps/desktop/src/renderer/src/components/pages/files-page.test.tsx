@@ -42,6 +42,7 @@ class FakeModel implements RegistryModel {
 
 const factory: RegistryModelFactory<FakeModel> = {
   createModel: ({ value }) => new FakeModel(value),
+  applyExternalEdit: (model, value) => model.setValue(value),
 };
 
 const identity: DocumentIdentity = {

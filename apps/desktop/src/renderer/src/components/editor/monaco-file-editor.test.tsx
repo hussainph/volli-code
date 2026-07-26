@@ -7,8 +7,8 @@ import {
 } from "@renderer/editor/monaco-theme";
 
 import {
+  applyExternalSeed,
   attachEditorContribution,
-  classifyExternalChange,
   fileEditorAriaLabel,
   fileEditorConstructionOptions,
   MonacoFileEditor,
@@ -55,6 +55,55 @@ describe("attachEditorContribution", () => {
 
   it("tolerates a contribution that attaches nothing disposable", () => {
     expect(attachEditorContribution(() => undefined, context)).toBeNull();
+  });
+});
+
+/** A dirty lease whose draft touched line 1 while disk moved on elsewhere. */
+function mergeLease() {
+  return {
+    model: { getValue: () => "human first\nkeep\nlast\n" },
+    snapshot: () => ({ baseline: "first\nkeep\nlast\n" }),
+    applyExternalUpdate: vi.fn(),
+    adoptCleanBaseline: vi.fn(),
+  };
+}
+
+describe("applyExternalSeed", () => {
+  it("merges through the shared registry policy", () => {
+    const lease = mergeLease();
+
+    const result = applyExternalSeed({
+      lease,
+      lastWrite: null,
+      seed: { value: "first\nkeep\nagent last\n", revision: 12 },
+    });
+
+    expect(result).toMatchObject({ kind: "apply", outcome: "merge" });
+    expect(lease.applyExternalUpdate).toHaveBeenCalledWith({
+      baseline: "first\nkeep\nagent last\n",
+      value: "human first\nkeep\nagent last\n",
+      revision: 12,
+    });
+  });
+
+  it("applies nothing to the model on a conflict, only recording the disk revision", () => {
+    // No editor is reachable from this signature at all: the registry lands an
+    // external write as minimal edits and Monaco maps the caret through them,
+    // so there is no pre-edit snapshot left for a caller to restore on top.
+    const lease = mergeLease();
+
+    const result = applyExternalSeed({
+      lease,
+      lastWrite: null,
+      seed: { value: "agent first\nkeep\nlast\n", revision: 12 },
+    });
+
+    expect(result).toMatchObject({ kind: "conflict", reason: "overlap" });
+    expect(lease.applyExternalUpdate).not.toHaveBeenCalled();
+    expect(lease.adoptCleanBaseline).toHaveBeenCalledWith({
+      value: "agent first\nkeep\nlast\n",
+      revision: 12,
+    });
   });
 });
 
@@ -132,46 +181,6 @@ describe("planExplicitSave", () => {
 
   it("ranks read-only above the in-flight and clean skips", () => {
     expect(planExplicitSave({ readOnly: true, saving: true, dirty: false })).toBe("skip-read-only");
-  });
-});
-
-describe("classifyExternalChange", () => {
-  const base = { baseline: "disk", dirty: false, lastWrite: null };
-
-  it("adopts disk truth when the user has no draft to protect", () => {
-    expect(classifyExternalChange({ ...base, incoming: "next" })).toBe("adopt");
-  });
-
-  it("reports divergence when disk moved under a dirty draft", () => {
-    expect(classifyExternalChange({ ...base, dirty: true, incoming: "next" })).toBe("diverged");
-  });
-
-  it("treats a same-content event (an mtime touch) as no change at all", () => {
-    expect(classifyExternalChange({ ...base, dirty: true, incoming: "disk" })).toBe("unchanged");
-  });
-
-  it("treats the echo of this view's own write as no change, even while dirty again", () => {
-    // Cmd-S wrote "mine", the user kept typing, then the fs watch delivered our
-    // own bytes back. That must not raise a 'changed on disk' banner.
-    expect(
-      classifyExternalChange({
-        baseline: "disk",
-        dirty: true,
-        lastWrite: "mine",
-        incoming: "mine",
-      }),
-    ).toBe("unchanged");
-  });
-
-  it("still diverges when someone else's bytes arrive after our own write", () => {
-    expect(
-      classifyExternalChange({
-        baseline: "disk",
-        dirty: true,
-        lastWrite: "mine",
-        incoming: "theirs",
-      }),
-    ).toBe("diverged");
   });
 });
 

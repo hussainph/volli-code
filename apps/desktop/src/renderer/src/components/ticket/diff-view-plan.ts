@@ -11,7 +11,6 @@ import {
   type WorktreeBaseReadResult,
 } from "@volli/shared";
 
-import { classifyExternalChange } from "@renderer/components/editor/monaco-file-editor";
 import {
   diffFilePolicy,
   type DiffBaseRead,
@@ -19,12 +18,107 @@ import {
 } from "@renderer/components/ticket/diff-file-policy";
 import { fileDocumentIdentity, type DocumentIdentity } from "@renderer/editor/document-identity";
 import type { DocumentRevision } from "@renderer/editor/document-registry";
+import {
+  applyLiveDocumentReconciliation,
+  type LiveDocumentReconciliationPlan,
+  type LiveReconciliationLease,
+  type LocalWriteReceipt,
+} from "@renderer/editor/live-document-reconciliation";
 
 /** Live worktree read outcome for the modified side. */
 export type DiffLiveRead =
   | { ok: true; text: string; mtime: number; source: FileSource; truncated: boolean }
   | { ok: false; missing: true }
   | { ok: false; error: string };
+
+/** Adapt a Diff live read onto the one File/Diff reconciliation policy. */
+export function applyDiffLiveReconciliation(input: {
+  lease: LiveReconciliationLease;
+  lastWrite: LocalWriteReceipt | null;
+  disk: DiffLiveRead;
+  unreadableRevision: DocumentRevision;
+}): LiveDocumentReconciliationPlan {
+  return applyLiveDocumentReconciliation({
+    lease: input.lease,
+    lastWrite: input.lastWrite,
+    disk: input.disk.ok
+      ? {
+          ok: true,
+          text: input.disk.text,
+          revision: input.disk.mtime,
+          truncated: input.disk.truncated,
+        }
+      : {
+          ok: false,
+          error:
+            "missing" in input.disk && input.disk.missing
+              ? "File was deleted on disk."
+              : "error" in input.disk
+                ? input.disk.error
+                : "File is unreadable.",
+          revision: input.unreadableRevision,
+        },
+  });
+}
+
+/**
+ * Reconcile the live read immediately when Diff attaches to a model that a File
+ * view already owns. A newly-created model was seeded from this same read, and
+ * a clean pre-existing model may represent the intentional empty side of a
+ * deletion; neither needs an extra transaction.
+ */
+export function reconcileAcquiredDiffModel(input: {
+  lease: LiveReconciliationLease;
+  existing: boolean;
+  lastWrite: LocalWriteReceipt | null;
+  disk: DiffLiveRead;
+}): LiveDocumentReconciliationPlan | null {
+  if (!input.existing) return null;
+  const dirty = input.lease.model.getValue() !== input.lease.snapshot().baseline;
+  if (!input.disk.ok && "missing" in input.disk && input.disk.missing && !dirty) return null;
+  return applyDiffLiveReconciliation({
+    lease: input.lease,
+    lastWrite: input.lastWrite,
+    disk: input.disk,
+    unreadableRevision: input.disk.ok ? input.disk.mtime : null,
+  });
+}
+
+/** How the Diff pane shows an `unreadable` reconciliation outcome. */
+export type LiveUnreadablePresentation =
+  | { kind: "inline"; message: string }
+  | { kind: "pane-error"; error: string };
+
+/**
+ * The one policy for presenting an `unreadable` plan, shared by the mount-time
+ * and live (`onChanged`) reconciles — and matching FileView case for case:
+ *
+ *  - A retained draft ALWAYS keeps its editing surface, with the reassurance
+ *    that the draft survived; nothing else can reach those bytes.
+ *  - `readable` (the read succeeded, it was merely capped past 1 MiB) keeps the
+ *    pane too, even with nothing to protect: it is still a perfectly good diff,
+ *    and collapsing it would throw away the base side, the presentation toggle
+ *    and the tab's scroll position over something the inline banner says better.
+ *    The caller forces the modified side read-only, since a capped prefix must
+ *    never be written back.
+ *  - A read that FAILED under a clean tab (deleted, or no longer plain text) is
+ *    the one case that replaces the pane: rendering a stale modified side would
+ *    hide the deletion behind content that no longer exists.
+ */
+export function presentLiveUnreadable(input: {
+  plan: Pick<
+    Extract<LiveDocumentReconciliationPlan, { kind: "unreadable" }>,
+    "error" | "keepDraft"
+  >;
+  /** Whether the disk read itself succeeded (a truncated read still counts). */
+  readable: boolean;
+}): LiveUnreadablePresentation {
+  if (input.plan.keepDraft) {
+    return { kind: "inline", message: `${input.plan.error} Your unsaved draft is still open.` };
+  }
+  if (input.readable) return { kind: "inline", message: input.plan.error };
+  return { kind: "pane-error", error: input.plan.error };
+}
 
 /**
  * True when `files.read` failed because the path is gone — the strings main's
@@ -166,87 +260,6 @@ export function coerceChangeStatus(status: string | undefined): ChangeSetFileSta
     return status as ChangeSetFileStatus;
   }
   return "modified";
-}
-
-/**
- * Decide how a DiffView should react when the live worktree file changes under
- * an open Diff tab (including when no FileView is mounted for the same path).
- * Pure — reuses {@link classifyExternalChange} so Diff and File tabs share the
- * same adopt / diverge / write-echo rules.
- */
-export type DiffDiskReconcilePlan =
-  | { kind: "adopt"; text: string; revision: number; source: FileSource }
-  | { kind: "diverged"; text: string; revision: number }
-  | { kind: "unreadable"; error: string; keepDraft: boolean }
-  | { kind: "missing" };
-
-export function planDiffDiskReconcile(input: {
-  dirty: boolean;
-  baseline: string;
-  lastWrite: string | null;
-  disk: DiffLiveRead;
-}): DiffDiskReconcilePlan {
-  if (input.disk.ok === false) {
-    if ("missing" in input.disk && input.disk.missing) {
-      return input.dirty
-        ? { kind: "unreadable", error: "File was deleted on disk.", keepDraft: true }
-        : { kind: "missing" };
-    }
-    const error = "error" in input.disk ? input.disk.error : "unreadable";
-    return { kind: "unreadable", error, keepDraft: input.dirty };
-  }
-
-  const decision = classifyExternalChange({
-    baseline: input.baseline,
-    dirty: input.dirty,
-    incoming: input.disk.text,
-    lastWrite: input.lastWrite,
-  });
-  if (decision === "diverged") {
-    // Callers MUST still `adoptCleanBaseline({ value: text, revision })` so
-    // externalRevision advances (overwrite-save uses the new mtime) while the
-    // dirty draft is kept — same as MonacoFileEditor.reconcileExternal.
-    return { kind: "diverged", text: input.disk.text, revision: input.disk.mtime };
-  }
-  // "adopt" and "unchanged" both advance through adoptCleanBaseline so mtime /
-  // externalRevision stay current even when the bytes match.
-  return {
-    kind: "adopt",
-    text: input.disk.text,
-    revision: input.disk.mtime,
-    source: input.disk.source,
-  };
-}
-
-/**
- * Apply a {@link planDiffDiskReconcile} result to the modified lease.
- * Mirrors MonacoFileEditor: both adopt and diverged call adoptCleanBaseline
- * (diverged advances externalRevision over a dirty draft without rewriting it).
- */
-export type DiffDiskReconcileApply =
-  | { kind: "clear-conflict" }
-  | { kind: "conflict"; conflict: { text: string; mtime: number } }
-  | { kind: "toast-unreadable" }
-  | { kind: "error"; error: string }
-  | { kind: "missing" };
-
-export function applyDiffDiskReconcilePlan(input: {
-  plan: DiffDiskReconcilePlan;
-  adoptCleanBaseline(seed: { value: string; revision: number }): unknown;
-}): DiffDiskReconcileApply {
-  const { plan } = input;
-  if (plan.kind === "adopt") {
-    input.adoptCleanBaseline({ value: plan.text, revision: plan.revision });
-    return { kind: "clear-conflict" };
-  }
-  if (plan.kind === "diverged") {
-    input.adoptCleanBaseline({ value: plan.text, revision: plan.revision });
-    return { kind: "conflict", conflict: { text: plan.text, mtime: plan.revision } };
-  }
-  if (plan.kind === "unreadable") {
-    return plan.keepDraft ? { kind: "toast-unreadable" } : { kind: "error", error: plan.error };
-  }
-  return { kind: "missing" };
 }
 
 /**

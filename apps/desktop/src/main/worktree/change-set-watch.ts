@@ -1,6 +1,6 @@
 /**
- * Debounced worktree filesystem watch for Change Set refresh (monaco-migration
- * §9): while a ticket workspace is live, main emits `volli:worktree-changed`
+ * Debounced worktree filesystem watch for Change Set refresh (CONCEPT #47):
+ * while a ticket workspace is live, main emits `volli:worktree-changed`
  * so the renderer can refetch the snapshot. Follows volli-fs's
  * {@link WATCH_DEBOUNCE_MS} cadence and window-scoped subscription lifecycle
  * (teardown on unwatch / `destroyed` — never leaks across tickets).

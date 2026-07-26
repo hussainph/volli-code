@@ -78,4 +78,23 @@ describe("TicketChangesList", () => {
     );
     expect(html).not.toContain('data-testid="ticket-changes-truncated"');
   });
+
+  it("renders updated awareness as visible text with an accessible explanation", () => {
+    const html = renderToStaticMarkup(
+      <TicketChangesList
+        rows={[
+          {
+            ...presentChangeRow(file({ path: "src/ticket.tsx" })),
+            updatedLabel: "Updated",
+            updatedDescription: "Updated since you last opened this file",
+          },
+        ]}
+        focusPath={null}
+        onSelectRow={noop}
+      />,
+    );
+
+    expect(html).toContain(">Updated<");
+    expect(html).toContain('aria-label="Updated since you last opened this file"');
+  });
 });

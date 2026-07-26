@@ -129,8 +129,8 @@ leave the seam), else main. Path safety: normalized relPath, reject
   `file:<relPath>`, label = basename, closable; worktree badge driven by the
   read result's `source`.
 - New `file-tab.tsx` hosts by kind: text → the shared Monaco model with the
-  role-specific presentation/write policy from `monaco-migration.md`; image →
-  inline; binary/truncated → stub + Reveal.
+  role-specific presentation/write policy from CONCEPT #33 (markdown editable,
+  code read-only); image → inline; binary/truncated → stub + Reveal.
 - @ picker: Monaco completion in Document Mode (enabled for both Ticket Body
   and Markdown Artifact tabs) triggered on `@`, backed by a
   ~10s-cached `api.files.index`, filtered/ranked by `scoreFileMatch`;

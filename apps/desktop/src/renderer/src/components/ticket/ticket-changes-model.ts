@@ -1,5 +1,5 @@
 /**
- * Pure presentation for the Changes navigator (decision #53 / monaco-migration §9).
+ * Pure presentation for the Changes navigator (decision #53).
  *
  * The Changes rail is a compact flat list: filename leads, parent path stays muted
  * and secondary, status + line counts trail. Deep repository structure belongs to
@@ -14,6 +14,8 @@ import {
   type ChangeSetFileStatus,
   type ChangeSetSnapshot,
 } from "@volli/shared";
+
+import { isChangeUpdated, type ChangeRecencyState } from "./ticket-change-recency";
 
 const STATUS_LABELS: Record<ChangeSetFileStatus, string> = {
   added: "Added",
@@ -54,6 +56,15 @@ export interface ChangeRowPresentation {
   countsLabel: string | null;
   /** Prior path for renames; null otherwise. */
   renameFrom: string | null;
+  /**
+   * Visible passive-awareness copy. Set only by
+   * {@link presentChangeRowWithRecency} — the plain {@link presentChangeRow}
+   * projection is deliberately recency-free, so a row built without the recency
+   * state simply omits it rather than claiming the file is current.
+   */
+  updatedLabel?: "Updated";
+  /** Accessible explanation accompanying {@link updatedLabel}. */
+  updatedDescription?: "Updated since you last opened this file";
 }
 
 /** Compose the full row presentation from a Change Set file. */
@@ -66,6 +77,27 @@ export function presentChangeRow(file: ChangeSetFile): ChangeRowPresentation {
     statusLabel: formatChangeStatus(file.status),
     countsLabel: formatChangeCounts(file),
     renameFrom: file.previousPath ?? null,
+  };
+}
+
+/**
+ * Project a Change Set row through passive recency awareness. Kept separate
+ * from {@link presentChangeRow} so the latter remains safe as an `Array.map`
+ * callback in existing navigator code.
+ */
+export function presentChangeRowWithRecency(
+  file: ChangeSetFile,
+  recency: ChangeRecencyState,
+): ChangeRowPresentation {
+  const row = presentChangeRow(file);
+  return {
+    ...row,
+    ...(isChangeUpdated(recency, file.path)
+      ? {
+          updatedLabel: "Updated" as const,
+          updatedDescription: "Updated since you last opened this file" as const,
+        }
+      : {}),
   };
 }
 

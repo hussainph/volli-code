@@ -9,9 +9,9 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { DirChangedEvent, FileChangedEvent, VolliIpcChannel } from "@volli/shared";
 import { FILE_CHANNELS, VOLLI_GITIGNORE_CONTENT } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -727,8 +727,90 @@ describe("FileWatchManager", () => {
 
     expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
       projectId: "proj-1",
+      ticketId: null,
       relPath: "notes.md",
       source: "main",
+      revision: expect.any(Number),
+    } satisfies FileChangedEvent);
+  });
+
+  it("identifies a changed worktree document and reports its current revision", async () => {
+    const project = makeTempProjectDir();
+    const worktree = makeTempProjectDir();
+    const filePath = join(worktree, "src", "app.ts");
+    await mkdir(join(worktree, "src"));
+    await writeFile(filePath, "export const answer = 42;", "utf8");
+    const revision = (await stat(filePath)).mtimeMs;
+    const manager = new FileWatchManager(250);
+    const webContents = makeWebContents();
+    manager.watch(
+      webContents as never,
+      "proj-1",
+      "ticket-1",
+      "src/app.ts",
+      "worktree",
+      dirname(filePath),
+      basename(filePath),
+      project,
+    );
+
+    vi.useFakeTimers();
+    watchCalls[0]?.cb("change", "app.ts");
+    vi.advanceTimersByTime(250);
+
+    expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
+      projectId: "proj-1",
+      ticketId: "ticket-1",
+      relPath: "src/app.ts",
+      source: "worktree",
+      revision,
+    } satisfies FileChangedEvent);
+  });
+
+  it("reports a null revision when the watched file was deleted before delivery", async () => {
+    const project = makeTempProjectDir();
+    const manager = new FileWatchManager(250);
+    const webContents = makeWebContents();
+    await watchFile(manager, webContents, project);
+
+    vi.useFakeTimers();
+    rmSync(join(project, "notes.md"));
+    watchCalls[0]?.cb("rename", "notes.md");
+    vi.advanceTimersByTime(250);
+
+    expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
+      projectId: "proj-1",
+      ticketId: null,
+      relPath: "notes.md",
+      source: "main",
+      revision: null,
+    } satisfies FileChangedEvent);
+  });
+
+  it("reports the replacement revision after an atomic file save", async () => {
+    const project = makeTempProjectDir();
+    const manager = new FileWatchManager(250);
+    const webContents = makeWebContents();
+    await watchFile(manager, webContents, project);
+    const filePath = join(project, "notes.md");
+    const oldRevision = (await stat(filePath)).mtimeMs;
+    const replacementPath = join(project, "notes.md.tmp");
+    await writeFile(replacementPath, "replacement", "utf8");
+    await utimes(replacementPath, oldRevision / 1000 + 10, oldRevision / 1000 + 10);
+    await rename(replacementPath, filePath);
+    const revision = (await stat(filePath)).mtimeMs;
+
+    vi.useFakeTimers();
+    watchCalls[0]?.cb("rename", "notes.md");
+    vi.advanceTimersByTime(250);
+
+    expect(revision).not.toBe(oldRevision);
+    expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
+      projectId: "proj-1",
+      ticketId: null,
+      relPath: "notes.md",
+      source: "main",
+      revision,
     } satisfies FileChangedEvent);
   });
 
@@ -821,8 +903,10 @@ describe("FileWatchManager", () => {
     vi.advanceTimersByTime(250);
     expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
       projectId: "proj-1",
+      ticketId: null,
       relPath: "notes.md",
       source: "main",
+      revision: expect.any(Number),
     } satisfies FileChangedEvent);
   });
 
@@ -868,8 +952,10 @@ describe("FileWatchManager", () => {
 
     expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
       projectId: "proj-1",
+      ticketId: null,
       relPath: "notes.md",
       source: "main",
+      revision: expect.any(Number),
     } satisfies FileChangedEvent);
   });
 
@@ -889,8 +975,10 @@ describe("FileWatchManager", () => {
 
     expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
       projectId: "proj-1",
+      ticketId: null,
       relPath: "notes.md",
       source: "main",
+      revision: expect.any(Number),
     } satisfies FileChangedEvent);
     // Torn down: a subsequent unwatch is a harmless no-op.
     expect(() =>
@@ -929,8 +1017,10 @@ describe("FileWatchManager", () => {
 
     expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
       projectId: "proj-1",
+      ticketId: null,
       relPath: "sub/notes.md",
       source: "main",
+      revision: null,
     } satisfies FileChangedEvent);
     // Torn down: a subsequent unwatch is a harmless no-op.
     expect(() =>
@@ -968,8 +1058,10 @@ describe("FileWatchManager", () => {
     vi.advanceTimersByTime(1);
     expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
       projectId: "proj-1",
+      ticketId: null,
       relPath: "sub/notes.md",
       source: "main",
+      revision: null,
     } satisfies FileChangedEvent);
   });
 
@@ -1416,6 +1508,35 @@ describe("registerFileIpcHandlers", () => {
     expect(read.ok && read.source).toBe("main");
   });
 
+  it("normalizes a Main file event to null ticket identity when a ticket view requested it", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    await invoke("volli:artifact-create", {}, { projectId: setup.projectId, name: "shared" });
+    const subscriber = makeWebContents();
+    const relPath = ".volli/artifacts/shared.md";
+    const revision = (await stat(join(setup.projectPath, relPath))).mtimeMs;
+
+    expect(
+      await invoke<{ ok: boolean }>("volli:file-watch", subscriber, {
+        projectId: setup.projectId,
+        ticketId: setup.ticketId,
+        relPath,
+      }),
+    ).toEqual({ ok: true });
+
+    vi.useFakeTimers();
+    watchCalls[0]?.cb("change", "shared.md");
+    vi.advanceTimersByTime(250);
+
+    expect(subscriber.send).toHaveBeenCalledWith("volli:file-changed", {
+      projectId: setup.projectId,
+      ticketId: null,
+      relPath,
+      source: "main",
+      revision,
+    } satisfies FileChangedEvent);
+  });
+
   // `worktree_path` IS populated in production (pty/manager.ts stamps it when a
   // ticket's worktree is created), so main-vs-ticket resolution is live behavior,
   // not future work — asserted end-to-end through the read channel.
@@ -1549,8 +1670,10 @@ describe("registerFileIpcHandlers", () => {
 
     expect(subscriber.send).toHaveBeenCalledWith("volli:file-changed", {
       projectId: setup.projectId,
+      ticketId: null,
       relPath: ".volli/artifacts/sender-check.md",
       source: "main",
+      revision: expect.any(Number),
     } satisfies FileChangedEvent);
     expect(bystander.send).not.toHaveBeenCalled();
   });
