@@ -22,6 +22,7 @@ import {
   applyLiveDocumentReconciliation,
   type LiveDocumentReconciliationPlan,
   type LiveReconciliationLease,
+  type LocalWriteReceipt,
 } from "@renderer/editor/live-document-reconciliation";
 
 /** Live worktree read outcome for the modified side. */
@@ -33,7 +34,7 @@ export type DiffLiveRead =
 /** Adapt a Diff live read onto the one File/Diff reconciliation policy. */
 export function applyDiffLiveReconciliation(input: {
   lease: LiveReconciliationLease;
-  lastWrite: string | null;
+  lastWrite: LocalWriteReceipt | null;
   disk: DiffLiveRead;
   unreadableRevision: DocumentRevision;
 }): LiveDocumentReconciliationPlan {
@@ -69,7 +70,7 @@ export function applyDiffLiveReconciliation(input: {
 export function reconcileAcquiredDiffModel(input: {
   lease: LiveReconciliationLease;
   existing: boolean;
-  lastWrite: string | null;
+  lastWrite: LocalWriteReceipt | null;
   disk: DiffLiveRead;
 }): LiveDocumentReconciliationPlan | null {
   if (!input.existing) return null;

@@ -39,11 +39,17 @@ export interface LiveReconciliationLease {
   adoptCleanBaseline(seed: DocumentSeed): unknown;
 }
 
+/** The exact successful write whose filesystem event may safely be ignored as an echo. */
+export interface LocalWriteReceipt {
+  text: string;
+  revision: DocumentRevision;
+}
+
 /** Pure A/L/D planning shared by File and Diff views. */
 export function planLiveDocumentReconciliation(input: {
   baseline: string;
   local: string;
-  lastWrite: string | null;
+  lastWrite: LocalWriteReceipt | null;
   disk: LiveDiskRead;
 }): LiveDocumentReconciliationPlan {
   if (!input.disk.ok) {
@@ -62,7 +68,11 @@ export function planLiveDocumentReconciliation(input: {
       revision: input.disk.revision,
     };
   }
-  if (input.lastWrite !== null && input.disk.text === input.lastWrite) {
+  if (
+    input.lastWrite !== null &&
+    input.disk.text === input.lastWrite.text &&
+    input.disk.revision === input.lastWrite.revision
+  ) {
     return {
       kind: "apply",
       outcome: "save-echo",
@@ -97,7 +107,7 @@ export function planLiveDocumentReconciliation(input: {
 /** Plan and apply one disk observation through the registry's shared transaction. */
 export function applyLiveDocumentReconciliation(input: {
   lease: LiveReconciliationLease;
-  lastWrite: string | null;
+  lastWrite: LocalWriteReceipt | null;
   disk: LiveDiskRead;
 }): LiveDocumentReconciliationPlan {
   const plan = planLiveDocumentReconciliation({

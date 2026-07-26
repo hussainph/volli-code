@@ -34,6 +34,7 @@ import {
 import { documentIdentityKey } from "@renderer/editor/document-identity";
 import type { DocumentLease } from "@renderer/editor/document-registry";
 import { matchesFileChangeIdentity } from "@renderer/editor/file-change-identity";
+import type { LocalWriteReceipt } from "@renderer/editor/live-document-reconciliation";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { toastError } from "@renderer/lib/toast";
 import { useUiStore } from "@renderer/stores/ui";
@@ -101,7 +102,7 @@ export function DiffView({
   const setDiffPresentation = useUiStore((s) => s.setDiffPresentation);
   const leasesRef = React.useRef<DiffLeases | null>(null);
   const lastViewStateRef = React.useRef<unknown>(undefined);
-  const lastWriteRef = React.useRef<string | null>(null);
+  const lastWriteRef = React.useRef<LocalWriteReceipt | null>(null);
   const mountedRef = React.useRef(true);
   const name = baseNameOf(relPath);
 
@@ -449,7 +450,7 @@ export function DiffView({
           expectedMtime,
         });
         if (!result.ok) return { ok: false, error: result.error };
-        lastWriteRef.current = text;
+        lastWriteRef.current = { text, revision: result.mtime };
         onLocalSave?.(relPath, state.plan.modifiedSource, result.mtime);
         return { ok: true, revision: result.mtime };
       } catch (error) {

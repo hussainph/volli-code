@@ -10,6 +10,7 @@ import {
   applyLiveDocumentReconciliation,
   type LiveDocumentReconciliationPlan,
   type LiveReconciliationLease,
+  type LocalWriteReceipt,
 } from "@renderer/editor/live-document-reconciliation";
 import { activeMonacoEditorThemeId } from "@renderer/editor/monaco-theme";
 import { loadMonacoRuntime, startModelLanguageWorker } from "@renderer/editor/monaco-runtime";
@@ -191,7 +192,7 @@ export interface ReconciliationEditorView {
 export function applyExternalSeedPreservingViewState(input: {
   lease: LiveReconciliationLease;
   editorView: ReconciliationEditorView | null;
-  lastWrite: string | null;
+  lastWrite: LocalWriteReceipt | null;
   seed: Pick<DiskSnapshot, "value" | "revision">;
   /**
    * Monaco may apply its cursor result after the model edit returns. Hosts can
@@ -260,10 +261,9 @@ export function MonacoFileEditor({
   const currentStale = stale !== null && stale.key === key ? stale : null;
 
   const savingRef = React.useRef(false);
-  // Text this view last handed to `onSave`. The fs watch echoes it back as a
-  // "change"; without this the echo would raise a banner over a draft the user
-  // resumed typing during the write.
-  const lastWriteRef = React.useRef<string | null>(null);
+  // Exact successful write this view last handed to disk. Both bytes and
+  // revision must match before a watch event is classified as our own echo.
+  const lastWriteRef = React.useRef<LocalWriteReceipt | null>(null);
   const emittedDirtyRef = React.useRef(false);
   // Props read from stable callbacks (the Monaco action is registered once).
   const liveRef = React.useRef({
@@ -330,7 +330,6 @@ export function MonacoFileEditor({
     const text = lease.model.getValue();
     savingRef.current = true;
     setSaving(true);
-    lastWriteRef.current = text;
     try {
       const result = await liveRef.current.onSave(text);
       if (leaseRef.current?.lease !== lease) return; // view moved on mid-write
@@ -339,6 +338,7 @@ export function MonacoFileEditor({
         toastError(saveFailureMessage(label, result.error));
         return;
       }
+      lastWriteRef.current = { text, revision: result.revision };
       if (lease.model.getValue() === text) {
         // Only claim the document is clean when it still holds the saved bytes;
         // `markSaved` adopts the model's *current* value as the baseline, which
