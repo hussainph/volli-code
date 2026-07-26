@@ -235,6 +235,12 @@ interface WorkspaceState {
    * Prunes the ticket's record entirely once nothing but Doc remains.
    */
   closeTicketFile(projectId: string, ticketId: string, relPath: string): void;
+  /**
+   * Closes `relPath`'s diff tab; if it was the active tab, falls back to Doc
+   * (same pattern as {@link closeTicketFile}). Drops any rename/status meta
+   * for that path. Prunes the ticket record once nothing but Doc remains.
+   */
+  closeTicketDiff(projectId: string, ticketId: string, relPath: string): void;
   /** Sets the active tab for `ticketId` (Ticket Body / `"doc"`, a `file:<relPath>`, or a session id). */
   setTicketActiveTab(projectId: string, ticketId: string, tabId: string): void;
   /**
@@ -624,6 +630,23 @@ export function createWorkspaceStore(storage?: StateStorage) {
             // the current selection (which may itself be Doc or a session tab).
             const active = existing.active === fileTabId(relPath) ? BODY_TAB_ID : existing.active;
             const next: TicketTabsState = { ...existing, files, active };
+            const nextTabs = { ...current.ticketTabs };
+            if (isEmptyTicketTabs(next)) delete nextTabs[ticketId];
+            else nextTabs[ticketId] = next;
+            return patchWorkspace(state, projectId, { ticketTabs: nextTabs });
+          });
+        },
+
+        closeTicketDiff(projectId, ticketId, relPath) {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const existing = current.ticketTabs[ticketId];
+            if (existing === undefined) return state;
+            const diffs = existing.diffs.filter((path) => path !== relPath);
+            const diffMeta = { ...existing.diffMeta };
+            delete diffMeta[relPath];
+            const active = existing.active === diffTabId(relPath) ? BODY_TAB_ID : existing.active;
+            const next: TicketTabsState = { ...existing, diffs, diffMeta, active };
             const nextTabs = { ...current.ticketTabs };
             if (isEmptyTicketTabs(next)) delete nextTabs[ticketId];
             else nextTabs[ticketId] = next;

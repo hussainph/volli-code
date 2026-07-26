@@ -347,6 +347,22 @@ describe("ticket diff tabs", () => {
       active: "diff:src/app.ts",
     });
   });
+
+  it("closeTicketDiff removes the diff and falls back to Doc when it was active", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicketFile("project-a", "ticket-1", "notes.md");
+    store.getState().openTicketDiff("project-a", "ticket-1", "src/app.ts", {
+      status: "modified",
+    });
+    store.getState().closeTicketDiff("project-a", "ticket-1", "src/app.ts");
+
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
+      files: ["notes.md"],
+      diffs: [],
+      diffMeta: {},
+      active: "doc",
+    });
+  });
 });
 
 describe("ticket file tabs", () => {
