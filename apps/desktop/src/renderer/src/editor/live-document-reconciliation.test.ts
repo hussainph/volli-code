@@ -132,4 +132,25 @@ describe("planLiveDocumentReconciliation", () => {
       revision: null,
     });
   });
+
+  it("never treats a truncated disk prefix as a writable baseline", () => {
+    expect(
+      planLiveDocumentReconciliation({
+        baseline: "before\n",
+        local: "human draft\n",
+        lastWrite: null,
+        disk: {
+          ok: true,
+          text: "truncated prefix",
+          revision: 6,
+          truncated: true,
+        },
+      }),
+    ).toEqual({
+      kind: "unreadable",
+      error: "File is too large to reconcile safely.",
+      keepDraft: true,
+      revision: 6,
+    });
+  });
 });
