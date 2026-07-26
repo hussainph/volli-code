@@ -8,6 +8,8 @@
  * for the next {@link bindMonacoEditorThemeHost}.
  */
 
+import { DEFAULT_EDITOR_THEME_ID, resolveEditorThemeId } from "./editor-theme-catalog";
+
 /** Narrow host: only what we need to activate a registered shiki theme. */
 export interface MonacoEditorThemeHost {
   editor: {
@@ -47,6 +49,32 @@ export function bindMonacoEditorThemeHost(monaco: MonacoEditorThemeHost): void {
   if (pendingThemeId !== null) {
     monaco.editor.setTheme(pendingThemeId);
   }
+}
+
+/**
+ * DiffEditor ignores construction-time `theme` (`createDiffEditor` is not
+ * patched by shikiToMonaco). Always call this before `createDiffEditor` so the
+ * active catalog id is applied via `setTheme` — never pass `theme` in options,
+ * and never `"volli-dark"` (#109 / #122).
+ *
+ * Uses `themeId` when provided (unknown ids fall through
+ * {@link resolveEditorThemeId}); otherwise the pending refresh id, else
+ * {@link DEFAULT_EDITOR_THEME_ID} via {@link ensureMonacoEditorTheme}.
+ */
+export function applyMonacoThemeForDiffEditor(
+  monaco: MonacoEditorThemeHost,
+  themeId?: string,
+): void {
+  let resolved: string;
+  if (themeId !== undefined && themeId.length > 0) {
+    resolved = resolveEditorThemeId({ editorThemeId: themeId, appThemeSlug: null });
+    refreshMonacoEditorTheme(resolved);
+  } else {
+    ensureMonacoEditorTheme(DEFAULT_EDITOR_THEME_ID);
+    resolved = pendingThemeId ?? DEFAULT_EDITOR_THEME_ID;
+  }
+
+  monaco.editor.setTheme(resolved);
 }
 
 /** Test-only: clear module state between cases. */
