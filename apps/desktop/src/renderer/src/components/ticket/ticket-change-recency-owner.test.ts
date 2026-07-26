@@ -56,4 +56,38 @@ describe("reduceTicketRecencyOwner", () => {
       updatedRevision: "2",
     });
   });
+
+  it("keeps a known local-save revision quiet and consumes its watcher echo", () => {
+    const identity = {
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      relPath: "src/app.ts",
+      source: "worktree",
+    } as const;
+    const inspected = reduceTicketRecencyOwner(EMPTY_TICKET_RECENCY_OWNER_STATE, {
+      type: "inspect",
+      identity,
+      revision: 1,
+    });
+    const saved = reduceTicketRecencyOwner(inspected, {
+      type: "local-save",
+      identity,
+      revision: 2,
+    });
+    const echoed = reduceTicketRecencyOwner(saved, {
+      type: "file-changed",
+      event: { ...identity, revision: 2 },
+    });
+
+    expect(saved.recency.paths["src/app.ts"]).toEqual({
+      seenRevision: "2",
+      updatedRevision: null,
+    });
+    expect(saved.localSaveEchoes["src/app.ts"]).toBe("2");
+    expect(echoed.recency.paths["src/app.ts"]).toEqual({
+      seenRevision: "2",
+      updatedRevision: null,
+    });
+    expect(echoed.localSaveEchoes["src/app.ts"]).toBeUndefined();
+  });
 });
