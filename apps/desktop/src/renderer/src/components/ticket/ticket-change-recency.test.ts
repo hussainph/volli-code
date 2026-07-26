@@ -95,4 +95,34 @@ describe("reduceChangeRecency", () => {
       },
     });
   });
+
+  it("keeps same revisions and uninspected paths quiet", () => {
+    const inspected = reduceChangeRecency(EMPTY_CHANGE_RECENCY_STATE, {
+      type: "inspect",
+      path: "src/ticket.tsx",
+      revision: "opaque-revision-1",
+    });
+
+    expect(
+      reduceChangeRecency(inspected, {
+        type: "external-revision",
+        path: "src/ticket.tsx",
+        revision: "opaque-revision-1",
+      }),
+    ).toBe(inspected);
+    expect(
+      reduceChangeRecency(EMPTY_CHANGE_RECENCY_STATE, {
+        type: "external-revision",
+        path: "src/uninspected.tsx",
+        revision: "opaque-revision-2",
+      }),
+    ).toBe(EMPTY_CHANGE_RECENCY_STATE);
+    expect(
+      reduceChangeRecency(EMPTY_CHANGE_RECENCY_STATE, {
+        type: "local-save-echo",
+        path: "src/uninspected.tsx",
+        revision: "opaque-revision-2",
+      }),
+    ).toBe(EMPTY_CHANGE_RECENCY_STATE);
+  });
 });
