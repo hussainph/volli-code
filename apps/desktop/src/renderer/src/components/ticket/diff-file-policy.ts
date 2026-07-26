@@ -34,8 +34,13 @@ export interface DiffFilePolicy {
 /**
  * Outcome of reading the file at the Change Set base revision — mirrors
  * main's {@link ChangeSetBaseFile} without importing Electron types.
+ * `truncated` is advisory (original is always read-only); content may be a
+ * leading ~1 MiB prefix when the base blob exceeded the live-read cap.
  */
-export type DiffBaseRead = { content: string } | { missing: true } | { binary: true };
+export type DiffBaseRead =
+  | { content: string; truncated?: boolean }
+  | { missing: true }
+  | { binary: true };
 
 export interface DiffFilePolicyInput {
   file: Pick<ChangeSetFile, "status" | "path" | "previousPath" | "binary">;
