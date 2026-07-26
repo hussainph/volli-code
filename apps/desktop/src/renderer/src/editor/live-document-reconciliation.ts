@@ -10,13 +10,21 @@ export type LiveDiskRead =
     }
   | { ok: false; error: string; revision: DocumentRevision };
 
-export type LiveDocumentReconciliationPlan = {
-  kind: "apply";
-  outcome: "adopt" | "keep-local" | "merge" | "save-echo";
-  baseline: string;
-  value: string;
-  revision: DocumentRevision;
-};
+export type LiveDocumentReconciliationPlan =
+  | {
+      kind: "apply";
+      outcome: "adopt" | "keep-local" | "merge" | "save-echo";
+      baseline: string;
+      value: string;
+      revision: DocumentRevision;
+    }
+  | {
+      kind: "conflict";
+      reason: "overlap" | "budget";
+      local: string;
+      disk: string;
+      revision: DocumentRevision;
+    };
 
 /** Pure A/L/D planning shared by File and Diff views. */
 export function planLiveDocumentReconciliation(input: {
@@ -42,6 +50,15 @@ export function planLiveDocumentReconciliation(input: {
     local: input.local,
     disk: input.disk.text,
   });
+  if (result.kind === "conflict") {
+    return {
+      kind: "conflict",
+      reason: result.reason,
+      local: result.local,
+      disk: result.disk,
+      revision: input.disk.revision,
+    };
+  }
   if (result.kind !== "adopt" && result.kind !== "keep-local" && result.kind !== "merge") {
     throw new Error(`Live reconciliation outcome ${result.kind} is not implemented`);
   }
