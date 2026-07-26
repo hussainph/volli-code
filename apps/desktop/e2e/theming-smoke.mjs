@@ -1062,11 +1062,20 @@ cursor-style = block
   // repaint, and checks 27-28 would be watching for a fade that correctly never
   // happens. This is also the only path that derives the stops through the app.
   await page.getByRole("button", { name: "Save theme", exact: true }).click();
+  // Waited on the EDITOR closing, not on the paint: the paint is optimistic and
+  // is already on screen, so a canvas poll would return before the write's
+  // response has been adopted — leaving check 27 to switch scopes with a theme
+  // write still in flight, which is a race it has no business testing.
+  await backgroundTrigger(page).waitFor({ state: "detached" });
   await waitForCanvasPaint(page, (value) => value.includes("linear-gradient"));
 
   await attempt(27, "a project-scope change crossfades the canvas layer", async () => {
     await watchCanvasFades(page);
     await watchScopeTransition(page);
+    // The paint trace is diagnosis, not assertion: "no crossfade" and "no scope
+    // change to crossfade" look identical from the outside, and only the trace
+    // tells them apart if this ever misses.
+    await watchBackgroundPaints(page);
     // Alpha overrides to Midnight, which carries no canvas, so the layer goes
     // from the saved gradient to the flat fill — precisely the change
     // `background-image` cannot interpolate, and the whole reason two layers
@@ -1086,7 +1095,7 @@ cursor-style = block
         fade.outgoing === true &&
         fade.duration === SCOPE_CROSSFADE_MS &&
         fade.playState === "running",
-      detail: `--background=${applied} crossfadeArmed=${armed.seen} fades=${JSON.stringify(fades)}`,
+      detail: `--background=${applied} crossfadeArmed=${armed.seen} fades=${JSON.stringify(fades)} paints=${JSON.stringify(await readBackgroundPaints(page))}`,
     };
   });
 
