@@ -100,6 +100,7 @@ export default defineConfig({
         "src/theme/apply.ts",
         "src/theme/catalog.ts",
         "src/theme/grain.ts",
+        "src/theme/scope-transition.ts",
         "src/terminal/css-color.ts",
         "src/terminal/appearance.ts",
         "src/terminal/appearance-model.ts",

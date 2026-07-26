@@ -228,6 +228,50 @@
   background-color: var(--muted-foreground);
 }
 
+/* Scope-change repaint (#69, theme/scope-transition.ts): when the app changes
+ * THEME SCOPE — a project switch, where every color can move at once — the
+ * swap eases instead of hard-cutting, because that transition is what tells
+ * you the window now belongs to a different project.
+ *
+ * CSS custom properties don't interpolate (unregistered, they animate
+ * discretely), so the crossfade is bought on the properties that CONSUME them.
+ * Deliberately unlayered: `@import "tailwindcss"` puts every utility in a
+ * cascade layer, and unlayered rules beat layered ones regardless of
+ * specificity — which is the only way this can outrank `transition-colors` on
+ * a button for the ~300ms it is armed. Nothing here is on at rest; scope-
+ * transition.ts adds the attribute for the length of one swap and removes it.
+ *
+ * Timing lives in scope-transition.ts's storyboard; --theme-scope-crossfade
+ * mirrors its `crossfade` constant. The curve is --ease-swift's, written out
+ * because Tailwind's `inline` theme tokens are not guaranteed to be emitted as
+ * custom properties. No overshoot: a theme change is a state change, not a
+ * thrown object. */
+:root {
+  --theme-scope-crossfade: 300ms;
+  --theme-scope-ease: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+:root[data-theme-transition="scope"],
+:root[data-theme-transition="scope"] *,
+:root[data-theme-transition="scope"] *::before,
+:root[data-theme-transition="scope"] *::after {
+  transition-property:
+    background-color, color, border-color, outline-color, text-decoration-color, fill, stroke,
+    box-shadow;
+  transition-duration: var(--theme-scope-crossfade);
+  transition-timing-function: var(--theme-scope-ease);
+}
+
+/* Reduced motion (HIG §accessibility): nothing here translates or scales, so
+ * there is no vestibular motion to remove — and an eased brightness change is
+ * itself the accessible treatment for a whole-window repaint. Keep the shortest
+ * honest ease rather than a hard cut, over before it reads as animation. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --theme-scope-crossfade: 120ms;
+  }
+}
+
 /* Electron hiddenInset chrome: window-drag regions. Interactive children of a
  * drag region must opt out with .app-region-no-drag or they swallow clicks. */
 .app-region-drag {

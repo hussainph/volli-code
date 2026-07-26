@@ -50,6 +50,7 @@ import {
   type ProjectAppChoice,
 } from "@renderer/components/theme/project-appearance-model";
 import { applyTheme as applyThemeToDom, resolveActiveTheme } from "@renderer/theme/apply";
+import { beginScopeRepaint, shouldEaseScopeRepaint } from "@renderer/theme/scope-transition";
 import { BUILTIN_THEMES, mergeThemeCatalog } from "@renderer/theme/catalog";
 import { resolveEditorThemeId } from "@renderer/editor/editor-theme-catalog";
 import { refreshMonacoEditorTheme } from "@renderer/editor/monaco-theme";
@@ -85,6 +86,12 @@ export interface ThemeStoreDeps {
   applyTheme(theme: ThemeDefinition): void;
   /** Activates a Monaco/shiki catalog id (queued until Monaco boots). */
   refreshEditorTheme(themeId: string): void;
+  /**
+   * Arms the eased repaint for ONE token swap (#69, theme/scope-transition.ts).
+   * Called immediately before {@link applyTheme}, and only for a scope change —
+   * never for a pick or a preview, where instant is the correct feedback.
+   */
+  beginScopeRepaint(): void;
 }
 
 const defaultDeps: ThemeStoreDeps = {
@@ -100,6 +107,7 @@ const defaultDeps: ThemeStoreDeps = {
   },
   applyTheme: (theme) => applyThemeToDom(theme),
   refreshEditorTheme: (themeId) => refreshMonacoEditorTheme(themeId),
+  beginScopeRepaint: () => beginScopeRepaint(),
 };
 
 interface ThemeState {
@@ -272,12 +280,17 @@ export function createThemeStore({
         let hydrateGeneration = 0;
         let editorWriteGeneration = 0;
         let editorWriteQueue: Promise<void> = Promise.resolve();
-        const repaint = (): void => {
+        const repaint = (options: { eased?: boolean } = {}): void => {
           const state = get();
           const theme = effectiveTheme(state);
           const key = JSON.stringify(theme);
           if (key !== painted) {
             painted = key;
+            // Armed only when there is an actual swap to ease: a scope change
+            // that resolves to the same theme repaints nothing, and a 300ms
+            // window in which every hover transition is slowed for no visible
+            // reason is exactly the kind of latency §1 asks us to hunt down.
+            if (options.eased === true) deps.beginScopeRepaint();
             deps.applyTheme(theme);
           }
 
@@ -297,8 +310,21 @@ export function createThemeStore({
           }
         };
 
-        /** Adopt a fresh authoritative payload from main and repaint from it. */
+        /**
+         * Adopt a fresh authoritative payload from main and repaint from it.
+         *
+         * This is the ONE place a payload can change which project's theme is
+         * in force, so it is also the one place that can tell a scope change
+         * from a theme change — and the eased repaint (#69) is decided here,
+         * before the state moves, while the outgoing scope is still readable.
+         */
         const accept = (value: ThemeStatePayload): void => {
+          const previous = get();
+          const eased = shouldEaseScopeRepaint({
+            hydrated: previous.hydrated,
+            from: previous.projectId,
+            to: value.projectId,
+          });
           persistedEditorThemeId = value.editorThemeId;
           set({
             global: value.theme,
@@ -308,7 +334,7 @@ export function createThemeStore({
             terminal: value.terminal,
             hydrated: true,
           });
-          repaint();
+          repaint({ eased });
         };
 
         /**

@@ -15,6 +15,10 @@ import {
 
 import { autoTintChoice } from "@renderer/components/theme/project-appearance-model";
 import { PROJECT_TINT_SLUG } from "@renderer/theme/apply";
+import {
+  SCOPE_TRANSITION_ATTRIBUTE,
+  SCOPE_TRANSITION_VALUE,
+} from "@renderer/theme/scope-transition";
 
 import { appliedTheme, createThemeStore, effectiveTheme, type ThemeGateway } from "./theme";
 
@@ -67,11 +71,23 @@ function statePayload(over: Partial<ThemeStatePayload> = {}): ThemeStatePayload 
 function recorder() {
   const applied: ThemeDefinition[] = [];
   const editorThemes: string[] = [];
+  // Records the EASED repaints specifically: the theme each one was armed for,
+  // so a test can assert both that the crossfade ran and what it ran into.
+  const eased: (ThemeDefinition | undefined)[] = [];
+  let arming = false;
   return {
     applied,
     editorThemes,
-    applyTheme: (theme: ThemeDefinition) => void applied.push(theme),
+    eased,
+    applyTheme: (theme: ThemeDefinition) => {
+      applied.push(theme);
+      if (arming) eased.push(theme);
+      arming = false;
+    },
     refreshEditorTheme: (themeId: string) => void editorThemes.push(themeId),
+    beginScopeRepaint: () => {
+      arming = true;
+    },
   };
 }
 
@@ -124,6 +140,7 @@ function freshStore(over: Partial<ThemeGateway> = {}) {
       gateway,
       applyTheme: paint.applyTheme,
       refreshEditorTheme: paint.refreshEditorTheme,
+      beginScopeRepaint: paint.beginScopeRepaint,
     },
     storage: memory.storage,
   });
@@ -250,6 +267,80 @@ describe("hydrate", () => {
       "Couldn't load the theme: ipc gone",
       expect.anything(),
     );
+  });
+});
+
+describe("the eased scope-change repaint (#69)", () => {
+  it("cuts straight to the theme on the first paint", async () => {
+    // Boot has no previous look to come from — a crossfade here would read as
+    // the app slowly fading in something it had already rendered.
+    const { store, paint } = freshStore();
+
+    await store.getState().hydrate("p1");
+
+    expect(paint.applied).toHaveLength(1);
+    expect(paint.eased).toEqual([]);
+  });
+
+  it("eases the repaint when the scope moves to another project", async () => {
+    const override: ProjectThemeOverride = {
+      ...EMPTY_PROJECT_THEME_OVERRIDE,
+      appThemeSlug: MIDNIGHT.slug,
+    };
+    const scopes: Record<string, ThemeStatePayload> = {
+      p1: statePayload({ projectId: "p1" }),
+      p2: statePayload({ projectId: "p2", projectOverride: override, theme: MIDNIGHT }),
+    };
+    const { store, paint } = freshStore({
+      state: vi.fn(async (input: { projectId?: string }) => ({
+        ok: true as const,
+        value: scopes[input.projectId ?? "p1"]!,
+      })),
+    });
+
+    await store.getState().hydrate("p1");
+    await store.getState().hydrate("p2");
+
+    // The transition IS the signal that the window now belongs to another
+    // project, so it is armed for exactly that swap.
+    expect(paint.eased).toEqual([MIDNIGHT]);
+  });
+
+  it("does not ease a theme change inside one scope", async () => {
+    // A pick is a direct answer to a keystroke; 300ms of crossfade there is
+    // latency on the input path, not polish.
+    const { store, paint } = freshStore();
+    await store.getState().hydrate();
+
+    await store.getState().setGlobalTheme(MIDNIGHT);
+
+    expect(paint.applied).toContainEqual(MIDNIGHT);
+    expect(paint.eased).toEqual([]);
+  });
+
+  it("does not ease a preview, however far the seed moves", () => {
+    const { store, paint } = freshStore();
+    store.getState().startPreview(MIDNIGHT);
+    store.getState().cancelPreview();
+
+    expect(paint.eased).toEqual([]);
+  });
+
+  it("arms nothing when a scope change resolves to the same theme", async () => {
+    // Both projects inherit, so nothing repaints — and a crossfade window with
+    // no color change in it would only slow every hover for 300ms.
+    const { store, paint } = freshStore({
+      state: vi.fn(async (input: { projectId?: string }) => ({
+        ok: true as const,
+        value: statePayload({ projectId: input.projectId ?? null }),
+      })),
+    });
+
+    await store.getState().hydrate("p1");
+    await store.getState().hydrate("p2");
+
+    expect(paint.applied).toHaveLength(1);
+    expect(paint.eased).toEqual([]);
   });
 });
 
@@ -568,6 +659,7 @@ describe("favorites and recents", () => {
         gateway: fakeGateway(),
         applyTheme: () => {},
         refreshEditorTheme: () => {},
+        beginScopeRepaint: () => {},
       },
       storage: memory.storage,
     });
@@ -903,9 +995,18 @@ describe("createThemeStore() with the default deps", () => {
   // real DOM apply path, which every other test in this file bypasses.
   it("routes through window.api.theme and paints the document element", async () => {
     const written = new Map<string, string>();
-    const state = vi.fn(async () => ({
+    const attributes = new Map<string, string>();
+    // Scope-aware, and each scope resolves to a DIFFERENT theme: the eased
+    // repaint is armed inside the "did the paint actually change" guard, so a
+    // scope switch that lands on the same theme would (correctly) never reach
+    // the real `beginScopeRepaint`.
+    const state = vi.fn(async (input: { projectId?: string }) => ({
       ok: true as const,
-      value: statePayload({ theme: MIDNIGHT }),
+      value: statePayload(
+        input.projectId === undefined
+          ? { theme: MIDNIGHT }
+          : { theme: DEFAULT_THEME, projectId: input.projectId },
+      ),
     }));
     const setGlobal = vi.fn(async () => ({ ok: true as const, value: statePayload() }));
     const setGlobalEditor = vi.fn(async (editorThemeId: ShippedEditorThemeId | null) => ({
@@ -938,6 +1039,9 @@ describe("createThemeStore() with the default deps", () => {
     vi.stubGlobal("document", {
       documentElement: {
         style: { setProperty: (name: string, value: string) => void written.set(name, value) },
+        setAttribute: (name: string, value: string) => void attributes.set(name, value),
+        removeAttribute: (name: string) => void attributes.delete(name),
+        offsetWidth: 0,
       },
     });
     const store = createThemeStore();
@@ -949,6 +1053,12 @@ describe("createThemeStore() with the default deps", () => {
     // generator (as window-theme.test.ts does) so the two can't drift, and
     // still meaningful because nothing writes this key unless the store paints.
     expect(written.get("--background")).toBe(generateThemeTokens(MIDNIGHT)["--background"]);
+    // Boot is not a transition: there is no previous look to ease from.
+    expect(attributes.has(SCOPE_TRANSITION_ATTRIBUTE)).toBe(false);
+
+    // Entering a project's scope IS one, and it arms the real DOM path (#69).
+    await store.getState().hydrate("p1");
+    expect(attributes.get(SCOPE_TRANSITION_ATTRIBUTE)).toBe(SCOPE_TRANSITION_VALUE);
 
     await store.getState().setGlobalTheme(DEFAULT_THEME);
     expect(setGlobal).toHaveBeenCalledWith(DEFAULT_THEME);
