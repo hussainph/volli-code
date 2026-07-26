@@ -7,6 +7,7 @@ import {
 } from "@renderer/editor/monaco-theme";
 
 import {
+  applyExternalSeedPreservingViewState,
   attachEditorContribution,
   classifyExternalChange,
   fileEditorAriaLabel,
@@ -55,6 +56,38 @@ describe("attachEditorContribution", () => {
 
   it("tolerates a contribution that attaches nothing disposable", () => {
     expect(attachEditorContribution(() => undefined, context)).toBeNull();
+  });
+});
+
+describe("applyExternalSeedPreservingViewState", () => {
+  it("merges through the shared registry policy while restoring cursor and scroll state", () => {
+    const viewState = { cursorState: [{ position: { lineNumber: 1, column: 4 } }], scrollTop: 42 };
+    const restoreViewState = vi.fn();
+    const applyExternalUpdate = vi.fn();
+    const lease = {
+      model: { getValue: () => "human first\nkeep\nlast\n" },
+      snapshot: () => ({ baseline: "first\nkeep\nlast\n" }),
+      applyExternalUpdate,
+      adoptCleanBaseline: vi.fn(),
+    };
+
+    const result = applyExternalSeedPreservingViewState({
+      lease,
+      editorView: {
+        saveViewState: () => viewState,
+        restoreViewState,
+      },
+      lastWrite: null,
+      seed: { value: "first\nkeep\nagent last\n", revision: 12 },
+    });
+
+    expect(result).toMatchObject({ kind: "apply", outcome: "merge" });
+    expect(applyExternalUpdate).toHaveBeenCalledWith({
+      baseline: "first\nkeep\nagent last\n",
+      value: "human first\nkeep\nagent last\n",
+      revision: 12,
+    });
+    expect(restoreViewState).toHaveBeenCalledWith(viewState);
   });
 });
 
