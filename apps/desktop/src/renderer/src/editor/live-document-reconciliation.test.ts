@@ -112,4 +112,24 @@ describe("planLiveDocumentReconciliation", () => {
       revision: 5,
     });
   });
+
+  it("keeps a dirty draft visible when the disk file becomes unreadable", () => {
+    expect(
+      planLiveDocumentReconciliation({
+        baseline: "before\n",
+        local: "human draft\n",
+        lastWrite: null,
+        disk: {
+          ok: false,
+          error: "File was deleted on disk.",
+          revision: null,
+        },
+      }),
+    ).toEqual({
+      kind: "unreadable",
+      error: "File was deleted on disk.",
+      keepDraft: true,
+      revision: null,
+    });
+  });
 });
