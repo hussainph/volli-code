@@ -62,7 +62,22 @@ export function reduceChangeRecency(
     };
   }
 
-  if (event.type === "local-save-echo") return state;
+  if (event.type === "local-save-echo") {
+    // A recognized save event belongs to the person already looking at this
+    // path. It advances their seen revision without creating review state.
+    if (
+      existing === undefined ||
+      (existing.seenRevision === event.revision && existing.updatedRevision === null)
+    ) {
+      return state;
+    }
+    return {
+      paths: {
+        ...state.paths,
+        [event.path]: { seenRevision: event.revision, updatedRevision: null },
+      },
+    };
+  }
   if (existing?.seenRevision === event.revision && existing.updatedRevision === null) return state;
 
   return {
