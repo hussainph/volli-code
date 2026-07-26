@@ -9,7 +9,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { DirChangedEvent, FileChangedEvent, VolliIpcChannel } from "@volli/shared";
@@ -784,6 +784,33 @@ describe("FileWatchManager", () => {
       relPath: "notes.md",
       source: "main",
       revision: null,
+    } satisfies FileChangedEvent);
+  });
+
+  it("reports the replacement revision after an atomic file save", async () => {
+    const project = makeTempProjectDir();
+    const manager = new FileWatchManager(250);
+    const webContents = makeWebContents();
+    await watchFile(manager, webContents, project);
+    const filePath = join(project, "notes.md");
+    const oldRevision = (await stat(filePath)).mtimeMs;
+    const replacementPath = join(project, "notes.md.tmp");
+    await writeFile(replacementPath, "replacement", "utf8");
+    await utimes(replacementPath, oldRevision / 1000 + 10, oldRevision / 1000 + 10);
+    await rename(replacementPath, filePath);
+    const revision = (await stat(filePath)).mtimeMs;
+
+    vi.useFakeTimers();
+    watchCalls[0]?.cb("rename", "notes.md");
+    vi.advanceTimersByTime(250);
+
+    expect(revision).not.toBe(oldRevision);
+    expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
+      projectId: "proj-1",
+      ticketId: null,
+      relPath: "notes.md",
+      source: "main",
+      revision,
     } satisfies FileChangedEvent);
   });
 
