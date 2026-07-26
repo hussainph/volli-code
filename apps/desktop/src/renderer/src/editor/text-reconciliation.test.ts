@@ -22,4 +22,18 @@ describe("reconcileText", () => {
       nextBaseline: "before\n",
     });
   });
+
+  it("merges one human and one agent edit in separate regions", () => {
+    expect(
+      reconcileText({
+        baseline: "first\nkeep\nlast\n",
+        local: "human first\nkeep\nlast\n",
+        disk: "first\nkeep\nagent last\n",
+      }),
+    ).toEqual({
+      kind: "merge",
+      value: "human first\nkeep\nagent last\n",
+      nextBaseline: "first\nkeep\nagent last\n",
+    });
+  });
 });
