@@ -61,6 +61,29 @@ export function applyDiffLiveReconciliation(input: {
 }
 
 /**
+ * Reconcile the live read immediately when Diff attaches to a model that a File
+ * view already owns. A newly-created model was seeded from this same read, and
+ * a clean pre-existing model may represent the intentional empty side of a
+ * deletion; neither needs an extra transaction.
+ */
+export function reconcileAcquiredDiffModel(input: {
+  lease: LiveReconciliationLease;
+  existing: boolean;
+  lastWrite: string | null;
+  disk: DiffLiveRead;
+}): LiveDocumentReconciliationPlan | null {
+  if (!input.existing) return null;
+  const dirty = input.lease.model.getValue() !== input.lease.snapshot().baseline;
+  if (!input.disk.ok && "missing" in input.disk && input.disk.missing && !dirty) return null;
+  return applyDiffLiveReconciliation({
+    lease: input.lease,
+    lastWrite: input.lastWrite,
+    disk: input.disk,
+    unreadableRevision: input.disk.ok ? input.disk.mtime : null,
+  });
+}
+
+/**
  * True when `files.read` failed because the path is gone — the strings main's
  * `volli-fs` returns for missing parents / vanished files, plus Node's ENOENT.
  */

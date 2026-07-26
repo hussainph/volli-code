@@ -27,6 +27,7 @@ import {
   mapBaseReadResult,
   mapFilesReadFailure,
   planDiffView,
+  reconcileAcquiredDiffModel,
   type DiffLiveRead,
   type DiffViewPlan,
 } from "@renderer/components/ticket/diff-view-plan";
@@ -272,6 +273,28 @@ export function DiffView({
         if (cancelled || !mountedRef.current) {
           releaseDiffLeases(leases, lastViewStateRef.current);
           return;
+        }
+
+        const acquiredPlan = reconcileAcquiredDiffModel({
+          lease: modified,
+          existing: existingSnap !== null,
+          lastWrite: lastWriteRef.current,
+          disk: live,
+        });
+        if (acquiredPlan?.kind === "conflict" && typeof acquiredPlan.revision === "number") {
+          setConflict({ text: acquiredPlan.disk, mtime: acquiredPlan.revision });
+          setLiveError(null);
+        } else if (acquiredPlan?.kind === "unreadable") {
+          if (!acquiredPlan.keepDraft) {
+            releaseDiffLeases(leases, lastViewStateRef.current);
+            setState({ status: "error", error: acquiredPlan.error });
+            return;
+          }
+          setLiveError(`${acquiredPlan.error} Your unsaved draft is still open.`);
+          setConflict(null);
+        } else if (acquiredPlan?.kind === "apply") {
+          setConflict(null);
+          setLiveError(null);
         }
 
         leasesRef.current = leases;
