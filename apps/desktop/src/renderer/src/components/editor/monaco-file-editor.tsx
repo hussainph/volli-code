@@ -193,6 +193,12 @@ export function applyExternalSeedPreservingViewState(input: {
   editorView: ReconciliationEditorView | null;
   lastWrite: string | null;
   seed: Pick<DiskSnapshot, "value" | "revision">;
+  /**
+   * Monaco may apply its cursor result after the model edit returns. Hosts can
+   * schedule one guarded post-flush restore without coupling the pure registry
+   * transaction to a browser timing primitive.
+   */
+  deferRestore?(restore: () => void): void;
 }): LiveDocumentReconciliationPlan {
   const viewState = input.editorView?.saveViewState() ?? null;
   const plan = applyLiveDocumentReconciliation({
@@ -205,7 +211,10 @@ export function applyExternalSeedPreservingViewState(input: {
       truncated: false,
     },
   });
-  if (viewState !== null) input.editorView?.restoreViewState(viewState);
+  if (viewState !== null) {
+    input.editorView?.restoreViewState(viewState);
+    input.deferRestore?.(() => input.editorView?.restoreViewState(viewState));
+  }
   return plan;
 }
 
@@ -285,11 +294,20 @@ export function MonacoFileEditor({
   /** Applies a fresh disk read through the shared File/Diff A/L/D policy. */
   const reconcileExternal = React.useCallback(
     (lease: MonacoLease, seed: DiskSnapshot) => {
+      const editorView = editorRef.current;
       const plan = applyExternalSeedPreservingViewState({
         lease,
-        editorView: editorRef.current,
+        editorView,
         lastWrite: lastWriteRef.current,
         seed,
+        deferRestore:
+          editorView === null
+            ? undefined
+            : (restore) => {
+                requestAnimationFrame(() => {
+                  if (editorRef.current === editorView) restore();
+                });
+              },
       });
       setStale(plan.kind === "conflict" ? seed : null);
       syncDirty();
