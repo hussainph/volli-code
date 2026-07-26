@@ -4,6 +4,7 @@ import { allEditorThemeImporters, resolveEditorThemeId } from "./editor-theme-ca
 import { DocumentRegistry, type RegistryModelFactory } from "./document-registry";
 import { ensureShikiLanguage, allShikiLangImporters, type ShikiLanguageHost } from "./shiki-langs";
 import { bootstrapShikiMonaco, type ShikiMonacoBootstrap } from "./shiki-monaco";
+import { bindMonacoEditorThemeHost, ensureMonacoEditorTheme } from "./monaco-theme";
 
 export function createLazyInitializer<Value>(
   initialize: () => Promise<Value>,
@@ -95,8 +96,8 @@ export function createShikiBackedModelFactory(
 
 /**
  * Wire shiki once with every catalog theme and document-identity language
- * loaded before `shikiToMonaco`, then activate the resolved default theme
- * (ember → one-dark-pro until store wiring supplies ActiveTheme).
+ * loaded before `shikiToMonaco`, then activate the pending editor theme (or
+ * the ember → one-dark-pro default when nothing has asked yet).
  */
 export async function prepareMonacoEditorThemes(
   monaco: typeof Monaco,
@@ -105,11 +106,15 @@ export async function prepareMonacoEditorThemes(
     themes: allEditorThemeImporters(),
     langs: allShikiLangImporters(),
   });
-  const themeId = resolveEditorThemeId({
-    editorThemeId: null,
-    appThemeSlug: "ember",
-  });
-  monaco.editor.setTheme(themeId);
+  bindMonacoEditorThemeHost(monaco);
+  // If the theme store already refreshed before runtime init, bind applied it.
+  // Otherwise activate the shipped default so the first editor isn't unthemed.
+  ensureMonacoEditorTheme(
+    resolveEditorThemeId({
+      editorThemeId: null,
+      appThemeSlug: "ember",
+    }),
+  );
   return shiki;
 }
 

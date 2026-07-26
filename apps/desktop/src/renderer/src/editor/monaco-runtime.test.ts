@@ -31,9 +31,11 @@ import {
   waitForLanguageWorkerRegistration,
   workerKindForLabel,
 } from "./monaco-runtime";
+import { resetMonacoEditorThemeForTests } from "./monaco-theme";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetMonacoEditorThemeForTests();
   bootstrapShikiMonaco.mockResolvedValue({
     highlighter: {},
     registerTheme: vi.fn(),
@@ -84,6 +86,18 @@ describe("prepareMonacoEditorThemes", () => {
     expect(defineTheme.mock.calls.some((call) => call[0] === "volli-dark")).toBe(false);
     expect(setTheme.mock.calls.some((call) => call[0] === "volli-dark")).toBe(false);
     expect(setTheme).toHaveBeenCalledWith(DEFAULT_EDITOR_THEME_ID);
+  });
+
+  it("keeps a theme queued before bootstrap instead of forcing the ember default", async () => {
+    const { refreshMonacoEditorTheme } = await import("./monaco-theme");
+    refreshMonacoEditorTheme("nord");
+    const setTheme = vi.fn();
+    const monaco = { editor: { defineTheme: vi.fn(), setTheme } };
+
+    await prepareMonacoEditorThemes(monaco as never);
+
+    expect(setTheme).toHaveBeenCalledWith("nord");
+    expect(setTheme).not.toHaveBeenCalledWith("one-dark-pro");
   });
 });
 
