@@ -682,6 +682,40 @@ describe("ticket file tab persistence", () => {
     });
   });
 
+  it("keeps a persisted __proto__ diffMeta path as an own property, not a prototype", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:workspace",
+      JSON.stringify({
+        state: {
+          byProject: {
+            "project-a": {
+              ticketTabs: {
+                "ticket-1": {
+                  files: [],
+                  diffs: ["__proto__"],
+                  diffMeta: {
+                    ["__proto__"]: { status: "modified" },
+                  },
+                  active: "diff:__proto__",
+                },
+              },
+            },
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    const store = createWorkspaceStore(storage);
+    const diffMeta = store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.diffMeta;
+    expect(Object.keys(diffMeta ?? {})).toEqual(["__proto__"]);
+    expect(Object.getPrototypeOf(diffMeta)).toBeNull();
+    expect(diffMeta?.["__proto__"]).toEqual({ status: "modified" });
+    // Corruption check: Object.prototype must not gain a `status` from the map.
+    expect(Object.prototype).not.toHaveProperty("status");
+  });
+
   it("falls active diff:missing.ts back to Doc when the path is not open", () => {
     const storage = createMemoryStorage();
     storage.setItem(

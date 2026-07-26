@@ -392,7 +392,9 @@ function sanitizeDiffMeta(
   raw: unknown,
   diffs: readonly string[],
 ): Record<string, TicketDiffTabMeta> {
-  const out: Record<string, TicketDiffTabMeta> = {};
+  // Null-prototype: a persisted `__proto__` path must land as an own property,
+  // not mutate Object.prototype via the `__proto__` setter on `{}`.
+  const out = Object.create(null) as Record<string, TicketDiffTabMeta>;
   if (typeof raw !== "object" || raw === null) return out;
   const open = new Set(diffs);
   for (const [path, value] of Object.entries(raw)) {
