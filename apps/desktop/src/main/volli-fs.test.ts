@@ -767,6 +767,26 @@ describe("FileWatchManager", () => {
     } satisfies FileChangedEvent);
   });
 
+  it("reports a null revision when the watched file was deleted before delivery", async () => {
+    const project = makeTempProjectDir();
+    const manager = new FileWatchManager(250);
+    const webContents = makeWebContents();
+    await watchFile(manager, webContents, project);
+
+    vi.useFakeTimers();
+    rmSync(join(project, "notes.md"));
+    watchCalls[0]?.cb("rename", "notes.md");
+    vi.advanceTimersByTime(250);
+
+    expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
+      projectId: "proj-1",
+      ticketId: null,
+      relPath: "notes.md",
+      source: "main",
+      revision: null,
+    } satisfies FileChangedEvent);
+  });
+
   it("ignores an event for a different basename in the same directory", async () => {
     const project = makeTempProjectDir();
     const manager = new FileWatchManager(250);
