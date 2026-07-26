@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   EMPTY_TICKET_RECENCY_OWNER_STATE,
+  readTicketInspection,
   reduceTicketRecencyOwner,
 } from "./ticket-change-recency-owner";
 
@@ -89,5 +90,34 @@ describe("reduceTicketRecencyOwner", () => {
       updatedRevision: null,
     });
     expect(echoed.localSaveEchoes["src/app.ts"]).toBeUndefined();
+  });
+});
+
+describe("readTicketInspection", () => {
+  it("records the exact revision and resolved Main identity from a deliberate open", async () => {
+    const read = async () =>
+      ({
+        ok: true,
+        source: "main",
+        mtime: 42,
+        content: { type: "text", text: "hello\n", truncated: false },
+      }) as const;
+
+    await expect(
+      readTicketInspection(read, {
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        relPath: ".volli/artifacts/notes.md",
+      }),
+    ).resolves.toEqual({
+      type: "inspect",
+      identity: {
+        projectId: "project-1",
+        ticketId: null,
+        relPath: ".volli/artifacts/notes.md",
+        source: "main",
+      },
+      revision: 42,
+    });
   });
 });
