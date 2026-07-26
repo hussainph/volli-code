@@ -4,6 +4,7 @@ import type { ChangeSetFile } from "@volli/shared";
 
 import { DiffStub } from "./diff-stub";
 import {
+  applyDiffLiveReconciliation,
   applyDiffDiskReconcilePlan,
   isDiffLeaseCurrent,
   isMissingFileReadError,
@@ -229,6 +230,38 @@ describe("applyDiffDiskReconcilePlan", () => {
         adoptCleanBaseline: vi.fn(),
       }),
     ).toEqual({ kind: "missing" });
+  });
+});
+
+describe("applyDiffLiveReconciliation", () => {
+  it("uses the shared File/Diff policy and registry transaction for disjoint edits", () => {
+    const applyExternalUpdate = vi.fn();
+    const lease = {
+      model: { getValue: () => "human first\nkeep\nlast\n" },
+      snapshot: () => ({ baseline: "first\nkeep\nlast\n" }),
+      applyExternalUpdate,
+      adoptCleanBaseline: vi.fn(),
+    };
+
+    const result = applyDiffLiveReconciliation({
+      lease,
+      lastWrite: null,
+      disk: {
+        ok: true,
+        text: "first\nkeep\nagent last\n",
+        mtime: 21,
+        source: "worktree",
+        truncated: false,
+      },
+      unreadableRevision: null,
+    });
+
+    expect(result).toMatchObject({ kind: "apply", outcome: "merge" });
+    expect(applyExternalUpdate).toHaveBeenCalledWith({
+      baseline: "first\nkeep\nagent last\n",
+      value: "human first\nkeep\nagent last\n",
+      revision: 21,
+    });
   });
 });
 
