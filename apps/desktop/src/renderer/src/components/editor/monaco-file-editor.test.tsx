@@ -9,7 +9,6 @@ import {
 import {
   applyExternalSeedPreservingViewState,
   attachEditorContribution,
-  classifyExternalChange,
   fileEditorAriaLabel,
   fileEditorConstructionOptions,
   MonacoFileEditor,
@@ -165,46 +164,6 @@ describe("planExplicitSave", () => {
 
   it("ranks read-only above the in-flight and clean skips", () => {
     expect(planExplicitSave({ readOnly: true, saving: true, dirty: false })).toBe("skip-read-only");
-  });
-});
-
-describe("classifyExternalChange", () => {
-  const base = { baseline: "disk", dirty: false, lastWrite: null };
-
-  it("adopts disk truth when the user has no draft to protect", () => {
-    expect(classifyExternalChange({ ...base, incoming: "next" })).toBe("adopt");
-  });
-
-  it("reports divergence when disk moved under a dirty draft", () => {
-    expect(classifyExternalChange({ ...base, dirty: true, incoming: "next" })).toBe("diverged");
-  });
-
-  it("treats a same-content event (an mtime touch) as no change at all", () => {
-    expect(classifyExternalChange({ ...base, dirty: true, incoming: "disk" })).toBe("unchanged");
-  });
-
-  it("treats the echo of this view's own write as no change, even while dirty again", () => {
-    // Cmd-S wrote "mine", the user kept typing, then the fs watch delivered our
-    // own bytes back. That must not raise a 'changed on disk' banner.
-    expect(
-      classifyExternalChange({
-        baseline: "disk",
-        dirty: true,
-        lastWrite: "mine",
-        incoming: "mine",
-      }),
-    ).toBe("unchanged");
-  });
-
-  it("still diverges when someone else's bytes arrive after our own write", () => {
-    expect(
-      classifyExternalChange({
-        baseline: "disk",
-        dirty: true,
-        lastWrite: "mine",
-        incoming: "theirs",
-      }),
-    ).toBe("diverged");
   });
 });
 

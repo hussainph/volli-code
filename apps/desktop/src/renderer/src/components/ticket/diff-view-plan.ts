@@ -11,7 +11,6 @@ import {
   type WorktreeBaseReadResult,
 } from "@volli/shared";
 
-import { classifyExternalChange } from "@renderer/components/editor/monaco-file-editor";
 import {
   diffFilePolicy,
   type DiffBaseRead,
@@ -201,87 +200,6 @@ export function coerceChangeStatus(status: string | undefined): ChangeSetFileSta
     return status as ChangeSetFileStatus;
   }
   return "modified";
-}
-
-/**
- * Decide how a DiffView should react when the live worktree file changes under
- * an open Diff tab (including when no FileView is mounted for the same path).
- * Pure — reuses {@link classifyExternalChange} so Diff and File tabs share the
- * same adopt / diverge / write-echo rules.
- */
-export type DiffDiskReconcilePlan =
-  | { kind: "adopt"; text: string; revision: number; source: FileSource }
-  | { kind: "diverged"; text: string; revision: number }
-  | { kind: "unreadable"; error: string; keepDraft: boolean }
-  | { kind: "missing" };
-
-export function planDiffDiskReconcile(input: {
-  dirty: boolean;
-  baseline: string;
-  lastWrite: string | null;
-  disk: DiffLiveRead;
-}): DiffDiskReconcilePlan {
-  if (input.disk.ok === false) {
-    if ("missing" in input.disk && input.disk.missing) {
-      return input.dirty
-        ? { kind: "unreadable", error: "File was deleted on disk.", keepDraft: true }
-        : { kind: "missing" };
-    }
-    const error = "error" in input.disk ? input.disk.error : "unreadable";
-    return { kind: "unreadable", error, keepDraft: input.dirty };
-  }
-
-  const decision = classifyExternalChange({
-    baseline: input.baseline,
-    dirty: input.dirty,
-    incoming: input.disk.text,
-    lastWrite: input.lastWrite,
-  });
-  if (decision === "diverged") {
-    // Callers MUST still `adoptCleanBaseline({ value: text, revision })` so
-    // externalRevision advances (overwrite-save uses the new mtime) while the
-    // dirty draft is kept — same as MonacoFileEditor.reconcileExternal.
-    return { kind: "diverged", text: input.disk.text, revision: input.disk.mtime };
-  }
-  // "adopt" and "unchanged" both advance through adoptCleanBaseline so mtime /
-  // externalRevision stay current even when the bytes match.
-  return {
-    kind: "adopt",
-    text: input.disk.text,
-    revision: input.disk.mtime,
-    source: input.disk.source,
-  };
-}
-
-/**
- * Apply a {@link planDiffDiskReconcile} result to the modified lease.
- * Mirrors MonacoFileEditor: both adopt and diverged call adoptCleanBaseline
- * (diverged advances externalRevision over a dirty draft without rewriting it).
- */
-export type DiffDiskReconcileApply =
-  | { kind: "clear-conflict" }
-  | { kind: "conflict"; conflict: { text: string; mtime: number } }
-  | { kind: "toast-unreadable" }
-  | { kind: "error"; error: string }
-  | { kind: "missing" };
-
-export function applyDiffDiskReconcilePlan(input: {
-  plan: DiffDiskReconcilePlan;
-  adoptCleanBaseline(seed: { value: string; revision: number }): unknown;
-}): DiffDiskReconcileApply {
-  const { plan } = input;
-  if (plan.kind === "adopt") {
-    input.adoptCleanBaseline({ value: plan.text, revision: plan.revision });
-    return { kind: "clear-conflict" };
-  }
-  if (plan.kind === "diverged") {
-    input.adoptCleanBaseline({ value: plan.text, revision: plan.revision });
-    return { kind: "conflict", conflict: { text: plan.text, mtime: plan.revision } };
-  }
-  if (plan.kind === "unreadable") {
-    return plan.keepDraft ? { kind: "toast-unreadable" } : { kind: "error", error: plan.error };
-  }
-  return { kind: "missing" };
 }
 
 /**

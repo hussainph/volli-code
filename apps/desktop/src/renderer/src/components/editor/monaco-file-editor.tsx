@@ -156,28 +156,6 @@ export function planExplicitSave(input: {
   return "save";
 }
 
-/** How a fresh on-disk read relates to what this view is showing. */
-export type ExternalChangeDecision = "unchanged" | "adopt" | "diverged";
-
-/**
- * Decides whether a re-read is worth reacting to. Two events look like external
- * changes but aren't: a bare mtime touch (identical bytes) and the fs-watch
- * echo of this view's own write — neither may raise a "Changed on disk" banner,
- * and the echo case has to be caught by content because the user may already
- * have typed again, making the document dirty against the saved bytes.
- * Only genuinely different bytes arriving over a dirty draft diverge.
- */
-export function classifyExternalChange(input: {
-  baseline: string;
-  dirty: boolean;
-  incoming: string;
-  lastWrite: string | null;
-}): ExternalChangeDecision {
-  if (input.incoming === input.baseline) return "unchanged";
-  if (input.lastWrite !== null && input.incoming === input.lastWrite) return "unchanged";
-  return input.dirty ? "diverged" : "adopt";
-}
-
 /** A failed write is never swallowed — this is what the user is told (CLAUDE.md). */
 export function saveFailureMessage(label: string, error: string): string {
   const detail = error.trim();

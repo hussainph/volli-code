@@ -407,10 +407,8 @@ export function FileView({
             // tab-close guard writes with, and leaving it behind disk wedges
             // that save on a stale `expectedMtime` while ⌘S here still
             // succeeds. This cannot look like an external edit to the user —
-            // the content is identical, so `classifyExternalChange` reports
-            // "unchanged" and raises no banner, and `adoptCleanBaseline`
-            // advances `externalRevision` even over a dirty draft without
-            // touching the draft itself.
+            // the shared reconciliation policy recognizes matching bytes and
+            // advances `externalRevision` without touching a dirty draft.
             setState((previous) =>
               previous.status === "code" ? { ...previous, revision: disk.mtime } : previous,
             );
