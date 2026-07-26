@@ -6,7 +6,11 @@
  * `bootstrapShikiMonaco({ themes })` before the single `shikiToMonaco` call.
  */
 
-import { SHIPPED_EDITOR_THEME_IDS, type ShippedEditorThemeId } from "@volli/shared";
+import {
+  isShippedEditorThemeId,
+  SHIPPED_EDITOR_THEME_IDS,
+  type ShippedEditorThemeId,
+} from "@volli/shared";
 import type { DynamicImportThemeRegistration, ThemeInput } from "shiki";
 
 export interface EditorThemeEntry {
@@ -180,8 +184,6 @@ const APP_SLUG_TO_EDITOR_THEME: Readonly<Record<string, string>> = {
   graphite: "github-dark",
 };
 
-const CATALOG_IDS = new Set(EDITOR_THEMES.map((theme) => theme.id));
-
 // Shared IPC vocabulary ↔ renderer catalog: same ids, same order. A mismatch
 // means someone added a shiki theme here without updating @volli/shared (or
 // the reverse) — refuse to ship a catalog the guard would reject.
@@ -217,7 +219,7 @@ export function resolveEditorThemeId(input: {
   appThemeSlug: string | null | undefined;
 }): string {
   const explicit = input.editorThemeId;
-  if (typeof explicit === "string" && explicit.length > 0 && CATALOG_IDS.has(explicit)) {
+  if (typeof explicit === "string" && explicit.length > 0 && isShippedEditorThemeId(explicit)) {
     return explicit;
   }
 
