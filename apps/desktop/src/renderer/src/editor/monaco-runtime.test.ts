@@ -1,10 +1,61 @@
-import { describe, expect, it, vi } from "vite-plus/test";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+
+const { bootstrapShikiMonaco } = vi.hoisted(() => ({
+  bootstrapShikiMonaco: vi.fn(),
+}));
+
+vi.mock("./shiki-monaco", () => ({ bootstrapShikiMonaco }));
 
 import {
   createLazyInitializer,
+  prepareMonacoEditorThemes,
   waitForLanguageWorkerRegistration,
   workerKindForLabel,
 } from "./monaco-runtime";
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  bootstrapShikiMonaco.mockResolvedValue({
+    highlighter: {},
+    registerTheme: vi.fn(),
+  });
+});
+
+describe("prepareMonacoEditorThemes", () => {
+  it("bootstraps shiki once then keeps volli-dark as the active Monaco theme", async () => {
+    const defineTheme = vi.fn();
+    const setTheme = vi.fn();
+    const monaco = {
+      editor: { defineTheme, setTheme },
+    };
+    const shiki = { highlighter: { id: "shiki" }, registerTheme: vi.fn() };
+    bootstrapShikiMonaco.mockResolvedValue(shiki);
+
+    const result = await prepareMonacoEditorThemes(monaco as never, {
+      background: "#111111",
+      foreground: "#f5f5f5",
+      muted: "#1c1c1c",
+      mutedForeground: "#9a9a9a",
+      border: "#262626",
+      primary: "#e8652a",
+      destructive: "#e5484d",
+    });
+
+    expect(bootstrapShikiMonaco).toHaveBeenCalledTimes(1);
+    expect(bootstrapShikiMonaco).toHaveBeenCalledWith(monaco);
+    expect(defineTheme).toHaveBeenCalledWith(
+      "volli-dark",
+      expect.objectContaining({
+        base: "vs-dark",
+        colors: expect.objectContaining({ "editor.background": "#111111" }),
+      }),
+    );
+    expect(setTheme).toHaveBeenCalledWith("volli-dark");
+    expect(result).toBe(shiki);
+    // shiki's empty-theme bootstrap may call setTheme(undefined); volli-dark must win last.
+    expect(setTheme.mock.calls.at(-1)).toEqual(["volli-dark"]);
+  });
+});
 
 describe("createLazyInitializer", () => {
   it("shares one initialization promise across concurrent and later callers", async () => {

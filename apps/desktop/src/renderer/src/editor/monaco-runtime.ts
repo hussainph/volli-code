@@ -1,7 +1,12 @@
 import type * as Monaco from "monaco-editor";
 
 import { DocumentRegistry } from "./document-registry";
-import { createVolliMonacoTheme, readVolliMonacoTokens } from "./monaco-theme";
+import {
+  createVolliMonacoTheme,
+  readVolliMonacoTokens,
+  type VolliMonacoTokens,
+} from "./monaco-theme";
+import { bootstrapShikiMonaco, type ShikiMonacoBootstrap } from "./shiki-monaco";
 
 export function createLazyInitializer<Value>(
   initialize: () => Promise<Value>,
@@ -65,6 +70,20 @@ export interface MonacoRuntime {
 
 type WorkerConstructor = new (options?: WorkerOptions) => Worker;
 
+/**
+ * Wire shiki once, then keep `volli-dark` as the active theme so editors still
+ * boot until the catalog/picker slice replaces it.
+ */
+export async function prepareMonacoEditorThemes(
+  monaco: typeof Monaco,
+  tokens: VolliMonacoTokens = readVolliMonacoTokens(),
+): Promise<ShikiMonacoBootstrap> {
+  const shiki = await bootstrapShikiMonaco(monaco);
+  monaco.editor.defineTheme("volli-dark", createVolliMonacoTheme(tokens));
+  monaco.editor.setTheme("volli-dark");
+  return shiki;
+}
+
 async function initializeMonacoRuntime(): Promise<MonacoRuntime> {
   // Vite turns each ?worker import into a same-origin worker constructor. Load
   // those wrappers first so MonacoEnvironment is configured before Monaco's
@@ -104,8 +123,7 @@ async function initializeMonacoRuntime(): Promise<MonacoRuntime> {
   };
 
   const monaco = await import("monaco-editor");
-  monaco.editor.defineTheme("volli-dark", createVolliMonacoTheme(readVolliMonacoTokens()));
-  monaco.editor.setTheme("volli-dark");
+  await prepareMonacoEditorThemes(monaco);
 
   const registry = new DocumentRegistry<
     Monaco.editor.ITextModel,
