@@ -17,61 +17,150 @@ export interface EditorThemeEntry {
 /** Static ES-module importer for a catalog theme id. */
 export type EditorThemeImporter = DynamicImportThemeRegistration;
 
-const EDITOR_THEMES: readonly EditorThemeEntry[] = [
-  { id: "catppuccin-mocha", label: "Catppuccin Mocha", family: "Catppuccin" },
-  { id: "catppuccin-macchiato", label: "Catppuccin Macchiato", family: "Catppuccin" },
-  { id: "catppuccin-frappe", label: "Catppuccin Frappé", family: "Catppuccin" },
-  { id: "tokyo-night", label: "Tokyo Night", family: "Tokyo Night" },
-  { id: "rose-pine", label: "Rosé Pine", family: "Rosé Pine" },
-  { id: "rose-pine-moon", label: "Rosé Pine Moon", family: "Rosé Pine" },
-  { id: "nord", label: "Nord", family: "Nord" },
-  { id: "gruvbox-dark-medium", label: "Gruvbox Dark Medium", family: "Gruvbox" },
-  { id: "dracula", label: "Dracula", family: "Dracula" },
-  { id: "one-dark-pro", label: "One Dark Pro", family: "One Dark" },
-  { id: "ayu-dark", label: "Ayu Dark", family: "Ayu" },
-  { id: "ayu-mirage", label: "Ayu Mirage", family: "Ayu" },
-  { id: "solarized-dark", label: "Solarized Dark", family: "Solarized" },
-  { id: "night-owl", label: "Night Owl", family: "Night Owl" },
-  { id: "github-dark", label: "GitHub Dark", family: "GitHub" },
-  { id: "vitesse-dark", label: "Vitesse Dark", family: "Vitesse" },
-  { id: "everforest-dark", label: "Everforest Dark", family: "Everforest" },
-  { id: "kanagawa-wave", label: "Kanagawa Wave", family: "Kanagawa" },
-  { id: "kanagawa-dragon", label: "Kanagawa Dragon", family: "Kanagawa" },
-  { id: "monokai", label: "Monokai", family: "Monokai" },
-  { id: "dark-plus", label: "Dark+", family: "VS Code" },
-  { id: "material-theme-palenight", label: "Material Theme Palenight", family: "Material" },
-];
+interface EditorThemeDefinition extends EditorThemeEntry {
+  load: EditorThemeImporter;
+}
 
 /**
- * Bundler-resolved importers keyed by catalog id. Keys must stay in lockstep
- * with `EDITOR_THEMES` — tests assert every catalog id has an importer.
+ * Single source of truth: metadata + static importer per theme.
+ * Keep `apps/desktop/scripts/generate-editor-theme-notices.mjs` in sync.
  */
-const EDITOR_THEME_IMPORTS: Readonly<Record<string, EditorThemeImporter>> = {
-  "catppuccin-mocha": () => import("@shikijs/themes/catppuccin-mocha"),
-  "catppuccin-macchiato": () => import("@shikijs/themes/catppuccin-macchiato"),
-  "catppuccin-frappe": () => import("@shikijs/themes/catppuccin-frappe"),
-  "tokyo-night": () => import("@shikijs/themes/tokyo-night"),
-  "rose-pine": () => import("@shikijs/themes/rose-pine"),
-  "rose-pine-moon": () => import("@shikijs/themes/rose-pine-moon"),
-  nord: () => import("@shikijs/themes/nord"),
-  "gruvbox-dark-medium": () => import("@shikijs/themes/gruvbox-dark-medium"),
-  dracula: () => import("@shikijs/themes/dracula"),
-  "one-dark-pro": () => import("@shikijs/themes/one-dark-pro"),
-  "ayu-dark": () => import("@shikijs/themes/ayu-dark"),
-  "ayu-mirage": () => import("@shikijs/themes/ayu-mirage"),
-  "solarized-dark": () => import("@shikijs/themes/solarized-dark"),
-  "night-owl": () => import("@shikijs/themes/night-owl"),
-  "github-dark": () => import("@shikijs/themes/github-dark"),
-  "vitesse-dark": () => import("@shikijs/themes/vitesse-dark"),
-  "everforest-dark": () => import("@shikijs/themes/everforest-dark"),
-  "kanagawa-wave": () => import("@shikijs/themes/kanagawa-wave"),
-  "kanagawa-dragon": () => import("@shikijs/themes/kanagawa-dragon"),
-  monokai: () => import("@shikijs/themes/monokai"),
-  "dark-plus": () => import("@shikijs/themes/dark-plus"),
-  "material-theme-palenight": () => import("@shikijs/themes/material-theme-palenight"),
-};
+const EDITOR_THEMES: readonly EditorThemeDefinition[] = [
+  {
+    id: "catppuccin-mocha",
+    label: "Catppuccin Mocha",
+    family: "Catppuccin",
+    load: () => import("@shikijs/themes/catppuccin-mocha"),
+  },
+  {
+    id: "catppuccin-macchiato",
+    label: "Catppuccin Macchiato",
+    family: "Catppuccin",
+    load: () => import("@shikijs/themes/catppuccin-macchiato"),
+  },
+  {
+    id: "catppuccin-frappe",
+    label: "Catppuccin Frappé",
+    family: "Catppuccin",
+    load: () => import("@shikijs/themes/catppuccin-frappe"),
+  },
+  {
+    id: "tokyo-night",
+    label: "Tokyo Night",
+    family: "Tokyo Night",
+    load: () => import("@shikijs/themes/tokyo-night"),
+  },
+  {
+    id: "rose-pine",
+    label: "Rosé Pine",
+    family: "Rosé Pine",
+    load: () => import("@shikijs/themes/rose-pine"),
+  },
+  {
+    id: "rose-pine-moon",
+    label: "Rosé Pine Moon",
+    family: "Rosé Pine",
+    load: () => import("@shikijs/themes/rose-pine-moon"),
+  },
+  {
+    id: "nord",
+    label: "Nord",
+    family: "Nord",
+    load: () => import("@shikijs/themes/nord"),
+  },
+  {
+    id: "gruvbox-dark-medium",
+    label: "Gruvbox Dark Medium",
+    family: "Gruvbox",
+    load: () => import("@shikijs/themes/gruvbox-dark-medium"),
+  },
+  {
+    id: "dracula",
+    label: "Dracula",
+    family: "Dracula",
+    load: () => import("@shikijs/themes/dracula"),
+  },
+  {
+    id: "one-dark-pro",
+    label: "One Dark Pro",
+    family: "One Dark",
+    load: () => import("@shikijs/themes/one-dark-pro"),
+  },
+  {
+    id: "ayu-dark",
+    label: "Ayu Dark",
+    family: "Ayu",
+    load: () => import("@shikijs/themes/ayu-dark"),
+  },
+  {
+    id: "ayu-mirage",
+    label: "Ayu Mirage",
+    family: "Ayu",
+    load: () => import("@shikijs/themes/ayu-mirage"),
+  },
+  {
+    id: "solarized-dark",
+    label: "Solarized Dark",
+    family: "Solarized",
+    load: () => import("@shikijs/themes/solarized-dark"),
+  },
+  {
+    id: "night-owl",
+    label: "Night Owl",
+    family: "Night Owl",
+    load: () => import("@shikijs/themes/night-owl"),
+  },
+  {
+    id: "github-dark",
+    label: "GitHub Dark",
+    family: "GitHub",
+    load: () => import("@shikijs/themes/github-dark"),
+  },
+  {
+    id: "vitesse-dark",
+    label: "Vitesse Dark",
+    family: "Vitesse",
+    load: () => import("@shikijs/themes/vitesse-dark"),
+  },
+  {
+    id: "everforest-dark",
+    label: "Everforest Dark",
+    family: "Everforest",
+    load: () => import("@shikijs/themes/everforest-dark"),
+  },
+  {
+    id: "kanagawa-wave",
+    label: "Kanagawa Wave",
+    family: "Kanagawa",
+    load: () => import("@shikijs/themes/kanagawa-wave"),
+  },
+  {
+    id: "kanagawa-dragon",
+    label: "Kanagawa Dragon",
+    family: "Kanagawa",
+    load: () => import("@shikijs/themes/kanagawa-dragon"),
+  },
+  {
+    id: "monokai",
+    label: "Monokai",
+    family: "Monokai",
+    load: () => import("@shikijs/themes/monokai"),
+  },
+  {
+    id: "dark-plus",
+    label: "Dark+",
+    family: "VS Code",
+    load: () => import("@shikijs/themes/dark-plus"),
+  },
+  {
+    id: "material-theme-palenight",
+    label: "Material Theme Palenight",
+    family: "Material",
+    load: () => import("@shikijs/themes/material-theme-palenight"),
+  },
+];
 
-/** Fallback when the app theme slug is unknown or maps to a missing catalog id. */
+/** Fallback when the app theme slug is unknown or unset. */
 export const DEFAULT_EDITOR_THEME_ID = "one-dark-pro";
 
 /**
@@ -91,7 +180,7 @@ const CATALOG_IDS = new Set(EDITOR_THEMES.map((theme) => theme.id));
 
 /** Every shipped editor theme for pickers and bootstrap. */
 export function listEditorThemes(): EditorThemeEntry[] {
-  return EDITOR_THEMES.map((theme) => ({ ...theme }));
+  return EDITOR_THEMES.map(({ id, label, family }) => ({ id, label, family }));
 }
 
 /**
@@ -99,13 +188,7 @@ export function listEditorThemes(): EditorThemeEntry[] {
  * Pass into `bootstrapShikiMonaco` before `shikiToMonaco` so themeMap populates.
  */
 export function allEditorThemeImporters(): ThemeInput[] {
-  return EDITOR_THEMES.map((theme) => {
-    const load = EDITOR_THEME_IMPORTS[theme.id];
-    if (load === undefined) {
-      throw new Error(`Missing @shikijs/themes importer for catalog id ${theme.id}`);
-    }
-    return load;
-  });
+  return EDITOR_THEMES.map((theme) => theme.load);
 }
 
 /**
@@ -123,8 +206,7 @@ export function resolveEditorThemeId(input: {
   }
 
   const slug = input.appThemeSlug ?? "";
-  const mapped = APP_SLUG_TO_EDITOR_THEME[slug] ?? DEFAULT_EDITOR_THEME_ID;
-  return CATALOG_IDS.has(mapped) ? mapped : DEFAULT_EDITOR_THEME_ID;
+  return APP_SLUG_TO_EDITOR_THEME[slug] ?? DEFAULT_EDITOR_THEME_ID;
 }
 
 /** Map a Volli app theme slug to its default editor theme (null → ember default). */

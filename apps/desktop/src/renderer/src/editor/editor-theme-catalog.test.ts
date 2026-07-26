@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   allEditorThemeImporters,
   DEFAULT_EDITOR_THEME_ID,
+  editorThemeIdForAppSlug,
   listEditorThemes,
   resolveEditorThemeId,
 } from "./editor-theme-catalog";
@@ -94,5 +95,13 @@ describe("resolveEditorThemeId", () => {
     expect(resolveEditorThemeId({ editorThemeId: "not-a-theme", appThemeSlug: "unknown" })).toBe(
       DEFAULT_EDITOR_THEME_ID,
     );
+    expect(resolveEditorThemeId({ editorThemeId: "", appThemeSlug: "moss" })).toBe(
+      "everforest-dark",
+    );
+  });
+
+  it("exposes editorThemeIdForAppSlug as the null-override convenience", () => {
+    expect(editorThemeIdForAppSlug("iris")).toBe("catppuccin-mocha");
+    expect(editorThemeIdForAppSlug(null)).toBe(DEFAULT_EDITOR_THEME_ID);
   });
 });
