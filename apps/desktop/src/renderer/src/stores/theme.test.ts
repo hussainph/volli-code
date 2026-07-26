@@ -397,6 +397,8 @@ describe("commit", () => {
 
     expect(gateway.setGlobal).toHaveBeenCalledWith(MIDNIGHT);
     expect(paint.applied).toEqual([MIDNIGHT]);
+    // null editorThemeId remaps Monaco when the app slug changes
+    expect(paint.editorThemes).toEqual(["tokyo-night"]);
   });
 });
 
@@ -420,7 +422,11 @@ describe("favorites and recents", () => {
       JSON.stringify({ state: { favorites: ["moss", 7], recents: "nope" }, version: 1 }),
     );
     const store = createThemeStore({
-      deps: { gateway: fakeGateway(), applyTheme: () => {} },
+      deps: {
+        gateway: fakeGateway(),
+        applyTheme: () => {},
+        refreshEditorTheme: () => {},
+      },
       storage: memory.storage,
     });
 
@@ -613,6 +619,10 @@ describe("createThemeStore() with the default deps", () => {
       value: statePayload({ theme: MIDNIGHT }),
     }));
     const setGlobal = vi.fn(async () => ({ ok: true as const, value: statePayload() }));
+    const setGlobalEditor = vi.fn(async (editorThemeId: string | null) => ({
+      ok: true as const,
+      value: statePayload({ editorThemeId }),
+    }));
     const setProject = vi.fn(async () => ({ ok: false as const, error: "unused" }));
     const listCustomThemes = vi.fn(async () => ({ ok: true as const, themes: [SUNSET] }));
     const saveCustomTheme = vi.fn(async () => ({
@@ -627,6 +637,7 @@ describe("createThemeStore() with the default deps", () => {
         theme: {
           state,
           setGlobal,
+          setGlobalEditor,
           setProject,
           listCustomThemes,
           saveCustomTheme,
@@ -652,6 +663,9 @@ describe("createThemeStore() with the default deps", () => {
 
     await store.getState().setGlobalTheme(DEFAULT_THEME);
     expect(setGlobal).toHaveBeenCalledWith(DEFAULT_THEME);
+
+    await store.getState().setEditorTheme("nord");
+    expect(setGlobalEditor).toHaveBeenCalledWith("nord");
 
     store.setState({ preview: MIDNIGHT });
     await store.getState().commitPreview({ kind: "project", projectId: "p1" });

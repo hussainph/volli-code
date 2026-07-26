@@ -143,8 +143,11 @@ function themeCatalog(customThemes: ThemeDefinition[]): readonly ThemeDefinition
 /** The inputs that decide what is on screen right now. */
 type EffectiveThemeInput = Pick<
   ThemeState,
-  "preview" | "global" | "projectOverride" | "customThemes" | "editorThemeId"
->;
+  "preview" | "global" | "projectOverride" | "customThemes"
+> & {
+  /** Optional for app-only callers; defaults to derive-from-app when omitted. */
+  editorThemeId?: string | null;
+};
 
 /**
  * The app-surface theme currently in force: the preview if one is running,
@@ -162,7 +165,7 @@ export function effectiveTheme({
   global,
   projectOverride,
   customThemes,
-  editorThemeId,
+  editorThemeId = null,
 }: EffectiveThemeInput): ThemeDefinition {
   if (preview !== null) return preview;
   return resolveActiveTheme(global, projectOverride, themeCatalog(customThemes), editorThemeId).app
@@ -172,8 +175,10 @@ export function effectiveTheme({
 /** What a scope has STORED — as opposed to what a preview is showing. */
 type AppliedThemeInput = Pick<
   ThemeState,
-  "global" | "projectId" | "projectOverride" | "customThemes" | "editorThemeId"
->;
+  "global" | "projectId" | "projectOverride" | "customThemes"
+> & {
+  editorThemeId?: string | null;
+};
 
 /**
  * The theme actually persisted for `scope`, ignoring any running preview —
@@ -182,7 +187,7 @@ type AppliedThemeInput = Pick<
  * hiding the one thing the tag exists to state.
  */
 export function appliedTheme(
-  { global, projectId, projectOverride, customThemes, editorThemeId }: AppliedThemeInput,
+  { global, projectId, projectOverride, customThemes, editorThemeId = null }: AppliedThemeInput,
   scope: ThemeScope,
 ): ThemeDefinition {
   // The store holds exactly one scope's override at a time; a picker scoped to
