@@ -85,4 +85,12 @@ describe("planEditorThemePreview", () => {
       themeId: "one-dark-pro",
     });
   });
+
+  it("always yields a themeId the Monaco refresh seam can apply", () => {
+    const preview = planEditorThemePreview({ selection: "dracula", resolvedId: "nord" });
+    const restore = planEditorThemePreview({ selection: "", resolvedId: "nord" });
+    expect(preview.themeId).toBe("dracula");
+    expect(restore.themeId).toBe("nord");
+    expect(preview.kind).not.toBe(restore.kind);
+  });
 });

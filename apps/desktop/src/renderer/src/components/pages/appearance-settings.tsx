@@ -22,6 +22,7 @@ import {
 } from "@renderer/components/theme/terminal-settings-model";
 import {
   buildEditorThemeDisplay,
+  planEditorThemePreview,
   type EditorThemeDisplay,
 } from "@renderer/components/theme/editor-settings-model";
 import {
@@ -37,6 +38,7 @@ import {
 import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { listEditorThemes, type EditorThemeEntry } from "@renderer/editor/editor-theme-catalog";
+import { refreshMonacoEditorTheme } from "@renderer/editor/monaco-theme";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { writeThrough } from "@renderer/stores/mutate";
@@ -293,13 +295,18 @@ function EditorThemeOriginBadge({ display }: { display: EditorThemeDisplay }) {
 /**
  * Monaco/shiki theme picker over the shipped catalog.
  *
- * Selecting a theme persists via {@link useThemeStore.setEditorTheme} (which
- * also refreshes Monaco). Preview-on-highlight lands in the next pass.
+ * Apply-then-revert preview (same contract as TerminalThemeRow): highlighting
+ * a row paints Monaco via {@link refreshMonacoEditorTheme} and writes nothing;
+ * picking one persists through {@link useThemeStore.setEditorTheme}; closing
+ * the menu any other way restores the resolved theme.
  */
 function EditorThemeRow() {
   const editorThemeId = useThemeStore((state) => state.editorThemeId);
   const appThemeSlug = useThemeStore((state) => state.global.slug);
   const [open, setOpen] = React.useState(false);
+  // cmdk only calls `onValueChange` when the root is CONTROLLED — uncontrolled
+  // it just updates its own store and returns, so an uncontrolled picker here
+  // would silently never preview anything.
   const [selected, setSelected] = React.useState("");
   const themes = React.useMemo(() => listEditorThemes(), []);
 
@@ -308,10 +315,35 @@ function EditorThemeRow() {
     [editorThemeId, appThemeSlug, themes],
   );
 
+  const paintPreview = React.useCallback(
+    (selection: string): void => {
+      const plan = planEditorThemePreview({
+        selection,
+        resolvedId: display.resolvedId,
+      });
+      refreshMonacoEditorTheme(plan.themeId);
+    },
+    [display.resolvedId],
+  );
+
+  const endPreview = React.useCallback((): void => {
+    paintPreview("");
+  }, [paintPreview]);
+
+  // Leaving the surface with a preview running would strand Monaco on a theme
+  // that is not stored anywhere.
+  React.useEffect(() => endPreview, [endPreview]);
+
   return (
     <SettingsRow label="Theme">
       <EditorThemeOriginBadge display={display} />
-      <Popover open={open} onOpenChange={setOpen}>
+      <Popover
+        open={open}
+        onOpenChange={(next) => {
+          setOpen(next);
+          if (!next) endPreview();
+        }}
+      >
         <PopoverTrigger asChild>
           <Button
             variant="outline"
@@ -326,7 +358,16 @@ function EditorThemeRow() {
           <Command
             loop
             value={selected}
-            onValueChange={setSelected}
+            onValueChange={(id) => {
+              setSelected(id);
+              paintPreview(id);
+            }}
+            // The pointer wandering off the list ends the preview, same as the
+            // terminal picker: a hover has no Escape.
+            onPointerLeave={() => {
+              setSelected("");
+              endPreview();
+            }}
             className="flex flex-col overflow-hidden rounded-md"
           >
             <Command.Input
@@ -345,11 +386,14 @@ function EditorThemeRow() {
                   value={theme.id}
                   keywords={[theme.label, theme.family ?? ""]}
                   onSelect={() => {
+                    // Commit first, then drop the preview: setEditorTheme
+                    // refreshes Monaco to the same id, so there is no flash.
                     void useThemeStore
                       .getState()
                       .setEditorTheme(theme.id)
                       .then((saved) => {
                         if (saved) setOpen(false);
+                        endPreview();
                       });
                   }}
                   className="flex cursor-pointer items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-sm outline-none data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground"
