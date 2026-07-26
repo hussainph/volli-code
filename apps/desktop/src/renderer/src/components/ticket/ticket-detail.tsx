@@ -85,8 +85,12 @@ export function TicketDetail({
   const openTicketDiff = useWorkspaceStore((state) => state.openTicketDiff);
   const closeTicketDiff = useWorkspaceStore((state) => state.closeTicketDiff);
   const setTicketActiveTab = useWorkspaceStore((state) => state.setTicketActiveTab);
+  const setTicketDiffViewState = useWorkspaceStore((state) => state.setTicketDiffViewState);
   const ticketTabsState = useWorkspaceStore(
     (state) => state.byProject[projectId]?.ticketTabs?.[ticket.id],
+  );
+  const ticketDiffViewStates = useWorkspaceStore(
+    (state) => state.byProject[projectId]?.ticketDiffViewStates?.[ticket.id],
   );
   const sessionTabs = useSessionsStore((state) => state.byOwner[ticket.id]?.tabs);
   const creating = useSessionsStore((state) => state.starting[ticket.id] ?? false);
@@ -425,6 +429,14 @@ export function TicketDetail({
     [activeEditorRelPath, markFileDirty],
   );
 
+  const handleDiffViewStateChange = React.useCallback(
+    (viewState: unknown) => {
+      if (activeEditorRelPath === null) return;
+      setTicketDiffViewState(projectId, ticket.id, activeEditorRelPath, viewState);
+    },
+    [activeEditorRelPath, projectId, setTicketDiffViewState, ticket.id],
+  );
+
   // The fallback above is purely visual — it renders the Ticket Body without
   // writing the store, so a persisted `active` naming a session that's since
   // closed (or one restored from a previous launch, which never repopulates:
@@ -616,6 +628,8 @@ export function TicketDetail({
                   previousPath={activeTab.previousPath ?? diffMeta[activeTab.relPath]?.previousPath}
                   status={diffMeta[activeTab.relPath]?.status}
                   onDirtyChange={handleFileDirtyChange}
+                  initialViewState={ticketDiffViewStates?.[activeTab.relPath]}
+                  onViewStateChange={handleDiffViewStateChange}
                 />
               ) : null}
               <TicketSessionPlane

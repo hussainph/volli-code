@@ -9,20 +9,21 @@
  * single delete no matter how many fields the record grows.
  *
  * Persistence is FIELD-SELECTIVE: `boardView`, `boardSort`, `openTicketId`,
- * `ticketTabs`, and the Project Files pair (`projectFiles` +
- * `projectFileViewStates`) survive relaunch (they're deliberate per-project
- * state — a view preference, the ticket-detail-mvp decision that the open
- * ticket persists across restart, decision #3, or the Project Files workspace
- * that must resume where you left it, decisions #55/#56), while `nav` and
- * `expandedDirs` stay session-only — nav resetting to Board on relaunch is a
- * settled decision (see ui.ts's history) and now applies per workspace. The
- * partialize below prunes each record down to that persisted set; merge
- * rehydrates them back over `DEFAULT_WORKSPACE_UI`, sanitizing stale values so
- * old localStorage can never smuggle in an invalid view/sort/ticket id — or an
- * unusable tab record.
+ * `ticketTabs`, the Diff-tab view-state map (`ticketDiffViewStates`), and the
+ * Project Files pair (`projectFiles` + `projectFileViewStates`) survive
+ * relaunch (they're deliberate per-project state — a view preference, the
+ * ticket-detail-mvp decision that the open ticket persists across restart,
+ * decision #3, Diff tabs landing where you left them after lazy content
+ * reload, issue #109, or the Project Files workspace that must resume where
+ * you left it, decisions #55/#56), while `nav` and `expandedDirs` stay
+ * session-only — nav resetting to Board on relaunch is a settled decision
+ * (see ui.ts's history) and now applies per workspace. The partialize below
+ * prunes each record down to that persisted set; merge rehydrates them back
+ * over `DEFAULT_WORKSPACE_UI`, sanitizing stale values so old localStorage can
+ * never smuggle in an invalid view/sort/ticket id — or an unusable tab record.
  *
- * What is persisted for Project Files is deliberately only IDENTITY (relPath),
- * the preview flag, and the editor's own opaque view state: file CONTENTS are
+ * What is persisted for Project Files / Diff tabs is deliberately only
+ * IDENTITY (relPath) and the editor's own opaque view state: file CONTENTS are
  * never stored, they reload lazily from the checkout on return (decision #55).
  */
 import {
@@ -119,6 +120,14 @@ export interface WorkspaceUiState {
    * CONCEPT #48/#51). Persisted. */
   ticketTabs: Record<string, TicketTabsState>;
   /**
+   * Serialized Monaco view state for open ticket Diff tabs (cursor / scroll on
+   * the modified side), keyed `ticketId → relPath → opaque state`. Path-stable
+   * identity — `baseRevision` is NOT part of the key (issue #109). Persisted;
+   * contents still reload lazily when DiffView mounts. Typed `unknown` so the
+   * store stays editor-agnostic.
+   */
+  ticketDiffViewStates: Record<string, Record<string, unknown>>;
+  /**
    * The Project Files tab workspace for this project (decisions #55/#56) —
    * always rooted in the project's Main checkout. Persisted, so the strip
    * survives navigation, project switches, and relaunch; contents reload
@@ -142,6 +151,7 @@ export const DEFAULT_WORKSPACE_UI: WorkspaceUiState = {
   boardSort: DEFAULT_TICKET_SORT,
   openTicketId: null,
   ticketTabs: {},
+  ticketDiffViewStates: {},
   projectFiles: EMPTY_FILE_WORKSPACE,
   projectFileViewStates: {},
 };
@@ -281,6 +291,17 @@ interface WorkspaceState {
    * exists only for tabs that exist.
    */
   setProjectFileViewState(projectId: string, relPath: string, viewState: unknown): void;
+  /**
+   * Remember the Diff editor's opaque view state for an open ticket Diff tab
+   * (`ticketId` + `relPath`). Ignored when that Diff tab is not open — same
+   * close-race guard as {@link setProjectFileViewState}.
+   */
+  setTicketDiffViewState(
+    projectId: string,
+    ticketId: string,
+    relPath: string,
+    viewState: unknown,
+  ): void;
   /** Drop a removed project's record so re-adding it starts fresh. */
   forget(projectId: string): void;
   /**
@@ -309,6 +330,7 @@ type PersistedWorkspaceUi = Pick<
   | "boardSort"
   | "openTicketId"
   | "ticketTabs"
+  | "ticketDiffViewStates"
   | "projectFiles"
   | "projectFileViewStates"
 >;
@@ -422,6 +444,36 @@ function sanitizeFileViewStates(
   return out;
 }
 
+/**
+ * Validate a rehydrated `ticketDiffViewStates` map against surviving Diff tabs.
+ * Same shape rules as {@link sanitizeFileViewStates}: non-object values and
+ * orphans for closed diffs are dropped. Nested under ticketId so path-stable
+ * identity stays `ticketId + relPath` without encoding baseRevision.
+ */
+function sanitizeTicketDiffViewStates(
+  raw: unknown,
+  ticketTabs: Record<string, TicketTabsState>,
+): Record<string, Record<string, unknown>> {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
+  const out = Object.create(null) as Record<string, Record<string, unknown>>;
+  for (const [ticketId, value] of Object.entries(raw)) {
+    const diffs = ticketTabs[ticketId]?.diffs;
+    if (diffs === undefined || diffs.length === 0) continue;
+    if (typeof value !== "object" || value === null || Array.isArray(value)) continue;
+    const open = new Set(diffs);
+    const perTicket = Object.create(null) as Record<string, unknown>;
+    for (const [relPath, viewState] of Object.entries(value)) {
+      if (!open.has(relPath)) continue;
+      if (typeof viewState !== "object" || viewState === null || Array.isArray(viewState)) {
+        continue;
+      }
+      perTicket[relPath] = viewState;
+    }
+    if (Object.keys(perTicket).length > 0) out[ticketId] = perTicket;
+  }
+  return out;
+}
+
 function sanitizePersistedUi(persisted: Partial<PersistedWorkspaceUi>): PersistedWorkspaceUi {
   const view: BoardView =
     persisted.boardView === "board" || persisted.boardView === "list"
@@ -441,6 +493,7 @@ function sanitizePersistedUi(persisted: Partial<PersistedWorkspaceUi>): Persiste
   // unusable shape to EMPTY_FILE_WORKSPACE rather than throwing — a corrupt
   // record must never keep Project Files (or the renderer) from starting.
   const projectFiles = sanitizeFileWorkspace(persisted.projectFiles);
+  const ticketTabs = sanitizeTicketTabs(persisted.ticketTabs);
   return {
     boardView: view,
     // Rebuild rather than spread so stray keys in old JSON never enter state.
@@ -451,7 +504,8 @@ function sanitizePersistedUi(persisted: Partial<PersistedWorkspaceUi>): Persiste
       typeof openTicketId === "string" || openTicketId === null
         ? openTicketId
         : DEFAULT_WORKSPACE_UI.openTicketId,
-    ticketTabs: sanitizeTicketTabs(persisted.ticketTabs),
+    ticketTabs,
+    ticketDiffViewStates: sanitizeTicketDiffViewStates(persisted.ticketDiffViewStates, ticketTabs),
     projectFiles,
     projectFileViewStates: sanitizeFileViewStates(persisted.projectFileViewStates, projectFiles),
   };
@@ -465,6 +519,7 @@ function isDefaultPersistedUi(ui: WorkspaceUiState): boolean {
     ui.boardSort.direction === DEFAULT_TICKET_SORT.direction &&
     ui.openTicketId === DEFAULT_WORKSPACE_UI.openTicketId &&
     Object.keys(ui.ticketTabs).length === 0 &&
+    Object.keys(ui.ticketDiffViewStates).length === 0 &&
     ui.projectFiles.tabs.length === 0 &&
     Object.keys(ui.projectFileViewStates).length === 0
   );
@@ -656,7 +711,17 @@ export function createWorkspaceStore(storage?: StateStorage) {
             const nextTabs = { ...current.ticketTabs };
             if (isEmptyTicketTabs(next)) delete nextTabs[ticketId];
             else nextTabs[ticketId] = next;
-            return patchWorkspace(state, projectId, { ticketTabs: nextTabs });
+
+            const ticketDiffViewStates = { ...current.ticketDiffViewStates };
+            const perTicket = { ...(ticketDiffViewStates[ticketId] ?? {}) };
+            delete perTicket[relPath];
+            if (Object.keys(perTicket).length === 0) delete ticketDiffViewStates[ticketId];
+            else ticketDiffViewStates[ticketId] = perTicket;
+
+            return patchWorkspace(state, projectId, {
+              ticketTabs: nextTabs,
+              ticketDiffViewStates,
+            });
           });
         },
 
@@ -719,6 +784,23 @@ export function createWorkspaceStore(storage?: StateStorage) {
           });
         },
 
+        setTicketDiffViewState(projectId, ticketId, relPath, viewState) {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const diffs = current.ticketTabs[ticketId]?.diffs;
+            if (diffs === undefined || !diffs.includes(relPath)) return state;
+            return patchWorkspace(state, projectId, {
+              ticketDiffViewStates: {
+                ...current.ticketDiffViewStates,
+                [ticketId]: {
+                  ...(current.ticketDiffViewStates[ticketId] ?? {}),
+                  [relPath]: viewState,
+                },
+              },
+            });
+          });
+        },
+
         forget(projectId) {
           set((state) => {
             if (!(projectId in state.byProject)) return state;
@@ -771,9 +853,10 @@ export function createWorkspaceStore(storage?: StateStorage) {
                   boardSort: ui.boardSort,
                   openTicketId: ui.openTicketId,
                   ticketTabs: ui.ticketTabs,
-                  // Tab identities + flags + the editor's own view state only —
+                  // Tab identities + Diff/Project Files view state only —
                   // file CONTENTS are never persisted (decision #55: a returning
                   // tab reloads its text lazily from the checkout).
+                  ticketDiffViewStates: ui.ticketDiffViewStates,
                   projectFiles: ui.projectFiles,
                   projectFileViewStates: ui.projectFileViewStates,
                 },

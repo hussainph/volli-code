@@ -54,4 +54,19 @@ describe("releaseDiffLeases", () => {
     expect(originalRelease).toHaveBeenCalledTimes(1);
     expect(modifiedRelease).toHaveBeenCalledTimes(1);
   });
+
+  it("forwards modified view state to the modified lease release", () => {
+    const originalRelease = vi.fn();
+    const modifiedRelease = vi.fn();
+    const pair: DiffLeasePair = {
+      original: { release: originalRelease },
+      modified: { release: modifiedRelease },
+    };
+    const viewState = { scrollTop: 40 };
+
+    releaseDiffLeases(pair, viewState);
+
+    expect(originalRelease).toHaveBeenCalledWith();
+    expect(modifiedRelease).toHaveBeenCalledWith(viewState);
+  });
 });

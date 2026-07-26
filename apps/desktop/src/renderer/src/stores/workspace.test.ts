@@ -754,6 +754,136 @@ describe("ticket file tab persistence", () => {
   });
 });
 
+describe("ticket diff view-state persistence", () => {
+  it("setTicketDiffViewState keeps opaque Monaco state keyed by ticketId + relPath", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicketDiff("project-a", "ticket-1", "src/a.ts");
+    store.getState().openTicketDiff("project-a", "ticket-1", "src/b.ts");
+    store.getState().openTicketDiff("project-a", "ticket-2", "src/a.ts");
+    store.getState().setTicketDiffViewState("project-a", "ticket-1", "src/a.ts", {
+      scrollTop: 12,
+    });
+    store.getState().setTicketDiffViewState("project-a", "ticket-1", "src/b.ts", {
+      scrollTop: 40,
+    });
+    store.getState().setTicketDiffViewState("project-a", "ticket-2", "src/a.ts", {
+      scrollTop: 7,
+    });
+    store.getState().setTicketDiffViewState("project-a", "ticket-1", "src/a.ts", {
+      scrollTop: 99,
+    });
+
+    expect(store.getState().byProject["project-a"]?.ticketDiffViewStates).toEqual({
+      "ticket-1": { "src/a.ts": { scrollTop: 99 }, "src/b.ts": { scrollTop: 40 } },
+      "ticket-2": { "src/a.ts": { scrollTop: 7 } },
+    });
+  });
+
+  it("closeTicketDiff drops the path's view state with the tab", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicketDiff("project-a", "ticket-1", "src/a.ts");
+    store.getState().openTicketDiff("project-a", "ticket-1", "src/b.ts");
+    store.getState().setTicketDiffViewState("project-a", "ticket-1", "src/a.ts", {
+      scrollTop: 12,
+    });
+    store.getState().setTicketDiffViewState("project-a", "ticket-1", "src/b.ts", {
+      scrollTop: 40,
+    });
+
+    store.getState().closeTicketDiff("project-a", "ticket-1", "src/a.ts");
+
+    expect(store.getState().byProject["project-a"]?.ticketDiffViewStates).toEqual({
+      "ticket-1": { "src/b.ts": { scrollTop: 40 } },
+    });
+  });
+
+  it("setTicketDiffViewState ignores a path with no open diff tab", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicketDiff("project-a", "ticket-1", "src/a.ts");
+    store.getState().setTicketDiffViewState("project-a", "ticket-1", "src/a.ts", {
+      scrollTop: 12,
+    });
+    store.getState().closeTicketDiff("project-a", "ticket-1", "src/a.ts");
+
+    const before = store.getState().byProject["project-a"];
+    store.getState().setTicketDiffViewState("project-a", "ticket-1", "src/a.ts", {
+      scrollTop: 12,
+    });
+    expect(store.getState().byProject["project-a"]).toBe(before);
+    expect(store.getState().byProject["project-a"]?.ticketDiffViewStates).toEqual({});
+
+    store.getState().setTicketDiffViewState("project-a", "ticket-1", "never.ts", {
+      scrollTop: 1,
+    });
+    expect(store.getState().byProject["project-a"]?.ticketDiffViewStates).toEqual({});
+  });
+
+  it("round-trips ticket diff view state through persistence without storing contents", () => {
+    const storage = createMemoryStorage();
+    const store = createWorkspaceStore(storage);
+    store.getState().openTicketDiff("project-a", "ticket-1", "src/a.ts");
+    store.getState().setTicketDiffViewState("project-a", "ticket-1", "src/a.ts", {
+      cursorState: [{ position: { lineNumber: 4, column: 1 } }],
+      viewState: { scrollTop: 80 },
+    });
+
+    const raw = storage.getItem("volli:workspace")!;
+    for (const contentKey of ["content", "contents", "text", "body", "source"]) {
+      expect(raw).not.toContain(`"${contentKey}"`);
+    }
+
+    const rehydrated = createWorkspaceStore(storage);
+    expect(rehydrated.getState().byProject["project-a"]?.ticketDiffViewStates).toEqual({
+      "ticket-1": {
+        "src/a.ts": {
+          cursorState: [{ position: { lineNumber: 4, column: 1 } }],
+          viewState: { scrollTop: 80 },
+        },
+      },
+    });
+  });
+
+  it("sanitizes ticketDiffViewStates: junk entries and closed-diff orphans are dropped", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:workspace",
+      JSON.stringify({
+        state: {
+          byProject: {
+            "project-a": {
+              ticketTabs: {
+                "ticket-1": {
+                  files: [],
+                  diffs: ["src/open.ts"],
+                  active: "diff:src/open.ts",
+                },
+              },
+              ticketDiffViewStates: {
+                "ticket-1": {
+                  "src/open.ts": { scrollTop: 10 },
+                  "src/closed.ts": { scrollTop: 90 },
+                  "src/junk.ts": "not-a-view-state",
+                },
+                "ticket-gone": {
+                  "src/x.ts": { scrollTop: 1 },
+                },
+              },
+            },
+            "project-b": { ticketDiffViewStates: "junk" },
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    const store = createWorkspaceStore(storage);
+    expect(store.getState().byProject["project-a"]?.ticketDiffViewStates).toEqual({
+      "ticket-1": { "src/open.ts": { scrollTop: 10 } },
+    });
+    expect(store.getState().byProject["project-b"]?.ticketDiffViewStates).toEqual({});
+  });
+});
+
 describe("project file workspace", () => {
   it("previewProjectFile opens a preview tab for that project only", () => {
     const store = createWorkspaceStore(createMemoryStorage());
@@ -1085,6 +1215,7 @@ describe("forget", () => {
       boardSort: DEFAULT_TICKET_SORT,
       openTicketId: null,
       ticketTabs: {},
+      ticketDiffViewStates: {},
       projectFiles: EMPTY_FILE_WORKSPACE,
       projectFileViewStates: {},
     });
@@ -1122,6 +1253,7 @@ describe("persistence", () => {
       "openTicketId",
       "projectFileViewStates",
       "projectFiles",
+      "ticketDiffViewStates",
       "ticketTabs",
     ]);
   });

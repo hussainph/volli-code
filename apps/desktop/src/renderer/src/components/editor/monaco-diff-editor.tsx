@@ -66,9 +66,9 @@ export function attachDiffModels(
 }
 
 /** Release both leases held for a DiffEditor mount. */
-export function releaseDiffLeases(pair: DiffLeasePair): void {
+export function releaseDiffLeases(pair: DiffLeasePair, modifiedViewState?: unknown): void {
   pair.original.release();
-  pair.modified.release();
+  pair.modified.release(modifiedViewState);
 }
 
 export interface MonacoDiffEditorProps {
@@ -83,6 +83,14 @@ export interface MonacoDiffEditorProps {
   /** Explicit ⌘S for the modified side when editable (CONCEPT #49). */
   onSave(text: string): Promise<MonacoFileSaveResult>;
   onDirtyChange?(dirty: boolean): void;
+  /**
+   * Host-persisted Monaco view state for the modified side (issue #109). Used
+   * when the registry has no in-session state for this viewId — e.g. after
+   * relaunch, once DiffView remounts and reloads contents lazily.
+   */
+  initialViewState?: unknown;
+  /** Emitted when the DiffEditor releases so the host can persist view state. */
+  onViewStateChange?(viewState: unknown): void;
 }
 
 /**
@@ -98,6 +106,8 @@ export function MonacoDiffEditor({
   ariaLabel,
   onSave,
   onDirtyChange,
+  initialViewState,
+  onViewStateChange,
 }: MonacoDiffEditorProps) {
   const hostRef = React.useRef<HTMLDivElement>(null);
   const diffEditorRef = React.useRef<editor.IStandaloneDiffEditor | null>(null);
@@ -110,8 +120,17 @@ export function MonacoDiffEditor({
     ariaLabel,
     onSave,
     presentation,
+    initialViewState,
+    onViewStateChange,
   });
-  liveRef.current = { modifiedReadOnly, ariaLabel, onSave, presentation };
+  liveRef.current = {
+    modifiedReadOnly,
+    ariaLabel,
+    onSave,
+    presentation,
+    initialViewState,
+    onViewStateChange,
+  };
 
   const syncDirty = React.useCallback(() => {
     setDirty(modifiedLease.snapshot().dirty);
@@ -195,6 +214,14 @@ export function MonacoDiffEditor({
           },
         });
 
+        const restored = modifiedLease.restoreViewState();
+        const fallbackViewState = liveRef.current.initialViewState as
+          | editor.ICodeEditorViewState
+          | null
+          | undefined;
+        const viewState = restored ?? fallbackViewState ?? null;
+        if (viewState !== null) modifiedEditor.restoreViewState(viewState);
+
         changeSubscription = modifiedLease.model.onDidChangeContent(() => {
           syncDirty();
         });
@@ -216,7 +243,11 @@ export function MonacoDiffEditor({
       cancelled = true;
       changeSubscription?.dispose();
       diffEditorRef.current = null;
-      diffEditor?.dispose();
+      if (diffEditor !== null) {
+        const viewState = diffEditor.getModifiedEditor().saveViewState();
+        diffEditor.dispose();
+        liveRef.current.onViewStateChange?.(viewState);
+      }
     };
   }, [originalLease, modifiedLease, syncDirty]);
 

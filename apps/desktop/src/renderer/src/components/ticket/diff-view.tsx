@@ -229,6 +229,13 @@ export interface DiffViewProps {
   /** Change Set binary flag when known from the row that opened the tab. */
   binary?: boolean;
   onDirtyChange?(dirty: boolean): void;
+  /**
+   * Host-persisted Monaco view state for the modified side — restored lazily
+   * when this DiffView mounts (issue #109). Opaque; never inspected here.
+   */
+  initialViewState?: unknown;
+  /** Emitted when the DiffEditor releases so the host can persist view state. */
+  onViewStateChange?(viewState: unknown): void;
 }
 
 /**
@@ -243,11 +250,14 @@ export function DiffView({
   status,
   binary = false,
   onDirtyChange,
+  initialViewState,
+  onViewStateChange,
 }: DiffViewProps) {
   const [state, setState] = React.useState<LoadState>({ status: "loading" });
   const presentation = useUiStore((s) => s.diffPresentation);
   const setDiffPresentation = useUiStore((s) => s.setDiffPresentation);
   const leasesRef = React.useRef<DiffLeases | null>(null);
+  const lastViewStateRef = React.useRef<unknown>(undefined);
   const mountedRef = React.useRef(true);
 
   React.useEffect(() => {
@@ -255,7 +265,7 @@ export function DiffView({
     return () => {
       mountedRef.current = false;
       if (leasesRef.current !== null) {
-        releaseDiffLeases(leasesRef.current);
+        releaseDiffLeases(leasesRef.current, lastViewStateRef.current);
         leasesRef.current = null;
       }
     };
@@ -446,6 +456,14 @@ export function DiffView({
     [state, projectId, ticket.id, relPath],
   );
 
+  const handleViewStateChange = React.useCallback(
+    (viewState: unknown) => {
+      lastViewStateRef.current = viewState;
+      onViewStateChange?.(viewState);
+    },
+    [onViewStateChange],
+  );
+
   if (state.status === "loading") {
     return <p className="px-gutter py-4 text-xs text-muted-foreground">Loading diff…</p>;
   }
@@ -469,6 +487,8 @@ export function DiffView({
         ariaLabel={`${baseNameOf(relPath)} diff`}
         onSave={handleSave}
         onDirtyChange={onDirtyChange}
+        initialViewState={initialViewState}
+        onViewStateChange={handleViewStateChange}
       />
     </div>
   );
