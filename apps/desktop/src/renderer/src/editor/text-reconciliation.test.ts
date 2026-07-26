@@ -82,4 +82,41 @@ describe("reconcileText", () => {
       disk: "aYc",
     });
   });
+
+  it("keeps deletion and recreation inputs lossless when they collide", () => {
+    expect(
+      reconcileText({
+        baseline: "obsolete\r\n",
+        local: "",
+        disk: "agent recreation\r\n",
+      }),
+    ).toEqual({
+      kind: "conflict",
+      reason: "overlap",
+      local: "",
+      disk: "agent recreation\r\n",
+    });
+  });
+
+  it("adopts recreated content from an empty clean model exactly", () => {
+    expect(reconcileText({ baseline: "", local: "", disk: "recreated\r\n" })).toEqual({
+      kind: "adopt",
+      value: "recreated\r\n",
+      nextBaseline: "recreated\r\n",
+    });
+  });
+
+  it("merges CRLF text without changing line endings or a trailing newline", () => {
+    expect(
+      reconcileText({
+        baseline: "one\r\ntwo\r\nthree\r\n",
+        local: "human one\r\ntwo\r\nthree\r\n",
+        disk: "one\r\ntwo\r\nagent three\r\n",
+      }),
+    ).toEqual({
+      kind: "merge",
+      value: "human one\r\ntwo\r\nagent three\r\n",
+      nextBaseline: "one\r\ntwo\r\nagent three\r\n",
+    });
+  });
 });
