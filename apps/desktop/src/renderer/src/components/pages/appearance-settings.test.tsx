@@ -13,4 +13,14 @@ describe("Settings → Appearance", () => {
     // presence here IS the assertion that this host supplies them.
     expect(html).toContain("More actions for Ember");
   });
+
+  it("hosts an Editor section beside the Terminal theme picker", () => {
+    const html = renderToStaticMarkup(<AppearanceSettings />);
+
+    expect(html).toContain("Editor");
+    expect(html).toContain("Terminal");
+    // Section order: App theme → Editor → Terminal (picker beside Terminal).
+    expect(html.indexOf("Editor")).toBeGreaterThan(html.indexOf("App theme"));
+    expect(html.indexOf("Terminal")).toBeGreaterThan(html.indexOf("Editor"));
+  });
 });

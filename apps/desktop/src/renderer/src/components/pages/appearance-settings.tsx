@@ -1,5 +1,6 @@
 import * as React from "react";
 import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
+import { BracketsCurlyIcon } from "@phosphor-icons/react/dist/csr/BracketsCurly";
 import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
 import { FileTextIcon } from "@phosphor-icons/react/dist/csr/FileText";
 import { MinusIcon } from "@phosphor-icons/react/dist/csr/Minus";
@@ -79,6 +80,14 @@ export function AppearanceSettings() {
   return (
     <>
       <AppThemeSection />
+
+      <SettingsSection
+        title="Editor"
+        icon={BracketsCurlyIcon}
+        description="Monaco syntax highlighting theme for file and document editors."
+      >
+        {/* Theme picker row lands in the next slice. */}
+      </SettingsSection>
 
       <SettingsSection
         title="Terminal"
