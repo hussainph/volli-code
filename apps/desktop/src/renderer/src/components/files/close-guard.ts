@@ -4,8 +4,12 @@
  * user saying so, and NEVER over a failed write — is stated once and tested,
  * rather than living inside dialog callbacks.
  *
- * The React half (components/pages/files-page.tsx) only performs what these
- * return: prompt or don't, then close or don't.
+ * Ticket File ↔ Diff tabs share one draft by relPath: closing one while the
+ * other remains open is always safe (no confirm / no discard). Confirmation
+ * only fires when this is the last open representation of that path.
+ *
+ * The React half (files-page / ticket-detail) only performs what these return:
+ * prompt or don't, then close or don't.
  */
 
 /** What closing a tab requires right now. */
@@ -21,8 +25,26 @@ export type TabCloseResolution =
 export type TabCloseOutcome = "close" | "keep-open";
 
 /** A clean tab closes immediately; a dirty one has to be asked about first. */
-export function planTabClose(input: { dirty: boolean }): TabCloseStep {
-  return input.dirty ? "confirm" : "close";
+export function planTabClose(input: {
+  dirty: boolean;
+  /**
+   * Another representation of the same path is still open (ticket File ↔ Diff
+   * share one draft by relPath). When true, closing this tab must not confirm
+   * or discard — the sibling still needs the draft.
+   */
+  siblingOpen?: boolean;
+}): TabCloseStep {
+  if (input.dirty && input.siblingOpen !== true) return "confirm";
+  return "close";
+}
+
+/**
+ * Whether Discard should wipe the shared draft. Only when this is the last
+ * open representation of the path — otherwise the remaining File/Diff tab
+ * would lose the user's edits.
+ */
+export function shouldDiscardSharedDraft(input: { siblingOpen: boolean }): boolean {
+  return !input.siblingOpen;
 }
 
 /**

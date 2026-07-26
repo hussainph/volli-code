@@ -10,6 +10,7 @@ import {
 import {
   planTabClose,
   resolveTabClose,
+  shouldDiscardSharedDraft,
   type TabCloseResolution,
 } from "@renderer/components/files/close-guard";
 import { FileSaveGuardDialog } from "@renderer/components/files/save-guard-dialog";
@@ -288,25 +289,39 @@ export function TicketDetail({
 
   const requestCloseFileTab = React.useCallback(
     (relPath: string) => {
-      if (planTabClose({ dirty: dirtyFiles.has(relPath) }) === "close") closeFileTab(relPath);
-      else setPendingClose({ relPath, kind: "file" });
+      const siblingOpen = (
+        useWorkspaceStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id]?.diffs ?? []
+      ).includes(relPath);
+      if (planTabClose({ dirty: dirtyFiles.has(relPath), siblingOpen }) === "close") {
+        closeFileTab(relPath);
+      } else {
+        setPendingClose({ relPath, kind: "file" });
+      }
     },
-    [closeFileTab, dirtyFiles],
+    [closeFileTab, dirtyFiles, projectId, ticket.id],
   );
 
   const requestCloseDiffTab = React.useCallback(
     (relPath: string) => {
-      if (planTabClose({ dirty: dirtyFiles.has(relPath) }) === "close") closeDiffTab(relPath);
-      else setPendingClose({ relPath, kind: "diff" });
+      const siblingOpen = (
+        useWorkspaceStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id]?.files ?? []
+      ).includes(relPath);
+      if (planTabClose({ dirty: dirtyFiles.has(relPath), siblingOpen }) === "close") {
+        closeDiffTab(relPath);
+      } else {
+        setPendingClose({ relPath, kind: "diff" });
+      }
     },
-    [closeDiffTab, dirtyFiles],
+    [closeDiffTab, dirtyFiles, projectId, ticket.id],
   );
 
   /**
    * Applies the user's answer. Cancel keeps the tab, and so does a FAILED save
    * — closing over a write that never landed would discard the only copy.
    * Dirty is shared by relPath across file+diff, but only the tab the user
-   * asked to close is removed.
+   * asked to close is removed. Discard never wipes the draft while the other
+   * representation is still open (defensive: the request path already skips
+   * confirm in that case).
    */
   const resolvePendingClose = React.useCallback(
     async (choice: TabCloseResolution["choice"]) => {
@@ -314,7 +329,12 @@ export function TicketDetail({
       const { relPath, kind } = pendingClose;
       const resolution: TabCloseResolution =
         choice === "save" ? { choice: "save", saved: await saveFileDocument(relPath) } : { choice };
-      if (resolution.choice === "discard") {
+      const tabs = useWorkspaceStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id];
+      const siblingOpen =
+        kind === "file"
+          ? (tabs?.diffs ?? []).includes(relPath)
+          : (tabs?.files ?? []).includes(relPath);
+      if (resolution.choice === "discard" && shouldDiscardSharedDraft({ siblingOpen })) {
         (await peekFileDocument(relPath))?.discard();
         markFileDirty(relPath, false);
       } else if (resolution.choice === "save" && resolution.saved) {
@@ -325,7 +345,16 @@ export function TicketDetail({
       if (kind === "file") closeFileTab(relPath);
       else closeDiffTab(relPath);
     },
-    [closeDiffTab, closeFileTab, markFileDirty, pendingClose, peekFileDocument, saveFileDocument],
+    [
+      closeDiffTab,
+      closeFileTab,
+      markFileDirty,
+      pendingClose,
+      peekFileDocument,
+      projectId,
+      saveFileDocument,
+      ticket.id,
+    ],
   );
 
   const setActiveTab = React.useCallback(
