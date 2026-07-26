@@ -75,7 +75,7 @@ export function releaseDiffLeases(pair: DiffLeasePair, modifiedViewState?: unkno
   pair.modified.release(modifiedViewState);
 }
 
-/** Toast copy when DiffEditor construction fails — never leave an empty pane silent. */
+/** Copy when DiffEditor construction fails — DiffView shows this in DiffStub. */
 export function diffEditorInitFailureMessage(label: string, detail: string): string {
   return `Couldn't load ${label}: ${detail}`;
 }
@@ -100,6 +100,11 @@ export interface MonacoDiffEditorProps {
   initialViewState?: unknown;
   /** Emitted when the DiffEditor releases so the host can persist view state. */
   onViewStateChange?(viewState: unknown): void;
+  /**
+   * DiffEditor construction failed — parent should swap to an in-pane stub and
+   * drop Inline/Side-by-side chrome (file-editor in-pane fallback spirit).
+   */
+  onInitFailed?(message: string): void;
 }
 
 /**
@@ -117,6 +122,7 @@ export function MonacoDiffEditor({
   onDirtyChange,
   initialViewState,
   onViewStateChange,
+  onInitFailed,
 }: MonacoDiffEditorProps) {
   const hostRef = React.useRef<HTMLDivElement>(null);
   const diffEditorRef = React.useRef<editor.IStandaloneDiffEditor | null>(null);
@@ -131,6 +137,7 @@ export function MonacoDiffEditor({
     presentation,
     initialViewState,
     onViewStateChange,
+    onInitFailed,
   });
   liveRef.current = {
     modifiedReadOnly,
@@ -139,6 +146,7 @@ export function MonacoDiffEditor({
     presentation,
     initialViewState,
     onViewStateChange,
+    onInitFailed,
   };
 
   const syncDirty = React.useCallback(() => {
@@ -245,10 +253,14 @@ export function MonacoDiffEditor({
         diffEditor = null;
         diffEditorRef.current = null;
         host.dataset.monacoDiffStatus = "failed";
+        const message = diffEditorInitFailureMessage(
+          liveRef.current.ariaLabel,
+          errorMessage(error),
+        );
         console.error("Monaco diff editor failed", error);
-        // DiffEditor has no fallback pane like MonacoFileEditor — toast so the
-        // empty host is not a silent failure (issue #109 review).
-        toastError(diffEditorInitFailureMessage(liveRef.current.ariaLabel, errorMessage(error)));
+        // Parent (DiffView) swaps to DiffStub — in-pane like MonacoFileEditor's
+        // <pre> fallback, not an empty host under presentation chrome.
+        liveRef.current.onInitFailed?.(message);
       });
 
     return () => {

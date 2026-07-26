@@ -74,7 +74,7 @@ describe("releaseDiffLeases", () => {
 });
 
 describe("diffEditorInitFailureMessage", () => {
-  it("surfaces the label and error so init failure is not a silent empty pane", () => {
+  it("formats copy DiffView puts in DiffStub so init failure is not a silent empty pane", () => {
     expect(diffEditorInitFailureMessage("src/app.ts", "WebGL unavailable")).toBe(
       "Couldn't load src/app.ts: WebGL unavailable",
     );
