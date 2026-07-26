@@ -20,7 +20,10 @@ import {
   MonacoDiffEditor,
   releaseDiffLeases,
 } from "@renderer/components/editor/monaco-diff-editor";
-import type { MonacoFileSaveResult } from "@renderer/components/editor/monaco-file-editor";
+import {
+  classifyExternalChange,
+  type MonacoFileSaveResult,
+} from "@renderer/components/editor/monaco-file-editor";
 import { Button } from "@renderer/components/ui/button";
 import {
   diffFilePolicy,
@@ -34,9 +37,11 @@ import {
 } from "@renderer/editor/document-identity";
 import type { DocumentLease, DocumentRevision } from "@renderer/editor/document-registry";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
+import { toastError } from "@renderer/lib/toast";
 import { useUiStore, type DiffPresentation } from "@renderer/stores/ui";
 
 import type { editor } from "monaco-editor";
+import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 
 /** Live worktree read outcome for the modified side. */
 export type DiffLiveRead =
@@ -152,6 +157,53 @@ export function coerceChangeStatus(status: string | undefined): ChangeSetFileSta
   return "modified";
 }
 
+/**
+ * Decide how a DiffView should react when the live worktree file changes under
+ * an open Diff tab (including when no FileView is mounted for the same path).
+ * Pure — reuses {@link classifyExternalChange} so Diff and File tabs share the
+ * same adopt / diverge / write-echo rules.
+ */
+export type DiffDiskReconcilePlan =
+  | { kind: "adopt"; text: string; revision: number; source: FileSource }
+  | { kind: "diverged"; text: string; revision: number }
+  | { kind: "unreadable"; error: string; keepDraft: boolean }
+  | { kind: "missing" };
+
+export function planDiffDiskReconcile(input: {
+  dirty: boolean;
+  baseline: string;
+  lastWrite: string | null;
+  disk: DiffLiveRead;
+}): DiffDiskReconcilePlan {
+  if (input.disk.ok === false) {
+    if ("missing" in input.disk && input.disk.missing) {
+      return input.dirty
+        ? { kind: "unreadable", error: "File was deleted on disk.", keepDraft: true }
+        : { kind: "missing" };
+    }
+    const error = "error" in input.disk ? input.disk.error : "unreadable";
+    return { kind: "unreadable", error, keepDraft: input.dirty };
+  }
+
+  const decision = classifyExternalChange({
+    baseline: input.baseline,
+    dirty: input.dirty,
+    incoming: input.disk.text,
+    lastWrite: input.lastWrite,
+  });
+  if (decision === "diverged") {
+    return { kind: "diverged", text: input.disk.text, revision: input.disk.mtime };
+  }
+  // "adopt" and "unchanged" both advance through adoptCleanBaseline so mtime /
+  // externalRevision stay current even when the bytes match.
+  return {
+    kind: "adopt",
+    text: input.disk.text,
+    revision: input.disk.mtime,
+    source: input.disk.source,
+  };
+}
+
 /** Immutable-base + live-file identities for one DiffView. */
 export function diffViewIdentities(input: {
   projectId: string;
@@ -254,11 +306,14 @@ export function DiffView({
   onViewStateChange,
 }: DiffViewProps) {
   const [state, setState] = React.useState<LoadState>({ status: "loading" });
+  const [conflict, setConflict] = React.useState<{ text: string; mtime: number } | null>(null);
   const presentation = useUiStore((s) => s.diffPresentation);
   const setDiffPresentation = useUiStore((s) => s.setDiffPresentation);
   const leasesRef = React.useRef<DiffLeases | null>(null);
   const lastViewStateRef = React.useRef<unknown>(undefined);
+  const lastWriteRef = React.useRef<string | null>(null);
   const mountedRef = React.useRef(true);
+  const name = baseNameOf(relPath);
 
   React.useEffect(() => {
     mountedRef.current = true;
@@ -276,6 +331,8 @@ export function DiffView({
 
     async function load() {
       setState({ status: "loading" });
+      setConflict(null);
+      lastWriteRef.current = null;
       try {
         const fileStatus = coerceChangeStatus(status);
         const changeSet = await window.api.worktree.changeSet(ticket.id);
@@ -429,6 +486,91 @@ export function DiffView({
     };
   }, [projectId, ticket.id, relPath, previousPath, status, binary]);
 
+  const modifiedReadOnly = state.status === "editor" ? state.plan.modifiedReadOnly : true;
+
+  // Live disk reconcile for this Diff tab's lifetime — needed when only the
+  // Diff tab (not a FileView) is mounted, so agent edits aren't invisible until
+  // a file tab opens (issue #109).
+  React.useEffect(() => {
+    if (state.status !== "editor" || modifiedReadOnly) return;
+
+    void window.api.files.watch({ projectId, ticketId: ticket.id, relPath }).then((result) => {
+      if (!result.ok) {
+        toastError(`Live updates for ${name} are off. Reopen the diff to refresh it.`);
+      }
+    });
+
+    const unsubscribe = window.api.files.onChanged((event) => {
+      if (event.projectId !== projectId || event.relPath !== relPath) return;
+      void (async () => {
+        const leases = leasesRef.current;
+        if (leases === null || !mountedRef.current) return;
+
+        const read = await window.api.files.read({
+          projectId,
+          ticketId: ticket.id,
+          relPath,
+        });
+        if (!mountedRef.current) return;
+
+        let disk: DiffLiveRead;
+        if (!read.ok) {
+          disk = { ok: false, error: read.error };
+        } else if (read.content.type !== "text") {
+          // Binary / image under a text Diff tab — treat as unreadable for reconcile.
+          disk = { ok: false, error: "File is no longer plain text." };
+        } else {
+          disk = {
+            ok: true,
+            text: read.content.text,
+            mtime: read.mtime,
+            source: read.source,
+          };
+        }
+
+        const snap = leases.modified.snapshot();
+        const plan = planDiffDiskReconcile({
+          dirty: snap.dirty,
+          baseline: snap.baseline,
+          lastWrite: lastWriteRef.current,
+          disk,
+        });
+
+        if (plan.kind === "adopt") {
+          leases.modified.adoptCleanBaseline({
+            value: plan.text,
+            revision: plan.revision,
+          });
+          if (mountedRef.current) setConflict(null);
+          return;
+        }
+        if (plan.kind === "diverged") {
+          if (mountedRef.current) setConflict({ text: plan.text, mtime: plan.revision });
+          return;
+        }
+        if (plan.kind === "unreadable") {
+          if (plan.keepDraft) {
+            toastError(
+              `${name} changed on disk and is now unreadable. Your unsaved edits were kept.`,
+            );
+          } else if (mountedRef.current) {
+            setState({ status: "error", error: plan.error });
+          }
+          return;
+        }
+        // missing while clean — surface the deletion instead of stale content.
+        if (mountedRef.current) {
+          setState({ status: "error", error: "File was deleted on disk." });
+        }
+      })();
+    });
+
+    return () => {
+      unsubscribe();
+      void window.api.files.unwatch({ projectId, ticketId: ticket.id, relPath });
+    };
+  }, [state.status, modifiedReadOnly, projectId, ticket.id, relPath, name]);
+
   const handleSave = React.useCallback(
     async (text: string): Promise<MonacoFileSaveResult> => {
       if (state.status !== "editor" || state.plan.modifiedReadOnly) {
@@ -448,6 +590,7 @@ export function DiffView({
           expectedMtime,
         });
         if (!result.ok) return { ok: false, error: result.error };
+        lastWriteRef.current = text;
         return { ok: true, revision: result.mtime };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
@@ -464,6 +607,18 @@ export function DiffView({
     [onViewStateChange],
   );
 
+  const reloadFromDisk = React.useCallback(() => {
+    const leases = leasesRef.current;
+    if (leases === null || conflict === null) return;
+    leases.modified.discard();
+    leases.modified.adoptCleanBaseline({
+      value: conflict.text,
+      revision: conflict.mtime,
+    });
+    lastWriteRef.current = null;
+    setConflict(null);
+  }, [conflict]);
+
   if (state.status === "loading") {
     return <p className="px-gutter py-4 text-xs text-muted-foreground">Loading diff…</p>;
   }
@@ -479,6 +634,18 @@ export function DiffView({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <DiffPresentationToggle presentation={presentation} onChange={setDiffPresentation} />
+      {conflict !== null ? (
+        <div className="mx-gutter mt-2 flex items-center justify-between gap-3 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+          <span>
+            Changed on disk — your unsaved edits were kept. Saving now overwrites the newer version
+            on disk.
+          </span>
+          <Button size="sm" variant="secondary" onClick={reloadFromDisk}>
+            <ArrowClockwiseIcon />
+            Reload
+          </Button>
+        </div>
+      ) : null}
       <MonacoDiffEditor
         originalLease={state.leases.original}
         modifiedLease={state.leases.modified}

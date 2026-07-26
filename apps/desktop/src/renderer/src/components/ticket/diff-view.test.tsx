@@ -2,7 +2,13 @@ import { describe, expect, it } from "vite-plus/test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ChangeSetFile } from "@volli/shared";
 
-import { DiffStub, mapBaseReadResult, planDiffView, type DiffLiveRead } from "./diff-view";
+import {
+  DiffStub,
+  mapBaseReadResult,
+  planDiffDiskReconcile,
+  planDiffView,
+  type DiffLiveRead,
+} from "./diff-view";
 
 function file(overrides: Partial<ChangeSetFile> & Pick<ChangeSetFile, "path">): ChangeSetFile {
   return {
@@ -25,6 +31,100 @@ describe("mapBaseReadResult", () => {
     expect(mapBaseReadResult({ ok: false, error: "No worktree" })).toEqual({
       error: "No worktree",
     });
+  });
+});
+
+describe("planDiffDiskReconcile", () => {
+  const liveOk = {
+    ok: true as const,
+    text: "agent\n",
+    mtime: 99,
+    source: "worktree" as const,
+  };
+
+  it("adopts a clean baseline when disk moved and the draft is clean", () => {
+    expect(
+      planDiffDiskReconcile({
+        dirty: false,
+        baseline: "old\n",
+        lastWrite: null,
+        disk: liveOk,
+      }),
+    ).toEqual({
+      kind: "adopt",
+      text: "agent\n",
+      revision: 99,
+      source: "worktree",
+    });
+  });
+
+  it("adopts when disk matches baseline so mtime can advance", () => {
+    expect(
+      planDiffDiskReconcile({
+        dirty: false,
+        baseline: "agent\n",
+        lastWrite: null,
+        disk: liveOk,
+      }),
+    ).toEqual({
+      kind: "adopt",
+      text: "agent\n",
+      revision: 99,
+      source: "worktree",
+    });
+  });
+
+  it("adopts the echo of our own write even when dirty against newer typing", () => {
+    expect(
+      planDiffDiskReconcile({
+        dirty: true,
+        baseline: "old\n",
+        lastWrite: "agent\n",
+        disk: liveOk,
+      }),
+    ).toEqual({
+      kind: "adopt",
+      text: "agent\n",
+      revision: 99,
+      source: "worktree",
+    });
+  });
+
+  it("diverges when disk moved under a dirty draft that is not our write echo", () => {
+    expect(
+      planDiffDiskReconcile({
+        dirty: true,
+        baseline: "old\n",
+        lastWrite: null,
+        disk: liveOk,
+      }),
+    ).toEqual({
+      kind: "diverged",
+      text: "agent\n",
+      revision: 99,
+    });
+  });
+
+  it("keeps a dirty draft when the live file becomes unreadable", () => {
+    expect(
+      planDiffDiskReconcile({
+        dirty: true,
+        baseline: "old\n",
+        lastWrite: null,
+        disk: { ok: false, error: "ENOENT" },
+      }),
+    ).toEqual({ kind: "unreadable", error: "ENOENT", keepDraft: true });
+  });
+
+  it("surfaces a clean missing file as an error transition", () => {
+    expect(
+      planDiffDiskReconcile({
+        dirty: false,
+        baseline: "old\n",
+        lastWrite: null,
+        disk: { ok: false, missing: true },
+      }),
+    ).toEqual({ kind: "missing" });
   });
 });
 
