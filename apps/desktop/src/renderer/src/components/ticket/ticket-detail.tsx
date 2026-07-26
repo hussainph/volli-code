@@ -434,26 +434,6 @@ export function TicketDetail({
     });
   }, [activeSessionTab, projectId, ticket.id, setTerminalFocusTarget]);
 
-  // ⌘Escape exits terminal focus. Bare Escape is deliberately left alone so it
-  // reaches the PTY — Claude Code interrupts on Esc and TUIs (vim, etc.) lean on
-  // it constantly, so a blanket Escape capture would break the terminal. ⌘Escape
-  // is a chord no terminal app consumes; we capture it (capture phase, before the
-  // renderer can forward it) and preventDefault so it never reaches the PTY. The
-  // "close ticket detail" listener below early-returns while focused, so it can't
-  // also fire off this keypress.
-  React.useEffect(() => {
-    if (!terminalFocused) return;
-    function exitTerminalFocus(event: KeyboardEvent) {
-      if (event.key !== "Escape" || !event.metaKey) return;
-      if (event.defaultPrevented || isEscapeExempt(event.target)) return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      setTerminalFocusTarget(null);
-    }
-    window.addEventListener("keydown", exitTerminalFocus, true);
-    return () => window.removeEventListener("keydown", exitTerminalFocus, true);
-  }, [terminalFocused, setTerminalFocusTarget]);
-
   // Escape closes the detail view and returns to the board — but only when
   // focus isn't inside an input/textarea/contenteditable or an open menu/
   // dialog, the same guard board.tsx's own Escape-deselect uses, so a
@@ -462,6 +442,11 @@ export function TicketDetail({
   // Escape-deselect listener is inert while this view is mounted — board.tsx
   // isn't rendered at all (board-page.tsx swaps the two) — so the two never
   // fire off the same keypress.
+  //
+  // While terminal-focused, Escape is left entirely alone so it reaches the
+  // PTY (Claude Code interrupts on it; vim and friends lean on it). Exit from
+  // terminal focus is the chrome-bar button only — no Escape chord — so the
+  // PTY never fights the app for the key.
   React.useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape" || event.defaultPrevented) return;

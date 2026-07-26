@@ -1052,7 +1052,7 @@ async function main() {
     // ===================================================================
     await attempt(
       "6b",
-      "Terminal focus reclaims sidebars/tab rail, keeps one thin chrome row, preserves the live canvas, and ⌘Escape restores the workspace",
+      "Terminal focus reclaims sidebars/tab rail, keeps one thin chrome row, preserves the live canvas, and the Exit button restores the workspace",
       async () => {
         const marked = await page.evaluate(() => {
           const canvas = Array.from(document.querySelectorAll("canvas")).find(
@@ -1099,13 +1099,11 @@ async function main() {
           focused.asides === 0 &&
           focused.canvasVisible;
 
-        // ⌘Escape, NOT bare Escape. Terminal focus deliberately leaves plain Esc
-        // to the PTY (Claude Code interrupts on it, vim and friends lean on it
-        // constantly), so the exit is a chord no terminal app consumes — see the
-        // `exitTerminalFocus` listener in ticket-detail.tsx. This check pressed
-        // bare Escape and had been asserting the pre-#78 behavior; it never
-        // caught it because the non-git fixture failed 6b long before this line.
-        await page.keyboard.press("Meta+Escape");
+        // Exit is the chrome-bar button only. Bare Escape stays with the PTY
+        // (Claude Code / vim), and the old ⌘Escape chord was dropped — it never
+        // reliably reached the renderer under Playwright/Electron and wasn't
+        // worth the fight.
+        await page.getByRole("button", { name: "Exit terminal focus" }).click();
         const restored = await waitUntil("workspace geometry restored", async () =>
           page.evaluate(() => {
             const inset = document.querySelector('[data-slot="sidebar-inset"]');
