@@ -62,6 +62,16 @@ describe("buildEditorThemeDisplay", () => {
     expect(display.resolvedId).toBe("everforest-dark");
     expect(display.resettable).toBe(false);
   });
+
+  it("defaults to the shipped catalog when themes are omitted", () => {
+    const display = buildEditorThemeDisplay({
+      editorThemeId: null,
+      appThemeSlug: "ember",
+    });
+
+    expect(display.label).toBe("One Dark Pro");
+    expect(display.sourceLabel).toBe("Matches app theme");
+  });
 });
 
 describe("editorThemeLabel", () => {

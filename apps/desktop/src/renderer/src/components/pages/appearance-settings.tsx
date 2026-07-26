@@ -48,7 +48,8 @@ import { DEFAULT_TERMINAL_FONT_SIZE } from "@renderer/terminal/appearance-model"
 import { listLocalFontFamilies } from "@renderer/terminal/local-fonts";
 
 /**
- * Settings → Appearance: the app surface's theme picker, and the terminal's.
+ * Settings → Appearance: the app surface's theme picker, the Monaco editor
+ * theme, and the terminal's.
  *
  * The terminal half is where decision #67 becomes visible. Volli NEVER writes
  * the user's own ghostty config; it writes an overlay file in ghostty's own
@@ -60,7 +61,8 @@ import { listLocalFontFamilies } from "@renderer/terminal/local-fonts";
  *
  * Preview here is a real palette swap, not a sample panel: we render the
  * terminal, so highlighting a theme repaints every live session and closing
- * the menu puts it back.
+ * the menu puts it back. The Editor picker does the same for Monaco via
+ * {@link refreshMonacoEditorTheme}.
  */
 export function AppearanceSettings() {
   const terminal = useThemeStore((state) => state.terminal);
@@ -315,24 +317,19 @@ function EditorThemeRow() {
     [editorThemeId, appThemeSlug, themes],
   );
 
-  const paintPreview = React.useCallback(
-    (selection: string): void => {
-      const plan = planEditorThemePreview({
-        selection,
-        resolvedId: display.resolvedId,
-      });
-      refreshMonacoEditorTheme(plan.themeId);
-    },
-    [display.resolvedId],
-  );
+  const paintPreview = (selection: string): void => {
+    const plan = planEditorThemePreview({
+      selection,
+      resolvedId: display.resolvedId,
+    });
+    refreshMonacoEditorTheme(plan.themeId);
+  };
 
-  const endPreview = React.useCallback((): void => {
-    paintPreview("");
-  }, [paintPreview]);
+  const endPreview = (): void => paintPreview("");
 
   // Leaving the surface with a preview running would strand Monaco on a theme
   // that is not stored anywhere.
-  React.useEffect(() => endPreview, [endPreview]);
+  React.useEffect(() => endPreview, [display.resolvedId]);
 
   return (
     <SettingsRow label="Theme">
