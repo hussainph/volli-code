@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ChangeSetFile } from "@volli/shared";
 
+import { DiffStub } from "./diff-stub";
 import {
-  DiffStub,
   applyDiffDiskReconcilePlan,
   isDiffLeaseCurrent,
   isMissingFileReadError,
@@ -12,7 +12,8 @@ import {
   planDiffDiskReconcile,
   planDiffView,
   type DiffLiveRead,
-} from "./diff-view";
+} from "./diff-view-plan";
+import { diffEditorInitFailureMessage } from "@renderer/components/editor/monaco-diff-editor";
 
 function file(overrides: Partial<ChangeSetFile> & Pick<ChangeSetFile, "path">): ChangeSetFile {
   return {
@@ -353,6 +354,19 @@ describe("DiffStub", () => {
     expect(html).toContain("logo.png");
     expect(html).toContain('data-testid="ticket-diff-stub"');
     expect(html).not.toContain("data-monaco-diff");
+  });
+
+  it("surfaces Monaco DiffEditor init failure without presentation chrome", () => {
+    const html = renderToStaticMarkup(
+      <DiffStub
+        path="src/app.ts"
+        previousPath={null}
+        stubReason={diffEditorInitFailureMessage("src/app.ts diff", "WebGL unavailable")}
+      />,
+    );
+    expect(html).toContain("load src/app.ts diff: WebGL unavailable");
+    expect(html).toContain('data-testid="ticket-diff-stub"');
+    expect(html).not.toContain("ticket-diff-presentation");
   });
 });
 

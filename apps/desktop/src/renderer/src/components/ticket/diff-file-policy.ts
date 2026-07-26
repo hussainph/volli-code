@@ -1,8 +1,8 @@
 /**
- * Pure seeding policy for a future DiffView: given a Change Set file and a
+ * Pure seeding policy for DiffView: given a Change Set file and a
  * base-revision read, decide editor vs binary stub and how to seed Monaco's
  * original/modified sides. No React, Monaco, Electron, or hunk parsing —
- * Monaco DiffEditor owns diff computation later.
+ * Monaco DiffEditor owns diff computation.
  *
  * Original identity (project/ticket/baseRevision/relPath) lives in
  * `DocumentIdentity` (`diff-base`); this module stays URI-agnostic and only
