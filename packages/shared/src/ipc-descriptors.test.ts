@@ -1323,6 +1323,12 @@ describe("THEME_IPC descriptor table", () => {
       expect(guard([{ theme }])).toBe(true);
     });
 
+    // The scope the write is MADE FROM, so the answer can describe it (#123).
+    it("accepts the caller's project scope and rejects a non-string one", () => {
+      expect(guard([{ theme, projectId: "p1" }])).toBe(true);
+      expect(guard([{ theme, projectId: 7 }])).toBe(false);
+    });
+
     it("rejects a definition with a bad canvas, seed, or appearance", () => {
       expect(guard([{ theme: { ...theme, canvas: { kind: "hologram" } } }])).toBe(false);
       expect(guard([{ theme: { ...theme, seed: 42 } }])).toBe(false);
@@ -1350,6 +1356,11 @@ describe("THEME_IPC descriptor table", () => {
     it("accepts an authored catalog id or null to derive from the app theme", () => {
       expect(guard([{ editorThemeId: "nord" }])).toBe(true);
       expect(guard([{ editorThemeId: null }])).toBe(true);
+    });
+
+    it("accepts the caller's project scope and rejects a non-string one", () => {
+      expect(guard([{ editorThemeId: "nord", projectId: "p1" }])).toBe(true);
+      expect(guard([{ editorThemeId: "nord", projectId: 7 }])).toBe(false);
     });
 
     it("rejects a missing or non-nullable-string editorThemeId", () => {

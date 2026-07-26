@@ -21,7 +21,7 @@
  * too (the window background follows it, before any renderer exists).
  */
 
-import { DEFAULT_THEME, EMPTY_PROJECT_THEME_OVERRIDE, errorMessage } from "@volli/shared";
+import { DEFAULT_THEME, errorMessage } from "@volli/shared";
 import type {
   CustomThemeListResult,
   CustomThemeWriteResult,
@@ -44,7 +44,13 @@ import {
   noteRecentTheme,
   toggleFavoriteTheme,
 } from "@renderer/components/theme/theme-picker-model";
+import {
+  withProjectAppChoice,
+  withProjectEditorChoice,
+  type ProjectAppChoice,
+} from "@renderer/components/theme/project-appearance-model";
 import { applyTheme as applyThemeToDom, resolveActiveTheme } from "@renderer/theme/apply";
+import { beginScopeRepaint, shouldEaseScopeRepaint } from "@renderer/theme/scope-transition";
 import { BUILTIN_THEMES, mergeThemeCatalog } from "@renderer/theme/catalog";
 import { resolveEditorThemeId } from "@renderer/editor/editor-theme-catalog";
 import { refreshMonacoEditorTheme } from "@renderer/editor/monaco-theme";
@@ -56,8 +62,18 @@ export type ThemeScope = { kind: "global" } | { kind: "project"; projectId: stri
 /** The preload theming surface this store needs — narrow, and fake-able in tests. */
 export interface ThemeGateway {
   state(input: { projectId?: string }): Promise<ThemeStateResult>;
-  setGlobal(theme: ThemeDefinition): Promise<ThemeStateResult>;
-  setGlobalEditor(editorThemeId: ShippedEditorThemeId | null): Promise<ThemeStateResult>;
+  /**
+   * Writes the GLOBAL theme, and answers with the state of the scope named by
+   * `projectId` — the one the store is showing (#123). The scope is not a
+   * second write target: it is what keeps a project that overrides the app
+   * surface wearing its own theme while the app-wide one changes underneath.
+   */
+  setGlobal(theme: ThemeDefinition, projectId: string | null): Promise<ThemeStateResult>;
+  /** The editor twin of {@link setGlobal} — same rule about whose scope the answer describes. */
+  setGlobalEditor(
+    editorThemeId: ShippedEditorThemeId | null,
+    projectId: string | null,
+  ): Promise<ThemeStateResult>;
   setProject(
     projectId: string,
     override: ProjectThemeOverride | null,
@@ -80,13 +96,20 @@ export interface ThemeStoreDeps {
   applyTheme(theme: ThemeDefinition): void;
   /** Activates a Monaco/shiki catalog id (queued until Monaco boots). */
   refreshEditorTheme(themeId: string): void;
+  /**
+   * Arms the eased repaint for ONE token swap (#69, theme/scope-transition.ts).
+   * Called immediately before {@link applyTheme}, and only for a scope change —
+   * never for a pick or a preview, where instant is the correct feedback.
+   */
+  beginScopeRepaint(): void;
 }
 
 const defaultDeps: ThemeStoreDeps = {
   gateway: {
     state: (input) => window.api.theme.state(input),
-    setGlobal: (theme) => window.api.theme.setGlobal(theme),
-    setGlobalEditor: (editorThemeId) => window.api.theme.setGlobalEditor(editorThemeId),
+    setGlobal: (theme, projectId) => window.api.theme.setGlobal(theme, projectId),
+    setGlobalEditor: (editorThemeId, projectId) =>
+      window.api.theme.setGlobalEditor(editorThemeId, projectId),
     setProject: (projectId, override) => window.api.theme.setProject(projectId, override),
     listCustomThemes: () => window.api.theme.listCustomThemes(),
     saveCustomTheme: (theme) => window.api.theme.saveCustomTheme(theme),
@@ -95,6 +118,7 @@ const defaultDeps: ThemeStoreDeps = {
   },
   applyTheme: (theme) => applyThemeToDom(theme),
   refreshEditorTheme: (themeId) => refreshMonacoEditorTheme(themeId),
+  beginScopeRepaint: () => beginScopeRepaint(),
 };
 
 interface ThemeState {
@@ -144,6 +168,23 @@ interface ThemeState {
   endEditorPreview(): void;
   setGlobalTheme(theme: ThemeDefinition): Promise<boolean>;
   setEditorTheme(editorThemeId: ShippedEditorThemeId | null): Promise<boolean>;
+  /**
+   * One project's app surface: Inherit, #72's auto-tint seed, or a named
+   * theme. The picker's Enter still commits through `commitPreview` (it has a
+   * preview to end and a Recent to note); this is the entry point for the
+   * choices that have no preview — going back to Inherit, and turning the
+   * auto-tint on.
+   */
+  setProjectAppChoice(projectId: string, choice: ProjectAppChoice): Promise<boolean>;
+  /**
+   * One project's editor surface — `null` puts it back to inheriting the
+   * global choice (#69). The project-scope twin of {@link setEditorTheme}; a
+   * non-null id must be a SHIPPED catalog id or main rejects the write.
+   */
+  setProjectEditorTheme(
+    projectId: string,
+    editorThemeId: ShippedEditorThemeId | null,
+  ): Promise<boolean>;
   toggleFavorite(slug: string): void;
 }
 
@@ -239,14 +280,28 @@ export function createThemeStore({
         let painted: string | null = null;
         let paintedEditor: string | null = null;
         let persistedEditorThemeId: ShippedEditorThemeId | null = null;
+        /**
+         * Which `hydrate` call is the current one. Scope reads overlap at boot
+         * (main.tsx reads the global scope immediately; boot() reads the
+         * restored project's scope once it knows it) and at every project
+         * switch — so the LAST call issued wins, whatever order the payloads
+         * come back in. Without this, a slow global read could land after a
+         * project read and quietly put the app back on global scope.
+         */
+        let hydrateGeneration = 0;
         let editorWriteGeneration = 0;
         let editorWriteQueue: Promise<void> = Promise.resolve();
-        const repaint = (): void => {
+        const repaint = (options: { eased?: boolean } = {}): void => {
           const state = get();
           const theme = effectiveTheme(state);
           const key = JSON.stringify(theme);
           if (key !== painted) {
             painted = key;
+            // Armed only when there is an actual swap to ease: a scope change
+            // that resolves to the same theme repaints nothing, and a 300ms
+            // window in which every hover transition is slowed for no visible
+            // reason is exactly the kind of latency §1 asks us to hunt down.
+            if (options.eased === true) deps.beginScopeRepaint();
             deps.applyTheme(theme);
           }
 
@@ -266,8 +321,21 @@ export function createThemeStore({
           }
         };
 
-        /** Adopt a fresh authoritative payload from main and repaint from it. */
+        /**
+         * Adopt a fresh authoritative payload from main and repaint from it.
+         *
+         * This is the ONE place a payload can change which project's theme is
+         * in force, so it is also the one place that can tell a scope change
+         * from a theme change — and the eased repaint (#69) is decided here,
+         * before the state moves, while the outgoing scope is still readable.
+         */
         const accept = (value: ThemeStatePayload): void => {
+          const previous = get();
+          const eased = shouldEaseScopeRepaint({
+            hydrated: previous.hydrated,
+            from: previous.projectId,
+            to: value.projectId,
+          });
           persistedEditorThemeId = value.editorThemeId;
           set({
             global: value.theme,
@@ -277,7 +345,20 @@ export function createThemeStore({
             terminal: value.terminal,
             hydrated: true,
           });
-          repaint();
+          repaint({ eased });
+        };
+
+        /**
+         * The override a per-surface write merges onto. The store holds
+         * exactly ONE scope's override (see `appliedTheme`), so a write aimed
+         * at a project it isn't showing has nothing of that project's to
+         * merge onto — and borrowing the loaded project's fields would write
+         * one project's look onto another. An all-inheriting base is the only
+         * honest answer there.
+         */
+        const overrideBaseFor = (projectId: string): ProjectThemeOverride | null => {
+          const state = get();
+          return state.projectId === projectId ? state.projectOverride : null;
         };
 
         /**
@@ -289,11 +370,14 @@ export function createThemeStore({
           projectId: string,
           theme: ThemeDefinition,
         ): Promise<boolean> => {
-          const base = get().projectOverride ?? EMPTY_PROJECT_THEME_OVERRIDE;
+          const next = withProjectAppChoice(overrideBaseFor(projectId), {
+            kind: "theme",
+            slug: theme.slug,
+          });
           const previousRecents = get().recents;
           set({ recents: noteRecentTheme(previousRecents, theme.slug) });
           const result = await writeThrough("save the theme", () =>
-            deps.gateway.setProject(projectId, { ...base, appThemeSlug: theme.slug }),
+            deps.gateway.setProject(projectId, next),
           );
           if (result === null) {
             // A theme that did not save was not applied — Recent must describe
@@ -320,6 +404,7 @@ export function createThemeStore({
           recents: [],
 
           async hydrate(projectId) {
+            const generation = ++hydrateGeneration;
             let result: ThemeStateResult;
             try {
               result = await deps.gateway.state(
@@ -332,6 +417,11 @@ export function createThemeStore({
               toastError(`Couldn't load the theme: ${errorMessage(error)}`);
               return;
             }
+            // Superseded while in flight: adopting this payload would repaint
+            // the app in a scope it has already left. Silent by design — the
+            // read didn't fail, it just stopped being the answer to the
+            // question being asked.
+            if (generation !== hydrateGeneration) return;
             if (!result.ok) {
               toastError(`Couldn't load the theme: ${result.error}`);
               return;
@@ -481,8 +571,11 @@ export function createThemeStore({
               recents: noteRecentTheme(previousRecents, theme.slug),
             });
             repaint();
+            // The write is global; the ANSWER has to describe the scope this
+            // window is in, or adopting it drops the project out of the store
+            // and repaints an overriding project to the new global (#123).
             const result = await writeThrough("save the theme", () =>
-              deps.gateway.setGlobal(theme),
+              deps.gateway.setGlobal(theme, get().projectId),
             );
             if (result === null) {
               // Put the user back on the theme that is actually stored rather
@@ -503,7 +596,10 @@ export function createThemeStore({
             repaint();
             const write = editorWriteQueue.then(() =>
               writeThrough("save the editor theme", () =>
-                deps.gateway.setGlobalEditor(editorThemeId),
+                // Read at SEND time, not at queue time: the scope this window
+                // is in when the write actually goes out is the one its answer
+                // has to describe (#123).
+                deps.gateway.setGlobalEditor(editorThemeId, get().projectId),
               ),
             );
             editorWriteQueue = write.then(() => undefined);
@@ -519,6 +615,31 @@ export function createThemeStore({
               repaint();
               return false;
             }
+            accept(result.value);
+            return true;
+          },
+
+          async setProjectAppChoice(projectId, choice) {
+            const next = withProjectAppChoice(overrideBaseFor(projectId), choice);
+            const result = await writeThrough("save the theme", () =>
+              deps.gateway.setProject(projectId, next),
+            );
+            if (result === null) return false;
+            accept(result.value);
+            return true;
+          },
+
+          async setProjectEditorTheme(projectId, editorThemeId) {
+            const next = withProjectEditorChoice(
+              overrideBaseFor(projectId),
+              editorThemeId === null
+                ? { kind: "inherit" }
+                : { kind: "theme", themeId: editorThemeId },
+            );
+            const result = await writeThrough("save the editor theme", () =>
+              deps.gateway.setProject(projectId, next),
+            );
+            if (result === null) return false;
             accept(result.value);
             return true;
           },

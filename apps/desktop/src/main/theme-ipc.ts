@@ -150,6 +150,31 @@ function buildThemeState(
 }
 
 /**
+ * The state a WRITE answers with: the scope the caller is in, not the scope the
+ * write targeted (#123).
+ *
+ * A global write made while the window is showing a project used to answer with
+ * `projectId: null`, and the renderer adopts that payload wholesale — so
+ * picking an app-wide theme silently dropped the project scope and repainted
+ * every overriding project to the global theme until you switched away and
+ * back. The write is still global; only the answer is scoped.
+ *
+ * A `projectId` that no longer resolves degrades to the global scope instead of
+ * failing: the write ALREADY succeeded, so a typed error here would make the
+ * renderer roll back to a theme that is no longer what is stored. A project
+ * that has gone has no scope left to describe, and global is what the window is
+ * about to be told it is in anyway.
+ */
+function stateForCaller(
+  db: Database.Database,
+  deps: ThemeIpcDeps,
+  projectId: string | null,
+): ThemeStateResult {
+  const scoped = buildThemeState(db, deps, projectId);
+  return scoped.ok ? scoped : buildThemeState(db, deps, null);
+}
+
+/**
  * Registers every theming channel. A degraded db answers all of them with the
  * open failure: theming reads the projects table and `app_state`, so there is
  * no honest partial mode, and a hanging `invoke()` is never acceptable.
@@ -179,12 +204,13 @@ export function registerThemeIpcHandlers(
       // persist — and the renderer's own repaint is driven by its optimistic
       // apply, not by this.
       hooks.onGlobalThemeChanged?.(input.theme);
-      return buildThemeState(db, deps, null);
+      // The caller's scope, not the write's — see `stateForCaller`.
+      return stateForCaller(db, deps, input.projectId ?? null);
     },
 
     "volli:theme-set-global-editor": (input: ThemeSetGlobalEditorInput): ThemeStateResult => {
       setGlobalEditorThemeId(db, input.editorThemeId, deps.now());
-      return buildThemeState(db, deps, null);
+      return stateForCaller(db, deps, input.projectId ?? null);
     },
 
     "volli:theme-set-project": (input: ThemeSetProjectInput): ThemeSetProjectResult => {

@@ -472,15 +472,31 @@ const api = {
     /** The authored global theme + a project's per-surface override + the resolved terminal chain. */
     state: (input: ThemeStateInput = {}): Promise<ThemeStateResult> =>
       invoke("volli:theme-state", input),
-    /** Persists the authored global theme; resolves with the fresh state. */
-    setGlobal: (theme: ThemeDefinition): Promise<ThemeStateResult> =>
-      invoke("volli:theme-set-global", { theme }),
+    /**
+     * Persists the authored global theme; resolves with the fresh state FOR
+     * THE CALLER'S SCOPE (#123) — pass the project the window is showing, or
+     * `null` from the global scope. The write is global either way; the scope
+     * only decides what the answer describes, so a project that overrides the
+     * app surface keeps wearing its own theme.
+     */
+    setGlobal: (
+      theme: ThemeDefinition,
+      projectId: string | null = null,
+    ): Promise<ThemeStateResult> =>
+      invoke("volli:theme-set-global", projectId === null ? { theme } : { theme, projectId }),
     /**
      * Persists the global Monaco/shiki theme id; `null` clears it so the editor
-     * derives from the active app theme slug. Resolves with the fresh state.
+     * derives from the active app theme slug. Resolves with the fresh state for
+     * the CALLER's scope, exactly like {@link setGlobal} (#123).
      */
-    setGlobalEditor: (editorThemeId: ShippedEditorThemeId | null): Promise<ThemeStateResult> =>
-      invoke("volli:theme-set-global-editor", { editorThemeId }),
+    setGlobalEditor: (
+      editorThemeId: ShippedEditorThemeId | null,
+      projectId: string | null = null,
+    ): Promise<ThemeStateResult> =>
+      invoke(
+        "volli:theme-set-global-editor",
+        projectId === null ? { editorThemeId } : { editorThemeId, projectId },
+      ),
     /** Persists one project's per-surface override; `null` clears it back to inheriting. */
     setProject: (
       projectId: string,

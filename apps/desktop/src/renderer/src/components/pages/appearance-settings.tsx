@@ -1,20 +1,25 @@
 import * as React from "react";
 import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
 import { BracketsCurlyIcon } from "@phosphor-icons/react/dist/csr/BracketsCurly";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
 import { FileTextIcon } from "@phosphor-icons/react/dist/csr/FileText";
 import { MinusIcon } from "@phosphor-icons/react/dist/csr/Minus";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { SlidersIcon } from "@phosphor-icons/react/dist/csr/Sliders";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { Command } from "cmdk";
-import { getBuiltinTheme, listBuiltinThemeNames } from "restty";
-import { errorMessage, type ThemeDefinition } from "@volli/shared";
+import { getBuiltinTheme } from "restty";
+import { type ThemeDefinition } from "@volli/shared";
 
 import { SettingsRow, SettingsSection } from "@renderer/components/pages/settings-shell";
 import { ThemeEditor } from "@renderer/components/theme/theme-editor";
 import { ThemePicker } from "@renderer/components/theme/theme-picker";
+import {
+  editorThemeItems,
+  FALLBACK_TERMINAL_THEME_LABEL,
+  revealPath,
+  terminalThemeItems,
+} from "@renderer/components/theme/appearance-catalog";
+import { ThemeComboBox, ThemeOriginPill } from "@renderer/components/theme/theme-combo-box";
 import {
   buildTerminalSettingRows,
   type TerminalSettingKey,
@@ -36,10 +41,7 @@ import {
   AlertDialogTitle,
 } from "@renderer/components/ui/alert-dialog";
 import { Button } from "@renderer/components/ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
-import { listEditorThemes, type EditorThemeEntry } from "@renderer/editor/editor-theme-catalog";
-import { toastError } from "@renderer/lib/toast";
-import { cn } from "@renderer/lib/utils";
+import { listEditorThemes } from "@renderer/editor/editor-theme-catalog";
 import { writeThrough } from "@renderer/stores/mutate";
 import { useThemeStore, type ThemeScope } from "@renderer/stores/theme";
 import { previewTerminalTheme } from "@renderer/terminal/appearance";
@@ -184,7 +186,13 @@ function AppThemeSection() {
       }
     >
       {editing === null ? (
-        <div className="overflow-hidden rounded-lg border border-border bg-background">
+        // Named so a test can say WHICH picker it means: this pane mounts the
+        // editor and terminal combo boxes too, and their lists carry options
+        // with the same theme names.
+        <div
+          data-testid="appearance-theme-picker"
+          className="overflow-hidden rounded-lg border border-border bg-background"
+        >
           <ThemePicker
             autoFocus={false}
             // Duplicate always opens on a new copy; Rename lands on the name field.
@@ -270,16 +278,9 @@ function DeleteThemeDialog({
 function EditorThemeOriginBadge({ display }: { display: EditorThemeDisplay }) {
   return (
     <span className="flex items-center gap-1.5">
-      <span
-        className={cn(
-          "rounded-full border px-2 py-0.5 text-label",
-          display.source === "automatic"
-            ? "border-border text-muted-foreground"
-            : "border-primary/40 text-primary-text",
-        )}
-      >
+      <ThemeOriginPill emphasized={display.source !== "automatic"}>
         {display.sourceLabel}
-      </span>
+      </ThemeOriginPill>
       {display.resettable ? (
         <Button
           variant="ghost"
@@ -309,112 +310,32 @@ function EditorThemeOriginBadge({ display }: { display: EditorThemeDisplay }) {
 function EditorThemeRow() {
   const editorThemeId = useThemeStore((state) => state.editorThemeId);
   const appThemeSlug = useThemeStore((state) => state.global.slug);
-  const [open, setOpen] = React.useState(false);
-  // cmdk only calls `onValueChange` when the root is CONTROLLED — uncontrolled
-  // it just updates its own store and returns, so an uncontrolled picker here
-  // would silently never preview anything.
-  const [selected, setSelected] = React.useState("");
   const themes = React.useMemo(() => listEditorThemes(), []);
+  const items = React.useMemo(() => editorThemeItems(), []);
 
   const display = React.useMemo(
     () => buildEditorThemeDisplay({ editorThemeId, appThemeSlug, themes }),
     [editorThemeId, appThemeSlug, themes],
   );
 
-  const paintPreview = (selection: string): void => {
-    const plan = planEditorThemePreview({
-      selection,
-      resolvedId: display.resolvedId,
-    });
-    if (plan.kind === "restore") {
-      endEditorPreview();
-      return;
-    }
-    useThemeStore.getState().startEditorPreview(plan.themeId);
-  };
-
-  // Leaving the surface with a preview running would strand Monaco on a theme
-  // that is not stored anywhere. Unmount-only, same as TerminalThemeRow —
-  // endEditorPreview reads live store state so a commit-then-restore lands on
-  // the committed id rather than a stale pre-commit closure.
-  React.useEffect(() => endEditorPreview, []);
-
   return (
     <SettingsRow label="Theme">
       <EditorThemeOriginBadge display={display} />
-      <Popover
-        open={open}
-        onOpenChange={(next) => {
-          setOpen(next);
-          if (!next) endEditorPreview();
+      <ThemeComboBox
+        ariaLabel="Editor theme"
+        searchLabel="Search editor themes"
+        buttonLabel={display.label}
+        empty="No matching theme."
+        items={items}
+        activeValue={display.resolvedId}
+        onPreview={(selection) => {
+          const plan = planEditorThemePreview({ selection, resolvedId: display.resolvedId });
+          if (plan.kind === "restore") endEditorPreview();
+          else useThemeStore.getState().startEditorPreview(plan.themeId);
         }}
-      >
-        <PopoverTrigger asChild>
-          <Button
-            variant="outline"
-            size="sm"
-            aria-label="Editor theme"
-            className="w-52 justify-between"
-          >
-            <span className="truncate">{display.label}</span>
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent align="end" className="w-64 p-0">
-          <Command
-            loop
-            value={selected}
-            onValueChange={(id) => {
-              setSelected(id);
-              paintPreview(id);
-            }}
-            // The pointer wandering off the list ends the preview, same as the
-            // terminal picker: a hover has no Escape.
-            onPointerLeave={() => {
-              setSelected("");
-              endEditorPreview();
-            }}
-            className="flex flex-col overflow-hidden rounded-md"
-          >
-            <Command.Input
-              autoFocus
-              aria-label="Search editor themes"
-              placeholder="Search themes…"
-              className="h-9 border-b border-border bg-transparent px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground"
-            />
-            <Command.List className="max-h-64 overflow-y-auto p-1">
-              <Command.Empty className="py-6 text-center text-sm text-muted-foreground">
-                No matching theme.
-              </Command.Empty>
-              {themes.map((theme: EditorThemeEntry) => (
-                <Command.Item
-                  key={theme.id}
-                  value={theme.id}
-                  keywords={[theme.label, theme.family ?? ""]}
-                  onSelect={() => {
-                    // Commit first, then drop the preview: setEditorTheme
-                    // refreshes Monaco to the same id, so there is no flash.
-                    // endEditorPreview reads the updated store so restore
-                    // paints the committed catalog id, not the pre-commit one.
-                    void useThemeStore
-                      .getState()
-                      .setEditorTheme(theme.id)
-                      .then((saved) => {
-                        if (saved) setOpen(false);
-                        endEditorPreview();
-                      });
-                  }}
-                  className="flex cursor-pointer items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-sm outline-none data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground"
-                >
-                  <span className="truncate">{theme.label}</span>
-                  {theme.id === display.resolvedId ? (
-                    <CheckIcon weight="bold" className="size-3.5" />
-                  ) : null}
-                </Command.Item>
-              ))}
-            </Command.List>
-          </Command>
-        </PopoverContent>
-      </Popover>
+        onEndPreview={endEditorPreview}
+        onSelect={(id) => useThemeStore.getState().setEditorTheme(id)}
+      />
     </SettingsRow>
   );
 }
@@ -428,20 +349,6 @@ function EditorThemeRow() {
 const endEditorPreview = (): void => {
   useThemeStore.getState().endEditorPreview();
 };
-
-/** Reveal a config file in Finder; a missing path or a failed reveal toasts. */
-async function revealPath(path: string | null): Promise<void> {
-  if (path === null) {
-    toastError("Terminal config hasn't loaded yet.");
-    return;
-  }
-  try {
-    const result = await window.api.fs.revealInFinder(path);
-    if (!result.ok) toastError(`Couldn't reveal ${path}: ${result.error}`);
-  } catch (error) {
-    toastError(`Couldn't reveal ${path}: ${errorMessage(error)}`);
-  }
-}
 
 /**
  * Writes overlay keys and adopts the freshly-resolved appearance main hands
@@ -461,20 +368,9 @@ async function writeOverlay(edits: Record<string, string | null>): Promise<boole
 function OriginBadge({ row }: { row: TerminalSettingRow }) {
   return (
     <span className="flex items-center gap-1.5">
-      <span
-        className={cn(
-          "rounded-full border px-2 py-0.5 text-label",
-          row.source === "default"
-            ? "border-border text-muted-foreground"
-            : row.source === "ghostty"
-              ? "border-border text-muted-foreground"
-              : // The label is 11px, so it needs the text token even more than
-                // body copy does; the border stays on --primary, which is a fill.
-                "border-primary/40 text-primary-text",
-        )}
-      >
+      <ThemeOriginPill emphasized={row.source === "volli-global" || row.source === "volli-project"}>
         {row.sourceLabel}
-      </span>
+      </ThemeOriginPill>
       {row.revertible ? <RevertButton settingKey={row.key} /> : null}
     </span>
   );
@@ -518,87 +414,22 @@ const endPreview = (): void => previewTerminalTheme(null);
  * closing the menu any other way puts the resolved palette back.
  */
 function TerminalThemeRow({ row }: { row: TerminalSettingRow }) {
-  const [open, setOpen] = React.useState(false);
-  // cmdk only calls `onValueChange` when the root is CONTROLLED — uncontrolled
-  // it just updates its own store and returns (see its `setState`), so an
-  // uncontrolled picker here would silently never preview anything.
-  const [selected, setSelected] = React.useState("");
-  const names = React.useMemo(() => listBuiltinThemeNames(), []);
-
-  // Leaving the surface with a preview running would strand every terminal on
-  // a palette that is not stored anywhere.
-  React.useEffect(() => endPreview, []);
+  const items = React.useMemo(() => terminalThemeItems(), []);
 
   return (
     <SettingsRow label={row.label}>
       <OriginBadge row={row} />
-      <Popover
-        open={open}
-        onOpenChange={(next) => {
-          setOpen(next);
-          if (!next) endPreview();
-        }}
-      >
-        <PopoverTrigger asChild>
-          <Button
-            variant="outline"
-            size="sm"
-            aria-label="Terminal theme"
-            className="w-52 justify-between"
-          >
-            <span className="truncate">{row.value ?? "Volli Dark"}</span>
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent align="end" className="w-64 p-0">
-          <Command
-            loop
-            value={selected}
-            onValueChange={(name) => {
-              setSelected(name);
-              preview(name);
-            }}
-            // The pointer wandering off the list ends the preview, same as in
-            // the app-theme picker: a hover has no Escape. Clearing the
-            // selection keeps cmdk from swallowing the re-entry onto the row
-            // it left highlighted.
-            onPointerLeave={() => {
-              setSelected("");
-              endPreview();
-            }}
-            className="flex flex-col overflow-hidden rounded-md"
-          >
-            <Command.Input
-              autoFocus
-              aria-label="Search terminal themes"
-              placeholder="Search themes…"
-              className="h-9 border-b border-border bg-transparent px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground"
-            />
-            <Command.List className="max-h-64 overflow-y-auto p-1">
-              <Command.Empty className="py-6 text-center text-sm text-muted-foreground">
-                No matching theme.
-              </Command.Empty>
-              {names.map((name) => (
-                <Command.Item
-                  key={name}
-                  value={name}
-                  onSelect={() => {
-                    // Commit first, then drop the preview: the overlay write
-                    // resolves into the same palette, so there is no flash.
-                    void writeOverlay({ theme: name }).then((saved) => {
-                      if (saved) setOpen(false);
-                      endPreview();
-                    });
-                  }}
-                  className="flex cursor-pointer items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-sm outline-none data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground"
-                >
-                  <span className="truncate">{name}</span>
-                  {name === row.value ? <CheckIcon weight="bold" className="size-3.5" /> : null}
-                </Command.Item>
-              ))}
-            </Command.List>
-          </Command>
-        </PopoverContent>
-      </Popover>
+      <ThemeComboBox
+        ariaLabel="Terminal theme"
+        searchLabel="Search terminal themes"
+        buttonLabel={row.value ?? FALLBACK_TERMINAL_THEME_LABEL}
+        empty="No matching theme."
+        items={items}
+        activeValue={row.value}
+        onPreview={preview}
+        onEndPreview={endPreview}
+        onSelect={(name) => writeOverlay({ theme: name })}
+      />
     </SettingsRow>
   );
 }
@@ -609,11 +440,15 @@ function TerminalThemeRow({ row }: { row: TerminalSettingRow }) {
  * actually be able to load.
  */
 function FontFamilyRow({ row }: { row: TerminalSettingRow }) {
-  const [open, setOpen] = React.useState(false);
+  const [opened, setOpened] = React.useState(false);
   const [families, setFamilies] = React.useState<readonly string[] | null>(null);
+  const items = React.useMemo(
+    () => (families ?? []).map((family) => ({ value: family, label: family })),
+    [families],
+  );
 
   React.useEffect(() => {
-    if (!open || families !== null) return;
+    if (!opened || families !== null) return;
     let cancelled = false;
     void listLocalFontFamilies().then((found) => {
       if (!cancelled) setFamilies(found);
@@ -621,51 +456,32 @@ function FontFamilyRow({ row }: { row: TerminalSettingRow }) {
     return () => {
       cancelled = true;
     };
-  }, [open, families]);
+  }, [opened, families]);
 
   return (
     <SettingsRow label={row.label}>
       <OriginBadge row={row} />
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <Button variant="outline" size="sm" className="w-52 justify-between">
-            <span className="truncate">{row.value ?? "Ghostty default"}</span>
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent align="end" className="w-64 p-0">
-          <Command loop className="flex flex-col overflow-hidden rounded-md">
-            <Command.Input
-              autoFocus
-              placeholder="Search fonts…"
-              className="h-9 border-b border-border bg-transparent px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground"
-            />
-            <Command.List className="max-h-64 overflow-y-auto p-1">
-              <Command.Empty className="py-6 text-center text-sm text-muted-foreground">
-                {families === null
-                  ? "Loading fonts…"
-                  : families.length === 0
-                    ? "No fonts found. Set font-family in the overlay file."
-                    : "No matching font."}
-              </Command.Empty>
-              {(families ?? []).map((family) => (
-                <Command.Item
-                  key={family}
-                  value={family}
-                  onSelect={() => {
-                    void writeOverlay({ "font-family": family }).then((saved) => {
-                      if (saved) setOpen(false);
-                    });
-                  }}
-                  className="flex cursor-pointer items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-sm outline-none data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground"
-                >
-                  <span className="truncate">{family}</span>
-                  {family === row.value ? <CheckIcon weight="bold" className="size-3.5" /> : null}
-                </Command.Item>
-              ))}
-            </Command.List>
-          </Command>
-        </PopoverContent>
-      </Popover>
+      <ThemeComboBox
+        ariaLabel="Terminal font family"
+        searchLabel="Search fonts"
+        searchPlaceholder="Search fonts…"
+        buttonLabel={row.value ?? "Ghostty default"}
+        empty={
+          families === null
+            ? "Loading fonts…"
+            : families.length === 0
+              ? "No fonts found. Set font-family in the overlay file."
+              : "No matching font."
+        }
+        items={items}
+        activeValue={row.value}
+        // Enumerating the local font list is a permissioned round trip, so it
+        // waits for the menu to actually open rather than running on mount.
+        onOpenChange={(next) => {
+          if (next) setOpened(true);
+        }}
+        onSelect={(family) => writeOverlay({ "font-family": family })}
+      />
     </SettingsRow>
   );
 }

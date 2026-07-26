@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import {
   DEFAULT_THEME,
   EMPTY_PROJECT_THEME_OVERRIDE,
+  PROJECT_COLORS,
   generateThemeTokens,
   type GhosttyAppearancePayload,
   type ProjectThemeOverride,
@@ -11,6 +12,13 @@ import {
   type ThemeStatePayload,
   type ThemeStateResult,
 } from "@volli/shared";
+
+import { autoTintChoice } from "@renderer/components/theme/project-appearance-model";
+import { PROJECT_TINT_SLUG } from "@renderer/theme/apply";
+import {
+  SCOPE_TRANSITION_ATTRIBUTE,
+  SCOPE_TRANSITION_VALUE,
+} from "@renderer/theme/scope-transition";
 
 import { appliedTheme, createThemeStore, effectiveTheme, type ThemeGateway } from "./theme";
 
@@ -63,11 +71,23 @@ function statePayload(over: Partial<ThemeStatePayload> = {}): ThemeStatePayload 
 function recorder() {
   const applied: ThemeDefinition[] = [];
   const editorThemes: string[] = [];
+  // Records the EASED repaints specifically: the theme each one was armed for,
+  // so a test can assert both that the crossfade ran and what it ran into.
+  const eased: (ThemeDefinition | undefined)[] = [];
+  let arming = false;
   return {
     applied,
     editorThemes,
-    applyTheme: (theme: ThemeDefinition) => void applied.push(theme),
+    eased,
+    applyTheme: (theme: ThemeDefinition) => {
+      applied.push(theme);
+      if (arming) eased.push(theme);
+      arming = false;
+    },
     refreshEditorTheme: (themeId: string) => void editorThemes.push(themeId),
+    beginScopeRepaint: () => {
+      arming = true;
+    },
   };
 }
 
@@ -86,14 +106,18 @@ function memoryStorage() {
 function fakeGateway(over: Partial<ThemeGateway> = {}): ThemeGateway {
   return {
     state: vi.fn(async () => ({ ok: true as const, value: statePayload() })),
-    setGlobal: vi.fn(async (theme: ThemeDefinition) => ({
+    // Echoes the scope it was called in, exactly as main does: the write is
+    // global, the answer describes the caller's scope (#123).
+    setGlobal: vi.fn(async (theme: ThemeDefinition, projectId: string | null) => ({
       ok: true as const,
-      value: statePayload({ theme }),
+      value: statePayload({ theme, projectId }),
     })),
-    setGlobalEditor: vi.fn(async (editorThemeId: ShippedEditorThemeId | null) => ({
-      ok: true as const,
-      value: statePayload({ editorThemeId }),
-    })),
+    setGlobalEditor: vi.fn(
+      async (editorThemeId: ShippedEditorThemeId | null, projectId: string | null) => ({
+        ok: true as const,
+        value: statePayload({ editorThemeId, projectId }),
+      }),
+    ),
     setProject: vi.fn(async (projectId: string, override: ProjectThemeOverride | null) => ({
       ok: true as const,
       project: { id: projectId } as never,
@@ -120,6 +144,7 @@ function freshStore(over: Partial<ThemeGateway> = {}) {
       gateway,
       applyTheme: paint.applyTheme,
       refreshEditorTheme: paint.refreshEditorTheme,
+      beginScopeRepaint: paint.beginScopeRepaint,
     },
     storage: memory.storage,
   });
@@ -191,6 +216,35 @@ describe("hydrate", () => {
     expect(store.getState().projectOverride).toEqual(override);
   });
 
+  // Boot's two reads overlap by design: main.tsx fires the global one the
+  // moment the renderer starts, and boot() fires the project-scoped one as
+  // soon as it has resolved the persisted selection. Whichever is issued LAST
+  // is the scope the app is in — arrival order is a network fact, not intent.
+  it("drops a stale read that lands after a newer one was issued", async () => {
+    const override: ProjectThemeOverride = {
+      ...EMPTY_PROJECT_THEME_OVERRIDE,
+      appThemeSlug: "midnight",
+    };
+    const globalRead = deferred<ThemeStateResult>();
+    const projectRead = deferred<ThemeStateResult>();
+    const pending = [globalRead.promise, projectRead.promise];
+    const { store } = freshStore({ state: vi.fn(() => pending.shift()!) });
+
+    const stale = store.getState().hydrate(); // main.tsx, global scope
+    const fresh = store.getState().hydrate("p1"); // boot, restored selection
+
+    projectRead.resolve({
+      ok: true,
+      value: statePayload({ projectId: "p1", projectOverride: override }),
+    });
+    await fresh;
+    globalRead.resolve({ ok: true, value: statePayload() });
+    await stale;
+
+    expect(store.getState().projectId).toBe("p1");
+    expect(store.getState().projectOverride).toEqual(override);
+  });
+
   it("toasts a typed read failure and keeps the shipped default", async () => {
     const { store } = freshStore({
       state: vi.fn(async () => ({ ok: false as const, error: "db closed" })),
@@ -220,13 +274,87 @@ describe("hydrate", () => {
   });
 });
 
+describe("the eased scope-change repaint (#69)", () => {
+  it("cuts straight to the theme on the first paint", async () => {
+    // Boot has no previous look to come from — a crossfade here would read as
+    // the app slowly fading in something it had already rendered.
+    const { store, paint } = freshStore();
+
+    await store.getState().hydrate("p1");
+
+    expect(paint.applied).toHaveLength(1);
+    expect(paint.eased).toEqual([]);
+  });
+
+  it("eases the repaint when the scope moves to another project", async () => {
+    const override: ProjectThemeOverride = {
+      ...EMPTY_PROJECT_THEME_OVERRIDE,
+      appThemeSlug: MIDNIGHT.slug,
+    };
+    const scopes: Record<string, ThemeStatePayload> = {
+      p1: statePayload({ projectId: "p1" }),
+      p2: statePayload({ projectId: "p2", projectOverride: override, theme: MIDNIGHT }),
+    };
+    const { store, paint } = freshStore({
+      state: vi.fn(async (input: { projectId?: string }) => ({
+        ok: true as const,
+        value: scopes[input.projectId ?? "p1"]!,
+      })),
+    });
+
+    await store.getState().hydrate("p1");
+    await store.getState().hydrate("p2");
+
+    // The transition IS the signal that the window now belongs to another
+    // project, so it is armed for exactly that swap.
+    expect(paint.eased).toEqual([MIDNIGHT]);
+  });
+
+  it("does not ease a theme change inside one scope", async () => {
+    // A pick is a direct answer to a keystroke; 300ms of crossfade there is
+    // latency on the input path, not polish.
+    const { store, paint } = freshStore();
+    await store.getState().hydrate();
+
+    await store.getState().setGlobalTheme(MIDNIGHT);
+
+    expect(paint.applied).toContainEqual(MIDNIGHT);
+    expect(paint.eased).toEqual([]);
+  });
+
+  it("does not ease a preview, however far the seed moves", () => {
+    const { store, paint } = freshStore();
+    store.getState().startPreview(MIDNIGHT);
+    store.getState().cancelPreview();
+
+    expect(paint.eased).toEqual([]);
+  });
+
+  it("arms nothing when a scope change resolves to the same theme", async () => {
+    // Both projects inherit, so nothing repaints — and a crossfade window with
+    // no color change in it would only slow every hover for 300ms.
+    const { store, paint } = freshStore({
+      state: vi.fn(async (input: { projectId?: string }) => ({
+        ok: true as const,
+        value: statePayload({ projectId: input.projectId ?? null }),
+      })),
+    });
+
+    await store.getState().hydrate("p1");
+    await store.getState().hydrate("p2");
+
+    expect(paint.applied).toHaveLength(1);
+    expect(paint.eased).toEqual([]);
+  });
+});
+
 describe("setEditorTheme", () => {
   it("persists the global editor id and refreshes Monaco without rewriting the app theme", async () => {
     const { store, gateway, paint } = freshStore();
 
     await expect(store.getState().setEditorTheme("nord")).resolves.toBe(true);
 
-    expect(gateway.setGlobalEditor).toHaveBeenCalledWith("nord");
+    expect(gateway.setGlobalEditor).toHaveBeenCalledWith("nord", null);
     expect(gateway.setGlobal).not.toHaveBeenCalled();
     expect(store.getState().editorThemeId).toBe("nord");
     expect(paint.editorThemes).toEqual(["nord"]);
@@ -420,7 +548,7 @@ describe("commit", () => {
     await expect(store.getState().commitPreview({ kind: "global" })).resolves.toBe(true);
 
     expect(gateway.setGlobal).toHaveBeenCalledTimes(1);
-    expect(gateway.setGlobal).toHaveBeenCalledWith(MIDNIGHT);
+    expect(gateway.setGlobal).toHaveBeenCalledWith(MIDNIGHT, null);
     expect(store.getState().preview).toBeNull();
     expect(store.getState().global).toEqual(MIDNIGHT);
     expect(store.getState().recents).toEqual(["midnight"]);
@@ -504,10 +632,96 @@ describe("commit", () => {
 
     await expect(store.getState().setGlobalTheme(MIDNIGHT)).resolves.toBe(true);
 
-    expect(gateway.setGlobal).toHaveBeenCalledWith(MIDNIGHT);
+    expect(gateway.setGlobal).toHaveBeenCalledWith(MIDNIGHT, null);
     expect(paint.applied).toEqual([MIDNIGHT]);
     // null editorThemeId remaps Monaco when the app slug changes
     expect(paint.editorThemes).toEqual(["tokyo-night"]);
+  });
+});
+
+/**
+ * The scope a global write ANSWERS in (#123). The write itself is global from
+ * every scope; what must not change is which project's look the window is
+ * wearing while it happens.
+ */
+describe("a global write made from a project scope", () => {
+  /** A project whose app AND editor surfaces are pinned to its own choices. */
+  const OVERRIDE: ProjectThemeOverride = {
+    ...EMPTY_PROJECT_THEME_OVERRIDE,
+    appThemeSlug: "sunset",
+    editorThemeId: "dracula",
+  };
+
+  /**
+   * Main's contract: the write goes to the global scope, and the state that
+   * comes back describes the scope the CALLER named (theme-ipc.ts).
+   */
+  function scopedGateway() {
+    return {
+      setGlobal: vi.fn(async (theme: ThemeDefinition, projectId: string | null) => ({
+        ok: true as const,
+        value: statePayload({
+          theme,
+          projectId,
+          projectOverride: projectId === "p1" ? OVERRIDE : null,
+        }),
+      })),
+      setGlobalEditor: vi.fn(
+        async (editorThemeId: ShippedEditorThemeId | null, projectId: string | null) => ({
+          ok: true as const,
+          value: statePayload({
+            editorThemeId,
+            projectId,
+            projectOverride: projectId === "p1" ? OVERRIDE : null,
+          }),
+        }),
+      ),
+    };
+  }
+
+  /** A hydrated store showing project `p1`, which overrides its app surface with Sunset. */
+  function inProjectScope() {
+    const fresh = freshStore(scopedGateway());
+    fresh.store.setState({
+      hydrated: true,
+      projectId: "p1",
+      projectOverride: OVERRIDE,
+      customThemes: [SUNSET],
+    });
+    return fresh;
+  }
+
+  it("keeps the project's own theme on screen while the global theme changes", async () => {
+    const { store, gateway, paint } = inProjectScope();
+
+    await expect(store.getState().setGlobalTheme(MIDNIGHT)).resolves.toBe(true);
+
+    expect(gateway.setGlobal).toHaveBeenCalledWith(MIDNIGHT, "p1");
+    // The global really moved — this project just isn't wearing it.
+    expect(store.getState().global).toEqual(MIDNIGHT);
+    expect(store.getState().projectId).toBe("p1");
+    expect(store.getState().projectOverride).toEqual(OVERRIDE);
+    expect(effectiveTheme(store.getState())).toEqual(SUNSET);
+    // One paint, into the project's own theme: no bounce through the global.
+    expect(paint.applied).toEqual([SUNSET]);
+    // The scope never changed, so the crossfade must stay out of it.
+    expect(paint.eased).toEqual([]);
+  });
+
+  it("keeps the project's own editor theme while the global editor theme changes", async () => {
+    const { store, gateway, paint } = inProjectScope();
+
+    await expect(store.getState().setEditorTheme("nord")).resolves.toBe(true);
+
+    expect(gateway.setGlobalEditor).toHaveBeenCalledWith("nord", "p1");
+    expect(store.getState().editorThemeId).toBe("nord");
+    expect(store.getState().projectId).toBe("p1");
+    expect(store.getState().projectOverride).toEqual(OVERRIDE);
+    // Monaco stays on what this project pinned — the global id is what the
+    // OTHER projects inherit, and adopting a scope-less answer here would
+    // repaint the editor (and the window) out from under this one.
+    expect(paint.editorThemes).toEqual(["dracula"]);
+    expect(paint.applied).toEqual([SUNSET]);
   });
 });
 
@@ -535,12 +749,160 @@ describe("favorites and recents", () => {
         gateway: fakeGateway(),
         applyTheme: () => {},
         refreshEditorTheme: () => {},
+        beginScopeRepaint: () => {},
       },
       storage: memory.storage,
     });
 
     expect(store.getState().favorites).toEqual(["moss"]);
     expect(store.getState().recents).toEqual([]);
+  });
+});
+
+/** A store already scoped to project `p1`, carrying `override`. */
+async function scopedToProject(override: ProjectThemeOverride) {
+  const scoped = freshStore({
+    state: vi.fn(async () => ({
+      ok: true as const,
+      value: statePayload({ projectId: "p1", projectOverride: override }),
+    })),
+  });
+  await scoped.store.getState().hydrate("p1");
+  scoped.paint.applied.length = 0;
+  scoped.paint.editorThemes.length = 0;
+  return scoped;
+}
+
+describe("setProjectAppChoice", () => {
+  it("clears BOTH the named theme and the tint seed when a project goes back to inherit", async () => {
+    // Dropping only the slug would leave the seed tinting the app — #72's
+    // auto-tint is exactly "a seed and no slug", so Inherit has to clear both.
+    const { store, gateway } = await scopedToProject({
+      ...EMPTY_PROJECT_THEME_OVERRIDE,
+      appThemeSlug: "sunset",
+      seed: "#E8652A",
+      editorThemeId: "nord",
+    });
+
+    await expect(store.getState().setProjectAppChoice("p1", { kind: "inherit" })).resolves.toBe(
+      true,
+    );
+
+    expect(gateway.setProject).toHaveBeenCalledWith("p1", {
+      ...EMPTY_PROJECT_THEME_OVERRIDE,
+      editorThemeId: "nord",
+    });
+  });
+
+  // #72: Custom opens with "Auto-tint from this project's color" pre-selected.
+  // The SEED is what's stored — the tinted theme itself is derived at paint
+  // time (theme/apply.ts), never written anywhere.
+  it("stores the project's color as the tint seed and paints the derived theme", async () => {
+    const { store, gateway, paint } = await scopedToProject(EMPTY_PROJECT_THEME_OVERRIDE);
+
+    await expect(store.getState().setProjectAppChoice("p1", autoTintChoice(0))).resolves.toBe(true);
+
+    expect(gateway.setProject).toHaveBeenCalledWith("p1", {
+      ...EMPTY_PROJECT_THEME_OVERRIDE,
+      seed: PROJECT_COLORS[0],
+    });
+    expect(paint.applied.at(-1)).toMatchObject({
+      slug: PROJECT_TINT_SLUG,
+      seed: PROJECT_COLORS[0],
+    });
+  });
+
+  it("never merges onto an override belonging to a different project", async () => {
+    // The store holds exactly ONE scope's override (see `appliedTheme`), so a
+    // write aimed elsewhere must start from "inherits everything" rather than
+    // copying the loaded project's look onto its neighbor.
+    const { store, gateway } = await scopedToProject({
+      ...EMPTY_PROJECT_THEME_OVERRIDE,
+      appThemeSlug: "sunset",
+    });
+
+    await store.getState().setProjectAppChoice("p2", autoTintChoice(1));
+
+    expect(gateway.setProject).toHaveBeenCalledWith("p2", {
+      ...EMPTY_PROJECT_THEME_OVERRIDE,
+      seed: PROJECT_COLORS[1],
+    });
+  });
+
+  it("reports a failed write instead of pretending the project changed", async () => {
+    const { store } = freshStore({
+      setProject: vi.fn(async () => ({ ok: false as const, error: "disk full" })),
+    });
+
+    await expect(store.getState().setProjectAppChoice("p1", { kind: "inherit" })).resolves.toBe(
+      false,
+    );
+
+    expect(store.getState().projectOverride).toBeNull();
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      "Couldn't save the theme: disk full",
+      expect.anything(),
+    );
+  });
+});
+
+describe("setProjectEditorTheme", () => {
+  it("persists the project's editor id, leaving its other surfaces alone (#69)", async () => {
+    const override: ProjectThemeOverride = {
+      ...EMPTY_PROJECT_THEME_OVERRIDE,
+      appThemeSlug: "sunset",
+    };
+    const { store, gateway, paint } = await scopedToProject(override);
+
+    await expect(store.getState().setProjectEditorTheme("p1", "nord")).resolves.toBe(true);
+
+    expect(gateway.setProject).toHaveBeenCalledWith("p1", { ...override, editorThemeId: "nord" });
+    expect(gateway.setGlobalEditor).not.toHaveBeenCalled();
+    expect(store.getState().projectOverride).toEqual({ ...override, editorThemeId: "nord" });
+    expect(paint.editorThemes).toEqual(["nord"]);
+  });
+
+  // "Inherit" is the absence of an override, not an override full of nulls —
+  // the row is dropped, so a project that inherits everything reads the same
+  // as a project that never set anything.
+  it("clears the whole override when the last set surface goes back to inherit", async () => {
+    const { store, gateway } = await scopedToProject({
+      ...EMPTY_PROJECT_THEME_OVERRIDE,
+      editorThemeId: "nord",
+    });
+
+    await expect(store.getState().setProjectEditorTheme("p1", null)).resolves.toBe(true);
+
+    expect(gateway.setProject).toHaveBeenCalledWith("p1", null);
+    expect(store.getState().projectOverride).toBeNull();
+  });
+
+  it("keeps the override when another surface is still set", async () => {
+    const { store, gateway } = await scopedToProject({
+      ...EMPTY_PROJECT_THEME_OVERRIDE,
+      appThemeSlug: "sunset",
+      editorThemeId: "nord",
+    });
+
+    await store.getState().setProjectEditorTheme("p1", null);
+
+    expect(gateway.setProject).toHaveBeenCalledWith("p1", {
+      ...EMPTY_PROJECT_THEME_OVERRIDE,
+      appThemeSlug: "sunset",
+    });
+  });
+
+  it("reports a failed write rather than leaving the picker looking saved", async () => {
+    const { store } = freshStore({
+      setProject: vi.fn(async () => ({ ok: false as const, error: "disk full" })),
+    });
+
+    await expect(store.getState().setProjectEditorTheme("p1", "nord")).resolves.toBe(false);
+
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      "Couldn't save the editor theme: disk full",
+      expect.anything(),
+    );
   });
 });
 
@@ -723,15 +1085,29 @@ describe("createThemeStore() with the default deps", () => {
   // real DOM apply path, which every other test in this file bypasses.
   it("routes through window.api.theme and paints the document element", async () => {
     const written = new Map<string, string>();
-    const state = vi.fn(async () => ({
+    const attributes = new Map<string, string>();
+    // Scope-aware, and each scope resolves to a DIFFERENT theme: the eased
+    // repaint is armed inside the "did the paint actually change" guard, so a
+    // scope switch that lands on the same theme would (correctly) never reach
+    // the real `beginScopeRepaint`.
+    const state = vi.fn(async (input: { projectId?: string }) => ({
       ok: true as const,
-      value: statePayload({ theme: MIDNIGHT }),
+      value: statePayload(
+        input.projectId === undefined
+          ? { theme: MIDNIGHT }
+          : { theme: DEFAULT_THEME, projectId: input.projectId },
+      ),
     }));
-    const setGlobal = vi.fn(async () => ({ ok: true as const, value: statePayload() }));
-    const setGlobalEditor = vi.fn(async (editorThemeId: ShippedEditorThemeId | null) => ({
+    const setGlobal = vi.fn(async (theme: ThemeDefinition, projectId: string | null) => ({
       ok: true as const,
-      value: statePayload({ editorThemeId }),
+      value: statePayload({ theme, projectId }),
     }));
+    const setGlobalEditor = vi.fn(
+      async (editorThemeId: ShippedEditorThemeId | null, projectId: string | null) => ({
+        ok: true as const,
+        value: statePayload({ editorThemeId, projectId }),
+      }),
+    );
     const setProject = vi.fn(async () => ({ ok: false as const, error: "unused" }));
     const listCustomThemes = vi.fn(async () => ({ ok: true as const, themes: [SUNSET] }));
     const saveCustomTheme = vi.fn(async () => ({
@@ -758,6 +1134,9 @@ describe("createThemeStore() with the default deps", () => {
     vi.stubGlobal("document", {
       documentElement: {
         style: { setProperty: (name: string, value: string) => void written.set(name, value) },
+        setAttribute: (name: string, value: string) => void attributes.set(name, value),
+        removeAttribute: (name: string) => void attributes.delete(name),
+        offsetWidth: 0,
       },
     });
     const store = createThemeStore();
@@ -769,12 +1148,20 @@ describe("createThemeStore() with the default deps", () => {
     // generator (as window-theme.test.ts does) so the two can't drift, and
     // still meaningful because nothing writes this key unless the store paints.
     expect(written.get("--background")).toBe(generateThemeTokens(MIDNIGHT)["--background"]);
+    // Boot is not a transition: there is no previous look to ease from.
+    expect(attributes.has(SCOPE_TRANSITION_ATTRIBUTE)).toBe(false);
 
+    // Entering a project's scope IS one, and it arms the real DOM path (#69).
+    await store.getState().hydrate("p1");
+    expect(attributes.get(SCOPE_TRANSITION_ATTRIBUTE)).toBe(SCOPE_TRANSITION_VALUE);
+
+    // …and the bridge carries the scope the store is in, not a bare theme:
+    // the write is global, its answer is this project's state (#123).
     await store.getState().setGlobalTheme(DEFAULT_THEME);
-    expect(setGlobal).toHaveBeenCalledWith(DEFAULT_THEME);
+    expect(setGlobal).toHaveBeenCalledWith(DEFAULT_THEME, "p1");
 
     await store.getState().setEditorTheme("nord");
-    expect(setGlobalEditor).toHaveBeenCalledWith("nord");
+    expect(setGlobalEditor).toHaveBeenCalledWith("nord", "p1");
 
     store.setState({ preview: MIDNIGHT });
     await store.getState().commitPreview({ kind: "project", projectId: "p1" });
@@ -835,7 +1222,7 @@ describe("the user's own themes", () => {
 
     expect(saved).toBe(true);
     expect(gateway.saveCustomTheme).toHaveBeenCalledWith(MINE);
-    expect(gateway.setGlobal).toHaveBeenCalledWith(MINE);
+    expect(gateway.setGlobal).toHaveBeenCalledWith(MINE, null);
     expect(store.getState().customThemes).toEqual([MINE]);
   });
 
@@ -864,7 +1251,7 @@ describe("the user's own themes", () => {
 
     expect(saved).toBe(false);
     expect(gateway.saveCustomTheme).toHaveBeenCalledWith(MINE);
-    expect(gateway.setGlobal).toHaveBeenCalledWith(MINE);
+    expect(gateway.setGlobal).toHaveBeenCalledWith(MINE, null);
     expect(store.getState().customThemes).toEqual([MINE]);
     expect(store.getState().preview).toEqual(MINE);
     expect(store.getState().global).toEqual(DEFAULT_THEME);

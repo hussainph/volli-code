@@ -17,11 +17,30 @@
  *   4. Volli NEVER writes the user's own ghostty config (decision #67), and a
  *      Volli write preserves hand-written keys and comments in its own
  *      overlay (decision #68).
+ *   5. PER-PROJECT overrides (#69/#72) resolve against the SELECTED project:
+ *      an override paints only its own project, an inheriting project falls
+ *      back to the global theme, the switch between them crossfades rather
+ *      than cutting, the override is in force ON BOOT when the app restores a
+ *      persisted selection, and Inherit really un-does it. The boot case is
+ *      the whole point of issue #123 — the store used to hydrate the global
+ *      scope and never re-read it for the restored project, so an override was
+ *      correct in the database and invisible in the window.
+ *   6. A GLOBAL theme pick made while an overriding project is selected leaves
+ *      that project's window alone (#123's other half): the write used to be
+ *      answered with the GLOBAL scope, the store adopts a payload whole, and
+ *      every project silently went back to looking the same until you switched
+ *      away and back. Asserted as a PAINT TRACE, because the failure was a
+ *      bounce and a final-value check would grade a window that flickered as
+ *      passing.
  *
  * Like terminal-smoke.mjs / ghostty-config-smoke.mjs this is a MANUALLY-RUN
  * smoke (needs a display + the built app) — CI does not run it:
  *
- *   pnpm -C apps/desktop run build
+ *   pnpm -w run build        # NOT `pnpm -C apps/desktop run build` — the
+ *                            # desktop package has no `build` script; the
+ *                            # workspace root's is the one that produces
+ *                            # dist/ + dist-electron/ (several sibling smokes
+ *                            # still document the dead command).
  *   node apps/desktop/e2e/theming-smoke.mjs
  */
 import { promises as fs } from "node:fs";
@@ -33,9 +52,13 @@ import {
   assertProfileIsolated,
   createRunner,
   launch,
+  makeGitRepo,
   makeScratch,
   pathExists,
   readFileSafe,
+  readSeededProjects,
+  seedProjects,
+  sleep,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
 
@@ -85,6 +108,13 @@ const MOSS = { "--background": "#0f120f", "--primary": "#57a858" };
 
 /** A ghostty theme with an unmistakable background, for proving a real palette swap. */
 const PREVIEW_THEME = "Aardvark Blue";
+
+/**
+ * Comfortably past `SCOPE_REPAINT_HOLD_MS` (300ms crossfade + 40ms tail, see
+ * renderer/src/theme/scope-transition.ts). Spent only to prove the crossfade
+ * attribute comes back OFF, so a generous margin costs one wait per run.
+ */
+const SCOPE_TRANSITION_SETTLE_MS = 600;
 
 /** The user's own ghostty config — seeded, then asserted byte-identical at the end. */
 const USER_GHOSTTY_CONFIG = `# The user's own ghostty config. Volli must NEVER write this file.
@@ -153,11 +183,142 @@ async function openTerminalThemeMenu(page) {
 /** Opens Settings → Appearance from the sidebar footer. */
 async function openAppearanceSettings(page) {
   await page.getByRole("button", { name: "Settings", exact: true }).first().click();
-  await page.getByRole("button", { name: "Appearance", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Settings categories" })
+    .getByRole("button", { name: "Appearance", exact: true })
+    .click();
   // The pane is up once its terminal half has rendered; assert on the control
   // itself rather than helper copy, which is free to be rewritten.
   await terminalThemeTrigger(page).waitFor();
 }
+
+// ---- per-project scope (#69/#72) -------------------------------------------
+
+/**
+ * The two seeded projects. Names are chosen for DISTINCT monograms ("AL"/"BE"),
+ * because the rail tile's accessible name is its monogram — two projects that
+ * initialled the same would make the tile locator ambiguous.
+ */
+const PROJECT_A = { id: "smoke-theme-a", name: "Alpha", prefix: "ALP", monogram: "AL" };
+const PROJECT_B = { id: "smoke-theme-b", name: "Beta", prefix: "BET", monogram: "BE" };
+
+/**
+ * One project's rail tile. `.and(a real <button>)` because dnd-kit's sortable
+ * wrapper ALSO carries `role="button"` and inherits the tile's accessible name,
+ * so the name alone matches two elements — and the wrapper is the one that does
+ * nothing on click.
+ */
+const projectTile = (page, project) =>
+  page.getByRole("button", { name: project.monogram, exact: true }).and(page.locator("button"));
+
+/** One segmented control's button for `choice` (`data-choice` on the segment). */
+const segment = (page, testId, choice) =>
+  page.getByTestId(testId).locator(`[data-choice="${choice}"]`);
+
+/** Configure → Appearance for whichever project is selected. */
+async function openProjectAppearance(page) {
+  await page.getByRole("button", { name: "Configure", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Configure categories" })
+    .getByRole("button", { name: "Appearance", exact: true })
+    .click();
+  // The section header's own control — present in every state of the pane, and
+  // only after this project's scope has actually hydrated (the pane renders a
+  // loading note until then).
+  await page.getByTestId("project-appearance-app-mode").waitFor();
+}
+
+/**
+ * Clicks `project`'s rail tile. The scope read it kicks off is asynchronous, so
+ * every caller's own `waitForToken` is what actually waits for the repaint —
+ * there is no cheaper signal to poll, and inventing a test-only one would be
+ * asserting on a hook rather than on the window.
+ */
+const selectProject = (page, project) => projectTile(page, project).click();
+
+/**
+ * Arms an in-page recorder for the scope crossfade, from now until it is read.
+ *
+ * A poll would be racing a ~340ms window; a MutationObserver cannot miss it,
+ * because the attribute is SET and REMOVED as two separate mutations and the
+ * observer gets a record for each. So this asserts the presence of the
+ * crossfade deterministically rather than settling for the weaker
+ * "absent once everything has settled" check.
+ */
+async function watchScopeTransition(page) {
+  await page.evaluate(() => {
+    window.volliScopeObserver?.disconnect();
+    window.volliScopeSeen = false;
+    const observer = new MutationObserver(() => {
+      if (document.documentElement.getAttribute("data-theme-transition") === "scope") {
+        window.volliScopeSeen = true;
+      }
+    });
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme-transition"],
+    });
+    window.volliScopeObserver = observer;
+  });
+}
+
+/**
+ * Records every value `--background` settles on from now until it is read.
+ *
+ * theme/apply.ts writes the whole token set onto the root element's inline
+ * style, so a MutationObserver on that attribute sees every repaint — a bounce
+ * through another theme and back cannot slip between two polls, which is
+ * exactly what the #123 regression looked like from the outside.
+ */
+async function watchBackgroundPaints(page) {
+  await page.evaluate(() => {
+    window.volliPaintObserver?.disconnect();
+    const paints = [];
+    window.volliPaints = paints;
+    const record = () => {
+      const value = document.documentElement.style
+        .getPropertyValue("--background")
+        .trim()
+        .toLowerCase();
+      // Deduped against the last entry: one repaint writes every token, so the
+      // observer fires many times for a single swap.
+      if (value !== "" && paints.at(-1) !== value) paints.push(value);
+    };
+    const observer = new MutationObserver(record);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["style"] });
+    window.volliPaintObserver = observer;
+    // Seeded with what is on screen right now, so the recording reads as a
+    // trace rather than as a diff against an assumed starting point.
+    record();
+  });
+}
+
+/** The `--background` trace since {@link watchBackgroundPaints}, oldest first. */
+const readBackgroundPaints = (page) => page.evaluate(() => window.volliPaints ?? []);
+
+/** `{seen}` — did the crossfade arm at all; `{now}` — is it still armed. */
+const readScopeTransition = (page) =>
+  page.evaluate(() => ({
+    seen: window.volliScopeSeen === true,
+    now: document.documentElement.getAttribute("data-theme-transition"),
+  }));
+
+/**
+ * One project's STORED theme state, straight from main — the database's answer,
+ * independent of whatever the renderer currently believes. `theme` is the
+ * global authored theme in every scope, so the project's own choice is read
+ * from `projectOverride`.
+ */
+const themeStateFor = (page, projectId) =>
+  page.evaluate(async (id) => {
+    const result = await window.api.theme.state({ projectId: id });
+    if (!result.ok) throw new Error(result.error);
+    return {
+      globalSlug: result.value.theme.slug,
+      override: result.value.projectOverride,
+      projectOverlayPath: result.value.terminal?.overlayPaths.project ?? null,
+    };
+  }, projectId);
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("volli-theming-smoke-");
 const home = join(scratch, "home");
@@ -355,6 +516,299 @@ cursor-style = block
         applied["--background"] === MOSS["--background"] &&
         applied["--primary"] === MOSS["--primary"],
       detail: JSON.stringify(applied),
+    };
+  });
+
+  // ---- 6. per-project overrides (#69/#72) ----------------------------------
+  // Everything above ran with NO projects, so "the theme" had exactly one
+  // meaning. From here the app has two projects and Moss is the GLOBAL theme
+  // every project inherits until it says otherwise.
+  const projectDirs = {
+    [PROJECT_A.id]: await makeGitRepo(scratch, "alpha-"),
+    [PROJECT_B.id]: await makeGitRepo(scratch, "beta-"),
+  };
+  await seedProjects(page, [
+    { ...PROJECT_A, path: projectDirs[PROJECT_A.id] },
+    { ...PROJECT_B, path: projectDirs[PROJECT_B.id] },
+  ]);
+  const { byName } = await readSeededProjects(page);
+  const projectAId = byName[PROJECT_A.name]?.id ?? null;
+  const projectBId = byName[PROJECT_B.name]?.id ?? null;
+  // Fail here rather than inside the first check: a seed that didn't boot would
+  // otherwise reach main as `state({projectId: null})` and be reported as a
+  // theme-read failure, naming the wrong cause.
+  if (projectAId === null || projectBId === null) {
+    throw new Error(`seeded projects did not boot: ${JSON.stringify(Object.keys(byName))}`);
+  }
+
+  await attempt(13, "two seeded projects both start out inheriting the global theme", async () => {
+    const applied = await waitForToken(page, "--background", MOSS["--background"]);
+    const [a, b] = await Promise.all([
+      themeStateFor(page, projectAId),
+      themeStateFor(page, projectBId),
+    ]);
+    return {
+      ok: applied === MOSS["--background"] && a.override === null && b.override === null,
+      detail: `--background=${applied} overrides=${JSON.stringify([a.override, b.override])}`,
+    };
+  });
+
+  await attempt(14, "Configure → Appearance overrides ONE project's app theme", async () => {
+    await selectProject(page, PROJECT_A);
+    await openProjectAppearance(page);
+
+    // Custom opens pre-selected on #72's auto-tint, which is itself a write —
+    // so the window must leave Moss on this click alone, before any theme is
+    // picked. (`--primary` is the seed's own channel; the tint reseeds from
+    // the project's rail color, so this is where it shows first.)
+    await segment(page, "project-appearance-app-mode", "custom").click();
+    const tinted = await waitUntil(
+      "auto-tint to repaint --primary",
+      async () => {
+        const value = (await readAppliedTokens(page, ["--primary"]))["--primary"];
+        return value === MOSS["--primary"] ? null : value;
+      },
+      { timeout: 4000 },
+    ).catch(() => null);
+
+    // …then a named theme from the library, through the SAME picker Settings
+    // mounts, handed a project scope (#73).
+    await segment(page, "project-appearance-app-source", "theme").click();
+    const picker = page.getByTestId("project-appearance-theme-picker");
+    await picker.waitFor();
+    await picker
+      .getByRole("option", { name: /Midnight/ })
+      .first()
+      .click();
+
+    const applied = await waitForToken(page, "--background", MIDNIGHT["--background"]);
+    const stored = await themeStateFor(page, projectAId);
+    return {
+      ok:
+        tinted !== null &&
+        applied === MIDNIGHT["--background"] &&
+        stored.override?.appThemeSlug === "midnight",
+      detail: `autoTint --primary=${tinted} --background=${applied} stored=${JSON.stringify(stored.override)}`,
+    };
+  });
+
+  await attempt(
+    15,
+    "switching to an inheriting project reverts to the global theme, eased",
+    async () => {
+      await watchScopeTransition(page);
+      await selectProject(page, PROJECT_B);
+      const applied = await waitForToken(page, "--background", MOSS["--background"]);
+      const armed = await readScopeTransition(page);
+      // The attribute's whole life is ~340ms, so "was it ever on" is recorded
+      // by an observer rather than polled; "is it off now" is read after the
+      // token has already settled, which is comfortably past the hold.
+      await sleep(SCOPE_TRANSITION_SETTLE_MS);
+      const after = await readScopeTransition(page);
+      const untouched = await themeStateFor(page, projectBId);
+      return {
+        ok:
+          applied === MOSS["--background"] &&
+          armed.seen &&
+          after.now === null &&
+          untouched.override === null,
+        detail: `--background=${applied} crossfadeArmed=${armed.seen} afterSettle=${JSON.stringify(after.now)}`,
+      };
+    },
+  );
+
+  await attempt(16, "switching back re-applies the overriding project's theme", async () => {
+    await selectProject(page, PROJECT_A);
+    const applied = await readAppliedTokens(page, ["--background", "--primary"]);
+    const settled = await waitForToken(page, "--background", MIDNIGHT["--background"]);
+    return {
+      ok: settled === MIDNIGHT["--background"],
+      detail: `--background=${settled} (first read ${applied["--background"]})`,
+    };
+  });
+
+  // ---- 7. the headline bug: the override must be live ON BOOT (#123) -------
+  await app.close();
+  app = await launch({ dbPath, userDataDir, extraEnv: env });
+  page = await app.firstWindow();
+  await page.waitForLoadState("domcontentloaded");
+
+  await attempt(17, "a restored project selection boots INTO its override (#123)", async () => {
+    // Nothing is clicked here on purpose. The app restores the persisted
+    // selection by itself, and the window must already be wearing that
+    // project's theme — the exact regression this branch fixes, where boot
+    // hydrated the global scope and never re-read it for the restored project.
+    const background = await waitForToken(page, "--background", MIDNIGHT["--background"]);
+    const primary = (await readAppliedTokens(page, ["--primary"]))["--primary"];
+    const selected = await page.evaluate(async () => {
+      const boot = await window.api.data.bootstrap();
+      if (!boot.ok) return null;
+      const raw = boot.data.appState["volli:projects-ui"];
+      return raw === undefined ? null : (JSON.parse(raw).selectedProjectId ?? null);
+    });
+    return {
+      ok:
+        background === MIDNIGHT["--background"] &&
+        primary === MIDNIGHT["--primary"] &&
+        selected === projectAId,
+      detail: `--background=${background} --primary=${primary} selected=${selected === projectAId ? "Alpha" : JSON.stringify(selected)}`,
+    };
+  });
+
+  await attempt(18, "Inherit puts the project back on the global theme", async () => {
+    await openProjectAppearance(page);
+    await segment(page, "project-appearance-app-mode", "inherit").click();
+    const applied = await waitForToken(page, "--background", MOSS["--background"]);
+    const stored = await themeStateFor(page, projectAId);
+    const pressed = await segment(page, "project-appearance-app-mode", "inherit").getAttribute(
+      "aria-pressed",
+    );
+    // An all-inheriting project must read EXACTLY like one that never set
+    // anything — a retained seed here would leave it tinted on the next boot.
+    return {
+      ok: applied === MOSS["--background"] && stored.override === null && pressed === "true",
+      detail: `--background=${applied} stored=${JSON.stringify(stored.override)} aria-pressed=${pressed}`,
+    };
+  });
+
+  await attempt(19, "the terminal surface writes THIS project's ghostty overlay", async () => {
+    // The one surface with no store setter: its source of truth is the file,
+    // so the assertion is on the file. Custom pins what the chain already
+    // resolves (Nord, from check 10's global overlay); picking another name
+    // rewrites the project layer; Inherit REMOVES the key rather than writing
+    // a default over the layer below (#67).
+    await segment(page, "project-appearance-terminal-mode", "custom").click();
+    const overlayPathA = await waitUntil("project overlay path", async () => {
+      const state = await themeStateFor(page, projectAId);
+      return state.projectOverlayPath;
+    });
+    const seeded = await waitUntil("project overlay seeded", async () =>
+      ((await readFileSafe(overlayPathA)) ?? "").includes("theme = Nord"),
+    ).then(
+      () => true,
+      () => false,
+    );
+
+    await page.getByRole("button", { name: "Project terminal theme", exact: true }).click();
+    const search = page.getByRole("combobox", { name: "Search terminal themes" });
+    await search.waitFor();
+    await search.fill(PREVIEW_THEME);
+    await page.getByRole("option", { name: PREVIEW_THEME, exact: true }).first().click();
+    const repointed = await waitUntil("project overlay rewritten", async () =>
+      ((await readFileSafe(overlayPathA)) ?? "").includes(`theme = ${PREVIEW_THEME}`),
+    ).then(
+      () => true,
+      () => false,
+    );
+    // Volli's GLOBAL overlay is a different file and must not have moved.
+    const globalStillNord = ((await readFileSafe(overlayPath)) ?? "").includes("theme = Nord");
+
+    await segment(page, "project-appearance-terminal-mode", "inherit").click();
+    // Line-wise, not `includes`: Volli's own header comment names the file, so
+    // a substring match would keep passing after a key it never removed.
+    const removed = await waitUntil("project overlay key removed", async () => {
+      const text = (await readFileSafe(overlayPathA)) ?? "";
+      return text.split("\n").some((line) => line.trim().startsWith("theme =")) ? null : true;
+    }).then(
+      () => true,
+      () => false,
+    );
+
+    return {
+      ok: seeded && repointed && globalStillNord && removed,
+      detail: `seeded=${seeded} repointed=${repointed} globalOverlayIntact=${globalStillNord} inheritRemovedKey=${removed}`,
+    };
+  });
+
+  await attempt(20, "the user's own ghostty config is STILL byte-identical (#67)", async () => {
+    // Re-asserted after the project layer exists: a per-project write is one
+    // more chance to touch a file Volli must never touch.
+    const after = await fs.readFile(userConfigPath, "utf8");
+    return {
+      ok: after === userConfigBefore,
+      detail: after === userConfigBefore ? "unchanged" : "MUTATED — decision #67 violated",
+    };
+  });
+
+  // ---- 8. a GLOBAL write must not evict the project scope (#123) -----------
+  // The other half of the same bug. Booting into an override was one way to
+  // lose the project's theme; picking an app-wide one while that project was
+  // selected was the other — main answered the write with the GLOBAL scope,
+  // the store adopts a payload whole, and the window silently went back to
+  // looking like everything else.
+  await attempt(
+    21,
+    "an app-wide theme pick leaves an overriding project alone (#123)",
+    async () => {
+      // Check 18 put Alpha back on Inherit, so give it an override again — the
+      // same route Configure offers: Custom, then a named theme.
+      await openProjectAppearance(page);
+      await segment(page, "project-appearance-app-mode", "custom").click();
+      await segment(page, "project-appearance-app-source", "theme").click();
+      const picker = page.getByTestId("project-appearance-theme-picker");
+      await picker.waitFor();
+      await picker
+        .getByRole("option", { name: /Midnight/ })
+        .first()
+        .click();
+      await waitForToken(page, "--background", MIDNIGHT["--background"]);
+
+      await openAppearanceSettings(page);
+      // Record the paints and the crossfade rather than sampling the end state:
+      // the regression was a BOUNCE, and a final-value check alone would grade a
+      // window that visibly flickered as passing. Armed AFTER the pane is up, so
+      // the trace is the theme pick alone and not whatever navigating here did.
+      await watchBackgroundPaints(page);
+      await watchScopeTransition(page);
+
+      // Scoped to the app-theme picker: this pane also mounts the editor and
+      // terminal pickers, whose lists carry a row of the same name.
+      const globalPicker = page.getByTestId("appearance-theme-picker");
+      await globalPicker.waitFor();
+      await globalPicker.getByRole("option", { name: /Ember/ }).first().click();
+      // The write is what this check waits on — once it lands the window is
+      // supposed to be doing nothing, so there is no repaint to poll for.
+      const globalSlug = await waitUntil("the global theme to change", async () => {
+        const state = await themeStateFor(page, projectAId);
+        return state.globalSlug === "ember" ? state.globalSlug : null;
+      }).catch(() => null);
+      await sleep(SCOPE_TRANSITION_SETTLE_MS);
+
+      const paints = await readBackgroundPaints(page);
+      const armed = await readScopeTransition(page);
+      const stored = await themeStateFor(page, projectAId);
+      // An excursion into Ember is expected and is not the bug: highlighting a
+      // row in the picker previews it live (check 4), and reaching the row to
+      // click it highlights it. The bug is a TERMINAL excursion — a non-Midnight
+      // paint after the commit that never comes back, the scope-less payload
+      // landing on top of the correct re-resolve (observed as rose → moss →
+      // rose → moss). So: the trace ends on Midnight, and every departure from
+      // it was the previewed theme rather than some third look. Counting the
+      // excursions instead would fail on an extra hover the click passed over.
+      const excursions = paints.filter((value) => value !== MIDNIGHT["--background"]);
+      return {
+        ok:
+          globalSlug === "ember" &&
+          paints.at(-1) === MIDNIGHT["--background"] &&
+          excursions.length >= 1 &&
+          excursions.every((value) => value === EMBER["--background"]) &&
+          // The scope never changed, so the crossfade has no business arming.
+          !armed.seen &&
+          stored.override?.appThemeSlug === "midnight",
+        detail: `global=${globalSlug} paints=${JSON.stringify(paints)} crossfadeArmed=${armed.seen} stored=${JSON.stringify(stored.override)}`,
+      };
+    },
+  );
+
+  await attempt(22, "an inheriting project then paints the NEW global theme", async () => {
+    // The write really was global — Beta inherits, so it must be wearing Ember
+    // now, which is also what proves check 21 wasn't just a write that failed.
+    await selectProject(page, PROJECT_B);
+    const applied = await waitForToken(page, "--background", EMBER["--background"]);
+    const stored = await themeStateFor(page, projectBId);
+    return {
+      ok: applied === EMBER["--background"] && stored.override === null,
+      detail: `--background=${applied} override=${JSON.stringify(stored.override)}`,
     };
   });
 } catch (error) {

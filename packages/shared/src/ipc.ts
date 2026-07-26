@@ -389,6 +389,13 @@ export interface ThemeStateInput {
 export interface ThemeSetGlobalInput {
   /** The AUTHORED definition. The resolved token set is derived at render time and never crosses this boundary. */
   theme: ThemeDefinition;
+  /**
+   * The scope the CALLER is in — not a second write target (#123). The write
+   * is global from every scope; this only says which scope's state to answer
+   * with, so a window showing a project that overrides the app surface keeps
+   * wearing that override instead of being repainted to the new global.
+   */
+  projectId?: string;
 }
 
 /**
@@ -397,6 +404,8 @@ export interface ThemeSetGlobalInput {
  */
 export interface ThemeSetGlobalEditorInput {
   editorThemeId: ShippedEditorThemeId | null;
+  /** The caller's own scope, exactly as on {@link ThemeSetGlobalInput} (#123). */
+  projectId?: string;
 }
 
 export interface ThemeSetProjectInput {
