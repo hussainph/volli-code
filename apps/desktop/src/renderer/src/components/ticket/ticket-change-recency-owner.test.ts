@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  createTicketRecencyWatchOwner,
   EMPTY_TICKET_RECENCY_OWNER_STATE,
   readTicketInspection,
   reduceTicketRecencyOwner,
@@ -90,6 +91,28 @@ describe("reduceTicketRecencyOwner", () => {
       updatedRevision: null,
     });
     expect(echoed.localSaveEchoes["src/app.ts"]).toBeUndefined();
+  });
+});
+
+describe("createTicketRecencyWatchOwner", () => {
+  it("retains one ticket-level watch per inspected path and balances cleanup", async () => {
+    const watch = vi.fn(async () => ({ ok: true }) as const);
+    const unwatch = vi.fn(async () => ({ ok: true }) as const);
+    const owner = createTicketRecencyWatchOwner({ watch, unwatch });
+    const input = {
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      relPath: "src/app.ts",
+    };
+
+    await expect(owner.watch(input)).resolves.toEqual({ ok: true });
+    await expect(owner.watch(input)).resolves.toEqual({ ok: true });
+    owner.dispose();
+
+    expect(watch).toHaveBeenCalledTimes(1);
+    expect(watch).toHaveBeenCalledWith(input);
+    expect(unwatch).toHaveBeenCalledTimes(1);
+    expect(unwatch).toHaveBeenCalledWith(input);
   });
 });
 
