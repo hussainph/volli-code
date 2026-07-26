@@ -153,4 +153,26 @@ describe("planLiveDocumentReconciliation", () => {
       revision: 6,
     });
   });
+
+  it("advances the baseline when local and disk already match", () => {
+    expect(
+      planLiveDocumentReconciliation({
+        baseline: "before\n",
+        local: "saved\n",
+        lastWrite: null,
+        disk: {
+          ok: true,
+          text: "saved\n",
+          revision: 7,
+          truncated: false,
+        },
+      }),
+    ).toEqual({
+      kind: "apply",
+      outcome: "unchanged",
+      baseline: "saved\n",
+      value: "saved\n",
+      revision: 7,
+    });
+  });
 });
