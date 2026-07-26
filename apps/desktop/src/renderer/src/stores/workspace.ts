@@ -165,7 +165,19 @@ const BODY_TAB_ID = TICKET_BODY_TAB_ID;
 
 /** Empty ticket-tabs record — Ticket Body alone, nothing open. */
 function emptyTicketTabs(active: string = BODY_TAB_ID): TicketTabsState {
-  return { files: [], diffs: [], diffMeta: {}, active };
+  return { files: [], diffs: [], diffMeta: Object.create(null), active };
+}
+
+/**
+ * Clone a `diffMeta` map onto a null prototype. Object-literal spreads
+ * (`{ ...map }`) reintroduce `Object.prototype`, so a runtime `__proto__`
+ * path key would hit the special setter — same defense sanitizers use on
+ * rehydrate.
+ */
+function cloneDiffMeta(
+  source: Record<string, TicketDiffTabMeta>,
+): Record<string, TicketDiffTabMeta> {
+  return Object.assign(Object.create(null), source) as Record<string, TicketDiffTabMeta>;
 }
 
 /** A file tab's id from its relPath (`file:<relPath>`) — the persisted `active` form. */
@@ -677,7 +689,8 @@ export function createWorkspaceStore(storage?: StateStorage) {
               if (opts.previousPath !== undefined) meta.previousPath = opts.previousPath;
               if (opts.status !== undefined) meta.status = opts.status;
               if (opts.binary !== undefined) meta.binary = opts.binary;
-              diffMeta = { ...diffMeta, [relPath]: meta };
+              diffMeta = cloneDiffMeta(diffMeta);
+              diffMeta[relPath] = meta;
             }
             return patchWorkspace(state, projectId, {
               ticketTabs: {
@@ -711,7 +724,7 @@ export function createWorkspaceStore(storage?: StateStorage) {
             const existing = current.ticketTabs[ticketId];
             if (existing === undefined) return state;
             const diffs = existing.diffs.filter((path) => path !== relPath);
-            const diffMeta = { ...existing.diffMeta };
+            const diffMeta = cloneDiffMeta(existing.diffMeta);
             delete diffMeta[relPath];
             const active = existing.active === diffTabId(relPath) ? BODY_TAB_ID : existing.active;
             const next: TicketTabsState = { ...existing, diffs, diffMeta, active };

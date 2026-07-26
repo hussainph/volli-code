@@ -360,6 +360,26 @@ describe("ticket diff tabs", () => {
     });
   });
 
+  it("openTicketDiff keeps runtime diffMeta on a null prototype", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicketDiff("project-a", "ticket-1", "__proto__", {
+      status: "modified",
+    });
+
+    const diffMeta = store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.diffMeta;
+    expect(Object.getPrototypeOf(diffMeta)).toBeNull();
+    expect(Object.keys(diffMeta ?? {})).toEqual(["__proto__"]);
+    expect(diffMeta?.["__proto__"]).toEqual({ status: "modified" });
+
+    store.getState().openTicketDiff("project-a", "ticket-1", "src/a.ts", {
+      status: "added",
+    });
+    store.getState().closeTicketDiff("project-a", "ticket-1", "src/a.ts");
+    const afterClose = store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.diffMeta;
+    expect(Object.getPrototypeOf(afterClose)).toBeNull();
+    expect(Object.keys(afterClose ?? {})).toEqual(["__proto__"]);
+  });
+
   it("closeTicketDiff removes the diff and falls back to Doc when it was active", () => {
     const store = createWorkspaceStore(createMemoryStorage());
     store.getState().openTicketFile("project-a", "ticket-1", "notes.md");
