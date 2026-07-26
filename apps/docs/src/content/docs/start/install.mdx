@@ -1,0 +1,115 @@
+---
+title: Install Volli Code
+description: Download Volli Code for macOS or build it from source, and install a coding agent for it to run.
+sidebar:
+  label: Install
+---
+
+import { Aside, Steps, Tabs, TabItem } from "@astrojs/starlight/components";
+
+Volli Code runs on macOS only. You can install the packaged app or build it from
+source. Volli is open source, so both give you the same working application.
+
+## Before you start
+
+You need [git](https://git-scm.com) installed, and at least one coding-agent CLI.
+Volli launches agents but doesn't bundle or install them. Install whichever you
+plan to use:
+
+- [Claude Code](https://claude.com/claude-code)
+- [Codex](https://developers.openai.com/codex/cli)
+- [OpenCode](https://opencode.ai)
+
+{/* TODO: confirm the minimum supported macOS version. Nothing in the repo pins one. */}
+
+## Install the app
+
+<Tabs>
+  <TabItem label="Download">
+    <Steps>
+
+    1. Download the latest release from
+       [GitHub releases](https://github.com/hussainph/volli-code/releases/latest).
+
+    2. Open the downloaded file and drag Volli Code to your Applications folder.
+
+    3. Launch it from Applications.
+
+    </Steps>
+
+    {/* TODO: confirm the release asset name and whether builds are signed and
+        notarized. If they are not, document the Gatekeeper first-run steps here. */}
+
+  </TabItem>
+  <TabItem label="Build from source">
+    You need Node `^24.13.0` and pnpm `11.10.0`. The repository pins both.
+
+    <Steps>
+
+    1. Clone the repository and install dependencies.
+
+       ```sh
+       git clone https://github.com/hussainph/volli-code.git
+       cd volli-code
+       pnpm install
+       ```
+
+       Installing also rebuilds Volli's native modules against Electron's ABI.
+       That step runs on its own and takes a minute the first time.
+
+    2. Run the app.
+
+       ```sh
+       pnpm dev
+       ```
+
+       This starts the renderer with hot reload and relaunches Electron when the
+       main process changes. Use it if you plan to change the code.
+
+    3. Or build once and run the built app.
+
+       ```sh
+       pnpm run build
+       pnpm start
+       ```
+
+    </Steps>
+
+    <Aside type="tip">
+      If `pnpm install` fails while compiling `node-pty` or `better-sqlite3`, run
+      `pnpm -C apps/desktop run rebuild:native`. Those two are native addons and
+      need rebuilding against Electron after any dependency change.
+    </Aside>
+
+  </TabItem>
+</Tabs>
+
+## The `volli` CLI
+
+Volli ships a `volli` command that agents use to read tickets and report back.
+You don't install it separately. Every terminal session Volli opens has it on
+`PATH` and points it at the running app through a local Unix socket.
+
+You can run the same commands yourself from any session terminal:
+
+```sh
+volli identify
+```
+
+If that prints the current project and ticket, the app and the CLI are talking to
+each other. See the [CLI reference](/reference/cli/) for everything it can do.
+
+## Where Volli keeps your data
+
+Everything is local:
+
+- Projects, tickets, labels, and the event log live in a SQLite database in
+  Electron's `userData` directory.
+- Ticket worktrees live under `~/.volli/worktrees/`.
+- Terminal transcripts are files on disk, indexed alongside the database.
+
+Removing a project from Volli never touches the folder on disk.
+
+## Next
+
+[Add your first project and run a ticket](/start/quickstart/).

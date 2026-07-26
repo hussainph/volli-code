@@ -3,6 +3,6 @@ import react from "@astrojs/react";
 
 export default defineConfig({
   output: "static",
-  site: "https://volli-code.pages.dev",
+  site: "https://volli.app",
   integrations: [react()],
 });

@@ -1,0 +1,80 @@
+---
+title: Quickstart
+description: Add a project, write a ticket, and hand it to a coding agent running in its own git worktree.
+sidebar:
+  label: Quickstart
+---
+
+import { Aside, Steps } from "@astrojs/starlight/components";
+
+By the end of this page you'll have a ticket that an agent picked up, worked on
+in an isolated branch, and handed back to you for review.
+
+You need Volli [installed](/start/install/), a git repository to point it at, and
+one coding-agent CLI on your machine.
+
+<Steps>
+
+1. **Add a project.**
+
+   Point Volli at a git repository on disk and give it a ticket prefix, two or
+   three letters that start every ticket's display ID, like `VC`. The folder
+   you choose becomes the project's main checkout, and Volli won't modify
+   it.
+
+2. **Write a ticket.**
+
+   Create a ticket and give it a title and a body. The body is the scope of the
+   work, written in Markdown. The agent reads it as its opening instruction.
+   Write it the way you would brief a colleague: what to change, where, and
+   what "done" means.
+
+   Pick the harness you want: Claude Code, Codex, or OpenCode. Volli remembers
+   your last choice for the next ticket.
+
+3. **Move it to Doing.**
+
+   Drag the card into Doing. Volli:
+
+   - creates a git worktree for the ticket on a new branch,
+     `volli/<DISPLAY-ID>-<slug>`, based on the ticket's base branch
+   - opens a terminal session inside that worktree
+   - starts your chosen agent there, seeded with the ticket's runtime brief
+
+   Your main checkout is untouched. If you have another ticket already running,
+   it keeps running in its own worktree on its own branch.
+
+4. **Watch it work, and step in when you want.**
+
+   The session is a real terminal, so you can type into it, answer the agent's
+   questions, redirect it, or stop it. The board tracks the ticket while you do.
+
+5. **Take it back for review.**
+
+   When the agent finishes, it reports back through the `volli` CLI and the
+   ticket lands in Needs Review. Open the ticket to see what changed: the
+   change set shows the ticket's commits and working-tree changes against its
+   base branch.
+
+   If the work is wrong, send it back. If it's right, merge the branch and move
+   the ticket to Done.
+
+</Steps>
+
+<Aside type="note">
+  Volli doesn't open pull requests for you. It gets you a branch with the work
+  on it; how that branch ships is your call.
+</Aside>
+
+## Running more than one at a time
+
+Move a second ticket to Doing and it gets its own worktree, its own branch, and
+its own session. Nothing is shared between them, so two agents editing the same
+file in two tickets never collide while working. Conflicts only show up at
+merge time, like with any two branches.
+
+## Next
+
+- [The board](/guides/board/): what each column means and what moves a ticket
+- [Agents and worktrees](/guides/agents-and-worktrees/): harnesses, sessions, and branches
+- [CLI reference](/reference/cli/): how agents talk back to Volli

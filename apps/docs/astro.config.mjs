@@ -1,0 +1,66 @@
+import starlight from "@astrojs/starlight";
+import { defineConfig } from "astro/config";
+
+export default defineConfig({
+  output: "static",
+  site: "https://docs.volli.app",
+  integrations: [
+    starlight({
+      title: "Volli Code",
+      description:
+        "Documentation for Volli Code — kanban planning and terminal coding agents in one macOS app.",
+      logo: {
+        src: "./src/assets/volli-icon-dark.png",
+        alt: "Volli Code",
+      },
+      favicon: "/volli-icon-dark.png",
+      social: [
+        {
+          icon: "github",
+          label: "GitHub",
+          href: "https://github.com/hussainph/volli-code",
+        },
+      ],
+      editLink: {
+        baseUrl:
+          "https://github.com/hussainph/volli-code/edit/main/apps/docs/",
+      },
+      // The site is dark-only, matching the app and volli.app. Overriding
+      // ThemeSelect with an empty component removes the light/dark toggle;
+      // volli.css pins the palette so a light-preferring visitor still gets dark.
+      components: {
+        ThemeSelect: "./src/components/ThemeSelect.astro",
+      },
+      customCss: [
+        "@fontsource-variable/mona-sans/wght.css",
+        "./src/styles/volli.css",
+      ],
+      sidebar: [
+        {
+          label: "Get started",
+          items: [
+            { label: "Install", slug: "start/install" },
+            { label: "Quickstart", slug: "start/quickstart" },
+            { label: "Concepts", slug: "start/concepts" },
+          ],
+        },
+        {
+          label: "Using Volli",
+          items: [
+            { label: "The board", slug: "guides/board" },
+            { label: "Agents and worktrees", slug: "guides/agents-and-worktrees" },
+            { label: "Theming", slug: "guides/theming" },
+          ],
+        },
+        {
+          label: "Reference",
+          items: [
+            { label: "CLI", slug: "reference/cli" },
+            { label: "Keyboard shortcuts", slug: "reference/keyboard-shortcuts" },
+            { label: "Troubleshooting", slug: "reference/troubleshooting" },
+          ],
+        },
+      ],
+    }),
+  ],
+});

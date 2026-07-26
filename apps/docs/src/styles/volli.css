@@ -1,0 +1,169 @@
+/*
+ * Volli docs brand layer.
+ *
+ * Every value here is lifted from an existing Volli surface so the docs read as
+ * the same product, not a themed template:
+ *   - page/text/line/ember come from apps/website/src/styles/global.css
+ *   - the readable accent (#ff966c) is the app's generated --primary-text token,
+ *     the ember solved onto a dark background at APCA Lc60 (see
+ *     packages/shared/src/theme/). Ember at full strength fails contrast as body
+ *     text, so fills use #e8652a and text uses #ff966c — same rule as the app.
+ *
+ * The palette is declared on both :root and :root[data-theme='light'] because
+ * the site is dark-only and Starlight otherwise honours the visitor's system
+ * preference. The light/dark toggle is removed in astro.config.mjs.
+ */
+
+:root,
+:root[data-theme="light"] {
+  color-scheme: dark;
+
+  /* Grays, darkest-last, in Starlight's dark-mode ordering. */
+  --sl-color-white: #ffffff;
+  --sl-color-gray-1: #f5f5f7;
+  --sl-color-gray-2: #d6d6d8;
+  --sl-color-gray-3: #9a9a9a;
+  --sl-color-gray-4: #6e6e73;
+  --sl-color-gray-5: #2a2a2a;
+  --sl-color-gray-6: #1b1b1b;
+  --sl-color-gray-7: #141414;
+  --sl-color-black: #0a0a0a;
+
+  /* Ember. */
+  --sl-color-accent-low: #2e1207;
+  --sl-color-accent: #e8652a;
+  --sl-color-accent-high: #ff966c;
+
+  /* Semantic surfaces. */
+  --sl-color-bg: #0a0a0a;
+  --sl-color-bg-nav: #0a0a0a;
+  --sl-color-bg-sidebar: #0a0a0a;
+  --sl-color-bg-inline-code: #1b1b1b;
+  --sl-color-bg-accent: #e8652a;
+
+  --sl-color-text: #f5f5f7;
+  --sl-color-text-accent: #ff966c;
+  --sl-color-text-invert: #160b06;
+
+  --sl-color-hairline: #2a2a2a;
+  --sl-color-hairline-light: #202020;
+  --sl-color-hairline-shade: #141414;
+
+  /* Callouts, tuned to sit on #0a0a0a rather than Starlight's default bg. */
+  --sl-color-asides-text-accent: #ff966c;
+
+  --sl-font:
+    "Mona Sans Variable", "Mona Sans", ui-sans-serif, system-ui, sans-serif;
+  --sl-font-system-mono:
+    ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Matches --container-content in docs/DESIGN.md (45rem / 720px). */
+  --sl-content-width: 45rem;
+}
+
+html {
+  background: var(--sl-color-bg);
+  font-synthesis: none;
+}
+
+body {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/*
+ * Type. The website sets h1 at weight 420 with -0.05em tracking; headings here
+ * follow the same curve, loosening the tracking as sizes drop so smaller
+ * headings don't crowd.
+ */
+.sl-markdown-content h1,
+.sl-markdown-content h2,
+.sl-markdown-content h3,
+.sl-markdown-content h4,
+h1.astro-route-announcer,
+.content-panel h1 {
+  font-weight: 420;
+  letter-spacing: -0.035em;
+}
+
+.content-panel h1 {
+  letter-spacing: -0.05em;
+}
+
+.sl-markdown-content {
+  font-weight: 360;
+}
+
+/* Links: ember, underlined only on hover — same restraint as the landing page. */
+.sl-markdown-content a:not(:where(.not-content *)) {
+  color: var(--sl-color-text-accent);
+  text-decoration: none;
+  text-underline-offset: 0.25em;
+}
+
+.sl-markdown-content a:not(:where(.not-content *)):hover {
+  text-decoration: underline;
+}
+
+/* The site's focus ring, verbatim. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+summary:focus-visible {
+  outline: 2px solid #ff8b57;
+  outline-offset: 4px;
+}
+
+/*
+ * Header wordmark. Starlight tints the site title with the accent; volli.app
+ * keeps the wordmark plain white and spends the ember on the CTA instead.
+ */
+a.site-title,
+.site-title span {
+  color: var(--sl-color-white);
+}
+
+/*
+ * Primary hero button, matching the landing page's CTA: ember fill, near-black
+ * label, and the same inset highlight plus ember glow. Starlight fills this with
+ * --sl-color-text-accent (#ff966c), which is the readable-copy ember rather than
+ * the fill ember, so it reads washed out against the page.
+ */
+.sl-link-button.primary {
+  background: var(--sl-color-accent);
+  color: #160b06;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 22%),
+    0 8px 24px rgb(232 101 42 / 15%);
+}
+
+.sl-link-button.primary:hover {
+  background: #f2773e;
+  color: #160b06;
+}
+
+/* Hairline borders rather than Starlight's heavier default separators. */
+.sidebar-pane,
+.right-sidebar,
+header.header {
+  border-color: var(--sl-color-hairline);
+}
+
+/* Sidebar: quiet by default, ember only for the current page. */
+.sidebar-content a[aria-current="page"],
+.sidebar-content a[aria-current="page"]:hover {
+  color: var(--sl-color-text-accent);
+  background-color: transparent;
+  font-weight: 500;
+}
+
+/* Code blocks sit one step off the page, matching the app's card layering. */
+.sl-markdown-content :not(pre) > code:not(:where(.not-content *)) {
+  border: 1px solid var(--sl-color-hairline-light);
+  border-radius: 6px;
+  font-size: 0.875em;
+}
+
+.expressive-code .frame {
+  border-radius: 10px;
+}

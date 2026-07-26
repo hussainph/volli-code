@@ -1,0 +1,127 @@
+---
+title: Agents and worktrees
+description: How Volli isolates each ticket in its own git worktree, which coding agents it supports, and how sessions behave.
+sidebar:
+  label: Agents and worktrees
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+Every ticket that runs gets its own git worktree, its own branch, and its own
+terminal session. That isolation lets several agents work at the same time
+without stepping on each other or on your main checkout.
+
+## Worktrees
+
+When a ticket moves to Doing, Volli creates a git worktree for it:
+
+- **Branch:** `volli/<DISPLAY-ID>-<slug>`, for example `volli/VC-12-mcp-server`
+- **Directory:** `~/.volli/worktrees/<project-dirname>-<short-id>/<DISPLAY-ID>-<slug>/`
+
+Volli names the worktree once, at creation, and owns it from then on. Your
+main checkout (the folder you added as the project) is never modified by
+ticket automation.
+
+The worktree is branched from the ticket's base branch. Set that per ticket if
+the work should start somewhere other than your default branch.
+
+<Aside type="tip">
+  A ticket can opt out of worktrees entirely at creation time with
+  `--no-worktree`, in which case it runs against the main checkout. Use it for
+  work that can't be branched, and expect no isolation.
+</Aside>
+
+## Worktrees are never destroyed
+
+Volli retains worktrees. Archiving a ticket keeps its worktree, and nothing
+gets force-removed while it holds uncommitted changes. If you want the disk
+space back, remove the worktree yourself with git once the work has landed.
+
+You can inspect a ticket's worktree without opening the app:
+
+```sh
+volli worktree status VC-12
+volli worktree diff VC-12
+```
+
+`worktree diff` defaults to the merge-base range, which is what a pull request
+would show. Add `--working-tree` for uncommitted changes instead.
+
+## Change sets
+
+A ticket's change set is its commits plus its uncommitted changes, measured
+against its base branch. Volli reads it live from git rather than storing a
+copy, so it can't drift from what's on disk.
+
+## Supported agents
+
+Volli has first-class support for three harnesses:
+
+- **Claude Code**
+- **Codex**
+- **OpenCode**
+
+Volli launches the CLI, so you install and authenticate it yourself. Volli
+doesn't bundle an agent or manage its credentials.
+
+Pick the harness per ticket. Volli remembers your last choice and offers it as
+the default on the next one.
+
+Agents are launched from command templates, so the list above isn't a hard
+limit. Claude Code, Codex, and OpenCode are the ones Volli knows how to resume
+and monitor in detail.
+
+## Sessions
+
+A session is one continuous terminal interaction with its own scrollback and
+its own resume identity. A ticket can have several: a long-running agent, plus
+a shell you opened to check something.
+
+Sessions are real terminals. You can type into them, answer an agent's
+question, interrupt it, or take over entirely.
+
+**Volli doesn't unmount live terminals when you navigate.** Clicking another
+card or switching projects doesn't kill what is running. Session state lives
+in the model; the views are what come and go.
+
+### Scratch sessions
+
+A scratch session has no ticket. It runs in the project's main checkout and
+gives you a terminal without putting anything on the board. Volli still
+records it, so it shows up in your session list.
+
+## How agents talk back
+
+Agents report to Volli through the bundled `volli` CLI, over a local Unix
+socket. Every session Volli opens has the command on `PATH` and the socket
+already configured.
+
+The two calls that drive the board:
+
+```sh
+volli session done --reason "Added the parser and tests"
+volli session blocked --reason "Needs a decision on the socket path"
+```
+
+`session done` hands the ticket back to you in Needs Review. `session
+blocked` flags that the agent has stopped and needs input.
+
+Volli doesn't use MCP for this. The CLI is a plain command any harness can
+call, which is what makes bring-your-own-agent work.
+
+See the [CLI reference](/reference/cli/) for the full surface.
+
+## Notifications
+
+Volli fires native macOS notifications on agent lifecycle events, so you don't
+have to watch the board to know when something wants you. Agents can also
+send their own:
+
+```sh
+volli notify -m "Tests are green, ready for review"
+```
+
+## Next
+
+- [CLI reference](/reference/cli/)
+- [Troubleshooting](/reference/troubleshooting/)

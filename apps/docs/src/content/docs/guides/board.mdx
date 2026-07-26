@@ -1,0 +1,92 @@
+---
+title: The board
+description: What each of Volli's five columns means, what moves tickets between them, and how manual moves interact with agent activity.
+sidebar:
+  label: The board
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+Volli's board has five fixed columns, and you can't add, rename, or remove
+them. They track whose turn it is with a ticket, not a workflow you configure.
+
+## The columns
+
+**Backlog.** Work you've written down but aren't committing to yet. Nothing
+runs here.
+
+**Todo.** Work you intend to do next. Nothing runs here either.
+
+**Doing.** An agent's column. Moving a ticket here creates its worktree and
+starts its session. A ticket in Doing has, or recently had, an agent working
+on it.
+
+**Needs Review.** The agent has stopped and handed back to you. Read the
+change set here and decide.
+
+**Done.** Finished. Volli keeps the worktree and branch around.
+
+Backlog and Todo are yours, Doing belongs to an agent, and Needs Review is the
+handoff back. Most of the movement you'll see happens across that Doing and
+Needs Review boundary.
+
+## What moves a ticket
+
+Three things move tickets, and they don't have equal authority.
+
+**You.** Drag a card, or run
+[`volli ticket move`](/reference/cli/#volli-ticket-move) yourself.
+
+**An agent.** Calling `volli session done` or `volli session blocked` from
+inside its session is how a finished agent lands its ticket in Needs Review.
+
+**Automation.** Volli's own lifecycle handling, reacting to a session that
+exited, stalled, or was interrupted.
+
+<Aside type="note">
+  Automation only de-escalates: it can interrupt a session, park a ticket, or
+  archive one that has gone stale. It never advances your work and never
+  deletes anything. Worktrees are kept even when dirty.
+</Aside>
+
+## Manual moves win
+
+If you move a ticket while its agent is still finishing, your move stands. A
+lifecycle event that arrives afterward won't undo it.
+
+For example: pull a ticket out of Doing because the agent is going the wrong
+way, and the agent's own "I'm done" signal landing a second later won't drag
+the ticket into Needs Review behind you.
+
+## Tickets
+
+A ticket carries a title, a Markdown body, a priority, labels, and a display
+ID like `VC-12`. The body matters most once an agent is involved: it's the
+scope of the work and the instruction the agent starts from.
+
+**Priority** is low, medium, or high. **Labels** are project-scoped records
+with their own colours, so the same label means the same thing across every
+ticket in a project.
+
+## History
+
+Every ticket keeps an append-only event log. Volli adds entries and never
+rewrites them, so the history stays accurate even after the ticket's title,
+body, or column changes.
+
+Each event records who caused it: you, a session, or automation. Volli
+derives that attribution itself, so an agent can't log something as though
+you did it.
+
+Read a ticket's history with
+[`volli ticket events`](/reference/cli/#volli-ticket-events).
+
+## Archiving
+
+Archiving a ticket takes it off the board and keeps everything else: its
+history, its branch, and its worktree. There's no destructive delete, and
+nothing gets force-removed while it has uncommitted work in it.
+
+## Next
+
+[How agents and worktrees fit together](/guides/agents-and-worktrees/).

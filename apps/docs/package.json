@@ -1,0 +1,23 @@
+{
+  "name": "@volli/docs",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "ASTRO_TELEMETRY_DISABLED=1 astro dev",
+    "check": "ASTRO_TELEMETRY_DISABLED=1 astro check",
+    "build": "ASTRO_TELEMETRY_DISABLED=1 astro check && ASTRO_TELEMETRY_DISABLED=1 astro build",
+    "deploy": "pnpm run build && wrangler pages deploy dist --project-name volli-docs --branch main",
+    "preview": "ASTRO_TELEMETRY_DISABLED=1 astro preview"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "0.41.4",
+    "@fontsource-variable/mona-sans": "5.3.0",
+    "astro": "7.1.2"
+  },
+  "devDependencies": {
+    "@astrojs/check": "0.9.9",
+    "typescript": "6.0.3",
+    "wrangler": "4.112.0"
+  }
+}

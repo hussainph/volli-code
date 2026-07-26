@@ -1,0 +1,254 @@
+---
+title: CLI reference
+description: Every volli command, its flags, and the environment it reads, for you at a terminal and for the agents Volli runs.
+sidebar:
+  label: CLI
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+`volli` is how agents read the plan and report back, and it works just as well
+typed by hand. It talks to the running app over a local Unix socket.
+
+Every command accepts `--json` for machine-readable output.
+
+## Addressing
+
+Commands that take an `<id>` want a display ID, like `VC-12`.
+
+Where an ID is optional, `volli` infers it from where you are. Inside a
+ticket's worktree, it uses that ticket. Inside a session Volli started, it
+knows the session too, so an agent can run `volli session done` with no
+arguments.
+
+Use `--project <name>` to target a project other than the current one.
+
+## Orientation
+
+### volli identify
+
+```sh
+volli identify [--project <name>]
+```
+
+Prints the project, ticket, and session `volli` thinks you're in. Run it
+first when something isn't behaving. If this fails, nothing else will work.
+
+### volli board
+
+```sh
+volli board [--project <name>]
+```
+
+The whole board, grouped by column.
+
+### volli project list
+
+```sh
+volli project list
+```
+
+### volli label list
+
+```sh
+volli label list [--project <name>]
+```
+
+## Tickets
+
+### volli ticket list
+
+```sh
+volli ticket list [--status <column>] [--priority low|medium|high]
+                  [--label <name>] [--project <name>] [--limit <n>]
+```
+
+### volli ticket show
+
+```sh
+volli ticket show <id> [--events <n>] [--comments <n>]
+```
+
+Full ticket, optionally with recent history and comments.
+
+### volli ticket events
+
+```sh
+volli ticket events <id> [--limit <n>]
+```
+
+The append-only history of a ticket.
+
+### volli ticket brief
+
+```sh
+volli ticket brief <id>
+```
+
+Prints the runtime brief, the exact content an agent receives when it starts
+on this ticket. Check it before starting an agent to see what it will read.
+
+### volli ticket create
+
+```sh
+volli ticket create --title <text>
+                    [--body <text> | --body-file <path>]
+                    [--priority low|medium|high] [--status <column>]
+                    [--label <name>]... [--project <name>]
+                    [--harness <harness>] [--base <branch>] [--no-worktree]
+```
+
+`--title` is required. `--body` and `--body-file` are mutually exclusive. Repeat
+`--label` for more than one.
+
+`--base` sets the branch the ticket's worktree branches from. `--no-worktree`
+skips creating a worktree for the ticket.
+
+### volli ticket update
+
+```sh
+volli ticket update <id> [--title <text>]
+                         [--body <text> | --body-file <path>
+                          | --append <text> | --edit <old> <new>]
+                         [--priority low|medium|high]
+                         [--add-label <name>]... [--remove-label <name>]...
+                         [--harness <harness>] [--base <branch>]
+```
+
+Pass exactly one body mutation. `--append` adds to the end; `--edit` replaces
+the first occurrence of `<old>` with `<new>`.
+
+### volli ticket move
+
+```sh
+volli ticket move <id> --to <column>
+```
+
+Columns are `backlog`, `todo`, `doing`, `needs-review`, and `done`. Moving to
+`doing` is what creates the worktree and starts the agent.
+
+### volli ticket comment
+
+```sh
+volli ticket comment <id> (-m <text> | --file <path>)
+```
+
+### volli ticket archive
+
+```sh
+volli ticket archive <id>
+```
+
+Takes the ticket off the board. The worktree and history are kept.
+
+## Worktrees
+
+### volli worktree status
+
+```sh
+volli worktree status [<id>]
+```
+
+### volli worktree diff
+
+```sh
+volli worktree diff [<id>] [--working-tree]
+```
+
+Defaults to the merge-base range against the ticket's base branch, the same
+range a pull request would show. `--working-tree` shows uncommitted changes
+instead.
+
+Both commands are read-only.
+
+## Sessions
+
+### volli session list
+
+```sh
+volli session list [--project <name>] [--ticket <id>]
+```
+
+### volli session peek
+
+```sh
+volli session peek <handle> [--lines <n>]
+```
+
+Recent output from a session, by its short handle. Lets one agent see what
+another is doing without attaching to it.
+
+### volli session done
+
+```sh
+volli session done [--reason <text>]
+```
+
+Signals that the session's work is finished and moves the ticket to Needs Review.
+Acts on the session in `VOLLI_SESSION`.
+
+### volli session blocked
+
+```sh
+volli session blocked [--reason <text>]
+```
+
+Signals that the session has stopped and needs a person. The `--reason` text
+appears on the board.
+
+### volli session link
+
+```sh
+volli session link <harness-session-id>
+```
+
+Records the harness's own session ID so Volli can resume that conversation later.
+
+## Other
+
+### volli notify
+
+```sh
+volli notify -m <text> [--title <text>]
+```
+
+Fires a native macOS notification.
+
+### volli app launch
+
+```sh
+volli app launch [--timeout <n>]
+```
+
+Starts Volli if it isn't already running.
+
+### volli help
+
+```sh
+volli help [<command> | <topic>]
+```
+
+Topics: `exit-codes`, `addressing`, `json`, `orchestration`.
+
+## Environment
+
+| Variable | Purpose |
+| --- | --- |
+| `VOLLI_SOCKET` | Path to the app's Unix socket. Required by every command except `identify`, `help`, and `app launch`. |
+| `VOLLI_SESSION` | The current session. Set by Volli; `session done` and `session blocked` act on it. |
+| `VOLLI_TICKET` | The current ticket, used when you omit `<id>`. |
+
+Volli sets all three in the sessions it starts.
+
+## Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Success |
+| `2` | Usage error (bad flag or missing argument) |
+| `3` | The app couldn't be reached |
+
+<Aside type="tip">
+  Exit code `3` almost always means Volli isn't running, or `VOLLI_SOCKET` isn't
+  set in the shell you're using. Run `volli identify` to confirm.
+</Aside>

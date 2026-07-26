@@ -1,0 +1,99 @@
+---
+title: Concepts
+description: The vocabulary Volli uses for tickets, sessions, worktrees, and the records it keeps.
+sidebar:
+  label: Concepts
+---
+
+Volli uses a small set of terms consistently across the app, the CLI, and these
+docs. This page defines them once.
+
+## Projects and tickets
+
+**Project.** A tracked codebase folder, with a name, a path, a ticket prefix,
+and a position in the rail. Removing a project from Volli never touches the
+folder on disk.
+
+**Main checkout.** The project folder you added to Volli. Ticket automation
+never touches it. Scratch sessions run here.
+
+**Ticket.** A card on the board and, once it reaches Doing, a terminal
+workspace. Its content doubles as the agent's starting prompt.
+
+**Ticket body.** The ticket's Markdown scope and the instruction an agent
+starts from. Part of the ticket record, not a file in your repository.
+
+**Runtime brief.** What an agent receives at launch: the ticket body plus
+resolved context and instructions. Volli generates it each time, so you never
+edit it directly.
+
+**Display ID.** The human-readable handle for a ticket, like `VC-12`. Built
+from the project's prefix; appears in the UI, in branch names, and in CLI
+commands.
+
+**Ticket ID.** The permanent UUID underneath. Volli never shows it to you. It
+exists so renaming or renumbering never breaks a reference.
+
+**Label.** A project-scoped tag with a name and an optional colour, stored as
+a real record rather than free text.
+
+**Ticket event.** One entry in a ticket's append-only history. Volli adds to
+the log and never rewrites it, so the history stays accurate even as the
+ticket changes.
+
+**Actor.** Who caused an event: `user`, `session`, or `automation`. Volli
+derives this itself, so an agent can't claim to be you.
+
+## Work surfaces
+
+**Ticket workspace.** The expanded view of a single ticket: its body,
+sessions, files, artifacts, and change set, together in one place.
+
+**Session.** One continuous terminal interaction, with its own scrollback and
+resume identity. A ticket can have several.
+
+**Scratch session.** A terminal session with no ticket attached, running in
+the project's main checkout. Useful for one-off commands. Volli still records
+it.
+
+**Ticket files.** The file tree of that ticket's worktree.
+
+**Project files.** The file tree of the main checkout.
+
+**Split tab.** One tab holding several independently owned surfaces side by
+side, so you can return to an arrangement instead of rebuilding it.
+
+## Git and output
+
+**Ticket worktree.** The isolated git checkout a ticket works in. Volli
+creates it on the branch `volli/<DISPLAY-ID>-<slug>`, under
+`~/.volli/worktrees/<project-dirname>-<short-id>/<DISPLAY-ID>-<slug>/`, and
+names it once, at creation.
+
+**Change set.** The source changes belonging to a ticket, committed and
+uncommitted, relative to its base branch. Volli reads it live from git rather
+than storing a copy.
+
+**Artifact.** A durable, project-scoped output stored as a file or bundle and
+reusable across tickets.
+
+**Attachment.** A file or URL attached to one ticket as starting context. It
+stays with that ticket.
+
+**Dangling reference.** A file reference in a ticket body that no longer
+resolves in that ticket's context. Volli flags these instead of passing a
+broken path to an agent.
+
+## Movement
+
+**Deliberate move.** A ticket move you made, by dragging the card or running
+`volli ticket move`. Deliberate moves beat lifecycle events that arrive
+afterward, so a stale agent signal can't undo a decision you just made.
+
+**Automation.** Volli's own lifecycle moves. Automation only ever
+de-escalates: it can interrupt, park, or archive, and it never deletes your
+work. Worktrees are retained rather than force-removed, even when dirty.
+
+## Next
+
+[See how these fit together on the board](/guides/board/).
