@@ -62,6 +62,11 @@ export const RAIL_DEFAULT_WIDTH = 300;
 export const RAIL_MIN_WIDTH = 240;
 export const RAIL_MAX_WIDTH = 560;
 
+/** Monaco diff layout preference (CONCEPT #51). Default inline; optional side-by-side. */
+export type DiffPresentation = "inline" | "side-by-side";
+
+const DEFAULT_DIFF_PRESENTATION: DiffPresentation = "inline";
+
 /** Identity of the ticket terminal tab temporarily owning the app canvas. */
 export interface TerminalFocusTarget {
   projectId: string;
@@ -147,6 +152,8 @@ interface UiState {
   railCollapsed: boolean;
   /** Active ticket-rail icon mode. Persisted app-wide (see module doc). */
   railMode: TicketRailMode;
+  /** Monaco diff presentation. Persisted app-wide (see module doc). */
+  diffPresentation: DiffPresentation;
   /** Session-only terminal focus target; never persisted. */
   terminalFocusTarget: TerminalFocusTarget | null;
   /**
@@ -167,6 +174,7 @@ interface UiState {
   toggleRailCollapsed(): void;
   setRailCollapsed(collapsed: boolean): void;
   setRailMode(mode: TicketRailMode): void;
+  setDiffPresentation(presentation: DiffPresentation): void;
   setTerminalFocusTarget(target: TerminalFocusTarget | null): void;
   /**
    * Clear the focus target if it belongs to `ticketId` — used when that ticket's
@@ -220,6 +228,7 @@ export function createUiStore(storage?: StateStorage) {
         workspaceRailHidden: false,
         railCollapsed: false,
         railMode: DEFAULT_TICKET_RAIL_MODE,
+        diffPresentation: DEFAULT_DIFF_PRESENTATION,
         terminalFocusTarget: null,
         lastHarnessId: DEFAULT_HARNESS_ID,
         setSidebarWidth: (width) => set({ sidebarWidth: clampSidebarWidth(width) }),
@@ -234,6 +243,7 @@ export function createUiStore(storage?: StateStorage) {
         toggleRailCollapsed: () => set((state) => ({ railCollapsed: !state.railCollapsed })),
         setRailCollapsed: (collapsed) => set({ railCollapsed: collapsed }),
         setRailMode: (mode) => set({ railMode: mode }),
+        setDiffPresentation: (presentation) => set({ diffPresentation: presentation }),
         setTerminalFocusTarget: (target) => set({ terminalFocusTarget: target }),
         clearTerminalFocusForTicket: (ticketId) =>
           set((state) =>

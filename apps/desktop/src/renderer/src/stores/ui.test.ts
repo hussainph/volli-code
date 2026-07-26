@@ -135,6 +135,13 @@ describe("resetUiScale", () => {
   });
 });
 
+describe("diffPresentation", () => {
+  it('defaults to "inline"', () => {
+    const store = createUiStore(createMemoryStorage());
+    expect(store.getState().diffPresentation).toBe("inline");
+  });
+});
+
 describe("setSettingsOpen", () => {
   it("toggles the app-wide Settings overlay", () => {
     const store = createUiStore(createMemoryStorage());
