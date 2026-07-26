@@ -1,4 +1,4 @@
-import type { DocumentRevision } from "./document-registry";
+import type { DocumentExternalUpdate, DocumentRevision, DocumentSeed } from "./document-registry";
 import { reconcileText } from "./text-reconciliation";
 
 export type LiveDiskRead =
@@ -31,6 +31,13 @@ export type LiveDocumentReconciliationPlan =
       keepDraft: boolean;
       revision: DocumentRevision;
     };
+
+export interface LiveReconciliationLease {
+  readonly model: { getValue(): string };
+  snapshot(): { baseline: string };
+  applyExternalUpdate(update: DocumentExternalUpdate): void;
+  adoptCleanBaseline(seed: DocumentSeed): unknown;
+}
 
 /** Pure A/L/D planning shared by File and Diff views. */
 export function planLiveDocumentReconciliation(input: {
@@ -85,4 +92,26 @@ export function planLiveDocumentReconciliation(input: {
     value: result.value,
     revision: input.disk.revision,
   };
+}
+
+/** Plan and apply one disk observation through the registry's shared transaction. */
+export function applyLiveDocumentReconciliation(input: {
+  lease: LiveReconciliationLease;
+  lastWrite: string | null;
+  disk: LiveDiskRead;
+}): LiveDocumentReconciliationPlan {
+  const plan = planLiveDocumentReconciliation({
+    baseline: input.lease.snapshot().baseline,
+    local: input.lease.model.getValue(),
+    lastWrite: input.lastWrite,
+    disk: input.disk,
+  });
+  if (plan.kind === "apply") {
+    input.lease.applyExternalUpdate({
+      baseline: plan.baseline,
+      value: plan.value,
+      revision: plan.revision,
+    });
+  }
+  return plan;
 }
