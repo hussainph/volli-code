@@ -21,6 +21,10 @@ import {
   type TerminalSettingRow,
 } from "@renderer/components/theme/terminal-settings-model";
 import {
+  buildEditorThemeDisplay,
+  type EditorThemeDisplay,
+} from "@renderer/components/theme/editor-settings-model";
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -32,6 +36,7 @@ import {
 } from "@renderer/components/ui/alert-dialog";
 import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
+import { listEditorThemes, type EditorThemeEntry } from "@renderer/editor/editor-theme-catalog";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { writeThrough } from "@renderer/stores/mutate";
@@ -86,7 +91,7 @@ export function AppearanceSettings() {
         icon={BracketsCurlyIcon}
         description="Monaco syntax highlighting theme for file and document editors."
       >
-        {/* Theme picker row lands in the next slice. */}
+        <EditorThemeRow />
       </SettingsSection>
 
       <SettingsSection
@@ -253,6 +258,113 @@ function DeleteThemeDialog({
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+  );
+}
+
+/** Provenance chip for the Editor theme row, plus reset when explicitly pinned. */
+function EditorThemeOriginBadge({ display }: { display: EditorThemeDisplay }) {
+  return (
+    <span className="flex items-center gap-1.5">
+      <span
+        className={cn(
+          "rounded-full border px-2 py-0.5 text-label",
+          display.source === "automatic"
+            ? "border-border text-muted-foreground"
+            : "border-primary/40 text-primary-text",
+        )}
+      >
+        {display.sourceLabel}
+      </span>
+      {display.resettable ? (
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label="Reset editor theme to match app theme"
+          title="Reset to match app theme"
+          onClick={() => void useThemeStore.getState().setEditorTheme(null)}
+        >
+          <ArrowCounterClockwiseIcon />
+        </Button>
+      ) : null}
+    </span>
+  );
+}
+
+/**
+ * Monaco/shiki theme picker over the shipped catalog.
+ *
+ * Selecting a theme persists via {@link useThemeStore.setEditorTheme} (which
+ * also refreshes Monaco). Preview-on-highlight lands in the next pass.
+ */
+function EditorThemeRow() {
+  const editorThemeId = useThemeStore((state) => state.editorThemeId);
+  const appThemeSlug = useThemeStore((state) => state.global.slug);
+  const [open, setOpen] = React.useState(false);
+  const [selected, setSelected] = React.useState("");
+  const themes = React.useMemo(() => listEditorThemes(), []);
+
+  const display = React.useMemo(
+    () => buildEditorThemeDisplay({ editorThemeId, appThemeSlug, themes }),
+    [editorThemeId, appThemeSlug, themes],
+  );
+
+  return (
+    <SettingsRow label="Theme">
+      <EditorThemeOriginBadge display={display} />
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            variant="outline"
+            size="sm"
+            aria-label="Editor theme"
+            className="w-52 justify-between"
+          >
+            <span className="truncate">{display.label}</span>
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="end" className="w-64 p-0">
+          <Command
+            loop
+            value={selected}
+            onValueChange={setSelected}
+            className="flex flex-col overflow-hidden rounded-md"
+          >
+            <Command.Input
+              autoFocus
+              aria-label="Search editor themes"
+              placeholder="Search themes…"
+              className="h-9 border-b border-border bg-transparent px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground"
+            />
+            <Command.List className="max-h-64 overflow-y-auto p-1">
+              <Command.Empty className="py-6 text-center text-sm text-muted-foreground">
+                No matching theme.
+              </Command.Empty>
+              {themes.map((theme: EditorThemeEntry) => (
+                <Command.Item
+                  key={theme.id}
+                  value={theme.id}
+                  keywords={[theme.label, theme.family ?? ""]}
+                  onSelect={() => {
+                    void useThemeStore
+                      .getState()
+                      .setEditorTheme(theme.id)
+                      .then((saved) => {
+                        if (saved) setOpen(false);
+                      });
+                  }}
+                  className="flex cursor-pointer items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-sm outline-none data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground"
+                >
+                  <span className="truncate">{theme.label}</span>
+                  {theme.id === display.resolvedId ? (
+                    <CheckIcon weight="bold" className="size-3.5" />
+                  ) : null}
+                </Command.Item>
+              ))}
+            </Command.List>
+          </Command>
+        </PopoverContent>
+      </Popover>
+    </SettingsRow>
   );
 }
 
