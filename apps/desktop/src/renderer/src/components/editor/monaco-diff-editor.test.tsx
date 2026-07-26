@@ -20,9 +20,10 @@ describe("diffEditorConstructionOptions", () => {
     expect(options).not.toHaveProperty("theme");
   });
 
-  it('maps "side-by-side" to renderSideBySide: true', () => {
+  it('maps "side-by-side" to renderSideBySide: true and keeps it in narrow panes', () => {
     expect(diffEditorConstructionOptions({ presentation: "side-by-side" })).toMatchObject({
       renderSideBySide: true,
+      useInlineViewWhenSpaceIsLimited: false,
     });
   });
 });

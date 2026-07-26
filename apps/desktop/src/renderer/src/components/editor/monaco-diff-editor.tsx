@@ -45,6 +45,10 @@ export function diffEditorConstructionOptions(input: {
   return {
     automaticLayout: true,
     renderSideBySide: input.presentation !== "inline",
+    // Honor the user's Side-by-side choice even in a narrow ticket pane —
+    // Monaco's default collapses to inline below ~900px and makes the toggle
+    // look broken (issue #109 smoke).
+    useInlineViewWhenSpaceIsLimited: false,
     originalEditable: false,
     readOnly: false,
     renderOverviewRuler: false,
@@ -255,6 +259,7 @@ export function MonacoDiffEditor({
   React.useEffect(() => {
     diffEditorRef.current?.updateOptions({
       renderSideBySide: presentation !== "inline",
+      useInlineViewWhenSpaceIsLimited: false,
     });
   }, [presentation]);
 
