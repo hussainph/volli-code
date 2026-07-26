@@ -88,8 +88,12 @@ export function shouldEaseScopeRepaint({ hydrated, from, to }: ScopeRepaintInput
   return hydrated && from !== to;
 }
 
-/** The live timer, so overlapping scope changes extend one window instead of cutting each other short. */
-let holding: ReturnType<typeof setTimeout> | null = null;
+/**
+ * The live timer AND what it is armed on, so overlapping scope changes extend
+ * one window instead of cutting each other short — and so re-arming on a
+ * different root disarms the first one rather than leaving it stuck mid-fade.
+ */
+let holding: { timer: ReturnType<typeof setTimeout>; target: HTMLElement } | null = null;
 
 /**
  * Arms the crossfade on `root` (the document element by default) and takes it
@@ -111,9 +115,15 @@ export function beginScopeRepaint(root?: HTMLElement): void {
   target.setAttribute(SCOPE_TRANSITION_ATTRIBUTE, SCOPE_TRANSITION_VALUE);
   // Flush: makes the transition current style before the caller moves the tokens.
   void target.offsetWidth;
-  if (holding !== null) clearTimeout(holding);
-  holding = setTimeout(() => {
+  if (holding !== null) {
+    clearTimeout(holding.timer);
+    // A different root: its timer is gone, so take the attribute off here or it
+    // stays armed forever.
+    if (holding.target !== target) holding.target.removeAttribute(SCOPE_TRANSITION_ATTRIBUTE);
+  }
+  const timer = setTimeout(() => {
     holding = null;
     target.removeAttribute(SCOPE_TRANSITION_ATTRIBUTE);
   }, SCOPE_REPAINT_HOLD_MS);
+  holding = { timer, target };
 }

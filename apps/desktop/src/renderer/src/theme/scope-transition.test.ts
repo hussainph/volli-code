@@ -108,6 +108,23 @@ describe("beginScopeRepaint", () => {
     expect(attributes.has(SCOPE_TRANSITION_ATTRIBUTE)).toBe(false);
   });
 
+  it("disarms the previous root when re-armed on a different one", () => {
+    // One timer serves every caller, so re-arming elsewhere cancels the first
+    // root's removal — take the attribute off there and then, or it would stay
+    // armed for the life of the window.
+    const first = fakeRoot();
+    const second = fakeRoot();
+
+    beginScopeRepaint(first.root);
+    beginScopeRepaint(second.root);
+
+    expect(first.attributes.has(SCOPE_TRANSITION_ATTRIBUTE)).toBe(false);
+    expect(second.attributes.get(SCOPE_TRANSITION_ATTRIBUTE)).toBe(SCOPE_TRANSITION_VALUE);
+
+    vi.advanceTimersByTime(SCOPE_REPAINT_HOLD_MS);
+    expect(second.attributes.has(SCOPE_TRANSITION_ATTRIBUTE)).toBe(false);
+  });
+
   it("defaults to the document element", () => {
     const { root, attributes } = fakeRoot();
     vi.stubGlobal("document", { documentElement: root });
