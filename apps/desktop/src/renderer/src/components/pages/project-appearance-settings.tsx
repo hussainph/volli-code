@@ -258,11 +258,18 @@ function ProjectAppThemeSection({ project }: { project: Project }) {
               <span className="font-mono text-xs uppercase text-muted-foreground">{tint}</span>
             </SettingsRow>
           ) : (
-            <div
-              data-testid="project-appearance-theme-picker"
-              className="mt-4 overflow-hidden rounded-lg border border-border bg-background"
-            >
-              <ThemePicker autoFocus={false} scope={scope} />
+            // The picker is one more block in this card, so it takes the card's
+            // own rhythm — SettingsRow's hairline + 16px, not a floating margin.
+            // Without the divider it read as a panel that had drifted loose from
+            // the Source row above it, while every other block in these three
+            // sections is separated by that hairline.
+            <div className="border-t border-border/60 pt-4">
+              <div
+                data-testid="project-appearance-theme-picker"
+                className="overflow-hidden rounded-lg border border-border bg-background"
+              >
+                <ThemePicker autoFocus={false} scope={scope} />
+              </div>
             </div>
           )}
         </>
