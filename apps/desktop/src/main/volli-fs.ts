@@ -677,7 +677,6 @@ interface WatchSubscription {
 interface FileWatchSubscription extends WatchSubscription {
   source: FileSource;
   ticketId: string | null;
-  revision: number;
   /** The file's basename — dir events for any other name are ignored. */
   base: string;
 }
@@ -907,7 +906,6 @@ export class FileWatchManager extends WatchManagerBase<FileWatchSubscription> {
       relPath,
       source,
       ticketId: source === "worktree" ? ticketId : null,
-      revision: statSync(join(dir, base)).mtimeMs,
       dir,
       base,
       watcher: null,
@@ -943,9 +941,19 @@ export class FileWatchManager extends WatchManagerBase<FileWatchSubscription> {
       ticketId: sub.ticketId,
       relPath: sub.relPath,
       source: sub.source,
-      revision: existsSync(join(sub.dir, sub.base)) ? sub.revision : null,
+      // Resolve after the debounce: an editor's temp-write + rename must
+      // identify the final inode, not the file present when watch was armed.
+      revision: this.currentRevision(join(sub.dir, sub.base)),
     };
     sub.webContents.send("volli:file-changed" satisfies VolliIpcEvent, payload);
+  }
+
+  private currentRevision(filePath: string): number | null {
+    try {
+      return statSync(filePath).mtimeMs;
+    } catch {
+      return null;
+    }
   }
 }
 
