@@ -71,6 +71,7 @@ export default defineConfig({
         "src/components/board/new-ticket/submit.ts",
         "src/components/sidebar/listing.ts",
         "src/components/theme/editor-settings-model.ts",
+        "src/components/theme/project-appearance-model.ts",
         "src/components/theme/theme-editor-model.ts",
         "src/components/theme/theme-picker-model.ts",
         "src/components/theme/terminal-settings-model.ts",
