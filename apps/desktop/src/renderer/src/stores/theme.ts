@@ -155,10 +155,7 @@ function themeCatalog(customThemes: ThemeDefinition[]): readonly ThemeDefinition
 type EffectiveThemeInput = Pick<
   ThemeState,
   "preview" | "global" | "projectOverride" | "customThemes"
-> & {
-  /** Optional for app-only callers; defaults to derive-from-app when omitted. */
-  editorThemeId?: string | null;
-};
+>;
 
 /**
  * The app-surface theme currently in force: the preview if one is running,
@@ -176,20 +173,16 @@ export function effectiveTheme({
   global,
   projectOverride,
   customThemes,
-  editorThemeId = null,
 }: EffectiveThemeInput): ThemeDefinition {
   if (preview !== null) return preview;
-  return resolveActiveTheme(global, projectOverride, themeCatalog(customThemes), editorThemeId).app
-    .value;
+  return resolveActiveTheme(global, projectOverride, themeCatalog(customThemes), null).app.value;
 }
 
 /** What a scope has STORED — as opposed to what a preview is showing. */
 type AppliedThemeInput = Pick<
   ThemeState,
   "global" | "projectId" | "projectOverride" | "customThemes"
-> & {
-  editorThemeId?: string | null;
-};
+>;
 
 /**
  * The theme actually persisted for `scope`, ignoring any running preview —
@@ -198,15 +191,14 @@ type AppliedThemeInput = Pick<
  * hiding the one thing the tag exists to state.
  */
 export function appliedTheme(
-  { global, projectId, projectOverride, customThemes, editorThemeId = null }: AppliedThemeInput,
+  { global, projectId, projectOverride, customThemes }: AppliedThemeInput,
   scope: ThemeScope,
 ): ThemeDefinition {
   // The store holds exactly one scope's override at a time; a picker scoped to
   // a project the store isn't showing has no override to read, and must not
   // borrow another project's.
   if (scope.kind === "global" || scope.projectId !== projectId) return global;
-  return resolveActiveTheme(global, projectOverride, themeCatalog(customThemes), editorThemeId).app
-    .value;
+  return resolveActiveTheme(global, projectOverride, themeCatalog(customThemes), null).app.value;
 }
 
 /** Persisted slice: the library's memory of your taste, not the theme itself. */
