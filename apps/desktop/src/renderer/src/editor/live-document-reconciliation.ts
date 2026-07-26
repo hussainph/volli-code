@@ -24,6 +24,12 @@ export type LiveDocumentReconciliationPlan =
       local: string;
       disk: string;
       revision: DocumentRevision;
+    }
+  | {
+      kind: "unreadable";
+      error: string;
+      keepDraft: boolean;
+      revision: DocumentRevision;
     };
 
 /** Pure A/L/D planning shared by File and Diff views. */
@@ -33,7 +39,15 @@ export function planLiveDocumentReconciliation(input: {
   lastWrite: string | null;
   disk: LiveDiskRead;
 }): LiveDocumentReconciliationPlan {
-  if (!input.disk.ok || input.disk.truncated) {
+  if (!input.disk.ok) {
+    return {
+      kind: "unreadable",
+      error: input.disk.error,
+      keepDraft: input.local !== input.baseline,
+      revision: input.disk.revision,
+    };
+  }
+  if (input.disk.truncated) {
     throw new Error("Unreadable live reconciliation is not implemented");
   }
   if (input.lastWrite !== null && input.disk.text === input.lastWrite) {
