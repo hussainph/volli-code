@@ -36,6 +36,7 @@ import {
   EMPTY_PROJECT_THEME_OVERRIDE,
   isProjectThemeOverrideEmpty,
   projectColor,
+  type GhosttyAppearancePayload,
   type OverlayEdits,
   type ProjectThemeOverride,
 } from "@volli/shared";
@@ -136,4 +137,36 @@ export function autoTintChoice(colorIndex: number): ProjectAppChoice {
  */
 export function projectTerminalOverlayEdits(choice: ProjectTerminalChoice): OverlayEdits {
   return { theme: choice.kind === "inherit" ? null : choice.name };
+}
+
+/**
+ * What the terminal-surface control shows — read from the resolved chain's
+ * PROVENANCE, not from the stored override.
+ *
+ * The terminal's source of truth is the project's ghostty overlay file, and
+ * main computes provenance next to the merge the terminal is actually painted
+ * with (#67). So "does this project override its terminal?" is answered by
+ * `theme` having been won by the project layer, which stays true for a key the
+ * user hand-wrote into that file — the same honesty rule the global rows
+ * follow (#68: the overlay takes any ghostty key, and Volli honors it).
+ */
+export function projectTerminalChoice(
+  payload: GhosttyAppearancePayload | null,
+): ProjectTerminalChoice {
+  const name = payload?.prefs.themeName ?? null;
+  if (name === null || payload?.provenance["theme"] !== "volli-project") return { kind: "inherit" };
+  return { kind: "theme", name };
+}
+
+/**
+ * The name Custom opens on for the terminal: whatever the project is ALREADY
+ * showing, so switching to Custom pins the look you were looking at instead of
+ * changing it. `null` when no layer in the chain names a theme at all — the
+ * terminal is then wearing the token-derived fallback, which has no catalog
+ * name, and Volli must not invent one: writing an unrequested `theme = …` into
+ * a file the user owns is exactly what the overlay design exists to avoid
+ * (#67). The picker opens empty there and the first pick is the first write.
+ */
+export function terminalCustomSeed(payload: GhosttyAppearancePayload | null): string | null {
+  return payload?.prefs.themeName ?? null;
 }

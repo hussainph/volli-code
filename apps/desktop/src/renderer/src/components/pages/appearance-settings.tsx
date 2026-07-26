@@ -7,17 +7,19 @@ import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { SlidersIcon } from "@phosphor-icons/react/dist/csr/Sliders";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { getBuiltinTheme, listBuiltinThemeNames } from "restty";
-import { errorMessage, type ShippedEditorThemeId, type ThemeDefinition } from "@volli/shared";
+import { getBuiltinTheme } from "restty";
+import { type ThemeDefinition } from "@volli/shared";
 
 import { SettingsRow, SettingsSection } from "@renderer/components/pages/settings-shell";
 import { ThemeEditor } from "@renderer/components/theme/theme-editor";
 import { ThemePicker } from "@renderer/components/theme/theme-picker";
 import {
-  ThemeComboBox,
-  ThemeOriginPill,
-  type ThemeComboBoxItem,
-} from "@renderer/components/theme/theme-combo-box";
+  editorThemeItems,
+  FALLBACK_TERMINAL_THEME_LABEL,
+  revealPath,
+  terminalThemeItems,
+} from "@renderer/components/theme/appearance-catalog";
+import { ThemeComboBox, ThemeOriginPill } from "@renderer/components/theme/theme-combo-box";
 import {
   buildTerminalSettingRows,
   type TerminalSettingKey,
@@ -40,7 +42,6 @@ import {
 } from "@renderer/components/ui/alert-dialog";
 import { Button } from "@renderer/components/ui/button";
 import { listEditorThemes } from "@renderer/editor/editor-theme-catalog";
-import { toastError } from "@renderer/lib/toast";
 import { writeThrough } from "@renderer/stores/mutate";
 import { useThemeStore, type ThemeScope } from "@renderer/stores/theme";
 import { previewTerminalTheme } from "@renderer/terminal/appearance";
@@ -334,19 +335,6 @@ function EditorThemeRow() {
 }
 
 /**
- * The shipped Monaco/shiki catalog as combo-box rows — family folded into the
- * search terms. Shared with Configure → Appearance, which offers the same
- * catalog scoped to one project, so the two lists cannot drift.
- */
-export function editorThemeItems(): ThemeComboBoxItem<ShippedEditorThemeId>[] {
-  return listEditorThemes().map((theme) => ({
-    value: theme.id,
-    label: theme.label,
-    keywords: [theme.label, theme.family ?? ""],
-  }));
-}
-
-/**
  * Puts Monaco back on the theme implied by the **current** theme store —
  * effective (preview-aware) app slug + committed editorThemeId. Module-level
  * so the unmount-only effect stays exhaustive-deps clean (mirrors
@@ -355,20 +343,6 @@ export function editorThemeItems(): ThemeComboBoxItem<ShippedEditorThemeId>[] {
 const endEditorPreview = (): void => {
   useThemeStore.getState().endEditorPreview();
 };
-
-/** Reveal a config file in Finder; a missing path or a failed reveal toasts. */
-async function revealPath(path: string | null): Promise<void> {
-  if (path === null) {
-    toastError("Terminal config hasn't loaded yet.");
-    return;
-  }
-  try {
-    const result = await window.api.fs.revealInFinder(path);
-    if (!result.ok) toastError(`Couldn't reveal ${path}: ${result.error}`);
-  } catch (error) {
-    toastError(`Couldn't reveal ${path}: ${errorMessage(error)}`);
-  }
-}
 
 /**
  * Writes overlay keys and adopts the freshly-resolved appearance main hands
@@ -452,22 +426,6 @@ function TerminalThemeRow({ row }: { row: TerminalSettingRow }) {
       />
     </SettingsRow>
   );
-}
-
-/**
- * What the terminal wears when no layer names a theme: the palette derived from
- * the app's own tokens (see terminal/appearance.ts), which has no catalog entry
- * to check-mark — so it is a LABEL, never a value that gets written.
- */
-export const FALLBACK_TERMINAL_THEME_LABEL = "Volli Dark";
-
-/**
- * restty's bundled catalog — which IS ghostty's full theme collection, already
- * in the app bundle. Shared with Configure → Appearance so the global and
- * per-project terminal pickers offer exactly the same names.
- */
-export function terminalThemeItems(): ThemeComboBoxItem[] {
-  return listBuiltinThemeNames().map((name) => ({ value: name, label: name }));
 }
 
 /**
