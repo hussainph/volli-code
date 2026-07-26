@@ -117,6 +117,28 @@ async function waitFileText(page, needle, dirty = null) {
   );
 }
 
+async function waitStableFileViewState(page, label) {
+  let previous = null;
+  let stablePolls = 0;
+  return waitUntil(
+    label,
+    async () => {
+      const state = await readFileState(page);
+      const signature = JSON.stringify({
+        focused: state.focused,
+        scrollTop: state.scrollTop,
+        cursorTop: state.cursorTop,
+        cursorLeft: state.cursorLeft,
+      });
+      if (signature === previous) stablePolls += 1;
+      else stablePolls = 0;
+      previous = signature;
+      return stablePolls >= 2 ? state : null;
+    },
+    { timeout: 5000, interval: 100 },
+  );
+}
+
 async function replaceFirstLine(page, text) {
   const editor = fileHost(page).locator(".monaco-editor");
   await editor.click();
@@ -274,12 +296,16 @@ async function main() {
         await page.keyboard.press("Meta+ArrowUp");
         for (let index = 0; index < 20; index += 1) await page.keyboard.press("ArrowDown");
         await page.keyboard.press("End");
-        const before = await readFileState(page);
+        const before = await waitStableFileViewState(
+          page,
+          "cursor to settle before external write",
+        );
         const tabsBefore = await readTicketTabs(page, ticketId);
 
         await sleep(20);
         await fs.writeFile(targetPath, CLEAN_DISK);
-        const after = await waitFileText(page, 'export const cleanAgent = "adopted";', false);
+        await waitFileText(page, 'export const cleanAgent = "adopted";', false);
+        const after = await waitStableFileViewState(page, "cursor to settle after external write");
         const tabsAfter = await readTicketTabs(page, ticketId);
         const updated = await waitUntil("Updated marker after inspected external write", async () =>
           (await changeRow.getByTestId("ticket-changes-updated").count()) === 1 ? true : null,
