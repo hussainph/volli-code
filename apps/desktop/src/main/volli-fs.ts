@@ -906,7 +906,7 @@ export class FileWatchManager extends WatchManagerBase<FileWatchSubscription> {
       projectPath,
       relPath,
       source,
-      ticketId,
+      ticketId: source === "worktree" ? ticketId : null,
       revision: statSync(join(dir, base)).mtimeMs,
       dir,
       base,
