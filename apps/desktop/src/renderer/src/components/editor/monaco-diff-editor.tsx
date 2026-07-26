@@ -164,6 +164,11 @@ export function MonacoDiffEditor({
         // DiffEditor ignores construction-time `theme`; set it explicitly.
         runtime.monaco.editor.setTheme("volli-dark");
 
+        // CONCEPT #48: keep keyboard focus in the Changes list after open —
+        // Monaco focuses the modified editor on create unless we restore.
+        const previouslyFocused =
+          document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
         diffEditor = runtime.monaco.editor.createDiffEditor(
           host,
           diffEditorConstructionOptions({ presentation: liveRef.current.presentation }),
@@ -173,6 +178,8 @@ export function MonacoDiffEditor({
           modified: modifiedLease.model,
         });
         diffEditorRef.current = diffEditor;
+
+        previouslyFocused?.focus();
 
         const modifiedEditor = diffEditor.getModifiedEditor();
         modifiedEditor.updateOptions({

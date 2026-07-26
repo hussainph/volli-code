@@ -34,7 +34,6 @@ import {
 } from "@renderer/editor/document-identity";
 import type { DocumentLease, DocumentRevision } from "@renderer/editor/document-registry";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
-import { toastError } from "@renderer/lib/toast";
 import { useUiStore, type DiffPresentation } from "@renderer/stores/ui";
 
 import type { editor } from "monaco-editor";

@@ -18,10 +18,12 @@ import type { DocumentFileRefs } from "@renderer/components/editor/monaco-docume
 import { ConfirmCloseDialog } from "@renderer/components/sessions/confirm-close-dialog";
 import { createTerminalSession } from "@renderer/components/sessions/session-create";
 import { FileView } from "@renderer/components/ticket/file-view";
+import { DiffView } from "@renderer/components/ticket/diff-view";
 import { RailResizeHandle } from "@renderer/components/ticket/rail-resize-handle";
 import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab";
 import { TicketBodyPanel } from "@renderer/components/ticket/ticket-body-panel";
 import { TicketChangesPanel } from "@renderer/components/ticket/ticket-changes-panel";
+import { diffTabId } from "@renderer/components/ticket/ticket-diff-tab";
 import { TicketFilesPanel } from "@renderer/components/ticket/ticket-files-panel";
 import { TicketRail } from "@renderer/components/ticket/ticket-rail";
 import { TicketSessionPlane } from "@renderer/components/ticket/ticket-session-plane";
@@ -45,8 +47,11 @@ import { getEngine } from "@renderer/terminal/registry";
  * Wire value remains `"doc"` (see ticket-body-tab.ts). */
 const BODY_TAB_ID = TICKET_BODY_TAB_ID;
 
-/** Stable empty tab list, so "no open files" isn't a new array every render. */
+/** Stable empty lists, so "no open files/diffs" aren't new arrays every render. */
 const NO_OPEN_FILES: readonly string[] = [];
+const NO_OPEN_DIFFS: readonly string[] = [];
+const NO_DIFF_META: Readonly<Record<string, { previousPath?: string | null; status?: string }>> =
+  {};
 
 /**
  * The full-page ticket detail view (ticket-detail-mvp decision #1), rendered
@@ -77,6 +82,8 @@ export function TicketDetail({
   const closeTicket = useWorkspaceStore((state) => state.closeTicket);
   const openTicketFile = useWorkspaceStore((state) => state.openTicketFile);
   const closeTicketFile = useWorkspaceStore((state) => state.closeTicketFile);
+  const openTicketDiff = useWorkspaceStore((state) => state.openTicketDiff);
+  const closeTicketDiff = useWorkspaceStore((state) => state.closeTicketDiff);
   const setTicketActiveTab = useWorkspaceStore((state) => state.setTicketActiveTab);
   const ticketTabsState = useWorkspaceStore(
     (state) => state.byProject[projectId]?.ticketTabs?.[ticket.id],
@@ -95,6 +102,8 @@ export function TicketDetail({
   const displayId = displayTicketId(ticketPrefix, ticket.ticketNumber);
 
   const openFiles = ticketTabsState?.files ?? NO_OPEN_FILES;
+  const openDiffs = ticketTabsState?.diffs ?? NO_OPEN_DIFFS;
+  const diffMeta = ticketTabsState?.diffMeta ?? NO_DIFF_META;
   const activeTabId = ticketTabsState?.active ?? BODY_TAB_ID;
 
   // The per-tab worktree badge is driven by each file's resolved source, which
@@ -115,8 +124,11 @@ export function TicketDetail({
    * unmounts even that while the draft stays parked.
    */
   const [dirtyFiles, setDirtyFiles] = React.useState<ReadonlySet<string>>(() => new Set());
-  /** The file tab the Save / Discard / Cancel guard is currently asking about. */
-  const [pendingClose, setPendingClose] = React.useState<string | null>(null);
+  /** The file/diff tab the Save / Discard / Cancel guard is currently asking about. */
+  const [pendingClose, setPendingClose] = React.useState<{
+    relPath: string;
+    kind: "file" | "diff";
+  } | null>(null);
 
   const markFileDirty = React.useCallback((relPath: string, dirty: boolean) => {
     setDirtyFiles((previous) => {
@@ -156,19 +168,18 @@ export function TicketDetail({
     [peekFileDocuments],
   );
 
-  // `openFiles` is the persisted tab list, iterated directly rather than joined
-  // into a delimited key: a relPath may legally contain a newline on macOS, and
-  // splitting one back apart would invent two paths that are open in no tab —
-  // so the real tab's parked draft never re-enters `dirtyFiles` and its close
-  // guard is silently skipped. `NO_OPEN_FILES` keeps the empty case a stable
-  // identity so this effect doesn't re-run every render.
+  // `openFiles` / `openDiffs` are the persisted tab lists. Paths may legally
+  // contain a newline on macOS, so iterate the arrays directly rather than
+  // joining into a delimited key. File and diff tabs of the same path share
+  // one dirty key (CONCEPT #48/#49).
   React.useEffect(() => {
-    if (openFiles.length === 0) return;
+    const paths = [...new Set([...openFiles, ...openDiffs])];
+    if (paths.length === 0) return;
     let cancelled = false;
     void loadMonacoRuntime()
       .then((runtime) => {
         if (cancelled) return;
-        const parked = openFiles.filter((relPath) =>
+        const parked = paths.filter((relPath) =>
           peekFileDocuments(runtime.registry, relPath).some((handle) => {
             const snap = handle.snapshot();
             // Autosave artifacts report dirty through FileView's onDirtyChange
@@ -188,7 +199,7 @@ export function TicketDetail({
     return () => {
       cancelled = true;
     };
-  }, [openFiles, peekFileDocuments]);
+  }, [openFiles, openDiffs, peekFileDocuments]);
 
   /**
    * Writes a tab's draft, conflict-guarded on the FRESHEST revision the
@@ -241,7 +252,12 @@ export function TicketDetail({
   const closeFileTab = React.useCallback(
     (relPath: string) => {
       closeTicketFile(projectId, ticket.id, relPath);
-      markFileDirty(relPath, false);
+      // Diff tab for the same path may still be open — only clear dirty when
+      // neither surface remains.
+      const diffsStillOpen = (
+        useWorkspaceStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id]?.diffs ?? []
+      ).includes(relPath);
+      if (!diffsStillOpen) markFileDirty(relPath, false);
       // Otherwise a reopened tab can briefly show the last-known worktree/main
       // badge from before the close, until the new FileView's own read reports
       // back — the record is keyed by relPath only and never pruned on its own.
@@ -255,27 +271,57 @@ export function TicketDetail({
     [closeTicketFile, markFileDirty, projectId, ticket.id],
   );
 
+  const closeDiffTab = React.useCallback(
+    (relPath: string) => {
+      closeTicketDiff(projectId, ticket.id, relPath);
+      const filesStillOpen = (
+        useWorkspaceStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id]?.files ?? []
+      ).includes(relPath);
+      if (!filesStillOpen) markFileDirty(relPath, false);
+    },
+    [closeTicketDiff, markFileDirty, projectId, ticket.id],
+  );
+
   const requestCloseFileTab = React.useCallback(
     (relPath: string) => {
       if (planTabClose({ dirty: dirtyFiles.has(relPath) }) === "close") closeFileTab(relPath);
-      else setPendingClose(relPath);
+      else setPendingClose({ relPath, kind: "file" });
     },
     [closeFileTab, dirtyFiles],
+  );
+
+  const requestCloseDiffTab = React.useCallback(
+    (relPath: string) => {
+      if (planTabClose({ dirty: dirtyFiles.has(relPath) }) === "close") closeDiffTab(relPath);
+      else setPendingClose({ relPath, kind: "diff" });
+    },
+    [closeDiffTab, dirtyFiles],
   );
 
   /**
    * Applies the user's answer. Cancel keeps the tab, and so does a FAILED save
    * — closing over a write that never landed would discard the only copy.
+   * Dirty is shared by relPath across file+diff, but only the tab the user
+   * asked to close is removed.
    */
   const resolvePendingClose = React.useCallback(
-    async (relPath: string, choice: TabCloseResolution["choice"]) => {
+    async (choice: TabCloseResolution["choice"]) => {
+      if (pendingClose === null) return;
+      const { relPath, kind } = pendingClose;
       const resolution: TabCloseResolution =
         choice === "save" ? { choice: "save", saved: await saveFileDocument(relPath) } : { choice };
-      if (resolution.choice === "discard") (await peekFileDocument(relPath))?.discard();
+      if (resolution.choice === "discard") {
+        (await peekFileDocument(relPath))?.discard();
+        markFileDirty(relPath, false);
+      } else if (resolution.choice === "save" && resolution.saved) {
+        markFileDirty(relPath, false);
+      }
       setPendingClose(null);
-      if (resolveTabClose(resolution) === "close") closeFileTab(relPath);
+      if (resolveTabClose(resolution) !== "close") return;
+      if (kind === "file") closeFileTab(relPath);
+      else closeDiffTab(relPath);
     },
-    [closeFileTab, peekFileDocument, saveFileDocument],
+    [closeDiffTab, closeFileTab, markFileDirty, pendingClose, peekFileDocument, saveFileDocument],
   );
 
   const setActiveTab = React.useCallback(
@@ -289,6 +335,14 @@ export function TicketDetail({
   const openFile = React.useCallback(
     (relPath: string) => openTicketFile(projectId, ticket.id, relPath),
     [openTicketFile, projectId, ticket.id],
+  );
+  const openDiff = React.useCallback(
+    (file: { path: string; previousPath?: string; status: string; binary: boolean }) =>
+      openTicketDiff(projectId, ticket.id, file.path, {
+        previousPath: file.previousPath ?? null,
+        status: file.status,
+      }),
+    [openTicketDiff, projectId, ticket.id],
   );
   const fileRefs = React.useMemo<DocumentFileRefs>(
     () => ({
@@ -311,9 +365,9 @@ export function TicketDetail({
   );
 
   // Doc (labeled with the ticket id) + one `"file"`-kind descriptor per open
-  // `@file` ref + one `"session"`-kind descriptor per live session; routing
-  // below is keyed off `kind`, not id, so the plane and content branch
-  // generically.
+  // `@file` ref + one `"diff"`-kind descriptor per open Change Set diff + one
+  // `"session"`-kind descriptor per live session; routing below is keyed off
+  // `kind`, not id, so the plane and content branch generically.
   const tabs: TicketTabDescriptor[] = [
     { id: BODY_TAB_ID, kind: "body", label: displayId },
     ...openFiles.map(
@@ -326,6 +380,17 @@ export function TicketDetail({
         dirty: dirtyFiles.has(relPath),
       }),
     ),
+    ...openDiffs.map((relPath): TicketTabDescriptor => {
+      const meta = diffMeta[relPath];
+      return {
+        id: diffTabId(relPath),
+        kind: "diff",
+        label: baseNameOf(relPath),
+        relPath,
+        previousPath: meta?.previousPath,
+        dirty: dirtyFiles.has(relPath),
+      };
+    }),
     ...(sessionTabs ?? []).map(
       (tab): TicketTabDescriptor => ({
         id: tab.sessionId,
@@ -347,15 +412,17 @@ export function TicketDetail({
     terminalFocusTarget.sessionId === activeTab.id &&
     activeSessionTab !== undefined;
 
-  // Only the active file tab mounts a FileView, so its dirty reports are for
-  // exactly one path — the one below it in the tab strip.
-  const activeFileRelPath = activeTab.kind === "file" ? (activeTab.relPath ?? null) : null;
+  // Only the active file/diff tab mounts an editor, so its dirty reports are for
+  // exactly one path — the one below it in the tab strip. File and diff of the
+  // same path share the dirty key.
+  const activeEditorRelPath =
+    activeTab.kind === "file" || activeTab.kind === "diff" ? (activeTab.relPath ?? null) : null;
   const handleFileDirtyChange = React.useCallback(
     (dirty: boolean) => {
-      if (activeFileRelPath === null) return;
-      markFileDirty(activeFileRelPath, dirty);
+      if (activeEditorRelPath === null) return;
+      markFileDirty(activeEditorRelPath, dirty);
     },
-    [activeFileRelPath, markFileDirty],
+    [activeEditorRelPath, markFileDirty],
   );
 
   // The fallback above is purely visual — it renders the Ticket Body without
@@ -477,6 +544,10 @@ export function TicketDetail({
                 requestCloseFileTab(tab.relPath);
                 return;
               }
+              if (tab.kind === "diff" && tab.relPath !== undefined) {
+                requestCloseDiffTab(tab.relPath);
+                return;
+              }
               const sessionId = tab.id;
               const sessionTab = sessionTabs?.find(
                 (candidate) => candidate.sessionId === sessionId,
@@ -536,6 +607,17 @@ export function TicketDetail({
                   onDirtyChange={handleFileDirtyChange}
                 />
               ) : null}
+              {activeTab.kind === "diff" && activeTab.relPath !== undefined ? (
+                <DiffView
+                  key={activeTab.relPath}
+                  projectId={projectId}
+                  ticket={ticket}
+                  relPath={activeTab.relPath}
+                  previousPath={activeTab.previousPath ?? diffMeta[activeTab.relPath]?.previousPath}
+                  status={diffMeta[activeTab.relPath]?.status}
+                  onDirtyChange={handleFileDirtyChange}
+                />
+              ) : null}
               <TicketSessionPlane
                 ticketId={ticket.id}
                 activeSessionId={activeTab.kind === "session" ? activeTab.id : null}
@@ -563,7 +645,7 @@ export function TicketDetail({
                   <TicketChangesPanel
                     ticket={ticket}
                     activeTabId={activeTabId}
-                    onOpenFile={openFile}
+                    onOpenDiff={openDiff}
                   />
                 }
                 filesContent={<TicketFilesPanel ticket={ticket} onOpenFile={openFile} />}
@@ -578,10 +660,10 @@ export function TicketDetail({
         onCancel={closeGuard.cancel}
       />
       <FileSaveGuardDialog
-        relPath={pendingClose}
+        relPath={pendingClose?.relPath ?? null}
         onCancel={() => setPendingClose(null)}
         onChoose={(choice) => {
-          if (pendingClose !== null) void resolvePendingClose(pendingClose, choice);
+          void resolvePendingClose(choice);
         }}
       />
     </>
