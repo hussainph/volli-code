@@ -13,7 +13,7 @@ export type LiveDiskRead =
 export type LiveDocumentReconciliationPlan =
   | {
       kind: "apply";
-      outcome: "adopt" | "keep-local" | "merge" | "save-echo";
+      outcome: "unchanged" | "adopt" | "keep-local" | "merge" | "save-echo";
       baseline: string;
       value: string;
       revision: DocumentRevision;
@@ -77,9 +77,6 @@ export function planLiveDocumentReconciliation(input: {
       disk: result.disk,
       revision: input.disk.revision,
     };
-  }
-  if (result.kind !== "adopt" && result.kind !== "keep-local" && result.kind !== "merge") {
-    throw new Error(`Live reconciliation outcome ${result.kind} is not implemented`);
   }
   return {
     kind: "apply",
