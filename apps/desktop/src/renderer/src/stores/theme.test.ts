@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import {
   DEFAULT_THEME,
   EMPTY_PROJECT_THEME_OVERRIDE,
+  PROJECT_COLORS,
   generateThemeTokens,
   type GhosttyAppearancePayload,
   type ProjectThemeOverride,
@@ -11,6 +12,9 @@ import {
   type ThemeStatePayload,
   type ThemeStateResult,
 } from "@volli/shared";
+
+import { autoTintChoice } from "@renderer/components/theme/project-appearance-model";
+import { PROJECT_TINT_SLUG } from "@renderer/theme/apply";
 
 import { appliedTheme, createThemeStore, effectiveTheme, type ThemeGateway } from "./theme";
 
@@ -570,6 +574,153 @@ describe("favorites and recents", () => {
 
     expect(store.getState().favorites).toEqual(["moss"]);
     expect(store.getState().recents).toEqual([]);
+  });
+});
+
+/** A store already scoped to project `p1`, carrying `override`. */
+async function scopedToProject(override: ProjectThemeOverride) {
+  const scoped = freshStore({
+    state: vi.fn(async () => ({
+      ok: true as const,
+      value: statePayload({ projectId: "p1", projectOverride: override }),
+    })),
+  });
+  await scoped.store.getState().hydrate("p1");
+  scoped.paint.applied.length = 0;
+  scoped.paint.editorThemes.length = 0;
+  return scoped;
+}
+
+describe("setProjectAppChoice", () => {
+  it("clears BOTH the named theme and the tint seed when a project goes back to inherit", async () => {
+    // Dropping only the slug would leave the seed tinting the app — #72's
+    // auto-tint is exactly "a seed and no slug", so Inherit has to clear both.
+    const { store, gateway } = await scopedToProject({
+      ...EMPTY_PROJECT_THEME_OVERRIDE,
+      appThemeSlug: "sunset",
+      seed: "#E8652A",
+      editorThemeId: "nord",
+    });
+
+    await expect(store.getState().setProjectAppChoice("p1", { kind: "inherit" })).resolves.toBe(
+      true,
+    );
+
+    expect(gateway.setProject).toHaveBeenCalledWith("p1", {
+      ...EMPTY_PROJECT_THEME_OVERRIDE,
+      editorThemeId: "nord",
+    });
+  });
+
+  // #72: Custom opens with "Auto-tint from this project's color" pre-selected.
+  // The SEED is what's stored — the tinted theme itself is derived at paint
+  // time (theme/apply.ts), never written anywhere.
+  it("stores the project's color as the tint seed and paints the derived theme", async () => {
+    const { store, gateway, paint } = await scopedToProject(EMPTY_PROJECT_THEME_OVERRIDE);
+
+    await expect(store.getState().setProjectAppChoice("p1", autoTintChoice(0))).resolves.toBe(true);
+
+    expect(gateway.setProject).toHaveBeenCalledWith("p1", {
+      ...EMPTY_PROJECT_THEME_OVERRIDE,
+      seed: PROJECT_COLORS[0],
+    });
+    expect(paint.applied.at(-1)).toMatchObject({
+      slug: PROJECT_TINT_SLUG,
+      seed: PROJECT_COLORS[0],
+    });
+  });
+
+  it("never merges onto an override belonging to a different project", async () => {
+    // The store holds exactly ONE scope's override (see `appliedTheme`), so a
+    // write aimed elsewhere must start from "inherits everything" rather than
+    // copying the loaded project's look onto its neighbor.
+    const { store, gateway } = await scopedToProject({
+      ...EMPTY_PROJECT_THEME_OVERRIDE,
+      appThemeSlug: "sunset",
+    });
+
+    await store.getState().setProjectAppChoice("p2", autoTintChoice(1));
+
+    expect(gateway.setProject).toHaveBeenCalledWith("p2", {
+      ...EMPTY_PROJECT_THEME_OVERRIDE,
+      seed: PROJECT_COLORS[1],
+    });
+  });
+
+  it("reports a failed write instead of pretending the project changed", async () => {
+    const { store } = freshStore({
+      setProject: vi.fn(async () => ({ ok: false as const, error: "disk full" })),
+    });
+
+    await expect(store.getState().setProjectAppChoice("p1", { kind: "inherit" })).resolves.toBe(
+      false,
+    );
+
+    expect(store.getState().projectOverride).toBeNull();
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      "Couldn't save the theme: disk full",
+      expect.anything(),
+    );
+  });
+});
+
+describe("setProjectEditorTheme", () => {
+  it("persists the project's editor id, leaving its other surfaces alone (#69)", async () => {
+    const override: ProjectThemeOverride = {
+      ...EMPTY_PROJECT_THEME_OVERRIDE,
+      appThemeSlug: "sunset",
+    };
+    const { store, gateway, paint } = await scopedToProject(override);
+
+    await expect(store.getState().setProjectEditorTheme("p1", "nord")).resolves.toBe(true);
+
+    expect(gateway.setProject).toHaveBeenCalledWith("p1", { ...override, editorThemeId: "nord" });
+    expect(gateway.setGlobalEditor).not.toHaveBeenCalled();
+    expect(store.getState().projectOverride).toEqual({ ...override, editorThemeId: "nord" });
+    expect(paint.editorThemes).toEqual(["nord"]);
+  });
+
+  // "Inherit" is the absence of an override, not an override full of nulls —
+  // the row is dropped, so a project that inherits everything reads the same
+  // as a project that never set anything.
+  it("clears the whole override when the last set surface goes back to inherit", async () => {
+    const { store, gateway } = await scopedToProject({
+      ...EMPTY_PROJECT_THEME_OVERRIDE,
+      editorThemeId: "nord",
+    });
+
+    await expect(store.getState().setProjectEditorTheme("p1", null)).resolves.toBe(true);
+
+    expect(gateway.setProject).toHaveBeenCalledWith("p1", null);
+    expect(store.getState().projectOverride).toBeNull();
+  });
+
+  it("keeps the override when another surface is still set", async () => {
+    const { store, gateway } = await scopedToProject({
+      ...EMPTY_PROJECT_THEME_OVERRIDE,
+      appThemeSlug: "sunset",
+      editorThemeId: "nord",
+    });
+
+    await store.getState().setProjectEditorTheme("p1", null);
+
+    expect(gateway.setProject).toHaveBeenCalledWith("p1", {
+      ...EMPTY_PROJECT_THEME_OVERRIDE,
+      appThemeSlug: "sunset",
+    });
+  });
+
+  it("reports a failed write rather than leaving the picker looking saved", async () => {
+    const { store } = freshStore({
+      setProject: vi.fn(async () => ({ ok: false as const, error: "disk full" })),
+    });
+
+    await expect(store.getState().setProjectEditorTheme("p1", "nord")).resolves.toBe(false);
+
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      "Couldn't save the editor theme: disk full",
+      expect.anything(),
+    );
   });
 });
 

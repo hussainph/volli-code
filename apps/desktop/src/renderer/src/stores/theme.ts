@@ -21,7 +21,7 @@
  * too (the window background follows it, before any renderer exists).
  */
 
-import { DEFAULT_THEME, EMPTY_PROJECT_THEME_OVERRIDE, errorMessage } from "@volli/shared";
+import { DEFAULT_THEME, errorMessage } from "@volli/shared";
 import type {
   CustomThemeListResult,
   CustomThemeWriteResult,
@@ -44,6 +44,11 @@ import {
   noteRecentTheme,
   toggleFavoriteTheme,
 } from "@renderer/components/theme/theme-picker-model";
+import {
+  withProjectAppChoice,
+  withProjectEditorChoice,
+  type ProjectAppChoice,
+} from "@renderer/components/theme/project-appearance-model";
 import { applyTheme as applyThemeToDom, resolveActiveTheme } from "@renderer/theme/apply";
 import { BUILTIN_THEMES, mergeThemeCatalog } from "@renderer/theme/catalog";
 import { resolveEditorThemeId } from "@renderer/editor/editor-theme-catalog";
@@ -144,6 +149,23 @@ interface ThemeState {
   endEditorPreview(): void;
   setGlobalTheme(theme: ThemeDefinition): Promise<boolean>;
   setEditorTheme(editorThemeId: ShippedEditorThemeId | null): Promise<boolean>;
+  /**
+   * One project's app surface: Inherit, #72's auto-tint seed, or a named
+   * theme. The picker's Enter still commits through `commitPreview` (it has a
+   * preview to end and a Recent to note); this is the entry point for the
+   * choices that have no preview — going back to Inherit, and turning the
+   * auto-tint on.
+   */
+  setProjectAppChoice(projectId: string, choice: ProjectAppChoice): Promise<boolean>;
+  /**
+   * One project's editor surface — `null` puts it back to inheriting the
+   * global choice (#69). The project-scope twin of {@link setEditorTheme}; a
+   * non-null id must be a SHIPPED catalog id or main rejects the write.
+   */
+  setProjectEditorTheme(
+    projectId: string,
+    editorThemeId: ShippedEditorThemeId | null,
+  ): Promise<boolean>;
   toggleFavorite(slug: string): void;
 }
 
@@ -290,6 +312,19 @@ export function createThemeStore({
         };
 
         /**
+         * The override a per-surface write merges onto. The store holds
+         * exactly ONE scope's override (see `appliedTheme`), so a write aimed
+         * at a project it isn't showing has nothing of that project's to
+         * merge onto — and borrowing the loaded project's fields would write
+         * one project's look onto another. An all-inheriting base is the only
+         * honest answer there.
+         */
+        const overrideBaseFor = (projectId: string): ProjectThemeOverride | null => {
+          const state = get();
+          return state.projectId === projectId ? state.projectOverride : null;
+        };
+
+        /**
          * A project's app surface, leaving its other surfaces exactly as they
          * were (#69: resolution is per surface, never per token — so a write
          * must be per surface too).
@@ -298,11 +333,14 @@ export function createThemeStore({
           projectId: string,
           theme: ThemeDefinition,
         ): Promise<boolean> => {
-          const base = get().projectOverride ?? EMPTY_PROJECT_THEME_OVERRIDE;
+          const next = withProjectAppChoice(overrideBaseFor(projectId), {
+            kind: "theme",
+            slug: theme.slug,
+          });
           const previousRecents = get().recents;
           set({ recents: noteRecentTheme(previousRecents, theme.slug) });
           const result = await writeThrough("save the theme", () =>
-            deps.gateway.setProject(projectId, { ...base, appThemeSlug: theme.slug }),
+            deps.gateway.setProject(projectId, next),
           );
           if (result === null) {
             // A theme that did not save was not applied — Recent must describe
@@ -534,6 +572,31 @@ export function createThemeStore({
               repaint();
               return false;
             }
+            accept(result.value);
+            return true;
+          },
+
+          async setProjectAppChoice(projectId, choice) {
+            const next = withProjectAppChoice(overrideBaseFor(projectId), choice);
+            const result = await writeThrough("save the theme", () =>
+              deps.gateway.setProject(projectId, next),
+            );
+            if (result === null) return false;
+            accept(result.value);
+            return true;
+          },
+
+          async setProjectEditorTheme(projectId, editorThemeId) {
+            const next = withProjectEditorChoice(
+              overrideBaseFor(projectId),
+              editorThemeId === null
+                ? { kind: "inherit" }
+                : { kind: "theme", themeId: editorThemeId },
+            );
+            const result = await writeThrough("save the editor theme", () =>
+              deps.gateway.setProject(projectId, next),
+            );
+            if (result === null) return false;
             accept(result.value);
             return true;
           },
