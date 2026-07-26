@@ -216,9 +216,9 @@ export function applyExternalSeedPreservingViewState(input: {
  * disposable editor DOM and never writes to disk itself — every save goes out
  * through `onSave` and comes back as a revision to record.
  *
- * When disk moves under an unsaved draft, both versions are preserved: the
- * draft stays untouched and a passive banner offers Reload. There is no
- * merge/reconciliation here on purpose (that is issue #110).
+ * Disk changes run through the shared A/L/D reconciliation policy. Disjoint
+ * edits merge in place; conflicts preserve both versions behind explicit
+ * consequence-labelled actions.
  */
 export function MonacoFileEditor({
   identity,

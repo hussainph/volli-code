@@ -1,8 +1,8 @@
 import * as React from "react";
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { baseNameOf, errorMessage, fileSavePolicy, type FileSource } from "@volli/shared";
 
+import { LiveReconciliationAffordance } from "@renderer/components/editor/live-reconciliation-affordance";
 import {
   MonacoFileEditor,
   type MonacoFileSaveResult,
@@ -72,6 +72,19 @@ type LoadState =
   | { status: "image"; dataUrl: string }
   | { status: "binary" };
 
+type AutosaveConflictWriteResult = { ok: true; mtime: number } | { ok: false; error: string };
+
+export function overwriteAutosaveConflict(input: {
+  draft: string;
+  diskRevision: number;
+  write(request: { content: string; expectedMtime: number }): Promise<AutosaveConflictWriteResult>;
+}): Promise<AutosaveConflictWriteResult> {
+  return input.write({
+    content: input.draft,
+    expectedMtime: input.diskRevision,
+  });
+}
+
 /**
  * A `file` tab's content pane (global-artifacts decision #7), generalized from
  * the old ArtifactViewer onto `api.files`. Which editor a file gets — and how
@@ -110,15 +123,17 @@ export function FileView({
   const [state, setState] = React.useState<LoadState>({ status: "loading" });
   const [docValue, setDocValue] = React.useState("");
   // Disk content+mtime captured when a conflict is detected. The mtime rides
-  // along so Reload can restore BOTH baselines together — advancing the content
+  // along so an explicit disk choice restores BOTH baselines together — advancing the content
   // baseline without its mtime would wedge every later write on a stale
   // `expectedMtime`. `null` = no conflict, autosave live.
   const [conflict, setConflict] = React.useState<{ text: string; mtime: number } | null>(null);
+  const [liveError, setLiveError] = React.useState<string | null>(null);
 
   const draftRef = React.useRef(""); // current autosave-editor content
   const syncedRef = React.useRef(""); // last content loaded or saved (disk baseline)
   const syncedMtimeRef = React.useRef(0); // mtime of that baseline — the write conflict guard
   const conflictRef = React.useRef<{ text: string; mtime: number } | null>(null);
+  const liveErrorRef = React.useRef<string | null>(null);
   const focusedRef = React.useRef(false);
   // Dirty state of the explicit-save Monaco editor. It lives in the shared
   // document registry, not in `draftRef`, so the editor reports it up here for
@@ -138,6 +153,9 @@ export function FileView({
   React.useEffect(() => {
     conflictRef.current = conflict;
   }, [conflict]);
+  React.useEffect(() => {
+    liveErrorRef.current = liveError;
+  }, [liveError]);
   React.useEffect(() => {
     stateRef.current = state;
   }, [state]);
@@ -283,7 +301,7 @@ export function FileView({
         ) {
           // The file grew past the 1 MiB read cap underneath us — that re-read is
           // a truncated prefix, not a valid editable baseline. Offering it as a
-          // Reload target would autosave the prefix back and destroy everything
+          // Disk-choice target would autosave the prefix back and destroy everything
           // past the cap, so don't raise the conflict banner: drop into the
           // read-only 'code' state instead, matching the load and onChanged paths.
           // `debouncer` is declared below but stable for the component's whole
@@ -371,14 +389,16 @@ export function FileView({
               ? draftRef.current !== syncedRef.current
               : current.status === "code" && current.editable && sourceDirtyRef.current;
           if (dirty) {
-            toastError(
-              `${name} changed on disk and is now unreadable. Your unsaved edits were kept.`,
+            debouncer.cancel();
+            setLiveError(
+              `${name} changed on disk and is now unreadable. Your unsaved draft is still open.`,
             );
           } else {
             setState({ status: "error", error: disk.error });
           }
           return;
         }
+        setLiveError(null);
         resolvedSourceRef.current = disk.source;
         onSource?.(relPath, disk.source);
         if (disk.content.type === "image") {
@@ -479,7 +499,7 @@ export function FileView({
 
   function handleChange(next: string) {
     draftRef.current = next;
-    if (conflictRef.current !== null) return; // paused until reload
+    if (conflictRef.current !== null || liveErrorRef.current !== null) return;
     debouncer.schedule();
   }
 
@@ -493,6 +513,9 @@ export function FileView({
    */
   const saveSource = React.useCallback(
     async (text: string): Promise<MonacoFileSaveResult> => {
+      if (liveErrorRef.current !== null) {
+        return { ok: false, error: "The file is unreadable on disk. Recreate it before saving." };
+      }
       const result = await window.api.files.write({
         projectId,
         ticketId,
@@ -530,7 +553,7 @@ export function FileView({
     [onDirtyChange],
   );
 
-  function reload() {
+  function useDiskAndDiscardDraft() {
     const disk = conflictRef.current;
     if (disk === null) return;
     debouncer.cancel();
@@ -541,6 +564,46 @@ export function FileView({
     draftRef.current = disk.text;
     setDocValue(disk.text); // editor is unfocused (the button took focus) → doc resets
     setConflict(null);
+  }
+
+  async function overwriteDiskWithDraft() {
+    const disk = conflictRef.current;
+    if (disk === null || writingRef.current) return;
+    debouncer.cancel();
+    writingRef.current = true;
+    const draft = draftRef.current;
+    try {
+      const result = await overwriteAutosaveConflict({
+        draft,
+        diskRevision: disk.mtime,
+        write: ({ content, expectedMtime }) =>
+          window.api.files.write({
+            projectId,
+            ticketId,
+            relPath,
+            content,
+            expectedMtime,
+          }),
+      });
+      if (!result.ok) {
+        toastError(`Couldn't overwrite ${name}: ${result.error}`);
+        return;
+      }
+      syncedRef.current = draft;
+      syncedMtimeRef.current = result.mtime;
+      setDocValue(draft);
+      setConflict(null);
+      await markDocumentSaved(result.mtime);
+      const current = stateRef.current;
+      if (current.status === "markdown") {
+        onLocalSave?.(relPath, current.source, result.mtime);
+      }
+      onDirtyChange?.(false);
+    } catch (error) {
+      toastError(`Couldn't overwrite ${name}: ${errorMessage(error)}`);
+    } finally {
+      writingRef.current = false;
+    }
   }
 
   async function handleReveal() {
@@ -583,14 +646,13 @@ export function FileView({
       <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
         <ContentColumn className="flex flex-col gap-2 py-6">
           {conflict !== null && (
-            <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-              <span>Changed on disk. Autosave paused.</span>
-              <Button size="sm" variant="secondary" onClick={reload}>
-                <ArrowClockwiseIcon />
-                Reload
-              </Button>
-            </div>
+            <LiveReconciliationAffordance
+              kind="conflict"
+              onUseDisk={useDiskAndDiscardDraft}
+              onOverwriteDisk={() => void overwriteDiskWithDraft()}
+            />
           )}
+          {liveError !== null && <LiveReconciliationAffordance kind="error" message={liveError} />}
           <div
             className="min-h-full"
             onFocus={() => {
@@ -635,6 +697,7 @@ export function FileView({
     const identity = fileDocumentIdentity({ projectId, ticketId, relPath, source: state.source });
     return (
       <div className="flex min-h-0 flex-1 flex-col gap-2 px-gutter py-4">
+        {liveError !== null && <LiveReconciliationAffordance kind="error" message={liveError} />}
         {state.truncated && (
           <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
             <span>Showing the first 1 MiB. Reveal in Finder for the whole file.</span>
@@ -653,7 +716,7 @@ export function FileView({
             revision={state.revision}
             viewId={`file:${projectId}:${ticketId ?? "main"}:${relPath}:source`}
             ariaLabel={`${name} contents`}
-            readOnly={!state.editable}
+            readOnly={!state.editable || liveError !== null}
             onSave={saveSource}
             onDirtyChange={handleSourceDirtyChange}
             initialViewState={initialViewState}
