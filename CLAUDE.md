@@ -2,7 +2,7 @@
 
 A macOS desktop app (Electron + React + TypeScript) merging Linear-style kanban planning with cmux-style embedded terminal agents. A ticket *is* a terminal workspace: moving it to **Doing** boots a coding agent (Claude Code / Codex / Opencode / any CLI harness) in an isolated git worktree; the agent's lifecycle drives the board and fires native notifications. Rewrite of the native Swift original at `../volli-swift` (SwiftUI proved slower for agent-driven dev than TS).
 
-**Read `docs/CONCEPT.md` before any product/architecture decision** — the full concept + settled decision log (don't relitigate casually). `CONTEXT.md` (root) is the domain glossary — use its terms. `docs/DESIGN.md` owns spacing/type; `docs/SWIFT-REFERENCE.md` is the Swift parity/data-model reference.
+`docs/CONCEPT.md` records the *reasoning* behind past choices — history, not authority. **The code is the record of what's settled**; anything not built there is an open question, so ask the owner rather than citing a decision number at him. `CONTEXT.md` (root) is the domain glossary — use its terms. `docs/DESIGN.md` owns spacing/type; `docs/SWIFT-REFERENCE.md` is the Swift parity/data-model reference.
 
 ## Structure
 
