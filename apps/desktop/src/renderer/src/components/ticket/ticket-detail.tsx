@@ -25,6 +25,11 @@ import { RailResizeHandle } from "@renderer/components/ticket/rail-resize-handle
 import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab";
 import { TicketBodyPanel } from "@renderer/components/ticket/ticket-body-panel";
 import { TicketChangesPanel } from "@renderer/components/ticket/ticket-changes-panel";
+import {
+  EMPTY_TICKET_RECENCY_OWNER_STATE,
+  readTicketInspection,
+  reduceTicketRecencyOwner,
+} from "@renderer/components/ticket/ticket-change-recency-owner";
 import { diffTabId } from "@renderer/components/ticket/ticket-diff-tab";
 import { TicketFilesPanel } from "@renderer/components/ticket/ticket-files-panel";
 import { TicketRail } from "@renderer/components/ticket/ticket-rail";
@@ -112,6 +117,18 @@ export function TicketDetail({
     (state) => state.clearTerminalFocusUnlessTicket,
   );
   const closeGuard = useCloseGuard();
+  const [recencyOwner, dispatchRecencyOwner] = React.useReducer(
+    reduceTicketRecencyOwner,
+    EMPTY_TICKET_RECENCY_OWNER_STATE,
+  );
+
+  React.useEffect(
+    () =>
+      window.api.files.onChanged((event) => {
+        dispatchRecencyOwner({ type: "file-changed", event });
+      }),
+    [],
+  );
 
   const displayId = displayTicketId(ticketPrefix, ticket.ticketNumber);
 
@@ -378,26 +395,64 @@ export function TicketDetail({
   // @file chips open persistent tabs (decision #33); Files-panel glances use
   // preview/pin instead (decision #56).
   const fileIndex = useFileIndex(projectId);
+  const inspectFile = React.useCallback(
+    (relPath: string) => {
+      void readTicketInspection(window.api.files.read, {
+        projectId,
+        ticketId: ticket.id,
+        relPath,
+      }).then((event) => {
+        if (event !== null) dispatchRecencyOwner(event);
+      });
+    },
+    [projectId, ticket.id],
+  );
   const openFile = React.useCallback(
-    (relPath: string) => openTicketFile(projectId, ticket.id, relPath),
-    [openTicketFile, projectId, ticket.id],
+    (relPath: string) => {
+      openTicketFile(projectId, ticket.id, relPath);
+      inspectFile(relPath);
+    },
+    [inspectFile, openTicketFile, projectId, ticket.id],
   );
   const previewFileFromRail = React.useCallback(
-    (relPath: string) => previewTicketFile(projectId, ticket.id, relPath),
-    [previewTicketFile, projectId, ticket.id],
+    (relPath: string) => {
+      previewTicketFile(projectId, ticket.id, relPath);
+      inspectFile(relPath);
+    },
+    [inspectFile, previewTicketFile, projectId, ticket.id],
   );
   const pinFileFromRail = React.useCallback(
-    (relPath: string) => pinTicketFile(projectId, ticket.id, relPath),
-    [pinTicketFile, projectId, ticket.id],
+    (relPath: string) => {
+      pinTicketFile(projectId, ticket.id, relPath);
+      inspectFile(relPath);
+    },
+    [inspectFile, pinTicketFile, projectId, ticket.id],
   );
   const openDiff = React.useCallback(
-    (file: { path: string; previousPath?: string; status: string; binary: boolean }) =>
+    (file: { path: string; previousPath?: string; status: string; binary: boolean }) => {
       openTicketDiff(projectId, ticket.id, file.path, {
         previousPath: file.previousPath ?? null,
         status: file.status,
         binary: file.binary,
-      }),
-    [openTicketDiff, projectId, ticket.id],
+      });
+      inspectFile(file.path);
+    },
+    [inspectFile, openTicketDiff, projectId, ticket.id],
+  );
+  const reportLocalSave = React.useCallback(
+    (relPath: string, source: FileSource, revision: number) => {
+      dispatchRecencyOwner({
+        type: "local-save",
+        identity: {
+          projectId,
+          ticketId: source === "worktree" ? ticket.id : null,
+          relPath,
+          source,
+        },
+        revision,
+      });
+    },
+    [projectId, ticket.id],
   );
   const fileRefs = React.useMemo<DocumentFileRefs>(
     () => ({
@@ -675,6 +730,7 @@ export function TicketDetail({
                   fileRefs={fileRefs}
                   onSource={reportFileSource}
                   onDirtyChange={handleFileDirtyChange}
+                  onLocalSave={reportLocalSave}
                 />
               ) : null}
               {activeTab.kind === "diff" && activeTab.relPath !== undefined ? (
@@ -687,6 +743,7 @@ export function TicketDetail({
                   status={diffMeta[activeTab.relPath]?.status}
                   binary={diffMeta[activeTab.relPath]?.binary}
                   onDirtyChange={handleFileDirtyChange}
+                  onLocalSave={reportLocalSave}
                   initialViewState={ticketDiffViewStates?.[activeTab.relPath]}
                   onViewStateChange={handleDiffViewStateChange}
                 />
@@ -718,6 +775,7 @@ export function TicketDetail({
                   <TicketChangesPanel
                     ticket={ticket}
                     activeTabId={activeTabId}
+                    recency={recencyOwner.recency}
                     onOpenDiff={openDiff}
                   />
                 }

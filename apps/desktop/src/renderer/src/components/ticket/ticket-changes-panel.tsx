@@ -10,11 +10,12 @@ import { errorMessage, type ChangeSetFile, type Ticket } from "@volli/shared";
 
 import {
   applyChangeSetRefresh,
-  presentChangeRow,
+  presentChangeRowWithRecency,
   selectChangeRow,
   type ChangeRowPresentation,
   type ChangesNavigatorState,
 } from "@renderer/components/ticket/ticket-changes-model";
+import type { ChangeRecencyState } from "@renderer/components/ticket/ticket-change-recency";
 import { subscribeWorktreeChanges } from "@renderer/components/ticket/worktree-change-watch";
 import { cn } from "@renderer/lib/utils";
 import { toastError } from "@renderer/lib/toast";
@@ -163,11 +164,14 @@ export type OpenChangeDiffTarget = Pick<
 export function TicketChangesPanel({
   ticket,
   activeTabId,
+  recency,
   onOpenDiff,
 }: {
   ticket: Ticket;
   /** Observed so refresh can be proven never to mutate it (decision #46/#48). */
   activeTabId: string;
+  /** Ticket-owned passive awareness shared by every File/Diff representation. */
+  recency: ChangeRecencyState;
   /** Deliberate open — host wires `openTicketDiff` (CONCEPT #48/#51). */
   onOpenDiff(file: OpenChangeDiffTarget): void;
 }) {
@@ -308,7 +312,7 @@ export function TicketChangesPanel({
     );
   }
 
-  const rows = nav.files.map(presentChangeRow);
+  const rows = nav.files.map((file) => presentChangeRowWithRecency(file, recency));
   return (
     <div data-testid="ticket-changes-panel" className="flex min-h-0 flex-1 flex-col">
       {watchError !== null ? (

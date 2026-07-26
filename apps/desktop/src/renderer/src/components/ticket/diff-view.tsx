@@ -66,6 +66,8 @@ export interface DiffViewProps {
   /** Change Set binary flag when known from the row that opened the tab. */
   binary?: boolean;
   onDirtyChange?(dirty: boolean): void;
+  /** Reports a successful local write so ticket-level recency can ignore its watch echo. */
+  onLocalSave?(relPath: string, source: "main" | "worktree", revision: number): void;
   /**
    * Host-persisted Monaco view state for the modified side — restored lazily
    * when this DiffView mounts (issue #109). Opaque; never inspected here.
@@ -87,6 +89,7 @@ export function DiffView({
   status,
   binary = false,
   onDirtyChange,
+  onLocalSave,
   initialViewState,
   onViewStateChange,
 }: DiffViewProps) {
@@ -424,12 +427,13 @@ export function DiffView({
         });
         if (!result.ok) return { ok: false, error: result.error };
         lastWriteRef.current = text;
+        onLocalSave?.(relPath, state.plan.modifiedSource, result.mtime);
         return { ok: true, revision: result.mtime };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }
     },
-    [state, liveError, projectId, ticket.id, relPath],
+    [state, liveError, projectId, ticket.id, relPath, onLocalSave],
   );
 
   const handleViewStateChange = React.useCallback(

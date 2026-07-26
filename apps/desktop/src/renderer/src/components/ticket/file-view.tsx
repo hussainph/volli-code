@@ -46,6 +46,8 @@ interface FileViewProps {
    * on its first edit (decision #56) and guarding its close.
    */
   onDirtyChange?(dirty: boolean): void;
+  /** Reports a successful local write so ticket-level recency can ignore its watch echo. */
+  onLocalSave?(relPath: string, source: FileSource, revision: number): void;
 }
 
 type LoadState =
@@ -103,6 +105,7 @@ export function FileView({
   initialViewState,
   onViewStateChange,
   onDirtyChange,
+  onLocalSave,
 }: FileViewProps) {
   const [state, setState] = React.useState<LoadState>({ status: "loading" });
   const [docValue, setDocValue] = React.useState("");
@@ -262,6 +265,10 @@ export function FileView({
           // peek().dirty stays true with externalRevision null and Save-on-close
           // refuses with "version on disk is unknown".
           await markDocumentSaved(result.mtime);
+          const current = stateRef.current;
+          if (current.status === "markdown") {
+            onLocalSave?.(relPath, current.source, result.mtime);
+          }
           onDirtyChange?.(false);
           return;
         }
@@ -320,7 +327,7 @@ export function FileView({
     // note there) — deliberately omitted from deps; its identity never
     // changes for the component's lifetime.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, ticketId, relPath, readFile, name, onDirtyChange, markDocumentSaved]);
+  }, [projectId, ticketId, relPath, readFile, name, onDirtyChange, onLocalSave, markDocumentSaved]);
 
   const debouncer = useDebouncedCallback(() => void commit(), AUTOSAVE_IDLE_MS);
 
@@ -496,6 +503,8 @@ export function FileView({
       if (!result.ok) return { ok: false, error: result.error };
       syncedRef.current = text;
       syncedMtimeRef.current = result.mtime;
+      const source = resolvedSourceRef.current;
+      if (source !== null) onLocalSave?.(relPath, source, result.mtime);
       if (mountedRef.current) {
         setState((previous) =>
           previous.status === "code" ? { ...previous, text, revision: result.mtime } : previous,
@@ -503,7 +512,7 @@ export function FileView({
       }
       return { ok: true, revision: result.mtime };
     },
-    [projectId, ticketId, relPath],
+    [projectId, ticketId, relPath, onLocalSave],
   );
 
   const handleSourceDirtyChange = React.useCallback(
