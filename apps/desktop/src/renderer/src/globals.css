@@ -282,6 +282,27 @@
   transition-timing-function: var(--theme-scope-ease);
 }
 
+/* The canvas layer's half of the same crossfade (#74, theme/theme-canvas.tsx).
+ * CSS `background-image` does not interpolate — a solid and a mesh have no
+ * value in between — so the canvas cannot ride the rule above. It stacks two
+ * layers instead and fades the outgoing one out over the incoming, which
+ * interpolates between any two canvases and stays on the compositor.
+ *
+ * An animation rather than a transition, because the outgoing layer is MOUNTED
+ * at the moment the fade should begin: a transition would need a second render
+ * to have something to move from. It reads the same two custom properties as
+ * everything else, so the reduced-motion collapse below applies to it for free
+ * and there is no second timing constant to keep in step. */
+@keyframes volli-canvas-fade {
+  to {
+    opacity: 0;
+  }
+}
+
+[data-volli-canvas-outgoing] {
+  animation: volli-canvas-fade var(--theme-scope-crossfade) var(--theme-scope-ease) forwards;
+}
+
 /* Reduced motion (HIG §accessibility): nothing here translates or scales, so
  * there is no vestibular motion to remove — and an eased brightness change is
  * itself the accessible treatment for a whole-window repaint. Keep the shortest

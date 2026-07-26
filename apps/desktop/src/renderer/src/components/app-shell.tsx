@@ -8,7 +8,9 @@ import { PrimarySidebar } from "@renderer/components/sidebar/primary-sidebar";
 import { SidebarResizeHandle } from "@renderer/components/sidebar/sidebar-resize-handle";
 import { Sidebar, SidebarInset, SidebarProvider } from "@renderer/components/ui/sidebar";
 import { Toaster } from "@renderer/components/ui/sonner";
+import { canvasBackground } from "@renderer/theme/canvas-layer";
 import { GrainOverlay } from "@renderer/theme/grain-overlay";
+import { ThemeCanvas } from "@renderer/theme/theme-canvas";
 import { takeBootNotice } from "@renderer/lib/boot-notice";
 import { takeCliLaunchNotice } from "@renderer/lib/cli-launch-notice";
 import { toastError } from "@renderer/lib/toast";
@@ -51,6 +53,10 @@ export function AppShell() {
   // `effectiveTheme` already folds in the running preview and the per-project
   // override, so dragging the grain slider repaints live.
   const grain = useThemeStore((state) => effectiveTheme(state).grain);
+  // A string, so the selector's snapshot is stable by value — and it folds in
+  // the running preview and the per-project override the same way `grain` does,
+  // which is what makes hovering a Background option repaint the whole window.
+  const canvas = useThemeStore((state) => canvasBackground(effectiveTheme(state)));
   const [resizing, setResizing] = React.useState(false);
   const terminalFocused = terminalFocusTarget !== null;
   const [focusGeometryInstant, setFocusGeometryInstant] = React.useState(false);
@@ -71,7 +77,12 @@ export function AppShell() {
 
   return (
     <SidebarProvider
-      className="h-svh flex-col"
+      // `relative isolate bg-rail` is the canvas layer's host (#74). `isolate`
+      // makes this a stacking context, so the z-index:-1 layer below paints
+      // above this fill and beneath every child — the same trick the content
+      // card uses for grain, one level up. `bg-rail` stays as the fallback
+      // beneath it, which is also exactly what `canvas: solid` paints.
+      className="relative isolate h-svh flex-col bg-rail"
       data-motion={terminalFocused || focusGeometryInstant ? "instant" : undefined}
       data-resizing={resizing || undefined}
       style={
@@ -92,6 +103,12 @@ export function AppShell() {
         } as React.CSSProperties
       }
     >
+      {/* The one canvas layer. Mounted here rather than inside the content row
+          for two reasons: it must sit under the chrome band and the rail as
+          well as the card (that is the whole Arc arrangement), and it must
+          stay OUTSIDE the `zoom: uiScale` row below, or ⌘+ would rescale the
+          gradient along with the UI. */}
+      <ThemeCanvas background={canvas} />
       <ChromeBar />
       {/* ui/sidebar.tsx's fixed sidebar-container positions itself via
           inset-y-0 relative to the nearest containing-block-establishing
@@ -108,8 +125,10 @@ export function AppShell() {
           canvases and ResizeObservers below see real resized boxes. `zoom` is
           missing from this TS lib's CSSProperties, hence the same cast style
           used for the CSS custom properties above. */}
+      {/* No fill of its own: the canvas above IS the backdrop now, and two
+          stacked fills would fight. `bg-rail` moved up to SidebarProvider. */}
       <div
-        className="flex min-h-0 flex-1 bg-rail contain-layout"
+        className="flex min-h-0 flex-1 contain-layout"
         style={{ zoom: uiScale } as React.CSSProperties}
       >
         <Sidebar
@@ -127,14 +146,23 @@ export function AppShell() {
             aria-hidden={workspaceRailHidden}
             inert={workspaceRailHidden}
             className={cn(
-              "w-(--rail-width) shrink-0 overflow-hidden bg-rail transition-[width,opacity] duration-[180ms] ease-swift",
+              // Transparent, not `bg-rail`: the rail was already painted in the
+              // backdrop's own token, so it has nothing of its own to give up —
+              // it simply sits on the canvas now.
+              "w-(--rail-width) shrink-0 overflow-hidden bg-transparent transition-[width,opacity] duration-[180ms] ease-swift",
               "group-data-[resizing]/sidebar-wrapper:transition-none group-data-[motion=instant]/sidebar-wrapper:transition-none",
               workspaceRailHidden && "opacity-0",
             )}
           >
             <ProjectRail />
           </Sidebar>
-          <Sidebar collapsible="none" className="min-w-0 flex-1">
+          {/* The one surface that keeps a fill, through a VEIL rather than an
+              opaque token (#74). It is a LIGHTER rung than the rail, so plain
+              transparency would visibly darken it and break pixel-parity;
+              `--sidebar-veil` at 10% over the canvas reproduces `--sidebar`
+              exactly in solid mode and preserves the one-rung lift over every
+              stop of a gradient. */}
+          <Sidebar collapsible="none" className="min-w-0 flex-1 bg-sidebar-veil">
             <PrimarySidebar />
           </Sidebar>
           <SidebarResizeHandle onResizingChange={setResizing} />
