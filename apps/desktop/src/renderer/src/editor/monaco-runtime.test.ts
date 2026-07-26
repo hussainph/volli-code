@@ -384,6 +384,12 @@ describe("createShikiBackedModelFactory", () => {
       [{ range: fullRange, text: "agent update\n" }],
       expect.any(Function),
     );
+    const call = pushEditOperations.mock.calls[0] as unknown as [
+      unknown[],
+      unknown[],
+      () => unknown,
+    ];
+    expect(call[2]()).toBeNull();
     expect(setValue).not.toHaveBeenCalled();
   });
 

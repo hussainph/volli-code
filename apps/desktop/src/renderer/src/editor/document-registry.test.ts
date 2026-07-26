@@ -374,6 +374,31 @@ describe("DocumentRegistry", () => {
     });
   });
 
+  it("records a clean external revision without rewriting an already-current model", () => {
+    const { registry } = makeRegistry();
+    const file = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "agent update", revision: "r1" },
+      savePolicy: "explicit",
+    });
+    const setValue = vi.spyOn(file.model, "setValue");
+
+    file.applyExternalUpdate({
+      baseline: "agent update",
+      value: "agent update",
+      revision: "r2",
+    });
+
+    expect(setValue).not.toHaveBeenCalled();
+    expect(file.snapshot()).toMatchObject({
+      baseline: "agent update",
+      baselineRevision: "r2",
+      externalRevision: "r2",
+      dirty: false,
+    });
+  });
+
   it("records the latest external revision without overwriting a dirty draft", () => {
     const { registry } = makeRegistry();
     const file = registry.acquire({
