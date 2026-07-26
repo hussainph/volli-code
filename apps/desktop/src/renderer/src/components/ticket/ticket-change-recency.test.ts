@@ -42,4 +42,27 @@ describe("reduceChangeRecency", () => {
       },
     });
   });
+
+  it("adopts a known local-save echo without marking the path updated", () => {
+    const inspected = reduceChangeRecency(EMPTY_CHANGE_RECENCY_STATE, {
+      type: "inspect",
+      path: "src/ticket.tsx",
+      revision: "opaque-revision-1",
+    });
+
+    const after = reduceChangeRecency(inspected, {
+      type: "local-save-echo",
+      path: "src/ticket.tsx",
+      revision: "opaque-revision-2",
+    });
+
+    expect(after).toEqual({
+      paths: {
+        "src/ticket.tsx": {
+          seenRevision: "opaque-revision-2",
+          updatedRevision: null,
+        },
+      },
+    });
+  });
 });
