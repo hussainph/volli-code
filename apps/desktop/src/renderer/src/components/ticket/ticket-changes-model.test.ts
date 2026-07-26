@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { ChangeSetFile, ChangeSetSnapshot } from "@volli/shared";
 
+import { EMPTY_CHANGE_RECENCY_STATE, reduceChangeRecency } from "./ticket-change-recency";
 import {
   applyChangeSetRefresh,
   formatChangeCounts,
@@ -104,6 +105,22 @@ describe("presentChangeRow", () => {
       statusLabel: "Renamed",
       countsLabel: "+0 −0",
       renameFrom: "src/old-name.ts",
+    });
+  });
+
+  it("projects passive stale awareness into visible and accessible row copy", () => {
+    const recency = reduceChangeRecency(
+      reduceChangeRecency(EMPTY_CHANGE_RECENCY_STATE, {
+        type: "inspect",
+        path: "src/a.ts",
+        revision: "revision-1",
+      }),
+      { type: "external-revision", path: "src/a.ts", revision: "revision-2" },
+    );
+
+    expect(presentChangeRow(file({ path: "src/a.ts" }), recency)).toMatchObject({
+      updatedLabel: "Updated",
+      updatedDescription: "Updated since you last opened this file",
     });
   });
 });
