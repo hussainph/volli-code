@@ -64,4 +64,22 @@ describe("reconcileText", () => {
       nextBaseline: "one\nagent two\nthree\n",
     });
   });
+
+  it("preserves exact local and disk text when both sides replace the same range", () => {
+    expect(reconcileText({ baseline: "before\n", local: "human\n", disk: "agent\n" })).toEqual({
+      kind: "conflict",
+      reason: "overlap",
+      local: "human\n",
+      disk: "agent\n",
+    });
+  });
+
+  it("treats an insertion at a replaced range boundary as a conflict", () => {
+    expect(reconcileText({ baseline: "abc", local: "aXbc", disk: "aYc" })).toEqual({
+      kind: "conflict",
+      reason: "overlap",
+      local: "aXbc",
+      disk: "aYc",
+    });
+  });
 });
