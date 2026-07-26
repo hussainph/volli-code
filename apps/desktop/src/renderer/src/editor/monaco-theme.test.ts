@@ -8,10 +8,45 @@ import {
   ensureMonacoEditorTheme,
   refreshMonacoEditorTheme,
   resetMonacoEditorThemeForTests,
+  restoreEditorThemeFromState,
 } from "./monaco-theme";
 
 afterEach(() => {
   resetMonacoEditorThemeForTests();
+});
+
+describe("restoreEditorThemeFromState", () => {
+  it("paints and returns the committed catalog id after a successful store commit", () => {
+    const setTheme = vi.fn();
+    bindMonacoEditorThemeHost({ editor: { setTheme } });
+    // Preview of something else must not win: restore reads live store inputs.
+    refreshMonacoEditorTheme("dracula");
+    setTheme.mockClear();
+
+    const painted = restoreEditorThemeFromState({
+      editorThemeId: "nord",
+      appThemeSlug: "ember",
+    });
+
+    expect(painted).toBe("nord");
+    expect(setTheme).toHaveBeenCalledWith("nord");
+    expect(activeMonacoEditorThemeId()).toBe("nord");
+  });
+
+  it("restores the live resolved id when selection is empty (automatic from app slug)", () => {
+    const setTheme = vi.fn();
+    bindMonacoEditorThemeHost({ editor: { setTheme } });
+    refreshMonacoEditorTheme("dracula");
+    setTheme.mockClear();
+
+    const painted = restoreEditorThemeFromState({
+      editorThemeId: null,
+      appThemeSlug: "midnight",
+    });
+
+    expect(painted).toBe("tokyo-night");
+    expect(setTheme).toHaveBeenCalledWith("tokyo-night");
+  });
 });
 
 describe("refreshMonacoEditorTheme", () => {

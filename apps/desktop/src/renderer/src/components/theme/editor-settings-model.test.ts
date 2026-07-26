@@ -103,4 +103,17 @@ describe("planEditorThemePreview", () => {
     expect(restore.themeId).toBe("nord");
     expect(preview.kind).not.toBe(restore.kind);
   });
+
+  it("post-commit restore input equals the committed catalog id (endPreview contract)", () => {
+    // After setEditorTheme("nord") the store already holds nord; endPreview must
+    // resolve from those live inputs — not a stale pre-commit resolvedId.
+    const committed = buildEditorThemeDisplay({
+      editorThemeId: "nord",
+      appThemeSlug: "ember",
+      themes: listEditorThemes(),
+    });
+    expect(
+      planEditorThemePreview({ selection: "", resolvedId: committed.resolvedId }).themeId,
+    ).toBe("nord");
+  });
 });

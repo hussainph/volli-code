@@ -38,7 +38,10 @@ import {
 import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { listEditorThemes, type EditorThemeEntry } from "@renderer/editor/editor-theme-catalog";
-import { refreshMonacoEditorTheme } from "@renderer/editor/monaco-theme";
+import {
+  refreshMonacoEditorTheme,
+  restoreEditorThemeFromState,
+} from "@renderer/editor/monaco-theme";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { writeThrough } from "@renderer/stores/mutate";
@@ -300,7 +303,9 @@ function EditorThemeOriginBadge({ display }: { display: EditorThemeDisplay }) {
  * Apply-then-revert preview (same contract as TerminalThemeRow): highlighting
  * a row paints Monaco via {@link refreshMonacoEditorTheme} and writes nothing;
  * picking one persists through {@link useThemeStore.setEditorTheme}; closing
- * the menu any other way restores the resolved theme.
+ * the menu any other way restores from **live** store inputs via
+ * {@link restoreEditorThemeFromState} — never a stale closure over the
+ * pre-commit resolved id.
  */
 function EditorThemeRow() {
   const editorThemeId = useThemeStore((state) => state.editorThemeId);
@@ -325,17 +330,11 @@ function EditorThemeRow() {
     refreshMonacoEditorTheme(plan.themeId);
   };
 
-  const endPreview = (): void => paintPreview("");
-
   // Leaving the surface with a preview running would strand Monaco on a theme
-  // that is not stored anywhere. Cleanup closes over the resolved id from this
-  // effect run so a mid-preview remount restores the right catalog theme.
-  React.useEffect(() => {
-    const resolvedId = display.resolvedId;
-    return () => {
-      refreshMonacoEditorTheme(planEditorThemePreview({ selection: "", resolvedId }).themeId);
-    };
-  }, [display.resolvedId]);
+  // that is not stored anywhere. Unmount-only, same as TerminalThemeRow —
+  // endEditorPreview reads live store state so a commit-then-restore lands on
+  // the committed id rather than a stale pre-commit closure.
+  React.useEffect(() => endEditorPreview, []);
 
   return (
     <SettingsRow label="Theme">
@@ -344,7 +343,7 @@ function EditorThemeRow() {
         open={open}
         onOpenChange={(next) => {
           setOpen(next);
-          if (!next) endPreview();
+          if (!next) endEditorPreview();
         }}
       >
         <PopoverTrigger asChild>
@@ -369,7 +368,7 @@ function EditorThemeRow() {
             // terminal picker: a hover has no Escape.
             onPointerLeave={() => {
               setSelected("");
-              endPreview();
+              endEditorPreview();
             }}
             className="flex flex-col overflow-hidden rounded-md"
           >
@@ -391,12 +390,14 @@ function EditorThemeRow() {
                   onSelect={() => {
                     // Commit first, then drop the preview: setEditorTheme
                     // refreshes Monaco to the same id, so there is no flash.
+                    // endEditorPreview reads the updated store so restore
+                    // paints the committed catalog id, not the pre-commit one.
                     void useThemeStore
                       .getState()
                       .setEditorTheme(theme.id)
                       .then((saved) => {
                         if (saved) setOpen(false);
-                        endPreview();
+                        endEditorPreview();
                       });
                   }}
                   className="flex cursor-pointer items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-sm outline-none data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground"
@@ -414,6 +415,19 @@ function EditorThemeRow() {
     </SettingsRow>
   );
 }
+
+/**
+ * Puts Monaco back on the theme implied by the **current** theme store —
+ * committed editorThemeId + app slug. Module-level so the unmount-only effect
+ * stays exhaustive-deps clean (mirrors TerminalThemeRow's `endPreview`).
+ */
+const endEditorPreview = (): void => {
+  const state = useThemeStore.getState();
+  restoreEditorThemeFromState({
+    editorThemeId: state.editorThemeId,
+    appThemeSlug: state.global.slug,
+  });
+};
 
 /** Reveal a config file in Finder; a missing path or a failed reveal toasts. */
 async function revealPath(path: string | null): Promise<void> {

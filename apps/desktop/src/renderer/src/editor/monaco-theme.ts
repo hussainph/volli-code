@@ -30,6 +30,23 @@ export function refreshMonacoEditorTheme(themeId: string): void {
 }
 
 /**
+ * End an Appearance Editor preview by resolving from **live** store inputs
+ * (committed `editorThemeId` + app slug) and painting that id. Callers must
+ * read the store at call time — never close over a stale resolved id — so a
+ * successful commit then restore lands on the committed catalog theme.
+ *
+ * @returns the catalog id painted into Monaco
+ */
+export function restoreEditorThemeFromState(input: {
+  editorThemeId: string | null;
+  appThemeSlug: string;
+}): string {
+  const themeId = resolveEditorThemeId(input);
+  refreshMonacoEditorTheme(themeId);
+  return themeId;
+}
+
+/**
  * Activate `fallbackId` only when nothing has asked for a theme yet — used at
  * Monaco bootstrap so a pre-hydrate store refresh is not clobbered by the
  * shipped default.
