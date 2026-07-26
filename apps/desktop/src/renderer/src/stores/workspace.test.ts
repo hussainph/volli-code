@@ -228,6 +228,8 @@ describe("openTicketWorkspace", () => {
 
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
       files: [],
+      diffs: [],
+      diffMeta: {},
       active: "doc",
     });
   });
@@ -320,6 +322,33 @@ describe("closeTicket", () => {
   });
 });
 
+describe("ticket diff tabs", () => {
+  it("openTicketDiff appends a persistent diff and makes it active", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicketDiff("project-a", "ticket-1", "src/app.ts", {
+      previousPath: "src/old.ts",
+      status: "renamed",
+    });
+
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
+      files: [],
+      diffs: ["src/app.ts"],
+      diffMeta: { "src/app.ts": { previousPath: "src/old.ts", status: "renamed" } },
+      active: "diff:src/app.ts",
+    });
+
+    // Re-open focuses without duplicating.
+    store.getState().openTicketDiff("project-a", "ticket-1", "src/other.ts");
+    store.getState().openTicketDiff("project-a", "ticket-1", "src/app.ts");
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
+      files: [],
+      diffs: ["src/app.ts", "src/other.ts"],
+      diffMeta: { "src/app.ts": { previousPath: "src/old.ts", status: "renamed" } },
+      active: "diff:src/app.ts",
+    });
+  });
+});
+
 describe("ticket file tabs", () => {
   it("openTicketFile appends the file and makes it active", () => {
     const store = createWorkspaceStore(createMemoryStorage());
@@ -327,6 +356,8 @@ describe("ticket file tabs", () => {
 
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
       files: ["docs/plan.md"],
+      diffs: [],
+      diffMeta: {},
       active: "file:docs/plan.md",
     });
   });
@@ -339,6 +370,8 @@ describe("ticket file tabs", () => {
 
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
       files: ["a.md", "b.md"],
+      diffs: [],
+      diffMeta: {},
       active: "file:a.md",
     });
   });
@@ -368,6 +401,8 @@ describe("ticket file tabs", () => {
 
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
       files: ["a.md"],
+      diffs: [],
+      diffMeta: {},
       active: "doc",
     });
   });
@@ -380,6 +415,8 @@ describe("ticket file tabs", () => {
 
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
       files: ["b.md"],
+      diffs: [],
+      diffMeta: {},
       active: "file:b.md",
     });
   });
@@ -406,6 +443,8 @@ describe("ticket file tabs", () => {
 
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
       files: ["a.md"],
+      diffs: [],
+      diffMeta: {},
       active: "session-9",
     });
   });
@@ -449,7 +488,12 @@ describe("ticket file tab persistence", () => {
 
     const store = createWorkspaceStore(storage);
     const tabs = store.getState().byProject["project-a"]?.ticketTabs["ticket-1"];
-    expect(tabs).toEqual({ files: ["notes.md"], active: TICKET_BODY_TAB_ID });
+    expect(tabs).toEqual({
+      files: ["notes.md"],
+      diffs: [],
+      diffMeta: {},
+      active: TICKET_BODY_TAB_ID,
+    });
     expect(isTicketBodyTabId(tabs!.active)).toBe(true);
   });
 
@@ -462,6 +506,8 @@ describe("ticket file tab persistence", () => {
     const rehydrated = createWorkspaceStore(storage);
     expect(rehydrated.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
       files: ["docs/plan.md"],
+      diffs: [],
+      diffMeta: {},
       active: "session-9",
     });
   });
@@ -502,7 +548,12 @@ describe("ticket file tab persistence", () => {
 
     const store = createWorkspaceStore(storage);
     const tabs = store.getState().byProject["project-a"]?.ticketTabs;
-    expect(tabs?.["ticket-1"]).toEqual({ files: ["ok.md"], active: "file:ok.md" });
+    expect(tabs?.["ticket-1"]).toEqual({
+      files: ["ok.md"],
+      diffs: [],
+      diffMeta: {},
+      active: "file:ok.md",
+    });
     expect(tabs?.["ticket-2"]).toBeUndefined();
     expect(tabs?.["ticket-3"]).toBeUndefined();
     expect(tabs?.["ticket-4"]).toBeUndefined();
