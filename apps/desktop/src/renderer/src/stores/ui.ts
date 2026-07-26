@@ -28,6 +28,10 @@
  * rehydration maps an open drawer onto Properties via `resolvePersistedRailMode`
  * and stops writing `detailsExpanded`.
  *
+ * `diffPresentation` — Monaco diff layout (inline vs side-by-side, CONCEPT #51).
+ * Persisted app-wide like `railCollapsed` / `railMode`: it is global chrome, not
+ * a per-ticket choice, so every diff tab honors the same presentation.
+ *
  * `terminalFocusTarget` — the ticket terminal tab temporarily owning the app
  * canvas. It is deliberately session-only: live PTYs do not survive relaunch,
  * and entering a new app lifetime with its chrome hidden around a missing
