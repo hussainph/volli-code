@@ -60,4 +60,25 @@ describe("diffFilePolicy", () => {
       modified: { value: null, readOnly: true },
     });
   });
+
+  it("retains previousPath for renames", () => {
+    expect(
+      diffFilePolicy({
+        file: file({
+          path: "src/new-name.ts",
+          previousPath: "src/old-name.ts",
+          status: "renamed",
+          insertions: 1,
+          deletions: 1,
+        }),
+        base: { content: "export const old = true;\n" },
+      }),
+    ).toEqual({
+      kind: "editor",
+      path: "src/new-name.ts",
+      previousPath: "src/old-name.ts",
+      original: { value: "export const old = true;\n", readOnly: true },
+      modified: { value: null, readOnly: false },
+    });
+  });
 });
