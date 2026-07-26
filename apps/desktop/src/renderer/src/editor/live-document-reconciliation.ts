@@ -112,6 +112,10 @@ export function applyLiveDocumentReconciliation(input: {
       value: plan.value,
       revision: plan.revision,
     });
+  } else if (plan.kind === "conflict") {
+    // The dirty lease refuses to replace baseline A, but still records the
+    // newest disk revision for the later explicit overwrite guard.
+    input.lease.adoptCleanBaseline({ value: plan.disk, revision: plan.revision });
   }
   return plan;
 }
