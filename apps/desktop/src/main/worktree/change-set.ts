@@ -1,5 +1,5 @@
 /**
- * Composed Change Set read model (CONCEPT #47, monaco-migration §9): one
+ * Composed Change Set read model (CONCEPT #47): one
  * snapshot of the ticket worktree's complete current outcome relative to its
  * recorded base — committed, staged, unstaged, and untracked together.
  *

@@ -4,10 +4,15 @@
  * Proves, through the built Electron app and real filesystem watchers:
  *   1. A clean open File model adopts an external write in place without
  *      losing focus/cursor/scroll, and the inspected Change row becomes Updated.
+ *   1b. An external edit that prepends lines above the caret keeps the caret
+ *      with its text (line number shifts by the inserted count, no viewport
+ *      jump) — the minimal-edit invariant, distinct from same-line-count #1.
  *   2. No filesystem event opens or focuses a tab.
  *   3. Disjoint human/agent edits merge into one dirty registry model.
  *   4. File and Diff deliberately opened for the same path share that model.
- *   5. A local save echo stays quiet in ticket recency.
+ *   5. A local save echo stays quiet in ticket recency — proved positively by
+ *      confirming the watcher still delivers a real external edit to a
+ *      different, previously-inspected file while the saved file stays quiet.
  *   6. Overlap keeps exact local and disk versions behind one accessible,
  *      non-modal, persistent affordance with consequence-labelled actions.
  *   7. Reopening Diff clears Updated and reproduces the same conflict result.
@@ -61,6 +66,25 @@ const DISJOINT_DISK = `${disjointLines.join("\n")}\n`;
 const HUMAN_MERGED_LINE = 'export const overlap = "human merged";';
 const HUMAN_CONFLICT_LINE = 'export const overlap = "human conflict";';
 const AGENT_CONFLICT_LINE = 'export const overlap = "agent conflict";';
+
+// Fixtures for step 1b: an external edit that changes line COUNT (prepends
+// above the caret) rather than same-line-count fixtures like CLEAN_DISK/
+// DISJOINT_DISK above — the invariant under minimal-edit application is that
+// the caret follows its TEXT, not its old absolute line number.
+const PREPEND_COUNT = 6;
+const PREPEND_LINES = Array.from(
+  { length: PREPEND_COUNT },
+  (_, index) => `// prepended banner line ${index + 1}`,
+);
+const PREPEND_DISK = `${PREPEND_LINES.join("\n")}\n${CLEAN_DISK}`;
+const KNOWN_ANCHOR_TEXT = "export const line51 = 51;";
+
+// A second, independent file used only by step 5 to prove the watcher
+// pipeline stays alive after a save, rather than proving a negative with a
+// bare timeout.
+const SECOND_TARGET = "src/sentinel.ts";
+const SENTINEL_BASE = 'export const sentinel = "seen";\n';
+const SENTINEL_EXTERNAL = 'export const sentinel = "changed by watcher";\n';
 
 async function git(cwd, args) {
   return execFileAsync("git", args, { cwd });
@@ -139,6 +163,41 @@ async function waitStableFileViewState(page, label) {
   );
 }
 
+/**
+ * Matches SOURCE_MODE_OPTIONS.lineHeight in monaco-file-editor.tsx. The
+ * caret's pixel row and the content view-lines share one coordinate space
+ * (both render in the content column), so one line's worth of pixel
+ * movement is an exact, config-anchored stand-in for "moved down by N
+ * lines" without touching the margin/gutter line-numbers column, which
+ * renders through a separate per-line grid with a different local origin
+ * (its own `top` is not comparable to the content caret's `top`).
+ */
+const LINE_HEIGHT_PX = 21;
+
+/**
+ * Reads the caret's own pixel row (`.cursor`) and the view-line text that
+ * shares that row, plus how far the row sits from the top of the scrolled
+ * viewport (to catch a visual scroll-jump). Works whether the caret is
+ * collapsed or the anchor of a selection.
+ */
+async function caretLocation(page) {
+  return fileHost(page).evaluate((host) => {
+    const cursor = host.querySelector(".cursor");
+    const scroll = host.querySelector(".monaco-scrollable-element");
+    if (!(cursor instanceof HTMLElement)) return null;
+    const top = Number.parseFloat(cursor.style.top || "0");
+    const scrollTop = scroll instanceof HTMLElement ? scroll.scrollTop : 0;
+    const viewLineEl = Array.from(host.querySelectorAll(".view-lines .view-line")).find(
+      (el) => el instanceof HTMLElement && Number.parseFloat(el.style.top || "NaN") === top,
+    );
+    return {
+      top,
+      scrollTop,
+      text: viewLineEl ? (viewLineEl.textContent ?? "").replace(/\u00a0/g, " ") : null,
+    };
+  });
+}
+
 async function replaceFirstLine(page, text) {
   const editor = fileHost(page).locator(".monaco-editor");
   await editor.click();
@@ -193,7 +252,13 @@ async function findInDiff(page, text) {
   );
 }
 
-async function openFileFromRail(aside) {
+/**
+ * Opens `path` (defaults to the main TARGET) from the ticket rail's Files
+ * mode. `pin` double-clicks instead of single-clicking so the tab lands
+ * persistent (decision #56) instead of in the one replaceable preview slot —
+ * used when a second file must stay open alongside TARGET's own tab.
+ */
+async function openFileFromRail(aside, path = TARGET, { pin = false } = {}) {
   await aside.getByTestId("ticket-rail-mode-files").click();
   await waitUntil(
     "Files list",
@@ -201,9 +266,10 @@ async function openFileFromRail(aside) {
   );
   const src = aside.locator('[data-testid="ticket-files-row"][data-path="src"]');
   if ((await src.count()) === 1) await src.click();
-  const row = aside.locator(`[data-testid="ticket-files-row"][data-path="${TARGET}"]`);
-  await waitUntil("reconcile.ts Files row", async () => (await row.count()) === 1);
-  await row.click();
+  const row = aside.locator(`[data-testid="ticket-files-row"][data-path="${path}"]`);
+  await waitUntil(`${path} Files row`, async () => (await row.count()) === 1);
+  if (pin) await row.dblclick();
+  else await row.click();
 }
 
 async function main() {
@@ -224,6 +290,7 @@ async function main() {
     const projectPath = await makeGitRepo(scratch, "reconciliation-project-");
     await fs.mkdir(join(projectPath, "src"), { recursive: true });
     await fs.writeFile(join(projectPath, TARGET), BASE);
+    await fs.writeFile(join(projectPath, SECOND_TARGET), SENTINEL_BASE);
     await git(projectPath, ["add", "-A"]);
     await git(projectPath, ["commit", "-q", "-m", "seed reconciliation file"]);
 
@@ -325,6 +392,89 @@ async function main() {
       },
     );
 
+    // Step 1 above uses same-line-count fixtures, so an absolute-position
+    // restore and a minimal caret-follows-text reconciliation are
+    // indistinguishable there. This step isolates the real invariant: an
+    // external edit that changes line COUNT above the caret must move the
+    // caret with its text (same content, shifted line number), not leave it
+    // pinned to its old absolute line.
+    await attempt(
+      "1b",
+      "external edit prepending lines above the caret keeps it with its text, not its old line",
+      async () => {
+        await findInFile(page, KNOWN_ANCHOR_TEXT);
+        // Find leaves the match selected; collapse to a plain caret (Home
+        // stays on the same line, just moves to column 1).
+        await page.keyboard.press("Home");
+        const before = await caretLocation(page);
+        const expectedTop =
+          before?.top != null ? before.top + PREPEND_COUNT * LINE_HEIGHT_PX : null;
+
+        await sleep(20);
+        await fs.writeFile(targetPath, PREPEND_DISK);
+        const after = await waitUntil(
+          "caret to follow its text after a prepended external edit",
+          async () => {
+            const state = await caretLocation(page);
+            return state?.text === KNOWN_ANCHOR_TEXT &&
+              expectedTop !== null &&
+              state.top != null &&
+              Math.abs(state.top - expectedTop) < 1
+              ? state
+              : null;
+          },
+          { timeout: 20000 },
+        );
+        // The caret's own on-screen row is EXPECTED to move (new content
+        // pushed it down) — that is not a scroll-jump. The invariant is that
+        // the viewport's scroll position itself does not jump to some
+        // unrelated place; it either holds steady or is corrected by a
+        // deliberate reveal, never left arbitrary.
+        const scrollStable =
+          before?.scrollTop != null &&
+          after?.scrollTop != null &&
+          before.scrollTop === after.scrollTop;
+
+        // Undo the prepend so the first-line-based steps below see the same
+        // layout they were written against.
+        await sleep(20);
+        await fs.writeFile(targetPath, CLEAN_DISK);
+        await waitUntil(
+          "caret to return to its original line once the prepend is undone",
+          async () => {
+            const state = await caretLocation(page);
+            return state?.text === KNOWN_ANCHOR_TEXT &&
+              before?.top != null &&
+              state.top != null &&
+              Math.abs(state.top - before.top) < 1
+              ? state
+              : null;
+          },
+          { timeout: 20000 },
+        );
+
+        // This step deliberately navigated to a far-away anchor line and left
+        // the viewport scrolled there. Monaco's virtualized rendering only
+        // keeps visible lines in the DOM, and the steps below assert on text
+        // near the top of the file — jump back so their `waitFileText` calls
+        // find real rendered `.view-line`s instead of timing out on content
+        // that is simply off-screen.
+        await fileHost(page).locator(".monaco-editor").click();
+        await page.keyboard.press("Meta+ArrowUp");
+
+        return {
+          ok:
+            before?.text === KNOWN_ANCHOR_TEXT &&
+            after?.text === KNOWN_ANCHOR_TEXT &&
+            after?.top != null &&
+            expectedTop !== null &&
+            Math.abs(after.top - expectedTop) < 1 &&
+            scrollStable,
+          detail: `text stable=${after?.text === KNOWN_ANCHOR_TEXT} top=${before?.top}→${after?.top} (expected ${expectedTop}, +${PREPEND_COUNT} lines) scroll=${before?.scrollTop}→${after?.scrollTop}`,
+        };
+      },
+    );
+
     await attempt(
       2,
       "deliberate Diff open clears Updated without duplicate or automatic tabs",
@@ -396,7 +546,7 @@ async function main() {
 
     await attempt(
       5,
-      "known local-save echo advances baseline without marking Updated",
+      "known local-save echo advances baseline without marking Updated, proved against a live watcher",
       async () => {
         await fileHost(page).locator(".monaco-editor").click();
         await page.keyboard.press("Meta+s");
@@ -405,15 +555,43 @@ async function main() {
           async () => ((await readFileState(page)).dirty === "false" ? true : null),
           { timeout: 15000 },
         );
-        await sleep(1200);
         const onDisk = await fs.readFile(targetPath, "utf8");
+
+        // A bare timeout here would only prove the badge stayed quiet for a
+        // while, which can't tell "the save echo was recognized" apart from
+        // "the watcher pipeline died". Instead: open a second, independent
+        // file once (recording its own inspect baseline), write a REAL
+        // external edit to it, and wait for ITS Updated badge — that proves
+        // the watcher round-tripped after our save. Only then check the
+        // saved file's own row is still quiet.
+        await openFileFromRail(aside, SECOND_TARGET, { pin: true });
+        await waitFileText(page, 'export const sentinel = "seen";', false);
+        await aside.getByTestId("ticket-rail-mode-changes").click();
+        const sentinelRow = aside.locator(
+          `[data-testid="ticket-changes-row"][data-path="${SECOND_TARGET}"]`,
+        );
+        await sleep(20);
+        await fs.writeFile(join(worktreeDir, SECOND_TARGET), SENTINEL_EXTERNAL);
+        await waitUntil(
+          "sentinel Updated marker after its own external write",
+          async () =>
+            (await sentinelRow.getByTestId("ticket-changes-updated").count()) === 1 ? true : null,
+          { timeout: 20000 },
+        );
+
+        // Restore TARGET as the active tab for the steps below, without
+        // leaving the rail anywhere but Changes.
+        await openFileFromRail(aside);
+        await waitFileText(page, HUMAN_MERGED_LINE, false);
+        await aside.getByTestId("ticket-rail-mode-changes").click();
+
         const updatedCount = await changeRow.getByTestId("ticket-changes-updated").count();
         return {
           ok:
             onDisk.includes(HUMAN_MERGED_LINE) &&
             onDisk.includes('export const diskOnly = "agent";') &&
             updatedCount === 0,
-          detail: `localOnDisk=${onDisk.includes(HUMAN_MERGED_LINE)} agentOnDisk=${onDisk.includes('diskOnly = "agent"')} updated=${updatedCount}`,
+          detail: `localOnDisk=${onDisk.includes(HUMAN_MERGED_LINE)} agentOnDisk=${onDisk.includes('diskOnly = "agent"')} watcherProvedLive=true updated=${updatedCount}`,
         };
       },
     );

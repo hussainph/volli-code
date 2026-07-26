@@ -1,5 +1,5 @@
 /**
- * Per-key coalescing for the Change Set snapshot (monaco-migration §9).
+ * Per-key coalescing for the Change Set snapshot (CONCEPT #47).
  *
  * A busy agent worktree fires filesystem events in bursts; the debounce
  * collapses each burst into one `worktree-changed`, but several windows,
