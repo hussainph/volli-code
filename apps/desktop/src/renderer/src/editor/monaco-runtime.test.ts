@@ -1,13 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-const { bootstrapShikiMonaco, ensureShikiLanguage, allShikiLangImporters } = vi.hoisted(() => ({
+const {
+  bootstrapShikiMonaco,
+  ensureShikiLanguage,
+  allShikiLangImporters,
+  allEditorThemeImporters,
+  resolveEditorThemeId,
+  DEFAULT_EDITOR_THEME_ID,
+} = vi.hoisted(() => ({
   bootstrapShikiMonaco: vi.fn(),
   ensureShikiLanguage: vi.fn(async () => true),
   allShikiLangImporters: vi.fn(() => [] as Array<() => Promise<unknown>>),
+  allEditorThemeImporters: vi.fn(() => [] as Array<() => Promise<unknown>>),
+  resolveEditorThemeId: vi.fn(() => "one-dark-pro"),
+  DEFAULT_EDITOR_THEME_ID: "one-dark-pro",
 }));
 
 vi.mock("./shiki-monaco", () => ({ bootstrapShikiMonaco }));
 vi.mock("./shiki-langs", () => ({ ensureShikiLanguage, allShikiLangImporters }));
+vi.mock("./editor-theme-catalog", () => ({
+  allEditorThemeImporters,
+  resolveEditorThemeId,
+  DEFAULT_EDITOR_THEME_ID,
+}));
 
 import {
   createLazyInitializer,
@@ -25,10 +40,12 @@ beforeEach(() => {
   });
   ensureShikiLanguage.mockResolvedValue(true);
   allShikiLangImporters.mockReturnValue([]);
+  allEditorThemeImporters.mockReturnValue([]);
+  resolveEditorThemeId.mockReturnValue("one-dark-pro");
 });
 
 describe("prepareMonacoEditorThemes", () => {
-  it("bootstraps shiki once with every document lang then keeps volli-dark active", async () => {
+  it("bootstraps shiki once with catalog themes and langs, then sets the resolved default", async () => {
     const defineTheme = vi.fn();
     const setTheme = vi.fn();
     const monaco = {
@@ -36,33 +53,37 @@ describe("prepareMonacoEditorThemes", () => {
     };
     const shiki = { highlighter: { id: "shiki" }, registerTheme: vi.fn() };
     const langs = [() => Promise.resolve({ id: "typescript" })];
+    const themes = [() => Promise.resolve({ name: "one-dark-pro" })];
     bootstrapShikiMonaco.mockResolvedValue(shiki);
     allShikiLangImporters.mockReturnValue(langs);
+    allEditorThemeImporters.mockReturnValue(themes);
 
-    const result = await prepareMonacoEditorThemes(monaco as never, {
-      background: "#111111",
-      foreground: "#f5f5f5",
-      muted: "#1c1c1c",
-      mutedForeground: "#9a9a9a",
-      border: "#262626",
-      primary: "#e8652a",
-      destructive: "#e5484d",
-    });
+    const result = await prepareMonacoEditorThemes(monaco as never);
 
+    expect(allEditorThemeImporters).toHaveBeenCalledTimes(1);
     expect(allShikiLangImporters).toHaveBeenCalledTimes(1);
     expect(bootstrapShikiMonaco).toHaveBeenCalledTimes(1);
-    expect(bootstrapShikiMonaco).toHaveBeenCalledWith(monaco, { langs });
-    expect(defineTheme).toHaveBeenCalledWith(
-      "volli-dark",
-      expect.objectContaining({
-        base: "vs-dark",
-        colors: expect.objectContaining({ "editor.background": "#111111" }),
-      }),
-    );
-    expect(setTheme).toHaveBeenCalledWith("volli-dark");
+    expect(bootstrapShikiMonaco).toHaveBeenCalledWith(monaco, { themes, langs });
+    expect(resolveEditorThemeId).toHaveBeenCalledWith({
+      editorThemeId: null,
+      appThemeSlug: "ember",
+    });
+    expect(defineTheme).not.toHaveBeenCalled();
+    expect(setTheme).toHaveBeenCalledWith("one-dark-pro");
+    expect(setTheme.mock.calls.at(-1)).toEqual(["one-dark-pro"]);
     expect(result).toBe(shiki);
-    // shiki's empty-theme bootstrap may call setTheme(undefined); volli-dark must win last.
-    expect(setTheme.mock.calls.at(-1)).toEqual(["volli-dark"]);
+  });
+
+  it("does not register or activate volli-dark", async () => {
+    const defineTheme = vi.fn();
+    const setTheme = vi.fn();
+    const monaco = { editor: { defineTheme, setTheme } };
+
+    await prepareMonacoEditorThemes(monaco as never);
+
+    expect(defineTheme.mock.calls.some((call) => call[0] === "volli-dark")).toBe(false);
+    expect(setTheme.mock.calls.some((call) => call[0] === "volli-dark")).toBe(false);
+    expect(setTheme).toHaveBeenCalledWith(DEFAULT_EDITOR_THEME_ID);
   });
 });
 

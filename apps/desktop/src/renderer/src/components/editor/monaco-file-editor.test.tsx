@@ -57,7 +57,7 @@ describe("fileEditorConstructionOptions", () => {
       lineNumbers: "on",
       fontFamily: "var(--font-mono)",
       minimap: { enabled: false },
-      theme: "volli-dark",
+      theme: "one-dark-pro",
       readOnly: false,
       domReadOnly: false,
       ariaLabel: "notes.md",
@@ -91,7 +91,7 @@ describe("fileEditorConstructionOptions", () => {
     expect(
       fileEditorConstructionOptions({ readOnly: true, ariaLabel: "notes.md", overrides: hostile }),
     ).toMatchObject({
-      theme: "volli-dark",
+      theme: "one-dark-pro",
       readOnly: true,
       domReadOnly: true,
       ariaLabel: "notes.md",

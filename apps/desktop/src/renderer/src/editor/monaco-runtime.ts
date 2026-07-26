@@ -1,11 +1,7 @@
 import type * as Monaco from "monaco-editor";
 
+import { allEditorThemeImporters, resolveEditorThemeId } from "./editor-theme-catalog";
 import { DocumentRegistry, type RegistryModelFactory } from "./document-registry";
-import {
-  createVolliMonacoTheme,
-  readVolliMonacoTokens,
-  type VolliMonacoTokens,
-} from "./monaco-theme";
 import { ensureShikiLanguage, allShikiLangImporters, type ShikiLanguageHost } from "./shiki-langs";
 import { bootstrapShikiMonaco, type ShikiMonacoBootstrap } from "./shiki-monaco";
 
@@ -98,17 +94,22 @@ export function createShikiBackedModelFactory(
 }
 
 /**
- * Wire shiki once with every document-identity language loaded before
- * `shikiToMonaco`, then keep `volli-dark` as the active theme so editors still
- * boot until the catalog/picker slice replaces it.
+ * Wire shiki once with every catalog theme and document-identity language
+ * loaded before `shikiToMonaco`, then activate the resolved default theme
+ * (ember → one-dark-pro until store wiring supplies ActiveTheme).
  */
 export async function prepareMonacoEditorThemes(
   monaco: typeof Monaco,
-  tokens: VolliMonacoTokens = readVolliMonacoTokens(),
 ): Promise<ShikiMonacoBootstrap> {
-  const shiki = await bootstrapShikiMonaco(monaco, { langs: allShikiLangImporters() });
-  monaco.editor.defineTheme("volli-dark", createVolliMonacoTheme(tokens));
-  monaco.editor.setTheme("volli-dark");
+  const shiki = await bootstrapShikiMonaco(monaco, {
+    themes: allEditorThemeImporters(),
+    langs: allShikiLangImporters(),
+  });
+  const themeId = resolveEditorThemeId({
+    editorThemeId: null,
+    appThemeSlug: "ember",
+  });
+  monaco.editor.setTheme(themeId);
   return shiki;
 }
 
