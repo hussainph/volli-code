@@ -46,4 +46,26 @@ describe("planLiveDocumentReconciliation", () => {
       revision: 2,
     });
   });
+
+  it("merges disjoint human and agent edits onto the new disk baseline", () => {
+    expect(
+      planLiveDocumentReconciliation({
+        baseline: "first\nkeep\nlast\n",
+        local: "human first\nkeep\nlast\n",
+        lastWrite: null,
+        disk: {
+          ok: true,
+          text: "first\nkeep\nagent last\n",
+          revision: 3,
+          truncated: false,
+        },
+      }),
+    ).toEqual({
+      kind: "apply",
+      outcome: "merge",
+      baseline: "first\nkeep\nagent last\n",
+      value: "human first\nkeep\nagent last\n",
+      revision: 3,
+    });
+  });
 });
