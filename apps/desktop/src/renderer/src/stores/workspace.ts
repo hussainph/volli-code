@@ -46,6 +46,7 @@ import {
   TICKET_BODY_TAB_ID,
   normalizeTicketBodyTabId,
 } from "@renderer/components/ticket/ticket-body-tab";
+import { diffTabId } from "@renderer/components/ticket/ticket-diff-tab";
 import {
   EMPTY_NAV_HISTORY,
   goBack,
@@ -69,14 +70,35 @@ export type NavKey = "board" | "sessions" | "files" | "configure";
 export type BoardView = "board" | "list";
 
 /**
- * A ticket's open `@file` tabs and its active tab (global-artifacts decision
- * #5). `files` is the ordered list of open relPaths; `active` is the active tab
- * id — the Ticket Body wire id (`"doc"`), a `file:<relPath>`, or a session id
- * (sessions rehydrate separately, so a persisted session id that no longer
- * exists falls back to the Ticket Body in ticket-detail).
+ * Optional rename/status metadata for an open ticket diff tab (issue #109).
+ * Needed later for descriptors that show rename provenance; not a UI concern
+ * of this store.
+ */
+export interface TicketDiffTabMeta {
+  previousPath?: string | null;
+  status?: string;
+}
+
+/** Options accepted by {@link WorkspaceState.openTicketDiff}. */
+export interface OpenTicketDiffOpts {
+  previousPath?: string | null;
+  status?: string;
+}
+
+/**
+ * A ticket's open file/diff tabs and its active tab (global-artifacts decision
+ * #5; CONCEPT #48/#51). `files` / `diffs` are ordered relPath lists; `active`
+ * is the active tab id — Ticket Body (`"doc"`), `file:<relPath>`,
+ * `diff:<relPath>`, or a session id (sessions rehydrate separately, so a
+ * persisted session id that no longer exists falls back to the Ticket Body in
+ * ticket-detail). Diff tabs are persistent (not preview/pin).
  */
 export interface TicketTabsState {
   files: string[];
+  /** Ordered relPaths of open Change Set diff tabs (`diff:<relPath>`). */
+  diffs: string[];
+  /** Rename/status metadata for open diffs, keyed by current relPath. */
+  diffMeta: Record<string, TicketDiffTabMeta>;
   active: string;
 }
 
@@ -126,6 +148,11 @@ export const DEFAULT_WORKSPACE_UI: WorkspaceUiState = {
 /** The active-tab id of the always-present Ticket Body tab — the fallback when a
  * file/session tab closes. Persisted wire value is still `"doc"`. */
 const BODY_TAB_ID = TICKET_BODY_TAB_ID;
+
+/** Empty ticket-tabs record — Ticket Body alone, nothing open. */
+function emptyTicketTabs(active: string = BODY_TAB_ID): TicketTabsState {
+  return { files: [], diffs: [], diffMeta: {}, active };
+}
 
 /** A file tab's id from its relPath (`file:<relPath>`) — the persisted `active` form. */
 function fileTabId(relPath: string): string {
@@ -191,6 +218,18 @@ interface WorkspaceState {
    * re-activates it.
    */
   openTicketFile(projectId: string, ticketId: string, relPath: string): void;
+  /**
+   * Opens a persistent Change Set `diff` tab for `relPath` (appends if missing,
+   * focuses if present — never duplicates). Tab id is path-stable
+   * `diff:<relPath>` (CONCEPT #48/#51; issue #109). Optional `opts` stash
+   * rename/status metadata for later descriptors.
+   */
+  openTicketDiff(
+    projectId: string,
+    ticketId: string,
+    relPath: string,
+    opts?: OpenTicketDiffOpts,
+  ): void;
   /**
    * Closes `relPath`'s file tab; if it was the active tab, falls back to Doc.
    * Prunes the ticket's record entirely once nothing but Doc remains.
@@ -276,12 +315,14 @@ interface PersistedWorkspaceState {
  * renamed sort key or view can never render an impossible state.
  */
 /**
- * Validate a rehydrated `ticketTabs` map: keep only records whose `files` is a
- * string[] and `active` a string, and prune anything carrying nothing worth
- * restoring (no open files and Ticket Body active) so the map never accretes
- * empty entries. A persisted `active` that's a session id is preserved —
- * ticket-detail falls back to the Ticket Body when it matches no live tab.
- * Legacy `"doc"` values are normalized through {@link normalizeTicketBodyTabId}.
+ * Validate a rehydrated `ticketTabs` map: keep only records whose `files` /
+ * `diffs` are string[] and `active` a string, and prune anything carrying
+ * nothing worth restoring (no open files/diffs and Ticket Body active) so the
+ * map never accretes empty entries. A persisted `active` that's a session id
+ * is preserved — ticket-detail falls back to the Ticket Body when it matches
+ * no live tab. Legacy `"doc"` values are normalized through
+ * {@link normalizeTicketBodyTabId}. Missing `diffs`/`diffMeta` (pre-#109
+ * writes) default to empty.
  */
 function sanitizeTicketTabs(raw: unknown): Record<string, TicketTabsState> {
   if (typeof raw !== "object" || raw === null) return {};
@@ -291,16 +332,55 @@ function sanitizeTicketTabs(raw: unknown): Record<string, TicketTabsState> {
   const out = Object.create(null) as Record<string, TicketTabsState>;
   for (const [ticketId, value] of Object.entries(raw)) {
     if (typeof value !== "object" || value === null) continue;
-    const record = value as { files?: unknown; active?: unknown };
+    const record = value as {
+      files?: unknown;
+      diffs?: unknown;
+      diffMeta?: unknown;
+      active?: unknown;
+    };
     const files = Array.isArray(record.files)
       ? record.files.filter((file): file is string => typeof file === "string")
       : [];
+    const diffs = Array.isArray(record.diffs)
+      ? record.diffs.filter((path): path is string => typeof path === "string")
+      : [];
+    const diffMeta = sanitizeDiffMeta(record.diffMeta, diffs);
     const active =
       typeof record.active === "string" ? normalizeTicketBodyTabId(record.active) : BODY_TAB_ID;
-    if (files.length === 0 && active === BODY_TAB_ID) continue;
-    out[ticketId] = { files, active };
+    if (files.length === 0 && diffs.length === 0 && active === BODY_TAB_ID) continue;
+    out[ticketId] = { files, diffs, diffMeta, active };
   }
   return out;
+}
+
+/** Keep only meta entries whose key is an open diff and whose value is a plain object. */
+function sanitizeDiffMeta(
+  raw: unknown,
+  diffs: readonly string[],
+): Record<string, TicketDiffTabMeta> {
+  const out: Record<string, TicketDiffTabMeta> = {};
+  if (typeof raw !== "object" || raw === null) return out;
+  const open = new Set(diffs);
+  for (const [path, value] of Object.entries(raw)) {
+    if (!open.has(path) || typeof value !== "object" || value === null) continue;
+    const entry = value as { previousPath?: unknown; status?: unknown };
+    const meta: TicketDiffTabMeta = {};
+    if (
+      entry.previousPath === null ||
+      entry.previousPath === undefined ||
+      typeof entry.previousPath === "string"
+    ) {
+      meta.previousPath = entry.previousPath as string | null | undefined;
+    }
+    if (typeof entry.status === "string") meta.status = entry.status;
+    if (meta.previousPath !== undefined || meta.status !== undefined) out[path] = meta;
+  }
+  return out;
+}
+
+/** Whether a ticket-tabs record still carries anything worth keeping. */
+function isEmptyTicketTabs(tabs: TicketTabsState): boolean {
+  return tabs.files.length === 0 && tabs.diffs.length === 0 && tabs.active === BODY_TAB_ID;
 }
 
 /**
@@ -468,7 +548,7 @@ export function createWorkspaceStore(storage?: StateStorage) {
             if (tabId === undefined) {
               return patchWorkspace(state, projectId, { nav: "board", openTicketId: ticketId });
             }
-            const existing = current.ticketTabs[ticketId] ?? { files: [], active: BODY_TAB_ID };
+            const existing = current.ticketTabs[ticketId] ?? emptyTicketTabs();
             return patchWorkspace(state, projectId, {
               nav: "board",
               openTicketId: ticketId,
@@ -495,14 +575,40 @@ export function createWorkspaceStore(storage?: StateStorage) {
         openTicketFile(projectId, ticketId, relPath) {
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
-            const existing = current.ticketTabs[ticketId] ?? { files: [], active: BODY_TAB_ID };
+            const existing = current.ticketTabs[ticketId] ?? emptyTicketTabs();
             const files = existing.files.includes(relPath)
               ? existing.files
               : [...existing.files, relPath];
             return patchWorkspace(state, projectId, {
               ticketTabs: {
                 ...current.ticketTabs,
-                [ticketId]: { files, active: fileTabId(relPath) },
+                [ticketId]: { ...existing, files, active: fileTabId(relPath) },
+              },
+            });
+          });
+        },
+
+        openTicketDiff(projectId, ticketId, relPath, opts) {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const existing = current.ticketTabs[ticketId] ?? emptyTicketTabs();
+            const diffs = existing.diffs.includes(relPath)
+              ? existing.diffs
+              : [...existing.diffs, relPath];
+            let diffMeta = existing.diffMeta;
+            if (
+              opts !== undefined &&
+              (opts.previousPath !== undefined || opts.status !== undefined)
+            ) {
+              const meta: TicketDiffTabMeta = { ...diffMeta[relPath] };
+              if (opts.previousPath !== undefined) meta.previousPath = opts.previousPath;
+              if (opts.status !== undefined) meta.status = opts.status;
+              diffMeta = { ...diffMeta, [relPath]: meta };
+            }
+            return patchWorkspace(state, projectId, {
+              ticketTabs: {
+                ...current.ticketTabs,
+                [ticketId]: { ...existing, diffs, diffMeta, active: diffTabId(relPath) },
               },
             });
           });
@@ -517,9 +623,10 @@ export function createWorkspaceStore(storage?: StateStorage) {
             // Closing the active file tab lands back on Doc; other closes keep
             // the current selection (which may itself be Doc or a session tab).
             const active = existing.active === fileTabId(relPath) ? BODY_TAB_ID : existing.active;
+            const next: TicketTabsState = { ...existing, files, active };
             const nextTabs = { ...current.ticketTabs };
-            if (files.length === 0 && active === BODY_TAB_ID) delete nextTabs[ticketId];
-            else nextTabs[ticketId] = { files, active };
+            if (isEmptyTicketTabs(next)) delete nextTabs[ticketId];
+            else nextTabs[ticketId] = next;
             return patchWorkspace(state, projectId, { ticketTabs: nextTabs });
           });
         },
@@ -527,7 +634,7 @@ export function createWorkspaceStore(storage?: StateStorage) {
         setTicketActiveTab(projectId, ticketId, tabId) {
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
-            const existing = current.ticketTabs[ticketId] ?? { files: [], active: BODY_TAB_ID };
+            const existing = current.ticketTabs[ticketId] ?? emptyTicketTabs();
             if (existing.active === tabId) return state; // no-op keeps empty records from forming
             return patchWorkspace(state, projectId, {
               ticketTabs: { ...current.ticketTabs, [ticketId]: { ...existing, active: tabId } },

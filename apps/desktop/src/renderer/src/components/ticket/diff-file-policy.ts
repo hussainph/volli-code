@@ -47,16 +47,14 @@ export function diffFilePolicy(input: DiffFilePolicyInput): DiffFilePolicy {
   const { file, base } = input;
   const previousPath = file.previousPath ?? null;
 
+  // v1 owner decision: conflicted paths are non-editor stubs (like binary).
+  if (file.status === "conflicted") {
+    return stubPolicy(file.path, previousPath, "Conflicted file");
+  }
+
   // Binary Change Set rows and binary base blobs never open Monaco.
   if (file.binary || "binary" in base) {
-    return {
-      kind: "binary-stub",
-      stubReason: "Binary file",
-      path: file.path,
-      previousPath,
-      original: { value: null, readOnly: true },
-      modified: { value: null, readOnly: true },
-    };
+    return stubPolicy(file.path, previousPath, "Binary file");
   }
 
   // Added / untracked have no base blob — always seed an empty original.
@@ -82,4 +80,15 @@ export function diffFilePolicy(input: DiffFilePolicyInput): DiffFilePolicy {
   }
 
   throw new Error("unimplemented");
+}
+
+function stubPolicy(path: string, previousPath: string | null, stubReason: string): DiffFilePolicy {
+  return {
+    kind: "binary-stub",
+    stubReason,
+    path,
+    previousPath,
+    original: { value: null, readOnly: true },
+    modified: { value: null, readOnly: true },
+  };
 }

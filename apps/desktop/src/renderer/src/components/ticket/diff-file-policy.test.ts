@@ -111,4 +111,25 @@ describe("diffFilePolicy", () => {
       }),
     ).toEqual(stub);
   });
+
+  it("returns a stub for conflicted files (v1: treat like binary)", () => {
+    expect(
+      diffFilePolicy({
+        file: file({
+          path: "src/merge.ts",
+          status: "conflicted",
+          insertions: null,
+          deletions: null,
+        }),
+        base: { content: "export const a = 1;\n" },
+      }),
+    ).toEqual({
+      kind: "binary-stub",
+      stubReason: "Conflicted file",
+      path: "src/merge.ts",
+      previousPath: null,
+      original: { value: null, readOnly: true },
+      modified: { value: null, readOnly: true },
+    });
+  });
 });
