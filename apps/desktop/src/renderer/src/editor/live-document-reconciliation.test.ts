@@ -77,7 +77,7 @@ describe("planLiveDocumentReconciliation", () => {
       planLiveDocumentReconciliation({
         baseline: "before\n",
         local: "saved\nnew typing\n",
-        lastWrite: "saved\n",
+        lastWrite: { text: "saved\n", revision: 4 },
         disk: {
           ok: true,
           text: "saved\n",
@@ -91,6 +91,28 @@ describe("planLiveDocumentReconciliation", () => {
       baseline: "saved\n",
       value: "saved\nnew typing\n",
       revision: 4,
+    });
+  });
+
+  it("does not mistake identical historic bytes at a newer revision for this view's save echo", () => {
+    expect(
+      planLiveDocumentReconciliation({
+        baseline: "before\n",
+        local: "human draft\n",
+        lastWrite: { text: "historic\n", revision: 4 },
+        disk: {
+          ok: true,
+          text: "historic\n",
+          revision: 5,
+          truncated: false,
+        },
+      }),
+    ).toEqual({
+      kind: "conflict",
+      reason: "overlap",
+      local: "human draft\n",
+      disk: "historic\n",
+      revision: 5,
     });
   });
 
