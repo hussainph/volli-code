@@ -1,5 +1,5 @@
 /**
- * Files navigator — ticket-worktree files + referenced context (monaco-migration §8).
+ * Files navigator — ticket-worktree files + referenced context (decision #46).
  *
  * Deliberately NOT a deep tree (decision #53/#54): referenced context is a flat
  * list from `parseFileRefs` + attachments; the worktree section is a flat

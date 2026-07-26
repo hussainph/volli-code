@@ -11,6 +11,7 @@ import {
   mapBaseReadResult,
   mapFilesReadFailure,
   planDiffView,
+  presentLiveUnreadable,
   type DiffLiveRead,
 } from "./diff-view-plan";
 import { diffEditorInitFailureMessage } from "@renderer/components/editor/monaco-diff-editor";
@@ -127,6 +128,75 @@ describe("applyDiffLiveReconciliation", () => {
       revision: 24,
     });
     expect(adoptCleanBaseline).toHaveBeenCalledWith({ value: "agent line\n", revision: 24 });
+  });
+});
+
+describe("live unreadable degradation", () => {
+  it("degrades a clean tab whose live file grew past the read cap without tearing the pane down", () => {
+    // Clean modified side: local value equals the registry baseline.
+    const lease = {
+      model: { getValue: () => "same\n" },
+      snapshot: () => ({ baseline: "same\n" }),
+      applyExternalUpdate: vi.fn(),
+      adoptCleanBaseline: vi.fn(),
+    };
+
+    const plan = applyDiffLiveReconciliation({
+      lease,
+      lastWrite: null,
+      // Post-mount `onChanged` re-read: the file is now over the 1 MiB cap, so
+      // what came back is a prefix that must never be reconciled or saved.
+      disk: { ok: true, text: "prefix…", mtime: 77, source: "worktree", truncated: true },
+      unreadableRevision: 77,
+    });
+
+    if (plan.kind !== "unreadable") throw new Error(`expected unreadable, got ${plan.kind}`);
+    expect(plan).toEqual({
+      kind: "unreadable",
+      error: "File is too large to reconcile safely.",
+      keepDraft: false,
+      revision: 77,
+    });
+    expect(lease.applyExternalUpdate).not.toHaveBeenCalled();
+    // No draft to reassure about — but the read SUCCEEDED, so the pane stays up
+    // (read-only) with this inline reason instead of collapsing to the bare
+    // error view, exactly as it did before the reconciliation rewrite.
+    expect(presentLiveUnreadable({ plan, readable: true })).toEqual({
+      kind: "inline",
+      message: "File is too large to reconcile safely.",
+    });
+  });
+
+  it("keeps the draft reassurance for a dirty modified side", () => {
+    const plan = applyDiffLiveReconciliation({
+      lease: {
+        model: { getValue: () => "human draft\n" },
+        snapshot: () => ({ baseline: "same\n" }),
+        applyExternalUpdate: vi.fn(),
+        adoptCleanBaseline: vi.fn(),
+      },
+      lastWrite: null,
+      disk: { ok: false, error: "File was deleted on disk." },
+      unreadableRevision: null,
+    });
+
+    if (plan.kind !== "unreadable") throw new Error(`expected unreadable, got ${plan.kind}`);
+    expect(plan).toMatchObject({ kind: "unreadable", keepDraft: true });
+    expect(presentLiveUnreadable({ plan, readable: false })).toEqual({
+      kind: "inline",
+      message: "File was deleted on disk. Your unsaved draft is still open.",
+    });
+  });
+
+  it("still replaces the pane when a clean tab's file can no longer be read at all", () => {
+    // The one case that must NOT render stale content: nothing came back from
+    // disk and there is no draft to protect, so the deletion has to be visible.
+    expect(
+      presentLiveUnreadable({
+        plan: { error: "File was deleted on disk.", keepDraft: false },
+        readable: false,
+      }),
+    ).toEqual({ kind: "pane-error", error: "File was deleted on disk." });
   });
 });
 

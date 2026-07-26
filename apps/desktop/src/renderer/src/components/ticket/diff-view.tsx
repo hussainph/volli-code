@@ -27,6 +27,7 @@ import {
   mapBaseReadResult,
   mapFilesReadFailure,
   planDiffView,
+  presentLiveUnreadable,
   reconcileAcquiredDiffModel,
   type DiffLiveRead,
   type DiffViewPlan,
@@ -71,6 +72,14 @@ export interface DiffViewProps {
   /** Reports a successful local write so ticket-level recency can ignore its watch echo. */
   onLocalSave?(relPath: string, source: "main" | "worktree", revision: number): void;
   /**
+   * The revision of the bytes this view actually MOUNTED — the only honest
+   * "seen" revision for stale-awareness (CONCEPT #52). Fired on a successful
+   * initial load and on an explicit user-driven reload ("Use disk"), never on a
+   * passive live adoption: silently adopting an agent's edit is exactly the case
+   * the Changes badge exists to announce.
+   */
+  onLoaded?(relPath: string, source: "main" | "worktree", revision: number): void;
+  /**
    * Host-persisted Monaco view state for the modified side — restored lazily
    * when this DiffView mounts (issue #109). Opaque; never inspected here.
    */
@@ -92,6 +101,7 @@ export function DiffView({
   binary = false,
   onDirtyChange,
   onLocalSave,
+  onLoaded,
   initialViewState,
   onViewStateChange,
 }: DiffViewProps) {
@@ -101,6 +111,8 @@ export function DiffView({
   const presentation = useUiStore((s) => s.diffPresentation);
   const setDiffPresentation = useUiStore((s) => s.setDiffPresentation);
   const leasesRef = React.useRef<DiffLeases | null>(null);
+  /** In-flight guard for the conflict banner's explicit overwrite. */
+  const writingRef = React.useRef(false);
   const lastViewStateRef = React.useRef<unknown>(undefined);
   const lastWriteRef = React.useRef<LocalWriteReceipt | null>(null);
   const mountedRef = React.useRef(true);
@@ -286,12 +298,16 @@ export function DiffView({
           setConflict({ text: acquiredPlan.disk, mtime: acquiredPlan.revision });
           setLiveError(null);
         } else if (acquiredPlan?.kind === "unreadable") {
-          if (!acquiredPlan.keepDraft) {
+          const presented = presentLiveUnreadable({
+            plan: acquiredPlan,
+            readable: live.ok,
+          });
+          if (presented.kind === "pane-error") {
             releaseDiffLeases(leases, lastViewStateRef.current);
-            setState({ status: "error", error: acquiredPlan.error });
+            setState({ status: "error", error: presented.error });
             return;
           }
-          setLiveError(`${acquiredPlan.error} Your unsaved draft is still open.`);
+          setLiveError(presented.message);
           setConflict(null);
         } else if (acquiredPlan?.kind === "apply") {
           setConflict(null);
@@ -300,6 +316,9 @@ export function DiffView({
 
         leasesRef.current = leases;
         setState({ status: "editor", plan, leases });
+        // These are the bytes now on screen; a deleted/absent live side has no
+        // revision to have seen.
+        if (live.ok) onLoaded?.(relPath, live.source, live.mtime);
       } catch (error) {
         if (cancelled || !mountedRef.current) return;
         // Defensive: start-of-load release should have cleared leasesRef, but
@@ -316,7 +335,7 @@ export function DiffView({
     return () => {
       cancelled = true;
     };
-  }, [projectId, ticket.id, relPath, previousPath, status, binary]);
+  }, [projectId, ticket.id, relPath, previousPath, status, binary, onLoaded]);
 
   const modifiedReadOnly = state.status === "editor" ? state.plan.modifiedReadOnly : true;
 
@@ -412,16 +431,20 @@ export function DiffView({
           }
           return;
         }
-        if (plan.keepDraft) {
-          if (mountedRef.current) {
-            setLiveError(`${plan.error} Your unsaved draft is still open.`);
-            setConflict(null);
-          }
+        // A file that merely grew past the 1 MiB read cap must NOT tear the
+        // pane down just because the tab happens to be clean: it stays up,
+        // read-only (the render below ORs `liveError` into `modifiedReadOnly`,
+        // and `handleSave` refuses while it is set), with the reason inline.
+        // Only a read that actually failed replaces the pane. See
+        // {@link presentLiveUnreadable}.
+        if (!mountedRef.current) return;
+        const presented = presentLiveUnreadable({ plan, readable: disk.ok });
+        if (presented.kind === "pane-error") {
+          setState({ status: "error", error: presented.error });
           return;
         }
-        if (mountedRef.current) {
-          setState({ status: "error", error: plan.error });
-        }
+        setLiveError(presented.message);
+        setConflict(null);
       })();
     });
 
@@ -485,7 +508,7 @@ export function DiffView({
     [previousPath, relPath],
   );
 
-  const useDiskAndDiscardDraft = React.useCallback(() => {
+  const applyDiskAndDiscardDraft = React.useCallback(() => {
     const leases = leasesRef.current;
     if (leases === null || conflict === null) return;
     leases.modified.applyExternalUpdate({
@@ -495,28 +518,38 @@ export function DiffView({
     });
     lastWriteRef.current = null;
     setConflict(null);
-  }, [conflict]);
+    // A deliberate "show me disk" IS an inspection of those bytes: the user
+    // asked for them and is now looking at them.
+    if (state.status === "editor") onLoaded?.(relPath, state.plan.modifiedSource, conflict.mtime);
+  }, [conflict, onLoaded, relPath, state]);
 
   const overwriteDiskWithDraft = React.useCallback(async () => {
     const leases = leasesRef.current;
-    if (leases === null || conflict === null) return;
-    const text = leases.modified.model.getValue();
-    const result = await handleSave(text);
-    if (!result.ok) {
-      toastError(`Could not overwrite ${name}: ${result.error}`);
-      return;
+    // Mirrors FileView's `writingRef`: a double-click must not fire two writes,
+    // where the second would race its own echo through a stale `expectedMtime`.
+    if (leases === null || conflict === null || writingRef.current) return;
+    writingRef.current = true;
+    try {
+      const text = leases.modified.model.getValue();
+      const result = await handleSave(text);
+      if (!result.ok) {
+        toastError(`Could not overwrite ${name}: ${result.error}`);
+        return;
+      }
+      if (leases.modified.model.getValue() === text) {
+        leases.modified.markSaved(result.revision);
+      } else {
+        leases.modified.applyExternalUpdate({
+          baseline: text,
+          value: leases.modified.model.getValue(),
+          revision: result.revision,
+        });
+      }
+      setConflict(null);
+      setLiveError(null);
+    } finally {
+      writingRef.current = false;
     }
-    if (leases.modified.model.getValue() === text) {
-      leases.modified.markSaved(result.revision);
-    } else {
-      leases.modified.applyExternalUpdate({
-        baseline: text,
-        value: leases.modified.model.getValue(),
-        revision: result.revision,
-      });
-    }
-    setConflict(null);
-    setLiveError(null);
   }, [conflict, handleSave, name]);
 
   if (state.status === "loading") {
@@ -540,7 +573,7 @@ export function DiffView({
       {conflict !== null ? (
         <LiveReconciliationAffordance
           kind="conflict"
-          onUseDisk={useDiskAndDiscardDraft}
+          onUseDisk={applyDiskAndDiscardDraft}
           onOverwriteDisk={() => void overwriteDiskWithDraft()}
         />
       ) : null}

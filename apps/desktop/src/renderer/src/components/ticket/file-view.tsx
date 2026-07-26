@@ -48,6 +48,14 @@ interface FileViewProps {
   onDirtyChange?(dirty: boolean): void;
   /** Reports a successful local write so ticket-level recency can ignore its watch echo. */
   onLocalSave?(relPath: string, source: FileSource, revision: number): void;
+  /**
+   * The revision of the bytes this view actually MOUNTED — the only honest
+   * "seen" revision for stale-awareness (CONCEPT #52). Fired on a successful
+   * initial load and on an explicit user-driven reload ("Use disk"), never on a
+   * passive live adoption: silently adopting an agent's edit is exactly the case
+   * the Changes badge exists to announce.
+   */
+  onLoaded?(relPath: string, source: FileSource, revision: number): void;
 }
 
 type LoadState =
@@ -119,6 +127,7 @@ export function FileView({
   onViewStateChange,
   onDirtyChange,
   onLocalSave,
+  onLoaded,
 }: FileViewProps) {
   const [state, setState] = React.useState<LoadState>({ status: "loading" });
   const [docValue, setDocValue] = React.useState("");
@@ -180,6 +189,9 @@ export function FileView({
     }
     resolvedSourceRef.current = result.source;
     onSource?.(relPath, result.source);
+    // Whatever mode this read lands in below, these are the bytes the user is
+    // about to be shown — report them as seen before any of it renders.
+    onLoaded?.(relPath, result.source, result.mtime);
     const { content } = result;
     if (content.type === "image") {
       setState({ status: "image", dataUrl: content.dataUrl });
@@ -212,7 +224,7 @@ export function FileView({
       revision: result.mtime,
       editable: policy === "explicit",
     });
-  }, [readFile, onSource, relPath]);
+  }, [readFile, onSource, onLoaded, relPath]);
 
   React.useEffect(() => {
     void load();
@@ -553,7 +565,7 @@ export function FileView({
     [onDirtyChange],
   );
 
-  function useDiskAndDiscardDraft() {
+  function applyDiskAndDiscardDraft() {
     const disk = conflictRef.current;
     if (disk === null) return;
     debouncer.cancel();
@@ -564,6 +576,10 @@ export function FileView({
     draftRef.current = disk.text;
     setDocValue(disk.text); // editor is unfocused (the button took focus) → doc resets
     setConflict(null);
+    // A deliberate "show me disk" IS an inspection of those bytes: the user
+    // asked for them and is now looking at them.
+    const source = resolvedSourceRef.current;
+    if (source !== null) onLoaded?.(relPath, source, disk.mtime);
   }
 
   async function overwriteDiskWithDraft() {
@@ -648,7 +664,7 @@ export function FileView({
           {conflict !== null && (
             <LiveReconciliationAffordance
               kind="conflict"
-              onUseDisk={useDiskAndDiscardDraft}
+              onUseDisk={applyDiskAndDiscardDraft}
               onOverwriteDisk={() => void overwriteDiskWithDraft()}
             />
           )}

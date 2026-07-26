@@ -1,5 +1,5 @@
 /**
- * Ticket Body tab identity (decision #46 / monaco-migration §8).
+ * Ticket Body tab identity (decision #46).
  *
  * The main-strip tab formerly called "Doc" is the Ticket Body. Its **persisted
  * wire id remains `"doc"`** so existing `volli:workspace` / `app_state` rows keep

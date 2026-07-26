@@ -1,5 +1,5 @@
 /**
- * Pure composition for the ticket Files navigator (monaco-migration §8).
+ * Pure composition for the ticket Files navigator (decision #46).
  *
  * Ticket Files is a contextual rail index — referenced context from the Ticket
  * Body (`parseFileRefs`) and attachments, plus a compact flat listing of the

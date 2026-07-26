@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { EMPTY_CHANGE_RECENCY_STATE, reduceChangeRecency } from "./ticket-change-recency";
+import {
+  EMPTY_CHANGE_RECENCY_STATE,
+  isChangeUpdated,
+  reduceChangeRecency,
+} from "./ticket-change-recency";
 
 describe("reduceChangeRecency", () => {
   it("records the exact revision only after a deliberate file or diff inspection", () => {
@@ -94,6 +98,38 @@ describe("reduceChangeRecency", () => {
         },
       },
     });
+  });
+
+  it("treats a file literally named `constructor` as an ordinary, uninspected path", () => {
+    // Path-keyed records are null-prototype: an `{}` literal would resolve
+    // `paths["constructor"]` through Object.prototype and badge a file nobody
+    // ever opened.
+    expect(isChangeUpdated(EMPTY_CHANGE_RECENCY_STATE, "constructor")).toBe(false);
+    expect(
+      reduceChangeRecency(EMPTY_CHANGE_RECENCY_STATE, {
+        type: "external-revision",
+        path: "constructor",
+        revision: "opaque-revision-2",
+      }),
+    ).toBe(EMPTY_CHANGE_RECENCY_STATE);
+
+    const inspected = reduceChangeRecency(EMPTY_CHANGE_RECENCY_STATE, {
+      type: "inspect",
+      path: "constructor",
+      revision: "opaque-revision-1",
+    });
+    const updated = reduceChangeRecency(inspected, {
+      type: "external-revision",
+      path: "constructor",
+      revision: "opaque-revision-2",
+    });
+
+    expect(isChangeUpdated(inspected, "constructor")).toBe(false);
+    expect(isChangeUpdated(updated, "constructor")).toBe(true);
+    // Every copy has to preserve the null prototype, spreads included.
+    expect(Object.getPrototypeOf(EMPTY_CHANGE_RECENCY_STATE.paths)).toBeNull();
+    expect(Object.getPrototypeOf(inspected.paths)).toBeNull();
+    expect(Object.getPrototypeOf(updated.paths)).toBeNull();
   });
 
   it("keeps same revisions and uninspected paths quiet", () => {

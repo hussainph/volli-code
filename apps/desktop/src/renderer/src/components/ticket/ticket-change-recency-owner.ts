@@ -1,8 +1,16 @@
-import type { FileChangedEvent, FilePathInput, Result } from "@volli/shared";
+import {
+  errorMessage,
+  type FileChangedEvent,
+  type FilePathInput,
+  type Result,
+} from "@volli/shared";
 
 import {
   EMPTY_CHANGE_RECENCY_STATE,
+  emptyPathRecord,
   reduceChangeRecency,
+  withoutPathEntry,
+  withPathEntry,
   type ChangeRecencyState,
 } from "./ticket-change-recency";
 import {
@@ -18,8 +26,10 @@ export interface TicketRecencyOwnerState {
 
 export const EMPTY_TICKET_RECENCY_OWNER_STATE: TicketRecencyOwnerState = {
   recency: EMPTY_CHANGE_RECENCY_STATE,
-  inspected: Object.freeze({}) as Readonly<Record<string, ResolvedFileChangeIdentity>>,
-  localSaveEchoes: Object.freeze({}) as Readonly<Record<string, string>>,
+  // Null-prototype, like every other path-keyed record here — see
+  // `emptyPathRecord`.
+  inspected: Object.freeze(emptyPathRecord<ResolvedFileChangeIdentity>()),
+  localSaveEchoes: Object.freeze(emptyPathRecord<string>()),
 };
 
 export type TicketRecencyOwnerEvent =
@@ -27,65 +37,93 @@ export type TicketRecencyOwnerEvent =
   | { type: "local-save"; identity: ResolvedFileChangeIdentity; revision: number }
   | { type: "file-changed"; event: FileChangedEvent };
 
-type TicketInspectionRead = (input: {
-  projectId: string;
-  ticketId: string;
-  relPath: string;
-}) => Promise<
-  | { ok: true; source: ResolvedFileChangeIdentity["source"]; mtime: number }
-  | { ok: false; error?: string }
->;
-
-/** Resolve the exact source identity and file revision for a deliberate open. */
-export async function readTicketInspection(
-  read: TicketInspectionRead,
-  input: { projectId: string; ticketId: string; relPath: string },
-): Promise<Extract<TicketRecencyOwnerEvent, { type: "inspect" }> | null> {
-  const result = await read(input);
-  if (!result.ok) return null;
-  return {
-    type: "inspect",
-    identity: {
-      projectId: input.projectId,
-      ticketId: result.source === "worktree" ? input.ticketId : null,
-      relPath: input.relPath,
-      source: result.source,
-    },
-    revision: result.mtime,
-  };
-}
-
 function ticketRecencyWatchKey(input: FilePathInput): string {
   return `${input.projectId}\u0000${input.ticketId ?? ""}\u0000${input.relPath}`;
 }
 
-export function createTicketRecencyWatchOwner(api: {
+/** The ticket-lifetime watch bookkeeping behind the Changes navigator's badges. */
+export interface TicketRecencyWatchOwner {
+  /** Arms (once) the ticket-lifetime watch for a path the user actually looked at. */
   watch(input: FilePathInput): Promise<Result>;
-  unwatch(input: FilePathInput): Promise<Result>;
-}): {
-  watch(input: FilePathInput): Promise<Result>;
+  /**
+   * Feeds every `volli:file-changed` event back to the owner so it can notice
+   * main tearing a watch down. Main owes a watch-less subscription one final
+   * event (see `WatchManagerBase.finishReArm`), and when the watched directory
+   * is gone that event carries `revision: null` — the only teardown signal the
+   * renderer gets. Without this the `held` latch below would short-circuit every
+   * later `watch()` with `{ ok: true }` and recency would die silently.
+   */
+  noteChangedEvent(event: FileChangedEvent): void;
   dispose(): void;
-} {
+}
+
+export function createTicketRecencyWatchOwner(
+  api: {
+    watch(input: FilePathInput): Promise<Result>;
+    unwatch(input: FilePathInput): Promise<Result>;
+  },
+  options: {
+    /** Called when a torn-down watch could not be re-armed — the caller toasts. */
+    onWatchLost?(input: FilePathInput): void;
+  } = {},
+): TicketRecencyWatchOwner {
   const held = new Map<string, FilePathInput>();
   const pending = new Map<string, Promise<Result>>();
   let disposed = false;
 
-  return {
-    watch(input) {
-      const key = ticketRecencyWatchKey(input);
-      if (held.has(key)) return Promise.resolve({ ok: true });
-      const existing = pending.get(key);
-      if (existing !== undefined) return existing;
-      const started = api.watch(input).then((result) => {
+  /** One in-flight arm per key; a rejected `api.watch` resolves as a typed failure. */
+  function arm(key: string, input: FilePathInput): Promise<Result> {
+    const existing = pending.get(key);
+    if (existing !== undefined) return existing;
+    const started = api.watch(input).then(
+      (result) => {
         if (result.ok) {
           if (disposed) void api.unwatch(input);
           else held.set(key, input);
         }
         return result;
-      });
-      pending.set(key, started);
-      void started.finally(() => pending.delete(key));
-      return started;
+      },
+      // A rejected IPC call must reach the caller as a failure it can toast,
+      // never as an unhandled rejection that leaves the tab believing the
+      // badge is armed.
+      (error: unknown): Result => ({ ok: false, error: errorMessage(error) }),
+    );
+    pending.set(key, started);
+    void started.finally(() => {
+      if (pending.get(key) === started) pending.delete(key);
+    });
+    return started;
+  }
+
+  return {
+    watch(input) {
+      const key = ticketRecencyWatchKey(input);
+      if (held.has(key)) return Promise.resolve({ ok: true });
+      return arm(key, input);
+    },
+    noteChangedEvent(event) {
+      if (disposed || event.revision !== null) return;
+      // Held inputs always carry this ticket's id, while a `main`-resolved event
+      // reports `ticketId: null` — so match on the (project, path) pair rather
+      // than the composite watch key.
+      const lost = [...held].filter(
+        ([, input]) => input.projectId === event.projectId && input.relPath === event.relPath,
+      );
+      for (const [key, input] of lost) {
+        held.delete(key);
+        // Release our hold before re-arming so main's refCount stays balanced:
+        // if it already tore the subscription down this is a documented no-op,
+        // and if it did not (a plain deletion under a live watcher) we hand the
+        // hold straight back. An unwatch failure is not separately actionable —
+        // the re-arm result below is what the user is told about.
+        void api
+          .unwatch(input)
+          .catch(() => undefined)
+          .then(() => arm(key, input))
+          .then((result) => {
+            if (!result.ok) options.onWatchLost?.(input);
+          });
+      }
     },
     dispose() {
       if (disposed) return;
@@ -96,16 +134,6 @@ export function createTicketRecencyWatchOwner(api: {
   };
 }
 
-function withoutPath<T>(
-  record: Readonly<Record<string, T>>,
-  path: string,
-): Readonly<Record<string, T>> {
-  if (!(path in record)) return record;
-  const next = { ...record };
-  delete next[path];
-  return next;
-}
-
 /** Ticket-altitude ownership for deliberate inspection and later file events. */
 export function reduceTicketRecencyOwner(
   state: TicketRecencyOwnerState,
@@ -113,8 +141,8 @@ export function reduceTicketRecencyOwner(
 ): TicketRecencyOwnerState {
   if (event.type === "inspect") {
     return {
-      inspected: { ...state.inspected, [event.identity.relPath]: event.identity },
-      localSaveEchoes: withoutPath(state.localSaveEchoes, event.identity.relPath),
+      inspected: withPathEntry(state.inspected, event.identity.relPath, event.identity),
+      localSaveEchoes: withoutPathEntry(state.localSaveEchoes, event.identity.relPath),
       recency: reduceChangeRecency(state.recency, {
         type: "inspect",
         path: event.identity.relPath,
@@ -134,7 +162,7 @@ export function reduceTicketRecencyOwner(
     const revision = String(event.revision);
     return {
       ...state,
-      localSaveEchoes: { ...state.localSaveEchoes, [event.identity.relPath]: revision },
+      localSaveEchoes: withPathEntry(state.localSaveEchoes, event.identity.relPath, revision),
       recency: reduceChangeRecency(state.recency, {
         type: "local-save-echo",
         path: event.identity.relPath,
@@ -155,7 +183,7 @@ export function reduceTicketRecencyOwner(
   if (state.localSaveEchoes[event.event.relPath] === revision) {
     return {
       ...state,
-      localSaveEchoes: withoutPath(state.localSaveEchoes, event.event.relPath),
+      localSaveEchoes: withoutPathEntry(state.localSaveEchoes, event.event.relPath),
       recency: reduceChangeRecency(state.recency, {
         type: "local-save-echo",
         path: event.event.relPath,

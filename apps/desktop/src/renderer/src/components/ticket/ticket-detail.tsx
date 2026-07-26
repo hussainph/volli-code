@@ -28,8 +28,8 @@ import { TicketChangesPanel } from "@renderer/components/ticket/ticket-changes-p
 import {
   createTicketRecencyWatchOwner,
   EMPTY_TICKET_RECENCY_OWNER_STATE,
-  readTicketInspection,
   reduceTicketRecencyOwner,
+  type TicketRecencyWatchOwner,
 } from "@renderer/components/ticket/ticket-change-recency-owner";
 import { diffTabId } from "@renderer/components/ticket/ticket-diff-tab";
 import { TicketFilesPanel } from "@renderer/components/ticket/ticket-files-panel";
@@ -37,7 +37,7 @@ import { TicketRail } from "@renderer/components/ticket/ticket-rail";
 import { TicketSessionPlane } from "@renderer/components/ticket/ticket-session-plane";
 import { TicketTabStrip, type TicketTabDescriptor } from "@renderer/components/ticket/ticket-tabs";
 import { TicketTitle } from "@renderer/components/ticket/ticket-title";
-import { fileDocumentIdentity } from "@renderer/editor/document-identity";
+import { fileDocumentIdentity, type DocumentIdentity } from "@renderer/editor/document-identity";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { isEscapeExempt } from "@renderer/lib/escape-guard";
@@ -64,6 +64,15 @@ const NO_DIFF_META: Readonly<Record<string, { previousPath?: string | null; stat
 /** Whether a ticket File-tab list already holds `relPath` (preview or pinned). */
 function ticketFilesInclude(files: readonly FileWorkspaceTab[], relPath: string): boolean {
   return files.some((tab) => tab.relPath === relPath);
+}
+
+/**
+ * Which checkout a document the registry already holds was resolved from —
+ * identity is what main actually read, never the request context, so this is
+ * the one trustworthy source for a save's `FileSource` when no view is mounted.
+ */
+function documentFileSource(identity: DocumentIdentity): FileSource {
+  return identity.kind === "file" && identity.checkout.kind === "ticket" ? "worktree" : "main";
 }
 
 /**
@@ -122,24 +131,43 @@ export function TicketDetail({
     reduceTicketRecencyOwner,
     EMPTY_TICKET_RECENCY_OWNER_STATE,
   );
-  const recencyWatchOwner = React.useMemo(
-    () =>
-      createTicketRecencyWatchOwner({
-        watch: window.api.files.watch,
-        unwatch: window.api.files.unwatch,
-      }),
-    [],
-  );
+  /**
+   * The ticket-lifetime watch owner is created INSIDE the effect that disposes
+   * it, and reached from callbacks through this ref. A `useMemo` cell survives
+   * StrictMode's dev double-mount (setup → cleanup → setup on the same fiber)
+   * while the cleanup runs its one-way `dispose()`, which would permanently
+   * kill recency under `pnpm dev`. `null` only before the mount effect runs —
+   * i.e. before any view can have loaded a file — so callbacks no-op on it.
+   */
+  const recencyWatchOwnerRef = React.useRef<TicketRecencyWatchOwner | null>(null);
 
   React.useEffect(() => {
+    const owner = createTicketRecencyWatchOwner(
+      {
+        watch: window.api.files.watch,
+        unwatch: window.api.files.unwatch,
+      },
+      {
+        onWatchLost: (input) => {
+          toastError(
+            `Updated awareness for ${baseNameOf(input.relPath)} is off. Reopen the file to retry.`,
+          );
+        },
+      },
+    );
+    recencyWatchOwnerRef.current = owner;
     const unsubscribe = window.api.files.onChanged((event) => {
+      // The owner sees every event first: a `revision: null` one is main's only
+      // signal that it tore a watch down (see `noteChangedEvent`).
+      owner.noteChangedEvent(event);
       dispatchRecencyOwner({ type: "file-changed", event });
     });
     return () => {
       unsubscribe();
-      recencyWatchOwner.dispose();
+      recencyWatchOwnerRef.current = null;
+      owner.dispose();
     };
-  }, [recencyWatchOwner]);
+  }, []);
 
   const displayId = displayTicketId(ticketPrefix, ticket.ticketNumber);
 
@@ -244,6 +272,28 @@ export function TicketDetail({
   }, [openFiles, openDiffs, peekFileDocuments]);
 
   /**
+   * Records a write this app just made, so the watch echo it provokes doesn't
+   * badge the Changes row "Updated" against the person who caused it. Declared
+   * above {@link saveFileDocument} because the ⌘W save-on-close guard writes
+   * without any mounted view to report for it.
+   */
+  const reportLocalSave = React.useCallback(
+    (relPath: string, source: FileSource, revision: number) => {
+      dispatchRecencyOwner({
+        type: "local-save",
+        identity: {
+          projectId,
+          ticketId: source === "worktree" ? ticket.id : null,
+          relPath,
+          source,
+        },
+        revision,
+      });
+    },
+    [projectId, ticket.id],
+  );
+
+  /**
    * Writes a tab's draft, conflict-guarded on the FRESHEST revision the
    * document has seen on disk (`externalRevision`, advanced by every re-read) —
    * not the baseline it was last saved at, which an agent touching the file
@@ -282,13 +332,17 @@ export function TicketDetail({
           return false;
         }
         handle.markSaved(result.mtime);
+        // Same report the mounted editors make on their own writes: without it
+        // the user's own Save-on-close echoes back through the watch and lights
+        // the "Updated" badge against bytes they just wrote themselves.
+        reportLocalSave(relPath, documentFileSource(snapshot.identity), result.mtime);
         return true;
       } catch (error) {
         toastError(`Could not save ${name}: ${errorMessage(error)}`);
         return false;
       }
     },
-    [peekFileDocument, projectId, ticket.id],
+    [peekFileDocument, projectId, reportLocalSave, ticket.id],
   );
 
   const closeFileTab = React.useCallback(
@@ -406,62 +460,47 @@ export function TicketDetail({
   // @file chips open persistent tabs (decision #33); Files-panel glances use
   // preview/pin instead (decision #56).
   const fileIndex = useFileIndex(projectId);
-  const inspectFile = React.useCallback(
-    (relPath: string) => {
-      void readTicketInspection(window.api.files.read, {
-        projectId,
-        ticketId: ticket.id,
-        relPath,
-      }).then((event) => {
-        if (event === null) return;
-        dispatchRecencyOwner(event);
-        void recencyWatchOwner.watch({ projectId, ticketId: ticket.id, relPath }).then((result) => {
-          if (!result.ok) {
-            toastError(
-              `Updated awareness for ${baseNameOf(relPath)} is off. Reopen the file to retry.`,
-            );
-          }
-        });
+
+  /**
+   * Closes the arm gap. The watch is installed AFTER the view's own read, so a
+   * write that lands in between is invisible until the next one — the badge
+   * would stay dark over content that has already moved. Re-read once the watch
+   * is confirmed and, if disk has drifted from what the view mounted, feed the
+   * reducer the same shape a watch event would have carried.
+   */
+  const revalidateSeenRevision = React.useCallback(
+    async (relPath: string, seenRevision: number) => {
+      // A failure here means the file vanished or turned unreadable between the
+      // view's load and the watch install. It is NOT swallowed: the mounted
+      // view holds its own watch on the same path and surfaces exactly that,
+      // and a second toast from the badge layer would only double-report it.
+      const fresh = await window.api.files.read({ projectId, ticketId: ticket.id, relPath });
+      if (!fresh.ok || fresh.mtime === seenRevision) return;
+      dispatchRecencyOwner({
+        type: "file-changed",
+        event: {
+          projectId,
+          ticketId: fresh.source === "worktree" ? ticket.id : null,
+          relPath,
+          source: fresh.source,
+          revision: fresh.mtime,
+        },
       });
     },
-    [projectId, recencyWatchOwner, ticket.id],
+    [projectId, ticket.id],
   );
-  const openFile = React.useCallback(
-    (relPath: string) => {
-      openTicketFile(projectId, ticket.id, relPath);
-      inspectFile(relPath);
-    },
-    [inspectFile, openTicketFile, projectId, ticket.id],
-  );
-  const previewFileFromRail = React.useCallback(
-    (relPath: string) => {
-      previewTicketFile(projectId, ticket.id, relPath);
-      inspectFile(relPath);
-    },
-    [inspectFile, previewTicketFile, projectId, ticket.id],
-  );
-  const pinFileFromRail = React.useCallback(
-    (relPath: string) => {
-      pinTicketFile(projectId, ticket.id, relPath);
-      inspectFile(relPath);
-    },
-    [inspectFile, pinTicketFile, projectId, ticket.id],
-  );
-  const openDiff = React.useCallback(
-    (file: { path: string; previousPath?: string; status: string; binary: boolean }) => {
-      openTicketDiff(projectId, ticket.id, file.path, {
-        previousPath: file.previousPath ?? null,
-        status: file.status,
-        binary: file.binary,
-      });
-      inspectFile(file.path);
-    },
-    [inspectFile, openTicketDiff, projectId, ticket.id],
-  );
-  const reportLocalSave = React.useCallback(
+
+  /**
+   * The seen revision comes from the bytes a view actually rendered (CONCEPT
+   * #52), never from a second read of our own: an independent read races the
+   * view's and can record revision R2 while the user is looking at R1, muting
+   * the badge for a change they never saw. Opening a tab is therefore not what
+   * records an inspection — mounting its content is.
+   */
+  const handleFileLoaded = React.useCallback(
     (relPath: string, source: FileSource, revision: number) => {
       dispatchRecencyOwner({
-        type: "local-save",
+        type: "inspect",
         identity: {
           projectId,
           ticketId: source === "worktree" ? ticket.id : null,
@@ -470,8 +509,44 @@ export function TicketDetail({
         },
         revision,
       });
+      const owner = recencyWatchOwnerRef.current;
+      if (owner === null) return;
+      void owner.watch({ projectId, ticketId: ticket.id, relPath }).then((result) => {
+        if (!result.ok) {
+          toastError(
+            `Updated awareness for ${baseNameOf(relPath)} is off. Reopen the file to retry.`,
+          );
+          return;
+        }
+        void revalidateSeenRevision(relPath, revision).catch(() => {
+          // Same rationale as inside `revalidateSeenRevision`: a broken read is
+          // the mounted view's story to tell, on its own watch.
+        });
+      });
     },
-    [projectId, ticket.id],
+    [projectId, revalidateSeenRevision, ticket.id],
+  );
+  const openFile = React.useCallback(
+    (relPath: string) => openTicketFile(projectId, ticket.id, relPath),
+    [openTicketFile, projectId, ticket.id],
+  );
+  const previewFileFromRail = React.useCallback(
+    (relPath: string) => previewTicketFile(projectId, ticket.id, relPath),
+    [previewTicketFile, projectId, ticket.id],
+  );
+  const pinFileFromRail = React.useCallback(
+    (relPath: string) => pinTicketFile(projectId, ticket.id, relPath),
+    [pinTicketFile, projectId, ticket.id],
+  );
+  const openDiff = React.useCallback(
+    (file: { path: string; previousPath?: string; status: string; binary: boolean }) => {
+      openTicketDiff(projectId, ticket.id, file.path, {
+        previousPath: file.previousPath ?? null,
+        status: file.status,
+        binary: file.binary,
+      });
+    },
+    [openTicketDiff, projectId, ticket.id],
   );
   const fileRefs = React.useMemo<DocumentFileRefs>(
     () => ({
@@ -750,6 +825,7 @@ export function TicketDetail({
                   onSource={reportFileSource}
                   onDirtyChange={handleFileDirtyChange}
                   onLocalSave={reportLocalSave}
+                  onLoaded={handleFileLoaded}
                 />
               ) : null}
               {activeTab.kind === "diff" && activeTab.relPath !== undefined ? (
@@ -763,6 +839,7 @@ export function TicketDetail({
                   binary={diffMeta[activeTab.relPath]?.binary}
                   onDirtyChange={handleFileDirtyChange}
                   onLocalSave={reportLocalSave}
+                  onLoaded={handleFileLoaded}
                   initialViewState={ticketDiffViewStates?.[activeTab.relPath]}
                   onViewStateChange={handleDiffViewStateChange}
                 />

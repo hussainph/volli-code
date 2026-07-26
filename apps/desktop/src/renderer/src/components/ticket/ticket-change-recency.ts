@@ -20,9 +20,43 @@ export interface ChangeRecencyState {
   paths: Readonly<Record<string, ChangeRecencyRecord>>;
 }
 
+/**
+ * Null-prototype accumulator (the `stores/workspace.ts` pattern): these records
+ * are keyed by arbitrary repository paths, and a file literally named
+ * `constructor` (or `__proto__`, `toString`, …) must not resolve through
+ * `Object.prototype` and read as an inspected path that was never opened.
+ * Object-literal spreads (`{ ...record }`) reintroduce `Object.prototype`, so
+ * every copy has to go through these helpers.
+ */
+export function emptyPathRecord<T>(): Readonly<Record<string, T>> {
+  return Object.create(null) as Record<string, T>;
+}
+
+/** Copy `record` onto a null prototype with `path` set to `value`. */
+export function withPathEntry<T>(
+  record: Readonly<Record<string, T>>,
+  path: string,
+  value: T,
+): Readonly<Record<string, T>> {
+  const next = Object.assign(Object.create(null) as Record<string, T>, record);
+  next[path] = value;
+  return next;
+}
+
+/** Copy `record` onto a null prototype without `path` (identity when absent). */
+export function withoutPathEntry<T>(
+  record: Readonly<Record<string, T>>,
+  path: string,
+): Readonly<Record<string, T>> {
+  if (!(path in record)) return record;
+  const next = Object.assign(Object.create(null) as Record<string, T>, record);
+  delete next[path];
+  return next;
+}
+
 /** Empty state for a newly opened Changes navigator. */
 export const EMPTY_CHANGE_RECENCY_STATE: ChangeRecencyState = {
-  paths: Object.freeze({}) as Readonly<Record<string, ChangeRecencyRecord>>,
+  paths: Object.freeze(emptyPathRecord<ChangeRecencyRecord>()),
 };
 
 /** Whether a deliberately inspected path has a later external revision. */
@@ -61,10 +95,10 @@ export function reduceChangeRecency(
       return state;
     }
     return {
-      paths: {
-        ...state.paths,
-        [event.path]: { ...existing, updatedRevision: event.revision },
-      },
+      paths: withPathEntry(state.paths, event.path, {
+        ...existing,
+        updatedRevision: event.revision,
+      }),
     };
   }
 
@@ -78,18 +112,18 @@ export function reduceChangeRecency(
       return state;
     }
     return {
-      paths: {
-        ...state.paths,
-        [event.path]: { seenRevision: event.revision, updatedRevision: null },
-      },
+      paths: withPathEntry(state.paths, event.path, {
+        seenRevision: event.revision,
+        updatedRevision: null,
+      }),
     };
   }
   if (existing?.seenRevision === event.revision && existing.updatedRevision === null) return state;
 
   return {
-    paths: {
-      ...state.paths,
-      [event.path]: { seenRevision: event.revision, updatedRevision: null },
-    },
+    paths: withPathEntry(state.paths, event.path, {
+      seenRevision: event.revision,
+      updatedRevision: null,
+    }),
   };
 }

@@ -1,5 +1,5 @@
 /**
- * Pure presentation for the Changes navigator (decision #53 / monaco-migration §9).
+ * Pure presentation for the Changes navigator (decision #53).
  *
  * The Changes rail is a compact flat list: filename leads, parent path stays muted
  * and secondary, status + line counts trail. Deep repository structure belongs to
@@ -56,7 +56,12 @@ export interface ChangeRowPresentation {
   countsLabel: string | null;
   /** Prior path for renames; null otherwise. */
   renameFrom: string | null;
-  /** Visible passive-awareness copy, omitted until recency events are wired. */
+  /**
+   * Visible passive-awareness copy. Set only by
+   * {@link presentChangeRowWithRecency} — the plain {@link presentChangeRow}
+   * projection is deliberately recency-free, so a row built without the recency
+   * state simply omits it rather than claiming the file is current.
+   */
   updatedLabel?: "Updated";
   /** Accessible explanation accompanying {@link updatedLabel}. */
   updatedDescription?: "Updated since you last opened this file";

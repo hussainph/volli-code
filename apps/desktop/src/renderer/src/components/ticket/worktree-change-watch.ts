@@ -1,6 +1,6 @@
 /**
- * The renderer half of the ticket-worktree filesystem watch (monaco-migration
- * §9): start a watch for one ticket, forward its debounced `worktree-changed`
+ * The renderer half of the ticket-worktree filesystem watch (CONCEPT #47):
+ * start a watch for one ticket, forward its debounced `worktree-changed`
  * events, and tear both down together.
  *
  * Extracted from the panels that use it because the subscription's ordering is

@@ -84,6 +84,42 @@ export function reconcileAcquiredDiffModel(input: {
   });
 }
 
+/** How the Diff pane shows an `unreadable` reconciliation outcome. */
+export type LiveUnreadablePresentation =
+  | { kind: "inline"; message: string }
+  | { kind: "pane-error"; error: string };
+
+/**
+ * The one policy for presenting an `unreadable` plan, shared by the mount-time
+ * and live (`onChanged`) reconciles — and matching FileView case for case:
+ *
+ *  - A retained draft ALWAYS keeps its editing surface, with the reassurance
+ *    that the draft survived; nothing else can reach those bytes.
+ *  - `readable` (the read succeeded, it was merely capped past 1 MiB) keeps the
+ *    pane too, even with nothing to protect: it is still a perfectly good diff,
+ *    and collapsing it would throw away the base side, the presentation toggle
+ *    and the tab's scroll position over something the inline banner says better.
+ *    The caller forces the modified side read-only, since a capped prefix must
+ *    never be written back.
+ *  - A read that FAILED under a clean tab (deleted, or no longer plain text) is
+ *    the one case that replaces the pane: rendering a stale modified side would
+ *    hide the deletion behind content that no longer exists.
+ */
+export function presentLiveUnreadable(input: {
+  plan: Pick<
+    Extract<LiveDocumentReconciliationPlan, { kind: "unreadable" }>,
+    "error" | "keepDraft"
+  >;
+  /** Whether the disk read itself succeeded (a truncated read still counts). */
+  readable: boolean;
+}): LiveUnreadablePresentation {
+  if (input.plan.keepDraft) {
+    return { kind: "inline", message: `${input.plan.error} Your unsaved draft is still open.` };
+  }
+  if (input.readable) return { kind: "inline", message: input.plan.error };
+  return { kind: "pane-error", error: input.plan.error };
+}
+
 /**
  * True when `files.read` failed because the path is gone — the strings main's
  * `volli-fs` returns for missing parents / vanished files, plus Node's ENOENT.
