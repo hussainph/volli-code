@@ -61,7 +61,9 @@ interface TextEdit {
   replacement: string;
 }
 
-type TextOperation = { kind: "equal" } | { kind: "delete" } | { kind: "insert"; value: string };
+type EditStep =
+  | { kind: "delete"; index: number }
+  | { kind: "insert"; index: number; value: string };
 
 // A 1 MiB file may be almost entirely unrelated after a generated rewrite. The
 // caps keep that case bounded, returning `null` so the public operation can
@@ -126,7 +128,7 @@ function operationsToEdits(
 ): TextEdit[] {
   let baselineIndex = baseline.length;
   let changedIndex = changed.length;
-  const reverseOperations: TextOperation[] = [];
+  const reverseSteps: EditStep[] = [];
 
   for (let distance = traces.length - 1; distance > 0; distance -= 1) {
     const previous = traces[distance - 1];
@@ -143,31 +145,32 @@ function operationsToEdits(
     const afterEditChangedIndex = takesInsertion ? previousChangedIndex + 1 : previousChangedIndex;
 
     while (baselineIndex > afterEditBaselineIndex && changedIndex > afterEditChangedIndex) {
-      reverseOperations.push({ kind: "equal" });
       baselineIndex -= 1;
       changedIndex -= 1;
     }
-    reverseOperations.push(
+    reverseSteps.push(
       takesInsertion
-        ? { kind: "insert", value: changed[previousChangedIndex] }
-        : { kind: "delete" },
+        ? {
+            kind: "insert",
+            index: previousBaselineIndex,
+            value: changed[previousChangedIndex],
+          }
+        : { kind: "delete", index: previousBaselineIndex },
     );
     baselineIndex = previousBaselineIndex;
     changedIndex = previousChangedIndex;
   }
 
   while (baselineIndex > 0 && changedIndex > 0) {
-    reverseOperations.push({ kind: "equal" });
     baselineIndex -= 1;
     changedIndex -= 1;
   }
 
-  return operationsToEditsInOrder(reverseOperations.reverse());
+  return stepsToEdits(reverseSteps.reverse());
 }
 
-function operationsToEditsInOrder(operations: readonly TextOperation[]): TextEdit[] {
+function stepsToEdits(steps: readonly EditStep[]): TextEdit[] {
   const edits: TextEdit[] = [];
-  let baselineIndex = 0;
   let pending: TextEdit | null = null;
 
   const flush = () => {
@@ -175,20 +178,17 @@ function operationsToEditsInOrder(operations: readonly TextOperation[]): TextEdi
     pending = null;
   };
 
-  for (const operation of operations) {
-    if (operation.kind === "equal") {
+  for (const step of steps) {
+    if (pending !== null && (step.index < pending.start || step.index > pending.end)) {
       flush();
-      baselineIndex += 1;
-      continue;
     }
     if (pending === null) {
-      pending = { start: baselineIndex, end: baselineIndex, replacement: "" };
+      pending = { start: step.index, end: step.index, replacement: "" };
     }
-    if (operation.kind === "delete") {
-      baselineIndex += 1;
-      pending.end = baselineIndex;
+    if (step.kind === "delete") {
+      pending.end = Math.max(pending.end, step.index + 1);
     } else {
-      pending.replacement += operation.value;
+      pending.replacement += step.value;
     }
   }
   flush();
