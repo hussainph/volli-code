@@ -1,9 +1,10 @@
 /**
  * Changes navigator — compact flat Change Set list (decision #53).
  *
- * Selecting a row opens/focuses a ticket file tab via the host callback
- * (`openTicketFile` today; #109 swaps that one call to a diff tab). Debounced
- * worktree events only refresh rows — never open, close, or focus a tab.
+ * Selecting a row asks the host to open/focus a tab via `onOpenFile`. Today the
+ * host still wires `openTicketFile` (#108); `openTicketDiff` is ready on the
+ * workspace store (#109 slice A) and the host call site swaps next — refresh
+ * handlers never open, close, or focus a tab.
  */
 import * as React from "react";
 import { errorMessage, type ChangeSetFile, type Ticket } from "@volli/shared";
@@ -154,8 +155,9 @@ export function TicketChangesPanel({
   /** Observed so refresh can be proven never to mutate it (decision #46/#48). */
   activeTabId: string;
   /**
-   * Deliberate open. Host wires `openTicketFile` for #108; #109 swaps this to
-   * the Monaco diff-tab opener — a one-line change at the call site.
+   * Deliberate open. Host still wires `openTicketFile` for #108; workspace
+   * `openTicketDiff` is ready (#109 slice A) — swap this call site to the
+   * Monaco diff-tab opener when wiring the DiffEditor.
    */
   onOpenFile(relPath: string): void;
 }) {
