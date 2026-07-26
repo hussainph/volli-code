@@ -495,7 +495,7 @@ export function FileView({
       unsubscribe();
       void window.api.files.unwatch({ projectId, ticketId, relPath });
     };
-  }, [projectId, ticketId, relPath, readFile, name, onSource, markDocumentSaved]);
+  }, [projectId, ticketId, relPath, readFile, name, onSource, markDocumentSaved, debouncer]);
 
   function handleChange(next: string) {
     draftRef.current = next;

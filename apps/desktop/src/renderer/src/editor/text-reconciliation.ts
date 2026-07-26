@@ -166,7 +166,7 @@ function operationsToEdits(
     changedIndex -= 1;
   }
 
-  return stepsToEdits(reverseSteps.reverse());
+  return stepsToEdits(reverseSteps.toReversed());
 }
 
 function stepsToEdits(steps: readonly EditStep[]): TextEdit[] {
@@ -209,7 +209,7 @@ function editRangesOverlap(left: TextEdit, right: TextEdit): boolean {
 }
 
 function applyEdits(baseline: string, edits: readonly TextEdit[]): string {
-  const ordered = [...edits].sort((left, right) => left.start - right.start);
+  const ordered = edits.toSorted((left, right) => left.start - right.start);
   let cursor = 0;
   let merged = "";
   for (const edit of ordered) {

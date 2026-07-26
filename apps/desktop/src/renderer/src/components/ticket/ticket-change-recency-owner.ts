@@ -55,6 +55,10 @@ export async function readTicketInspection(
   };
 }
 
+function ticketRecencyWatchKey(input: FilePathInput): string {
+  return `${input.projectId}\u0000${input.ticketId ?? ""}\u0000${input.relPath}`;
+}
+
 export function createTicketRecencyWatchOwner(api: {
   watch(input: FilePathInput): Promise<Result>;
   unwatch(input: FilePathInput): Promise<Result>;
@@ -65,12 +69,10 @@ export function createTicketRecencyWatchOwner(api: {
   const held = new Map<string, FilePathInput>();
   const pending = new Map<string, Promise<Result>>();
   let disposed = false;
-  const keyOf = (input: FilePathInput) =>
-    `${input.projectId}\u0000${input.ticketId ?? ""}\u0000${input.relPath}`;
 
   return {
     watch(input) {
-      const key = keyOf(input);
+      const key = ticketRecencyWatchKey(input);
       if (held.has(key)) return Promise.resolve({ ok: true });
       const existing = pending.get(key);
       if (existing !== undefined) return existing;

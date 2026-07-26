@@ -7,6 +7,15 @@ import {
   reduceTicketRecencyOwner,
 } from "./ticket-change-recency-owner";
 
+async function readMainInspectionFixture() {
+  return {
+    ok: true,
+    source: "main",
+    mtime: 42,
+    content: { type: "text", text: "hello\n", truncated: false },
+  } as const;
+}
+
 describe("reduceTicketRecencyOwner", () => {
   it("marks only a later event with the deliberately inspected complete identity", () => {
     const inspected = reduceTicketRecencyOwner(EMPTY_TICKET_RECENCY_OWNER_STATE, {
@@ -118,16 +127,8 @@ describe("createTicketRecencyWatchOwner", () => {
 
 describe("readTicketInspection", () => {
   it("records the exact revision and resolved Main identity from a deliberate open", async () => {
-    const read = async () =>
-      ({
-        ok: true,
-        source: "main",
-        mtime: 42,
-        content: { type: "text", text: "hello\n", truncated: false },
-      }) as const;
-
     await expect(
-      readTicketInspection(read, {
+      readTicketInspection(readMainInspectionFixture, {
         projectId: "project-1",
         ticketId: "ticket-1",
         relPath: ".volli/artifacts/notes.md",
