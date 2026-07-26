@@ -71,6 +71,24 @@ const EDITOR_THEME_IMPORTS: Readonly<Record<string, EditorThemeImporter>> = {
   "material-theme-palenight": () => import("@shikijs/themes/material-theme-palenight"),
 };
 
+/** Fallback when the app theme slug is unknown or maps to a missing catalog id. */
+export const DEFAULT_EDITOR_THEME_ID = "one-dark-pro";
+
+/**
+ * App-surface theme slug → closest popular shiki catalog id.
+ * Unknown custom slugs fall through to `DEFAULT_EDITOR_THEME_ID`.
+ */
+const APP_SLUG_TO_EDITOR_THEME: Readonly<Record<string, string>> = {
+  ember: "one-dark-pro",
+  midnight: "tokyo-night",
+  moss: "everforest-dark",
+  iris: "catppuccin-mocha",
+  rose: "rose-pine",
+  graphite: "github-dark",
+};
+
+const CATALOG_IDS = new Set(EDITOR_THEMES.map((theme) => theme.id));
+
 /** Every shipped editor theme for pickers and bootstrap. */
 export function listEditorThemes(): EditorThemeEntry[] {
   return EDITOR_THEMES.map((theme) => ({ ...theme }));
@@ -88,4 +106,28 @@ export function allEditorThemeImporters(): ThemeInput[] {
     }
     return load;
   });
+}
+
+/**
+ * Resolve the Monaco/shiki theme id to apply.
+ * Explicit `editorThemeId` wins when it is in the catalog; otherwise map from
+ * the active app theme slug (unknown → ember default).
+ */
+export function resolveEditorThemeId(input: {
+  editorThemeId: string | null | undefined;
+  appThemeSlug: string | null | undefined;
+}): string {
+  const explicit = input.editorThemeId;
+  if (typeof explicit === "string" && explicit.length > 0 && CATALOG_IDS.has(explicit)) {
+    return explicit;
+  }
+
+  const slug = input.appThemeSlug ?? "";
+  const mapped = APP_SLUG_TO_EDITOR_THEME[slug] ?? DEFAULT_EDITOR_THEME_ID;
+  return CATALOG_IDS.has(mapped) ? mapped : DEFAULT_EDITOR_THEME_ID;
+}
+
+/** Map a Volli app theme slug to its default editor theme (null → ember default). */
+export function editorThemeIdForAppSlug(appThemeSlug: string | null | undefined): string {
+  return resolveEditorThemeId({ editorThemeId: null, appThemeSlug });
 }
