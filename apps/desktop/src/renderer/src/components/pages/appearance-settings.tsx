@@ -38,10 +38,6 @@ import {
 import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { listEditorThemes, type EditorThemeEntry } from "@renderer/editor/editor-theme-catalog";
-import {
-  refreshMonacoEditorTheme,
-  restoreEditorThemeFromState,
-} from "@renderer/editor/monaco-theme";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { writeThrough } from "@renderer/stores/mutate";
@@ -64,8 +60,10 @@ import { listLocalFontFamilies } from "@renderer/terminal/local-fonts";
  *
  * Preview here is a real palette swap, not a sample panel: we render the
  * terminal, so highlighting a theme repaints every live session and closing
- * the menu puts it back. The Editor picker does the same for Monaco via
- * {@link refreshMonacoEditorTheme}.
+ * the menu puts it back. The Editor picker does the same for Monaco through
+ * the theme store ({@link useThemeStore.startEditorPreview} /
+ * {@link useThemeStore.endEditorPreview}) so `paintedEditor` stays coherent
+ * with App-theme preview.
  */
 export function AppearanceSettings() {
   const terminal = useThemeStore((state) => state.terminal);
@@ -301,11 +299,12 @@ function EditorThemeOriginBadge({ display }: { display: EditorThemeDisplay }) {
  * Monaco/shiki theme picker over the shipped catalog.
  *
  * Apply-then-revert preview (same contract as TerminalThemeRow): highlighting
- * a row paints Monaco via {@link refreshMonacoEditorTheme} and writes nothing;
- * picking one persists through {@link useThemeStore.setEditorTheme}; closing
- * the menu any other way restores from **live** store inputs via
- * {@link restoreEditorThemeFromState} — never a stale closure over the
- * pre-commit resolved id.
+ * a row paints Monaco via {@link useThemeStore.startEditorPreview} and writes
+ * nothing; picking one persists through {@link useThemeStore.setEditorTheme};
+ * closing the menu any other way restores through
+ * {@link useThemeStore.endEditorPreview} — preview-aware (`effectiveTheme`),
+ * never a stale closure over the pre-commit resolved id, and never a direct
+ * Monaco call that would desync `paintedEditor`.
  */
 function EditorThemeRow() {
   const editorThemeId = useThemeStore((state) => state.editorThemeId);
@@ -327,7 +326,11 @@ function EditorThemeRow() {
       selection,
       resolvedId: display.resolvedId,
     });
-    refreshMonacoEditorTheme(plan.themeId);
+    if (plan.kind === "restore") {
+      endEditorPreview();
+      return;
+    }
+    useThemeStore.getState().startEditorPreview(plan.themeId);
   };
 
   // Leaving the surface with a preview running would strand Monaco on a theme
@@ -418,15 +421,12 @@ function EditorThemeRow() {
 
 /**
  * Puts Monaco back on the theme implied by the **current** theme store —
- * committed editorThemeId + app slug. Module-level so the unmount-only effect
- * stays exhaustive-deps clean (mirrors TerminalThemeRow's `endPreview`).
+ * effective (preview-aware) app slug + committed editorThemeId. Module-level
+ * so the unmount-only effect stays exhaustive-deps clean (mirrors
+ * TerminalThemeRow's `endPreview`).
  */
 const endEditorPreview = (): void => {
-  const state = useThemeStore.getState();
-  restoreEditorThemeFromState({
-    editorThemeId: state.editorThemeId,
-    appThemeSlug: state.global.slug,
-  });
+  useThemeStore.getState().endEditorPreview();
 };
 
 /** Reveal a config file in Finder; a missing path or a failed reveal toasts. */

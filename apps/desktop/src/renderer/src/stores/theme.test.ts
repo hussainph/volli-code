@@ -301,6 +301,44 @@ describe("preview", () => {
 
     expect(paint.applied).toEqual([MIDNIGHT, DEFAULT_THEME]);
   });
+
+  it("keeps Monaco on the App-preview editor theme when ending an Editor preview", () => {
+    // Regression: endEditorPreview used to restore from global.slug (ember →
+    // one-dark-pro) while App preview was still Midnight, desyncing Monaco
+    // from paintedEditor (tokyo-night).
+    const { store, paint, gateway } = freshStore();
+    store.getState().startPreview(MIDNIGHT);
+    expect(paint.editorThemes.at(-1)).toBe("tokyo-night");
+    paint.editorThemes.length = 0;
+
+    store.getState().startEditorPreview("nord");
+    expect(paint.editorThemes).toEqual(["nord"]);
+    paint.editorThemes.length = 0;
+
+    store.getState().endEditorPreview();
+
+    expect(paint.editorThemes).toEqual(["tokyo-night"]);
+    expect(store.getState().preview).toEqual(MIDNIGHT);
+    expect(gateway.setGlobal).not.toHaveBeenCalled();
+    expect(gateway.setGlobalEditor).not.toHaveBeenCalled();
+  });
+
+  it("re-previewing the same App theme refreshes Monaco after an editor desync", () => {
+    // Stuck case: paintedEditor still tokyo-night after an out-of-band paint
+    // left Monaco on one-dark-pro. Re-highlighting Midnight must refresh, not
+    // skip because the tracker already says tokyo-night.
+    const { store, paint } = freshStore();
+    store.getState().startPreview(MIDNIGHT);
+    expect(paint.editorThemes.at(-1)).toBe("tokyo-night");
+
+    // Bypass the store the way the old Appearance Editor restore did.
+    paint.refreshEditorTheme("one-dark-pro");
+    paint.editorThemes.length = 0;
+
+    store.getState().startPreview(MIDNIGHT);
+
+    expect(paint.editorThemes).toEqual(["tokyo-night"]);
+  });
 });
 
 describe("commit", () => {

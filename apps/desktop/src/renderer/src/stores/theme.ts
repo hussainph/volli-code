@@ -130,6 +130,17 @@ interface ThemeState {
   startPreview(theme: ThemeDefinition): void;
   cancelPreview(): void;
   commitPreview(scope: ThemeScope): Promise<boolean>;
+  /**
+   * Live Monaco preview for Settings → Editor — paints a catalog id and
+   * updates `paintedEditor`, writing nothing. Must go through this store so
+   * App-theme preview and Editor restore stay coherent.
+   */
+  startEditorPreview(themeId: string): void;
+  /**
+   * End an Editor preview by restoring Monaco from the same resolution
+   * `repaint` uses (`effectiveTheme`, not only `global.slug`).
+   */
+  endEditorPreview(): void;
   setGlobalTheme(theme: ThemeDefinition): Promise<boolean>;
   setEditorTheme(editorThemeId: string | null): Promise<boolean>;
   toggleFavorite(slug: string): void;
@@ -417,6 +428,12 @@ export function createThemeStore({
           },
 
           startPreview(theme) {
+            // Force the editor half even when the resolved catalog id matches
+            // `paintedEditor`: an Editor-picker restore that bypassed this
+            // store (or any out-of-band Monaco paint) can leave Monaco on the
+            // wrong theme while the tracker still says the preview id. Re-
+            // highlighting the same App theme must refresh, not skip.
+            paintedEditor = null;
             set({ preview: theme });
             repaint();
           },
@@ -425,6 +442,24 @@ export function createThemeStore({
             // Nothing to undo but the paint: a preview never wrote anywhere.
             if (get().preview === null) return;
             set({ preview: null });
+            repaint();
+          },
+
+          startEditorPreview(themeId) {
+            if (themeId.length === 0) {
+              get().endEditorPreview();
+              return;
+            }
+            paintedEditor = themeId;
+            deps.refreshEditorTheme(themeId);
+          },
+
+          endEditorPreview() {
+            // Always re-resolve and paint: a no-op skip on `paintedEditor`
+            // would leave Monaco stuck after a bypassed preview paint. Use
+            // the same inputs as `repaint` — effective (preview-aware) app
+            // slug, not only the stored global.
+            paintedEditor = null;
             repaint();
           },
 
