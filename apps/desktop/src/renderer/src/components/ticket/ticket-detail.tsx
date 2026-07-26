@@ -26,6 +26,7 @@ import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab"
 import { TicketBodyPanel } from "@renderer/components/ticket/ticket-body-panel";
 import { TicketChangesPanel } from "@renderer/components/ticket/ticket-changes-panel";
 import {
+  createTicketRecencyWatchOwner,
   EMPTY_TICKET_RECENCY_OWNER_STATE,
   readTicketInspection,
   reduceTicketRecencyOwner,
@@ -121,14 +122,24 @@ export function TicketDetail({
     reduceTicketRecencyOwner,
     EMPTY_TICKET_RECENCY_OWNER_STATE,
   );
-
-  React.useEffect(
+  const recencyWatchOwner = React.useMemo(
     () =>
-      window.api.files.onChanged((event) => {
-        dispatchRecencyOwner({ type: "file-changed", event });
+      createTicketRecencyWatchOwner({
+        watch: window.api.files.watch,
+        unwatch: window.api.files.unwatch,
       }),
     [],
   );
+
+  React.useEffect(() => {
+    const unsubscribe = window.api.files.onChanged((event) => {
+      dispatchRecencyOwner({ type: "file-changed", event });
+    });
+    return () => {
+      unsubscribe();
+      recencyWatchOwner.dispose();
+    };
+  }, [recencyWatchOwner]);
 
   const displayId = displayTicketId(ticketPrefix, ticket.ticketNumber);
 
@@ -402,10 +413,18 @@ export function TicketDetail({
         ticketId: ticket.id,
         relPath,
       }).then((event) => {
-        if (event !== null) dispatchRecencyOwner(event);
+        if (event === null) return;
+        dispatchRecencyOwner(event);
+        void recencyWatchOwner.watch({ projectId, ticketId: ticket.id, relPath }).then((result) => {
+          if (!result.ok) {
+            toastError(
+              `Updated awareness for ${baseNameOf(relPath)} is off. Reopen the file to retry.`,
+            );
+          }
+        });
       });
     },
-    [projectId, ticket.id],
+    [projectId, recencyWatchOwner, ticket.id],
   );
   const openFile = React.useCallback(
     (relPath: string) => {
