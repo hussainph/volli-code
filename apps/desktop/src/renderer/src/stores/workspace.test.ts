@@ -363,6 +363,21 @@ describe("ticket diff tabs", () => {
       active: "doc",
     });
   });
+
+  it("keeps files and diffs as independent ordered lists with a shared active id", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicketFile("project-a", "ticket-1", "a.md");
+    store.getState().openTicketDiff("project-a", "ticket-1", "b.ts");
+    store.getState().openTicketFile("project-a", "ticket-1", "c.md");
+    store.getState().setTicketActiveTab("project-a", "ticket-1", "diff:b.ts");
+
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
+      files: ["a.md", "c.md"],
+      diffs: ["b.ts"],
+      diffMeta: {},
+      active: "diff:b.ts",
+    });
+  });
 });
 
 describe("ticket file tabs", () => {

@@ -115,7 +115,8 @@ export interface WorkspaceUiState {
    * #1/#3); `null` on the plain board. Persisted — survives restart.
    */
   openTicketId: string | null;
-  /** Open file tabs + active tab, per ticket (global-artifacts decision #5). Persisted. */
+  /** Open file/diff tabs + active tab, per ticket (global-artifacts decision #5;
+   * CONCEPT #48/#51). Persisted. */
   ticketTabs: Record<string, TicketTabsState>;
   /**
    * The Project Files tab workspace for this project (decisions #55/#56) —
@@ -241,7 +242,8 @@ interface WorkspaceState {
    * for that path. Prunes the ticket record once nothing but Doc remains.
    */
   closeTicketDiff(projectId: string, ticketId: string, relPath: string): void;
-  /** Sets the active tab for `ticketId` (Ticket Body / `"doc"`, a `file:<relPath>`, or a session id). */
+  /** Sets the active tab for `ticketId` (Ticket Body / `"doc"`, a
+   * `file:<relPath>`, a `diff:<relPath>`, or a session id). */
   setTicketActiveTab(projectId: string, ticketId: string, tabId: string): void;
   /**
    * Single-click in the Project Files navigator: open `relPath` in the
