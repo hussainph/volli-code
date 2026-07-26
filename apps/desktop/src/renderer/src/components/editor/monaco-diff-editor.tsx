@@ -75,6 +75,11 @@ export function releaseDiffLeases(pair: DiffLeasePair, modifiedViewState?: unkno
   pair.modified.release(modifiedViewState);
 }
 
+/** Toast copy when DiffEditor construction fails — never leave an empty pane silent. */
+export function diffEditorInitFailureMessage(label: string, detail: string): string {
+  return `Couldn't load ${label}: ${detail}`;
+}
+
 export interface MonacoDiffEditorProps {
   /** Registry lease for the immutable base side (`diff-base` identity). */
   originalLease: MonacoLease;
@@ -241,6 +246,9 @@ export function MonacoDiffEditor({
         diffEditorRef.current = null;
         host.dataset.monacoDiffStatus = "failed";
         console.error("Monaco diff editor failed", error);
+        // DiffEditor has no fallback pane like MonacoFileEditor — toast so the
+        // empty host is not a silent failure (issue #109 review).
+        toastError(diffEditorInitFailureMessage(liveRef.current.ariaLabel, errorMessage(error)));
       });
 
     return () => {
