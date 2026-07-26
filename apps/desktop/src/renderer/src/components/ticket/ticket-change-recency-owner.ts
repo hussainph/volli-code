@@ -1,4 +1,4 @@
-import type { FileChangedEvent } from "@volli/shared";
+import type { FileChangedEvent, FilePathInput, Result } from "@volli/shared";
 
 import {
   EMPTY_CHANGE_RECENCY_STATE,
@@ -52,6 +52,45 @@ export async function readTicketInspection(
       source: result.source,
     },
     revision: result.mtime,
+  };
+}
+
+export function createTicketRecencyWatchOwner(api: {
+  watch(input: FilePathInput): Promise<Result>;
+  unwatch(input: FilePathInput): Promise<Result>;
+}): {
+  watch(input: FilePathInput): Promise<Result>;
+  dispose(): void;
+} {
+  const held = new Map<string, FilePathInput>();
+  const pending = new Map<string, Promise<Result>>();
+  let disposed = false;
+  const keyOf = (input: FilePathInput) =>
+    `${input.projectId}\u0000${input.ticketId ?? ""}\u0000${input.relPath}`;
+
+  return {
+    watch(input) {
+      const key = keyOf(input);
+      if (held.has(key)) return Promise.resolve({ ok: true });
+      const existing = pending.get(key);
+      if (existing !== undefined) return existing;
+      const started = api.watch(input).then((result) => {
+        if (result.ok) {
+          if (disposed) void api.unwatch(input);
+          else held.set(key, input);
+        }
+        return result;
+      });
+      pending.set(key, started);
+      void started.finally(() => pending.delete(key));
+      return started;
+    },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      for (const input of held.values()) void api.unwatch(input);
+      held.clear();
+    },
   };
 }
 
