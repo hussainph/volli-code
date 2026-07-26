@@ -73,6 +73,69 @@ describe("reconcileText", () => {
     });
   });
 
+  it("merges an append at EOF with an edit on an earlier line", () => {
+    expect(
+      reconcileText({
+        baseline: "one\ntwo\n",
+        local: "one\ntwo\nhuman appended\n",
+        disk: "agent one\ntwo\n",
+      }),
+    ).toEqual({
+      kind: "merge",
+      value: "agent one\ntwo\nhuman appended\n",
+      nextBaseline: "agent one\ntwo\n",
+    });
+  });
+
+  it("merges edits that surround an astral character without splitting it", () => {
+    expect(
+      reconcileText({
+        baseline: "title\n🚀 launch\ntail\n",
+        local: "human title\n🚀 launch\ntail\n",
+        disk: "title\n🚀 launch\nagent tail\n",
+      }),
+    ).toEqual({
+      kind: "merge",
+      value: "human title\n🚀 launch\nagent tail\n",
+      nextBaseline: "title\n🚀 launch\nagent tail\n",
+    });
+  });
+
+  it("refuses to invent a value neither side wrote when both retune the same line", () => {
+    // Character-granular merging turned 100 → 1000 (local) and 100 → 200 (disk)
+    // into 2000, a timeout nobody chose. Same base line ⇒ conflict.
+    expect(
+      reconcileText({
+        baseline: "const timeout = 100;\n",
+        local: "const timeout = 1000;\n",
+        disk: "const timeout = 200;\n",
+      }),
+    ).toEqual({
+      kind: "conflict",
+      reason: "overlap",
+      local: "const timeout = 1000;\n",
+      disk: "const timeout = 200;\n",
+    });
+  });
+
+  it("decides the same conflict whichever side is called local", () => {
+    const both = {
+      baseline: "const timeout = 100;\n",
+      local: "const timeout = 1000;\n",
+      disk: "const timeout = 200;\n",
+    };
+
+    expect(reconcileText(both).kind).toBe(
+      reconcileText({ ...both, local: both.disk, disk: both.local }).kind,
+    );
+  });
+
+  it("conflicts when both sides append to the same unterminated final line", () => {
+    expect(
+      reconcileText({ baseline: "one\ntwo", local: "one\ntwo local", disk: "one\ntwo disk" }).kind,
+    ).toBe("conflict");
+  });
+
   it("preserves exact local and disk text when both sides replace the same range", () => {
     expect(reconcileText({ baseline: "before\n", local: "human\n", disk: "agent\n" })).toEqual({
       kind: "conflict",
@@ -125,6 +188,37 @@ describe("reconcileText", () => {
       kind: "merge",
       value: "human one\r\ntwo\r\nagent three\r\n",
       nextBaseline: "one\r\ntwo\r\nagent three\r\n",
+    });
+  });
+
+  // MAX_EDIT_DISTANCE is 1024 edit steps. A pure append of N characters costs
+  // exactly N, so these two pin the boundary from either side.
+  it("still merges a change sitting exactly on the maximum edit distance", () => {
+    const baseline = "head\ntail\n";
+
+    expect(
+      reconcileText({
+        baseline,
+        local: baseline + "z".repeat(1024),
+        disk: "agent head\ntail\n",
+      }),
+    ).toEqual({
+      kind: "merge",
+      value: "agent head\ntail\n" + "z".repeat(1024),
+      nextBaseline: "agent head\ntail\n",
+    });
+  });
+
+  it("preserves both versions once a change is one step past the maximum edit distance", () => {
+    const baseline = "head\ntail\n";
+    const local = baseline + "z".repeat(1025);
+    const disk = "agent head\ntail\n";
+
+    expect(reconcileText({ baseline, local, disk })).toEqual({
+      kind: "conflict",
+      reason: "budget",
+      local,
+      disk,
     });
   });
 

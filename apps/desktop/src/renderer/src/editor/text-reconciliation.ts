@@ -45,7 +45,7 @@ export function reconcileText(input: ReconcileTextInput): ReconcileTextResult {
   if (localEdits === null || diskEdits === null) {
     return { kind: "conflict", local, disk, reason: "budget" };
   }
-  if (editsOverlap(localEdits, diskEdits)) {
+  if (editsOverlap(baseline, localEdits, diskEdits)) {
     return { kind: "conflict", local, disk, reason: "overlap" };
   }
   return {
@@ -55,7 +55,8 @@ export function reconcileText(input: ReconcileTextInput): ReconcileTextResult {
   };
 }
 
-interface TextEdit {
+/** One replacement of `baseline[start, end)`. `start === end` is an insertion. */
+export interface TextEdit {
   start: number;
   end: number;
   replacement: string;
@@ -73,12 +74,16 @@ const MAX_EDIT_DISTANCE = 1024;
 const MAX_COMPARISONS = 3_000_000;
 
 /**
- * Find a bounded shortest edit script with Myers' O((N + M)D) algorithm.
+ * Find a bounded shortest edit script with Myers' O((N + M)D) algorithm, or
+ * `null` when the change exceeds the caps above.
  *
- * The mutable frontier and reconstruction trace are deliberately private: a
- * reconciliation caller only needs a safe outcome, never diff coordinates.
+ * The returned edits are non-overlapping, sorted by `start`, and expressed in
+ * `baseline` coordinates — the contract `applyEdits` relies on here and Monaco's
+ * `pushEditOperations` relies on when the same edits become one external write.
+ * The mutable frontier and reconstruction trace stay private: a reconciliation
+ * caller only ever needs the resulting script, never the search state.
  */
-function findTextEdits(baseline: string, changed: string): TextEdit[] | null {
+export function findTextEdits(baseline: string, changed: string): TextEdit[] | null {
   if (baseline.length > MAX_TEXT_LENGTH || changed.length > MAX_TEXT_LENGTH) return null;
 
   const maximumDistance = Math.min(MAX_EDIT_DISTANCE, baseline.length + changed.length);
@@ -195,17 +200,69 @@ function stepsToEdits(steps: readonly EditStep[]): TextEdit[] {
   return edits;
 }
 
-function editsOverlap(leftEdits: readonly TextEdit[], rightEdits: readonly TextEdit[]): boolean {
-  return leftEdits.some((left) => rightEdits.some((right) => editRangesOverlap(left, right)));
+/** An inclusive range of BASE line indices one edit consumes or lands in. */
+interface LineSpan {
+  first: number;
+  last: number;
 }
 
-function editRangesOverlap(left: TextEdit, right: TextEdit): boolean {
-  const leftIsInsertion = left.start === left.end;
-  const rightIsInsertion = right.start === right.end;
-  if (leftIsInsertion && rightIsInsertion) return left.start === right.start;
-  if (leftIsInsertion) return left.start >= right.start && left.start <= right.end;
-  if (rightIsInsertion) return right.start >= left.start && right.start <= left.end;
-  return Math.max(left.start, right.start) < Math.min(left.end, right.end);
+/**
+ * Conflicts are decided per LINE, not per character.
+ *
+ * Two character-disjoint edits on the same line are not independent in any sense
+ * a person would recognize: `timeout = 100` becoming `1000` locally and `200` on
+ * disk share the digit `0`, so a character merge silently produces `2000` — a
+ * value neither side wrote. A line is the smallest unit whose merged result a
+ * reviewer can still read, so touching the same base line is a conflict and both
+ * versions are preserved. Edits on different lines still merge character-exactly.
+ */
+function editsOverlap(
+  baseline: string,
+  leftEdits: readonly TextEdit[],
+  rightEdits: readonly TextEdit[],
+): boolean {
+  const lineStarts = lineStartOffsets(baseline);
+  const rightSpans = rightEdits.map((right) => baseLineSpan(right, lineStarts));
+  return leftEdits.some((left) => {
+    const leftSpan = baseLineSpan(left, lineStarts);
+    return rightSpans.some(
+      (rightSpan) => leftSpan.first <= rightSpan.last && rightSpan.first <= leftSpan.last,
+    );
+  });
+}
+
+/**
+ * Offsets at which each base line begins. `\n` terminates a line, so a CRLF
+ * file's `\r` belongs to the line it closes and never starts a new one; a text
+ * ending in a newline has a final empty line, which is where an EOF append lands.
+ */
+function lineStartOffsets(text: string): number[] {
+  const starts = [0];
+  for (let index = text.indexOf("\n"); index !== -1; index = text.indexOf("\n", index + 1)) {
+    starts.push(index + 1);
+  }
+  return starts;
+}
+
+function baseLineSpan(edit: TextEdit, lineStarts: readonly number[]): LineSpan {
+  const first = lineIndexAt(lineStarts, edit.start);
+  // An insertion consumes nothing, so it only touches the line it lands in. A
+  // replacement touches every line it consumes a character from — `end` is
+  // exclusive, so the last of those characters is at `end - 1` (which is the
+  // closing `\n` when the replacement swallows a whole line, keeping the
+  // untouched line that follows free to merge).
+  return { first, last: edit.end > edit.start ? lineIndexAt(lineStarts, edit.end - 1) : first };
+}
+
+function lineIndexAt(lineStarts: readonly number[], offset: number): number {
+  let low = 0;
+  let high = lineStarts.length - 1;
+  while (low < high) {
+    const middle = (low + high + 1) >> 1;
+    if (lineStarts[middle] <= offset) low = middle;
+    else high = middle - 1;
+  }
+  return low;
 }
 
 function applyEdits(baseline: string, edits: readonly TextEdit[]): string {
