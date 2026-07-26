@@ -70,15 +70,22 @@ function treeDir(page, relPath) {
   return page.locator(`[data-testid="file-tree-dir"][data-rel-path="${relPath}"]`);
 }
 
+function editorThemeTrigger(page) {
+  return page.getByRole("button", { name: "Editor theme", exact: true });
+}
+
 async function goToNav(page, label, settled) {
   await navButton(page, label).click();
   await waitUntil(`${label} page to settle`, () => settled(), { timeout: 15000 });
 }
 
+const filesSettled = (page) => async () =>
+  (await page.locator('[data-testid="files-workbench"]').count()) === 1;
+
 async function openAppearanceSettings(page) {
   await page.getByRole("button", { name: "Settings", exact: true }).first().click();
   await page.getByRole("button", { name: "Appearance", exact: true }).click();
-  await page.getByRole("button", { name: "Editor theme" }).waitFor();
+  await editorThemeTrigger(page).waitFor();
 }
 
 async function expandDir(page, relPath, expectChild) {
@@ -167,9 +174,7 @@ async function waitForMonacoBackground(page, expectedHex) {
 }
 
 async function openSeededFile(page) {
-  await goToNav(page, "Files", () =>
-    page.getByRole("button", { name: "New ticket", exact: true }).isVisible(),
-  );
+  await goToNav(page, "Files", filesSettled(page));
   await waitUntil(
     "files empty or tree",
     async () =>
@@ -223,7 +228,7 @@ try {
 
   await attempt(3, "Appearance Editor theme commit persists Nord", async () => {
     await openAppearanceSettings(page);
-    await page.getByRole("button", { name: "Editor theme" }).click();
+    await editorThemeTrigger(page).click();
     await page.getByRole("combobox", { name: "Search editor themes" }).fill("Nord");
     await page
       .getByRole("option", { name: /^Nord$/ })
@@ -231,7 +236,7 @@ try {
       .click();
 
     const label = await waitUntil("Editor theme trigger shows Nord", async () => {
-      const text = (await page.getByRole("button", { name: "Editor theme" }).textContent())?.trim();
+      const text = (await editorThemeTrigger(page).textContent())?.trim();
       return text === "Nord" ? text : null;
     });
 

@@ -1,5 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+
+import {
+  refreshMonacoEditorTheme,
+  resetMonacoEditorThemeForTests,
+} from "@renderer/editor/monaco-theme";
 
 import {
   attachEditorContribution,
@@ -12,6 +17,10 @@ import {
   planExplicitSave,
   saveFailureMessage,
 } from "./monaco-file-editor";
+
+afterEach(() => {
+  resetMonacoEditorThemeForTests();
+});
 
 /**
  * The mount effect calls `attachEditorContribution` once after the editor is
@@ -96,6 +105,11 @@ describe("fileEditorConstructionOptions", () => {
       domReadOnly: true,
       ariaLabel: "notes.md",
     });
+  });
+
+  it("uses the active catalog theme so remounts do not clobber Appearance", () => {
+    refreshMonacoEditorTheme("nord");
+    expect(fileEditorConstructionOptions(base)).toMatchObject({ theme: "nord" });
   });
 });
 

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { DEFAULT_EDITOR_THEME_ID } from "./editor-theme-catalog";
 import {
+  activeMonacoEditorThemeId,
   applyMonacoThemeForDiffEditor,
   bindMonacoEditorThemeHost,
   ensureMonacoEditorTheme,
@@ -94,5 +95,13 @@ describe("applyMonacoThemeForDiffEditor", () => {
 
     expect(setTheme).toHaveBeenCalledWith(DEFAULT_EDITOR_THEME_ID);
     expect(setTheme.mock.calls.some((call) => call[0] === "volli-dark")).toBe(false);
+  });
+});
+
+describe("activeMonacoEditorThemeId", () => {
+  it("returns the pending catalog id so create() construction options do not clobber it", () => {
+    expect(activeMonacoEditorThemeId()).toBe(DEFAULT_EDITOR_THEME_ID);
+    refreshMonacoEditorTheme("nord");
+    expect(activeMonacoEditorThemeId()).toBe("nord");
   });
 });

@@ -77,6 +77,15 @@ export function applyMonacoThemeForDiffEditor(
   monaco.editor.setTheme(resolved);
 }
 
+/**
+ * Catalog id for `editor.create` construction options. shikiToMonaco patches
+ * `create` to honor `theme`, so hardcoding {@link DEFAULT_EDITOR_THEME_ID}
+ * would clobber a committed Appearance selection on every remount.
+ */
+export function activeMonacoEditorThemeId(): string {
+  return pendingThemeId ?? DEFAULT_EDITOR_THEME_ID;
+}
+
 /** Test-only: clear module state between cases. */
 export function resetMonacoEditorThemeForTests(): void {
   host = null;
