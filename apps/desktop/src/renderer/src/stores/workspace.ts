@@ -720,7 +720,7 @@ export function createWorkspaceStore(storage?: StateStorage) {
             else nextTabs[ticketId] = next;
 
             const ticketDiffViewStates = { ...current.ticketDiffViewStates };
-            const perTicket = { ...(ticketDiffViewStates[ticketId] ?? {}) };
+            const perTicket = { ...ticketDiffViewStates[ticketId] };
             delete perTicket[relPath];
             if (Object.keys(perTicket).length === 0) delete ticketDiffViewStates[ticketId];
             else ticketDiffViewStates[ticketId] = perTicket;
@@ -800,7 +800,7 @@ export function createWorkspaceStore(storage?: StateStorage) {
               ticketDiffViewStates: {
                 ...current.ticketDiffViewStates,
                 [ticketId]: {
-                  ...(current.ticketDiffViewStates[ticketId] ?? {}),
+                  ...current.ticketDiffViewStates[ticketId],
                   [relPath]: viewState,
                 },
               },

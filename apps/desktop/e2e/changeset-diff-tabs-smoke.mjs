@@ -101,9 +101,7 @@ async function readDiffMonaco(page) {
       getComputedStyle(diffEditor ?? host).getPropertyValue("--monaco-diff-side-by-side") === "true"
         ? true
         : diffEditor !== null
-          ? !diffEditor.classList.contains("side-by-side")
-            ? false
-            : true
+          ? diffEditor.classList.contains("side-by-side")
           : null;
     return {
       hostCount: document.querySelectorAll("[data-monaco-diff-status]").length,
