@@ -2,7 +2,7 @@ import { createHighlighter, createJavaScriptRegexEngine } from "shiki";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { detectDocumentLanguage, type DocumentIdentity } from "./document-identity";
-import { ensureShikiLanguage, shikiLangImportFor } from "./shiki-langs";
+import { allShikiLangImporters, ensureShikiLanguage, shikiLangImportFor } from "./shiki-langs";
 
 const mainFile = (relPath: string): DocumentIdentity => ({
   kind: "file",
@@ -62,6 +62,27 @@ describe("shikiLangImportFor", () => {
     expect(detectDocumentLanguage(mainFile("LICENSE"))).toBe("plaintext");
     expect(shikiLangImportFor("plaintext")).toBeNull();
     expect(shikiLangImportFor("not-a-real-language")).toBeNull();
+  });
+});
+
+describe("allShikiLangImporters", () => {
+  it("returns every mapped document-language loader and excludes plaintext", () => {
+    const importers = allShikiLangImporters();
+
+    expect(importers.length).toBeGreaterThan(0);
+    expect(importers).toHaveLength(DOCUMENT_LANGUAGE_FIXTURES.length);
+
+    for (const importer of importers) {
+      expect(typeof importer).toBe("function");
+    }
+
+    for (const { language } of DOCUMENT_LANGUAGE_FIXTURES) {
+      const load = shikiLangImportFor(language);
+      expect(load).not.toBeNull();
+      expect(importers).toContain(load);
+    }
+
+    expect(shikiLangImportFor("plaintext")).toBeNull();
   });
 });
 
