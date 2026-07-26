@@ -9,12 +9,27 @@ import {
   isThemeDefinition,
   parseThemeJson,
   serializeGlobalTheme,
+  parseGlobalEditorThemeId,
+  serializeGlobalEditorThemeId,
   THEME_APP_STATE_KEY,
+  THEME_EDITOR_APP_STATE_KEY,
 } from "./persistence";
 
 describe("global theme persistence", () => {
   it("stores the authored definition under the `theme` app_state key", () => {
     expect(THEME_APP_STATE_KEY).toBe("theme");
+  });
+
+  it("stores the global editor theme id under a dedicated app_state key", () => {
+    expect(THEME_EDITOR_APP_STATE_KEY).toBe("theme_editor");
+  });
+
+  it("round-trips a global editor theme id and treats absent/empty as derive-from-app", () => {
+    expect(parseGlobalEditorThemeId(serializeGlobalEditorThemeId("nord"))).toBe("nord");
+    expect(parseGlobalEditorThemeId(serializeGlobalEditorThemeId(null))).toBeNull();
+    expect(parseGlobalEditorThemeId(undefined)).toBeNull();
+    expect(parseGlobalEditorThemeId(null)).toBeNull();
+    expect(parseGlobalEditorThemeId("")).toBeNull();
   });
 
   it("round-trips an authored definition", () => {

@@ -474,6 +474,12 @@ const api = {
     /** Persists the authored global theme; resolves with the fresh state. */
     setGlobal: (theme: ThemeDefinition): Promise<ThemeStateResult> =>
       invoke("volli:theme-set-global", { theme }),
+    /**
+     * Persists the global Monaco/shiki theme id; `null` clears it so the editor
+     * derives from the active app theme slug. Resolves with the fresh state.
+     */
+    setGlobalEditor: (editorThemeId: string | null): Promise<ThemeStateResult> =>
+      invoke("volli:theme-set-global-editor", { editorThemeId }),
     /** Persists one project's per-surface override; `null` clears it back to inheriting. */
     setProject: (
       projectId: string,

@@ -594,6 +594,13 @@ export const THEME_IPC: { readonly [C in ThemeIpcChannel]: IpcRequestDescriptor<
       args.length === 1 && isRecord(args[0]) && isThemeDefinition(args[0]["theme"]),
     invalidError: "Invalid theme",
   },
+  "volli:theme-set-global-editor": {
+    guard: (args): args is IpcArgs<"volli:theme-set-global-editor"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      (args[0]["editorThemeId"] === null || typeof args[0]["editorThemeId"] === "string"),
+    invalidError: "Invalid editor theme",
+  },
   "volli:theme-set-project": {
     guard: (args): args is IpcArgs<"volli:theme-set-project"> => {
       if (args.length !== 1) return false;

@@ -26,6 +26,32 @@ import { isThemeTokenName } from "./tokens";
 /** The `app_state` key the authored global theme lives under (#29's kv table). */
 export const THEME_APP_STATE_KEY = "theme";
 
+/**
+ * The `app_state` key for the global Monaco/shiki editor theme id.
+ * Absent or null means “derive from the active app theme slug” via
+ * `resolveEditorThemeId` — never a resolved token set.
+ */
+export const THEME_EDITOR_APP_STATE_KEY = "theme_editor";
+
+/**
+ * The string stored under {@link THEME_EDITOR_APP_STATE_KEY}. Empty means
+ * “derive from app” (same as a missing row); a non-empty value is the
+ * authored catalog id.
+ */
+export function serializeGlobalEditorThemeId(editorThemeId: string | null): string {
+  return editorThemeId ?? "";
+}
+
+/**
+ * Reads the authored global editor theme id back out of `app_state`. Null for
+ * absent, empty, or “clear back to derive” — the renderer maps that through
+ * `resolveEditorThemeId` against the active app theme slug.
+ */
+export function parseGlobalEditorThemeId(raw: string | undefined | null): string | null {
+  if (raw === undefined || raw === null || raw.length === 0) return null;
+  return raw;
+}
+
 // ── project override (migration 013) ─────────────────────────────────────────
 
 /**

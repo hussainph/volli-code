@@ -150,6 +150,7 @@ describe("volli:theme-state", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.theme).toEqual(DEFAULT_THEME);
+    expect(result.value.editorThemeId).toBeNull();
     expect(result.value.projectOverride).toBeNull();
     expect(result.value.projectId).toBeNull();
   });
@@ -195,6 +196,34 @@ describe("volli:theme-set-global", () => {
 
     expect(result.ok && result.value.theme).toEqual(theme);
     expect(getGlobalTheme(ctx.db)).toEqual(theme);
+  });
+});
+
+describe("volli:theme-set-global-editor", () => {
+  it("persists an authored editor theme id and echoes it on theme-state", () => {
+    setup();
+
+    const written = invoke<ThemeStateResult>("volli:theme-set-global-editor", {
+      editorThemeId: "nord",
+    });
+
+    expect(written.ok).toBe(true);
+    if (!written.ok) return;
+    expect(written.value.editorThemeId).toBe("nord");
+
+    const read = invoke<ThemeStateResult>("volli:theme-state", {});
+    expect(read.ok && read.value.editorThemeId).toBe("nord");
+  });
+
+  it("clears back to derive-from-app on null", () => {
+    setup();
+    invoke("volli:theme-set-global-editor", { editorThemeId: "nord" });
+
+    const result = invoke<ThemeStateResult>("volli:theme-set-global-editor", {
+      editorThemeId: null,
+    });
+
+    expect(result.ok && result.value.editorThemeId).toBeNull();
   });
 });
 
