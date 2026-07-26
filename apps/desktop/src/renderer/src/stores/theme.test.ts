@@ -191,6 +191,35 @@ describe("hydrate", () => {
     expect(store.getState().projectOverride).toEqual(override);
   });
 
+  // Boot's two reads overlap by design: main.tsx fires the global one the
+  // moment the renderer starts, and boot() fires the project-scoped one as
+  // soon as it has resolved the persisted selection. Whichever is issued LAST
+  // is the scope the app is in — arrival order is a network fact, not intent.
+  it("drops a stale read that lands after a newer one was issued", async () => {
+    const override: ProjectThemeOverride = {
+      ...EMPTY_PROJECT_THEME_OVERRIDE,
+      appThemeSlug: "midnight",
+    };
+    const globalRead = deferred<ThemeStateResult>();
+    const projectRead = deferred<ThemeStateResult>();
+    const pending = [globalRead.promise, projectRead.promise];
+    const { store } = freshStore({ state: vi.fn(() => pending.shift()!) });
+
+    const stale = store.getState().hydrate(); // main.tsx, global scope
+    const fresh = store.getState().hydrate("p1"); // boot, restored selection
+
+    projectRead.resolve({
+      ok: true,
+      value: statePayload({ projectId: "p1", projectOverride: override }),
+    });
+    await fresh;
+    globalRead.resolve({ ok: true, value: statePayload() });
+    await stale;
+
+    expect(store.getState().projectId).toBe("p1");
+    expect(store.getState().projectOverride).toEqual(override);
+  });
+
   it("toasts a typed read failure and keeps the shipped default", async () => {
     const { store } = freshStore({
       state: vi.fn(async () => ({ ok: false as const, error: "db closed" })),

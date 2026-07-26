@@ -29,6 +29,7 @@ import {
 
 import { useBoardStore } from "./board";
 import { writeThrough } from "./mutate";
+import { useThemeStore } from "./theme";
 import { useWorkspaceStore } from "./workspace";
 
 /** The `app_state` key `selectedProjectId` is persisted under — also read by lib/boot.ts. */
@@ -80,6 +81,20 @@ export interface ProjectsGateway {
   setSelection(selectedProjectId: string | null): Promise<AppStateSetResult>;
 }
 
+/**
+ * Told which project the app is now looking at (`null` = no project / global
+ * scope). The per-project theme override (#69) is keyed on exactly this, and
+ * the theme store cannot poll for it — so the ONE place the selection changes
+ * announces it, and every UI entry point (rail click, ⌘1–9, project added,
+ * project removed, boot restoring the persisted choice) is covered by
+ * construction rather than by remembering to call something.
+ */
+export type SelectedProjectListener = (projectId: string | null) => void;
+
+const defaultSelectedProjectListener: SelectedProjectListener = (projectId) => {
+  void useThemeStore.getState().hydrate(projectId);
+};
+
 const defaultGateway: ProjectsGateway = {
   create: (input) => window.api.projects.create(input),
   update: (input) => window.api.projects.update(input),
@@ -112,8 +127,11 @@ function sameOrder(a: readonly Project[], b: readonly Project[]): boolean {
   return a.length === b.length && a.every((project, index) => project.id === b[index]?.id);
 }
 
-/** Factory so tests can inject a fake gateway instead of the real preload bridge. */
-export function createProjectsStore(gateway: ProjectsGateway = defaultGateway) {
+/** Factory so tests can inject a fake gateway (and scope listener) instead of the real seams. */
+export function createProjectsStore(
+  gateway: ProjectsGateway = defaultGateway,
+  onSelectedProjectChange: SelectedProjectListener = defaultSelectedProjectListener,
+) {
   /**
    * Chains `gateway.update` calls for the SAME project id so only one is ever
    * in flight at a time. `updateBaseBranch` and `updateSetupCommand` write
@@ -159,12 +177,24 @@ export function createProjectsStore(gateway: ProjectsGateway = defaultGateway) {
       });
   }
 
+  /**
+   * Announces a selection change to {@link SelectedProjectListener} — and only
+   * a real CHANGE: re-selecting the project already showing would otherwise
+   * cost a redundant theme round-trip on every rail click, and boot hydrating
+   * `null` over `null` would race main.tsx's own global-scope read.
+   */
+  function announceSelection(previous: string | null, next: string | null): void {
+    if (next !== previous) onSelectedProjectChange(next);
+  }
+
   return create<ProjectsState>()((set, get) => ({
     projects: [],
     selectedProjectId: null,
 
     hydrate(projects, selectedProjectId) {
+      const previous = get().selectedProjectId;
       set({ projects, selectedProjectId });
+      announceSelection(previous, selectedProjectId);
     },
 
     async addProject({ path, defaultName }) {
@@ -190,13 +220,14 @@ export function createProjectsStore(gateway: ProjectsGateway = defaultGateway) {
       // project at that path was selected rather than inserted; append it
       // defensively only if this renderer doesn't already have it (a fresh
       // insert never will, so the guard is a no-op there).
-      const { projects } = get();
+      const { projects, selectedProjectId } = get();
       const exists = projects.some((project) => project.id === result.project.id);
       set({
         projects: exists ? projects : [...projects, result.project],
         selectedProjectId: result.project.id,
       });
       persistSelection(result.project.id);
+      announceSelection(selectedProjectId, result.project.id);
     },
 
     async updateBaseBranch(id, baseBranch) {
@@ -284,6 +315,7 @@ export function createProjectsStore(gateway: ProjectsGateway = defaultGateway) {
           : nextProjects[Math.min(Math.max(removedIndex, 0), nextProjects.length - 1)]!.id;
       set({ projects: nextProjects, selectedProjectId: nextSelectedId });
       persistSelection(nextSelectedId);
+      announceSelection(selectedProjectId, nextSelectedId);
     },
 
     reorder(activeId, overId) {
@@ -327,10 +359,11 @@ export function createProjectsStore(gateway: ProjectsGateway = defaultGateway) {
     },
 
     select(id) {
-      const exists = get().projects.some((project) => project.id === id);
-      if (!exists) return;
+      const { projects, selectedProjectId } = get();
+      if (!projects.some((project) => project.id === id)) return;
       set({ selectedProjectId: id });
       persistSelection(id);
+      announceSelection(selectedProjectId, id);
     },
 
     selectByIndex(index) {

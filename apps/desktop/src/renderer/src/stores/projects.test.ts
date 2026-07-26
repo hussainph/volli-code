@@ -74,9 +74,18 @@ function fakeGateway(overrides: Partial<ProjectsGateway> = {}): ProjectsGateway 
   return { create, update, remove, reorder, setSelection, ...overrides };
 }
 
-/** Fresh store over a fresh fake gateway — never shared across tests. */
+/**
+ * Fresh store over a fresh fake gateway — never shared across tests. The
+ * selection listener is faked too: the real one re-hydrates the theme store's
+ * scope, which is a whole second store's worth of IPC no projects test wants.
+ */
 function freshStore(gateway: ProjectsGateway = fakeGateway()) {
-  return { store: createProjectsStore(gateway), gateway };
+  const onSelectedProjectChange = vi.fn<(projectId: string | null) => void>();
+  return {
+    store: createProjectsStore(gateway, onSelectedProjectChange),
+    gateway,
+    onSelectedProjectChange,
+  };
 }
 
 describe("encodeProjectsUiState / decodeProjectsUiState", () => {
@@ -148,6 +157,17 @@ describe("addProject", () => {
     expect(a).toBeDefined();
     expect(a!.path).toBe("/a");
     expect(store.getState().selectedProjectId).toBe(a!.id);
+  });
+
+  // Adding a project auto-selects it, so it is a scope change like any other —
+  // a brand-new project inherits everything, and the app has to be repainted
+  // out of the previous project's override to show that.
+  it("announces the auto-selected new project as the scope", async () => {
+    const { store, onSelectedProjectChange } = freshStore();
+
+    await store.getState().addProject({ path: "/a", defaultName: "A" });
+
+    expect(onSelectedProjectChange).toHaveBeenCalledExactlyOnceWith("id-/a");
   });
 
   it("seeds the board's ticket/label slices for the new project", async () => {
@@ -320,6 +340,20 @@ describe("removeProject", () => {
 
     expect(store.getState().projects).toEqual([]);
     expect(store.getState().selectedProjectId).toBeNull();
+  });
+
+  // The removed project's theme override goes with it; anything still painted
+  // from it is a look no project asks for any more, so the scope falls back to
+  // global (or to whichever neighbor now holds the selection).
+  it("announces the fallback scope when the selected project is removed", async () => {
+    const only = project({ id: "only", path: "/a" });
+    const { store, onSelectedProjectChange } = freshStore();
+    store.getState().hydrate([only], only.id);
+    onSelectedProjectChange.mockClear();
+
+    await store.getState().removeProject(only.id);
+
+    expect(onSelectedProjectChange).toHaveBeenCalledExactlyOnceWith(null);
   });
 
   it("leaves the selection unchanged when removing a non-selected project", async () => {
@@ -677,6 +711,20 @@ describe("select", () => {
     expect(store.getState().selectedProjectId).toBe(only.id);
   });
 
+  // The per-project theme override (#69) is keyed on the SELECTED project, so
+  // every path that changes the selection has to say so — the theme store reads
+  // its scope from this notification, never from a UI call site.
+  it("announces the new scope so the theme store can re-hydrate", () => {
+    const [a, b] = [project({ id: "a", path: "/a" }), project({ id: "b", path: "/b" })];
+    const { store, onSelectedProjectChange } = freshStore();
+    store.getState().hydrate([a, b], a.id);
+    onSelectedProjectChange.mockClear();
+
+    store.getState().select(b.id);
+
+    expect(onSelectedProjectChange).toHaveBeenCalledExactlyOnceWith(b.id);
+  });
+
   it("toasts on a typed persistence failure", async () => {
     const only = project({ id: "only", path: "/a" });
     const gateway = fakeGateway({
@@ -756,6 +804,28 @@ describe("hydrate", () => {
 
     expect(store.getState().projects).toEqual([a, b]);
     expect(store.getState().selectedProjectId).toBe(b.id);
+  });
+
+  // Boot restores the persisted selection through `hydrate` (lib/boot.ts), NOT
+  // through `select` — so without this the theme scope would stay global for
+  // the whole session no matter which project the user left the app on.
+  it("announces the restored selection so boot lands on the project's theme", () => {
+    const [a, b] = [project({ id: "a", path: "/a" }), project({ id: "b", path: "/b" })];
+    const { store, onSelectedProjectChange } = freshStore();
+
+    store.getState().hydrate([a, b], b.id);
+
+    expect(onSelectedProjectChange).toHaveBeenCalledExactlyOnceWith(b.id);
+  });
+
+  // main.tsx already reads the global scope concurrently with boot; a null →
+  // null "change" would re-issue that same read for nothing.
+  it("stays quiet when boot restores no selection", () => {
+    const { store, onSelectedProjectChange } = freshStore();
+
+    store.getState().hydrate([project({ id: "a", path: "/a" })], null);
+
+    expect(onSelectedProjectChange).not.toHaveBeenCalled();
   });
 });
 

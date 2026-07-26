@@ -239,6 +239,15 @@ export function createThemeStore({
         let painted: string | null = null;
         let paintedEditor: string | null = null;
         let persistedEditorThemeId: ShippedEditorThemeId | null = null;
+        /**
+         * Which `hydrate` call is the current one. Scope reads overlap at boot
+         * (main.tsx reads the global scope immediately; boot() reads the
+         * restored project's scope once it knows it) and at every project
+         * switch — so the LAST call issued wins, whatever order the payloads
+         * come back in. Without this, a slow global read could land after a
+         * project read and quietly put the app back on global scope.
+         */
+        let hydrateGeneration = 0;
         let editorWriteGeneration = 0;
         let editorWriteQueue: Promise<void> = Promise.resolve();
         const repaint = (): void => {
@@ -320,6 +329,7 @@ export function createThemeStore({
           recents: [],
 
           async hydrate(projectId) {
+            const generation = ++hydrateGeneration;
             let result: ThemeStateResult;
             try {
               result = await deps.gateway.state(
@@ -332,6 +342,11 @@ export function createThemeStore({
               toastError(`Couldn't load the theme: ${errorMessage(error)}`);
               return;
             }
+            // Superseded while in flight: adopting this payload would repaint
+            // the app in a scope it has already left. Silent by design — the
+            // read didn't fail, it just stopped being the answer to the
+            // question being asked.
+            if (generation !== hydrateGeneration) return;
             if (!result.ok) {
               toastError(`Couldn't load the theme: ${result.error}`);
               return;
