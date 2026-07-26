@@ -975,8 +975,10 @@ describe("FileWatchManager", () => {
 
     expect(webContents.send).toHaveBeenCalledWith("volli:file-changed", {
       projectId: "proj-1",
+      ticketId: null,
       relPath: "notes.md",
       source: "main",
+      revision: expect.any(Number),
     } satisfies FileChangedEvent);
     // Torn down: a subsequent unwatch is a harmless no-op.
     expect(() =>
@@ -1059,7 +1061,7 @@ describe("FileWatchManager", () => {
       ticketId: null,
       relPath: "sub/notes.md",
       source: "main",
-      revision: expect.any(Number),
+      revision: null,
     } satisfies FileChangedEvent);
   });
 
