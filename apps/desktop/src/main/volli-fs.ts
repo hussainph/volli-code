@@ -16,7 +16,7 @@
  * inside the resolved root ({@link assertWithinRoot}) — guarding a symlink
  * swapped in for a directory (or the target file itself).
  */
-import { existsSync, promises as fsp, watch as fsWatch } from "node:fs";
+import { existsSync, promises as fsp, statSync, watch as fsWatch } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { basename, dirname, join, sep } from "node:path";
@@ -676,6 +676,8 @@ interface WatchSubscription {
 
 interface FileWatchSubscription extends WatchSubscription {
   source: FileSource;
+  ticketId: string | null;
+  revision: number;
   /** The file's basename — dir events for any other name are ignored. */
   base: string;
 }
@@ -904,6 +906,8 @@ export class FileWatchManager extends WatchManagerBase<FileWatchSubscription> {
       projectPath,
       relPath,
       source,
+      ticketId,
+      revision: statSync(join(dir, base)).mtimeMs,
       dir,
       base,
       watcher: null,
@@ -936,8 +940,10 @@ export class FileWatchManager extends WatchManagerBase<FileWatchSubscription> {
   protected override sendChanged(sub: FileWatchSubscription): void {
     const payload: FileChangedEvent = {
       projectId: sub.projectId,
+      ticketId: sub.ticketId,
       relPath: sub.relPath,
       source: sub.source,
+      revision: sub.revision,
     };
     sub.webContents.send("volli:file-changed" satisfies VolliIpcEvent, payload);
   }
