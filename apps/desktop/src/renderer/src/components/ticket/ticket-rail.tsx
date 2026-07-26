@@ -9,10 +9,10 @@
  * Mode-content seam for follow-on navigators:
  *   - Pass `filesContent` / `changesContent` to replace the empty placeholders.
  *   - On row select, call the host's open/focus helpers — typically
- *     `useWorkspaceStore.getState().openTicketFile(projectId, ticketId, relPath)`
- *     for Files and Changes (#108). Issue #109 swaps the Changes opener to a
- *     Monaco diff tab — a one-line change at the TicketRail host call site.
- *     Sessions already call `onActivateSession(sessionId)` → `setTicketActiveTab`.
+ *     `useWorkspaceStore.getState().previewTicketFile(projectId, ticketId, relPath)`
+ *     (click) / `pinTicketFile` (dblclick) for Files and `openTicketDiff` for
+ *     Changes. Sessions already call `onActivateSession(sessionId)` →
+ *     `setTicketActiveTab`.
  *   - Do NOT call those openers from agent/filesystem event handlers.
  */
 import * as React from "react";

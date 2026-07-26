@@ -7,14 +7,16 @@
  * connected to the content below; inactive tabs are flat on the recessed rail
  * band. Data-driven by design: `TicketTabDescriptor` is the one shape a tab
  * needs, so ticket-detail.tsx appends one `"file"`-kind descriptor per open
- * `@file` ref and one `"session"`-kind descriptor per linked terminal. Content
- * routing stays with the caller, keyed off each tab's `kind`; file and session
- * tabs are closable, session tabs alone are renameable.
+ * `@file` ref, one `"diff"`-kind descriptor per open Change Set diff, and one
+ * `"session"`-kind descriptor per linked terminal. Content routing stays with
+ * the caller, keyed off each tab's `kind`; file, diff, and session tabs are
+ * closable, session tabs alone are renameable.
  */
 import * as React from "react";
 import { CornersOutIcon } from "@phosphor-icons/react/dist/csr/CornersOut";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 
 import { InlineRename } from "@renderer/components/sessions/inline-rename";
@@ -49,21 +51,37 @@ function moveTabFocus(from: HTMLElement, to: "prev" | "next" | "first" | "last")
   target?.focus();
 }
 
-export type TicketTabKind = "body" | "session" | "file";
+export type TicketTabKind = "body" | "session" | "file" | "diff";
+
+/** Whether a ticket-strip tab of this kind shows a close affordance. */
+export function isClosableTicketTab(kind: TicketTabKind): boolean {
+  return kind === "session" || kind === "file" || kind === "diff";
+}
 
 export interface TicketTabDescriptor {
-  /** Stable tab identity — a session tab's id is its session id; a file tab's is `file:<relPath>`. */
+  /** Stable tab identity — session id, `file:<relPath>`, or `diff:<relPath>`. */
   id: string;
   kind: TicketTabKind;
   label: string;
-  /** The project-relative path a `"file"`-kind tab opens (absent for other kinds). */
+  /** The project-relative path a `"file"` / `"diff"` tab opens (absent for other kinds). */
   relPath?: string;
+  /**
+   * Prior path for a rename diff (Change Set `previousPath`). Absent for
+   * non-diff tabs and for diffs that are not renames.
+   */
+  previousPath?: string | null;
   /** A `"file"` tab whose file resolved from the ticket's worktree copy shows a subtle badge (decision #6). */
   badge?: "worktree";
   /**
-   * A `"file"` tab whose editor holds unsaved work. Repository files save only
-   * on ⌘S (CONCEPT #49), so the draft has to be visible from across the strip —
-   * and ticket-detail.tsx guards the close on the same flag.
+   * A `"file"` tab in the replaceable preview slot (decision #56). Diff tabs
+   * are always persistent and never set this. Preview labels render italic.
+   */
+  preview?: boolean;
+  /**
+   * A `"file"` / `"diff"` tab whose shared live model holds unsaved work.
+   * Repository files save only on ⌘S (CONCEPT #49), so the draft has to be
+   * visible from across the strip — and ticket-detail.tsx guards the close on
+   * the same flag.
    */
   dirty?: boolean;
 }
@@ -74,8 +92,13 @@ interface TicketTabStripProps {
   /** Disables the "+" button while a session is booting. */
   creating: boolean;
   onSelectTab(tabId: string): void;
-  /** Closes a session tab (kill-on-close) or a file tab. Doc has no close affordance. */
+  /** Closes a session, file, or diff tab. Doc has no close affordance. */
   onCloseTab(tab: TicketTabDescriptor): void;
+  /**
+   * Double-click a preview File tab → pin it (decision #56). Ignored for
+   * Diff/session/Doc tabs.
+   */
+  onPinFileTab?(relPath: string): void;
   /** Commits a session-tab rename (double-click / context menu). Ignored for Doc/file tabs. */
   onRenameSessionTab(tabId: string, title: string): void;
   /** Boots a new session tab — the same path as the rail's New-session button. */
@@ -98,6 +121,7 @@ function TicketTab({
   editing,
   onSelect,
   onClose,
+  onPin,
   onStartRename,
   onCommitRename,
   onCancelRename,
@@ -107,13 +131,16 @@ function TicketTab({
   editing: boolean;
   onSelect(): void;
   onClose(): void;
+  /** Pin a preview File tab (decision #56); undefined for other kinds. */
+  onPin?: () => void;
   onStartRename(): void;
   onCommitRename(next: string): void;
   onCancelRename(): void;
 }) {
   const isSession = tab.kind === "session";
-  const closable = tab.kind === "session" || tab.kind === "file";
+  const closable = isClosableTicketTab(tab.kind);
   const dirty = tab.dirty === true;
+  const preview = tab.preview === true;
 
   const inner = (
     // The tab itself is the focusable role="tab" — the direct child of the
@@ -127,9 +154,10 @@ function TicketTab({
       // reads doubled to AT (and breaks exact-name lookups).
       aria-label={tab.label}
       aria-selected={active}
+      data-preview={preview ? "true" : undefined}
       tabIndex={active ? 0 : -1}
       onClick={onSelect}
-      onDoubleClick={isSession ? onStartRename : undefined}
+      onDoubleClick={isSession ? onStartRename : preview && onPin !== undefined ? onPin : undefined}
       onKeyDown={(event) => {
         switch (event.key) {
           case "ArrowRight":
@@ -186,7 +214,10 @@ function TicketTab({
       ) : (
         // The clickable/selectable target is the tab div (role="tab") above,
         // so the label is a plain span — no nested interactive control.
-        <span className="max-w-40 truncate font-medium">{tab.label}</span>
+        // Preview File tabs are italic (same convention as Project Files).
+        <span className={cn("max-w-40 truncate font-medium", preview && "italic")}>
+          {tab.label}
+        </span>
       )}
       {closable && !editing ? (
         <button
@@ -222,16 +253,23 @@ function TicketTab({
     </div>
   );
 
-  // Only session tabs rename, so Doc and file tabs skip the context menu.
-  if (!isSession) return inner;
+  // Session tabs rename; preview File tabs get Keep Open (decision #56).
+  // Doc / Diff / pinned File tabs skip the menu.
+  if (!isSession && !(preview && onPin !== undefined)) return inner;
 
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{inner}</ContextMenuTrigger>
       <ContextMenuContent>
-        <ContextMenuItem icon={PencilSimpleIcon} onSelect={onStartRename}>
-          Rename
-        </ContextMenuItem>
+        {isSession ? (
+          <ContextMenuItem icon={PencilSimpleIcon} onSelect={onStartRename}>
+            Rename
+          </ContextMenuItem>
+        ) : (
+          <ContextMenuItem icon={PushPinIcon} onSelect={onPin}>
+            Keep Open
+          </ContextMenuItem>
+        )}
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -244,6 +282,7 @@ export function TicketTabStrip({
   creating,
   onSelectTab,
   onCloseTab,
+  onPinFileTab,
   onRenameSessionTab,
   onNewSession,
   canFocusTerminal,
@@ -266,6 +305,11 @@ export function TicketTabStrip({
               editing={editingId === tab.id}
               onSelect={() => onSelectTab(tab.id)}
               onClose={() => onCloseTab(tab)}
+              onPin={
+                tab.kind === "file" && tab.relPath !== undefined && onPinFileTab !== undefined
+                  ? () => onPinFileTab(tab.relPath!)
+                  : undefined
+              }
               onStartRename={() => setEditingId(tab.id)}
               onCommitRename={(next) => {
                 setEditingId(null);

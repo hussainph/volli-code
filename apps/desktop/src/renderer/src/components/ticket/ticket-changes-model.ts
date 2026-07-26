@@ -109,10 +109,10 @@ export function applyChangeSetRefresh(
 }
 
 /**
- * Deliberate row selection. Returns an `openPath` the host should open via
- * `openTicketFile` today (issue #109 swaps that one call to a diff-tab opener).
- * List focus moves to the row; `activeTabId` is intentionally unchanged so
- * initial keyboard focus stays in the Changes list (decision #48).
+ * Deliberate row selection. Returns an `openPath` the host should open as a
+ * diff tab (`openTicketDiff`). List focus moves to the row; `activeTabId` is
+ * intentionally unchanged so initial keyboard focus stays in the Changes list
+ * (decision #48).
  */
 export function selectChangeRow(
   state: ChangesNavigatorState,

@@ -135,6 +135,22 @@ describe("resetUiScale", () => {
   });
 });
 
+describe("diffPresentation", () => {
+  it('defaults to "inline"', () => {
+    const store = createUiStore(createMemoryStorage());
+    expect(store.getState().diffPresentation).toBe("inline");
+  });
+
+  it('setDiffPresentation updates to "side-by-side" or "inline"', () => {
+    const store = createUiStore(createMemoryStorage());
+    store.getState().setDiffPresentation("side-by-side");
+    expect(store.getState().diffPresentation).toBe("side-by-side");
+
+    store.getState().setDiffPresentation("inline");
+    expect(store.getState().diffPresentation).toBe("inline");
+  });
+});
+
 describe("setSettingsOpen", () => {
   it("toggles the app-wide Settings overlay", () => {
     const store = createUiStore(createMemoryStorage());
@@ -220,7 +236,7 @@ describe("terminal focus", () => {
 });
 
 describe("persistence", () => {
-  it("persists sidebarWidth + railWidth + uiScale + workspaceRailHidden + railCollapsed + railMode — settingsOpen resets each launch", () => {
+  it("persists sidebarWidth + railWidth + uiScale + workspaceRailHidden + railCollapsed + railMode + diffPresentation — settingsOpen resets each launch", () => {
     const storage = createMemoryStorage();
     const store = createUiStore(storage);
     store.getState().setSettingsOpen(true);
@@ -230,6 +246,7 @@ describe("persistence", () => {
     store.getState().toggleWorkspaceRailHidden();
     store.getState().toggleRailCollapsed();
     store.getState().setRailMode("properties");
+    store.getState().setDiffPresentation("side-by-side");
 
     const persisted = JSON.parse(storage.getItem("volli:ui")!) as {
       state: Record<string, unknown>;
@@ -241,9 +258,47 @@ describe("persistence", () => {
       workspaceRailHidden: true,
       railCollapsed: true,
       railMode: "properties",
+      diffPresentation: "side-by-side",
       lastHarnessId: "claude-code",
     });
     expect(persisted.state).not.toHaveProperty("detailsExpanded");
+  });
+
+  it("rehydrates diffPresentation from storage; missing/unknown values default to inline", async () => {
+    const storage = createMemoryStorage();
+    createUiStore(storage).getState().setDiffPresentation("side-by-side");
+    const reloaded = createUiStore(storage);
+    await reloaded.persist.rehydrate();
+    expect(reloaded.getState().diffPresentation).toBe("side-by-side");
+
+    // Older state without the key defaults to inline.
+    const missing = createMemoryStorage();
+    missing.setItem(
+      "volli:ui",
+      JSON.stringify({ state: { sidebarWidth: 320, uiScale: 1 }, version: 1 }),
+    );
+    expect(createUiStore(missing).getState().diffPresentation).toBe("inline");
+
+    // Corrupt / unknown values fall back to the safe inline default.
+    const corrupt = createMemoryStorage();
+    corrupt.setItem(
+      "volli:ui",
+      JSON.stringify({
+        state: { sidebarWidth: 320, uiScale: 1, diffPresentation: "split" },
+        version: 1,
+      }),
+    );
+    expect(createUiStore(corrupt).getState().diffPresentation).toBe("inline");
+
+    const nonString = createMemoryStorage();
+    nonString.setItem(
+      "volli:ui",
+      JSON.stringify({
+        state: { sidebarWidth: 320, uiScale: 1, diffPresentation: true },
+        version: 1,
+      }),
+    );
+    expect(createUiStore(nonString).getState().diffPresentation).toBe("inline");
   });
 
   it("persists lastHarnessId and rehydrates it; missing/unknown ids default to claude-code", async () => {

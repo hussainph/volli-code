@@ -4,8 +4,8 @@
  * Deliberately NOT a deep tree (decision #53/#54): referenced context is a flat
  * list from `parseFileRefs` + attachments; the worktree section is a flat
  * listing of the current directory with a breadcrumb to move around. Selecting
- * a file opens/focuses a ticket file tab via `onOpenFile` — never from an fs
- * event.
+ * a file opens/focuses a ticket file tab via preview/pin (decision #56) —
+ * never from an fs event.
  */
 import * as React from "react";
 import { errorMessage, type DirEntry, type Ticket, type TicketAttachment } from "@volli/shared";
@@ -35,11 +35,14 @@ function FileRow({
   label,
   kind,
   onActivate,
+  onPin,
 }: {
   relPath: string;
   label: string;
   kind: "file" | "directory" | "reference";
   onActivate(): void;
+  /** Double-click pin — omitted for directories (they only navigate). */
+  onPin?(): void;
 }) {
   const { filename, parentPath } = splitFilesPath(relPath);
   const primary = kind === "reference" ? label : filename;
@@ -50,6 +53,7 @@ function FileRow({
       data-path={relPath}
       data-kind={kind}
       onClick={onActivate}
+      onDoubleClick={onPin}
       className={cn(
         "flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors",
         "hover:bg-accent",
@@ -71,14 +75,18 @@ export function TicketFilesList({
   referenced,
   worktree,
   cwd = "",
-  onOpenFile,
+  onPreviewFile,
+  onPinFile,
   onOpenDirectory,
   onNavigateUp,
 }: {
   referenced: readonly TicketFileRefRow[];
   worktree: readonly TicketWorktreeEntry[];
   cwd?: string;
-  onOpenFile(relPath: string): void;
+  /** Single-click: open in the replaceable File preview slot (decision #56). */
+  onPreviewFile(relPath: string): void;
+  /** Double-click: make the File tab persistent (decision #56). */
+  onPinFile(relPath: string): void;
   onOpenDirectory(relPath: string): void;
   onNavigateUp?(): void;
 }) {
@@ -98,7 +106,8 @@ export function TicketFilesList({
                   relPath={row.relPath}
                   label={row.label}
                   kind="reference"
-                  onActivate={() => onOpenFile(row.relPath)}
+                  onActivate={() => onPreviewFile(row.relPath)}
+                  onPin={() => onPinFile(row.relPath)}
                 />
               </li>
             ))}
@@ -137,8 +146,9 @@ export function TicketFilesList({
                   onActivate={() =>
                     entry.kind === "directory"
                       ? onOpenDirectory(entry.relPath)
-                      : onOpenFile(entry.relPath)
+                      : onPreviewFile(entry.relPath)
                   }
+                  onPin={entry.kind === "directory" ? undefined : () => onPinFile(entry.relPath)}
                 />
               </li>
             ))}
@@ -182,15 +192,18 @@ function FilesErrorBanner({ error, onRetry }: { error: string; onRetry(): void }
  * Ticket Files panel: body refs + optional attachments + worktree directory
  * listing. Attachments are accepted as a prop because the renderer has no
  * attachments IPC yet — hosts that can supply them (or tests) pass them in.
+ * Single-click previews; double-click pins (decision #56).
  */
 export function TicketFilesPanel({
   ticket,
   attachments = NO_ATTACHMENTS,
-  onOpenFile,
+  onPreviewFile,
+  onPinFile,
 }: {
   ticket: Ticket;
   attachments?: readonly TicketAttachment[];
-  onOpenFile(relPath: string): void;
+  onPreviewFile(relPath: string): void;
+  onPinFile(relPath: string): void;
 }) {
   const [cwd, setCwd] = React.useState("");
   const [entries, setEntries] = React.useState<TicketWorktreeEntry[]>([]);
@@ -270,7 +283,8 @@ export function TicketFilesPanel({
         referenced={nav.referenced}
         worktree={nav.worktree}
         cwd={cwd}
-        onOpenFile={onOpenFile}
+        onPreviewFile={onPreviewFile}
+        onPinFile={onPinFile}
         onOpenDirectory={(relPath) => void loadDir(relPath)}
         onNavigateUp={() => {
           const slash = cwd.lastIndexOf("/");

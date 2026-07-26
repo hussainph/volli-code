@@ -28,6 +28,10 @@
  * rehydration maps an open drawer onto Properties via `resolvePersistedRailMode`
  * and stops writing `detailsExpanded`.
  *
+ * `diffPresentation` — Monaco diff layout (inline vs side-by-side, CONCEPT #51).
+ * Persisted app-wide like `railCollapsed` / `railMode`: it is global chrome, not
+ * a per-ticket choice, so every diff tab honors the same presentation.
+ *
  * `terminalFocusTarget` — the ticket terminal tab temporarily owning the app
  * canvas. It is deliberately session-only: live PTYs do not survive relaunch,
  * and entering a new app lifetime with its chrome hidden around a missing
@@ -61,6 +65,11 @@ export const RAIL_DEFAULT_WIDTH = 300;
 // and the History search stay legible without crowding.
 export const RAIL_MIN_WIDTH = 240;
 export const RAIL_MAX_WIDTH = 560;
+
+/** Monaco diff layout preference (CONCEPT #51). Default inline; optional side-by-side. */
+export type DiffPresentation = "inline" | "side-by-side";
+
+const DEFAULT_DIFF_PRESENTATION: DiffPresentation = "inline";
 
 /** Identity of the ticket terminal tab temporarily owning the app canvas. */
 export interface TerminalFocusTarget {
@@ -133,6 +142,13 @@ function sanitizeRailWidth(width: unknown): number {
   return clampRailWidth(width);
 }
 
+/** A persisted Monaco diff layout; unknown/missing values fall back to inline. */
+function sanitizeDiffPresentation(presentation: unknown): DiffPresentation {
+  return presentation === "inline" || presentation === "side-by-side"
+    ? presentation
+    : DEFAULT_DIFF_PRESENTATION;
+}
+
 interface UiState {
   sidebarWidth: number;
   /** Ticket-detail right rail width; resizable via its grip, persisted app-wide. */
@@ -147,6 +163,8 @@ interface UiState {
   railCollapsed: boolean;
   /** Active ticket-rail icon mode. Persisted app-wide (see module doc). */
   railMode: TicketRailMode;
+  /** Monaco diff presentation. Persisted app-wide (see module doc). */
+  diffPresentation: DiffPresentation;
   /** Session-only terminal focus target; never persisted. */
   terminalFocusTarget: TerminalFocusTarget | null;
   /**
@@ -167,6 +185,7 @@ interface UiState {
   toggleRailCollapsed(): void;
   setRailCollapsed(collapsed: boolean): void;
   setRailMode(mode: TicketRailMode): void;
+  setDiffPresentation(presentation: DiffPresentation): void;
   setTerminalFocusTarget(target: TerminalFocusTarget | null): void;
   /**
    * Clear the focus target if it belongs to `ticketId` — used when that ticket's
@@ -193,6 +212,7 @@ type PersistedUiState = Pick<
   | "workspaceRailHidden"
   | "railCollapsed"
   | "railMode"
+  | "diffPresentation"
   | "lastHarnessId"
 > & {
   /** Legacy pre-icon-rail key; read on merge only, never written again. */
@@ -220,6 +240,7 @@ export function createUiStore(storage?: StateStorage) {
         workspaceRailHidden: false,
         railCollapsed: false,
         railMode: DEFAULT_TICKET_RAIL_MODE,
+        diffPresentation: DEFAULT_DIFF_PRESENTATION,
         terminalFocusTarget: null,
         lastHarnessId: DEFAULT_HARNESS_ID,
         setSidebarWidth: (width) => set({ sidebarWidth: clampSidebarWidth(width) }),
@@ -234,6 +255,7 @@ export function createUiStore(storage?: StateStorage) {
         toggleRailCollapsed: () => set((state) => ({ railCollapsed: !state.railCollapsed })),
         setRailCollapsed: (collapsed) => set({ railCollapsed: collapsed }),
         setRailMode: (mode) => set({ railMode: mode }),
+        setDiffPresentation: (presentation) => set({ diffPresentation: presentation }),
         setTerminalFocusTarget: (target) => set({ terminalFocusTarget: target }),
         clearTerminalFocusForTicket: (ticketId) =>
           set((state) =>
@@ -260,6 +282,7 @@ export function createUiStore(storage?: StateStorage) {
           workspaceRailHidden: state.workspaceRailHidden,
           railCollapsed: state.railCollapsed,
           railMode: state.railMode,
+          diffPresentation: state.diffPresentation,
           lastHarnessId: state.lastHarnessId,
         }),
         // Rehydrated values come from JSON a past build wrote — sanitize
@@ -285,6 +308,9 @@ export function createUiStore(storage?: StateStorage) {
               railMode: stored.railMode,
               detailsExpanded: stored.detailsExpanded,
             }),
+            // Missing/unknown presentation (older build, corrupt JSON) keeps
+            // the CONCEPT #51 default of inline.
+            diffPresentation: sanitizeDiffPresentation(stored.diffPresentation),
             // A missing/unknown persisted harness (older build, corrupt JSON,
             // or a since-removed custom id) falls back to the first-class default.
             lastHarnessId: isHarnessId(stored.lastHarnessId)
