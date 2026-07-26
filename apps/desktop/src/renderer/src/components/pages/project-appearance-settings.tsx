@@ -91,11 +91,15 @@ export function ProjectAppearanceSettings({ project }: { project: Project }) {
     );
   }
 
+  // Keyed on the project so switching projects while this pane is open remounts
+  // the sections: the local "opening the library" / "Custom, nothing written
+  // yet" states describe ONE project's session with this pane, and carrying
+  // them across would show project B a picker project A had opened.
   return (
     <>
-      <ProjectAppThemeSection project={project} />
-      <ProjectEditorThemeSection projectId={project.id} />
-      <ProjectTerminalThemeSection projectId={project.id} />
+      <ProjectAppThemeSection key={project.id} project={project} />
+      <ProjectEditorThemeSection key={project.id} projectId={project.id} />
+      <ProjectTerminalThemeSection key={project.id} projectId={project.id} />
     </>
   );
 }
@@ -109,6 +113,12 @@ function InheritNote({ children }: { children: React.ReactNode }) {
  * The app's segmented-control idiom (ui/button.tsx's pill scale, same shape as
  * the board's view toggle and the diff presentation toggle), driven by a data
  * array rather than repeated blocks so a third segment is a row, not a branch.
+ *
+ * Re-selecting the active segment is a NO-OP, which matters here more than it
+ * usually does: "Custom" means a different stored value per surface, so
+ * clicking it while already Custom would re-run that surface's entry write —
+ * and on the app surface that write is the auto-tint, which would silently
+ * throw away the theme the user had picked.
  */
 function SegmentedChoice<Key extends string>({
   ariaLabel,
@@ -137,7 +147,9 @@ function SegmentedChoice<Key extends string>({
           variant={option.key === value ? "secondary" : "ghost"}
           aria-pressed={option.key === value}
           data-choice={option.key}
-          onClick={() => onChange(option.key)}
+          onClick={() => {
+            if (option.key !== value) onChange(option.key);
+          }}
         >
           {option.label}
         </Button>
