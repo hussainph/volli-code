@@ -5,6 +5,7 @@ import type { ChangeSetFile } from "@volli/shared";
 import { DiffStub } from "./diff-stub";
 import {
   applyDiffLiveReconciliation,
+  reconcileAcquiredDiffModel,
   isDiffLeaseCurrent,
   isMissingFileReadError,
   mapBaseReadResult,
@@ -95,6 +96,37 @@ describe("applyDiffLiveReconciliation", () => {
       value: "human first\nkeep\nagent last\n",
       revision: 21,
     });
+  });
+
+  it("reconciles the live disk value when Diff acquires an existing dirty file model", () => {
+    const adoptCleanBaseline = vi.fn();
+    const lease = {
+      model: { getValue: () => "human line\n" },
+      snapshot: () => ({ baseline: "baseline\n" }),
+      applyExternalUpdate: vi.fn(),
+      adoptCleanBaseline,
+    };
+
+    const result = reconcileAcquiredDiffModel({
+      lease,
+      existing: true,
+      lastWrite: null,
+      disk: {
+        ok: true,
+        text: "agent line\n",
+        mtime: 24,
+        source: "worktree",
+        truncated: false,
+      },
+    });
+
+    expect(result).toMatchObject({
+      kind: "conflict",
+      local: "human line\n",
+      disk: "agent line\n",
+      revision: 24,
+    });
+    expect(adoptCleanBaseline).toHaveBeenCalledWith({ value: "agent line\n", revision: 24 });
   });
 });
 
