@@ -90,4 +90,26 @@ describe("planLiveDocumentReconciliation", () => {
       revision: 4,
     });
   });
+
+  it("preserves exact local and disk values when edits overlap", () => {
+    expect(
+      planLiveDocumentReconciliation({
+        baseline: "before\n",
+        local: "human\n",
+        lastWrite: null,
+        disk: {
+          ok: true,
+          text: "agent\n",
+          revision: 5,
+          truncated: false,
+        },
+      }),
+    ).toEqual({
+      kind: "conflict",
+      reason: "overlap",
+      local: "human\n",
+      disk: "agent\n",
+      revision: 5,
+    });
+  });
 });
