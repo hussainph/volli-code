@@ -703,12 +703,16 @@ describe("select", () => {
 
   it("is a no-op for an unknown id", () => {
     const only = project({ id: "only", path: "/a" });
-    const { store } = freshStore();
+    const { store, onSelectedProjectChange } = freshStore();
     store.getState().hydrate([only], only.id);
+    onSelectedProjectChange.mockClear();
 
     store.getState().select("missing");
 
     expect(store.getState().selectedProjectId).toBe(only.id);
+    // An id this renderer doesn't have is not a scope — announcing it would
+    // send the theme store hydrating for a project that isn't here.
+    expect(onSelectedProjectChange).not.toHaveBeenCalled();
   });
 
   // The per-project theme override (#69) is keyed on the SELECTED project, so
@@ -723,6 +727,20 @@ describe("select", () => {
     store.getState().select(b.id);
 
     expect(onSelectedProjectChange).toHaveBeenCalledExactlyOnceWith(b.id);
+  });
+
+  // The other half of that contract: the announcement is what makes the theme
+  // store re-read, so a selection that didn't move must stay quiet or every
+  // re-click of the current project pays for a theme round-trip.
+  it("stays quiet when the already-selected project is re-selected", () => {
+    const a = project({ id: "a", path: "/a" });
+    const { store, onSelectedProjectChange } = freshStore();
+    store.getState().hydrate([a], a.id);
+    onSelectedProjectChange.mockClear();
+
+    store.getState().select(a.id);
+
+    expect(onSelectedProjectChange).not.toHaveBeenCalled();
   });
 
   it("toasts on a typed persistence failure", async () => {
