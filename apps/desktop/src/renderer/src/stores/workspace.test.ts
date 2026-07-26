@@ -591,7 +591,98 @@ describe("ticket file tab persistence", () => {
     expect(tabs?.["ticket-5"]).toBeUndefined();
   });
 
-  it("sanitizes malformed diffs and falls back when active points at a missing diff", () => {
+  it("rehydrates a pre-#109 {files, active} shape with diffs: [] and empty diffMeta", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:workspace",
+      JSON.stringify({
+        state: {
+          byProject: {
+            "project-a": {
+              // Pre-#109 writes had no diffs / diffMeta fields at all.
+              ticketTabs: {
+                "ticket-1": { files: ["notes.md"], active: "file:notes.md" },
+              },
+            },
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    const store = createWorkspaceStore(storage);
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
+      files: ["notes.md"],
+      diffs: [],
+      diffMeta: {},
+      active: "file:notes.md",
+    });
+  });
+
+  it("drops non-string and empty-string diff paths on rehydrate", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:workspace",
+      JSON.stringify({
+        state: {
+          byProject: {
+            "project-a": {
+              ticketTabs: {
+                "ticket-1": {
+                  files: [],
+                  diffs: ["ok.ts", 99, "", null, "also.ts"],
+                  active: "diff:ok.ts",
+                },
+              },
+            },
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    const store = createWorkspaceStore(storage);
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.diffs).toEqual([
+      "ok.ts",
+      "also.ts",
+    ]);
+  });
+
+  it("prunes orphan and corrupt diffMeta entries on rehydrate", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:workspace",
+      JSON.stringify({
+        state: {
+          byProject: {
+            "project-a": {
+              ticketTabs: {
+                "ticket-1": {
+                  files: [],
+                  diffs: ["ok.ts", "bare.ts"],
+                  diffMeta: {
+                    "ok.ts": { previousPath: "was.ts", status: "renamed" },
+                    "bare.ts": "not-an-object", // open path, corrupt value — drop
+                    "gone.ts": { status: "deleted" }, // closed path — drop
+                    "also-closed.ts": null,
+                  },
+                  active: "diff:ok.ts",
+                },
+              },
+            },
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    const store = createWorkspaceStore(storage);
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.diffMeta).toEqual({
+      "ok.ts": { previousPath: "was.ts", status: "renamed" },
+    });
+  });
+
+  it("falls active diff:missing.ts back to Doc when the path is not open", () => {
     const storage = createMemoryStorage();
     storage.setItem(
       "volli:workspace",
@@ -602,12 +693,8 @@ describe("ticket file tab persistence", () => {
               ticketTabs: {
                 "ticket-1": {
                   files: ["keep.md"],
-                  diffs: ["ok.ts", 99, "", null],
-                  diffMeta: {
-                    "ok.ts": { previousPath: "was.ts", status: "renamed" },
-                    "gone.ts": { status: "deleted" }, // not in diffs — drop
-                    "ok.ts-bad": "junk",
-                  },
+                  diffs: ["ok.ts"],
+                  diffMeta: {},
                   active: "diff:missing.ts",
                 },
               },
@@ -619,12 +706,37 @@ describe("ticket file tab persistence", () => {
     );
 
     const store = createWorkspaceStore(storage);
-    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
-      files: ["keep.md"],
-      diffs: ["ok.ts"],
-      diffMeta: { "ok.ts": { previousPath: "was.ts", status: "renamed" } },
-      active: "doc",
-    });
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.active).toBe("doc");
+  });
+
+  it("preserves diffs ordering through sanitize on rehydrate", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:workspace",
+      JSON.stringify({
+        state: {
+          byProject: {
+            "project-a": {
+              ticketTabs: {
+                "ticket-1": {
+                  files: [],
+                  diffs: ["z.ts", "a.ts", "m.ts"],
+                  active: "diff:a.ts",
+                },
+              },
+            },
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    const store = createWorkspaceStore(storage);
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.diffs).toEqual([
+      "z.ts",
+      "a.ts",
+      "m.ts",
+    ]);
   });
 
   it("defaults ticketTabs to an empty map for a record without one", () => {
