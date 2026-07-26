@@ -47,6 +47,17 @@ export function diffFilePolicy(input: DiffFilePolicyInput): DiffFilePolicy {
   const { file, base } = input;
   const previousPath = file.previousPath ?? null;
 
+  // Added / untracked have no base blob — always seed an empty original.
+  if (file.status === "added" || file.status === "untracked") {
+    return {
+      kind: "editor",
+      path: file.path,
+      previousPath,
+      original: { value: null, readOnly: true },
+      modified: { value: null, readOnly: false },
+    };
+  }
+
   if ("content" in base) {
     return {
       kind: "editor",

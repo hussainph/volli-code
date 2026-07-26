@@ -28,4 +28,21 @@ describe("diffFilePolicy", () => {
       modified: { value: null, readOnly: false },
     });
   });
+
+  it("uses an empty original for added and untracked files", () => {
+    for (const status of ["added", "untracked"] as const) {
+      expect(
+        diffFilePolicy({
+          file: file({ path: "src/new.ts", status, insertions: null, deletions: null }),
+          base: { missing: true },
+        }),
+      ).toEqual({
+        kind: "editor",
+        path: "src/new.ts",
+        previousPath: null,
+        original: { value: null, readOnly: true },
+        modified: { value: null, readOnly: false },
+      });
+    }
+  });
 });
