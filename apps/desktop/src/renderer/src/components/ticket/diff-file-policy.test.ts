@@ -81,4 +81,34 @@ describe("diffFilePolicy", () => {
       modified: { value: null, readOnly: false },
     });
   });
+
+  it("returns a binary stub when the Change Set flag or base read is binary", () => {
+    const stub = {
+      kind: "binary-stub" as const,
+      stubReason: "Binary file",
+      path: "assets/logo.png",
+      previousPath: null,
+      original: { value: null, readOnly: true },
+      modified: { value: null, readOnly: true },
+    };
+
+    expect(
+      diffFilePolicy({
+        file: file({
+          path: "assets/logo.png",
+          binary: true,
+          insertions: null,
+          deletions: null,
+        }),
+        base: { content: "not used" },
+      }),
+    ).toEqual(stub);
+
+    expect(
+      diffFilePolicy({
+        file: file({ path: "assets/logo.png" }),
+        base: { binary: true },
+      }),
+    ).toEqual(stub);
+  });
 });

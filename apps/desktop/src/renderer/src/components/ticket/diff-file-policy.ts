@@ -47,6 +47,18 @@ export function diffFilePolicy(input: DiffFilePolicyInput): DiffFilePolicy {
   const { file, base } = input;
   const previousPath = file.previousPath ?? null;
 
+  // Binary Change Set rows and binary base blobs never open Monaco.
+  if (file.binary || "binary" in base) {
+    return {
+      kind: "binary-stub",
+      stubReason: "Binary file",
+      path: file.path,
+      previousPath,
+      original: { value: null, readOnly: true },
+      modified: { value: null, readOnly: true },
+    };
+  }
+
   // Added / untracked have no base blob — always seed an empty original.
   if (file.status === "added" || file.status === "untracked") {
     return {
