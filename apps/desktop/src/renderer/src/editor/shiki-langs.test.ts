@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vite-plus/test";
+import { createHighlighter, createJavaScriptRegexEngine } from "shiki";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { detectDocumentLanguage, type DocumentIdentity } from "./document-identity";
-import { shikiLangImportFor } from "./shiki-langs";
+import { ensureShikiLanguage, shikiLangImportFor } from "./shiki-langs";
 
 const mainFile = (relPath: string): DocumentIdentity => ({
   kind: "file",
@@ -61,5 +62,37 @@ describe("shikiLangImportFor", () => {
     expect(detectDocumentLanguage(mainFile("LICENSE"))).toBe("plaintext");
     expect(shikiLangImportFor("plaintext")).toBeNull();
     expect(shikiLangImportFor("not-a-real-language")).toBeNull();
+  });
+});
+
+describe("ensureShikiLanguage", () => {
+  it("is a no-op for plaintext and unknown language ids", async () => {
+    const highlighter = await createHighlighter({
+      themes: [],
+      langs: [],
+      engine: createJavaScriptRegexEngine(),
+    });
+    const loadLanguage = vi.spyOn(highlighter, "loadLanguage");
+
+    expect(await ensureShikiLanguage(highlighter, "plaintext")).toBe(false);
+    expect(await ensureShikiLanguage(highlighter, "not-a-real-language")).toBe(false);
+    expect(loadLanguage).not.toHaveBeenCalled();
+    expect(highlighter.getLoadedLanguages()).toEqual([]);
+  });
+
+  it("loads a known language into the highlighter once", async () => {
+    const highlighter = await createHighlighter({
+      themes: [],
+      langs: [],
+      engine: createJavaScriptRegexEngine(),
+    });
+    const loadLanguage = vi.spyOn(highlighter, "loadLanguage");
+
+    expect(await ensureShikiLanguage(highlighter, "typescript")).toBe(true);
+    expect(highlighter.getLoadedLanguages()).toEqual(expect.arrayContaining(["typescript"]));
+    expect(loadLanguage).toHaveBeenCalledTimes(1);
+
+    expect(await ensureShikiLanguage(highlighter, "typescript")).toBe(true);
+    expect(loadLanguage).toHaveBeenCalledTimes(1);
   });
 });

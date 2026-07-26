@@ -1,13 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-const { bootstrapShikiMonaco } = vi.hoisted(() => ({
+const { bootstrapShikiMonaco, ensureShikiLanguage } = vi.hoisted(() => ({
   bootstrapShikiMonaco: vi.fn(),
+  ensureShikiLanguage: vi.fn(async () => true),
 }));
 
 vi.mock("./shiki-monaco", () => ({ bootstrapShikiMonaco }));
+vi.mock("./shiki-langs", () => ({ ensureShikiLanguage }));
 
 import {
   createLazyInitializer,
+  createShikiBackedModelFactory,
   prepareMonacoEditorThemes,
   waitForLanguageWorkerRegistration,
   workerKindForLabel,
@@ -19,6 +22,7 @@ beforeEach(() => {
     highlighter: {},
     registerTheme: vi.fn(),
   });
+  ensureShikiLanguage.mockResolvedValue(true);
 });
 
 describe("prepareMonacoEditorThemes", () => {
@@ -54,6 +58,36 @@ describe("prepareMonacoEditorThemes", () => {
     expect(result).toBe(shiki);
     // shiki's empty-theme bootstrap may call setTheme(undefined); volli-dark must win last.
     expect(setTheme.mock.calls.at(-1)).toEqual(["volli-dark"]);
+  });
+});
+
+describe("createShikiBackedModelFactory", () => {
+  it("ensures the shiki grammar when a Monaco model is created", () => {
+    const model = { id: "model-1" };
+    const createModel = vi.fn(() => model);
+    const parse = vi.fn((uri: string) => ({ path: uri }));
+    const highlighter = { id: "highlighter" };
+
+    const factory = createShikiBackedModelFactory(
+      { editor: { createModel }, Uri: { parse } } as never,
+      highlighter as never,
+    );
+
+    expect(
+      factory.createModel({
+        value: "const x = 1",
+        language: "typescript",
+        uri: "volli-document://file/p/main/src/index.ts",
+      }),
+    ).toBe(model);
+
+    expect(ensureShikiLanguage).toHaveBeenCalledTimes(1);
+    expect(ensureShikiLanguage).toHaveBeenCalledWith(highlighter, "typescript");
+    expect(createModel).toHaveBeenCalledWith(
+      "const x = 1",
+      "typescript",
+      expect.objectContaining({ path: "volli-document://file/p/main/src/index.ts" }),
+    );
   });
 });
 

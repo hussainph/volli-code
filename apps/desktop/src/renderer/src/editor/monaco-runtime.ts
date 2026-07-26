@@ -1,11 +1,12 @@
 import type * as Monaco from "monaco-editor";
 
-import { DocumentRegistry } from "./document-registry";
+import { DocumentRegistry, type RegistryModelFactory } from "./document-registry";
 import {
   createVolliMonacoTheme,
   readVolliMonacoTokens,
   type VolliMonacoTokens,
 } from "./monaco-theme";
+import { ensureShikiLanguage, type ShikiLanguageHost } from "./shiki-langs";
 import { bootstrapShikiMonaco, type ShikiMonacoBootstrap } from "./shiki-monaco";
 
 export function createLazyInitializer<Value>(
@@ -66,9 +67,34 @@ export async function waitForLanguageWorkerRegistration<Worker>(
 export interface MonacoRuntime {
   monaco: typeof Monaco;
   registry: DocumentRegistry<Monaco.editor.ITextModel, Monaco.editor.ICodeEditorViewState>;
+  /** Shiki session from bootstrap — grammars load lazily via the model factory. */
+  shiki: ShikiMonacoBootstrap;
 }
 
 type WorkerConstructor = new (options?: WorkerOptions) => Worker;
+
+type MonacoModelHost = {
+  editor: {
+    createModel: (value: string, language?: string, uri?: Monaco.Uri) => Monaco.editor.ITextModel;
+  };
+  Uri: { parse: (value: string) => Monaco.Uri };
+};
+
+/**
+ * Document-registry model factory that kicks off a lazy shiki grammar load for
+ * the model's Monaco language id, then creates the Monaco text model.
+ */
+export function createShikiBackedModelFactory(
+  monaco: MonacoModelHost,
+  highlighter: ShikiLanguageHost,
+): RegistryModelFactory<Monaco.editor.ITextModel> {
+  return {
+    createModel({ value, language, uri }) {
+      void ensureShikiLanguage(highlighter, language);
+      return monaco.editor.createModel(value, language, monaco.Uri.parse(uri));
+    },
+  };
+}
 
 /**
  * Wire shiki once, then keep `volli-dark` as the active theme so editors still
@@ -123,17 +149,13 @@ async function initializeMonacoRuntime(): Promise<MonacoRuntime> {
   };
 
   const monaco = await import("monaco-editor");
-  await prepareMonacoEditorThemes(monaco);
+  const shiki = await prepareMonacoEditorThemes(monaco);
 
   const registry = new DocumentRegistry<
     Monaco.editor.ITextModel,
     Monaco.editor.ICodeEditorViewState
-  >({
-    createModel({ value, language, uri }) {
-      return monaco.editor.createModel(value, language, monaco.Uri.parse(uri));
-    },
-  });
-  return { monaco, registry };
+  >(createShikiBackedModelFactory(monaco, shiki.highlighter));
+  return { monaco, registry, shiki };
 }
 
 export const loadMonacoRuntime = createLazyInitializer(initializeMonacoRuntime);

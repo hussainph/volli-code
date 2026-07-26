@@ -1,10 +1,10 @@
-import type { LanguageInput } from "shiki";
+import type { DynamicImportLanguageRegistration, LanguageInput } from "shiki";
 
 /**
  * Static ES-module importer for a Monaco language id.
  * Bundler resolves `@shikijs/langs/<id>` at build time — no runtime network fetch.
  */
-export type ShikiLangImporter = () => Promise<LanguageInput>;
+export type ShikiLangImporter = DynamicImportLanguageRegistration;
 
 /**
  * Monaco language ids produced by `detectDocumentLanguage` that have a matching
@@ -49,4 +49,24 @@ const SHIKI_LANG_IMPORTS: Readonly<Record<string, ShikiLangImporter>> = {
  */
 export function shikiLangImportFor(monacoLanguageId: string): ShikiLangImporter | null {
   return SHIKI_LANG_IMPORTS[monacoLanguageId] ?? null;
+}
+
+export type ShikiLanguageHost = {
+  loadLanguage: (...langs: LanguageInput[]) => Promise<void>;
+  getLoadedLanguages: () => string[];
+};
+
+/**
+ * Lazily load the TextMate grammar for a Monaco language id into a highlighter.
+ * Plaintext / unknown ids are a no-op and return `false`.
+ */
+export async function ensureShikiLanguage(
+  highlighter: ShikiLanguageHost,
+  monacoLanguageId: string,
+): Promise<boolean> {
+  const load = shikiLangImportFor(monacoLanguageId);
+  if (load === null) return false;
+  if (highlighter.getLoadedLanguages().includes(monacoLanguageId)) return true;
+  await highlighter.loadLanguage(load);
+  return true;
 }
