@@ -132,4 +132,22 @@ describe("diffFilePolicy", () => {
       modified: { value: null, readOnly: true },
     });
   });
+
+  it("uses an empty original when base is missing for a modified file", () => {
+    // Missing base for a non-added path is rare (stale snapshot / odd git
+    // state). Prefer an empty original over a stub so the live modified side
+    // stays reviewable in Monaco.
+    expect(
+      diffFilePolicy({
+        file: file({ path: "src/a.ts", status: "modified" }),
+        base: { missing: true },
+      }),
+    ).toEqual({
+      kind: "editor",
+      path: "src/a.ts",
+      previousPath: null,
+      original: { value: null, readOnly: true },
+      modified: { value: null, readOnly: false },
+    });
+  });
 });

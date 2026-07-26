@@ -79,7 +79,15 @@ export function diffFilePolicy(input: DiffFilePolicyInput): DiffFilePolicy {
     };
   }
 
-  throw new Error("unimplemented");
+  // Missing base for a non-added path (stale snapshot / odd git state): empty
+  // original rather than a stub, so the live modified side stays reviewable.
+  return {
+    kind: "editor",
+    path: file.path,
+    previousPath,
+    original: { value: null, readOnly: true },
+    modified: { value: null, readOnly: file.status === "deleted" },
+  };
 }
 
 function stubPolicy(path: string, previousPath: string | null, stubReason: string): DiffFilePolicy {
