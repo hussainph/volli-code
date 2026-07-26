@@ -347,6 +347,30 @@ describe("DocumentRegistry", () => {
     });
   });
 
+  it("applies one clean external update transaction to baseline, revision, and live model", () => {
+    const { registry } = makeRegistry();
+    const file = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "baseline", revision: "r1" },
+      savePolicy: "explicit",
+    });
+
+    file.applyExternalUpdate({
+      baseline: "agent update",
+      value: "agent update",
+      revision: "r2",
+    });
+
+    expect(file.model.getValue()).toBe("agent update");
+    expect(file.snapshot()).toMatchObject({
+      baseline: "agent update",
+      baselineRevision: "r2",
+      externalRevision: "r2",
+      dirty: false,
+    });
+  });
+
   it("records the latest external revision without overwriting a dirty draft", () => {
     const { registry } = makeRegistry();
     const file = registry.acquire({
