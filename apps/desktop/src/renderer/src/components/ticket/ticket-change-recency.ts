@@ -45,8 +45,24 @@ export function reduceChangeRecency(
   state: ChangeRecencyState,
   event: ChangeRecencyEvent,
 ): ChangeRecencyState {
-  if (event.type !== "inspect") return state;
   const existing = state.paths[event.path];
+  if (event.type === "external-revision") {
+    if (
+      existing === undefined ||
+      existing.seenRevision === event.revision ||
+      existing.updatedRevision === event.revision
+    ) {
+      return state;
+    }
+    return {
+      paths: {
+        ...state.paths,
+        [event.path]: { ...existing, updatedRevision: event.revision },
+      },
+    };
+  }
+
+  if (event.type === "local-save-echo") return state;
   if (existing?.seenRevision === event.revision && existing.updatedRevision === null) return state;
 
   return {
