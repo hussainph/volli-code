@@ -71,7 +71,7 @@ export function applyMonacoThemeForDiffEditor(
     refreshMonacoEditorTheme(resolved);
   } else {
     ensureMonacoEditorTheme(DEFAULT_EDITOR_THEME_ID);
-    resolved = pendingThemeId ?? DEFAULT_EDITOR_THEME_ID;
+    resolved = activeMonacoEditorThemeId();
   }
 
   monaco.editor.setTheme(resolved);
