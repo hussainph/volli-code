@@ -591,6 +591,42 @@ describe("ticket file tab persistence", () => {
     expect(tabs?.["ticket-5"]).toBeUndefined();
   });
 
+  it("sanitizes malformed diffs and falls back when active points at a missing diff", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:workspace",
+      JSON.stringify({
+        state: {
+          byProject: {
+            "project-a": {
+              ticketTabs: {
+                "ticket-1": {
+                  files: ["keep.md"],
+                  diffs: ["ok.ts", 99, "", null],
+                  diffMeta: {
+                    "ok.ts": { previousPath: "was.ts", status: "renamed" },
+                    "gone.ts": { status: "deleted" }, // not in diffs — drop
+                    "ok.ts-bad": "junk",
+                  },
+                  active: "diff:missing.ts",
+                },
+              },
+            },
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    const store = createWorkspaceStore(storage);
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
+      files: ["keep.md"],
+      diffs: ["ok.ts"],
+      diffMeta: { "ok.ts": { previousPath: "was.ts", status: "renamed" } },
+      active: "doc",
+    });
+  });
+
   it("defaults ticketTabs to an empty map for a record without one", () => {
     const storage = createMemoryStorage();
     storage.setItem(

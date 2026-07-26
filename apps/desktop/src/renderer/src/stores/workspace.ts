@@ -46,7 +46,7 @@ import {
   TICKET_BODY_TAB_ID,
   normalizeTicketBodyTabId,
 } from "@renderer/components/ticket/ticket-body-tab";
-import { diffTabId } from "@renderer/components/ticket/ticket-diff-tab";
+import { diffTabId, parseDiffTabId } from "@renderer/components/ticket/ticket-diff-tab";
 import {
   EMPTY_NAV_HISTORY,
   goBack,
@@ -347,14 +347,18 @@ function sanitizeTicketTabs(raw: unknown): Record<string, TicketTabsState> {
       active?: unknown;
     };
     const files = Array.isArray(record.files)
-      ? record.files.filter((file): file is string => typeof file === "string")
+      ? record.files.filter((file): file is string => typeof file === "string" && file.length > 0)
       : [];
     const diffs = Array.isArray(record.diffs)
-      ? record.diffs.filter((path): path is string => typeof path === "string")
+      ? record.diffs.filter((path): path is string => typeof path === "string" && path.length > 0)
       : [];
     const diffMeta = sanitizeDiffMeta(record.diffMeta, diffs);
-    const active =
+    let active =
       typeof record.active === "string" ? normalizeTicketBodyTabId(record.active) : BODY_TAB_ID;
+    // A persisted active pointing at a diff that did not survive sanitize falls
+    // back to Ticket Body — same soft recovery files get when their tab is gone.
+    const activeDiffPath = parseDiffTabId(active);
+    if (activeDiffPath !== null && !diffs.includes(activeDiffPath)) active = BODY_TAB_ID;
     if (files.length === 0 && diffs.length === 0 && active === BODY_TAB_ID) continue;
     out[ticketId] = { files, diffs, diffMeta, active };
   }
