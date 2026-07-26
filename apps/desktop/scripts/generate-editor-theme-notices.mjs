@@ -16,7 +16,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** Must match `listEditorThemes()` ids in editor-theme-catalog.ts. */
+/** Must match `SHIPPED_EDITOR_THEME_IDS` in `@volli/shared` (and listEditorThemes). */
 const SHIPPED_THEME_IDS = [
   "catppuccin-mocha",
   "catppuccin-macchiato",

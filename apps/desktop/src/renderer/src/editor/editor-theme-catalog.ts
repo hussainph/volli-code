@@ -6,6 +6,7 @@
  * `bootstrapShikiMonaco({ themes })` before the single `shikiToMonaco` call.
  */
 
+import { SHIPPED_EDITOR_THEME_IDS, type ShippedEditorThemeId } from "@volli/shared";
 import type { DynamicImportThemeRegistration, ThemeInput } from "shiki";
 
 export interface EditorThemeEntry {
@@ -18,12 +19,15 @@ export interface EditorThemeEntry {
 export type EditorThemeImporter = DynamicImportThemeRegistration;
 
 interface EditorThemeDefinition extends EditorThemeEntry {
+  id: ShippedEditorThemeId;
   load: EditorThemeImporter;
 }
 
 /**
- * Single source of truth: metadata + static importer per theme.
- * Keep `apps/desktop/scripts/generate-editor-theme-notices.mjs` in sync.
+ * Metadata + static importer per theme. Ids must match
+ * {@link SHIPPED_EDITOR_THEME_IDS} exactly (asserted below) so the IPC guard
+ * and this picker cannot drift. Keep
+ * `apps/desktop/scripts/generate-editor-theme-notices.mjs` in sync too.
  */
 const EDITOR_THEMES: readonly EditorThemeDefinition[] = [
   {
@@ -177,6 +181,18 @@ const APP_SLUG_TO_EDITOR_THEME: Readonly<Record<string, string>> = {
 };
 
 const CATALOG_IDS = new Set(EDITOR_THEMES.map((theme) => theme.id));
+
+// Shared IPC vocabulary ↔ renderer catalog: same ids, same order. A mismatch
+// means someone added a shiki theme here without updating @volli/shared (or
+// the reverse) — refuse to ship a catalog the guard would reject.
+if (
+  EDITOR_THEMES.length !== SHIPPED_EDITOR_THEME_IDS.length ||
+  EDITOR_THEMES.some((theme, index) => theme.id !== SHIPPED_EDITOR_THEME_IDS[index])
+) {
+  throw new Error(
+    "editor-theme-catalog EDITOR_THEMES ids must match SHIPPED_EDITOR_THEME_IDS exactly",
+  );
+}
 
 /** Every shipped editor theme for pickers and bootstrap. */
 export function listEditorThemes(): EditorThemeEntry[] {

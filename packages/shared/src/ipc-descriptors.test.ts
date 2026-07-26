@@ -1358,6 +1358,12 @@ describe("THEME_IPC descriptor table", () => {
       expect(guard([])).toBe(false);
     });
 
+    it("rejects a non-catalog string id", () => {
+      expect(guard([{ editorThemeId: "volli-dark" }])).toBe(false);
+      expect(guard([{ editorThemeId: "not-a-theme" }])).toBe(false);
+      expect(guard([{ editorThemeId: "" }])).toBe(false);
+    });
+
     it("carries the handler's exact invalid-input message", () => {
       expect(invalidError).toBe("Invalid editor theme");
     });

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { SHIPPED_EDITOR_THEME_IDS } from "@volli/shared";
+
 import {
   allEditorThemeImporters,
   DEFAULT_EDITOR_THEME_ID,
@@ -25,6 +27,10 @@ describe("listEditorThemes", () => {
   it("has unique theme ids", () => {
     const ids = listEditorThemes().map((theme) => theme.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("matches SHIPPED_EDITOR_THEME_IDS exactly so the IPC guard cannot drift", () => {
+    expect(listEditorThemes().map((theme) => theme.id)).toEqual([...SHIPPED_EDITOR_THEME_IDS]);
   });
 });
 
