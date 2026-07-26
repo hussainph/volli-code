@@ -15,6 +15,7 @@ import {
 import { Button } from "@renderer/components/ui/button";
 import { AUTOSAVE_IDLE_MS, planAutosave } from "@renderer/editor/autosave-plan";
 import { documentIdentityKey, fileDocumentIdentity } from "@renderer/editor/document-identity";
+import { matchesFileChangeIdentity } from "@renderer/editor/file-change-identity";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { toastError } from "@renderer/lib/toast";
 import { useDebouncedCallback } from "@renderer/lib/use-debounced-callback";
@@ -123,6 +124,7 @@ export function FileView({
   const sourceDirtyRef = React.useRef(false);
   const writingRef = React.useRef(false);
   const mountedRef = React.useRef(true);
+  const resolvedSourceRef = React.useRef<FileSource | null>(null);
   // Mirrors `state` for the fs-watch subscription (set up once, so it can't
   // read the current `state` off a render closure) — only its `.status` and
   // `.editable` are read, to decide which editor (if any) is live and therefore
@@ -155,6 +157,7 @@ export function FileView({
       setState({ status: "error", error: result.error });
       return;
     }
+    resolvedSourceRef.current = result.source;
     onSource?.(relPath, result.source);
     const { content } = result;
     if (content.type === "image") {
@@ -331,7 +334,18 @@ export function FileView({
       }
     });
     const unsubscribe = window.api.files.onChanged((event) => {
-      if (event.projectId !== projectId || event.relPath !== relPath) return;
+      const source = resolvedSourceRef.current;
+      if (
+        source === null ||
+        !matchesFileChangeIdentity(event, {
+          projectId,
+          ticketId: source === "worktree" ? (ticketId ?? null) : null,
+          relPath,
+          source,
+        })
+      ) {
+        return;
+      }
       void (async () => {
         const disk = await readFile();
         if (!mountedRef.current) return;
@@ -358,6 +372,7 @@ export function FileView({
           }
           return;
         }
+        resolvedSourceRef.current = disk.source;
         onSource?.(relPath, disk.source);
         if (disk.content.type === "image") {
           setState({ status: "image", dataUrl: disk.content.dataUrl });

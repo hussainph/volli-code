@@ -19,12 +19,47 @@ import {
 } from "@renderer/components/ticket/diff-file-policy";
 import { fileDocumentIdentity, type DocumentIdentity } from "@renderer/editor/document-identity";
 import type { DocumentRevision } from "@renderer/editor/document-registry";
+import {
+  applyLiveDocumentReconciliation,
+  type LiveDocumentReconciliationPlan,
+  type LiveReconciliationLease,
+} from "@renderer/editor/live-document-reconciliation";
 
 /** Live worktree read outcome for the modified side. */
 export type DiffLiveRead =
   | { ok: true; text: string; mtime: number; source: FileSource; truncated: boolean }
   | { ok: false; missing: true }
   | { ok: false; error: string };
+
+/** Adapt a Diff live read onto the one File/Diff reconciliation policy. */
+export function applyDiffLiveReconciliation(input: {
+  lease: LiveReconciliationLease;
+  lastWrite: string | null;
+  disk: DiffLiveRead;
+  unreadableRevision: DocumentRevision;
+}): LiveDocumentReconciliationPlan {
+  return applyLiveDocumentReconciliation({
+    lease: input.lease,
+    lastWrite: input.lastWrite,
+    disk: input.disk.ok
+      ? {
+          ok: true,
+          text: input.disk.text,
+          revision: input.disk.mtime,
+          truncated: input.disk.truncated,
+        }
+      : {
+          ok: false,
+          error:
+            "missing" in input.disk && input.disk.missing
+              ? "File was deleted on disk."
+              : "error" in input.disk
+                ? input.disk.error
+                : "File is unreadable.",
+          revision: input.unreadableRevision,
+        },
+  });
+}
 
 /**
  * True when `files.read` failed because the path is gone — the strings main's

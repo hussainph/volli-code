@@ -15,30 +15,29 @@ import {
   MonacoDiffEditor,
   releaseDiffLeases,
 } from "@renderer/components/editor/monaco-diff-editor";
+import { LiveReconciliationAffordance } from "@renderer/components/editor/live-reconciliation-affordance";
 import type { MonacoFileSaveResult } from "@renderer/components/editor/monaco-file-editor";
-import { Button } from "@renderer/components/ui/button";
 import { DiffPresentationToggle } from "@renderer/components/ticket/diff-presentation-toggle";
 import { DiffStub } from "@renderer/components/ticket/diff-stub";
 import {
-  applyDiffDiskReconcilePlan,
+  applyDiffLiveReconciliation,
   coerceChangeStatus,
   diffViewIdentities,
   isDiffLeaseCurrent,
   mapBaseReadResult,
   mapFilesReadFailure,
-  planDiffDiskReconcile,
   planDiffView,
   type DiffLiveRead,
   type DiffViewPlan,
 } from "@renderer/components/ticket/diff-view-plan";
 import { documentIdentityKey } from "@renderer/editor/document-identity";
 import type { DocumentLease } from "@renderer/editor/document-registry";
+import { matchesFileChangeIdentity } from "@renderer/editor/file-change-identity";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { toastError } from "@renderer/lib/toast";
 import { useUiStore } from "@renderer/stores/ui";
 
 import type { editor } from "monaco-editor";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 
 type MonacoLease = DocumentLease<editor.ITextModel, editor.ICodeEditorViewState>;
 
@@ -93,6 +92,7 @@ export function DiffView({
 }: DiffViewProps) {
   const [state, setState] = React.useState<LoadState>({ status: "loading" });
   const [conflict, setConflict] = React.useState<{ text: string; mtime: number } | null>(null);
+  const [liveError, setLiveError] = React.useState<string | null>(null);
   const presentation = useUiStore((s) => s.diffPresentation);
   const setDiffPresentation = useUiStore((s) => s.setDiffPresentation);
   const leasesRef = React.useRef<DiffLeases | null>(null);
@@ -118,6 +118,7 @@ export function DiffView({
     async function load() {
       setState({ status: "loading" });
       setConflict(null);
+      setLiveError(null);
       lastWriteRef.current = null;
       // Drop prior editor leases at the start of every load attempt so stub /
       // error / cancelled paths cannot leave a stale leasesRef held (mirrors
@@ -305,7 +306,17 @@ export function DiffView({
     });
 
     const unsubscribe = window.api.files.onChanged((event) => {
-      if (event.projectId !== projectId || event.relPath !== relPath) return;
+      const source = state.plan.modifiedSource;
+      if (
+        !matchesFileChangeIdentity(event, {
+          projectId,
+          ticketId: source === "worktree" ? ticket.id : null,
+          relPath,
+          source,
+        })
+      ) {
+        return;
+      }
       void (async () => {
         const leases = leasesRef.current;
         if (leases === null || !mountedRef.current) return;
@@ -342,40 +353,11 @@ export function DiffView({
           };
         }
 
-        // A truncated re-read is never a valid overwrite/save baseline — force
-        // the modified side read-only (FileView) rather than raising a
-        // "Saving now overwrites" banner over a capped prefix.
-        if (disk.ok && disk.truncated) {
-          const truncatedDisk = disk;
-          const wasDirty = leases.modified.snapshot().dirty;
-          if (wasDirty) leases.modified.discard();
-          leases.modified.adoptCleanBaseline({
-            value: truncatedDisk.text,
-            revision: truncatedDisk.mtime,
-          });
-          if (mountedRef.current) {
-            setConflict(null);
-            setState((previous) =>
-              previous.status === "editor"
-                ? {
-                    ...previous,
-                    plan: { ...previous.plan, modifiedReadOnly: true },
-                  }
-                : previous,
-            );
-            if (wasDirty) {
-              toastError(`${name} changed on disk and is no longer editable. Editing stopped.`);
-            }
-          }
-          return;
-        }
-
-        const snap = leases.modified.snapshot();
-        const plan = planDiffDiskReconcile({
-          dirty: snap.dirty,
-          baseline: snap.baseline,
+        const plan = applyDiffLiveReconciliation({
+          lease: leases.modified,
           lastWrite: lastWriteRef.current,
           disk,
+          unreadableRevision: event.revision,
         });
 
         // Re-check before mutating — adopt/discard must not touch a replaced lease.
@@ -389,31 +371,29 @@ export function DiffView({
           return;
         }
 
-        const applied = applyDiffDiskReconcilePlan({
-          plan,
-          adoptCleanBaseline: (seed) => leases.modified.adoptCleanBaseline(seed),
-        });
-        if (applied.kind === "clear-conflict") {
-          if (mountedRef.current) setConflict(null);
+        if (plan.kind === "apply") {
+          if (mountedRef.current) {
+            setConflict(null);
+            setLiveError(null);
+          }
           return;
         }
-        if (applied.kind === "conflict") {
-          if (mountedRef.current) setConflict(applied.conflict);
+        if (plan.kind === "conflict") {
+          if (mountedRef.current && typeof plan.revision === "number") {
+            setConflict({ text: plan.disk, mtime: plan.revision });
+            setLiveError(null);
+          }
           return;
         }
-        if (applied.kind === "toast-unreadable") {
-          toastError(
-            `${name} changed on disk and is now unreadable. Your unsaved edits were kept.`,
-          );
+        if (plan.keepDraft) {
+          if (mountedRef.current) {
+            setLiveError(`${plan.error} Your unsaved draft is still open.`);
+            setConflict(null);
+          }
           return;
         }
-        if (applied.kind === "error") {
-          if (mountedRef.current) setState({ status: "error", error: applied.error });
-          return;
-        }
-        // missing while clean — surface the deletion instead of stale content.
         if (mountedRef.current) {
-          setState({ status: "error", error: "File was deleted on disk." });
+          setState({ status: "error", error: plan.error });
         }
       })();
     });
@@ -422,11 +402,11 @@ export function DiffView({
       unsubscribe();
       void window.api.files.unwatch({ projectId, ticketId: ticket.id, relPath });
     };
-  }, [state.status, modifiedReadOnly, projectId, ticket.id, relPath, name]);
+  }, [state, modifiedReadOnly, projectId, ticket.id, relPath, name]);
 
   const handleSave = React.useCallback(
     async (text: string): Promise<MonacoFileSaveResult> => {
-      if (state.status !== "editor" || state.plan.modifiedReadOnly) {
+      if (state.status !== "editor" || state.plan.modifiedReadOnly || liveError !== null) {
         return { ok: false, error: "This side is read-only." };
       }
       try {
@@ -449,7 +429,7 @@ export function DiffView({
         return { ok: false, error: errorMessage(error) };
       }
     },
-    [state, projectId, ticket.id, relPath],
+    [state, liveError, projectId, ticket.id, relPath],
   );
 
   const handleViewStateChange = React.useCallback(
@@ -477,17 +457,39 @@ export function DiffView({
     [previousPath, relPath],
   );
 
-  const reloadFromDisk = React.useCallback(() => {
+  const useDiskAndDiscardDraft = React.useCallback(() => {
     const leases = leasesRef.current;
     if (leases === null || conflict === null) return;
-    leases.modified.discard();
-    leases.modified.adoptCleanBaseline({
+    leases.modified.applyExternalUpdate({
+      baseline: conflict.text,
       value: conflict.text,
       revision: conflict.mtime,
     });
     lastWriteRef.current = null;
     setConflict(null);
   }, [conflict]);
+
+  const overwriteDiskWithDraft = React.useCallback(async () => {
+    const leases = leasesRef.current;
+    if (leases === null || conflict === null) return;
+    const text = leases.modified.model.getValue();
+    const result = await handleSave(text);
+    if (!result.ok) {
+      toastError(`Could not overwrite ${name}: ${result.error}`);
+      return;
+    }
+    if (leases.modified.model.getValue() === text) {
+      leases.modified.markSaved(result.revision);
+    } else {
+      leases.modified.applyExternalUpdate({
+        baseline: text,
+        value: leases.modified.model.getValue(),
+        revision: result.revision,
+      });
+    }
+    setConflict(null);
+    setLiveError(null);
+  }, [conflict, handleSave, name]);
 
   if (state.status === "loading") {
     return <p className="px-gutter py-4 text-xs text-muted-foreground">Loading diff…</p>;
@@ -504,23 +506,21 @@ export function DiffView({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <DiffPresentationToggle presentation={presentation} onChange={setDiffPresentation} />
+      {liveError !== null ? (
+        <LiveReconciliationAffordance kind="error" message={liveError} />
+      ) : null}
       {conflict !== null ? (
-        <div className="mx-gutter mt-2 flex items-center justify-between gap-3 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-          <span>
-            Changed on disk — your unsaved edits were kept. Saving now overwrites the newer version
-            on disk.
-          </span>
-          <Button size="sm" variant="secondary" onClick={reloadFromDisk}>
-            <ArrowClockwiseIcon />
-            Reload
-          </Button>
-        </div>
+        <LiveReconciliationAffordance
+          kind="conflict"
+          onUseDisk={useDiskAndDiscardDraft}
+          onOverwriteDisk={() => void overwriteDiskWithDraft()}
+        />
       ) : null}
       <MonacoDiffEditor
         originalLease={state.leases.original}
         modifiedLease={state.leases.modified}
         presentation={presentation}
-        modifiedReadOnly={state.plan.modifiedReadOnly}
+        modifiedReadOnly={state.plan.modifiedReadOnly || liveError !== null}
         ariaLabel={`${baseNameOf(relPath)} diff`}
         onSave={handleSave}
         onDirtyChange={onDirtyChange}
