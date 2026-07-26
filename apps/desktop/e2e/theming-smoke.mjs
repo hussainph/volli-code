@@ -25,6 +25,13 @@
  *      the whole point of issue #123 — the store used to hydrate the global
  *      scope and never re-read it for the restored project, so an override was
  *      correct in the database and invisible in the window.
+ *   6. A GLOBAL theme pick made while an overriding project is selected leaves
+ *      that project's window alone (#123's other half): the write used to be
+ *      answered with the GLOBAL scope, the store adopts a payload whole, and
+ *      every project silently went back to looking the same until you switched
+ *      away and back. Asserted as a PAINT TRACE, because the failure was a
+ *      bounce and a final-value check would grade a window that flickered as
+ *      passing.
  *
  * Like terminal-smoke.mjs / ghostty-config-smoke.mjs this is a MANUALLY-RUN
  * smoke (needs a display + the built app) — CI does not run it:
@@ -254,6 +261,40 @@ async function watchScopeTransition(page) {
     window.volliScopeObserver = observer;
   });
 }
+
+/**
+ * Records every value `--background` settles on from now until it is read.
+ *
+ * theme/apply.ts writes the whole token set onto the root element's inline
+ * style, so a MutationObserver on that attribute sees every repaint — a bounce
+ * through another theme and back cannot slip between two polls, which is
+ * exactly what the #123 regression looked like from the outside.
+ */
+async function watchBackgroundPaints(page) {
+  await page.evaluate(() => {
+    window.volliPaintObserver?.disconnect();
+    const paints = [];
+    window.volliPaints = paints;
+    const record = () => {
+      const value = document.documentElement.style
+        .getPropertyValue("--background")
+        .trim()
+        .toLowerCase();
+      // Deduped against the last entry: one repaint writes every token, so the
+      // observer fires many times for a single swap.
+      if (value !== "" && paints.at(-1) !== value) paints.push(value);
+    };
+    const observer = new MutationObserver(record);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["style"] });
+    window.volliPaintObserver = observer;
+    // Seeded with what is on screen right now, so the recording reads as a
+    // trace rather than as a diff against an assumed starting point.
+    record();
+  });
+}
+
+/** The `--background` trace since {@link watchBackgroundPaints}, oldest first. */
+const readBackgroundPaints = (page) => page.evaluate(() => window.volliPaints ?? []);
 
 /** `{seen}` — did the crossfade arm at all; `{now}` — is it still armed. */
 const readScopeTransition = (page) =>
@@ -685,6 +726,80 @@ cursor-style = block
     return {
       ok: after === userConfigBefore,
       detail: after === userConfigBefore ? "unchanged" : "MUTATED — decision #67 violated",
+    };
+  });
+
+  // ---- 8. a GLOBAL write must not evict the project scope (#123) -----------
+  // The other half of the same bug. Booting into an override was one way to
+  // lose the project's theme; picking an app-wide one while that project was
+  // selected was the other — main answered the write with the GLOBAL scope,
+  // the store adopts a payload whole, and the window silently went back to
+  // looking like everything else.
+  await attempt(
+    21,
+    "an app-wide theme pick leaves an overriding project alone (#123)",
+    async () => {
+      // Check 18 put Alpha back on Inherit, so give it an override again — the
+      // same route Configure offers: Custom, then a named theme.
+      await openProjectAppearance(page);
+      await segment(page, "project-appearance-app-mode", "custom").click();
+      await segment(page, "project-appearance-app-source", "theme").click();
+      const picker = page.getByTestId("project-appearance-theme-picker");
+      await picker.waitFor();
+      await picker
+        .getByRole("option", { name: /Midnight/ })
+        .first()
+        .click();
+      await waitForToken(page, "--background", MIDNIGHT["--background"]);
+
+      // Record the paints and the crossfade rather than sampling the end state:
+      // the regression was a BOUNCE, and a final-value check alone would grade a
+      // window that visibly flickered as passing.
+      await watchBackgroundPaints(page);
+      await watchScopeTransition(page);
+
+      await openAppearanceSettings(page);
+      await page.getByRole("option", { name: /Ember/ }).first().click();
+      // The write is what this check waits on — once it lands the window is
+      // supposed to be doing nothing, so there is no repaint to poll for.
+      const globalSlug = await waitUntil("the global theme to change", async () => {
+        const state = await themeStateFor(page, projectAId);
+        return state.globalSlug === "ember" ? state.globalSlug : null;
+      }).catch(() => null);
+      await sleep(SCOPE_TRANSITION_SETTLE_MS);
+
+      const paints = await readBackgroundPaints(page);
+      const armed = await readScopeTransition(page);
+      const stored = await themeStateFor(page, projectAId);
+      // ONE excursion into Ember is expected and is not the bug: highlighting a
+      // row in the picker previews it live (check 4), and reaching the row to
+      // click it highlights it. What the bug looked like is a SECOND one, after
+      // the commit, that never came back — the scope-less payload landing on top
+      // of the correct re-resolve (observed as rose → moss → rose → moss).
+      const excursions = paints.filter((value) => value !== MIDNIGHT["--background"]);
+      return {
+        ok:
+          globalSlug === "ember" &&
+          paints.at(-1) === MIDNIGHT["--background"] &&
+          excursions.length === 1 &&
+          excursions[0] === EMBER["--background"] &&
+          // The scope never changed, so the crossfade has no business arming.
+          !armed.seen &&
+          stored.override?.appThemeSlug === "midnight",
+        detail: `global=${globalSlug} paints=${JSON.stringify(paints)} crossfadeArmed=${armed.seen} stored=${JSON.stringify(stored.override)}`,
+      };
+    },
+  );
+
+  await attempt(22, "an inheriting project then paints the NEW global theme", async () => {
+    // The write really was global — Beta inherits, so it must be wearing Ember
+    // now, which is also what proves check 21 wasn't just a write that failed.
+    await selectProject(page, PROJECT_B);
+    const applied = await waitForToken(page, "--background", EMBER["--background"]);
+    const stored = await themeStateFor(page, projectBId);
+    return {
+      ok: applied === EMBER["--background"] && stored.override === null,
+      detail: `--background=${applied} override=${JSON.stringify(stored.override)}`,
     };
   });
 } catch (error) {
