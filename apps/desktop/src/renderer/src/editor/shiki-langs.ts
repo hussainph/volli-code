@@ -1,4 +1,4 @@
-import type { DynamicImportLanguageRegistration, LanguageInput } from "shiki";
+import type { DynamicImportLanguageRegistration, LanguageInput } from "shiki/types";
 
 /**
  * Static ES-module importer for a Monaco language id.
@@ -53,11 +53,17 @@ export function shikiLangImportFor(monacoLanguageId: string): ShikiLangImporter 
 
 /**
  * Every static `@shikijs/langs` importer for document-identity languages.
- * Plaintext is excluded (no grammar). Pass into `createHighlighter` /
- * `bootstrapShikiMonaco` before `shikiToMonaco` so TextMate providers register.
+ * Plaintext is excluded (no grammar). Pass into `createHighlighterCore` /
+ * `bootstrapShikiMonaco` before `shikiToMonaco` so TextMate providers register
+ * in that single wire-up pass (eager load — not a late-provider path).
  */
 export function allShikiLangImporters(): ShikiLangImporter[] {
   return Object.values(SHIKI_LANG_IMPORTS);
+}
+
+/** Every Monaco language id that has a catalog `@shikijs/langs` grammar. */
+export function allShikiLanguageIds(): string[] {
+  return Object.keys(SHIKI_LANG_IMPORTS);
 }
 
 export type ShikiLanguageHost = {
@@ -66,8 +72,16 @@ export type ShikiLanguageHost = {
 };
 
 /**
- * Lazily load the TextMate grammar for a Monaco language id into a highlighter.
+ * Load a TextMate grammar into the highlighter for a Monaco language id.
+ *
+ * After eager bootstrap (`allShikiLangImporters` + `bootstrapShikiMonaco`),
+ * catalog ids are already loaded and this returns `true` without work.
  * Plaintext / unknown ids are a no-op and return `false`.
+ *
+ * This does **not** install Monaco TextMate token providers. `@shikijs/monaco`
+ * only binds providers during the one-shot `shikiToMonaco` call; late grammar
+ * loads alone will not highlight. Keep new document langs in
+ * `SHIKI_LANG_IMPORTS` and the eager bootstrap path.
  */
 export async function ensureShikiLanguage(
   highlighter: ShikiLanguageHost,

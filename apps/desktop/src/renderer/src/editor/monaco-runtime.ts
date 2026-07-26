@@ -78,9 +78,15 @@ type MonacoModelHost = {
 };
 
 /**
- * Document-registry model factory that ensures the shiki grammar for the
- * model's Monaco language id (no-op when already loaded at bootstrap), then
- * creates the Monaco text model.
+ * Document-registry model factory: creates the Monaco text model after a
+ * best-effort `ensureShikiLanguage` call.
+ *
+ * With eager bootstrap, catalog grammars are already loaded and that call is a
+ * no-op. It does not (and cannot) install TextMate providers later —
+ * providers are registered once in `bootstrapShikiMonaco` after missing Monaco
+ * language ids are registered. Kept so a missing eager-list entry still loads
+ * the grammar into the highlighter for non-TextMate uses; highlighting still
+ * requires the lang to be present at bootstrap.
  */
 export function createShikiBackedModelFactory(
   monaco: MonacoModelHost,
@@ -96,8 +102,9 @@ export function createShikiBackedModelFactory(
 
 /**
  * Wire shiki once with every catalog theme and document-identity language
- * loaded before `shikiToMonaco`, then activate the pending editor theme (or
- * the ember → one-dark-pro default when nothing has asked yet).
+ * loaded before `shikiToMonaco` (eager TextMate providers; not lazy). Then
+ * activate the pending editor theme (or the ember → one-dark-pro default when
+ * nothing has asked yet).
  */
 export async function prepareMonacoEditorThemes(
   monaco: typeof Monaco,

@@ -102,7 +102,7 @@ describe("prepareMonacoEditorThemes", () => {
 });
 
 describe("createShikiBackedModelFactory", () => {
-  it("ensures the shiki grammar when a Monaco model is created", () => {
+  it("calls ensureShikiLanguage when creating a model (no-op after eager bootstrap)", () => {
     const model = { id: "model-1" };
     const createModel = vi.fn(() => model);
     const parse = vi.fn((uri: string) => ({ path: uri }));

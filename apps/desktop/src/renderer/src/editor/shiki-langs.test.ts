@@ -1,8 +1,14 @@
-import { createHighlighter, createJavaScriptRegexEngine } from "shiki";
+import { createHighlighterCore } from "shiki/core";
+import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { detectDocumentLanguage, type DocumentIdentity } from "./document-identity";
-import { allShikiLangImporters, ensureShikiLanguage, shikiLangImportFor } from "./shiki-langs";
+import {
+  allShikiLangImporters,
+  allShikiLanguageIds,
+  ensureShikiLanguage,
+  shikiLangImportFor,
+} from "./shiki-langs";
 
 const mainFile = (relPath: string): DocumentIdentity => ({
   kind: "file",
@@ -68,9 +74,12 @@ describe("shikiLangImportFor", () => {
 describe("allShikiLangImporters", () => {
   it("returns every mapped document-language loader and excludes plaintext", () => {
     const importers = allShikiLangImporters();
+    const ids = allShikiLanguageIds();
 
     expect(importers.length).toBeGreaterThan(0);
     expect(importers).toHaveLength(DOCUMENT_LANGUAGE_FIXTURES.length);
+    expect(ids).toHaveLength(DOCUMENT_LANGUAGE_FIXTURES.length);
+    expect(ids).toEqual(expect.arrayContaining(["toml", "cmake", "makefile", "properties"]));
 
     for (const importer of importers) {
       expect(typeof importer).toBe("function");
@@ -80,15 +89,17 @@ describe("allShikiLangImporters", () => {
       const load = shikiLangImportFor(language);
       expect(load).not.toBeNull();
       expect(importers).toContain(load);
+      expect(ids).toContain(language);
     }
 
     expect(shikiLangImportFor("plaintext")).toBeNull();
+    expect(ids).not.toContain("plaintext");
   });
 });
 
 describe("ensureShikiLanguage", () => {
   it("is a no-op for plaintext and unknown language ids", async () => {
-    const highlighter = await createHighlighter({
+    const highlighter = await createHighlighterCore({
       themes: [],
       langs: [],
       engine: createJavaScriptRegexEngine(),
@@ -102,7 +113,7 @@ describe("ensureShikiLanguage", () => {
   });
 
   it("loads a known language into the highlighter once", async () => {
-    const highlighter = await createHighlighter({
+    const highlighter = await createHighlighterCore({
       themes: [],
       langs: [],
       engine: createJavaScriptRegexEngine(),
