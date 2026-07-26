@@ -56,7 +56,7 @@ export function shikiLangImportFor(monacoLanguageId: string): ShikiLangImporter 
  * Plaintext is excluded (no grammar). Pass into `createHighlighter` /
  * `bootstrapShikiMonaco` before `shikiToMonaco` so TextMate providers register.
  */
-export function allShikiLangImporters(): readonly ShikiLangImporter[] {
+export function allShikiLangImporters(): ShikiLangImporter[] {
   return Object.values(SHIKI_LANG_IMPORTS);
 }
 
