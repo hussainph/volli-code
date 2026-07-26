@@ -58,6 +58,24 @@ guess.
 
 ## Deployment
 
-Cloudflare Pages project `volli-docs`, custom domain `docs.volli.app`.
+Cloudflare Pages project `volli-docs`, serving `docs.volli.app`. The project
+exists; `pnpm -C apps/docs deploy` builds and ships to it.
 
-Both need to exist in the Cloudflare dashboard before `pnpm deploy` will work.
+The custom domain needs a DNS record that wrangler cannot create. `wrangler` has
+no `pages domain` subcommand, and custom domains are dashboard or REST-API only.
+
+`volli.app` has a wildcard record pointing at the marketing site, so
+`docs.volli.app` resolves without a record of its own and Cloudflare reports
+`CNAME record not set`, leaving the domain pending and TLS unissued. The fix is a
+specific record, which beats the wildcard:
+
+```
+Type:    CNAME
+Name:    docs
+Target:  volli-docs.pages.dev
+Proxy:   on
+```
+
+Add it in the `volli.app` zone under DNS > Records. Validation and certificate
+issuance follow within a few minutes. The apex and the `volli-code` project are
+unaffected.
