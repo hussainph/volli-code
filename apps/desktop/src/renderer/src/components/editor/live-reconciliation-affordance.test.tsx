@@ -20,4 +20,18 @@ describe("LiveReconciliationAffordance", () => {
     expect(html).not.toContain("Reload");
     expect(html).not.toContain('role="dialog"');
   });
+
+  it("keeps unreadable-file errors visible beside an unsaved draft", () => {
+    const html = renderToStaticMarkup(
+      <LiveReconciliationAffordance
+        kind="error"
+        message="File was deleted on disk. Your unsaved draft is still open."
+      />,
+    );
+
+    expect(html).toContain('data-testid="live-reconciliation-error"');
+    expect(html).toContain("File was deleted on disk. Your unsaved draft is still open.");
+    expect(html).toContain('role="status"');
+    expect(html).not.toContain("Overwrite disk");
+  });
 });
