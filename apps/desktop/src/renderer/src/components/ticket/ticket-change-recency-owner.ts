@@ -27,6 +27,34 @@ export type TicketRecencyOwnerEvent =
   | { type: "local-save"; identity: ResolvedFileChangeIdentity; revision: number }
   | { type: "file-changed"; event: FileChangedEvent };
 
+type TicketInspectionRead = (input: {
+  projectId: string;
+  ticketId: string;
+  relPath: string;
+}) => Promise<
+  | { ok: true; source: ResolvedFileChangeIdentity["source"]; mtime: number }
+  | { ok: false; error?: string }
+>;
+
+/** Resolve the exact source identity and file revision for a deliberate open. */
+export async function readTicketInspection(
+  read: TicketInspectionRead,
+  input: { projectId: string; ticketId: string; relPath: string },
+): Promise<Extract<TicketRecencyOwnerEvent, { type: "inspect" }> | null> {
+  const result = await read(input);
+  if (!result.ok) return null;
+  return {
+    type: "inspect",
+    identity: {
+      projectId: input.projectId,
+      ticketId: result.source === "worktree" ? input.ticketId : null,
+      relPath: input.relPath,
+      source: result.source,
+    },
+    revision: result.mtime,
+  };
+}
+
 function withoutPath<T>(
   record: Readonly<Record<string, T>>,
   path: string,
