@@ -1358,6 +1358,11 @@ describe("THEME_IPC descriptor table", () => {
       expect(guard([{ editorThemeId: null }])).toBe(true);
     });
 
+    it("accepts the caller's project scope and rejects a non-string one", () => {
+      expect(guard([{ editorThemeId: "nord", projectId: "p1" }])).toBe(true);
+      expect(guard([{ editorThemeId: "nord", projectId: 7 }])).toBe(false);
+    });
+
     it("rejects a missing or non-nullable-string editorThemeId", () => {
       expect(guard([{}])).toBe(false);
       expect(guard([{ editorThemeId: 7 }])).toBe(false);

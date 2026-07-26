@@ -616,7 +616,8 @@ export const THEME_IPC: { readonly [C in ThemeIpcChannel]: IpcRequestDescriptor<
       isRecord(args[0]) &&
       (args[0]["editorThemeId"] === null ||
         (typeof args[0]["editorThemeId"] === "string" &&
-          isShippedEditorThemeId(args[0]["editorThemeId"]))),
+          isShippedEditorThemeId(args[0]["editorThemeId"]))) &&
+      isCallerScope(args[0]["projectId"]),
     invalidError: "Invalid editor theme",
   },
   "volli:theme-set-project": {

@@ -210,7 +210,7 @@ export function registerThemeIpcHandlers(
 
     "volli:theme-set-global-editor": (input: ThemeSetGlobalEditorInput): ThemeStateResult => {
       setGlobalEditorThemeId(db, input.editorThemeId, deps.now());
-      return buildThemeState(db, deps, null);
+      return stateForCaller(db, deps, input.projectId ?? null);
     },
 
     "volli:theme-set-project": (input: ThemeSetProjectInput): ThemeSetProjectResult => {

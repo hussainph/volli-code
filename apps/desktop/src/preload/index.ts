@@ -486,10 +486,17 @@ const api = {
       invoke("volli:theme-set-global", projectId === null ? { theme } : { theme, projectId }),
     /**
      * Persists the global Monaco/shiki theme id; `null` clears it so the editor
-     * derives from the active app theme slug. Resolves with the fresh state.
+     * derives from the active app theme slug. Resolves with the fresh state for
+     * the CALLER's scope, exactly like {@link setGlobal} (#123).
      */
-    setGlobalEditor: (editorThemeId: ShippedEditorThemeId | null): Promise<ThemeStateResult> =>
-      invoke("volli:theme-set-global-editor", { editorThemeId }),
+    setGlobalEditor: (
+      editorThemeId: ShippedEditorThemeId | null,
+      projectId: string | null = null,
+    ): Promise<ThemeStateResult> =>
+      invoke(
+        "volli:theme-set-global-editor",
+        projectId === null ? { editorThemeId } : { editorThemeId, projectId },
+      ),
     /** Persists one project's per-surface override; `null` clears it back to inheriting. */
     setProject: (
       projectId: string,

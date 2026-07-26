@@ -264,6 +264,31 @@ describe("volli:theme-set-global-editor", () => {
     expect(read.ok && read.value.editorThemeId).toBe("nord");
   });
 
+  // The editor twin of the app-theme case above: global write, caller's scope
+  // in the answer (#123). A project that pinned its own editor theme must not
+  // have it dropped because the app-wide one changed.
+  it("writes globally but answers in the caller's project scope (#123)", () => {
+    const { projectId } = setup();
+    const override: ProjectThemeOverride = {
+      appThemeSlug: null,
+      terminalThemeName: null,
+      editorThemeId: "dracula",
+      seed: null,
+    };
+    invoke("volli:theme-set-project", { projectId, override });
+
+    const result = invoke<ThemeStateResult>("volli:theme-set-global-editor", {
+      editorThemeId: "nord",
+      projectId,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.editorThemeId).toBe("nord");
+    expect(result.value.projectId).toBe(projectId);
+    expect(result.value.projectOverride?.editorThemeId).toBe("dracula");
+  });
+
   it("clears back to derive-from-app on null", () => {
     setup();
     invoke("volli:theme-set-global-editor", { editorThemeId: "nord" });

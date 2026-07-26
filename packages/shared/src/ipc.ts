@@ -404,6 +404,8 @@ export interface ThemeSetGlobalInput {
  */
 export interface ThemeSetGlobalEditorInput {
   editorThemeId: ShippedEditorThemeId | null;
+  /** The caller's own scope, exactly as on {@link ThemeSetGlobalInput} (#123). */
+  projectId?: string;
 }
 
 export interface ThemeSetProjectInput {

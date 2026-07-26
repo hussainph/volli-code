@@ -112,10 +112,12 @@ function fakeGateway(over: Partial<ThemeGateway> = {}): ThemeGateway {
       ok: true as const,
       value: statePayload({ theme, projectId }),
     })),
-    setGlobalEditor: vi.fn(async (editorThemeId: ShippedEditorThemeId | null) => ({
-      ok: true as const,
-      value: statePayload({ editorThemeId }),
-    })),
+    setGlobalEditor: vi.fn(
+      async (editorThemeId: ShippedEditorThemeId | null, projectId: string | null) => ({
+        ok: true as const,
+        value: statePayload({ editorThemeId, projectId }),
+      }),
+    ),
     setProject: vi.fn(async (projectId: string, override: ProjectThemeOverride | null) => ({
       ok: true as const,
       project: { id: projectId } as never,
@@ -352,7 +354,7 @@ describe("setEditorTheme", () => {
 
     await expect(store.getState().setEditorTheme("nord")).resolves.toBe(true);
 
-    expect(gateway.setGlobalEditor).toHaveBeenCalledWith("nord");
+    expect(gateway.setGlobalEditor).toHaveBeenCalledWith("nord", null);
     expect(gateway.setGlobal).not.toHaveBeenCalled();
     expect(store.getState().editorThemeId).toBe("nord");
     expect(paint.editorThemes).toEqual(["nord"]);
@@ -643,10 +645,11 @@ describe("commit", () => {
  * wearing while it happens.
  */
 describe("a global write made from a project scope", () => {
-  /** A project whose app surface is pinned to a theme of the user's own. */
+  /** A project whose app AND editor surfaces are pinned to its own choices. */
   const OVERRIDE: ProjectThemeOverride = {
     ...EMPTY_PROJECT_THEME_OVERRIDE,
     appThemeSlug: "sunset",
+    editorThemeId: "dracula",
   };
 
   /**
@@ -663,6 +666,16 @@ describe("a global write made from a project scope", () => {
           projectOverride: projectId === "p1" ? OVERRIDE : null,
         }),
       })),
+      setGlobalEditor: vi.fn(
+        async (editorThemeId: ShippedEditorThemeId | null, projectId: string | null) => ({
+          ok: true as const,
+          value: statePayload({
+            editorThemeId,
+            projectId,
+            projectOverride: projectId === "p1" ? OVERRIDE : null,
+          }),
+        }),
+      ),
     };
   }
 
@@ -693,6 +706,22 @@ describe("a global write made from a project scope", () => {
     expect(paint.applied).toEqual([SUNSET]);
     // The scope never changed, so the crossfade must stay out of it.
     expect(paint.eased).toEqual([]);
+  });
+
+  it("keeps the project's own editor theme while the global editor theme changes", async () => {
+    const { store, gateway, paint } = inProjectScope();
+
+    await expect(store.getState().setEditorTheme("nord")).resolves.toBe(true);
+
+    expect(gateway.setGlobalEditor).toHaveBeenCalledWith("nord", "p1");
+    expect(store.getState().editorThemeId).toBe("nord");
+    expect(store.getState().projectId).toBe("p1");
+    expect(store.getState().projectOverride).toEqual(OVERRIDE);
+    // Monaco stays on what this project pinned — the global id is what the
+    // OTHER projects inherit, and adopting a scope-less answer here would
+    // repaint the editor (and the window) out from under this one.
+    expect(paint.editorThemes).toEqual(["dracula"]);
+    expect(paint.applied).toEqual([SUNSET]);
   });
 });
 
@@ -1073,10 +1102,12 @@ describe("createThemeStore() with the default deps", () => {
       ok: true as const,
       value: statePayload({ theme, projectId }),
     }));
-    const setGlobalEditor = vi.fn(async (editorThemeId: ShippedEditorThemeId | null) => ({
-      ok: true as const,
-      value: statePayload({ editorThemeId }),
-    }));
+    const setGlobalEditor = vi.fn(
+      async (editorThemeId: ShippedEditorThemeId | null, projectId: string | null) => ({
+        ok: true as const,
+        value: statePayload({ editorThemeId, projectId }),
+      }),
+    );
     const setProject = vi.fn(async () => ({ ok: false as const, error: "unused" }));
     const listCustomThemes = vi.fn(async () => ({ ok: true as const, themes: [SUNSET] }));
     const saveCustomTheme = vi.fn(async () => ({
@@ -1130,7 +1161,7 @@ describe("createThemeStore() with the default deps", () => {
     expect(setGlobal).toHaveBeenCalledWith(DEFAULT_THEME, "p1");
 
     await store.getState().setEditorTheme("nord");
-    expect(setGlobalEditor).toHaveBeenCalledWith("nord");
+    expect(setGlobalEditor).toHaveBeenCalledWith("nord", "p1");
 
     store.setState({ preview: MIDNIGHT });
     await store.getState().commitPreview({ kind: "project", projectId: "p1" });

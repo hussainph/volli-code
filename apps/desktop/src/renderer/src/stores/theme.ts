@@ -69,7 +69,11 @@ export interface ThemeGateway {
    * surface wearing its own theme while the app-wide one changes underneath.
    */
   setGlobal(theme: ThemeDefinition, projectId: string | null): Promise<ThemeStateResult>;
-  setGlobalEditor(editorThemeId: ShippedEditorThemeId | null): Promise<ThemeStateResult>;
+  /** The editor twin of {@link setGlobal} — same rule about whose scope the answer describes. */
+  setGlobalEditor(
+    editorThemeId: ShippedEditorThemeId | null,
+    projectId: string | null,
+  ): Promise<ThemeStateResult>;
   setProject(
     projectId: string,
     override: ProjectThemeOverride | null,
@@ -104,7 +108,8 @@ const defaultDeps: ThemeStoreDeps = {
   gateway: {
     state: (input) => window.api.theme.state(input),
     setGlobal: (theme, projectId) => window.api.theme.setGlobal(theme, projectId),
-    setGlobalEditor: (editorThemeId) => window.api.theme.setGlobalEditor(editorThemeId),
+    setGlobalEditor: (editorThemeId, projectId) =>
+      window.api.theme.setGlobalEditor(editorThemeId, projectId),
     setProject: (projectId, override) => window.api.theme.setProject(projectId, override),
     listCustomThemes: () => window.api.theme.listCustomThemes(),
     saveCustomTheme: (theme) => window.api.theme.saveCustomTheme(theme),
@@ -591,7 +596,10 @@ export function createThemeStore({
             repaint();
             const write = editorWriteQueue.then(() =>
               writeThrough("save the editor theme", () =>
-                deps.gateway.setGlobalEditor(editorThemeId),
+                // Read at SEND time, not at queue time: the scope this window
+                // is in when the write actually goes out is the one its answer
+                // has to describe (#123).
+                deps.gateway.setGlobalEditor(editorThemeId, get().projectId),
               ),
             );
             editorWriteQueue = write.then(() => undefined);
