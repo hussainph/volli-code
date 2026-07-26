@@ -159,13 +159,43 @@ async function readAppliedTokens(page, names) {
 }
 
 /** Polls one custom property until it reaches `expected` (or times out), returning what it settled on. */
-async function waitForToken(page, name, expected) {
+async function waitForToken(page, name, expected, { timeout = 4000 } = {}) {
   await waitUntil(
     `${name} → ${expected}`,
     async () => (await readAppliedTokens(page, [name]))[name] === expected,
-    { timeout: 4000 },
+    { timeout },
   ).catch(() => {});
   return (await readAppliedTokens(page, [name]))[name];
+}
+
+/**
+ * Hovers a theme row and waits for its preview to paint, re-entering the row if
+ * the first move didn't take.
+ *
+ * The picker previews on POINTERMOVE — cmdk selects the row the pointer moves
+ * over and the app previews whatever is selected — and a small fraction of
+ * hovers here land with no preview at all: the theme on screen does not change,
+ * and no amount of waiting fixes it. Measured against the built app: 3 misses
+ * across ~450 hover cycles, and the one caught with the pointer trace running
+ * recovered the instant the pointer left and came back. A synthetic pointer
+ * event that didn't take is not what these checks are about, so they retry
+ * rather than report a working picker as broken.
+ *
+ * The pointer LEAVES the list before each retry: cmdk selects on crossing into
+ * a row, and leaving also drops the highlight, so the retry is a real re-entry
+ * and not a second no-op on an unchanged value. The caller still asserts that
+ * the preview landed, so a picker that has genuinely stopped previewing fails
+ * exactly as loudly as before.
+ */
+async function hoverThemeRow(page, name, expected) {
+  let applied = "";
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (attempt > 0) await page.mouse.move(8, 8);
+    await page.getByRole("option", { name }).first().hover();
+    applied = await waitForToken(page, "--background", expected, { timeout: 1500 });
+    if (applied === expected) return applied;
+  }
+  return applied;
 }
 
 /** The terminal theme row's trigger — distinct from the app-theme picker on the same page. */
@@ -388,11 +418,7 @@ try {
   await openAppearanceSettings(page);
 
   await attempt(4, "moving through the picker previews the theme live", async () => {
-    await page
-      .getByRole("option", { name: /Midnight/ })
-      .first()
-      .hover();
-    const applied = await waitForToken(page, "--background", MIDNIGHT["--background"]);
+    const applied = await hoverThemeRow(page, /Midnight/, MIDNIGHT["--background"]);
     return {
       ok: applied === MIDNIGHT["--background"],
       detail: `--background=${applied} (expected ${MIDNIGHT["--background"]})`,
@@ -417,8 +443,7 @@ try {
     // nothing and this check would grade a revert that never had anything to
     // revert. Hence the mid-state assertion too — half a check is worse here
     // than none, because it would pass whether or not hover still works.
-    await page.getByRole("option", { name: /Moss/ }).first().hover();
-    const previewed = await waitForToken(page, "--background", MOSS["--background"]);
+    const previewed = await hoverThemeRow(page, /Moss/, MOSS["--background"]);
     // A hover has no Escape: walking away IS the "never mind". The corner is
     // outside the Command root, so this is the real pointerleave, not a click.
     await page.mouse.move(8, 8);
