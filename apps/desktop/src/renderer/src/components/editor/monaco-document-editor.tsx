@@ -85,6 +85,35 @@ export interface MonacoDocumentEditorProps {
 
 type DocumentMonacoLease = DocumentLease<editor.ITextModel, editor.ICodeEditorViewState>;
 
+interface DocumentExternalLease {
+  applyExternalUpdate(update: {
+    baseline: string;
+    value: string;
+    revision: DocumentRevision;
+  }): void;
+}
+
+interface DocumentExternalEditorView<TViewState> {
+  saveViewState(): TViewState | null;
+  restoreViewState(state: TViewState): void;
+}
+
+export function applyDocumentExternalValue<TViewState>({
+  lease,
+  editorView,
+  value,
+  revision,
+}: {
+  lease: DocumentExternalLease;
+  editorView: DocumentExternalEditorView<TViewState> | null;
+  value: string;
+  revision: DocumentRevision;
+}): void {
+  const viewState = editorView?.saveViewState() ?? null;
+  lease.applyExternalUpdate({ baseline: value, value, revision });
+  if (viewState !== null) editorView?.restoreViewState(viewState);
+}
+
 /**
  * The Monaco Document Mode editor — the ONE surface for the Ticket Body and
  * Markdown Artifacts (CONCEPT #49/#60). The markdown buffer IS the document:
@@ -189,29 +218,22 @@ export const MonacoDocumentEditor = React.forwardRef<
     liveRef.current.onDirtyChange?.(dirty);
   }, []);
 
-  /**
-   * Replace the document with `next` in a single host-visible update. The
-   * registry's `adoptCleanBaseline` refuses a dirty model, so a dirty draft is
-   * first cleared via `markSaved` (keeps the current bytes as baseline — one
-   * subsequent setValue from adopt) rather than `discard` (which would setValue
-   * back to the old baseline first and fire a spurious onChange).
-   */
+  /** Replace the document through the registry's single external-edit transaction. */
   const applyExternal = React.useCallback(
     (next: string, nextRevision: DocumentRevision) => {
       const lease = leaseRef.current;
       if (lease === null) return;
-      const view = editorRef.current;
-      const viewState = view?.saveViewState() ?? null;
       suppressChangeRef.current = true;
       try {
-        if (lease.snapshot().dirty) {
-          lease.markSaved(lease.snapshot().baselineRevision);
-        }
-        lease.adoptCleanBaseline({ value: next, revision: nextRevision });
+        applyDocumentExternalValue({
+          lease,
+          editorView: editorRef.current,
+          value: next,
+          revision: nextRevision,
+        });
       } finally {
         suppressChangeRef.current = false;
       }
-      if (viewState !== null) view?.restoreViewState(viewState);
       lastSyncedRef.current = next;
       pendingRef.current = null;
       emitDirty(false);
@@ -287,10 +309,12 @@ export const MonacoDocumentEditor = React.forwardRef<
         if (lease.model.getValue() !== seed) {
           suppressChangeRef.current = true;
           try {
-            if (lease.snapshot().dirty) {
-              lease.markSaved(lease.snapshot().baselineRevision);
-            }
-            lease.adoptCleanBaseline({ value: seed, revision: seedRevision });
+            applyDocumentExternalValue({
+              lease,
+              editorView: null,
+              value: seed,
+              revision: seedRevision,
+            });
           } finally {
             suppressChangeRef.current = false;
           }
@@ -408,7 +432,7 @@ export const MonacoDocumentEditor = React.forwardRef<
       // Bytes match; still advance the revision when the host learned a fresher
       // mtime (echo of our own autosave, or a bare touch).
       if (!Object.is(lease.snapshot().externalRevision, revision)) {
-        lease.adoptCleanBaseline({ value, revision });
+        lease.applyExternalUpdate({ baseline: value, value, revision });
       }
       return;
     }
