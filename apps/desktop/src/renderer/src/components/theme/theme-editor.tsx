@@ -4,23 +4,29 @@ import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
 import {
   beginThemeDuplicate,
   beginThemeEdit,
+  CANVAS_KINDS,
+  canvasOf,
   GRAIN_RANGE,
   swatchColor,
   withAccent,
   withAccentUnlocked,
+  withCanvas,
   withGrain,
   withName,
   withSeed,
+  type CanvasKind,
   type ThemeDraft,
 } from "@renderer/components/theme/theme-editor-model";
 import { SettingsRow } from "@renderer/components/pages/settings-shell";
+import { ThemeComboBox } from "@renderer/components/theme/theme-combo-box";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 import { Switch } from "@renderer/components/ui/switch";
 import { cn } from "@renderer/lib/utils";
 import { useThemeStore, type ThemeScope } from "@renderer/stores/theme";
 import { BUILTIN_THEMES, mergeThemeCatalog } from "@renderer/theme/catalog";
-import { isBuiltinThemeSlug, type ThemeDefinition } from "@volli/shared";
+import { canvasBackground } from "@renderer/theme/canvas-layer";
+import { isBuiltinThemeSlug, type ThemeCanvas, type ThemeDefinition } from "@volli/shared";
 
 /**
  * The theme editor (#71/#75): a seed, an unlockable accent, grain, a name.
@@ -115,9 +121,20 @@ export function ThemeEditor({
     if (focusName) nameRef.current?.select();
   }, [focusName]);
 
+  /**
+   * The look a hover-preview must put back — the draft as it stands.
+   *
+   * A ref, moved SYNCHRONOUSLY wherever the draft moves rather than in an
+   * effect: `ThemeComboBox` restores in a `finally`, which can run before React
+   * has committed the pick, so a restore reading render-time state would put
+   * back the value the user just replaced.
+   */
+  const painted = React.useRef(draft.theme);
+
   /** Adopt a draft change and repaint from it. `null` = not a color yet; keep the text, keep the paint. */
   const edit = (next: ThemeDraft | null): void => {
     if (next === null) return;
+    painted.current = next.theme;
     setDraft(next);
     useThemeStore.getState().startPreview(next.theme);
   };
@@ -128,7 +145,10 @@ export function ThemeEditor({
    * (theme/apply.ts), so typing a name would re-theme every live session
    * per keystroke. Save sends the final draft either way.
    */
-  const editUnpainted = (next: ThemeDraft): void => setDraft(next);
+  const editUnpainted = (next: ThemeDraft): void => {
+    painted.current = next.theme;
+    setDraft(next);
+  };
 
   const save = (): void => {
     setSaving(true);
@@ -218,6 +238,41 @@ export function ThemeEditor({
         </div>
       ) : null}
 
+      {/* Above Grain, below the accent disclosure: the canvas is the layer
+          grain would sit over, and it is the larger of the two decisions, so
+          it reads first. */}
+      <SettingsRow
+        label="Background"
+        description="The layer behind the app's content. Its colors come from the color above."
+      >
+        <ThemeComboBox
+          ariaLabel="Background"
+          buttonLabel={CANVAS_LABEL[draft.theme.canvas.kind]}
+          buttonPreview={<CanvasSample canvas={draft.theme.canvas} />}
+          searchLabel="Search backgrounds"
+          // Three rows do not get a search field.
+          searchable={false}
+          empty="No backgrounds match."
+          activeValue={draft.theme.canvas.kind}
+          items={CANVAS_KINDS.map((kind) => ({
+            value: kind,
+            label: CANVAS_LABEL[kind],
+            preview: <CanvasSample canvas={canvasOf(kind, draft.theme.seed)} />,
+          }))}
+          onPreview={(kind) =>
+            useThemeStore.getState().startPreview(withCanvas(draft, kind as CanvasKind).theme)
+          }
+          // Back to the DRAFT, which is what this editor is showing — read
+          // through a ref because the combo box restores in a `finally` that
+          // can run before React has committed the pick.
+          onEndPreview={() => useThemeStore.getState().startPreview(painted.current)}
+          onSelect={(kind) => {
+            edit(withCanvas(draft, kind));
+            return Promise.resolve(true);
+          }}
+        />
+      </SettingsRow>
+
       <SettingsRow
         label="Grain"
         htmlFor="theme-grain"
@@ -257,6 +312,34 @@ export function ThemeEditor({
         </div>
       </div>
     </div>
+  );
+}
+
+/** What each Background reads as. The noun alone — the preview is the app. */
+const CANVAS_LABEL: Record<CanvasKind, string> = {
+  solid: "Solid",
+  gradient: "Gradient",
+  mesh: "Mesh",
+};
+
+/**
+ * A Background row's painted sample: the derived stops themselves, as one small
+ * bar, in **the same CSS the canvas paints**.
+ *
+ * A single flat swatch would be the wrong thing to show — the choice here is
+ * between two-or-three derived colors and a geometry, and one color states
+ * neither. Painting the real thing at 16×24 makes the ramp legible, and going
+ * through `canvasBackground` means a sample can never drift from the window.
+ *
+ * `aria-hidden`: the row's accessible name is the option word alone.
+ */
+function CanvasSample({ canvas }: { canvas: ThemeCanvas }) {
+  return (
+    <span
+      aria-hidden
+      className="h-6 w-4 shrink-0 rounded-sm border border-border/60"
+      style={{ background: canvasBackground(canvas) }}
+    />
   );
 }
 

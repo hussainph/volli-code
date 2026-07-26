@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   DEFAULT_THEME,
   EMPTY_PROJECT_THEME_OVERRIDE,
+  deriveCanvasStops,
   generateThemeTokens,
   generateVeilTokens,
   THEME_TOKEN_NAMES,
@@ -10,6 +11,7 @@ import {
 } from "@volli/shared";
 
 import { applyThemeTokens, resolveActiveTheme } from "./apply";
+import { canvasBackground } from "./canvas-layer";
 
 /**
  * The renderer test project runs under vitest's default `node` environment, so
@@ -130,6 +132,27 @@ describe("resolveActiveTheme", () => {
     expect(active.editor).toEqual({ value: "catppuccin-mocha", scope: "project" });
     expect(active.app.scope).toBe("global");
     expect(active.terminal.scope).toBe("global");
+  });
+
+  it("carries an overriding project's own canvas through to the layer", () => {
+    // The canvas is part of the app surface, so it follows the same per-surface
+    // resolution as every token — a project on a gradient theme gets the
+    // gradient, not the global's flat fill.
+    const gradient: ThemeDefinition = {
+      ...MIDNIGHT,
+      canvas: {
+        kind: "gradient",
+        stops: deriveCanvasStops({ seed: MIDNIGHT.seed, kind: "gradient" }),
+      },
+    };
+    const active = resolveActiveTheme(
+      DEFAULT_THEME,
+      { ...EMPTY_PROJECT_THEME_OVERRIDE, appThemeSlug: "midnight" },
+      [DEFAULT_THEME, gradient],
+    );
+
+    expect(canvasBackground(active.app.value.canvas)).toContain("linear-gradient(180deg");
+    expect(canvasBackground(DEFAULT_THEME.canvas)).not.toContain("linear-gradient");
   });
 
   it("resolves a project's app theme slug against the catalog", () => {

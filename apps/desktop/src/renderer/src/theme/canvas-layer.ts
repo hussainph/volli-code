@@ -7,7 +7,7 @@
  * `grain-overlay.tsx`.
  */
 
-import { canvasLayerBackground, type ThemeDefinition } from "@volli/shared";
+import { canvasLayerBackground, type ThemeCanvas } from "@volli/shared";
 
 /**
  * What `kind: "solid"` paints.
@@ -20,9 +20,16 @@ import { canvasLayerBackground, type ThemeDefinition } from "@volli/shared";
  */
 export const CANVAS_SOLID_FILL = "var(--rail)";
 
-/** The CSS `background` the layer paints for a theme, band-clamped on the way through. */
-export function canvasBackground(theme: ThemeDefinition): string {
-  return canvasLayerBackground(theme.canvas, CANVAS_SOLID_FILL);
+/**
+ * The CSS `background` a canvas paints, band-clamped on the way through.
+ *
+ * Takes the canvas rather than the whole theme so the Background picker can
+ * paint a sample of an option it has not committed, through the same one
+ * function the window itself is painted with — a preview that could drift from
+ * the real thing would be worse than no preview.
+ */
+export function canvasBackground(canvas: ThemeCanvas): string {
+  return canvasLayerBackground(canvas, CANVAS_SOLID_FILL);
 }
 
 /**

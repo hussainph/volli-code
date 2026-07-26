@@ -6,11 +6,8 @@ import { canvasBackground, CANVAS_SOLID_FILL } from "./canvas-layer";
 import { ThemeCanvas } from "./theme-canvas";
 
 const GRADIENT = canvasBackground({
-  ...DEFAULT_THEME,
-  canvas: {
-    kind: "gradient",
-    stops: deriveCanvasStops({ seed: DEFAULT_THEME.seed, kind: "mesh" }),
-  },
+  kind: "gradient",
+  stops: deriveCanvasStops({ seed: DEFAULT_THEME.seed, kind: "gradient" }),
 });
 
 describe("ThemeCanvas", () => {

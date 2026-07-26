@@ -56,7 +56,7 @@ export function AppShell() {
   // A string, so the selector's snapshot is stable by value — and it folds in
   // the running preview and the per-project override the same way `grain` does,
   // which is what makes hovering a Background option repaint the whole window.
-  const canvas = useThemeStore((state) => canvasBackground(effectiveTheme(state)));
+  const canvas = useThemeStore((state) => canvasBackground(effectiveTheme(state).canvas));
   const [resizing, setResizing] = React.useState(false);
   const terminalFocused = terminalFocusTarget !== null;
   const [focusGeometryInstant, setFocusGeometryInstant] = React.useState(false);

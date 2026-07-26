@@ -15,12 +15,13 @@
  */
 
 import {
+  deriveCanvasStops,
   isHexColor as isParseableHexColor,
   isBuiltinThemeSlug,
   persistedTheme,
   slugify,
 } from "@volli/shared";
-import type { ThemeDefinition } from "@volli/shared";
+import type { ThemeCanvas, ThemeDefinition } from "@volli/shared";
 
 export { isHexColor } from "@volli/shared";
 
@@ -83,7 +84,37 @@ function edited(draft: ThemeDraft, theme: ThemeDefinition): ThemeDraft {
  * or crash the render.
  */
 export function withSeed(draft: ThemeDraft, seed: string): ThemeDraft | null {
-  return isEditorHexColor(seed) ? edited(draft, { ...draft.theme, seed }) : null;
+  if (!isEditorHexColor(seed)) return null;
+  // The canvas follows the seed, because the Background row promises exactly
+  // that ("its colors come from the color above"). Left alone, a gradient would
+  // stay on the previous hue while every other surface repainted — the app
+  // sitting on someone else's wallpaper.
+  return edited(draft, { ...draft.theme, seed, canvas: derivedCanvas(draft.theme.canvas, seed) });
+}
+
+/** Every Background the picker offers, in the order it lists them. */
+export const CANVAS_KINDS = ["solid", "gradient", "mesh"] as const;
+
+/** One Background option. */
+export type CanvasKind = (typeof CANVAS_KINDS)[number];
+
+/** A canvas of `kind`, with its stops derived from `seed`. Solid carries none. */
+export function canvasOf(kind: CanvasKind, seed: string): ThemeCanvas {
+  return kind === "solid" ? { kind } : { kind, stops: deriveCanvasStops({ seed, kind }) };
+}
+
+/** The same canvas re-derived against a new seed — a no-op for solid. */
+function derivedCanvas(canvas: ThemeCanvas, seed: string): ThemeCanvas {
+  return canvasOf(canvas.kind, seed);
+}
+
+/**
+ * A new Background. The stops are derived here rather than at render time
+ * because they are AUTHORED (#71): what the file holds is what the user
+ * chose, and the band that keeps it legible is applied on read instead.
+ */
+export function withCanvas(draft: ThemeDraft, kind: CanvasKind): ThemeDraft {
+  return edited(draft, { ...draft.theme, canvas: canvasOf(kind, draft.theme.seed) });
 }
 
 /** A new unlocked accent, or `null` while the entry isn't a color yet. */

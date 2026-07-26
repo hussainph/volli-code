@@ -44,6 +44,14 @@ export interface ThemeComboBoxItem<Value extends string = string> {
   label: string;
   /** Extra search terms — a theme's family, say. */
   keywords?: readonly string[];
+  /**
+   * A small painted sample of what this row does, shown before its label.
+   *
+   * Hover-preview repaints the whole app, but the popover covers part of the
+   * window — so without a sample the user is comparing against memory. Always
+   * `aria-hidden`: the row's accessible name stays the option word alone.
+   */
+  preview?: React.ReactNode;
 }
 
 export interface ThemeComboBoxProps<Value extends string> {
@@ -54,6 +62,17 @@ export interface ThemeComboBoxProps<Value extends string> {
   /** Names the search field; the list is long enough that it is a landmark of its own. */
   searchLabel: string;
   searchPlaceholder?: string;
+  /**
+   * Whether the search field is VISIBLE. A three-row list does not get one —
+   * it would be a chrome-heavy answer to a question nobody has.
+   *
+   * The field itself never goes away, only its box: cmdk routes arrow keys and
+   * type-ahead through the focused input, so removing it would take the
+   * keyboard with it. Hidden, it stays focusable and named for assistive tech.
+   */
+  searchable?: boolean;
+  /** The same painted sample as the matching row's, shown on the trigger. */
+  buttonPreview?: React.ReactNode;
   /** Shown when the query matches nothing — also the slot for "still loading". */
   empty: React.ReactNode;
   items: readonly ThemeComboBoxItem<Value>[];
@@ -75,6 +94,8 @@ export function ThemeComboBox<Value extends string>({
   buttonLabel,
   searchLabel,
   searchPlaceholder = "Search themes…",
+  searchable = true,
+  buttonPreview,
   empty,
   items,
   activeValue,
@@ -126,7 +147,8 @@ export function ThemeComboBox<Value extends string>({
           aria-label={ariaLabel}
           className={cn("w-52 justify-between", className)}
         >
-          <span className="truncate">{buttonLabel}</span>
+          {buttonPreview}
+          <span className="flex-1 truncate text-left">{buttonLabel}</span>
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-64 p-0">
@@ -144,7 +166,10 @@ export function ThemeComboBox<Value extends string>({
             autoFocus
             aria-label={searchLabel}
             placeholder={searchPlaceholder}
-            className="h-9 border-b border-border bg-transparent px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground"
+            className={cn(
+              "h-9 border-b border-border bg-transparent px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground",
+              !searchable && "sr-only",
+            )}
           />
           <Command.List className="max-h-64 overflow-y-auto p-1">
             <Command.Empty className="py-6 text-center text-sm text-muted-foreground">
@@ -169,7 +194,10 @@ export function ThemeComboBox<Value extends string>({
                 }}
                 className="flex cursor-pointer items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-sm outline-none data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground"
               >
-                <span className="truncate">{item.label}</span>
+                <span className="flex min-w-0 items-center gap-2">
+                  {item.preview}
+                  <span className="truncate">{item.label}</span>
+                </span>
                 {item.value === activeValue ? (
                   <CheckIcon weight="bold" className="size-3.5" />
                 ) : null}
