@@ -1,11 +1,14 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ChangeSetFile } from "@volli/shared";
 
 import {
   DiffStub,
+  applyDiffDiskReconcilePlan,
   isDiffLeaseCurrent,
+  isMissingFileReadError,
   mapBaseReadResult,
+  mapFilesReadFailure,
   planDiffDiskReconcile,
   planDiffView,
   type DiffLiveRead,
@@ -23,7 +26,13 @@ function file(overrides: Partial<ChangeSetFile> & Pick<ChangeSetFile, "path">): 
 
 describe("mapBaseReadResult", () => {
   it("maps IPC success arms onto DiffBaseRead", () => {
-    expect(mapBaseReadResult({ ok: true, content: "a\n" })).toEqual({ content: "a\n" });
+    expect(mapBaseReadResult({ ok: true, content: "a\n", truncated: false })).toEqual({
+      content: "a\n",
+    });
+    expect(mapBaseReadResult({ ok: true, content: "a\n", truncated: true })).toEqual({
+      content: "a\n",
+      truncated: true,
+    });
     expect(mapBaseReadResult({ ok: true, missing: true })).toEqual({ missing: true });
     expect(mapBaseReadResult({ ok: true, binary: true })).toEqual({ binary: true });
   });
@@ -35,12 +44,35 @@ describe("mapBaseReadResult", () => {
   });
 });
 
+describe("isMissingFileReadError / mapFilesReadFailure", () => {
+  it("recognizes volli-fs and Node missing-file errors", () => {
+    expect(isMissingFileReadError("File was not found")).toBe(true);
+    expect(isMissingFileReadError("File no longer exists on disk")).toBe(true);
+    expect(isMissingFileReadError("File does not exist on disk")).toBe(true);
+    expect(isMissingFileReadError("ENOENT: no such file or directory, stat '/x'")).toBe(true);
+    expect(isMissingFileReadError("Permission denied")).toBe(false);
+  });
+
+  it("maps missing errors onto the DiffLiveRead missing arm", () => {
+    expect(mapFilesReadFailure("File was not found")).toEqual({ ok: false, missing: true });
+    expect(mapFilesReadFailure("ENOENT: no such file or directory, open '/x'")).toEqual({
+      ok: false,
+      missing: true,
+    });
+    expect(mapFilesReadFailure("Permission denied")).toEqual({
+      ok: false,
+      error: "Permission denied",
+    });
+  });
+});
+
 describe("planDiffDiskReconcile", () => {
-  const liveOk = {
-    ok: true as const,
+  const liveOk: DiffLiveRead = {
+    ok: true,
     text: "agent\n",
     mtime: 99,
-    source: "worktree" as const,
+    source: "worktree",
+    truncated: false,
   };
 
   it("adopts a clean baseline when disk moved and the draft is clean", () => {
@@ -112,9 +144,9 @@ describe("planDiffDiskReconcile", () => {
         dirty: true,
         baseline: "old\n",
         lastWrite: null,
-        disk: { ok: false, error: "ENOENT" },
+        disk: { ok: false, error: "Permission denied" },
       }),
-    ).toEqual({ kind: "unreadable", error: "ENOENT", keepDraft: true });
+    ).toEqual({ kind: "unreadable", error: "Permission denied", keepDraft: true });
   });
 
   it("surfaces a clean missing file as an error transition", () => {
@@ -127,6 +159,76 @@ describe("planDiffDiskReconcile", () => {
       }),
     ).toEqual({ kind: "missing" });
   });
+
+  it("treats a dirty missing file as an unreadable keep-draft", () => {
+    expect(
+      planDiffDiskReconcile({
+        dirty: true,
+        baseline: "old\n",
+        lastWrite: null,
+        disk: { ok: false, missing: true },
+      }),
+    ).toEqual({
+      kind: "unreadable",
+      error: "File was deleted on disk.",
+      keepDraft: true,
+    });
+  });
+});
+
+describe("applyDiffDiskReconcilePlan", () => {
+  it("adopts on adopt and clears conflict", () => {
+    const adoptCleanBaseline = vi.fn();
+    expect(
+      applyDiffDiskReconcilePlan({
+        plan: { kind: "adopt", text: "new\n", revision: 7, source: "worktree" },
+        adoptCleanBaseline,
+      }),
+    ).toEqual({ kind: "clear-conflict" });
+    expect(adoptCleanBaseline).toHaveBeenCalledWith({ value: "new\n", revision: 7 });
+  });
+
+  it("adopts externalRevision on diverged before raising the conflict banner", () => {
+    const adoptCleanBaseline = vi.fn();
+    expect(
+      applyDiffDiskReconcilePlan({
+        plan: { kind: "diverged", text: "disk\n", revision: 42 },
+        adoptCleanBaseline,
+      }),
+    ).toEqual({ kind: "conflict", conflict: { text: "disk\n", mtime: 42 } });
+    // Without this adopt, handleSave would still send the stale expectedMtime
+    // even though the banner says "Saving now overwrites".
+    expect(adoptCleanBaseline).toHaveBeenCalledWith({ value: "disk\n", revision: 42 });
+  });
+
+  it("toasts when unreadable keeps a dirty draft", () => {
+    const adoptCleanBaseline = vi.fn();
+    expect(
+      applyDiffDiskReconcilePlan({
+        plan: { kind: "unreadable", error: "gone", keepDraft: true },
+        adoptCleanBaseline,
+      }),
+    ).toEqual({ kind: "toast-unreadable" });
+    expect(adoptCleanBaseline).not.toHaveBeenCalled();
+  });
+
+  it("errors when unreadable and the draft was clean", () => {
+    expect(
+      applyDiffDiskReconcilePlan({
+        plan: { kind: "unreadable", error: "gone", keepDraft: false },
+        adoptCleanBaseline: vi.fn(),
+      }),
+    ).toEqual({ kind: "error", error: "gone" });
+  });
+
+  it("surfaces missing while clean", () => {
+    expect(
+      applyDiffDiskReconcilePlan({
+        plan: { kind: "missing" },
+        adoptCleanBaseline: vi.fn(),
+      }),
+    ).toEqual({ kind: "missing" });
+  });
 });
 
 describe("planDiffView", () => {
@@ -135,6 +237,7 @@ describe("planDiffView", () => {
     text: "live\n",
     mtime: 42,
     source: "worktree",
+    truncated: false,
   };
 
   it("plans a binary stub without an editor", () => {
@@ -186,6 +289,21 @@ describe("planDiffView", () => {
       modifiedRevision: 42,
       modifiedSource: "worktree",
       modifiedReadOnly: false,
+    });
+  });
+
+  it("marks truncated live text read-only so a prefix can never be saved back", () => {
+    expect(
+      planDiffView({
+        file: file({ path: "logs/huge.txt" }),
+        base: { content: "base\n" },
+        baseRevision: "abc",
+        live: { ...live, text: "prefix…", truncated: true },
+      }),
+    ).toMatchObject({
+      kind: "editor",
+      modifiedValue: "prefix…",
+      modifiedReadOnly: true,
     });
   });
 

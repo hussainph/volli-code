@@ -9,6 +9,7 @@ import * as React from "react";
 import {
   baseNameOf,
   errorMessage,
+  fileSavePolicy,
   type ChangeSetFile,
   type ChangeSetFileStatus,
   type FileSource,
@@ -45,9 +46,30 @@ import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwis
 
 /** Live worktree read outcome for the modified side. */
 export type DiffLiveRead =
-  | { ok: true; text: string; mtime: number; source: FileSource }
+  | { ok: true; text: string; mtime: number; source: FileSource; truncated: boolean }
   | { ok: false; missing: true }
   | { ok: false; error: string };
+
+/**
+ * True when `files.read` failed because the path is gone — the strings main's
+ * `volli-fs` returns for missing parents / vanished files, plus Node's ENOENT.
+ */
+export function isMissingFileReadError(error: string): boolean {
+  const trimmed = error.trim();
+  if (
+    trimmed === "File was not found" ||
+    trimmed === "File no longer exists on disk" ||
+    trimmed === "File does not exist on disk"
+  ) {
+    return true;
+  }
+  return /\bENOENT\b/.test(trimmed);
+}
+
+/** Map a failed `files.read` onto DiffLiveRead, preserving the missing arm. */
+export function mapFilesReadFailure(error: string): DiffLiveRead {
+  return isMissingFileReadError(error) ? { ok: false, missing: true } : { ok: false, error };
+}
 
 /** Map `api.worktree.baseRead` onto the policy's DiffBaseRead, or an error. */
 export function mapBaseReadResult(
@@ -56,7 +78,10 @@ export function mapBaseReadResult(
   if (!result.ok) return { error: result.error };
   if (result.missing === true) return { missing: true };
   if (result.binary === true) return { binary: true };
-  return { content: result.content };
+  return {
+    content: result.content,
+    ...(result.truncated ? { truncated: true } : {}),
+  };
 }
 
 export type DiffViewPlan =
@@ -109,21 +134,31 @@ export function planDiffView(input: {
     return { kind: "error", error: input.live.error };
   }
 
-  const modifiedReadOnly = policy.modified.readOnly;
   let modifiedValue = "";
   let modifiedRevision: DocumentRevision = null;
   let modifiedSource: FileSource = "worktree";
+  let truncated = false;
 
   if (input.live.ok) {
     modifiedValue = input.live.text;
     modifiedRevision = input.live.mtime;
     modifiedSource = input.live.source;
+    truncated = input.live.truncated;
   } else {
     // Deleted / absent live file — empty modified side (policy already marks RO).
     modifiedValue = "";
     modifiedRevision = 0;
     modifiedSource = "worktree";
   }
+
+  // Truncated (and other read-only) live reads must not be saveable — saving a
+  // capped prefix would destroy the rest of the file (CONCEPT #49 / FileView).
+  const liveSavePolicy = fileSavePolicy({
+    relPath: policy.path,
+    binary: false,
+    truncated,
+  });
+  const modifiedReadOnly = policy.modified.readOnly || liveSavePolicy === "read-only";
 
   return {
     kind: "editor",
@@ -192,6 +227,9 @@ export function planDiffDiskReconcile(input: {
     lastWrite: input.lastWrite,
   });
   if (decision === "diverged") {
+    // Callers MUST still `adoptCleanBaseline({ value: text, revision })` so
+    // externalRevision advances (overwrite-save uses the new mtime) while the
+    // dirty draft is kept — same as MonacoFileEditor.reconcileExternal.
     return { kind: "diverged", text: input.disk.text, revision: input.disk.mtime };
   }
   // "adopt" and "unchanged" both advance through adoptCleanBaseline so mtime /
@@ -202,6 +240,37 @@ export function planDiffDiskReconcile(input: {
     revision: input.disk.mtime,
     source: input.disk.source,
   };
+}
+
+/**
+ * Apply a {@link planDiffDiskReconcile} result to the modified lease.
+ * Mirrors MonacoFileEditor: both adopt and diverged call adoptCleanBaseline
+ * (diverged advances externalRevision over a dirty draft without rewriting it).
+ */
+export type DiffDiskReconcileApply =
+  | { kind: "clear-conflict" }
+  | { kind: "conflict"; conflict: { text: string; mtime: number } }
+  | { kind: "toast-unreadable" }
+  | { kind: "error"; error: string }
+  | { kind: "missing" };
+
+export function applyDiffDiskReconcilePlan(input: {
+  plan: DiffDiskReconcilePlan;
+  adoptCleanBaseline(seed: { value: string; revision: number }): unknown;
+}): DiffDiskReconcileApply {
+  const { plan } = input;
+  if (plan.kind === "adopt") {
+    input.adoptCleanBaseline({ value: plan.text, revision: plan.revision });
+    return { kind: "clear-conflict" };
+  }
+  if (plan.kind === "diverged") {
+    input.adoptCleanBaseline({ value: plan.text, revision: plan.revision });
+    return { kind: "conflict", conflict: { text: plan.text, mtime: plan.revision } };
+  }
+  if (plan.kind === "unreadable") {
+    return plan.keepDraft ? { kind: "toast-unreadable" } : { kind: "error", error: plan.error };
+  }
+  return { kind: "missing" };
 }
 
 /**
@@ -346,6 +415,13 @@ export function DiffView({
       setState({ status: "loading" });
       setConflict(null);
       lastWriteRef.current = null;
+      // Drop prior editor leases at the start of every load attempt so stub /
+      // error / cancelled paths cannot leave a stale leasesRef held (mirrors
+      // unmount). Pass last view state so the host can persist it.
+      if (leasesRef.current !== null) {
+        releaseDiffLeases(leasesRef.current, lastViewStateRef.current);
+        leasesRef.current = null;
+      }
       try {
         const fileStatus = coerceChangeStatus(status);
         const changeSet = await window.api.worktree.changeSet(ticket.id);
@@ -390,13 +466,14 @@ export function DiffView({
           });
           if (cancelled || !mountedRef.current) return;
           if (!read.ok) {
-            live = { ok: false, error: read.error };
+            live = mapFilesReadFailure(read.error);
           } else if (read.content.type !== "text") {
             live = {
               ok: true,
               text: "",
               mtime: read.mtime,
               source: read.source,
+              truncated: false,
             };
             fileForPolicy = { ...row, binary: true };
           } else {
@@ -405,6 +482,7 @@ export function DiffView({
               text: read.content.text,
               mtime: read.mtime,
               source: read.source,
+              truncated: read.content.truncated,
             };
           }
         }
@@ -441,12 +519,6 @@ export function DiffView({
 
         const runtime = await loadMonacoRuntime();
         if (cancelled || !mountedRef.current) return;
-
-        // Drop any prior leases before acquiring replacements (path/meta change).
-        if (leasesRef.current !== null) {
-          releaseDiffLeases(leasesRef.current);
-          leasesRef.current = null;
-        }
 
         const original = runtime.registry.acquire({
           identity: identities.original,
@@ -485,10 +557,25 @@ export function DiffView({
           original,
           modified,
         };
+
+        // A newer load (or unmount) may have started while we acquired — release
+        // these fresh leases locally and leave leasesRef alone (it may already
+        // belong to the newer attempt).
+        if (cancelled || !mountedRef.current) {
+          releaseDiffLeases(leases, lastViewStateRef.current);
+          return;
+        }
+
         leasesRef.current = leases;
         setState({ status: "editor", plan, leases });
       } catch (error) {
         if (cancelled || !mountedRef.current) return;
+        // Defensive: start-of-load release should have cleared leasesRef, but
+        // never leave an editor lease held under an error pane.
+        if (leasesRef.current !== null) {
+          releaseDiffLeases(leasesRef.current, lastViewStateRef.current);
+          leasesRef.current = null;
+        }
         setState({ status: "error", error: errorMessage(error) });
       }
     }
@@ -537,7 +624,7 @@ export function DiffView({
 
         let disk: DiffLiveRead;
         if (!read.ok) {
-          disk = { ok: false, error: read.error };
+          disk = mapFilesReadFailure(read.error);
         } else if (read.content.type !== "text") {
           // Binary / image under a text Diff tab — treat as unreadable for reconcile.
           disk = { ok: false, error: "File is no longer plain text." };
@@ -547,7 +634,36 @@ export function DiffView({
             text: read.content.text,
             mtime: read.mtime,
             source: read.source,
+            truncated: read.content.truncated,
           };
+        }
+
+        // A truncated re-read is never a valid overwrite/save baseline — force
+        // the modified side read-only (FileView) rather than raising a
+        // "Saving now overwrites" banner over a capped prefix.
+        if (disk.ok && disk.truncated) {
+          const truncatedDisk = disk;
+          const wasDirty = leases.modified.snapshot().dirty;
+          if (wasDirty) leases.modified.discard();
+          leases.modified.adoptCleanBaseline({
+            value: truncatedDisk.text,
+            revision: truncatedDisk.mtime,
+          });
+          if (mountedRef.current) {
+            setConflict(null);
+            setState((previous) =>
+              previous.status === "editor"
+                ? {
+                    ...previous,
+                    plan: { ...previous.plan, modifiedReadOnly: true },
+                  }
+                : previous,
+            );
+            if (wasDirty) {
+              toastError(`${name} changed on disk and is no longer editable. Editing stopped.`);
+            }
+          }
+          return;
         }
 
         const snap = leases.modified.snapshot();
@@ -569,26 +685,26 @@ export function DiffView({
           return;
         }
 
-        if (plan.kind === "adopt") {
-          leases.modified.adoptCleanBaseline({
-            value: plan.text,
-            revision: plan.revision,
-          });
+        const applied = applyDiffDiskReconcilePlan({
+          plan,
+          adoptCleanBaseline: (seed) => leases.modified.adoptCleanBaseline(seed),
+        });
+        if (applied.kind === "clear-conflict") {
           if (mountedRef.current) setConflict(null);
           return;
         }
-        if (plan.kind === "diverged") {
-          if (mountedRef.current) setConflict({ text: plan.text, mtime: plan.revision });
+        if (applied.kind === "conflict") {
+          if (mountedRef.current) setConflict(applied.conflict);
           return;
         }
-        if (plan.kind === "unreadable") {
-          if (plan.keepDraft) {
-            toastError(
-              `${name} changed on disk and is now unreadable. Your unsaved edits were kept.`,
-            );
-          } else if (mountedRef.current) {
-            setState({ status: "error", error: plan.error });
-          }
+        if (applied.kind === "toast-unreadable") {
+          toastError(
+            `${name} changed on disk and is now unreadable. Your unsaved edits were kept.`,
+          );
+          return;
+        }
+        if (applied.kind === "error") {
+          if (mountedRef.current) setState({ status: "error", error: applied.error });
           return;
         }
         // missing while clean — surface the deletion instead of stale content.
