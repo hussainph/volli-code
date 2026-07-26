@@ -20,4 +20,16 @@ describe("isClosableTicketTab", () => {
     expect(isClosableTicketTab(tab.kind)).toBe(true);
     expect(tab.previousPath).toBe("src/old.ts");
   });
+
+  it("accepts a preview File descriptor (decision #56)", () => {
+    const tab: TicketTabDescriptor = {
+      id: "file:src/app.ts",
+      kind: "file",
+      label: "app.ts",
+      relPath: "src/app.ts",
+      preview: true,
+    };
+    expect(isClosableTicketTab(tab.kind)).toBe(true);
+    expect(tab.preview).toBe(true);
+  });
 });

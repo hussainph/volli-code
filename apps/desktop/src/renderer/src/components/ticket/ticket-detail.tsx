@@ -4,6 +4,7 @@ import {
   displayTicketId,
   errorMessage,
   type FileSource,
+  type FileWorkspaceTab,
   type Ticket,
 } from "@volli/shared";
 
@@ -49,10 +50,15 @@ import { getEngine } from "@renderer/terminal/registry";
 const BODY_TAB_ID = TICKET_BODY_TAB_ID;
 
 /** Stable empty lists, so "no open files/diffs" aren't new arrays every render. */
-const NO_OPEN_FILES: readonly string[] = [];
+const NO_OPEN_FILES: readonly FileWorkspaceTab[] = [];
 const NO_OPEN_DIFFS: readonly string[] = [];
 const NO_DIFF_META: Readonly<Record<string, { previousPath?: string | null; status?: string }>> =
   {};
+
+/** Whether a ticket File-tab list already holds `relPath` (preview or pinned). */
+function ticketFilesInclude(files: readonly FileWorkspaceTab[], relPath: string): boolean {
+  return files.some((tab) => tab.relPath === relPath);
+}
 
 /**
  * The full-page ticket detail view (ticket-detail-mvp decision #1), rendered
@@ -82,6 +88,9 @@ export function TicketDetail({
 }) {
   const closeTicket = useWorkspaceStore((state) => state.closeTicket);
   const openTicketFile = useWorkspaceStore((state) => state.openTicketFile);
+  const previewTicketFile = useWorkspaceStore((state) => state.previewTicketFile);
+  const pinTicketFile = useWorkspaceStore((state) => state.pinTicketFile);
+  const markTicketFileEdited = useWorkspaceStore((state) => state.markTicketFileEdited);
   const closeTicketFile = useWorkspaceStore((state) => state.closeTicketFile);
   const openTicketDiff = useWorkspaceStore((state) => state.openTicketDiff);
   const closeTicketDiff = useWorkspaceStore((state) => state.closeTicketDiff);
@@ -178,7 +187,7 @@ export function TicketDetail({
   // joining into a delimited key. File and diff tabs of the same path share
   // one dirty key (CONCEPT #48/#49).
   React.useEffect(() => {
-    const paths = [...new Set([...openFiles, ...openDiffs])];
+    const paths = [...new Set([...openFiles.map((tab) => tab.relPath), ...openDiffs])];
     if (paths.length === 0) return;
     let cancelled = false;
     void loadMonacoRuntime()
@@ -279,9 +288,10 @@ export function TicketDetail({
   const closeDiffTab = React.useCallback(
     (relPath: string) => {
       closeTicketDiff(projectId, ticket.id, relPath);
-      const filesStillOpen = (
-        useWorkspaceStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id]?.files ?? []
-      ).includes(relPath);
+      const filesStillOpen = ticketFilesInclude(
+        useWorkspaceStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id]?.files ?? [],
+        relPath,
+      );
       if (!filesStillOpen) markFileDirty(relPath, false);
     },
     [closeTicketDiff, markFileDirty, projectId, ticket.id],
@@ -303,9 +313,10 @@ export function TicketDetail({
 
   const requestCloseDiffTab = React.useCallback(
     (relPath: string) => {
-      const siblingOpen = (
-        useWorkspaceStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id]?.files ?? []
-      ).includes(relPath);
+      const siblingOpen = ticketFilesInclude(
+        useWorkspaceStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id]?.files ?? [],
+        relPath,
+      );
       if (planTabClose({ dirty: dirtyFiles.has(relPath), siblingOpen }) === "close") {
         closeDiffTab(relPath);
       } else {
@@ -333,7 +344,7 @@ export function TicketDetail({
       const siblingOpen =
         kind === "file"
           ? (tabs?.diffs ?? []).includes(relPath)
-          : (tabs?.files ?? []).includes(relPath);
+          : ticketFilesInclude(tabs?.files ?? [], relPath);
       if (resolution.choice === "discard" && shouldDiscardSharedDraft({ siblingOpen })) {
         (await peekFileDocument(relPath))?.discard();
         markFileDirty(relPath, false);
@@ -364,10 +375,20 @@ export function TicketDetail({
 
   // The `@file` index + create/open wiring, shared by the Doc body editor and
   // every open markdown file tab so any of them can reference (and create) files.
+  // @file chips open persistent tabs (decision #33); Files-panel glances use
+  // preview/pin instead (decision #56).
   const fileIndex = useFileIndex(projectId);
   const openFile = React.useCallback(
     (relPath: string) => openTicketFile(projectId, ticket.id, relPath),
     [openTicketFile, projectId, ticket.id],
+  );
+  const previewFileFromRail = React.useCallback(
+    (relPath: string) => previewTicketFile(projectId, ticket.id, relPath),
+    [previewTicketFile, projectId, ticket.id],
+  );
+  const pinFileFromRail = React.useCallback(
+    (relPath: string) => pinTicketFile(projectId, ticket.id, relPath),
+    [pinTicketFile, projectId, ticket.id],
   );
   const openDiff = React.useCallback(
     (file: { path: string; previousPath?: string; status: string; binary: boolean }) =>
@@ -399,19 +420,20 @@ export function TicketDetail({
   );
 
   // Doc (labeled with the ticket id) + one `"file"`-kind descriptor per open
-  // `@file` ref + one `"diff"`-kind descriptor per open Change Set diff + one
+  // file tab + one `"diff"`-kind descriptor per open Change Set diff + one
   // `"session"`-kind descriptor per live session; routing below is keyed off
   // `kind`, not id, so the plane and content branch generically.
   const tabs: TicketTabDescriptor[] = [
     { id: BODY_TAB_ID, kind: "body", label: displayId },
     ...openFiles.map(
-      (relPath): TicketTabDescriptor => ({
-        id: `file:${relPath}`,
+      (tab): TicketTabDescriptor => ({
+        id: `file:${tab.relPath}`,
         kind: "file",
-        label: baseNameOf(relPath),
-        relPath,
-        badge: fileSources[relPath] === "worktree" ? "worktree" : undefined,
-        dirty: dirtyFiles.has(relPath),
+        label: baseNameOf(tab.relPath),
+        relPath: tab.relPath,
+        preview: !tab.pinned,
+        badge: fileSources[tab.relPath] === "worktree" ? "worktree" : undefined,
+        dirty: dirtyFiles.has(tab.relPath),
       }),
     ),
     ...openDiffs.map((relPath): TicketTabDescriptor => {
@@ -455,8 +477,13 @@ export function TicketDetail({
     (dirty: boolean) => {
       if (activeEditorRelPath === null) return;
       markFileDirty(activeEditorRelPath, dirty);
+      // Decision #56: a dirty File tab is never replaced, so the first edit
+      // promotes the preview slot to a persistent tab. Diff tabs are always
+      // persistent already — markTicketFileEdited is a no-op when the path
+      // isn't an open File preview.
+      if (dirty) markTicketFileEdited(projectId, ticket.id, activeEditorRelPath);
     },
-    [activeEditorRelPath, markFileDirty],
+    [activeEditorRelPath, markFileDirty, markTicketFileEdited, projectId, ticket.id],
   );
 
   const handleDiffViewStateChange = React.useCallback(
@@ -579,6 +606,7 @@ export function TicketDetail({
             activeTabId={activeTab.id}
             creating={creating}
             onSelectTab={setActiveTab}
+            onPinFileTab={(relPath) => pinTicketFile(projectId, ticket.id, relPath)}
             onCloseTab={(tab) => {
               if (tab.kind === "file" && tab.relPath !== undefined) {
                 // A file tab with an unsaved draft routes through the Save /
@@ -693,7 +721,13 @@ export function TicketDetail({
                     onOpenDiff={openDiff}
                   />
                 }
-                filesContent={<TicketFilesPanel ticket={ticket} onOpenFile={openFile} />}
+                filesContent={
+                  <TicketFilesPanel
+                    ticket={ticket}
+                    onPreviewFile={previewFileFromRail}
+                    onPinFile={pinFileFromRail}
+                  />
+                }
               />
             </aside>
           )}

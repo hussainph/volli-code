@@ -24,7 +24,8 @@ describe("TicketFilesList", () => {
       <TicketFilesList
         referenced={referenced}
         worktree={worktree}
-        onOpenFile={noop}
+        onPreviewFile={noop}
+        onPinFile={noop}
         onOpenDirectory={noop}
       />,
     );
@@ -41,7 +42,13 @@ describe("TicketFilesList", () => {
 
   it("shows an empty hint when both sections are empty", () => {
     const html = renderToStaticMarkup(
-      <TicketFilesList referenced={[]} worktree={[]} onOpenFile={noop} onOpenDirectory={noop} />,
+      <TicketFilesList
+        referenced={[]}
+        worktree={[]}
+        onPreviewFile={noop}
+        onPinFile={noop}
+        onOpenDirectory={noop}
+      />,
     );
     expect(html).toContain("No referenced files yet");
   });

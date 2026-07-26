@@ -389,7 +389,7 @@ describe("ticket diff tabs", () => {
     store.getState().closeTicketDiff("project-a", "ticket-1", "src/app.ts");
 
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
-      files: ["notes.md"],
+      files: [{ relPath: "notes.md", pinned: true }],
       diffs: [],
       diffMeta: {},
       active: "doc",
@@ -404,7 +404,10 @@ describe("ticket diff tabs", () => {
     store.getState().setTicketActiveTab("project-a", "ticket-1", "diff:b.ts");
 
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
-      files: ["a.md", "c.md"],
+      files: [
+        { relPath: "a.md", pinned: true },
+        { relPath: "c.md", pinned: true },
+      ],
       diffs: ["b.ts"],
       diffMeta: {},
       active: "diff:b.ts",
@@ -413,12 +416,12 @@ describe("ticket diff tabs", () => {
 });
 
 describe("ticket file tabs", () => {
-  it("openTicketFile appends the file and makes it active", () => {
+  it("openTicketFile appends a pinned file and makes it active", () => {
     const store = createWorkspaceStore(createMemoryStorage());
     store.getState().openTicketFile("project-a", "ticket-1", "docs/plan.md");
 
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
-      files: ["docs/plan.md"],
+      files: [{ relPath: "docs/plan.md", pinned: true }],
       diffs: [],
       diffMeta: {},
       active: "file:docs/plan.md",
@@ -432,7 +435,10 @@ describe("ticket file tabs", () => {
     store.getState().openTicketFile("project-a", "ticket-1", "a.md");
 
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
-      files: ["a.md", "b.md"],
+      files: [
+        { relPath: "a.md", pinned: true },
+        { relPath: "b.md", pinned: true },
+      ],
       diffs: [],
       diffMeta: {},
       active: "file:a.md",
@@ -446,13 +452,13 @@ describe("ticket file tabs", () => {
     store.getState().openTicketFile("project-b", "ticket-1", "c.md");
 
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.files).toEqual([
-      "a.md",
+      { relPath: "a.md", pinned: true },
     ]);
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-2"]?.files).toEqual([
-      "b.md",
+      { relPath: "b.md", pinned: true },
     ]);
     expect(store.getState().byProject["project-b"]?.ticketTabs["ticket-1"]?.files).toEqual([
-      "c.md",
+      { relPath: "c.md", pinned: true },
     ]);
   });
 
@@ -463,7 +469,7 @@ describe("ticket file tabs", () => {
     store.getState().closeTicketFile("project-a", "ticket-1", "b.md"); // b was active
 
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
-      files: ["a.md"],
+      files: [{ relPath: "a.md", pinned: true }],
       diffs: [],
       diffMeta: {},
       active: "doc",
@@ -477,7 +483,7 @@ describe("ticket file tabs", () => {
     store.getState().closeTicketFile("project-a", "ticket-1", "a.md");
 
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
-      files: ["b.md"],
+      files: [{ relPath: "b.md", pinned: true }],
       diffs: [],
       diffMeta: {},
       active: "file:b.md",
@@ -505,7 +511,7 @@ describe("ticket file tabs", () => {
     store.getState().setTicketActiveTab("project-a", "ticket-1", "session-9");
 
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
-      files: ["a.md"],
+      files: [{ relPath: "a.md", pinned: true }],
       diffs: [],
       diffMeta: {},
       active: "session-9",
@@ -526,6 +532,101 @@ describe("ticket file tabs", () => {
 
     expect(store.getState().byProject["project-a"]?.boardView).toBe("list");
     expect(store.getState().byProject["project-a"]?.boardSort).toBe(DEFAULT_TICKET_SORT);
+  });
+});
+
+describe("ticket file preview/pin (decision #56)", () => {
+  it("previewTicketFile opens a replaceable preview tab", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().previewTicketFile("project-a", "ticket-1", "src/app.ts");
+
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
+      files: [{ relPath: "src/app.ts", pinned: false }],
+      diffs: [],
+      diffMeta: {},
+      active: "file:src/app.ts",
+    });
+  });
+
+  it("a second preview replaces the preview slot in place", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicketFile("project-a", "ticket-1", "pinned.md");
+    store.getState().previewTicketFile("project-a", "ticket-1", "one.ts");
+    store.getState().previewTicketFile("project-a", "ticket-1", "two.ts");
+
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.files).toEqual([
+      { relPath: "pinned.md", pinned: true },
+      { relPath: "two.ts", pinned: false },
+    ]);
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.active).toBe(
+      "file:two.ts",
+    );
+  });
+
+  it("pinTicketFile / markTicketFileEdited promote the preview so the next glance appends", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().previewTicketFile("project-a", "ticket-1", "one.ts");
+    store.getState().markTicketFileEdited("project-a", "ticket-1", "one.ts");
+    store.getState().previewTicketFile("project-a", "ticket-1", "two.ts");
+
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.files).toEqual([
+      { relPath: "one.ts", pinned: true },
+      { relPath: "two.ts", pinned: false },
+    ]);
+
+    store.getState().pinTicketFile("project-a", "ticket-1", "two.ts");
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.files).toEqual([
+      { relPath: "one.ts", pinned: true },
+      { relPath: "two.ts", pinned: true },
+    ]);
+  });
+
+  it("openTicketDiff stays always-persistent and does not use the File preview slot", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().previewTicketFile("project-a", "ticket-1", "glance.ts");
+    store.getState().openTicketDiff("project-a", "ticket-1", "changed.ts");
+    store.getState().previewTicketFile("project-a", "ticket-1", "other.ts");
+
+    const tabs = store.getState().byProject["project-a"]?.ticketTabs["ticket-1"];
+    expect(tabs?.files).toEqual([{ relPath: "other.ts", pinned: false }]);
+    expect(tabs?.diffs).toEqual(["changed.ts"]);
+    expect(tabs?.active).toBe("file:other.ts");
+  });
+
+  it("rehydrates legacy string[] files as pinned tabs and object files with preview", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:workspace",
+      JSON.stringify({
+        state: {
+          byProject: {
+            "project-a": {
+              ticketTabs: {
+                "ticket-legacy": { files: ["old.md", "also.ts"], active: "file:old.md" },
+                "ticket-new": {
+                  files: [
+                    { relPath: "pinned.ts", pinned: true },
+                    { relPath: "preview.ts", pinned: false },
+                  ],
+                  active: "file:preview.ts",
+                },
+              },
+            },
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    const store = createWorkspaceStore(storage);
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-legacy"]?.files).toEqual([
+      { relPath: "old.md", pinned: true },
+      { relPath: "also.ts", pinned: true },
+    ]);
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-new"]?.files).toEqual([
+      { relPath: "pinned.ts", pinned: true },
+      { relPath: "preview.ts", pinned: false },
+    ]);
   });
 });
 
@@ -552,7 +653,7 @@ describe("ticket file tab persistence", () => {
     const store = createWorkspaceStore(storage);
     const tabs = store.getState().byProject["project-a"]?.ticketTabs["ticket-1"];
     expect(tabs).toEqual({
-      files: ["notes.md"],
+      files: [{ relPath: "notes.md", pinned: true }],
       diffs: [],
       diffMeta: {},
       active: TICKET_BODY_TAB_ID,
@@ -568,7 +669,7 @@ describe("ticket file tab persistence", () => {
 
     const rehydrated = createWorkspaceStore(storage);
     expect(rehydrated.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
-      files: ["docs/plan.md"],
+      files: [{ relPath: "docs/plan.md", pinned: true }],
       diffs: [],
       diffMeta: {},
       active: "session-9",
@@ -612,7 +713,7 @@ describe("ticket file tab persistence", () => {
     const store = createWorkspaceStore(storage);
     const tabs = store.getState().byProject["project-a"]?.ticketTabs;
     expect(tabs?.["ticket-1"]).toEqual({
-      files: ["ok.md"],
+      files: [{ relPath: "ok.md", pinned: true }],
       diffs: [],
       diffMeta: {},
       active: "file:ok.md",
@@ -644,7 +745,7 @@ describe("ticket file tab persistence", () => {
 
     const store = createWorkspaceStore(storage);
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
-      files: ["notes.md"],
+      files: [{ relPath: "notes.md", pinned: true }],
       diffs: [],
       diffMeta: {},
       active: "file:notes.md",

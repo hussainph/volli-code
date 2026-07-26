@@ -3,7 +3,7 @@
  *
  * Selecting a row asks the host to open/focus a Monaco diff tab via
  * `onOpenDiff` (`openTicketDiff`, CONCEPT #48/#51). Refresh handlers never
- * open, close, or focus a tab. Files navigator keeps `openTicketFile`.
+ * open, close, or focus a tab. Files navigator uses preview/pin (decision #56).
  */
 import * as React from "react";
 import { errorMessage, type ChangeSetFile, type Ticket } from "@volli/shared";
