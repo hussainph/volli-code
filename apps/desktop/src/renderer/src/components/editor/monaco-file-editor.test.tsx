@@ -7,7 +7,7 @@ import {
 } from "@renderer/editor/monaco-theme";
 
 import {
-  applyExternalSeedPreservingViewState,
+  applyExternalSeed,
   attachEditorContribution,
   fileEditorAriaLabel,
   fileEditorConstructionOptions,
@@ -58,35 +58,52 @@ describe("attachEditorContribution", () => {
   });
 });
 
-describe("applyExternalSeedPreservingViewState", () => {
-  it("merges through the shared registry policy while restoring cursor and scroll state", () => {
-    const viewState = { cursorState: [{ position: { lineNumber: 1, column: 4 } }], scrollTop: 42 };
-    const restoreViewState = vi.fn();
-    const applyExternalUpdate = vi.fn();
-    const lease = {
-      model: { getValue: () => "human first\nkeep\nlast\n" },
-      snapshot: () => ({ baseline: "first\nkeep\nlast\n" }),
-      applyExternalUpdate,
-      adoptCleanBaseline: vi.fn(),
-    };
+/** A dirty lease whose draft touched line 1 while disk moved on elsewhere. */
+function mergeLease() {
+  return {
+    model: { getValue: () => "human first\nkeep\nlast\n" },
+    snapshot: () => ({ baseline: "first\nkeep\nlast\n" }),
+    applyExternalUpdate: vi.fn(),
+    adoptCleanBaseline: vi.fn(),
+  };
+}
 
-    const result = applyExternalSeedPreservingViewState({
+describe("applyExternalSeed", () => {
+  it("merges through the shared registry policy", () => {
+    const lease = mergeLease();
+
+    const result = applyExternalSeed({
       lease,
-      editorView: {
-        saveViewState: () => viewState,
-        restoreViewState,
-      },
       lastWrite: null,
       seed: { value: "first\nkeep\nagent last\n", revision: 12 },
     });
 
     expect(result).toMatchObject({ kind: "apply", outcome: "merge" });
-    expect(applyExternalUpdate).toHaveBeenCalledWith({
+    expect(lease.applyExternalUpdate).toHaveBeenCalledWith({
       baseline: "first\nkeep\nagent last\n",
       value: "human first\nkeep\nagent last\n",
       revision: 12,
     });
-    expect(restoreViewState).toHaveBeenCalledWith(viewState);
+  });
+
+  it("applies nothing to the model on a conflict, only recording the disk revision", () => {
+    // No editor is reachable from this signature at all: the registry lands an
+    // external write as minimal edits and Monaco maps the caret through them,
+    // so there is no pre-edit snapshot left for a caller to restore on top.
+    const lease = mergeLease();
+
+    const result = applyExternalSeed({
+      lease,
+      lastWrite: null,
+      seed: { value: "agent first\nkeep\nlast\n", revision: 12 },
+    });
+
+    expect(result).toMatchObject({ kind: "conflict", reason: "overlap" });
+    expect(lease.applyExternalUpdate).not.toHaveBeenCalled();
+    expect(lease.adoptCleanBaseline).toHaveBeenCalledWith({
+      value: "agent first\nkeep\nlast\n",
+      revision: 12,
+    });
   });
 });
 

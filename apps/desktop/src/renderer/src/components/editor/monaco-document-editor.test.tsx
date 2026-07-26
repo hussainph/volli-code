@@ -3,18 +3,14 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { applyDocumentExternalValue } from "./monaco-document-editor";
 
 describe("applyDocumentExternalValue", () => {
-  it("updates an existing document model in one edit transaction and restores view state", () => {
-    const viewState = { cursorState: [{ position: { lineNumber: 2, column: 3 } }], scrollTop: 50 };
-    const restoreViewState = vi.fn();
+  it("adopts the host's value as model text and baseline in one transaction", () => {
+    // No editor view is involved: the registry lands the change as minimal edit
+    // operations and Monaco maps the caret through them. Restoring a pre-edit
+    // view-state snapshot afterwards would undo exactly that mapping.
     const applyExternalUpdate = vi.fn();
-    const lease = { applyExternalUpdate };
 
     applyDocumentExternalValue({
-      lease,
-      editorView: {
-        saveViewState: () => viewState,
-        restoreViewState,
-      },
+      lease: { applyExternalUpdate },
       value: "agent document\n",
       revision: 3,
     });
@@ -24,6 +20,5 @@ describe("applyDocumentExternalValue", () => {
       value: "agent document\n",
       revision: 3,
     });
-    expect(restoreViewState).toHaveBeenCalledWith(viewState);
   });
 });

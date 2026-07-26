@@ -179,30 +179,23 @@ interface DiskSnapshot {
   revision: DocumentRevision;
 }
 
-/** Minimal Monaco view-state seam needed around an external model mutation. */
-export interface ReconciliationEditorView {
-  saveViewState(): unknown;
-  restoreViewState(viewState: unknown): void;
-}
-
 /**
- * Apply one disk seed through the shared File/Diff policy while preserving the
- * mounted editor's cursor, selection, folding, and scroll snapshot.
+ * Apply one disk seed through the shared File/Diff policy.
+ *
+ * Deliberately does NOT snapshot and restore the editor's view state around the
+ * mutation. The registry now lands an external write as MINIMAL edit operations
+ * (`externalEditOperations`), and Monaco maps the caret, selection and folding
+ * regions through those ranges itself — text the write did not touch keeps its
+ * caret, and text that moved carries the caret with it. Restoring an absolute
+ * pre-edit snapshot on top of that would undo exactly that mapping and pin the
+ * caret to a line number the agent's insertion had already shifted.
  */
-export function applyExternalSeedPreservingViewState(input: {
+export function applyExternalSeed(input: {
   lease: LiveReconciliationLease;
-  editorView: ReconciliationEditorView | null;
   lastWrite: LocalWriteReceipt | null;
   seed: Pick<DiskSnapshot, "value" | "revision">;
-  /**
-   * Monaco may apply its cursor result after the model edit returns. Hosts can
-   * schedule one guarded post-flush restore without coupling the pure registry
-   * transaction to a browser timing primitive.
-   */
-  deferRestore?(restore: () => void): void;
 }): LiveDocumentReconciliationPlan {
-  const viewState = input.editorView?.saveViewState() ?? null;
-  const plan = applyLiveDocumentReconciliation({
+  return applyLiveDocumentReconciliation({
     lease: input.lease,
     lastWrite: input.lastWrite,
     disk: {
@@ -212,11 +205,6 @@ export function applyExternalSeedPreservingViewState(input: {
       truncated: false,
     },
   });
-  if (viewState !== null) {
-    input.editorView?.restoreViewState(viewState);
-    input.deferRestore?.(() => input.editorView?.restoreViewState(viewState));
-  }
-  return plan;
 }
 
 /**
@@ -294,21 +282,7 @@ export function MonacoFileEditor({
   /** Applies a fresh disk read through the shared File/Diff A/L/D policy. */
   const reconcileExternal = React.useCallback(
     (lease: MonacoLease, seed: DiskSnapshot) => {
-      const editorView = editorRef.current;
-      const plan = applyExternalSeedPreservingViewState({
-        lease,
-        editorView,
-        lastWrite: lastWriteRef.current,
-        seed,
-        deferRestore:
-          editorView === null
-            ? undefined
-            : (restore) => {
-                requestAnimationFrame(() => {
-                  if (editorRef.current === editorView) restore();
-                });
-              },
-      });
+      const plan = applyExternalSeed({ lease, lastWrite: lastWriteRef.current, seed });
       setStale(plan.kind === "conflict" ? seed : null);
       syncDirty();
     },
@@ -539,7 +513,13 @@ export function MonacoFileEditor({
     });
   }, [ariaLabel, dirty, readOnly]);
 
-  function useDiskAndDiscardDraft() {
+  /**
+   * The conflict banner's "use disk" consequence: the draft is genuinely thrown
+   * away, so the pre-edit view state is still the right thing to land on. Focus
+   * returns to the editor because the click that got here moved it to a button
+   * that is about to unmount.
+   */
+  function applyDiskAndDiscardDraft() {
     const active = leaseRef.current;
     if (active === null || currentStale === null) return;
     const editorView = editorRef.current;
@@ -550,6 +530,7 @@ export function MonacoFileEditor({
       revision: currentStale.revision,
     });
     if (viewState !== null) editorView?.restoreViewState(viewState);
+    editorView?.focus();
     lastWriteRef.current = null;
     setStale(null);
     syncDirty();
@@ -573,7 +554,7 @@ export function MonacoFileEditor({
       {currentStale !== null && (
         <LiveReconciliationAffordance
           kind="conflict"
-          onUseDisk={useDiskAndDiscardDraft}
+          onUseDisk={applyDiskAndDiscardDraft}
           onOverwriteDisk={() => void runSaveRef.current()}
         />
       )}

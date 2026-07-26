@@ -93,25 +93,27 @@ interface DocumentExternalLease {
   }): void;
 }
 
-interface DocumentExternalEditorView<TViewState> {
-  saveViewState(): TViewState | null;
-  restoreViewState(state: TViewState): void;
-}
-
-export function applyDocumentExternalValue<TViewState>({
+/**
+ * Adopt a host-supplied value as both the new model text and the new baseline —
+ * the document editor's only external write (it has no disk of its own; the
+ * host owns autosave).
+ *
+ * No view-state snapshot is taken around it: the registry lands the change as
+ * MINIMAL edit operations (`externalEditOperations`), and Monaco maps the caret
+ * and selection through those ranges itself. Restoring an absolute pre-edit
+ * snapshot afterwards would undo that mapping and pin the caret to a line number
+ * an insertion above it had already shifted.
+ */
+export function applyDocumentExternalValue({
   lease,
-  editorView,
   value,
   revision,
 }: {
   lease: DocumentExternalLease;
-  editorView: DocumentExternalEditorView<TViewState> | null;
   value: string;
   revision: DocumentRevision;
 }): void {
-  const viewState = editorView?.saveViewState() ?? null;
   lease.applyExternalUpdate({ baseline: value, value, revision });
-  if (viewState !== null) editorView?.restoreViewState(viewState);
 }
 
 /**
@@ -225,12 +227,7 @@ export const MonacoDocumentEditor = React.forwardRef<
       if (lease === null) return;
       suppressChangeRef.current = true;
       try {
-        applyDocumentExternalValue({
-          lease,
-          editorView: editorRef.current,
-          value: next,
-          revision: nextRevision,
-        });
+        applyDocumentExternalValue({ lease, value: next, revision: nextRevision });
       } finally {
         suppressChangeRef.current = false;
       }
@@ -309,12 +306,7 @@ export const MonacoDocumentEditor = React.forwardRef<
         if (lease.model.getValue() !== seed) {
           suppressChangeRef.current = true;
           try {
-            applyDocumentExternalValue({
-              lease,
-              editorView: null,
-              value: seed,
-              revision: seedRevision,
-            });
+            applyDocumentExternalValue({ lease, value: seed, revision: seedRevision });
           } finally {
             suppressChangeRef.current = false;
           }

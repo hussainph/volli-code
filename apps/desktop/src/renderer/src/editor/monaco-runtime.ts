@@ -18,6 +18,7 @@ import {
   bindMonacoEditorThemeHost,
   ensureMonacoEditorTheme,
 } from "./monaco-theme";
+import { findTextEdits } from "./text-reconciliation";
 
 export function createLazyInitializer<Value>(
   initialize: () => Promise<Value>,
@@ -91,6 +92,49 @@ type MonacoModelHost = {
   languages: Pick<typeof Monaco.languages, "getLanguages" | "register">;
 };
 
+/** The slice of a Monaco model an external write touches. */
+type ExternalEditModel = Pick<
+  Monaco.editor.ITextModel,
+  "getValue" | "getPositionAt" | "getFullModelRange" | "pushStackElement" | "pushEditOperations"
+>;
+
+/**
+ * The MINIMAL edit operations that turn the model's current text into `value`,
+ * or `null` when the diff exceeded its budget and only a full replace is left.
+ *
+ * Minimality is the whole point: Monaco maps every cursor, selection, marker and
+ * folding region THROUGH an edit's ranges, so a caret sitting in text the agent
+ * did not touch has to sit inside no range at all to come out where it went in.
+ * A full-model-range replace touches everything and therefore preserves nothing.
+ *
+ * Coordinates line up because both sides speak the model's own text: `getValue`
+ * and `getPositionAt` share the model's EOL, `findTextEdits` reports offsets
+ * into exactly the string it was handed, and Monaco resolves every range in one
+ * `pushEditOperations` call against the PRE-edit model — the same space. The
+ * edits are non-overlapping and sorted (see `findTextEdits`), which is what lets
+ * them travel as a single batch.
+ */
+export function externalEditOperations(
+  model: ExternalEditModel,
+  value: string,
+): Monaco.editor.IIdentifiedSingleEditOperation[] | null {
+  const edits = findTextEdits(model.getValue(), value);
+  if (edits === null) return null;
+  return edits.map((edit) => {
+    const start = model.getPositionAt(edit.start);
+    const end = edit.end === edit.start ? start : model.getPositionAt(edit.end);
+    return {
+      range: {
+        startLineNumber: start.lineNumber,
+        startColumn: start.column,
+        endLineNumber: end.lineNumber,
+        endColumn: end.column,
+      },
+      text: edit.replacement,
+    };
+  });
+}
+
 /**
  * Document-registry model factory: creates the Monaco text model and kicks a
  * best-effort grammar+provider bind.
@@ -111,7 +155,19 @@ export function createShikiBackedModelFactory(
       return monaco.editor.createModel(value, language, monaco.Uri.parse(uri));
     },
     applyExternalEdit(model, value) {
-      model.pushEditOperations([], [{ range: model.getFullModelRange(), text: value }], () => null);
+      // A whole-file fallback when the change is past the diff budget. It still
+      // goes through the edit stack (never `setValue`), so undo survives even
+      // when precise cursor mapping cannot.
+      const operations = externalEditOperations(model, value) ?? [
+        { range: model.getFullModelRange(), text: value },
+      ];
+      // The external write is its own undo element. Without these boundaries
+      // Monaco coalesces it into whatever the user is currently typing, so one
+      // ⌘Z would revert the agent's write AND the user's edit together — and the
+      // advanced externalRevision would then let a guarded save clobber disk.
+      model.pushStackElement();
+      model.pushEditOperations([], operations, () => null);
+      model.pushStackElement();
     },
   };
 }

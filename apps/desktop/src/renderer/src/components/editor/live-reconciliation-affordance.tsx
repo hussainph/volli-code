@@ -30,12 +30,17 @@ export function LiveReconciliationAffordance(props: LiveReconciliationAffordance
     <div
       data-testid="live-reconciliation-conflict"
       data-kind={props.kind}
-      role="status"
-      aria-live="polite"
-      aria-atomic="true"
       className="mx-2 mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
     >
-      <span>Your draft and the newer disk version were both preserved.</span>
+      {/*
+        Only the announcement is the live region. Buttons inside one get
+        re-announced with the status text on every polite update, and some screen
+        readers surface live-region content as flat text rather than as the
+        focusable controls they are — so the actions live in a plain sibling.
+      */}
+      <span role="status" aria-live="polite" aria-atomic="true">
+        Your draft and the newer disk version were both preserved.
+      </span>
       <span className="flex flex-wrap items-center gap-2">
         <Button size="sm" variant="ghost" onClick={props.onUseDisk}>
           Use disk and discard draft
