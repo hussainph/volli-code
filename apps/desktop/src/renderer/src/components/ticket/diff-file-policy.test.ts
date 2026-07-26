@@ -45,4 +45,19 @@ describe("diffFilePolicy", () => {
       });
     }
   });
+
+  it("uses an empty read-only modified side for deleted files", () => {
+    expect(
+      diffFilePolicy({
+        file: file({ path: "src/gone.ts", status: "deleted", insertions: 0, deletions: 4 }),
+        base: { content: "export const x = 1;\n" },
+      }),
+    ).toEqual({
+      kind: "editor",
+      path: "src/gone.ts",
+      previousPath: null,
+      original: { value: "export const x = 1;\n", readOnly: true },
+      modified: { value: null, readOnly: true },
+    });
+  });
 });

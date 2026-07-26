@@ -64,8 +64,8 @@ export function diffFilePolicy(input: DiffFilePolicyInput): DiffFilePolicy {
       path: file.path,
       previousPath,
       original: { value: base.content, readOnly: true },
-      // Live modified model is owned elsewhere; policy only describes the seed.
-      modified: { value: null, readOnly: false },
+      // Deleted: empty read-only modified. Otherwise live model owned elsewhere.
+      modified: { value: null, readOnly: file.status === "deleted" },
     };
   }
 
