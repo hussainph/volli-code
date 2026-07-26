@@ -140,6 +140,15 @@ describe("diffPresentation", () => {
     const store = createUiStore(createMemoryStorage());
     expect(store.getState().diffPresentation).toBe("inline");
   });
+
+  it('setDiffPresentation updates to "side-by-side" or "inline"', () => {
+    const store = createUiStore(createMemoryStorage());
+    store.getState().setDiffPresentation("side-by-side");
+    expect(store.getState().diffPresentation).toBe("side-by-side");
+
+    store.getState().setDiffPresentation("inline");
+    expect(store.getState().diffPresentation).toBe("inline");
+  });
 });
 
 describe("setSettingsOpen", () => {
