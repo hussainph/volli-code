@@ -943,7 +943,7 @@ export class FileWatchManager extends WatchManagerBase<FileWatchSubscription> {
       ticketId: sub.ticketId,
       relPath: sub.relPath,
       source: sub.source,
-      revision: sub.revision,
+      revision: existsSync(join(sub.dir, sub.base)) ? sub.revision : null,
     };
     sub.webContents.send("volli:file-changed" satisfies VolliIpcEvent, payload);
   }
