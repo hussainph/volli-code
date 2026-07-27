@@ -9,6 +9,8 @@
  * engine up here on mount and re-parents it into the freshly-rendered
  * container, instead of constructing a new one.
  */
+import { toastError } from "@renderer/lib/toast";
+
 import { getCurrentAppearance, onTerminalAppearanceChanged } from "./appearance";
 import { watchDevicePixelRatio } from "./device-pixel-ratio";
 import { onGpuSessionRotated } from "./gpu-session";
@@ -62,12 +64,30 @@ function fitLiveEngines(): void {
 // gpu-session's `.catch()`, which drops it: silent, and the recovery never
 // completes.
 onGpuSessionRotated(() => {
+  let failed = 0;
   for (const engine of engines.values()) {
     try {
       engine.rebuildRenderer?.();
     } catch (error) {
       console.warn("terminal renderer rebuild failed:", error);
+      failed += 1;
     }
+  }
+  // Isolating the failure is not the same as accepting it. gpu-session already
+  // toasted "Terminals recovered" on its way here, and an engine that threw is
+  // a permanently blank pane behind that reassurance — nothing retries a
+  // rebuild, so the user would sit staring at a dead rectangle with the news
+  // only in the devtools console (CLAUDE.md: surface every failed mutation).
+  // The shell itself is untouched in the main process, so reopening the
+  // terminal really does bring it back; say so, since nothing else will.
+  //
+  // ONE toast for the whole rotation: a GPU crash tends to take every renderer
+  // with it, and twenty stacked toasts would bury the one instruction.
+  if (failed > 0) {
+    const them = failed === 1 ? "it" : "them";
+    toastError(
+      `${failed} terminal${failed === 1 ? "" : "s"} couldn't be restored after the display driver reset. Close and reopen ${them} — the shell is still running.`,
+    );
   }
 });
 onTerminalAppearanceChanged(() => {
@@ -78,6 +98,13 @@ onTerminalAppearanceChanged(() => {
     } catch (error) {
       // A font family that won't resolve, or a re-theme against a dead pane:
       // the other terminals still deserve the user's new config.
+      //
+      // No toast, unlike the rebuild above. A pane that missed a re-theme is
+      // cosmetic and self-correcting — it keeps rendering with the previous
+      // appearance, stays fully usable, and picks the new one up on the next
+      // config edit or whenever its renderer is next created. There is nothing
+      // for the user to do about it, and a red toast over a font tweak would
+      // spend the attention the dead-pane case needs.
       console.warn("terminal appearance reload failed:", error);
     }
   }

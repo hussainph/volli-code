@@ -24,8 +24,16 @@ const hooks = vi.hoisted(() => ({
   onAppearance: (_engine: { id: string }) => undefined as void,
   /** Every engine the registry built this run, in creation order. */
   built: [] as { id: string; rebuilt: number; rethemed: number }[],
+  /** The app's one error-toast surface, so a case can read what the user was
+   *  actually told rather than only what the console was. */
+  toastError: (_message: string) => undefined as void,
 }));
 
+// Sonner draws React components into a DOM this project has none of; the
+// registry only ever hands it a string, so the wrapper is the right seam.
+vi.mock("@renderer/lib/toast", () => ({
+  toastError: (message: string) => hooks.toastError(message),
+}));
 vi.mock("./appearance", () => ({
   getCurrentAppearance: () => ({}),
   onTerminalAppearanceChanged: (listener: () => void) => {
@@ -83,6 +91,7 @@ async function freshRegistry() {
   hooks.built = [];
   hooks.onRebuild = () => undefined;
   hooks.onAppearance = () => undefined;
+  hooks.toastError = () => undefined;
   return import("./registry");
 }
 
@@ -229,9 +238,74 @@ describe("engine registry", () => {
     expect(warnSpy).toHaveBeenCalledWith("terminal renderer rebuild failed:", failure);
   });
 
+  // Isolating the failure kept the OTHER panes alive; it did nothing for the
+  // one that died. Nothing retries a rebuild, so that pane is blank until the
+  // user closes and reopens it — and gpu-session has already told them
+  // "Terminals recovered". A console.warn is not a way to tell somebody their
+  // terminal is gone (CLAUDE.md: surface every failed mutation).
+  it("tells the user which terminals the device loss took with it", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const toasted = vi.fn();
+    const { getOrCreateEngine } = await freshRegistry();
+    hooks.toastError = toasted;
+    getOrCreateEngine("s1");
+    getOrCreateEngine("s2");
+    getOrCreateEngine("s3");
+    hooks.onRebuild = (engine) => {
+      if (engine.id !== "e2") throw new Error("no GPU adapter");
+    };
+
+    hooks.rotateGpuSession();
+
+    // One toast for the rotation, not one per dead pane, and it counts them.
+    expect(toasted).toHaveBeenCalledOnce();
+    expect(toasted.mock.calls[0]?.[0]).toContain("2 terminals");
+    expect(toasted.mock.calls[0]?.[0]).toContain("Close and reopen them");
+  });
+
+  it("speaks of a single dead pane in the singular", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const toasted = vi.fn();
+    const { getOrCreateEngine } = await freshRegistry();
+    hooks.toastError = toasted;
+    getOrCreateEngine("s1");
+    getOrCreateEngine("s2");
+    hooks.onRebuild = (engine) => {
+      if (engine.id === "e1") throw new Error("no GPU adapter");
+    };
+
+    hooks.rotateGpuSession();
+
+    expect(toasted.mock.calls[0]?.[0]).toContain("1 terminal couldn't");
+    expect(toasted.mock.calls[0]?.[0]).toContain("Close and reopen it");
+  });
+
+  // The common case: the rotation worked. gpu-session's own "terminals
+  // recovered" toast is the whole story, and an error on top of it would make
+  // every GPU hiccup look like data loss.
+  it("stays quiet when every renderer came back", async () => {
+    const toasted = vi.fn();
+    const { getOrCreateEngine } = await freshRegistry();
+    hooks.toastError = toasted;
+    getOrCreateEngine("s1");
+    getOrCreateEngine("s2");
+
+    hooks.rotateGpuSession();
+
+    expect(hooks.built.map((engine) => engine.rebuilt)).toEqual([1, 1]);
+    expect(toasted).not.toHaveBeenCalled();
+  });
+
+  // Logged, deliberately NOT toasted — the one place this file departs from the
+  // rebuild above. A pane that missed a re-theme keeps its previous appearance,
+  // stays fully usable, and picks the new one up on the next config edit or
+  // renderer creation. There is no action for the user to take, and spending a
+  // red toast here is spending the attention a dead pane needs.
   it("re-themes every terminal on a config edit even when one engine throws", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const toasted = vi.fn();
     const { getOrCreateEngine } = await freshRegistry();
+    hooks.toastError = toasted;
     getOrCreateEngine("s1");
     getOrCreateEngine("s2");
     getOrCreateEngine("s3");
@@ -244,5 +318,6 @@ describe("engine registry", () => {
 
     expect(hooks.built.map((engine) => engine.rethemed)).toEqual([1, 1, 1]);
     expect(warnSpy).toHaveBeenCalledWith("terminal appearance reload failed:", failure);
+    expect(toasted).not.toHaveBeenCalled();
   });
 });
