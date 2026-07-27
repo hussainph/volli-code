@@ -19,10 +19,12 @@ const engines = new Map<string, TerminalEngine>();
 const membershipListeners = new Set<() => void>();
 
 /**
- * Tell every watcher the engine set changed. Snapshot + per-listener catch, for
- * the same reasons as `fitLiveEngines` below: a listener that unsubscribes
- * itself mid-walk would skip its neighbour, and a THROWING watcher must never
- * abort the create/dispose it was merely observing — an exception escaping
+ * Tell every watcher the engine set changed. Snapshot AND per-listener catch —
+ * the fan-outs below need only the catch (they walk engines, which nothing they
+ * call can add to or remove from mid-walk), while this one walks a listener set
+ * a listener can mutate: unsubscribing itself mid-walk would skip its
+ * neighbour. The catch is the shared part: a THROWING watcher must never abort
+ * the create/dispose it was merely observing — an exception escaping
  * `disposeEngine` would strand the caller's remaining PTYs unkilled.
  */
 function announceMembership(): void {
@@ -52,12 +54,33 @@ function fitLiveEngines(): void {
 // Module-lifetime subscriptions (the registry IS the app-wide engine list):
 // a GPU session rotation rebuilds every live renderer against the fresh
 // device, and a ghostty config edit re-themes them in place (issue #18).
+// Both fan-outs catch per engine, for `fitLiveEngines`' reason sharpened by
+// when they run. A rotation fires right after a GPU device died, and rebuilding
+// against a freshly-crashed device is exactly where `createRestty` throws — one
+// unlucky engine must not cost engines #2..N their renderer and leave them
+// permanently blank. Worse, the throw would escape `rotate()` into
+// gpu-session's `.catch()`, which drops it: silent, and the recovery never
+// completes.
 onGpuSessionRotated(() => {
-  for (const engine of engines.values()) engine.rebuildRenderer?.();
+  for (const engine of engines.values()) {
+    try {
+      engine.rebuildRenderer?.();
+    } catch (error) {
+      console.warn("terminal renderer rebuild failed:", error);
+    }
+  }
 });
 onTerminalAppearanceChanged(() => {
   const appearance = getCurrentAppearance();
-  for (const engine of engines.values()) engine.applyAppearance?.(appearance);
+  for (const engine of engines.values()) {
+    try {
+      engine.applyAppearance?.(appearance);
+    } catch (error) {
+      // A font family that won't resolve, or a re-theme against a dead pane:
+      // the other terminals still deserve the user's new config.
+      console.warn("terminal appearance reload failed:", error);
+    }
+  }
 });
 
 // restty's ResizeObserver catches CSS-size changes, but not a pure backing-scale

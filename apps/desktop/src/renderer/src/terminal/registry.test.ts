@@ -6,19 +6,39 @@ import { describe, expect, it, vi } from "vite-plus/test";
  *
  * Everything the registry touches on import is stubbed: the real engine builds a
  * restty renderer against a GPU (there is no DOM at all under the renderer test
- * project's node environment), and appearance/gpu-session/DPR are module-lifetime
- * subscriptions whose only job here would be to drag restty in. What's left is
- * the part with consequences: which engine a session id maps to, and who hears
- * about it.
+ * project's node environment), and DPR is a module-lifetime subscription whose
+ * only job here would be to drag restty in. The gpu-session and appearance
+ * subscriptions are stubbed but CAPTURED, because the registry's second job is
+ * fanning those two app-wide events out over every engine it holds.
  *
  * The registry keeps module-level state, so every case imports a fresh copy
  * rather than sharing (and having to unwind) one map and one listener set.
  */
+const hooks = vi.hoisted(() => ({
+  /** The registry's module-lifetime subscriptions, captured so a case can fire
+   *  the app-wide event and watch what the registry does to every engine. */
+  rotateGpuSession: () => undefined as void,
+  reloadAppearance: () => undefined as void,
+  /** Per-engine hook the fan-out cases arm to make one engine throw. */
+  onRebuild: (_engine: { id: string }) => undefined as void,
+  onAppearance: (_engine: { id: string }) => undefined as void,
+  /** Every engine the registry built this run, in creation order. */
+  built: [] as { id: string; rebuilt: number; rethemed: number }[],
+}));
+
 vi.mock("./appearance", () => ({
   getCurrentAppearance: () => ({}),
-  onTerminalAppearanceChanged: () => () => undefined,
+  onTerminalAppearanceChanged: (listener: () => void) => {
+    hooks.reloadAppearance = listener;
+    return () => undefined;
+  },
 }));
-vi.mock("./gpu-session", () => ({ onGpuSessionRotated: () => () => undefined }));
+vi.mock("./gpu-session", () => ({
+  onGpuSessionRotated: (listener: () => void) => {
+    hooks.rotateGpuSession = listener;
+    return () => undefined;
+  },
+}));
 vi.mock("./device-pixel-ratio", () => ({ watchDevicePixelRatio: () => () => undefined }));
 vi.mock("./restty-engine", () => ({
   // Enough TerminalEngine for the registry, which only ever fits, rebuilds,
@@ -28,6 +48,12 @@ vi.mock("./restty-engine", () => ({
   ResttyEngine: class {
     hasRenderer = true;
     backend = null;
+    readonly id = `e${hooks.built.length + 1}`;
+    rebuilt = 0;
+    rethemed = 0;
+    constructor() {
+      hooks.built.push(this);
+    }
     attach = () => undefined;
     write = () => undefined;
     onData = () => () => undefined;
@@ -38,6 +64,14 @@ vi.mock("./restty-engine", () => ({
     focus = () => undefined;
     adjustFontSize = () => undefined;
     resetFontSize = () => undefined;
+    rebuildRenderer = () => {
+      this.rebuilt += 1;
+      hooks.onRebuild(this);
+    };
+    applyAppearance = () => {
+      this.rethemed += 1;
+      hooks.onAppearance(this);
+    };
     dispose = () => {
       this.hasRenderer = false;
     };
@@ -46,6 +80,9 @@ vi.mock("./restty-engine", () => ({
 
 async function freshRegistry() {
   vi.resetModules();
+  hooks.built = [];
+  hooks.onRebuild = () => undefined;
+  hooks.onAppearance = () => undefined;
   return import("./registry");
 }
 
@@ -156,5 +193,45 @@ describe("engine registry", () => {
 
     expect([...engines]).toHaveLength(2);
     expect([...engines]).toHaveLength(2);
+  });
+
+  // A rotation fires because a GPU device just died, which is the one moment
+  // `createRestty` is most likely to throw — so the loop that recovers every
+  // terminal is the last place that can afford to stop at the first failure.
+  // Unguarded, engine #1's throw left #2..N permanently blank AND escaped
+  // `rotate()` into gpu-session's `.catch()`, which swallows it: no rebuild,
+  // no error, no clue.
+  it("rebuilds every renderer after a device loss even when one engine throws", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { getOrCreateEngine } = await freshRegistry();
+    getOrCreateEngine("s1");
+    getOrCreateEngine("s2");
+    getOrCreateEngine("s3");
+    const failure = new Error("no GPU adapter");
+    hooks.onRebuild = (engine) => {
+      if (engine.id === "e1") throw failure;
+    };
+
+    expect(() => hooks.rotateGpuSession()).not.toThrow();
+
+    expect(hooks.built.map((engine) => engine.rebuilt)).toEqual([1, 1, 1]);
+    expect(warnSpy).toHaveBeenCalledWith("terminal renderer rebuild failed:", failure);
+  });
+
+  it("re-themes every terminal on a config edit even when one engine throws", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { getOrCreateEngine } = await freshRegistry();
+    getOrCreateEngine("s1");
+    getOrCreateEngine("s2");
+    getOrCreateEngine("s3");
+    const failure = new Error("font family will not resolve");
+    hooks.onAppearance = (engine) => {
+      if (engine.id === "e1") throw failure;
+    };
+
+    expect(() => hooks.reloadAppearance()).not.toThrow();
+
+    expect(hooks.built.map((engine) => engine.rethemed)).toEqual([1, 1, 1]);
+    expect(warnSpy).toHaveBeenCalledWith("terminal appearance reload failed:", failure);
   });
 });
