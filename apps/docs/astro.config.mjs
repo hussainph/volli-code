@@ -25,11 +25,17 @@ export default defineConfig({
         baseUrl:
           "https://github.com/hussainph/volli-code/edit/main/apps/docs/",
       },
-      // The site is dark-only, matching the app and volli.app. Overriding
-      // ThemeSelect with an empty component removes the light/dark toggle;
-      // volli.css pins the palette so a light-preferring visitor still gets dark.
       components: {
+        // The site is dark-only, matching the app and volli.app. Overriding
+        // ThemeSelect with an empty component removes the light/dark toggle;
+        // volli.css pins the palette so a light-preferring visitor still gets
+        // dark.
         ThemeSelect: "./src/components/ThemeSelect.astro",
+        // Adds a "Copy page" control beside the title, and a link to /llms.txt
+        // in the footer. Both exist because our readers paste these pages into
+        // coding agents.
+        PageTitle: "./src/components/PageTitle.astro",
+        Footer: "./src/components/Footer.astro",
       },
       customCss: [
         "@fontsource-variable/mona-sans/wght.css",

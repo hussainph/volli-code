@@ -1,13 +1,20 @@
 /*
  * Volli docs brand layer.
  *
- * Every value here is lifted from an existing Volli surface so the docs read as
- * the same product, not a themed template:
- *   - page/text/line/ember come from apps/website/src/styles/global.css
- *   - the readable accent (#ff966c) is the app's generated --primary-text token,
- *     the ember solved onto a dark background at APCA Lc60 (see
- *     packages/shared/src/theme/). Ember at full strength fails contrast as body
- *     text, so fills use #e8652a and text uses #ff966c — same rule as the app.
+ * Two sources feed this file, and neither is Starlight's defaults:
+ *
+ * 1. Volli's own surfaces. Page, text, hairline, and ember values come from
+ *    apps/website/src/styles/global.css. The readable accent (#ff966c) is the
+ *    app's generated --primary-text token, the ember solved onto a dark
+ *    background at APCA Lc60 (see packages/shared/src/theme/). Ember at full
+ *    strength fails contrast as body text, so fills use #e8652a and text uses
+ *    #ff966c — the same split the desktop app uses.
+ *
+ * 2. The structure of cursor.com/docs, measured rather than eyeballed. Their
+ *    docs and ours landed on the same accent hue and the same restraint, so
+ *    what we borrow is layout and type, not colour. The specific moves are
+ *    marked "Cursor:" below so a future reader can tell a deliberate copy from
+ *    a Starlight default we left alone.
  *
  * The palette is declared on both :root and :root[data-theme='light'] because
  * the site is dark-only and Starlight otherwise honours the visitor's system
@@ -49,16 +56,93 @@
   --sl-color-hairline-light: #202020;
   --sl-color-hairline-shade: #141414;
 
-  /* Callouts, tuned to sit on #0a0a0a rather than Starlight's default bg. */
-  --sl-color-asides-text-accent: #ff966c;
+  /*
+   * Callouts.
+   *
+   * Starlight builds each aside from a hue triple, and its light theme swaps
+   * -low and -high: --sl-color-blue-low is a near-black fill in dark mode and a
+   * pale lavender in light. Pinning only the grays and the accent above left
+   * these on Starlight's own theme switch, so a visitor whose system prefers
+   * light got pastel boxes on a near-black page. They have to be declared here
+   * or the bug comes back.
+   *
+   * The values are quieter than Starlight's, whose -low fills are saturated
+   * enough to glow against #0a0a0a, and they stay clear of ember so a callout
+   * never reads as a link.
+   */
+  --sl-color-blue-low: #0e1a24;
+  --sl-color-blue: #5aa0d0;
+  --sl-color-blue-high: #a9cee7;
+
+  --sl-color-purple-low: #16121f;
+  --sl-color-purple: #9580e0;
+  --sl-color-purple-high: #c6bcef;
+
+  --sl-color-green-low: #0b1c16;
+  --sl-color-green: #3cb88a;
+  --sl-color-green-high: #9adcc2;
+
+  --sl-color-orange-low: #1f1408;
+  --sl-color-orange: #d4a24a;
+  --sl-color-orange-high: #e8cb93;
+
+  --sl-color-red-low: #200f0f;
+  --sl-color-red: #e05252;
+  --sl-color-red-high: #f0a3a3;
 
   --sl-font:
     "Mona Sans Variable", "Mona Sans", ui-sans-serif, system-ui, sans-serif;
   --sl-font-system-mono:
     ui-monospace, SFMono-Regular, Menlo, monospace;
 
-  /* Matches --container-content in docs/DESIGN.md (45rem / 720px). */
-  --sl-content-width: 45rem;
+  /*
+   * Weight. Cursor sets body and headings to the same 400 and lets size and
+   * tracking carry the whole hierarchy — no bold anywhere in the content
+   * column. We keep that relationship but shade the body down, because light
+   * type on a near-black page reads optically heavier than the same weight on
+   * Cursor's paper background. These are the two numbers to tune if the page
+   * ever feels too light or too dense; nothing else hard-codes a weight.
+   */
+  --volli-weight-body: 380;
+  --volli-weight-heading: 400;
+
+  /*
+   * Type scale, from cursor.com/docs. Body is 15px at 1.625 with a hair of
+   * positive tracking, which is smaller and looser than Starlight's 16/1.75.
+   */
+  --sl-text-body: 0.9375rem; /* 15px */
+  --sl-text-h1: 2.1094rem; /* 33.75px */
+  --sl-text-h2: 1.2891rem; /* 20.625px */
+  --sl-text-h3: 1.125rem; /* 18px */
+  --sl-text-h4: 1rem; /* 16px */
+  --sl-text-h5: 0.9375rem; /* 15px */
+  --sl-line-height: 1.625;
+  --sl-line-height-headings: 1.2;
+
+  /*
+   * Layout. Sidebar and nav height match Cursor's 280px / 49px. The content
+   * column stays at 45rem: that's --container-content from docs/DESIGN.md, and
+   * the 16px difference from Cursor's 704px isn't worth breaking our own
+   * design system over.
+   */
+  --sl-sidebar-width: 17.5rem; /* 280px */
+  --sl-content-width: 45rem; /* 720px, per docs/DESIGN.md */
+  --sl-nav-height: 3.0625rem; /* 49px */
+  --sl-nav-pad-y: 0.375rem;
+
+  /* Corner radius. Cursor's cards are rounded-sm; documents, not app chrome. */
+  --volli-radius: 4px;
+  --volli-radius-code: 6px;
+}
+
+/* Starlight bumps h1 and the nav at desktop width. Hold our own values. */
+@media (min-width: 50rem) {
+  :root,
+  :root[data-theme="light"] {
+    --sl-text-h1: 2.1094rem;
+    --sl-nav-height: 3.0625rem;
+    --sl-nav-pad-x: 1.5rem;
+  }
 }
 
 html {
@@ -71,27 +155,57 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* ---------------------------------------------------------------- Type --- */
+
 /*
- * Type. The website sets h1 at weight 420 with -0.05em tracking; headings here
- * follow the same curve, loosening the tracking as sizes drop so smaller
- * headings don't crowd.
+ * Cursor tightens tracking as headings grow and lets it back out as they
+ * shrink, so a large heading stays compact and a small one doesn't crowd.
  */
 .sl-markdown-content h1,
-.sl-markdown-content h2,
-.sl-markdown-content h3,
-.sl-markdown-content h4,
 h1.astro-route-announcer,
 .content-panel h1 {
-  font-weight: 420;
-  letter-spacing: -0.035em;
+  font-weight: var(--volli-weight-heading);
+  letter-spacing: -0.02em;
 }
 
-.content-panel h1 {
-  letter-spacing: -0.05em;
+.sl-markdown-content h2 {
+  font-weight: var(--volli-weight-heading);
+  letter-spacing: -0.005em;
 }
 
+.sl-markdown-content h3,
+.sl-markdown-content h4,
+.sl-markdown-content h5,
+.sl-markdown-content h6 {
+  font-weight: var(--volli-weight-heading);
+  letter-spacing: 0;
+}
+
+/*
+ * Starlight declares --sl-text-body but never applies it to the content
+ * column, which just inherits the root 16px. Setting it here is what actually
+ * moves body copy to Cursor's 15px. Headings and code blocks size in rem, so
+ * they don't follow; inline code is sized in em and does, landing at ~12px.
+ */
 .sl-markdown-content {
-  font-weight: 360;
+  font-size: var(--sl-text-body);
+  font-weight: var(--volli-weight-body);
+  letter-spacing: 0.005em;
+}
+
+/*
+ * Heading rhythm, from Cursor: a generous gap above an h2 and a tight one
+ * below, so a section reads as attached to its own body rather than floating
+ * between two.
+ */
+.sl-markdown-content :is(h2):not(:where(.not-content *)) {
+  margin-top: 3rem;
+  margin-bottom: 1rem;
+}
+
+.sl-markdown-content :is(h3, h4):not(:where(.not-content *)) {
+  margin-top: 2rem;
+  margin-bottom: 0.75rem;
 }
 
 /* Links: ember, underlined only on hover — same restraint as the landing page. */
@@ -114,6 +228,8 @@ summary:focus-visible {
   outline-offset: 4px;
 }
 
+/* -------------------------------------------------------------- Chrome --- */
+
 /*
  * Header wordmark. Starlight tints the site title with the accent; volli.app
  * keeps the wordmark plain white and spends the ember on the CTA instead.
@@ -121,6 +237,189 @@ summary:focus-visible {
 a.site-title,
 .site-title span {
   color: var(--sl-color-white);
+  font-weight: var(--volli-weight-heading);
+  letter-spacing: -0.02em;
+}
+
+/* Hairline borders rather than Starlight's heavier default separators. */
+.sidebar-pane,
+.right-sidebar,
+header.header {
+  border-color: var(--sl-color-hairline);
+}
+
+/* Cursor's left rail carries no fill and no border — it is simply the page. */
+.sidebar-pane {
+  border-inline-end: 0;
+}
+
+/*
+ * Search. Cursor gives the field real estate in the header instead of hiding
+ * it behind an icon, so it reads as a primary way through the docs. Starlight
+ * already renders a button with the icon, label, and ⌘K hint; it just caps the
+ * width at 22rem and centres the label. Widening it and pushing the hint to
+ * the far edge is the whole change.
+ */
+@media (min-width: 50rem) {
+  header .sl-flex:has(site-search) {
+    flex: 1;
+  }
+
+  site-search button[data-open-modal] {
+    max-width: 28rem;
+    height: 2rem;
+    border-radius: var(--volli-radius);
+    border-color: var(--sl-color-hairline);
+    background-color: var(--sl-color-gray-7);
+    color: var(--sl-color-gray-3);
+  }
+
+  site-search button[data-open-modal]:hover {
+    border-color: var(--sl-color-gray-4);
+    color: var(--sl-color-gray-1);
+  }
+
+  site-search button[data-open-modal] > kbd {
+    background-color: transparent;
+    color: var(--sl-color-gray-4);
+  }
+}
+
+/* ------------------------------------------------------------- Sidebar --- */
+
+/*
+ * The signature move from cursor.com/docs, and the inverse of Starlight's
+ * default: the page links are large and full-contrast, the group labels are
+ * small and quiet. Starlight ships 18px/600/white group labels above
+ * 16px/muted links, which reads as a control panel. Cursor's reads as a table
+ * of contents, and the nav stops competing with the page.
+ */
+.sidebar-content .group-label .large {
+  font-size: 0.75rem; /* 12px */
+  font-weight: 400;
+  letter-spacing: 0.05em;
+  color: var(--sl-color-gray-3);
+}
+
+.sidebar-content a {
+  font-size: 0.9375rem; /* 15px */
+  font-weight: var(--volli-weight-body);
+  color: var(--sl-color-gray-1);
+  border-radius: var(--volli-radius);
+}
+
+.sidebar-content a:hover {
+  color: var(--sl-color-white);
+}
+
+/* Sidebar: quiet by default, ember only for the current page. */
+.sidebar-content a[aria-current="page"],
+.sidebar-content a[aria-current="page"]:hover {
+  color: var(--sl-color-text-accent);
+  background-color: transparent;
+  font-weight: 500;
+}
+
+/*
+ * Cursor draws no indent guide and no disclosure caret. Every group is open,
+ * so the caret only ever points one way, and the guide line adds a rule for
+ * a hierarchy the type already shows.
+ */
+.sidebar-content ul ul li {
+  border-inline-start: 0;
+  padding-inline-start: 0;
+  margin-inline-start: 0;
+}
+
+.sidebar-content summary .caret {
+  display: none;
+}
+
+.sidebar-content summary {
+  cursor: default;
+  padding-inline: 0.5rem;
+}
+
+/* 29px rows, and a clear break between groups. */
+.sidebar-content .top-level > li + li {
+  margin-top: 2rem;
+}
+
+.sidebar-content ul ul li + li {
+  margin-top: 0.125rem;
+}
+
+/* ---------------------------------------------------- Content surfaces --- */
+
+/*
+ * Code. Cursor sets inline code a step *quieter* than the prose around it, so
+ * a sentence full of flags still reads as a sentence.
+ */
+.sl-markdown-content :not(pre) > code:not(:where(.not-content *)) {
+  border: 1px solid var(--sl-color-hairline-light);
+  border-radius: var(--volli-radius);
+  background-color: var(--sl-color-gray-7);
+  color: var(--sl-color-gray-2);
+  font-size: 0.8125em;
+  padding: 0.15em 0.4em;
+}
+
+.expressive-code .frame {
+  border-radius: var(--volli-radius-code);
+}
+
+/*
+ * Cards. Cursor's sit one shallow step off the page behind a hairline and a
+ * 4px corner, carry no shadow at rest, and spend the accent only on hover.
+ * Starlight ships a transparent 8px panel with an 18px/600 title, which shouts
+ * next to 15px body copy.
+ *
+ * Both selectors matter: `.sl-link-card` is <LinkCard>, which every "Next
+ * steps" grid uses, and `.card` is <Card>. Styling only the latter leaves the
+ * grids on Starlight's defaults.
+ */
+.sl-markdown-content :is(.sl-link-card, .card) {
+  background-color: var(--sl-color-gray-7);
+  border: 1px solid var(--sl-color-hairline);
+  border-radius: var(--volli-radius);
+  box-shadow: none;
+  padding: 1rem 1.25rem;
+}
+
+.sl-markdown-content :is(.sl-link-card, .card) .title {
+  color: var(--sl-color-white);
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.sl-markdown-content .sl-link-card .description {
+  font-size: var(--sl-text-body);
+  color: var(--sl-color-gray-3);
+}
+
+.sl-markdown-content .sl-link-card:hover {
+  border-color: rgb(232 101 42 / 50%);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 40%);
+}
+
+/* Starlight tints the link-card arrow with the accent; keep it quiet. */
+.sl-markdown-content .sl-link-card .icon {
+  color: var(--sl-color-gray-4);
+}
+
+.sl-markdown-content .sl-link-card:hover .icon {
+  color: var(--sl-color-text-accent);
+}
+
+/* Tables carry most of the reference pages, so they get the hairline too. */
+.sl-markdown-content :is(th, td):not(:where(.not-content *)) {
+  border-color: var(--sl-color-hairline);
+}
+
+.sl-markdown-content th:not(:where(.not-content *)) {
+  font-weight: 500;
+  color: var(--sl-color-gray-2);
 }
 
 /*
@@ -132,6 +431,7 @@ a.site-title,
 .sl-link-button.primary {
   background: var(--sl-color-accent);
   color: #160b06;
+  border-radius: var(--volli-radius);
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 22%),
     0 8px 24px rgb(232 101 42 / 15%);
@@ -142,28 +442,22 @@ a.site-title,
   color: #160b06;
 }
 
-/* Hairline borders rather than Starlight's heavier default separators. */
-.sidebar-pane,
-.right-sidebar,
-header.header {
-  border-color: var(--sl-color-hairline);
+.sl-link-button.minimal {
+  border-radius: var(--volli-radius);
 }
 
-/* Sidebar: quiet by default, ember only for the current page. */
-.sidebar-content a[aria-current="page"],
-.sidebar-content a[aria-current="page"]:hover {
+/* ------------------------------------------------------- Page furniture --- */
+
+/*
+ * Right-hand contents. Cursor keeps it at 14px and muted, with the accent
+ * reserved for the section you're actually in.
+ */
+.right-sidebar a {
+  font-size: 0.875rem;
+  font-weight: var(--volli-weight-body);
+  color: var(--sl-color-gray-3);
+}
+
+.right-sidebar a[aria-current="true"] {
   color: var(--sl-color-text-accent);
-  background-color: transparent;
-  font-weight: 500;
-}
-
-/* Code blocks sit one step off the page, matching the app's card layering. */
-.sl-markdown-content :not(pre) > code:not(:where(.not-content *)) {
-  border: 1px solid var(--sl-color-hairline-light);
-  border-radius: 6px;
-  font-size: 0.875em;
-}
-
-.expressive-code .frame {
-  border-radius: 10px;
 }
