@@ -7,6 +7,7 @@ import "../styles/global.css";
 
 const repositoryUrl = "https://github.com/hussainph/volli-code";
 const downloadUrl = `${repositoryUrl}/releases/latest`;
+const docsUrl = "https://docs.volli.app";
 ---
 
 <!doctype html>
@@ -57,8 +58,9 @@ const downloadUrl = `${repositoryUrl}/releases/latest`;
               </p>
               <p>
                 The board turns your software lifecycle into a programmable system, with prompts
-                and automations that run as work enters each phase. Every agent can use the Volli
-                CLI to read the plan, create follow-up work, schedule tasks, and keep the project
+                and automations that run as work enters each phase. Every agent can use the <a
+                  href={`${docsUrl}/reference/cli/`}>Volli CLI</a
+                > to read the plan, create follow-up work, schedule tasks, and keep the project
                 moving.
               </p>
               <p>
@@ -87,6 +89,16 @@ const downloadUrl = `${repositoryUrl}/releases/latest`;
                   />
                 </svg>
                 <span>Star on GitHub</span>
+              </a>
+              <a class="cta cta-secondary" href={docsUrl}>
+                <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
+                  <path
+                    fill="currentColor"
+                    fill-rule="evenodd"
+                    d="M6 2h8l6 6v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Zm7.6 1.9v4.5h4.5l-4.5-4.5ZM7.9 12.4h8.2V14H7.9v-1.6Zm0 4.1h6.1v1.6H7.9v-1.6Z"
+                  />
+                </svg>
+                <span>Docs</span>
               </a>
             </div>
           </div>
