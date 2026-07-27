@@ -11,6 +11,7 @@ A macOS desktop app (Electron + React + TypeScript) merging Linear-style kanban 
 - `apps/desktop/src/renderer/` — React UI + Zustand stores. **No Node imports.**
 - `packages/shared/` (`@volli/shared`) — pure, unit-tested domain code (models, ticket state machine, event-log types, branch/slug rules). **No Electron/Node/DOM imports.** All automatic ticket-movement logic lives here.
 - `packages/cli/` — the agent-facing `volli` CLI (built; Unix socket to main). App data lives under Electron's `userData` dir.
+- `apps/desktop/src/renderer/lab/` — the UI lab (`pnpm lab`): browser-only scratches for trying interactions against real components/tokens with fixture data, before they become app features. Dev-server only, never built; imports the app, never the reverse.
 
 ## Conventions
 
@@ -27,6 +28,7 @@ A macOS desktop app (Electron + React + TypeScript) merging Linear-style kanban 
 ## Commands
 
 - `pnpm dev` — full dev loop (renderer HMR + main/preload watch + Electron auto-relaunch). `pnpm run build` then `pnpm start` runs the built app.
+- `pnpm lab` — the UI lab on :5174 (runs alongside `pnpm dev`); add an idea by dropping one file into `src/renderer/lab/scratches/`.
 - `vp run -r typecheck` · `vp run -r test` · `vp check` (= `vp fmt` + `vp lint`) — the quality stack. `vp` is the global toolchain CLI (Node/pnpm pinned in root `package.json`).
 - `vp install` / `pnpm install` for deps; `pnpm run ensure:electron` (`apps/desktop`) prefetches Electron's lazily-fetched binary.
 - CI: PRs run one lean Linux job and must be green before shipping. **Desktop e2e smokes (`apps/desktop/e2e/*.mjs`) do NOT run in CI — run the relevant ones locally before shipping any desktop-touching PR.** The macOS smoke lane is manual-only (`gh workflow run ci.yml -f desktop-smoke=true`); `act pull_request --container-architecture linux/amd64` mirrors the Linux job locally.

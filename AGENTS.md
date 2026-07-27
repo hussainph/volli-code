@@ -17,6 +17,7 @@ Use `docs/SWIFT-REFERENCE.md` for the Swift app's feature-parity and data-model 
 - `apps/desktop/src/renderer/` — React UI and Zustand stores. Do not import Node APIs.
 - `apps/desktop/scripts/` — Node build and development orchestration.
 - `packages/shared/` (`@volli/shared`) — pure, unit-tested domain code: models, ticket state machine, event-log types, and branch/slug rules. Do not import Electron, Node, or DOM APIs. Put all automatic ticket transitions here.
+- `apps/desktop/src/renderer/lab/` — the UI lab (`pnpm lab`): browser-only scratches for trying interactions against real components and tokens with fixture data, before they become app features. Dev-server only, never built; it imports the app, never the reverse.
 
 App data lives under Electron's `userData` directory as a fresh start, separate from the Swift app's data. The agent-facing `volli` CLI is planned but not yet built; it will be a separate binary over a Unix socket.
 
@@ -37,6 +38,7 @@ App data lives under Electron's `userData` directory as a fresh start, separate 
 ## Commands
 
 - `pnpm dev` — run the full development loop: renderer HMR, main/preload watch, and Electron auto-relaunch.
+- `pnpm lab` — serve the UI lab on port 5174, alongside `pnpm dev`. Add an idea by dropping one file into `apps/desktop/src/renderer/lab/scratches/`.
 - `pnpm run build` then `pnpm start` — build and run the packaged application locally.
 - `vp run -r typecheck` — type-check the workspace.
 - `vp run -r test` — run workspace tests.

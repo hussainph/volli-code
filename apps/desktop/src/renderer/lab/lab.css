@@ -1,0 +1,20 @@
+/**
+ * The lab's stylesheet: the app's real one, plus this folder registered as a
+ * Tailwind source.
+ *
+ * The second part is not optional. Tailwind v4 detects sources relative to the
+ * stylesheet that imports it, and `globals.css` lives in `src/renderer/src/` —
+ * so `src/renderer/lab/` is a SIBLING it never scans. Without this `@source`,
+ * a utility the app already happens to use works in a scratch and a utility it
+ * doesn't use is silently dropped: `h-40` computed to 17px, `grid-cols-2` to a
+ * single column. That failure is invisible (no error, no warning — the class is
+ * simply absent) and it makes the lab quietly lie about layout, which is the
+ * one thing it must never do.
+ *
+ * This file is dev-only, like everything else in `lab/`. The app keeps
+ * importing `globals.css` directly and is unaffected, so the shipped stylesheet
+ * never grows a utility that only a scratch asked for — the dependency still
+ * runs one way, lab → app.
+ */
+@import "../src/globals.css";
+@source "./";
