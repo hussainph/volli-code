@@ -19,6 +19,14 @@
  * instead of into a crash, and the scratch shows you what that path looks like.
  * Anything a scratch actually depends on is passed explicitly via `overrides`.
  *
+ * The one shape this convention CANNOT infer is a plain value member — the
+ * bridge has a few (`app.launchedByCli`, `versions.electron`), and a property
+ * read alone gives nothing to distinguish "a boolean" from "a namespace I have
+ * not descended into yet". They therefore read as a (truthy) node unless a
+ * scratch overrides them, which {@link installFakeApi} supports by handing back
+ * any non-object override verbatim. `lab/seed.ts` declares the ones the app
+ * shell reads at mount.
+ *
  * Scope: this is lab-only. Nothing under `src/renderer/src/` may import it —
  * the app talks to the real bridge, and a test double must never be reachable
  * from shipped code. The dependency runs one way: lab → app, never app → lab.
@@ -78,6 +86,16 @@ function lookup(overrides: ApiOverrides, path: readonly string[]): unknown {
 }
 
 /**
+ * Whether an override is a branch to descend into rather than a value to hand
+ * back. Only a plain object qualifies, which is exactly what lets a partial
+ * `{ tickets: { move } }` leave every other `tickets` method stubbed — while
+ * an array, or a `null`, reads as the value it plainly is.
+ */
+function isNamespace(value: unknown): boolean {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
  * One node of the fake bridge at `path`. The target is a function so the node
  * is both callable (a method) and traversable (a namespace) — which member it
  * turns out to be is decided by the caller, not guessed here. An override
@@ -87,7 +105,11 @@ function lookup(overrides: ApiOverrides, path: readonly string[]): unknown {
  */
 function node(overrides: ApiOverrides, path: readonly string[]): unknown {
   const override = lookup(overrides, path);
-  if (typeof override === "function") return override;
+  // A function override IS the method. Any other non-namespace value is a
+  // VALUE member of the bridge and is returned verbatim — the only way to
+  // express `app.launchedByCli: false`, since the shape convention above
+  // cannot tell a boolean from an undescended namespace.
+  if (override !== undefined && !isNamespace(override)) return override;
 
   return new Proxy(() => {}, {
     get(_target, property) {

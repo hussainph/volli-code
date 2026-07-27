@@ -28,7 +28,10 @@
  */
 import "@fontsource-variable/geist-mono/wght.css";
 import "@fontsource-variable/mona-sans/wght.css";
-import "@renderer/globals.css";
+// `globals.css` by way of lab.css, which additionally registers this folder as
+// a Tailwind source — see the note there; importing globals.css directly leaves
+// every lab-only utility silently ungenerated.
+import "./lab.css";
 import "@renderer/typeset.css";
 
 import { StrictMode } from "react";
@@ -36,11 +39,17 @@ import { createRoot } from "react-dom/client";
 
 import { installFakeApi } from "./fake-api";
 import { LabShell } from "./shell";
+import { applyStoredLabTheme } from "./theme-choice";
 
 // The floor: an all-stubs bridge, so anything reaching for `window.api` before
 // a scratch is chosen finds a stub rather than an undefined global. The shell
 // re-installs with the active scratch's own overrides on every activation.
 installFakeApi();
+
+// The app hydrates its theme from SQLite at boot; the lab restores the theme
+// the Theming scratch last committed. Without this a reload would silently drop
+// back to the `globals.css` default while the picker still claimed otherwise.
+applyStoredLabTheme();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

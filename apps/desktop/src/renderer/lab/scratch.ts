@@ -22,6 +22,20 @@ export interface ScratchModule {
   /** One line on what question this scratch is meant to answer. */
   note?: string;
   /**
+   * How much room the scratch gets.
+   *
+   * `"stage"` (the default) puts it in the shell's padded, width-limited stage
+   * — right for a component or a set of states.
+   *
+   * `"window"` gives it the entire viewport and hides the lab's own chrome
+   * behind a floating control. Whole-window surfaces need this rather than
+   * merely preferring it: the app shell is sized `h-svh` and its sidebar
+   * positions against the viewport, so inside a stage box it would render a
+   * window's worth of layout hanging out of a smaller frame — and you would be
+   * judging the overhang, not the design.
+   */
+  viewport?: "stage" | "window";
+  /**
    * Bridge stubs this scratch needs — see `fake-api.ts`. Installed wholesale
    * when the scratch becomes active, so no other scratch's stubs are in play.
    */

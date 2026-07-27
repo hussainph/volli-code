@@ -82,6 +82,37 @@ function useScratchSetup(active: Scratch | null): void {
   }
 }
 
+/**
+ * A `viewport: "window"` scratch, given the whole viewport with the lab's own
+ * chrome reduced to one floating control.
+ *
+ * The control is `fixed` with a high z-index because the surface underneath is
+ * a full app shell that owns its own stacking contexts — anything merely
+ * "after" it in the DOM would end up beneath it.
+ */
+function WindowStage({ scratch }: { scratch: Scratch }) {
+  return (
+    <>
+      {/* Keyed on the slug for the same reason the stage below is: switching
+          scratches must remount rather than reconcile. */}
+      <div key={scratch.slug} className="h-svh w-full">
+        <scratch.default />
+      </div>
+      {/* Bottom-RIGHT: the app's own bottom-left is the sidebar's pinned
+          Settings row, and a lab control sitting on top of a real affordance
+          is a control you will eventually mistake for one. */}
+      <a
+        href="#"
+        className="fixed right-3 bottom-3 z-[9999] flex items-center gap-2 rounded-full border border-border bg-background/90 px-3 py-1.5 text-label text-muted-foreground shadow-lg backdrop-blur transition-colors hover:text-foreground"
+      >
+        <span aria-hidden>←</span>
+        <span>Lab</span>
+        <span className="text-foreground">{scratch.title}</span>
+      </a>
+    </>
+  );
+}
+
 export function LabShell() {
   const slug = useHashSlug();
   const [stageWidth, setStageWidth] = React.useState<StageWidth>("app");
@@ -89,6 +120,8 @@ export function LabShell() {
   const stage = STAGE_WIDTHS[stageWidth];
 
   useScratchSetup(active);
+
+  if (active !== null && active.viewport === "window") return <WindowStage scratch={active} />;
 
   return (
     <div className="flex h-svh w-full bg-background text-foreground">
