@@ -184,15 +184,26 @@ describe("engine registry", () => {
     expect(warnSpy).toHaveBeenCalledWith("terminal engine-set listener failed:", failure);
   });
 
-  it("keeps the live list a snapshot a caller can walk more than once", async () => {
-    const { getOrCreateEngine, liveEngines } = await freshRegistry();
-    getOrCreateEngine("s1");
-    getOrCreateEngine("s2");
+  // A Map iterator escaping the module would read as empty the second time a
+  // caller walked it, and a live view would rewrite itself under a caller
+  // holding it. Membership has to move — both ways — between the capture and
+  // the assertion, or the case passes against exactly the shapes it forbids.
+  it("keeps the live list a snapshot that survives the engine set changing under it", async () => {
+    const { disposeEngine, getOrCreateEngine, liveEngines } = await freshRegistry();
+    const first = getOrCreateEngine("s1");
+    const second = getOrCreateEngine("s2");
 
-    const engines = liveEngines();
+    const captured = liveEngines();
+    expect(captured).toEqual([first, second]);
 
-    expect([...engines]).toHaveLength(2);
-    expect([...engines]).toHaveLength(2);
+    getOrCreateEngine("s3");
+    disposeEngine("s1");
+
+    expect(captured).toEqual([first, second]);
+    expect([...captured]).toEqual([first, second]);
+    // The registry itself did move — the captured list is stale, not merely
+    // equal to a set that never changed.
+    expect(liveEngines()).not.toEqual(captured);
   });
 
   // A rotation fires because a GPU device just died, which is the one moment
