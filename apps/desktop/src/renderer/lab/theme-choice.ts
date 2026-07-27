@@ -83,6 +83,12 @@ export function setLabTheme(theme: ThemeDefinition): void {
   }
   useThemeStore.setState({ global: theme, preview: null });
   applyTheme(theme);
+  // The arc canvas wins while it is armed, so it goes back on top of the theme
+  // that just landed. `applyTheme` writes the whole token set inline and the
+  // canvas now derives its own set from the gradient (arc/tokens.ts), so a
+  // theme pick would otherwise leave the window painted with a canvas whose
+  // card had reverted to the picked theme's ladder — half of each.
+  applyArcCanvas(loadArcCanvas());
 }
 
 /**
@@ -93,12 +99,8 @@ export function setLabTheme(theme: ThemeDefinition): void {
  *
  * The Canvas scratch's gradient is restored in the same breath, because it is
  * the same kind of thing — a standing lab choice with no JS-free first paint of
- * its own. Theme first: the canvas layers over the token set rather than
- * replacing it, and its ink is measured against pools the theme has no say in.
- *
- * Only `applyStoredLabTheme` re-asserts it, not `setLabTheme`. The canvas seam
- * lives in `lab.css` as `!important` rules (see arc/paint.ts), so switching
- * themes cannot clobber it and a re-assert there would be dead work.
+ * its own. Theme first, always: an armed canvas derives a full token set of its
+ * own and must land ON TOP of whatever the theme wrote.
  */
 export function applyStoredLabTheme(): void {
   applyTheme(labTheme());

@@ -16,6 +16,7 @@ import {
   arcCanvasBackground,
   arcInk,
   ARC_TUNING,
+  MAX_STOPS,
   clampArcCanvasState,
   DEFAULT_ARC_CANVAS,
   effectiveStopHexes,
@@ -141,18 +142,34 @@ describe("harmony", () => {
     });
   });
 
-  it("re-derives around a promoted stop without recoloring it", () => {
-    const two = addStop(DEFAULT_ARC_CANVAS);
-    const promoted = withPrimaryIndex(two, 1);
-    expect(promoted.primaryIndex).toBe(1);
-    expect(promoted.stops[1].hex).toBe(two.stops[1].hex);
-    expect(promoted.stops[0].hex).not.toBe(two.stops[0].hex);
-    // Positions are the one thing the user placed by hand — harmony never moves them.
-    expect(promoted.stops.map((stop) => stop.x)).toEqual(two.stops.map((stop) => stop.x));
+  it("promotes without touching a single color, because the sets are rotation-closed", () => {
+    for (const state of [addStop(DEFAULT_ARC_CANVAS), addStop(addStop(DEFAULT_ARC_CANVAS))]) {
+      const promoted = withPrimaryIndex(state, state.stops.length - 1);
+      expect(promoted.primaryIndex).toBe(state.stops.length - 1);
+      // Every hue offset a family uses is present from ANY of its members, so
+      // there is nothing to re-derive — and re-deriving would push each hex
+      // back through the gamut map and quantise it a little flatter.
+      expect(promoted.stops).toEqual(state.stops);
+    }
+  });
+
+  it("round-trips a promotion losslessly — A→B→A is the state it started in", () => {
+    const three = addStop(addStop(DEFAULT_ARC_CANVAS));
+    expect(withPrimaryIndex(withPrimaryIndex(three, 2), 0)).toEqual(three);
+  });
+
+  it("takes its stop ceiling from the harmony table, so the two cannot disagree", () => {
+    expect(MAX_STOPS).toBe(ARC_TUNING.harmony.length);
+    // Every count the ceiling admits has a row to look up; the failure this
+    // guards is an `undefined` row NaN-ing into `#NaNNaNNaN`.
+    for (let count = 1; count <= MAX_STOPS; count += 1) {
+      expect(ARC_TUNING.harmony[count - 1]).toHaveLength(count);
+    }
   });
 
   it("adds and removes stops within bounds, keeping the primary's own color", () => {
-    const { maxStops, newStop } = ARC_TUNING;
+    const maxStops = MAX_STOPS;
+    const { newStop } = ARC_TUNING;
     let state = DEFAULT_ARC_CANVAS;
     for (let i = 0; i < maxStops + 2; i += 1) state = addStop(state);
     expect(state.stops).toHaveLength(maxStops);
@@ -225,6 +242,24 @@ describe("clampArcCanvasState", () => {
       { ...valid, vibrancy: "loud" },
     ];
     for (const value of junk) expect(clampArcCanvasState(value)).toBeNull();
+  });
+
+  it("normalizes every hex it accepts into the one form that paints", () => {
+    for (const authored of ["e8652a", " #E8652A ", "#E8652A", "#e8652a"]) {
+      const guarded = clampArcCanvasState({
+        ...DEFAULT_ARC_CANVAS,
+        stops: [{ hex: authored, x: 0.5, y: 0.5 }],
+      });
+      // `isHexColor` accepts all of these; CSS, the `===` against the swatch
+      // presets, and the readout chips accept only the last.
+      expect(guarded?.stops[0].hex).toBe("#e8652a");
+    }
+    // Shorthand expands rather than reaching CSS as a form the pad's orb style
+    // and the chips print back differently.
+    expect(
+      clampArcCanvasState({ ...DEFAULT_ARC_CANVAS, stops: [{ hex: "#FA0", x: 0, y: 0 }] })?.stops[0]
+        .hex,
+    ).toBe("#ffaa00");
   });
 
   it("clamps ranges instead, because a stale number still says what was meant", () => {

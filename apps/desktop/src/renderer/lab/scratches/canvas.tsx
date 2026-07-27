@@ -10,11 +10,16 @@
  * unwound on the way out could only ever be judged against the mock column on
  * the right of this screen.
  *
- * The mock column is here for the tighter loop, not as the verdict: it is the
- * same two tokens the real sidebar paints its labels in, so a reading that
- * fails here fails there. The readout at the bottom left says which ink the
- * flip chose and the APCA Lc it survives the worst pool at, which is the number
- * the whole design turns on.
+ * The mock column is here for the tighter loop, not as the verdict. It paints
+ * in `--lab-canvas-ink`/`--lab-canvas-ink-muted`, which is what the seam in
+ * `lab.css` forces `--sidebar-foreground` and `--sidebar-accent-foreground` to
+ * while a canvas is armed — so a reading that fails here fails on the real
+ * sidebar. It does NOT model the rest of the window: arming a canvas now also
+ * derives a whole app token set from it (arc/tokens.ts), so the content card,
+ * its body copy and its helper text move too, and those are only visible on the
+ * App shell. The readout at the bottom left carries the numbers for both — the
+ * ink the flip chose against the worst pool, and the body/secondary scores on
+ * the derived card.
  *
  * Dormant until you touch something. With nothing stored — or right after a
  * reset — the canvas is OFF and the app's own backdrop shows through, because
@@ -36,14 +41,16 @@ import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
 
+import { apcaLc, type ThemeTokens } from "@volli/shared";
+
 import {
   addStop,
   arcCanvasBackground,
   arcGrainLayer,
   arcInk,
-  ARC_TUNING,
   DEFAULT_ARC_CANVAS,
   effectiveStopHexes,
+  MAX_STOPS,
   moveStop,
   removeStop,
   resolveArcMode,
@@ -56,6 +63,8 @@ import {
   type ArcStop,
 } from "../arc/model";
 import { applyArcCanvas, loadArcCanvas, saveArcCanvas } from "../arc/paint";
+import { deriveArcTokens } from "../arc/tokens";
+import { labTheme, setLabTheme } from "../theme-choice";
 
 export const title = "Canvas — Arc gradient editor";
 export const note = "A vivid 1–3 color canvas, and whether on-canvas nav survives it";
@@ -242,6 +251,12 @@ interface DragHandlers {
   onPointerCancel(event: React.PointerEvent<HTMLElement>): void;
 }
 
+/** Where inside the dragged element the pointer went down, from its centre. */
+interface GrabOffset {
+  dx: number;
+  dy: number;
+}
+
 /**
  * Press-and-drag on one element, with pointer capture so the gesture survives
  * the cursor leaving it — an orb dragged to the pad's edge must not be dropped
@@ -251,8 +266,14 @@ interface DragHandlers {
  * the value is set on press and every move, which is what a track wants
  * (clicking anywhere on it jumps there). Above 0 nothing moves until the
  * pointer has travelled that far, and a release before it does is reported as a
- * click instead — so pressing an orb selects it and dragging it moves it,
- * without a press ever snapping the orb's center under the cursor.
+ * click instead — so pressing an orb selects it and dragging it moves it.
+ *
+ * The grab offset handed to `onDrag` is what keeps that drag from starting with
+ * a jump. A press near an orb's edge is up to its radius away from its centre,
+ * so a handler that treats the pointer AS the centre teleports the orb by that
+ * much on the first frame past the slop — measured at 14px for a 6px move.
+ * Absolute controls (the slider's track, the dial's angle) are positioned by
+ * where the pointer IS and ignore it; anything being carried subtracts it.
  */
 function useDrag({
   slop = 0,
@@ -260,26 +281,40 @@ function useDrag({
   onClick,
 }: {
   slop?: number;
-  onDrag(event: React.PointerEvent<HTMLElement>): void;
+  onDrag(event: React.PointerEvent<HTMLElement>, grab: GrabOffset): void;
   onClick?(): void;
 }): DragHandlers {
-  const gesture = React.useRef<{ id: number; x: number; y: number; dragging: boolean } | null>(
-    null,
-  );
+  const gesture = React.useRef<{
+    id: number;
+    x: number;
+    y: number;
+    grab: GrabOffset;
+    dragging: boolean;
+  } | null>(null);
 
   return {
     onPointerDown(event) {
       event.preventDefault();
       event.currentTarget.setPointerCapture(event.pointerId);
+      // `preventDefault` above suppresses the native focus that a press would
+      // otherwise give, and these controls are keyboard-operable — without this
+      // the arrow keys only work after a Tab, never after a click.
+      event.currentTarget.focus();
+      const rect = event.currentTarget.getBoundingClientRect();
+      const grab = {
+        dx: event.clientX - (rect.left + rect.width / 2),
+        dy: event.clientY - (rect.top + rect.height / 2),
+      };
       gesture.current = {
         id: event.pointerId,
         x: event.clientX,
         y: event.clientY,
+        grab,
         dragging: false,
       };
       if (slop === 0) {
         gesture.current.dragging = true;
-        onDrag(event);
+        onDrag(event, grab);
       }
     },
     onPointerMove(event) {
@@ -289,7 +324,7 @@ function useDrag({
         if (Math.hypot(event.clientX - active.x, event.clientY - active.y) < slop) return;
         active.dragging = true;
       }
-      onDrag(event);
+      onDrag(event, active.grab);
     },
     onPointerUp(event) {
       const active = gesture.current;
@@ -366,14 +401,16 @@ function PadOrb({
 }) {
   const handlers = useDrag({
     slop: CLICK_SLOP,
-    onDrag(event) {
+    // The orb is CARRIED, so the grab offset comes back out of the pointer
+    // position — grab it near its edge and it stays gripped there.
+    onDrag(event, grab) {
       const pad = padRef.current;
       if (pad === null) return;
       const rect = pad.getBoundingClientRect();
       onMove(
         index,
-        (event.clientX - rect.left) / rect.width,
-        (event.clientY - rect.top) / rect.height,
+        (event.clientX - grab.dx - rect.left) / rect.width,
+        (event.clientY - grab.dy - rect.top) / rect.height,
       );
     },
     onClick: () => onPromote(index),
@@ -474,7 +511,9 @@ function StopCountRow({
           type="button"
           onClick={onRemove}
           disabled={count <= 1}
-          aria-label="Remove a color"
+          // Names which one goes: the last stop, unless the last stop is the
+          // primary — then the one below it, so "−" never recolors the window.
+          aria-label="Remove the last non-primary color"
           className={button}
         >
           <MinusIcon weight="fill" size={14} />
@@ -482,7 +521,7 @@ function StopCountRow({
         <button
           type="button"
           onClick={onAdd}
-          disabled={count >= ARC_TUNING.maxStops}
+          disabled={count >= MAX_STOPS}
           aria-label="Add a color"
           className={button}
         >
@@ -503,10 +542,25 @@ function SwatchRow({
   onPick(hex: string): void;
 }) {
   const normalized = active.toLowerCase();
-  const [page, setPage] = React.useState(() => {
-    const found = SWATCH_PAGES.findIndex((swatches) => swatches.includes(normalized));
-    return found === -1 ? 0 : found;
-  });
+  const [page, setPage] = React.useState(0);
+  const [shown, setShown] = React.useState<string | null>(null);
+
+  // The page FOLLOWS the primary instead of being seeded from it once. A
+  // one-shot initializer only fires on mount, so promoting a stop whose color
+  // lives on the other page left nine swatches with the ring on none of them —
+  // the control silently disagreeing with the canvas.
+  //
+  // Adjusted during render rather than in an effect (React's documented
+  // pattern for deriving state from changed props): an effect would paint one
+  // frame of the wrong page first. Keyed on the primary having CHANGED, so
+  // paging by hand still works — the chevrons move the page and it stays there
+  // until a different color becomes primary.
+  if (shown !== normalized) {
+    setShown(normalized);
+    const matching = SWATCH_PAGES.findIndex((swatches) => swatches.includes(normalized));
+    if (matching !== -1 && matching !== page) setPage(matching);
+  }
+
   const turn = (step: number) =>
     setPage((current) => (current + step + SWATCH_PAGES.length) % SWATCH_PAGES.length);
   const chevron = `flex size-5 shrink-0 items-center justify-center rounded-full transition-colors ${chrome.ghost}`;
@@ -616,6 +670,34 @@ function VibrancySlider({
   );
 }
 
+/** The shorter way round the circle between two bearings, in degrees. */
+function angularDistance(from: number, to: number): number {
+  return Math.abs(((from - to + 540) % 360) - 180);
+}
+
+/**
+ * A pointer bearing (0° up, clockwise positive) → the grain it sets.
+ *
+ * The dial's travel is a 270° arc, which leaves a 90° dead wedge below it —
+ * and `atan2`'s ±180° seam falls exactly in the MIDDLE of that wedge. Clamping
+ * the raw value was therefore not "pinning": a drag sweeping across the bottom
+ * crossed from +179° to −179°, and the two clamped to opposite ENDS, so grain
+ * snapped 1 → 0 under a pointer that had barely moved.
+ *
+ * Measuring the short way round instead makes the wedge behave the way the
+ * clamp was meant to: anything inside it takes whichever end of the arc it is
+ * actually nearer to, so the value stops at the end you dragged past and stays
+ * there.
+ */
+function grainForAngle(degrees: number): number {
+  if (degrees >= DIAL_MIN_ANGLE && degrees <= DIAL_MAX_ANGLE) {
+    return (degrees - DIAL_MIN_ANGLE) / (DIAL_MAX_ANGLE - DIAL_MIN_ANGLE);
+  }
+  return angularDistance(degrees, DIAL_MAX_ANGLE) <= angularDistance(degrees, DIAL_MIN_ANGLE)
+    ? 1
+    : 0;
+}
+
 function GrainDial({
   value,
   chrome,
@@ -627,14 +709,18 @@ function GrainDial({
 }) {
   const dialRef = React.useRef<HTMLDivElement>(null);
   const handlers = useDrag({
+    // A knob is grabbed, not tapped: with slop, a press that never moves does
+    // nothing at all rather than jumping the value to wherever it landed. That
+    // is the opposite of the slider above, where clicking anywhere on the track
+    // is the fastest way to set it — a track has a position under the pointer
+    // and a dial only has an angle around it.
     slop: CLICK_SLOP,
     onDrag(event) {
       const dial = dialRef.current;
       if (dial === null) return;
       const rect = dial.getBoundingClientRect();
       // atan2(dx, -dy): 0° is straight up and clockwise is positive, matching
-      // how the notch is drawn. Clamping rather than wrapping means dragging
-      // past either end pins there instead of jumping to the far end.
+      // how the notch is drawn.
       const degrees =
         (Math.atan2(
           event.clientX - (rect.left + rect.width / 2),
@@ -642,7 +728,7 @@ function GrainDial({
         ) *
           180) /
         Math.PI;
-      onChange(clamp01((degrees - DIAL_MIN_ANGLE) / (DIAL_MAX_ANGLE - DIAL_MIN_ANGLE)));
+      onChange(grainForAngle(degrees));
     },
   });
 
@@ -756,6 +842,7 @@ function Readout({
   effective,
   resolved,
   ink,
+  tokens,
   live,
   chrome,
   onReset,
@@ -764,10 +851,19 @@ function Readout({
   effective: readonly string[];
   resolved: ArcResolvedMode;
   ink: ArcInk;
+  tokens: ThemeTokens;
   live: boolean;
   chrome: CardChrome;
   onReset(): void;
 }) {
+  // The card's own numbers, measured off the derived set rather than claimed.
+  // The ink line above answers "can the sidebar be read ON the canvas"; this
+  // one answers "can the card be read on the surface the canvas derived", which
+  // is the question the owner put first — it is the surface stared at all day.
+  const surface = tokens["--background"];
+  const bodyLc = Math.abs(apcaLc(tokens["--foreground"], surface));
+  const mutedLc = Math.abs(apcaLc(tokens["--muted-foreground"], surface));
+
   return (
     <div className={`flex flex-col gap-2 rounded-2xl border p-3 backdrop-blur-xl ${chrome.card}`}>
       <div className="flex flex-wrap gap-1.5">
@@ -792,6 +888,11 @@ function Readout({
           </span>
         ))}
       </div>
+      <p className={`flex items-center gap-1.5 font-mono text-label ${chrome.mute}`}>
+        <span aria-hidden className="size-3 rounded-full" style={{ background: surface }} />
+        card {surface} · body Lc <span className="tabular-nums">{bodyLc.toFixed(1)}</span> · muted
+        Lc <span className="tabular-nums">{mutedLc.toFixed(1)}</span>
+      </p>
       <div className="flex items-center justify-between gap-3">
         <p className={`font-mono text-label ${chrome.mute}`}>
           {resolved} · ink {ink.ink} · worst Lc{" "}
@@ -846,6 +947,13 @@ export default function CanvasScratch() {
     setLive(false);
     saveArcCanvas(null);
     applyArcCanvas(null);
+    // Teardown only takes the SEAM down; the derived app tokens it wrote are
+    // still on the element, and paint.ts cannot put the lab's own theme back
+    // without importing this module's neighbour (see its note on the cycle).
+    // So the caller that genuinely turns a canvas off is the one that restores
+    // — otherwise Reset leaves the window wearing the gradient's ladder with no
+    // gradient behind it.
+    setLabTheme(labTheme());
   }, []);
 
   const systemDark = useSystemDark();
@@ -853,6 +961,7 @@ export default function CanvasScratch() {
   const gradient = React.useMemo(() => arcCanvasBackground(state, resolved), [state, resolved]);
   const effective = React.useMemo(() => effectiveStopHexes(state, resolved), [state, resolved]);
   const ink = React.useMemo(() => arcInk(state, resolved), [state, resolved]);
+  const tokens = React.useMemo(() => deriveArcTokens(state, resolved), [state, resolved]);
   const primary = state.stops[state.primaryIndex];
   // The card follows the canvas it is floating on, not the app's dark-only
   // theme — see CHROME. It tracks `resolved`, so `auto` moves it too.
@@ -918,6 +1027,7 @@ export default function CanvasScratch() {
           effective={effective}
           resolved={resolved}
           ink={ink}
+          tokens={tokens}
           live={live}
           chrome={chrome}
           onReset={reset}

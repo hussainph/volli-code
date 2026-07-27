@@ -9,19 +9,23 @@
  * why a `volli-lab:`-namespaced `localStorage` key is the right home for a
  * dev-tool preference in a folder the app cannot import.
  *
- * This module writes THREE custom properties and one attribute, and nothing
- * else. The actual overrides — the app's canvas layer, and the two sidebar
- * foregrounds that paint directly on it — are `!important` rules in `lab.css`
- * keyed off that attribute.
+ * Arming a canvas writes THREE things:
  *
- * Doing it that way rather than setting `--sidebar-foreground` inline is what
- * makes the seam reversible. `applyTheme` owns those tokens as inline props on
- * the same element, so an inline override would have to be un-written from a
- * snapshot taken before it — and any `applyTheme` call in between (picking a
- * theme, booting) would make that snapshot stale and restore the wrong colors.
- * A stylesheet rule that stops matching the moment the attribute goes has no
- * state to get wrong.
+ *  1. `data-lab-canvas` on the root, which arms the `lab.css` seam. That seam
+ *     owns the app's canvas layer and the two foregrounds painted directly ON
+ *     it — as `!important` rules, because `applyTheme` writes those tokens
+ *     inline and nothing weaker reaches them.
+ *  2. The three `--lab-canvas*` custom properties the seam reads.
+ *  3. The whole derived app token set, via `applyThemeTokens` (see tokens.ts).
+ *     This is what makes the opaque content card inherit the canvas instead of
+ *     staying stock dark under it, and what makes the light/dark ink flip reach
+ *     helper text inside the card rather than only the sidebar. It also
+ *     re-solves the veils, so a translucent sidebar keeps its rung.
+ *
+ * Only (1) and (2) are torn down again — see {@link applyArcCanvas}.
  */
+import { applyThemeTokens } from "@renderer/theme/apply";
+
 import {
   arcCanvasBackground,
   arcInk,
@@ -29,6 +33,7 @@ import {
   resolveArcMode,
   type ArcCanvasState,
 } from "./model";
+import { deriveArcTokens } from "./tokens";
 
 const STORAGE_KEY = "volli-lab:arc-canvas";
 
@@ -40,6 +45,13 @@ const INK_MUTED_VARIABLE = "--lab-canvas-ink-muted";
 const CANVAS_VARIABLES = [CANVAS_VARIABLE, INK_VARIABLE, INK_MUTED_VARIABLE];
 
 const SYSTEM_DARK_QUERY = "(prefers-color-scheme: dark)";
+
+/**
+ * The last canvas actually PUT ON THE DOCUMENT this session, or null once it
+ * has been taken down. See {@link watchSystemAppearance} for why this exists
+ * rather than a re-read of storage.
+ */
+let applied: ArcCanvasState | null = null;
 
 /** The stored canvas, or null when there is none — or when what is stored is no longer paintable. */
 export function loadArcCanvas(): ArcCanvasState | null {
@@ -70,16 +82,29 @@ function systemPrefersDark(): boolean {
 }
 
 /**
- * Paints `state` onto the document, or takes the whole seam back down when it
- * is null.
+ * Paints `state` onto the document, or takes the seam back down when it is
+ * null.
  *
  * The attribute moves LAST on the way up and FIRST on the way down, because it
  * is the switch: armed while `--lab-canvas-ink` did not exist, the seam's
  * `var()` would resolve to the guaranteed-invalid value and drop every sidebar
  * label to its inherited color for a frame.
+ *
+ * **Teardown does not restore the theme's tokens, and callers must.** Two
+ * reasons, and they point the same way. This module cannot import
+ * `theme-choice.ts` — that direction is the cycle (theme-choice → paint →
+ * model is the acyclic one) — and it could not choose correctly anyway, since
+ * which theme should come back is precisely what that module owns. Removing the
+ * derived properties instead of leaving them would be worse than useless: the
+ * common `applyArcCanvas(loadArcCanvas())` call sits one line after an
+ * `applyTheme`, so on a boot with nothing stored it would erase the theme that
+ * had just been applied. So the derived set is left to be overwritten, and the
+ * one caller that genuinely takes a canvas DOWN (the editor's Reset) re-applies
+ * the standing lab theme itself.
  */
 export function applyArcCanvas(state: ArcCanvasState | null): void {
   const root = document.documentElement;
+  applied = state;
 
   if (state === null) {
     root.removeAttribute(CANVAS_ATTRIBUTE);
@@ -89,6 +114,9 @@ export function applyArcCanvas(state: ArcCanvasState | null): void {
 
   const resolved = resolveArcMode(state.mode, systemPrefersDark());
   const { ink, inkMuted } = arcInk(state, resolved);
+  // The app set first: it is the widest write, and the seam's `!important`
+  // rules sit above it for the two tokens that paint on the canvas itself.
+  applyThemeTokens(deriveArcTokens(state, resolved));
   root.style.setProperty(CANVAS_VARIABLE, arcCanvasBackground(state, resolved));
   root.style.setProperty(INK_VARIABLE, ink);
   root.style.setProperty(INK_MUTED_VARIABLE, inkMuted);
@@ -104,16 +132,20 @@ let watching = false;
  * all imported eagerly (see scratch.ts), so a module-scope listener here would
  * install itself whether or not the canvas editor is the scratch on screen.
  *
- * It re-reads storage instead of closing over the last state it painted, so the
- * editor's live edits and this listener cannot end up disagreeing about what is
- * currently on the document.
+ * It repaints what is ON THE DOCUMENT, falling back to storage only before
+ * anything has been applied this session. Re-reading storage unconditionally
+ * looks like the safer choice and is the opposite: `saveArcCanvas` swallows a
+ * failed write on purpose (a full or blocked quota must not break the editor),
+ * so after one such failure storage holds a canvas OLDER than the one on
+ * screen — and a system appearance flip would then silently roll the user's
+ * edits back. The applied state is the only record that cannot be stale.
  */
 export function watchSystemAppearance(): void {
   if (watching) return;
   watching = true;
   window.matchMedia(SYSTEM_DARK_QUERY).addEventListener("change", () => {
-    const stored = loadArcCanvas();
-    if (stored === null || stored.mode !== "auto") return;
-    applyArcCanvas(stored);
+    const current = applied ?? loadArcCanvas();
+    if (current === null || current.mode !== "auto") return;
+    applyArcCanvas(current);
   });
 }

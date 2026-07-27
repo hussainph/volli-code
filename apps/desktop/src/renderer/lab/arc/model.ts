@@ -25,12 +25,11 @@ import { apcaLc, hexToOklch, isHexColor, oklchToHex, type Oklch } from "@volli/s
  * gradient is judged by eye and then adjusted, so the adjustment has to be a
  * one-line edit in a table rather than a hunt through four functions. Nothing
  * below is derived from anything else — if a value appears in a formula, it
- * appears here.
+ * appears here. The one deliberate exception lives just underneath: the stop
+ * ceiling is READ OFF this table rather than stated in it, because the two
+ * disagreeing is a silent crash rather than a wrong color.
  */
 export const ARC_TUNING = {
-  /** Pools past three stop reading as a palette and start reading as a smear. */
-  maxStops: 3,
-
   /**
    * Where each stop's hue sits relative to the primary's, in degrees, indexed
    * by (stop count − 1): one color, its complement, then a triad. Rotation
@@ -124,8 +123,13 @@ export const ARC_TUNING = {
     /** Only ever chosen over a light canvas, so it can afford to sit near-black — 0.24 measured ~8 Lc short there. */
     darkL: 0.19,
     darkC: 0.02,
-    /** How far the muted ink slides from the chosen ink toward the base fill's L. */
-    mutedTowardBase: 0.3,
+    /**
+     * How far the muted ink slides from the chosen ink toward the base fill's
+     * L. Measured against a vibrancy-1 light base fill (the binding surface):
+     * 0.3 → Lc 54.3, 0.22 → 58.3, 0.15 → clears 60 with the mute still a
+     * visible tier below the full ink.
+     */
+    mutedTowardBase: 0.15,
   },
 
   /** A stop dragged on the pad, as a fraction of the window. */
@@ -145,6 +149,19 @@ export const ARC_TUNING = {
   },
 } as const;
 
+/**
+ * The most stops a canvas can carry — the number of rows in the harmony table,
+ * never a number stated beside it.
+ *
+ * Pools past three stop reading as a palette and start reading as a smear, so
+ * the ceiling is a real design limit; it is DERIVED because the failure mode of
+ * the two disagreeing is not a wrong color. `harmonyOffsets` clamps its lookup
+ * to the ceiling, so a ceiling above the table's length reads past the end,
+ * arrives at `undefined`, and NaNs into `#NaNNaNNaN` — a blank scratch and no
+ * error. Adding a fourth harmony row is now the only edit that raises it.
+ */
+export const MAX_STOPS = ARC_TUNING.harmony.length;
+
 /** One color pool: what it is, and where in the window it is anchored. */
 export interface ArcStop {
   /** The AUTHORED color. The pad's orbs show this; the mode transform never touches it. */
@@ -161,7 +178,7 @@ export type ArcMode = "auto" | "light" | "dark";
 export type ArcResolvedMode = "light" | "dark";
 
 export interface ArcCanvasState {
-  /** One to {@link ARC_TUNING.maxStops}, in the order they were added. */
+  /** One to {@link MAX_STOPS}, in the order they were added. */
   stops: ArcStop[];
   /** The dominant pool: bigger, later-fading, and the one every other color is derived from. */
   primaryIndex: number;
@@ -202,7 +219,7 @@ function lerp(from: number, to: number, t: number): number {
 }
 
 function harmonyOffsets(count: number): readonly number[] {
-  return ARC_TUNING.harmony[clamp(count, 1, ARC_TUNING.maxStops) - 1];
+  return ARC_TUNING.harmony[clamp(count, 1, MAX_STOPS) - 1];
 }
 
 /** Resolves `auto`. Split from the `matchMedia` read so the rule itself stays testable. */
@@ -242,15 +259,22 @@ export function withPrimaryHex(state: ArcCanvasState, hex: string): ArcCanvasSta
 }
 
 /**
- * Promotes a stop to primary — the pad's click gesture.
+ * Promotes a stop to primary — the pad's click gesture. Moves the index and
+ * NOTHING else.
  *
- * The family is then re-derived around it, so the promoted stop keeps the color
- * it already had and everyone else moves. Promoting a stop and having it change
- * color under the finger would make the pad unusable.
+ * Re-deriving here would be worse than redundant, and the reason is a property
+ * of the harmony table: every row is closed under rotation. {0, 180} and
+ * {0, 120, 240} have the same multiset of pairwise hue differences seen from
+ * any member, so the set of colors a family produces does not depend on which
+ * of them is called the primary. Re-deriving therefore asks for the colors that
+ * are already on screen — but asks for them through `oklchToHex`, which
+ * gamut-maps, so a stop whose chroma had been given up to reach sRGB came back
+ * quantised a little flatter every time. Promote A→B→A drifted. Doing nothing
+ * is both the correct answer and a lossless one.
  */
 export function withPrimaryIndex(state: ArcCanvasState, index: number): ArcCanvasState {
   if (index === state.primaryIndex || index < 0 || index >= state.stops.length) return state;
-  return { ...state, primaryIndex: index, stops: deriveHarmony(state.stops, index) };
+  return { ...state, primaryIndex: index };
 }
 
 /** Moves one stop's anchor, clamped away from the very edges of the window. */
@@ -302,7 +326,7 @@ function freestDiagonal(stops: readonly ArcStop[], from: ArcStop): { x: number; 
  * set that no longer has a rule.
  */
 export function addStop(state: ArcCanvasState): ArcCanvasState {
-  if (state.stops.length >= ARC_TUNING.maxStops) return state;
+  if (state.stops.length >= MAX_STOPS) return state;
   const primary = state.stops[state.primaryIndex];
   const stops = [...state.stops, { ...freestDiagonal(state.stops, primary), hex: primary.hex }];
   return { ...state, stops: deriveHarmony(stops, state.primaryIndex) };
@@ -312,7 +336,10 @@ export function addStop(state: ArcCanvasState): ArcCanvasState {
  * Drops the highest-index stop that is not the primary.
  *
  * Never the primary itself: "−" means "one fewer color", and taking the one the
- * whole family is derived from would recolor the entire window instead.
+ * whole family is derived from would recolor the entire window instead. So when
+ * the primary happens to BE the last stop, the one below it goes and the middle
+ * of the list is what closes up — a deliberate asymmetry, and the only rule
+ * that keeps "−" from changing the color you are looking at.
  */
 export function removeStop(state: ArcCanvasState): ArcCanvasState {
   if (state.stops.length <= 1) return state;
@@ -334,18 +361,39 @@ export function removeStop(state: ArcCanvasState): ArcCanvasState {
  * turns muddy at a chroma a light one carries comfortably.
  */
 function effectiveOklch(hex: string, resolved: ArcResolvedMode, vibrancy: number): Oklch {
-  const light = resolved === "light";
   const { L, C, h } = hexToOklch(hex);
-  const { lightBand, darkBand, chroma } = ARC_TUNING;
-  const bandedL = light
-    ? clamp(L, lightBand.min, lightBand.max)
-    : clamp(L + darkBand.shift, darkBand.min, darkBand.max);
+  const { lightBand, darkBand } = ARC_TUNING;
+  const bandedL =
+    resolved === "light"
+      ? clamp(L, lightBand.min, lightBand.max)
+      : clamp(L + darkBand.shift, darkBand.min, darkBand.max);
+  return { L: bandedL, C: effectiveChroma(C, resolved, vibrancy), h };
+}
+
+/**
+ * How much of an authored chroma survives into the painted canvas — the
+ * vibrancy curve and the per-mode cap, on their own.
+ *
+ * Split out of {@link effectiveOklch} because the token derivation needs
+ * exactly this number and nothing else around it: `tokens.ts` seeds the app's
+ * generator with `oklch(L Ceff h)` at an arbitrary L, so it wants the canvas's
+ * saturation without the canvas's lightness band. Copying the expression there
+ * would put the same tuning in two files, and the whole point of `ARC_TUNING`
+ * is that there is one place to turn the dial.
+ */
+export function effectiveChroma(
+  authoredChroma: number,
+  resolved: ArcResolvedMode,
+  vibrancy: number,
+): number {
+  const { chroma } = ARC_TUNING;
+  const light = resolved === "light";
   const gain = lerp(
     chroma.floor,
     light ? chroma.lightGain : chroma.darkGain,
     clamp(vibrancy, 0, 1) ** chroma.vibrancyExponent,
   );
-  return { L: bandedL, C: Math.min(C * gain, light ? chroma.lightCap : chroma.darkCap), h };
+  return Math.min(authoredChroma * gain, light ? chroma.lightCap : chroma.darkCap);
 }
 
 function toHex({ L, C, h }: Oklch): string {
@@ -497,12 +545,34 @@ function isUnit(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
+/**
+ * `#RGB`, `rrggbb`, stray whitespace → the one form everything downstream can
+ * actually use: trimmed, `#`-prefixed, lowercase, six digits. Null when the
+ * input is not a color at all.
+ *
+ * Normalizing rather than merely accepting, because {@link isHexColor} is
+ * generous — it takes all of those — while the things that consume a stop's hex
+ * are not. ` #E8652A ` reaches CSS as an invalid `background` (the space breaks
+ * the value), the swatch row's `===` match against its lowercase presets fails,
+ * and the chips print it back at you in whatever shape it arrived. Widening the
+ * guard and narrowing the output is what makes the accepted set and the
+ * paintable set the same set.
+ */
+function normalizeHex(value: string): string | null {
+  const trimmed = value.trim();
+  if (!isHexColor(trimmed)) return null;
+  const digits = trimmed.replace("#", "").toLowerCase();
+  return `#${digits.length === 3 ? digits.replace(/./g, (digit) => digit + digit) : digits}`;
+}
+
 function clampStop(value: unknown): ArcStop | null {
   if (typeof value !== "object" || value === null) return null;
   const { hex, x, y } = value as Record<string, unknown>;
-  if (typeof hex !== "string" || !isHexColor(hex)) return null;
+  if (typeof hex !== "string") return null;
+  const normalized = normalizeHex(hex);
+  if (normalized === null) return null;
   if (!isUnit(x) || !isUnit(y)) return null;
-  return { hex, x: clamp(x, 0, 1), y: clamp(y, 0, 1) };
+  return { hex: normalized, x: clamp(x, 0, 1), y: clamp(y, 0, 1) };
 }
 
 /**
@@ -518,7 +588,7 @@ export function clampArcCanvasState(value: unknown): ArcCanvasState | null {
   if (typeof value !== "object" || value === null) return null;
   const { stops, primaryIndex, mode, vibrancy, grain } = value as Record<string, unknown>;
 
-  if (!Array.isArray(stops) || stops.length < 1 || stops.length > ARC_TUNING.maxStops) return null;
+  if (!Array.isArray(stops) || stops.length < 1 || stops.length > MAX_STOPS) return null;
   const parsed: ArcStop[] = [];
   for (const raw of stops) {
     const stop = clampStop(raw);
