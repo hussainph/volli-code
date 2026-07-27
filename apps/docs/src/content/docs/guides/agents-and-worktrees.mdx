@@ -1,0 +1,233 @@
+---
+title: Agents and worktrees
+description: How Volli isolates each ticket in its own git worktree, which coding agents it supports, and how sessions behave.
+sidebar:
+  label: Agents and worktrees
+---
+
+import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
+
+Every ticket that runs gets its own git worktree, its own branch, and its own
+terminal session. That isolation lets several agents work at the same time
+without stepping on each other or on your main checkout.
+
+## Worktrees
+
+When a ticket moves to Doing, Volli creates a git worktree for it:
+
+- **Branch:** `volli/<DISPLAY-ID>-<slug>`, for example `volli/VC-12-mcp-server`
+- **Directory:** `~/.volli/worktrees/<project-dirname>-<short-id>/<DISPLAY-ID>-<slug>/`
+
+Volli names the worktree once, at creation, and owns it from then on. Your
+main checkout (the folder you added as the project) is never modified by
+ticket automation.
+
+The worktree is branched from the ticket's base branch. Set that per ticket if
+the work should start somewhere other than your default branch.
+
+<Aside type="tip">
+  A ticket can opt out of worktrees entirely at creation time with
+  `--no-worktree`, in which case it runs against the main checkout. Use it for
+  work that can't be branched, and expect no isolation.
+</Aside>
+
+## Worktrees are never destroyed
+
+Volli retains worktrees. Archiving a ticket keeps its worktree, and nothing
+gets force-removed while it holds uncommitted changes. If you want the disk
+space back, remove the worktree yourself with git once the work has landed.
+
+You can inspect a ticket's worktree without opening the app:
+
+```sh
+volli worktree status VC-12
+volli worktree diff VC-12
+```
+
+`worktree diff` defaults to the merge-base range, which is what a pull request
+would show. Add `--working-tree` for uncommitted changes instead.
+
+## Change sets
+
+A ticket's change set is its commits plus its uncommitted changes, measured
+against its base branch. Volli reads it live from git rather than storing a
+copy, so it can't drift from what's on disk.
+
+## Supported agents
+
+Volli has first-class support for three harnesses:
+
+- **Claude Code**
+- **Codex**
+- **Opencode**
+
+Volli launches the CLI, so you install and authenticate it yourself. Volli
+doesn't bundle an agent or manage its credentials.
+
+Pick the harness per ticket. Volli remembers your last choice and offers it as
+the default on the next one.
+
+Agents are launched from command templates, so the list above isn't a hard
+limit. Claude Code, Codex, and Opencode are the ones Volli knows how to resume
+and monitor in detail.
+
+## Sessions
+
+A session is one continuous terminal interaction with its own scrollback and
+its own resume identity. A ticket can have several: a long-running agent, plus
+a shell you opened to check something.
+
+Sessions are real terminals. You can type into them, answer an agent's
+question, interrupt it, or take over entirely.
+
+**Volli doesn't unmount live terminals when you navigate.** Clicking another
+card or switching projects doesn't kill what is running. Session state lives
+in the model; the views are what come and go.
+
+### Scratch sessions
+
+A scratch session has no ticket. It runs in the project's main checkout and
+gives you a terminal without putting anything on the board. Volli still
+records it, so it shows up in your session list.
+
+## Warm park
+
+Volli parks an idle terminal instead of leaving it running: it sends SIGSTOP
+to the session's whole process tree, then SIGCONT the moment you need it
+again. This is a process-level freeze, not a ticket move. The board and the
+ticket's status stay exactly where you left them.
+
+A sweep checks every session once a minute. A session becomes a park
+candidate once it has been quiet for 5 minutes (no PTY output, no input),
+isn't the tab you're currently viewing, and isn't pinned with **Keep Awake**.
+From there it needs two consecutive quiet sweeps (its whole process tree
+under 0.5% CPU) before Volli parks it. It also skips any session whose
+process tree holds an open TCP listening socket, so a dev server waiting on
+a request never gets frozen mid-wait.
+
+<Aside type="note">
+  A parked session isn't silently abandoned. Every sweep, Volli briefly wakes
+  each parked session for about a second and checks for real work: new
+  output, CPU use, a spawned child process, or a fresh listening socket. Find
+  any, and the session stays awake; find none, and it goes back to sleep.
+</Aside>
+
+Waking is automatic: opening the tab, typing into it, or toggling **Keep
+Awake** all resume the process immediately, typically within about a tenth of
+a second. Nothing about the session is lost. Parking freezes the process
+where it stood; it doesn't end or resume the harness conversation. If you
+come back to a session that has sat idle for a while, a brief pause before it
+responds is the wake happening, not a hang.
+
+You can also control this by hand: right-click a session's tab for **Park
+Now**, **Wake**, and **Keep Awake** (or **Allow Parking** once pinned). A
+parked tab shows a moon icon in place of its status dot.
+
+## Resuming a session
+
+An ended agent session isn't gone. When its harness supports resuming, Volli
+can hand a fresh terminal the same conversation instead of starting from a
+blank prompt.
+
+**Resume** shows up wherever a resumable session appears: right-click a
+ticket card on the board for **Resume last session**, or right-click a past
+session in the ticket's session history for **Resume**. Volli only offers it
+when the session launched an agent, has ended (a live session has nothing to
+resume into), and its harness knows how to resume at all. An unrecognized or
+custom harness never shows the option.
+
+What gets sent depends on what Volli knows about that conversation:
+
+- If the session ran [`volli session link`](/reference/cli/#volli-session-link)
+  with the harness's own session ID, Volli resumes that exact conversation:
+  `claude --resume <id>`, `codex resume <id>`, or `opencode --session <id>`.
+- Otherwise it falls back to the harness's own "resume latest" command for
+  the ticket's directory: `claude --continue`, `codex resume --last`, or
+  `opencode --continue`.
+
+Resuming opens a new session tab. The session it resumed from stays in
+history exactly as it ended.
+
+## Closing a busy terminal
+
+Volli treats a terminal as busy when its shell has a live foreground process
+running: a coding agent, a build, anything past the bare prompt. An idle
+shell sitting at its prompt closes without asking.
+
+| Action | Prompt | Choices |
+| --- | --- | --- |
+| Closing a session tab | **Close terminal?** | Close Anyway / Cancel |
+| Archiving a ticket with a live session | **Archive ticket?** | Archive Anyway / Cancel |
+| Closing the window | **Close this window?** | Close Window / Cancel |
+| Quitting Volli (⌘Q) | **Quit Volli?** | Quit / Cancel |
+
+Every prompt names the running process and warns that proceeding will end it.
+There's no way to detach a foreground process from its terminal instead.
+Canceling leaves everything running untouched.
+
+This is a different guard from warm park above: a busy terminal has a live
+foreground process, so it is never park-eligible in the first place.
+
+None of these prompts touch the worktree itself. What ends is the terminal
+process; the ticket's branch, its commits, and its uncommitted changes on
+disk are exactly as they were (see
+[Worktrees are never destroyed](#worktrees-are-never-destroyed)).
+
+## How agents talk back
+
+Agents report to Volli through the bundled `volli` CLI, over a local Unix
+socket. Every session Volli opens has the command on `PATH` and the socket
+already configured.
+
+The two calls that drive the board:
+
+```sh
+volli session done --reason "Added the parser and tests"
+volli session blocked --reason "Needs a decision on the socket path"
+```
+
+`session done` hands the ticket back to you in Needs Review. `session
+blocked` flags that the agent has stopped and needs input.
+
+Volli doesn't use MCP for this. The CLI is a plain command any harness can
+call, which is what makes bring-your-own-agent work.
+
+See the [CLI reference](/reference/cli/) for the full surface.
+
+## Notifications
+
+Volli fires native macOS notifications on agent lifecycle events, so you don't
+have to watch the board to know when something wants you. Agents can also
+send their own:
+
+```sh
+volli notify -m "Tests are green, ready for review"
+```
+
+Two notifications come from Volli itself, not from an agent:
+
+- **Pull request merged**: the retention watch checks each ticket's open PR
+  about once a minute in the background and fires this, with the ticket's
+  title, the moment one lands.
+- **Volli CLI unavailable**: if the agent socket fails to start for this
+  launch, Volli notifies you right away instead of leaving every `volli`
+  command silently broken for the rest of the session.
+
+Volli has no notification settings of its own. Muting or filtering them
+means changing your Mac's notification permissions for the app, the same as
+any other app.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard
+    title="CLI reference"
+    href="/reference/cli/"
+    description="Every volli command, its flags, and the environment it reads."
+  />
+  <LinkCard
+    title="Troubleshooting"
+    href="/reference/troubleshooting/"
+    description="Agents that won't start, and worktrees that outlive their tickets."
+  />
+</CardGrid>

@@ -1,0 +1,75 @@
+---
+title: Volli Code
+description: Documentation for Volli Code, a macOS app that plans work on a kanban board and runs coding agents in isolated git worktrees.
+template: splash
+# Without this the tab reads "Volli Code | Volli Code", since Starlight appends
+# the site title to every page title and this page's title is the site's.
+head:
+  - tag: title
+    content: Volli Code documentation
+hero:
+  tagline: A ticket is a terminal workspace. Move one to Doing and a coding agent starts in its own git worktree.
+  actions:
+    - text: Install
+      link: /start/install/
+      icon: right-arrow
+    - text: Source on GitHub
+      link: https://github.com/hussainph/volli-code
+      icon: external
+      variant: minimal
+---
+
+import { CardGrid, LinkCard } from "@astrojs/starlight/components";
+
+Volli Code runs on macOS and keeps everything on your machine. Projects, tickets,
+and history live in a local SQLite database. There's no account and no sync.
+
+## Start here
+
+<CardGrid>
+  <LinkCard
+    title="Install"
+    href="/start/install/"
+    description="Download the app or build it from source."
+  />
+  <LinkCard
+    title="Quickstart"
+    href="/start/quickstart/"
+    description="Add a project, write a ticket, and watch an agent pick it up."
+  />
+  <LinkCard
+    title="Concepts"
+    href="/start/concepts/"
+    description="Tickets, sessions, worktrees, and the words Volli uses for them."
+  />
+  <LinkCard
+    title="CLI reference"
+    href="/reference/cli/"
+    description="Every volli command, for you and for the agents you run."
+  />
+</CardGrid>
+
+## What you can do
+
+<CardGrid>
+  <LinkCard
+    title="Plan on a board"
+    href="/guides/board/"
+    description="Five fixed columns track whose turn it is. Backlog and Todo are yours, Doing belongs to an agent, Needs Review comes back to you."
+  />
+  <LinkCard
+    title="Run agents in isolation"
+    href="/guides/agents-and-worktrees/"
+    description="Each ticket gets its own git worktree and branch, so two agents can work at once without touching each other's files or your main checkout."
+  />
+  <LinkCard
+    title="Let agents drive the board"
+    href="/reference/cli/"
+    description="Agents report progress through the bundled volli CLI over a local socket, which moves tickets between columns."
+  />
+  <LinkCard
+    title="Make it yours"
+    href="/guides/theming/"
+    description="Every color in the app derives from one seed. Pick a built-in theme, set a different one per project, or build your own."
+  />
+</CardGrid>

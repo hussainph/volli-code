@@ -1,0 +1,93 @@
+---
+title: Troubleshooting
+description: Fixes for CLI connection failures, native module errors, agents that won't start, and questions about where Volli keeps your data.
+sidebar:
+  label: Troubleshooting
+---
+
+## `volli` exits with code 3
+
+The CLI couldn't reach the app.
+
+1. Check Volli is running.
+2. Run `volli identify`. If it prints your project and ticket, the connection is
+   fine and the problem is elsewhere.
+3. Check `VOLLI_SOCKET` is set in the shell you're using.
+
+Volli sets `VOLLI_SOCKET` in the sessions it starts. A terminal you opened
+yourself, outside Volli, won't have it.
+
+## `volli: command not found`
+
+You're in a terminal Volli didn't start. The command is on `PATH` inside
+Volli's own sessions. Run it from a session in the app.
+
+## An agent doesn't start when a ticket reaches Doing
+
+Volli launches agent CLIs but doesn't install them. Check the harness is
+installed and works on its own:
+
+```sh
+claude --version
+```
+
+Then check it's authenticated. Volli doesn't manage agent credentials, so an
+agent that needs a login will fail to start without one.
+
+Confirm the ticket is using the harness you expect. The harness is set per
+ticket, and Volli defaults to whichever you used last.
+
+## `pnpm install` fails on node-pty or better-sqlite3
+
+Both are native addons and have to be compiled against Electron's ABI rather than
+your system Node's. Rebuild them:
+
+```sh
+pnpm -C apps/desktop run rebuild:native
+```
+
+Run this after any dependency change that touches either package.
+
+## The terminal ignores my app theme
+
+A named theme in your Ghostty config takes precedence over Volli's generated
+colors. This is expected.
+
+To let the terminal follow the app theme, remove the `theme` key from your
+Ghostty configuration and from Volli's terminal settings. See
+[Theming](/guides/theming/).
+
+## A shortcut does nothing
+
+Terminals claim keystrokes first, so `⌘K` and `Esc` don't reach the app while a
+terminal has focus. Click outside the terminal and try again.
+
+Single-letter shortcuts like `C` are suppressed whenever you're typing: in a
+text field, in the editor, or with a dialog open.
+
+## My worktree is still on disk after archiving
+
+Volli retains worktrees and won't force-remove one that has uncommitted
+changes. Nothing you've done is lost.
+
+Once the work is landed, remove it yourself:
+
+```sh
+git worktree remove ~/.volli/worktrees/<project>/<TICKET-ID>-<slug>
+```
+
+## Where Volli keeps things
+
+- **Database**: projects, tickets, labels, and event log, in a SQLite file in
+  Electron's `userData` directory
+- **Worktrees**: `~/.volli/worktrees/`
+- **Transcripts**: files on disk, indexed alongside the database
+
+Everything is local. Removing a project from Volli never touches the folder on
+disk.
+
+## Reporting a bug
+
+Volli is open source. Open an issue at
+[github.com/hussainph/volli-code](https://github.com/hussainph/volli-code/issues)
+and include what `volli identify` prints.

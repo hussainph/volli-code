@@ -1,0 +1,105 @@
+---
+/*
+ * Page title, plus a "Copy page" control.
+ *
+ * Borrowed from cursor.com/docs, which puts a copy affordance next to every
+ * title. People paste our pages into the agents they run, and a page copied
+ * out of the DOM arrives as soup: the sidebar, the contents rail, and the
+ * heading anchors all come with it. This copies the page's Markdown source
+ * instead, served by src/pages/[...slug].md.ts.
+ *
+ * The button only appears once its script has run, so a visitor without
+ * JavaScript never sees a control that can't work.
+ */
+// Starlight's own PAGE_TITLE_ID. Its constants module isn't a public export,
+// and the value is the skip-link target, so it has to stay in step by hand.
+const PAGE_TITLE_ID = "_top";
+
+const { entry, id } = Astro.locals.starlightRoute;
+// The home page's id is the empty string, which would address `/.md`.
+const slug = id.replace(/\/$/, "") || "index";
+const source = `${import.meta.env.BASE_URL.replace(/\/$/, "")}/${slug}.md`;
+---
+
+<div class="title-row">
+  <h1 id={PAGE_TITLE_ID}>{entry.data.title}</h1>
+  <copy-page data-source={source}>
+    <button type="button" hidden>
+      <span data-label>Copy page</span>
+    </button>
+  </copy-page>
+</div>
+
+<script>
+  class CopyPage extends HTMLElement {
+    constructor() {
+      super();
+      const button = this.querySelector("button");
+      const label = this.querySelector("[data-label]");
+      const source = this.dataset.source;
+      if (!button || !label || !source || !navigator.clipboard) return;
+
+      button.hidden = false;
+
+      let resetTimer: ReturnType<typeof setTimeout> | undefined;
+      const say = (text: string) => {
+        label.textContent = text;
+        clearTimeout(resetTimer);
+        resetTimer = setTimeout(() => {
+          label.textContent = "Copy page";
+        }, 2000);
+      };
+
+      button.addEventListener("click", async () => {
+        try {
+          const response = await fetch(source);
+          if (!response.ok) throw new Error(String(response.status));
+          await navigator.clipboard.writeText(await response.text());
+          say("Copied");
+        } catch {
+          say("Copy failed");
+        }
+      });
+    }
+  }
+  customElements.define("copy-page", CopyPage);
+</script>
+
+<style>
+  .title-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-top: 1rem;
+  }
+
+  h1 {
+    font-size: var(--sl-text-h1);
+    line-height: var(--sl-line-height-headings);
+    color: var(--sl-color-white);
+  }
+
+  button {
+    flex-shrink: 0;
+    padding: 0.25rem 0.625rem;
+    border: 1px solid var(--sl-color-hairline);
+    border-radius: var(--volli-radius, 4px);
+    background: transparent;
+    color: var(--sl-color-gray-3);
+    font: inherit;
+    font-size: var(--sl-text-xs);
+    cursor: pointer;
+  }
+
+  button:hover {
+    border-color: var(--sl-color-gray-4);
+    color: var(--sl-color-gray-1);
+  }
+
+  @media print {
+    button {
+      display: none;
+    }
+  }
+</style>

@@ -1,0 +1,33 @@
+---
+/*
+ * Starlight's footer, plus a link to /llms.txt.
+ *
+ * cursor.com/docs closes every page with a link to the whole tree as plain
+ * text, which is the address you hand an agent. Same reasoning here, and it's
+ * the only thing this override adds.
+ *
+ * The edit link, timestamp, and pagination come from Starlight's own Footer,
+ * rendered as-is. Rebuilding them here would mean importing three
+ * `virtual:starlight/components/*` modules, whose types are internal to the
+ * package.
+ */
+import Default from "@astrojs/starlight/components/Footer.astro";
+---
+
+<Default><slot /></Default>
+
+<a href="/llms.txt" class="llms print:hidden">All docs as plain text</a>
+
+<style>
+  .llms {
+    display: block;
+    margin-top: 1.5rem;
+    font-size: var(--sl-text-xs);
+    text-decoration: none;
+    color: var(--sl-color-gray-4);
+  }
+
+  .llms:hover {
+    color: var(--sl-color-gray-1);
+  }
+</style>

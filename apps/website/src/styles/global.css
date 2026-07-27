@@ -316,6 +316,18 @@ a:focus-visible {
   line-height: 1.65;
 }
 
+.body-copy a {
+  color: #ff966c;
+  text-decoration: underline;
+  text-decoration-color: rgb(255 150 108 / 38%);
+  text-underline-offset: 3px;
+  transition: text-decoration-color 180ms ease;
+}
+
+.body-copy a:hover {
+  text-decoration-color: #ff966c;
+}
+
 .cta-row {
   display: flex;
   padding-top: 34px;

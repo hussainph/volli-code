@@ -1,0 +1,100 @@
+---
+title: Theming
+description: Change Volli's colors globally or per project, build a theme from any seed color, and understand what the terminal does.
+sidebar:
+  label: Theming
+---
+
+import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
+
+Volli generates its entire color set from one seed color. Picking a seed
+derives backgrounds, text tiers, borders, and accents from it, keeping
+contrast in a legible range across every seed.
+
+Volli is dark only.
+
+## Built-in themes
+
+| Theme | Seed |
+| --- | --- |
+| Ember (default) | `#e8652a` |
+| Midnight | `#4c6ef5` |
+| Moss | `#3f9142` |
+| Iris | `#8b5cf6` |
+| Rose | `#f43f5e` |
+| Graphite | `#8a8a8a` |
+
+Graphite's seed has no hue, so it stays monochrome throughout, with a neutral
+chrome and a neutral accent.
+
+## Change the theme
+
+Go to **Settings → Appearance → App theme** and choose **Customize**. You can
+also reach the picker from the command palette with `⌘K`.
+
+Moving through the list previews each theme against the real app. Press `Enter`
+to keep the highlighted theme, or `Esc` to back out and restore what you had.
+![Volli's Settings screen on the Appearance page. The App theme picker lists
+six built-in themes (Ember, marked Current, then Midnight, Moss, Iris, Rose,
+and Graphite), each with a color swatch and Dark, Warm, Cool, or Neutral tags,
+above the Editor theme row.](../../../assets/screenshots/theme-picker.png)
+
+
+## Use a different theme for one project
+
+Each project can override the global theme, so you can tell projects apart at
+a glance when you keep several open.
+
+Open **Configure → Appearance → App theme** for that project and switch from
+**Inherit** to **Custom**. Custom opens on **Auto-tint**, which reseeds the theme
+from that project's own rail color, with no picking required. To choose
+explicitly, switch **Source** to **Pick a theme**.
+
+Click **Inherit** to remove the override instead of storing a second setting.
+The project then follows any future change you make globally.
+
+## Build a theme from your own color
+
+Choose **Customize** on any theme to open the editor. The **Color** row has a
+swatch that opens the macOS color picker and a hex field beside it. Both accept
+`#rgb` and `#rrggbb`.
+
+Dragging in the color picker repaints the app as you go. The hex field
+applies once what you type parses as a valid color, so a half-typed value
+leaves the app unchanged.
+
+## What the terminal does
+
+The terminal is the one surface that doesn't always follow your app theme,
+because Ghostty configuration takes precedence over Volli's.
+
+- **If you haven't set a Ghostty theme**, the terminal derives its background,
+  foreground, cursor, and ANSI red from your app theme, and repaints as soon as
+  you change it.
+- **If a Ghostty theme is set**, in your own `~/.config/ghostty/config` or
+  through Volli's terminal settings, that theme wins. The terminal keeps its
+  colors no matter which app theme you pick.
+
+Either way, twelve of the sixteen ANSI colors are a fixed set. Green, yellow, blue,
+magenta, cyan, white, and their bright variants have no equivalent in the app's
+palette, so Volli doesn't invent one.
+
+<Aside type="note">
+  Volli never edits your Ghostty config. It writes overlay files layered on top
+  of it, so anything you've configured yourself keeps working.
+</Aside>
+
+## Next steps
+
+<CardGrid>
+  <LinkCard
+    title="Keyboard shortcuts"
+    href="/reference/keyboard-shortcuts/"
+    description="The theme picker's keys, and every other shortcut in the app."
+  />
+  <LinkCard
+    title="Troubleshooting"
+    href="/reference/troubleshooting/"
+    description="What to do when the terminal ignores your app theme."
+  />
+</CardGrid>
