@@ -18,14 +18,23 @@ export type { GpuPressure };
 
 const tracker = createGpuPressureTracker({ liveEngines, onLiveEnginesChanged });
 
+// The registry outlives this module: Vite re-evaluates it on every renderer HMR
+// edit, and without a teardown each outgoing tracker keeps its registry
+// subscription and one per engine forever — so every edit adds another stale
+// reader recomputing over the live engine set on every gpu-state event.
+import.meta.hot?.dispose(() => {
+  tracker.dispose();
+});
+
 /** A reading taken right now. */
 export function currentGpuPressure(): GpuPressure {
   return tracker.current();
 }
 
 /**
- * Subscribe to pressure changes — a terminal opening or closing, or one
- * resolving its backend. Returns the unsubscribe function.
+ * Subscribe to pressure changes — a terminal opening or closing, one resolving
+ * its backend, or one losing and rebuilding its renderer after a GPU device
+ * loss. Returns the unsubscribe function.
  */
 export function subscribeGpuPressure(listener: (pressure: GpuPressure) => void): () => void {
   return tracker.subscribe(listener);

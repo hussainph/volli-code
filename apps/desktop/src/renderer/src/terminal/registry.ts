@@ -9,6 +9,8 @@
  * engine up here on mount and re-parents it into the freshly-rendered
  * container, instead of constructing a new one.
  */
+import { toastError } from "@renderer/lib/toast";
+
 import { getCurrentAppearance, onTerminalAppearanceChanged } from "./appearance";
 import { watchDevicePixelRatio } from "./device-pixel-ratio";
 import { onGpuSessionRotated } from "./gpu-session";
@@ -18,8 +20,24 @@ import type { TerminalEngine } from "./engine";
 const engines = new Map<string, TerminalEngine>();
 const membershipListeners = new Set<() => void>();
 
+/**
+ * Tell every watcher the engine set changed. Snapshot AND per-listener catch —
+ * the fan-outs below need only the catch (they walk engines, which nothing they
+ * call can add to or remove from mid-walk), while this one walks a listener set
+ * a listener can mutate: unsubscribing itself mid-walk would skip its
+ * neighbour. The catch is the shared part: a THROWING watcher must never abort
+ * the create/dispose it was merely observing — an exception escaping
+ * `disposeEngine` would strand the caller's remaining PTYs unkilled.
+ */
 function announceMembership(): void {
-  for (const listener of membershipListeners) listener();
+  const watchers = [...membershipListeners];
+  for (const listener of watchers) {
+    try {
+      listener();
+    } catch (error) {
+      console.warn("terminal engine-set listener failed:", error);
+    }
+  }
 }
 
 function fitLiveEngines(): void {
@@ -38,12 +56,58 @@ function fitLiveEngines(): void {
 // Module-lifetime subscriptions (the registry IS the app-wide engine list):
 // a GPU session rotation rebuilds every live renderer against the fresh
 // device, and a ghostty config edit re-themes them in place (issue #18).
+// Both fan-outs catch per engine, for `fitLiveEngines`' reason sharpened by
+// when they run. A rotation fires right after a GPU device died, and rebuilding
+// against a freshly-crashed device is exactly where `createRestty` throws — one
+// unlucky engine must not cost engines #2..N their renderer and leave them
+// permanently blank. Worse, the throw would escape `rotate()` into
+// gpu-session's `.catch()`, which drops it: silent, and the recovery never
+// completes.
 onGpuSessionRotated(() => {
-  for (const engine of engines.values()) engine.rebuildRenderer?.();
+  let failed = 0;
+  for (const engine of engines.values()) {
+    try {
+      engine.rebuildRenderer?.();
+    } catch (error) {
+      console.warn("terminal renderer rebuild failed:", error);
+      failed += 1;
+    }
+  }
+  // Isolating the failure is not the same as accepting it. gpu-session already
+  // toasted "Terminals recovered" on its way here, and an engine that threw is
+  // a permanently blank pane behind that reassurance — nothing retries a
+  // rebuild, so the user would sit staring at a dead rectangle with the news
+  // only in the devtools console (CLAUDE.md: surface every failed mutation).
+  // The shell itself is untouched in the main process, so reopening the
+  // terminal really does bring it back; say so, since nothing else will.
+  //
+  // ONE toast for the whole rotation: a GPU crash tends to take every renderer
+  // with it, and twenty stacked toasts would bury the one instruction.
+  if (failed > 0) {
+    const them = failed === 1 ? "it" : "them";
+    toastError(
+      `${failed} terminal${failed === 1 ? "" : "s"} couldn't be restored after the display driver reset. Close and reopen ${them} — the shell is still running.`,
+    );
+  }
 });
 onTerminalAppearanceChanged(() => {
   const appearance = getCurrentAppearance();
-  for (const engine of engines.values()) engine.applyAppearance?.(appearance);
+  for (const engine of engines.values()) {
+    try {
+      engine.applyAppearance?.(appearance);
+    } catch (error) {
+      // A font family that won't resolve, or a re-theme against a dead pane:
+      // the other terminals still deserve the user's new config.
+      //
+      // No toast, unlike the rebuild above. A pane that missed a re-theme is
+      // cosmetic and self-correcting — it keeps rendering with the previous
+      // appearance, stays fully usable, and picks the new one up on the next
+      // config edit or whenever its renderer is next created. There is nothing
+      // for the user to do about it, and a red toast over a font tweak would
+      // spend the attention the dead-pane case needs.
+      console.warn("terminal appearance reload failed:", error);
+    }
+  }
 });
 
 // restty's ResizeObserver catches CSS-size changes, but not a pure backing-scale
@@ -101,7 +165,12 @@ export function getEngine(sessionId: string): TerminalEngine | undefined {
 export function disposeEngine(sessionId: string): void {
   const engine = engines.get(sessionId);
   if (engine === undefined) return;
-  engine.dispose();
+  // Forget it BEFORE disposing. `dispose()` announces the released backend, and
+  // anything folding the registry into a reading (gpu-pressure) recomputes from
+  // `liveEngines()` on that event — with the dying engine still in the map it
+  // would publish a reading that counts a destroyed terminal as a live one,
+  // ahead of the corrected reading `announceMembership()` triggers below.
   engines.delete(sessionId);
+  engine.dispose();
   announceMembership();
 }
