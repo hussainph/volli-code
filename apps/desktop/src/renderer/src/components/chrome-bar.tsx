@@ -49,7 +49,12 @@ export function ChromeBar() {
     <>
       {/* relative: the command trigger centers itself against the band, not the
           flex row, so it stays put when the traffic-light spacer collapses. */}
-      <div className="app-region-drag relative flex h-10 shrink-0 items-center bg-rail">
+      {/* No fill (#74): the band was already painted in the backdrop's own
+          token, so it has nothing of its own to give up — it now sits on the
+          canvas layer like the rail does. The ⌘K pill keeps its
+          `bg-white/[0.06]`, which was already written as a material over a
+          fill rather than as a fill of its own. */}
+      <div className="app-region-drag relative flex h-10 shrink-0 items-center">
         {/* Clears the traffic lights (start x:10, group renders ≈60px wide,
           ending ≈70px) plus breathing room so the trigger doesn't crowd them.
           Fullscreen hides the lights, so the spacer collapses and the trigger

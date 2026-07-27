@@ -63,7 +63,13 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
                   style={{ backgroundColor: projectColor(project.colorIndex) }}
                   className={cn(
                     "group/tile relative flex size-9 items-center justify-center rounded-[10px] text-sm font-semibold text-white transition-transform duration-100 ease-out active:scale-[0.96]",
-                    isSelected && "ring-2 ring-foreground/90 ring-offset-[3px] ring-offset-rail",
+                    // `ring-offset-transparent`, NOT `ring-offset-rail` (#74):
+                    // the rail gave up its fill to sit on the canvas, so an
+                    // offset painted in `--rail` would punch an opaque dark
+                    // halo through the gradient around every selected tile.
+                    // The offset is a GAP, and a gap has to show what is behind.
+                    isSelected &&
+                      "ring-2 ring-foreground/90 ring-offset-[3px] ring-offset-transparent",
                   )}
                 >
                   {monogram(project.name)}

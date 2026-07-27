@@ -218,6 +218,27 @@ export function ThemeEditor({
         </div>
       ) : null}
 
+      {/* A Background row belongs here, above Grain — and it is deliberately
+          absent. The canvas layer it would drive is built and mounted; what it
+          is missing is a color model worth picking from. The derivation this
+          shipped with keeps every stop inside a legibility band solved from
+          `--muted-foreground` sitting at Lc 60 directly on the canvas, and that
+          band prices the feature down to nothing: Ember's stops come out
+          #160d0a / #0d0705 / #060303, so gradient and mesh are indistinguishable
+          from solid on a real window. A picker whose three options look the same
+          reads as broken, not as subtle, so there is no picker.
+
+          `canvas` defaults to `solid` (DEFAULT_THEME), which paints `var(--rail)`
+          — the exact fill the backdrop carried before the layer existed — so
+          nothing below is dead weight: it is dormant, and pixel-identical while
+          it sleeps. What wakes it is #74's own answer, which is a different
+          color model: authored 1–3 vivid colors with real chroma, multi-hue
+          allowed, legibility carried by the scrim rather than by a lightness
+          band, and an Arc-style light/dark foreground flip driven off the
+          canvas's luminance. That PR replaces `theme/canvas.ts`'s derivation and
+          re-exposes a control here — `withCanvas`/`CANVAS_KINDS` in
+          theme-editor-model.ts are the model it plugs back into. */}
+
       <SettingsRow
         label="Grain"
         htmlFor="theme-grain"

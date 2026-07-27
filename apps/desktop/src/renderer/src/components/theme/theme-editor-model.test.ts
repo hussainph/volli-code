@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { DEFAULT_THEME, slugify, type ThemeDefinition } from "@volli/shared";
+import { DEFAULT_THEME, deriveCanvasStops, slugify, type ThemeDefinition } from "@volli/shared";
 
 import {
   beginThemeDuplicate,
@@ -9,6 +9,7 @@ import {
   withAccent,
   withAccentUnlocked,
   withGrain,
+  withCanvas,
   withName,
   withSeed,
   swatchColor,
@@ -124,6 +125,33 @@ describe("editing a draft", () => {
     expect(withGrain(draft, 0.5).theme.grain).toBe(0.5);
     expect(withGrain(draft, 2).theme.grain).toBe(GRAIN_RANGE.max);
     expect(withGrain(draft, -1).theme.grain).toBe(GRAIN_RANGE.min);
+  });
+
+  it("derives a canvas's stops from the seed the moment it is picked", () => {
+    const gradient = withCanvas(draftOf(MINE), "gradient");
+
+    expect(gradient.theme.canvas).toEqual({
+      kind: "gradient",
+      stops: deriveCanvasStops({ seed: MINE.seed, kind: "gradient" }),
+    });
+    // Solid carries no stops at all — the type says so, and an unused array
+    // left lying in the file would be intent nobody authored.
+    expect(withCanvas(gradient, "solid").theme.canvas).toEqual({ kind: "solid" });
+  });
+
+  it("re-derives the canvas when the seed moves, so the row's promise stays true", () => {
+    // "Its colors come from the color above." Leaving the old stops behind
+    // would strand the canvas on the previous hue while every other surface
+    // repainted — the one thing the description tells the user cannot happen.
+    const gradient = withCanvas(draftOf(MINE), "gradient");
+    const reseeded = withSeed(gradient, "#3f9142")!;
+
+    expect(reseeded.theme.canvas).toEqual({
+      kind: "gradient",
+      stops: deriveCanvasStops({ seed: "#3f9142", kind: "gradient" }),
+    });
+    // A solid canvas has nothing to re-derive; it must not sprout stops.
+    expect(withSeed(draftOf(MINE), "#3f9142")!.theme.canvas).toEqual({ kind: "solid" });
   });
 
   it("renames without moving the slug, because the slug is the theme's identity", () => {

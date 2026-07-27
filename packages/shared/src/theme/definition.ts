@@ -15,13 +15,22 @@
 
 import type { ThemeTokenName } from "./tokens";
 
-/** The layer painted behind the framed content card (#31/#74). */
+/**
+ * The layer painted behind the whole window — the chrome band and the sidebar
+ * as well as the framed content card (#31/#74).
+ *
+ * `stops` is AUTHORED, not derived at render time: a theme file is a shareable
+ * artifact and what it says is what it holds (#71). Both halves of keeping that
+ * safe live elsewhere — the three-stop ceiling is enforced at the storage
+ * boundary by `isThemeCanvas`, and the legibility band is applied on READ, by
+ * `canvasLayerBackground`, which is the only path from a stop to the screen.
+ */
 export type ThemeCanvas =
-  /** Flat fill of the generated `--background`; the default. */
+  /** Flat fill of the generated `--rail`; the default, and pixel-identical to no canvas at all. */
   | { kind: "solid" }
-  /** A derived gradient, capped at three stops (Arc's own ceiling). */
+  /** A derived vertical ramp, capped at three stops (Arc's own ceiling). */
   | { kind: "gradient"; stops: string[] }
-  /** A derived mesh gradient. */
+  /** A derived multi-radial composite — same stops, no single axis. */
   | { kind: "mesh"; stops: string[] };
 
 /**
@@ -66,9 +75,20 @@ export interface ThemeDefinition {
  * VARIANCE: per-pixel luminance jitter in the gaps around antialiased glyph
  * edges. "Never above text" is not sufficient protection, because text drawn
  * over a textured backdrop still has noise in every counter and sidebearing.
- * The slider keeps the effect one click away for anyone who wants it, and its
- * natural home is over PR 5's canvas layer — a gradient or image behind the
- * framed card (#31) — rather than under body copy.
+ * The slider keeps the effect one click away for anyone who wants it, and grain
+ * stays exactly where it is: inside the framed card (#31), beneath page
+ * content.
+ *
+ * This comment used to say its natural home was over the canvas layer. That was
+ * wrong, and the canvas landing (#74) is what showed why. In the Arc
+ * arrangement the canvas is a full-window layer, so it is *precisely* the
+ * surface the sidebar's nav labels are drawn on — texturing it would put
+ * per-pixel jitter under the very text this finding is about, which makes it
+ * the worst place for grain rather than the best. The rule generalizes: the
+ * finding is about spatial FREQUENCY, not about tint. A gradient moving ~0.0012
+ * L across a 13px glyph is constant at the scale of an antialiased edge; noise
+ * changing pixel to pixel is not. Low-frequency lightness variation under text
+ * is safe; high-frequency variation is not.
  */
 export const DEFAULT_THEME: ThemeDefinition = {
   name: "Ember",
