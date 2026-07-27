@@ -19,6 +19,7 @@
  * Pure: JSON + shape guards only, no Node/DOM.
  */
 
+import { CANVAS_MAX_STOPS } from "./canvas";
 import { isHexColor } from "./color";
 import type { ThemeCanvas, ThemeDefinition } from "./definition";
 import { isShippedEditorThemeId, type ShippedEditorThemeId } from "./editor-themes";
@@ -130,12 +131,29 @@ export function isProjectThemeOverride(value: unknown): value is ProjectThemeOve
 
 // ── global theme (app_state kv) ──────────────────────────────────────────────
 
+/**
+ * The canvas, at the boundary — including the two things a `ThemeCanvas`'s type
+ * only *documents*: the three-stop ceiling, and that a stop is a color.
+ *
+ * Both are enforced here rather than downstream because the failure modes are
+ * asymmetric. A fourth stop has no position to sit at, so it would be dropped
+ * without anyone being told; an unparseable stop throws inside the color math
+ * and takes the render with it. A theme file is hand-editable and shareable, so
+ * neither is hypothetical — and a theme that fails this guard degrades to the
+ * shipped default, which is the honest answer to a file we cannot paint.
+ *
+ * What is NOT enforced here is the legibility band. That one is applied on
+ * READ, every time the layer paints (`theme/canvas.ts`), so it holds for
+ * whatever the file says without storage having to rewrite what it was given.
+ */
 function isThemeCanvas(value: unknown): value is ThemeCanvas {
   if (!isRecord(value)) return false;
   if (value["kind"] === "solid") return true;
   if (value["kind"] !== "gradient" && value["kind"] !== "mesh") return false;
   const stops = value["stops"];
-  return Array.isArray(stops) && stops.every((stop) => typeof stop === "string");
+  if (!Array.isArray(stops)) return false;
+  if (stops.length > CANVAS_MAX_STOPS) return false;
+  return stops.every((stop) => typeof stop === "string" && isHexColor(stop));
 }
 
 /** Whether every key is a known token name and every value a string — the sparse AUTHORED override map (#71). */
@@ -179,11 +197,11 @@ export function isThemeDefinition(value: unknown): value is ThemeDefinition {
  * exactly the resolved-token smuggling the field-by-field rebuild exists to
  * prevent, just one level down.
  *
- * `stops` is copied, not truncated. The three-stop ceiling in
- * {@link ThemeCanvas}'s comment describes what the generator DERIVES (both
- * variants are documented as derived, and only one names a number); silently
- * dropping a stop the user authored would be this module's own cardinal sin —
- * storage rewriting intent — so the cap belongs to the generator, not here.
+ * `stops` is copied, never edited. The three-stop ceiling is enforced by
+ * {@link isThemeCanvas} — a REJECTION, which the caller sees — rather than by
+ * truncating here, because storage silently dropping a stop the user authored
+ * would be this module's own cardinal sin. Same for the legibility band, which
+ * is applied on read: what a theme file says is what storage holds.
  */
 function persistedCanvas(canvas: ThemeCanvas): ThemeCanvas {
   return canvas.kind === "solid"

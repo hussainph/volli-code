@@ -32,6 +32,20 @@
  *      away and back. Asserted as a PAINT TRACE, because the failure was a
  *      bounce and a final-value check would grade a window that flickered as
  *      passing.
+ *   7. The CANVAS layer (#124) obeys the same two rules, in the one place they
+ *      can actually be seen: a hover-preview repaints the layer and every way
+ *      out of the picker puts it back exactly, and a scope change — and only a
+ *      scope change — crossfades it. The crossfade is a CSS animation on a
+ *      mounted-then-dropped element, so a unit test can reach the decision but
+ *      never the animation; both of the bugs these checks pin have already
+ *      shipped once in this subsystem (2c84925, 124abab).
+ *
+ *      These are driven through the THEME PICKER, against two seeded theme
+ *      files that carry a non-solid canvas — not through an Appearance control,
+ *      because there deliberately isn't one (see theme-editor.tsx: the
+ *      Background row is withdrawn until #74's vivid color model lands). A
+ *      theme file is the canvas's other, older interface (#71), so this is the
+ *      entry point that will still be here when the picker comes back.
  *
  * Like terminal-smoke.mjs / ghostty-config-smoke.mjs this is a MANUALLY-RUN
  * smoke (needs a display + the built app) — CI does not run it:
@@ -115,6 +129,15 @@ const PREVIEW_THEME = "Aardvark Blue";
  * attribute comes back OFF, so a generous margin costs one wait per run.
  */
 const SCOPE_TRANSITION_SETTLE_MS = 600;
+
+/**
+ * `--theme-scope-crossfade` at rest and under reduced motion (globals.css, and
+ * `SCOPE_REPAINT.crossfade` next to it). Read back off the RUNNING animation
+ * rather than off the custom property, so a canvas that armed against some
+ * timing of its own instead of the shared one fails here.
+ */
+const SCOPE_CROSSFADE_MS = 300;
+const REDUCED_MOTION_CROSSFADE_MS = 120;
 
 /** The user's own ghostty config — seeded, then asserted byte-identical at the end. */
 const USER_GHOSTTY_CONFIG = `# The user's own ghostty config. Volli must NEVER write this file.
@@ -350,6 +373,151 @@ const themeStateFor = (page, projectId) =>
     };
   }, projectId);
 
+// ---- the canvas layer (#124) ------------------------------------------------
+
+/**
+ * Two theme files that carry a non-solid canvas — the only way into the layer
+ * now that the Background row is withdrawn, and the way a shared or hand-edited
+ * theme reaches it anyway (#71: the file is the full interface).
+ *
+ * Both seed on **Ember's own `#e8652a`**, so every generated token is byte-equal
+ * to Ember's and the whole EMBER table above keeps describing the window while
+ * these are worn. The only thing that moves is the canvas, which is exactly the
+ * axis under test — a theme that also changed `--background` would let a canvas
+ * assertion pass on the strength of an unrelated repaint.
+ *
+ * The stops are `deriveCanvasStops({ seed: "#e8652a", kind })`'s own output,
+ * pinned in `packages/shared/src/theme/canvas.test.ts`. They are also the whole
+ * reason the picker is gone: three shades of near-black is what the legibility
+ * band can afford, and it is not a feature. The layer still has to WORK, which
+ * is what these checks are for.
+ */
+const CANVAS_THEMES = [
+  {
+    name: "Glow",
+    slug: "glow",
+    seed: "#e8652a",
+    accent: null,
+    grain: 0,
+    canvas: { kind: "gradient", stops: ["#160d0a", "#0d0705", "#060303"] },
+    overrides: {},
+    appearance: "dark",
+  },
+  {
+    name: "Haze",
+    slug: "haze",
+    seed: "#e8652a",
+    accent: null,
+    grain: 0,
+    canvas: { kind: "mesh", stops: ["#160d0a", "#0d0705", "#060302"] },
+    overrides: {},
+    appearance: "dark",
+  },
+];
+
+/**
+ * What the canvas layer is painting right now, as one comparable string.
+ *
+ * The FIRST child is the canvas in force; a fade mounts a second one over it.
+ * Both halves are read because a mesh's base fill lands in `background-color`
+ * while its pools land in the image list — and the restore assertions want
+ * "exactly what it was", not "close enough".
+ */
+const canvasPaint = (page) =>
+  page.evaluate(() => {
+    const layer = document.querySelector("[data-volli-canvas]")?.firstElementChild;
+    if (layer === null || layer === undefined) return "(no canvas)";
+    const computed = getComputedStyle(layer);
+    return `${computed.backgroundImage} on ${computed.backgroundColor}`;
+  });
+
+/** Polls the canvas until `matches` holds, returning whatever it settled on. */
+async function waitForCanvasPaint(page, matches, { timeout = 2500 } = {}) {
+  await waitUntil("the canvas layer to repaint", async () => matches(await canvasPaint(page)), {
+    timeout,
+  }).catch(() => {});
+  return canvasPaint(page);
+}
+
+/** A canvas paint value, trimmed to something a one-line check detail can carry. */
+const short = (paint) => (paint.length > 72 ? `${paint.slice(0, 69)}…` : paint);
+
+/**
+ * Arms an in-page recorder for the canvas crossfade, from now until it is read.
+ *
+ * `animationstart`, not a poll of `getAnimations()`: the outgoing layer is
+ * mounted and dropped inside ~340ms, so sampling for it is racing a window the
+ * runner cannot see the start of, and a miss would read as "no crossfade". The
+ * event fires exactly once per animation that really begins, and the duration is
+ * read off the RUNNING animation at that instant — the only place
+ * `--theme-scope-crossfade` has been resolved, and therefore the only honest way
+ * to check the reduced-motion collapse.
+ *
+ * Listening on the canvas ROOT rather than the document: it contains the two
+ * layers and nothing else, so no unrelated animation can land in the trace.
+ */
+async function watchCanvasFades(page) {
+  await page.evaluate(() => {
+    const root = document.querySelector("[data-volli-canvas]");
+    if (window.volliCanvasFades !== undefined) {
+      root.removeEventListener("animationstart", window.volliCanvasFades.handler);
+    }
+    const fades = [];
+    const handler = (event) => {
+      const running = event.target
+        .getAnimations()
+        .find((animation) => animation.animationName === event.animationName);
+      fades.push({
+        name: event.animationName,
+        // The fade must be on the OUTGOING layer. One armed on the incoming one
+        // would fade the new canvas out and leave the window on the old.
+        outgoing: event.target.hasAttribute("data-volli-canvas-outgoing"),
+        duration: running?.effect.getTiming().duration ?? null,
+        playState: running?.playState ?? "(gone)",
+      });
+    };
+    root.addEventListener("animationstart", handler);
+    window.volliCanvasFades = { handler, fades };
+  });
+}
+
+/** Every canvas animation that has started since {@link watchCanvasFades}, oldest first. */
+const readCanvasFades = (page) => page.evaluate(() => window.volliCanvasFades?.fades ?? []);
+
+/**
+ * The GLOBAL app-theme picker on Settings → Appearance. Scoped by test id
+ * because this pane mounts the editor and terminal combo boxes too, and their
+ * lists carry options of the same name.
+ */
+const appearancePicker = (page) => page.getByTestId("appearance-theme-picker");
+
+/** Settings → Appearance, with the app-theme picker's rows up and hittable. */
+async function openThemePicker(page) {
+  await openAppearanceSettings(page);
+  await appearancePicker(page).waitFor();
+  await appearancePicker(page).getByRole("option", { name: /Glow/ }).first().waitFor();
+}
+
+/**
+ * Hovers a theme row and waits for the CANVAS to repaint under it, re-entering
+ * the row if the first move didn't take — {@link hoverThemeRow}'s shape, read
+ * against the canvas layer instead of a token, for the same measured reason.
+ *
+ * Leaving the list before a retry is load-bearing twice over here: cmdk selects
+ * on crossing into a row and no-ops on an unchanged value, so a row the previous
+ * check left highlighted would swallow the hover outright.
+ */
+async function hoverThemeRowForCanvas(page, name, before) {
+  let painted = before;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (attempt > 0) await page.mouse.move(8, 8);
+    await appearancePicker(page).getByRole("option", { name }).first().hover();
+    painted = await waitForCanvasPaint(page, (value) => value !== before, { timeout: 1500 });
+    if (painted !== before) return painted;
+  }
+  return painted;
+}
+
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("volli-theming-smoke-");
 const home = join(scratch, "home");
 const ghosttyDir = join(home, ".config", "ghostty");
@@ -359,6 +527,18 @@ await fs.writeFile(userConfigPath, USER_GHOSTTY_CONFIG);
 const userConfigBefore = await fs.readFile(userConfigPath, "utf8");
 
 const overlayPath = join(userDataDir, "volli", "ghostty", "config");
+
+// The canvas themes go in BEFORE the first launch, one JSON file each under
+// `<userData>/volli/themes/<slug>.json` — the layout `customThemePath()` owns.
+// Dropped rather than saved through the app on purpose: a hand-placed theme
+// file is a supported way to get one (#71), so this also proves the listing
+// picks up a canvas it never wrote.
+const themesDir = join(userDataDir, "volli", "themes");
+await fs.mkdir(themesDir, { recursive: true });
+for (const theme of CANVAS_THEMES) {
+  await fs.writeFile(join(themesDir, `${theme.slug}.json`), `${JSON.stringify(theme, null, 2)}\n`);
+}
+
 const { check, attempt, summarize } = createRunner();
 
 console.log("scratch:", scratch, "\n");
@@ -834,6 +1014,153 @@ cursor-style = block
     return {
       ok: applied === EMBER["--background"] && stored.override === null,
       detail: `--background=${applied} override=${JSON.stringify(stored.override)}`,
+    };
+  });
+
+  // ---- 9. the canvas layer (#124) ------------------------------------------
+  // Beta is selected and inherits the global theme (Ember, from check 21), so
+  // the picker opened here changes the look the whole app is currently wearing.
+  // Glow and Haze seed on Ember's own color, so a preview of either moves the
+  // canvas and NOTHING else — which is what makes these assertions about the
+  // layer rather than about a repaint in general.
+  await openThemePicker(page);
+  const committedCanvas = await canvasPaint(page);
+
+  await attempt(
+    23,
+    "a theme hover-preview repaints the canvas, and Escape puts it back",
+    async () => {
+      const previewed = await hoverThemeRowForCanvas(page, /Glow/, committedCanvas);
+      // Pressed on the picker's own search field, which is where focus already is
+      // — the same keystroke check 5 makes, graded against the canvas instead of
+      // the token set.
+      await page.getByRole("combobox", { name: "Themes" }).press("Escape");
+      const restored = await waitForCanvasPaint(page, (value) => value === committedCanvas);
+      return {
+        ok:
+          previewed !== committedCanvas &&
+          previewed.includes("linear-gradient") &&
+          restored === committedCanvas,
+        detail: `preview=${short(previewed)} restored=${restored === committedCanvas ? "exactly" : short(restored)}`,
+      };
+    },
+  );
+
+  await attempt(24, "the pointer leaving the picker ends a canvas preview", async () => {
+    // Haze, not the Glow of check 23: Escape leaves that row SELECTED and cmdk
+    // no-ops on an unchanged value, so re-hovering it would preview nothing and
+    // this check would grade a revert that never had anything to revert. Haze is
+    // also a mesh, so the OTHER geometry gets painted on a real window at least
+    // once — a `background-color` plus three radial layers, which is the shape
+    // the two-layer crossfade exists for.
+    const previewed = await hoverThemeRowForCanvas(page, /Haze/, committedCanvas);
+    // A hover has no Escape: walking away IS the "never mind". (8, 8) is outside
+    // the Command root, so this is the real pointerleave and not a click.
+    await page.mouse.move(8, 8);
+    const restored = await waitForCanvasPaint(page, (value) => value === committedCanvas);
+    // Re-entering the SAME row must preview again. cmdk no-ops on an unchanged
+    // value, so a row left highlighted swallows every later hover over it —
+    // the bug 2c84925 fixed, now watched on the canvas layer too.
+    const reentered = await hoverThemeRowForCanvas(page, /Haze/, committedCanvas);
+    await page.mouse.move(8, 8);
+    const restoredTwice = await waitForCanvasPaint(page, (value) => value === committedCanvas);
+    return {
+      ok:
+        previewed !== committedCanvas &&
+        previewed.includes("radial-gradient") &&
+        restored === committedCanvas &&
+        reentered === previewed &&
+        restoredTwice === committedCanvas,
+      detail: `preview=${short(previewed)} left=${restored === committedCanvas ? "exactly" : short(restored)} reentry=${reentered === previewed ? "previewed again" : short(reentered)}`,
+    };
+  });
+
+  await attempt(25, "committing a canvas theme repaints instantly, with no crossfade", async () => {
+    // The negative half of #124's behaviour 16, and the one that matters most:
+    // a canvas that faded on every pick would make the picker feel like a queue
+    // of stale frames, and nothing else in the suite would notice. It is also
+    // the setup for 26-27 — the GLOBAL theme has to carry a gradient, or both
+    // scopes below resolve to `var(--rail)`, no canvas repaints, and those two
+    // checks watch for a fade that correctly never happens.
+    await watchCanvasFades(page);
+    await watchScopeTransition(page);
+    await appearancePicker(page).getByRole("option", { name: /Glow/ }).first().click();
+    const painted = await waitForCanvasPaint(page, (value) => value.includes("linear-gradient"));
+    await sleep(SCOPE_TRANSITION_SETTLE_MS);
+    const fades = await readCanvasFades(page);
+    const armed = await readScopeTransition(page);
+    // The WRITE, not the paint: the paint is optimistic and is already on
+    // screen, so moving on from a canvas poll would leave check 26 switching
+    // scopes with a theme write still in flight — a race it has no business
+    // testing (and one this check has already been caught by once).
+    const globalSlug = await waitUntil("the global theme to change", async () => {
+      const state = await themeStateFor(page, projectBId);
+      return state.globalSlug === "glow" ? state.globalSlug : null;
+    }).catch(() => null);
+    return {
+      ok:
+        painted.includes("linear-gradient") &&
+        fades.length === 0 &&
+        !armed.seen &&
+        globalSlug === "glow",
+      detail: `painted=${short(painted)} fades=${JSON.stringify(fades)} crossfadeArmed=${armed.seen} global=${globalSlug}`,
+    };
+  });
+
+  await attempt(26, "a project-scope change crossfades the canvas layer", async () => {
+    await watchCanvasFades(page);
+    await watchScopeTransition(page);
+    // The paint trace is diagnosis, not assertion: "no crossfade" and "no scope
+    // change to crossfade" look identical from the outside, and only the trace
+    // tells them apart if this ever misses.
+    await watchBackgroundPaints(page);
+    // Alpha overrides to Midnight, which carries no canvas, so the layer goes
+    // from the committed gradient to the flat fill — precisely the change
+    // `background-image` cannot interpolate, and the whole reason two layers
+    // are stacked rather than one whose `background` moves.
+    await selectProject(page, PROJECT_A);
+    const applied = await waitForToken(page, "--background", MIDNIGHT["--background"]);
+    await sleep(SCOPE_TRANSITION_SETTLE_MS);
+    const fades = await readCanvasFades(page);
+    const armed = await readScopeTransition(page);
+    const fade = fades[0] ?? {};
+    return {
+      ok:
+        applied === MIDNIGHT["--background"] &&
+        armed.seen &&
+        fades.length === 1 &&
+        fade.name === "volli-canvas-fade" &&
+        fade.outgoing === true &&
+        fade.duration === SCOPE_CROSSFADE_MS &&
+        fade.playState === "running",
+      detail: `--background=${applied} crossfadeArmed=${armed.seen} fades=${JSON.stringify(fades)} paints=${JSON.stringify(await readBackgroundPaints(page))}`,
+    };
+  });
+
+  await attempt(27, "reduced motion collapses the crossfade to its short ease", async () => {
+    // HIG: nothing here translates or scales, so the accessible treatment is the
+    // shortest honest ease rather than a hard cut. The media query moves ONE
+    // custom property, and the canvas reads it through the same animation — so
+    // if this number is 300 the canvas has a duration of its own somewhere.
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    // Reported for diagnosis only — Chromium serializes it as `.12s`, and the
+    // assertion below is on the resolved animation, which is the number that
+    // actually governs what is on screen.
+    const collapsed = await page.evaluate(() =>
+      getComputedStyle(document.documentElement).getPropertyValue("--theme-scope-crossfade").trim(),
+    );
+    await watchCanvasFades(page);
+    await selectProject(page, PROJECT_B);
+    const applied = await waitForToken(page, "--background", EMBER["--background"]);
+    await sleep(SCOPE_TRANSITION_SETTLE_MS);
+    const fades = await readCanvasFades(page);
+    const fade = fades[0] ?? {};
+    return {
+      ok:
+        applied === EMBER["--background"] &&
+        fades.length === 1 &&
+        fade.duration === REDUCED_MOTION_CROSSFADE_MS,
+      detail: `--theme-scope-crossfade=${collapsed || "(unset)"} --background=${applied} fades=${JSON.stringify(fades)}`,
     };
   });
 } catch (error) {

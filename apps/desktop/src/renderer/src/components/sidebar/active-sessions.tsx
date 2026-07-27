@@ -117,7 +117,11 @@ function SessionRow({
         size="lg"
         isActive={active}
         onClick={onActivate}
-        className="h-auto min-h-10 items-start gap-2 py-2 [&:hover_.session-row-meta]:text-sidebar-accent-foreground [&[data-active=true]_.session-row-meta]:text-sidebar-accent-foreground"
+        // Every dimmed thing in the row is promoted together on hover/selected
+        // (#74's vibrancy rule). It is not decoration: the row's fill is a VEIL
+        // now, so at the canvas band's ceiling this text measures Lc 58.3
+        // un-promoted — under the floor — and 88.2 promoted.
+        className="h-auto min-h-10 items-start gap-2 py-2 [&:hover_.session-row-dim]:text-sidebar-accent-foreground [&[data-active=true]_.session-row-dim]:text-sidebar-accent-foreground"
       >
         <span
           aria-hidden
@@ -136,7 +140,7 @@ function SessionRow({
           <span className="flex min-w-0 items-center gap-1">
             <span
               className={cn(
-                "truncate text-xs",
+                "session-row-dim truncate text-xs transition-colors",
                 row.lastRun !== null ? "text-muted-foreground" : "text-sidebar-foreground",
               )}
             >
@@ -145,11 +149,11 @@ function SessionRow({
             {row.lastRun?.resumable ? (
               <ArrowClockwiseIcon
                 aria-label="Resumable"
-                className="size-3 shrink-0 text-muted-foreground/70"
+                className="session-row-dim size-3 shrink-0 text-muted-foreground/70 transition-colors"
               />
             ) : null}
           </span>
-          <span className="session-row-meta flex min-w-0 items-center gap-1 text-label text-muted-foreground transition-colors">
+          <span className="session-row-dim flex min-w-0 items-center gap-1 text-label text-muted-foreground transition-colors">
             <span className="shrink-0 font-mono">
               {displayTicketId(project.ticketPrefix, row.ticket.ticketNumber)}
             </span>

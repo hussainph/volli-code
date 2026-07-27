@@ -98,6 +98,7 @@ export default defineConfig({
         "src/editor/shiki-monaco.ts",
         "src/editor/text-position.ts",
         "src/theme/apply.ts",
+        "src/theme/canvas-layer.ts",
         "src/theme/catalog.ts",
         "src/theme/grain.ts",
         "src/theme/scope-transition.ts",

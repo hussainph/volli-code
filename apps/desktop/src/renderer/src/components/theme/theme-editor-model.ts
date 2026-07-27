@@ -15,12 +15,13 @@
  */
 
 import {
+  deriveCanvasStops,
   isHexColor as isParseableHexColor,
   isBuiltinThemeSlug,
   persistedTheme,
   slugify,
 } from "@volli/shared";
-import type { ThemeDefinition } from "@volli/shared";
+import type { ThemeCanvas, ThemeDefinition } from "@volli/shared";
 
 export { isHexColor } from "@volli/shared";
 
@@ -83,7 +84,43 @@ function edited(draft: ThemeDraft, theme: ThemeDefinition): ThemeDraft {
  * or crash the render.
  */
 export function withSeed(draft: ThemeDraft, seed: string): ThemeDraft | null {
-  return isEditorHexColor(seed) ? edited(draft, { ...draft.theme, seed }) : null;
+  if (!isEditorHexColor(seed)) return null;
+  // The canvas follows the seed. This one is NOT dormant even with no Background
+  // row (see theme-editor.tsx): a theme file may already carry a gradient (#71
+  // — the file is the full interface), and left alone it would stay on the
+  // previous hue while every other surface repainted, which is the app sitting
+  // on someone else's wallpaper.
+  return edited(draft, { ...draft.theme, seed, canvas: derivedCanvas(draft.theme.canvas, seed) });
+}
+
+/** Every Background a theme can carry, in the order a picker lists them. */
+export const CANVAS_KINDS = ["solid", "gradient", "mesh"] as const;
+
+/** One Background option. */
+export type CanvasKind = (typeof CANVAS_KINDS)[number];
+
+/** A canvas of `kind`, with its stops derived from `seed`. Solid carries none. */
+export function canvasOf(kind: CanvasKind, seed: string): ThemeCanvas {
+  return kind === "solid" ? { kind } : { kind, stops: deriveCanvasStops({ seed, kind }) };
+}
+
+/** The same canvas re-derived against a new seed — a no-op for solid. */
+function derivedCanvas(canvas: ThemeCanvas, seed: string): ThemeCanvas {
+  return canvasOf(canvas.kind, seed);
+}
+
+/**
+ * A new Background. The stops are derived here rather than at render time
+ * because they are AUTHORED (#71): what the file holds is what the user
+ * chose, and the band that keeps it legible is applied on read instead.
+ *
+ * No caller in the app today — the Background row is deliberately unexposed
+ * until #74's vivid color model lands (theme-editor.tsx says why). Kept, and
+ * kept under test, because that PR re-exposes a control against exactly this
+ * signature; it is the derivation underneath that is being replaced, not this.
+ */
+export function withCanvas(draft: ThemeDraft, kind: CanvasKind): ThemeDraft {
+  return edited(draft, { ...draft.theme, canvas: canvasOf(kind, draft.theme.seed) });
 }
 
 /** A new unlocked accent, or `null` while the entry isn't a color yet. */

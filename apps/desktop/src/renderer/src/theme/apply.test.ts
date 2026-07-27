@@ -2,12 +2,16 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   DEFAULT_THEME,
   EMPTY_PROJECT_THEME_OVERRIDE,
+  deriveCanvasStops,
   generateThemeTokens,
+  generateVeilTokens,
   THEME_TOKEN_NAMES,
+  THEME_VEIL_TOKEN_NAMES,
   type ThemeDefinition,
 } from "@volli/shared";
 
 import { applyThemeTokens, resolveActiveTheme } from "./apply";
+import { canvasBackground } from "./canvas-layer";
 
 /**
  * The renderer test project runs under vitest's default `node` environment, so
@@ -41,16 +45,28 @@ describe("applyThemeTokens", () => {
 
     applyThemeTokens(tokens, root);
 
-    expect(written.size).toBe(THEME_TOKEN_NAMES.length);
     for (const name of THEME_TOKEN_NAMES) expect(written.get(name)).toBe(tokens[name]);
+  });
+
+  it("writes the veils alongside the tokens they are solved from", () => {
+    // A veil is generated from the token set, so it has to move WITH it. Left
+    // behind, every veiled surface would keep compositing to the previous
+    // theme's rung — the sidebar frozen on the old palette while the rail under
+    // it repaints, which is the most visible half of a theme change.
+    const { root, written } = fakeRoot();
+    const tokens = generateThemeTokens(MIDNIGHT);
+
+    applyThemeTokens(tokens, root);
+
+    const veils = generateVeilTokens(tokens);
+    for (const name of THEME_VEIL_TOKEN_NAMES) expect(written.get(name)).toBe(veils[name]);
   });
 
   it("writes nothing but color tokens — geometry and type never follow a theme", () => {
     const { root, written } = fakeRoot();
     applyThemeTokens(generateThemeTokens(DEFAULT_THEME), root);
-    for (const name of written.keys()) {
-      expect(THEME_TOKEN_NAMES as readonly string[]).toContain(name);
-    }
+    const colorTokens: readonly string[] = [...THEME_TOKEN_NAMES, ...THEME_VEIL_TOKEN_NAMES];
+    for (const name of written.keys()) expect(colorTokens).toContain(name);
   });
 
   it("re-applying a different theme overwrites every token", () => {
@@ -116,6 +132,27 @@ describe("resolveActiveTheme", () => {
     expect(active.editor).toEqual({ value: "catppuccin-mocha", scope: "project" });
     expect(active.app.scope).toBe("global");
     expect(active.terminal.scope).toBe("global");
+  });
+
+  it("carries an overriding project's own canvas through to the layer", () => {
+    // The canvas is part of the app surface, so it follows the same per-surface
+    // resolution as every token — a project on a gradient theme gets the
+    // gradient, not the global's flat fill.
+    const gradient: ThemeDefinition = {
+      ...MIDNIGHT,
+      canvas: {
+        kind: "gradient",
+        stops: deriveCanvasStops({ seed: MIDNIGHT.seed, kind: "gradient" }),
+      },
+    };
+    const active = resolveActiveTheme(
+      DEFAULT_THEME,
+      { ...EMPTY_PROJECT_THEME_OVERRIDE, appThemeSlug: "midnight" },
+      [DEFAULT_THEME, gradient],
+    );
+
+    expect(canvasBackground(active.app.value.canvas)).toContain("linear-gradient(180deg");
+    expect(canvasBackground(DEFAULT_THEME.canvas)).not.toContain("linear-gradient");
   });
 
   it("resolves a project's app theme slug against the catalog", () => {
