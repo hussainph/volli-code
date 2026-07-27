@@ -5,6 +5,8 @@ sidebar:
   label: Concepts
 ---
 
+import { CardGrid, LinkCard } from "@astrojs/starlight/components";
+
 Volli uses a small set of terms consistently across the app, the CLI, and these
 docs. This page defines them once.
 
@@ -34,7 +36,7 @@ commands.
 **Ticket ID.** The permanent UUID underneath. Volli never shows it to you. It
 exists so renaming or renumbering never breaks a reference.
 
-**Label.** A project-scoped tag with a name and an optional colour, stored as
+**Label.** A project-scoped tag with a name and an optional color, stored as
 a real record rather than free text.
 
 **Ticket event.** One entry in a ticket's append-only history. Volli adds to
@@ -46,8 +48,9 @@ derives this itself, so an agent can't claim to be you.
 
 ## Work surfaces
 
-**Ticket workspace.** The expanded view of a single ticket: its body,
-sessions, files, artifacts, and change set, together in one place.
+**Ticket workspace.** The expanded view of a single ticket. It opens on the
+ticket body and gains a tab for each session you start, file you open, and
+change-set diff you inspect.
 
 **Session.** One continuous terminal interaction, with its own scrollback and
 resume identity. A ticket can have several.
@@ -74,11 +77,12 @@ names it once, at creation.
 uncommitted, relative to its base branch. Volli reads it live from git rather
 than storing a copy.
 
-**Artifact.** A durable, project-scoped output stored as a file or bundle and
-reusable across tickets.
+**Artifact.** A durable, project-scoped output that outlives the ticket that
+produced it. Artifacts are files under `.volli/artifacts/` in the project, so
+any ticket can reference one.
 
-**Attachment.** A file or URL attached to one ticket as starting context. It
-stays with that ticket.
+**File reference.** An `@relative/path` mention in a ticket body. Volli
+resolves it against the ticket's own worktree and opens it as a tab.
 
 **Dangling reference.** A file reference in a ticket body that no longer
 resolves in that ticket's context. Volli flags these instead of passing a
@@ -94,6 +98,17 @@ afterward, so a stale agent signal can't undo a decision you just made.
 de-escalates: it can interrupt, park, or archive, and it never deletes your
 work. Worktrees are retained rather than force-removed, even when dirty.
 
-## Next
+## Next steps
 
-[See how these fit together on the board](/guides/board/).
+<CardGrid>
+  <LinkCard
+    title="The board"
+    href="/guides/board/"
+    description="See how these fit together across the five columns."
+  />
+  <LinkCard
+    title="Agents and worktrees"
+    href="/guides/agents-and-worktrees/"
+    description="What a ticket actually gets when it starts running."
+  />
+</CardGrid>

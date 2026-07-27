@@ -1,13 +1,13 @@
 ---
 title: Theming
-description: Change Volli's colours globally or per project, build a theme from any seed colour, and understand what the terminal does.
+description: Change Volli's colors globally or per project, build a theme from any seed color, and understand what the terminal does.
 sidebar:
   label: Theming
 ---
 
-import { Aside } from "@astrojs/starlight/components";
+import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
 
-Volli generates its entire colour set from one seed colour. Picking a seed
+Volli generates its entire color set from one seed color. Picking a seed
 derives backgrounds, text tiers, borders, and accents from it, keeping
 contrast in a legible range across every seed.
 
@@ -42,20 +42,20 @@ a glance when you keep several open.
 
 Open **Configure → Appearance → App theme** for that project and switch from
 **Inherit** to **Custom**. Custom opens on **Auto-tint**, which reseeds the theme
-from that project's own rail colour, with no picking required. To choose
+from that project's own rail color, with no picking required. To choose
 explicitly, switch **Source** to **Pick a theme**.
 
 Click **Inherit** to remove the override instead of storing a second setting.
 The project then follows any future change you make globally.
 
-## Build a theme from your own colour
+## Build a theme from your own color
 
 Choose **Customize** on any theme to open the editor. The **Color** row has a
-swatch that opens the macOS colour picker and a hex field beside it. Both accept
+swatch that opens the macOS color picker and a hex field beside it. Both accept
 `#rgb` and `#rrggbb`.
 
-Dragging in the colour picker repaints the app as you go. The hex field
-applies once what you type parses as a valid colour, so a half-typed value
+Dragging in the color picker repaints the app as you go. The hex field
+applies once what you type parses as a valid color, so a half-typed value
 leaves the app unchanged.
 
 ## What the terminal does
@@ -68,9 +68,9 @@ because Ghostty configuration takes precedence over Volli's.
   you change it.
 - **If a Ghostty theme is set**, in your own `~/.config/ghostty/config` or
   through Volli's terminal settings, that theme wins. The terminal keeps its
-  colours no matter which app theme you pick.
+  colors no matter which app theme you pick.
 
-Either way, twelve of the sixteen ANSI colours are a fixed set. Green, yellow, blue,
+Either way, twelve of the sixteen ANSI colors are a fixed set. Green, yellow, blue,
 magenta, cyan, white, and their bright variants have no equivalent in the app's
 palette, so Volli doesn't invent one.
 
@@ -78,3 +78,18 @@ palette, so Volli doesn't invent one.
   Volli never edits your Ghostty config. It writes overlay files layered on top
   of it, so anything you've configured yourself keeps working.
 </Aside>
+
+## Next steps
+
+<CardGrid>
+  <LinkCard
+    title="Keyboard shortcuts"
+    href="/reference/keyboard-shortcuts/"
+    description="The theme picker's keys, and every other shortcut in the app."
+  />
+  <LinkCard
+    title="Troubleshooting"
+    href="/reference/troubleshooting/"
+    description="What to do when the terminal ignores your app theme."
+  />
+</CardGrid>

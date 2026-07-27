@@ -5,7 +5,7 @@ sidebar:
   label: Quickstart
 ---
 
-import { Aside, Steps } from "@astrojs/starlight/components";
+import { Aside, CardGrid, LinkCard, Steps } from "@astrojs/starlight/components";
 
 By the end of this page you'll have a ticket that an agent picked up, worked on
 in an isolated branch, and handed back to you for review.
@@ -17,10 +17,13 @@ one coding-agent CLI on your machine.
 
 1. **Add a project.**
 
-   Point Volli at a git repository on disk and give it a ticket prefix, two or
-   three letters that start every ticket's display ID, like `VC`. The folder
-   you choose becomes the project's main checkout, and Volli won't modify
-   it.
+   Press **+** in the project rail and pick a git repository on disk. That
+   folder becomes the project's main checkout. Ticket automation never writes
+   to it.
+
+   Volli derives a ticket prefix from the folder's name, using the initials of
+   its first three words, so `volli-code` becomes `VC`. The prefix starts every
+   display ID on the board.
 
 2. **Write a ticket.**
 
@@ -29,7 +32,7 @@ one coding-agent CLI on your machine.
    Write it the way you would brief a colleague: what to change, where, and
    what "done" means.
 
-   Pick the harness you want: Claude Code, Codex, or OpenCode. Volli remembers
+   Pick the harness you want: Claude Code, Codex, or Opencode. Volli remembers
    your last choice for the next ticket.
 
 3. **Move it to Doing.**
@@ -56,14 +59,24 @@ one coding-agent CLI on your machine.
    change set shows the ticket's commits and working-tree changes against its
    base branch.
 
-   If the work is wrong, send it back. If it's right, merge the branch and move
-   the ticket to Done.
+   If the work is wrong, send it back.
+
+6. **Ship it.**
+
+   The ticket has one button for getting the branch out, and its label changes
+   to whatever comes next: **Commit**, then **Push**, then **Create draft
+   PR**, then **View PR**. Press it as many times as the work needs. Volli
+   opens the pull request as a draft, against the ticket's base branch.
+
+   Merging is yours. Volli watches the pull request and offers to archive the
+   ticket once it lands.
 
 </Steps>
 
 <Aside type="note">
-  Volli doesn't open pull requests for you. It gets you a branch with the work
-  on it; how that branch ships is your call.
+  The push and pull-request steps shell out to the
+  [GitHub CLI](https://cli.github.com), so they need `gh` installed and
+  authenticated, and a remote to push to. Commit works without either.
 </Aside>
 
 ## Running more than one at a time
@@ -73,8 +86,27 @@ its own session. Nothing is shared between them, so two agents editing the same
 file in two tickets never collide while working. Conflicts only show up at
 merge time, like with any two branches.
 
-## Next
+## Next steps
 
-- [The board](/guides/board/): what each column means and what moves a ticket
-- [Agents and worktrees](/guides/agents-and-worktrees/): harnesses, sessions, and branches
-- [CLI reference](/reference/cli/): how agents talk back to Volli
+<CardGrid>
+  <LinkCard
+    title="The board"
+    href="/guides/board/"
+    description="What each column means, and what's allowed to move a ticket between them."
+  />
+  <LinkCard
+    title="Agents and worktrees"
+    href="/guides/agents-and-worktrees/"
+    description="Harnesses, sessions, branches, and what each ticket gets to itself."
+  />
+  <LinkCard
+    title="CLI reference"
+    href="/reference/cli/"
+    description="Every volli command, for you and for the agents you run."
+  />
+  <LinkCard
+    title="Concepts"
+    href="/start/concepts/"
+    description="The words Volli uses, defined once."
+  />
+</CardGrid>

@@ -1,11 +1,18 @@
 ---
 title: Install Volli Code
-description: Download Volli Code for macOS or build it from source, and install a coding agent for it to run.
+description: Install Volli Code for macOS, install a coding agent for it to run, and set up the volli command.
 sidebar:
   label: Install
 ---
 
-import { Aside, Steps, Tabs, TabItem } from "@astrojs/starlight/components";
+import {
+  Aside,
+  CardGrid,
+  LinkCard,
+  Steps,
+  Tabs,
+  TabItem,
+} from "@astrojs/starlight/components";
 
 Volli Code runs on macOS only. You can install the packaged app or build it from
 source. Volli is open source, so both give you the same working application.
@@ -18,14 +25,21 @@ plan to use:
 
 - [Claude Code](https://claude.com/claude-code)
 - [Codex](https://developers.openai.com/codex/cli)
-- [OpenCode](https://opencode.ai)
+- [Opencode](https://opencode.ai)
 
-{/* TODO: confirm the minimum supported macOS version. Nothing in the repo pins one. */}
+Add the [GitHub CLI](https://cli.github.com) if you want Volli to push branches
+and open pull requests for you. Everything else works without it.
 
 ## Install the app
 
 <Tabs>
   <TabItem label="Download">
+    <Aside type="caution" title="Not released yet">
+      The first packaged build ships at launch. Until then,
+      [the releases page](https://github.com/hussainph/volli-code/releases) is
+      empty. Build from source.
+    </Aside>
+
     <Steps>
 
     1. Download the latest release from
@@ -36,9 +50,6 @@ plan to use:
     3. Launch it from Applications.
 
     </Steps>
-
-    {/* TODO: confirm the release asset name and whether builds are signed and
-        notarized. If they are not, document the Gatekeeper first-run steps here. */}
 
   </TabItem>
   <TabItem label="Build from source">
@@ -84,11 +95,29 @@ plan to use:
   </TabItem>
 </Tabs>
 
+## First launch
+
+Volli offers to install the `volli` command and its agent skills the first time
+you open it:
+
+> **Install the Volli CLI and agent skills?**
+> Adds the volli command to `/usr/local/bin` and installs its skill for the
+> agents you already have.
+
+Choosing **Install** asks for your admin password, because `/usr/local/bin`
+needs it. Choosing **Not Now** costs you nothing: the terminal sessions Volli
+opens have `volli` on `PATH` either way. Installing it puts the command in
+terminals Volli didn't start, and gives your agents a skill describing how
+Volli expects them to use it.
+
+You can run it later from **File → Install Volli CLI & Agent Skills…**, and
+undo it from **File → Remove Volli CLI & Agent Skills…**.
+
 ## The `volli` CLI
 
 Volli ships a `volli` command that agents use to read tickets and report back.
-You don't install it separately. Every terminal session Volli opens has it on
-`PATH` and points it at the running app through a local Unix socket.
+Every terminal session Volli opens has it on `PATH`, pointed at the running app
+through a local Unix socket.
 
 You can run the same commands yourself from any session terminal:
 
@@ -110,6 +139,17 @@ Everything is local:
 
 Removing a project from Volli never touches the folder on disk.
 
-## Next
+## Next steps
 
-[Add your first project and run a ticket](/start/quickstart/).
+<CardGrid>
+  <LinkCard
+    title="Quickstart"
+    href="/start/quickstart/"
+    description="Add a project, write a ticket, and watch an agent pick it up."
+  />
+  <LinkCard
+    title="Troubleshooting"
+    href="/reference/troubleshooting/"
+    description="Native module errors, agents that won't start, and CLI connection failures."
+  />
+</CardGrid>

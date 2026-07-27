@@ -16,12 +16,18 @@ Every command accepts `--json` for machine-readable output.
 
 Commands that take an `<id>` want a display ID, like `VC-12`.
 
-Where an ID is optional, `volli` infers it from where you are. Inside a
-ticket's worktree, it uses that ticket. Inside a session Volli started, it
-knows the session too, so an agent can run `volli session done` with no
-arguments.
+Where an ID is optional, `volli` resolves it in a fixed order and stops at the
+first answer:
 
-Use `--project <name>` to target a project other than the current one.
+1. An explicit `--project <name>`.
+2. `VOLLI_SESSION` and `VOLLI_TICKET`, which Volli sets in every session it
+   starts. This is how an agent can run `volli session done` with no arguments.
+3. The current directory, if it belongs to a registered project or a ticket
+   worktree.
+
+`volli` never guesses past that. If more than one project or ticket fits, the
+command fails with `AMBIGUOUS_PROJECT` or `AMBIGUOUS_TICKET` rather than
+picking one.
 
 ## Orientation
 
@@ -48,11 +54,15 @@ The whole board, grouped by column.
 volli project list
 ```
 
+Every registered project, with its path and ticket prefix.
+
 ### volli label list
 
 ```sh
 volli label list [--project <name>]
 ```
+
+A project's labels. Agents use it to check a label exists before applying it.
 
 ## Tickets
 
@@ -62,6 +72,9 @@ volli label list [--project <name>]
 volli ticket list [--status <column>] [--priority low|medium|high]
                   [--label <name>] [--project <name>] [--limit <n>]
 ```
+
+A project's tickets. Filters combine, so `--status doing --priority high`
+returns only tickets matching both.
 
 ### volli ticket show
 
@@ -133,6 +146,9 @@ Columns are `backlog`, `todo`, `doing`, `needs-review`, and `done`. Moving to
 volli ticket comment <id> (-m <text> | --file <path>)
 ```
 
+Adds a comment to the ticket's activity feed, attributed to the session it ran
+in.
+
 ### volli ticket archive
 
 ```sh
@@ -148,6 +164,8 @@ Takes the ticket off the board. The worktree and history are kept.
 ```sh
 volli worktree status [<id>]
 ```
+
+The ticket's branch, its base, and how far the two have diverged.
 
 ### volli worktree diff
 
@@ -168,6 +186,8 @@ Both commands are read-only.
 ```sh
 volli session list [--project <name>] [--ticket <id>]
 ```
+
+Active terminal sessions, with the short handles `session peek` takes.
 
 ### volli session peek
 
@@ -245,10 +265,25 @@ Volli sets all three in the sessions it starts.
 | Code | Meaning |
 | --- | --- |
 | `0` | Success |
+| `1` | The command ran and failed |
 | `2` | Usage error (bad flag or missing argument) |
-| `3` | The app couldn't be reached |
+| `3` | The app couldn't be reached. Retryable |
 
 <Aside type="tip">
   Exit code `3` almost always means Volli isn't running, or `VOLLI_SOCKET` isn't
   set in the shell you're using. Run `volli identify` to confirm.
 </Aside>
+
+## Error codes
+
+Every failure prints `error[CODE] message` and carries one of these codes. The
+code is stable; the message isn't, so branch on the code.
+
+| Exit | Codes |
+| --- | --- |
+| `2` | `USAGE`, `INVALID_REQUEST`, `UNSUPPORTED_COMMAND` |
+| `3` | `APP_UNREACHABLE` |
+| `1` | `DB_UNAVAILABLE`, `PROJECT_REQUIRED`, `PROJECT_NOT_FOUND`, `AMBIGUOUS_PROJECT`, `TICKET_NOT_FOUND`, `AMBIGUOUS_TICKET`, `SESSION_NOT_FOUND`, `AMBIGUOUS_CONTEXT`, `CONTEXT_REQUIRED`, `CONTEXT_MISMATCH`, `BODY_MATCH_FAILED`, `INVALID_COLUMN`, `INVALID_PRIORITY`, `ARCHIVED_TICKET`, `PREFIX_CONFLICT`, `FILE_READ_FAILED`, `MUTATION_FAILED`, `SOCKET_PROTOCOL`, `TIMEOUT` |
+
+Run `volli help exit-codes` for the same table, generated from the codes the
+app actually emits.

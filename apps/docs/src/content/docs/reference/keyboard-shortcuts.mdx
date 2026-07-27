@@ -23,6 +23,11 @@ unless a terminal has focus.
 | `⌘]` | Forward |
 | `⌘+` / `⌘-` / `⌘0` | Zoom the app in, out, or back to actual size |
 
+The command palette searches tickets and sessions across every project, and
+carries **Change theme…** as an action. Selecting a session opens it; selecting
+a ticket opens its workspace, switching projects on the way if it belongs to
+another one.
+
 `C` is a bare keypress with no modifier, so Volli suppresses it while you're
 typing: in text fields, in the editor, in a terminal, or with a dialog already
 open. `⌘[` behaves the same way, since it means outdent inside an editor.
@@ -34,11 +39,11 @@ open. `⌘[` behaves the same way, since it means outdent inside an editor.
 
 ## Board
 
-| Shortcut | Action |
-| --- | --- |
-| `Esc` | Deselect the selected card |
-| `Enter` | Add the card and keep the composer open |
-| `Esc` | Close the inline composer |
+| Shortcut | Action | When |
+| --- | --- | --- |
+| `Esc` | Deselect the selected card | A card is selected |
+| `Enter` | Add the card and keep the composer open | The inline composer is open |
+| `Esc` | Close the inline composer | The inline composer is open |
 
 ## New ticket dialog
 
@@ -49,11 +54,11 @@ open. `⌘[` behaves the same way, since it means outdent inside an editor.
 
 ## Ticket detail
 
-| Shortcut | Action |
-| --- | --- |
-| `Esc` | Close the ticket and return to the board |
-| `⌘Enter` | Post a comment |
-| `Esc` | Cancel an in-progress comment edit |
+| Shortcut | Action | When |
+| --- | --- | --- |
+| `Esc` | Close the ticket and return to the board | Nothing else has focus |
+| `⌘Enter` | Post a comment | The comment box has focus |
+| `Esc` | Cancel an in-progress comment edit | You're editing a comment |
 
 `Esc` won't close the ticket while a terminal has focus. It goes to the
 terminal instead, where it usually means "interrupt".
