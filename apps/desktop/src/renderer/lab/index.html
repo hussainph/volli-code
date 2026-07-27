@@ -1,0 +1,35 @@
+<!doctype html>
+<!--
+  The UI lab — a dev-server-only page for battle-testing interactions and
+  product ideas in isolation, before they become app features. See main.tsx.
+
+  This page is NEVER built or packaged: Vite's build has a single input
+  (`<root>/index.html`, the app), so nothing under lab/ reaches dist/ or the
+  packaged bundle. It exists only while `pnpm lab` serves it on localhost.
+-->
+<!-- class="dark" is pinned to match the app (see globals.css). -->
+<html class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Volli Lab</title>
+    <!--
+      Same network posture as the app's index.html — no external origins are
+      reachable, so a scratch cannot quietly start depending on a CDN font or
+      a remote image that the real app's CSP would reject.
+
+      'unsafe-inline' in script-src is the one deliberate relaxation, and it is
+      what makes this a dev-only page: @vitejs/plugin-react injects its Fast
+      Refresh preamble as an inline module script, so HMR cannot work without
+      it. The app's CSP stays strict and is unaffected by this file.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://localhost:*"
+    />
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/lab/main.tsx"></script>
+  </body>
+</html>

@@ -8,5 +8,8 @@
       "@renderer/*": ["./src/renderer/src/*"]
     }
   },
-  "include": ["src/renderer/src/**/*", "src/preload/*.d.ts"]
+  // The UI lab (src/renderer/lab) is dev-server-only and never built, but it
+  // IS type-checked: it imports real app components, so a signature change in
+  // the app should break the lab here rather than at `pnpm lab`.
+  "include": ["src/renderer/src/**/*", "src/renderer/lab/**/*", "src/preload/*.d.ts"]
 }

@@ -185,6 +185,14 @@ export default defineConfig({
           "vp run --filter @volli/cli build && vp build && vp pack && node scripts/copy-cli.mjs",
         cache: false,
       },
+      // The UI lab (src/renderer/lab) — the renderer dev server alone, no
+      // Electron, no main/preload watcher. Its own port so it can run
+      // ALONGSIDE `pnpm dev`; `strictPort` above still applies, so a clash
+      // fails loudly instead of silently landing somewhere else.
+      lab: {
+        command: "vp dev --port 5174 --open /lab/",
+        cache: false,
+      },
     },
   },
 });
