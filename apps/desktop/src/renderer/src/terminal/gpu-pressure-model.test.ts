@@ -79,6 +79,10 @@ class FakeRegistry {
     this.announce();
   }
 
+  membershipListenerCount(): number {
+    return this.listeners.size;
+  }
+
   /**
    * The real `disposeEngine` order: forget it, dispose it (which announces the
    * released backend), then announce membership. Splicing after the dispose —
@@ -320,6 +324,29 @@ describe("createGpuPressureTracker", () => {
     registry.add(new FakeEngine("webgpu"));
 
     expect(neighbour).toHaveBeenCalledOnce();
+  });
+
+  // A tracker subscribes for its whole life otherwise. Without a teardown every
+  // renderer-HMR re-evaluation of gpu-pressure.ts leaves the previous tracker
+  // still folding the live engine set, and every test leaves listeners behind on
+  // the engines it watched.
+  it("lets go of the registry and every engine when torn down", () => {
+    const registry = new FakeRegistry();
+    const tracker = createGpuPressureTracker(registry);
+    const seen = vi.fn();
+    tracker.subscribe(seen);
+    const watched = new FakeEngine();
+    registry.add(watched);
+    seen.mockClear();
+
+    tracker.dispose();
+
+    expect(registry.membershipListenerCount()).toBe(0);
+    expect(watched.listenerCount()).toBe(0);
+
+    watched.resolve("webgl2");
+    registry.add(new FakeEngine("webgl2"));
+    expect(seen).not.toHaveBeenCalled();
   });
 
   it("shows a device-loss rebuild as every terminal going unresolved and back", () => {

@@ -85,6 +85,15 @@ export interface BackendReporterRegistry {
 export interface GpuPressureTracker {
   current(): GpuPressure;
   subscribe(listener: (pressure: GpuPressure) => void): () => void;
+
+  /**
+   * Detach from the registry and from every engine, and drop all readers. A
+   * tracker subscribes for its whole life otherwise, which leaks twice: each
+   * renderer-HMR re-evaluation of its owning module leaves the outgoing tracker
+   * still folding the live engine set, and every test-constructed tracker
+   * leaves a listener on the engines it watched.
+   */
+  dispose(): void;
 }
 
 /**
@@ -123,7 +132,7 @@ export function createGpuPressureTracker(registry: BackendReporterRegistry): Gpu
     engineSubscriptions = registry.liveEngines().map((engine) => engine.onBackendChanged(notify));
   };
 
-  registry.onLiveEnginesChanged(() => {
+  const unwatchMembership = registry.onLiveEnginesChanged(() => {
     rewire();
     notify();
   });
@@ -136,6 +145,12 @@ export function createGpuPressureTracker(registry: BackendReporterRegistry): Gpu
       return () => {
         listeners.delete(listener);
       };
+    },
+    dispose() {
+      unwatchMembership();
+      for (const unsubscribe of engineSubscriptions) unsubscribe();
+      engineSubscriptions = [];
+      listeners.clear();
     },
   };
 }
