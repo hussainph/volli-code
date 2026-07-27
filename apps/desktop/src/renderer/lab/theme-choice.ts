@@ -23,6 +23,8 @@ import { DEFAULT_THEME, type ThemeDefinition } from "@volli/shared";
 import { applyTheme } from "@renderer/theme/apply";
 import { useThemeStore } from "@renderer/stores/theme";
 
+import { applyArcCanvas, loadArcCanvas } from "./arc/paint";
+
 const STORAGE_KEY = "volli-lab:theme";
 
 /**
@@ -88,7 +90,17 @@ export function setLabTheme(theme: ThemeDefinition): void {
  * the same reason the app hydrates its theme at boot: `globals.css` paints the
  * shipped default with no JS, so without this a reload silently puts every
  * scratch back on Ember while the store says otherwise.
+ *
+ * The Canvas scratch's gradient is restored in the same breath, because it is
+ * the same kind of thing — a standing lab choice with no JS-free first paint of
+ * its own. Theme first: the canvas layers over the token set rather than
+ * replacing it, and its ink is measured against pools the theme has no say in.
+ *
+ * Only `applyStoredLabTheme` re-asserts it, not `setLabTheme`. The canvas seam
+ * lives in `lab.css` as `!important` rules (see arc/paint.ts), so switching
+ * themes cannot clobber it and a re-assert there would be dead work.
  */
 export function applyStoredLabTheme(): void {
   applyTheme(labTheme());
+  applyArcCanvas(loadArcCanvas());
 }

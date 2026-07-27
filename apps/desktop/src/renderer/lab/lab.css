@@ -18,3 +18,41 @@
  */
 @import "../src/globals.css";
 @source "./";
+
+/* LAB-ONLY SEAM — the Canvas scratch's vivid gradient, driven onto the app's
+ * own root canvas layer (`theme/theme-canvas.tsx`).
+ *
+ * The app already mounts that layer under the chrome band, the rail and the
+ * sidebar; what it paints comes from `@volli/shared`'s band-clamped generator,
+ * which by construction cannot produce a vivid canvas. So the lab drives the
+ * element directly rather than the read path — the point of the experiment is
+ * what a vivid canvas does to the REAL sidebar sitting transparently on it, and
+ * a mocked-up layer would answer a different question.
+ *
+ * The `!important` is load-bearing in both rules: `theme-canvas.tsx` styles its
+ * layers inline, and `applyTheme` writes the sidebar foregrounds inline too, so
+ * nothing weaker than an important author declaration reaches either. Keeping
+ * the flip HERE rather than as more inline props is what makes it reversible —
+ * `applyArcCanvas(null)` drops one attribute and the whole seam stops matching,
+ * with no saved values to restore (see arc/paint.ts).
+ *
+ * Only the two foregrounds that paint ON the canvas are flipped. `--foreground`
+ * and `--muted-foreground` also paint the opaque content card floating above
+ * it, and flipping those would make a light canvas unreadable everywhere the
+ * canvas isn't.
+ *
+ * Keep the selectors in step with `theme-canvas.tsx`. Delete all of it once the
+ * vivid model is ported into `@volli/shared` and the canvas has a real read
+ * path to drive. */
+html[data-lab-canvas] [data-volli-canvas] > div {
+  background: var(--lab-canvas) !important;
+}
+/* The crossfade partner. It carries the theme's own canvas, which would sit on
+ * top of ours at whatever opacity the fade had reached. */
+html[data-lab-canvas] [data-volli-canvas-outgoing] {
+  display: none;
+}
+html[data-lab-canvas] {
+  --sidebar-foreground: var(--lab-canvas-ink) !important;
+  --sidebar-accent-foreground: var(--lab-canvas-ink) !important;
+}
