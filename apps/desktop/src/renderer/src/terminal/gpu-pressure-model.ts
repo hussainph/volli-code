@@ -3,7 +3,7 @@
  * engine registry). Kept renderer-free so the counting rule — the part with
  * real consequences — is testable without a DOM.
  */
-import type { TerminalBackend } from "./engine";
+import type { TerminalGpuState } from "./engine";
 
 /** What the terminals collectively cost the GPU right now. */
 export type GpuPressure = {
@@ -25,12 +25,10 @@ export type GpuPressure = {
   pending: number;
 };
 
-/** One engine's GPU state, as the counting rule needs to see it. Structurally
- *  a `TerminalEngine` — the two fields together, never `backend` alone. */
-export interface EngineGpuState {
-  readonly hasRenderer: boolean;
-  readonly backend: TerminalBackend | null;
-}
+/** One engine's GPU state, as the counting rule needs to see it: the engine
+ *  seam's own pair, so an engine IS one — the two fields together, never
+ *  `backend` alone. */
+export type EngineGpuState = TerminalGpuState;
 
 /**
  * The counting rule. WebGPU engines all render through the one runtime
@@ -71,14 +69,15 @@ export function gpuPressureOf(engines: readonly EngineGpuState[]): GpuPressure {
   };
 }
 
-/** The slice of an engine gpu pressure reads — see `TerminalEngine`. */
-export interface BackendReporter extends EngineGpuState {
-  onBackendChanged(listener: (backend: TerminalBackend | null) => void): () => void;
+/** The slice of an engine gpu pressure reads — see `TerminalEngine`. Both
+ *  inputs, plus the one event that announces either of them moving. */
+export interface GpuStateReporter extends EngineGpuState {
+  onGpuStateChanged(listener: (state: EngineGpuState) => void): () => void;
 }
 
 /** The slice of the engine registry gpu pressure reads — see `registry.ts`. */
-export interface BackendReporterRegistry {
-  liveEngines(): readonly BackendReporter[];
+export interface GpuStateReporterRegistry {
+  liveEngines(): readonly GpuStateReporter[];
   onLiveEnginesChanged(listener: () => void): () => void;
 }
 
@@ -101,14 +100,14 @@ export interface GpuPressureTracker {
  * registry as an argument (rather than importing it) is what keeps the rule
  * above testable — gpu-pressure.ts supplies the real one.
  */
-export function createGpuPressureTracker(registry: BackendReporterRegistry): GpuPressureTracker {
+export function createGpuPressureTracker(registry: GpuStateReporterRegistry): GpuPressureTracker {
   const listeners = new Set<(pressure: GpuPressure) => void>();
   let engineSubscriptions: (() => void)[] = [];
 
   const current = (): GpuPressure => gpuPressureOf(registry.liveEngines());
 
   // Snapshot + per-listener catch. Reading pressure must never perturb what it
-  // observes: this fan-out runs INSIDE an engine's dispose (via its backend
+  // observes: this fan-out runs INSIDE an engine's dispose (via its gpu-state
   // event), so a throwing reader would abort that teardown — leaking the very
   // GPU context it was asking about. A reader that unsubscribes itself here
   // must likewise not cost its neighbour a reading.
@@ -124,12 +123,14 @@ export function createGpuPressureTracker(registry: BackendReporterRegistry): Gpu
     }
   };
 
-  // Backend resolution is per-engine, so the membership event alone would miss
-  // it. Re-attach from scratch on every membership change: a disposed engine
-  // must not keep a subscription alive, and a new one must be heard from.
+  // A live engine's GPU state moves without the engine set changing — backend
+  // resolution, and the renderer itself going away and coming back across a
+  // device-loss rebuild — so the membership event alone would miss it.
+  // Re-attach from scratch on every membership change: a disposed engine must
+  // not keep a subscription alive, and a new one must be heard from.
   const rewire = (): void => {
     for (const unsubscribe of engineSubscriptions) unsubscribe();
-    engineSubscriptions = registry.liveEngines().map((engine) => engine.onBackendChanged(notify));
+    engineSubscriptions = registry.liveEngines().map((engine) => engine.onGpuStateChanged(notify));
   };
 
   const unwatchMembership = registry.onLiveEnginesChanged(() => {

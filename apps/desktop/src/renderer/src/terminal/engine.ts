@@ -70,6 +70,35 @@ export function polledBackend(value: string | null): TerminalBackend | null {
   return backend === "none" ? null : backend;
 }
 
+/**
+ * Everything an engine costs the GPU, as one value. The two fields are only
+ * ever meaningful TOGETHER — `backend === null` means "still resolving" under a
+ * live renderer and "nothing was ever asked" without one — so the seam carries
+ * them as a pair rather than letting a caller read one and infer the other.
+ */
+export interface TerminalGpuState {
+  /** See `TerminalEngine.hasRenderer`. */
+  readonly hasRenderer: boolean;
+  /** See `TerminalEngine.backend`. */
+  readonly backend: TerminalBackend | null;
+}
+
+/**
+ * Whether two GPU states are the same reading — the dedupe rule an engine's
+ * `onGpuStateChanged` announcement keys off.
+ *
+ * On the PAIR, never on `backend` alone. A device-loss rebuild destroys the
+ * renderer and builds a fresh one, and the backend it lands on is very often
+ * the value it started from: `null` on both sides, because `polledBackend`
+ * folds restty's birth-state `"none"` to `null` for the whole acquisition
+ * window. Comparing backends alone makes that entire teardown-and-recreate
+ * silent, so a reader counting live GPU contexts keeps publishing a reading
+ * from before the crash until some unrelated event happens to jog it.
+ */
+export function sameGpuState(a: TerminalGpuState, b: TerminalGpuState): boolean {
+  return a.hasRenderer === b.hasRenderer && a.backend === b.backend;
+}
+
 /** Terminal grid dimensions in character cells. */
 export interface TerminalDimensions {
   cols: number;
@@ -178,13 +207,19 @@ export interface TerminalEngine {
   readonly backend: TerminalBackend | null;
 
   /**
-   * Subscribe to backend resolution (and to its return to `null` on a
-   * rebuild or dispose). Reading `backend` alone races the async selection,
-   * so this event — not the getter — is what a caller counting live GPU
-   * contexts must key off. Multi-subscriber; returns the unsubscribe
-   * function (see onData).
+   * Subscribe to this engine's GPU cost changing — BOTH inputs, announced as
+   * the consistent `(hasRenderer, backend)` pair, deduped with `sameGpuState`.
+   *
+   * Both, because both move the reading and only one of them is a backend
+   * event: a renderer being created or destroyed (attach, the device-loss
+   * rebuild, dispose) changes what the GPU holds without necessarily changing
+   * `backend` at all. Reading the getters instead races the async backend
+   * selection, so this event — not the getters — is what a caller counting
+   * live GPU contexts must key off.
+   *
+   * Multi-subscriber; returns the unsubscribe function (see onData).
    */
-  onBackendChanged(listener: (backend: TerminalBackend | null) => void): () => void;
+  onGpuStateChanged(listener: (state: TerminalGpuState) => void): () => void;
 
   /**
    * Re-apply a changed appearance to the LIVE renderer (theme, font size,

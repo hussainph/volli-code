@@ -58,7 +58,7 @@ vi.mock("./restty-engine", () => ({
     write = () => undefined;
     onData = () => () => undefined;
     onResize = () => () => undefined;
-    onBackendChanged = () => () => undefined;
+    onGpuStateChanged = () => () => undefined;
     setPaused = () => undefined;
     fit = () => undefined;
     focus = () => undefined;

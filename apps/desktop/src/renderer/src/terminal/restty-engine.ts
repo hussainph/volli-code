@@ -32,12 +32,13 @@ import {
 } from "restty";
 
 import { getCurrentAppearance } from "./appearance";
-import { polledBackend, toTerminalBackend } from "./engine";
+import { polledBackend, sameGpuState, toTerminalBackend } from "./engine";
 import type {
   TerminalAppearance,
   TerminalBackend,
   TerminalDimensions,
   TerminalEngine,
+  TerminalGpuState,
 } from "./engine";
 import { currentGpuSession, watchGpuDeviceLoss } from "./gpu-session";
 import { heldAltSides, installAltSideTracker, optionAsAltSequence } from "./option-as-alt";
@@ -106,7 +107,7 @@ export class ResttyEngine implements TerminalEngine {
 
   private readonly dataCbs = new Set<(data: string) => void>();
   private readonly resizeCbs = new Set<(dimensions: TerminalDimensions) => void>();
-  private readonly backendCbs = new Set<(backend: TerminalBackend | null) => void>();
+  private readonly gpuStateCbs = new Set<(state: TerminalGpuState) => void>();
   private dimensions: TerminalDimensions | null = null;
   /**
    * Recent PTY output, capped at REPLAY_BUFFER_MAX_CHARS. Serves two jobs:
@@ -122,6 +123,15 @@ export class ResttyEngine implements TerminalEngine {
   /** The active renderer backend once known; null until restty resolves it. */
   backend: TerminalBackend | null = null;
   private disposed = false;
+  /**
+   * The last pair handed to `gpuStateCbs`. Both fields are derived state
+   * (`restty`, `backend`), but the dedupe has to compare against what was
+   * ANNOUNCED, not against the live values — that is the whole difference
+   * between "nothing moved" and "it moved and came back before anyone looked".
+   * Starts where a freshly-constructed engine already is, so the first real
+   * transition is the first announcement.
+   */
+  private announcedGpuState: TerminalGpuState = { hasRenderer: false, backend: null };
 
   /**
    * A renderer exists iff restty does. Distinguishes an engine that holds no
@@ -216,6 +226,13 @@ export class ResttyEngine implements TerminalEngine {
         },
       },
     });
+    // A renderer now exists, so `hasRenderer` just flipped — half of what GPU
+    // pressure counts, and on a rebuild that lands on the same backend the ONLY
+    // half that moves. Announce here rather than after the wiring below: if any
+    // of it throws (a rotation runs right after a device died, which is exactly
+    // where restty throws), the registry catches it and readers would otherwise
+    // be left believing this engine still holds nothing.
+    this.announceGpuState();
     // Registers the transport callbacks used by write()/replay and marks the
     // transport connected so keystrokes, terminal replies, and mouse reports
     // all route back through sendInput above.
@@ -282,18 +299,33 @@ export class ResttyEngine implements TerminalEngine {
     });
   }
 
-  /** Record a backend transition and announce it. Silent on a repeat: restty
-   *  re-reports the same backend on every renderer (re)creation. */
+  /** Record a backend transition, then announce the pair it belongs to. */
   private setBackend(backend: TerminalBackend | null): void {
-    if (this.backend === backend) return;
     this.backend = backend;
-    fanOut(this.backendCbs, "backend", backend);
+    this.announceGpuState();
   }
 
-  onBackendChanged(callback: (backend: TerminalBackend | null) => void): () => void {
-    this.backendCbs.add(callback);
+  /**
+   * Publish `(hasRenderer, backend)` if it moved since the last announcement.
+   * EVERY mutation of `restty` or `backend` ends here — creating the renderer,
+   * the rebuild's teardown, dispose — because either field moving changes what
+   * this engine costs the GPU, and only the pair says which way.
+   *
+   * Silent on a repeat: restty re-reports the same backend on every renderer
+   * (re)creation, and callers act on these readings. Deduping on `backend`
+   * alone is the bug this replaces — see `sameGpuState`.
+   */
+  private announceGpuState(): void {
+    const state: TerminalGpuState = { hasRenderer: this.hasRenderer, backend: this.backend };
+    if (sameGpuState(state, this.announcedGpuState)) return;
+    this.announcedGpuState = state;
+    fanOut(this.gpuStateCbs, "gpu state", state);
+  }
+
+  onGpuStateChanged(callback: (state: TerminalGpuState) => void): () => void {
+    this.gpuStateCbs.add(callback);
     return () => {
-      this.backendCbs.delete(callback);
+      this.gpuStateCbs.delete(callback);
     };
   }
 
@@ -455,8 +487,11 @@ export class ResttyEngine implements TerminalEngine {
     }
     this.restty = null;
     this.pane = null;
-    // The rebuilt renderer re-resolves its backend from scratch, so callers
-    // counting GPU contexts see this engine go unresolved and come back.
+    // Announce the torn-down half AFTER both fields are actually gone, so the
+    // pair readers see is `(false, null)` and never a phantom live renderer on
+    // a destroyed one. `createInstance` below announces the other half; between
+    // the two, callers counting GPU contexts see this engine drop its context
+    // and take a fresh one even when the backend it lands on is the one it left.
     this.setBackend(null);
     this.ptyCallbacks = null;
     // Detached engines (created, never attached) just wait for attach —
@@ -487,11 +522,13 @@ export class ResttyEngine implements TerminalEngine {
     // Announce the released context AFTER the renderer is actually gone — a
     // reader that folds this engine into a reading must see `hasRenderer`
     // false, not a phantom unresolved context — and BEFORE the listener sets
-    // are dropped, or the last reader never learns the context went away.
+    // are dropped, or the last reader never learns the context went away. One
+    // announcement, of the settled pair: `restty` and `backend` are both
+    // already null above, so this is the single edge to `(false, null)`.
     this.setBackend(null);
     this.dataCbs.clear();
     this.resizeCbs.clear();
-    this.backendCbs.clear();
+    this.gpuStateCbs.clear();
     this.recentOutput = [];
     this.recentOutputChars = 0;
     this.hostEl.remove();

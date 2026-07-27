@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { polledBackend } from "./engine";
+import { polledBackend, sameGpuState } from "./engine";
 import { createGpuPressureTracker, gpuPressureOf } from "./gpu-pressure-model";
-import type { TerminalBackend } from "./engine";
+import type { TerminalBackend, TerminalGpuState } from "./engine";
 
 /** An engine with a live renderer reporting `backend`. */
 const live = (backend: TerminalBackend | null) => ({ hasRenderer: true, backend });
@@ -14,25 +14,34 @@ const headless = { hasRenderer: false, backend: null };
  * an event. Mirrors ResttyEngine's real lifecycle — an engine exists BEFORE its
  * renderer does (`getOrCreateEngine` only makes the host element; `attach`
  * creates the renderer), and `dispose` destroys the renderer before announcing
- * the released backend.
+ * the released state.
+ *
+ * The dedupe is `sameGpuState`, the PRODUCTION rule, not a re-implementation of
+ * it: an engine that announces every call unconditionally is a fake with a
+ * guarantee the real one doesn't have, and it would pass the rebuild case below
+ * no matter what the rule said.
  */
 class FakeEngine {
-  private readonly listeners = new Set<(backend: TerminalBackend | null) => void>();
+  private readonly listeners = new Set<(state: TerminalGpuState) => void>();
+  private announced: TerminalGpuState;
 
   /** `hasRenderer` defaults true: most cases are about an attached terminal. */
   constructor(
     public backend: TerminalBackend | null = null,
     public hasRenderer = true,
-  ) {}
+  ) {
+    this.announced = { hasRenderer, backend };
+  }
 
-  onBackendChanged(listener: (backend: TerminalBackend | null) => void): () => void {
+  onGpuStateChanged(listener: (state: TerminalGpuState) => void): () => void {
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
     };
   }
 
-  /** Create the renderer, as `attach` does for a never-attached engine. */
+  /** Create the renderer, as `attach` does for a never-attached engine — and
+   *  as `rebuildRenderer` does for the second half of a device-loss recovery. */
   attach(): void {
     this.hasRenderer = true;
     this.announce();
@@ -44,11 +53,17 @@ class FakeEngine {
     this.announce();
   }
 
-  /** Destroy the renderer, then announce the released backend — the real
-   *  engine's dispose order, so the announcement is already truthful. */
-  dispose(): void {
+  /** The device-loss rebuild's teardown half: the renderer is destroyed and the
+   *  backend goes back to unresolved, both before anything is re-created. */
+  tearDownRenderer(): void {
     this.hasRenderer = false;
     this.resolve(null);
+  }
+
+  /** Destroy the renderer, then announce the released state — the real
+   *  engine's dispose order, so the announcement is already truthful. */
+  dispose(): void {
+    this.tearDownRenderer();
   }
 
   listenerCount(): number {
@@ -56,8 +71,11 @@ class FakeEngine {
   }
 
   private announce(): void {
+    const state: TerminalGpuState = { hasRenderer: this.hasRenderer, backend: this.backend };
+    if (sameGpuState(state, this.announced)) return;
+    this.announced = state;
     const snapshot = [...this.listeners];
-    for (const listener of snapshot) listener(this.backend);
+    for (const listener of snapshot) listener(state);
   }
 }
 
@@ -374,6 +392,34 @@ describe("createGpuPressureTracker", () => {
     watched.resolve("webgl2");
     registry.add(new FakeEngine("webgl2"));
     expect(seen).not.toHaveBeenCalled();
+  });
+
+  // REGRESSION. The engine used to announce `backend` alone, and to dedupe on
+  // `backend` alone — so a device-loss rebuild that starts and ends unresolved
+  // was completely silent. That is not an exotic case: `polledBackend` folds
+  // restty's birth-state "none" to null, so an engine rebuilt before (or
+  // instead of) resolving reads null on both sides of the whole teardown and
+  // re-creation. Renderer presence, meanwhile, went false→true→false→true. The
+  // pushed reading stayed frozen at the pre-crash value until some unrelated
+  // engine's event happened to jog the tracker; only a `current()` pull was
+  // ever right, which is exactly the bug a pushed reading exists to prevent.
+  it("still reports a device-loss rebuild that lands on the same backend it left", () => {
+    const registry = new FakeRegistry();
+    const tracker = createGpuPressureTracker(registry);
+    const engine = new FakeEngine();
+    registry.add(engine);
+    const seen = vi.fn();
+    tracker.subscribe(seen);
+
+    engine.tearDownRenderer();
+    expect(seen).toHaveBeenLastCalledWith({ liveContexts: 0, anyWebgl2: false, pending: 0 });
+
+    engine.attach();
+    expect(seen).toHaveBeenLastCalledWith({ liveContexts: 1, anyWebgl2: false, pending: 1 });
+
+    // Both halves were heard, and `backend` never moved off null to carry them.
+    expect(seen).toHaveBeenCalledTimes(2);
+    expect(engine.backend).toBeNull();
   });
 
   it("shows a device-loss rebuild as every terminal going unresolved and back", () => {
