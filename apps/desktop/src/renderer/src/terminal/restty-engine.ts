@@ -55,6 +55,29 @@ const MAX_FONT_SIZE = 40;
  * Apple Symbols covers the common terminal-symbol blocks, while STIX Two Math
  * fills later Misc Technical codepoints such as U+23FA that Apple Symbols
  * omits. Color emoji remains last and is selected only for emoji presentation. */
+/**
+ * Deliver `value` to every listener, isolating each one. Two rules, both load-
+ * bearing (same reasoning as the registry's `fitLiveEngines`):
+ *
+ *  1. Iterate a SNAPSHOT. A listener that unsubscribes itself — or re-adds the
+ *     same function object — mutates the live Set mid-walk, which skips or
+ *     double-fires its neighbours.
+ *  2. Catch per listener. A throwing subscriber must not abort the fan-out, and
+ *     above all must not escape into the engine's own lifecycle: a throw out of
+ *     `dispose()`'s backend announcement would leave the GPU canvas alive, the
+ *     engine in the registry, and the caller's remaining PTYs unkilled.
+ */
+function fanOut<T>(listeners: Iterable<(value: T) => void>, event: string, value: T): void {
+  const snapshot = [...listeners];
+  for (const listener of snapshot) {
+    try {
+      listener(value);
+    } catch (error) {
+      console.warn(`terminal ${event} listener failed:`, error);
+    }
+  }
+}
+
 function resttyFonts(fontFamilies: readonly string[]): ResttyFontInput[] {
   return [
     ...fontFamilies.map((family) => ({ family, local: "prefer" as const })),
@@ -218,7 +241,7 @@ export class ResttyEngine implements TerminalEngine {
         // re-measures on reveal.
         if (event.cols <= 1 || event.rows <= 1) return;
         this.dimensions = { cols: event.cols, rows: event.rows };
-        for (const cb of this.resizeCbs) cb(this.dimensions);
+        fanOut(this.resizeCbs, "resize", this.dimensions);
       } else if (event.type === "backend") {
         this.setBackend(toTerminalBackend(event.backend));
         if (this.backend === "webgpu") this.armDeviceLossWatch();
@@ -238,7 +261,7 @@ export class ResttyEngine implements TerminalEngine {
   private setBackend(backend: TerminalBackend | null): void {
     if (this.backend === backend) return;
     this.backend = backend;
-    for (const cb of this.backendCbs) cb(backend);
+    fanOut(this.backendCbs, "backend", backend);
   }
 
   onBackendChanged(callback: (backend: TerminalBackend | null) => void): () => void {
@@ -273,7 +296,7 @@ export class ResttyEngine implements TerminalEngine {
   }
 
   private emitData(data: string): void {
-    for (const cb of this.dataCbs) cb(data);
+    fanOut(this.dataCbs, "input", data);
   }
 
   private readonly onKeyDownCapture = (event: KeyboardEvent): void => {

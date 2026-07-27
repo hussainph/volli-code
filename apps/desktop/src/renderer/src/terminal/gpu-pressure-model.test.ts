@@ -158,6 +158,46 @@ describe("createGpuPressureTracker", () => {
     expect(seen).toHaveBeenCalledOnce();
   });
 
+  // Observation must never perturb what it observes: this fan-out runs inside a
+  // dying engine's dispose, so an escaping throw would abort that teardown and
+  // leak the context the reader was asking about.
+  it("keeps serving every other reader when one of them throws", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const registry = new FakeRegistry();
+    const tracker = createGpuPressureTracker(registry);
+    const failure = new Error("reader is broken");
+    const before = vi.fn();
+    const after = vi.fn();
+    tracker.subscribe(before);
+    tracker.subscribe(() => {
+      throw failure;
+    });
+    tracker.subscribe(after);
+
+    const engine = new FakeEngine();
+    expect(() => registry.add(engine)).not.toThrow();
+
+    expect(before).toHaveBeenCalledOnce();
+    expect(after).toHaveBeenCalledOnce();
+    expect(warnSpy).toHaveBeenCalledWith("gpu pressure listener failed:", failure);
+  });
+
+  // A reader that drops out on the reading it just received mutates the live
+  // listener set mid-walk; iterating it directly would skip its neighbour.
+  it("still reaches the neighbour of a reader that unsubscribes mid-reading", () => {
+    const registry = new FakeRegistry();
+    const tracker = createGpuPressureTracker(registry);
+    const neighbour = vi.fn();
+    const unsubscribe = tracker.subscribe(() => {
+      unsubscribe();
+    });
+    tracker.subscribe(neighbour);
+
+    registry.add(new FakeEngine("webgpu"));
+
+    expect(neighbour).toHaveBeenCalledOnce();
+  });
+
   it("shows a device-loss rebuild as every terminal going unresolved and back", () => {
     const registry = new FakeRegistry();
     const tracker = createGpuPressureTracker(registry);

@@ -72,9 +72,21 @@ export function createGpuPressureTracker(registry: BackendReporterRegistry): Gpu
   const current = (): GpuPressure =>
     gpuPressureOf(registry.liveEngines().map((engine) => engine.backend));
 
+  // Snapshot + per-listener catch. Reading pressure must never perturb what it
+  // observes: this fan-out runs INSIDE an engine's dispose (via its backend
+  // event), so a throwing reader would abort that teardown — leaking the very
+  // GPU context it was asking about. A reader that unsubscribes itself here
+  // must likewise not cost its neighbour a reading.
   const notify = (): void => {
     const pressure = current();
-    for (const listener of listeners) listener(pressure);
+    const readers = [...listeners];
+    for (const listener of readers) {
+      try {
+        listener(pressure);
+      } catch (error) {
+        console.warn("gpu pressure listener failed:", error);
+      }
+    }
   };
 
   // Backend resolution is per-engine, so the membership event alone would miss

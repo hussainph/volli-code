@@ -18,8 +18,22 @@ import type { TerminalEngine } from "./engine";
 const engines = new Map<string, TerminalEngine>();
 const membershipListeners = new Set<() => void>();
 
+/**
+ * Tell every watcher the engine set changed. Snapshot + per-listener catch, for
+ * the same reasons as `fitLiveEngines` below: a listener that unsubscribes
+ * itself mid-walk would skip its neighbour, and a THROWING watcher must never
+ * abort the create/dispose it was merely observing — an exception escaping
+ * `disposeEngine` would strand the caller's remaining PTYs unkilled.
+ */
 function announceMembership(): void {
-  for (const listener of membershipListeners) listener();
+  const watchers = [...membershipListeners];
+  for (const listener of watchers) {
+    try {
+      listener();
+    } catch (error) {
+      console.warn("terminal engine-set listener failed:", error);
+    }
+  }
 }
 
 function fitLiveEngines(): void {
@@ -101,7 +115,12 @@ export function getEngine(sessionId: string): TerminalEngine | undefined {
 export function disposeEngine(sessionId: string): void {
   const engine = engines.get(sessionId);
   if (engine === undefined) return;
-  engine.dispose();
+  // Forget it BEFORE disposing. `dispose()` announces the released backend, and
+  // anything folding the registry into a reading (gpu-pressure) recomputes from
+  // `liveEngines()` on that event — with the dying engine still in the map it
+  // would publish a reading that counts a destroyed terminal as a live one,
+  // ahead of the corrected reading `announceMembership()` triggers below.
   engines.delete(sessionId);
+  engine.dispose();
   announceMembership();
 }
