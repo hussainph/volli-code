@@ -33,13 +33,19 @@
  *      bounce and a final-value check would grade a window that flickered as
  *      passing.
  *   7. The CANVAS layer (#124) obeys the same two rules, in the one place they
- *      can actually be seen: the Background row's hover-preview ends on EVERY
- *      way out of the list (Escape, an outside click, the pointer leaving), and
- *      a scope change — and only a scope change — crossfades the layer. The
- *      crossfade is a CSS animation on a mounted-then-dropped element, so a
- *      unit test can reach the decision but never the animation; both of the
- *      bugs these checks pin have already shipped once in this subsystem
- *      (2c84925, 124abab).
+ *      can actually be seen: a hover-preview repaints the layer and every way
+ *      out of the picker puts it back exactly, and a scope change — and only a
+ *      scope change — crossfades it. The crossfade is a CSS animation on a
+ *      mounted-then-dropped element, so a unit test can reach the decision but
+ *      never the animation; both of the bugs these checks pin have already
+ *      shipped once in this subsystem (2c84925, 124abab).
+ *
+ *      These are driven through the THEME PICKER, against two seeded theme
+ *      files that carry a non-solid canvas — not through an Appearance control,
+ *      because there deliberately isn't one (see theme-editor.tsx: the
+ *      Background row is withdrawn until #74's vivid color model lands). A
+ *      theme file is the canvas's other, older interface (#71), so this is the
+ *      entry point that will still be here when the picker comes back.
  *
  * Like terminal-smoke.mjs / ghostty-config-smoke.mjs this is a MANUALLY-RUN
  * smoke (needs a display + the built app) — CI does not run it:
@@ -369,8 +375,45 @@ const themeStateFor = (page, projectId) =>
 
 // ---- the canvas layer (#124) ------------------------------------------------
 
-/** The Background options, in the order the row lists them (theme-editor-model.ts). */
-const CANVAS_OPTIONS = ["Solid", "Gradient", "Mesh"];
+/**
+ * Two theme files that carry a non-solid canvas — the only way into the layer
+ * now that the Background row is withdrawn, and the way a shared or hand-edited
+ * theme reaches it anyway (#71: the file is the full interface).
+ *
+ * Both seed on **Ember's own `#e8652a`**, so every generated token is byte-equal
+ * to Ember's and the whole EMBER table above keeps describing the window while
+ * these are worn. The only thing that moves is the canvas, which is exactly the
+ * axis under test — a theme that also changed `--background` would let a canvas
+ * assertion pass on the strength of an unrelated repaint.
+ *
+ * The stops are `deriveCanvasStops({ seed: "#e8652a", kind })`'s own output,
+ * pinned in `packages/shared/src/theme/canvas.test.ts`. They are also the whole
+ * reason the picker is gone: three shades of near-black is what the legibility
+ * band can afford, and it is not a feature. The layer still has to WORK, which
+ * is what these checks are for.
+ */
+const CANVAS_THEMES = [
+  {
+    name: "Glow",
+    slug: "glow",
+    seed: "#e8652a",
+    accent: null,
+    grain: 0,
+    canvas: { kind: "gradient", stops: ["#160d0a", "#0d0705", "#060303"] },
+    overrides: {},
+    appearance: "dark",
+  },
+  {
+    name: "Haze",
+    slug: "haze",
+    seed: "#e8652a",
+    accent: null,
+    grain: 0,
+    canvas: { kind: "mesh", stops: ["#160d0a", "#0d0705", "#060302"] },
+    overrides: {},
+    appearance: "dark",
+  },
+];
 
 /**
  * What the canvas layer is painting right now, as one comparable string.
@@ -441,42 +484,34 @@ async function watchCanvasFades(page) {
 /** Every canvas animation that has started since {@link watchCanvasFades}, oldest first. */
 const readCanvasFades = (page) => page.evaluate(() => window.volliCanvasFades?.fades ?? []);
 
-/** The Background row's trigger — `aria-label`, so the name is the noun alone. */
-const backgroundTrigger = (page) => page.getByRole("button", { name: "Background", exact: true });
-
-/** Settings → Appearance → Customize, which is where the Background row lives. */
-async function openThemeEditor(page) {
-  await openAppearanceSettings(page);
-  await page.getByRole("button", { name: "Customize", exact: true }).click();
-  await backgroundTrigger(page).waitFor();
-}
-
 /**
- * Opens the Background popover, reopening the editor first if a previous check's
- * exit took it down with it. Escape belongs to the innermost dismissable thing,
- * and which one that is here is precisely what these checks are measuring — so
- * they assert on the RESTORE and let the editor's own lifetime be whatever it is.
+ * The GLOBAL app-theme picker on Settings → Appearance. Scoped by test id
+ * because this pane mounts the editor and terminal combo boxes too, and their
+ * lists carry options of the same name.
  */
-async function openBackgroundMenu(page) {
-  if ((await backgroundTrigger(page).count()) === 0) await openThemeEditor(page);
-  const trigger = backgroundTrigger(page);
-  // Gated on the trigger's own state, not clicked unconditionally: a hover-
-  // preview exit leaves the popover OPEN (walking away is not a dismissal), and
-  // a second click there would toggle it shut under the next check.
-  if ((await trigger.getAttribute("aria-expanded")) !== "true") await trigger.click();
-  await page.getByRole("option", { name: "Mesh", exact: true }).first().waitFor();
+const appearancePicker = (page) => page.getByTestId("appearance-theme-picker");
+
+/** Settings → Appearance, with the app-theme picker's rows up and hittable. */
+async function openThemePicker(page) {
+  await openAppearanceSettings(page);
+  await appearancePicker(page).waitFor();
+  await appearancePicker(page).getByRole("option", { name: /Glow/ }).first().waitFor();
 }
 
 /**
- * Hovers a Background row and waits for the app to repaint under it, re-entering
+ * Hovers a theme row and waits for the CANVAS to repaint under it, re-entering
  * the row if the first move didn't take — {@link hoverThemeRow}'s shape, read
  * against the canvas layer instead of a token, for the same measured reason.
+ *
+ * Leaving the list before a retry is load-bearing twice over here: cmdk selects
+ * on crossing into a row and no-ops on an unchanged value, so a row the previous
+ * check left highlighted would swallow the hover outright.
  */
-async function hoverBackgroundRow(page, label, before) {
+async function hoverThemeRowForCanvas(page, name, before) {
   let painted = before;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     if (attempt > 0) await page.mouse.move(8, 8);
-    await page.getByRole("option", { name: label, exact: true }).first().hover();
+    await appearancePicker(page).getByRole("option", { name }).first().hover();
     painted = await waitForCanvasPaint(page, (value) => value !== before, { timeout: 1500 });
     if (painted !== before) return painted;
   }
@@ -492,6 +527,18 @@ await fs.writeFile(userConfigPath, USER_GHOSTTY_CONFIG);
 const userConfigBefore = await fs.readFile(userConfigPath, "utf8");
 
 const overlayPath = join(userDataDir, "volli", "ghostty", "config");
+
+// The canvas themes go in BEFORE the first launch, one JSON file each under
+// `<userData>/volli/themes/<slug>.json` — the layout `customThemePath()` owns.
+// Dropped rather than saved through the app on purpose: a hand-placed theme
+// file is a supported way to get one (#71), so this also proves the listing
+// picks up a canvas it never wrote.
+const themesDir = join(userDataDir, "volli", "themes");
+await fs.mkdir(themesDir, { recursive: true });
+for (const theme of CANVAS_THEMES) {
+  await fs.writeFile(join(themesDir, `${theme.slug}.json`), `${JSON.stringify(theme, null, 2)}\n`);
+}
+
 const { check, attempt, summarize } = createRunner();
 
 console.log("scratch:", scratch, "\n");
@@ -972,66 +1019,55 @@ cursor-style = block
 
   // ---- 9. the canvas layer (#124) ------------------------------------------
   // Beta is selected and inherits the global theme (Ember, from check 21), so
-  // the editor opened here edits the look the whole app is currently wearing.
-  await openThemeEditor(page);
+  // the picker opened here changes the look the whole app is currently wearing.
+  // Glow and Haze seed on Ember's own color, so a preview of either moves the
+  // canvas and NOTHING else — which is what makes these assertions about the
+  // layer rather than about a repaint in general.
+  await openThemePicker(page);
   const committedCanvas = await canvasPaint(page);
 
-  await attempt(23, "a Background hover repaints the canvas, and Escape puts it back", async () => {
-    await openBackgroundMenu(page);
-    const previewed = await hoverBackgroundRow(page, "Gradient", committedCanvas);
-    // The search field is `sr-only` on a three-row list but still holds focus,
-    // so this is the same keystroke a user makes — pressed on the page rather
-    // than on a 1px box.
-    await page.keyboard.press("Escape");
-    const restored = await waitForCanvasPaint(page, (value) => value === committedCanvas);
-    return {
-      ok:
-        previewed !== committedCanvas &&
-        previewed.includes("linear-gradient") &&
-        restored === committedCanvas,
-      detail: `preview=${short(previewed)} restored=${restored === committedCanvas ? "exactly" : short(restored)}`,
-    };
-  });
+  await attempt(
+    23,
+    "a theme hover-preview repaints the canvas, and Escape puts it back",
+    async () => {
+      const previewed = await hoverThemeRowForCanvas(page, /Glow/, committedCanvas);
+      // Pressed on the picker's own search field, which is where focus already is
+      // — the same keystroke check 5 makes, graded against the canvas instead of
+      // the token set.
+      await page.getByRole("combobox", { name: "Themes" }).press("Escape");
+      const restored = await waitForCanvasPaint(page, (value) => value === committedCanvas);
+      return {
+        ok:
+          previewed !== committedCanvas &&
+          previewed.includes("linear-gradient") &&
+          restored === committedCanvas,
+        detail: `preview=${short(previewed)} restored=${restored === committedCanvas ? "exactly" : short(restored)}`,
+      };
+    },
+  );
 
-  await attempt(24, "an outside click ends a Background preview", async () => {
-    await openBackgroundMenu(page);
-    // Arrowed, not hovered, on purpose: moving the pointer OUT of the list to
-    // reach the outside target would fire the pointer-leave path on the way,
-    // and this check would be grading that instead of the click. cmdk routes
-    // arrow keys through the focused input, so the preview is real either way.
-    let previewed = committedCanvas;
-    for (let step = 0; step < CANVAS_OPTIONS.length && previewed === committedCanvas; step += 1) {
-      await page.keyboard.press("ArrowDown");
-      previewed = await waitForCanvasPaint(page, (value) => value !== committedCanvas, {
-        timeout: 800,
-      });
-    }
-    // The row's own description: inert copy, outside the popover, and it cannot
-    // wander the way a bare coordinate can.
-    await page.getByText("The layer behind the app's content.", { exact: false }).first().click();
-    const restored = await waitForCanvasPaint(page, (value) => value === committedCanvas);
-    return {
-      ok: previewed !== committedCanvas && restored === committedCanvas,
-      detail: `preview=${short(previewed)} restored=${restored === committedCanvas ? "exactly" : short(restored)}`,
-    };
-  });
-
-  await attempt(25, "the pointer leaving the list ends a Background preview", async () => {
-    await openBackgroundMenu(page);
-    const previewed = await hoverBackgroundRow(page, "Mesh", committedCanvas);
+  await attempt(24, "the pointer leaving the picker ends a canvas preview", async () => {
+    // Haze, not the Glow of check 23: Escape leaves that row SELECTED and cmdk
+    // no-ops on an unchanged value, so re-hovering it would preview nothing and
+    // this check would grade a revert that never had anything to revert. Haze is
+    // also a mesh, so the OTHER geometry gets painted on a real window at least
+    // once — a `background-color` plus three radial layers, which is the shape
+    // the two-layer crossfade exists for.
+    const previewed = await hoverThemeRowForCanvas(page, /Haze/, committedCanvas);
     // A hover has no Escape: walking away IS the "never mind". (8, 8) is outside
     // the Command root, so this is the real pointerleave and not a click.
     await page.mouse.move(8, 8);
     const restored = await waitForCanvasPaint(page, (value) => value === committedCanvas);
     // Re-entering the SAME row must preview again. cmdk no-ops on an unchanged
     // value, so a row left highlighted swallows every later hover over it —
-    // the bug 2c84925 fixed, on a row that fix predates.
-    const reentered = await hoverBackgroundRow(page, "Mesh", committedCanvas);
+    // the bug 2c84925 fixed, now watched on the canvas layer too.
+    const reentered = await hoverThemeRowForCanvas(page, /Haze/, committedCanvas);
     await page.mouse.move(8, 8);
     const restoredTwice = await waitForCanvasPaint(page, (value) => value === committedCanvas);
     return {
       ok:
         previewed !== committedCanvas &&
+        previewed.includes("radial-gradient") &&
         restored === committedCanvas &&
         reentered === previewed &&
         restoredTwice === committedCanvas,
@@ -1039,37 +1075,39 @@ cursor-style = block
     };
   });
 
-  await attempt(26, "picking a Background repaints instantly, with no crossfade", async () => {
+  await attempt(25, "committing a canvas theme repaints instantly, with no crossfade", async () => {
     // The negative half of #124's behaviour 16, and the one that matters most:
-    // a canvas that faded on every pick would make three options feel like a
-    // queue of stale frames, and nothing else in the suite would notice.
-    await openBackgroundMenu(page);
+    // a canvas that faded on every pick would make the picker feel like a queue
+    // of stale frames, and nothing else in the suite would notice. It is also
+    // the setup for 26-27 — the GLOBAL theme has to carry a gradient, or both
+    // scopes below resolve to `var(--rail)`, no canvas repaints, and those two
+    // checks watch for a fade that correctly never happens.
     await watchCanvasFades(page);
     await watchScopeTransition(page);
-    await page.getByRole("option", { name: "Gradient", exact: true }).first().click();
+    await appearancePicker(page).getByRole("option", { name: /Glow/ }).first().click();
     const painted = await waitForCanvasPaint(page, (value) => value.includes("linear-gradient"));
     await sleep(SCOPE_TRANSITION_SETTLE_MS);
     const fades = await readCanvasFades(page);
     const armed = await readScopeTransition(page);
+    // The WRITE, not the paint: the paint is optimistic and is already on
+    // screen, so moving on from a canvas poll would leave check 26 switching
+    // scopes with a theme write still in flight — a race it has no business
+    // testing (and one this check has already been caught by once).
+    const globalSlug = await waitUntil("the global theme to change", async () => {
+      const state = await themeStateFor(page, projectBId);
+      return state.globalSlug === "glow" ? state.globalSlug : null;
+    }).catch(() => null);
     return {
-      ok: painted.includes("linear-gradient") && fades.length === 0 && !armed.seen,
-      detail: `painted=${short(painted)} fades=${JSON.stringify(fades)} crossfadeArmed=${armed.seen}`,
+      ok:
+        painted.includes("linear-gradient") &&
+        fades.length === 0 &&
+        !armed.seen &&
+        globalSlug === "glow",
+      detail: `painted=${short(painted)} fades=${JSON.stringify(fades)} crossfadeArmed=${armed.seen} global=${globalSlug}`,
     };
   });
 
-  // Save the draft, so the GLOBAL theme now carries a gradient. Without this the
-  // two scopes below would both resolve to `var(--rail)` — the same string, no
-  // repaint, and checks 27-28 would be watching for a fade that correctly never
-  // happens. This is also the only path that derives the stops through the app.
-  await page.getByRole("button", { name: "Save theme", exact: true }).click();
-  // Waited on the EDITOR closing, not on the paint: the paint is optimistic and
-  // is already on screen, so a canvas poll would return before the write's
-  // response has been adopted — leaving check 27 to switch scopes with a theme
-  // write still in flight, which is a race it has no business testing.
-  await backgroundTrigger(page).waitFor({ state: "detached" });
-  await waitForCanvasPaint(page, (value) => value.includes("linear-gradient"));
-
-  await attempt(27, "a project-scope change crossfades the canvas layer", async () => {
+  await attempt(26, "a project-scope change crossfades the canvas layer", async () => {
     await watchCanvasFades(page);
     await watchScopeTransition(page);
     // The paint trace is diagnosis, not assertion: "no crossfade" and "no scope
@@ -1077,7 +1115,7 @@ cursor-style = block
     // tells them apart if this ever misses.
     await watchBackgroundPaints(page);
     // Alpha overrides to Midnight, which carries no canvas, so the layer goes
-    // from the saved gradient to the flat fill — precisely the change
+    // from the committed gradient to the flat fill — precisely the change
     // `background-image` cannot interpolate, and the whole reason two layers
     // are stacked rather than one whose `background` moves.
     await selectProject(page, PROJECT_A);
@@ -1099,7 +1137,7 @@ cursor-style = block
     };
   });
 
-  await attempt(28, "reduced motion collapses the crossfade to its short ease", async () => {
+  await attempt(27, "reduced motion collapses the crossfade to its short ease", async () => {
     // HIG: nothing here translates or scales, so the accessible treatment is the
     // shortest honest ease rather than a hard cut. The media query moves ONE
     // custom property, and the canvas reads it through the same animation — so

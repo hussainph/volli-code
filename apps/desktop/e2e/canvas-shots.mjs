@@ -26,6 +26,12 @@
  *      stay opaque is the fixed rule; alpha is only readable from a live
  *      computed style, which is why it lives here.
  *
+ * There is no Background picker to drive: the row is deliberately unexposed
+ * until #74's vivid color model lands (theme-editor.tsx says why), so the app's
+ * own derivation is reached through the seed field instead — see
+ * {@link paintedStops}. Check 1 never touched a control and is unchanged, which
+ * matters: it is the guarantee that makes shipping the dormant layer free.
+ *
  * MANUALLY RUN (needs a display + the built app); CI does not run it:
  *
  *   pnpm -C apps/desktop run build     # or: vp run build
@@ -50,6 +56,17 @@ const OUT_DIR = process.argv[2] ?? join(APP_DIR, "e2e", "shots");
 
 /** The band from theme/canvas.ts, plus the one 8-bit step it is allowed to round by. */
 const BAND = { min: 0.105, max: 0.17, quantization: 0.005 };
+
+/**
+ * Ember's seed, and three stops no derivation would ever emit.
+ *
+ * The placeholders are three unrelated saturated hues; the read-time band clamp
+ * drags them dark but cannot make them a monotone ramp, so a seed nudge that
+ * failed to re-derive shows up as a paint that never moved rather than as a
+ * plausible gradient nobody notices. {@link paintedStops} throws on exactly that.
+ */
+const EMBER_SEED = "#e8652a";
+const PLACEHOLDER_STOPS = ["#ff00ff", "#00ff00", "#0000ff"];
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("volli-canvas-shots-");
 const { check, attempt, summarize } = createRunner();
@@ -184,15 +201,10 @@ try {
   // Derive the stops through the APP rather than recomputing them here: the
   // painted layer is the derivation's own output, so a shot can never be of
   // colors the app would not actually produce.
-  await openThemeEditor(page);
   const gradient = await paintedStops(page, "gradient");
   const mesh = await paintedStops(page, "mesh");
-  // Leave the edit without saving — the shots below write the canvas directly,
-  // onto the shipped theme rather than onto a copy of it — and go back to the
-  // board, which is the surface worth judging: rail, sidebar, chrome band and
-  // the framed card all in one frame.
-  await page.keyboard.press("Escape");
-  await sleep(300);
+  // Back to the board, which is the surface worth judging: rail, sidebar,
+  // chrome band and the framed card all in one frame.
   await page.getByRole("button", { name: "Board", exact: true }).first().click();
   await sleep(900);
   // A two-stop derivation IS the three-stop one without its middle: both
@@ -282,7 +294,7 @@ async function seedBoard(page) {
   await sleep(1200);
 }
 
-/** Settings → Appearance → Customize, which is where the Background row lives. */
+/** Settings → Appearance → Customize: the theme editor, opened on the applied theme. */
 async function openThemeEditor(page) {
   await page.getByRole("button", { name: "Settings", exact: true }).first().click();
   await page
@@ -290,7 +302,12 @@ async function openThemeEditor(page) {
     .getByRole("button", { name: "Appearance", exact: true })
     .click();
   await page.getByRole("button", { name: "Customize", exact: true }).click();
-  await page.getByRole("button", { name: "Background" }).waitFor();
+  await seedHexField(page).waitFor();
+}
+
+/** The theme editor's seed hex field — the control that re-derives a canvas. */
+function seedHexField(page) {
+  return page.getByLabel("Theme color hex");
 }
 
 /**
@@ -313,27 +330,48 @@ async function setCanvas(page, canvas) {
   await sleep(1200);
 }
 
-/**
- * The stops the app itself derives for `kind`, obtained the way a user would:
- * pick that Background in the editor, then read the colors back off the layer
- * it actually painted.
- *
- * Driving the real control rather than reimplementing the OKLCH derivation here
- * is the point — a smoke that recomputed the colors could shoot a gradient the
- * app would never produce, and never notice.
- */
-async function paintedStops(page, kind) {
-  const label = `${kind[0].toUpperCase()}${kind.slice(1)}`;
-  await page.getByRole("button", { name: "Background" }).click();
-  await page.getByRole("option", { name: label, exact: true }).click();
-  await sleep(400);
-  // A mesh's base fill lands in `background-color` rather than in the image
-  // list, and its pools repeat a stop so all three anchors get used — so read
-  // both halves, drop the `transparent` falloffs, and keep first appearances.
-  const painted = await page.evaluate(() => {
+/** The canvas layer's current paint, both halves, as one comparable string. */
+function canvasPaint(page) {
+  return page.evaluate(() => {
     const computed = getComputedStyle(document.querySelector("[data-volli-canvas] > div"));
     return `${computed.backgroundImage} ${computed.backgroundColor}`;
   });
+}
+
+/**
+ * The stops the app itself derives for `kind`, read back off the layer it
+ * actually painted — never recomputed here, because a smoke that reimplemented
+ * the OKLCH derivation could shoot a gradient the app would never produce and
+ * never notice.
+ *
+ * The route is the **seed field**, not a Background picker: that row is
+ * deliberately unexposed until #74's vivid color model lands (theme-editor.tsx
+ * says why), and `withSeed` is the control that still re-derives a non-solid
+ * canvas — "its colors come from the color above" is a promise the editor keeps
+ * whether or not there is a row to pick the geometry in. So: write a canvas of
+ * the right kind with junk stops, open the editor, move the seed off Ember and
+ * back, and let the app fill them in. That also means this smoke now covers the
+ * one canvas path a control still reaches.
+ */
+async function paintedStops(page, kind) {
+  await setCanvas(page, { kind, stops: PLACEHOLDER_STOPS });
+  await openThemeEditor(page);
+  const before = await canvasPaint(page);
+  // Two writes, ending on Ember's own seed: React fires no change event for a
+  // fill that leaves the value where it was, so the nudge has to actually move.
+  await seedHexField(page).fill("#e8652b");
+  await seedHexField(page).fill(EMBER_SEED);
+  const painted = await waitUntil(`the ${kind} canvas to re-derive`, async () => {
+    const now = await canvasPaint(page);
+    return now === before ? null : now;
+  });
+  // Leave the edit without saving — the shots below write the canvas directly,
+  // onto the shipped theme rather than onto a copy of it.
+  await page.keyboard.press("Escape");
+  await sleep(300);
+  // A mesh's base fill lands in `background-color` rather than in the image
+  // list, and its pools repeat a stop so all three anchors get used — so read
+  // both halves, drop the `transparent` falloffs, and keep first appearances.
   const stops = [...painted.matchAll(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/g)]
     .filter(([, , , , alpha]) => alpha === undefined || Number(alpha) > 0)
     .map(
