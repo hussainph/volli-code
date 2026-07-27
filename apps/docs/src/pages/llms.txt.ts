@@ -20,7 +20,13 @@ const SECTIONS = [
   },
   {
     label: "Using Volli",
-    slugs: ["guides/board", "guides/agents-and-worktrees", "guides/theming"],
+    slugs: [
+      "guides/board",
+      "guides/ticket-workspace",
+      "guides/agents-and-worktrees",
+      "guides/settings",
+      "guides/theming",
+    ],
   },
   {
     label: "Reference",

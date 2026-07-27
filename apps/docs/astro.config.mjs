@@ -51,10 +51,14 @@ export default defineConfig({
           ],
         },
         {
+          // Ordered by the path through the product: plan on the board, open a
+          // ticket, understand what runs inside it, then configure and theme.
           label: "Using Volli",
           items: [
             { label: "The board", slug: "guides/board" },
+            { label: "Ticket workspace", slug: "guides/ticket-workspace" },
             { label: "Agents and worktrees", slug: "guides/agents-and-worktrees" },
+            { label: "Settings", slug: "guides/settings" },
             { label: "Theming", slug: "guides/theming" },
           ],
         },

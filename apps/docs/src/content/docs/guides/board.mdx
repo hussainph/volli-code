@@ -5,10 +5,11 @@ sidebar:
   label: The board
 ---
 
-import { Aside } from "@astrojs/starlight/components";
+import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
 
 Volli's board has five fixed columns, and you can't add, rename, or remove
 them. They track whose turn it is with a ticket, not a workflow you configure.
+
 
 ## The columns
 
@@ -29,6 +30,32 @@ change set here and decide.
 Backlog and Todo are yours, Doing belongs to an agent, and Needs Review is the
 handoff back. Most of the movement you'll see happens across that Doing and
 Needs Review boundary.
+
+## List view
+
+The board button next to the ticket count switches between **Board** and
+**List**. Board is the kanban layout above; List lays the same tickets out as
+rows instead of cards, grouped by the same five columns. Both views share the
+same filtering and sort order, so switching between them never changes which
+tickets you see or the order they're in.
+
+## Filtering and sorting
+
+The board header carries a **Priority** and, once a project has labels, a
+**Label** filter chip. Each opens a checklist, and you can select more than
+one value in it: picking two priorities shows tickets matching either.
+**Clear** appears once a filter is active and resets it.
+
+The sort control next to the filters picks how each column orders its
+tickets: **Manual** (the order you left them in by dragging), **Priority**,
+**Created**, **Updated**, or **Title**. Every key but Manual has an
+independent Ascending/Descending toggle; Manual ignores it, since a drag
+order only goes one way. Switching to a different key and back to Manual
+restores the hand-arranged order, because sorting by a field never touches
+it.
+
+Free-text search isn't in this header. It's part of the command palette
+(`⌘K`), which searches tickets and sessions across every project.
 
 ## What moves a ticket
 
@@ -58,6 +85,22 @@ For example: pull a ticket out of Doing because the agent is going the wrong
 way, and the agent's own "I'm done" signal landing a second later won't drag
 the ticket into Needs Review behind you.
 
+## The ticket context menu
+
+Right-click a card for the fastest way to act on it without a drag or the
+CLI. The menu offers:
+
+- **Move to** a column: the same move as a drag, without the drag.
+- **Priority**: set it to low, medium, or high. The current priority carries
+  a checkmark.
+- **Resume last session**: shown only when the ticket has a resumable
+  session. Reopens it in the ticket's workspace.
+- **Remove worktree…**: deletes the worktree's folder on disk and keeps the
+  branch. Disabled while any of the ticket's sessions are still running. If
+  the worktree has uncommitted work, Volli asks again before it lets you
+  discard it.
+- **Archive**: see [Archiving](#archiving) below.
+
 ## Tickets
 
 A ticket carries a title, a Markdown body, a priority, labels, and a display
@@ -65,8 +108,27 @@ ID like `VC-12`. The body matters most once an agent is involved: it's the
 scope of the work and the instruction the agent starts from.
 
 **Priority** is low, medium, or high. **Labels** are project-scoped records
-with their own colours, so the same label means the same thing across every
+with their own colors, so the same label means the same thing across every
 ticket in a project.
+
+Set priority from a card's context menu, or from the **Properties** tab of
+the ticket's workspace. Labels have no context-menu entry; set them from the
+ticket workspace's **Properties** tab, or when you create the ticket, from
+the composer's Labels chip. Typing a name that doesn't exist yet and pressing
+Enter creates that label for the project, so there's no separate "manage
+labels" screen.
+
+## Comments
+
+Every ticket workspace has a comment feed under its Activity section. Post
+one from the box at the bottom (`⌘Enter` submits) and it renders as Markdown.
+You can edit or delete your own comments; an edited comment is marked
+"edited" next to its timestamp.
+
+Each comment is attributed to whoever posted it: you, or a specific harness
+(Claude Code, Codex, and so on) when a session posts one. Only your own
+comments carry edit and delete controls. Volli doesn't let you alter what an
+agent posted on its own behalf.
 
 ## History
 
@@ -84,9 +146,50 @@ Read a ticket's history with
 ## Archiving
 
 Archiving a ticket takes it off the board and keeps everything else: its
-history, its branch, and its worktree. There's no destructive delete, and
-nothing gets force-removed while it has uncommitted work in it.
+history, its branch, and its worktree. Reach every archived ticket in a
+project from the archive icon in the board header. From there, **Restore**
+puts a ticket back on the board, and **Delete permanently** removes it and
+its full history for good. It's the one genuinely destructive action in this
+flow, and the only one that asks you to confirm it can't be undone.
 
-## Next
+### Auto-archive
 
-[How agents and worktrees fit together](/guides/agents-and-worktrees/).
+Volli watches every worktree ticket's pull request in the background (it
+needs `gh`, the GitHub CLI, on your PATH) and prompts you to wrap one up in
+two cases: its PR merged, in any column, or it's sat in Done for 14 days with
+no open PR. Neither case archives anything by itself. Automation only ever
+prompts here, the same de-escalate-only rule as the rest of the board; you
+still click through it.
+
+That prompt shows up in the ticket's workspace, on the **Properties** tab,
+under Pull request: the button that normally reads "Push updates" or "View
+PR" changes to **Archive & clean**. Clicking it removes the worktree and then
+archives the ticket, in that order. If the worktree still has uncommitted
+work, it refuses the same way [Remove
+worktree…](#the-ticket-context-menu) does, leaving the ticket on the board
+for you to resolve.
+
+Two ways to turn a prompt down. **Keep** pins the ticket so neither case ever
+prompts again, until you unpin it. **Dismiss** just clears the current
+prompt; it's offered again the next time you launch Volli. Both live in the
+same menu as Archive & clean.
+
+Volli checks every worktree ticket about once a minute. If `gh` fails (not
+installed, not authenticated, offline), Volli backs off: it doubles the wait
+after each consecutive failed check, up to 15 minutes, then retries
+automatically without surfacing an error toast.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard
+    title="Agents and worktrees"
+    href="/guides/agents-and-worktrees/"
+    description="What happens to a ticket the moment it reaches Doing."
+  />
+  <LinkCard
+    title="CLI reference"
+    href="/reference/cli/"
+    description="The commands that move tickets, for you and for agents."
+  />
+</CardGrid>

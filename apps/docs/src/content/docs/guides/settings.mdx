@@ -1,0 +1,157 @@
+---
+title: Settings and configuration
+description: Every pane in Settings and Configure, including the worktree copy set that controls which local files reach a fresh ticket, and how to back up your data.
+sidebar:
+  label: Settings
+---
+
+import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
+
+Volli splits configuration into two places: **Settings**, for preferences that
+apply everywhere, and **Configure**, for defaults scoped to one project. This
+page covers every pane in both, and the one path for backing up your data.
+
+## Settings
+
+Open **Settings** from the gear icon in the sidebar footer.
+
+### General
+
+**Settings → General → Archive Done tickets after** sets the Done TTL. A ticket
+with no open pull request that has sat in Done for this many days becomes
+eligible for archive-and-clean. It defaults to 14 days and accepts whole
+numbers of 1 or more.
+
+### Appearance
+
+**Settings → Appearance → App theme** is the app-wide theme picker. See
+[Theming](/guides/theming/) for how it works and how to build your own. Two
+more surfaces live in this pane.
+
+**Editor.** The syntax-highlighting theme for the editor Volli uses for files
+and documents. Leave it on **Matches app theme** and it follows your app theme
+automatically. Pick one explicitly and the row shows **Set by Volli**, with a
+button to reset it back to automatic.
+
+**Terminal.** Font family and font size, plus the terminal's color theme
+(covered in [Theming](/guides/theming/#what-the-terminal-does)). Each row shows
+where its value came from: **Inherited from Ghostty**, **Set by Volli**, **Set
+by this project**, or **Built-in default**, with a revert button on anything
+Volli set. Reverting removes the key from Volli's overlay file rather than
+touching your Ghostty config. Two buttons under **Config files** reveal the
+Ghostty config and Volli's overlay file in Finder.
+
+A custom theme, built from the App theme editor, is a plain JSON file at
+`<userData>/volli/themes/<slug>.json`, one per theme. Its context menu in the
+picker has **Duplicate**, **Rename**, **Open file**, and **Delete**, so you can
+hand-edit or share a theme file directly.
+
+### Harness Runtimes
+
+**Settings → Harness Runtimes** lists the three built-in harnesses, **Claude
+Code**, **Codex**, and **Opencode**, each marked **Built-in**. That's the whole
+pane today. Custom command templates and per-harness resume-flag overrides
+aren't built yet.
+
+### Worktrees
+
+**Settings → Worktrees** lists orphaned worktree directories: leftovers from
+tickets that no longer exist, kept on disk because git found uncommitted
+changes, an unfinished merge, or commits that never reached a remote. Volli
+never deletes these automatically. Each row gets **Reveal in Finder** and
+**Delete**. Deleting is permanent and asks you to confirm first.
+
+Volli sweeps for orphans once, at app launch, and caches the result. Press the
+refresh button to rescan on demand, for instance after you've committed and
+pushed the work yourself.
+
+## Configure
+
+Open the **Configure** tab for a selected project. Everything here is scoped to
+that one project.
+
+### General
+
+**Configure → General → Default base branch** overrides which branch a new
+ticket's worktree branches from. Leave it blank and Volli detects your repo's
+default itself, from `origin`'s HEAD, or your current branch if there's no
+remote.
+
+**Configure → General → Setup command** runs once, in the ticket's own
+terminal, right after its worktree is created and before the agent starts. It's
+the place for `pnpm install` or anything else the worktree needs before an
+agent can work in it. Output prints to the same session the agent then takes
+over, and a failing setup command leaves that terminal live rather than
+starting the agent, so you can fix it and continue by hand. It runs only the
+first time a worktree is created; reopening an existing session skips it.
+
+### Appearance
+
+**Configure → Appearance → App theme** lets this project override the global
+theme. Covered in
+[Theming](/guides/theming/#use-a-different-theme-for-one-project).
+
+### Worktrees
+
+**Configure → Worktrees** documents the copy set: which files, besides your
+tracked source, reach a fresh ticket worktree. By default that's `.env*` and
+`.claude/settings.local.json`, copied with their real contents so an agent has
+your local secrets and settings without either being committed to the repo.
+
+Add a `.worktreeinclude` file at your project's repo root to change the set. It
+uses gitignore syntax, one pattern per line, and Volli reads it straight from
+your main checkout, so it never has to be tracked by git itself:
+
+```
+# Extend the default copy set
+.env.local
+config/dev-secrets.json
+
+# Suppress a default: stop .env* from being copied
+!.env*
+```
+
+The copy step follows three more rules:
+
+- It fires once, right after `git worktree add`, before the setup command or
+  the agent starts.
+- If a file already exists at the destination, because `git worktree add` put
+  it there, Volli leaves it alone. This step only fills in what git doesn't
+  track.
+- Volli recreates a symlink as a symlink rather than following it, so a link
+  pointing outside your repo can't leak its target's contents into the
+  worktree.
+
+<Aside type="caution">
+  The copy set duplicates whatever it matches onto disk in every ticket
+  worktree, including your `.env` files. A coding agent running in that
+  worktree can read them.
+</Aside>
+
+## Back up your data
+
+Volli is local-only, so there's no cloud copy to fall back on. **File → Export
+Database as JSON…** writes your projects, tickets, labels, event history,
+sessions, and comments to a JSON file at a location you choose. There's no
+import path back in, so treat the export as a backup and inspection tool rather
+than a restore mechanism.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard
+    title="Theming"
+    href="/guides/theming/"
+    description="Build the app and terminal color palette this page doesn't cover."
+  />
+  <LinkCard
+    title="Agents and worktrees"
+    href="/guides/agents-and-worktrees/"
+    description="What a ticket's worktree gets, and how sessions behave inside it."
+  />
+  <LinkCard
+    title="Troubleshooting"
+    href="/reference/troubleshooting/"
+    description="Fixes for worktrees, harness credentials, and where Volli keeps things."
+  />
+</CardGrid>
