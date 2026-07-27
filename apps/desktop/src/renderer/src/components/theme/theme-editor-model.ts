@@ -85,14 +85,15 @@ function edited(draft: ThemeDraft, theme: ThemeDefinition): ThemeDraft {
  */
 export function withSeed(draft: ThemeDraft, seed: string): ThemeDraft | null {
   if (!isEditorHexColor(seed)) return null;
-  // The canvas follows the seed, because the Background row promises exactly
-  // that ("its colors come from the color above"). Left alone, a gradient would
-  // stay on the previous hue while every other surface repainted — the app
-  // sitting on someone else's wallpaper.
+  // The canvas follows the seed. This one is NOT dormant even with no Background
+  // row (see theme-editor.tsx): a theme file may already carry a gradient (#71
+  // — the file is the full interface), and left alone it would stay on the
+  // previous hue while every other surface repainted, which is the app sitting
+  // on someone else's wallpaper.
   return edited(draft, { ...draft.theme, seed, canvas: derivedCanvas(draft.theme.canvas, seed) });
 }
 
-/** Every Background the picker offers, in the order it lists them. */
+/** Every Background a theme can carry, in the order a picker lists them. */
 export const CANVAS_KINDS = ["solid", "gradient", "mesh"] as const;
 
 /** One Background option. */
@@ -112,6 +113,11 @@ function derivedCanvas(canvas: ThemeCanvas, seed: string): ThemeCanvas {
  * A new Background. The stops are derived here rather than at render time
  * because they are AUTHORED (#71): what the file holds is what the user
  * chose, and the band that keeps it legible is applied on read instead.
+ *
+ * No caller in the app today — the Background row is deliberately unexposed
+ * until #74's vivid color model lands (theme-editor.tsx says why). Kept, and
+ * kept under test, because that PR re-exposes a control against exactly this
+ * signature; it is the derivation underneath that is being replaced, not this.
  */
 export function withCanvas(draft: ThemeDraft, kind: CanvasKind): ThemeDraft {
   return edited(draft, { ...draft.theme, canvas: canvasOf(kind, draft.theme.seed) });
