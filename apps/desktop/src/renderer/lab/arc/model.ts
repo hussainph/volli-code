@@ -42,8 +42,14 @@ export const ARC_TUNING = {
 
   /** Light mode: the authored lightness is pulled into a pastel band. */
   lightBand: {
-    /** Below this a "light" canvas stops reading as light at all. */
-    min: 0.66,
+    /**
+     * Below this a "light" canvas stops reading as light at all. Measured at
+     * 0.66 with the ember seed: a saturated mid-tone wall that strands BOTH
+     * inks near Lc 50 — light scored 56.9, dark 42.1, neither readable. 0.80
+     * is where the band turns genuinely pastel; 0.83 buys the last few Lc the
+     * worst-case ink score needs once the base fill counts as a surface.
+     */
+    min: 0.83,
     /** Above it the pools wash out and the ink has nothing to bite on. */
     max: 0.9,
   },
@@ -91,7 +97,8 @@ export const ARC_TUNING = {
   /** The flat color under every pool, as a drop from the primary's effective L. */
   baseFill: {
     lightDrop: 0.05,
-    darkDrop: 0.03,
+    /** 0.03 left a one-stop dark canvas reading as a flat fill — the pool needs this much to register as shape. */
+    darkDrop: 0.045,
   },
 
   /** The film-noise tile laid over everything. */
@@ -114,7 +121,8 @@ export const ARC_TUNING = {
     /** Not pure white: a trace of the primary's hue keeps the text part of the canvas. */
     lightL: 0.965,
     lightC: 0.012,
-    darkL: 0.24,
+    /** Only ever chosen over a light canvas, so it can afford to sit near-black — 0.24 measured ~8 Lc short there. */
+    darkL: 0.19,
     darkC: 0.02,
     /** How far the muted ink slides from the chosen ink toward the base fill's L. */
     mutedTowardBase: 0.3,
@@ -465,7 +473,10 @@ export function arcInk(state: ArcCanvasState, resolved: ArcResolvedMode): ArcInk
   const lightInk = oklchToHex(lightL, lightC, h);
   const darkInk = oklchToHex(darkL, darkC, h);
 
-  const surfaces = effectiveStopHexes(state, resolved);
+  // The base fill is a surface too — it is what text sits on wherever no pool
+  // reaches, and a worst-case score that exempted it would be an average with
+  // extra steps.
+  const surfaces = [...effectiveStopHexes(state, resolved), arcBaseFillHex(state, resolved)];
   const lightLc = worstContrast(lightInk, surfaces);
   const darkLc = worstContrast(darkInk, surfaces);
   const chooseLight = lightLc >= darkLc;

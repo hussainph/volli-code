@@ -140,6 +140,85 @@ const NAV_ROWS: readonly { label: string; Icon: Icon }[] = [
 const INK = "var(--lab-canvas-ink, var(--sidebar-foreground))";
 const INK_MUTED = "var(--lab-canvas-ink-muted, var(--muted-foreground))";
 
+/**
+ * The editor's own chrome, which follows the canvas the way Arc's popover does:
+ * a pale veil with dark controls over a light Space, the inverse over a dark
+ * one. The card is a translucent sheet of the surface behind it, so it cannot
+ * stay one color while that surface flips — a dark card on a pastel canvas
+ * reads as a foreign object rather than a layer of it.
+ *
+ * One table rather than a ternary at each call site, for the same reason
+ * `ARC_TUNING` is one table: this is a surface that gets adjusted by eye, and
+ * the adjustment should be a line here rather than a hunt through eight
+ * components. Every value is a literal class string because Tailwind only
+ * generates what it can see written out.
+ */
+interface CardChrome {
+  /** The card itself: veil, hairline, and the ink everything inside inherits. */
+  card: string;
+  /** A subtle inset fill ON the card — the mode-row track, the readout chips. */
+  well: string;
+  /** One mode-row item: dim until pressed, then the pill lifts and the ink fills in. */
+  segment: string;
+  /** A filled round button — the +/− pair. */
+  control: string;
+  /** A text-only button — the swatch chevrons and Reset. */
+  ghost: string;
+  /** Supporting text. */
+  mute: string;
+  /** The dimmest text: separators, the losing Lc, the dormant notice. */
+  faint: string;
+  /** The active swatch's outline. */
+  swatchRing: string;
+  /** Focus ring color for the two 0–1 controls. */
+  focus: string;
+  /** The vibrancy slider's sine stroke, as a CSS color. */
+  wave: string;
+  /**
+   * The grain dial's face, as a CSS color. A MID-tone in BOTH modes, and that is
+   * the constraint that picks it: the tile is black noise and the indicator is a
+   * white notch, so a face that went pale with the card would lose the notch and
+   * one that went dark would lose the grain.
+   */
+  dialFace: string;
+  /** The dial's scale dots, which sit on the card rather than on the face. */
+  dialDot: string;
+  dialDotOn: string;
+}
+
+const CHROME: Record<ArcResolvedMode, CardChrome> = {
+  dark: {
+    card: "border-white/10 bg-black/45 text-white",
+    well: "bg-white/8",
+    segment: "text-white/55 hover:text-white aria-pressed:bg-white/18 aria-pressed:text-white",
+    control: "bg-white/10 text-white hover:bg-white/20 disabled:hover:bg-white/10",
+    ghost: "text-white/50 hover:bg-white/10 hover:text-white",
+    mute: "text-white/55",
+    faint: "text-white/35",
+    swatchRing: "aria-pressed:outline-white",
+    focus: "focus-visible:ring-white/60",
+    wave: "rgb(255 255 255 / 0.5)",
+    dialFace: "rgb(255 255 255 / 0.45)",
+    dialDot: "rgb(255 255 255 / 0.3)",
+    dialDotOn: "rgb(255 255 255 / 0.85)",
+  },
+  light: {
+    card: "border-black/10 bg-white/65 text-black",
+    well: "bg-black/6",
+    segment: "text-black/55 hover:text-black aria-pressed:bg-white/75 aria-pressed:text-black",
+    control: "bg-black/8 text-black hover:bg-black/16 disabled:hover:bg-black/8",
+    ghost: "text-black/50 hover:bg-black/8 hover:text-black",
+    mute: "text-black/60",
+    faint: "text-black/40",
+    swatchRing: "aria-pressed:outline-black",
+    focus: "focus-visible:ring-black/50",
+    wave: "rgb(0 0 0 / 0.45)",
+    dialFace: "rgb(0 0 0 / 0.3)",
+    dialDot: "rgb(0 0 0 / 0.25)",
+    dialDotOn: "rgb(0 0 0 / 0.8)",
+  },
+};
+
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
@@ -242,9 +321,17 @@ function stepOnArrow(
   onChange(clamp01(value + direction * step));
 }
 
-function ModeRow({ mode, onChange }: { mode: ArcMode; onChange(next: ArcMode): void }) {
+function ModeRow({
+  mode,
+  chrome,
+  onChange,
+}: {
+  mode: ArcMode;
+  chrome: CardChrome;
+  onChange(next: ArcMode): void;
+}) {
   return (
-    <div className="flex items-center gap-1 rounded-full bg-white/8 p-1">
+    <div className={`flex items-center gap-1 rounded-full p-1 ${chrome.well}`}>
       {MODES.map(({ mode: candidate, label, Icon: ModeIcon }) => (
         <button
           key={candidate}
@@ -252,7 +339,7 @@ function ModeRow({ mode, onChange }: { mode: ArcMode; onChange(next: ArcMode): v
           onClick={() => onChange(candidate)}
           aria-pressed={candidate === mode}
           title={label}
-          className="flex flex-1 items-center justify-center gap-1.5 rounded-full px-3 py-1.5 text-label text-white/55 transition-colors hover:text-white aria-pressed:bg-white/18 aria-pressed:text-white"
+          className={`flex flex-1 items-center justify-center gap-1.5 rounded-full px-3 py-1.5 text-label transition-colors ${chrome.segment}`}
         >
           <ModeIcon weight="fill" size={14} />
           {label}
@@ -367,16 +454,19 @@ function GradientPad({
 
 function StopCountRow({
   count,
+  chrome,
   onAdd,
   onRemove,
 }: {
   count: number;
+  chrome: CardChrome;
   onAdd(): void;
   onRemove(): void;
 }) {
+  const button = `flex size-7 items-center justify-center rounded-full transition-colors disabled:opacity-30 ${chrome.control}`;
   return (
     <div className="flex items-center justify-between">
-      <span className="text-label text-white/50 uppercase">
+      <span className={`text-label uppercase ${chrome.mute}`}>
         {count} {count === 1 ? "color" : "colors"}
       </span>
       <div className="flex items-center gap-1">
@@ -385,7 +475,7 @@ function StopCountRow({
           onClick={onRemove}
           disabled={count <= 1}
           aria-label="Remove a color"
-          className="flex size-7 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20 disabled:opacity-30 disabled:hover:bg-white/10"
+          className={button}
         >
           <MinusIcon weight="fill" size={14} />
         </button>
@@ -394,7 +484,7 @@ function StopCountRow({
           onClick={onAdd}
           disabled={count >= ARC_TUNING.maxStops}
           aria-label="Add a color"
-          className="flex size-7 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20 disabled:opacity-30 disabled:hover:bg-white/10"
+          className={button}
         >
           <PlusIcon weight="fill" size={14} />
         </button>
@@ -403,7 +493,15 @@ function StopCountRow({
   );
 }
 
-function SwatchRow({ active, onPick }: { active: string; onPick(hex: string): void }) {
+function SwatchRow({
+  active,
+  chrome,
+  onPick,
+}: {
+  active: string;
+  chrome: CardChrome;
+  onPick(hex: string): void;
+}) {
   const normalized = active.toLowerCase();
   const [page, setPage] = React.useState(() => {
     const found = SWATCH_PAGES.findIndex((swatches) => swatches.includes(normalized));
@@ -411,6 +509,7 @@ function SwatchRow({ active, onPick }: { active: string; onPick(hex: string): vo
   });
   const turn = (step: number) =>
     setPage((current) => (current + step + SWATCH_PAGES.length) % SWATCH_PAGES.length);
+  const chevron = `flex size-5 shrink-0 items-center justify-center rounded-full transition-colors ${chrome.ghost}`;
 
   return (
     <div className="flex items-center gap-1.5">
@@ -418,7 +517,7 @@ function SwatchRow({ active, onPick }: { active: string; onPick(hex: string): vo
         type="button"
         onClick={() => turn(-1)}
         aria-label="Previous swatches"
-        className="flex size-5 shrink-0 items-center justify-center rounded-full text-white/50 transition-colors hover:text-white"
+        className={chevron}
       >
         <CaretLeftIcon weight="fill" size={12} />
       </button>
@@ -431,16 +530,11 @@ function SwatchRow({ active, onPick }: { active: string; onPick(hex: string): vo
             aria-label={hex}
             aria-pressed={hex === normalized}
             style={{ background: hex }}
-            className="aspect-square w-full rounded-full outline-offset-2 transition-transform hover:scale-110 aria-pressed:outline-2 aria-pressed:outline-white"
+            className={`aspect-square w-full rounded-full outline-offset-2 transition-transform hover:scale-110 aria-pressed:outline-2 ${chrome.swatchRing}`}
           />
         ))}
       </div>
-      <button
-        type="button"
-        onClick={() => turn(1)}
-        aria-label="More swatches"
-        className="flex size-5 shrink-0 items-center justify-center rounded-full text-white/50 transition-colors hover:text-white"
-      >
+      <button type="button" onClick={() => turn(1)} aria-label="More swatches" className={chevron}>
         <CaretRightIcon weight="fill" size={12} />
       </button>
     </div>
@@ -461,7 +555,15 @@ function wavePath(amplitude: number): string {
   return path;
 }
 
-function VibrancySlider({ value, onChange }: { value: number; onChange(next: number): void }) {
+function VibrancySlider({
+  value,
+  chrome,
+  onChange,
+}: {
+  value: number;
+  chrome: CardChrome;
+  onChange(next: number): void;
+}) {
   const trackRef = React.useRef<HTMLDivElement>(null);
   const travel = SLIDER_WIDTH - THUMB_WIDTH;
   const handlers = useDrag({
@@ -485,7 +587,7 @@ function VibrancySlider({ value, onChange }: { value: number; onChange(next: num
       aria-valuemax={1}
       aria-valuenow={Number(value.toFixed(2))}
       style={{ width: SLIDER_WIDTH, height: SLIDER_HEIGHT }}
-      className="relative shrink-0 cursor-ew-resize touch-none rounded-full outline-none focus-visible:ring-2 focus-visible:ring-white/60"
+      className={`relative shrink-0 cursor-ew-resize touch-none rounded-full outline-none focus-visible:ring-2 ${chrome.focus}`}
     >
       <svg
         aria-hidden
@@ -497,11 +599,14 @@ function VibrancySlider({ value, onChange }: { value: number; onChange(next: num
         <path
           d={wavePath(WAVE_MAX_AMPLITUDE * value)}
           fill="none"
-          stroke="rgb(255 255 255 / 0.5)"
+          stroke={chrome.wave}
           strokeWidth={2}
           strokeLinecap="round"
         />
       </svg>
+      {/* White in BOTH modes, like Arc's: the thumb and the dial's notch are the
+          only two things in the card that read as hardware rather than as text,
+          and flipping them with the appearance would lose that. */}
       <div
         aria-hidden
         style={{ width: THUMB_WIDTH, left: value * travel }}
@@ -511,7 +616,15 @@ function VibrancySlider({ value, onChange }: { value: number; onChange(next: num
   );
 }
 
-function GrainDial({ value, onChange }: { value: number; onChange(next: number): void }) {
+function GrainDial({
+  value,
+  chrome,
+  onChange,
+}: {
+  value: number;
+  chrome: CardChrome;
+  onChange(next: number): void;
+}) {
   const dialRef = React.useRef<HTMLDivElement>(null);
   const handlers = useDrag({
     slop: CLICK_SLOP,
@@ -550,18 +663,16 @@ function GrainDial({ value, onChange }: { value: number; onChange(next: number):
       aria-valuemax={1}
       aria-valuenow={Number(value.toFixed(2))}
       style={{ width: DIAL_SIZE, height: DIAL_SIZE }}
-      className="relative shrink-0 cursor-grab touch-none rounded-full outline-none focus-visible:ring-2 focus-visible:ring-white/60"
+      className={`relative shrink-0 cursor-grab touch-none rounded-full outline-none focus-visible:ring-2 ${chrome.focus}`}
     >
       {/* The knob face carries the texture at its current amount — the dial
           shows what it is setting, which is the only way to judge a value this
-          subtle at this size. Mid-grey rather than dark: the tile is black
-          noise, so it needs something to be noise ON. */}
+          subtle at this size. `dialFace` lands mid-grey in BOTH modes because
+          the tile is black noise and the notch is white: it has to be something
+          each of them can be seen on. */}
       <div
         aria-hidden
-        style={{
-          background:
-            grain === null ? "rgb(255 255 255 / 0.45)" : `${grain}, rgb(255 255 255 / 0.45)`,
-        }}
+        style={{ background: grain === null ? chrome.dialFace : `${grain}, ${chrome.dialFace}` }}
         className="absolute inset-[7px] rounded-full"
       />
       <svg
@@ -581,10 +692,12 @@ function GrainDial({ value, onChange }: { value: number; onChange(next: number):
               cx={center + Math.sin(dotRadians) * 25.5}
               cy={center - Math.cos(dotRadians) * 25.5}
               r={1.1}
-              fill={progress <= value ? "rgb(255 255 255 / 0.85)" : "rgb(255 255 255 / 0.3)"}
+              fill={progress <= value ? chrome.dialDotOn : chrome.dialDot}
             />
           );
         })}
+        {/* White in both modes — see the slider's thumb. It sits on `dialFace`,
+            which is mid-grey either way, so it always has something to read on. */}
         <line
           x1={center + Math.sin(radians) * 12}
           y1={center - Math.cos(radians) * 12}
@@ -644,6 +757,7 @@ function Readout({
   resolved,
   ink,
   live,
+  chrome,
   onReset,
 }: {
   state: ArcCanvasState;
@@ -651,21 +765,24 @@ function Readout({
   resolved: ArcResolvedMode;
   ink: ArcInk;
   live: boolean;
+  chrome: CardChrome;
   onReset(): void;
 }) {
   return (
-    <div className="flex flex-col gap-2 rounded-2xl border border-white/10 bg-black/45 p-3 text-white backdrop-blur-xl">
+    <div className={`flex flex-col gap-2 rounded-2xl border p-3 backdrop-blur-xl ${chrome.card}`}>
       <div className="flex flex-wrap gap-1.5">
         {state.stops.map((stop, index) => (
+          // The hexes inherit the card's own ink, so both halves of a chip stay
+          // legible in either mode — they are the numbers you tune from.
           <span
             // Slot is identity — see the pad's orbs.
             // oxlint-disable-next-line react/no-array-index-key
             key={index}
-            className="flex items-center gap-1.5 rounded-full bg-white/8 py-0.5 pr-2 pl-1 font-mono text-label"
+            className={`flex items-center gap-1.5 rounded-full py-0.5 pr-2 pl-1 font-mono text-label ${chrome.well}`}
           >
             <span aria-hidden className="size-3 rounded-full" style={{ background: stop.hex }} />
             {stop.hex}
-            <span className="text-white/40">→</span>
+            <span className={chrome.faint}>→</span>
             <span
               aria-hidden
               className="size-3 rounded-full"
@@ -676,10 +793,10 @@ function Readout({
         ))}
       </div>
       <div className="flex items-center justify-between gap-3">
-        <p className="font-mono text-label text-white/60">
+        <p className={`font-mono text-label ${chrome.mute}`}>
           {resolved} · ink {ink.ink} · worst Lc{" "}
-          <span className="text-white tabular-nums">{ink.worstLc.toFixed(1)}</span>
-          <span className="text-white/35">
+          <span className="tabular-nums">{ink.worstLc.toFixed(1)}</span>
+          <span className={chrome.faint}>
             {" "}
             (other {Math.min(ink.lightLc, ink.darkLc).toFixed(1)})
           </span>
@@ -687,13 +804,13 @@ function Readout({
         <button
           type="button"
           onClick={onReset}
-          className="shrink-0 rounded-full px-2 py-1 text-label text-white/50 transition-colors hover:bg-white/10 hover:text-white"
+          className={`shrink-0 rounded-full px-2 py-1 text-label transition-colors ${chrome.ghost}`}
         >
           Reset canvas
         </button>
       </div>
       {live ? null : (
-        <p className="text-label text-white/40">
+        <p className={`text-label ${chrome.faint}`}>
           Not applied — the app&apos;s own canvas is showing. Touch any control to commit.
         </p>
       )}
@@ -737,6 +854,9 @@ export default function CanvasScratch() {
   const effective = React.useMemo(() => effectiveStopHexes(state, resolved), [state, resolved]);
   const ink = React.useMemo(() => arcInk(state, resolved), [state, resolved]);
   const primary = state.stops[state.primaryIndex];
+  // The card follows the canvas it is floating on, not the app's dark-only
+  // theme — see CHROME. It tracks `resolved`, so `auto` moves it too.
+  const chrome = CHROME[resolved];
 
   return (
     <div
@@ -750,10 +870,11 @@ export default function CanvasScratch() {
         <div className="flex-1" />
         <div
           style={{ padding: CARD_PADDING }}
-          className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-black/45 shadow-2xl backdrop-blur-xl"
+          className={`flex flex-col gap-3 rounded-2xl border shadow-2xl backdrop-blur-xl ${chrome.card}`}
         >
           <ModeRow
             mode={state.mode}
+            chrome={chrome}
             onChange={(mode) => mutate((current) => ({ ...current, mode }))}
           />
 
@@ -766,22 +887,26 @@ export default function CanvasScratch() {
 
           <StopCountRow
             count={state.stops.length}
+            chrome={chrome}
             onAdd={() => mutate(addStop)}
             onRemove={() => mutate(removeStop)}
           />
 
           <SwatchRow
             active={primary.hex}
+            chrome={chrome}
             onPick={(hex) => mutate((current) => withPrimaryHex(current, hex))}
           />
 
           <div className="flex items-center" style={{ gap: CONTROL_GAP }}>
             <VibrancySlider
               value={state.vibrancy}
+              chrome={chrome}
               onChange={(vibrancy) => mutate((current) => ({ ...current, vibrancy }))}
             />
             <GrainDial
               value={state.grain}
+              chrome={chrome}
               onChange={(grain) => mutate((current) => ({ ...current, grain }))}
             />
           </div>
@@ -794,6 +919,7 @@ export default function CanvasScratch() {
           resolved={resolved}
           ink={ink}
           live={live}
+          chrome={chrome}
           onReset={reset}
         />
       </div>
