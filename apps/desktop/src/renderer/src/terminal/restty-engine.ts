@@ -123,6 +123,15 @@ export class ResttyEngine implements TerminalEngine {
   backend: TerminalBackend | null = null;
   private disposed = false;
 
+  /**
+   * A renderer exists iff restty does. Distinguishes an engine that holds no
+   * GPU context and has asked for none — never attached (headless sessions),
+   * mid-rebuild, or disposed — from one whose backend is still resolving.
+   */
+  get hasRenderer(): boolean {
+    return this.restty !== null;
+  }
+
   constructor() {
     this.hostEl = document.createElement("div");
     // Fill whatever container we are parented into; restty measures this box.
@@ -231,9 +240,13 @@ export class ResttyEngine implements TerminalEngine {
    * and WebGPU winning is the cue to arm the device-loss watcher.
    */
   private subscribeRuntimeEvents(): void {
-    if (this.pane === null) return;
+    // Read the backend BEFORE bailing on a missing pane: neither the read nor
+    // the device-loss watch needs one, and a renderer that came up without a
+    // pane would otherwise sit at `null` forever with nothing left to update
+    // it — a caller waiting on `pending` would wait for good.
     this.setBackend(toTerminalBackend(safeBackend(this.restty)));
     if (this.backend === "webgpu") this.armDeviceLossWatch();
+    if (this.pane === null) return;
     this.unsubscribeRuntime = this.pane.runtime.events.subscribe((event: ResttyRuntimeEvent) => {
       if (event.type === "term-size") {
         // A hidden (zero-size) canvas is clamped to a degenerate 1×1 grid;
@@ -449,14 +462,6 @@ export class ResttyEngine implements TerminalEngine {
     this.settleFitFrame = null;
     this.unsubscribeRuntime?.();
     this.unsubscribeRuntime = null;
-    // Announce the released context before dropping listeners, or the last
-    // reader of this engine never learns its GPU context went away.
-    this.setBackend(null);
-    this.dataCbs.clear();
-    this.resizeCbs.clear();
-    this.backendCbs.clear();
-    this.recentOutput = [];
-    this.recentOutputChars = 0;
     try {
       this.restty?.destroy();
     } catch {
@@ -466,6 +471,16 @@ export class ResttyEngine implements TerminalEngine {
     this.restty = null;
     this.pane = null;
     this.ptyCallbacks = null;
+    // Announce the released context AFTER the renderer is actually gone — a
+    // reader that folds this engine into a reading must see `hasRenderer`
+    // false, not a phantom unresolved context — and BEFORE the listener sets
+    // are dropped, or the last reader never learns the context went away.
+    this.setBackend(null);
+    this.dataCbs.clear();
+    this.resizeCbs.clear();
+    this.backendCbs.clear();
+    this.recentOutput = [];
+    this.recentOutputChars = 0;
     this.hostEl.remove();
   }
 }

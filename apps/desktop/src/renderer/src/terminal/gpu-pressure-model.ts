@@ -7,13 +7,30 @@ import type { TerminalBackend } from "./engine";
 
 /** What the terminals collectively cost the GPU right now. */
 export type GpuPressure = {
-  /** GPU contexts actually held across every live terminal. */
+  /**
+   * GPU contexts actually held right now. Counts only engines with a LIVE
+   * renderer: an engine that has never been attached (or is mid-rebuild, or
+   * disposed) has asked nothing of the GPU and contributes nothing, and one
+   * whose renderer resolved to no backend at all holds nothing either.
+   */
   liveContexts: number;
   /** Any terminal on the WebGL2 fallback. */
   anyWebgl2: boolean;
-  /** Engines whose backend hasn't resolved yet. */
+  /**
+   * Live renderers still choosing a backend — the only engines a caller can
+   * usefully wait on, and therefore guaranteed to drain. An engine with no
+   * renderer isn't pending (nothing was asked), and one that resolved to
+   * `"none"` isn't either (it answered: nothing).
+   */
   pending: number;
 };
+
+/** One engine's GPU state, as the counting rule needs to see it. Structurally
+ *  a `TerminalEngine` — the two fields together, never `backend` alone. */
+export interface EngineGpuState {
+  readonly hasRenderer: boolean;
+  readonly backend: TerminalBackend | null;
+}
 
 /**
  * The counting rule. WebGPU engines all render through the one runtime
@@ -21,20 +38,31 @@ export type GpuPressure = {
  * between them; on the WebGL2 fallback each engine owns its own canvas and
  * therefore its own context, so they cost one apiece.
  *
- * An unresolved engine will hold at least one context, so it counts as one —
- * but it must not set `anyWebgl2`. Overstating contexts only makes a caller
- * degrade early, which is cheap; asserting a fallback that may not exist
- * hard-blocks on a maybe, which isn't. Callers that can afford to wait have
- * `pending` to wait on.
+ * An engine with no live renderer is skipped entirely. `backend === null` on
+ * such an engine is not a pending answer — nothing has been asked of the GPU
+ * yet (a headless session's engine is created at boot and may never host a
+ * view). Counting it would report contexts the GPU doesn't hold AND a
+ * `pending` that never drains, stranding any caller told to wait on it.
+ *
+ * A live renderer that resolved to `"none"` also holds nothing, and is done
+ * resolving: zero contexts, not pending.
+ *
+ * A live renderer still resolving will hold at least one context, so it counts
+ * as one — but it must not set `anyWebgl2`. Overstating contexts only makes a
+ * caller degrade early, which is cheap; asserting a fallback that may not
+ * exist hard-blocks on a maybe, which isn't. Callers that can afford to wait
+ * have `pending` to wait on.
  */
-export function gpuPressureOf(backends: readonly (TerminalBackend | null)[]): GpuPressure {
+export function gpuPressureOf(engines: readonly EngineGpuState[]): GpuPressure {
   let webgpu = 0;
   let webgl2 = 0;
   let pending = 0;
-  for (const backend of backends) {
-    if (backend === "webgpu") webgpu += 1;
-    else if (backend === "webgl2") webgl2 += 1;
-    else pending += 1;
+  for (const engine of engines) {
+    if (!engine.hasRenderer) continue;
+    if (engine.backend === "webgpu") webgpu += 1;
+    else if (engine.backend === "webgl2") webgl2 += 1;
+    else if (engine.backend === null) pending += 1;
+    // "none": resolved, and holds nothing.
   }
   return {
     liveContexts: (webgpu > 0 ? 1 : 0) + webgl2 + pending,
@@ -44,8 +72,7 @@ export function gpuPressureOf(backends: readonly (TerminalBackend | null)[]): Gp
 }
 
 /** The slice of an engine gpu pressure reads — see `TerminalEngine`. */
-export interface BackendReporter {
-  readonly backend: TerminalBackend | null;
+export interface BackendReporter extends EngineGpuState {
   onBackendChanged(listener: (backend: TerminalBackend | null) => void): () => void;
 }
 
@@ -69,8 +96,7 @@ export function createGpuPressureTracker(registry: BackendReporterRegistry): Gpu
   const listeners = new Set<(pressure: GpuPressure) => void>();
   let engineSubscriptions: (() => void)[] = [];
 
-  const current = (): GpuPressure =>
-    gpuPressureOf(registry.liveEngines().map((engine) => engine.backend));
+  const current = (): GpuPressure => gpuPressureOf(registry.liveEngines());
 
   // Snapshot + per-listener catch. Reading pressure must never perturb what it
   // observes: this fan-out runs INSIDE an engine's dispose (via its backend

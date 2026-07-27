@@ -16,8 +16,14 @@ import type { GhosttyTheme } from "restty";
  * Which renderer a live terminal actually got. A closed union because callers
  * branch on it: the WebGL2 fallback gives every terminal its own GL context,
  * where WebGPU shares one device across all of them (see gpu-session.ts).
+ *
+ * `"none"` is a RESOLVED answer, not a missing one: the renderer tried WebGPU,
+ * tried the WebGL2 fallback, got neither, and went ready anyway (software
+ * rasteriser, GPU blocklist, `--disable-gpu`). It holds zero GPU contexts and
+ * will never report anything else — the one thing a caller must not do is keep
+ * waiting on it, which is what `null` would have said.
  */
-export type TerminalBackend = "webgpu" | "webgl2";
+export type TerminalBackend = "webgpu" | "webgl2" | "none";
 
 /**
  * The only sanctioned way into `TerminalBackend`. Renderers report their
@@ -28,6 +34,7 @@ export type TerminalBackend = "webgpu" | "webgl2";
 export function toTerminalBackend(value: string | null): TerminalBackend | null {
   if (value === "webgpu") return "webgpu";
   if (value === "webgl2") return "webgl2";
+  if (value === "none") return "none";
   return null;
 }
 
@@ -118,9 +125,23 @@ export interface TerminalEngine {
   resetFontSize(): void;
 
   /**
+   * Whether a renderer exists at all right now. False for an engine that has
+   * been constructed but never `attach`ed (a headless session's engine is
+   * created at boot and may never host a view), between the teardown and the
+   * re-creation inside `rebuildRenderer`, and after `dispose`.
+   *
+   * This is what separates "holds no GPU context and never asked for one" from
+   * "asked, still waiting" — `backend === null` cannot tell them apart, and a
+   * caller counting contexts or waiting for one to resolve needs both answers.
+   */
+  readonly hasRenderer: boolean;
+
+  /**
    * The renderer this engine actually got, or `null` while it is still
    * unresolved — backend selection finishes asynchronously, well after the
-   * engine is constructed and often after it is attached.
+   * engine is constructed and often after it is attached. Only meaningful
+   * alongside `hasRenderer`: with no renderer, `null` means "nothing has been
+   * asked of the GPU yet", not "an answer is coming".
    */
   readonly backend: TerminalBackend | null;
 
