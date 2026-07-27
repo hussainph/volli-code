@@ -15,47 +15,18 @@
  * scratch is the one on screen (see scratch.ts).
  */
 import type { ReactNode } from "react";
-import type { RetentionStateResult, TicketRetentionState } from "@volli/shared";
 
 import { TicketCardContent } from "@renderer/components/board/ticket-card";
-import { useBoardStore } from "@renderer/stores/board";
 
-import { labels, project, tickets } from "../fixtures";
+import { project, ticketById } from "../fixtures";
+import { appApi, seedBoard } from "../seed";
 
 export const title = "Ticket card";
 export const note = "Real card component, fixture tickets — states side by side";
 
-export function seed(): void {
-  useBoardStore.setState({
-    ticketsByProject: { [project.id]: tickets },
-    labelsByProject: { [project.id]: labels },
-  });
-}
-
-/** Only VLT-14 is archive-ready, so the badge's presence and absence are both visible. */
-const ARCHIVE_READY_TICKET_ID = "tkt-14";
-
-function retentionState(ticketId: string): TicketRetentionState {
-  const archiveReady = ticketId === ARCHIVE_READY_TICKET_ID;
-  return {
-    ticketId,
-    prUrl: archiveReady ? "https://github.com/demo/voltaic/pull/41" : null,
-    prState: archiveReady ? "merged" : null,
-    hasConflicts: false,
-    failingChecks: [],
-    archiveReady,
-    reason: archiveReady ? "pr-merged" : null,
-    keep: false,
-    dismissed: false,
-  };
-}
-
-export const api = {
-  retention: {
-    state: (ticketId: string): Promise<RetentionStateResult> =>
-      Promise.resolve({ ok: true, state: retentionState(ticketId) }),
-  },
-};
+export const seed = seedBoard;
+/** Includes the retention stub the archive-ready badge reads. */
+export const api = appApi;
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -69,24 +40,31 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 }
 
 export default function TicketCardScratch() {
-  const [merged, singleLabel, longTitle, plain] = tickets;
+  const archiveReady = ticketById("tkt-11");
+  const twoLabels = ticketById("tkt-14");
+  const singleLabel = ticketById("tkt-12");
+  const longTitle = ticketById("tkt-9");
+  const plain = ticketById("tkt-7");
 
   return (
     <div className="flex flex-wrap gap-8">
       <Row label="High + labels + archive-ready">
-        <TicketCardContent ticket={merged!} ticketPrefix={project.ticketPrefix} />
+        <TicketCardContent ticket={archiveReady} ticketPrefix={project.ticketPrefix} />
       </Row>
       <Row label="Same card, selected">
-        <TicketCardContent ticket={merged!} ticketPrefix={project.ticketPrefix} selected />
+        <TicketCardContent ticket={archiveReady} ticketPrefix={project.ticketPrefix} selected />
+      </Row>
+      <Row label="Two labels">
+        <TicketCardContent ticket={twoLabels} ticketPrefix={project.ticketPrefix} />
       </Row>
       <Row label="Single label">
-        <TicketCardContent ticket={singleLabel!} ticketPrefix={project.ticketPrefix} />
+        <TicketCardContent ticket={singleLabel} ticketPrefix={project.ticketPrefix} />
       </Row>
       <Row label="Two-line title clamp">
-        <TicketCardContent ticket={longTitle!} ticketPrefix={project.ticketPrefix} />
+        <TicketCardContent ticket={longTitle} ticketPrefix={project.ticketPrefix} />
       </Row>
       <Row label="No labels">
-        <TicketCardContent ticket={plain!} ticketPrefix={project.ticketPrefix} />
+        <TicketCardContent ticket={plain} ticketPrefix={project.ticketPrefix} />
       </Row>
     </div>
   );
