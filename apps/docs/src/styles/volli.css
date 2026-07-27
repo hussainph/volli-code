@@ -412,6 +412,16 @@ header.header {
   color: var(--sl-color-text-accent);
 }
 
+/*
+ * Screenshots. The app is dark and so is the page, so a bare screenshot bleeds
+ * into the article with no edge. The same hairline and 4px corner the cards use
+ * gives it one, and reads it as an artifact rather than a background.
+ */
+.sl-markdown-content img:not(:where(.not-content *)) {
+  border: 1px solid var(--sl-color-hairline);
+  border-radius: var(--volli-radius);
+}
+
 /* Tables carry most of the reference pages, so they get the hairline too. */
 .sl-markdown-content :is(th, td):not(:where(.not-content *)) {
   border-color: var(--sl-color-hairline);
