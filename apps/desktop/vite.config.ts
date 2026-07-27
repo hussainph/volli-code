@@ -103,6 +103,8 @@ export default defineConfig({
         "src/theme/scope-transition.ts",
         "src/terminal/css-color.ts",
         "src/terminal/appearance.ts",
+        "src/terminal/engine.ts",
+        "src/terminal/gpu-pressure-model.ts",
         "src/terminal/appearance-model.ts",
         "src/terminal/local-fonts.ts",
         "src/terminal/option-as-alt.ts",

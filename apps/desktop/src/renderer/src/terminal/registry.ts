@@ -16,6 +16,11 @@ import { ResttyEngine } from "./restty-engine";
 import type { TerminalEngine } from "./engine";
 
 const engines = new Map<string, TerminalEngine>();
+const membershipListeners = new Set<() => void>();
+
+function announceMembership(): void {
+  for (const listener of membershipListeners) listener();
+}
 
 function fitLiveEngines(): void {
   for (const engine of engines.values()) {
@@ -57,8 +62,30 @@ export function getOrCreateEngine(sessionId: string): TerminalEngine {
   if (engine === undefined) {
     engine = new ResttyEngine();
     engines.set(sessionId, engine);
+    announceMembership();
   }
   return engine;
+}
+
+/**
+ * Every live engine, in creation order. A snapshot array rather than
+ * `engines.values()`: a Map iterator is single-pass, and one escaping this
+ * module would read as empty the second time a caller walked it.
+ */
+export function liveEngines(): readonly TerminalEngine[] {
+  return [...engines.values()];
+}
+
+/**
+ * Subscribe to the engine set growing or shrinking. Paired with `liveEngines`
+ * this is the whole read seam over the registry — gpu-pressure.ts is built on
+ * exactly these two and nothing else.
+ */
+export function onLiveEnginesChanged(listener: () => void): () => void {
+  membershipListeners.add(listener);
+  return () => {
+    membershipListeners.delete(listener);
+  };
 }
 
 /**
@@ -76,4 +103,5 @@ export function disposeEngine(sessionId: string): void {
   if (engine === undefined) return;
   engine.dispose();
   engines.delete(sessionId);
+  announceMembership();
 }

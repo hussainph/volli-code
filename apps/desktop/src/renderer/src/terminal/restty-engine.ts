@@ -32,7 +32,13 @@ import {
 } from "restty";
 
 import { getCurrentAppearance } from "./appearance";
-import type { TerminalAppearance, TerminalDimensions, TerminalEngine } from "./engine";
+import { toTerminalBackend } from "./engine";
+import type {
+  TerminalAppearance,
+  TerminalBackend,
+  TerminalDimensions,
+  TerminalEngine,
+} from "./engine";
 import { currentGpuSession, watchGpuDeviceLoss } from "./gpu-session";
 import { heldAltSides, installAltSideTracker, optionAsAltSequence } from "./option-as-alt";
 
@@ -77,6 +83,7 @@ export class ResttyEngine implements TerminalEngine {
 
   private readonly dataCbs = new Set<(data: string) => void>();
   private readonly resizeCbs = new Set<(dimensions: TerminalDimensions) => void>();
+  private readonly backendCbs = new Set<(backend: TerminalBackend | null) => void>();
   private dimensions: TerminalDimensions | null = null;
   /**
    * Recent PTY output, capped at REPLAY_BUFFER_MAX_CHARS. Serves two jobs:
@@ -89,8 +96,8 @@ export class ResttyEngine implements TerminalEngine {
   private paused = false;
   /** Pane-local zoom layered over the live Ghostty-config base size. */
   private fontSizeOffset = 0;
-  /** The active renderer backend once known ("webgpu" | "webgl2"). */
-  backend: string | null = null;
+  /** The active renderer backend once known; null until restty resolves it. */
+  backend: TerminalBackend | null = null;
   private disposed = false;
 
   constructor() {
@@ -202,7 +209,7 @@ export class ResttyEngine implements TerminalEngine {
    */
   private subscribeRuntimeEvents(): void {
     if (this.pane === null) return;
-    this.backend = safeBackend(this.restty);
+    this.setBackend(toTerminalBackend(safeBackend(this.restty)));
     if (this.backend === "webgpu") this.armDeviceLossWatch();
     this.unsubscribeRuntime = this.pane.runtime.events.subscribe((event: ResttyRuntimeEvent) => {
       if (event.type === "term-size") {
@@ -213,8 +220,8 @@ export class ResttyEngine implements TerminalEngine {
         this.dimensions = { cols: event.cols, rows: event.rows };
         for (const cb of this.resizeCbs) cb(this.dimensions);
       } else if (event.type === "backend") {
-        this.backend = event.backend;
-        if (event.backend === "webgpu") this.armDeviceLossWatch();
+        this.setBackend(toTerminalBackend(event.backend));
+        if (this.backend === "webgpu") this.armDeviceLossWatch();
       } else if (event.type === "state" && event.state === "ready") {
         // The first visible fit can happen while restty is still loading fonts,
         // WASM, and its GPU backend. Refit again at the lifecycle boundary
@@ -224,6 +231,21 @@ export class ResttyEngine implements TerminalEngine {
         else this.fit();
       }
     });
+  }
+
+  /** Record a backend transition and announce it. Silent on a repeat: restty
+   *  re-reports the same backend on every renderer (re)creation. */
+  private setBackend(backend: TerminalBackend | null): void {
+    if (this.backend === backend) return;
+    this.backend = backend;
+    for (const cb of this.backendCbs) cb(backend);
+  }
+
+  onBackendChanged(callback: (backend: TerminalBackend | null) => void): () => void {
+    this.backendCbs.add(callback);
+    return () => {
+      this.backendCbs.delete(callback);
+    };
   }
 
   private armDeviceLossWatch(): void {
@@ -384,7 +406,9 @@ export class ResttyEngine implements TerminalEngine {
     }
     this.restty = null;
     this.pane = null;
-    this.backend = null;
+    // The rebuilt renderer re-resolves its backend from scratch, so callers
+    // counting GPU contexts see this engine go unresolved and come back.
+    this.setBackend(null);
     this.ptyCallbacks = null;
     // Detached engines (created, never attached) just wait for attach —
     // createInstance needs a laid-out host to measure.
@@ -402,8 +426,12 @@ export class ResttyEngine implements TerminalEngine {
     this.settleFitFrame = null;
     this.unsubscribeRuntime?.();
     this.unsubscribeRuntime = null;
+    // Announce the released context before dropping listeners, or the last
+    // reader of this engine never learns its GPU context went away.
+    this.setBackend(null);
     this.dataCbs.clear();
     this.resizeCbs.clear();
+    this.backendCbs.clear();
     this.recentOutput = [];
     this.recentOutputChars = 0;
     try {
