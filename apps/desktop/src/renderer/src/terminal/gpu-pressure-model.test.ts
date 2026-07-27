@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
+import { polledBackend } from "./engine";
 import { createGpuPressureTracker, gpuPressureOf } from "./gpu-pressure-model";
 import type { TerminalBackend } from "./engine";
 
@@ -169,9 +170,11 @@ describe("gpuPressureOf", () => {
     });
   });
 
-  // Both backends failed to initialise and the renderer went ready anyway. It
-  // holds nothing, and — the point — it is DONE: `pending` drains.
-  it("treats a renderer that got no backend at all as resolved and holding nothing", () => {
+  // Both backends failed to initialise and the renderer ANNOUNCED it and went
+  // ready anyway. It holds nothing, and — the point — it is DONE: `pending`
+  // drains. Only an engine that heard the renderer's `backend` event ever
+  // reaches this state; the case below is why that distinction is load-bearing.
+  it("treats a renderer that announced no backend at all as resolved and holding nothing", () => {
     expect(gpuPressureOf([live("none")])).toEqual({
       liveContexts: 0,
       anyWebgl2: false,
@@ -181,6 +184,30 @@ describe("gpuPressureOf", () => {
       liveContexts: 2,
       anyWebgl2: false,
       pending: 1,
+    });
+  });
+
+  // REGRESSION. restty's runtime state is born holding backend "none" and is
+  // only overwritten inside async init, so between `attach()` and the first
+  // `backend` event every freshly-attached engine polls as "none" while it is
+  // in fact racing for a GPU context. Read as resolved, four attaching
+  // terminals report zero contexts held and nothing worth waiting for —
+  // exactly the free-capacity lie that walks a caller into Chrome's context
+  // eviction. `polledBackend` is what stands between the poll and this reading,
+  // so compose the two rather than trusting the counting rule alone.
+  it("counts a freshly-attached engine as pending, not as resolved-zero", () => {
+    const justAttached = live(polledBackend("none"));
+
+    expect(justAttached.backend).toBeNull();
+    expect(gpuPressureOf([justAttached])).toEqual({
+      liveContexts: 1,
+      anyWebgl2: false,
+      pending: 1,
+    });
+    expect(gpuPressureOf([justAttached, justAttached, justAttached, justAttached])).toEqual({
+      liveContexts: 4,
+      anyWebgl2: false,
+      pending: 4,
     });
   });
 });

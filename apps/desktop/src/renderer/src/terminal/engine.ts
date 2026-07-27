@@ -22,20 +22,52 @@ import type { GhosttyTheme } from "restty";
  * rasteriser, GPU blocklist, `--disable-gpu`). It holds zero GPU contexts and
  * will never report anything else — the one thing a caller must not do is keep
  * waiting on it, which is what `null` would have said.
+ *
+ * That only holds for a `"none"` the renderer ANNOUNCED. A renderer polled
+ * before it has resolved anything can also say "none", meaning the opposite;
+ * `polledBackend` below is the converter that keeps the two apart.
  */
 export type TerminalBackend = "webgpu" | "webgl2" | "none";
 
 /**
- * The only sanctioned way into `TerminalBackend`. Renderers report their
- * backend as a bare string, so anything unrecognised becomes `null` ("not
- * resolved") rather than leaking past the union — a future backend name must
- * never be mistaken for one whose context accounting we know.
+ * The only sanctioned way into `TerminalBackend`, for a backend a renderer has
+ * ANNOUNCED. Renderers report their backend as a bare string, so anything
+ * unrecognised becomes `null` ("not resolved") rather than leaking past the
+ * union — a future backend name must never be mistaken for one whose context
+ * accounting we know.
+ *
+ * Announced is the load-bearing word: `"none"` survives as `"none"` here only
+ * because an announcement is by definition the end of resolution. Use
+ * `polledBackend` for a value READ off a renderer instead — see below.
  */
 export function toTerminalBackend(value: string | null): TerminalBackend | null {
   if (value === "webgpu") return "webgpu";
   if (value === "webgl2") return "webgl2";
   if (value === "none") return "none";
   return null;
+}
+
+/**
+ * The same conversion for a backend POLLED off a renderer — read synchronously
+ * rather than delivered by its event — where `"none"` must fold to `null`.
+ *
+ * The trap this exists to close: restty initialises its runtime state to
+ * `backend: "none"` synchronously, and only overwrites it inside async init
+ * (WASM load + adapter request; 100 ms to 1 s+, longer when WebGPU fails and
+ * the WebGL2 fallback is tried). So the identical string means opposite things
+ * depending on where it came from: announced, it is "tried both, got neither,
+ * holds nothing forever"; polled, it is overwhelmingly "hasn't started yet".
+ * Trusting the polled one reports free capacity for the whole acquisition
+ * window — precisely when N terminals are each racing for a context — which is
+ * the Chrome context-eviction cliff gpu-pressure exists to keep away from.
+ *
+ * `null` is the safe direction: it counts as pending, every resolution
+ * (including a genuine `"none"`) is announced as an event, and that event is
+ * what corrects the reading.
+ */
+export function polledBackend(value: string | null): TerminalBackend | null {
+  const backend = toTerminalBackend(value);
+  return backend === "none" ? null : backend;
 }
 
 /** Terminal grid dimensions in character cells. */

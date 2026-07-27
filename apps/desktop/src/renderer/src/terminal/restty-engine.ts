@@ -32,7 +32,7 @@ import {
 } from "restty";
 
 import { getCurrentAppearance } from "./appearance";
-import { toTerminalBackend } from "./engine";
+import { polledBackend, toTerminalBackend } from "./engine";
 import type {
   TerminalAppearance,
   TerminalBackend,
@@ -244,7 +244,15 @@ export class ResttyEngine implements TerminalEngine {
     // the device-loss watch needs one, and a renderer that came up without a
     // pane would otherwise sit at `null` forever with nothing left to update
     // it — a caller waiting on `pending` would wait for good.
-    this.setBackend(toTerminalBackend(safeBackend(this.restty)));
+    //
+    // POLLED, so `polledBackend` — NOT `toTerminalBackend` (used on the event
+    // below). We are one statement after `createRestty` returned; restty's
+    // async init has not run, and its runtime state still holds the `"none"`
+    // it was initialised with. Read literally, every terminal would look like
+    // "resolved, holds zero contexts" for its whole acquisition window.
+    // `polledBackend` folds that to `null` (pending) and the `backend` event
+    // below supplies the real answer, `"none"` included.
+    this.setBackend(polledBackend(safeBackend(this.restty)));
     if (this.backend === "webgpu") this.armDeviceLossWatch();
     if (this.pane === null) return;
     this.unsubscribeRuntime = this.pane.runtime.events.subscribe((event: ResttyRuntimeEvent) => {
@@ -256,6 +264,11 @@ export class ResttyEngine implements TerminalEngine {
         this.dimensions = { cols: event.cols, rows: event.rows };
         fanOut(this.resizeCbs, "resize", this.dimensions);
       } else if (event.type === "backend") {
+        // ANNOUNCED, so `toTerminalBackend` — NOT `polledBackend` (used on the
+        // synchronous read above). restty emits this event from exactly one
+        // place per outcome, at the end of backend selection, so `"none"` here
+        // is the real "tried WebGPU, tried WebGL2, got neither" and must stay
+        // resolved: folding it to `null` would leave `pending` un-drainable.
         this.setBackend(toTerminalBackend(event.backend));
         if (this.backend === "webgpu") this.armDeviceLossWatch();
       } else if (event.type === "state" && event.state === "ready") {
