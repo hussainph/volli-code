@@ -85,3 +85,89 @@ html[data-lab-canvas] .app-region-drag {
   --foreground: var(--lab-canvas-ink) !important;
   --muted-foreground: var(--lab-canvas-ink-muted) !important;
 }
+
+/* LIGHT-MODE ELEVATION — the lift overlays and the shadow set (arc/surfaces.ts).
+ *
+ * Two tiers, applied outward from the gradient: tier 1 is the chrome band and
+ * the project rail, tier 2 the inner sidebar. The dial is signed, so the SAME
+ * rules produce the frosted arrangement (each tier nearer paper than the one
+ * outside it) and the recessed one (each tier nearer the ink); at lift 0 every
+ * variable is `transparent` and the rules are inert.
+ *
+ * Painted as a `background-image` rather than a `background-color` on purpose.
+ * The primary sidebar already wears `bg-sidebar-veil`, which is a color — an
+ * image composites ON TOP of it, so the veil keeps doing its job (holding the
+ * sidebar's rung over every stop of the gradient) and the lift is a second,
+ * independent layer above it. Setting a color instead would silently replace
+ * the veil, and lift 0 would stop meaning "unchanged".
+ *
+ * Unprefixed by mode because `arc/paint.ts` already answers that: dark writes
+ * `transparent` and `none` into every one of these. One place decides, and it
+ * is the one that can measure. */
+html[data-lab-canvas] .app-region-drag {
+  background-image: linear-gradient(var(--lab-lift-1), var(--lab-lift-1));
+}
+/* The primary sidebar, named by the fill it declares in `app-shell.tsx` — the
+ * one thing that distinguishes it from the two other `data-slot="sidebar"`
+ * roots in the same tree (the collapsible wrapper and the workspace rail). */
+html[data-lab-canvas] [data-slot="sidebar"].bg-sidebar-veil {
+  background-image: linear-gradient(var(--lab-lift-2), var(--lab-lift-2));
+}
+/* …and in LIGHT mode the veil under it is dropped, so lift owns the tier
+ * relationship outright.
+ *
+ * The two were working against each other. `--sidebar-veil` reproduces the
+ * ladder's sidebar rung over whatever is beneath it, and the light ladder puts
+ * that rung BELOW the rail — so the veil pulls the sidebar 0.015 of lightness
+ * DOWN at the same moment lift pushes it up, and the outer/inner gap the owner
+ * asked for lost a third of itself to a correction aimed at the other mode.
+ *
+ * The rationale the veil was built on is a dark-mode one — "the sidebar is a
+ * lighter rung than the rail, so plain transparency would darken it" — and
+ * light mode is exactly where it does not hold. Dark keeps it untouched.
+ *
+ * What this costs at lift 0 is that same 0.015: the invisible amount this whole
+ * exercise started from. */
+html[data-lab-canvas="light"] [data-slot="sidebar"].bg-sidebar-veil {
+  background-color: transparent;
+}
+
+/* The framed content card, floating on the canvas. */
+html[data-lab-canvas] [data-slot="sidebar-inset"] {
+  box-shadow: var(--lab-shadow-card);
+}
+/* Raised-on-a-surface: the active tab in every strip, and the board's cards.
+ * This is the tier the owner's screenshot is of — a tab reads as a tab because
+ * of the halo under it, not because of its fill. */
+html[data-lab-canvas] [role="tab"][aria-selected="true"],
+html[data-lab-canvas] article.bg-card {
+  box-shadow: var(--lab-shadow-raised);
+}
+/* Everything that portals to the body and floats over the whole window. */
+html[data-lab-canvas] [data-slot="popover-content"],
+html[data-lab-canvas] [data-slot="dropdown-menu-content"],
+html[data-lab-canvas] [data-slot="dropdown-menu-sub-content"],
+html[data-lab-canvas] [data-slot="context-menu-content"],
+html[data-lab-canvas] [data-slot="context-menu-sub-content"],
+html[data-lab-canvas] [data-slot="dialog-content"],
+html[data-lab-canvas] [data-slot="alert-dialog-content"],
+html[data-lab-canvas] [data-slot="sheet-content"],
+html[data-lab-canvas] [data-slot="tooltip-content"] {
+  box-shadow: var(--lab-shadow-overlay);
+}
+
+/* The micro-label tier (arc/tokens.ts § LIGHT_FLOORS).
+ *
+ * Scoped INSIDE the content card, and the scope is the whole reason this is one
+ * rule rather than a token: `--muted-foreground` means two different colors in
+ * this app depending on which side of the card's edge it is read from — the
+ * canvas ink out on the gradient, the solved paper ink within. A label tier
+ * defined at the root would follow the wrong one out onto the chrome.
+ *
+ * The two-class selector is doing real work too. `.text-label` alone would
+ * capture labels that already declare `text-foreground`, dragging body-weight
+ * text DOWN to this tier; matching both says exactly "a label currently painted
+ * as secondary copy", which is the set the owner pointed at. */
+html[data-lab-canvas] [data-slot="sidebar-inset"] .text-label.text-muted-foreground {
+  color: var(--lab-label-ink);
+}

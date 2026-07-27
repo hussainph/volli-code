@@ -16,13 +16,20 @@ import {
   apcaLc,
   hexToOklch,
   isHexColor,
+  oklchToHex,
   THEME_TOKEN_NAMES,
   type ThemeTokenName,
 } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
 import { DEFAULT_ARC_CANVAS, type ArcCanvasState, type ArcResolvedMode } from "./model";
-import { ARC_TOKEN_FLOORS, deriveArcTokens, LIGHT_LADDER } from "./tokens";
+import {
+  ARC_TOKEN_FLOORS,
+  deriveArcLabelInk,
+  deriveArcTokens,
+  lightFloors,
+  LIGHT_LADDER,
+} from "./tokens";
 
 /** Eight hues around the wheel plus both achromatic extremes. */
 const HUES = [
@@ -103,11 +110,19 @@ describe("deriveArcTokens", () => {
     // as well as the card used to flatten the two onto one hex; the on-canvas
     // rows are handled by the scoped flip in `lab.css` instead, which leaves
     // this free to say what it means on the card.
+    //
+    // Stated in Lc rather than in the ΔL 0.1 it used to be. That threshold was
+    // calibrated when secondary sat at Lc 60 and 0.1 of lightness was what
+    // separated the two; raising secondary to 75 deliberately closes the gap in
+    // lightness while keeping it wide in the unit anyone perceives. Asserting
+    // the old number here would have made the fix look like a regression.
     for (const { hex, vibrancy } of everyCase().filter((one) => one.resolved === "light")) {
       const tokens = deriveArcTokens(canvasOf(hex, vibrancy), "light");
-      const body = hexToOklch(tokens["--foreground"]).L;
-      const secondary = hexToOklch(tokens["--muted-foreground"]).L;
-      expect({ case: `${hex} @ v${vibrancy}`, gap: secondary - body > 0.1 }).toEqual({
+      const card = tokens["--card"];
+      const gap =
+        Math.abs(apcaLc(tokens["--foreground"], card)) -
+        Math.abs(apcaLc(tokens["--muted-foreground"], card));
+      expect({ case: `${hex} @ v${vibrancy}`, gap: gap > 6 }).toEqual({
         case: `${hex} @ v${vibrancy}`,
         gap: true,
       });
@@ -160,6 +175,109 @@ describe("deriveArcTokens", () => {
     const state = canvasOf("#4653a2", 0.6);
     for (const resolved of MODES) {
       expect(deriveArcTokens(state, resolved)).toEqual(deriveArcTokens(state, resolved));
+    }
+  });
+
+  it("clears the LIGHT floors on the surface each one is actually painted on", () => {
+    // The bug this locks out, measured before the fix: secondary copy cleared
+    // its floor on `--background` (60.3) and missed it on `--card` (57.0) —
+    // and `--card` is the rung every panel, rail and popover in the app paints
+    // it on. A floor asserted against the lightest surface in the ladder is a
+    // floor that fails everywhere else in the ladder.
+    const failures: string[] = [];
+    for (const { hex, vibrancy } of everyCase().filter((one) => one.resolved === "light")) {
+      for (const textWeight of [0, 0.5, 1]) {
+        const state = { ...canvasOf(hex, vibrancy), textWeight };
+        const tokens = deriveArcTokens(state, "light");
+        const floors = lightFloors(textWeight);
+        const label = deriveArcLabelInk(state, "light");
+        // Each tier on the surface it is SOLVED against — the whole point of
+        // the correction. Measuring both on the lightest rung is what let
+        // secondary sit 3 Lc under its own floor for as long as it did.
+        const cases: [string, string, string, number][] = [
+          ["body", tokens["--foreground"], tokens["--background"], floors.body],
+          ["secondary", tokens["--muted-foreground"], tokens["--card"], floors.secondary],
+        ];
+        for (const [what, text, surface, floor] of cases) {
+          const lc = Math.abs(apcaLc(text, surface));
+          // The ask is clamped to what the hue can actually deliver
+          // (`solveClamped`), so the assertion is against the SAME ceiling
+          // rather than against the raw floor. Demanding the raw number would
+          // assert that OKLCH can produce contrast it cannot, and the dial is
+          // allowed to ask for more than the color space has.
+          const { C, h } = hexToOklch(text);
+          const owed = Math.min(floor, Math.abs(apcaLc(oklchToHex(0, C, h), surface)));
+          if (lc < owed - 0.5) {
+            failures.push(
+              `${what} scored ${lc.toFixed(1)} < ${owed.toFixed(1)} — ${hex} @ v${vibrancy} w${textWeight}`,
+            );
+          }
+        }
+        // The label tier has no floor of its own — it is a position between the
+        // two above — so what it owes is that it stay between them.
+        const labelL = hexToOklch(label ?? "").L;
+        const bodyL = hexToOklch(tokens["--foreground"]).L;
+        const secondaryL = hexToOklch(tokens["--muted-foreground"]).L;
+        if (!(labelL > bodyL && labelL < secondaryL)) {
+          failures.push(
+            `label L ${labelL.toFixed(3)} outside body ${bodyL.toFixed(3)}…secondary ${secondaryL.toFixed(3)} — ${hex} @ v${vibrancy} w${textWeight}`,
+          );
+        }
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it("keeps a real span between body and secondary, at every weight", () => {
+    // The span is what has to survive the dial; where the label sits inside it
+    // is what the dial is FOR. At weight 1 the label lands 0.3 Lc off body,
+    // because "use the branch text's colour across the board" is exactly what
+    // the top of that travel means — asserting a minimum gap there would be
+    // asserting against the request.
+    //
+    // So this holds the two ends apart, and the floors test above holds the
+    // label between them. Together those are the whole contract; neither is
+    // enough alone.
+    for (const { hex, vibrancy } of everyCase().filter((one) => one.resolved === "light")) {
+      for (const textWeight of [0, 0.5, 1]) {
+        const state = { ...canvasOf(hex, vibrancy), textWeight };
+        const tokens = deriveArcTokens(state, "light");
+        const card = tokens["--card"];
+        const body = Math.abs(apcaLc(tokens["--foreground"], card));
+        const secondary = Math.abs(apcaLc(tokens["--muted-foreground"], card));
+        const at = `${hex} @ v${vibrancy} w${textWeight} — ${body.toFixed(1)}/${secondary.toFixed(1)}`;
+        expect({ at, spanned: body - secondary > 2 }).toEqual({ at, spanned: true });
+      }
+    }
+  });
+
+  it("mixes the paper toward the canvas without letting vibrancy off the hook", () => {
+    // `cardTint` and `vibrancy` are not two names for one dial. Tint decides
+    // how much of the canvas reaches the paper; vibrancy decides how much
+    // canvas there is to reach it — so a quiet canvas stays quiet however far
+    // the tint is pushed, which is the property that keeps the two composable.
+    const chromaAt = (vibrancy: number, cardTint: number) =>
+      hexToOklch(deriveArcTokens({ ...canvasOf("#e8652a", vibrancy), cardTint }, "light")["--card"])
+        .C;
+
+    expect(chromaAt(0.6, 0.25)).toBeGreaterThan(chromaAt(0.6, 0) * 1.5);
+    expect(chromaAt(0, 0.25)).toBeLessThan(0.01);
+  });
+
+  it("holds the ladder's order at every tint, so no veil solve leaves its window", () => {
+    // Every rung moves by the same fraction toward the same target, so gaps
+    // scale by (1 − tint) and the order is preserved by construction. Asserted
+    // anyway: the veil solve `C = (T − B(1−α))/α` does not clamp, and a pair
+    // that swapped rungs would emit an out-of-range rgb() rather than an error.
+    for (const cardTint of [0, 0.05, 0.25]) {
+      for (const { hex, vibrancy } of everyCase().filter((one) => one.resolved === "light")) {
+        const tokens = deriveArcTokens({ ...canvasOf(hex, vibrancy), cardTint }, "light");
+        const rungs = LIGHT_LADDER.rungs.map((rung) => hexToOklch(tokens[rung.tokens[0]]).L);
+        for (let i = 1; i < rungs.length; i += 1) {
+          const at = `${hex} @ v${vibrancy} t${cardTint} rung ${i}`;
+          expect({ at, descending: rungs[i] <= rungs[i - 1] }).toEqual({ at, descending: true });
+        }
+      }
     }
   });
 });

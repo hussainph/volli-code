@@ -33,6 +33,7 @@
  * writes the result.
  */
 import {
+  apcaLc,
   DEFAULT_THEME,
   generateThemeTokens,
   hexToOklch,
@@ -43,7 +44,12 @@ import {
   type ThemeTokens,
 } from "@volli/shared";
 
-import { effectiveChroma, type ArcCanvasState, type ArcResolvedMode } from "./model";
+import {
+  effectiveChroma,
+  effectiveStopHexes,
+  type ArcCanvasState,
+  type ArcResolvedMode,
+} from "./model";
 
 /**
  * The contrast floors this module is held to — the SAME list `generate.ts`
@@ -126,10 +132,174 @@ export const LIGHT_LADDER = {
    * warm ones do not, so the tint would stop being even across the wheel.
    */
   tintGain: { min: 1, max: 3 },
+
+  /**
+   * How far the ladder's rungs are pushed APART, as a multiplier on each rung's
+   * drop below `--background`.
+   *
+   * The rungs above were mirrored from `generate.ts` step for step, and that is
+   * where they inherited a spacing that does not survive the mirror. Perceptual
+   * step size is not symmetric about mid-grey: the dark ladder separates `--rail`
+   * from `--background` by ΔL 0.020 near L 0.17 and it reads clearly; the same
+   * 0.020 near L 0.94 is a surface you have to hunt for. It is why the tab strip
+   * and the tab on it were one shape in light mode, and why "UI elements in the
+   * inner space lose contrast" was a report about every panel at once rather
+   * than about any one of them.
+   *
+   * The multiplier FADES OUT as the drop grows, and that shape is the whole
+   * design. A flat multiplier fixes the surfaces and wrecks the bottom of the
+   * ladder in the same stroke — the border rungs are already far from paper, so
+   * scaling them equally turns hairlines into rules and quietly delivers the
+   * heavier borders that were explicitly not asked for. Fading it means the
+   * rungs that are invisible get the correction and the rungs that already work
+   * are left alone; `--border-strong`, the furthest, does not move at all.
+   */
+  spread: { min: 1, max: 2.6 },
 } as const;
+
+/**
+ * What light-mode copy is held to, as a function of `state.textWeight`.
+ *
+ * The dark ladder gets ONE floor per role because it only ever paints on
+ * near-black; light mode gets a range because the owner's judgment is the input
+ * here. Measured on the shipped default before this existed: secondary copy
+ * scored Lc 60.3 on `--background` — its declared floor — but **57.0 on
+ * `--card`**, which is the surface the ticket rail and every panel actually
+ * paint it on. So it was missing its own contract on the surface that matters,
+ * and reading faint was not a matter of taste.
+ *
+ * Two fixes, and they are independent. The floors move (below), AND the solve
+ * moves to `--card`: a token solved against the lightest rung in the ladder is
+ * guaranteed to under-deliver on every rung beneath it.
+ *
+ * `label` is its own tier because the micro-labels (PRIORITY, DOING) are
+ * uppercase at 11px — the smallest, widest-tracked text in the app, and the
+ * least forgiving of a low score. It sits ABOVE secondary and just below body.
+ *
+ * Every range below is centred so that `textWeight` 0.5 gives **90 / 85 / 75 on
+ * the card** — the arrangement the owner chose. That is the anchor: a later
+ * adjustment to one range should be checked against this line rather than
+ * against whatever the previous adjustment happened to leave behind.
+ */
+export const LIGHT_FLOORS = {
+  /**
+   * Body copy, on `--background` — deliberately NOT moved to the card with the
+   * others, because this one token is already the answer.
+   *
+   * The ink it produces (#352a26 on the shipped default) is the branch and
+   * base-branch text the owner named as the thing he liked, and a floor is a
+   * means to an ink rather than the other way round. Re-solving the same 90
+   * against `--card` looks like the consistent choice and is not: APCA's curve
+   * is steep at the paper end, so one rung of surface costs a great deal of
+   * text — the identical floor reaches for #0d0503 there, a stark near-black
+   * nobody asked for and visibly heavier than the text being matched.
+   */
+  body: 90,
+  /**
+   * Secondary copy, on `--card`: the old floor at 0, near-body at 1.
+   *
+   * This is the one that was genuinely broken. It declared 60, cleared it on
+   * `--background` (60.3) and missed it on `--card` (57.0) — and `--card` is
+   * where the ticket rail, the panels and the popovers actually paint it.
+   *
+   * The ceiling is set by `body`, not by taste: body scores about 84.6 on the
+   * card (its 90 is measured a rung up), so a secondary allowed past that would
+   * end up DARKER than the copy it is subordinate to. 82 leaves the tier intact
+   * at the very top of the dial with a couple of Lc to spare.
+   */
+  secondary: { min: 68, max: 82 },
+  /**
+   * Micro-labels — a POSITION between body and secondary, not a floor of their
+   * own. 0 is body's exact ink, 1 is secondary's.
+   *
+   * Stated relatively because that is what the owner asked for: "I like the
+   * colour of the branch text, that could be used across the board" is a
+   * request about a specific ink, and any absolute Lc that reproduces it does
+   * so only for the surface and tint it was measured against. This holds at
+   * every spread, tint and hue instead — and it cannot invert the hierarchy or
+   * run out of color space the way a fourth independent solve can, since both
+   * of its endpoints are already-solved inks.
+   *
+   * The travel runs BACKWARDS against the weight dial (0.55 → 0.10): turning
+   * copy weight up means moving labels toward body, which is a smaller
+   * fraction, not a larger one.
+   */
+  labelTowardSecondary: { min: 0.55, max: 0.1 },
+  /** Sidebar nav. Unmoved — `lab.css` flips it to the canvas ink anyway. */
+  sidebar: 75,
+} as const;
+
+/** {@link LIGHT_FLOORS} with the weight applied — the numbers actually solved for. */
+export function lightFloors(textWeight: number): {
+  /** Lc, on `--background`. */
+  body: number;
+  /** Lc, on `--card`. */
+  secondary: number;
+  /** A fraction from body's ink toward secondary's — not an Lc. */
+  labelTowardSecondary: number;
+  /** Lc, on `--sidebar`. */
+  sidebar: number;
+} {
+  const t = Math.min(1, Math.max(0, textWeight));
+  const { body, secondary, labelTowardSecondary, sidebar } = LIGHT_FLOORS;
+  return {
+    body,
+    secondary: lerp(secondary.min, secondary.max, t),
+    labelTowardSecondary: lerp(labelTowardSecondary.min, labelTowardSecondary.max, t),
+    sidebar,
+  };
+}
 
 function lerp(from: number, to: number, t: number): number {
   return from + (to - from) * t;
+}
+
+/**
+ * A rung's authored lightness → its lightness at this spread — see
+ * {@link LIGHT_LADDER.spread}.
+ *
+ * Built once per derivation and returned as a closure because the fade needs
+ * the ladder's FULL depth to normalize against, and re-deriving that inside the
+ * loop would compute the same constant eleven times while making the rule
+ * itself harder to read than the one sentence it is.
+ *
+ * The top rung is the origin, so `--background` is a fixed point at every
+ * setting: paper is the one surface with nowhere to go, and a ladder whose
+ * lightest rung drifted with a spacing control would turn a spacing control
+ * into a brightness control.
+ */
+function spreadFactor(surfaceSpread: number): (L: number) => number {
+  const { min, max } = LIGHT_LADDER.spread;
+  const gain = lerp(min, max, Math.min(1, Math.max(0, surfaceSpread)));
+  const rungs = LIGHT_LADDER.rungs;
+  const paper = rungs[0].L;
+  const deepest = paper - rungs[rungs.length - 1].L;
+  return (L) => {
+    const drop = paper - L;
+    // Full gain at the paper end, none at the far end, linear between.
+    return paper - drop * lerp(gain, 1, drop / deepest);
+  };
+}
+
+/**
+ * `solveLightnessForContrast`, made safe to hand a floor that a dial can push
+ * past what the hue can physically deliver.
+ *
+ * That solver THROWS when no lightness reaches the target, which is right for
+ * the generator (a floor it cannot meet is a bug in the ladder) and wrong here:
+ * `textWeight` is a slider, and the top of its travel asks for Lc 98 from a
+ * chromatic ink on tinted paper — reachable at some hues and tints, not at
+ * others, with the boundary somewhere in the middle of the dial. A thrown error
+ * there would blank the lab mid-drag.
+ *
+ * So the ceiling is measured first and the ask is clamped to it, by the same
+ * expression the solver guards with. The result is a dial that stops moving
+ * when the color space runs out instead of falling off it.
+ */
+function solveClamped(targetLc: number, C: number, h: number, surface: string): number {
+  const bound = hexToOklch(surface).L < 0.5 ? 1 : 0;
+  const ceiling = apcaLc(oklchToHex(bound, C, h), surface);
+  return solveLightnessForContrast(Math.min(targetLc, ceiling), C, h, surface);
 }
 
 /**
@@ -152,13 +322,41 @@ function lightTokens(
     neutralChroma(seedChroma) *
     lerp(LIGHT_LADDER.tintGain.min, LIGHT_LADDER.tintGain.max, state.vibrancy);
 
+  // `cardTint` mixes the paper toward the canvas AS PAINTED, which is a
+  // different move from turning the ladder's chroma up and reaches somewhere
+  // turning it up cannot. Chroma alone runs into the sRGB boundary at L 0.955
+  // — the ceiling `tintGain` documents — and the boundary is closer at warm
+  // hues than cool ones, so past it the paper stops tinting evenly around the
+  // wheel. A mix brings the canvas's LIGHTNESS along with its chroma, walking
+  // the rung a little away from the boundary at exactly the moment it asks for
+  // more color, so the same fraction reads as the same amount of canvas at
+  // every hue.
+  //
+  // Mixing toward the primary's painted color rather than its authored one is
+  // what keeps vibrancy in charge: at vibrancy 0 the canvas is a near-neutral
+  // wash, so mixing 5% of it in is 5% of nearly nothing, and quiet stays quiet.
+  const canvas = hexToOklch(effectiveStopHexes(state, "light")[state.primaryIndex]);
+  const mix = Math.min(1, Math.max(0, state.cardTint));
+
+  const spread = spreadFactor(state.surfaceSpread);
+
   const ladder = {} as Record<ThemeTokenName, string>;
   for (const { tokens, L, k } of LIGHT_LADDER.rungs) {
-    const hex = oklchToHex(L, tint * k, hue);
+    // Spread first, mix second. They pull on the same axis and the order is not
+    // arbitrary: spread is a statement about the ladder's own proportions and
+    // mix is a statement about how far the whole thing sits from the canvas, so
+    // spreading a mixed ladder would have the tint decide the spacing.
+    //
+    // Every rung then moves by the same fraction toward the same target, so the
+    // gaps scale by (1 − mix) and their ORDER cannot change — which is what
+    // keeps the veil solves (whose window depends on a rung pair's gap) valid
+    // at every tint.
+    const hex = oklchToHex(lerp(spread(L), canvas.L, mix), lerp(tint * k, canvas.C, mix), hue);
     for (const token of tokens) ladder[token] = hex;
   }
-  const background = ladder["--background"];
+  const card = ladder["--card"];
   const sidebar = ladder["--sidebar"];
+  const floors = lightFloors(state.textWeight);
 
   // Every foreground here is solved against a CARD surface and nothing else.
   // Secondary copy also appears on the canvas — in a sidebar that gave up its
@@ -168,9 +366,17 @@ function lightTokens(
   // the floor the gradient needs. `lab.css` flips the on-canvas subtrees to the
   // canvas ink instead, which is the arrangement the port will formalize as
   // dedicated tokens.
-  const foregroundL = solveLightnessForContrast(90, tint, hue, background);
-  const mutedForegroundL = solveLightnessForContrast(60, tint, hue, background);
-  const sidebarForegroundL = solveLightnessForContrast(75, tint, hue, sidebar);
+  //
+  // Secondary moves to `--card` and body stays on `--background` — see
+  // LIGHT_FLOORS for why the asymmetry is the point rather than an oversight.
+  // In short: `--background` is the LIGHTEST rung, so a floor met only there is
+  // met nowhere else, and secondary copy lives a rung down on every panel, rail
+  // and popover in the app. Body's floor already lands on the ink the owner
+  // wanted, and re-solving it one rung down would trade that ink for a
+  // near-black in the name of consistency.
+  const foregroundL = solveClamped(floors.body, tint, hue, ladder["--background"]);
+  const mutedForegroundL = solveClamped(floors.secondary, tint, hue, card);
+  const sidebarForegroundL = solveClamped(floors.sidebar, tint, hue, sidebar);
 
   const foreground = oklchToHex(foregroundL, tint, hue);
   // The accent's hue and chroma as the dark generation settled them, re-solved
@@ -188,11 +394,10 @@ function lightTokens(
     "--sidebar-accent-foreground": foreground,
     "--muted-foreground": oklchToHex(mutedForegroundL, tint, hue),
     "--sidebar-foreground": oklchToHex(sidebarForegroundL, tint, hue),
-    "--primary-text": oklchToHex(
-      solveLightnessForContrast(60, accent.C, accent.h, background),
-      accent.C,
-      accent.h,
-    ),
+    // Accent-as-text, held to the same surface as the copy tiers for the same
+    // reason: it is a link and a button label inside panels, not a headline on
+    // the page's lightest rung.
+    "--primary-text": oklchToHex(solveClamped(60, accent.C, accent.h, card), accent.C, accent.h),
     "--primary": dark["--primary"],
     "--primary-foreground": dark["--primary-foreground"],
     "--ring": dark["--primary"],
@@ -221,4 +426,34 @@ export function deriveArcTokens(state: ArcCanvasState, resolved: ArcResolvedMode
     seed: oklchToHex(LIGHT_LADDER.seedCarrierL, chroma, h),
   });
   return resolved === "dark" ? dark : lightTokens(state, chroma, h, dark);
+}
+
+/**
+ * The micro-label tier — the one color in this module that is not a
+ * {@link ThemeTokens} member.
+ *
+ * `ThemeTokens` is a closed record over `THEME_TOKEN_NAMES`, and adding a name
+ * to it is an edit to `@volli/shared` that the whole app compiles against. That
+ * edit belongs to the port, not to a lab that is still deciding whether the
+ * tier should exist at all — so this returns a bare hex and `paint.ts` writes
+ * it as a `--lab-` property that only the seam reads.
+ *
+ * Null in dark mode, and null is the answer rather than a fallback color: the
+ * dark ladder's secondary tier already reads at the weight the owner wanted
+ * from the light one, so there is nothing to override and the seam should not
+ * match at all.
+ */
+export function deriveArcLabelInk(state: ArcCanvasState, resolved: ArcResolvedMode): string | null {
+  if (resolved === "dark") return null;
+  const tokens = deriveArcTokens(state, resolved);
+  const body = hexToOklch(tokens["--foreground"]);
+  const secondary = hexToOklch(tokens["--muted-foreground"]);
+  // A lightness walk between two solved inks, so the tier cannot invert and
+  // cannot fall out of gamut — both endpoints are already representable, and
+  // everything between two representable colors at one hue and chroma is too.
+  // Chroma and hue come from body: the two are within a rounding step of each
+  // other (same `tint`, same `hue`) and taking them from one end rather than
+  // interpolating keeps the three tiers exactly one family.
+  const t = lightFloors(state.textWeight).labelTowardSecondary;
+  return oklchToHex(lerp(body.L, secondary.L, t), body.C, body.h);
 }

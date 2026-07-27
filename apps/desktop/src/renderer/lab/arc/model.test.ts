@@ -268,13 +268,36 @@ describe("clampArcCanvasState", () => {
       stops: [{ hex: "#e8652a", x: 1.4, y: -3 }],
       vibrancy: 4,
       grain: -1,
+      lift: -9,
+      cardTint: 3,
+      shadow: -0.5,
     });
     expect(clamped).toEqual({
+      ...DEFAULT_ARC_CANVAS,
       stops: [{ hex: "#e8652a", x: 1, y: 0 }],
-      primaryIndex: 0,
-      mode: "auto",
       vibrancy: 1,
       grain: 0,
+      // Lift is the one dial with a signed range, so its floor is −1 rather
+      // than the 0 every other control clamps to.
+      lift: -1,
+      cardTint: 1,
+      shadow: 0,
     });
+  });
+
+  it("defaults the light dials instead of rejecting a canvas stored before they existed", () => {
+    // The guard's own asymmetry, asserted: a missing SHAPE is a question it
+    // refuses to answer, a missing DIAL is one it answers with the default.
+    // Without this, adding a knob would silently discard every canvas the owner
+    // had already tuned — the editor's persistence punishing the editor's
+    // iteration.
+    const legacy = {
+      stops: [{ hex: "#e8652a", x: 0.68, y: 0.3 }],
+      primaryIndex: 0,
+      mode: "auto",
+      vibrancy: 0.6,
+      grain: 0.15,
+    };
+    expect(clampArcCanvasState(legacy)).toEqual(DEFAULT_ARC_CANVAS);
   });
 });

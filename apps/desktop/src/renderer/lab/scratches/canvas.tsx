@@ -3,23 +3,24 @@
  * make `arc/model.ts` worth having.
  *
  * The question is not "is this gradient pretty". It is whether a canvas vivid
- * enough to be worth the trouble can still carry the app's own sidebar nav, and
- * that has exactly one honest test: pick a canvas here, then open the App shell
- * scratch and read the REAL sidebar sitting transparently on it. So every edit
- * commits immediately (see arc/paint.ts) rather than previewing — a canvas that
- * unwound on the way out could only ever be judged against the mock column on
- * the right of this screen.
+ * enough to be worth the trouble can still carry the app's own chrome — and
+ * once the light dials arrived, whether the surfaces standing on it separate
+ * from each other and from the paper card floating above. So every edit commits
+ * immediately (see arc/paint.ts) rather than previewing: the canvas is on the
+ * document while you tune it, not inside a preview box.
  *
- * The mock column is here for the tighter loop, not as the verdict. It paints
- * in `--lab-canvas-ink`/`--lab-canvas-ink-muted`, which is what the seam in
- * `lab.css` forces `--sidebar-foreground` and `--sidebar-accent-foreground` to
- * while a canvas is armed — so a reading that fails here fails on the real
- * sidebar. It does NOT model the rest of the window: arming a canvas now also
- * derives a whole app token set from it (arc/tokens.ts), so the content card,
- * its body copy and its helper text move too, and those are only visible on the
- * App shell. The readout at the bottom left carries the numbers for both — the
- * ink the flip chose against the worst pool, and the body/secondary scores on
- * the derived card.
+ * The specimen column on the right is the reason the dials are usable at all.
+ * Lift, spread and shadow are each a statement about how two surfaces sit NEXT
+ * to one another, so a control whose effect you had to navigate away to see was
+ * a control tuned from memory. `WindowSpecimen` puts the whole tier stack —
+ * chrome, rail, sidebar, card, tab strip, copy — under the slider, and quotes
+ * every color from the same `--lab-*` properties and token classes the real
+ * components read.
+ *
+ * It still is not the verdict, and the docstring on that component says exactly
+ * where the line is: geometry is mocked, values are not. Judge color, contrast
+ * and separation here; judge proportion and layout on the App shell scratch,
+ * which mounts the real thing.
  *
  * Dormant until you touch something. With nothing stored — or right after a
  * reset — the canvas is OFF and the app's own backdrop shows through, because
@@ -33,15 +34,13 @@ import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
 import { GearIcon } from "@phosphor-icons/react/dist/csr/Gear";
 import { MinusIcon } from "@phosphor-icons/react/dist/csr/Minus";
 import { MoonStarsIcon } from "@phosphor-icons/react/dist/csr/MoonStars";
-import { PaintBrushIcon } from "@phosphor-icons/react/dist/csr/PaintBrush";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { SparkleIcon } from "@phosphor-icons/react/dist/csr/Sparkle";
-import { SquaresFourIcon } from "@phosphor-icons/react/dist/csr/SquaresFour";
 import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
 
-import { apcaLc, type ThemeTokens } from "@volli/shared";
+import { apcaLc, hexToOklch, type ThemeTokens } from "@volli/shared";
 
 import {
   addStop,
@@ -63,7 +62,8 @@ import {
   type ArcStop,
 } from "../arc/model";
 import { applyArcCanvas, loadArcCanvas, saveArcCanvas } from "../arc/paint";
-import { deriveArcTokens } from "../arc/tokens";
+import { arcElevation } from "../arc/surfaces";
+import { deriveArcLabelInk, deriveArcTokens, lightFloors } from "../arc/tokens";
 import { labTheme, setLabTheme } from "../theme-choice";
 
 export const title = "Canvas — Arc gradient editor";
@@ -140,14 +140,6 @@ const NAV_ROWS: readonly { label: string; Icon: Icon }[] = [
   { label: "Sessions", Icon: TerminalWindowIcon },
   { label: "Settings", Icon: GearIcon },
 ];
-
-/**
- * The two tokens the real sidebar paints its labels in, with the app's own as
- * the fallback — so the mock column below reads correctly while the canvas is
- * dormant instead of falling back to `currentColor`.
- */
-const INK = "var(--lab-canvas-ink, var(--sidebar-foreground))";
-const INK_MUTED = "var(--lab-canvas-ink-muted, var(--muted-foreground))";
 
 /**
  * The editor's own chrome, which follows the canvas the way Arc's popover does:
@@ -343,6 +335,10 @@ function stepOnArrow(
   event: React.KeyboardEvent,
   value: number,
   onChange: (next: number) => void,
+  // The lift dial is the one control here that runs through zero, so the bounds
+  // are a parameter rather than a `clamp01` baked in.
+  min = 0,
+  max = 1,
 ): void {
   const step = event.shiftKey ? 0.1 : 0.02;
   const direction =
@@ -353,7 +349,187 @@ function stepOnArrow(
         : 0;
   if (direction === 0) return;
   event.preventDefault();
-  onChange(clamp01(value + direction * step));
+  onChange(Math.min(max, Math.max(min, value + direction * step)));
+}
+
+/**
+ * A plain labelled track — the shape the four light-mode dials share.
+ *
+ * Deliberately not another wave or another dial. The vibrancy slider and the
+ * grain dial are shaped like what they do because each of them is ONE thing
+ * with a memorable identity; four more sculpted controls in a 340px card would
+ * be four things to learn and a column of ornament. These read as a settings
+ * block, which is what they are.
+ *
+ * The origin is `min`, or zero when the range spans it: a signed dial that
+ * filled from its left end would draw the same bar for "slightly recessed" and
+ * "strongly frosted" and only the thumb would say which.
+ */
+function TuneSlider({
+  label,
+  value,
+  min,
+  max,
+  readout,
+  chrome,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  /** What the number means, in the units the owner is judging in. */
+  readout: string;
+  chrome: CardChrome;
+  onChange(next: number): void;
+}) {
+  const trackRef = React.useRef<HTMLDivElement>(null);
+  const toFraction = (raw: number) => (raw - min) / (max - min);
+  const handlers = useDrag({
+    onDrag(event) {
+      const track = trackRef.current;
+      if (track === null) return;
+      const rect = track.getBoundingClientRect();
+      const fraction = clamp01((event.clientX - rect.left) / rect.width);
+      onChange(min + fraction * (max - min));
+    },
+  });
+
+  const origin = toFraction(Math.min(Math.max(0, min), max));
+  const position = toFraction(value);
+  const [from, to] = origin <= position ? [origin, position] : [position, origin];
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className={`text-label ${chrome.mute}`}>{label}</span>
+        <span className={`font-mono text-label tabular-nums ${chrome.faint}`}>{readout}</span>
+      </div>
+      <div
+        ref={trackRef}
+        {...handlers}
+        onKeyDown={(event) => stepOnArrow(event, value, onChange, min, max)}
+        role="slider"
+        tabIndex={0}
+        aria-label={label}
+        aria-valuemin={min}
+        aria-valuemax={max}
+        aria-valuenow={Number(value.toFixed(2))}
+        aria-valuetext={readout}
+        className={`relative h-4 cursor-ew-resize touch-none rounded-full outline-none focus-visible:ring-2 ${chrome.focus}`}
+      >
+        <div className={`absolute inset-x-0 top-1.5 h-1 rounded-full ${chrome.well}`} />
+        {/* `bg-current` at partial weight: the fill inherits the card's own ink,
+            which the CHROME table has already flipped for the mode, so this
+            needs no entry of its own. */}
+        <div
+          aria-hidden
+          style={{ left: `${from * 100}%`, right: `${(1 - to) * 100}%` }}
+          className="absolute top-1.5 h-1 rounded-full bg-current opacity-45"
+        />
+        {/* White in both modes, like the vibrancy thumb — same hardware family. */}
+        <div
+          aria-hidden
+          style={{ left: `calc(${position * 100}% - 6px)` }}
+          className="absolute top-0.5 size-3 rounded-full bg-white shadow"
+        />
+      </div>
+    </div>
+  );
+}
+
+function percent(value: number): string {
+  return `${Math.round(value * 100)}%`;
+}
+
+/**
+ * The five dials that only light mode uses, in one block.
+ *
+ * Shown in both modes rather than hidden in dark, and the note says why: they
+ * are still the state you are editing, and a control that vanishes when you
+ * flip appearance reads as a control you lost rather than one that does not
+ * apply. `arc/paint.ts` neutralizes them for dark; this only has to be honest
+ * about it.
+ */
+function LightTuning({
+  state,
+  resolved,
+  chrome,
+  onChange,
+}: {
+  state: ArcCanvasState;
+  resolved: ArcResolvedMode;
+  chrome: CardChrome;
+  onChange(patch: Partial<ArcCanvasState>): void;
+}) {
+  const floors = lightFloors(state.textWeight);
+  // Measured off the derived set rather than off the slider, so the readout is
+  // the thing on screen and not a restatement of the input.
+  const light = deriveArcTokens(state, "light");
+  const railDrop = hexToOklch(light["--background"]).L - hexToOklch(light["--rail"]).L;
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className={`text-label uppercase ${chrome.faint}`}>Light surfaces</span>
+        {resolved === "dark" ? (
+          <span className={`text-label ${chrome.faint}`}>inert in dark</span>
+        ) : null}
+      </div>
+      <TuneSlider
+        label="Lift"
+        value={state.lift}
+        min={-1}
+        max={1}
+        readout={
+          state.lift === 0 ? "flush" : `${state.lift > 0 ? "frost" : "sink"} ${percent(state.lift)}`
+        }
+        chrome={chrome}
+        onChange={(lift) => onChange({ lift })}
+      />
+      <TuneSlider
+        label="Card tint"
+        value={state.cardTint}
+        min={0}
+        max={0.25}
+        readout={percent(state.cardTint)}
+        chrome={chrome}
+        onChange={(cardTint) => onChange({ cardTint })}
+      />
+      <TuneSlider
+        label="Surface spread"
+        value={state.surfaceSpread}
+        min={0}
+        max={1}
+        // The rung the complaint was actually about: the tab strip under a tab,
+        // which the mirrored ladder put ΔL 0.019 from the page it sits on.
+        readout={`rail ΔL ${railDrop.toFixed(3)}`}
+        chrome={chrome}
+        onChange={(surfaceSpread) => onChange({ surfaceSpread })}
+      />
+      <TuneSlider
+        label="Text weight"
+        value={state.textWeight}
+        min={0}
+        max={1}
+        // The floors, not the slider position: Lc is the unit the decision is
+        // actually made in, and "0.50" says nothing you can check on screen.
+        // Body / label / secondary, all measured on `--card`.
+        readout={`Lc ${floors.body.toFixed(0)} · ${floors.secondary.toFixed(0)} · lbl ${Math.round((1 - floors.labelTowardSecondary) * 100)}%`}
+        chrome={chrome}
+        onChange={(textWeight) => onChange({ textWeight })}
+      />
+      <TuneSlider
+        label="Shadow"
+        value={state.shadow}
+        min={0}
+        max={1}
+        readout={percent(state.shadow)}
+        chrome={chrome}
+        onChange={(shadow) => onChange({ shadow })}
+      />
+    </div>
+  );
 }
 
 function ModeRow({
@@ -798,41 +974,160 @@ function GrainDial({
   );
 }
 
+/** One on-canvas tier's lift overlay, exactly as `lab.css` paints it on the real thing. */
+function tier(index: 1 | 2): React.CSSProperties {
+  return { backgroundImage: `linear-gradient(var(--lab-lift-${index}), var(--lab-lift-${index}))` };
+}
+
 /**
- * The readability judge: the app's sidebar shape, painted in the app's sidebar
- * tokens, with NO fill of its own.
+ * The window in miniature — every tier the light dials move, on one screen.
  *
- * Transparent is the entire point. The real sidebar gave up its opaque token to
- * sit on the canvas (`--sidebar-veil`, #74), so a mock with a background would
- * be testing text on a card and reporting it as text on a gradient.
+ * It exists because the dials were not usable without it. Lift, spread and
+ * shadow are all statements about how two surfaces sit NEXT to each other, and
+ * a control you have to leave the page to evaluate is a control you tune by
+ * memory: drag, navigate to App shell, look, navigate back, guess. This puts
+ * the comparison under the slider.
+ *
+ * **Geometry is mocked; not one color is.** Every fill, ink and shadow here is
+ * a `var(--lab-*)` or an app token class — the same properties `arc/paint.ts`
+ * writes and the same ones `lab.css` hands the real components — so this can
+ * disagree with the app about proportion and never about value. That is the
+ * only trade the lab's contract allows, and it is why the seam's own selectors
+ * are deliberately NOT reused here: a specimen wearing `data-slot="sidebar-
+ * inset"` would be claiming to be the card rather than quoting it.
+ *
+ * So: judge color, contrast and separation here. Judge layout on App shell.
  */
-function SidebarPreview() {
+function WindowSpecimen({ ink }: { ink: ArcInk }) {
   return (
-    <div className="flex h-full w-full flex-col gap-1 rounded-2xl p-3">
-      <div className="flex items-center gap-2 px-2 py-1.5" style={{ color: INK }}>
-        <PaintBrushIcon weight="fill" size={16} />
-        <span className="text-ui font-medium">Voltaic</span>
+    <div
+      style={{ aspectRatio: PAD_ASPECT, boxShadow: "var(--lab-shadow-overlay)" }}
+      className="flex w-full flex-col overflow-hidden rounded-xl"
+    >
+      {/* Chrome band — tier 1, like the app's 40px strip. */}
+      <div
+        style={{ ...tier(1), color: ink.inkMuted }}
+        className="flex h-7 shrink-0 items-center justify-center text-label"
+      >
+        Search tickets and sessions
+      </div>
+      <div className="flex min-h-0 flex-1">
+        {/* Project rail — tier 1 as well: it is the same distance out. */}
+        <div style={tier(1)} className="flex w-8 shrink-0 flex-col items-center gap-1.5 pt-2">
+          <span className="size-5 rounded-md bg-primary" />
+          <span className="size-5 rounded-md" style={{ background: "var(--lab-lift-2)" }} />
+        </div>
+        {/* Primary sidebar — tier 2, one step nearer than the rail. */}
+        <div
+          style={{ ...tier(2), color: ink.ink }}
+          className="flex w-24 shrink-0 flex-col gap-0.5 p-1.5"
+        >
+          <span className="truncate px-1 text-label font-medium">Voltaic</span>
+          {NAV_ROWS.map(({ label, Icon: RowIcon }, index) => (
+            <span
+              key={label}
+              style={index === 0 ? undefined : { color: ink.inkMuted }}
+              className="flex items-center gap-1 rounded px-1 py-0.5 text-label"
+            >
+              <RowIcon weight="fill" size={10} />
+              <span className="truncate">{label}</span>
+            </span>
+          ))}
+        </div>
+        {/* The content card: opaque paper, floating. */}
+        <div
+          style={{ boxShadow: "var(--lab-shadow-card)" }}
+          className="m-1 flex min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-background"
+        >
+          {/* Tab strip — `--rail` under a `--background` tab, the pair the
+              spread dial is judged on. */}
+          <div className="flex shrink-0 items-end gap-0.5 border-b border-border bg-rail px-1 pt-1">
+            <span
+              style={{ boxShadow: "var(--lab-shadow-raised)" }}
+              className="rounded-t bg-background px-1.5 py-0.5 text-label text-foreground"
+            >
+              VLT-12
+            </span>
+            <span className="px-1 py-0.5 text-label text-muted-foreground">+</span>
+          </div>
+          <div className="flex min-h-0 flex-1 flex-col gap-1 p-2">
+            <span className="text-ui font-medium text-foreground">Warm-park sessions</span>
+            <CopyTiers />
+            {/* A board card: `--card` on `--background`, with the raised tier. */}
+            <div
+              style={{ boxShadow: "var(--lab-shadow-raised)" }}
+              className="mt-auto rounded-md border border-border bg-card px-1.5 py-1"
+            >
+              <span className="text-label text-muted-foreground">VLT-13</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The three copy tiers, in the order they rank — the `textWeight` dial's
+ * subject, and the one thing worth reading rather than glancing at.
+ *
+ * The label row wears `--lab-label-ink` directly rather than the seam's
+ * `.text-label.text-muted-foreground` pair, for the reason in
+ * {@link WindowSpecimen}: quoting the value is honest, impersonating the
+ * selector is not.
+ */
+function CopyTiers() {
+  return (
+    <div className="flex flex-col">
+      <span className="text-label text-foreground">volli/VC-12-warm-park · body</span>
+      <span className="text-label uppercase" style={{ color: "var(--lab-label-ink)" }}>
+        Priority · Doing
+      </span>
+      <span className="text-label text-muted-foreground">Secondary copy, one tier down</span>
+    </div>
+  );
+}
+
+/**
+ * The specimens that do not fit inside a 16:10 miniature: things at their real
+ * size, where a shadow and a hairline can actually be seen.
+ */
+function ComponentSpecimens() {
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-border bg-background p-3">
+      <CopyTiers />
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="rounded-full bg-primary px-2 py-0.5 text-label text-primary-foreground">
+          New ticket
+        </span>
+        <span className="rounded-full border border-border px-2 py-0.5 text-label text-muted-foreground">
+          Priority
+        </span>
+        <span className="text-label text-primary-text">accent as text</span>
+      </div>
+      <div className="rounded-md border border-border bg-input/40 px-2 py-1 text-label text-muted-foreground">
+        Search tickets and sessions
+      </div>
+      <div className="flex items-end gap-0.5 rounded-t-md border-b border-border bg-rail px-1 pt-1">
+        <span
+          style={{ boxShadow: "var(--lab-shadow-raised)" }}
+          className="rounded-t bg-background px-2 py-1 text-label text-foreground"
+        >
+          VLT-12
+        </span>
+        <span className="px-2 py-1 text-label text-muted-foreground">Session 1</span>
       </div>
       <div
-        className="mt-2 flex items-center gap-2 rounded-md bg-white/10 px-2 py-1.5"
-        style={{ color: INK }}
+        style={{ boxShadow: "var(--lab-shadow-overlay)" }}
+        className="rounded-md border border-border bg-popover p-1.5"
       >
-        <SquaresFourIcon weight="fill" size={16} />
-        <span className="text-ui font-medium">Board</span>
+        <span className="block rounded px-1.5 py-0.5 text-label text-popover-foreground">
+          Open in terminal
+        </span>
+        <span className="block rounded bg-accent px-1.5 py-0.5 text-label text-accent-foreground">
+          Copy branch name
+        </span>
       </div>
-      {NAV_ROWS.map(({ label, Icon: RowIcon }) => (
-        <div
-          key={label}
-          className="flex items-center gap-2 rounded-md px-2 py-1.5"
-          style={{ color: INK_MUTED }}
-        >
-          <RowIcon weight="fill" size={16} />
-          <span className="truncate text-ui">{label}</span>
-        </div>
-      ))}
-      <p className="mt-auto px-2 text-label" style={{ color: INK_MUTED }}>
-        Transparent — this column is reading the canvas, not a card.
-      </p>
     </div>
   );
 }
@@ -843,6 +1138,7 @@ function Readout({
   resolved,
   ink,
   tokens,
+  label,
   live,
   chrome,
   onReset,
@@ -852,6 +1148,8 @@ function Readout({
   resolved: ArcResolvedMode;
   ink: ArcInk;
   tokens: ThemeTokens;
+  /** The micro-label tier, or null in dark mode where there isn't one. */
+  label: string | null;
   live: boolean;
   chrome: CardChrome;
   onReset(): void;
@@ -860,9 +1158,16 @@ function Readout({
   // The ink line above answers "can the sidebar be read ON the canvas"; this
   // one answers "can the card be read on the surface the canvas derived", which
   // is the question the owner put first — it is the surface stared at all day.
+  //
+  // Body is scored on `--background` and the other two on `--card`, matching
+  // where each is solved (arc/tokens.ts). Scoring them all on the lightest rung
+  // was how secondary copy came to be 3 Lc short of its floor on every panel in
+  // the app while a readout said it was passing.
   const surface = tokens["--background"];
+  const panel = tokens["--card"];
   const bodyLc = Math.abs(apcaLc(tokens["--foreground"], surface));
-  const mutedLc = Math.abs(apcaLc(tokens["--muted-foreground"], surface));
+  const mutedLc = Math.abs(apcaLc(tokens["--muted-foreground"], panel));
+  const labelLc = label === null ? null : Math.abs(apcaLc(label, panel));
 
   return (
     <div className={`flex flex-col gap-2 rounded-2xl border p-3 backdrop-blur-xl ${chrome.card}`}>
@@ -890,8 +1195,14 @@ function Readout({
       </div>
       <p className={`flex items-center gap-1.5 font-mono text-label ${chrome.mute}`}>
         <span aria-hidden className="size-3 rounded-full" style={{ background: surface }} />
-        card {surface} · body Lc <span className="tabular-nums">{bodyLc.toFixed(1)}</span> · muted
-        Lc <span className="tabular-nums">{mutedLc.toFixed(1)}</span>
+        card {surface} · body <span className="tabular-nums">{bodyLc.toFixed(1)}</span> · muted{" "}
+        <span className="tabular-nums">{mutedLc.toFixed(1)}</span>
+        {labelLc === null ? null : (
+          <>
+            {" · label "}
+            <span className="tabular-nums">{labelLc.toFixed(1)}</span>
+          </>
+        )}
       </p>
       <div className="flex items-center justify-between gap-3">
         <p className={`font-mono text-label ${chrome.mute}`}>
@@ -960,8 +1271,19 @@ export default function CanvasScratch() {
   const resolved = resolveArcMode(state.mode, systemDark);
   const gradient = React.useMemo(() => arcCanvasBackground(state, resolved), [state, resolved]);
   const effective = React.useMemo(() => effectiveStopHexes(state, resolved), [state, resolved]);
-  const ink = React.useMemo(() => arcInk(state, resolved), [state, resolved]);
   const tokens = React.useMemo(() => deriveArcTokens(state, resolved), [state, resolved]);
+  // The same order `paint.ts` uses, and for the same reason: the lifted tiers
+  // are surfaces the ink has to survive, so scoring without them would print a
+  // worst-case number the window does not actually hold to.
+  const elevation = React.useMemo(
+    () => arcElevation(state, resolved, tokens),
+    [state, resolved, tokens],
+  );
+  const ink = React.useMemo(
+    () => arcInk(state, resolved, elevation.surfaces),
+    [state, resolved, elevation],
+  );
+  const labelInk = React.useMemo(() => deriveArcLabelInk(state, resolved), [state, resolved]);
   const primary = state.stops[state.primaryIndex];
   // The card follows the canvas it is floating on, not the app's dark-only
   // theme — see CHROME. It tracks `resolved`, so `auto` moves it too.
@@ -1019,6 +1341,15 @@ export default function CanvasScratch() {
               onChange={(grain) => mutate((current) => ({ ...current, grain }))}
             />
           </div>
+
+          <div className={`h-px ${chrome.well}`} />
+
+          <LightTuning
+            state={state}
+            resolved={resolved}
+            chrome={chrome}
+            onChange={(patch) => mutate((current) => ({ ...current, ...patch }))}
+          />
         </div>
         <div className="flex-1" />
 
@@ -1028,14 +1359,19 @@ export default function CanvasScratch() {
           resolved={resolved}
           ink={ink}
           tokens={tokens}
+          label={labelInk}
           live={live}
           chrome={chrome}
           onReset={reset}
         />
       </div>
 
-      <div className="absolute inset-y-6 right-6 w-[300px]">
-        <SidebarPreview />
+      {/* Scrollable, because the specimen stack is taller than a short window
+          and the alternative is squeezing every specimen until none of them
+          shows what it is for. */}
+      <div className="absolute inset-y-6 right-6 flex w-[360px] flex-col gap-3 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <WindowSpecimen ink={ink} />
+        <ComponentSpecimens />
       </div>
     </div>
   );

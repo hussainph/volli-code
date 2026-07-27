@@ -33,7 +33,9 @@ import {
   resolveArcMode,
   type ArcCanvasState,
 } from "./model";
-import { deriveArcTokens } from "./tokens";
+import { applyArcEditorTheme, arcEditorTheme } from "./editor-theme";
+import { arcElevation } from "./surfaces";
+import { deriveArcLabelInk, deriveArcTokens } from "./tokens";
 
 const STORAGE_KEY = "volli-lab:arc-canvas";
 
@@ -42,7 +44,32 @@ const CANVAS_ATTRIBUTE = "data-lab-canvas";
 const CANVAS_VARIABLE = "--lab-canvas";
 const INK_VARIABLE = "--lab-canvas-ink";
 const INK_MUTED_VARIABLE = "--lab-canvas-ink-muted";
-const CANVAS_VARIABLES = [CANVAS_VARIABLE, INK_VARIABLE, INK_MUTED_VARIABLE];
+/**
+ * The elevation set — cumulative lift per on-canvas tier, the micro-label ink,
+ * and the three shadow tiers.
+ *
+ * Every one of these carries a value even when its dial is at zero
+ * (`transparent`, `none`, the muted token) rather than being left unset. The
+ * seam's rules are unconditional, so an unset property would fall back to the
+ * `var()` fallback on a *repaint* while still matching — which is the same
+ * mid-drag flicker the attribute ordering below exists to prevent, arriving
+ * from the other direction.
+ */
+const LIFT_VARIABLES = ["--lab-lift-1", "--lab-lift-2"] as const;
+const LABEL_VARIABLE = "--lab-label-ink";
+const SHADOW_VARIABLES = {
+  raised: "--lab-shadow-raised",
+  card: "--lab-shadow-card",
+  overlay: "--lab-shadow-overlay",
+} as const;
+const CANVAS_VARIABLES = [
+  CANVAS_VARIABLE,
+  INK_VARIABLE,
+  INK_MUTED_VARIABLE,
+  ...LIFT_VARIABLES,
+  LABEL_VARIABLE,
+  ...Object.values(SHADOW_VARIABLES),
+];
 
 const SYSTEM_DARK_QUERY = "(prefers-color-scheme: dark)";
 
@@ -109,17 +136,43 @@ export function applyArcCanvas(state: ArcCanvasState | null): void {
   if (state === null) {
     root.removeAttribute(CANVAS_ATTRIBUTE);
     for (const name of CANVAS_VARIABLES) root.style.removeProperty(name);
+    // Disarming only stops FUTURE editors being caught up; the one on screen
+    // keeps the derived theme until something sets another. Same asymmetry as
+    // the token set above, and the same reason — the caller that genuinely
+    // turns a canvas off is the one that knows what should come back.
+    applyArcEditorTheme(null);
     return;
   }
 
   const resolved = resolveArcMode(state.mode, systemPrefersDark());
-  const { ink, inkMuted } = arcInk(state, resolved);
+  const tokens = deriveArcTokens(state, resolved);
+  // Elevation before ink, because the ink's worst case depends on it: a lifted
+  // tier is a surface the on-canvas text now sits on, and at NEGATIVE lift it
+  // is darker than any pool — so an ink chosen against the gradient alone would
+  // be chosen against surfaces that are no longer the hardest ones on screen.
+  const elevation = arcElevation(state, resolved, tokens);
+  const { ink, inkMuted } = arcInk(state, resolved, elevation.surfaces);
   // The app set first: it is the widest write, and the seam's `!important`
   // rules sit above it for the two tokens that paint on the canvas itself.
-  applyThemeTokens(deriveArcTokens(state, resolved));
+  applyThemeTokens(tokens);
   root.style.setProperty(CANVAS_VARIABLE, arcCanvasBackground(state, resolved));
   root.style.setProperty(INK_VARIABLE, ink);
   root.style.setProperty(INK_MUTED_VARIABLE, inkMuted);
+  LIFT_VARIABLES.forEach((name, tier) => {
+    root.style.setProperty(name, elevation.tiers[tier].veil);
+  });
+  // The dark ladder has no label tier to override, so its own secondary token
+  // is what the seam should land on — see `deriveArcLabelInk`.
+  root.style.setProperty(
+    LABEL_VARIABLE,
+    deriveArcLabelInk(state, resolved) ?? tokens["--muted-foreground"],
+  );
+  for (const [tier, name] of Object.entries(SHADOW_VARIABLES)) {
+    root.style.setProperty(name, elevation.shadows[tier as keyof typeof SHADOW_VARIABLES]);
+  }
+  // The editor is not a custom property — Monaco owns its own pixels — so it
+  // gets the derived set pushed at it rather than inheriting one.
+  applyArcEditorTheme(arcEditorTheme(tokens, resolved));
   root.setAttribute(CANVAS_ATTRIBUTE, resolved);
 }
 

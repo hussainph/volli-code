@@ -115,6 +115,78 @@ export const ARC_TUNING = {
     alphaScale: 0.55,
   },
 
+  /**
+   * Light-mode surface elevation — how far the surfaces sitting ON the canvas
+   * move away from it.
+   *
+   * A signed amount rather than a mode, because the two arrangements worth
+   * comparing are the same arrangement with the sign turned over. Positive
+   * lifts each tier toward paper (frosted: the window reads canvas → chrome →
+   * sidebar → card, each step closer); negative sinks it toward the ink
+   * (recessed: the light ladder's original direction, where the sidebar is a
+   * shadowed trough). Zero is neither, and is exactly today's picture.
+   *
+   * Light only. Dark already separates its tiers by a veil that reads clearly
+   * near-black (ΔL 0.022 measured, against light's 0.015 on a far brighter
+   * backdrop), which is the whole reason this exists for one mode and not both.
+   */
+  lift: {
+    /**
+     * Alpha at lift 1, for the tier furthest from the canvas.
+     *
+     * 0.7 rather than a gentler number because the alpha buys a share of a
+     * headroom that is not fixed: the distance between the canvas and the paper
+     * closes as the canvas gets lighter, and at the top of the light band
+     * (a near-white seed) it is barely 0.10 of lightness for BOTH tiers to
+     * divide. At 0.5 the outer tier's share of that landed at ΔL 0.022 —
+     * inside the same invisible range this whole module exists to escape.
+     */
+    liftAlpha: 0.7,
+    /**
+     * The sinking counterpart, deliberately smaller. A dark overlay on a pastel
+     * canvas costs lightness far faster than a paper one gains it, so matched
+     * alphas would make the two halves of the slider travel at different rates.
+     */
+    sinkAlpha: 0.3,
+    /**
+     * Each on-canvas tier's share of that alpha, in the order the seam applies
+     * them: the chrome band and the project rail first, the inner sidebar
+     * second. Cumulative by construction — a tier's share is its DISTANCE from
+     * the canvas, so the sidebar always separates from the rail as well as from
+     * the gradient.
+     */
+    tiers: [0.45, 1],
+  },
+
+  /**
+   * Light-mode elevation shadows — the blurred halo a raised surface casts.
+   *
+   * Light mode only, and for a structural reason rather than a taste one: on a
+   * near-black canvas a shadow has almost no luminance left to remove, so dark
+   * mode signals elevation by making a surface LIGHTER and a shadow there is
+   * cost without effect. That asymmetry is why the app has none today.
+   *
+   * The color is the canvas's own hue at low lightness, never neutral black. A
+   * neutral shadow over a warm pastel reads as dirt on the canvas — the grey
+   * desaturates the pixels under it instead of darkening them.
+   */
+  shadow: {
+    color: { L: 0.32, C: 0.05 },
+    /** Peak alphas at strength 1. Every layer scales linearly from here. */
+    raised: [
+      { y: 1, blur: 2, spread: 0, alpha: 0.12 },
+      { y: 2, blur: 7, spread: -1, alpha: 0.18 },
+    ],
+    card: [
+      { y: 1, blur: 3, spread: 0, alpha: 0.1 },
+      { y: 10, blur: 30, spread: -6, alpha: 0.24 },
+    ],
+    overlay: [
+      { y: 2, blur: 6, spread: -2, alpha: 0.14 },
+      { y: 16, blur: 44, spread: -8, alpha: 0.32 },
+    ],
+  },
+
   /** The two candidate foregrounds the flip chooses between. */
   ink: {
     /** Not pure white: a trace of the primary's hue keeps the text part of the canvas. */
@@ -187,6 +259,30 @@ export interface ArcCanvasState {
   vibrancy: number;
   /** 0 = no noise layer at all. */
   grain: number;
+  /**
+   * Light-mode surface elevation, −1 (recessed) → 0 (flush) → 1 (frosted).
+   * See {@link ARC_TUNING.lift}; ignored in dark mode.
+   */
+  lift: number;
+  /**
+   * How far the paper ladder is mixed toward the canvas's own color, 0–1.
+   * A fraction of the canvas mixed IN, not a chroma multiplier — see
+   * `tokens.ts`, which is where the mix happens.
+   */
+  cardTint: number;
+  /**
+   * How far apart the light ladder's rungs sit, 0 (as mirrored from the dark
+   * generator) → 1. Separates the surfaces INSIDE the card the way `lift`
+   * separates the ones on the canvas. See `LIGHT_LADDER.spread`.
+   */
+  surfaceSpread: number;
+  /**
+   * Light-mode copy weight, 0–1: where secondary and label text sit between
+   * their old floors and near-body. See `LIGHT_FLOORS` in `tokens.ts`.
+   */
+  textWeight: number;
+  /** Light-mode elevation shadow strength, 0–1. Scales every layer's alpha. */
+  shadow: number;
 }
 
 /** The chosen foreground plus the numbers that chose it. */
@@ -208,6 +304,11 @@ export const DEFAULT_ARC_CANVAS: ArcCanvasState = {
   mode: "auto",
   vibrancy: 0.6,
   grain: 0.15,
+  lift: 0.55,
+  cardTint: 0.05,
+  surfaceSpread: 0.5,
+  textWeight: 0.5,
+  shadow: 0.6,
 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -515,7 +616,24 @@ function worstContrast(candidate: string, surfaces: readonly string[]): number {
  * unreadable over one pool because it is excellent over the other two, which is
  * the failure this whole flip exists to prevent.
  */
-export function arcInk(state: ArcCanvasState, resolved: ArcResolvedMode): ArcInk {
+export function arcInk(
+  state: ArcCanvasState,
+  resolved: ArcResolvedMode,
+  /**
+   * What the lift veils composite the on-canvas tiers to — every tier over
+   * every pool (see `surfaces.ts`). Passed in rather than derived here because
+   * the veils are mixed from the app token set, and this module sits UNDER
+   * that: `tokens.ts` imports it, so it cannot import back.
+   *
+   * Optional, and empty is the honest default: at lift 0 there are no lifted
+   * surfaces, and the callers that only want the gradient's own answer (the
+   * editor's readout, the model tests) should get exactly that. It matters most
+   * when lift is NEGATIVE — a sunk tier is darker than every pool, so an ink
+   * scored only against the pools would be scored against the surfaces it does
+   * not actually have to survive.
+   */
+  liftedSurfaces: readonly string[] = [],
+): ArcInk {
   const { lightL, lightC, darkL, darkC, mutedTowardBase } = ARC_TUNING.ink;
   const { h } = hexToOklch(state.stops[state.primaryIndex].hex);
   const lightInk = oklchToHex(lightL, lightC, h);
@@ -524,7 +642,11 @@ export function arcInk(state: ArcCanvasState, resolved: ArcResolvedMode): ArcInk
   // The base fill is a surface too — it is what text sits on wherever no pool
   // reaches, and a worst-case score that exempted it would be an average with
   // extra steps.
-  const surfaces = [...effectiveStopHexes(state, resolved), arcBaseFillHex(state, resolved)];
+  const surfaces = [
+    ...effectiveStopHexes(state, resolved),
+    arcBaseFillHex(state, resolved),
+    ...liftedSurfaces,
+  ];
   const lightLc = worstContrast(lightInk, surfaces);
   const darkLc = worstContrast(darkInk, surfaces);
   const chooseLight = lightLc >= darkLc;
@@ -607,5 +729,54 @@ export function clampArcCanvasState(value: unknown): ArcCanvasState | null {
     mode,
     vibrancy: clamp(vibrancy, 0, 1),
     grain: clamp(grain, 0, 1),
+    ...tuning(value as Record<string, unknown>),
   };
+}
+
+/**
+ * The four light-mode dials, DEFAULTED rather than required — the one place
+ * this guard reads an absent field as an answer instead of a question.
+ *
+ * The distinction it draws is the same one the guard draws everywhere else,
+ * just landing the other way. A missing `stops` says nothing and guessing at it
+ * resurrects a canvas nobody authored; a missing `lift` says "this was stored
+ * before the dial existed", and the honest reading of that is the default the
+ * dial ships with. Rejecting instead would throw away a canvas the owner tuned,
+ * every time a knob is added — which would make the editor's own persistence
+ * the thing that punishes iterating on it.
+ */
+function tuning(
+  value: Record<string, unknown>,
+): Pick<ArcCanvasState, "lift" | "cardTint" | "surfaceSpread" | "textWeight" | "shadow"> {
+  const unit = (raw: unknown, fallback: number, min = 0): number =>
+    isUnit(raw) ? clamp(raw, min, 1) : fallback;
+  return {
+    lift: unit(value.lift, DEFAULT_ARC_CANVAS.lift, -1),
+    cardTint: unit(value.cardTint, DEFAULT_ARC_CANVAS.cardTint),
+    surfaceSpread: unit(value.surfaceSpread, DEFAULT_ARC_CANVAS.surfaceSpread),
+    textWeight: unit(value.textWeight, DEFAULT_ARC_CANVAS.textWeight),
+    shadow: unit(value.shadow, DEFAULT_ARC_CANVAS.shadow),
+  };
+}
+
+/** One `#rrggbb` channel, 0–255. */
+function channel(hex: string, index: number): number {
+  return parseInt(hex.slice(1 + index * 2, 3 + index * 2), 16);
+}
+
+/**
+ * `over` at `alpha` composited on `under`, as a hex.
+ *
+ * In 8-bit sRGB rather than OKLCH for the same reason `veil.ts` solves there:
+ * what has to match is the byte the compositor produces, and the compositor
+ * works in gamma-encoded channels. A perceptual mix would predict a pixel the
+ * browser never paints, and every measurement taken against it — every ink
+ * score, every reported Lc — would be measuring a surface that isn't on screen.
+ */
+export function compositeHex(over: string, alpha: number, under: string): string {
+  const bytes = [0, 1, 2].map((index) => {
+    const mixed = channel(over, index) * alpha + channel(under, index) * (1 - alpha);
+    return clamp(Math.round(mixed), 0, 255).toString(16).padStart(2, "0");
+  });
+  return `#${bytes.join("")}`;
 }
