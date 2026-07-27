@@ -314,6 +314,15 @@ async function sidebarSessionIds(page) {
   });
 }
 
+/**
+ * A session row's meta line (`VC-10 · Ready for review`).
+ *
+ * Everything dimmed in the row promotes together under decision #74's vibrancy
+ * rule, so the hook class is `session-row-dim` and the title carries it too —
+ * pin the selector to the one span that holds the mono ticket id.
+ */
+const SESSION_ROW_META = "span.session-row-dim:has(> span.font-mono)";
+
 // ---- main ------------------------------------------------------------------
 
 async function main() {
@@ -987,21 +996,21 @@ async function main() {
           .filter({ has: page.locator("span.font-mono", { hasText: /^VC-10$/ }) })
           .first();
         const subtextBefore = await needsYouRow
-          .locator(".session-row-meta")
+          .locator(SESSION_ROW_META)
           .evaluate((element) => getComputedStyle(element).color);
         await needsYouRow.click();
         await sleep(400);
         const ticketOpened =
           (await page.getByRole("tab", { name: "VC-10", exact: true }).count()) === 1;
-        const subtextHighlight = await needsYouRow.evaluate((button) => {
-          const subtext = button.querySelector(".session-row-meta");
+        const subtextHighlight = await needsYouRow.evaluate((button, metaSelector) => {
+          const subtext = button.querySelector(metaSelector);
           if (!(subtext instanceof HTMLElement)) return null;
           return {
             active: button.getAttribute("data-active"),
             buttonColor: getComputedStyle(button).color,
             subtextColor: getComputedStyle(subtext).color,
           };
-        });
+        }, SESSION_ROW_META);
         const subtextHighlighted =
           subtextHighlight?.active === "true" &&
           subtextHighlight.subtextColor === subtextHighlight.buttonColor &&
