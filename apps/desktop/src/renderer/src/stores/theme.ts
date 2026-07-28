@@ -173,7 +173,13 @@ export interface ThemeStoreDeps {
    * instant is the correct feedback.
    */
   beginScopeRepaint(): void;
-  /** Whether the system is asking for dark right now. */
+  /**
+   * What the system was asking for when this window was built — main's
+   * `nativeTheme` reading, handed over on the process arguments. Called exactly
+   * once, for the initial state, because that snapshot cannot go stale
+   * unobserved: a later flip arrives at {@link ThemeState.noteSystemAppearance}
+   * instead.
+   */
   systemPrefersDark(): boolean;
 }
 

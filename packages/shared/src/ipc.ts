@@ -671,7 +671,14 @@ export type VolliIpcEvent =
   | "volli:worktree-watch-error"
   // Transient worktree-ensure phase transitions (never persisted; the renderer
   // mirrors them in a keyed store map, the `starting[ticketId]` pattern).
-  | "volli:worktree-phase";
+  | "volli:worktree-phase"
+  // A real OS light↔dark flip — `nativeTheme`'s `updated`, carrying
+  // `shouldUseDarkColors`. Main is the only process that can see one: Chromium
+  // resolves the renderer's `prefers-color-scheme` query against the root
+  // element's used `color-scheme`, which this app stamps itself, so over there
+  // the query only ever reports the mode already painted. Every scope on `auto`
+  // re-resolves off this.
+  | "volli:system-appearance-changed";
 
 /** Direction of a `volli:ui-zoom-command` event: step in/out one rung, or reset. */
 export type UiZoomCommand = "in" | "out" | "reset";

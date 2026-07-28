@@ -1021,9 +1021,11 @@ describe("the default gateway", () => {
       },
     });
     vi.stubGlobal("window", {
-      matchMedia: () => ({ matches: true, addEventListener: () => {} }),
       api: {
         theme: {
+          // Not a verb: it is read synchronously off this window's process
+          // arguments, and the default deps call it once for the initial state.
+          systemPrefersDark: () => true,
           state: verb("state"),
           setGlobalCanvas: verb("setGlobalCanvas"),
           setGlobalAppearance: verb("setGlobalAppearance"),

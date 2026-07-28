@@ -26,6 +26,13 @@
  *     `additionalArguments`; preload stamps the class before any page script.
  *     Check 14 boots with that hint at `light` and samples the first ~20 frames
  *     for a dark one.
+ *   • AND NEITHER IS `auto`. The renderer cannot read the system's mode at all:
+ *     Chromium resolves `prefers-color-scheme` against the root element's used
+ *     `color-scheme`, which this app stamps, so the query answers with the mode
+ *     already painted. `nativeTheme` in main is the source — over
+ *     `additionalArguments` for the first answer and over an event for every
+ *     one after. Checks 24/25 are the two halves of that: main and the window
+ *     agree on `auto`, and a forced `themeSource` repaints the live window.
  *
  * The eleven ghostty / relaunch / scope-precedence assertions are carried over
  * from the deleted smoke close to verbatim — those surfaces were meant to
@@ -312,6 +319,38 @@ const readMode = (page) =>
     classes: [...document.documentElement.classList],
     colorScheme: getComputedStyle(document.documentElement).colorScheme,
   }));
+
+/**
+ * `nativeTheme.shouldUseDarkColors` — what the SYSTEM is asking for, read in
+ * main.
+ *
+ * The only honest reading of it. Chromium resolves the renderer's
+ * `matchMedia("(prefers-color-scheme: dark)")` against the root element's used
+ * `color-scheme`, and this app stamps that itself, so in the renderer that query
+ * reports the mode already painted. Measured on a Dark-mode Mac with the root in
+ * light: this said `true`, the renderer's query said `false` — which is what
+ * made `auto` resolve to whatever was already on screen, forever.
+ */
+const systemPrefersDark = (app) =>
+  app.evaluate(({ nativeTheme }) => nativeTheme.shouldUseDarkColors);
+
+/** The renderer's own query — kept only as the evidence that it cannot be trusted. */
+const rendererMediaQuery = (page) =>
+  page.evaluate(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
+
+/**
+ * Drives a real OS appearance flip.
+ *
+ * `nativeTheme.themeSource` is the documented override, and setting it moves
+ * `shouldUseDarkColors` AND fires `updated` — the same event a user flipping
+ * System Settings produces, which is the whole path under test. `"system"` puts
+ * the app back on the host's own answer.
+ */
+const forceThemeSource = (app, source) =>
+  app.evaluate(({ nativeTheme }, value) => {
+    nativeTheme.themeSource = value;
+    return nativeTheme.shouldUseDarkColors;
+  }, source);
 
 /** The window's own edge color, as Chromium paints it before/around the document. */
 const readWindowBackground = (app) =>
@@ -1380,6 +1419,90 @@ cursor-style = block
     return {
       ok: after === userConfigBefore,
       detail: after === userConfigBefore ? "unchanged" : "MUTATED — decision #67 violated",
+    };
+  });
+
+  // ---- 9. `auto`, and the flip only main can see ---------------------------
+  // Every check above pinned the mode explicitly, precisely so its table would
+  // not depend on whose Mac ran the smoke. These two are about the mode nobody
+  // pins, and they are the only ones that CAN'T assert a colour: what they
+  // assert is that main and the window agree, whichever way the host is set.
+  await attempt(24, "on `auto`, main's nativeTheme and the painted mode agree", async () => {
+    // The disagreement this pins is what shipped. `auto` was resolved in the
+    // renderer from `matchMedia("(prefers-color-scheme: dark)")`, which Chromium
+    // answers from the root element's used `color-scheme` — stamped by this very
+    // app — so it read back the mode already painted. Picking Auto after an
+    // explicit light or dark therefore repainted nothing at all, whatever the
+    // system said.
+    await openAppearanceSettings(page);
+    await segment(page, "appearance-mode", "auto").click();
+    const prefersDark = await systemPrefersDark(app);
+    const expected = prefersDark ? "dark" : "light";
+    const mode = await waitUntil(
+      `the window to resolve \`auto\` to ${expected}`,
+      async () => {
+        const now = await readMode(page);
+        return now.classes.includes(expected) ? now : null;
+      },
+      { timeout: 8000 },
+    ).catch(() => readMode(page));
+    const query = await rendererMediaQuery(page);
+    const stored = await storedTheme(page);
+    return {
+      ok:
+        mode.classes.includes(expected) &&
+        !mode.classes.includes(prefersDark ? "light" : "dark") &&
+        mode.colorScheme === expected &&
+        // `auto` is what is STORED; only its resolution moved. A window that
+        // agreed with main by quietly persisting a resolved mode would be the
+        // one bug this whole design exists to make unrepresentable.
+        stored.appearance === "auto",
+      detail: `nativeTheme.shouldUseDarkColors=${prefersDark} painted=${JSON.stringify(mode)} stored=${stored.appearance} · the renderer's own media query says ${query}`,
+    };
+  });
+
+  await attempt(25, "a system flip repaints an `auto` window, with no reload", async () => {
+    // `themeSource` is the documented way to move `shouldUseDarkColors` and it
+    // fires `updated`, which is the exact event a user flipping System Settings
+    // produces — so this exercises the real path end to end: main's listener,
+    // the fan-out, the preload subscription, the store's change guard, a paint.
+    const before = await readMode(page);
+    const flipTo = before.classes.includes("dark") ? "light" : "dark";
+    // A marker only a document load could clear. The claim is that the RUNNING
+    // window repainted; a reload would satisfy every colour assertion below
+    // while proving nothing about the live subscription.
+    await page.evaluate(() => {
+      window.volliNoReload = true;
+    });
+    const background = (await readAppliedTokens(page, ["--background"]))["--background"];
+
+    await forceThemeSource(app, flipTo);
+    const after = await waitUntil(
+      `the window to repaint to ${flipTo}`,
+      async () => {
+        const now = await readMode(page);
+        return now.classes.includes(flipTo) ? now : null;
+      },
+      { timeout: 8000 },
+    ).catch(() => readMode(page));
+    const repainted = (await readAppliedTokens(page, ["--background"]))["--background"];
+    const sameDocument = await page.evaluate(() => window.volliNoReload === true);
+    const stored = await storedTheme(page);
+
+    // Back to the host's own answer, so nothing after this runs under a forced
+    // system mode.
+    await forceThemeSource(app, "system");
+
+    return {
+      ok:
+        after.classes.includes(flipTo) &&
+        after.colorScheme === flipTo &&
+        // The class alone is not a repaint: the derived token set has to have
+        // moved with it, or every surface keeps the other mode's colours.
+        repainted !== background &&
+        sameDocument &&
+        stored.appearance === "auto",
+      detail: `${JSON.stringify(before)} → ${JSON.stringify(after)}; --background ${background}→${repainted}; sameDocument=${sameDocument} stored=${stored.appearance}`,
     };
   });
 } catch (error) {

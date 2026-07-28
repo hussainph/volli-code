@@ -30,7 +30,11 @@ import { defaultFsDeps } from "./fs-deps";
 import { getFirstPaintHint, getGlobalAppearance, getGlobalCanvas } from "./db/theme-repo";
 import { firstPaintArguments, resolveFirstPaint } from "./window-theme";
 import { registerFileIpcHandlers } from "./volli-fs";
-import { broadcastDataChanged, broadcastSessionsInterrupted } from "./broadcast";
+import {
+  broadcastDataChanged,
+  broadcastSessionsInterrupted,
+  broadcastSystemAppearance,
+} from "./broadcast";
 import { startOrphanSweep } from "./orphan-sweep";
 import { worktreeDeps } from "./worktree-runtime";
 import { getRetentionWatcher } from "./retention-runtime";
@@ -164,11 +168,17 @@ function createWindow(ptyManager: PtyManager, firstPaint: FirstPaintHint): Brows
     backgroundColor: firstPaint.background,
     webPreferences: {
       preload: join(__dirname, "preload.cjs"),
-      // The resolved light/dark mode, readable synchronously in the preload
-      // (`process.argv`) so the inline script in index.html can stamp the mode
-      // class BEFORE the first frame. An `invoke()` round trip resolves a frame
-      // too late, which is the flash this whole path exists to prevent.
-      additionalArguments: firstPaintArguments(firstPaint),
+      // Two facts the renderer needs before it can run a line of its own: the
+      // resolved light/dark mode, so the preload can stamp the mode class BEFORE
+      // the first frame (an `invoke()` round trip resolves a frame too late,
+      // which is the flash this whole path exists to prevent), and what the
+      // system is asking for, which is what an `auto` appearance resolves
+      // against and which the renderer cannot read for itself — its own
+      // `prefers-color-scheme` query answers from the `color-scheme` this app
+      // stamped. `nativeTheme` is read here, at construction, for the same
+      // reason `currentFirstPaint` reads it: `activate` can build a window long
+      // after boot.
+      additionalArguments: firstPaintArguments(firstPaint, nativeTheme.shouldUseDarkColors),
       contextIsolation: true,
       nodeIntegration: false,
       // Electron 20+ already defaults this on; explicit so it can't silently
@@ -434,6 +444,17 @@ app.whenReady().then(async () => {
       },
     },
   );
+  // The OTHER half of `auto`: the system flipping while the app is running.
+  // Only main can see it — the renderer's `prefers-color-scheme` query resolves
+  // against the `color-scheme` this app stamps, so it reports the mode already
+  // painted and never changes on its own. Every window hears about the flip and
+  // re-resolves; a scope on an explicit light or dark ignores it, which is a
+  // question only the renderer can answer for the scope it is showing.
+  // `currentAppearance` above needs no such wiring: it reads `nativeTheme`
+  // fresh on every call already.
+  nativeTheme.on("updated", () => {
+    broadcastSystemAppearance(nativeTheme.shouldUseDarkColors);
+  });
   // Boots the PTY multiplexer (persists a durable record per session) and its
   // before-quit teardown (kills all PTYs, gated on busy sessions); needs the
   // db, so it registers here. The returned manager feeds each window's own

@@ -148,6 +148,40 @@ function firstPaintAppearance(): "light" | "dark" | null {
 }
 
 /**
+ * The second flag main appends, carrying `nativeTheme.shouldUseDarkColors` —
+ * what an `auto` appearance resolves against.
+ *
+ * It comes from main because the renderer has no way to ask. Chromium answers
+ * `matchMedia("(prefers-color-scheme: dark)")` from the root element's used
+ * `color-scheme`, which this app stamps for itself a few lines below — so over
+ * there the query reports the mode already painted, not the system's. And it
+ * comes over argv rather than IPC because the theme store's singleton is
+ * constructed at import time, which is before any `invoke()` could settle.
+ *
+ * Must match `SYSTEM_DARK_ARG` in `src/main/window-theme.ts`, duplicated as a
+ * literal for the same reason as the flag above and pinned by the same test.
+ */
+const SYSTEM_DARK_ARG_PREFIX = "--volli-system-dark=";
+
+/**
+ * What the system was asking for when this window was constructed. A snapshot,
+ * not a subscription — argv never changes, so later flips arrive through
+ * `onSystemAppearanceChanged` below.
+ *
+ * `null` means the flag is absent or unreadable, i.e. no window built by
+ * `createWindow` is behind this preload; the caller picks its own default rather
+ * than being handed a guess dressed as an answer.
+ */
+function systemPrefersDark(): boolean | null {
+  const flag = process.argv.find((arg) => arg.startsWith(SYSTEM_DARK_ARG_PREFIX));
+  if (flag === undefined) return null;
+  const value = flag.slice(SYSTEM_DARK_ARG_PREFIX.length);
+  if (value === "1") return true;
+  if (value === "0") return false;
+  return null;
+}
+
+/**
  * Stamps the resolved mode class on `<html>` before the page's own scripts run.
  *
  * `index.html` no longer pins `class="dark"`, and the two obvious replacements
@@ -609,6 +643,32 @@ const api = {
      * flag is missing — keep the document's declared mode in that case.
      */
     firstPaintAppearance,
+    /**
+     * What `nativeTheme` said when this window was built — the boolean an `auto`
+     * appearance resolves against, read synchronously off the process arguments
+     * because the theme store's initial state needs it before any round trip
+     * could return. `null` when the flag is absent.
+     */
+    systemPrefersDark,
+    /**
+     * Subscribes to real OS light↔dark flips (`nativeTheme`'s `updated`, fanned
+     * out by main); returns the unsubscribe function.
+     *
+     * The renderer cannot observe one for itself — its own
+     * `prefers-color-scheme` query resolves against the mode this app stamped,
+     * so it never moves — which is why the flip has to be pushed rather than
+     * polled.
+     */
+    onSystemAppearanceChanged: (callback: (prefersDark: boolean) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, prefersDark: boolean) =>
+        callback(prefersDark);
+      ipcRenderer.on("volli:system-appearance-changed" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener(
+          "volli:system-appearance-changed" satisfies VolliIpcEvent,
+          listener,
+        );
+    },
     /** Rewrites keys in Volli's global ghostty overlay (`null` removes a key). */
     writeGlobalOverlay: (edits: OverlayEdits): Promise<TerminalOverlayWriteResult> =>
       invoke("volli:theme-terminal-overlay-write", { scope: "global", edits }),

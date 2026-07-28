@@ -76,11 +76,38 @@ export function windowBackgroundColor(input: FirstPaintInput): string {
 export const FIRST_PAINT_APPEARANCE_ARG = "--volli-first-paint-appearance=";
 
 /**
+ * The flag carrying `nativeTheme.shouldUseDarkColors` — the boolean `auto`
+ * resolves against — into the renderer alongside the resolved mode.
+ *
+ * It rides the same channel as the flag above for the same reason (the theme
+ * store's singleton is constructed at import time and reads this for its initial
+ * state, so an awaited answer is too late), but it exists for a second reason
+ * that is worth stating: the renderer cannot work this out on its own. Chromium
+ * resolves `matchMedia("(prefers-color-scheme: dark)")` against the root
+ * element's used `color-scheme`, and this app stamps that itself — so that query
+ * reads back whatever was last painted rather than what the system is asking
+ * for. Measured on a Dark-mode Mac with the root in light: main said
+ * `shouldUseDarkColors = true`, the renderer's query said `false`. `nativeTheme`
+ * is the only honest source, and this is how its first answer gets across.
+ *
+ * Must match `SYSTEM_DARK_ARG_PREFIX` in `src/preload/index.ts`, duplicated as a
+ * literal and pinned by a test here for the same reason as the flag above.
+ */
+export const SYSTEM_DARK_ARG = "--volli-system-dark=";
+
+/**
  * The `additionalArguments` a window is constructed with. Electron documents
  * this as the way to pass "small bits of data down to renderer process preload
- * scripts", and one word is exactly that; the alternative — a synchronous IPC
+ * scripts", and two words are exactly that; the alternative — a synchronous IPC
  * call from the preload — blocks main on every window.
+ *
+ * `systemPrefersDark` arrives as an argument rather than being read here so this
+ * module stays Electron-free and unit-testable — the same stance
+ * {@link FirstPaintInput} takes on the same boolean.
  */
-export function firstPaintArguments(paint: FirstPaintHint): string[] {
-  return [`${FIRST_PAINT_APPEARANCE_ARG}${paint.appearance}`];
+export function firstPaintArguments(paint: FirstPaintHint, systemPrefersDark: boolean): string[] {
+  return [
+    `${FIRST_PAINT_APPEARANCE_ARG}${paint.appearance}`,
+    `${SYSTEM_DARK_ARG}${systemPrefersDark ? "1" : "0"}`,
+  ];
 }

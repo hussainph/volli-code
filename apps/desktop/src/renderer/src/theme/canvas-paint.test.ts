@@ -158,71 +158,96 @@ describe("applyResolvedAppearanceClass", () => {
   });
 });
 
-describe("systemPrefersDark", () => {
-  it("reads the media query when there is a window to read it from", () => {
-    vi.stubGlobal("window", { matchMedia: () => ({ matches: false, addEventListener: () => {} }) });
+/**
+ * A stand-in for the preload bridge, so "what did main say?" and "the OS just
+ * flipped" are both things this test can state.
+ *
+ * `matchMedia` is stubbed alongside it, always answering the OPPOSITE — it is
+ * what the app used to read, and the point of these tests is that nothing goes
+ * near it any more.
+ */
+function fakeBridge({ prefersDark }: { prefersDark: boolean | null }) {
+  const listeners: ((prefersDark: boolean) => void)[] = [];
+  let subscriptions = 0;
+  vi.stubGlobal("window", {
+    matchMedia: () => ({ matches: prefersDark !== true, addEventListener: () => {} }),
+    api: {
+      theme: {
+        systemPrefersDark: () => prefersDark,
+        onSystemAppearanceChanged: (listener: (prefersDark: boolean) => void) => {
+          subscriptions += 1;
+          listeners.push(listener);
+          return () => {};
+        },
+      },
+    },
+  });
+  return {
+    flip: (next: boolean) => listeners.forEach((listener) => listener(next)),
+    subscriptionCount: () => subscriptions,
+  };
+}
 
+describe("systemPrefersDark", () => {
+  it("reads the boolean main stamped on this window, not the media query", () => {
+    // Chromium resolves `(prefers-color-scheme: dark)` against the root
+    // element's used `color-scheme`, which this app stamps itself — so in the
+    // renderer that query reports the mode already painted. Measured on a
+    // Dark-mode Mac with the root in light: main said `true`, the query said
+    // `false`. The fake answers them in opposite directions for exactly that
+    // reason: only one of the two can be the source.
+    fakeBridge({ prefersDark: true });
+    expect(systemPrefersDark()).toBe(true);
+
+    fakeBridge({ prefersDark: false });
     expect(systemPrefersDark()).toBe(false);
   });
 
-  it("answers dark with no window at all", () => {
+  it("answers dark with no bridge at all", () => {
     // The theme store's singleton is constructed at import time and reads this
-    // for its initial state, so it has to survive a headless host. Dark is what
-    // globals.css renders with no mode class stamped — the guard agrees with the
-    // stylesheet rather than inventing a third default.
+    // for its initial state, so it has to survive a headless host — the
+    // renderer's own test project runs under vitest's `node` environment. Dark
+    // is what globals.css renders with no mode class stamped, so the guard
+    // agrees with the stylesheet rather than inventing a third default.
+    expect(systemPrefersDark()).toBe(true);
+  });
+
+  it("answers dark when the flag never arrived", () => {
+    // `null` means no window built by `createWindow` is behind this preload.
+    // Same reasoning, same answer — and it must come from here rather than from
+    // the bridge, so the fallback is stated once.
+    fakeBridge({ prefersDark: null });
+
     expect(systemPrefersDark()).toBe(true);
   });
 });
 
-/** A stubbed `matchMedia`, so a "system flip" is a call this test can make. */
-function fakeMedia() {
-  const listeners: (() => void)[] = [];
-  let queries = 0;
-  return {
-    listeners,
-    queryCount: () => queries,
-    install() {
-      vi.stubGlobal("window", {
-        matchMedia: () => {
-          queries += 1;
-          return {
-            matches: true,
-            addEventListener: (_event: string, listener: () => void) => {
-              listeners.push(listener);
-            },
-          };
-        },
-      });
-    },
-  };
-}
-
 describe("watchSystemAppearance", () => {
-  it("reports a flip to its caller rather than deciding what it means", () => {
-    // "Is this scope on auto?" is the store's question and only the store can
-    // answer it for the scope currently loaded.
-    const media = fakeMedia();
-    media.install();
-    let flips = 0;
+  it("hands the flip's own boolean to its caller rather than deciding what it means", () => {
+    // The value has to RIDE the event: the argv snapshot behind
+    // `systemPrefersDark` is fixed for the window's lifetime, so a callback that
+    // re-read it would repaint to the mode that just stopped being true. What
+    // the flip MEANS is the store's question — "is this scope on auto?" is
+    // answerable only there.
+    const bridge = fakeBridge({ prefersDark: true });
+    const seen: boolean[] = [];
 
-    watchSystemAppearance(() => {
-      flips += 1;
-    });
-    media.listeners.forEach((listener) => listener());
+    watchSystemAppearance((prefersDark) => seen.push(prefersDark));
+    bridge.flip(false);
+    bridge.flip(true);
 
-    expect(flips).toBe(1);
+    expect(seen).toEqual([false, true]);
   });
 
-  it("installs exactly one listener however often it is called", () => {
-    // A hot reload or a second caller must not stack listeners on one media
-    // query — every flip would then repaint as many times as it was registered.
-    const media = fakeMedia();
-    media.install();
+  it("subscribes exactly once however often it is called", () => {
+    // A hot reload or a second caller must not stack subscriptions — every flip
+    // would then repaint as many times as it was registered.
+    const bridge = fakeBridge({ prefersDark: true });
 
     watchSystemAppearance(() => {});
     watchSystemAppearance(() => {});
 
-    expect(media.queryCount()).toBe(1);
+    expect(bridge.subscriptionCount()).toBe(1);
   });
 });
 

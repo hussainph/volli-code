@@ -108,22 +108,31 @@ export type CanvasTokens = Record<CanvasTokenName, string>;
 /** The two classes that name a resolved appearance on `<html>`. */
 const MODE_CLASSES = ["light", "dark"] as const;
 
-const SYSTEM_DARK_QUERY = "(prefers-color-scheme: dark)";
-
 /**
  * Whether the system is currently asking for dark — the input `auto` resolves
- * against.
+ * against, as main read it off `nativeTheme` when this window was built.
+ *
+ * NOT `matchMedia("(prefers-color-scheme: dark)")`, which is the obvious answer
+ * here and a wrong one. Chromium resolves that query against the root element's
+ * used `color-scheme` — which this module stamps, a few functions down — so in
+ * this renderer it reads back whatever was last painted rather than what the
+ * system wants. Measured on a Dark-mode Mac with the root in light: main's
+ * `nativeTheme.shouldUseDarkColors` was `true` and the query answered `false`.
+ * `auto` then resolves to the mode already on screen, forever, and no OS flip
+ * can ever be noticed. Main is the only process that can see the truth, so the
+ * answer arrives over the bridge (argv, then a push — see
+ * {@link watchSystemAppearance}) and is never re-derived here.
  *
  * Guarded because the theme store's singleton is constructed at import time and
  * reads this for its initial state, and the renderer's own test project runs
- * under vitest's `node` environment with no DOM (see apply.test.ts). Absent a
- * `matchMedia`, the answer is `true`: dark is what `globals.css` renders with no
- * mode class stamped, so the guard agrees with the stylesheet rather than
- * inventing a third default.
+ * under vitest's `node` environment with no DOM and no preload (see
+ * apply.test.ts). With no bridge to ask, the answer is `true`: dark is what
+ * `globals.css` renders with no mode class stamped, so the guard agrees with the
+ * stylesheet rather than inventing a third default.
  */
 export function systemPrefersDark(): boolean {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return true;
-  return window.matchMedia(SYSTEM_DARK_QUERY).matches;
+  if (typeof window === "undefined") return true;
+  return window.api?.theme.systemPrefersDark() ?? true;
 }
 
 /**
@@ -245,21 +254,29 @@ let watching = false;
 
 /**
  * Repaints when the system flips appearance — the `auto` half of the appearance
- * setting, which nothing else can observe.
+ * setting, which nothing in the renderer can observe.
+ *
+ * The flip is PUSHED from main (`nativeTheme`'s `updated`), for the reason
+ * {@link systemPrefersDark} gives: the media query this used to listen to
+ * resolves against the mode the app itself stamped, so its `change` event could
+ * never fire for an OS flip and a window on `auto` stayed on whatever it had.
+ * The new boolean rides the event rather than being re-read, because the
+ * argv snapshot behind `systemPrefersDark` is fixed for the window's lifetime.
  *
  * Registered from `main.tsx` rather than at import time, and idempotent, so a
- * hot reload or a second caller cannot stack listeners on one media query. The
- * callback decides whether the flip is relevant (an explicit light/dark choice
- * ignores it); this module only reports that it happened, because "is this
- * scope on auto?" is the store's question and it is the only thing that can
- * answer it for the scope currently loaded.
+ * hot reload or a second caller cannot stack subscriptions. The unsubscribe is
+ * deliberately dropped: this listener's lifetime is the window's. The callback
+ * decides whether the flip is relevant (an explicit light/dark choice ignores
+ * it); this module only reports that it happened, because "is this scope on
+ * auto?" is the store's question and it is the only thing that can answer it
+ * for the scope currently loaded.
  */
-export function watchSystemAppearance(onSystemAppearanceChange: () => void): void {
+export function watchSystemAppearance(
+  onSystemAppearanceChange: (prefersDark: boolean) => void,
+): void {
   if (watching) return;
   watching = true;
-  window.matchMedia(SYSTEM_DARK_QUERY).addEventListener("change", () => {
-    onSystemAppearanceChange();
-  });
+  window.api.theme.onSystemAppearanceChanged(onSystemAppearanceChange);
 }
 
 /** Test seam: forgets that a listener was installed. Never called by the app. */
