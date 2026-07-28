@@ -11,36 +11,22 @@ import {
 describe("buildEditorThemeDisplay", () => {
   const themes = listEditorThemes();
 
-  it("derives the effective theme from the app slug when editorThemeId is null", () => {
+  it("resolves to the shipped default when editorThemeId is null", () => {
     const display = buildEditorThemeDisplay({
       editorThemeId: null,
-      appThemeSlug: "ember",
       themes,
     });
 
     expect(display.resolvedId).toBe(DEFAULT_EDITOR_THEME_ID);
     expect(display.label).toBe("One Dark Pro");
     expect(display.source).toBe("automatic");
-    expect(display.sourceLabel).toBe("Matches app theme");
+    expect(display.sourceLabel).toBe("Default");
     expect(display.resettable).toBe(false);
   });
 
-  it("maps other app slugs when still automatic", () => {
-    const display = buildEditorThemeDisplay({
-      editorThemeId: null,
-      appThemeSlug: "midnight",
-      themes,
-    });
-
-    expect(display.resolvedId).toBe("tokyo-night");
-    expect(display.label).toBe("Tokyo Night");
-    expect(display.source).toBe("automatic");
-  });
-
-  it("honors an explicit catalog id over the app slug", () => {
+  it("honors an explicit catalog id", () => {
     const display = buildEditorThemeDisplay({
       editorThemeId: "nord",
-      appThemeSlug: "ember",
       themes,
     });
 
@@ -54,23 +40,21 @@ describe("buildEditorThemeDisplay", () => {
   it("treats an empty string like automatic", () => {
     const display = buildEditorThemeDisplay({
       editorThemeId: "",
-      appThemeSlug: "moss",
       themes,
     });
 
     expect(display.source).toBe("automatic");
-    expect(display.resolvedId).toBe("everforest-dark");
+    expect(display.resolvedId).toBe(DEFAULT_EDITOR_THEME_ID);
     expect(display.resettable).toBe(false);
   });
 
   it("defaults to the shipped catalog when themes are omitted", () => {
     const display = buildEditorThemeDisplay({
       editorThemeId: null,
-      appThemeSlug: "ember",
     });
 
     expect(display.label).toBe("One Dark Pro");
-    expect(display.sourceLabel).toBe("Matches app theme");
+    expect(display.sourceLabel).toBe("Default");
   });
 });
 
@@ -109,7 +93,6 @@ describe("planEditorThemePreview", () => {
     // resolve from those live inputs — not a stale pre-commit resolvedId.
     const committed = buildEditorThemeDisplay({
       editorThemeId: "nord",
-      appThemeSlug: "ember",
       themes: listEditorThemes(),
     });
     expect(

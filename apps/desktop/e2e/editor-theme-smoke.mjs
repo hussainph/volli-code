@@ -214,7 +214,7 @@ try {
     };
   });
 
-  await attempt(2, "default Ember mapping paints One Dark Pro editor.background", async () => {
+  await attempt(2, "an unset editor theme paints the shipped One Dark Pro background", async () => {
     const state = await page.evaluate(async () => {
       const result = await window.api.theme.state({});
       return result.ok ? result.value.editorThemeId : null;

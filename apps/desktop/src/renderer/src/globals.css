@@ -2,14 +2,15 @@
  * The canonical design-token module (per CLAUDE.md: tokens live in one shared
  * module, not per-component). Colors, radii, and fonts are CSS variables here;
  * TS-side domain colors (the project-tile palette) live in @volli/shared.
- * The main process needs --background too (BrowserWindow backgroundColor), but
- * no longer duplicates a literal: it runs the same generator over the same
- * stored theme (src/main/window-theme.ts), so the two cannot drift.
+ * The main process needs a window background too, and no longer duplicates a
+ * literal: it runs the same canvas pipeline over the same stored canvas
+ * (src/main/window-theme.ts), so the two cannot drift.
  *
- * Dark-only for now, by owner decision: values are authored once under
- * `:root, .dark` and <html class="dark"> is pinned in index.html so shadcn
- * `dark:` variants keep working and a light theme (or user theming UI) can be
- * added later without restructuring.
+ * Both appearances ship. `<html>` carries `light` or `dark` — stamped by preload
+ * before first paint from the hint main resolved at window construction, and
+ * moved after that only by `theme/canvas-paint.ts`. A boot that somehow reaches
+ * CSS with neither class renders dark, exactly as the old pinned `class="dark"`
+ * did.
  */
 
 @import "tailwindcss";
@@ -17,88 +18,190 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* GENERATED THEME TOKENS — BEGIN */
 /*
- * Every color below is the generator's output for the shipped Ember theme —
- * `generateThemeTokens(DEFAULT_THEME)` in @volli/shared, verbatim. Authoring
- * the generated set (rather than a hand-picked near-equivalent) is what makes
- * the first paint flash-free: the app already renders its default theme before
- * any JS runs, and `renderer/src/theme/apply.ts` only has work to do once the
- * user picks something else. It also keeps this literal fallback honest — if
- * the generator ever drifts from these values, the difference is a visible
- * repaint at boot rather than a silent divergence.
+ * Every color below is the canvas pipeline's output for the shipped default
+ * canvas, verbatim: `deriveCanvasTokens(DEFAULT_CANVAS, mode)` and the
+ * elevation/ink pair solved beside it, at both appearances.
  *
- * Regenerate, never hand-tune: the ladder's lightnesses and the APCA-solved
- * foregrounds are generator-owned constants (docs/plans/theming-engine.md
- * § Surface 3). `--primary` staying exactly ember `#e8652a` is not a
- * coincidence — the brand color is a fixed point of the accent math.
+ * REGENERATE, NEVER HAND-TUNE — and regenerate BOTH blocks together:
+ *     node apps/desktop/scripts/generate-theme-css.mjs
+ * A light block that has drifted from the dark one is the exact failure this
+ * rule exists to prevent, and it is invisible until someone switches mode.
  *
- * Non-color tokens (--radius, the type scale, the layout tokens) are NOT
- * themeable and never appear in the generated set: theming moves color, never
- * geometry or type.
+ * Non-color tokens (the type scale, the layout tokens) are NOT themeable and
+ * never appear here: theming moves color, never geometry or type.
  */
+/* Dark, and the no-class fallback. A boot that somehow reaches CSS with no
+ * mode class stamped renders dark, exactly as the pinned `class="dark"` did. */
 :root,
-.dark {
-  --background: #15100e;
-  --foreground: #ebe3df;
-  --card: #1b1412;
-  --card-foreground: #ebe3df;
-  --popover: #1f1816;
-  --popover-foreground: #ebe3df;
-  /* Ember orange — the single brand accent (CLAUDE.md). */
-  --primary: #e8652a;
+:root.dark {
+  color-scheme: dark;
+  /* Two-tier sidebar depth: rail darkest, panel between rail and content. */
+  --rail: #170f0b;
+  --background: #1c1310;
+  --card: #211815;
+  --popover: #251b18;
+  --secondary: #271d1a;
+  --muted: #271d1a;
+  --accent: #2d2220;
+  --sidebar: #211815;
+  --foreground: #e8e4e2;
+  --card-foreground: #e8e4e2;
+  --popover-foreground: #e8e4e2;
+  --secondary-foreground: #e8e4e2;
+  --muted-foreground: #bdbab8;
+  --accent-foreground: #e8e4e2;
+  --sidebar-foreground: #d0cdcb;
+  --sidebar-accent: #2d2220;
+  --sidebar-accent-foreground: #e8e4e2;
+  --border: #312623;
+  --border-hover: #3c312c;
+  --border-strong: #423632;
+  --input: #312623;
+  --sidebar-border: #2d241f;
+  /* The accent, derived from the canvas's primary stop at the chroma the
+   gradient actually paints — so vibrancy modulates the chrome exactly as it
+   modulates the canvas. It is NOT the literal brand ember: the default
+   canvas ships at vibrancy 0.6, and a fill solved at full seed chroma would
+   not belong to the wash behind it. */
+  --primary: #be826b;
   --primary-foreground: #ffffff;
-  /* The same accent solved to APCA Lc 60 on --background, for body-sized
-   * accent TEXT. --primary is Lc 41 as copy — fine for an icon, below the
-   * floor for a paragraph link — and it cannot simply be brightened, because
-   * its lightness is what makes it work as a fill. Use --primary for fills and
-   * icons, --primary-text for anything you read. */
-  --primary-text: #ff966c;
-  --secondary: #211a17;
-  --secondary-foreground: #ebe3df;
-  --muted: #211a17;
-  /* APCA Lc 60 against --background (the old #9a9a9a was Lc 47 — below the
-   * floor for non-body text, and a live legibility bug independent of theming). */
-  --muted-foreground: #b9b0ad;
-  --accent: #28201d;
-  --accent-foreground: #ebe3df;
-  /* Hue-locked: the semantic escape list never follows the seed, or a red
-   * theme would make "delete" indistinguishable from "primary". */
+  /* The accent solved to APCA Lc 60 on the card, for body-sized accent TEXT.
+   `--primary` is below the floor as copy and cannot simply be brightened —
+   its lightness is what makes it work as a fill. Fills and icons take
+   `--primary`; anything you read takes this. */
+  --primary-text: #e3a58d;
+  --ring: #be826b;
+  --sidebar-primary: #be826b;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-ring: #be826b;
+  /* Hue-locked: the semantic escape list never follows the canvas, or a red
+   canvas would make “delete” indistinguishable from “primary”. */
   --destructive: #e5484d;
   --destructive-foreground: #ffffff;
-  --border: #2d2421;
-  /* Slightly-brighter-than---border grays for hover/active edge emphasis
-   * (card hover, active filter chips, unfilled priority bars). */
-  --border-hover: #3b312d;
-  --border-strong: #423834;
-  --input: #2d2421;
-  --ring: #e8652a;
   --radius: 0.625rem;
-  /* Two-tier sidebar depth: rail darkest, panel between rail and content. */
-  --rail: #0f0b09;
-  --sidebar: #1b1412;
-  --sidebar-foreground: #d3cbc7;
-  --sidebar-primary: #e8652a;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #28201d;
-  --sidebar-accent-foreground: #ebe3df;
-  --sidebar-border: #29211d;
-  --sidebar-ring: #e8652a;
-  /* Veils (#74, @volli/shared theme/veil.ts). The canvas layer now paints the
-   * whole window behind the chrome, so the sidebar cannot keep an opaque fill —
-   * but it is a LIGHTER rung than the rail, so plain transparency would darken
-   * it. Each veil is the color that, at 10% over the surface named beside it,
-   * composites to the opaque token above byte-exactly: `--sidebar-veil` over
-   * `--rail` is `#1b1412`, and `--sidebar-accent-veil` / `--sidebar-border-veil`
-   * over that are `#28201d` / `#29211d`. So `canvas: solid` is pixel-identical
-   * to a build without the layer, and over a gradient each surface and edge
-   * keeps its relative lift instead of a fixed absolute one — which for the 1px
-   * hairline is the difference between holding its weight and reading as a
-   * bright line at the dark end of the ramp and vanishing at the light end.
-   * Generated like everything above — regenerate, never hand-tune. */
-  --sidebar-veil: rgb(135 101 99 / 0.1);
-  --sidebar-accent-veil: rgb(157 140 128 / 0.1);
-  --sidebar-border-veil: rgb(167 150 128 / 0.1);
+  /* Veils (#74). The canvas paints the whole window behind the chrome, so the
+   sidebar cannot keep an opaque fill — but it is a LIGHTER rung than the
+   rail, so plain transparency would darken it. Each veil is the color that,
+   at 10% over the surface named beside it, composites to the opaque token
+   above byte-exactly. */
+  --sidebar-veil: rgb(123 105 111 / 0.1);
+  --sidebar-accent-veil: rgb(153 124 131 / 0.1);
+  --sidebar-border-veil: rgb(153 144 121 / 0.1);
+  /* THE CANVAS ITSELF, and the nine values derived alongside it
+   (`CANVAS_TOKEN_NAMES`, renderer/src/theme/canvas-paint.ts). The gradient
+   is a `background` value, grain layer included, so the window can paint
+   itself before any JS runs. */
+  --canvas:
+    url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22140%22%20height%3D%22140%22%3E%3Cfilter%20id%3D%22n%22%20x%3D%220%22%20y%3D%220%22%20width%3D%22100%25%22%20height%3D%22100%25%22%3E%3CfeTurbulence%20type%3D%22fractalNoise%22%20baseFrequency%3D%220.9%22%20numOctaves%3D%222%22%20seed%3D%227%22%20stitchTiles%3D%22stitch%22%2F%3E%3CfeColorMatrix%20type%3D%22luminanceToAlpha%22%2F%3E%3CfeComponentTransfer%3E%3CfeFuncA%20type%3D%22linear%22%20slope%3D%220.083%22%2F%3E%3C%2FfeComponentTransfer%3E%3C%2Ffilter%3E%3Crect%20width%3D%22100%25%22%20height%3D%22100%25%22%20filter%3D%22url(%23n)%22%2F%3E%3C%2Fsvg%3E")
+      0 0 / 140px 140px repeat,
+    radial-gradient(ellipse 130% 110% at 68% 30%, #55220b, transparent 75.6%), #481600;
+  /* The on-canvas copy ladder, head first — solved against the gradient and
+   the lifted tiers on it, NOT against the card. `--foreground` and
+   `--muted-foreground` answer the same question for the other side of the
+   card's edge; neither set can serve both surfaces. */
+  --canvas-ink: #fbf1ed;
+  --canvas-ink-label: #d2c8c5;
+  --canvas-ink-muted: #b6aca9;
+  /* Cumulative lift per on-canvas tier. Tier 1 (chrome band, project rail)
+   takes a share of zero — the frame reads as a frame only if it is
+   uniform — so it is `transparent` by design, not by omission. */
+  --lift-1: transparent;
+  --lift-2: rgb(251 241 237 / 0.03);
+  /* The card's micro-label tier, between body and secondary. */
+  --label-ink: #d5d1cf;
+  /* The three shadow tiers: raised on a surface, the card, and overlays. */
+  --shadow-raised: 0 1px 2px 0px rgb(2 0 0 / 0.09), 0 2px 7px -1px rgb(2 0 0 / 0.135);
+  --shadow-card: 0 1px 3px 0px rgb(2 0 0 / 0.075), 0 10px 30px -6px rgb(2 0 0 / 0.18);
+  --shadow-overlay: 0 2px 6px -2px rgb(2 0 0 / 0.105), 0 16px 44px -8px rgb(2 0 0 / 0.24);
 }
+
+/* Later in the file at equal specificity (0,2,0) to `:root.dark` and higher
+ * than bare `:root`, so an explicit light choice wins wherever it is stamped —
+ * by preload before first paint, or by `canvas-paint.ts` on every repaint after. */
+:root.light {
+  color-scheme: light;
+  /* Two-tier sidebar depth: rail darkest, panel between rail and content. */
+  --rail: #edd1c6;
+  --background: #fdded2;
+  --card: #f4d4c8;
+  --popover: #f7d8cc;
+  --secondary: #eacabd;
+  --muted: #eacabd;
+  --accent: #dab9ad;
+  --sidebar: #e2c3b7;
+  --foreground: #120906;
+  --card-foreground: #120906;
+  --popover-foreground: #120906;
+  --secondary-foreground: #120906;
+  --muted-foreground: #514541;
+  --accent-foreground: #120906;
+  --sidebar-foreground: #080302;
+  --sidebar-accent: #dab9ad;
+  --sidebar-accent-foreground: #120906;
+  --border: #d8b6a9;
+  --border-hover: #d3b0a3;
+  --border-strong: #d5b2a5;
+  --input: #d8b6a9;
+  --sidebar-border: #ddbbad;
+  /* The accent, derived from the canvas's primary stop at the chroma the
+   gradient actually paints — so vibrancy modulates the chrome exactly as it
+   modulates the canvas. It is NOT the literal brand ember: the default
+   canvas ships at vibrancy 0.6, and a fill solved at full seed chroma would
+   not belong to the wash behind it. */
+  --primary: #d6744d;
+  --primary-foreground: #ffffff;
+  /* The accent solved to APCA Lc 60 on the card, for body-sized accent TEXT.
+   `--primary` is below the floor as copy and cannot simply be brightened —
+   its lightness is what makes it work as a fill. Fills and icons take
+   `--primary`; anything you read takes this. */
+  --primary-text: #9e4218;
+  --ring: #d6744d;
+  --sidebar-primary: #d6744d;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-ring: #d6744d;
+  /* Hue-locked: the semantic escape list never follows the canvas, or a red
+   canvas would make “delete” indistinguishable from “primary”. */
+  --destructive: #e5484d;
+  --destructive-foreground: #ffffff;
+  --radius: 0.625rem;
+  /* Veils (#74). The canvas paints the whole window behind the chrome, so the
+   sidebar cannot keep an opaque fill — but it is a LIGHTER rung than the
+   rail, so plain transparency would darken it. Each veil is the color that,
+   at 10% over the surface named beside it, composites to the opaque token
+   above byte-exactly. */
+  --sidebar-veil: rgb(127 69 48 / 0.1);
+  --sidebar-accent-veil: rgb(146 95 83 / 0.1);
+  --sidebar-border-veil: rgb(176 115 83 / 0.1);
+  /* THE CANVAS ITSELF, and the nine values derived alongside it
+   (`CANVAS_TOKEN_NAMES`, renderer/src/theme/canvas-paint.ts). The gradient
+   is a `background` value, grain layer included, so the window can paint
+   itself before any JS runs. */
+  --canvas:
+    url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22140%22%20height%3D%22140%22%3E%3Cfilter%20id%3D%22n%22%20x%3D%220%22%20y%3D%220%22%20width%3D%22100%25%22%20height%3D%22100%25%22%3E%3CfeTurbulence%20type%3D%22fractalNoise%22%20baseFrequency%3D%220.9%22%20numOctaves%3D%222%22%20seed%3D%227%22%20stitchTiles%3D%22stitch%22%2F%3E%3CfeColorMatrix%20type%3D%22luminanceToAlpha%22%2F%3E%3CfeComponentTransfer%3E%3CfeFuncA%20type%3D%22linear%22%20slope%3D%220.083%22%2F%3E%3C%2FfeComponentTransfer%3E%3C%2Ffilter%3E%3Crect%20width%3D%22100%25%22%20height%3D%22100%25%22%20filter%3D%22url(%23n)%22%2F%3E%3C%2Fsvg%3E")
+      0 0 / 140px 140px repeat,
+    radial-gradient(ellipse 130% 110% at 68% 30%, #ffb294, transparent 75.6%), #ff9970;
+  /* The on-canvas copy ladder, head first — solved against the gradient and
+   the lifted tiers on it, NOT against the card. `--foreground` and
+   `--muted-foreground` answer the same question for the other side of the
+   card's edge; neither set can serve both surfaces. */
+  --canvas-ink: #1c110d;
+  --canvas-ink-label: #392c28;
+  --canvas-ink-muted: #4c3f3a;
+  /* Cumulative lift per on-canvas tier. Tier 1 (chrome band, project rail)
+   takes a share of zero — the frame reads as a frame only if it is
+   uniform — so it is `transparent` by design, not by omission. */
+  --lift-1: transparent;
+  --lift-2: rgb(253 222 210 / 0.175);
+  /* The card's micro-label tier, between body and secondary. */
+  --label-ink: #2f2521;
+  /* The three shadow tiers: raised on a surface, the card, and overlays. */
+  --shadow-raised: 0 1px 2px 0px rgb(72 42 30 / 0.09), 0 2px 7px -1px rgb(72 42 30 / 0.135);
+  --shadow-card: 0 1px 3px 0px rgb(72 42 30 / 0.075), 0 10px 30px -6px rgb(72 42 30 / 0.18);
+  --shadow-overlay: 0 2px 6px -2px rgb(72 42 30 / 0.105), 0 16px 44px -8px rgb(72 42 30 / 0.24);
+}
+/* GENERATED THEME TOKENS — END */
 
 @theme inline {
   --color-background: var(--background);
@@ -171,14 +274,441 @@
   * {
     @apply border-border outline-ring/50;
   }
+  /* THE CANVAS. On `html` rather than `body` so it is the element's own
+   * background instead of a propagated one, and so it is painted from the
+   * generated block above with no JS at all — which is the whole first-paint
+   * argument. `body` therefore has to be transparent: `bg-background` there
+   * would lay the CARD's rung over the entire window and the gradient would
+   * never be seen.
+   *
+   * It also has to be outside the `zoom: uiScale` row (app-shell.tsx), and here
+   * it could not be more outside — ⌘+ rescales the UI without touching the
+   * gradient. */
   html {
-    color-scheme: dark;
+    background: var(--canvas);
   }
   body {
-    @apply bg-background text-foreground font-sans;
+    @apply text-foreground font-sans;
+    background: transparent;
     font-synthesis: none;
   }
 }
+
+/* ─── THE SEAM ───────────────────────────────────────────────────────────────
+ *
+ * How the sidebar, the canvas and the card meet. Ported from the lab's
+ * `lab.css`, where the arrangement was chosen against a real running sidebar;
+ * the reasoning is preserved because every rule below is the answer to a
+ * measurement, and a rule whose measurement is lost is a rule nobody can
+ * safely change.
+ *
+ * Unconditional, and not scoped to an appearance. The canvas is always on now,
+ * and whether the card floats is a STRUCTURAL decision — a window that
+ * rearranged itself when the system went dark would be a bug rather than a
+ * theme. What flips per mode is the sign of the lift, which `canvas-paint.ts`
+ * has already resolved into the values these rules read. */
+
+/* THE ON-CANVAS FOREGROUNDS.
+ *
+ * `--foreground` and `--muted-foreground` paint two surfaces at once: the
+ * opaque content card, which has its own APCA-solved values from the token
+ * ladder, and the chrome standing on the gradient. Flipping them at `:root`
+ * makes one of those unreadable whichever way it goes — and solving one token
+ * against both surfaces just collapses the card's body/secondary hierarchy into
+ * a single value without ever reaching the floor the canvas needs (measured:
+ * body and muted both #3a2f2b, still only Lc 56 on the gradient). Two scopes,
+ * two answers, no compromise between them.
+ *
+ * Custom properties inherit, so setting them on each subtree ROOT is enough;
+ * the card is a sibling of these, never a descendant, so it keeps its own. No
+ * `!important` is needed even though `canvas-paint.ts` writes the same token
+ * names inline on `<html>`: that flag settles a contest between declarations on
+ * the SAME element, and these are descendants with an inheritance between them.
+ *
+ * `--sidebar-foreground` is also the fix for a real shortfall rather than a
+ * preference. At light's settled surface spread `--sidebar` lands at L 0.840,
+ * where even pure black scores Lc 74.8 against the ladder's declared floor of
+ * 75 — a ceiling, not a solver bug. The canvas ink is solved against the
+ * gradient the sidebar actually sits on and clears it comfortably, so the
+ * shortfall never reaches the screen.
+ *
+ * `--sidebar-accent-foreground` (the hover/selected promotion) rides along, and
+ * ONLY here — the lab overrode it at the root, which also repainted Settings'
+ * own nav rail inside the card, where the canvas ink is the wrong answer.
+ *
+ * Selectors mirror, and must be kept in step with:
+ *   • `components/ui/sidebar.tsx` — `data-slot="sidebar"` is the `Sidebar`
+ *     component root (the project rail and the primary sidebar). It does NOT
+ *     match `data-slot="sidebar-inset"`, which IS the opaque card.
+ *   • `components/chrome-bar.tsx` — the 40px band's root carries
+ *     `app-region-drag`. `rail/project-rail.tsx` carries it too, which is
+ *     harmless: the rail is on the canvas as well. */
+[data-slot="sidebar"],
+.app-region-drag {
+  --foreground: var(--canvas-ink);
+  --muted-foreground: var(--canvas-ink-muted);
+  /* The furniture rung — see the ladder below. Set here rather than there
+     because it is the DEFAULT everything on the canvas inherits; those rules
+     are the exceptions to it. */
+  --sidebar-foreground: var(--canvas-ink-label);
+  --sidebar-accent-foreground: var(--canvas-ink);
+}
+
+/* THE ON-CANVAS COPY LADDER — which of the sidebar's tiers reads at which rung.
+ *
+ * Scoped CSS rather than tokens, and it is the same argument the `--label-ink`
+ * rule at the bottom of this file makes, seen from the other side. That one says
+ * `--muted-foreground` means two different colors depending on which side of the
+ * card's edge it is read from, so the card's label tier has to be a rule INSIDE
+ * the card. This is the mirror: these tiers are the canvas's answer to the same
+ * question, so they have to be rules inside the subtrees that sit ON the canvas.
+ * Neither can be a root token without following the wrong surface out.
+ *
+ * The assignment, in one sentence: **the sidebar's furniture recedes and its
+ * content leads.**
+ *
+ *  - `--canvas-ink` (head) — session TITLES, and nothing else. The only text in
+ *    the sidebar that changes with what you are doing.
+ *  - `--canvas-ink-label` — the surface itself: the project name, the nav
+ *    destinations, the footer, and the section headings that organize them.
+ *    Learned once, then recognized by icon and position rather than read.
+ *  - `--canvas-ink-muted` — attributes of the line above them: ticket id,
+ *    session state, timestamps, the project prefix. Read on demand, per row.
+ *
+ * Which way round the top two rungs go was the actual decision, and the type
+ * scale settles it. A nav row is 14px and a session title is 12px, so SIZE
+ * already ranks the nav above the list; putting the nav at the head as well
+ * would leave four permanent words — Board, Terminals, Files, Configure — as the
+ * loudest thing on a surface whose subject is the work. Tried both on a
+ * saturated, a near-white and a dark canvas; this is the one where the eye lands
+ * on the session list first.
+ *
+ * The head rung is deliberately NARROW — one role, not a category. Three tiers
+ * have to fit under a full ink measuring Lc 62.4 on the default canvas (against
+ * body copy's 90 on paper), so every extra role admitted to the top pushes
+ * another one down onto a rung that is already carrying two. */
+
+/* Section headings, at their own rung — and no longer at an ALPHA.
+ *
+ * `SidebarGroupLabel` ships `text-sidebar-foreground/70`, which composites
+ * against whatever is behind it; over a gradient that is a different color at
+ * the top of the sidebar than at the bottom, so one label reads at two
+ * contrasts and neither of them was measured. A solved tier is the fix, and the
+ * `color` (rather than a token override) is what actually kills the alpha —
+ * redefining `--sidebar-foreground` on the element would only change what the
+ * 70% is taken OF.
+ *
+ * `.uppercase` catches the second heading level, the `SessionTier` rows
+ * ("NEEDS YOU", "ACTIVE") that are a plain div rather than a group label.
+ * Counted in the running sidebar, that class matches three elements and all
+ * three are headings — which is why one this generic is precise here. It is
+ * also the rule that should survive a fourth: 11px letterspaced caps in a
+ * sidebar IS a section heading, whatever component drew it.
+ *
+ * Each heading's COUNT rides with it rather than dropping to the mute. The two
+ * bracket the row from opposite edges and read as one unit. */
+[data-slot="sidebar"] [data-slot="sidebar-group-label"],
+[data-slot="sidebar"] .uppercase {
+  color: var(--canvas-ink-label);
+}
+
+/* The session row's first line, at the head rung — and the data-dependent flip
+ * in `active-sessions.tsx` neutralized from here.
+ *
+ * That component swaps the title between `text-muted-foreground` and
+ * `text-sidebar-foreground` on `row.lastRun !== null`, so a title's RANK moved
+ * with whether its session had run yet — two rows of equal standing painting as
+ * two different tiers. Setting both tokens to the same value on the title itself
+ * is what makes the swap a no-op.
+ *
+ * Overriding the two TOKENS rather than `color` is what keeps the row's hover
+ * and selected promotion working: that promotion is a third class
+ * (`text-sidebar-accent-foreground`), so it reads a token this rule never
+ * touches; a `color` declaration here would have silently killed it.
+ *
+ * The class pair names "the row's first line" — the meta line beneath it wears
+ * `session-row-dim` too, and `text-xs` against its `text-label` is what tells
+ * them apart. */
+[data-slot="sidebar"] .session-row-dim.text-xs {
+  --sidebar-foreground: var(--canvas-ink);
+  --muted-foreground: var(--canvas-ink);
+}
+
+/* ELEVATION — the lift overlays and the shadow set.
+ *
+ * Two tiers, applied outward from the gradient: tier 1 is the chrome band and
+ * the project rail, tier 2 the inner sidebar. The lift is signed, so the SAME
+ * rules serve both appearances — light walks its tiers toward paper and dark
+ * away from it, and both arrive at a sidebar sitting just above its canvas.
+ *
+ * WHICH tiers move is the share table's call in `@volli/shared`, not this
+ * file's — both rules stay unconditional and a tier meant to stay on the canvas
+ * is given a share of zero, which reaches here as `transparent`. That is the
+ * settled arrangement's own answer for tier 1: the frame reads as a frame only
+ * if it is uniform, so the chrome band and rail ARE the gradient and the rule
+ * below paints nothing. If the chrome does not respond, that table is why.
+ *
+ * Painted as a `background-image` rather than a `background-color` on purpose:
+ * an image composites on top of a fill, so anything the element declares for
+ * itself survives underneath and a share of zero keeps meaning "unchanged". */
+.app-region-drag {
+  background-image: linear-gradient(var(--lift-1), var(--lift-1));
+}
+/* The primary sidebar, by its own name rather than by a utility class it
+ * happens to wear (app-shell.tsx) — the one thing that distinguishes it from
+ * the two other `data-slot="sidebar"` roots in the same tree (the collapsible
+ * wrapper and the workspace rail). */
+[data-volli-sidebar] {
+  background-image: linear-gradient(var(--lift-2), var(--lift-2));
+  /* …and no veil under it, in BOTH modes, so lift owns the tier relationship
+   * outright.
+   *
+   * The two worked against each other. `--sidebar-veil` reproduces the ladder's
+   * sidebar rung over whatever is beneath it, and in light that rung sits BELOW
+   * the rail — so the veil pulled the sidebar 0.015 of lightness DOWN at the
+   * same moment lift pushed it up. Dark is the same collision, not its absence:
+   * the dark ladder's `--sidebar` is L 0.199 while a dark canvas measures 0.276,
+   * so the veil reproduces a rung DARKER than the gradient under it, which is
+   * exactly what a positive lift does — at a fixed amount with no dial on it.
+   * Two mechanisms pushing the same way is not separation, it is a dial whose
+   * zero is somewhere other than zero.
+   *
+   * What it costs is the veil's own step at lift 0. That is the point rather
+   * than the price: lift 0 now means the same sentence in both modes (every
+   * on-canvas tier IS the canvas). The veil TOKENS stay — `ui/sidebar.tsx` uses
+   * `--sidebar-accent-veil` and `--sidebar-border-veil` for hover fills and
+   * hairlines, which do still need to composite over a gradient. */
+  background-color: transparent;
+}
+
+/* SEAM GEOMETRY — how the sidebar, the canvas and the card meet.
+ *
+ * The problem all of this answers: a lifted sidebar sits at a lightness that is
+ * neither the canvas nor the paper, and `SidebarInset`'s `m-2` leaves 8px of
+ * bare gradient between it and the card. That is three backgrounds in one
+ * window, and the middle one is the only one that cannot say what it is.
+ *
+ * What ships is Slack's arrangement, and the only one of the four tried that
+ * stops treating the sidebar and the card as two objects. They become ONE inset
+ * unit with a colour change down the middle: a single rounded outline around the
+ * pair, no gutter between them, and the canvas running all the way around the
+ * outside as a frame rather than the reverse-L the alternatives left.
+ *
+ * Built as two half-boxes because the DOM has no element that wraps exactly
+ * these two: the sidebar lives inside the collapsible `Sidebar` (with the
+ * project rail, which stays OUT on the canvas — it is the workspace switcher,
+ * the thing Slack also keeps outside), and `SidebarInset` is that wrapper's
+ * sibling. So each half draws its own outer corners and border and drops the
+ * ones that face the seam; abutted, they read as one outline.
+ *
+ * `clip-path` is what makes that survive the shadow. Both halves cast the same
+ * card shadow, and a shadow paints OUTSIDE its border box — so without a clip
+ * the card's would fall across the sidebar's right edge and the sidebar's across
+ * the card, drawing a dark bar down the middle of a unit whose whole claim is
+ * that it has no middle. Each inset() clips flush at the seam side (0) and lets
+ * the shadow run 60px past the other three, comfortably more than the widest
+ * layer reaches. Nothing else is lost to it: the card already clips its content
+ * with `overflow-hidden`, popovers portal to the body, and the seam edge is
+ * square anyway. */
+
+/* The two numbers the rest of this geometry is built from: the margin that
+ * insets the unit, and the hairline it draws around it. `primary-sidebar.tsx`
+ * sizes its two absolutely-positioned presentation panes from
+ * `--sidebar-width`/`--sidebar-width-icon` minus `--rail-width` and
+ * `--sidebar-edge` — it has no way to know this seam then narrows the sidebar's
+ * own box by a margin and wraps it in a border of its own, so a hand-copied
+ * `0.5rem` here and a bare width calc there were free to drift apart, and did
+ * (measured in a 1280x800 window: the sidebar box ran 68→317 but the expanded
+ * pane's content reached 327, 10px past the wall). Naming both once and reusing
+ * them in every correction below makes that drift impossible rather than just
+ * fixed for today. */
+:root {
+  --shell-inset: 0.5rem;
+  --shell-edge: 1px;
+}
+
+[data-volli-shell="framed"] [data-volli-sidebar] {
+  margin: var(--shell-inset) 0 var(--shell-inset) var(--shell-inset);
+  border: var(--shell-edge) solid var(--border);
+  border-right-width: 0;
+  border-radius: var(--radius-xl) 0 0 var(--radius-xl);
+  box-shadow: var(--shadow-card);
+  clip-path: inset(-60px 0 -60px -60px);
+  overflow: hidden;
+  /* `h-full` is `height: 100%`, which measures the row and ignores the margins
+   * — so the unit would hang 16px past the bottom of the window with its lower
+   * corners cut off by the shell's clip. `auto` hands the sizing back to the
+   * flex row's own stretch, which subtracts them. Measured before/after: bottom
+   * 808 in an 800px window, then 792. */
+  height: auto;
+}
+
+/* The framed content card, floating on the canvas — the other half of the unit. */
+[data-volli-shell="framed"] [data-slot="sidebar-inset"] {
+  /* 0, not −1px.
+   *
+   * The lab carried a 1px overlap justified by a `--sidebar-width` rounding tax
+   * ("the gap ends at 318, the sidebar at 317"). That tax was real only while
+   * `sidebar-container` still drew its own `border-r`; with that border zeroed
+   * below, the two halves are laid out from the same width token and meet
+   * exactly.
+   *
+   * Fractional widths, contrary to the migration note, ARE reachable — but not
+   * from the resize handle, which divides the pointer delta by `uiScale` and
+   * then hands it to `clampSidebarWidth`, where `Math.round` makes the stored
+   * width an integer every time. They come from `zoom: uiScale` on the content
+   * row: an integer CSS px inside a 0.9 or 1.25 zoom is a fractional used
+   * value, and both halves get the same fraction from the same token. Chromium
+   * lays them out against one another, so they still abut; a −1px overlap under
+   * zoom would instead paint a 1px column of the sidebar's fill over the card,
+   * scaled, which is the artifact rather than the fix. Verified by measurement
+   * at every zoom rung — see the note on this change. */
+  margin: var(--shell-inset) var(--shell-inset) var(--shell-inset) 0;
+  border-left-width: 0;
+  border-radius: 0 var(--radius-xl) var(--radius-xl) 0;
+  clip-path: inset(-60px -60px -60px 0);
+  box-shadow: var(--shadow-card);
+}
+
+/* The collapsible wrapper clips its children so the collapse animation has an
+ * edge to slide behind — which also clips the sidebar half's shadow at the top
+ * and bottom of the unit, leaving the frame shaded on three sides and bare on
+ * the fourth. */
+[data-volli-shell="framed"] [data-slot="sidebar"].overflow-hidden {
+  overflow: visible;
+}
+
+/* `primary-sidebar.tsx`'s two presentation panes are sized in TSX from
+ * `--sidebar-width`/`--sidebar-width-icon` minus `--rail-width` and
+ * `--sidebar-edge` — fixed widths, deliberately, so their text doesn't reflow
+ * frame-by-frame while the collapse transition animates the sidebar's width
+ * (`100%` would reintroduce that). That calc has no idea this seam then insets
+ * the sidebar's own box by `--shell-inset`, so both panes ran exactly that far
+ * past the right wall.
+ *
+ * Each formula below re-derives the pane's true content box for THIS seam
+ * rather than patching the app's, so it names the seam's own borders, not the
+ * app's. `--sidebar-edge` is handed BACK here — `sidebar-container`'s `border-r`
+ * is zeroed further down, since a unit whose claim is that it has no middle has
+ * nothing to draw there — and the same pixel is immediately spent again on
+ * `--shell-edge`, the sidebar half's own left border, which the pane lives
+ * inside. Identical width, different border; subtracting it under its own name
+ * is what keeps the two independent if either moves. */
+[data-volli-shell="framed"] [data-sidebar-presentation="expanded"] {
+  width: calc(var(--sidebar-width) - var(--rail-width) - var(--shell-inset) - var(--shell-edge));
+  /* Air against the fold, and deliberately only a little.
+   *
+   * This padding STACKS on each tier's own inset rather than replacing it — the
+   * tiers (`SidebarHeader` at `px-4`, `SidebarGroup` at `p-2`) are full-bleed to
+   * the pane, so whatever goes here lands on top of 8px or 16px that is already
+   * there. Measuring the pane's own edge makes any value look one-for-one;
+   * measuring the INK is what shows the cost. At 13px the nav rows read 8px left
+   * against 21px right and the header 16 against 29, which puts the selected
+   * row's pill visibly off-centre.
+   *
+   * 6px is the compromise: rows land 8/14, header 16/22. Enough that nothing
+   * crowds the seam, small enough that the asymmetry reads as intent. Asymmetry
+   * at all is the right shape here — the right wall is a hard fold against the
+   * card, the left edge a soft one against the canvas — but it has to stay under
+   * the threshold where the pill stops looking centred. */
+  padding-right: 6px;
+}
+
+[data-volli-shell="framed"] [data-sidebar-presentation="collapsed"] {
+  width: calc(
+    var(--sidebar-width-icon) - var(--rail-width) - var(--shell-inset) - var(--shell-edge)
+  );
+}
+
+/* The grip is `absolute inset-y-0 right-0` against the fixed sidebar container,
+ * which spans the full contain-layout row (y 40→800 in an 800px window) — 8px
+ * taller at each end than the wall this seam actually draws (y 48→792, from the
+ * sidebar's own `--shell-inset` margin). `right` is already correct since the
+ * sidebar half has no right margin; only the two ends needed pulling in. */
+[data-volli-shell="framed"] [data-slot="sidebar-resize-handle"] {
+  top: var(--shell-inset);
+  bottom: var(--shell-inset);
+}
+
+/* …and the OTHER thing at those coordinates, which is what was actually being
+ * seen. `sidebar-container` carries a 1px right border of its own and, being
+ * `fixed inset-y-0`, spans the whole content row against a unit that runs
+ * 48→792 — so a stub of grey line poked out of each rounded corner, reading
+ * exactly like the resize grip overflowing. Two unrelated elements, same 1px
+ * column, same symptom.
+ *
+ * Zeroed rather than inset, because in this seam it has nothing to divide. The
+ * sidebar and the card meet as a colour change with no gutter, and both halves
+ * already give up the border facing that seam — a third line drawn down the
+ * middle would contradict the one thing the shell is claiming. It is also what
+ * makes the card's left margin 0 rather than −1px, directly above. */
+[data-volli-shell="framed"] [data-slot="sidebar-container"] {
+  border-right-width: 0;
+}
+
+/* Same bug, seen from outside the unit instead of inside it: `project-rail.tsx`
+ * centers its tile column and its `AddProjectTile` row inside the rail's own
+ * 60px box, which is correct everywhere else. This geometry doesn't touch the
+ * rail at all, but it DOES move what the eye reads as the rail's far edge: that
+ * edge used to be the rail's own right side (60); now the sidebar unit starts
+ * 8px further out (68), so the perceived band is 0→68 and a tile centered on the
+ * wrong band lands 12px from the viewport edge but 20px from the unit.
+ *
+ * The fix is the FULL inset, not half of it: this centers twice (`items-center`
+ * inside a stretched flex row), and each stretch-then-center layer halves
+ * whatever asymmetry the padding introduces — confirmed empirically, not
+ * assumed. `padding-left: 4px` only moved the tile to 14/18; 8px lands both
+ * tiles at 16/16.
+ *
+ * `min(…, --rail-width)` rather than the inset alone, because the rail can be
+ * hidden (the chrome band's workspace-switcher toggle), and hiding it sets
+ * `--rail-width: 0px` — it does NOT unmount the element. A border-box width can
+ * never fall below its own padding, so a flat 8px floored a rail asking for 0
+ * at 8 instead, and every pane formula above still subtracted 0 — leaving both
+ * presentation layers exactly 8px wider than the pane clipping them. Deriving
+ * the cap from `--rail-width` keeps the padding from ever exceeding the box it
+ * is padding. */
+[data-volli-shell="framed"] [data-workspace-rail] {
+  padding-left: min(var(--shell-inset), var(--rail-width));
+}
+
+/* Raised-on-a-surface: the active tab in every strip, and the board's cards.
+ * A tab reads as a tab because of the halo under it, not because of its fill. */
+[role="tab"][aria-selected="true"],
+article.bg-card {
+  box-shadow: var(--shadow-raised);
+}
+
+/* Everything that portals to the body and floats over the whole window. */
+[data-slot="popover-content"],
+[data-slot="dropdown-menu-content"],
+[data-slot="dropdown-menu-sub-content"],
+[data-slot="context-menu-content"],
+[data-slot="context-menu-sub-content"],
+[data-slot="dialog-content"],
+[data-slot="alert-dialog-content"],
+[data-slot="sheet-content"],
+[data-slot="tooltip-content"] {
+  box-shadow: var(--shadow-overlay);
+}
+
+/* The micro-label tier.
+ *
+ * Scoped INSIDE the content card, and the scope is the whole reason this is one
+ * rule rather than a token: `--muted-foreground` means two different colors in
+ * this app depending on which side of the card's edge it is read from — the
+ * canvas ink out on the gradient, the solved paper ink within. A label tier
+ * defined at the root would follow the wrong one out onto the chrome.
+ *
+ * The two-class selector is doing real work too. `.text-label` alone would
+ * capture labels that already declare `text-foreground`, dragging body-weight
+ * text DOWN to this tier; matching both says exactly "a label currently painted
+ * as secondary copy". */
+[data-slot="sidebar-inset"] .text-label.text-muted-foreground {
+  color: var(--label-ink);
+}
+
+/* ─── end of the seam ─────────────────────────────────────────────────────── */
 
 /* The expanded sidebar is a fixed-width presentation layer. Neutralize the
  * stock icon-collapse rules inside it so its contents never reflow while the
@@ -246,18 +776,24 @@
   background-color: var(--muted-foreground);
 }
 
-/* Scope-change repaint (#69, theme/scope-transition.ts): when the app changes
- * THEME SCOPE — a project switch, where every color can move at once — the
- * swap eases instead of hard-cutting, because that transition is what tells
- * you the window now belongs to a different project.
+/* Whole-window repaint (#69, theme/scope-transition.ts): when the app changes
+ * THEME SCOPE — a workspace switch — or flips light↔dark, the swap eases instead
+ * of hard-cutting. The first is what tells you the window now belongs to a
+ * different project; the second is the brightness change Apple's accessibility
+ * guidance singles out for easing (HIG: ease dark↔light theme changes).
  *
  * CSS custom properties don't interpolate (unregistered, they animate
  * discretely), so the crossfade is bought on the properties that CONSUME them.
  * Deliberately unlayered: `@import "tailwindcss"` puts every utility in a
  * cascade layer, and unlayered rules beat layered ones regardless of
- * specificity — which is the only way this can outrank `transition-colors` on
- * a button for the ~300ms it is armed. Nothing here is on at rest; scope-
- * transition.ts adds the attribute for the length of one swap and removes it.
+ * specificity — which is the only way this can outrank `transition-colors` on a
+ * button for the ~300ms it is armed. Nothing here is on at rest;
+ * scope-transition.ts adds the attribute for the length of one swap.
+ *
+ * `background-image` is deliberately NOT in the list, and cannot be: it does not
+ * interpolate, so the gradient itself cuts while every color on top of it eases.
+ * The seed system bought a gradient crossfade with a second stacked layer and a
+ * mounted "outgoing" copy; that machinery went with the layer it belonged to.
  *
  * Timing lives in scope-transition.ts's storyboard; --theme-scope-crossfade
  * mirrors its `crossfade` constant. The curve is --ease-swift's, written out
@@ -278,27 +814,6 @@
     box-shadow;
   transition-duration: var(--theme-scope-crossfade);
   transition-timing-function: var(--theme-scope-ease);
-}
-
-/* The canvas layer's half of the same crossfade (#74, theme/theme-canvas.tsx).
- * CSS `background-image` does not interpolate — a solid and a mesh have no
- * value in between — so the canvas cannot ride the rule above. It stacks two
- * layers instead and fades the outgoing one out over the incoming, which
- * interpolates between any two canvases and stays on the compositor.
- *
- * An animation rather than a transition, because the outgoing layer is MOUNTED
- * at the moment the fade should begin: a transition would need a second render
- * to have something to move from. It reads the same two custom properties as
- * everything else, so the reduced-motion collapse below applies to it for free
- * and there is no second timing constant to keep in step. */
-@keyframes volli-canvas-fade {
-  to {
-    opacity: 0;
-  }
-}
-
-[data-volli-canvas-outgoing] {
-  animation: volli-canvas-fade var(--theme-scope-crossfade) var(--theme-scope-ease) forwards;
 }
 
 /* Reduced motion (HIG §accessibility): nothing here translates or scales, so
@@ -322,11 +837,13 @@
 
 /* A quiet first-run field: neutral on purpose, so the ember accent remains
  * reserved for the single action. The dot layer is static and fades before the
- * canvas edge; it adds depth without turning the empty state into onboarding. */
+ * canvas edge; it adds depth without turning the empty state into onboarding.
+ * Built from the body ink rather than a literal white so it holds in both
+ * appearances — a hardcoded `white/N` is invisible on paper. */
 .empty-projects-canvas {
   background-image: radial-gradient(
     ellipse 72% 58% at 50% 48%,
-    rgb(255 255 255 / 0.028),
+    color-mix(in srgb, var(--foreground) 3%, transparent),
     transparent 76%
   );
 }
@@ -336,7 +853,10 @@
   inset: 0;
   pointer-events: none;
   content: "";
-  background-image: radial-gradient(rgb(255 255 255 / 0.1) 0.65px, transparent 0.8px);
+  background-image: radial-gradient(
+    color-mix(in srgb, var(--foreground) 10%, transparent) 0.65px,
+    transparent 0.8px
+  );
   background-position: center;
   background-size: 24px 24px;
   mask-image: radial-gradient(ellipse 76% 62% at 50% 48%, black 0%, transparent 78%);

@@ -6,7 +6,8 @@
  */
 import { getBuiltinTheme, parseGhosttyTheme } from "restty";
 import type { GhosttyTheme } from "restty";
-import type { GhosttyAppearancePayload } from "@volli/shared";
+import { parseGhosttyTerminalPrefs } from "@volli/shared";
+import type { GhosttyAppearancePayload, ResolvedAppearance } from "@volli/shared";
 
 import type { TerminalAppearance } from "./engine";
 
@@ -67,6 +68,25 @@ export function overlayGhosttyTheme(base: GhosttyTheme, overlay: GhosttyTheme): 
 }
 
 /**
+ * The theme name in force for `appearance`, re-resolved rather than trusted.
+ *
+ * `prefs.themeName` was resolved in main, where the mode is not known — a
+ * ghostty `theme = light:X,dark:Y` pair therefore arrives collapsed to whichever
+ * half main defaulted to. The config text travels with the payload, so the
+ * cheapest honest answer is to re-run the same pure parse against the LIVE mode;
+ * it also means a light↔dark flip re-picks the theme with no file read at all.
+ */
+function liveThemeName(
+  payload: GhosttyAppearancePayload,
+  appearance: ResolvedAppearance,
+): string | null {
+  if (payload.prefs.themeName === null || payload.configText === null) {
+    return payload.prefs.themeName;
+  }
+  return parseGhosttyTerminalPrefs(payload.configText, appearance).themeName;
+}
+
+/**
  * Resolve the theme for a payload: named custom theme file, else builtin
  * catalog (restty bundles ghostty's full theme collection), else the app's
  * token-derived fallback — then overlay any explicit color keys from the
@@ -75,12 +95,19 @@ export function overlayGhosttyTheme(base: GhosttyTheme, overlay: GhosttyTheme): 
 export function resolveGhosttyThemeChoice(
   payload: GhosttyAppearancePayload,
   fallbackTheme: GhosttyTheme,
+  appearance: ResolvedAppearance,
 ): GhosttyTheme {
+  const themeName = liveThemeName(payload, appearance);
   let base: GhosttyTheme | null = null;
-  if (payload.themeSource !== null) {
+  // `themeSource` is the file main read for the half IT resolved. When the live
+  // mode picks the other half that text belongs to the wrong theme, so the
+  // catalog (and failing that, the mode-correct token fallback) has to answer
+  // instead — painting a dark theme's file in light mode is the exact failure
+  // being fixed here.
+  if (payload.themeSource !== null && themeName === payload.prefs.themeName) {
     base = parseGhosttyTheme(payload.themeSource);
-  } else if (payload.prefs.themeName !== null) {
-    base = getBuiltinTheme(payload.prefs.themeName);
+  } else if (themeName !== null) {
+    base = getBuiltinTheme(themeName);
   }
   let resolved = base ?? fallbackTheme;
   if (payload.configText !== null) {
@@ -93,6 +120,7 @@ export function resolveGhosttyThemeChoice(
 export function resolveAppearance(
   payload: GhosttyAppearancePayload | null,
   fallbackTheme: GhosttyTheme,
+  appearance: ResolvedAppearance,
 ): TerminalAppearance {
   if (payload === null) {
     return {
@@ -107,7 +135,7 @@ export function resolveAppearance(
   }
   const { prefs } = payload;
   return {
-    theme: resolveGhosttyThemeChoice(payload, fallbackTheme),
+    theme: resolveGhosttyThemeChoice(payload, fallbackTheme, appearance),
     fontFamilies: terminalFontFamilies(prefs.fontFamilies),
     fontSize: prefs.fontSize ?? DEFAULT_TERMINAL_FONT_SIZE,
     ligatures: prefs.ligatures ?? true,

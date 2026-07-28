@@ -151,6 +151,51 @@ function firstPaintAppearance(): "light" | "dark" | null {
   return value === "light" || value === "dark" ? value : null;
 }
 
+/**
+ * Stamps the resolved mode class on `<html>` before the page's own scripts run.
+ *
+ * `index.html` no longer pins `class="dark"`, and the two obvious replacements
+ * both fail. A `@media (prefers-color-scheme: light)` block knows the SYSTEM,
+ * not the setting — a user on a light system who explicitly chose dark would get
+ * a light first paint and then a flip, which is the flash the hint exists to
+ * kill, arriving from the other side. And an inline `<script>` is blocked
+ * outright: the CSP in `index.html` is `script-src 'self' 'wasm-unsafe-eval'`
+ * with no `'unsafe-inline'`, so it would silently never run.
+ *
+ * Preload is the one place left that runs in the renderer before any page
+ * script AND already has the answer synchronously, off `process.argv`. Main
+ * additionally sets `BrowserWindow.backgroundColor` from the same hint, so the
+ * window edge is right before the document paints anything at all.
+ *
+ * Guarded because the timing is not guaranteed: `document.documentElement` is
+ * normally present by the time a preload's first statement runs, but a preload
+ * that lands earlier would throw here and take the whole bridge with it. One
+ * `readystatechange` listener is the fallback, and it is removed as soon as it
+ * fires.
+ *
+ * `null` — no flag, or an unreadable one — leaves the document alone: nothing
+ * built this window through `createWindow`, and guessing at a mode is worse
+ * than deferring to whatever the stylesheet already declares (which is dark).
+ */
+function stampFirstPaintAppearance(): void {
+  const appearance = firstPaintAppearance();
+  if (appearance === null) return;
+  const stamp = (): boolean => {
+    const root = document.documentElement;
+    if (root === null || root === undefined) return false;
+    root.classList.remove(appearance === "dark" ? "light" : "dark");
+    root.classList.add(appearance);
+    return true;
+  };
+  if (stamp()) return;
+  const onReady = (): void => {
+    if (stamp()) document.removeEventListener("readystatechange", onReady);
+  };
+  document.addEventListener("readystatechange", onReady);
+}
+
+stampFirstPaintAppearance();
+
 // Minimal typed API surface exposed to the renderer.
 const api = {
   app: {

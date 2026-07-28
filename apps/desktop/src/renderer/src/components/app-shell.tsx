@@ -8,9 +8,6 @@ import { PrimarySidebar } from "@renderer/components/sidebar/primary-sidebar";
 import { SidebarResizeHandle } from "@renderer/components/sidebar/sidebar-resize-handle";
 import { Sidebar, SidebarInset, SidebarProvider } from "@renderer/components/ui/sidebar";
 import { Toaster } from "@renderer/components/ui/sonner";
-import { canvasBackground } from "@renderer/theme/canvas-layer";
-import { GrainOverlay } from "@renderer/theme/grain-overlay";
-import { ThemeCanvas } from "@renderer/theme/theme-canvas";
 import { takeBootNotice } from "@renderer/lib/boot-notice";
 import { takeCliLaunchNotice } from "@renderer/lib/cli-launch-notice";
 import { toastError } from "@renderer/lib/toast";
@@ -20,7 +17,6 @@ import { useProjectShortcuts } from "@renderer/hooks/use-project-shortcuts";
 import { cn } from "@renderer/lib/utils";
 import { errorMessage } from "@volli/shared";
 import { useProjectsStore } from "@renderer/stores/projects";
-import { effectiveTheme, useThemeStore } from "@renderer/stores/theme";
 import { useUiStore } from "@renderer/stores/ui";
 import { toast } from "sonner";
 
@@ -54,14 +50,6 @@ export function AppShell() {
   const workspaceRailHidden = useUiStore((state) => state.workspaceRailHidden);
   const terminalFocusTarget = useUiStore((state) => state.terminalFocusTarget);
   const uiScale = useUiStore((state) => state.uiScale);
-  // Read-only: the theme store owns `grain`, this shell only paints it.
-  // `effectiveTheme` already folds in the running preview and the per-project
-  // override, so dragging the grain slider repaints live.
-  const grain = useThemeStore((state) => effectiveTheme(state).grain);
-  // A string, so the selector's snapshot is stable by value — and it folds in
-  // the running preview and the per-project override the same way `grain` does,
-  // which is what makes hovering a Background option repaint the whole window.
-  const canvas = useThemeStore((state) => canvasBackground(effectiveTheme(state).canvas));
   const [resizing, setResizing] = React.useState(false);
   const terminalFocused = terminalFocusTarget !== null;
   const [focusGeometryInstant, setFocusGeometryInstant] = React.useState(false);
@@ -82,12 +70,17 @@ export function AppShell() {
 
   return (
     <SidebarProvider
-      // `relative isolate bg-rail` is the canvas layer's host (#74). `isolate`
-      // makes this a stacking context, so the z-index:-1 layer below paints
-      // above this fill and beneath every child — the same trick the content
-      // card uses for grain, one level up. `bg-rail` stays as the fallback
-      // beneath it, which is also exactly what `canvas: solid` paints.
-      className="relative isolate h-svh flex-col bg-rail"
+      // No fill of its own: the canvas IS the backdrop and it is painted on
+      // `<html>` (globals.css), where it is outside every zoom and outside
+      // React — which is what lets it be correct before any JS runs. A fill
+      // here would simply cover it.
+      className="relative h-svh flex-col"
+      // Arms the seam's geometry (globals.css). The framed arrangement — one
+      // inset unit with the canvas running around it — is exactly what terminal
+      // focus takes away, and the seam's rules are unlayered author CSS, so a
+      // Tailwind `m-0` on the card cannot switch them off from the other side.
+      // One attribute, read by every rule that participates.
+      data-volli-shell={terminalFocused ? "focused" : "framed"}
       data-motion={terminalFocused || focusGeometryInstant ? "instant" : undefined}
       data-resizing={resizing || undefined}
       style={
@@ -116,12 +109,6 @@ export function AppShell() {
         } as React.CSSProperties
       }
     >
-      {/* The one canvas layer. Mounted here rather than inside the content row
-          for two reasons: it must sit under the chrome band and the rail as
-          well as the card (that is the whole Arc arrangement), and it must
-          stay OUTSIDE the `zoom: uiScale` row below, or ⌘+ would rescale the
-          gradient along with the UI. */}
-      <ThemeCanvas background={canvas} />
       <ChromeBar />
       {/* ui/sidebar.tsx's fixed sidebar-container positions itself via
           inset-y-0 relative to the nearest containing-block-establishing
@@ -138,8 +125,8 @@ export function AppShell() {
           canvases and ResizeObservers below see real resized boxes. `zoom` is
           missing from this TS lib's CSSProperties, hence the same cast style
           used for the CSS custom properties above. */}
-      {/* No fill of its own: the canvas above IS the backdrop now, and two
-          stacked fills would fight. `bg-rail` moved up to SidebarProvider. */}
+      {/* No fill of its own: the canvas on `<html>` IS the backdrop, and a fill
+          here would simply cover it. */}
       <div
         className="flex min-h-0 flex-1 contain-layout"
         style={{ zoom: uiScale } as React.CSSProperties}
@@ -169,13 +156,17 @@ export function AppShell() {
           >
             <ProjectRail />
           </Sidebar>
-          {/* The one surface that keeps a fill, through a VEIL rather than an
-              opaque token (#74). It is a LIGHTER rung than the rail, so plain
-              transparency would visibly darken it and break pixel-parity;
-              `--sidebar-veil` at 10% over the canvas reproduces `--sidebar`
-              exactly in solid mode and preserves the one-rung lift over every
-              stop of a gradient. */}
-          <Sidebar collapsible="none" className="min-w-0 flex-1 bg-sidebar-veil">
+          {/* The lifted half of the seam, and the one on-canvas tier that moves
+              (globals.css § ELEVATION). It carries no fill of its own: `--lift-2`
+              composites over the gradient as a background IMAGE, and a veil
+              underneath would be a second mechanism pushing the same way — see
+              the note on that rule.
+
+              `data-volli-sidebar` rather than a utility class, because the seam
+              has to name this element specifically: it is one of three
+              `data-slot="sidebar"` roots in this tree, and selecting it by a
+              fill it no longer has was how the lab did it. */}
+          <Sidebar collapsible="none" data-volli-sidebar className="min-w-0 flex-1">
             <PrimarySidebar />
           </Sidebar>
           <SidebarResizeHandle onResizingChange={setResizing} />
@@ -185,33 +176,22 @@ export function AppShell() {
             renders inside this one card, floating on the rail-dark backdrop
             with a hairline border. overflow-hidden clips full-bleed children
             (tab strips, terminals) to the rounded corners. */}
-        {/* `isolate` is what lets the grain layer below work: it makes this
-            card its own stacking context, so a z-index:-1 child paints above
-            the card's own --background fill and beneath every page — text
-            included. Without it the layer escapes to the row's stacking
-            context and disappears under this fill. Nothing inside the card
-            competes for stacking with anything outside it (overflow-hidden
-            clips it, and every popover/dialog portals to the body), so the
-            isolation costs nothing. */}
+        {/* Grain is no longer a layer here: the canvas draws it as a gradient
+            layer of its own, on the surface it is actually visible on. The card
+            is opaque paper above it. */}
         <SidebarInset
-          // Names the surface the grain layer mounts on. Grain ships off, so
-          // `e2e/grain-smoke.mjs` has no layer to wait for and needs the HOST
-          // to anchor on — and its "never above text" check reads this element
-          // rather than assuming the layer's parentElement is the card.
+          // Names the app's principal surface for probes that need to anchor on
+          // the card rather than guess at it.
           data-volli-surface=""
           className={cn(
-            "isolate overflow-hidden",
-            terminalFocused ? "m-0 rounded-none border-0" : "m-2 rounded-xl border border-border",
+            "overflow-hidden",
+            // Margin, radius and the seam-facing border are the seam's
+            // (globals.css) in the framed arrangement; what stays here is the
+            // hairline the card draws on its own three outer edges, and the
+            // full-bleed shape terminal focus collapses it to.
+            terminalFocused ? "m-0 rounded-none border-0" : "border border-border",
           )}
         >
-          {/* The one grain overlay (docs/plans/theming-engine.md § Grain).
-              The card is the app's principal surface and the only layer where
-              texture is visible at all — the rail, the sidebar and the chrome
-              band are opaque fills stacked above the backdrop. It sits behind
-              everything the card renders, so it is never above text and never
-              over restty's canvas or Monaco, which paint their own opaque
-              surfaces on top of it. */}
-          <GrainOverlay grain={grain} />
           <MainContent />
         </SidebarInset>
       </div>

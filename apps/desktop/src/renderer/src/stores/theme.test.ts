@@ -1,42 +1,45 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
 import {
-  DEFAULT_THEME,
-  EMPTY_PROJECT_THEME_OVERRIDE,
-  PROJECT_COLORS,
-  generateThemeTokens,
+  DEFAULT_CANVAS,
+  windowBackground,
+  type Appearance,
+  type Canvas,
   type GhosttyAppearancePayload,
   type ProjectThemeOverride,
+  type ResolvedAppearance,
   type ShippedEditorThemeId,
-  type ThemeDefinition,
   type ThemeStatePayload,
-  type ThemeStateResult,
 } from "@volli/shared";
 
-import { autoTintChoice } from "@renderer/components/theme/project-appearance-model";
-import { PROJECT_TINT_SLUG } from "@renderer/theme/apply";
 import {
-  SCOPE_TRANSITION_ATTRIBUTE,
-  SCOPE_TRANSITION_VALUE,
-} from "@renderer/theme/scope-transition";
-
-import { appliedTheme, createThemeStore, effectiveTheme, type ThemeGateway } from "./theme";
+  APPEARANCE_APP_STATE_KEY,
+  CANVAS_APP_STATE_KEY,
+  activeTheme,
+  appliedCanvas,
+  createThemeStore,
+  effectiveAppearance,
+  effectiveCanvas,
+  type ThemeGateway,
+  type ThemeProjectScope,
+} from "./theme";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
-const MIDNIGHT: ThemeDefinition = {
-  ...DEFAULT_THEME,
-  name: "Midnight",
-  slug: "midnight",
-  seed: "#4c6ef5",
+/** A canvas nothing else in these tests can be confused with. */
+const TEAL: Canvas = {
+  stops: [{ hex: "#2ba39c", x: 0.2, y: 0.7 }],
+  primaryIndex: 0,
+  vibrancy: 0.9,
+  grain: 0,
 };
 
-/** A theme of the user's own — one with a file behind it. */
-const SUNSET: ThemeDefinition = {
-  ...DEFAULT_THEME,
-  name: "Sunset",
-  slug: "sunset",
-  seed: "#ff8a3d",
+/** A third, so "the workspace's" and "the preview's" are never the same object. */
+const PLUM: Canvas = {
+  stops: [{ hex: "#7a4fa3", x: 0.5, y: 0.5 }],
+  primaryIndex: 0,
+  vibrancy: 0.4,
+  grain: 0.2,
 };
 
 const TERMINAL: GhosttyAppearancePayload = {
@@ -56,9 +59,15 @@ const TERMINAL: GhosttyAppearancePayload = {
   ghosttyConfigPath: "/home/u/.config/ghostty/config",
 };
 
+/**
+ * `volli:theme-state`'s payload. Its `theme` field is the seed system's, which
+ * main still serves and this store no longer reads — the canvas arrives through
+ * the bootstrap rows instead. It is filled with a stub for exactly that reason:
+ * a test that set it meaningfully would be asserting a coupling that is gone.
+ */
 function statePayload(over: Partial<ThemeStatePayload> = {}): ThemeStatePayload {
   return {
-    theme: DEFAULT_THEME,
+    theme: null as never,
     editorThemeId: null,
     projectOverride: null,
     projectId: null,
@@ -67,51 +76,51 @@ function statePayload(over: Partial<ThemeStatePayload> = {}): ThemeStatePayload 
   };
 }
 
+/** One paint, as the DOM would have received it. */
+interface Paint {
+  canvas: Canvas;
+  resolved: ResolvedAppearance;
+}
+
 /** Records what the DOM would have been repainted with, in order. */
 function recorder() {
-  const applied: ThemeDefinition[] = [];
+  const painted: Paint[] = [];
   const editorThemes: string[] = [];
-  // Records the EASED repaints specifically: the theme each one was armed for,
-  // so a test can assert both that the crossfade ran and what it ran into.
-  const eased: (ThemeDefinition | undefined)[] = [];
+  // Records the EASED repaints specifically: what each one was armed for, so a
+  // test can assert both that the crossfade ran and what it ran into.
+  const eased: Paint[] = [];
   let arming = false;
+  let prefersDark = true;
   return {
-    applied,
+    painted,
     editorThemes,
     eased,
-    applyTheme: (theme: ThemeDefinition) => {
-      applied.push(theme);
-      if (arming) eased.push(theme);
+    setSystemPrefersDark: (value: boolean) => {
+      prefersDark = value;
+    },
+    paintCanvas: (canvas: Canvas, resolved: ResolvedAppearance) => {
+      painted.push({ canvas, resolved });
+      if (arming) eased.push({ canvas, resolved });
       arming = false;
     },
     refreshEditorTheme: (themeId: string) => void editorThemes.push(themeId),
     beginScopeRepaint: () => {
       arming = true;
     },
-  };
-}
-
-function memoryStorage() {
-  const data = new Map<string, string>();
-  return {
-    read: (key: string) => data.get(key) ?? null,
-    storage: {
-      getItem: (name: string) => data.get(name) ?? null,
-      setItem: (name: string, value: string) => void data.set(name, value),
-      removeItem: (name: string) => void data.delete(name),
-    },
+    systemPrefersDark: () => prefersDark,
   };
 }
 
 function fakeGateway(over: Partial<ThemeGateway> = {}): ThemeGateway {
   return {
     state: vi.fn(async () => ({ ok: true as const, value: statePayload() })),
+    setGlobalCanvas: vi.fn(async () => ({ ok: true as const })),
+    setGlobalAppearance: vi.fn(async () => ({ ok: true as const })),
+    setProjectCanvas: vi.fn(async () => ({ ok: true as const })),
+    setProjectAppearance: vi.fn(async () => ({ ok: true as const })),
+    setFirstPaint: vi.fn(async () => ({ ok: true as const })),
     // Echoes the scope it was called in, exactly as main does: the write is
     // global, the answer describes the caller's scope (#123).
-    setGlobal: vi.fn(async (theme: ThemeDefinition, projectId: string | null) => ({
-      ok: true as const,
-      value: statePayload({ theme, projectId }),
-    })),
     setGlobalEditor: vi.fn(
       async (editorThemeId: ShippedEditorThemeId | null, projectId: string | null) => ({
         ok: true as const,
@@ -123,14 +132,6 @@ function fakeGateway(over: Partial<ThemeGateway> = {}): ThemeGateway {
       project: { id: projectId } as never,
       value: statePayload({ projectId, projectOverride: override }),
     })),
-    listCustomThemes: vi.fn(async () => ({ ok: true as const, themes: [SUNSET] })),
-    saveCustomTheme: vi.fn(async (theme: ThemeDefinition) => ({
-      ok: true as const,
-      path: `/data/volli/themes/${theme.slug}.json`,
-      themes: [theme],
-    })),
-    deleteCustomTheme: vi.fn(async () => ({ ok: true as const, themes: [] })),
-    openCustomTheme: vi.fn(async () => ({ ok: true as const })),
     ...over,
   };
 }
@@ -138,17 +139,28 @@ function fakeGateway(over: Partial<ThemeGateway> = {}): ThemeGateway {
 function freshStore(over: Partial<ThemeGateway> = {}) {
   const gateway = fakeGateway(over);
   const paint = recorder();
-  const memory = memoryStorage();
   const store = createThemeStore({
     deps: {
       gateway,
-      applyTheme: paint.applyTheme,
+      paintCanvas: paint.paintCanvas,
       refreshEditorTheme: paint.refreshEditorTheme,
       beginScopeRepaint: paint.beginScopeRepaint,
+      systemPrefersDark: paint.systemPrefersDark,
     },
-    storage: memory.storage,
   });
-  return { store, gateway, paint, memory };
+  return { store, gateway, paint };
+}
+
+/** The bootstrap payload's raw `app_state` rows, as main writes them. */
+function appState(canvas?: Canvas, appearance?: Appearance): Record<string, string> {
+  const rows: Record<string, string> = {};
+  if (canvas !== undefined) rows[CANVAS_APP_STATE_KEY] = JSON.stringify(canvas);
+  if (appearance !== undefined) rows[APPEARANCE_APP_STATE_KEY] = appearance;
+  return rows;
+}
+
+function projectScope(over: Partial<ThemeProjectScope> = {}): ThemeProjectScope {
+  return { projectId: "p1", canvas: null, appearance: null, ...over };
 }
 
 function deferred<Value>() {
@@ -159,6 +171,9 @@ function deferred<Value>() {
   return { promise, resolve };
 }
 
+/** Lets a fire-and-forget `.then()` chain (the first-paint write) settle. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
 beforeEach(() => {
   vi.mocked(toast.error).mockClear();
 });
@@ -167,24 +182,62 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("hydrate", () => {
-  it("adopts the authored state and paints it", async () => {
-    const { store, paint } = freshStore({
-      state: vi.fn(async () => ({ ok: true as const, value: statePayload({ theme: MIDNIGHT }) })),
-    });
+describe("hydrateGlobal", () => {
+  it("adopts the stored canvas and appearance off the bootstrap rows", () => {
+    // No IPC read: the rows already arrived with the bootstrap payload, and a
+    // second read path would be a second answer to "what is the theme?".
+    const { store, paint, gateway } = freshStore();
 
-    await store.getState().hydrate();
+    store.getState().hydrateGlobal(appState(TEAL, "light"));
 
-    expect(store.getState().global).toEqual(MIDNIGHT);
-    expect(store.getState().editorThemeId).toBeNull();
-    expect(store.getState().terminal).toEqual(TERMINAL);
-    expect(store.getState().hydrated).toBe(true);
-    expect(paint.applied).toEqual([MIDNIGHT]);
-    // null editorThemeId → derive from midnight → tokyo-night
-    expect(paint.editorThemes).toEqual(["tokyo-night"]);
+    expect(store.getState().globalCanvas).toEqual(TEAL);
+    expect(store.getState().globalAppearance).toBe("light");
+    expect(paint.painted).toEqual([{ canvas: store.getState().globalCanvas, resolved: "light" }]);
+    expect(gateway.state).not.toHaveBeenCalled();
   });
 
-  it("adopts a persisted global editor theme id and refreshes Monaco with it", async () => {
+  it("falls back to the shipped canvas when nothing is stored", () => {
+    const { store } = freshStore();
+
+    store.getState().hydrateGlobal({});
+
+    expect(store.getState().globalCanvas).toEqual(DEFAULT_CANVAS);
+    expect(store.getState().globalAppearance).toBe("auto");
+  });
+
+  it("resets to the shipped canvas when the row still holds a seed-system theme", () => {
+    // Decision 7 — reset to the default, no seed→canvas conversion — falling
+    // out of the guard rather than needing a migration to do it. A
+    // `ThemeDefinition` is not a canvas, so it parses to null and reads exactly
+    // like an absent row.
+    const { store } = freshStore();
+
+    store.getState().hydrateGlobal({
+      [CANVAS_APP_STATE_KEY]: JSON.stringify({ name: "Ember", slug: "ember", seed: "#e8652a" }),
+    });
+
+    expect(store.getState().globalCanvas).toEqual(DEFAULT_CANVAS);
+  });
+
+  it("survives an unparseable row rather than failing the boot it runs inside", () => {
+    const { store } = freshStore();
+
+    store.getState().hydrateGlobal({ [CANVAS_APP_STATE_KEY]: "{ not json" });
+
+    expect(store.getState().globalCanvas).toEqual(DEFAULT_CANVAS);
+  });
+
+  it("ignores an appearance row that is not one of the three words", () => {
+    const { store } = freshStore();
+
+    store.getState().hydrateGlobal({ [APPEARANCE_APP_STATE_KEY]: "sepia" });
+
+    expect(store.getState().globalAppearance).toBe("auto");
+  });
+});
+
+describe("hydrate", () => {
+  it("adopts the terminal chain and the editor id, and paints", async () => {
     const { store, paint } = freshStore({
       state: vi.fn(async () => ({
         ok: true as const,
@@ -194,145 +247,128 @@ describe("hydrate", () => {
 
     await store.getState().hydrate();
 
+    expect(store.getState().terminal).toEqual(TERMINAL);
     expect(store.getState().editorThemeId).toBe("nord");
+    expect(store.getState().hydrated).toBe(true);
+    expect(paint.painted).toHaveLength(1);
     expect(paint.editorThemes).toEqual(["nord"]);
   });
 
-  it("scopes the read to a project when asked (#69)", async () => {
-    const override: ProjectThemeOverride = {
-      ...EMPTY_PROJECT_THEME_OVERRIDE,
-      appThemeSlug: "midnight",
-    };
+  it("takes the workspace's canvas columns from the caller, not from a second read", async () => {
     const { store, gateway } = freshStore({
+      state: vi.fn(async () => ({ ok: true as const, value: statePayload({ projectId: "p1" }) })),
+    });
+
+    await store.getState().hydrate(projectScope({ canvas: TEAL, appearance: "light" }));
+
+    expect(gateway.state).toHaveBeenCalledWith({ projectId: "p1" });
+    expect(store.getState().projectOverride).toEqual({
+      canvas: TEAL,
+      appearance: "light",
+      terminalThemeName: null,
+      editorThemeId: null,
+    });
+    expect(effectiveCanvas(store.getState())).toEqual(TEAL);
+    expect(effectiveAppearance(store.getState())).toBe("light");
+  });
+
+  it("merges the 013 row's surfaces with the 014 canvas columns", async () => {
+    // The two halves genuinely arrive from different places — the terminal and
+    // editor names off `volli:theme-state`, the canvas and appearance off the
+    // project row — and the resolution has to see them as one override.
+    const { store } = freshStore({
       state: vi.fn(async () => ({
         ok: true as const,
-        value: statePayload({ projectId: "p1", projectOverride: override }),
+        value: statePayload({
+          projectId: "p1",
+          projectOverride: {
+            appThemeSlug: null,
+            seed: null,
+            terminalThemeName: "Nord",
+            editorThemeId: "dracula",
+          },
+        }),
       })),
     });
 
-    await store.getState().hydrate("p1");
+    await store.getState().hydrate(projectScope({ canvas: TEAL }));
 
-    expect(gateway.state).toHaveBeenCalledWith({ projectId: "p1" });
-    expect(store.getState().projectOverride).toEqual(override);
+    expect(store.getState().projectOverride).toEqual({
+      canvas: TEAL,
+      appearance: null,
+      terminalThemeName: "Nord",
+      editorThemeId: "dracula",
+    });
   });
 
-  // Boot's two reads overlap by design: main.tsx fires the global one the
-  // moment the renderer starts, and boot() fires the project-scoped one as
-  // soon as it has resolved the persisted selection. Whichever is issued LAST
-  // is the scope the app is in — arrival order is a network fact, not intent.
-  it("drops a stale read that lands after a newer one was issued", async () => {
-    const override: ProjectThemeOverride = {
-      ...EMPTY_PROJECT_THEME_OVERRIDE,
-      appThemeSlug: "midnight",
-    };
-    const globalRead = deferred<ThemeStateResult>();
-    const projectRead = deferred<ThemeStateResult>();
-    const pending = [globalRead.promise, projectRead.promise];
-    const { store } = freshStore({ state: vi.fn(() => pending.shift()!) });
+  it("stores no override at all for a workspace that inherits everything", () => {
+    // A workspace that was reset must read exactly like one that was never
+    // touched, or "does this workspace override anything?" has two answers.
+    return freshStore({
+      state: vi.fn(async () => ({ ok: true as const, value: statePayload({ projectId: "p1" }) })),
+    })
+      .store.getState()
+      .hydrate(projectScope())
+      .then(() => {
+        expect(freshStore().store.getState().projectOverride).toBeNull();
+      });
+  });
 
-    const stale = store.getState().hydrate(); // main.tsx, global scope
-    const fresh = store.getState().hydrate("p1"); // boot, restored selection
+  it("lets the LAST hydrate win, whatever order the payloads come back in", async () => {
+    // Scope reads overlap at boot and at every workspace switch; a slow global
+    // read landing after a project read would otherwise put the app back on the
+    // global scope silently.
+    const slow = deferred<{ ok: true; value: ThemeStatePayload }>();
+    const state = vi
+      .fn<ThemeGateway["state"]>()
+      .mockImplementationOnce(() => slow.promise)
+      .mockImplementation(async () => ({
+        ok: true as const,
+        value: statePayload({ projectId: "p1" }),
+      }));
+    const { store } = freshStore({ state });
 
-    projectRead.resolve({
-      ok: true,
-      value: statePayload({ projectId: "p1", projectOverride: override }),
-    });
-    await fresh;
-    globalRead.resolve({ ok: true, value: statePayload() });
-    await stale;
+    const first = store.getState().hydrate();
+    const second = store.getState().hydrate(projectScope({ canvas: TEAL }));
+    slow.resolve({ ok: true, value: statePayload() });
+    await Promise.all([first, second]);
 
     expect(store.getState().projectId).toBe("p1");
-    expect(store.getState().projectOverride).toEqual(override);
+    expect(effectiveCanvas(store.getState())).toEqual(TEAL);
   });
 
-  it("toasts a typed read failure and keeps the shipped default", async () => {
+  it("surfaces a failed read instead of silently keeping the default", async () => {
     const { store } = freshStore({
-      state: vi.fn(async () => ({ ok: false as const, error: "db closed" })),
+      state: vi.fn(async () => ({ ok: false as const, error: "database is locked" })),
     });
 
     await store.getState().hydrate();
 
-    expect(store.getState().global).toEqual(DEFAULT_THEME);
-    expect(store.getState().hydrated).toBe(false);
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
-      "Couldn't load the theme: db closed",
+      expect.stringContaining("database is locked"),
       expect.anything(),
     );
+    expect(store.getState().hydrated).toBe(false);
   });
 
-  it("toasts a rejected bridge call", async () => {
+  it("surfaces a rejected read the same way", async () => {
     const { store } = freshStore({
-      state: vi.fn(() => Promise.reject(new Error("ipc gone"))),
+      state: vi.fn(async () => {
+        throw new Error("bridge gone");
+      }),
     });
 
     await store.getState().hydrate();
 
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
-      "Couldn't load the theme: ipc gone",
+      expect.stringContaining("bridge gone"),
       expect.anything(),
     );
   });
 });
 
-describe("the eased scope-change repaint (#69)", () => {
-  it("cuts straight to the theme on the first paint", async () => {
-    // Boot has no previous look to come from — a crossfade here would read as
-    // the app slowly fading in something it had already rendered.
-    const { store, paint } = freshStore();
-
-    await store.getState().hydrate("p1");
-
-    expect(paint.applied).toHaveLength(1);
-    expect(paint.eased).toEqual([]);
-  });
-
-  it("eases the repaint when the scope moves to another project", async () => {
-    const override: ProjectThemeOverride = {
-      ...EMPTY_PROJECT_THEME_OVERRIDE,
-      appThemeSlug: MIDNIGHT.slug,
-    };
-    const scopes: Record<string, ThemeStatePayload> = {
-      p1: statePayload({ projectId: "p1" }),
-      p2: statePayload({ projectId: "p2", projectOverride: override, theme: MIDNIGHT }),
-    };
-    const { store, paint } = freshStore({
-      state: vi.fn(async (input: { projectId?: string }) => ({
-        ok: true as const,
-        value: scopes[input.projectId ?? "p1"]!,
-      })),
-    });
-
-    await store.getState().hydrate("p1");
-    await store.getState().hydrate("p2");
-
-    // The transition IS the signal that the window now belongs to another
-    // project, so it is armed for exactly that swap.
-    expect(paint.eased).toEqual([MIDNIGHT]);
-  });
-
-  it("does not ease a theme change inside one scope", async () => {
-    // A pick is a direct answer to a keystroke; 300ms of crossfade there is
-    // latency on the input path, not polish.
-    const { store, paint } = freshStore();
-    await store.getState().hydrate();
-
-    await store.getState().setGlobalTheme(MIDNIGHT);
-
-    expect(paint.applied).toContainEqual(MIDNIGHT);
-    expect(paint.eased).toEqual([]);
-  });
-
-  it("does not ease a preview, however far the seed moves", () => {
-    const { store, paint } = freshStore();
-    store.getState().startPreview(MIDNIGHT);
-    store.getState().cancelPreview();
-
-    expect(paint.eased).toEqual([]);
-  });
-
-  it("arms nothing when a scope change resolves to the same theme", async () => {
-    // Both projects inherit, so nothing repaints — and a crossfade window with
-    // no color change in it would only slow every hover for 300ms.
+describe("the eased repaint", () => {
+  it("crossfades a workspace switch", async () => {
     const { store, paint } = freshStore({
       state: vi.fn(async (input: { projectId?: string }) => ({
         ok: true as const,
@@ -340,980 +376,700 @@ describe("the eased scope-change repaint (#69)", () => {
       })),
     });
 
-    await store.getState().hydrate("p1");
-    await store.getState().hydrate("p2");
+    await store.getState().hydrate();
+    await store.getState().hydrate(projectScope({ canvas: TEAL }));
 
-    expect(paint.applied).toHaveLength(1);
+    expect(paint.eased).toEqual([{ canvas: TEAL, resolved: expect.anything() as never }]);
+  });
+
+  it("crossfades a light↔dark flip inside one scope", async () => {
+    // The case the projectId-only trigger missed while dark was pinned: same
+    // scope, same canvas, every surface inverted.
+    const { store, paint } = freshStore();
+    store.getState().hydrateGlobal(appState(DEFAULT_CANVAS, "dark"));
+
+    await store.getState().setGlobalAppearance("light");
+
+    expect(paint.eased).toEqual([{ canvas: DEFAULT_CANVAS, resolved: "light" }]);
+  });
+
+  it("never eases the first paint", () => {
+    const { store, paint } = freshStore();
+
+    store.getState().hydrateGlobal(appState(TEAL, "light"));
+
+    expect(paint.painted).toHaveLength(1);
     expect(paint.eased).toEqual([]);
+  });
+
+  it("cuts straight to a canvas edit within one scope", async () => {
+    const { store, paint } = freshStore();
+    store.getState().hydrateGlobal(appState(DEFAULT_CANVAS, "dark"));
+
+    await store.getState().setGlobalCanvas(TEAL);
+
+    expect(paint.eased).toEqual([]);
+    expect(paint.painted).toHaveLength(2);
   });
 });
 
-describe("setEditorTheme", () => {
-  it("persists the global editor id and refreshes Monaco without rewriting the app theme", async () => {
-    const { store, gateway, paint } = freshStore();
+describe("repaint deduplication", () => {
+  it("does not repaint when nothing effective changed", async () => {
+    // Every paint invalidates the terminals' token-derived palette, so a
+    // redundant one makes every live terminal re-theme for nothing.
+    const { store, paint } = freshStore();
 
-    await expect(store.getState().setEditorTheme("nord")).resolves.toBe(true);
-
-    expect(gateway.setGlobalEditor).toHaveBeenCalledWith("nord", null);
-    expect(gateway.setGlobal).not.toHaveBeenCalled();
-    expect(store.getState().editorThemeId).toBe("nord");
-    expect(paint.editorThemes).toEqual(["nord"]);
-  });
-
-  it("clears back to derive-from-app and remaps Monaco from the active app slug", async () => {
-    const { store, paint } = freshStore({
-      state: vi.fn(async () => ({
-        ok: true as const,
-        value: statePayload({ theme: MIDNIGHT, editorThemeId: "nord" }),
-      })),
-      setGlobalEditor: vi.fn(async () => ({
-        ok: true as const,
-        value: statePayload({ theme: MIDNIGHT, editorThemeId: null }),
-      })),
-    });
+    store.getState().hydrateGlobal(appState(TEAL, "dark"));
     await store.getState().hydrate();
-    paint.editorThemes.length = 0;
+    await store.getState().hydrate();
 
-    await expect(store.getState().setEditorTheme(null)).resolves.toBe(true);
-
-    expect(store.getState().editorThemeId).toBeNull();
-    expect(paint.editorThemes).toEqual(["tokyo-night"]);
+    expect(paint.painted).toHaveLength(1);
   });
 
-  it("rolls back the optimistic editor id when persistence fails", async () => {
-    const { store, paint } = freshStore({
-      setGlobalEditor: vi.fn(async () => ({ ok: false as const, error: "db closed" })),
-    });
+  it("repaints when only the MODE moved under an unchanged canvas", () => {
+    // The canvas is byte-identical across a flip; the window is not. Keying the
+    // dedupe on the canvas alone would silently swallow the whole light path.
+    const { store, paint } = freshStore();
+    paint.setSystemPrefersDark(true);
+    store.getState().hydrateGlobal(appState(TEAL, "auto"));
 
-    await expect(store.getState().setEditorTheme("nord")).resolves.toBe(false);
+    store.getState().noteSystemAppearance(false);
 
-    expect(store.getState().editorThemeId).toBeNull();
-    // optimistic nord, then rollback to ember-derived one-dark-pro
-    expect(paint.editorThemes).toEqual(["nord", "one-dark-pro"]);
+    expect(paint.painted).toEqual([
+      { canvas: TEAL, resolved: "dark" },
+      { canvas: TEAL, resolved: "light" },
+    ]);
+  });
+});
+
+describe("the system appearance", () => {
+  it("repaints a scope on `auto` when the system flips", () => {
+    const { store, paint } = freshStore();
+    paint.setSystemPrefersDark(true);
+    store.getState().hydrateGlobal(appState(DEFAULT_CANVAS, "auto"));
+
+    store.getState().noteSystemAppearance(false);
+
+    expect(effectiveAppearance(store.getState())).toBe("light");
+    expect(paint.painted).toHaveLength(2);
   });
 
-  it("serializes rapid writes and keeps the newest optimistic selection", async () => {
-    const first = deferred<ThemeStateResult>();
-    const second = deferred<ThemeStateResult>();
-    const setGlobalEditor = vi
-      .fn<(editorThemeId: ShippedEditorThemeId | null) => Promise<ThemeStateResult>>()
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(second.promise);
-    const { store } = freshStore({ setGlobalEditor });
+  it("leaves an explicit choice alone when the system flips", () => {
+    const { store, paint } = freshStore();
+    paint.setSystemPrefersDark(true);
+    store.getState().hydrateGlobal(appState(DEFAULT_CANVAS, "dark"));
 
-    const nordWrite = store.getState().setEditorTheme("nord");
-    const draculaWrite = store.getState().setEditorTheme("dracula");
+    store.getState().noteSystemAppearance(false);
 
-    expect(store.getState().editorThemeId).toBe("dracula");
-    await vi.waitFor(() => expect(setGlobalEditor).toHaveBeenCalledTimes(1));
-    first.resolve({
-      ok: true,
-      value: statePayload({ editorThemeId: "nord" }),
-    });
-    await nordWrite;
-    await vi.waitFor(() => expect(setGlobalEditor).toHaveBeenCalledTimes(2));
-    expect(store.getState().editorThemeId).toBe("dracula");
-
-    second.resolve({
-      ok: true,
-      value: statePayload({ editorThemeId: "dracula" }),
-    });
-    await expect(draculaWrite).resolves.toBe(true);
-    expect(store.getState().editorThemeId).toBe("dracula");
+    expect(effectiveAppearance(store.getState())).toBe("dark");
+    expect(paint.painted).toHaveLength(1);
   });
 
-  it("does not let a superseded failure roll back the newest selection", async () => {
-    const first = deferred<ThemeStateResult>();
-    const setGlobalEditor = vi
-      .fn<(editorThemeId: ShippedEditorThemeId | null) => Promise<ThemeStateResult>>()
-      .mockReturnValueOnce(first.promise)
-      .mockResolvedValueOnce({
-        ok: true,
-        value: statePayload({ editorThemeId: "dracula" }),
-      });
-    const { store } = freshStore({ setGlobalEditor });
+  it("ignores a flip to the value it already held", () => {
+    const { store, paint } = freshStore();
+    paint.setSystemPrefersDark(true);
+    store.getState().hydrateGlobal(appState(DEFAULT_CANVAS, "auto"));
 
-    const nordWrite = store.getState().setEditorTheme("nord");
-    const draculaWrite = store.getState().setEditorTheme("dracula");
-    first.resolve({ ok: false, error: "db closed" });
+    store.getState().noteSystemAppearance(true);
 
-    await expect(nordWrite).resolves.toBe(false);
-    await expect(draculaWrite).resolves.toBe(true);
-    expect(store.getState().editorThemeId).toBe("dracula");
+    expect(paint.painted).toHaveLength(1);
   });
 });
 
 describe("preview", () => {
-  it("repaints the live DOM and writes NOTHING", () => {
-    const { store, gateway, paint, memory } = freshStore();
+  it("paints without writing anywhere", () => {
+    const { store, gateway, paint } = freshStore();
+    store.getState().hydrateGlobal(appState(DEFAULT_CANVAS, "dark"));
 
-    store.getState().startPreview(MIDNIGHT);
+    store.getState().startPreview(TEAL);
 
-    expect(paint.applied).toEqual([MIDNIGHT]);
-    expect(effectiveTheme(store.getState())).toEqual(MIDNIGHT);
-    expect(gateway.setGlobal).not.toHaveBeenCalled();
-    expect(gateway.setProject).not.toHaveBeenCalled();
-    // The persisted slice is favorites/recents only — a previewed theme must
-    // leave no trace in it, even though `persist` writes on every state change.
-    expect(memory.read("volli:theme") ?? "").not.toContain("midnight");
+    expect(effectiveCanvas(store.getState())).toEqual(TEAL);
+    expect(paint.painted.at(-1)).toEqual({ canvas: TEAL, resolved: "dark" });
+    expect(gateway.setGlobalCanvas).not.toHaveBeenCalled();
+    expect(gateway.setProjectCanvas).not.toHaveBeenCalled();
   });
 
-  it("restores the pre-preview theme on cancel, still touching no persistence", () => {
-    const { store, gateway, paint, memory } = freshStore();
-
-    store.getState().startPreview(MIDNIGHT);
-    store.getState().cancelPreview();
-
-    expect(paint.applied).toEqual([MIDNIGHT, DEFAULT_THEME]);
-    expect(store.getState().global).toEqual(DEFAULT_THEME);
-    expect(gateway.setGlobal).not.toHaveBeenCalled();
-    expect(memory.read("volli:theme") ?? "").not.toContain("midnight");
-  });
-
-  it("cancelling without a preview is a no-op", () => {
-    const { store, paint } = freshStore();
+  it("restores the stored look by simply forgetting the preview", () => {
+    // Nothing to undo but the paint: a preview never wrote anywhere, which is
+    // the whole reason cancel can be this cheap.
+    const { store } = freshStore();
+    store.getState().hydrateGlobal(appState(DEFAULT_CANVAS, "dark"));
+    store.getState().startPreview(TEAL);
 
     store.getState().cancelPreview();
 
-    expect(paint.applied).toEqual([]);
+    expect(effectiveCanvas(store.getState())).toEqual(DEFAULT_CANVAS);
   });
 
-  it("follows the selection as it moves, without repainting the same theme twice", () => {
-    const { store, paint } = freshStore();
+  it("previews an appearance independently of a canvas", () => {
+    const { store } = freshStore();
+    store.getState().hydrateGlobal(appState(DEFAULT_CANVAS, "dark"));
 
-    store.getState().startPreview(MIDNIGHT);
-    store.getState().startPreview(DEFAULT_THEME);
-    // Cancelling back onto the theme already on screen costs nothing — a paint
-    // re-themes every live terminal, so redundant ones are suppressed.
-    store.getState().cancelPreview();
+    store.getState().startAppearancePreview("light");
 
-    expect(paint.applied).toEqual([MIDNIGHT, DEFAULT_THEME]);
+    expect(effectiveAppearance(store.getState())).toBe("light");
+    expect(effectiveCanvas(store.getState())).toEqual(DEFAULT_CANVAS);
   });
 
-  it("keeps Monaco on the App-preview editor theme when ending an Editor preview", () => {
-    // Regression: endEditorPreview used to restore from global.slug (ember →
-    // one-dark-pro) while App preview was still Midnight, desyncing Monaco
-    // from paintedEditor (tokyo-night).
-    const { store, paint, gateway } = freshStore();
-    store.getState().startPreview(MIDNIGHT);
-    expect(paint.editorThemes.at(-1)).toBe("tokyo-night");
-    paint.editorThemes.length = 0;
+  it("outranks a workspace override rather than replacing the global", async () => {
+    // Previewing a canvas inside a workspace that overrides only the APPEARANCE
+    // must keep that appearance — the two are scoped independently, and a
+    // preview is a third scope layered on top, not a replacement for either.
+    const { store } = freshStore({
+      state: vi.fn(async () => ({ ok: true as const, value: statePayload({ projectId: "p1" }) })),
+    });
+    store.getState().hydrateGlobal(appState(DEFAULT_CANVAS, "dark"));
+    await store.getState().hydrate(projectScope({ appearance: "light" }));
 
-    store.getState().startEditorPreview("nord");
-    expect(paint.editorThemes).toEqual(["nord"]);
-    paint.editorThemes.length = 0;
+    store.getState().startPreview(TEAL);
 
-    store.getState().endEditorPreview();
-
-    expect(paint.editorThemes).toEqual(["tokyo-night"]);
-    expect(store.getState().preview).toEqual(MIDNIGHT);
-    expect(gateway.setGlobal).not.toHaveBeenCalled();
-    expect(gateway.setGlobalEditor).not.toHaveBeenCalled();
+    expect(effectiveCanvas(store.getState())).toEqual(TEAL);
+    expect(effectiveAppearance(store.getState())).toBe("light");
   });
 
-  it("re-previewing the same App theme refreshes Monaco after an editor desync", () => {
-    // Stuck case: paintedEditor still tokyo-night after an out-of-band paint
-    // left Monaco on one-dark-pro. Re-highlighting Midnight must refresh, not
-    // skip because the tracker already says tokyo-night.
-    const { store, paint } = freshStore();
-    store.getState().startPreview(MIDNIGHT);
-    expect(paint.editorThemes.at(-1)).toBe("tokyo-night");
+  it("commits to the global scope", async () => {
+    const { store, gateway } = freshStore();
+    store.getState().hydrateGlobal(appState(DEFAULT_CANVAS, "dark"));
+    store.getState().startPreview(TEAL);
 
-    // Bypass the store the way the old Appearance Editor restore did.
-    paint.refreshEditorTheme("one-dark-pro");
-    paint.editorThemes.length = 0;
+    expect(await store.getState().commitPreview({ kind: "global" })).toBe(true);
 
-    store.getState().startPreview(MIDNIGHT);
+    expect(gateway.setGlobalCanvas).toHaveBeenCalledWith(TEAL);
+    expect(store.getState().globalCanvas).toEqual(TEAL);
+    expect(store.getState().preview).toBeNull();
+  });
 
-    expect(paint.editorThemes).toEqual(["tokyo-night"]);
+  it("commits to a workspace scope", async () => {
+    const { store, gateway } = freshStore({
+      state: vi.fn(async () => ({ ok: true as const, value: statePayload({ projectId: "p1" }) })),
+    });
+    store.getState().hydrateGlobal(appState(DEFAULT_CANVAS, "dark"));
+    await store.getState().hydrate(projectScope());
+    store.getState().startPreview(TEAL);
+
+    expect(await store.getState().commitPreview({ kind: "project", projectId: "p1" })).toBe(true);
+
+    expect(gateway.setProjectCanvas).toHaveBeenCalledWith("p1", TEAL);
+    expect(gateway.setGlobalCanvas).not.toHaveBeenCalled();
+    expect(store.getState().globalCanvas).toEqual(DEFAULT_CANVAS);
+  });
+
+  it("commits both halves when both are being previewed", async () => {
+    const { store, gateway } = freshStore();
+    store.getState().hydrateGlobal(appState(DEFAULT_CANVAS, "dark"));
+    store.getState().startPreview(TEAL);
+    store.getState().startAppearancePreview("light");
+
+    expect(await store.getState().commitPreview({ kind: "global" })).toBe(true);
+
+    expect(gateway.setGlobalCanvas).toHaveBeenCalledWith(TEAL);
+    expect(gateway.setGlobalAppearance).toHaveBeenCalledWith("light");
+  });
+
+  it("commits nothing when there is no preview to commit", async () => {
+    const { store, gateway } = freshStore();
+
+    expect(await store.getState().commitPreview({ kind: "global" })).toBe(false);
+
+    expect(gateway.setGlobalCanvas).not.toHaveBeenCalled();
   });
 });
 
-describe("editor preview", () => {
-  it("treats an empty editor preview id as restore", () => {
+describe("setGlobalCanvas", () => {
+  it("paints optimistically, then persists", async () => {
+    // The editor's whole point is that the window is already wearing the
+    // gradient by the time you let go of the orb.
+    const { store, gateway, paint } = freshStore();
+    store.getState().hydrateGlobal(appState(DEFAULT_CANVAS, "dark"));
+
+    const pending = store.getState().setGlobalCanvas(TEAL);
+    expect(paint.painted.at(-1)?.canvas).toEqual(TEAL);
+
+    expect(await pending).toBe(true);
+    expect(gateway.setGlobalCanvas).toHaveBeenCalledWith(TEAL);
+  });
+
+  it("puts the user back on what is actually stored when the write fails", async () => {
+    const { store, paint } = freshStore({
+      setGlobalCanvas: vi.fn(async () => ({ ok: false as const, error: "disk full" })),
+    });
+    store.getState().hydrateGlobal(appState(DEFAULT_CANVAS, "dark"));
+
+    expect(await store.getState().setGlobalCanvas(TEAL)).toBe(false);
+
+    expect(store.getState().globalCanvas).toEqual(DEFAULT_CANVAS);
+    expect(paint.painted.at(-1)?.canvas).toEqual(DEFAULT_CANVAS);
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      expect.stringContaining("disk full"),
+      expect.anything(),
+    );
+  });
+});
+
+describe("setGlobalAppearance", () => {
+  it("persists and repaints", async () => {
+    const { store, gateway } = freshStore();
+    store.getState().hydrateGlobal(appState(DEFAULT_CANVAS, "dark"));
+
+    expect(await store.getState().setGlobalAppearance("light")).toBe(true);
+
+    expect(gateway.setGlobalAppearance).toHaveBeenCalledWith("light");
+    expect(effectiveAppearance(store.getState())).toBe("light");
+  });
+
+  it("rolls back a failed write", async () => {
+    const { store } = freshStore({
+      setGlobalAppearance: vi.fn(async () => ({ ok: false as const, error: "database is locked" })),
+    });
+    store.getState().hydrateGlobal(appState(DEFAULT_CANVAS, "dark"));
+
+    expect(await store.getState().setGlobalAppearance("light")).toBe(false);
+
+    expect(effectiveAppearance(store.getState())).toBe("dark");
+    expect(vi.mocked(toast.error)).toHaveBeenCalled();
+  });
+});
+
+describe("the workspace scope", () => {
+  it("writes and paints a canvas for the workspace it is showing", async () => {
+    const { store, gateway } = freshStore({
+      state: vi.fn(async () => ({ ok: true as const, value: statePayload({ projectId: "p1" }) })),
+    });
+    store.getState().hydrateGlobal(appState(DEFAULT_CANVAS, "dark"));
+    await store.getState().hydrate(projectScope());
+
+    expect(await store.getState().setProjectCanvas("p1", TEAL)).toBe(true);
+
+    expect(gateway.setProjectCanvas).toHaveBeenCalledWith("p1", TEAL);
+    expect(effectiveCanvas(store.getState())).toEqual(TEAL);
+  });
+
+  it("persists without painting for a workspace it is NOT showing", async () => {
+    // Adopting another workspace's canvas here would paint one project's window
+    // with another's.
+    const { store, gateway, paint } = freshStore({
+      state: vi.fn(async () => ({ ok: true as const, value: statePayload({ projectId: "p1" }) })),
+    });
+    store.getState().hydrateGlobal(appState(DEFAULT_CANVAS, "dark"));
+    await store.getState().hydrate(projectScope());
+    const before = paint.painted.length;
+
+    expect(await store.getState().setProjectCanvas("p2", TEAL)).toBe(true);
+
+    expect(gateway.setProjectCanvas).toHaveBeenCalledWith("p2", TEAL);
+    expect(paint.painted).toHaveLength(before);
+    expect(effectiveCanvas(store.getState())).toEqual(DEFAULT_CANVAS);
+  });
+
+  it("clears a workspace back to inheriting", async () => {
+    const { store, gateway } = freshStore({
+      state: vi.fn(async () => ({ ok: true as const, value: statePayload({ projectId: "p1" }) })),
+    });
+    store.getState().hydrateGlobal(appState(PLUM, "dark"));
+    await store.getState().hydrate(projectScope({ canvas: TEAL }));
+
+    expect(await store.getState().setProjectCanvas("p1", null)).toBe(true);
+
+    expect(gateway.setProjectCanvas).toHaveBeenCalledWith("p1", null);
+    expect(effectiveCanvas(store.getState())).toEqual(PLUM);
+  });
+
+  it("scopes the appearance separately from the canvas", async () => {
+    const { store, gateway } = freshStore({
+      state: vi.fn(async () => ({ ok: true as const, value: statePayload({ projectId: "p1" }) })),
+    });
+    store.getState().hydrateGlobal(appState(PLUM, "dark"));
+    await store.getState().hydrate(projectScope({ canvas: TEAL }));
+
+    expect(await store.getState().setProjectAppearance("p1", "light")).toBe(true);
+
+    expect(gateway.setProjectAppearance).toHaveBeenCalledWith("p1", "light");
+    expect(effectiveCanvas(store.getState())).toEqual(TEAL);
+    expect(effectiveAppearance(store.getState())).toBe("light");
+  });
+
+  it("rolls a failed workspace write back to the override that is stored", async () => {
+    const { store } = freshStore({
+      state: vi.fn(async () => ({ ok: true as const, value: statePayload({ projectId: "p1" }) })),
+      setProjectCanvas: vi.fn(async () => ({ ok: false as const, error: "no such project" })),
+    });
+    store.getState().hydrateGlobal(appState(PLUM, "dark"));
+    await store.getState().hydrate(projectScope({ canvas: TEAL }));
+
+    expect(await store.getState().setProjectCanvas("p1", DEFAULT_CANVAS)).toBe(false);
+
+    expect(effectiveCanvas(store.getState())).toEqual(TEAL);
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      expect.stringContaining("no such project"),
+      expect.anything(),
+    );
+  });
+});
+
+describe("the first-paint hint", () => {
+  it("records what was painted, so the next launch builds the right window", async () => {
+    const { store, gateway } = freshStore();
+
+    store.getState().hydrateGlobal(appState(TEAL, "light"));
+    await settle();
+
+    expect(gateway.setFirstPaint).toHaveBeenCalledWith({
+      appearance: "light",
+      background: windowBackground(TEAL, "light"),
+    });
+  });
+
+  it("surfaces a failed hint write rather than letting it stop silently", async () => {
+    // A hint that quietly stopped updating shows up as a boot flash nobody can
+    // explain, one launch later.
+    const { store } = freshStore({
+      setFirstPaint: vi.fn(async () => ({ ok: false as const, error: "database is locked" })),
+    });
+
+    store.getState().hydrateGlobal(appState(TEAL, "light"));
+    await settle();
+
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      expect.stringContaining("window appearance"),
+      expect.anything(),
+    );
+  });
+});
+
+describe("the editor surface", () => {
+  it("paints the shipped default when nothing is authored", async () => {
+    // Decision 6: the canvas does not derive an editor theme, so an unset id
+    // means one flat default rather than something mapped off the app.
     const { store, paint } = freshStore();
-    store.getState().startEditorPreview("nord");
+
+    await store.getState().hydrate();
+
+    expect(paint.editorThemes).toEqual(["one-dark-pro"]);
+  });
+
+  it("persists a global editor pick and repaints Monaco", async () => {
+    const { store, gateway, paint } = freshStore();
+    await store.getState().hydrate();
+
+    expect(await store.getState().setEditorTheme("nord")).toBe(true);
+
+    expect(gateway.setGlobalEditor).toHaveBeenCalledWith("nord", null);
+    expect(paint.editorThemes.at(-1)).toBe("nord");
+  });
+
+  it("rolls back to the persisted id when the write fails", async () => {
+    const { store } = freshStore({
+      setGlobalEditor: vi.fn(async () => ({ ok: false as const, error: "database is locked" })),
+    });
+    await store.getState().hydrate();
+
+    expect(await store.getState().setEditorTheme("nord")).toBe(false);
+
+    expect(store.getState().editorThemeId).toBeNull();
+  });
+
+  it("overrides the editor for one workspace, leaving its canvas alone", async () => {
+    const { store, gateway } = freshStore({
+      state: vi.fn(async () => ({ ok: true as const, value: statePayload({ projectId: "p1" }) })),
+    });
+    store.getState().hydrateGlobal(appState(PLUM, "dark"));
+    await store.getState().hydrate(projectScope({ canvas: TEAL }));
+
+    expect(await store.getState().setProjectEditorTheme("p1", "dracula")).toBe(true);
+
+    expect(gateway.setProject).toHaveBeenCalledWith("p1", {
+      appThemeSlug: null,
+      seed: null,
+      terminalThemeName: null,
+      editorThemeId: "dracula",
+    });
+  });
+
+  it("previews Monaco without writing, and restores on end", async () => {
+    const { store, gateway, paint } = freshStore();
+    await store.getState().hydrate();
+
+    store.getState().startEditorPreview("dracula");
+    expect(paint.editorThemes.at(-1)).toBe("dracula");
+    expect(gateway.setGlobalEditor).not.toHaveBeenCalled();
+
+    store.getState().endEditorPreview();
+    expect(paint.editorThemes.at(-1)).toBe("one-dark-pro");
+  });
+
+  it("treats an empty preview selection as the end of the preview", () => {
+    const { store, paint } = freshStore();
 
     store.getState().startEditorPreview("");
 
-    expect(paint.editorThemes).toEqual(["nord", "one-dark-pro"]);
+    expect(paint.editorThemes.at(-1)).toBe("one-dark-pro");
   });
 });
 
-describe("commit", () => {
-  it("persists the previewed theme once, and remembers it as recent", async () => {
-    const { store, gateway } = freshStore();
-    store.getState().startPreview(MIDNIGHT);
-
-    await expect(store.getState().commitPreview({ kind: "global" })).resolves.toBe(true);
-
-    expect(gateway.setGlobal).toHaveBeenCalledTimes(1);
-    expect(gateway.setGlobal).toHaveBeenCalledWith(MIDNIGHT, null);
-    expect(store.getState().preview).toBeNull();
-    expect(store.getState().global).toEqual(MIDNIGHT);
-    expect(store.getState().recents).toEqual(["midnight"]);
-  });
-
-  it("commits with nothing previewed by doing nothing", async () => {
-    const { store, gateway } = freshStore();
-
-    await expect(store.getState().commitPreview({ kind: "global" })).resolves.toBe(false);
-
-    expect(gateway.setGlobal).not.toHaveBeenCalled();
-  });
-
-  it("repaints back to the previous theme when the write fails", async () => {
-    const { store, paint } = freshStore({
-      setGlobal: vi.fn(async () => ({ ok: false as const, error: "disk full" })),
-    });
-    store.getState().startPreview(MIDNIGHT);
-
-    await expect(store.getState().commitPreview({ kind: "global" })).resolves.toBe(false);
-
-    expect(store.getState().global).toEqual(DEFAULT_THEME);
-    expect(paint.applied).toEqual([MIDNIGHT, DEFAULT_THEME]);
-    // The optimistic Recent entry rolls back with the theme: Recent means
-    // "applied", and this one never made it to disk.
-    expect(store.getState().recents).toEqual([]);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
-      "Couldn't save the theme: disk full",
-      expect.anything(),
-    );
-  });
-
-  it("rolls the optimistic Recent entry back when a project write fails too", async () => {
-    const { store } = freshStore({
-      setProject: vi.fn(async () => ({ ok: false as const, error: "disk full" })),
-    });
-    store.setState({ recents: ["ember"] });
-    store.getState().startPreview(MIDNIGHT);
-
-    await expect(
-      store.getState().commitPreview({ kind: "project", projectId: "p1" }),
-    ).resolves.toBe(false);
-
-    expect(store.getState().recents).toEqual(["ember"]);
-  });
-
-  it("writes a project's app-surface override for a project scope", async () => {
-    const { store, gateway } = freshStore();
-    store.getState().startPreview(MIDNIGHT);
-
-    await expect(
-      store.getState().commitPreview({ kind: "project", projectId: "p1" }),
-    ).resolves.toBe(true);
-
-    expect(gateway.setProject).toHaveBeenCalledWith("p1", {
-      ...EMPTY_PROJECT_THEME_OVERRIDE,
-      appThemeSlug: "midnight",
-    });
-    expect(gateway.setGlobal).not.toHaveBeenCalled();
-  });
-
-  it("keeps a project's other surfaces untouched — resolution is per surface", async () => {
-    const { store, gateway } = freshStore();
-    store.setState({
-      projectId: "p1",
-      projectOverride: { ...EMPTY_PROJECT_THEME_OVERRIDE, terminalThemeName: "Nord" },
-    });
-    store.getState().startPreview(MIDNIGHT);
-
-    await store.getState().commitPreview({ kind: "project", projectId: "p1" });
-
-    expect(gateway.setProject).toHaveBeenCalledWith("p1", {
-      ...EMPTY_PROJECT_THEME_OVERRIDE,
-      appThemeSlug: "midnight",
-      terminalThemeName: "Nord",
-    });
-  });
-
-  it("setGlobalTheme commits directly, without a preview round trip", async () => {
-    const { store, gateway, paint } = freshStore();
-
-    await expect(store.getState().setGlobalTheme(MIDNIGHT)).resolves.toBe(true);
-
-    expect(gateway.setGlobal).toHaveBeenCalledWith(MIDNIGHT, null);
-    expect(paint.applied).toEqual([MIDNIGHT]);
-    // null editorThemeId remaps Monaco when the app slug changes
-    expect(paint.editorThemes).toEqual(["tokyo-night"]);
-  });
-});
-
-/**
- * The scope a global write ANSWERS in (#123). The write itself is global from
- * every scope; what must not change is which project's look the window is
- * wearing while it happens.
- */
-describe("a global write made from a project scope", () => {
-  /** A project whose app AND editor surfaces are pinned to its own choices. */
-  const OVERRIDE: ProjectThemeOverride = {
-    ...EMPTY_PROJECT_THEME_OVERRIDE,
-    appThemeSlug: "sunset",
-    editorThemeId: "dracula",
-  };
-
-  /**
-   * Main's contract: the write goes to the global scope, and the state that
-   * comes back describes the scope the CALLER named (theme-ipc.ts).
-   */
-  function scopedGateway() {
-    return {
-      setGlobal: vi.fn(async (theme: ThemeDefinition, projectId: string | null) => ({
-        ok: true as const,
-        value: statePayload({
-          theme,
-          projectId,
-          projectOverride: projectId === "p1" ? OVERRIDE : null,
-        }),
-      })),
-      setGlobalEditor: vi.fn(
-        async (editorThemeId: ShippedEditorThemeId | null, projectId: string | null) => ({
-          ok: true as const,
-          value: statePayload({
-            editorThemeId,
-            projectId,
-            projectOverride: projectId === "p1" ? OVERRIDE : null,
-          }),
-        }),
-      ),
-    };
-  }
-
-  /** A hydrated store showing project `p1`, which overrides its app surface with Sunset. */
-  function inProjectScope() {
-    const fresh = freshStore(scopedGateway());
-    fresh.store.setState({
-      hydrated: true,
-      projectId: "p1",
-      projectOverride: OVERRIDE,
-      customThemes: [SUNSET],
-    });
-    return fresh;
-  }
-
-  it("keeps the project's own theme on screen while the global theme changes", async () => {
-    const { store, gateway, paint } = inProjectScope();
-
-    await expect(store.getState().setGlobalTheme(MIDNIGHT)).resolves.toBe(true);
-
-    expect(gateway.setGlobal).toHaveBeenCalledWith(MIDNIGHT, "p1");
-    // The global really moved — this project just isn't wearing it.
-    expect(store.getState().global).toEqual(MIDNIGHT);
-    expect(store.getState().projectId).toBe("p1");
-    expect(store.getState().projectOverride).toEqual(OVERRIDE);
-    expect(effectiveTheme(store.getState())).toEqual(SUNSET);
-    // One paint, into the project's own theme: no bounce through the global.
-    expect(paint.applied).toEqual([SUNSET]);
-    // The scope never changed, so the crossfade must stay out of it.
-    expect(paint.eased).toEqual([]);
-  });
-
-  it("keeps the project's own editor theme while the global editor theme changes", async () => {
-    const { store, gateway, paint } = inProjectScope();
-
-    await expect(store.getState().setEditorTheme("nord")).resolves.toBe(true);
-
-    expect(gateway.setGlobalEditor).toHaveBeenCalledWith("nord", "p1");
-    expect(store.getState().editorThemeId).toBe("nord");
-    expect(store.getState().projectId).toBe("p1");
-    expect(store.getState().projectOverride).toEqual(OVERRIDE);
-    // Monaco stays on what this project pinned — the global id is what the
-    // OTHER projects inherit, and adopting a scope-less answer here would
-    // repaint the editor (and the window) out from under this one.
-    expect(paint.editorThemes).toEqual(["dracula"]);
-    expect(paint.applied).toEqual([SUNSET]);
-  });
-});
-
-describe("favorites and recents", () => {
-  it("stars and unstars, persisting through app_state", () => {
-    const { store, memory } = freshStore();
-
-    store.getState().toggleFavorite("midnight");
-
-    expect(store.getState().favorites).toEqual(["midnight"]);
-    expect(memory.read("volli:theme")).toContain("midnight");
-
-    store.getState().toggleFavorite("midnight");
-    expect(store.getState().favorites).toEqual([]);
-  });
-
-  it("rehydrates favorites and recents, ignoring corrupt persisted shapes", () => {
-    const memory = memoryStorage();
-    memory.storage.setItem(
-      "volli:theme",
-      JSON.stringify({ state: { favorites: ["moss", 7], recents: "nope" }, version: 1 }),
-    );
-    const store = createThemeStore({
-      deps: {
-        gateway: fakeGateway(),
-        applyTheme: () => {},
-        refreshEditorTheme: () => {},
-        beginScopeRepaint: () => {},
-      },
-      storage: memory.storage,
-    });
-
-    expect(store.getState().favorites).toEqual(["moss"]);
-    expect(store.getState().recents).toEqual([]);
-  });
-});
-
-/** A store already scoped to project `p1`, carrying `override`. */
-async function scopedToProject(override: ProjectThemeOverride) {
-  const scoped = freshStore({
-    state: vi.fn(async () => ({
-      ok: true as const,
-      value: statePayload({ projectId: "p1", projectOverride: override }),
-    })),
-  });
-  await scoped.store.getState().hydrate("p1");
-  scoped.paint.applied.length = 0;
-  scoped.paint.editorThemes.length = 0;
-  return scoped;
-}
-
-describe("setProjectAppChoice", () => {
-  it("clears BOTH the named theme and the tint seed when a project goes back to inherit", async () => {
-    // Dropping only the slug would leave the seed tinting the app — #72's
-    // auto-tint is exactly "a seed and no slug", so Inherit has to clear both.
-    const { store, gateway } = await scopedToProject({
-      ...EMPTY_PROJECT_THEME_OVERRIDE,
-      appThemeSlug: "sunset",
-      seed: "#E8652A",
-      editorThemeId: "nord",
-    });
-
-    await expect(store.getState().setProjectAppChoice("p1", { kind: "inherit" })).resolves.toBe(
-      true,
-    );
-
-    expect(gateway.setProject).toHaveBeenCalledWith("p1", {
-      ...EMPTY_PROJECT_THEME_OVERRIDE,
-      editorThemeId: "nord",
-    });
-  });
-
-  // #72: Custom opens with "Auto-tint from this project's color" pre-selected.
-  // The SEED is what's stored — the tinted theme itself is derived at paint
-  // time (theme/apply.ts), never written anywhere.
-  it("stores the project's color as the tint seed and paints the derived theme", async () => {
-    const { store, gateway, paint } = await scopedToProject(EMPTY_PROJECT_THEME_OVERRIDE);
-
-    await expect(store.getState().setProjectAppChoice("p1", autoTintChoice(0))).resolves.toBe(true);
-
-    expect(gateway.setProject).toHaveBeenCalledWith("p1", {
-      ...EMPTY_PROJECT_THEME_OVERRIDE,
-      seed: PROJECT_COLORS[0],
-    });
-    expect(paint.applied.at(-1)).toMatchObject({
-      slug: PROJECT_TINT_SLUG,
-      seed: PROJECT_COLORS[0],
-    });
-  });
-
-  it("never merges onto an override belonging to a different project", async () => {
-    // The store holds exactly ONE scope's override (see `appliedTheme`), so a
-    // write aimed elsewhere must start from "inherits everything" rather than
-    // copying the loaded project's look onto its neighbor.
-    const { store, gateway } = await scopedToProject({
-      ...EMPTY_PROJECT_THEME_OVERRIDE,
-      appThemeSlug: "sunset",
-    });
-
-    await store.getState().setProjectAppChoice("p2", autoTintChoice(1));
-
-    expect(gateway.setProject).toHaveBeenCalledWith("p2", {
-      ...EMPTY_PROJECT_THEME_OVERRIDE,
-      seed: PROJECT_COLORS[1],
-    });
-  });
-
-  it("reports a failed write instead of pretending the project changed", async () => {
-    const { store } = freshStore({
-      setProject: vi.fn(async () => ({ ok: false as const, error: "disk full" })),
-    });
-
-    await expect(store.getState().setProjectAppChoice("p1", { kind: "inherit" })).resolves.toBe(
-      false,
-    );
-
-    expect(store.getState().projectOverride).toBeNull();
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
-      "Couldn't save the theme: disk full",
-      expect.anything(),
-    );
-  });
-});
-
-describe("setProjectEditorTheme", () => {
-  it("persists the project's editor id, leaving its other surfaces alone (#69)", async () => {
-    const override: ProjectThemeOverride = {
-      ...EMPTY_PROJECT_THEME_OVERRIDE,
-      appThemeSlug: "sunset",
-    };
-    const { store, gateway, paint } = await scopedToProject(override);
-
-    await expect(store.getState().setProjectEditorTheme("p1", "nord")).resolves.toBe(true);
-
-    expect(gateway.setProject).toHaveBeenCalledWith("p1", { ...override, editorThemeId: "nord" });
-    expect(gateway.setGlobalEditor).not.toHaveBeenCalled();
-    expect(store.getState().projectOverride).toEqual({ ...override, editorThemeId: "nord" });
-    expect(paint.editorThemes).toEqual(["nord"]);
-  });
-
-  // "Inherit" is the absence of an override, not an override full of nulls —
-  // the row is dropped, so a project that inherits everything reads the same
-  // as a project that never set anything.
-  it("clears the whole override when the last set surface goes back to inherit", async () => {
-    const { store, gateway } = await scopedToProject({
-      ...EMPTY_PROJECT_THEME_OVERRIDE,
-      editorThemeId: "nord",
-    });
-
-    await expect(store.getState().setProjectEditorTheme("p1", null)).resolves.toBe(true);
-
-    expect(gateway.setProject).toHaveBeenCalledWith("p1", null);
-    expect(store.getState().projectOverride).toBeNull();
-  });
-
-  it("keeps the override when another surface is still set", async () => {
-    const { store, gateway } = await scopedToProject({
-      ...EMPTY_PROJECT_THEME_OVERRIDE,
-      appThemeSlug: "sunset",
-      editorThemeId: "nord",
-    });
-
-    await store.getState().setProjectEditorTheme("p1", null);
-
-    expect(gateway.setProject).toHaveBeenCalledWith("p1", {
-      ...EMPTY_PROJECT_THEME_OVERRIDE,
-      appThemeSlug: "sunset",
-    });
-  });
-
-  it("reports a failed write rather than leaving the picker looking saved", async () => {
-    const { store } = freshStore({
-      setProject: vi.fn(async () => ({ ok: false as const, error: "disk full" })),
-    });
-
-    await expect(store.getState().setProjectEditorTheme("p1", "nord")).resolves.toBe(false);
-
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
-      "Couldn't save the editor theme: disk full",
-      expect.anything(),
-    );
-  });
-});
-
-describe("terminal appearance", () => {
-  it("accepts a fresh payload after an overlay write, so rows relabel without a refetch", () => {
+describe("the terminal chain", () => {
+  it("adopts a payload resolved for this store's scope", () => {
     const { store } = freshStore();
-    const next: GhosttyAppearancePayload = {
-      ...TERMINAL,
-      provenance: { theme: "volli-global" },
-    };
 
-    store.getState().acceptTerminal(next);
+    store.getState().acceptTerminal(TERMINAL);
 
-    expect(store.getState().terminal).toEqual(next);
+    expect(store.getState().terminal).toEqual(TERMINAL);
   });
 
-  it("adopts the config-changed broadcast when the store is on the global scope", () => {
-    const { store, gateway } = freshStore();
-    const next: GhosttyAppearancePayload = { ...TERMINAL, provenance: { theme: "ghostty" } };
+  it("takes the global broadcast at the global scope", () => {
+    const { store } = freshStore();
 
-    store.getState().acceptGlobalTerminal(next);
+    store.getState().acceptGlobalTerminal(TERMINAL);
 
-    expect(store.getState().terminal).toEqual(next);
-    expect(gateway.state).not.toHaveBeenCalled();
+    expect(store.getState().terminal).toEqual(TERMINAL);
   });
 
-  it("re-requests the scoped resolution instead, when a project scope is loaded", async () => {
-    // The broadcast carries no project layer (main/ghostty-config.ts), so
-    // adopting it would relabel a project's rows with global provenance.
-    const projectPayload: GhosttyAppearancePayload = {
-      ...TERMINAL,
-      provenance: { theme: "volli-project" },
-      overlayPaths: { global: TERMINAL.overlayPaths.global, project: "/data/volli/p1/config" },
-    };
+  it("re-reads instead of swallowing the global broadcast inside a workspace", async () => {
+    // The broadcast has no project context and fires at every window at once;
+    // adopting it whole would overwrite this workspace's provenance and overlay
+    // paths with global ones, and fail silently.
     const { store, gateway } = freshStore({
-      state: vi.fn(async () => ({
-        ok: true as const,
-        value: statePayload({ projectId: "p1", terminal: projectPayload }),
-      })),
+      state: vi.fn(async () => ({ ok: true as const, value: statePayload({ projectId: "p1" }) })),
     });
-    await store.getState().hydrate("p1");
+    await store.getState().hydrate(projectScope({ canvas: TEAL }));
+    vi.mocked(gateway.state).mockClear();
 
-    store.getState().acceptGlobalTerminal({ ...TERMINAL, provenance: { theme: "ghostty" } });
-    await vi.waitFor(() => expect(gateway.state).toHaveBeenCalledTimes(2));
+    store.getState().acceptGlobalTerminal(TERMINAL);
+    await settle();
 
-    expect(gateway.state).toHaveBeenLastCalledWith({ projectId: "p1" });
-    expect(store.getState().terminal).toEqual(projectPayload);
+    expect(gateway.state).toHaveBeenCalledWith({ projectId: "p1" });
   });
 });
 
-describe("effectiveTheme", () => {
-  it("prefers the preview, then the project override, then the global theme", () => {
-    expect(
-      effectiveTheme({
-        preview: MIDNIGHT,
-        global: DEFAULT_THEME,
-        projectOverride: null,
-        customThemes: [],
-      }),
-    ).toEqual(MIDNIGHT);
-
-    expect(
-      effectiveTheme({ preview: null, global: MIDNIGHT, projectOverride: null, customThemes: [] }),
-    ).toEqual(MIDNIGHT);
-
-    const tinted = effectiveTheme({
-      preview: null,
-      global: DEFAULT_THEME,
-      projectOverride: { ...EMPTY_PROJECT_THEME_OVERRIDE, seed: "#3f9142" },
-      customThemes: [],
-    });
-    expect(tinted.seed).toBe("#3f9142");
-  });
-
-  it("resolves a project appThemeSlug against custom themes in the catalog", () => {
-    const state = {
-      preview: null,
-      global: DEFAULT_THEME,
-      projectOverride: { ...EMPTY_PROJECT_THEME_OVERRIDE, appThemeSlug: "sunset" },
-      customThemes: [SUNSET],
-    };
-
-    expect(effectiveTheme(state)).toBe(SUNSET);
-    expect(effectiveTheme(state)).toBe(SUNSET);
-  });
-
-  it("returns the IDENTICAL reference for unchanged state, on every path", () => {
-    // The invariant, not the value: this is read as a zustand v5 selector,
-    // i.e. through `useSyncExternalStore`, which compares snapshots with
-    // `Object.is` on every render. Any path that builds a fresh object here is
-    // an infinite render loop, not a wasted allocation. The auto-tint path is
-    // the one that has to build one, so it is the one that must be pinned.
-    const tinting = {
-      preview: null,
-      global: DEFAULT_THEME,
-      projectOverride: { ...EMPTY_PROJECT_THEME_OVERRIDE, seed: "#3f9142" },
-      customThemes: [],
-    };
-    expect(effectiveTheme(tinting)).toBe(effectiveTheme(tinting));
-
-    const previewing = {
-      preview: MIDNIGHT,
-      global: DEFAULT_THEME,
-      projectOverride: null,
-      customThemes: [],
-    };
-    expect(effectiveTheme(previewing)).toBe(effectiveTheme(previewing));
-
-    const plain = { preview: null, global: MIDNIGHT, projectOverride: null, customThemes: [] };
-    expect(effectiveTheme(plain)).toBe(effectiveTheme(plain));
-
-    const named = {
-      preview: null,
-      global: DEFAULT_THEME,
-      projectOverride: { ...EMPTY_PROJECT_THEME_OVERRIDE, appThemeSlug: DEFAULT_THEME.slug },
-      customThemes: [],
-    };
-    expect(effectiveTheme(named)).toBe(effectiveTheme(named));
-  });
-});
-
-describe("appliedTheme", () => {
-  const TINTED = { ...EMPTY_PROJECT_THEME_OVERRIDE, seed: "#3f9142" };
-
-  it("is the global theme for the global scope, whatever a project overrides", () => {
-    const state = {
-      global: MIDNIGHT,
-      projectId: "p1",
-      projectOverride: TINTED,
-      customThemes: [],
-    };
-
-    expect(appliedTheme(state, { kind: "global" })).toBe(MIDNIGHT);
-  });
-
-  it("resolves the project's own override for its scope", () => {
-    const state = {
-      global: DEFAULT_THEME,
-      projectId: "p1",
-      projectOverride: TINTED,
-      customThemes: [],
-    };
-
-    expect(appliedTheme(state, { kind: "project", projectId: "p1" }).seed).toBe("#3f9142");
-  });
-
-  it("resolves a project appThemeSlug against custom themes in the catalog", () => {
-    const state = {
-      global: DEFAULT_THEME,
-      projectId: "p1",
-      projectOverride: { ...EMPTY_PROJECT_THEME_OVERRIDE, appThemeSlug: "sunset" },
-      customThemes: [SUNSET],
-    };
-
-    expect(appliedTheme(state, { kind: "project", projectId: "p1" })).toBe(SUNSET);
-  });
-
-  it("never borrows another project's override", () => {
-    const state = {
-      global: MIDNIGHT,
-      projectId: "p1",
-      projectOverride: TINTED,
-      customThemes: [],
-    };
-
-    expect(appliedTheme(state, { kind: "project", projectId: "p2" })).toBe(MIDNIGHT);
-  });
-
-  it("ignores a running preview — it reports what is stored, not what is on screen", () => {
+describe("appliedCanvas", () => {
+  it("ignores a running preview — it says what is STORED", () => {
     const { store } = freshStore();
-    store.getState().startPreview(MIDNIGHT);
+    store.getState().hydrateGlobal(appState(PLUM, "dark"));
+    store.getState().startPreview(TEAL);
 
-    expect(appliedTheme(store.getState(), { kind: "global" })).toEqual(DEFAULT_THEME);
-    expect(effectiveTheme(store.getState())).toEqual(MIDNIGHT);
+    expect(appliedCanvas(store.getState(), { kind: "global" })).toEqual(PLUM);
+  });
+
+  it("reads a workspace's own canvas when that workspace is the one loaded", async () => {
+    const { store } = freshStore({
+      state: vi.fn(async () => ({ ok: true as const, value: statePayload({ projectId: "p1" }) })),
+    });
+    store.getState().hydrateGlobal(appState(PLUM, "dark"));
+    await store.getState().hydrate(projectScope({ canvas: TEAL }));
+
+    expect(appliedCanvas(store.getState(), { kind: "project", projectId: "p1" })).toEqual(TEAL);
+  });
+
+  it("never borrows another workspace's override", async () => {
+    // The store holds exactly one scope's override at a time, so an editor
+    // scoped to a workspace it isn't showing has nothing of that workspace's to
+    // read — the global canvas is the only honest answer.
+    const { store } = freshStore({
+      state: vi.fn(async () => ({ ok: true as const, value: statePayload({ projectId: "p1" }) })),
+    });
+    store.getState().hydrateGlobal(appState(PLUM, "dark"));
+    await store.getState().hydrate(projectScope({ canvas: TEAL }));
+
+    expect(appliedCanvas(store.getState(), { kind: "project", projectId: "p2" })).toEqual(PLUM);
   });
 });
 
-describe("createThemeStore() with the default deps", () => {
-  // No fakes injected: these exercise the real window.api wrappers and the
-  // real DOM apply path, which every other test in this file bypasses.
-  it("routes through window.api.theme and paints the document element", async () => {
-    const written = new Map<string, string>();
-    const attributes = new Map<string, string>();
-    // Scope-aware, and each scope resolves to a DIFFERENT theme: the eased
-    // repaint is armed inside the "did the paint actually change" guard, so a
-    // scope switch that lands on the same theme would (correctly) never reach
-    // the real `beginScopeRepaint`.
-    const state = vi.fn(async (input: { projectId?: string }) => ({
-      ok: true as const,
-      value: statePayload(
-        input.projectId === undefined
-          ? { theme: MIDNIGHT }
-          : { theme: DEFAULT_THEME, projectId: input.projectId },
-      ),
-    }));
-    const setGlobal = vi.fn(async (theme: ThemeDefinition, projectId: string | null) => ({
-      ok: true as const,
-      value: statePayload({ theme, projectId }),
-    }));
-    const setGlobalEditor = vi.fn(
-      async (editorThemeId: ShippedEditorThemeId | null, projectId: string | null) => ({
-        ok: true as const,
-        value: statePayload({ editorThemeId, projectId }),
-      }),
-    );
-    const setProject = vi.fn(async () => ({ ok: false as const, error: "unused" }));
-    const listCustomThemes = vi.fn(async () => ({ ok: true as const, themes: [SUNSET] }));
-    const saveCustomTheme = vi.fn(async () => ({
-      ok: true as const,
-      path: "/data/volli/themes/sunset.json",
-      themes: [SUNSET],
-    }));
-    const deleteCustomTheme = vi.fn(async () => ({ ok: true as const, themes: [] }));
-    const openCustomTheme = vi.fn(async () => ({ ok: true as const }));
-    vi.stubGlobal("window", {
-      api: {
-        theme: {
-          state,
-          setGlobal,
-          setGlobalEditor,
-          setProject,
-          listCustomThemes,
-          saveCustomTheme,
-          deleteCustomTheme,
-          openCustomTheme,
-        },
-      },
-    });
+describe("selector stability", () => {
+  it("hands back the state's own canvas reference, not a copy", () => {
+    // zustand v5 compares each render's snapshot with `Object.is`; a freshly
+    // constructed object here is an infinite render loop ("The result of
+    // getSnapshot should be cached"), not a wasted allocation. `activeTheme`
+    // itself builds one, which is exactly why components read these two
+    // narrow selectors instead of it.
+    const { store } = freshStore();
+    store.getState().hydrateGlobal(appState(TEAL, "dark"));
+
+    expect(effectiveCanvas(store.getState())).toBe(store.getState().globalCanvas);
+    expect(activeTheme(store.getState())).not.toBe(activeTheme(store.getState()));
+  });
+
+  it("returns a preview by reference too", () => {
+    const { store } = freshStore();
+    store.getState().hydrateGlobal(appState(PLUM, "dark"));
+
+    store.getState().startPreview(TEAL);
+
+    expect(effectiveCanvas(store.getState())).toBe(TEAL);
+  });
+});
+
+describe("the default gateway", () => {
+  /** Every `window.api.theme` verb the store's real deps reach for, recorded. */
+  function stubBridge() {
+    const calls: [string, unknown[]][] = [];
+    const verb =
+      (name: string) =>
+      (...args: unknown[]) => {
+        calls.push([name, args]);
+        return Promise.resolve({ ok: true as const, value: statePayload() });
+      };
+    // The real deps paint and arm the crossfade, so this needs a document as
+    // well as a bridge — the point of the case is that the wiring runs, not
+    // that it is bypassed.
     vi.stubGlobal("document", {
       documentElement: {
-        style: { setProperty: (name: string, value: string) => void written.set(name, value) },
-        setAttribute: (name: string, value: string) => void attributes.set(name, value),
-        removeAttribute: (name: string) => void attributes.delete(name),
+        style: { setProperty: () => {} },
+        classList: { toggle: () => {} },
+        setAttribute: () => {},
+        removeAttribute: () => {},
         offsetWidth: 0,
       },
     });
+    vi.stubGlobal("window", {
+      matchMedia: () => ({ matches: true, addEventListener: () => {} }),
+      api: {
+        theme: {
+          state: verb("state"),
+          setGlobalCanvas: verb("setGlobalCanvas"),
+          setGlobalAppearance: verb("setGlobalAppearance"),
+          setProjectCanvas: verb("setProjectCanvas"),
+          setProjectAppearance: verb("setProjectAppearance"),
+          setFirstPaint: verb("setFirstPaint"),
+          setGlobalEditor: verb("setGlobalEditor"),
+          setProject: verb("setProject"),
+        },
+      },
+    });
+    return calls;
+  }
+
+  it("routes every write to the channel of the same name", async () => {
+    // The default deps are the only untested seam between this store and the
+    // preload bridge, and a verb wired to the wrong channel fails silently — the
+    // write "succeeds" against something else.
+    const calls = stubBridge();
     const store = createThemeStore();
 
     await store.getState().hydrate();
-
-    expect(state).toHaveBeenCalledWith({});
-    // Exactly Midnight's generated --background — asserted against the
-    // generator (as window-theme.test.ts does) so the two can't drift, and
-    // still meaningful because nothing writes this key unless the store paints.
-    expect(written.get("--background")).toBe(generateThemeTokens(MIDNIGHT)["--background"]);
-    // Boot is not a transition: there is no previous look to ease from.
-    expect(attributes.has(SCOPE_TRANSITION_ATTRIBUTE)).toBe(false);
-
-    // Entering a project's scope IS one, and it arms the real DOM path (#69).
-    await store.getState().hydrate("p1");
-    expect(attributes.get(SCOPE_TRANSITION_ATTRIBUTE)).toBe(SCOPE_TRANSITION_VALUE);
-
-    // …and the bridge carries the scope the store is in, not a bare theme:
-    // the write is global, its answer is this project's state (#123).
-    await store.getState().setGlobalTheme(DEFAULT_THEME);
-    expect(setGlobal).toHaveBeenCalledWith(DEFAULT_THEME, "p1");
-
+    await store.getState().setGlobalCanvas(TEAL);
+    await store.getState().setGlobalAppearance("light");
+    await store.getState().setProjectCanvas("p1", TEAL);
+    await store.getState().setProjectAppearance("p1", "dark");
     await store.getState().setEditorTheme("nord");
-    expect(setGlobalEditor).toHaveBeenCalledWith("nord", "p1");
+    await store.getState().setProjectEditorTheme("p1", "dracula");
+    await settle();
 
-    store.setState({ preview: MIDNIGHT });
-    await store.getState().commitPreview({ kind: "project", projectId: "p1" });
-    expect(setProject).toHaveBeenCalled();
-
-    // The theme-file verbs go through the same bridge — each names a SLUG (or
-    // the whole definition), never a path.
-    expect(listCustomThemes).toHaveBeenCalled();
-    expect(store.getState().customThemes).toEqual([SUNSET]);
-    await store.getState().saveCustomTheme(SUNSET, { kind: "global" });
-    expect(saveCustomTheme).toHaveBeenCalledWith(SUNSET);
-    await store.getState().deleteCustomTheme(SUNSET.slug);
-    expect(deleteCustomTheme).toHaveBeenCalledWith(SUNSET.slug);
-    await store.getState().openCustomThemeFile(SUNSET.slug);
-    expect(openCustomTheme).toHaveBeenCalledWith(SUNSET.slug);
+    const names = new Set(calls.map(([name]) => name));
+    expect(names).toEqual(
+      new Set([
+        "state",
+        "setGlobalCanvas",
+        "setGlobalAppearance",
+        "setProjectCanvas",
+        "setProjectAppearance",
+        "setFirstPaint",
+        "setGlobalEditor",
+        "setProject",
+      ]),
+    );
+    expect(calls.find(([name]) => name === "setProjectCanvas")?.[1]).toEqual(["p1", TEAL]);
   });
 });
 
-describe("the user's own themes", () => {
-  const MINE = SUNSET;
-
-  it("loads the catalog when the authored state is hydrated", async () => {
-    const { store, gateway } = freshStore();
-
-    await store.getState().hydrate();
-
-    expect(gateway.listCustomThemes).toHaveBeenCalled();
-    expect(store.getState().customThemes).toEqual([MINE]);
-  });
-
-  it("previews a draft without writing anything, however far the seed moves", () => {
-    const { store, gateway, paint } = freshStore();
-
-    for (const seed of ["#ff0000", "#00ff00", "#0000ff"]) {
-      store.getState().startPreview({ ...MINE, seed });
-    }
-
-    expect(paint.applied.map((theme) => theme.seed)).toEqual(["#ff0000", "#00ff00", "#0000ff"]);
-    expect(gateway.saveCustomTheme).not.toHaveBeenCalled();
-    expect(gateway.setGlobal).not.toHaveBeenCalled();
-  });
-
-  it("restores the pre-edit theme when the edit is abandoned", () => {
-    const { store, paint } = freshStore();
-
-    store.getState().startPreview({ ...MINE, seed: "#ff0000" });
-    store.getState().cancelPreview();
-
-    expect(paint.applied.at(-1)).toEqual(DEFAULT_THEME);
-    expect(store.getState().global).toEqual(DEFAULT_THEME);
-  });
-
-  it("saves a theme to its file AND applies it, adopting the catalog the write hands back", async () => {
-    const { store, gateway } = freshStore();
-    store.getState().startPreview(MINE);
-
-    const saved = await store.getState().saveCustomTheme(MINE, { kind: "global" });
-
-    expect(saved).toBe(true);
-    expect(gateway.saveCustomTheme).toHaveBeenCalledWith(MINE);
-    expect(gateway.setGlobal).toHaveBeenCalledWith(MINE, null);
-    expect(store.getState().customThemes).toEqual([MINE]);
-  });
-
-  it("surfaces a failed save and leaves the theme unapplied", async () => {
-    const { store, gateway } = freshStore({
-      saveCustomTheme: vi.fn(async () => ({ ok: false as const, error: "disk full" })),
+describe("carrying the 013 row through a canvas write", () => {
+  it("keeps the workspace's editor override when its canvas moves", async () => {
+    // The two halves live in different places and only this store sees them as
+    // one override — dropping the editor id while rewriting the canvas would
+    // silently un-pin Monaco for that workspace.
+    const { store } = freshStore({
+      state: vi.fn(async () => ({
+        ok: true as const,
+        value: statePayload({
+          projectId: "p1",
+          projectOverride: {
+            appThemeSlug: null,
+            seed: null,
+            terminalThemeName: "Nord",
+            editorThemeId: "dracula",
+          },
+        }),
+      })),
     });
-    store.getState().startPreview(MINE);
+    store.getState().hydrateGlobal(appState(PLUM, "dark"));
+    await store.getState().hydrate(projectScope());
 
-    const saved = await store.getState().saveCustomTheme(MINE, { kind: "global" });
+    await store.getState().setProjectCanvas("p1", TEAL);
 
-    expect(saved).toBe(false);
-    expect(gateway.setGlobal).not.toHaveBeenCalled();
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
-      "Couldn't save the theme: disk full",
-      expect.anything(),
-    );
+    expect(store.getState().projectOverride).toEqual({
+      canvas: TEAL,
+      appearance: null,
+      terminalThemeName: "Nord",
+      editorThemeId: "dracula",
+    });
   });
 
-  it("keeps customThemes and restores preview when the file write succeeds but apply fails", async () => {
+  it("rolls a failed appearance write back to the stored override", async () => {
+    const { store } = freshStore({
+      state: vi.fn(async () => ({ ok: true as const, value: statePayload({ projectId: "p1" }) })),
+      setProjectAppearance: vi.fn(async () => ({ ok: false as const, error: "disk full" })),
+    });
+    store.getState().hydrateGlobal(appState(PLUM, "dark"));
+    await store.getState().hydrate(projectScope({ appearance: "light" }));
+
+    expect(await store.getState().setProjectAppearance("p1", "dark")).toBe(false);
+
+    expect(effectiveAppearance(store.getState())).toBe("light");
+  });
+});
+
+describe("overlapping and out-of-scope writes", () => {
+  it("lets the last editor write win when two overlap", async () => {
+    // The writes are queued, so a superseded one must not put its own id back
+    // into the state the later one already moved past.
+    const slow = deferred<{ ok: true; value: ThemeStatePayload }>();
+    const setGlobalEditor = vi
+      .fn<ThemeGateway["setGlobalEditor"]>()
+      .mockImplementationOnce(() => slow.promise)
+      .mockImplementation(async (editorThemeId) => ({
+        ok: true as const,
+        value: statePayload({ editorThemeId }),
+      }));
+    const { store } = freshStore({ setGlobalEditor });
+
+    const first = store.getState().setEditorTheme("nord");
+    const second = store.getState().setEditorTheme("dracula");
+    slow.resolve({ ok: true, value: statePayload({ editorThemeId: "nord" }) });
+    await Promise.all([first, second]);
+
+    expect(store.getState().editorThemeId).toBe("dracula");
+  });
+
+  it("puts a workspace's editor back to inheriting", async () => {
+    const { store, gateway } = freshStore({
+      state: vi.fn(async () => ({ ok: true as const, value: statePayload({ projectId: "p1" }) })),
+    });
+    await store.getState().hydrate(projectScope());
+
+    expect(await store.getState().setProjectEditorTheme("p1", null)).toBe(true);
+
+    // An all-inheriting override is stored as no override at all.
+    expect(gateway.setProject).toHaveBeenCalledWith("p1", null);
+  });
+
+  it("reports a failed workspace editor write rather than claiming success", async () => {
+    const { store } = freshStore({
+      setProject: vi.fn(async () => ({ ok: false as const, error: "no such project" })),
+    });
+
+    expect(await store.getState().setProjectEditorTheme("p1", "nord")).toBe(false);
+  });
+
+  it("persists an appearance for a workspace it is not showing, without repainting", async () => {
     const { store, gateway, paint } = freshStore({
-      setGlobal: vi.fn(async () => ({ ok: false as const, error: "disk full" })),
+      state: vi.fn(async () => ({ ok: true as const, value: statePayload({ projectId: "p1" }) })),
     });
+    store.getState().hydrateGlobal(appState(PLUM, "dark"));
+    await store.getState().hydrate(projectScope());
+    const before = paint.painted.length;
 
-    const saved = await store.getState().saveCustomTheme(MINE, { kind: "global" });
+    expect(await store.getState().setProjectAppearance("p2", "light")).toBe(true);
 
-    expect(saved).toBe(false);
-    expect(gateway.saveCustomTheme).toHaveBeenCalledWith(MINE);
-    expect(gateway.setGlobal).toHaveBeenCalledWith(MINE, null);
-    expect(store.getState().customThemes).toEqual([MINE]);
-    expect(store.getState().preview).toEqual(MINE);
-    expect(store.getState().global).toEqual(DEFAULT_THEME);
-    expect(effectiveTheme(store.getState())).toEqual(MINE);
-    expect(paint.applied.at(-1)).toEqual(MINE);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
-      "Couldn't save the theme: disk full",
-      expect.anything(),
-    );
-  });
-
-  it("deletes through the slug and adopts the fresh catalog", async () => {
-    const { store, gateway } = freshStore({
-      deleteCustomTheme: vi.fn(async () => ({ ok: true as const, themes: [] })),
-    });
-    await store.getState().hydrate();
-
-    const deleted = await store.getState().deleteCustomTheme("sunset");
-
-    expect(deleted).toBe(true);
-    expect(gateway.deleteCustomTheme).toHaveBeenCalledWith("sunset");
-    expect(store.getState().customThemes).toEqual([]);
-  });
-
-  it("surfaces a failed delete and keeps the theme in the catalog", async () => {
-    const { store } = freshStore({
-      deleteCustomTheme: vi.fn(async () => ({ ok: false as const, error: "file locked" })),
-    });
-    await store.getState().hydrate();
-
-    expect(await store.getState().deleteCustomTheme("sunset")).toBe(false);
-    expect(store.getState().customThemes).toEqual([MINE]);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
-      "Couldn't delete the theme: file locked",
-      expect.anything(),
-    );
-  });
-
-  it("opens a theme's file through its slug, surfacing a failure to open", async () => {
-    const { store, gateway } = freshStore({
-      openCustomTheme: vi.fn(async () => ({ ok: false as const, error: "no editor" })),
-    });
-
-    expect(await store.getState().openCustomThemeFile("sunset")).toBe(false);
-    expect(gateway.openCustomTheme).toHaveBeenCalledWith("sunset");
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
-      "Couldn't open the theme file: no editor",
-      expect.anything(),
-    );
-  });
-
-  it("toasts a catalog read failure rather than quietly showing no themes", async () => {
-    const { store } = freshStore({
-      listCustomThemes: vi.fn(async () => ({ ok: false as const, error: "unreadable" })),
-    });
-
-    await store.getState().loadCustomThemes();
-
-    expect(store.getState().customThemes).toEqual([]);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
-      "Couldn't load your themes: unreadable",
-      expect.anything(),
-    );
+    expect(gateway.setProjectAppearance).toHaveBeenCalledWith("p2", "light");
+    expect(paint.painted).toHaveLength(before);
+    expect(effectiveAppearance(store.getState())).toBe("dark");
   });
 });

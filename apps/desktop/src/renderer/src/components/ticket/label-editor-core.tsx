@@ -171,6 +171,9 @@ export function LabelEditorCore({
             }
           }}
           placeholder={addPlaceholder}
+          // `dark:bg-transparent` only looks redundant next to `bg-transparent`:
+          // Input carries `dark:bg-input/30`, which outranks an unprefixed
+          // class, so the dark variant is what actually strips the fill there.
           className="h-8 w-full rounded-none border-0 bg-transparent px-3 text-sm shadow-none focus-visible:ring-0 dark:bg-transparent"
         />
         {value.length > 0 ? (

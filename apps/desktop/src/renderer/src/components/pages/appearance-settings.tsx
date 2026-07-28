@@ -5,14 +5,10 @@ import { FileTextIcon } from "@phosphor-icons/react/dist/csr/FileText";
 import { MinusIcon } from "@phosphor-icons/react/dist/csr/Minus";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { SlidersIcon } from "@phosphor-icons/react/dist/csr/Sliders";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { getBuiltinTheme } from "restty";
-import { type ThemeDefinition } from "@volli/shared";
 
 import { SettingsRow, SettingsSection } from "@renderer/components/pages/settings-shell";
-import { ThemeEditor } from "@renderer/components/theme/theme-editor";
-import { ThemePicker } from "@renderer/components/theme/theme-picker";
 import {
   editorThemeItems,
   FALLBACK_TERMINAL_THEME_LABEL,
@@ -30,20 +26,10 @@ import {
   planEditorThemePreview,
   type EditorThemeDisplay,
 } from "@renderer/components/theme/editor-settings-model";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@renderer/components/ui/alert-dialog";
 import { Button } from "@renderer/components/ui/button";
 import { listEditorThemes } from "@renderer/editor/editor-theme-catalog";
 import { writeThrough } from "@renderer/stores/mutate";
-import { useThemeStore, type ThemeScope } from "@renderer/stores/theme";
+import { useThemeStore } from "@renderer/stores/theme";
 import { previewTerminalTheme } from "@renderer/terminal/appearance";
 import { DEFAULT_TERMINAL_FONT_SIZE } from "@renderer/terminal/appearance-model";
 import { listLocalFontFamilies } from "@renderer/terminal/local-fonts";
@@ -132,145 +118,34 @@ export function AppearanceSettings() {
   );
 }
 
-/** Settings edits the theme every project inherits, so its scope is the global one. */
-const GLOBAL_SCOPE: ThemeScope = { kind: "global" };
-
-/** What the editor is open on: which theme, how, and whether the name is the point. */
-interface OpenEdit {
-  source: ThemeDefinition;
-  focusName: boolean;
-  mode: "edit" | "duplicate";
-}
-
 /**
- * The app-surface library: the picker, and the editor behind it.
+ * Placeholder for the canvas editor.
  *
- * The two are one surface in two modes rather than two panels side by side.
- * Both drive the SAME live preview — the whole app repaints — so showing them
- * together would mean two controls arguing over what is on screen: moving the
- * picker's cursor would stomp the seed you were dragging, and hovering away
- * would revert it. One at a time makes "what am I looking at" answerable.
+ * The seed-based picker and its theme-file editor stood here and are gone with
+ * the system behind them; the stop editor that replaces them is the next change
+ * on this branch, and it lands in exactly this slot. A panel that says so is the
+ * honest interim — an empty section would read as a broken pane, and half a
+ * control would be a surface arguing with the window it cannot yet change.
  */
 function AppThemeSection() {
-  const applied = useThemeStore((state) => state.global);
-  const [editing, setEditing] = React.useState<OpenEdit | null>(null);
-  const [deleting, setDeleting] = React.useState<ThemeDefinition | null>(null);
-
-  // The theme files are hand-editable (#71), so entering this pane re-reads
-  // them rather than trusting whatever boot last saw.
-  React.useEffect(() => {
-    void useThemeStore.getState().loadCustomThemes();
-  }, []);
-
-  const edit = (
-    source: ThemeDefinition,
-    options: { focusName?: boolean; duplicate?: boolean } = {},
-  ): void =>
-    setEditing({
-      source,
-      focusName: options.focusName ?? false,
-      mode: options.duplicate ? "duplicate" : "edit",
-    });
-
   return (
     <SettingsSection
       title="App theme"
       icon={PaletteIcon}
-      action={
-        editing === null ? (
-          <Button variant="outline" size="sm" onClick={() => edit(applied)}>
-            <SlidersIcon weight="fill" />
-            Customize
-          </Button>
-        ) : null
-      }
+      description="The gradient this window is painted with, and whether it renders light or dark."
     >
-      {editing === null ? (
-        // Named so a test can say WHICH picker it means: this pane mounts the
-        // editor and terminal combo boxes too, and their lists carry options
-        // with the same theme names.
-        <div
-          data-testid="appearance-theme-picker"
-          className="overflow-hidden rounded-lg border border-border bg-background"
-        >
-          <ThemePicker
-            autoFocus={false}
-            // Duplicate always opens on a new copy; Rename lands on the name field.
-            onDuplicate={(theme) => edit(theme, { duplicate: true })}
-            onRename={(theme) => edit(theme, { focusName: true })}
-            onDelete={setDeleting}
-            onOpenFile={(theme) => void useThemeStore.getState().openCustomThemeFile(theme.slug)}
-          />
-        </div>
-      ) : (
-        <ThemeEditor
-          key={`${editing.mode}:${editing.source.slug}`}
-          source={editing.source}
-          focusName={editing.focusName}
-          mode={editing.mode}
-          scope={GLOBAL_SCOPE}
-          onClose={() => setEditing(null)}
-        />
-      )}
-      <DeleteThemeDialog theme={deleting} onOpenChange={() => setDeleting(null)} />
+      <div
+        data-testid="appearance-canvas-placeholder"
+        className="rounded-lg border border-border bg-background px-4 py-6 text-center"
+      >
+        <p className="text-sm text-foreground">The canvas editor lands next.</p>
+        <p className="mt-1 text-ui text-muted-foreground">
+          Volli is painted from a canvas you author — a gradient, its saturation and its texture —
+          which renders correctly in both light and dark. The controls for it arrive in the next
+          change; until then the window wears the shipped default.
+        </p>
+      </div>
     </SettingsSection>
-  );
-}
-
-/**
- * Deleting a theme deletes a FILE the user wrote, and the ⋯ menu it is reached
- * from is one mis-aimed click away from Open file — so it confirms, and names
- * the theme it is about to remove.
- */
-function DeleteThemeDialog({
-  theme,
-  onOpenChange,
-}: {
-  theme: ThemeDefinition | null;
-  onOpenChange(open: boolean): void;
-}) {
-  const [pending, setPending] = React.useState(false);
-
-  return (
-    <AlertDialog
-      open={theme !== null}
-      onOpenChange={(open) => {
-        if (!open) setPending(false);
-        onOpenChange(open);
-      }}
-    >
-      <AlertDialogContent size="sm">
-        <AlertDialogHeader>
-          <AlertDialogTitle>Delete {theme?.name}?</AlertDialogTitle>
-          <AlertDialogDescription>
-            Its file is removed from your themes folder. Anything already wearing this theme keeps
-            the colors it has.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            disabled={pending}
-            onClick={(event) => {
-              // Kept open across the write, so a failed delete leaves the
-              // confirm (and its toast) rather than closing as if it worked.
-              event.preventDefault();
-              if (theme === null) return;
-              setPending(true);
-              void useThemeStore
-                .getState()
-                .deleteCustomTheme(theme.slug)
-                .then((deleted) => {
-                  setPending(false);
-                  if (deleted) onOpenChange(false);
-                });
-            }}
-          >
-            Delete theme
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
   );
 }
 
@@ -285,8 +160,8 @@ function EditorThemeOriginBadge({ display }: { display: EditorThemeDisplay }) {
         <Button
           variant="ghost"
           size="icon-xs"
-          aria-label="Reset editor theme to match app theme"
-          title="Reset to match app theme"
+          aria-label="Reset editor theme to the default"
+          title="Reset to the default"
           onClick={() => void useThemeStore.getState().setEditorTheme(null)}
         >
           <ArrowCounterClockwiseIcon />
@@ -303,19 +178,18 @@ function EditorThemeOriginBadge({ display }: { display: EditorThemeDisplay }) {
  * a row paints Monaco via {@link useThemeStore.startEditorPreview} and writes
  * nothing; picking one persists through {@link useThemeStore.setEditorTheme};
  * closing the menu any other way restores through
- * {@link useThemeStore.endEditorPreview} — preview-aware (`effectiveTheme`),
- * never a stale closure over the pre-commit resolved id, and never a direct
- * Monaco call that would desync `paintedEditor`.
+ * {@link useThemeStore.endEditorPreview} — never a stale closure over the
+ * pre-commit resolved id, and never a direct Monaco call that would desync
+ * `paintedEditor`.
  */
 function EditorThemeRow() {
   const editorThemeId = useThemeStore((state) => state.editorThemeId);
-  const appThemeSlug = useThemeStore((state) => state.global.slug);
   const themes = React.useMemo(() => listEditorThemes(), []);
   const items = React.useMemo(() => editorThemeItems(), []);
 
   const display = React.useMemo(
-    () => buildEditorThemeDisplay({ editorThemeId, appThemeSlug, themes }),
-    [editorThemeId, appThemeSlug, themes],
+    () => buildEditorThemeDisplay({ editorThemeId, themes }),
+    [editorThemeId, themes],
   );
 
   return (
@@ -341,8 +215,8 @@ function EditorThemeRow() {
 }
 
 /**
- * Puts Monaco back on the theme implied by the **current** theme store —
- * effective (preview-aware) app slug + committed editorThemeId. Module-level
+ * Puts Monaco back on the theme implied by the **current** theme store — the
+ * committed editorThemeId, or the shipped default. Module-level
  * so the unmount-only effect stays exhaustive-deps clean (mirrors
  * TerminalThemeRow's `endPreview`).
  */

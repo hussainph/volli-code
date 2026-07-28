@@ -92,7 +92,21 @@ export interface ProjectsGateway {
 export type SelectedProjectListener = (projectId: string | null) => void;
 
 const defaultSelectedProjectListener: SelectedProjectListener = (projectId) => {
-  void useThemeStore.getState().hydrate(projectId);
+  if (projectId === null) {
+    void useThemeStore.getState().hydrate();
+    return;
+  }
+  // The workspace's own canvas and appearance are columns on the row this store
+  // already holds (migration 014), so they are handed OVER rather than fetched.
+  // The theme store must not keep a second copy of the projects list to look
+  // them up in, and a project that has just been removed has no row to read —
+  // hence the null-safe fallback to inheriting.
+  const project = useProjectsStore.getState().projects.find(({ id }) => id === projectId);
+  void useThemeStore.getState().hydrate({
+    projectId,
+    canvas: project?.themeCanvas ?? null,
+    appearance: project?.themeAppearance ?? null,
+  });
 };
 
 const defaultGateway: ProjectsGateway = {

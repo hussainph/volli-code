@@ -77,17 +77,14 @@ export function refreshMonacoEditorTheme(themeId: string): void {
 }
 
 /**
- * End an Appearance Editor preview by resolving from **live** store inputs
- * (committed `editorThemeId` + app slug) and painting that id. Callers must
- * read the store at call time — never close over a stale resolved id — so a
- * successful commit then restore lands on the committed catalog theme.
+ * End an Appearance Editor preview by resolving from the **live** committed
+ * `editorThemeId` and painting that id. Callers must read the store at call
+ * time — never close over a stale resolved id — so a successful commit then
+ * restore lands on the committed catalog theme.
  *
  * @returns the catalog id painted into Monaco
  */
-export function restoreEditorThemeFromState(input: {
-  editorThemeId: string | null;
-  appThemeSlug: string;
-}): string {
+export function restoreEditorThemeFromState(input: { editorThemeId: string | null }): string {
   const themeId = resolveEditorThemeId(input);
   refreshMonacoEditorTheme(themeId);
   return themeId;
@@ -134,7 +131,7 @@ export function applyMonacoThemeForDiffEditor(
 ): void {
   let resolved: string;
   if (themeId !== undefined && themeId.length > 0) {
-    resolved = resolveEditorThemeId({ editorThemeId: themeId, appThemeSlug: null });
+    resolved = resolveEditorThemeId({ editorThemeId: themeId });
     refreshMonacoEditorTheme(resolved);
   } else {
     ensureMonacoEditorTheme(DEFAULT_EDITOR_THEME_ID);

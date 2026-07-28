@@ -73,19 +73,51 @@ export interface ScopeRepaintInput {
   from: string | null;
   /** The project the incoming payload belongs to. */
   to: string | null;
+  /** The RESOLVED appearance before this repaint — `auto` already answered. */
+  fromAppearance?: ResolvedAppearance;
+  /** The resolved appearance after it. */
+  toAppearance?: ResolvedAppearance;
 }
 
+/** `auto` already answered; mirrors `@volli/shared`'s type without importing the barrel. */
+type ResolvedAppearance = "light" | "dark";
+
 /**
- * Whether this repaint is a SCOPE change, and therefore the one that eases.
+ * Whether this repaint is one of the two whole-window changes that ease.
  *
- * Two things are deliberately excluded. The first paint is not a transition —
- * there is no previous look to come from, and easing it would make boot look
- * like a slow fade-in of an app that had already rendered. And a repaint within
- * the same scope (picking a theme, committing an edit, a preview) is a direct
- * response to a click or a keystroke, where instant IS the correct feedback.
+ * A **scope change** is the first: switching workspaces can move every color at
+ * once, and the crossfade is what tells you the window now belongs to a
+ * different project.
+ *
+ * A **light↔dark flip** is the second, and it was missed while the pin was on.
+ * It is a whole-window repaint with no scope change at all — the same project,
+ * the same canvas, every surface inverted — so keying only on `projectId` would
+ * hard-cut precisely the transition Apple's accessibility guidance singles out
+ * for easing (HIG: ease dark↔light theme changes). It reaches here from three
+ * places: the user picking a mode, a workspace whose override differs from the
+ * global one coming into scope, and the system flipping under `auto`.
+ *
+ * Two things stay excluded. The first paint is not a transition — there is no
+ * previous look to come from, and easing it would make boot look like a slow
+ * fade-in of an app that had already rendered. And a repaint within the same
+ * scope at the same mode (authoring a gradient, a live preview) is a direct
+ * response to a drag or a keystroke, where instant IS the correct feedback.
  */
-export function shouldEaseScopeRepaint({ hydrated, from, to }: ScopeRepaintInput): boolean {
-  return hydrated && from !== to;
+export function shouldEaseScopeRepaint({
+  hydrated,
+  from,
+  to,
+  fromAppearance,
+  toAppearance,
+}: ScopeRepaintInput): boolean {
+  if (!hydrated) return false;
+  if (from !== to) return true;
+  // Undefined on either side means the caller is not tracking appearance, which
+  // is not the same as "it did not change" — but it is the only honest answer
+  // available, and it preserves the pre-appearance behaviour exactly.
+  return (
+    fromAppearance !== undefined && toAppearance !== undefined && fromAppearance !== toAppearance
+  );
 }
 
 /**

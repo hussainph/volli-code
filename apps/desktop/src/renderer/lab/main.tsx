@@ -37,27 +37,20 @@ import "@renderer/typeset.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
-import { watchSystemAppearance } from "./arc/paint";
 import { installFakeApi } from "./fake-api";
 import { LabShell } from "./shell";
-import { applyStoredLabTheme } from "./theme-choice";
 
 // The floor: an all-stubs bridge, so anything reaching for `window.api` before
 // a scratch is chosen finds a stub rather than an undefined global. The shell
 // re-installs with the active scratch's own overrides on every activation.
 installFakeApi();
 
-// The app hydrates its theme from SQLite at boot; the lab restores the theme
-// the Theming scratch last committed, plus the canvas the Canvas scratch last
-// committed. Without this a reload would silently drop back to the
-// `globals.css` default while the pickers still claimed otherwise.
-applyStoredLabTheme();
-
-// Here rather than at import time in `arc/paint.ts`: scratches are imported
-// eagerly, so a module-scope listener would install itself regardless of which
-// scratch is on screen (see scratch.ts). An `auto` canvas repaints when macOS
-// flips appearance; every other mode ignores it.
-watchSystemAppearance();
+// No theme bootstrap of its own any more. The app is painted from a canvas the
+// generated `globals.css` blocks carry with no JS at all, so the lab renders the
+// shipped default the moment the stylesheet lands — which is exactly what the
+// app's own first paint does. The lab's `volli-lab:` theme and canvas keys went
+// with the picker and the canvas scratch that owned them; a dev-tool preference
+// that outlived its editor would just be a way to make the lab lie.
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

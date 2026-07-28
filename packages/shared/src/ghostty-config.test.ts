@@ -5,6 +5,7 @@ import {
   mergeGhosttyConfigTexts,
   parseGhosttyTerminalPrefs,
   resolveGhosttyConfigText,
+  resolveGhosttyThemeName,
 } from "./ghostty-config";
 
 /** The all-unset result, so tests can assert full objects concisely. */
@@ -17,6 +18,26 @@ const EMPTY_PREFS: GhosttyTerminalPrefs = {
   mouseReporting: null,
   macosOptionAsAlt: null,
 };
+
+describe("resolveGhosttyThemeName", () => {
+  it("takes the half matching the appearance", () => {
+    const pair = "light:Rose Pine Dawn,dark:Rose Pine";
+    expect(resolveGhosttyThemeName(pair, "light")).toBe("Rose Pine Dawn");
+    expect(resolveGhosttyThemeName(pair, "dark")).toBe("Rose Pine");
+  });
+
+  // A user who wrote only one half meant it: falling through to the raw
+  // `light:Rose Pine Dawn` string would name a theme that cannot exist.
+  it("falls back to the other half when the pair is one-sided", () => {
+    expect(resolveGhosttyThemeName("light:Rose Pine Dawn", "dark")).toBe("Rose Pine Dawn");
+    expect(resolveGhosttyThemeName("dark:Rose Pine", "light")).toBe("Rose Pine");
+  });
+
+  it("uses an unprefixed value verbatim, in either appearance", () => {
+    expect(resolveGhosttyThemeName("Nord", "light")).toBe("Nord");
+    expect(resolveGhosttyThemeName("Nord", "dark")).toBe("Nord");
+  });
+});
 
 describe("parseGhosttyTerminalPrefs", () => {
   it("ignores comments and blank lines", () => {
@@ -106,7 +127,16 @@ theme =
     expect(parseGhosttyTerminalPrefs(text).themeName).toBeNull();
   });
 
-  it("picks the dark variant from a light/dark theme pair", () => {
+  it("picks the half of a theme pair matching the appearance it was given", () => {
+    const pair = "theme = light:Rose Pine Dawn,dark:Rose Pine";
+    expect(parseGhosttyTerminalPrefs(pair, "dark").themeName).toBe("Rose Pine");
+    expect(parseGhosttyTerminalPrefs(pair, "light").themeName).toBe("Rose Pine Dawn");
+  });
+
+  // The app was dark-only when this parser was written, so the default keeps
+  // that behavior for the one caller that cannot name a mode yet (main's config
+  // read). Pinned so deleting the default is a deliberate, visible change.
+  it("defaults to the dark half when no appearance is named", () => {
     expect(parseGhosttyTerminalPrefs("theme = light:Rose Pine Dawn,dark:Rose Pine").themeName).toBe(
       "Rose Pine",
     );
@@ -118,14 +148,9 @@ theme =
     ).toBe("Rose Pine");
   });
 
-  it("falls back to the light variant when only light: is present", () => {
-    expect(parseGhosttyTerminalPrefs("theme = light:Rose Pine Dawn").themeName).toBe(
-      "Rose Pine Dawn",
-    );
-  });
-
-  it("uses a plain theme value as-is", () => {
-    expect(parseGhosttyTerminalPrefs("theme = Nord").themeName).toBe("Nord");
+  it("uses a plain theme value as-is in both appearances", () => {
+    expect(parseGhosttyTerminalPrefs("theme = Nord", "dark").themeName).toBe("Nord");
+    expect(parseGhosttyTerminalPrefs("theme = Nord", "light").themeName).toBe("Nord");
   });
 
   it("skips entries without a light:/dark: prefix inside a variant pair", () => {

@@ -46,11 +46,62 @@ describe("shouldEaseScopeRepaint", () => {
     expect(shouldEaseScopeRepaint({ hydrated: true, from: "p1", to: null })).toBe(true);
   });
 
-  it("cuts straight to the new theme within one scope", () => {
-    // Picking a theme, committing an edit, ending a preview: every one of
+  it("cuts straight to the new canvas within one scope", () => {
+    // Dragging a stop, committing an edit, ending a preview: every one of
     // these is a direct answer to a click, where instant IS the feedback.
     expect(shouldEaseScopeRepaint({ hydrated: true, from: "p1", to: "p1" })).toBe(false);
     expect(shouldEaseScopeRepaint({ hydrated: true, from: null, to: null })).toBe(false);
+  });
+
+  it("eases a light↔dark flip inside one scope", () => {
+    // The case the projectId-only trigger missed entirely while dark was
+    // pinned: same project, same canvas, every surface inverted. It reaches
+    // here from a mode pick, from a workspace whose override differs coming
+    // into scope, and from the system flipping under `auto`.
+    expect(
+      shouldEaseScopeRepaint({
+        hydrated: true,
+        from: "p1",
+        to: "p1",
+        fromAppearance: "dark",
+        toAppearance: "light",
+      }),
+    ).toBe(true);
+    expect(
+      shouldEaseScopeRepaint({
+        hydrated: true,
+        from: null,
+        to: null,
+        fromAppearance: "light",
+        toAppearance: "dark",
+      }),
+    ).toBe(true);
+  });
+
+  it("cuts when the mode is unchanged, however the canvas moved", () => {
+    expect(
+      shouldEaseScopeRepaint({
+        hydrated: true,
+        from: "p1",
+        to: "p1",
+        fromAppearance: "dark",
+        toAppearance: "dark",
+      }),
+    ).toBe(false);
+  });
+
+  it("never eases the first paint, mode flip or not", () => {
+    // A boot that resolves to light has no dark frame to come from — the mode
+    // class was stamped by preload before the document painted at all.
+    expect(
+      shouldEaseScopeRepaint({
+        hydrated: false,
+        from: null,
+        to: null,
+        fromAppearance: "dark",
+        toAppearance: "light",
+      }),
+    ).toBe(false);
   });
 
   it("never eases the first paint", () => {

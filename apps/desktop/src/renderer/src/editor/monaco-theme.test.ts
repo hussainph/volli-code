@@ -26,30 +26,24 @@ describe("restoreEditorThemeFromState", () => {
     await vi.waitFor(() => expect(setTheme).toHaveBeenCalledWith("dracula"));
     setTheme.mockClear();
 
-    const painted = restoreEditorThemeFromState({
-      editorThemeId: "nord",
-      appThemeSlug: "ember",
-    });
+    const painted = restoreEditorThemeFromState({ editorThemeId: "nord" });
 
     expect(painted).toBe("nord");
     await vi.waitFor(() => expect(setTheme).toHaveBeenCalledWith("nord"));
     expect(activeMonacoEditorThemeId()).toBe("nord");
   });
 
-  it("restores the live resolved id when selection is empty (automatic from app slug)", async () => {
+  it("restores the shipped default when nothing is pinned", async () => {
     const setTheme = vi.fn();
     bindMonacoEditorThemeHost({ editor: { setTheme } });
     refreshMonacoEditorTheme("dracula");
     await vi.waitFor(() => expect(setTheme).toHaveBeenCalledWith("dracula"));
     setTheme.mockClear();
 
-    const painted = restoreEditorThemeFromState({
-      editorThemeId: null,
-      appThemeSlug: "midnight",
-    });
+    const painted = restoreEditorThemeFromState({ editorThemeId: null });
 
-    expect(painted).toBe("tokyo-night");
-    await vi.waitFor(() => expect(setTheme).toHaveBeenCalledWith("tokyo-night"));
+    expect(painted).toBe("one-dark-pro");
+    await vi.waitFor(() => expect(setTheme).toHaveBeenCalledWith("one-dark-pro"));
   });
 });
 

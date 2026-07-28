@@ -102,7 +102,11 @@ describe("overlayGhosttyTheme", () => {
 
 describe("resolveGhosttyThemeChoice", () => {
   it("resolves a builtin theme by name (the owner's real config case)", () => {
-    const theme = resolveGhosttyThemeChoice(payload({ themeName: "Front End Delight" }), FALLBACK);
+    const theme = resolveGhosttyThemeChoice(
+      payload({ themeName: "Front End Delight" }),
+      FALLBACK,
+      "dark",
+    );
     expect(theme.colors.background).toEqual({ r: 27, g: 28, b: 29 });
   });
 
@@ -110,12 +114,53 @@ describe("resolveGhosttyThemeChoice", () => {
     const theme = resolveGhosttyThemeChoice(
       payload({ themeName: "Front End Delight" }, { themeSource: "background = #123456" }),
       FALLBACK,
+      "dark",
     );
     expect(theme.colors.background).toEqual({ r: 0x12, g: 0x34, b: 0x56 });
   });
 
   it("falls back to the token theme for an unknown name", () => {
-    const theme = resolveGhosttyThemeChoice(payload({ themeName: "No Such Theme" }), FALLBACK);
+    const theme = resolveGhosttyThemeChoice(
+      payload({ themeName: "No Such Theme" }),
+      FALLBACK,
+      "dark",
+    );
+    expect(theme.colors.background).toEqual(FALLBACK.colors.background);
+  });
+
+  // main resolves `theme = light:X,dark:Y` without knowing the mode, so the
+  // half it picked is a guess; the live appearance re-picks from the config text
+  // that travels with the payload. Without this a light-mode window renders the
+  // user's DARK ghostty theme and nothing anywhere reports a problem.
+  it("re-picks the half of a light/dark theme pair that matches the live mode", () => {
+    const paired = payload(
+      { themeName: "Nord" },
+      { configText: "theme = light:GitHub Light Default,dark:Nord" },
+    );
+
+    const dark = resolveGhosttyThemeChoice(paired, FALLBACK, "dark");
+    const light = resolveGhosttyThemeChoice(paired, FALLBACK, "light");
+
+    expect(dark.colors.background).toEqual({ r: 0x2e, g: 0x34, b: 0x40 });
+    expect(light.colors.background).toEqual({ r: 0xff, g: 0xff, b: 0xff });
+  });
+
+  // The file main read belongs to the half main resolved. Reusing it for the
+  // other half would paint a dark theme's colors in light mode — the fallback
+  // (which the caller builds for the live mode) is the honest answer.
+  it("ignores main's theme file when the live mode picks the other half", () => {
+    const theme = resolveGhosttyThemeChoice(
+      payload(
+        { themeName: "Nord" },
+        {
+          configText: "theme = light:No Such Theme,dark:Nord",
+          themeSource: "background = #123456",
+        },
+      ),
+      FALLBACK,
+      "light",
+    );
+
     expect(theme.colors.background).toEqual(FALLBACK.colors.background);
   });
 
@@ -126,6 +171,7 @@ describe("resolveGhosttyThemeChoice", () => {
         { configText: 'theme = "Front End Delight"\nbackground = #101010' },
       ),
       FALLBACK,
+      "dark",
     );
     expect(theme.colors.background).toEqual({ r: 0x10, g: 0x10, b: 0x10 });
   });
@@ -133,7 +179,7 @@ describe("resolveGhosttyThemeChoice", () => {
 
 describe("resolveAppearance", () => {
   it("yields pure defaults when no config exists", () => {
-    const appearance = resolveAppearance(null, FALLBACK);
+    const appearance = resolveAppearance(null, FALLBACK, "dark");
     expect(appearance).toEqual({
       theme: FALLBACK,
       fontFamilies: [...FALLBACK_FONT_FAMILIES],
@@ -146,7 +192,7 @@ describe("resolveAppearance", () => {
   });
 
   it("defaults every unset pref when a config exists but sets none of them", () => {
-    const appearance = resolveAppearance(payload({}), FALLBACK);
+    const appearance = resolveAppearance(payload({}), FALLBACK, "dark");
     expect(appearance.fontSize).toBe(DEFAULT_TERMINAL_FONT_SIZE);
     expect(appearance.ligatures).toBe(true);
     expect(appearance.mouseReporting).toBe(true);
@@ -165,6 +211,7 @@ describe("resolveAppearance", () => {
         scrollbackLimitBytes: 1_000_000,
       }),
       FALLBACK,
+      "dark",
     );
     expect(appearance.fontFamilies[0]).toBe("Iosevka");
     expect(appearance.fontSize).toBe(15);
