@@ -154,8 +154,24 @@ export const ARC_TUNING = {
      * second. Cumulative by construction — a tier's share is its DISTANCE from
      * the canvas, so the sidebar always separates from the rail as well as from
      * the gradient.
+     *
+     * Keyed by {@link ArcSeam} because the shares and the geometry are one
+     * decision, not two. `continuous` is the whole reason this is a table: it
+     * gives the sidebar a share of ZERO, which is not "a bit less lift" but a
+     * different arrangement — the sidebar stops being a surface and becomes the
+     * canvas, so the strip of gradient between it and the card stops being a
+     * third material. The outer tier takes the entire alpha in exchange, since
+     * the rail is then the only thing left to carry the chrome/canvas boundary.
+     *
+     * Listed most-joined to most-floating, because {@link ARC_SEAMS} reads its
+     * offer order straight off these keys.
      */
-    tiers: [0.45, 1],
+    seams: {
+      continuous: [1, 0],
+      inset: [0.45, 1],
+      shell: [0.45, 1],
+      float: [0.45, 1],
+    },
   },
 
   /**
@@ -234,6 +250,55 @@ export const ARC_TUNING = {
  */
 export const MAX_STOPS = ARC_TUNING.harmony.length;
 
+/**
+ * How the window's regions meet — the one structural choice in an otherwise
+ * entirely chromatic model.
+ *
+ * It exists because separation and cohesion pull opposite ways and the middle
+ * of that pull is the worst place to stand. Lifting the sidebar toward paper
+ * fixes the rail/sidebar blend, but it also parks the sidebar at a lightness
+ * that is neither the canvas nor the card — and with an 8px gutter of raw
+ * gradient between it and the card, the window ends up showing three
+ * backgrounds and explaining none of them. Every option here is a way of
+ * getting back to two things that mean something:
+ *
+ *  - `continuous` — the sidebar rejoins the canvas (share 0) and only the
+ *    chrome band and rail lift. The gutter stops being a band because the
+ *    sidebar beside it is the same material. Arc's own arrangement.
+ *  - `inset` — the card gives up its gutter, radius and shadow and meets the
+ *    sidebar at a hairline. Nothing floats, so nothing needs air around it; the
+ *    canvas becomes purely the chrome, and the paper purely the work.
+ *  - `shell` — Slack's answer, and the only one that questions the premise. The
+ *    other three all treat the sidebar and the card as two objects and argue
+ *    about the space between them; this one says they are ONE object with a
+ *    colour change down the middle. Sidebar and card share a single rounded,
+ *    bordered outline and touch along a seam with no gutter at all, and the
+ *    canvas becomes a full frame around them rather than the reverse-L that
+ *    `continuous` leaves. The middle lightness stops needing an explanation
+ *    because it is no longer a separate surface — it is one half of one.
+ *  - `float` — what the tiers shipped as: filled square sidebar, floating
+ *    rounded card. Kept so the others can be judged against it.
+ *
+ * Derived from the tuning table rather than declared beside it, for the same
+ * reason as {@link MAX_STOPS}: a seam with no share would compute `undefined`
+ * alphas and paint nothing, with no error to find it by.
+ */
+export type ArcSeam = keyof typeof ARC_TUNING.lift.seams;
+
+/**
+ * The seams in the order the editor offers them, READ OFF the tuning table
+ * rather than restated — so a seam can never exist without a segment to reach
+ * it, and the segments can never drift out of the order the table documents.
+ * (String keys enumerate in insertion order, which is what makes the table's
+ * own ordering the single place that decision lives.)
+ */
+export const ARC_SEAMS = Object.keys(ARC_TUNING.lift.seams) as readonly ArcSeam[];
+
+/** Whether `value` names a seam this module can actually paint. */
+export function isArcSeam(value: unknown): value is ArcSeam {
+  return typeof value === "string" && value in ARC_TUNING.lift.seams;
+}
+
 /** One color pool: what it is, and where in the window it is anchored. */
 export interface ArcStop {
   /** The AUTHORED color. The pad's orbs show this; the mode transform never touches it. */
@@ -283,6 +348,12 @@ export interface ArcCanvasState {
   textWeight: number;
   /** Light-mode elevation shadow strength, 0–1. Scales every layer's alpha. */
   shadow: number;
+  /**
+   * How the sidebar, the canvas and the card meet. Unlike every other field
+   * here it is structural rather than chromatic, and it applies in BOTH modes —
+   * whether the card floats is not a question the appearance answers.
+   */
+  seam: ArcSeam;
 }
 
 /** The chosen foreground plus the numbers that chose it. */
@@ -309,6 +380,12 @@ export const DEFAULT_ARC_CANVAS: ArcCanvasState = {
   surfaceSpread: 0.5,
   textWeight: 0.5,
   shadow: 0.6,
+  // Not `float`, which is what the tiers first shipped as. A lifted sidebar
+  // beside a floating card puts a strip of bare gradient between two surfaces
+  // that are already different from it and from each other, and no amount of
+  // tuning the fill makes a third material read as anything but a third
+  // material. `continuous` spends the same lift on the rail instead.
+  seam: "continuous",
 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -734,8 +811,9 @@ export function clampArcCanvasState(value: unknown): ArcCanvasState | null {
 }
 
 /**
- * The four light-mode dials, DEFAULTED rather than required — the one place
- * this guard reads an absent field as an answer instead of a question.
+ * The tuning fields — the five light dials and the seam — DEFAULTED rather than
+ * required, the one place this guard reads an absent field as an answer instead
+ * of a question.
  *
  * The distinction it draws is the same one the guard draws everywhere else,
  * just landing the other way. A missing `stops` says nothing and guessing at it
@@ -747,7 +825,7 @@ export function clampArcCanvasState(value: unknown): ArcCanvasState | null {
  */
 function tuning(
   value: Record<string, unknown>,
-): Pick<ArcCanvasState, "lift" | "cardTint" | "surfaceSpread" | "textWeight" | "shadow"> {
+): Pick<ArcCanvasState, "lift" | "cardTint" | "surfaceSpread" | "textWeight" | "shadow" | "seam"> {
   const unit = (raw: unknown, fallback: number, min = 0): number =>
     isUnit(raw) ? clamp(raw, min, 1) : fallback;
   return {
@@ -756,6 +834,10 @@ function tuning(
     surfaceSpread: unit(value.surfaceSpread, DEFAULT_ARC_CANVAS.surfaceSpread),
     textWeight: unit(value.textWeight, DEFAULT_ARC_CANVAS.textWeight),
     shadow: unit(value.shadow, DEFAULT_ARC_CANVAS.shadow),
+    // Membership-checked rather than clamped, since a seam has no range to fall
+    // back into — but still defaulted rather than rejected, exactly like the
+    // dials, so a canvas stored before the seam existed survives the upgrade.
+    seam: isArcSeam(value.seam) ? value.seam : DEFAULT_ARC_CANVAS.seam,
   };
 }
 

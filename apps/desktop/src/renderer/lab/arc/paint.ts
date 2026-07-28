@@ -41,6 +41,12 @@ const STORAGE_KEY = "volli-lab:arc-canvas";
 
 /** Armed state for the `lab.css` seam; its value is the RESOLVED mode. */
 const CANVAS_ATTRIBUTE = "data-lab-canvas";
+/**
+ * The structural half of the same seam, carried separately because it does not
+ * follow the appearance: whether the card floats is a layout decision, and a
+ * window that rearranged itself when the sun went down would be a bug.
+ */
+const SEAM_ATTRIBUTE = "data-lab-seam";
 const CANVAS_VARIABLE = "--lab-canvas";
 const INK_VARIABLE = "--lab-canvas-ink";
 const INK_MUTED_VARIABLE = "--lab-canvas-ink-muted";
@@ -135,6 +141,7 @@ export function applyArcCanvas(state: ArcCanvasState | null): void {
 
   if (state === null) {
     root.removeAttribute(CANVAS_ATTRIBUTE);
+    root.removeAttribute(SEAM_ATTRIBUTE);
     for (const name of CANVAS_VARIABLES) root.style.removeProperty(name);
     // Disarming only stops FUTURE editors being caught up; the one on screen
     // keeps the derived theme until something sets another. Same asymmetry as
@@ -173,6 +180,11 @@ export function applyArcCanvas(state: ArcCanvasState | null): void {
   // The editor is not a custom property — Monaco owns its own pixels — so it
   // gets the derived set pushed at it rather than inheriting one.
   applyArcEditorTheme(arcEditorTheme(tokens, resolved));
+  // Seam first: its rules are all geometry, so they carry no dependency on the
+  // custom properties above and every one of them is scoped by the canvas
+  // attribute anyway — arming it early costs nothing and keeps the switch a
+  // single line.
+  root.setAttribute(SEAM_ATTRIBUTE, state.seam);
   root.setAttribute(CANVAS_ATTRIBUTE, resolved);
 }
 

@@ -136,6 +136,94 @@ html[data-lab-canvas="light"] [data-slot="sidebar"].bg-sidebar-veil {
 html[data-lab-canvas] [data-slot="sidebar-inset"] {
   box-shadow: var(--lab-shadow-card);
 }
+
+/* SEAM GEOMETRY — how the sidebar, the canvas and the card meet
+ * (`ArcSeam` in arc/model.ts).
+ *
+ * The problem all of this answers: a lifted sidebar sits at a lightness that is
+ * neither the canvas nor the paper, and `SidebarInset`'s `m-2` leaves 8px of
+ * bare gradient between it and the card. That is three backgrounds in one
+ * window, and the middle one is the only one that cannot say what it is.
+ *
+ * NOT scoped to light mode, unlike everything above it. Whether the card floats
+ * is a structural decision, and a window that rearranged itself when the system
+ * went dark would be a bug rather than a theme. What the seam changes in dark is
+ * only geometry — the lift shares it also carries are already neutralized there
+ * by `arc/paint.ts`.
+ *
+ * `continuous` needs no rule at all, which is the argument for it: the sidebar
+ * simply takes a lift share of zero, so it IS the canvas and the gutter beside
+ * it stops being a band. Everything below is a different answer to the same
+ * question. */
+
+/* `inset` — nothing floats, so nothing needs air around it. The card gives up
+ * its gutter, its radius and its shadow (zeroed in `arcShadows`, since a shadow
+ * with no ground to fall on is just a dark line) and meets the sidebar at a
+ * hairline. The canvas becomes purely the chrome; the paper, purely the work. */
+html[data-lab-canvas][data-lab-seam="inset"] [data-slot="sidebar-inset"] {
+  margin: 0;
+  border-width: 0 0 0 1px;
+  border-radius: 0;
+}
+
+/* `shell` — Slack's arrangement, and the only one that stops treating the
+ * sidebar and the card as two objects. They become ONE inset unit with a colour
+ * change down the middle: a single rounded outline around the pair, no gutter
+ * between them, and the canvas running all the way around the outside as a
+ * frame rather than the reverse-L the other seams leave.
+ *
+ * Built as two half-boxes because the DOM has no element that wraps exactly
+ * these two: the sidebar lives inside the collapsible `Sidebar` (with the
+ * project rail, which stays OUT on the canvas — it is the workspace switcher,
+ * the thing Slack also keeps outside), and `SidebarInset` is that wrapper's
+ * sibling. So each half draws its own outer corners and border and drops the
+ * ones that face the seam; abutted, they read as one outline.
+ *
+ * `clip-path` is what makes that survive the shadow. Both halves cast the same
+ * card shadow, and a shadow paints OUTSIDE its border box — so without a clip
+ * the card's would fall across the sidebar's right edge and the sidebar's
+ * across the card, drawing a dark bar down the middle of a unit whose whole
+ * claim is that it has no middle. Each inset() clips flush at the seam side
+ * (0) and lets the shadow run 60px past the other three, comfortably more than
+ * the widest layer reaches (30px blur, −6 spread, +10 y). Nothing else is lost
+ * to it: the card already clips its content with `overflow-hidden`, popovers
+ * portal to the body, and the seam edge is square in this mode anyway. */
+html[data-lab-canvas][data-lab-seam="shell"] [data-slot="sidebar"].bg-sidebar-veil {
+  margin: 0.5rem 0 0.5rem 0.5rem;
+  border: 1px solid var(--border);
+  border-right-width: 0;
+  border-radius: var(--radius-xl) 0 0 var(--radius-xl);
+  box-shadow: var(--lab-shadow-card);
+  clip-path: inset(-60px 0 -60px -60px);
+  overflow: hidden;
+  /* `h-full` is `height: 100%`, which measures the row and ignores the margins
+   * — so the unit would hang 16px past the bottom of the window with its lower
+   * corners cut off by the shell's clip. `auto` hands the sizing back to the
+   * flex row's own stretch, which subtracts them. Measured before/after: bottom
+   * 808 in an 800px window, then 792. */
+  height: auto;
+}
+html[data-lab-canvas][data-lab-seam="shell"] [data-slot="sidebar-inset"] {
+  /* −1px, not 0. The two halves are laid out by different boxes — the card
+   * follows `sidebar-gap`, which rounds the fractional `--sidebar-width` up,
+   * while the sidebar fills `sidebar-inner`, which lands a pixel short of it
+   * (measured: gap ends at 318, sidebar at 317). That left a hairline of raw
+   * gradient down the middle of a unit whose entire claim is that it has no
+   * middle. Overlapping is the robust fix rather than matching the rounding:
+   * the card paints after the sidebar and this mode gives the sidebar no right
+   * border, so the covered column is one pixel of its fill and nothing else. */
+  margin: 0.5rem 0.5rem 0.5rem -1px;
+  border-left-width: 0;
+  border-radius: 0 var(--radius-xl) var(--radius-xl) 0;
+  clip-path: inset(-60px -60px -60px 0);
+}
+/* The collapsible wrapper clips its children so the collapse animation has an
+ * edge to slide behind — which also clips the sidebar half's shadow at the top
+ * and bottom of the unit, leaving the frame shaded on three sides and bare on
+ * the fourth. Only lifted here, where a shadow has to escape it. */
+html[data-lab-canvas][data-lab-seam="shell"] [data-slot="sidebar"].overflow-hidden {
+  overflow: visible;
+}
 /* Raised-on-a-surface: the active tab in every strip, and the board's cards.
  * This is the tier the owner's screenshot is of — a tab reads as a tab because
  * of the halo under it, not because of its fill. */

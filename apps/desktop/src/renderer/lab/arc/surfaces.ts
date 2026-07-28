@@ -54,10 +54,18 @@ export interface ArcLiftTier {
 export interface ArcElevation {
   /**
    * Outward from the canvas: the chrome band and project rail first, the inner
-   * sidebar second. Always {@link ARC_TUNING.lift.tiers}-many, so the seam can
-   * index them by position rather than by name.
+   * sidebar second. Always as many as the seam's share row, so the stylesheet
+   * can index them by position rather than by name.
    */
   tiers: ArcLiftTier[];
+  /**
+   * Where the sidebar ends up between the canvas and the paper, 0–1 — the
+   * number the seam choice is really about. A sidebar at 0 or 1 is one of the
+   * two materials the window already has; anything in between is a third, which
+   * is exactly what reads as an unexplained band. Reported rather than used, so
+   * the editor can show the position instead of the alpha that produced it.
+   */
+  sidebarTowardPaper: number;
   /** Every tier's composited surfaces, flattened — what {@link arcInk} scores against. */
   surfaces: string[];
   /** `box-shadow` values, or `none` at strength 0 / in dark mode. */
@@ -107,10 +115,12 @@ export function arcElevation(
   tokens: ThemeTokens,
 ): ArcElevation {
   const inert: ArcLiftTier = { veil: "transparent", surfaces: [] };
+  const shares = ARC_TUNING.lift.seams[state.seam];
   if (resolved === "dark") {
     return {
-      tiers: ARC_TUNING.lift.tiers.map(() => inert),
+      tiers: shares.map(() => inert),
       surfaces: [],
+      sidebarTowardPaper: 0,
       shadows: { raised: "none", card: "none", overlay: "none" },
     };
   }
@@ -119,8 +129,12 @@ export function arcElevation(
   // all of them and its worst reading is the one that counts.
   const beneath = [...effectiveStopHexes(state, resolved), arcBaseFillHex(state, resolved)];
   const target = liftTarget(state, tokens);
-  const tiers = ARC_TUNING.lift.tiers.map((share) => {
-    if (target === null) return inert;
+  const tiers = shares.map((share) => {
+    // A share of zero is `continuous` saying the tier is not a surface at all.
+    // Returning the inert answer rather than a 0-alpha overlay keeps that a
+    // structural statement: nothing to paint, and nothing added to the list of
+    // surfaces the ink has to survive — the bare canvas is already in it.
+    if (target === null || share === 0) return inert;
     const alpha = target.alpha * share;
     const { r, g, b } = channels(target.hex);
     return {
@@ -129,9 +143,16 @@ export function arcElevation(
     };
   });
 
+  // An alpha toward `--background` IS the share of the way to paper — but only
+  // while the lift is positive. Sinking walks the other way entirely, so there
+  // is no position between canvas and paper to report and 0 is the honest one.
+  const inner = shares[shares.length - 1] ?? 0;
+  const sidebarTowardPaper = state.lift > 0 ? (target?.alpha ?? 0) * inner : 0;
+
   return {
     tiers,
     surfaces: tiers.flatMap((tier) => tier.surfaces),
+    sidebarTowardPaper,
     shadows: arcShadows(state, resolved),
   };
 }
@@ -172,5 +193,14 @@ export function arcShadows(
       )
       .join(", ");
 
-  return { raised: layers(raised), card: layers(card), overlay: layers(overlay) };
+  return {
+    raised: layers(raised),
+    // The `inset` seam takes the card's gutter away, and a shadow with no
+    // ground to fall on is just a dark line inside the sidebar's edge. The
+    // other two tiers are unaffected: a tab is still raised on the card, and a
+    // popover still floats over the whole window, whatever the card's own edge
+    // is doing.
+    card: state.seam === "inset" ? "none" : layers(card),
+    overlay: layers(overlay),
+  };
 }

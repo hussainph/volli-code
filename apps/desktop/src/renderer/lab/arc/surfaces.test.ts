@@ -47,6 +47,11 @@ function tierL(state: ArcCanvasState, tier: number): number {
 }
 
 describe("lift", () => {
+  // Pinned to `float` throughout this block. It is the seam with a two-rung
+  // ladder to test — `continuous` deliberately has none, and asserting a gap
+  // between the tiers there would be asserting the bug it was added to remove.
+  const LADDER = { seam: "float" } as const;
+
   it("gives every tier a real share of the distance between canvas and paper", () => {
     // Stated as a SHARE rather than an absolute ΔL, because the distance being
     // divided is not a constant: the light band runs to L 0.90 and the paper
@@ -60,7 +65,7 @@ describe("lift", () => {
     // ΔL 0.015 out of ember's 0.17 — under 9%, which is why the two panes read
     // as one.
     for (const hex of HUES) {
-      const state = canvasOf(hex, { lift: 1 });
+      const state = canvasOf(hex, { ...LADDER, lift: 1 });
       const base = hexToOklch(arcBaseFillHex(state, "light")).L;
       const paper = hexToOklch(deriveArcTokens(state, "light")["--background"]).L;
       const headroom = paper - base;
@@ -79,7 +84,7 @@ describe("lift", () => {
     // it is this one with the sign flipped, which is what makes the toggle
     // between them a comparison rather than an A/B of two implementations.
     for (const hex of HUES) {
-      const state = canvasOf(hex, { lift: -1 });
+      const state = canvasOf(hex, { ...LADDER, lift: -1 });
       const base = hexToOklch(arcBaseFillHex(state, "light")).L;
       const outer = tierL(state, 0);
       const inner = tierL(state, 1);
@@ -114,7 +119,7 @@ describe("lift", () => {
     // clear. Scoring the tiers here is what makes that ordering a contract.
     for (const hex of HUES) {
       for (const lift of [-1, -0.4, 0.4, 1]) {
-        const state = canvasOf(hex, { lift });
+        const state = canvasOf(hex, { ...LADDER, lift });
         const elevation = elevationOf(state);
         // Both candidate inks are scored by `arcInk`; here we only need to know
         // that SOME ink clears the floor on every surface lift introduces.
@@ -128,6 +133,62 @@ describe("lift", () => {
         expect({ hex, lift, floor: Math.min(...worst) > 45 }).toEqual({ hex, lift, floor: true });
       }
     }
+  });
+});
+
+describe("seams", () => {
+  it("puts the sidebar back ON the canvas under `continuous`", () => {
+    // The whole point of the option. Not "a smaller lift" — no overlay at all,
+    // so the sidebar and the strip of gradient between it and the card are the
+    // same pixels, and the window is back to two materials it can name.
+    const state = canvasOf("#e8652a", { seam: "continuous", lift: 1 });
+    const elevation = elevationOf(state);
+    expect(elevation.tiers[1]).toEqual({ veil: "transparent", surfaces: [] });
+    expect(elevation.sidebarTowardPaper).toBe(0);
+  });
+
+  it("spends the whole lift on the rail instead", () => {
+    // The trade that makes `continuous` answer the complaint it was added for
+    // rather than dodge it: the rail/sidebar boundary the owner wanted is still
+    // there, carried by one surface instead of two.
+    const outer = (seam: "continuous" | "float") =>
+      tierL(canvasOf("#e8652a", { seam, lift: 1 }), 0);
+    expect(outer("continuous")).toBeGreaterThan(outer("float"));
+  });
+
+  it("keeps the two-rung ladder for every seam that has one", () => {
+    for (const seam of ["float", "inset", "shell"] as const) {
+      const state = canvasOf("#e8652a", { seam, lift: 1 });
+      expect({ seam, laddered: tierL(state, 1) > tierL(state, 0) }).toEqual({
+        seam,
+        laddered: true,
+      });
+    }
+  });
+
+  it("stops the card casting once `inset` takes its gutter away", () => {
+    // A shadow needs ground to fall on. Flush against the sidebar there is
+    // none, and the halo becomes a dark line inside the seam — while the tiers
+    // that still have somewhere to fall are untouched.
+    const flush = arcShadows(canvasOf("#e8652a", { seam: "inset" }), "light");
+    expect(flush.card).toBe("none");
+    expect(flush.raised).not.toBe("none");
+    expect(flush.overlay).not.toBe("none");
+    expect(arcShadows(canvasOf("#e8652a", { seam: "float" }), "light").card).not.toBe("none");
+  });
+
+  it("reports the sidebar's position between canvas and paper", () => {
+    // The number the seam control is really about: at either end the sidebar is
+    // one of the two materials the window already has, and anywhere between it
+    // is a third. `float` at the shipped lift lands squarely in the middle,
+    // which is the measurement the complaint was.
+    const middle = elevationOf(canvasOf("#e8652a", { seam: "float" })).sidebarTowardPaper;
+    expect(middle).toBeGreaterThan(0.2);
+    expect(middle).toBeLessThan(0.6);
+    // Sinking is not a position between them at all — it walks the other way.
+    expect(elevationOf(canvasOf("#e8652a", { seam: "float", lift: -1 })).sidebarTowardPaper).toBe(
+      0,
+    );
   });
 });
 

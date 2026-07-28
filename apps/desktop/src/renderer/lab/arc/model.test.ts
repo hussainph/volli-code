@@ -300,4 +300,14 @@ describe("clampArcCanvasState", () => {
     };
     expect(clampArcCanvasState(legacy)).toEqual(DEFAULT_ARC_CANVAS);
   });
+
+  it("falls back on a seam it cannot paint rather than trusting the string", () => {
+    // The seam is the one tuning field with no range to clamp into, so its
+    // guard is membership instead. Trusting it would index the share table with
+    // a key it does not hold, and `undefined` shares NaN their way into an
+    // alpha — a blank sidebar and no error to find it by.
+    const stored = { ...DEFAULT_ARC_CANVAS, seam: "frosted" };
+    expect(clampArcCanvasState(stored)?.seam).toBe(DEFAULT_ARC_CANVAS.seam);
+    expect(clampArcCanvasState({ ...DEFAULT_ARC_CANVAS, seam: "inset" })?.seam).toBe("inset");
+  });
 });
