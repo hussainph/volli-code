@@ -1,6 +1,6 @@
 /**
  * Firing an Automation — the three surfaces of #86, with the prototype-gated
- * one built four ways.
+ * one built five ways.
  *
  * The plan is explicit that dragging is NOT the primary path (#86): the common
  * modality is ticket-centric, and a ticket open in front of you has no column to
@@ -16,10 +16,15 @@
  *     already mid-context does not need setting up again.
  *   • ARMING (#86b, #88) — a column holds at most one armed Automation, and an
  *     unarmed column says so quietly rather than saying nothing.
- *   • DRAG (#86c) — the open question. Four variants against the plan's stated
+ *   • DRAG (#86c) — the open question. Five variants against the plan's stated
  *     constraints: no dwell and no debounce anywhere, name AND harness legible
  *     rather than bare numbers, drop targets identical to today, and the dragged
- *     card always naming what will run.
+ *     card always naming what will run. The default tab, Hybrid, replaces the
+ *     ⌥-gated palette's numbering with unmodified digits (index 0 was "Move
+ *     only" before; now "move only" is simply what a release without a digit
+ *     does) and adds a second, sticky ⌥ overlay for reaching a column the
+ *     pointer isn't near — see `use-drag-sim`'s module doc for how the two
+ *     tiers are kept from touching the other four variants' own state.
  *
  * Every surface here is drawn INSIDE the chrome it will really live in — a mock
  * ticket header, a real board with real cards. A control judged on an empty page
@@ -72,13 +77,13 @@ import {
 } from "@renderer/components/ui/dropdown-menu";
 import { cn } from "@renderer/lib/utils";
 
-import { HarnessTag } from "../automation/harness-identity";
+import { HarnessMark, HarnessTag } from "../automation/harness-identity";
 import { SEEDED_AUTOMATIONS, type Automation } from "../automation/model";
-import { useDragSim } from "../automation/use-drag-sim";
+import { useDragSim, type OverlayCell } from "../automation/use-drag-sim";
 import { project, ticketById, tickets } from "../fixtures";
 
 export const title = "Automation · trigger";
-export const note = "Arming, the in-ticket advance button, and four drag pickers (#86/#89)";
+export const note = "Arming, the in-ticket advance button, and five drag pickers (#86/#89)";
 
 /** Digits stop here: an accelerator you have to look at your hand to use is not one. */
 const MAX_ACCELERATORS = 4;
@@ -587,9 +592,15 @@ function ArmingTab() {
 
 /* ----------------------------------------------------------------------- drag */
 
-type DragVariant = "held" | "always" | "card" | "column";
+type DragVariant = "hybrid" | "held" | "always" | "card" | "column";
 
 const DRAG_VARIANTS: { id: DragVariant; label: string; claim: string }[] = [
+  {
+    id: "hybrid",
+    label: "Hybrid · digits + ⌥ overlay",
+    claim:
+      "No palette to reveal at all: 1–9 arm an automation in whichever column the pointer is already over, no modifier needed. ⌥ is reserved for the rarer case — reaching a column that's scrolled away or far from the pointer — where it opens a sticky overlay of every column × automation as a target you can hover or arrow-key to, and release commits whichever cell is lit.",
+  },
   {
     id: "held",
     label: "Header palette · ⌥ held",
@@ -621,10 +632,13 @@ function DragGhost({
   ticket,
   point,
   automation,
+  hint,
 }: {
   ticket: Ticket;
   point: { x: number; y: number };
   automation: Automation | null;
+  /** The hybrid variant's discoverability line — undefined everywhere else. */
+  hint?: string;
 }) {
   return (
     <div
@@ -650,6 +664,9 @@ function DragGhost({
           </>
         )}
       </p>
+      {/* A status line, not a tooltip — quiet on purpose. Bare digits are
+          otherwise invisible until someone happens to press one. */}
+      {hint !== undefined ? <p className="pt-1 text-label text-muted-foreground">{hint}</p> : null}
     </div>
   );
 }
@@ -700,6 +717,118 @@ function PaletteRow({
   );
 }
 
+/**
+ * Hybrid tier 2: the ⌥ overlay. Every column, side by side, each offering its
+ * automations plus an explicit "Move only" as large hover targets — the whole
+ * point being that the pointer's real position on the board underneath stops
+ * mattering, so a column scrolled out of view is exactly as reachable as the
+ * one already under the cursor.
+ *
+ * Cells only ever get `onPointerEnter`, never a click handler: the mouse
+ * button that would click is already held down driving the drag, so hover is
+ * the only gesture available to the pointer here. The keyboard path (arrows +
+ * digits) lives entirely in `use-drag-sim`, since it has to share one
+ * `overlayCell` with this hover path rather than keeping a second copy of it.
+ */
+function HybridOverlay({
+  overlayCell,
+  setOverlayCell,
+}: {
+  overlayCell: OverlayCell | null;
+  setOverlayCell: (cell: OverlayCell) => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[150] flex items-center justify-center bg-background/85 p-6 backdrop-blur-sm">
+      <div className="flex max-h-full flex-col gap-2">
+        <p className="text-center text-xs text-muted-foreground">
+          Hover, or ←/→ · ↑/↓ · 1–9, to pick a target — release to commit it, Esc to go back
+        </p>
+        <div className="flex gap-2 overflow-x-auto">
+          {TICKET_STATUSES.map((status) => {
+            const offered = offeredFor(status);
+            const columnActive = overlayCell?.status === status;
+            const moveOnlyChosen = columnActive && overlayCell?.index === null;
+
+            return (
+              <div
+                key={status}
+                className={cn(
+                  "flex w-48 shrink-0 flex-col gap-px rounded-lg border border-border bg-card p-2 transition-[background-color,box-shadow] duration-150 ease-out",
+                  columnActive && "border-ring ring-1 ring-ring",
+                )}
+              >
+                <p className="px-1 pb-1 text-ui font-medium text-foreground">
+                  {TICKET_STATUS_LABELS[status]}
+                </p>
+                {/* The explicit "move only, arm nothing" target — reachable
+                    here even though the pointer isn't expressing it by simply
+                    being elsewhere, which is the whole reason it has to be a
+                    real row rather than an absence. */}
+                <button
+                  type="button"
+                  onPointerEnter={() => setOverlayCell({ status, index: null })}
+                  aria-pressed={moveOnlyChosen}
+                  className={cn(
+                    "flex items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs transition-colors duration-100 ease-out",
+                    moveOnlyChosen ? "bg-accent text-foreground" : "text-muted-foreground",
+                  )}
+                >
+                  <LightningIcon weight={moveOnlyChosen ? "fill" : "regular"} />
+                  Move only
+                </button>
+                {offered.map((automation, index) => {
+                  const chosenCell = columnActive && overlayCell?.index === index;
+                  return (
+                    <button
+                      key={automation.id}
+                      type="button"
+                      onPointerEnter={() => setOverlayCell({ status, index })}
+                      aria-pressed={chosenCell}
+                      className={cn(
+                        "flex items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs transition-colors duration-100 ease-out",
+                        chosenCell ? "bg-accent text-foreground" : "text-muted-foreground",
+                      )}
+                    >
+                      {/* The digit the hint above promises. Without it "1–9" is a
+                          claim the overlay never backs up, and the mapping has to
+                          be counted rather than read. */}
+                      <span
+                        className={cn(
+                          "w-3 shrink-0 text-center font-mono text-label tabular-nums",
+                          chosenCell ? "text-primary" : "text-muted-foreground/70",
+                        )}
+                      >
+                        {index + 1}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate">{automation.name}</span>
+                      {/* The MARK, not the full tag. Repeating "Claude Code" down
+                          every row cost ~70px each and truncated the automation
+                          NAME to "Imple…" — the harness is context, the name is
+                          the thing being chosen, and the glyph was built to carry
+                          identity without the label precisely for rows like this. */}
+                      <HarnessMark
+                        harnessId={automation.runtime.harnessId}
+                        className="ml-auto size-3.5"
+                      />
+                    </button>
+                  );
+                })}
+                {offered.length === 0 ? (
+                  // A column offering nothing is still a legitimate target —
+                  // it has to be reachable and say so, not just fall silent.
+                  <p className="px-2 py-1 text-label text-muted-foreground">
+                    No automations offered here
+                  </p>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** What a completed drop resolved to, captured where the pointer released it. */
 interface DropConfirmation {
   /** A fresh key per drop, so dropping twice into the same column replays the entrance. */
@@ -728,7 +857,7 @@ interface MoveEntry {
 }
 
 function DragTab() {
-  const [variant, setVariant] = React.useState<DragVariant>("held");
+  const [variant, setVariant] = React.useState<DragVariant>("hybrid");
 
   // "Move only" is index 0 in every palette. Making the no-Run choice the
   // default is what keeps a drag from ever silently spending tokens — the
@@ -739,13 +868,44 @@ function DragTab() {
     [],
   );
 
-  const drag = useDragSim(MAX_ACCELERATORS);
+  // Hybrid-only: how many automations (excluding "move only") a column offers
+  // — `use-drag-sim` needs this as a plain count to validate a digit and to
+  // clamp ⌥-overlay navigation, without the hook having to know about
+  // `Automation` objects at all.
+  const automationCountFor = React.useCallback(
+    (status: TicketStatus) => offeredFor(status).length,
+    [],
+  );
+
+  const drag = useDragSim({
+    legacyOptionCount: MAX_ACCELERATORS,
+    hybrid: variant === "hybrid",
+    automationCountFor,
+  });
 
   // The truthful set: what a release RIGHT NOW would offer. Over no column that
   // is "Move only" and nothing else, which is what keeps the ghost honest when
   // the pointer wanders into the gutter.
   const options = optionsFor(drag.hovered);
-  const chosen = options[drag.chosenIndex] ?? null;
+
+  // What the ghost names as "what will run". The legacy variants read
+  // `chosenIndex` (unchanged); the hybrid variant has its own two-tier
+  // resolution — the ⌥ overlay's highlighted cell wins while it's open
+  // (release commits THAT, not whatever the pointer is over), otherwise the
+  // bare-digit selection if it's still bound to the hovered column, otherwise
+  // "move only".
+  let chosen: Automation | null = null;
+  if (variant === "hybrid") {
+    if (drag.overlayOpen && drag.overlayCell !== null) {
+      const cell = drag.overlayCell;
+      chosen = cell.index === null ? null : (offeredFor(cell.status)[cell.index] ?? null);
+    } else if (drag.digitSelection !== null && drag.digitSelection.status === drag.hovered) {
+      const selection = drag.digitSelection;
+      chosen = offeredFor(selection.status)[selection.index] ?? null;
+    }
+  } else {
+    chosen = options[drag.chosenIndex] ?? null;
+  }
 
   // The displayed set, which lags the truthful one by exactly one column-exit.
   // A palette fading out after you leave a column would otherwise re-render as
@@ -1086,6 +1246,54 @@ function DragTab() {
                   </div>
                 ) : null}
 
+                {/* Hybrid tier 1's legend — read-only, digits are keyboard-only.
+                    Shown for the hovered column only, so re-entering a
+                    different column visibly swaps the list (and the reset
+                    the module doc promises) rather than silently carrying a
+                    stale selection over. */}
+                {variant === "hybrid" &&
+                !drag.overlayOpen &&
+                drag.hovered === status &&
+                drag.ticketId !== null ? (
+                  <div className="mb-1.5 flex flex-col gap-px rounded-md border border-border bg-popover p-1">
+                    <p className="flex items-center gap-1.5 px-1 py-0.5 text-xs text-muted-foreground">
+                      <LightningIcon />
+                      Move only
+                      <span className="ml-auto text-label">default</span>
+                    </p>
+                    {offeredFor(status).map((automation, index) => {
+                      const isChosen =
+                        drag.digitSelection !== null &&
+                        drag.digitSelection.status === status &&
+                        drag.digitSelection.index === index;
+                      return (
+                        <p
+                          key={automation.id}
+                          className={cn(
+                            "flex items-center gap-1.5 rounded px-1 py-0.5 text-xs",
+                            isChosen ? "bg-accent text-foreground" : "text-muted-foreground",
+                          )}
+                        >
+                          <LightningIcon
+                            weight={isChosen ? "fill" : "regular"}
+                            className={isChosen ? "text-primary" : ""}
+                          />
+                          <span className="truncate">{automation.name}</span>
+                          <span className="ml-auto shrink-0">
+                            <HarnessTag
+                              harnessId={automation.runtime.harnessId}
+                              className="text-xs"
+                            />
+                          </span>
+                          <kbd className="shrink-0 rounded border border-border px-1 font-mono text-[10px] text-muted-foreground">
+                            {index + 1}
+                          </kbd>
+                        </p>
+                      );
+                    })}
+                  </div>
+                ) : null}
+
                 <div className="flex flex-col gap-1.5">
                   {tickets
                     .filter((ticket) => effectiveStatus(ticket) === status)
@@ -1117,11 +1325,13 @@ function DragTab() {
       </div>
 
       <p className="text-xs text-muted-foreground">
-        Drag a card. ⌥ reveals the palette in the first variant; 1–{MAX_ACCELERATORS} pick; Esc
-        cancels. Dropping a card that names an Automation ARMS it for{" "}
-        {(TIMING.ARM_MS / 1000).toFixed(1)}s before it fires — Undo on the card or "Undo moves" in
-        the column header reverts the move itself. Once fired, the pulsing border means a session is
-        (simulated as) running; the lab still starts nothing for real.
+        {variant === "hybrid"
+          ? "Drag a card. 1–9 (no modifier) arms an automation in whichever column the pointer is over; the same digit again clears it. ⌥ opens an overlay of every column × automation to hover or arrow-key through — release commits its highlighted cell. Esc closes the overlay first, then cancels the drag."
+          : `Drag a card. ⌥ reveals the palette in the ⌥-held variant; 1–${MAX_ACCELERATORS} pick; Esc cancels.`}{" "}
+        Dropping a card that names an Automation ARMS it for {(TIMING.ARM_MS / 1000).toFixed(1)}s
+        before it fires — Undo on the card or "Undo moves" in the column header reverts the move
+        itself. Once fired, the pulsing border means a session is (simulated as) running; the lab
+        still starts nothing for real.
       </p>
 
       {confirmation !== null ? (
@@ -1167,7 +1377,12 @@ function DragTab() {
 
       {drag.ticketId !== null && draggedTicket !== null ? (
         <>
-          <DragGhost ticket={draggedTicket} point={drag.point} automation={chosen} />
+          <DragGhost
+            ticket={draggedTicket}
+            point={drag.point}
+            automation={chosen}
+            hint={variant === "hybrid" ? "1–9 to arm · ⌥ for all columns" : undefined}
+          />
           {variant === "card" ? (
             // Only opacity and transform are transitioned. `left`/`top` update
             // every pointer move and must stay untransitioned, or the palette
@@ -1186,6 +1401,12 @@ function DragTab() {
             </div>
           ) : null}
         </>
+      ) : null}
+
+      {/* Tier 2, mounted only while it's open — see `HybridOverlay`'s own doc
+          for why hover here never needs a click. */}
+      {variant === "hybrid" && drag.overlayOpen ? (
+        <HybridOverlay overlayCell={drag.overlayCell} setOverlayCell={drag.setOverlayCell} />
       ) : null}
     </div>
   );
