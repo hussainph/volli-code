@@ -19,6 +19,18 @@
  * it is the one whose Instructions demote the body, so it stresses the layout
  * most), then on a blank one via New.
  *
+ * WHAT CHANGED AFTER THE FIRST CRITIQUE. The first pass drew all four parts at
+ * the same weight and shipped a separate "what gets sent" preview panel. Both
+ * were the same mistake in different clothes: an Automation is a piece of
+ * WRITING, and the form was treating the writing as one field among four while
+ * outsourcing the job of showing what the writing means to a panel below it.
+ * So the preview is gone — {@link ChipEditor} paints chips and commands in
+ * place, which is what the preview was standing in for — and Instructions now
+ * owns the surface in both layouts while Trigger/Runtime/Outcome sit in a quiet
+ * settings strip. Even in SECTIONED, which exists to argue for four visible
+ * parts, "four parts" now means four labelled parts, not four equal ones; the
+ * reading order is unchanged so the layouts still differ only in emphasis.
+ *
  * What this scratch is genuinely testing, beneath the layout:
  *   1. Does the seeded template read like something a person wrote (#88)?
  *   2. Does the effort dial's ABSENCE on opencode read as correct rather than
@@ -32,7 +44,6 @@
 import * as React from "react";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import { GlobeIcon } from "@phosphor-icons/react/dist/csr/Globe";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import {
@@ -57,6 +68,8 @@ import {
 } from "@renderer/components/ui/dropdown-menu";
 import { cn } from "@renderer/lib/utils";
 
+import { ChipEditor, type ChipEditorHandle } from "../automation/chip-editor";
+import { HarnessTag } from "../automation/harness-identity";
 import {
   blankAutomation,
   CONTEXT_CHIPS,
@@ -73,6 +86,9 @@ export const note = "Authoring one Automation — two layouts, same state (#79/#
 
 type Layout = "composer" | "sectioned";
 
+/** The demo project. Named once so the scope switcher and its footnote agree. */
+const PROJECT_NAME = "Voltaic";
+
 /**
  * The chip row's idiom, lifted from `composer-chips.tsx`. `w-fit` is the one
  * addition: the sectioned layout stacks its fields in a flex column, which
@@ -81,6 +97,19 @@ type Layout = "composer" | "sectioned";
 function chipClass() {
   return "w-fit gap-1.5 border border-border px-2.5 text-xs text-muted-foreground";
 }
+
+/**
+ * The house entrance transition, in one place because it is used on three
+ * different state changes and they should not drift apart. It only fires on
+ * mount, so every caller earns it by keying the element on the state that
+ * changed — which is also what stops it firing while you type.
+ *
+ * The transform is what `motion-reduce` drops; the fade stays, because a
+ * cross-fade is not the kind of motion that causes trouble and losing it would
+ * make the change of state read as a flicker instead.
+ */
+const ENTER_CLASS =
+  "transition-[opacity,transform,translate,scale] duration-200 ease-out starting:opacity-0 motion-reduce:transition-none";
 
 function scopeSummary(columnScope: Automation["columnScope"]): string {
   if (columnScope === "any") return "Any column";
@@ -151,6 +180,11 @@ function TriggerControl({
  * when the adapter declares a scale; opencode declares none, and the correct
  * behaviour is for the dial to be absent rather than disabled, because there is
  * nothing there to enable.
+ *
+ * The harness is the one field here that is a category rather than a value, so
+ * it carries its mark ({@link HarnessTag}) instead of being a fourth run of grey
+ * words — this row is otherwise all grey words, and which agent runs is the part
+ * you should be able to check without reading.
  */
 function RuntimeControl({
   automation,
@@ -183,7 +217,7 @@ function RuntimeControl({
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="ghost" className={chipClass()}>
-            {adapter.label}
+            <HarnessTag harnessId={runtime.harnessId} />
             <CaretDownIcon weight="bold" className="size-3" />
           </Button>
         </DropdownMenuTrigger>
@@ -194,7 +228,7 @@ function RuntimeControl({
           >
             {HARNESS_IDS.map((id) => (
               <DropdownMenuRadioItem key={id} value={id}>
-                {HARNESS_ADAPTERS[id].label}
+                <HarnessTag harnessId={id} muted={false} />
               </DropdownMenuRadioItem>
             ))}
           </DropdownMenuRadioGroup>
@@ -252,8 +286,16 @@ function RuntimeControl({
 
       {/* The dialect note is the part that keeps the row honest — without it the
           three stops above look like a portable scale, which is exactly the
-          normalised cross-harness enum #81 rejected. */}
-      <span className={cn("text-xs text-muted-foreground", layout === "composer" && "w-full")}>
+          normalised cross-harness enum #81 rejected. Keyed on the harness so it
+          fades in rather than swapping mid-sentence when the harness changes. */}
+      <span
+        key={runtime.harnessId}
+        className={cn(
+          "text-xs text-muted-foreground",
+          ENTER_CLASS,
+          layout === "composer" && "w-full",
+        )}
+      >
         {adapter.effortNote}
       </span>
     </div>
@@ -261,66 +303,62 @@ function RuntimeControl({
 }
 
 /**
- * The Instructions editor: a plain textarea plus insert affordances, and a live
- * tokenized preview.
+ * The Instructions editor: {@link ChipEditor} plus the two insert affordances.
  *
- * A textarea rather than Monaco on purpose. The design questions here are what
- * the chip vocabulary is, how the command tiers present themselves, and whether
- * a seeded template reads well — none of which a syntax-highlighted editor
- * answers, and all of which it would slow down iterating on. The shipped
- * version inherits the composer's editor.
+ * There is no preview panel any more and no "show what gets sent" toggle. The
+ * editor paints chips and commands where they sit, so a second rendering of the
+ * same text below it would be showing the same thing twice — and a toggle that
+ * reveals what the field means is an admission the field does not.
  *
- * Likewise the command list opens from a button rather than on typing `/`. The
- * real picker is `/`-triggered; what is being judged here is the TIER structure
- * — that a compiled-in `/code-review` and a scanned `/tdd` are both offered and
- * visibly different in origin — and that survives the cheaper trigger. Typing a
- * command by hand still works, and the preview marks an unknown one unverified
- * rather than rejecting it (#82).
+ * What survives from the preview is the one thing the paint layer states quietly
+ * rather than says: a command this harness does not know is underlined, not
+ * explained. That underline is deliberately cheap (#82 — never blocked, only
+ * marked), so the count gets one line underneath, and only when there is
+ * something to count.
+ *
+ * The command list still opens from a button rather than on typing `/`. The real
+ * picker is `/`-triggered; what is being judged here is the TIER structure —
+ * that a compiled-in `/code-review` and a scanned `/tdd` are both offered and
+ * visibly different in origin — and that survives the cheaper trigger.
+ *
+ * `heightClass` rather than `rows`: the editor is two stacked layers inside a
+ * bordered box, so its height is the box's, not a textarea attribute's. Callers
+ * still make the same call they used to — how much room does this layout give
+ * the writing — they just make it in the units the box understands.
  */
 function InstructionsEditor({
   automation,
   onChange,
-  rows,
+  heightClass,
 }: {
   automation: Automation;
   onChange: (instructions: string) => void;
-  rows: number;
+  heightClass: string;
 }) {
-  const ref = React.useRef<HTMLTextAreaElement>(null);
-  const [showPreview, setShowPreview] = React.useState(false);
-  const commands = SLASH_COMMANDS[automation.runtime.harnessId];
+  const editorRef = React.useRef<ChipEditorHandle>(null);
+  const harnessId = automation.runtime.harnessId;
+  const commands = SLASH_COMMANDS[harnessId];
+  const unverified = tokenizeInstructions(automation.instructions, harnessId).filter(
+    (token) => token.kind === "command" && !token.known,
+  ).length;
 
   function insert(snippet: string) {
-    const field = ref.current;
-    if (field === null) {
-      onChange(`${automation.instructions}${snippet}`);
-      return;
-    }
-    const { selectionStart, selectionEnd } = field;
-    const next =
-      automation.instructions.slice(0, selectionStart) +
-      snippet +
-      automation.instructions.slice(selectionEnd);
-    onChange(next);
-    // Restore the caret after the inserted text — an insert that dumps the
-    // cursor at the end makes the chip bar useless for anything but appending.
-    requestAnimationFrame(() => {
-      field.focus();
-      field.setSelectionRange(selectionStart + snippet.length, selectionStart + snippet.length);
-    });
+    editorRef.current?.insert(snippet);
   }
 
   return (
     <div className="flex flex-col gap-2">
-      <textarea
-        ref={ref}
-        rows={rows}
+      <ChipEditor
+        ref={editorRef}
         value={automation.instructions}
-        onChange={(event) => onChange(event.target.value)}
-        spellCheck={false}
-        aria-label="Instructions"
+        onChange={onChange}
+        harnessId={harnessId}
         placeholder="What should the agent do?"
-        className="w-full resize-none rounded-lg border border-border bg-card px-3 py-2.5 text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring"
+        // A min and a max, never a fixed height: the editor grows with what you
+        // write and then scrolls inside itself rather than pushing the settings
+        // strip off the page — the same bounded-growth rule the New-ticket
+        // composer's body already follows.
+        className={heightClass}
       />
 
       <div className="flex flex-wrap items-center gap-1.5">
@@ -343,8 +381,8 @@ function InstructionsEditor({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-72">
-            <DropdownMenuLabel>
-              Built in to {HARNESS_ADAPTERS[automation.runtime.harnessId].label}
+            <DropdownMenuLabel className="flex items-center gap-1">
+              Built in to <HarnessTag harnessId={harnessId} muted={false} />
             </DropdownMenuLabel>
             {commands
               .filter((command) => command.tier === "builtin")
@@ -378,78 +416,15 @@ function InstructionsEditor({
             </DropdownMenuLabel>
           </DropdownMenuContent>
         </DropdownMenu>
-
-        <button
-          type="button"
-          onClick={() => setShowPreview((open) => !open)}
-          className="ml-auto text-xs text-muted-foreground transition-colors hover:text-foreground"
-        >
-          {showPreview ? "Hide" : "Show"} what gets sent
-        </button>
       </div>
 
-      {showPreview ? <InstructionsPreview automation={automation} /> : null}
-    </div>
-  );
-}
-
-/**
- * What the harness actually receives, with chips and commands called out.
- *
- * Chips are shown as chips rather than expanded into their resolved text: the
- * Runtime Brief alone is several hundred words, and pasting it here would bury
- * the authored prose the preview exists to check. The point being made is
- * "these resolve at launch, and they resolve to something", not the literal
- * bytes.
- */
-function InstructionsPreview({ automation }: { automation: Automation }) {
-  const tokens = tokenizeInstructions(automation.instructions, automation.runtime.harnessId);
-  const unverified = tokens.filter((token) => token.kind === "command" && !token.known);
-
-  return (
-    <div className="flex flex-col gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2.5">
-      <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
-        {tokens.map((token) => {
-          if (token.kind === "text") return <span key={token.at}>{token.value}</span>;
-          if (token.kind === "chip") {
-            return (
-              <span
-                key={token.at}
-                className={cn(
-                  "mx-px rounded px-1 py-0.5 font-mono text-xs",
-                  token.known
-                    ? "bg-primary/15 text-primary-text"
-                    : "bg-destructive/15 text-destructive",
-                )}
-              >
-                {token.known
-                  ? CONTEXT_CHIPS.find((chip) => chip.token === token.token)?.label
-                  : `unknown: ${token.token}`}
-              </span>
-            );
-          }
-          return (
-            <span
-              key={token.at}
-              className={cn(
-                "mx-px rounded px-1 py-0.5 font-mono text-xs",
-                token.known
-                  ? "bg-accent text-foreground"
-                  : "bg-transparent text-muted-foreground underline decoration-dotted",
-              )}
-            >
-              {token.name}
-            </span>
-          );
-        })}
-      </p>
-      {unverified.length > 0 ? (
-        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <WarningIcon />
-          {unverified.length === 1
-            ? "1 command isn't"
-            : `${unverified.length} commands aren't`} one
-          this harness knows. It will be sent as written.
+      {/* Last, not between the editor and its toolbar: appearing and disappearing
+          as you type must not shift the buttons you are aiming at. */}
+      {unverified > 0 ? (
+        <p className={cn("flex items-center gap-1.5 text-xs text-muted-foreground", ENTER_CLASS)}>
+          <WarningIcon className="size-3.5 shrink-0" />
+          {unverified === 1 ? "1 command isn't" : `${unverified} commands aren't`} one{" "}
+          {HARNESS_ADAPTERS[harnessId].label} knows. Sent as written.
         </p>
       ) : null}
     </div>
@@ -457,24 +432,30 @@ function InstructionsPreview({ automation }: { automation: Automation }) {
 }
 
 /**
- * Outcome — present, named, and empty (#84).
+ * Outcome — present, named, and deliberately empty (#84).
  *
  * v1 asserts launch only, so this is the one part of the four-part object with
- * nothing behind it. Showing it greyed rather than omitting it is a deliberate
- * bet: #79 says the object HAS four parts, and a form that silently ships three
- * teaches the wrong shape to everyone who learns the feature from the UI. The
- * risk being tested is the opposite one — that a permanently disabled control
- * reads as broken.
+ * nothing behind it. #79 says the object HAS four parts, and a form that
+ * silently ships three teaches the wrong shape to everyone who learns the
+ * feature from the UI — so it stays.
+ *
+ * The first version drew it as a dashed, greyed-out pill, which is the visual
+ * language of a control that is temporarily unavailable: it read as broken, the
+ * exact risk #84 names. So it is drawn as a stated VALUE instead — solid, in
+ * foreground text, the way any other chosen setting looks — and the sentence
+ * underneath gives the reason rather than an apology. "Nothing" is an answer
+ * here, not an absence, and it should look like one.
  */
 function OutcomeControl() {
   return (
     <div className="flex flex-col gap-1.5">
-      <div className="flex w-fit items-center gap-1.5 rounded-full border border-dashed border-border px-2.5 py-0.5 text-xs text-muted-foreground">
+      <span className="flex w-fit items-center gap-1.5 rounded-full bg-muted px-2.5 py-0.5 text-xs text-foreground">
         Nothing — the session is the report
-      </div>
+      </span>
       <span className="text-xs text-muted-foreground">
-        Moving the ticket when a Run finishes needs completion detection, which isn't built yet.
-        Tickets leave Doing because you move them.
+        The answer for v1, not a gap: moving a ticket when a Run finishes needs completion
+        detection, and a wrong guess moves your work for you. Tickets leave Doing because you move
+        them.
       </span>
     </div>
   );
@@ -482,11 +463,29 @@ function OutcomeControl() {
 
 /* ------------------------------------------------------------------- layouts */
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+/**
+ * The settings idiom, shared by both layouts: everything that is not the writing
+ * sits inside one recessed panel. It is the layout doing the argument — a
+ * bordered `bg-muted` strip reads as chrome ON something, where a bare stack of
+ * equally-weighted fields reads as four peers.
+ */
+function SettingsStrip({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex flex-col gap-2 border-b border-border py-4 first:pt-0 last:border-b-0 last:pb-0">
-      <h3 className="font-mono text-label uppercase text-muted-foreground">{label}</h3>
+    <div className="flex flex-col rounded-lg border border-border bg-muted/30 px-3 py-2">
       {children}
+    </div>
+  );
+}
+
+/** A labelled row inside a {@link SettingsStrip}. Label left, control right, so
+ *  the labels form one scannable column instead of interrupting the controls. */
+function QuietField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex gap-3 border-b border-border/60 py-2 first:pt-0 last:border-b-0 last:pb-0">
+      <h3 className="w-16 shrink-0 pt-1 font-mono text-label uppercase text-muted-foreground">
+        {label}
+      </h3>
+      <div className="flex min-w-0 flex-1 flex-col gap-1.5">{children}</div>
     </div>
   );
 }
@@ -505,36 +504,49 @@ function ComposerLayout({
         onChange={(event) => update({ name: event.target.value })}
         placeholder="Automation name"
         aria-label="Automation name"
-        className="w-full border-none bg-transparent text-heading font-medium text-foreground outline-none placeholder:text-muted-foreground"
+        className="w-full border-none bg-transparent text-title font-medium text-foreground outline-none placeholder:text-muted-foreground"
       />
 
+      {/* No label above the editor. The composer's whole claim is that the
+          writing is the object rather than a field on it, and a field label
+          would be the first thing to contradict that. */}
       <InstructionsEditor
         automation={automation}
         onChange={(instructions) => update({ instructions })}
-        rows={14}
+        heightClass="min-h-[320px] max-h-[52vh]"
       />
 
-      {/* One quiet row for everything that is not the writing — the composer's
-          claim in a single line of layout. */}
-      <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
-        <TriggerControl
-          columnScope={automation.columnScope}
-          onChange={(columnScope) => update({ columnScope })}
-        />
-        <RuntimeControl
-          automation={automation}
-          onChange={(runtime) => update({ runtime })}
-          layout="composer"
-        />
-      </div>
-      <p className="text-xs text-muted-foreground">
-        Offered in {scopeSummary(automation.columnScope)}. It only runs on its own where a column is
-        armed with it.
-      </p>
+      {/* One recessed strip for everything that is not the writing — the
+          composer's claim in a single block of layout. */}
+      <SettingsStrip>
+        <div className="flex flex-wrap items-center gap-2 py-1">
+          <TriggerControl
+            columnScope={automation.columnScope}
+            onChange={(columnScope) => update({ columnScope })}
+          />
+          <RuntimeControl
+            automation={automation}
+            onChange={(runtime) => update({ runtime })}
+            layout="composer"
+          />
+        </div>
+        <p className="pb-1 text-xs text-muted-foreground">
+          Offered in {scopeSummary(automation.columnScope)}. It only runs on its own where a column
+          is armed with it.
+        </p>
+      </SettingsStrip>
     </div>
   );
 }
 
+/**
+ * Four labelled parts — but not four equal ones, which is the correction the
+ * critique forced. The reading order Trigger → Instructions → Runtime → Outcome
+ * is preserved exactly, so this is still the same argument as before; what
+ * changed is that the writing is the only thing on a raised surface and the
+ * other three bracket it as recessed settings. If four EQUAL parts turns out to
+ * be the thing worth testing, it is this component that has to change back.
+ */
 function SectionedLayout({
   automation,
   update,
@@ -543,44 +555,56 @@ function SectionedLayout({
   update: (patch: Partial<Automation>) => void;
 }) {
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col gap-3">
       <input
         value={automation.name}
         onChange={(event) => update({ name: event.target.value })}
         placeholder="Automation name"
         aria-label="Automation name"
-        className="w-full border-none bg-transparent pb-3 text-heading font-medium text-foreground outline-none placeholder:text-muted-foreground"
+        className="w-full border-none bg-transparent text-heading font-medium text-foreground outline-none placeholder:text-muted-foreground"
       />
 
-      <Field label="Trigger">
-        <TriggerControl
-          columnScope={automation.columnScope}
-          onChange={(columnScope) => update({ columnScope })}
-        />
-        <span className="text-xs text-muted-foreground">
-          Where this Automation is offered. It only runs on its own where a column is armed with it.
-        </span>
-      </Field>
+      <SettingsStrip>
+        <QuietField label="Trigger">
+          <TriggerControl
+            columnScope={automation.columnScope}
+            onChange={(columnScope) => update({ columnScope })}
+          />
+          <span className="text-xs text-muted-foreground">
+            Where this Automation is offered. It only runs on its own where a column is armed with
+            it.
+          </span>
+        </QuietField>
+      </SettingsStrip>
 
-      <Field label="Instructions">
+      {/* The hero. Its heading is the one on this page in body weight rather than
+          a mono all-caps field label, because it is naming the substance, not a
+          setting — and the strips above and below keep their small labels so the
+          difference is unmistakable. */}
+      <div className="flex flex-col gap-2">
+        <div className="flex items-baseline gap-2">
+          <h3 className="text-ui font-medium text-foreground">Instructions</h3>
+          <span className="text-xs text-muted-foreground">What the agent is asked to do.</span>
+        </div>
         <InstructionsEditor
           automation={automation}
           onChange={(instructions) => update({ instructions })}
-          rows={12}
+          heightClass="min-h-[260px] max-h-[44vh]"
         />
-      </Field>
+      </div>
 
-      <Field label="Runtime">
-        <RuntimeControl
-          automation={automation}
-          onChange={(runtime) => update({ runtime })}
-          layout="sectioned"
-        />
-      </Field>
-
-      <Field label="Outcome">
-        <OutcomeControl />
-      </Field>
+      <SettingsStrip>
+        <QuietField label="Runtime">
+          <RuntimeControl
+            automation={automation}
+            onChange={(runtime) => update({ runtime })}
+            layout="sectioned"
+          />
+        </QuietField>
+        <QuietField label="Outcome">
+          <OutcomeControl />
+        </QuietField>
+      </SettingsStrip>
     </div>
   );
 }
@@ -594,6 +618,13 @@ function SectionedLayout({
  * mine or this repo's?" is a property of an automation, not a different place
  * to go. The seeded set arrives here unarmed (#88) — editing beats authoring
  * from scratch, so the list is never empty on a first launch.
+ *
+ * The switcher used to read "Voltaic | All projects", which was a lie in two
+ * words: global scope means an Automation is AVAILABLE IN every project, not
+ * that you are looking at every project's automations at once. The pair is now
+ * "This project | Global" — both sides naming a property of the things in the
+ * list — and a line underneath says which set you are looking at, because a
+ * two-word toggle cannot carry a distinction this easy to get backwards.
  */
 function AutomationIndex({
   automations,
@@ -621,34 +652,52 @@ function AutomationIndex({
             type="button"
             onClick={() => onScopeChange(option)}
             aria-pressed={option === scope}
-            className="flex-1 rounded-full px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:text-foreground aria-pressed:bg-background aria-pressed:text-foreground"
+            className="flex-1 rounded-full px-2 py-0.5 text-xs text-muted-foreground transition-[background-color,color] duration-150 ease-out hover:text-foreground aria-pressed:bg-background aria-pressed:text-foreground motion-reduce:transition-none"
           >
-            {option === "project" ? "Voltaic" : "All projects"}
+            {option === "project" ? "This project" : "Global"}
           </button>
         ))}
       </div>
 
-      <div className="flex flex-col gap-px">
-        {visible.map((automation) => (
-          <button
-            key={automation.id}
-            type="button"
-            onClick={() => onSelect(automation.id)}
-            aria-current={automation.id === selectedId ? "true" : undefined}
-            className="flex flex-col gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent aria-[current]:bg-accent"
-          >
-            <span className="flex items-center gap-1.5 text-ui text-foreground">
-              {automation.scope === "global" ? (
-                <GlobeIcon className="size-3 text-muted-foreground" />
+      {/* Keyed on scope so the whole set — the sentence and the rows it describes
+          — enters together. Two elements changing at two different times would
+          read as the list lagging the switch. */}
+      <div key={scope} className={cn("flex flex-col gap-2", ENTER_CLASS)}>
+        <p className="px-1 text-xs text-muted-foreground">
+          {scope === "project"
+            ? `Offered in ${PROJECT_NAME} only.`
+            : "Offered in every project, including ones you haven't opened."}
+        </p>
+
+        <div className="flex flex-col gap-px">
+          {visible.map((automation) => (
+            <button
+              key={automation.id}
+              type="button"
+              onClick={() => onSelect(automation.id)}
+              aria-current={automation.id === selectedId ? "true" : undefined}
+              className="relative flex flex-col gap-0.5 rounded-md py-1.5 pr-2 pl-3 text-left transition-[background-color] duration-150 ease-out hover:bg-accent aria-[current]:bg-accent motion-reduce:transition-none"
+            >
+              {/* The selection marker is a mounted element rather than a border
+                  that switches colour, which is what buys it an entrance: it
+                  exists only on the selected row, so `starting:` fires each time
+                  selection moves. */}
+              {automation.id === selectedId ? (
+                <span
+                  aria-hidden
+                  className="absolute inset-y-1.5 left-1 w-0.5 rounded-full bg-primary transition-[opacity,transform,translate,scale] duration-200 ease-out starting:scale-y-0 starting:opacity-0 motion-reduce:transition-none motion-reduce:starting:scale-y-100"
+                />
               ) : null}
-              {automation.name === "" ? "Untitled" : automation.name}
-            </span>
-            <span className="text-xs text-muted-foreground">
-              {scopeSummary(automation.columnScope)} ·{" "}
-              {HARNESS_ADAPTERS[automation.runtime.harnessId].label}
-            </span>
-          </button>
-        ))}
+              <span className="text-ui text-foreground">
+                {automation.name === "" ? "Untitled" : automation.name}
+              </span>
+              <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                {scopeSummary(automation.columnScope)} ·
+                <HarnessTag harnessId={automation.runtime.harnessId} />
+              </span>
+            </button>
+          ))}
+        </div>
       </div>
 
       <Button
@@ -709,7 +758,7 @@ export default function AutomationFormScratch() {
             type="button"
             onClick={() => setLayout(option)}
             aria-pressed={option === layout}
-            className="rounded-full px-2.5 py-0.5 text-label text-muted-foreground transition-colors hover:text-foreground aria-pressed:bg-accent aria-pressed:text-foreground"
+            className="rounded-full px-2.5 py-0.5 text-label text-muted-foreground transition-[background-color,color] duration-150 ease-out hover:text-foreground aria-pressed:bg-accent aria-pressed:text-foreground motion-reduce:transition-none"
           >
             {option === "composer" ? "Composer" : "Sectioned"}
           </button>
@@ -725,7 +774,14 @@ export default function AutomationFormScratch() {
           onSelect={setSelectedId}
           onCreate={create}
         />
-        <div className="min-w-0 flex-1 p-5">
+        {/* Keyed on layout: the two layouts are the comparison this scratch
+            exists for, and a hard swap makes them harder to tell apart than a
+            settle does. Deliberately NOT keyed on the selected automation —
+            re-entering the form on every click would animate the wrong thing. */}
+        <div
+          key={layout}
+          className={cn("min-w-0 flex-1 p-5", ENTER_CLASS, "starting:translate-y-1")}
+        >
           {layout === "composer" ? (
             <ComposerLayout automation={selected} update={update} />
           ) : (

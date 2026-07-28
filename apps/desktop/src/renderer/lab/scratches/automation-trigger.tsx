@@ -21,8 +21,31 @@
  *     rather than bare numbers, drop targets identical to today, and the dragged
  *     card always naming what will run.
  *
+ * Every surface here is drawn INSIDE the chrome it will really live in — a mock
+ * ticket header, a real board with real cards. A control judged on an empty page
+ * is judged against a page nobody will ever see: the advance button's whole bet
+ * is that "Move to Needs Review · Code review" reads at a glance while sitting
+ * next to a ticket title competing for the same line, and three bare buttons on
+ * white cannot test that.
+ *
+ * Motion is deliberately confined to APPEARANCE. Nothing in this file may delay
+ * or gate a response — no dwell, no debounce, no transition standing between the
+ * pointer and what it is aiming at. The transitions are property-listed rather
+ * than `transition-all` for exactly that reason: a floating palette that tracks
+ * the cursor must animate its opacity and never its position, or it trails the
+ * hand that is steering it.
+ *
+ * One deviation from the house `transition-[opacity,transform]` string, and it
+ * is a bug fix rather than a preference: Tailwind v4 compiles `scale-*` and
+ * `translate-*` to the standalone `scale` and `translate` properties, not to
+ * `transform` — which is why its own `transition-transform` expands to
+ * `transform, translate, scale, rotate`. A property list naming only `transform`
+ * therefore animates the opacity and snaps the scale, and the fade is
+ * convincing enough that nobody notices the half that never ran. Worth checking
+ * the shipped `board-column.tsx` against the same thing.
+ *
  * Local state only — no stores, no bridge. Nothing here starts a session, and
- * the drop line at the bottom of the drag tab is the assertion in place of one.
+ * the drop confirmation says so at the moment it would otherwise be believed.
  */
 import * as React from "react";
 import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
@@ -48,15 +71,24 @@ import {
 } from "@renderer/components/ui/dropdown-menu";
 import { cn } from "@renderer/lib/utils";
 
-import { HARNESS_ADAPTERS, SEEDED_AUTOMATIONS, type Automation } from "../automation/model";
+import { HarnessTag } from "../automation/harness-identity";
+import { SEEDED_AUTOMATIONS, type Automation } from "../automation/model";
 import { useDragSim } from "../automation/use-drag-sim";
-import { tickets } from "../fixtures";
+import { project, ticketById, tickets } from "../fixtures";
 
 export const title = "Automation · trigger";
 export const note = "Arming, the in-ticket advance button, and four drag pickers (#86/#89)";
 
 /** Digits stop here: an accelerator you have to look at your hand to use is not one. */
 const MAX_ACCELERATORS = 4;
+
+/**
+ * How long a drop confirmation stays before it starts leaving, and how long the
+ * leaving itself takes. Short enough that a second drop never queues behind the
+ * first, long enough to be read by someone whose eyes were on the card.
+ */
+const CONFIRM_HOLD_MS = 1500;
+const CONFIRM_LEAVE_MS = 200;
 
 /** Which automations may be offered for a column (#79's `columnScope`). */
 function offeredFor(status: TicketStatus): Automation[] {
@@ -72,8 +104,51 @@ function automationById(id: string | undefined): Automation | null {
   return SEEDED_AUTOMATIONS.find((automation) => automation.id === id) ?? null;
 }
 
-function harnessOf(automation: Automation): string {
-  return HARNESS_ADAPTERS[automation.runtime.harnessId].label;
+/** `VLT-14`. Built from the project rather than stored, exactly as the app does it. */
+function ticketRef(ticket: Ticket): string {
+  return `${project.ticketPrefix}-${ticket.ticketNumber}`;
+}
+
+/* ------------------------------------------------------------------- fragments */
+
+function StatusChip({ status }: { status: TicketStatus }) {
+  return (
+    <span className="rounded-full border border-border px-1.5 py-px text-label text-muted-foreground">
+      {TICKET_STATUS_LABELS[status]}
+    </span>
+  );
+}
+
+/**
+ * One board card, shared by the Arming and Drag tabs.
+ *
+ * Shared rather than duplicated because the two tabs are meant to be the SAME
+ * board seen twice — if arming looks like a different product from dragging, the
+ * comparison between the two trigger surfaces is measuring the mock, not the
+ * design.
+ */
+function BoardCard({
+  ticket,
+  dimmed = false,
+  onPointerDown,
+}: {
+  ticket: Ticket;
+  dimmed?: boolean;
+  onPointerDown?: (event: React.PointerEvent) => void;
+}) {
+  return (
+    <div
+      onPointerDown={onPointerDown}
+      className={cn(
+        "rounded-lg border border-border bg-card px-2.5 py-1.5 select-none",
+        onPointerDown !== undefined && "cursor-grab touch-none",
+        dimmed && "opacity-40",
+      )}
+    >
+      <p className="font-mono text-label text-muted-foreground">{ticketRef(ticket)}</p>
+      <p className="line-clamp-2 text-xs text-foreground">{ticket.title}</p>
+    </div>
+  );
 }
 
 /* ------------------------------------------------------------------ in ticket */
@@ -87,99 +162,150 @@ const TICKET_STATE_NOTES: Record<TicketState, string> = {
     "Same armed column, but this ticket has a session worth resuming — #89: resume wins, and a fresh Run stays one click away.",
 };
 
+/** The ticket the header mock is built around — Doing, so the move it offers is the real next one. */
+const HEADER_TICKET = ticketById("tkt-14");
+
+/**
+ * One target column for all three states, deliberately.
+ *
+ * The three states differ in what is ARMED and whether a session exists; if the
+ * destination moved too, the labels would differ for two reasons at once and the
+ * comparison would be worthless. Needs Review is also the honest hard case: its
+ * armed Automation is `Code review`, which is the longest primary label the bet
+ * has to survive.
+ */
+const ADVANCE_TARGET: TicketStatus = "needs_review";
+
 /**
  * The in-ticket advance control (#86d), reusing #45's shipped split-button shape
  * — primary + chevron, corners squared between them, never a second row.
  *
  * The whole design bet is in the primary's LABEL. "Move to Needs Review · Code
- * Review" is one gesture that names two consequences, which is the only way a
+ * review" is one gesture that names two consequences, which is the only way a
  * single click can spend tokens without being a surprise (#20). If that label
  * stops fitting, the bet is off.
  */
 function AdvanceButton({ state }: { state: TicketState }) {
-  const target: TicketStatus = state === "unarmed" ? "todo" : "doing";
-  const armed = state === "unarmed" ? null : automationById("atm-implement");
+  const armed = state === "unarmed" ? null : automationById("atm-review");
   const resuming = state === "resumable";
 
   const primaryLabel = resuming
     ? "Resume"
     : armed === null
-      ? `Move to ${TICKET_STATUS_LABELS[target]}`
-      : `Move to ${TICKET_STATUS_LABELS[target]} · ${armed.name}`;
+      ? `Move to ${TICKET_STATUS_LABELS[ADVANCE_TARGET]}`
+      : `Move to ${TICKET_STATUS_LABELS[ADVANCE_TARGET]} · ${armed.name}`;
 
   return (
-    <div className="flex flex-col gap-2">
-      <div className="inline-flex w-fit">
-        <Button variant="outline" size="xs" className="rounded-r-none">
-          {resuming ? (
-            <PlayIcon weight="fill" />
-          ) : armed !== null ? (
-            <LightningIcon weight="fill" />
-          ) : (
-            <ArrowRightIcon />
-          )}
-          {primaryLabel}
-        </Button>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="outline"
-              size="icon-xs"
-              aria-label="More ways to advance this ticket"
-              className="-ml-px rounded-l-none"
-            >
-              <CaretDownIcon weight="bold" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-72">
-            {resuming ? (
-              <>
-                {/* The rarer intent, made cheap without making it the default. */}
-                <DropdownMenuItem className="justify-between gap-6">
-                  <span className="flex items-center gap-2">
-                    <LightningIcon weight="fill" />
-                    Start a fresh Run · Implement
-                  </span>
-                  <span className="text-xs text-muted-foreground">Claude Code</span>
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-              </>
-            ) : null}
-            {armed !== null ? (
-              <DropdownMenuItem>
-                <ArrowRightIcon />
-                Move to {TICKET_STATUS_LABELS[target]} without running
-              </DropdownMenuItem>
-            ) : null}
-            <DropdownMenuSeparator />
-            {/* "Run without moving" — the plan routes this through the session
-                tab strip's new-session control; offering it here too is the
-                thing to have an opinion about. */}
-            <DropdownMenuLabel>Run without moving</DropdownMenuLabel>
-            {offeredFor(target).map((automation) => (
-              <DropdownMenuItem key={automation.id} className="justify-between gap-6">
+    <div className="inline-flex w-fit shrink-0">
+      <Button variant="outline" size="xs" className="rounded-r-none">
+        {resuming ? (
+          <PlayIcon weight="fill" />
+        ) : armed !== null ? (
+          <LightningIcon weight="fill" />
+        ) : (
+          <ArrowRightIcon />
+        )}
+        {primaryLabel}
+      </Button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="outline"
+            size="icon-xs"
+            aria-label="More ways to advance this ticket"
+            className="-ml-px rounded-l-none"
+          >
+            <CaretDownIcon weight="bold" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-80">
+          {resuming && armed !== null ? (
+            <>
+              {/* The rarer intent, made cheap without making it the default. */}
+              <DropdownMenuItem className="justify-between gap-6">
                 <span className="flex items-center gap-2">
-                  <PlayIcon weight="fill" />
-                  {automation.name}
+                  <LightningIcon weight="fill" />
+                  Start a fresh Run · {armed.name}
                 </span>
-                <span className="text-xs text-muted-foreground">{harnessOf(automation)}</span>
+                <HarnessTag harnessId={armed.runtime.harnessId} className="text-xs" />
               </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-      <p className="max-w-prose text-xs text-muted-foreground">{TICKET_STATE_NOTES[state]}</p>
+              <DropdownMenuSeparator />
+            </>
+          ) : null}
+          {armed !== null ? (
+            <DropdownMenuItem>
+              <ArrowRightIcon />
+              Move to {TICKET_STATUS_LABELS[ADVANCE_TARGET]} without running
+            </DropdownMenuItem>
+          ) : null}
+          <DropdownMenuSeparator />
+          {/* "Run without moving" — the plan routes this through the session
+              tab strip's new-session control; offering it here too is the
+              thing to have an opinion about. */}
+          <DropdownMenuLabel>Run without moving</DropdownMenuLabel>
+          {offeredFor(ADVANCE_TARGET).map((automation) => (
+            <DropdownMenuItem key={automation.id} className="justify-between gap-6">
+              <span className="flex items-center gap-2">
+                <PlayIcon weight="fill" />
+                {automation.name}
+              </span>
+              <HarnessTag harnessId={automation.runtime.harnessId} className="text-xs" />
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }
 
+/**
+ * Enough ticket header to judge the control by: identity in mono, the title it
+ * has to share a line with, current status, and the advance control pinned right
+ * where the app puts its header actions.
+ *
+ * Not a faithful port of the shipped header — a mock that chases every detail
+ * starts collecting review comments about the mock. It carries exactly the four
+ * things that compete with the button for space and attention.
+ */
+function MockTicketHeader({ ticket, state }: { ticket: Ticket; state: TicketState }) {
+  return (
+    <div className="rounded-xl border border-border bg-card">
+      <div className="flex items-center gap-2 border-b border-border px-3 py-1.5">
+        <span className="font-mono text-xs text-muted-foreground">{ticketRef(ticket)}</span>
+        <StatusChip status={ticket.status} />
+        {ticket.labels.map((label) => (
+          <span key={label} className="text-label text-muted-foreground">
+            {label}
+          </span>
+        ))}
+      </div>
+      <div className="flex items-center gap-4 px-3 py-2.5">
+        <h4 className="min-w-0 flex-1 truncate text-ui font-medium text-foreground">
+          {ticket.title}
+        </h4>
+        <AdvanceButton state={state} />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Three stacked headers rather than one header with a state switcher.
+ *
+ * The thing under review is label LENGTH — whether the armed label still reads
+ * as one phrase when the title is pushing back. Lengths are only comparable when
+ * they are on screen together; a switcher makes you hold the previous label in
+ * memory and compare against a remembered one, which is exactly the judgement
+ * people get wrong.
+ */
 function InTicketTab() {
   return (
     <div className="flex flex-col gap-6">
       {(["unarmed", "armed", "resumable"] as const).map((state) => (
-        <section key={state} className="flex flex-col gap-2">
+        <section key={state} className="flex flex-col gap-1.5">
           <h3 className="font-mono text-label uppercase text-muted-foreground">{state}</h3>
-          <AdvanceButton state={state} />
+          <MockTicketHeader ticket={HEADER_TICKET} state={state} />
+          <p className="max-w-prose text-xs text-muted-foreground">{TICKET_STATE_NOTES[state]}</p>
         </section>
       ))}
       <p className="max-w-prose border-t border-border pt-4 text-xs text-muted-foreground">
@@ -194,95 +320,119 @@ function InTicketTab() {
 /* --------------------------------------------------------------------- arming */
 
 /**
- * Column-header arming (#86b).
+ * Column-header arming (#86b), against a populated board.
  *
  * The affordance has to carry two facts at once — that a column CAN be armed,
  * and what it is armed with — without turning the board header into a second
- * toolbar. The quiet dashed hint on an unarmed column is #88's discoverability
- * answer: seeded automations are useless if nobody learns that columns fire.
+ * toolbar. The cards are here because that "without" is the whole test: an
+ * arming control that looks calm above an empty column can still be the loudest
+ * thing on a board with work in it.
+ *
+ * The quiet dashed hint on an unarmed column is #88's discoverability answer:
+ * seeded automations are useless if nobody learns that columns fire.
  */
 function ArmingTab() {
   const [arming, setArming] = React.useState<Partial<Record<TicketStatus, string>>>(SEEDED_ARMING);
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex gap-2 overflow-x-auto pb-2">
-        {TICKET_STATUSES.map((status) => {
-          const armed = automationById(arming[status]);
-          const offered = offeredFor(status);
-          const count = tickets.filter((ticket) => ticket.status === status).length;
+      <div className="overflow-hidden rounded-xl border border-border bg-background">
+        <div className="flex gap-2 overflow-x-auto p-2">
+          {TICKET_STATUSES.map((status) => {
+            const armed = automationById(arming[status]);
+            const offered = offeredFor(status);
+            const inColumn = tickets.filter((ticket) => ticket.status === status);
 
-          return (
-            <div key={status} className="flex w-56 shrink-0 flex-col rounded-lg bg-muted/40 p-2.5">
-              <div className="flex items-center gap-2 pb-1">
-                <span className="text-ui font-medium text-foreground">
-                  {TICKET_STATUS_LABELS[status]}
-                </span>
-                <span className="font-mono text-xs text-muted-foreground">{count}</span>
-              </div>
+            return (
+              <div key={status} className="flex w-52 shrink-0 flex-col rounded-lg bg-muted/40 p-2">
+                <div className="flex items-center gap-2 px-1 pb-1.5">
+                  <span className="text-ui font-medium text-foreground">
+                    {TICKET_STATUS_LABELS[status]}
+                  </span>
+                  <span className="font-mono text-xs text-muted-foreground">{inColumn.length}</span>
+                </div>
 
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  {armed === null ? (
-                    // Unarmed: dashed, muted, and honest about being an offer.
-                    <button
-                      type="button"
-                      className="flex items-center gap-1.5 rounded-md border border-dashed border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:border-solid hover:text-foreground"
-                    >
-                      <LightningIcon />
-                      Arm an automation
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className="flex flex-col items-start gap-0.5 rounded-md border border-border bg-card px-2 py-1 text-left transition-colors hover:border-ring"
-                    >
-                      <span className="flex items-center gap-1.5 text-xs text-foreground">
-                        <LightningIcon weight="fill" className="text-primary" />
-                        {armed.name}
-                      </span>
-                      <span className="pl-4 text-xs text-muted-foreground">{harnessOf(armed)}</span>
-                    </button>
-                  )}
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-64">
-                  <DropdownMenuLabel>
-                    Fires when a ticket is moved into {TICKET_STATUS_LABELS[status]}
-                  </DropdownMenuLabel>
-                  {offered.map((automation) => (
-                    <DropdownMenuItem
-                      key={automation.id}
-                      onSelect={() =>
-                        setArming((current) => ({ ...current, [status]: automation.id }))
-                      }
-                      className="justify-between gap-6"
-                    >
-                      <span>{automation.name}</span>
-                      <span className="text-xs text-muted-foreground">{harnessOf(automation)}</span>
-                    </DropdownMenuItem>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    {armed === null ? (
+                      // Unarmed: dashed, muted, and honest about being an offer.
+                      //
+                      // The `key` is load-bearing, not decoration: both branches
+                      // are <button>, so React reuses the DOM node and the
+                      // element is never "newly added" — which is the condition
+                      // @starting-style animates on. Without distinct keys,
+                      // arming a column swaps its contents with no transition at
+                      // all and the `starting:` classes look broken.
+                      <button
+                        key="unarmed"
+                        type="button"
+                        className="flex items-center gap-1.5 rounded-md border border-dashed border-border px-2 py-1 text-xs text-muted-foreground transition-[color,border-color,opacity,transform,translate,scale] duration-150 ease-out hover:border-solid hover:text-foreground starting:scale-[0.98] starting:opacity-0 motion-reduce:starting:scale-100"
+                      >
+                        <LightningIcon />
+                        Arm an automation
+                      </button>
+                    ) : (
+                      <button
+                        key="armed"
+                        type="button"
+                        className="flex flex-col items-start gap-0.5 rounded-md border border-border bg-card px-2 py-1 text-left transition-[color,border-color,opacity,transform,translate,scale] duration-150 ease-out hover:border-ring starting:scale-[0.98] starting:opacity-0 motion-reduce:starting:scale-100"
+                      >
+                        <span className="flex items-center gap-1.5 text-xs text-foreground">
+                          <LightningIcon weight="fill" className="text-primary" />
+                          {armed.name}
+                        </span>
+                        <HarnessTag
+                          harnessId={armed.runtime.harnessId}
+                          className="pl-0.5 text-xs"
+                        />
+                      </button>
+                    )}
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-72">
+                    <DropdownMenuLabel>
+                      Fires when a ticket is moved into {TICKET_STATUS_LABELS[status]}
+                    </DropdownMenuLabel>
+                    {offered.map((automation) => (
+                      <DropdownMenuItem
+                        key={automation.id}
+                        onSelect={() =>
+                          setArming((current) => ({ ...current, [status]: automation.id }))
+                        }
+                        className="justify-between gap-6"
+                      >
+                        <span>{automation.name}</span>
+                        <HarnessTag harnessId={automation.runtime.harnessId} className="text-xs" />
+                      </DropdownMenuItem>
+                    ))}
+                    <DropdownMenuSeparator />
+                    {/* In-situ creation (#86a): authoring must never require a trip to settings. */}
+                    <DropdownMenuItem>New automation for this column…</DropdownMenuItem>
+                    {armed !== null ? (
+                      <DropdownMenuItem
+                        onSelect={() =>
+                          setArming((current) => {
+                            const next = { ...current };
+                            delete next[status];
+                            return next;
+                          })
+                        }
+                      >
+                        <XIcon />
+                        Disarm
+                      </DropdownMenuItem>
+                    ) : null}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
+                <div className="flex flex-col gap-1.5 pt-2">
+                  {inColumn.map((ticket) => (
+                    <BoardCard key={ticket.id} ticket={ticket} />
                   ))}
-                  <DropdownMenuSeparator />
-                  {/* In-situ creation (#86a): authoring must never require a trip to settings. */}
-                  <DropdownMenuItem>New automation for this column…</DropdownMenuItem>
-                  {armed !== null ? (
-                    <DropdownMenuItem
-                      onSelect={() =>
-                        setArming((current) => {
-                          const next = { ...current };
-                          delete next[status];
-                          return next;
-                        })
-                      }
-                    >
-                      <XIcon />
-                      Disarm
-                    </DropdownMenuItem>
-                  ) : null}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-          );
-        })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       <p className="max-w-prose text-xs text-muted-foreground">
@@ -351,7 +501,14 @@ function DragGhost({
         )}
       >
         <LightningIcon weight={automation === null ? "regular" : "fill"} />
-        {automation === null ? "Move only" : `${automation.name} · ${harnessOf(automation)}`}
+        {automation === null ? (
+          "Move only"
+        ) : (
+          <>
+            {automation.name}
+            <HarnessTag harnessId={automation.runtime.harnessId} />
+          </>
+        )}
       </p>
     </div>
   );
@@ -376,17 +533,23 @@ function PaletteRow({
       onPointerEnter={onChoose}
       aria-pressed={chosen}
       className={cn(
-        "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-xs transition-colors",
+        // 100ms, not 150: this one is on the selection path, and selection
+        // feedback that eases in slowly reads as a laggy click even though the
+        // state changed on the same frame as the pointer event.
+        "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-xs transition-colors duration-100 ease-out",
         chosen ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground",
       )}
     >
+      {/* Two marks, two different facts: the bolt means "a Run will start", the
+          harness mark means "and this is who runs it". Collapsing them into one
+          glyph would lose the distinction the palette exists to make. */}
       <LightningIcon
         weight={chosen ? "fill" : "regular"}
         className={chosen ? "text-primary" : ""}
       />
       <span className="truncate">{automation === null ? "Move only" : automation.name}</span>
-      <span className="ml-auto shrink-0 text-muted-foreground">
-        {automation === null ? "" : harnessOf(automation)}
+      <span className="ml-auto shrink-0">
+        {automation === null ? null : <HarnessTag harnessId={automation.runtime.harnessId} />}
       </span>
       {index < MAX_ACCELERATORS ? (
         <kbd className="shrink-0 rounded border border-border px-1 font-mono text-[10px] text-muted-foreground">
@@ -395,6 +558,16 @@ function PaletteRow({
       ) : null}
     </button>
   );
+}
+
+/** What a completed drop resolved to, captured where the pointer released it. */
+interface DropConfirmation {
+  /** A fresh key per drop, so dropping twice into the same column replays the entrance. */
+  key: number;
+  x: number;
+  y: number;
+  status: TicketStatus;
+  automation: Automation | null;
 }
 
 function DragTab() {
@@ -410,17 +583,68 @@ function DragTab() {
   );
 
   const drag = useDragSim(MAX_ACCELERATORS);
+
+  // The truthful set: what a release RIGHT NOW would offer. Over no column that
+  // is "Move only" and nothing else, which is what keeps the ghost honest when
+  // the pointer wanders into the gutter.
   const options = optionsFor(drag.hovered);
   const chosen = options[drag.chosenIndex] ?? null;
+
+  // The displayed set, which lags the truthful one by exactly one column-exit.
+  // A palette fading out after you leave a column would otherwise re-render as
+  // the single "Move only" row on its way out — a content flicker in the corner
+  // of your eye that looks like the palette changed its mind. Written during
+  // render (like `use-drag-sim`'s own listener ref) because it is a cache of
+  // this render's inputs, not state anything reacts to.
+  const lastHovered = React.useRef<TicketStatus | null>(null);
+  if (drag.hovered !== null) lastHovered.current = drag.hovered;
+  const paletteOptions = optionsFor(drag.hovered ?? lastHovered.current);
+
   const paletteVisible =
     drag.ticketId !== null &&
     drag.hovered !== null &&
     (variant === "always" || variant === "card" || drag.modifierHeld || variant === "column");
   const draggedTicket = tickets.find((ticket) => ticket.id === drag.ticketId) ?? null;
 
+  // Feedback belongs where the eye already is. A line at the bottom of the page
+  // is a result nobody reads, because at the moment of release you are looking
+  // at the column you just released over.
+  const [confirmation, setConfirmation] = React.useState<DropConfirmation | null>(null);
+  const [confirmationLeaving, setConfirmationLeaving] = React.useState(false);
+
+  React.useEffect(() => {
+    const drop = drag.lastDrop;
+    if (drop === null) {
+      // Starting a new drag clears `lastDrop`, which is also the right moment to
+      // drop a confirmation still on screen: it describes the previous drag.
+      setConfirmation(null);
+      return;
+    }
+    setConfirmation({
+      key: Date.now(),
+      // `use-drag-sim` reports the pointer on every move and does not touch it
+      // on release, so this is the release point — no need to widen the hook's
+      // contract to carry a coordinate it already has.
+      x: drag.point.x,
+      y: drag.point.y,
+      status: drop.status,
+      automation: optionsFor(drop.status)[drop.automationIndex] ?? null,
+    });
+    setConfirmationLeaving(false);
+    const fade = window.setTimeout(() => setConfirmationLeaving(true), CONFIRM_HOLD_MS);
+    const clear = window.setTimeout(
+      () => setConfirmation(null),
+      CONFIRM_HOLD_MS + CONFIRM_LEAVE_MS,
+    );
+    return () => {
+      window.clearTimeout(fade);
+      window.clearTimeout(clear);
+    };
+  }, [drag.lastDrop, drag.point, optionsFor]);
+
   const palette = (
     <div className="flex flex-col gap-px">
-      {options.map((automation, index) => (
+      {paletteOptions.map((automation, index) => (
         <PaletteRow
           key={automation?.id ?? "none"}
           automation={automation}
@@ -455,40 +679,62 @@ function DragTab() {
           variant — the plan forbids the picker from adding or subdividing one. */}
       <div className="relative overflow-hidden rounded-xl border border-border bg-background">
         <div className="flex h-8 items-center gap-3 border-b border-border px-3">
-          <span className="text-xs text-muted-foreground">Board</span>
+          <span className="shrink-0 text-xs text-muted-foreground">Board</span>
           {/* The header strip. It is never a drop target — it is a readout that
               happens to be clickable, which is why it lives in chrome the drag
-              can't land on. */}
-          {(variant === "held" || variant === "always") && paletteVisible ? (
-            <div className="flex items-center gap-1">
-              {options.map((automation, index) => (
-                <button
-                  key={automation?.id ?? "none"}
-                  type="button"
-                  onPointerEnter={() => drag.setChosenIndex(index)}
-                  aria-pressed={index === drag.chosenIndex}
+              can't land on.
+
+              Mounted for the whole drag and merely faded, rather than mounted
+              and unmounted: it lives in fixed-height chrome, so keeping it
+              costs no layout, and it buys a real exit transition — releasing ⌥
+              fades the strip out instead of blinking it away. */}
+          {(variant === "held" || variant === "always") && drag.ticketId !== null ? (
+            <div className="relative flex min-w-0 flex-1 items-center">
+              <div
+                className={cn(
+                  "flex items-center gap-1 transition-[opacity,transform,translate,scale] duration-150 ease-out",
+                  paletteVisible
+                    ? "opacity-100"
+                    : "pointer-events-none scale-[0.98] opacity-0 motion-reduce:scale-100",
+                )}
+              >
+                {paletteOptions.map((automation, index) => (
+                  <button
+                    key={automation?.id ?? "none"}
+                    type="button"
+                    onPointerEnter={() => drag.setChosenIndex(index)}
+                    aria-pressed={index === drag.chosenIndex}
+                    className={cn(
+                      "flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs transition-colors duration-100 ease-out",
+                      index === drag.chosenIndex
+                        ? "bg-accent text-foreground"
+                        : "text-muted-foreground",
+                    )}
+                  >
+                    <LightningIcon weight={index === drag.chosenIndex ? "fill" : "regular"} />
+                    {automation === null ? "Move only" : automation.name}
+                    {automation === null ? null : (
+                      <HarnessTag harnessId={automation.runtime.harnessId} />
+                    )}
+                    {index < MAX_ACCELERATORS ? (
+                      <kbd className="rounded border border-border px-1 font-mono text-[10px]">
+                        {index + 1}
+                      </kbd>
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+              {variant === "held" ? (
+                <span
                   className={cn(
-                    "flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs transition-colors",
-                    index === drag.chosenIndex
-                      ? "bg-accent text-foreground"
-                      : "text-muted-foreground",
+                    "pointer-events-none absolute left-0 text-xs whitespace-nowrap text-muted-foreground transition-opacity duration-150 ease-out",
+                    paletteVisible ? "opacity-0" : "opacity-100",
                   )}
                 >
-                  <LightningIcon weight={index === drag.chosenIndex ? "fill" : "regular"} />
-                  {automation === null ? "Move only" : automation.name}
-                  <span className="text-muted-foreground">
-                    {automation === null ? "" : harnessOf(automation)}
-                  </span>
-                  {index < MAX_ACCELERATORS ? (
-                    <kbd className="rounded border border-border px-1 font-mono text-[10px]">
-                      {index + 1}
-                    </kbd>
-                  ) : null}
-                </button>
-              ))}
+                  Hold ⌥ to choose an automation
+                </span>
+              ) : null}
             </div>
-          ) : variant === "held" && drag.ticketId !== null ? (
-            <span className="text-xs text-muted-foreground">Hold ⌥ to choose an automation</span>
           ) : null}
         </div>
 
@@ -498,7 +744,12 @@ function DragTab() {
               key={status}
               data-lab-column={status}
               className={cn(
-                "flex w-52 shrink-0 flex-col rounded-lg bg-muted/40 p-2 transition-colors",
+                // The ring is a box-shadow, which `transition-colors` does not
+                // cover — which is why the highlight used to snap on and the
+                // background used to ease. 150ms is appearance only: the hit
+                // test that decides the drop already happened on the move
+                // event that triggered this class change.
+                "flex w-52 shrink-0 flex-col rounded-lg bg-muted/40 p-2 transition-[background-color,box-shadow] duration-150 ease-out",
                 drag.hovered === status && "bg-accent/60 ring-1 ring-ring",
               )}
             >
@@ -508,8 +759,13 @@ function DragTab() {
                 </span>
               </div>
 
+              {/* Enter-only, unlike the other two variants. This palette sits in
+                  the column's flow, so an exiting copy would hold the layout
+                  open under a column you have already left — pushing cards
+                  around the exact region you are aiming at. Instant removal is
+                  the calmer of the two. */}
               {variant === "column" && paletteVisible && drag.hovered === status ? (
-                <div className="mb-1.5 rounded-md border border-border bg-popover p-1">
+                <div className="mb-1.5 rounded-md border border-border bg-popover p-1 transition-[opacity,transform,translate,scale] duration-150 ease-out starting:scale-[0.98] starting:opacity-0 motion-reduce:starting:scale-100">
                   {palette}
                 </div>
               ) : null}
@@ -518,16 +774,12 @@ function DragTab() {
                 {tickets
                   .filter((ticket) => ticket.status === status)
                   .map((ticket) => (
-                    <div
+                    <BoardCard
                       key={ticket.id}
+                      ticket={ticket}
+                      dimmed={drag.ticketId === ticket.id}
                       onPointerDown={drag.start(ticket.id)}
-                      className={cn(
-                        "cursor-grab touch-none rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs text-foreground select-none",
-                        drag.ticketId === ticket.id && "opacity-40",
-                      )}
-                    >
-                      <span className="line-clamp-2">{ticket.title}</span>
-                    </div>
+                    />
                   ))}
               </div>
             </div>
@@ -535,27 +787,67 @@ function DragTab() {
         </div>
       </div>
 
-      {drag.lastDrop !== null ? (
-        <p className="flex items-center gap-1.5 text-xs text-foreground">
-          <LightningIcon weight="fill" className="text-primary" />
-          Dropped in {TICKET_STATUS_LABELS[drag.lastDrop.status]} —{" "}
-          {optionsFor(drag.lastDrop.status)[drag.lastDrop.automationIndex]?.name ??
-            "moved without running"}
-          . (Nothing started: the lab has no sessions.)
-        </p>
-      ) : (
-        <p className="text-xs text-muted-foreground">
-          Drag a card. ⌥ reveals the palette in the first variant; 1–{MAX_ACCELERATORS} pick; Esc
-          cancels.
-        </p>
-      )}
+      <p className="text-xs text-muted-foreground">
+        Drag a card. ⌥ reveals the palette in the first variant; 1–{MAX_ACCELERATORS} pick; Esc
+        cancels.
+      </p>
+
+      {confirmation !== null ? (
+        <div
+          key={confirmation.key}
+          className={cn(
+            // Centred on the release point and lifted clear of it, so it reads
+            // as "this landed here" rather than as a notification that happens
+            // to be nearby. The x-translate is the centring; the y-axis is left
+            // free for the animation to use.
+            "pointer-events-none fixed z-[110] w-64 -translate-x-1/2 rounded-lg border border-border bg-popover px-3 py-2 shadow-lg",
+            "transition-[opacity,transform,translate,scale] duration-200 ease-out starting:translate-y-1 starting:opacity-0 motion-reduce:starting:translate-y-0",
+            confirmationLeaving && "-translate-y-1 opacity-0 motion-reduce:transition-none",
+          )}
+          style={{ left: confirmation.x, top: confirmation.y - 56 }}
+        >
+          {/* Wraps rather than truncates, and the harness tag is what falls to a
+              second line when it must. An earlier version truncated this row,
+              which ate the AUTOMATION NAME — the one fact the confirmation
+              exists to deliver. Nothing here may be elided; two lines is fine. */}
+          <p className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-foreground">
+            <LightningIcon
+              weight={confirmation.automation === null ? "regular" : "fill"}
+              className={
+                confirmation.automation === null ? "text-muted-foreground" : "text-primary"
+              }
+            />
+            <span>
+              Moved to {TICKET_STATUS_LABELS[confirmation.status]}
+              {confirmation.automation === null ? "" : ` · ${confirmation.automation.name}`}
+            </span>
+            {confirmation.automation === null ? null : (
+              <HarnessTag harnessId={confirmation.automation.runtime.harnessId} />
+            )}
+          </p>
+          {/* The confirmation is the only thing standing between this prototype
+              and someone believing a Run started. It says so every time. */}
+          <p className="pt-0.5 text-label text-muted-foreground">
+            Nothing started — the lab has no sessions.
+          </p>
+        </div>
+      ) : null}
 
       {drag.ticketId !== null && draggedTicket !== null ? (
         <>
           <DragGhost ticket={draggedTicket} point={drag.point} automation={chosen} />
-          {variant === "card" && paletteVisible ? (
+          {variant === "card" ? (
+            // Only opacity and transform are transitioned. `left`/`top` update
+            // every pointer move and must stay untransitioned, or the palette
+            // trails the hand steering it — the one place where "add some
+            // motion" would have become a delay.
             <div
-              className="pointer-events-auto fixed z-[101] w-64 rounded-md border border-border bg-popover p-1 shadow-lg"
+              className={cn(
+                "fixed z-[101] w-64 rounded-md border border-border bg-popover p-1 shadow-lg transition-[opacity,transform,translate,scale] duration-150 ease-out",
+                paletteVisible
+                  ? "pointer-events-auto opacity-100"
+                  : "pointer-events-none scale-[0.98] opacity-0 motion-reduce:scale-100",
+              )}
               style={{ left: drag.point.x - 24, top: drag.point.y + 44 }}
             >
               {palette}
