@@ -31,8 +31,10 @@ import { BoardHeader } from "@renderer/components/board/board-header";
 import { BoardListView, TicketRowContent } from "@renderer/components/board/board-list-view";
 import { CollapsedColumnRail } from "@renderer/components/board/collapsed-column-rail";
 import { TicketCardContent } from "@renderer/components/board/ticket-card";
+import { useBoardCanvasPan } from "@renderer/hooks/use-board-canvas-pan";
 import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { isEscapeExempt } from "@renderer/lib/escape-guard";
+import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
 import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
 
@@ -62,7 +64,7 @@ const boardCollision: CollisionDetection = (args) => {
 // Never mutated (every board op is pure); typed mutable to match the store.
 const EMPTY_TICKETS: Ticket[] = [];
 
-/** The kanban board: columns scroll vertically, the canvas scrolls horizontally. */
+/** The kanban board: columns scroll vertically; the canvas pans horizontally. */
 export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPrefix: string }) {
   const storeTickets = useBoardStore((state) => state.ticketsByProject[projectId]) ?? EMPTY_TICKETS;
   const filter = useBoardStore((state) => state.filterByProject[projectId]) ?? EMPTY_TICKET_FILTER;
@@ -145,6 +147,13 @@ export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPr
   const handleSelect = React.useCallback(
     (ticketId: string | null) => selectTicket(projectId, ticketId),
     [selectTicket, projectId],
+  );
+  // Click empty canvas to clear selection — pan-aware (a drag past slop is not
+  // a click). Lives next to handleSelect so the deselect closure stays stable.
+  const handleCanvasBackgroundClick = React.useCallback(() => handleSelect(null), [handleSelect]);
+  const { panning, canvasRef, canvasProps } = useBoardCanvasPan(
+    handleCanvasBackgroundClick,
+    boardView === "board",
   );
   // Double-click open (ticket-detail-mvp step 3): `openTicket` is a stable
   // zustand action reference, same stability contract as `selectTicket` above.
@@ -246,10 +255,16 @@ export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPr
           />
         ) : (
           <div
-            className="flex min-h-0 flex-1 items-start gap-3 overflow-x-auto px-gutter pb-4"
-            onClick={(event) => {
-              if (event.target === event.currentTarget) handleSelect(null);
-            }}
+            ref={canvasRef}
+            {...canvasProps}
+            className={cn(
+              // Columns cap below full height so a strip of canvas stays
+              // grab-able under them (Trello-style mouse pan). Scrollbar is
+              // hidden — drag / shift-wheel / trackpad replace it.
+              "flex min-h-0 flex-1 items-start gap-3 overflow-x-auto px-gutter pb-4",
+              "[scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+              panning ? "cursor-grabbing select-none" : "cursor-grab",
+            )}
           >
             {shown.map((status) => (
               <BoardColumn

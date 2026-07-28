@@ -25,7 +25,7 @@ export function CollapsedColumnRail({
   if (statuses.length === 0) return null;
 
   return (
-    <div className="flex w-44 flex-none flex-col gap-1.5">
+    <div className="flex w-44 flex-none cursor-default flex-col gap-1.5">
       <span className="text-label uppercase text-muted-foreground/70">Empty</span>
       {statuses.map((status) => (
         <CollapsedColumnTarget

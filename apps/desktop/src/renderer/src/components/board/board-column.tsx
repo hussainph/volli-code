@@ -51,7 +51,11 @@ export function BoardColumn({
   return (
     <div
       className={cn(
-        "flex min-h-0 max-h-full w-72 flex-none flex-col rounded-lg bg-muted/40",
+        // Cap below the canvas so a strip of background stays grab-able for
+        // mouse drag-to-pan (see useBoardCanvasPan). Short columns still hug.
+        // cursor-default overrides the canvas's cursor-grab so only empty
+        // background reads as a pan surface.
+        "flex min-h-0 max-h-[85%] w-72 flex-none cursor-default flex-col rounded-lg bg-muted/40",
         // Layout snaps (no width tween — transform/opacity only); the newly
         // expanded column plays a short ease-out enter instead.
         animateEnter &&
