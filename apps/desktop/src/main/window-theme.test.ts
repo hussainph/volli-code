@@ -7,7 +7,6 @@ import {
   SYSTEM_DARK_ARG,
   firstPaintArguments,
   resolveFirstPaint,
-  windowBackgroundColor,
 } from "./window-theme";
 
 const midnight: Canvas = {
@@ -20,20 +19,20 @@ const midnight: Canvas = {
 describe("resolveFirstPaint", () => {
   it("is exactly the canvas pipeline's window background, so the edge cannot drift from the app", () => {
     expect(
-      windowBackgroundColor({
+      resolveFirstPaint({
         hint: null,
         canvas: midnight,
         appearance: "dark",
         systemPrefersDark: true,
-      }),
+      }).background,
     ).toBe(windowBackground(midnight, "dark"));
   });
 
   it("follows the authored canvas", () => {
     const input = { hint: null, appearance: "dark", systemPrefersDark: true } as const;
 
-    expect(windowBackgroundColor({ ...input, canvas: midnight })).not.toBe(
-      windowBackgroundColor({ ...input, canvas: DEFAULT_CANVAS }),
+    expect(resolveFirstPaint({ ...input, canvas: midnight }).background).not.toBe(
+      resolveFirstPaint({ ...input, canvas: DEFAULT_CANVAS }).background,
     );
   });
 
@@ -42,8 +41,8 @@ describe("resolveFirstPaint", () => {
     // an absent or unreadable canvas must still paint.
     const stored = { hint: null, appearance: "dark", systemPrefersDark: true } as const;
 
-    expect(windowBackgroundColor({ ...stored, canvas: null })).toBe(
-      windowBackgroundColor({ ...stored, canvas: DEFAULT_CANVAS }),
+    expect(resolveFirstPaint({ ...stored, canvas: null }).background).toBe(
+      resolveFirstPaint({ ...stored, canvas: DEFAULT_CANVAS }).background,
     );
   });
 
@@ -71,8 +70,8 @@ describe("resolveFirstPaint", () => {
   it("paints the same canvas differently in the two modes", () => {
     const base = { hint: null, canvas: DEFAULT_CANVAS, appearance: null } as const;
 
-    expect(windowBackgroundColor({ ...base, systemPrefersDark: true })).not.toBe(
-      windowBackgroundColor({ ...base, systemPrefersDark: false }),
+    expect(resolveFirstPaint({ ...base, systemPrefersDark: true }).background).not.toBe(
+      resolveFirstPaint({ ...base, systemPrefersDark: false }).background,
     );
   });
 
@@ -94,6 +93,87 @@ describe("resolveFirstPaint", () => {
         systemPrefersDark: true,
       }),
     ).toEqual(painted);
+  });
+
+  /**
+   * Scenario: appearance is `auto` (the default). The user quit with the Mac in
+   * dark mode, so the hint recorded `dark`. They switch macOS to light while the
+   * app is closed, then relaunch. The hint is a snapshot of the OLD system
+   * preference, not an instruction — honoring its mode would paint the dark
+   * window edge that the renderer only corrects after `boot()`'s IPC round
+   * trip, which is exactly the flash this function exists to prevent, arriving
+   * from the other direction.
+   */
+  it("re-resolves `auto` against the system rather than trust a hint recorded under the old preference", () => {
+    const stale = { appearance: "dark", background: "#000000" } as const;
+
+    const result = resolveFirstPaint({
+      hint: stale,
+      canvas: DEFAULT_CANVAS,
+      appearance: "auto",
+      systemPrefersDark: false,
+    });
+
+    expect(result.appearance).toBe("light");
+    // The hint's background belongs to the mode it recorded, not the mode we
+    // just resolved to — reusing it would paint a dark window edge around a
+    // light UI.
+    expect(result.background).toBe(windowBackground(DEFAULT_CANVAS, "light"));
+    expect(result.background).not.toBe(stale.background);
+  });
+
+  it("re-resolves the mirror case — the OS switched to dark while the app was closed", () => {
+    const stale = { appearance: "light", background: "#ffffff" } as const;
+
+    const result = resolveFirstPaint({
+      hint: stale,
+      canvas: DEFAULT_CANVAS,
+      appearance: "auto",
+      systemPrefersDark: true,
+    });
+
+    expect(result.appearance).toBe("dark");
+    expect(result.background).toBe(windowBackground(DEFAULT_CANVAS, "dark"));
+    expect(result.background).not.toBe(stale.background);
+  });
+
+  it("still honors the hint under an explicit choice, regardless of what the system is doing", () => {
+    // An explicit choice has no expiry — unlike `auto` it means the same thing
+    // no matter what the OS does in the meantime, so the recorded hint stays
+    // authoritative even when it disagrees with `systemPrefersDark`.
+    const paintedLight = { appearance: "light", background: "#123456" } as const;
+    const paintedDark = { appearance: "dark", background: "#654321" } as const;
+
+    expect(
+      resolveFirstPaint({
+        hint: paintedLight,
+        canvas: DEFAULT_CANVAS,
+        appearance: "light",
+        systemPrefersDark: true,
+      }),
+    ).toEqual(paintedLight);
+    expect(
+      resolveFirstPaint({
+        hint: paintedDark,
+        canvas: DEFAULT_CANVAS,
+        appearance: "dark",
+        systemPrefersDark: false,
+      }),
+    ).toEqual(paintedDark);
+  });
+
+  it("treats a null stored appearance as `auto` for hint trust too — an unread row isn't an explicit choice", () => {
+    const stale = { appearance: "dark", background: "#000000" } as const;
+
+    const result = resolveFirstPaint({
+      hint: stale,
+      canvas: DEFAULT_CANVAS,
+      appearance: null,
+      systemPrefersDark: false,
+    });
+
+    expect(result.appearance).toBe("light");
+    expect(result.background).not.toBe(stale.background);
   });
 });
 

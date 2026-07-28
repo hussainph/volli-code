@@ -54,14 +54,24 @@ export interface FirstPaintInput {
  * every arm of this has to end in a color.
  */
 export function resolveFirstPaint(input: FirstPaintInput): FirstPaintHint {
-  if (input.hint !== null) return input.hint;
+  // The hint is a snapshot of what the renderer painted LAST launch, and on
+  // `auto` that snapshot is only as fresh as the OS preference was at that
+  // moment. If the system flips while the app is closed, the hint's mode is now
+  // the stale one — trusting it unconditionally would reintroduce the flash it
+  // exists to prevent, from the other direction. An explicit `light`/`dark`
+  // choice has no such expiry: it means the same thing regardless of what the OS
+  // is doing, so the hint stays authoritative for it. Note this checks the
+  // *stored* appearance, not `input.hint.appearance` — the hint's own field is
+  // always a resolved `light`/`dark` (never `auto`), so it can't tell us which
+  // case we're in.
+  const explicit = input.appearance === "light" || input.appearance === "dark";
+  if (input.hint !== null && explicit) return input.hint;
   const resolved = resolveAppearance(input.appearance ?? "auto", input.systemPrefersDark);
+  // Re-resolving the mode means the hint's `background` (if any) belongs to the
+  // OTHER mode and must not be reused — recompute it for the mode we just
+  // settled on. Reusing it would paint a dark window edge around a light UI (or
+  // vice versa), which is the flash this whole function exists to prevent.
   return { appearance: resolved, background: windowBackground(input.canvas, resolved) };
-}
-
-/** The window background alone — {@link resolveFirstPaint}'s color half. */
-export function windowBackgroundColor(input: FirstPaintInput): string {
-  return resolveFirstPaint(input).background;
 }
 
 /**
