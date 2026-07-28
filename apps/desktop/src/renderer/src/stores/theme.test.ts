@@ -79,6 +79,8 @@ function statePayload(over: Partial<ThemeStatePayload> = {}): ThemeStatePayload 
 interface Paint {
   canvas: Canvas;
   resolved: ResolvedAppearance;
+  /** True for one frame of a running gesture — the terminals are not told. */
+  transient: boolean;
 }
 
 /** Records what the DOM would have been repainted with, in order. */
@@ -97,9 +99,14 @@ function recorder() {
     setSystemPrefersDark: (value: boolean) => {
       prefersDark = value;
     },
-    paintCanvas: (canvas: Canvas, resolved: ResolvedAppearance) => {
-      painted.push({ canvas, resolved });
-      if (arming) eased.push({ canvas, resolved });
+    paintCanvas: (
+      canvas: Canvas,
+      resolved: ResolvedAppearance,
+      options?: { transient?: boolean },
+    ) => {
+      const paint = { canvas, resolved, transient: options?.transient === true };
+      painted.push(paint);
+      if (arming) eased.push(paint);
       arming = false;
     },
     refreshEditorTheme: (themeId: string) => void editorThemes.push(themeId),
@@ -199,7 +206,9 @@ describe("hydrateGlobal", () => {
 
     expect(store.getState().globalCanvas).toEqual(TEAL);
     expect(store.getState().globalAppearance).toBe("light");
-    expect(paint.painted).toEqual([{ canvas: store.getState().globalCanvas, resolved: "light" }]);
+    expect(paint.painted).toEqual([
+      { canvas: store.getState().globalCanvas, resolved: "light", transient: false },
+    ]);
     expect(gateway.state).not.toHaveBeenCalled();
   });
 
@@ -384,7 +393,9 @@ describe("the eased repaint", () => {
     await store.getState().hydrate();
     await store.getState().hydrate(projectScope({ canvas: TEAL }));
 
-    expect(paint.eased).toEqual([{ canvas: TEAL, resolved: expect.anything() as never }]);
+    expect(paint.eased).toEqual([
+      { canvas: TEAL, resolved: expect.anything() as never, transient: false },
+    ]);
   });
 
   it("crossfades a light↔dark flip inside one scope", async () => {
@@ -395,7 +406,7 @@ describe("the eased repaint", () => {
 
     await store.getState().setGlobalAppearance("light");
 
-    expect(paint.eased).toEqual([{ canvas: DEFAULT_CANVAS, resolved: "light" }]);
+    expect(paint.eased).toEqual([{ canvas: DEFAULT_CANVAS, resolved: "light", transient: false }]);
   });
 
   it("never eases the first paint", () => {
@@ -441,8 +452,8 @@ describe("repaint deduplication", () => {
     store.getState().noteSystemAppearance(false);
 
     expect(paint.painted).toEqual([
-      { canvas: TEAL, resolved: "dark" },
-      { canvas: TEAL, resolved: "light" },
+      { canvas: TEAL, resolved: "dark", transient: false },
+      { canvas: TEAL, resolved: "light", transient: false },
     ]);
   });
 });
@@ -489,9 +500,49 @@ describe("preview", () => {
     store.getState().startPreview(TEAL);
 
     expect(effectiveCanvas(store.getState())).toEqual(TEAL);
-    expect(paint.painted.at(-1)).toEqual({ canvas: TEAL, resolved: "dark" });
+    expect(paint.painted.at(-1)).toEqual({ canvas: TEAL, resolved: "dark", transient: true });
     expect(gateway.setGlobalCanvas).not.toHaveBeenCalled();
     expect(gateway.setProjectCanvas).not.toHaveBeenCalled();
+  });
+
+  it("marks an in-flight paint transient, and the paint that ends it committed", async () => {
+    // The frame of a drag skips the terminal palette rebuild and the first-paint
+    // hint (theme/apply.ts) — both are work about a value that has been chosen,
+    // and mid-gesture nothing has been.
+    const { store, gateway, paint } = freshStore();
+    store.getState().hydrateGlobal(appState(DEFAULT_CANVAS, "dark"));
+    // The hint is written from a microtask, so the boot paint's own is still in
+    // flight here — let it land before counting the drag's.
+    await settle();
+    vi.mocked(gateway.setFirstPaint).mockClear();
+
+    store.getState().startPreview(TEAL);
+    store.getState().startPreview(PLUM);
+
+    expect(paint.painted.map((entry) => entry.transient).slice(-2)).toEqual([true, true]);
+    expect(gateway.setFirstPaint).not.toHaveBeenCalled();
+
+    await store.getState().commitPreview({ kind: "global" });
+
+    expect(paint.painted.at(-1)?.transient).toBe(false);
+    await settle();
+    expect(gateway.setFirstPaint).toHaveBeenCalledTimes(1);
+  });
+
+  it("still paints on commit when the last preview frame already showed that canvas", async () => {
+    // The release commits exactly what the final frame previewed, so the key is
+    // unchanged and the repaint's dedupe would swallow it — leaving every live
+    // terminal on the palette it had before the drag, with nothing left to
+    // correct it.
+    const { store, paint } = freshStore();
+    store.getState().hydrateGlobal(appState(DEFAULT_CANVAS, "dark"));
+    store.getState().startPreview(TEAL);
+    const duringDrag = paint.painted.length;
+
+    await store.getState().commitPreview({ kind: "global" });
+
+    expect(paint.painted.length).toBeGreaterThan(duringDrag);
+    expect(paint.painted.at(-1)).toEqual({ canvas: TEAL, resolved: "dark", transient: false });
   });
 
   it("restores the stored look by simply forgetting the preview", () => {

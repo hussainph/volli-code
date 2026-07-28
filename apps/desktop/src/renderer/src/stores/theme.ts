@@ -65,7 +65,11 @@ import {
   type ActiveTheme,
   type ProjectSurfaceOverride,
 } from "@renderer/theme/apply";
-import { paintCanvas, systemPrefersDark } from "@renderer/theme/canvas-paint";
+import {
+  paintCanvas,
+  systemPrefersDark,
+  type PaintCanvasOptions,
+} from "@renderer/theme/canvas-paint";
 import { beginScopeRepaint, shouldEaseScopeRepaint } from "@renderer/theme/scope-transition";
 import { resolveEditorThemeId } from "@renderer/editor/editor-theme-catalog";
 import { refreshMonacoEditorTheme } from "@renderer/editor/monaco-theme";
@@ -154,8 +158,12 @@ export function setProjectRowSink(sink: (project: Project) => void): void {
 /** The seams the store drives: the IPC bridge, and the DOM / Monaco repaint. */
 export interface ThemeStoreDeps {
   gateway: ThemeGateway;
-  /** Derives and writes every custom property, and moves the mode class. Injected so the store stays testable headlessly. */
-  paintCanvas(canvas: Canvas, resolved: ResolvedAppearance): void;
+  /**
+   * Derives and writes every custom property, and moves the mode class.
+   * Injected so the store stays testable headlessly. `options.transient` marks
+   * one frame of a running gesture — see `theme/apply.ts`.
+   */
+  paintCanvas(canvas: Canvas, resolved: ResolvedAppearance, options?: PaintCanvasOptions): void;
   /** Activates a Monaco/shiki catalog id (queued until Monaco boots). */
   refreshEditorTheme(themeId: string): void;
   /**
@@ -182,7 +190,10 @@ const defaultDeps: ThemeStoreDeps = {
       window.api.theme.setGlobalEditor(editorThemeId, projectId),
     setProject: (projectId, override) => window.api.theme.setProject(projectId, override),
   },
-  paintCanvas: (canvas, resolved) => paintCanvas(canvas, resolved),
+  // Point-free on purpose. An arrow re-listing the parameters is how the
+  // `transient` flag came to be silently dropped here: a shorter function is
+  // assignable to a longer signature, so the mistake typechecks.
+  paintCanvas,
   refreshEditorTheme: (themeId) => refreshMonacoEditorTheme(themeId),
   beginScopeRepaint: () => beginScopeRepaint(),
   systemPrefersDark: () => systemPrefersDark(),
@@ -368,6 +379,17 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
      * Monaco follows the same choke point, one resolution later.
      */
     let painted: string | null = null;
+    /**
+     * Whether what is on the document right now was written by a TRANSIENT
+     * paint — one frame of a running gesture, which skipped the terminal
+     * refresh and the first-paint hint.
+     *
+     * Without this the skip would be permanent. A drag's last frame paints the
+     * exact canvas the release then commits, so the committing repaint would
+     * find its key unchanged, take the early return, and the terminals would
+     * keep the palette they had before the drag until something else moved.
+     */
+    let paintedInFlight = false;
     let paintedEditor: string | null = null;
     let persistedEditorThemeId: ShippedEditorThemeId | null = null;
     /**
@@ -380,22 +402,36 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
     let editorWriteGeneration = 0;
     let editorWriteQueue: Promise<void> = Promise.resolve();
 
-    const repaint = (options: { eased?: boolean } = {}): void => {
+    const repaint = (options: { eased?: boolean; transient?: boolean } = {}): void => {
       const state = get();
       const active = activeTheme(state);
       // Keyed on the canvas AND the mode, because one canvas paints two
       // different windows: a light↔dark flip moves every derived value while the
       // authored gradient is byte-identical.
       const key = `${active.resolved}|${JSON.stringify(active.canvas.value)}`;
-      if (key !== painted) {
+      const transient = options.transient === true;
+      // A committing paint runs even when the key is unchanged, as long as what
+      // is on the document got there in flight: the properties are already
+      // right, but the deferred half of that paint has still never happened.
+      if (key !== painted || (paintedInFlight && !transient)) {
         painted = key;
+        paintedInFlight = transient;
         // Armed only when there is an actual swap to ease: a scope change that
         // resolves to the same canvas at the same mode repaints nothing, and a
         // 300ms window in which every hover transition is slowed for no visible
         // reason is a latency regression.
         if (options.eased === true) deps.beginScopeRepaint();
-        deps.paintCanvas(active.canvas.value, active.resolved);
-        recordFirstPaint(active.canvas.value, active.resolved);
+        deps.paintCanvas(active.canvas.value, active.resolved, { transient });
+        // The hint describes the NEXT launch's window, so it may only ever
+        // describe something STORED. Keyed on a preview being in flight rather
+        // than on this paint being transient, because those come apart: a
+        // payload landing mid-drag (`accept`, an editor-preview end) repaints
+        // durably off state that still has the preview layered on it, and
+        // caching that would have the next launch open on a colour the user
+        // never chose. It is also an IPC round trip per pointer event.
+        if (state.preview === null && state.previewAppearance === null) {
+          recordFirstPaint(active.canvas.value, active.resolved);
+        }
       }
 
       const editorId = resolveEditorThemeId({ editorThemeId: active.editor.value });
@@ -480,7 +516,55 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
      * mode flip after boot whenever that read was slow — and would ease the very
      * first paint if it were fast.
      */
+    /**
+     * The preview paint waiting for the next animation frame, if any.
+     *
+     * A drag delivers pointer events faster than the display refreshes — a
+     * trackpad runs well past 120Hz — and every one of them used to reach the
+     * DOM. Only the last write before a frame is ever seen, so the rest were
+     * document-wide style recalculations nobody could look at.
+     *
+     * Coalesced by keeping ONE frame in flight and letting later requests ride
+     * it, rather than by cancelling and re-requesting: re-requesting on every
+     * event starves at any pointer rate above the refresh rate, because the
+     * callback is cancelled before it can run and the window stops following
+     * the pointer at all. The frame reads the store when it fires, so it always
+     * paints the newest preview — the state is never what is deferred, only the
+     * paint is.
+     */
+    let previewFrame: number | null = null;
+
+    const schedulePreviewPaint = (): void => {
+      // Headless — the renderer's own tests run under vitest's `node`
+      // environment — there are no frames to coalesce onto, so the paint is
+      // immediate. What a preview paints is under test; when it paints is not.
+      if (typeof requestAnimationFrame !== "function") {
+        repaint({ transient: true });
+        return;
+      }
+      if (previewFrame !== null) return;
+      previewFrame = requestAnimationFrame(() => {
+        previewFrame = null;
+        repaint({ transient: true });
+      });
+    };
+
+    /**
+     * Drops a queued preview frame, for every path that paints authoritatively.
+     *
+     * A frame surviving into a commit repaints from state the commit has
+     * already cleared, so the window would snap back to the stored canvas for
+     * one frame on every release — and, worse, would leave the document showing
+     * a transient paint after the committing one had already run.
+     */
+    const dropPendingPreviewPaint = (): void => {
+      if (previewFrame === null) return;
+      cancelAnimationFrame(previewFrame);
+      previewFrame = null;
+    };
+
     const setAndRepaint = (patch: Partial<ThemeState>): void => {
+      dropPendingPreviewPaint();
       const hadPainted = painted !== null;
       const before = activeTheme(get()).resolved;
       set(patch);
@@ -600,7 +684,17 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
       },
 
       startPreview(canvas) {
-        setAndRepaint({ preview: canvas });
+        // The STATE moves now and the paint moves on the next frame. Everything
+        // reading this store — the editor's own controls, and the next event in
+        // the same drag building on where the last one landed — sees the new
+        // canvas immediately; only the document's ~50 properties wait.
+        //
+        // Deliberately not `setAndRepaint`: that path is for authoritative
+        // changes, and it drops exactly the frame this one is scheduling. A
+        // canvas preview also cannot flip the mode, so there is nothing here for
+        // the eased repaint it arms.
+        set({ preview: canvas });
+        schedulePreviewPaint();
       },
 
       startAppearancePreview(appearance) {
@@ -634,6 +728,9 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
       async commitPreview(scope) {
         const { preview, previewAppearance } = get();
         if (preview === null && previewAppearance === null) return false;
+        // The gesture is over. A frame still queued would fire against state
+        // that no longer holds a preview and repaint the pre-drag canvas.
+        dropPendingPreviewPaint();
         set({ preview: null, previewAppearance: null });
         const writes: Promise<boolean>[] = [];
         if (preview !== null) {
@@ -650,7 +747,16 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
               : get().setProjectAppearance(scope.projectId, previewAppearance),
           );
         }
-        return (await Promise.all(writes)).every(Boolean);
+        const settled = (await Promise.all(writes)).every(Boolean);
+        // The gesture's last frame was a transient paint, and every write path
+        // above is supposed to end in an authoritative one that supersedes it —
+        // but `setProjectCanvas` skips its repaint entirely when the committed
+        // workspace is not the scope the store currently holds. Left there, the
+        // document keeps a paint whose deferred half never ran: the terminals
+        // stay on the pre-drag palette and the first-paint hint is never
+        // recorded. Deduped on the key, so in the ordinary case this is free.
+        repaint();
+        return settled;
       },
 
       async setGlobalCanvas(canvas) {

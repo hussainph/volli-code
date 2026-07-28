@@ -91,6 +91,40 @@ describe("CanvasEditor", () => {
     expect(html).toContain("15%");
   });
 
+  it("gives grain a dial and vibrancy a track, because they are not the same control", () => {
+    // A rushed port flattened both into `<input type="range">`. Vibrancy has a
+    // position along a line and grain does not — it has an amount of texture,
+    // which only a face can show.
+    const html = render(DEFAULT_CANVAS, "dark");
+
+    expect(html).toContain('data-testid="canvas-grain-dial"');
+    expect(html).toContain('role="slider"');
+    expect(html).toContain('aria-valuenow="0.15"');
+    // Exactly one native range, and it is vibrancy's.
+    expect(html.match(/type="range"/g)).toHaveLength(1);
+  });
+
+  it("puts the grain itself on the dial's face, which is the reason it is a dial", () => {
+    // A value this subtle cannot be read off a number or a thumb position, so
+    // the knob shows the texture it is setting — on a mid-grey backdrop, the one
+    // surface that carries both black noise and a white notch in either mode.
+    const textured = render(DEFAULT_CANVAS, "dark");
+    const none = render({ ...DEFAULT_CANVAS, grain: 0 }, "dark");
+
+    expect(textured).toContain("#8a8a8a");
+    expect(textured).toContain("url(&quot;data:image/svg+xml");
+    expect(none).toContain("#8a8a8a");
+    expect(none).not.toContain("url(&quot;data:image/svg+xml");
+  });
+
+  it("keeps the dial operable without a pointer", () => {
+    const html = render(DEFAULT_CANVAS, "dark");
+
+    expect(html).toContain('tabindex="0"');
+    expect(html).toContain('aria-valuemin="0"');
+    expect(html).toContain('aria-valuemax="1"');
+  });
+
   it("reads out every floor it measured, in both modes, with nothing stranded", () => {
     for (const resolved of ["light", "dark"] as const) {
       const html = render(DEFAULT_CANVAS, resolved);

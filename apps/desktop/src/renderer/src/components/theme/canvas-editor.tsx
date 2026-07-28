@@ -13,14 +13,29 @@
  * dragging it moves it, and the swatch page follows the primary rather than
  * being seeded from it once.
  *
- * What did NOT come across is the lab's chrome. That editor was a translucent
- * card floating ON the gradient, so it carried its own two-mode `CHROME` table
- * and its own bespoke SVG slider and dial; this one lives inside Settings' own
- * opaque card, where the app's tokens already answer light and dark and the
- * pill/row vocabulary is the house style. Its six tuning dials did not come
- * across either — lift, card tint, surface spread, shadow, text weight and the
- * seam are settled and now live in `ARC_SETTLED`, so they are no longer
- * settings.
+ * What did NOT come across is the lab's two-mode `CHROME` table. That editor was
+ * a translucent card floating ON the gradient and had to answer light and dark
+ * itself; this one lives inside Settings' own opaque card, where the app's
+ * tokens already do. Its six tuning dials did not come across either — lift,
+ * card tint, surface spread, shadow, text weight and the seam are settled and
+ * now live in `ARC_SETTLED`, so they are no longer settings.
+ *
+ * ## Two controls, deliberately not the same control
+ *
+ * Vibrancy is a TRACK and grain is a KNOB, and that is a decision rather than a
+ * leftover — a rushed first port flattened both into `<input type="range">` and
+ * lost the reason each one has its shape.
+ *
+ *  - Vibrancy is the platform's own slider. It has a position along a line, so
+ *    clicking anywhere on the track to jump there is the fastest way to set it,
+ *    and the native control brings that, the keyboard and both modes' rendering
+ *    for free.
+ *  - Grain is {@link GrainDial}, and its face carries the actual grain texture
+ *    at its current amount. There is no other way to judge a value this subtle
+ *    at this size, and showing a texture needs a surface to show it on. A knob
+ *    has only an angle around it, not a position under the pointer, so it is
+ *    grabbed rather than tapped: a press that never travels does nothing at all
+ *    instead of jumping the value to wherever it landed.
  *
  * ## Preview
  *
@@ -31,6 +46,12 @@
  * repaint and the pointer-up is the single write. It also outranks both scopes,
  * which is what lets a workspace-scoped edit be visible while the global canvas
  * is still what is stored.
+ *
+ * The store paints a preview once per animation frame and tells the terminals
+ * only on settle (`stores/theme.ts`, `theme/apply.ts`); the controls here are
+ * NOT throttled with it. State is immediate and only the document's properties
+ * wait, because a knob or an orb that lagged the pointer by a frame is the
+ * thing this editor most has to get right.
  *
  * A commit that fails is surfaced by the store's own `writeThrough` and rolls
  * the paint back to what is actually stored — nothing here swallows it.
@@ -66,13 +87,22 @@ import { SettingsRow } from "@renderer/components/pages/settings-shell";
 import {
   canvasContrastReport,
   CANVAS_SWATCH_PAGES,
+  dialAngle,
+  dialPoint,
+  DIAL_MAX_ANGLE,
+  DIAL_MIN_ANGLE,
   droppedStopIndex,
   easedVibrancy,
+  grainForAngle,
   lcLabel,
   normalizeStopHex,
   padAnchor,
   percentLabel,
+  pointerBearing,
   swatchPageOf,
+  unitStepForKey,
+  UNIT_STEP,
+  UNIT_STEP_COARSE,
   type CanvasContrastReport,
   type CanvasFloorReading,
 } from "@renderer/components/theme/canvas-editor-model";
@@ -85,26 +115,40 @@ import { useThemeStore, type ThemeScope } from "@renderer/stores/theme";
 const PAD_ASPECT = "16 / 10";
 const PAD_DOT_SPACING = 14;
 
-const ORB_SIZE = 22;
-const PRIMARY_ORB_SIZE = 34;
+/**
+ * The lab's orb sizes, and a promotion that is a 1.6× jump.
+ *
+ * Kept at the lab's absolute numbers even though this pad is roughly twice its
+ * width: an orb is a grab target and a colour sample, and neither of those wants
+ * to scale with the container. The first port shrank them to 22/34 and the pad
+ * read as a map of pinheads.
+ */
+const ORB_SIZE = 28;
+const PRIMARY_ORB_SIZE = 44;
 
-/** Travel under which a press on an orb is a click (promote) rather than a drag (move). */
+/** Travel under which a press is a click (promote, or nothing) rather than a drag. */
 const CLICK_SLOP = 4;
 
-/** One arrow press on a focused orb, and the same with Shift held. */
-const NUDGE = 0.01;
-const NUDGE_COARSE = 0.05;
-
 /**
- * The grain chip's backdrop.
+ * Mid-grey, under both the grain dial's face and the vibrancy chip.
  *
- * A literal mid-grey rather than a token, and it is the one place in this file
- * that refuses one: the grain layer is BLACK noise, so the chip has to sit on a
- * surface each mode can show it on. Every neutral token is near-paper in light
- * or near-page in dark, and both ends hide it — the chip would be blank in one
- * mode and blank in the other for the opposite reason.
+ * A literal rather than a token, and it is the one place in this file that
+ * refuses one: the grain layer is BLACK noise and the dial's notch is WHITE, so
+ * the surface underneath has to be something each of them can be seen on. Every
+ * neutral token is near-paper in light or near-page in dark, and both ends lose
+ * one of the two.
  */
-const GRAIN_CHIP_BACKDROP = "#8a8a8a";
+const GRAIN_BACKDROP = "#8a8a8a";
+
+/** The dial, and the ring of scale dots around it. */
+const DIAL_SIZE = 56;
+const DIAL_DOTS = 16;
+const DIAL_DOT_RADIUS = 25.5;
+const DIAL_NOTCH_INNER = 12;
+const DIAL_NOTCH_OUTER = 19;
+/** The scale dots, lit and unlit — the lab's alpha pair, carried over. */
+const DIAL_DOT_LIT = 0.85;
+const DIAL_DOT_UNLIT = 0.25;
 
 /** The three modes, in the order the control lists them. */
 const APPEARANCE_OPTIONS = [
@@ -161,20 +205,28 @@ interface GrabOffset {
  * the cursor leaving it — an orb dragged to the pad's edge must not be dropped
  * the moment it crosses out.
  *
- * `CLICK_SLOP` is what separates the pad's two gestures: nothing moves until the
- * pointer has travelled that far, and a release before it does is reported as a
- * click instead. So pressing an orb promotes it and dragging it moves it.
+ * `CLICK_SLOP` is what makes a press and a drag two gestures rather than one:
+ * nothing moves until the pointer has travelled that far, and a release before
+ * it does is reported to `onClick` instead. Both users of this hook want that
+ * and want it for the same reason, which is why there is one hook:
+ *
+ *  - an orb is PROMOTED by a press and MOVED by a drag, two things one control
+ *    has to be able to do;
+ *  - the dial has nothing for a press to mean, so `onClick` is omitted and a
+ *    press that never travels does nothing — which is the point. A knob has an
+ *    angle around it and no position under the pointer, so jumping the value to
+ *    wherever a finger landed would be answering a question nobody asked.
  *
  * `onSettle` fires once at the end of any gesture that actually moved, which is
  * the editor's single write per drag — every intermediate frame is a preview.
  */
-function useOrbDrag({
+function useSlopDrag({
   onDrag,
   onClick,
   onSettle,
 }: {
   onDrag(event: React.PointerEvent<HTMLElement>, grab: GrabOffset): void;
-  onClick(): void;
+  onClick?(): void;
   onSettle(): void;
 }): DragHandlers {
   const gesture = React.useRef<{
@@ -219,7 +271,7 @@ function useOrbDrag({
       if (active === null || active.id !== event.pointerId) return;
       gesture.current = null;
       if (active.dragging) onSettle();
-      else onClick();
+      else onClick?.();
     },
     onPointerCancel() {
       // A cancelled gesture still leaves a preview painted, so it still has to
@@ -261,14 +313,14 @@ function PadOrb({
     onMove(index, x, y);
   };
 
-  const handlers = useOrbDrag({
+  const handlers = useSlopDrag({
     onDrag: move,
     onClick: () => onPromote(index),
     onSettle,
   });
 
   const nudge = (event: React.KeyboardEvent): void => {
-    const step = event.shiftKey ? NUDGE_COARSE : NUDGE;
+    const step = event.shiftKey ? UNIT_STEP_COARSE : UNIT_STEP;
     const delta = {
       ArrowLeft: { x: -step, y: 0 },
       ArrowRight: { x: step, y: 0 },
@@ -277,6 +329,10 @@ function PadOrb({
     }[event.key];
     if (delta === undefined) return;
     event.preventDefault();
+    // Relative, so it reads `stop` — which is why the orb has to be rendered
+    // from the previewed canvas. Fed the STORED one, every press in a held
+    // repeat would start from the same anchor and the orb would sit one step
+    // out however long the key was down.
     onMove(index, stop.x + delta.x, stop.y + delta.y);
   };
 
@@ -450,6 +506,14 @@ function StopRow({
  * simplification — every other stop's hue is derived from this one at the
  * harmony offsets for the current stop count, so a canvas stays one family
  * instead of three unrelated colours sharing a window.
+ *
+ * The one control fed the STORED hex rather than the previewed one, and the only
+ * place the loop the editor's header describes actually closes. Typing widens
+ * `#e86` into `#ee8866` and previews it; handed that back as its own `hex`, the
+ * draft would sync to the widened form and rewrite the field under the cursor
+ * after three characters. The swatch ring and the page follow the stored colour
+ * for the same reason — they are answering "what is this canvas's colour", which
+ * a half-typed field is not yet a claim about.
  */
 function PrimaryColourRow({
   hex,
@@ -567,18 +631,15 @@ function PrimaryColourRow({
 }
 
 /**
- * A 0–1 control as the platform's own slider.
+ * Vibrancy, as the platform's own slider.
  *
- * Deliberately a native `range` rather than the lab's hand-built sine track and
- * knob dial. Those were right for a translucent card floating on the gradient
- * and would be a foreign object in a settings row — and the native control
- * brings keyboard operation, the correct pointer semantics and its own
- * light/dark rendering for free, none of which a re-implementation gets without
- * writing them again.
+ * A track is the right shape for it — the value has a position along a line, so
+ * clicking anywhere on it to jump there is the fastest way to set it, and the
+ * native control brings that, the keyboard and both modes' rendering for free.
  *
- * What it does keep from the lab is the reason those controls were usable: a
- * chip beside the slider showing what the value actually IS, because a value
- * this subtle cannot be judged from a number.
+ * The chip beside it is what the lab's hand-drawn track was for: a value this
+ * subtle cannot be judged from a number, so the control shows what it is
+ * setting.
  */
 function UnitSlider({
   id,
@@ -603,7 +664,7 @@ function UnitSlider({
         type="range"
         min={0}
         max={1}
-        step={0.01}
+        step={UNIT_STEP}
         value={value}
         aria-label={label}
         onChange={(event) => onInput(Number(event.target.value))}
@@ -617,6 +678,144 @@ function UnitSlider({
       <span className="w-9 text-right text-ui text-muted-foreground tabular-nums">
         {percentLabel(value)}
       </span>
+    </div>
+  );
+}
+
+/**
+ * Grain, as a rotary knob — ported from the lab, where it was designed.
+ *
+ * The face carries the grain texture at its CURRENT amount, and that is the
+ * whole argument for the shape: grain at 6% and grain at 12% are not
+ * distinguishable from a number or a thumb position, and the only honest readout
+ * is the texture itself. A texture needs a surface, and a surface that is being
+ * turned is a knob.
+ *
+ * The rest follows from that. The ring of dots is the progress the track would
+ * otherwise show; the notch says which way the face is turned; and the gesture
+ * is an ANGLE around the control rather than a position under the pointer, which
+ * is why it takes the slopped press (see {@link useSlopDrag}) and the slider
+ * beside it does not.
+ */
+function GrainDial({
+  value,
+  onInput,
+  onSettle,
+}: {
+  value: number;
+  onInput(next: number): void;
+  onSettle(): void;
+}) {
+  const dialRef = React.useRef<HTMLDivElement>(null);
+
+  const handlers = useSlopDrag({
+    onDrag(event) {
+      const dial = dialRef.current;
+      if (dial === null) return;
+      onInput(
+        grainForAngle(
+          pointerBearing({
+            pointerX: event.clientX,
+            pointerY: event.clientY,
+            rect: dial.getBoundingClientRect(),
+          }),
+        ),
+      );
+    },
+    onSettle,
+  });
+
+  const turn = (event: React.KeyboardEvent): void => {
+    const next = unitStepForKey(event.key, value, event.shiftKey);
+    if (next === null) return;
+    event.preventDefault();
+    onInput(next);
+  };
+
+  const centre = DIAL_SIZE / 2;
+  const notchFrom = dialPoint(centre, dialAngle(value), DIAL_NOTCH_INNER);
+  const notchTo = dialPoint(centre, dialAngle(value), DIAL_NOTCH_OUTER);
+  const grain = grainLayer(value);
+
+  return (
+    <div
+      ref={dialRef}
+      {...handlers}
+      onKeyDown={turn}
+      onKeyUp={onSettle}
+      // The slider beside this one settles on blur too, and for a reason that
+      // applies here identically: focus leaving while an arrow key is still
+      // down sends the `keyup` to whatever took focus, so without this the
+      // grain preview stays painted and unwritten.
+      onBlur={onSettle}
+      role="slider"
+      tabIndex={0}
+      data-testid="canvas-grain-dial"
+      aria-label="Grain"
+      aria-valuemin={0}
+      aria-valuemax={1}
+      aria-valuenow={Number(value.toFixed(2))}
+      style={{ width: DIAL_SIZE, height: DIAL_SIZE }}
+      className="relative shrink-0 cursor-grab touch-none rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      {/* The face, mid-grey in BOTH modes — see GRAIN_BACKDROP. The tile is
+          black noise and the notch above it is white, so this is the one
+          surface both can be read on. */}
+      <div
+        aria-hidden
+        style={{ background: grain === null ? GRAIN_BACKDROP : `${grain}, ${GRAIN_BACKDROP}` }}
+        className="absolute inset-[7px] rounded-full"
+      />
+      <svg
+        aria-hidden
+        width={DIAL_SIZE}
+        height={DIAL_SIZE}
+        viewBox={`0 0 ${DIAL_SIZE} ${DIAL_SIZE}`}
+        className="absolute inset-0"
+      >
+        {/* The dots sit on the CARD rather than on the face, so unlike the notch
+            they take the card's own ink and flip with it.
+
+            Lit and unlit are one colour at two opacities rather than two tokens.
+            Measured on the shipped canvas, `--foreground` and
+            `--muted-foreground` are close enough that the ring read as sixteen
+            identical dots — a progress indicator showing no progress. The gap
+            has to be an alpha gap, which is what the lab's own pair was. */}
+        {Array.from({ length: DIAL_DOTS }, (_, index) => {
+          const progress = index / (DIAL_DOTS - 1);
+          const at = dialPoint(
+            centre,
+            DIAL_MIN_ANGLE + (DIAL_MAX_ANGLE - DIAL_MIN_ANGLE) * progress,
+            DIAL_DOT_RADIUS,
+          );
+          return (
+            <circle
+              // The dot's index IS its position on the arc; there is nothing
+              // else to key on and nothing ever reorders.
+              // oxlint-disable-next-line react/no-array-index-key
+              key={index}
+              cx={at.x}
+              cy={at.y}
+              r={1.1}
+              fill="var(--foreground)"
+              fillOpacity={progress <= value ? DIAL_DOT_LIT : DIAL_DOT_UNLIT}
+            />
+          );
+        })}
+        {/* White in both modes, like Arc's. The notch is the one thing in this
+            panel that reads as hardware rather than as text, and flipping it
+            with the appearance would lose that — it sits on the mid-grey face,
+            which gives it something to read on either way. */}
+        <line
+          x1={notchFrom.x}
+          y1={notchFrom.y}
+          x2={notchTo.x}
+          y2={notchTo.y}
+          stroke="white"
+          strokeWidth={2.5}
+          strokeLinecap="round"
+        />
+      </svg>
     </div>
   );
 }
@@ -722,11 +921,27 @@ function ContrastReport({
 /**
  * The editor itself.
  *
- * `canvas` is what the SCOPE has stored (`appliedCanvas`), never what is on
- * screen: a preview is on screen, and a control fed the preview would drift a
- * pixel per frame as its own output came back round. The store is read
- * imperatively for every write, so no handler closes over a snapshot that a
- * concurrent hydrate has already replaced.
+ * `canvas` is what the SCOPE has STORED (`appliedCanvas`). What the controls
+ * render from is `live` — the running preview when there is one — and the
+ * difference between those two is the whole of "the colour dragging felt
+ * unstable".
+ *
+ * Rendered from the stored canvas, an orb does not move while you drag it. The
+ * window behind Settings repaints, because that goes to the DOM directly, but
+ * the pad's own orb is a React `style` fed a value the drag never changes, so it
+ * sits still under the pointer for the length of the gesture and then teleports
+ * to the drop point when the release commits. Every relative control had the
+ * same fault: a held arrow key re-applied one step to the same stored anchor
+ * forever.
+ *
+ * The feedback loop this was guarding against is real but narrower than it
+ * looks. `padAnchor` and `pointerBearing` both position from where the pointer
+ * IS, minus a grab offset captured once at press time, so neither can accumulate
+ * its own output. The one control that genuinely cannot read the preview is the
+ * hex field — see {@link PrimaryColourRow}.
+ *
+ * The store is read imperatively for every write, so no handler closes over a
+ * snapshot that a concurrent hydrate has already replaced.
  */
 export function CanvasEditor({
   scope,
@@ -773,34 +988,40 @@ export function CanvasEditor({
     [edit, settle],
   );
 
-  const report = React.useMemo(() => canvasContrastReport(canvas, resolved), [canvas, resolved]);
-  const eased = React.useMemo(() => easedVibrancy(canvas, resolved), [canvas, resolved]);
-  const primary = canvas.stops[canvas.primaryIndex];
-  const grain = React.useMemo(() => grainLayer(canvas.grain), [canvas.grain]);
+  /**
+   * What is actually on screen — the preview while a gesture runs, the stored
+   * canvas otherwise. Every control that is a picture of the canvas reads this;
+   * the one that is a picture of the STORED canvas is the hex field.
+   */
+  const preview = useThemeStore((state) => state.preview);
+  const live = preview ?? canvas;
+
+  const report = React.useMemo(() => canvasContrastReport(live, resolved), [live, resolved]);
+  const eased = React.useMemo(() => easedVibrancy(live, resolved), [live, resolved]);
   const vibrancyChip = React.useMemo(
-    () => effectiveStopHexes(canvas, resolved)[canvas.primaryIndex],
-    [canvas, resolved],
+    () => effectiveStopHexes(live, resolved)[live.primaryIndex],
+    [live, resolved],
   );
 
   return (
     <>
       <div className="flex flex-col gap-3 pb-4">
         <GradientPad
-          canvas={canvas}
+          canvas={live}
           resolved={resolved}
           onMove={(index, x, y) => edit((current) => moveStop(current, index, x, y))}
           onPromote={(index) => commit((current) => withPrimaryIndex(current, index))}
           onSettle={settle}
         />
         <StopRow
-          canvas={canvas}
+          canvas={live}
           resolved={resolved}
           onPromote={(index) => commit((current) => withPrimaryIndex(current, index))}
           onAdd={() => commit(addStop)}
           onRemove={() => commit(removeStop)}
         />
         <PrimaryColourRow
-          hex={primary.hex}
+          hex={canvas.stops[canvas.primaryIndex].hex}
           onPick={(next) => commit((current) => withPrimaryHex(current, next))}
           onPreview={(next) => edit((current) => withPrimaryHex(current, next))}
           onSettle={settle}
@@ -811,7 +1032,7 @@ export function CanvasEditor({
         <UnitSlider
           id="canvas-vibrancy"
           label="Vibrancy"
-          value={canvas.vibrancy}
+          value={live.vibrancy}
           chip={
             <span
               aria-hidden
@@ -824,24 +1045,17 @@ export function CanvasEditor({
         />
       </SettingsRow>
 
-      <SettingsRow label="Grain" htmlFor="canvas-grain">
-        <UnitSlider
-          id="canvas-grain"
-          label="Grain"
-          value={canvas.grain}
-          chip={
-            <span
-              aria-hidden
-              className="size-6 shrink-0 rounded-md ring-1 ring-black/15"
-              style={{
-                background:
-                  grain === null ? GRAIN_CHIP_BACKDROP : `${grain}, ${GRAIN_CHIP_BACKDROP}`,
-              }}
-            />
-          }
-          onInput={(value) => edit((current) => ({ ...current, grain: value }))}
+      {/* No `htmlFor`: the dial is a `div[role="slider"]`, which a label cannot
+          be bound to. It carries its own `aria-label` instead. */}
+      <SettingsRow label="Grain">
+        <GrainDial
+          value={live.grain}
+          onInput={(grain) => edit((current) => ({ ...current, grain }))}
           onSettle={settle}
         />
+        <span className="w-9 text-right text-ui text-muted-foreground tabular-nums">
+          {percentLabel(live.grain)}
+        </span>
       </SettingsRow>
 
       <div className="border-t border-border/60 pt-4">

@@ -3,18 +3,28 @@ import { describe, expect, it } from "vite-plus/test";
 import { DEFAULT_CANVAS, type Canvas } from "@volli/shared";
 
 import {
+  angularDistance,
   canvasContrastReport,
   CANVAS_FLOOR_ROLES,
   CANVAS_SWATCH_PAGES,
   describeAppearance,
+  dialAngle,
+  dialPoint,
+  DIAL_MAX_ANGLE,
+  DIAL_MIN_ANGLE,
   droppedStopIndex,
   easedVibrancy,
+  grainForAngle,
   normalizeStopHex,
   padAnchor,
   percentLabel,
+  pointerBearing,
   projectAppearanceChoice,
   projectCanvasChoice,
   swatchPageOf,
+  unitStepForKey,
+  UNIT_STEP,
+  UNIT_STEP_COARSE,
 } from "./canvas-editor-model";
 
 /** A one-stop canvas at a given colour and vibrancy — the sweep's input shape. */
@@ -261,5 +271,105 @@ describe("percentLabel", () => {
     expect(percentLabel(0)).toBe("0%");
     expect(percentLabel(0.153)).toBe("15%");
     expect(percentLabel(1)).toBe("100%");
+  });
+});
+
+/** A 56px dial with its centre at (128, 128) — the geometry the editor lays out. */
+const DIAL_RECT = { left: 100, top: 100, width: 56, height: 56 };
+
+describe("pointerBearing", () => {
+  it("reads 0° straight up and turns clockwise", () => {
+    const at = (x: number, y: number) =>
+      Math.round(pointerBearing({ pointerX: x, pointerY: y, rect: DIAL_RECT }));
+
+    expect(at(128, 60)).toBe(0);
+    expect(at(200, 128)).toBe(90);
+    expect(at(128, 200)).toBe(180);
+    expect(at(60, 128)).toBe(-90);
+  });
+
+  it("answers the arc's start rather than NaN on a dial that has not been laid out", () => {
+    // A rect measured before layout divides to NaN, which `grainForAngle` passes
+    // straight through into the canvas and then into CSS as an unparseable
+    // gradient — with no error anywhere.
+    const bearing = pointerBearing({
+      pointerX: 10,
+      pointerY: 10,
+      rect: { left: 0, top: 0, width: 0, height: 0 },
+    });
+
+    expect(bearing).toBe(DIAL_MIN_ANGLE);
+    expect(grainForAngle(bearing)).toBe(0);
+  });
+});
+
+describe("grainForAngle", () => {
+  it("spans the 270° arc from nothing to everything", () => {
+    expect(grainForAngle(DIAL_MIN_ANGLE)).toBe(0);
+    expect(grainForAngle(0)).toBeCloseTo(0.5, 10);
+    expect(grainForAngle(DIAL_MAX_ANGLE)).toBe(1);
+  });
+
+  it("holds the end you dragged past, right across the dead wedge", () => {
+    // Off the top of the travel and onward: grain stays pinned at 1 through the
+    // whole near half of the 90° wedge rather than falling away as soon as the
+    // pointer leaves the arc, and only reads as the other end once it has passed
+    // straight down.
+    expect(grainForAngle(136)).toBe(1);
+    expect(grainForAngle(150)).toBe(1);
+    expect(grainForAngle(179)).toBe(1);
+    expect(grainForAngle(-179)).toBe(0);
+    expect(grainForAngle(-150)).toBe(0);
+    expect(grainForAngle(-136)).toBe(0);
+  });
+});
+
+describe("dialAngle", () => {
+  it("is the inverse of grainForAngle across the arc", () => {
+    for (const value of [0, 0.25, 0.5, 0.75, 1]) {
+      expect(grainForAngle(dialAngle(value))).toBeCloseTo(value, 10);
+    }
+  });
+
+  it("keeps the notch on the arc for a value from outside 0–1", () => {
+    expect(dialAngle(-1)).toBe(DIAL_MIN_ANGLE);
+    expect(dialAngle(2)).toBe(DIAL_MAX_ANGLE);
+  });
+});
+
+describe("dialPoint", () => {
+  it("puts 0° above the centre, matching the bearing it is drawn from", () => {
+    const up = dialPoint(28, 0, 19);
+
+    expect(up.x).toBeCloseTo(28, 10);
+    expect(up.y).toBeCloseTo(9, 10);
+  });
+});
+
+describe("unitStepForKey", () => {
+  it("raises on up/right and lowers on down/left, because a knob has no one axis", () => {
+    expect(unitStepForKey("ArrowUp", 0.5, false)).toBeCloseTo(0.5 + UNIT_STEP, 10);
+    expect(unitStepForKey("ArrowRight", 0.5, false)).toBeCloseTo(0.5 + UNIT_STEP, 10);
+    expect(unitStepForKey("ArrowDown", 0.5, false)).toBeCloseTo(0.5 - UNIT_STEP, 10);
+    expect(unitStepForKey("ArrowLeft", 0.5, false)).toBeCloseTo(0.5 - UNIT_STEP, 10);
+    expect(unitStepForKey("ArrowUp", 0.5, true)).toBeCloseTo(0.5 + UNIT_STEP_COARSE, 10);
+  });
+
+  it("stops at the ends rather than running past them", () => {
+    expect(unitStepForKey("ArrowDown", 0, false)).toBe(0);
+    expect(unitStepForKey("ArrowUp", 1, false)).toBe(1);
+  });
+
+  it("declines every other key, so the control never traps Tab", () => {
+    expect(unitStepForKey("Tab", 0.5, false)).toBeNull();
+    expect(unitStepForKey("Enter", 0.5, false)).toBeNull();
+  });
+});
+
+describe("angularDistance", () => {
+  it("measures the short way round, across the seam", () => {
+    expect(angularDistance(179, -179)).toBe(2);
+    expect(angularDistance(10, 350)).toBe(20);
+    expect(angularDistance(0, 180)).toBe(180);
   });
 });

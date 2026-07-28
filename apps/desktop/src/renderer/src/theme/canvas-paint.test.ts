@@ -7,6 +7,8 @@ import {
   type Canvas,
 } from "@volli/shared";
 
+import { onTerminalAppearanceChanged } from "@renderer/terminal/appearance";
+
 import {
   CANVAS_TOKEN_NAMES,
   applyResolvedAppearanceClass,
@@ -102,19 +104,43 @@ describe("paintCanvas", () => {
   it("writes the app tokens and the canvas properties in one pass", () => {
     const { root, written } = fakeRoot();
 
-    paintCanvas(DEFAULT_CANVAS, "dark", root);
+    paintCanvas(DEFAULT_CANVAS, "dark", { root });
 
     for (const name of THEME_TOKEN_NAMES) expect(written.has(name)).toBe(true);
     for (const name of CANVAS_TOKEN_NAMES) expect(written.has(name)).toBe(true);
   });
 
+  it("tells the terminals on a committed paint and holds off on a transient one", () => {
+    // The terminals rebuild their palette by reading tokens back off the
+    // element with `getComputedStyle` — a forced style recalculation, per live
+    // terminal, right after this function wrote ~50 properties. A drag frame
+    // must not pay it, and everything else must.
+    //
+    // Asserted through `paintCanvas` rather than `applyThemeTokens` because the
+    // bug this pins was in the FORWARDING: the flag reached `applyThemeTokens`
+    // in tests and was dropped on the way there in the running app.
+    const { root } = fakeRoot();
+    let told = 0;
+    const stop = onTerminalAppearanceChanged(() => (told += 1));
+
+    try {
+      paintCanvas(DEFAULT_CANVAS, "dark", { root, transient: true });
+      expect(told).toBe(0);
+
+      paintCanvas(DEFAULT_CANVAS, "dark", { root });
+      expect(told).toBe(1);
+    } finally {
+      stop();
+    }
+  });
+
   it("moves the mode class, replacing whichever one was there", () => {
     const { root, classes } = fakeRoot();
 
-    paintCanvas(DEFAULT_CANVAS, "light", root);
+    paintCanvas(DEFAULT_CANVAS, "light", { root });
     expect([...classes]).toEqual(["light"]);
 
-    paintCanvas(DEFAULT_CANVAS, "dark", root);
+    paintCanvas(DEFAULT_CANVAS, "dark", { root });
     expect([...classes]).toEqual(["dark"]);
   });
 });

@@ -33,6 +33,32 @@ import type { Appearance, Canvas, ResolvedAppearance, ThemeTokens } from "@volli
 import { refreshTerminalTokenTheme } from "@renderer/terminal/appearance";
 
 /**
+ * How a paint should treat the work that only matters once a value settles.
+ *
+ * `transient` marks a paint that is already known to be superseded — one frame
+ * of a drag. The properties still land, because following the pointer is the
+ * whole point of a live preview; what is deferred is
+ * {@link refreshTerminalTokenTheme}, the one part of a paint whose cost has
+ * nothing to do with how much changed.
+ *
+ * That call drops every live terminal's cached palette and makes each one
+ * rebuild it by reading ~20 custom properties back off `<html>` with
+ * `getComputedStyle` — a forced style recalculation of the whole document,
+ * issued immediately after this function has just written ~50 properties to
+ * that same element, followed by a full repaint per terminal. At pointer-event
+ * rates that is the drag's stutter, and every one of those palettes is thrown
+ * away by the next frame.
+ *
+ * This module stays the single choke point for COMMITTED colour changes:
+ * `transient` defaults to false, so every path except an in-flight preview
+ * still refreshes, and the paint that ends a gesture is a committed one.
+ */
+export interface ThemeApplyOptions {
+  /** True while a gesture is still running; the terminals are told on settle. */
+  transient?: boolean;
+}
+
+/**
  * Writes every themeable color token onto `root` (the document element by
  * default), replacing whatever `globals.css` authored, plus any `extra`
  * properties the caller owns.
@@ -48,13 +74,15 @@ import { refreshTerminalTokenTheme } from "@renderer/terminal/appearance";
  * from these same tokens and caches the result, so without this a canvas change
  * leaves every such terminal rendering the previous palette until relaunch.
  * Doing it here rather than at each call site makes the apply path the single
- * choke point — there is no way to change the app's colors without the
- * terminals hearing about it.
+ * choke point — there is no way to commit a change to the app's colors without
+ * the terminals hearing about it. See {@link ThemeApplyOptions} for the one
+ * case that defers it.
  */
 export function applyThemeTokens(
   tokens: ThemeTokens,
   root?: HTMLElement,
   extra?: Readonly<Record<string, string>>,
+  options: ThemeApplyOptions = {},
 ): void {
   const target = root ?? document.documentElement;
   for (const name of THEME_TOKEN_NAMES) target.style.setProperty(name, tokens[name]);
@@ -67,7 +95,7 @@ export function applyThemeTokens(
   if (extra !== undefined) {
     for (const [name, value] of Object.entries(extra)) target.style.setProperty(name, value);
   }
-  refreshTerminalTokenTheme();
+  if (options.transient !== true) refreshTerminalTokenTheme();
 }
 
 /** Which scope supplied a surface's value. */

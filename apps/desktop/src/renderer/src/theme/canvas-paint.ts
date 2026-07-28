@@ -33,7 +33,7 @@ import {
   type ResolvedAppearance,
 } from "@volli/shared";
 
-import { applyThemeTokens } from "@renderer/theme/apply";
+import { applyThemeTokens, type ThemeApplyOptions } from "@renderer/theme/apply";
 
 /**
  * The gradient itself — one CSS `background` value, grain layer included.
@@ -166,23 +166,46 @@ export function deriveCanvasPaint(
 }
 
 /**
- * Paints `canvas` at `resolved` onto `root` (the document element by default).
+ * Everything a paint takes besides the canvas and the mode.
+ *
+ * `root` rides in this bag rather than sitting in front of it as a positional
+ * parameter, and that is a correctness fix rather than tidying. The theme store
+ * wires this function up as a dependency; with `root` third, that wiring was an
+ * arrow function that had to re-list every parameter, and it silently stopped
+ * at two — TypeScript accepts a function of fewer parameters wherever a longer
+ * one is expected, so `transient` was dropped with no error anywhere and the
+ * deferral it asks for never happened in the running app. One bag means the
+ * store can forward the whole thing point-free and there is nothing left to
+ * drop.
+ */
+export interface PaintCanvasOptions extends ThemeApplyOptions {
+  /** Where to paint. Defaults to `<html>`; tests pass a recording stand-in. */
+  root?: HTMLElement;
+}
+
+/**
+ * Paints `canvas` at `resolved` onto `options.root` (the document element by
+ * default).
  *
  * The mode class moves FIRST and the properties second, because the class is
  * what the `:root.light` block is selected by: writing an inline light ink
  * while `.dark` was still on the element would leave one frame in which the
  * generated dark block supplied every surface underneath it.
+ *
+ * `transient` is carried straight through to {@link applyThemeTokens}, which is
+ * where it means something — this module has no per-frame cost of its own worth
+ * skipping.
  */
 export function paintCanvas(
   canvas: Canvas,
   resolved: ResolvedAppearance,
-  root?: HTMLElement,
+  options: PaintCanvasOptions = {},
 ): void {
-  const target = root ?? documentRoot();
+  const target = options.root ?? documentRoot();
   if (target === null) return;
   applyResolvedAppearanceClass(resolved, target);
   const { tokens, canvasTokens } = deriveCanvasPaint(canvas, resolved);
-  applyThemeTokens(tokens, target, canvasTokens);
+  applyThemeTokens(tokens, target, canvasTokens, options);
 }
 
 /**

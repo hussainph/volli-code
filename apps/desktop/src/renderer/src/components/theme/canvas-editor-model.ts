@@ -121,6 +121,133 @@ export function padAnchor(input: {
   };
 }
 
+/* -------------------------------------------------------------------------- */
+/*  The grain dial                                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The dial's travel: a 270° arc, seven-o'clock to five-o'clock, 0° being
+ * straight up and clockwise positive.
+ *
+ * Ported from the lab, where the knob was designed. A rotary control is not a
+ * decoration here — the knob's face carries the grain texture at its current
+ * amount, which is the only way to judge a value this subtle at this size, and a
+ * face needs a circle to be.
+ */
+export const DIAL_MIN_ANGLE = -135;
+export const DIAL_MAX_ANGLE = 135;
+
+/** The shorter way round the circle between two bearings, in degrees. */
+export function angularDistance(from: number, to: number): number {
+  return Math.abs(((from - to + 540) % 360) - 180);
+}
+
+/**
+ * A pointer over the dial → its bearing from the dial's centre, in degrees.
+ *
+ * `atan2(dx, -dy)` rather than the usual `atan2(dy, dx)`: it puts 0° straight
+ * up and makes clockwise positive, which is how the notch is drawn and how the
+ * arc above is stated. Reading it the conventional way and correcting afterwards
+ * gives two places to get the same quarter-turn wrong.
+ *
+ * A zero-sized dial answers `DIAL_MIN_ANGLE` rather than measuring against a
+ * rect that has not been laid out — the same rule {@link padAnchor} follows, and
+ * for the same reason: `NaN` would reach the grain value and then CSS.
+ */
+export function pointerBearing(input: {
+  pointerX: number;
+  pointerY: number;
+  rect: PadRect;
+}): number {
+  const { pointerX, pointerY, rect } = input;
+  if (rect.width === 0 || rect.height === 0) return DIAL_MIN_ANGLE;
+  const dx = pointerX - (rect.left + rect.width / 2);
+  const dy = pointerY - (rect.top + rect.height / 2);
+  return (Math.atan2(dx, -dy) * 180) / Math.PI;
+}
+
+/**
+ * A pointer bearing → the grain it sets.
+ *
+ * The 270° arc leaves a 90° dead wedge below the dial, so a drag that runs off
+ * one end has to be answered by something. The rule is that the wedge takes
+ * whichever end of the arc it is nearer to: drag past the top of the travel and
+ * grain holds at 1 until the pointer passes straight down, and only then reads
+ * as having come round to the other end.
+ *
+ * Stated as a distance rather than as a clamp on the extrapolated ratio because
+ * the two only coincide by luck. `atan2`'s ±180° seam falls exactly in the
+ * MIDDLE of this wedge, which is the one place a clamp has no idea which end it
+ * is clamping toward — swept at quarter-degree steps the two agree everywhere
+ * except on the seam itself, and that is a fact about this particular arc being
+ * symmetric, not a property anyone should rely on. Measuring the short way round
+ * says what is meant and stays true if the travel is ever retuned.
+ */
+export function grainForAngle(degrees: number): number {
+  if (degrees >= DIAL_MIN_ANGLE && degrees <= DIAL_MAX_ANGLE) {
+    return (degrees - DIAL_MIN_ANGLE) / (DIAL_MAX_ANGLE - DIAL_MIN_ANGLE);
+  }
+  return angularDistance(degrees, DIAL_MAX_ANGLE) <= angularDistance(degrees, DIAL_MIN_ANGLE)
+    ? 1
+    : 0;
+}
+
+/** The inverse: a 0–1 value → where along the arc the notch points. */
+export function dialAngle(value: number): number {
+  return DIAL_MIN_ANGLE + (DIAL_MAX_ANGLE - DIAL_MIN_ANGLE) * clampUnit(value);
+}
+
+/** A point on the dial's face, `radius` out from its centre along `degrees`. */
+export function dialPoint(
+  centre: number,
+  degrees: number,
+  radius: number,
+): { x: number; y: number } {
+  const radians = (degrees * Math.PI) / 180;
+  return {
+    x: centre + Math.sin(radians) * radius,
+    y: centre - Math.cos(radians) * radius,
+  };
+}
+
+/** Whatever arrives, inside 0–1. */
+export function clampUnit(value: number): number {
+  return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
+}
+
+/**
+ * One arrow press on a 0–1 control, and the same with Shift held.
+ *
+ * The fine step matches the native slider's `step`, so the dial and the track
+ * beside it answer the keyboard at the same resolution — two controls in one
+ * panel that moved by different amounts per press would read as a bug. The pad's
+ * orbs nudge by the same pair, read as pad fractions.
+ */
+export const UNIT_STEP = 0.01;
+export const UNIT_STEP_COARSE = 0.05;
+
+/**
+ * An arrow key on a 0–1 control → the value it moves to, or `null` for a key
+ * this control does not answer.
+ *
+ * Both axes, because a rotary knob has no single obvious direction: up and right
+ * raise it, down and left lower it. `null` rather than the unchanged value so
+ * the caller knows whether to swallow the event — a control that
+ * `preventDefault`s Tab is a keyboard trap.
+ */
+export function unitStepForKey(key: string, value: number, coarse: boolean): number | null {
+  const direction =
+    key === "ArrowRight" || key === "ArrowUp"
+      ? 1
+      : key === "ArrowLeft" || key === "ArrowDown"
+        ? -1
+        : 0;
+  if (direction === 0) return null;
+  return clampUnit(value + direction * (coarse ? UNIT_STEP_COARSE : UNIT_STEP));
+}
+
+/* -------------------------------------------------------------------------- */
+
 /**
  * Which stop "−" will drop, or `null` when there is nothing to drop.
  *
