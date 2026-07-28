@@ -30,30 +30,53 @@
  * is touched, so the hand-authored non-color tokens (radius, type scale, layout)
  * stay where they are: theming moves color, never geometry.
  *
- * HOW IT LOADS `@volli/shared`. That package ships raw TypeScript with
- * extensionless relative imports, which Node's ESM resolver rejects on its own.
- * Node 24 strips the types; the resolve hook below supplies the extension. No
- * bundler, no extra dependency, no second copy of the pipeline.
+ * HOW IT LOADS `@volli/shared` AND THE RENDERER'S CANVAS PIPELINE. Both ship raw
+ * TypeScript with extensionless relative imports, which Node's ESM resolver
+ * rejects on its own; Node 24 strips the types, and the resolve hook below
+ * supplies the missing extension. The renderer additionally resolves `@renderer/*`
+ * through a bundler alias with no Node-native equivalent, so the same hook also
+ * maps that prefix onto `src/renderer/src/`. That is what lets this script call
+ * `canvas-paint.ts`'s own `deriveCanvasPaint` instead of re-deriving its output —
+ * the exact function the renderer paints the DOM with, at both appearances, so
+ * the canvas declarations below and a live repaint cannot disagree about what a
+ * canvas produces. No bundler, no extra dependency beyond what that import chain
+ * already needs (react, restty — both resolve headless; nothing on the path from
+ * `canvas-paint.ts` to its imports touches `document` or `window` at module load,
+ * only inside functions this script never calls).
  */
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { dirname, resolve as resolvePath } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const CANDIDATE_SUFFIXES = [".ts", ".tsx", "/index.ts"];
 
+const HERE = dirname(fileURLToPath(import.meta.url));
+
+/** `src/renderer/src/`, as a directory URL — where a bare `@renderer/*` points. */
+const RENDERER_SRC = pathToFileURL(`${resolvePath(HERE, "../src/renderer/src")}/`);
+
+/** The first `base.href + suffix` that exists on disk, or null. */
+function resolveExtensionless(base) {
+  for (const suffix of CANDIDATE_SUFFIXES) {
+    const candidate = new URL(base.href + suffix);
+    if (existsSync(fileURLToPath(candidate))) return candidate.href;
+  }
+  return null;
+}
+
 registerHooks({
   resolve(specifier, context, nextResolve) {
-    if (specifier.startsWith(".") && !/\.[cm]?[jt]sx?$/.test(specifier)) {
+    if (specifier.startsWith("@renderer/")) {
+      const base = new URL(specifier.slice("@renderer/".length), RENDERER_SRC);
+      const resolved = resolveExtensionless(base);
+      if (resolved !== null) return { url: resolved, shortCircuit: true };
+    } else if (specifier.startsWith(".") && !/\.[cm]?[jt]sx?$/.test(specifier)) {
       const base = new URL(specifier, context.parentURL);
-      for (const suffix of CANDIDATE_SUFFIXES) {
-        const candidate = new URL(base.href + suffix);
-        if (existsSync(fileURLToPath(candidate))) {
-          return { url: candidate.href, shortCircuit: true };
-        }
-      }
+      const resolved = resolveExtensionless(base);
+      if (resolved !== null) return { url: resolved, shortCircuit: true };
     }
     return nextResolve(specifier, context);
   },
@@ -61,17 +84,19 @@ registerHooks({
 
 const {
   DEFAULT_CANVAS,
-  canvasBackground,
-  canvasElevation,
-  canvasInk,
   deriveCanvasTokens,
-  deriveLabelInk,
   generateVeilTokens,
   THEME_TOKEN_NAMES,
   THEME_VEIL_TOKEN_NAMES,
 } = await import("@volli/shared");
 
-const HERE = dirname(fileURLToPath(import.meta.url));
+// The single source of truth for which properties a canvas is responsible for,
+// and the single function that derives their values — imported rather than
+// mirrored, so a name added to one and not the other (the failure mode this
+// script used to allow) cannot happen here. See `declaration` below for what
+// backs that up when a name IS added without a matching value.
+const { CANVAS_TOKEN_NAMES, deriveCanvasPaint } = await import("@renderer/theme/canvas-paint");
+
 const GLOBALS_CSS = resolvePath(HERE, "../src/renderer/src/globals.css");
 const TERMINAL_APPEARANCE_TS = resolvePath(HERE, "../src/renderer/src/terminal/appearance.ts");
 
@@ -129,8 +154,18 @@ const NOTES = {
   "--shadow-raised": "The three shadow tiers: raised on a surface, the card, and overlays.",
 };
 
-/** One `--token: value;` line, with its note above it when it has one. */
+/**
+ * One `--token: value;` line, with its note above it when it has one.
+ *
+ * Throws on a missing value rather than emitting `undefined` into the
+ * stylesheet. The one caller this actually guards is the `CANVAS_TOKEN_NAMES`
+ * loop below: `canvas-paint.test.ts` already keeps that list and
+ * `deriveCanvasPaint`'s output in lockstep on the renderer side, but this is
+ * what turns the same mistake into a loud failure HERE too, rather than a
+ * `--new-token: undefined;` line that `--check` would wave through.
+ */
 function declaration(name, value) {
+  if (value === undefined) throw new Error(`no value derived for ${name}`);
   const note = NOTES[name];
   const comment = note === undefined ? "" : `  /* ${note} */\n`;
   return `${comment}  ${name}: ${value};\n`;
@@ -139,16 +174,14 @@ function declaration(name, value) {
 /**
  * Every property one appearance implies, in the order they are written.
  *
- * The canvas properties come last and are derived exactly as
- * `deriveCanvasPaint` derives them — elevation before ink, because a lifted
- * tier is a surface the on-canvas text sits on and can be the worst case the
- * ink has to clear. Two implementations of that order would be two answers.
+ * The canvas properties come last and are `deriveCanvasPaint`'s own output —
+ * called directly, not re-derived, so this script and a live repaint read off
+ * the same function rather than two copies of the same pipeline that could
+ * disagree about elevation-before-ink or anything else.
  */
 function tokensFor(resolved) {
-  const tokens = deriveCanvasTokens(DEFAULT_CANVAS, resolved);
+  const { tokens, canvasTokens } = deriveCanvasPaint(DEFAULT_CANVAS, resolved);
   const veils = generateVeilTokens(tokens);
-  const elevation = canvasElevation(DEFAULT_CANVAS, resolved, tokens);
-  const ink = canvasInk(DEFAULT_CANVAS, resolved, elevation.surfaces);
 
   let css = "";
   for (const name of THEME_TOKEN_NAMES) css += declaration(name, tokens[name]);
@@ -157,16 +190,7 @@ function tokensFor(resolved) {
   // markers would be the one line a regeneration silently dropped.
   css += declaration("--radius", "0.625rem");
   for (const name of THEME_VEIL_TOKEN_NAMES) css += declaration(name, veils[name]);
-  css += declaration("--canvas", canvasBackground(DEFAULT_CANVAS, resolved));
-  css += declaration("--canvas-ink", ink.ink);
-  css += declaration("--canvas-ink-label", ink.inkLabel);
-  css += declaration("--canvas-ink-muted", ink.inkMuted);
-  css += declaration("--lift-1", elevation.tiers[0].veil);
-  css += declaration("--lift-2", elevation.tiers[1].veil);
-  css += declaration("--label-ink", deriveLabelInk(tokens, resolved));
-  css += declaration("--shadow-raised", elevation.shadows.raised);
-  css += declaration("--shadow-card", elevation.shadows.card);
-  css += declaration("--shadow-overlay", elevation.shadows.overlay);
+  for (const name of CANVAS_TOKEN_NAMES) css += declaration(name, canvasTokens[name]);
   return css;
 }
 
@@ -289,15 +313,23 @@ function format(paths) {
   }
 }
 
+const isCheck = process.argv.includes("--check");
 const before = TARGETS.map(rewrite);
-format(TARGETS.map(({ path }) => path));
-const after = TARGETS.map(({ path }) => readFileSync(path, "utf8"));
-const moved = TARGETS.filter((_, index) => after[index] !== before[index]);
+let moved = [];
+try {
+  format(TARGETS.map(({ path }) => path));
+  const after = TARGETS.map(({ path }) => readFileSync(path, "utf8"));
+  moved = TARGETS.filter((_, index) => after[index] !== before[index]);
+} finally {
+  // --check must leave the tree exactly as it found it whichever way the
+  // answer comes out — INCLUDING when `format()` throws (`vp fmt` exiting
+  // non-zero). That is why this restore is a `finally`, not a step at the top
+  // of the `--check` branch below: this is the one place both the success
+  // path and the thrown-error path pass through on their way out.
+  if (isCheck) TARGETS.forEach(({ path }, index) => writeFileSync(path, before[index]));
+}
 
-if (process.argv.includes("--check")) {
-  // Written, formatted, compared, and put back: --check must leave the tree
-  // exactly as it found it whichever way the answer comes out.
-  TARGETS.forEach(({ path }, index) => writeFileSync(path, before[index]));
+if (isCheck) {
   if (moved.length > 0) {
     console.error(
       `${moved.map(({ name }) => name).join(", ")} stale — run \`node apps/desktop/scripts/generate-theme-css.mjs\`.`,
