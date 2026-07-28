@@ -73,11 +73,15 @@ const END = "/* GENERATED THEME TOKENS — END */";
  */
 const NOTES = {
   "--primary":
-    "The accent, derived from the canvas's primary stop at the chroma the\n" +
-    "   gradient actually paints — so vibrancy modulates the chrome exactly as it\n" +
-    "   modulates the canvas. It is NOT the literal brand ember: the default\n" +
-    "   canvas ships at vibrancy 0.6, and a fill solved at full seed chroma would\n" +
-    "   not belong to the wash behind it.",
+    "The accent, derived from the canvas's primary stop on the SAME vibrancy\n" +
+    "   curve the gradient rides — a near-neutral wash still yields near-neutral\n" +
+    "   chrome — but with neither the per-mode gain nor the per-mode cap, which\n" +
+    "   exist to stop a backdrop fighting the ink and have no business holding\n" +
+    "   down a button fill. So vibrancy 1 lands on the AUTHORED color exactly\n" +
+    "   (ember #e8652a for the shipped canvas); the default ships at 0.6, which\n" +
+    "   is why this is a quieter ember rather than the brand hex itself. It is\n" +
+    "   the same hex in BOTH blocks: the accent carries no mode, so a light/dark\n" +
+    "   flip repaints every surface and leaves it exactly where it is.",
   "--primary-text":
     "The accent solved to APCA Lc 60 on the card, for body-sized accent TEXT.\n" +
     "   `--primary` is below the floor as copy and cannot simply be brightened —\n" +

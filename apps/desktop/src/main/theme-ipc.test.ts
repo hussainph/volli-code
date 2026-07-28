@@ -3,16 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { DEFAULT_THEME, THEME_CHANNELS } from "@volli/shared";
+import { THEME_CHANNELS } from "@volli/shared";
 import type {
   Canvas,
   ProjectCanvasWriteResult,
-  CustomThemeListResult,
-  CustomThemeReadResult,
-  CustomThemeWriteResult,
   ProjectThemeOverride,
+  ResolvedAppearance,
   Result,
-  ThemeDefinition,
   ThemeSetProjectResult,
   ThemeStateResult,
   TerminalOverlayWriteResult,
@@ -21,10 +18,8 @@ import type {
 
 // Hoisted above module evaluation so the electron mock factory can capture
 // into it — the same shape data-ipc.test.ts and ghostty-config.test.ts use.
-const { handlers, showItemInFolder, openPath } = vi.hoisted(() => ({
+const { handlers } = vi.hoisted(() => ({
   handlers: new Map<string, (...args: never[]) => unknown>(),
-  showItemInFolder: vi.fn(),
-  openPath: vi.fn(async () => ""),
 }));
 
 vi.mock("electron", () => ({
@@ -34,17 +29,11 @@ vi.mock("electron", () => ({
     },
   },
   BrowserWindow: { getAllWindows: () => [] },
-  shell: { showItemInFolder, openPath },
 }));
 
 import { registerThemeIpcHandlers } from "./theme-ipc";
 import { defaultFsDeps } from "./fs-deps";
-import {
-  getFirstPaintHint,
-  getGlobalAppearance,
-  getGlobalCanvas,
-  getGlobalTheme,
-} from "./db/theme-repo";
+import { getFirstPaintHint, getGlobalAppearance, getGlobalCanvas } from "./db/theme-repo";
 import { getProjectById, insertProject } from "./db/projects-repo";
 import { openTestDb, testProject } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
@@ -54,9 +43,6 @@ let userDataDir: string;
 
 beforeEach(() => {
   handlers.clear();
-  showItemInFolder.mockClear();
-  openPath.mockClear();
-  openPath.mockResolvedValue("");
   ctx = openTestDb();
   userDataDir = mkdtempSync(join(tmpdir(), "volli-theme-ipc-"));
 });
@@ -71,10 +57,13 @@ afterEach(() => {
  * project. The ghostty layer is pointed at a fake home inside the temp dir so
  * the suite never reads (or could ever write) the developer's real config.
  */
-function setup(db: Database.Database = ctx.db): { projectId: string } {
+function setup(
+  db: Database.Database = ctx.db,
+  appearance: () => ResolvedAppearance = () => "dark",
+): { projectId: string } {
   const project = testProject({ ticketPrefix: "VC" });
   insertProject(ctx.db, project);
-  const deps = { fs: defaultFsDeps(userDataDir), now: Date.now };
+  const deps = { fs: defaultFsDeps(userDataDir), now: Date.now, appearance };
   registerThemeIpcHandlers(
     { ok: true, db },
     { ...deps, fs: { ...deps.fs, homeDir: join(userDataDir, "fake-home"), env: {} } },
@@ -137,7 +126,7 @@ describe("registerThemeIpcHandlers", () => {
   it("answers every channel with a typed error when the db failed to open", () => {
     registerThemeIpcHandlers(
       { ok: false, error: "disk is on fire" },
-      { fs: defaultFsDeps(userDataDir), now: Date.now },
+      { fs: defaultFsDeps(userDataDir), now: Date.now, appearance: () => "dark" },
     );
 
     for (const channel of THEME_CHANNELS) {
@@ -150,16 +139,35 @@ describe("registerThemeIpcHandlers", () => {
 });
 
 describe("volli:theme-state", () => {
-  it("falls back to the shipped default before anything has been chosen", () => {
+  it("resolves the global scope before anything has been chosen", () => {
     setup();
     const result = invoke<ThemeStateResult>("volli:theme-state", {});
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.theme).toEqual(DEFAULT_THEME);
     expect(result.value.editorThemeId).toBeNull();
     expect(result.value.projectOverride).toBeNull();
     expect(result.value.projectId).toBeNull();
+  });
+
+  // A ghostty `theme = light:X,dark:Y` pair resolves to a different half in each
+  // mode, and main used to have no way to say which — `parseGhosttyTerminalPrefs`
+  // assumed dark. The resolved mode is threaded in now, so this read answers with
+  // the half the window is actually wearing.
+  it("resolves a light/dark theme pair against the mode main resolved", () => {
+    writeGhosttyConfig("theme = light:Rose Pine Dawn,dark:Rose Pine");
+    setup(ctx.db, () => "light");
+
+    const result = invoke<ThemeStateResult>("volli:theme-state", {});
+    expect(result.ok && result.value.terminal.prefs.themeName).toBe("Rose Pine Dawn");
+  });
+
+  it("resolves the dark half when the window is dark", () => {
+    writeGhosttyConfig("theme = light:Rose Pine Dawn,dark:Rose Pine");
+    setup(ctx.db, () => "dark");
+
+    const result = invoke<ThemeStateResult>("volli:theme-state", {});
+    expect(result.ok && result.value.terminal.prefs.themeName).toBe("Rose Pine");
   });
 
   it("resolves the project's override and its terminal overlay path", () => {
@@ -194,67 +202,6 @@ describe("volli:theme-state", () => {
   });
 });
 
-describe("volli:theme-set-global", () => {
-  const SEA: ThemeDefinition = { ...DEFAULT_THEME, name: "Sea", slug: "sea", seed: "#3a7d9a" };
-
-  /** The project override the caller's scope must still be wearing afterwards. */
-  const ROSE: ProjectThemeOverride = {
-    appThemeSlug: null,
-    terminalThemeName: null,
-    editorThemeId: null,
-    seed: "#c4526f",
-  };
-
-  it("persists the authored definition and resolves with the fresh global state", () => {
-    setup();
-
-    const result = invoke<ThemeStateResult>("volli:theme-set-global", { theme: SEA });
-
-    expect(result.ok && result.value.theme).toEqual(SEA);
-    // No caller scope named: the global scope IS the caller's scope.
-    expect(result.ok && result.value.projectId).toBeNull();
-    expect(result.ok && result.value.projectOverride).toBeNull();
-    expect(getGlobalTheme(ctx.db)).toEqual(SEA);
-  });
-
-  // The write is global from every scope; the ANSWER is what tells the renderer
-  // which project it is still showing. Answering `projectId: null` here dropped
-  // the scope out of the store and repainted an overriding project to the new
-  // global theme (#123).
-  it("writes globally but answers in the caller's project scope (#123)", () => {
-    const { projectId } = setup();
-    invoke("volli:theme-set-project", { projectId, override: ROSE });
-
-    const result = invoke<ThemeStateResult>("volli:theme-set-global", { theme: SEA, projectId });
-
-    expect(getGlobalTheme(ctx.db)).toEqual(SEA);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.value.theme).toEqual(SEA);
-    expect(result.value.projectId).toBe(projectId);
-    expect(result.value.projectOverride).toEqual(ROSE);
-    expect(result.value.terminal.overlayPaths.project).toBe(
-      join(userDataDir, "volli/ghostty/projects/VC.config"),
-    );
-  });
-
-  // A scope that has gone (the project was deleted while the window still
-  // showed it) must not fail a write that already landed — the renderer would
-  // roll back to a theme that is no longer what is stored.
-  it("degrades a vanished caller scope to the global one, keeping the write", () => {
-    setup();
-
-    const result = invoke<ThemeStateResult>("volli:theme-set-global", {
-      theme: SEA,
-      projectId: "gone",
-    });
-
-    expect(result.ok).toBe(true);
-    expect(result.ok && result.value.projectId).toBeNull();
-    expect(getGlobalTheme(ctx.db)).toEqual(SEA);
-  });
-});
-
 describe("volli:theme-set-global-editor", () => {
   it("persists an authored editor theme id and echoes it on theme-state", () => {
     setup();
@@ -271,9 +218,8 @@ describe("volli:theme-set-global-editor", () => {
     expect(read.ok && read.value.editorThemeId).toBe("nord");
   });
 
-  // The editor twin of the app-theme case above: global write, caller's scope
-  // in the answer (#123). A project that pinned its own editor theme must not
-  // have it dropped because the app-wide one changed.
+  // Global write, caller's scope in the answer (#123). A project that pinned its
+  // own editor theme must not have it dropped because the app-wide one changed.
   it("writes globally but answers in the caller's project scope (#123)", () => {
     const { projectId } = setup();
     const override: ProjectThemeOverride = {
@@ -294,6 +240,22 @@ describe("volli:theme-set-global-editor", () => {
     expect(result.value.editorThemeId).toBe("nord");
     expect(result.value.projectId).toBe(projectId);
     expect(result.value.projectOverride?.editorThemeId).toBe("dracula");
+  });
+
+  // A scope that has gone (the project was deleted while the window still
+  // showed it) must not fail a write that already landed — the renderer would
+  // roll back to a value that is no longer what is stored.
+  it("degrades a vanished caller scope to the global one, keeping the write", () => {
+    setup();
+
+    const result = invoke<ThemeStateResult>("volli:theme-set-global-editor", {
+      editorThemeId: "nord",
+      projectId: "gone",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.value.projectId).toBeNull();
+    expect(result.ok && result.value.editorThemeId).toBe("nord");
   });
 
   it("clears back to derive-from-app on null", () => {
@@ -451,181 +413,6 @@ describe("volli:theme-terminal-overlay-write", () => {
   });
 });
 
-// ── custom theme files (`<userData>/volli/themes/<slug>.json`, #71) ───────────
-
-const sunset: ThemeDefinition = { ...DEFAULT_THEME, name: "Sunset", slug: "sunset" };
-
-/** Slugs that must never reach the filesystem — the seam's whole security boundary. */
-const REFUSED_SLUGS = ["..", "../evil", "/etc/passwd", "..\\evil", ""];
-
-describe("volli:theme-file-write + volli:theme-file-list", () => {
-  it("writes one JSON file per theme and lists it back", () => {
-    setup();
-    const written = invoke<CustomThemeWriteResult>("volli:theme-file-write", { theme: sunset });
-
-    expect(written.ok).toBe(true);
-    if (!written.ok) return;
-    expect(written.path).toBe(join(userDataDir, "volli/themes/sunset.json"));
-    // The fresh catalog rides along, so the caller repaints its picker without
-    // a second round trip — same "re-read rather than predict" stance as the
-    // terminal overlay write.
-    expect(written.themes).toEqual([sunset]);
-    expect(invoke<CustomThemeListResult>("volli:theme-file-list")).toEqual({
-      ok: true,
-      themes: [sunset],
-    });
-  });
-
-  it("refuses a theme whose slug would escape the themes directory", () => {
-    setup();
-    for (const slug of REFUSED_SLUGS) {
-      const result = invoke<CustomThemeWriteResult>("volli:theme-file-write", {
-        theme: { ...sunset, slug },
-      });
-      expect(result.ok).toBe(false);
-    }
-    expect(invoke<CustomThemeListResult>("volli:theme-file-list")).toEqual({
-      ok: true,
-      themes: [],
-    });
-  });
-
-  it("rejects a payload that isn't an authored theme", () => {
-    setup();
-    expect(
-      invoke<CustomThemeWriteResult>("volli:theme-file-write", { theme: { name: "X" } }),
-    ).toEqual({ ok: false, error: "Invalid theme" });
-  });
-
-  it("surfaces a failed write rather than reporting a catalog that never changed", () => {
-    setup();
-    writeFileSync(join(userDataDir, "volli"), "not a directory", "utf8");
-
-    const result = invoke<CustomThemeWriteResult>("volli:theme-file-write", { theme: sunset });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.error).toContain("ENOTDIR");
-  });
-});
-
-describe("volli:theme-file-read", () => {
-  it("reads one theme back by slug", () => {
-    setup();
-    invoke("volli:theme-file-write", { theme: sunset });
-
-    expect(invoke<CustomThemeReadResult>("volli:theme-file-read", { slug: "sunset" })).toEqual({
-      ok: true,
-      theme: sunset,
-    });
-  });
-
-  // A theme file is invited to be hand-edited, so a broken one is an ordinary
-  // outcome: a typed error the UI can show, never a throw across IPC.
-  it("degrades a hand-broken theme file to a typed error", () => {
-    setup();
-    invoke("volli:theme-file-write", { theme: sunset });
-    writeFileSync(join(userDataDir, "volli/themes/sunset.json"), "{ not json", "utf8");
-
-    const result = invoke<CustomThemeReadResult>("volli:theme-file-read", { slug: "sunset" });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.error).toMatch(/could not be read/i);
-  });
-
-  it("rejects a slug that could escape the themes directory", () => {
-    setup();
-    for (const slug of REFUSED_SLUGS) {
-      expect(invoke<CustomThemeReadResult>("volli:theme-file-read", { slug }).ok).toBe(false);
-    }
-  });
-});
-
-describe("volli:theme-file-delete", () => {
-  it("removes the theme's file and answers with the fresh catalog", () => {
-    setup();
-    invoke("volli:theme-file-write", { theme: sunset });
-
-    expect(invoke<CustomThemeListResult>("volli:theme-file-delete", { slug: "sunset" })).toEqual({
-      ok: true,
-      themes: [],
-    });
-  });
-
-  it("rejects a slug that could escape the themes directory", () => {
-    setup();
-    for (const slug of REFUSED_SLUGS) {
-      expect(invoke<CustomThemeListResult>("volli:theme-file-delete", { slug }).ok).toBe(false);
-    }
-  });
-
-  it("surfaces a failed delete rather than reporting a catalog that never changed", () => {
-    setup();
-    // A DIRECTORY where the theme's file belongs, so the unlink fails.
-    mkdirSync(join(userDataDir, "volli/themes/sunset.json"), { recursive: true });
-
-    expect(invoke<CustomThemeListResult>("volli:theme-file-delete", { slug: "sunset" }).ok).toBe(
-      false,
-    );
-  });
-});
-
-describe("volli:theme-file-reveal", () => {
-  it("reveals the theme's own file — the renderer names a slug, never a path", () => {
-    setup();
-    invoke("volli:theme-file-write", { theme: sunset });
-
-    expect(invoke<Result>("volli:theme-file-reveal", { slug: "sunset" })).toEqual({ ok: true });
-    expect(showItemInFolder).toHaveBeenCalledWith(join(userDataDir, "volli/themes/sunset.json"));
-  });
-
-  it("refuses a traversal slug without revealing anything", () => {
-    setup();
-    for (const slug of REFUSED_SLUGS) {
-      expect(invoke<Result>("volli:theme-file-reveal", { slug }).ok).toBe(false);
-    }
-    expect(showItemInFolder).not.toHaveBeenCalled();
-  });
-});
-
-describe("volli:theme-file-open", () => {
-  it("opens the theme's own file in the user's editor", async () => {
-    setup();
-    invoke("volli:theme-file-write", { theme: sunset });
-
-    await expect(
-      invoke<Promise<Result>>("volli:theme-file-open", { slug: "sunset" }),
-    ).resolves.toEqual({ ok: true });
-    expect(openPath).toHaveBeenCalledWith(join(userDataDir, "volli/themes/sunset.json"));
-  });
-
-  // `shell.openPath` reports failure as a non-empty string rather than by
-  // rejecting — swallowing that would leave a dead menu item with no feedback.
-  it("surfaces the reason the file could not be opened", async () => {
-    setup();
-    openPath.mockResolvedValue("No application knows how to open this file");
-
-    await expect(
-      invoke<Promise<Result>>("volli:theme-file-open", { slug: "sunset" }),
-    ).resolves.toEqual({ ok: false, error: "No application knows how to open this file" });
-  });
-
-  // Refused by the shared descriptor guard, so the answer comes back
-  // SYNCHRONOUSLY: the async handler is never entered at all, which is the
-  // strongest form of "no filesystem call was attempted".
-  it("refuses a traversal slug without opening anything", () => {
-    setup();
-    for (const slug of REFUSED_SLUGS) {
-      expect(invoke<Result>("volli:theme-file-open", { slug })).toEqual({
-        ok: false,
-        error: "Invalid theme slug",
-      });
-    }
-    expect(openPath).not.toHaveBeenCalled();
-  });
-});
-
 describe("canvas writes (migration 014)", () => {
   const canvas: Canvas = {
     stops: [
@@ -735,7 +522,11 @@ describe("canvas writes (migration 014)", () => {
   it("records the first-paint hint and repaints every window's edge from it", () => {
     const project = testProject({ ticketPrefix: "VC" });
     insertProject(ctx.db, project);
-    const deps = { fs: defaultFsDeps(userDataDir), now: Date.now };
+    const deps = {
+      fs: defaultFsDeps(userDataDir),
+      now: Date.now,
+      appearance: () => "dark" as const,
+    };
     const onFirstPaintChanged = vi.fn();
     registerThemeIpcHandlers(
       { ok: true, db: ctx.db },

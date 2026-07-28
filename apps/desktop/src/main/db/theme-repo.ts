@@ -30,28 +30,20 @@
  *    read at boot, before there is any UI to surface a failure in; the caller
  *    falls back to the shipped default rather than failing to paint. That is
  *    also, exactly, how a database written by the seed-based theming system
- *    resets to the default canvas: its `theme` row is a `ThemeDefinition`,
- *    which is not a canvas, so it reads as null. No seed→canvas conversion,
- *    by construction.
+ *    resets to the default canvas: its `theme` row holds that system's authored
+ *    theme, which is not a canvas, so it reads as null. No seed→canvas
+ *    conversion, by construction.
  */
 import type Database from "better-sqlite3";
 import {
   isAppearance,
   parseCanvas,
   parseGlobalEditorThemeId,
-  parseThemeJson,
   serializeGlobalEditorThemeId,
-  serializeGlobalTheme,
   THEME_APP_STATE_KEY,
   THEME_EDITOR_APP_STATE_KEY,
 } from "@volli/shared";
-import type {
-  Appearance,
-  Canvas,
-  FirstPaintHint,
-  ShippedEditorThemeId,
-  ThemeDefinition,
-} from "@volli/shared";
+import type { Appearance, Canvas, FirstPaintHint, ShippedEditorThemeId } from "@volli/shared";
 import { setAppState } from "./app-state-repo";
 import { prepared } from "./prepared";
 
@@ -60,9 +52,10 @@ import { prepared } from "./prepared";
  * has never chosen one, which the resolver reads as `auto`.
  *
  * TODO(canvas-engine): move these two beside `THEME_APP_STATE_KEY` in
- * `@volli/shared`'s theme persistence module once the canvas engine lands
- * there — the renderer reads the same rows out of the bootstrap payload, and
- * two hand-typed copies of a key string is one too many.
+ * `@volli/shared`'s `theme/app-state.ts` — the renderer reads the same rows out
+ * of the bootstrap payload (and keeps its own copy of the appearance key in
+ * `stores/theme.ts`), and three hand-typed copies of a key string is two too
+ * many.
  */
 export const APPEARANCE_APP_STATE_KEY = "appearance";
 
@@ -180,33 +173,16 @@ export function setFirstPaintHint(db: Database.Database, hint: FirstPaintHint, n
   );
 }
 
-// ── the seed-based system, on its way out ────────────────────────────────────
-// Still live because the renderer's picker still is: these two write the SAME
-// `theme` row the canvas accessors above use, and each other's payload fails
-// the other's guard, so whichever system last wrote is the one that reads back
-// and the other degrades to its shipped default. That is decision 7 — "reset to
-// Ember, no seed→canvas conversion" — falling out of the guards rather than
-// needing a migration to do it. Both halves cannot be live at once, and only
-// one of them is getting a UI.
+// ── the editor surface (decision 6: its own surface, its own row) ────────────
 
-/** The authored global theme, or null when unset/unreadable (the caller falls back to `DEFAULT_THEME`). */
-export function getGlobalTheme(db: Database.Database): ThemeDefinition | null {
-  return parseThemeJson(getRawGlobalTheme(db));
-}
-
-/** Upserts the authored global theme. */
-export function setGlobalTheme(db: Database.Database, theme: ThemeDefinition, now: number): void {
-  setAppState(db, THEME_APP_STATE_KEY, serializeGlobalTheme(theme), now);
-}
-
-/** The authored global editor theme id, or null when unset (derive from the app theme slug). */
+/** The authored global editor theme id, or null when unset (derive from the resolved appearance). */
 export function getGlobalEditorThemeId(db: Database.Database): ShippedEditorThemeId | null {
   return parseGlobalEditorThemeId(readAppState(db, THEME_EDITOR_APP_STATE_KEY));
 }
 
 /**
  * Upserts the global editor theme id. `null` clears it so Monaco derives from
- * the active app theme slug.
+ * the resolved appearance.
  */
 export function setGlobalEditorThemeId(
   db: Database.Database,

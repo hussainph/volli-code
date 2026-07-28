@@ -45,6 +45,35 @@ export function effectiveChroma(
 }
 
 /**
+ * The ACCENT's chroma — the same vibrancy curve as {@link effectiveChroma}, with
+ * neither the per-mode gain nor the per-mode cap.
+ *
+ * It sits here rather than in `derive.ts` because the two are one decision
+ * expressed twice, and the only way to keep them one decision is to be able to
+ * read them together. Where they diverge is the whole point:
+ *
+ *  - **Vibrancy still governs.** A near-neutral wash must still yield
+ *    near-neutral chrome, so the accent is coupled to the same slider on the same
+ *    exponent — the shared low-half emphasis, unchanged.
+ *  - **The ceiling is the AUTHORED chroma, not the background's.** `darkGain`
+ *    0.62 and `darkCap` 0.09 exist so a saturated *backdrop* does not fight the
+ *    ink standing on it. An accent is not a backdrop: it is a 32px button fill
+ *    and an icon. Holding it to the background's ceiling made the brand color
+ *    unreachable in dark at ANY setting (ember capped at 51% of its own chroma),
+ *    which is a bug in the model rather than a taste.
+ *
+ * So vibrancy 1 lands on the authored color exactly — for the shipped canvas,
+ * ember `#e8652a`, which is an exact fixed point of the accent math in
+ * `generate.ts`. There is no mode in the signature because there is no mode in
+ * the formula: one curve, both appearances, so a light↔dark flip moves every
+ * surface in the window and leaves the accent where it was.
+ */
+export function accentChroma(authoredChroma: number, vibrancy: number): number {
+  const { chroma } = ARC_TUNING;
+  return authoredChroma * lerp(chroma.floor, 1, clamp(vibrancy, 0, 1) ** chroma.vibrancyExponent);
+}
+
+/**
  * The authored color as the window will actually paint it.
  *
  * Lightness is banded rather than scaled, so "light" and "dark" are two

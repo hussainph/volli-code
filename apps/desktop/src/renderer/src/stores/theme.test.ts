@@ -60,14 +60,12 @@ const TERMINAL: GhosttyAppearancePayload = {
 };
 
 /**
- * `volli:theme-state`'s payload. Its `theme` field is the seed system's, which
- * main still serves and this store no longer reads — the canvas arrives through
- * the bootstrap rows instead. It is filled with a stub for exactly that reason:
- * a test that set it meaningfully would be asserting a coupling that is gone.
+ * `volli:theme-state`'s payload — the resolved terminal chain, the editor id and
+ * the migration-013 row. The canvas is deliberately absent: it arrives through
+ * the bootstrap rows instead, and this channel has no second answer for it.
  */
 function statePayload(over: Partial<ThemeStatePayload> = {}): ThemeStatePayload {
   return {
-    theme: null as never,
     editorThemeId: null,
     projectOverride: null,
     projectId: null,
@@ -912,7 +910,13 @@ describe("the default gateway", () => {
     // that it is bypassed.
     vi.stubGlobal("document", {
       documentElement: {
-        style: { setProperty: () => {} },
+        // `getPropertyValue` is read as well as written: the crossfade captures
+        // the outgoing gradient off this element before the paint replaces it.
+        style: {
+          setProperty: () => {},
+          getPropertyValue: () => "",
+          removeProperty: () => {},
+        },
         classList: { toggle: () => {} },
         setAttribute: () => {},
         removeAttribute: () => {},

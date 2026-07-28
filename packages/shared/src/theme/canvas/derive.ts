@@ -23,10 +23,15 @@
 
 import { hexToOklch, lerp, oklchToHex } from "../color";
 import { DEFAULT_THEME } from "../definition";
-import { generateThemeTokens, solveLightnessOrCeiling } from "../generate";
+import {
+  generateAccentTokens,
+  generateThemeTokens,
+  solveLightnessOrCeiling,
+  type AccentTokens,
+} from "../generate";
 import type { ThemeTokens } from "../tokens";
 import { copyFloors } from "./floors";
-import { baseFillHex, effectiveChroma, effectiveStopHexes } from "./gradient";
+import { accentChroma, baseFillHex, effectiveChroma, effectiveStopHexes } from "./gradient";
 import {
   buildDarkLadder,
   buildLightLadder,
@@ -111,37 +116,29 @@ function solveCopy(
 /**
  * The light path: a mirror of `generateThemeTokens`, step for step.
  *
- * `dark` is passed in rather than recomputed because three things are taken from
- * it verbatim. `--primary` and `--primary-foreground` are a solved PAIR whose
- * floor is measured on the button itself, so it holds whatever page the button
- * sits on — re-solving would be a no-op that could only introduce drift. And
- * `--destructive` is hue-locked by the semantic escape list, so it ignores the
- * seed entirely.
+ * `dark` is passed in rather than recomputed because `--destructive` is taken
+ * from it verbatim — hue-locked by the semantic escape list, so it ignores the
+ * seed entirely. `accent` arrives already solved and is shared with the dark
+ * path unchanged: `--primary` and `--primary-foreground` are a solved PAIR whose
+ * floor is measured on the button itself, so the button holds whatever page it
+ * sits on.
  */
 function lightTokens(
   canvas: Canvas,
   seedChroma: number,
   hue: number,
   dark: ThemeTokens,
+  accent: AccentTokens,
   dials: SettledDials,
 ): ThemeTokens {
   const tint = lightTint(seedChroma, canvas.vibrancy);
   const painted = hexToOklch(effectiveStopHexes(canvas, "light")[canvas.primaryIndex]);
   const ladder = buildLightLadder(painted, tint, hue, dials);
-  // The accent's hue and chroma as the dark generation settled them, re-solved
-  // for lightness only — so accent-as-text stays recognizably the accent instead
-  // of becoming a second neutral.
-  const accent = hexToOklch(dark["--primary"]);
 
   return {
     ...ladder,
-    ...solveCopy(ladder, "light", { C: tint, h: hue }, accent),
-    "--primary": dark["--primary"],
-    "--primary-foreground": dark["--primary-foreground"],
-    "--ring": dark["--primary"],
-    "--sidebar-primary": dark["--primary"],
-    "--sidebar-primary-foreground": dark["--primary-foreground"],
-    "--sidebar-ring": dark["--primary"],
+    ...solveCopy(ladder, "light", { C: tint, h: hue }, hexToOklch(accent["--primary"])),
+    ...accent,
     "--destructive": dark["--destructive"],
     "--destructive-foreground": dark["--destructive-foreground"],
   };
@@ -152,22 +149,28 @@ function lightTokens(
  * BUILDS a ladder from authored rungs because light has no shipped counterpart;
  * this one starts from the generator's output and moves it, because dark does.
  *
- * What is NOT touched: `--primary`/`--primary-foreground` and the hue-locked
- * `--destructive` family, both carried over by the spread below.
+ * What the ladder does NOT touch: the hue-locked `--destructive` family, carried
+ * over by the spread below, and the accent family, which the spread replaces
+ * wholesale with the one solved off the canvas's own chroma.
  */
-function darkTokens(canvas: Canvas, dark: ThemeTokens, dials: SettledDials): ThemeTokens {
+function darkTokens(
+  canvas: Canvas,
+  dark: ThemeTokens,
+  accent: AccentTokens,
+  dials: SettledDials,
+): ThemeTokens {
   const painted = hexToOklch(effectiveStopHexes(canvas, "dark")[canvas.primaryIndex]);
   const ladder = buildDarkLadder(dark, painted, dials);
   // The ink's own chroma and hue, taken from the generator's solved body copy so
   // the re-solve moves lightness ONLY. Anything else here would be inventing a
   // second opinion about how chromatic dark text should be.
   const ink = hexToOklch(dark["--foreground"]);
-  const accent = hexToOklch(dark["--primary"]);
 
   return {
     ...dark,
     ...ladder,
-    ...solveCopy(ladder, "dark", ink, accent),
+    ...accent,
+    ...solveCopy(ladder, "dark", ink, hexToOklch(accent["--primary"])),
   };
 }
 
@@ -175,22 +178,38 @@ function darkTokens(canvas: Canvas, dark: ThemeTokens, dials: SettledDials): The
  * The full app token set a canvas implies — what the inner card, its copy and
  * its controls become while this gradient is on the window.
  *
- * Seeded from the PRIMARY stop's authored hue at the chroma the canvas actually
- * paints, so vibrancy modulates the card exactly as it modulates the gradient: a
- * near-neutral wash yields near-neutral chrome, and a vivid canvas yields chrome
- * that visibly belongs to it.
+ * TWO seeds, not one, and the split is the load-bearing part.
+ *
+ * The NEUTRALS take the chroma the canvas actually paints, so vibrancy modulates
+ * the card exactly as it modulates the gradient: a near-neutral wash yields
+ * near-neutral chrome, and a vivid canvas yields chrome that visibly belongs to
+ * it. That chroma is deliberately capped and per-mode (`effectiveChroma`) —
+ * every rung of the ladder inherits from it, and a ladder built from a saturated
+ * seed is a window full of brown greys.
+ *
+ * The ACCENT takes the same vibrancy curve without that ceiling
+ * (`accentChroma`), because the numbers holding the background down are about
+ * being a *background*. Seeding both families at one number made the app's own
+ * brand color unreachable in dark at every setting of the slider; seeding the
+ * ladder at the accent's number would warm every grey in the window. So they are
+ * two calls at two chromas through one construction — the same carrier hex, the
+ * same solvers — and each family is taken from the call that was seeded for it.
+ *
+ * The accent's call carries no appearance, and that is a statement rather than a
+ * saving: one accent serves both modes, so a light↔dark flip repaints every
+ * surface in the window and leaves the one color the user recognizes it by
+ * exactly where it was.
  */
 export function deriveCanvasTokens(canvas: Canvas, resolved: ResolvedAppearance): ThemeTokens {
   const { C, h } = hexToOklch(canvas.stops[canvas.primaryIndex].hex);
   const chroma = effectiveChroma(C, resolved, canvas.vibrancy);
-  const dark = generateThemeTokens({
-    ...DEFAULT_THEME,
-    seed: oklchToHex(SEED_CARRIER_L, chroma, h),
-  });
+  const seed = (seedChroma: number) => oklchToHex(SEED_CARRIER_L, seedChroma, h);
+  const dark = generateThemeTokens({ ...DEFAULT_THEME, seed: seed(chroma) });
+  const accent = generateAccentTokens(seed(accentChroma(C, canvas.vibrancy)));
   const dials = settled(resolved);
   return resolved === "dark"
-    ? darkTokens(canvas, dark, dials)
-    : lightTokens(canvas, chroma, h, dark, dials);
+    ? darkTokens(canvas, dark, accent, dials)
+    : lightTokens(canvas, chroma, h, dark, accent, dials);
 }
 
 /**

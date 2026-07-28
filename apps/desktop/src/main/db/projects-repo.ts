@@ -43,11 +43,16 @@ interface ProjectRow {
  * keeps "does this project override anything?" a single check for every reader,
  * instead of an object whose fields all have to be interrogated.
  *
- * DYING. Migration 014's `theme_canvas`/`theme_appearance` are what per-project
- * theming means now (see `mapCanvas` below); these four are read only because
- * the renderer's theme picker still writes them. This function, the columns'
- * reads, and `updateProjectThemeOverride` go together in the commit that
- * removes that picker.
+ * HALF DYING, and it is worth being exact about which half. Migration 014's
+ * `theme_canvas`/`theme_appearance` are what the APP surface means now (see
+ * `mapCanvas` below), so `theme_app_slug` and `theme_seed` are written `null`
+ * and read by nobody — they went with the seed-based picker. The other two did
+ * not: the terminal and editor surfaces are separate systems (a ghostty overlay
+ * file, a Monaco/shiki id) that still resolve global → project off this row, and
+ * `renderer/src/stores/theme.ts` reads both out of `volli:theme-state`'s
+ * `projectOverride`. The two dead columns stay because `db/export.test.ts`
+ * requires every column on `projects` to have an exported field, and SQLite
+ * `DROP COLUMN` is not safe on the versions we support.
  */
 function mapThemeOverride(row: ProjectRow): ProjectThemeOverride | null {
   const override: ProjectThemeOverride = {

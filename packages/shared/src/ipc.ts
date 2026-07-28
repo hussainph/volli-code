@@ -20,9 +20,8 @@ import type {
   TerminalIoResult,
 } from "./terminal";
 import type { Appearance, Canvas, ResolvedAppearance } from "./theme/canvas/types";
-import type { ThemeDefinition } from "./theme/definition";
 import type { ShippedEditorThemeId } from "./theme/editor-themes";
-import type { ProjectThemeOverride } from "./theme/persistence";
+import type { ProjectThemeOverride } from "./theme/project-override";
 import type { ArchivedTicket, HarnessId, Ticket, TicketPriority, TicketStatus } from "./ticket";
 import type { TicketComment } from "./ticket-comment";
 import type { DiffStat, LatestSessionSignal, TicketEvent } from "./ticket-events";
@@ -387,25 +386,18 @@ export interface ThemeStateInput {
   projectId?: string;
 }
 
-export interface ThemeSetGlobalInput {
-  /** The AUTHORED definition. The resolved token set is derived at render time and never crosses this boundary. */
-  theme: ThemeDefinition;
-  /**
-   * The scope the CALLER is in — not a second write target (#123). The write
-   * is global from every scope; this only says which scope's state to answer
-   * with, so a window showing a project that overrides the app surface keeps
-   * wearing that override instead of being repainted to the new global.
-   */
-  projectId?: string;
-}
-
 /**
  * Persists the global Monaco/shiki theme id (`app_state.theme_editor`).
- * `null` clears it so the editor derives from the active app theme slug.
+ * `null` clears it so the editor derives from the resolved appearance.
  */
 export interface ThemeSetGlobalEditorInput {
   editorThemeId: ShippedEditorThemeId | null;
-  /** The caller's own scope, exactly as on {@link ThemeSetGlobalInput} (#123). */
+  /**
+   * The scope the CALLER is in — not a second write target (#123). The write
+   * is global from every scope; this only says which scope's state to answer
+   * with, so a window showing a project that overrides a surface keeps wearing
+   * that override instead of being repainted to the new global.
+   */
   projectId?: string;
 }
 
@@ -426,16 +418,15 @@ export type TerminalOverlayWriteInput = {
 } & ({ scope: "global" } | { scope: "project"; projectId: string });
 
 /**
- * Everything needed to resolve the three surfaces for a scope. The AUTHORED
- * inputs only — `{global theme, project override}` is authoritative and the
- * token set is generated from it in the renderer at render time.
+ * What a scope needs that `volli:data-bootstrap` cannot ship: the resolved
+ * TERMINAL chain (which has to be read off the filesystem), plus the editor id
+ * and the migration-013 row those two surfaces still live on. The app surface is
+ * not here — its `{canvas, appearance}` pair rides the bootstrap payload.
  */
 export interface ThemeStatePayload {
-  /** The authored global theme (the shipped default when none has been chosen). */
-  theme: ThemeDefinition;
   /**
    * Global Monaco/shiki theme id from `app_state`. `null` means derive from the
-   * active app theme slug — never a resolved token set.
+   * resolved appearance — never a resolved token set.
    */
   editorThemeId: ShippedEditorThemeId | null;
   /** The scoping project's per-surface override; null when unscoped or fully inheriting. */
@@ -445,22 +436,6 @@ export interface ThemeStatePayload {
   /** The terminal appearance with the full overlay chain (and provenance) applied for that scope. */
   terminal: GhosttyAppearancePayload;
 }
-
-/** `{ slug }` — every custom-theme-file verb names a SLUG, never a path (see {@link VolliThemeIpcContract}). */
-export interface ThemeSlugInput {
-  slug: string;
-}
-
-/** `{ theme }` — the authored definition; its own `slug` names the file it lands in. */
-export interface CustomThemeWriteInput {
-  theme: ThemeDefinition;
-}
-
-/** The custom-theme catalog: every readable `<userData>/volli/themes/*.json`, by display name. */
-export type CustomThemeListResult = Result<{ themes: ThemeDefinition[] }>;
-export type CustomThemeReadResult = Result<{ theme: ThemeDefinition }>;
-/** Resolves with the file written AND the fresh catalog, so the picker repaints without a second round trip. */
-export type CustomThemeWriteResult = Result<{ path: string; themes: ThemeDefinition[] }>;
 
 // ---- canvas theming writes (docs/plans/arc-theming-migration.md) ------------
 // WRITES ONLY. There is no `volli:canvas-state` read channel and there must not
@@ -532,25 +507,19 @@ export type TerminalOverlayWriteResult = Result<{
 }>;
 
 /**
- * The theming channels `src/main/theme-ipc.ts` owns
- * (docs/plans/theming-engine.md § Persistence, application, IPC).
+ * The theming channels `src/main/theme-ipc.ts` owns.
  *
- * The `volli:theme-file-*` half is the custom-theme catalog (#71): one JSON
- * file per theme under `<userData>/volli/themes/<slug>.json`. Like the overlay
- * write above, the renderer names an IDENTITY — here a slug — and never a
- * path, so no request it can send reaches a file outside that directory. Write
- * and delete answer with the FRESH catalog rather than a bare ack, which is
- * also why there is no change broadcast: the window that mutated already has
- * the new truth, and the catalog is read when a picker opens, not held live.
+ * One read and a set of writes. The read exists only because the terminal chain
+ * has to be resolved off the filesystem; everything the canvas stores is an
+ * `app_state` row or a `projects` column, which `volli:data-bootstrap` already
+ * ships — so a canvas write answers with a bare ack rather than fresh state.
  */
 export interface VolliThemeIpcContract {
-  /** The authored global theme + a project's override + the resolved terminal chain. The renderer derives tokens from this. */
+  /** The resolved terminal chain for a scope, plus the editor id and the migration-013 row. */
   "volli:theme-state": { args: [input: ThemeStateInput]; result: ThemeStateResult };
-  /** Persists the authored global theme (`app_state.theme`). Resolves with the fresh state. */
-  "volli:theme-set-global": { args: [input: ThemeSetGlobalInput]; result: ThemeStateResult };
   /**
    * Persists the global editor theme id (`app_state.theme_editor`). `null` clears
-   * it so Monaco derives from the active app theme slug. Resolves with fresh state.
+   * it so Monaco derives from the resolved appearance. Resolves with fresh state.
    */
   "volli:theme-set-global-editor": {
     args: [input: ThemeSetGlobalEditorInput];
@@ -587,21 +556,6 @@ export interface VolliThemeIpcContract {
     args: [input: TerminalOverlayWriteInput];
     result: TerminalOverlayWriteResult;
   };
-  /** Every custom theme on disk. A file that isn't a readable theme is skipped, never fatal. */
-  "volli:theme-file-list": { args: []; result: CustomThemeListResult };
-  /** One custom theme by slug; a hand-broken file comes back as a typed error. */
-  "volli:theme-file-read": { args: [input: ThemeSlugInput]; result: CustomThemeReadResult };
-  /** Writes (or replaces) one theme file atomically. Resolves with its path + the fresh catalog. */
-  "volli:theme-file-write": {
-    args: [input: CustomThemeWriteInput];
-    result: CustomThemeWriteResult;
-  };
-  /** Deletes one theme file. Already gone counts as deleted. Resolves with the fresh catalog. */
-  "volli:theme-file-delete": { args: [input: ThemeSlugInput]; result: CustomThemeListResult };
-  /** Reveals one theme file in Finder — main resolves the slug, the renderer never sends a path. */
-  "volli:theme-file-reveal": { args: [input: ThemeSlugInput]; result: Result };
-  /** Opens one theme file in the user's default editor (#71: a theme is a plain file). */
-  "volli:theme-file-open": { args: [input: ThemeSlugInput]; result: Result };
 }
 
 export type ThemeIpcChannel = keyof VolliThemeIpcContract;

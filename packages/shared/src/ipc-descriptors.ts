@@ -13,10 +13,9 @@ import type {
 import { parseCanvas } from "./theme/canvas";
 import type { Appearance } from "./theme/canvas/types";
 import { isHexColor } from "./theme/color";
-import { isValidThemeSlug } from "./theme/custom-themes";
 import { isShippedEditorThemeId } from "./theme/editor-themes";
 import { isValidOverlayKey, isValidOverlayValue } from "./theme/ghostty-overlay";
-import { isProjectThemeOverride, isThemeDefinition } from "./theme/persistence";
+import { isProjectThemeOverride } from "./theme/project-override";
 import { isHarnessId, isTicketPriority, isTicketStatus } from "./ticket";
 import { isValidBranchName } from "./ticket-branch";
 
@@ -546,9 +545,9 @@ export const FILE_IPC: { readonly [C in FileIpcChannel]: IpcRequestDescriptor<C>
 export const FILE_CHANNELS = Object.keys(FILE_IPC) as readonly FileIpcChannel[];
 
 // ---- theme-IPC descriptor table ------------------------------------------
-// Exactly one entry per VolliThemeIpcContract channel (the 4 channels
-// `src/main/theme-ipc.ts` owns). The theme/override shape guards live next to
-// the persistence rules they enforce (`theme/persistence.ts`), imported above.
+// Exactly one entry per VolliThemeIpcContract channel (the channels
+// `src/main/theme-ipc.ts` owns). The per-surface override guard lives next to
+// the shape it enforces (`theme/project-override.ts`), imported above.
 
 /**
  * Whether every value is a string or null — the overlay edit-set shape (`null`
@@ -580,17 +579,6 @@ function isCallerScope(value: unknown): boolean {
   return value === undefined || typeof value === "string";
 }
 
-/** `[{ slug }]` where the slug can actually name a file in the themes directory. */
-function isThemeSlugArgs(args: unknown[]): boolean {
-  const [input] = args;
-  return (
-    args.length === 1 &&
-    isRecord(input) &&
-    typeof input["slug"] === "string" &&
-    isValidThemeSlug(input["slug"])
-  );
-}
-
 /**
  * The closed appearance vocabulary — the same three words migration 014's
  * `CHECK` admits, and the same three {@link Appearance} names.
@@ -616,17 +604,9 @@ export const THEME_IPC: { readonly [C in ThemeIpcChannel]: IpcRequestDescriptor<
     },
     invalidError: "Invalid theme request",
   },
-  "volli:theme-set-global": {
+  "volli:theme-set-global-editor": {
     // `projectId` names the CALLER's scope, never a second write target — it
     // decides which scope's state the answer describes (#123).
-    guard: (args): args is IpcArgs<"volli:theme-set-global"> =>
-      args.length === 1 &&
-      isRecord(args[0]) &&
-      isThemeDefinition(args[0]["theme"]) &&
-      isCallerScope(args[0]["projectId"]),
-    invalidError: "Invalid theme",
-  },
-  "volli:theme-set-global-editor": {
     // null = derive from app theme; otherwise only a shipped catalog id.
     // `isShippedEditorThemeId` is the shared vocabulary the renderer catalog
     // asserts against — an unknown string never reaches SQLite.
@@ -705,35 +685,6 @@ export const THEME_IPC: { readonly [C in ThemeIpcChannel]: IpcRequestDescriptor<
       return input["scope"] === "project" && typeof input["projectId"] === "string";
     },
     invalidError: "Invalid terminal overlay write",
-  },
-  // The custom-theme catalog names a SLUG, never a path. `isValidThemeSlug` is
-  // imported rather than restated, so the IPC boundary cannot drift from the
-  // path builder it guards: a traversal is refused here, before main runs, as
-  // well as in `customThemePath`.
-  "volli:theme-file-list": {
-    guard: (args): args is IpcArgs<"volli:theme-file-list"> => args.length === 0,
-    invalidError: "Invalid theme request",
-  },
-  "volli:theme-file-read": {
-    guard: (args): args is IpcArgs<"volli:theme-file-read"> => isThemeSlugArgs(args),
-    invalidError: "Invalid theme slug",
-  },
-  "volli:theme-file-write": {
-    guard: (args): args is IpcArgs<"volli:theme-file-write"> =>
-      args.length === 1 && isRecord(args[0]) && isThemeDefinition(args[0]["theme"]),
-    invalidError: "Invalid theme",
-  },
-  "volli:theme-file-delete": {
-    guard: (args): args is IpcArgs<"volli:theme-file-delete"> => isThemeSlugArgs(args),
-    invalidError: "Invalid theme slug",
-  },
-  "volli:theme-file-reveal": {
-    guard: (args): args is IpcArgs<"volli:theme-file-reveal"> => isThemeSlugArgs(args),
-    invalidError: "Invalid theme slug",
-  },
-  "volli:theme-file-open": {
-    guard: (args): args is IpcArgs<"volli:theme-file-open"> => isThemeSlugArgs(args),
-    invalidError: "Invalid theme slug",
   },
 };
 

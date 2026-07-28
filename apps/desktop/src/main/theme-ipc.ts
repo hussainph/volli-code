@@ -1,28 +1,24 @@
 /**
- * The theming IPC surface (docs/plans/theming-engine.md § Persistence,
- * application, IPC): read the resolved state, set the global theme, set a
- * project's per-surface override, write terminal overlay edits, and manage the
- * user's own theme FILES (`<userData>/volli/themes/<slug>.json`, #71).
+ * The theming IPC surface: read the resolved terminal chain for a scope, persist
+ * the canvas and appearance at either scope, set the editor theme, set a
+ * project's per-surface override, and write terminal overlay edits.
  *
  * Two shapes worth naming up front, because they are what keep the design's
  * rules true at the boundary rather than only inside it:
  *
- *  - **Only AUTHORED inputs cross this seam.** `volli:theme-state` answers with
- *    `{global theme, project override}` and the resolved *terminal* config; it
- *    never carries a generated token set, because the generator runs in the
- *    renderer at render time and the resolved set is stored nowhere.
- *  - **The renderer names a SCOPE or a SLUG, never a path.** An overlay write
- *    says "global" or "this project"; a theme-file verb says which slug. Main
- *    maps either onto a file under `<userData>/volli/`, and the write paths
- *    (`theme-overlay.ts`, `theme-files.ts`) guard it again. There is no request
- *    the renderer can send that reaches the user's own ghostty config
- *    (decision #67) or any file outside the themes directory.
+ *  - **Only AUTHORED inputs cross this seam.** No channel here carries a
+ *    generated token set: the generator runs in the renderer at render time and
+ *    the resolved set is stored nowhere.
+ *  - **The renderer names a SCOPE, never a path.** An overlay write says
+ *    "global" or "this project"; main maps that onto a file under
+ *    `<userData>/volli/`, and the write path (`theme-overlay.ts`) guards it
+ *    again. There is no request the renderer can send that reaches the user's
+ *    own ghostty config (decision #67).
  *
- * The canvas half (docs/plans/arc-theming-migration.md) is five WRITES and no
- * reads, which is the shape the rest of this surface will collapse into: what
- * is stored is `app_state` rows and `projects` columns, and `volli:data-bootstrap`
- * already ships both. `volli:theme-state` exists only because the terminal
- * chain has to be resolved off the filesystem, and the canvas has no such need.
+ * The canvas half is WRITES and no reads: what is stored is `app_state` rows and
+ * `projects` columns, and `volli:data-bootstrap` already ships both.
+ * `volli:theme-state` exists only because the terminal chain has to be resolved
+ * off the filesystem, and the canvas has no such need.
  *
  * Registered through the shared guard→body→envelope registry (issue #98):
  * `THEME_IPC` (@volli/shared) supplies the validators, this module supplies
@@ -30,27 +26,20 @@
  * typed `{ ok: false, error }` — same stance as data-ipc.ts and volli-fs.ts.
  */
 
-import { shell } from "electron";
 import type Database from "better-sqlite3";
-import { customThemePath, DEFAULT_THEME, THEME_CHANNELS, THEME_IPC } from "@volli/shared";
+import { THEME_CHANNELS, THEME_IPC } from "@volli/shared";
 import type {
   AppearanceSetGlobalInput,
   AppearanceSetProjectInput,
   CanvasSetGlobalInput,
   CanvasSetProjectInput,
-  CustomThemeListResult,
-  CustomThemeReadResult,
-  CustomThemeWriteInput,
-  CustomThemeWriteResult,
   FirstPaintHint,
   GhosttyAppearancePayload,
   ProjectCanvasWriteResult,
+  ResolvedAppearance,
   Result,
-  ThemeDefinition,
-  ThemeSlugInput,
   ThemeIpcChannel,
   ThemeSetGlobalEditorInput,
-  ThemeSetGlobalInput,
   ThemeSetProjectInput,
   ThemeSetProjectResult,
   ThemeStateInput,
@@ -68,23 +57,15 @@ import {
 } from "./db/projects-repo";
 import {
   getGlobalEditorThemeId,
-  getGlobalTheme,
   setFirstPaintHint,
   setGlobalAppearance,
   setGlobalCanvas,
   setGlobalEditorThemeId,
-  setGlobalTheme,
 } from "./db/theme-repo";
 import { readGhosttyAppearance } from "./ghostty-config";
 import type { FsDeps } from "./fs-deps";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";
-import {
-  deleteCustomTheme,
-  listCustomThemes,
-  readCustomTheme,
-  writeCustomTheme,
-} from "./theme-files";
 import { writeGlobalTerminalOverlay, writeProjectTerminalOverlay } from "./theme-overlay";
 import type { OverlayWriteResult } from "./theme-overlay";
 
@@ -101,6 +82,18 @@ import type { OverlayWriteResult } from "./theme-overlay";
 export interface ThemeIpcDeps {
   fs: FsDeps;
   now: () => number;
+  /**
+   * The mode the window is actually wearing, read fresh per call.
+   *
+   * A ghostty `theme = light:X,dark:Y` pair resolves to one half or the other,
+   * so a chain read that cannot name a mode has to assume one — and the
+   * assumption `parseGhosttyTerminalPrefs` used to bake in was `dark`. Main
+   * knows the answer (`window-theme.ts` resolves it from the `first-paint` hint
+   * and the stored global pair), so it passes it rather than defaulting; a
+   * thunk because the user can flip the mode long after these handlers are
+   * registered.
+   */
+  appearance: () => ResolvedAppearance;
 }
 
 /**
@@ -110,18 +103,11 @@ export interface ThemeIpcDeps {
  */
 export interface ThemeIpcHooks {
   /**
-   * The persisted global theme changed. `src/main/index.ts` repaints every
-   * window's `backgroundColor` from it — Chromium paints that color during
-   * resizes and before first paint, so a stale one flashes the previous palette
-   * at exactly the moments the user notices.
-   */
-  onGlobalThemeChanged?(theme: ThemeDefinition): void;
-  /**
    * The renderer finished a paint and recorded what it resolved. Main repaints
-   * every window's `backgroundColor` from it — the canvas-era replacement for
-   * {@link onGlobalThemeChanged}, and a strictly better one: the renderer has
-   * already run the whole pipeline, so main takes the color it actually painted
-   * instead of re-deriving one and hoping the two agree.
+   * every window's `backgroundColor` from it — Chromium paints that color during
+   * resizes and before first paint, so a stale one flashes the previous palette
+   * at exactly the moments the user notices. Taking the color the renderer
+   * actually painted beats re-deriving one in main and hoping the two agree.
    */
   onFirstPaintChanged?(hint: FirstPaintHint): void;
 }
@@ -149,13 +135,10 @@ function buildThemeState(
   let terminal: GhosttyAppearancePayload;
   let payload: ThemeStatePayload;
   const editorThemeId = getGlobalEditorThemeId(db);
+  const appearance = deps.appearance();
   if (projectId === null) {
-    terminal = readGhosttyAppearance(deps.fs, null);
+    terminal = readGhosttyAppearance(deps.fs, appearance, null);
     payload = {
-      // No stored theme (or an unreadable one) degrades to the shipped default
-      // rather than failing to paint — a theme is read before any UI exists to
-      // surface a failure in.
-      theme: getGlobalTheme(db) ?? DEFAULT_THEME,
       editorThemeId,
       projectOverride: null,
       projectId: null,
@@ -166,9 +149,8 @@ function buildThemeState(
 
   const project = getProjectById(db, projectId);
   if (project === undefined) return { ok: false, error: "Unknown project" };
-  terminal = readGhosttyAppearance(deps.fs, project.ticketPrefix);
+  terminal = readGhosttyAppearance(deps.fs, appearance, project.ticketPrefix);
   payload = {
-    theme: getGlobalTheme(db) ?? DEFAULT_THEME,
     editorThemeId,
     projectOverride: project.themeOverride ?? null,
     projectId,
@@ -223,21 +205,9 @@ export function registerThemeIpcHandlers(
     "volli:theme-state": (input: ThemeStateInput): ThemeStateResult =>
       buildThemeState(db, deps, input.projectId ?? null),
 
-    "volli:theme-set-global": (input: ThemeSetGlobalInput): ThemeStateResult => {
-      // The AUTHORED definition only — `setGlobalTheme` serializes field by
-      // field, so a resolved token set cannot reach storage even if one rode
-      // along on the request.
-      setGlobalTheme(db, input.theme, deps.now());
-      // After the write, so a window never repaints to a theme that failed to
-      // persist — and the renderer's own repaint is driven by its optimistic
-      // apply, not by this.
-      hooks.onGlobalThemeChanged?.(input.theme);
-      // The caller's scope, not the write's — see `stateForCaller`.
-      return stateForCaller(db, deps, input.projectId ?? null);
-    },
-
     "volli:theme-set-global-editor": (input: ThemeSetGlobalEditorInput): ThemeStateResult => {
       setGlobalEditorThemeId(db, input.editorThemeId, deps.now());
+      // The caller's scope, not the write's — see `stateForCaller`.
       return stateForCaller(db, deps, input.projectId ?? null);
     },
 
@@ -249,7 +219,7 @@ export function registerThemeIpcHandlers(
       return { ok: true, project, value: state.value };
     },
 
-    // ── the canvas (docs/plans/arc-theming-migration.md) ──────────────────
+    // ── the canvas ────────────────────────────────────────────────────────
     // WRITES ONLY, and every one of them answers with an ack rather than fresh
     // state: the global canvas and appearance are `app_state` rows and a
     // project's are `projects` columns, so `volli:data-bootstrap` already ships
@@ -283,51 +253,9 @@ export function registerThemeIpcHandlers(
     "volli:theme-first-paint-set": (input: FirstPaintHint): Result => {
       setFirstPaintHint(db, input, deps.now());
       // After the write, so a window never repaints to a background that failed
-      // to persist — the same ordering `volli:theme-set-global` uses.
+      // to persist.
       hooks.onFirstPaintChanged?.(input);
       return { ok: true };
-    },
-
-    // ── custom theme files (#71) ──────────────────────────────────────────
-    // The renderer names a SLUG; main turns it into the one path it is allowed
-    // to name, and `theme-files.ts` guards that again. Write and delete answer
-    // with the fresh catalog — re-read, not predicted — so the caller repaints
-    // without a second round trip.
-    "volli:theme-file-list": (): CustomThemeListResult => ({
-      ok: true,
-      themes: listCustomThemes(deps.fs),
-    }),
-
-    "volli:theme-file-read": (input: ThemeSlugInput): CustomThemeReadResult =>
-      readCustomTheme(deps.fs, input.slug),
-
-    "volli:theme-file-write": (input: CustomThemeWriteInput): CustomThemeWriteResult => {
-      const written = writeCustomTheme(deps.fs, input.theme);
-      if (!written.ok) return written;
-      return { ok: true, path: written.path, themes: listCustomThemes(deps.fs) };
-    },
-
-    "volli:theme-file-delete": (input: ThemeSlugInput): CustomThemeListResult => {
-      const deleted = deleteCustomTheme(deps.fs, input.slug);
-      if (!deleted.ok) return deleted;
-      return { ok: true, themes: listCustomThemes(deps.fs) };
-    },
-
-    // Reveal and open resolve the slug with `customThemePath` directly: it
-    // THROWS on anything that isn't a valid slug, and the registry envelope
-    // turns that into `{ ok: false, error }` — the same "refuse before a path
-    // exists" shape `writeProjectTerminalOverlay` uses for a ticket prefix.
-    "volli:theme-file-reveal": (input: ThemeSlugInput): Result => {
-      shell.showItemInFolder(customThemePath(deps.fs.userDataDir, input.slug));
-      return { ok: true };
-    },
-
-    // `shell.openPath` reports failure as a non-empty string rather than by
-    // rejecting, so an unchecked call is a menu item that silently does
-    // nothing — surface it like any other failed action (CLAUDE.md).
-    "volli:theme-file-open": async (input: ThemeSlugInput): Promise<Result> => {
-      const failure = await shell.openPath(customThemePath(deps.fs.userDataDir, input.slug));
-      return failure === "" ? { ok: true } : { ok: false, error: failure };
     },
 
     "volli:theme-terminal-overlay-write": (
@@ -352,7 +280,7 @@ export function registerThemeIpcHandlers(
       return {
         ok: true,
         path: written.path,
-        terminal: readGhosttyAppearance(deps.fs, prefix),
+        terminal: readGhosttyAppearance(deps.fs, deps.appearance(), prefix),
       };
     },
   };

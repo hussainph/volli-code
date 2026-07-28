@@ -60,22 +60,26 @@
   --border-strong: #423632;
   --input: #312623;
   --sidebar-border: #2d241f;
-  /* The accent, derived from the canvas's primary stop at the chroma the
-   gradient actually paints — so vibrancy modulates the chrome exactly as it
-   modulates the canvas. It is NOT the literal brand ember: the default
-   canvas ships at vibrancy 0.6, and a fill solved at full seed chroma would
-   not belong to the wash behind it. */
-  --primary: #be826b;
+  /* The accent, derived from the canvas's primary stop on the SAME vibrancy
+   curve the gradient rides — a near-neutral wash still yields near-neutral
+   chrome — but with neither the per-mode gain nor the per-mode cap, which
+   exist to stop a backdrop fighting the ink and have no business holding
+   down a button fill. So vibrancy 1 lands on the AUTHORED color exactly
+   (ember #e8652a for the shipped canvas); the default ships at 0.6, which
+   is why this is a quieter ember rather than the brand hex itself. It is
+   the same hex in BOTH blocks: the accent carries no mode, so a light/dark
+   flip repaints every surface and leaves it exactly where it is. */
+  --primary: #d37550;
   --primary-foreground: #ffffff;
   /* The accent solved to APCA Lc 60 on the card, for body-sized accent TEXT.
    `--primary` is below the floor as copy and cannot simply be brightened —
    its lightness is what makes it work as a fill. Fills and icons take
    `--primary`; anything you read takes this. */
-  --primary-text: #e3a58d;
-  --ring: #be826b;
-  --sidebar-primary: #be826b;
+  --primary-text: #fc9a74;
+  --ring: #d37550;
+  --sidebar-primary: #d37550;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-ring: #be826b;
+  --sidebar-ring: #d37550;
   /* Hue-locked: the semantic escape list never follows the canvas, or a red
    canvas would make “delete” indistinguishable from “primary”. */
   --destructive: #e5484d;
@@ -145,22 +149,26 @@
   --border-strong: #d5b2a5;
   --input: #d8b6a9;
   --sidebar-border: #ddbbad;
-  /* The accent, derived from the canvas's primary stop at the chroma the
-   gradient actually paints — so vibrancy modulates the chrome exactly as it
-   modulates the canvas. It is NOT the literal brand ember: the default
-   canvas ships at vibrancy 0.6, and a fill solved at full seed chroma would
-   not belong to the wash behind it. */
-  --primary: #d6744d;
+  /* The accent, derived from the canvas's primary stop on the SAME vibrancy
+   curve the gradient rides — a near-neutral wash still yields near-neutral
+   chrome — but with neither the per-mode gain nor the per-mode cap, which
+   exist to stop a backdrop fighting the ink and have no business holding
+   down a button fill. So vibrancy 1 lands on the AUTHORED color exactly
+   (ember #e8652a for the shipped canvas); the default ships at 0.6, which
+   is why this is a quieter ember rather than the brand hex itself. It is
+   the same hex in BOTH blocks: the accent carries no mode, so a light/dark
+   flip repaints every surface and leaves it exactly where it is. */
+  --primary: #d37550;
   --primary-foreground: #ffffff;
   /* The accent solved to APCA Lc 60 on the card, for body-sized accent TEXT.
    `--primary` is below the floor as copy and cannot simply be brightened —
    its lightness is what makes it work as a fill. Fills and icons take
    `--primary`; anything you read takes this. */
-  --primary-text: #9e4218;
-  --ring: #d6744d;
-  --sidebar-primary: #d6744d;
+  --primary-text: #9c441e;
+  --ring: #d37550;
+  --sidebar-primary: #d37550;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-ring: #d6744d;
+  --sidebar-ring: #d37550;
   /* Hue-locked: the semantic escape list never follows the canvas, or a red
    canvas would make “delete” indistinguishable from “primary”. */
   --destructive: #e5484d;
@@ -790,10 +798,9 @@ article.bg-card {
  * button for the ~300ms it is armed. Nothing here is on at rest;
  * scope-transition.ts adds the attribute for the length of one swap.
  *
- * `background-image` is deliberately NOT in the list, and cannot be: it does not
- * interpolate, so the gradient itself cuts while every color on top of it eases.
- * The seed system bought a gradient crossfade with a second stacked layer and a
- * mounted "outgoing" copy; that machinery went with the layer it belonged to.
+ * `background-image` is deliberately NOT in the list, and cannot be: two
+ * multi-stop gradients have no value in between, so listing it would still cut.
+ * The gradient's half of the crossfade is the stacked layer below.
  *
  * Timing lives in scope-transition.ts's storyboard; --theme-scope-crossfade
  * mirrors its `crossfade` constant. The curve is --ease-swift's, written out
@@ -816,10 +823,72 @@ article.bg-card {
   transition-timing-function: var(--theme-scope-ease);
 }
 
+/* THE GRADIENT'S HALF OF THAT CROSSFADE.
+ *
+ * The rule above eases every color the window draws with. It cannot ease the
+ * canvas: `--canvas` is a multi-stop `background-image`, and two gradients have
+ * no value in between, so it swaps on the first frame. That is worse than no
+ * animation — for a third of a second the card, the sidebar and the text are
+ * still the outgoing workspace's colors, easing over the incoming workspace's
+ * wallpaper. Opacity, unlike a gradient, interpolates between any two canvases.
+ *
+ * So the OUTGOING gradient is painted a second time here and faded out over the
+ * incoming one, which `html` is already painting underneath. One layer, not two:
+ * the base canvas has to stay on `html` itself — that is the entire first-paint
+ * argument (§ THE CANVAS above), since a value the stylesheet declares is
+ * paintable before any JS runs and an element is not — so the only thing that
+ * needs a second layer is the copy being retired.
+ *
+ * WHY `html::before` and not a React element. The layer must sit above `html`'s
+ * own background and below every pixel of the app, and a negative-z fixed child
+ * of the root stacking context is exactly that slot. Reaching it from React
+ * would mean an element that mounts after first paint, that has to be kept
+ * outside the `zoom: uiScale` row (app-shell.tsx) by hand, and that lives in the
+ * same tree as the live terminals — which must never be unmounted incidentally.
+ * A pseudo-element has no mount at all: it is created by an attribute and
+ * destroyed by its removal, touches no component tree, and cannot be reordered
+ * by a refactor above it. `::before` rather than `::after` because this paints
+ * BENEATH everything; `::after` reads as the layer on top.
+ *
+ * An animation rather than a transition, because it plays exactly once from a
+ * known start. `scope-transition.ts` removes the attribute, flushes, and re-adds
+ * it, so an overlapping scope change builds a fresh layer that starts from the
+ * top instead of resuming a spent one at opacity 0; `forwards` holds the last
+ * frame until the shared hold timer takes the attribute off for good.
+ *
+ * `contain: strict` keeps a window-sized gradient out of every layout and paint
+ * invalidation above it (safe here: an inset-0 fixed box takes its size from its
+ * insets), and `pointer-events: none` is defensive — a full-window layer that
+ * swallowed a click would be a bug in every direction. */
+:root[data-canvas-fade="outgoing"]::before {
+  position: fixed;
+  z-index: -1;
+  contain: strict;
+  inset: 0;
+  animation: theme-canvas-crossfade var(--theme-scope-crossfade) var(--theme-scope-ease) forwards;
+  pointer-events: none;
+  content: "";
+  background: var(--canvas-outgoing);
+}
+
+@keyframes theme-canvas-crossfade {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
 /* Reduced motion (HIG §accessibility): nothing here translates or scales, so
  * there is no vestibular motion to remove — and an eased brightness change is
  * itself the accessible treatment for a whole-window repaint. Keep the shortest
- * honest ease rather than a hard cut, over before it reads as animation. */
+ * honest ease rather than a hard cut, over before it reads as animation.
+ *
+ * One variable collapses BOTH halves, which is the point of their sharing it:
+ * a gradient that outlived the token crossfade would leave the new workspace's
+ * chrome sitting on the old one's wallpaper — the exact defect the layer exists
+ * to remove, reintroduced by a second timing. */
 @media (prefers-reduced-motion: reduce) {
   :root {
     --theme-scope-crossfade: 120ms;

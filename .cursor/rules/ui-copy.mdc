@@ -1,0 +1,38 @@
+---
+description: UI copy discipline — no tutorial helper text on controls; let controls speak
+globs: apps/desktop/src/renderer/**/*.tsx
+alwaysApply: false
+---
+
+# UI copy — let the controls talk
+
+Volli is a dense workbench (Linear, Arc, Raycast). Settings and editors are **not** onboarding wizards.
+
+## Default: no helper text
+
+Do **not** add `description` on `SettingsSection`, `SettingsRow`, or pane headers unless the user explicitly asked for it.
+
+- **Labels are nouns**, not sentences: "Vibrancy", "Grain", "Mode" — not "How much colour the gradient carries".
+- **The control is the explanation**: gradient pad, swatches, sliders, segmented pills, origin chips. If someone has to read a paragraph to use a visual editor, the editor failed.
+- **No tutorial copy** under section titles ("Drag a colour to move its pool…", "Off at zero", "One color tints the whole app").
+- **No `title=` essays** on icon buttons that already have `aria-label`. Tooltip = a few words when disabled, nothing when enabled.
+- **Module comments** carry architecture and tradeoffs. **UI strings** do not repeat them.
+
+## When helper text is allowed (rare)
+
+1. **Irreversible or surprising scope** — e.g. delete theme confirm, "Volli never edits your Ghostty config" (trust boundary, one line).
+2. **True error / blocked state** — contrast floor unreachable; say what failed and offer one recovery action. No color-space lecture.
+3. **Inherit vs custom** — one short line naming what is being followed (`Following app-wide — Dark`). No second sentence restating independence.
+
+Max **one line** of `text-muted-foreground` helper text per row. Zero is better.
+
+## Anti-patterns (remove on sight)
+
+- Section description + row description + tooltip + footer paragraph saying the same thing.
+- Dynamic row descriptions that narrate the control state (`Following macOS — dark right now` under a three-segment mode picker that already shows Auto/Light/Dark).
+- Readout panels that explain APCA, solvers, or "this is the colour space running out" to end users.
+- Lab scratch copy bleeding into shipped Settings (`Transparent — this column is reading the canvas`).
+
+## Reference
+
+Arc Space editor, Linear settings, macOS System Settings: names on the left, controls on the right, silence everywhere else.

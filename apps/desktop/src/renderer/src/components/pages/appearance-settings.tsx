@@ -1,11 +1,13 @@
 import * as React from "react";
 import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
 import { BracketsCurlyIcon } from "@phosphor-icons/react/dist/csr/BracketsCurly";
+import { CircleHalfIcon } from "@phosphor-icons/react/dist/csr/CircleHalf";
 import { FileTextIcon } from "@phosphor-icons/react/dist/csr/FileText";
 import { MinusIcon } from "@phosphor-icons/react/dist/csr/Minus";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
+import { resolveAppearance } from "@volli/shared";
 import { getBuiltinTheme } from "restty";
 
 import { SettingsRow, SettingsSection } from "@renderer/components/pages/settings-shell";
@@ -15,6 +17,7 @@ import {
   revealPath,
   terminalThemeItems,
 } from "@renderer/components/theme/appearance-catalog";
+import { AppearanceModeChoice, CanvasEditor } from "@renderer/components/theme/canvas-editor";
 import { ThemeComboBox, ThemeOriginPill } from "@renderer/components/theme/theme-combo-box";
 import {
   buildTerminalSettingRows,
@@ -29,14 +32,25 @@ import {
 import { Button } from "@renderer/components/ui/button";
 import { listEditorThemes } from "@renderer/editor/editor-theme-catalog";
 import { writeThrough } from "@renderer/stores/mutate";
-import { useThemeStore } from "@renderer/stores/theme";
+import { useThemeStore, type ThemeScope } from "@renderer/stores/theme";
 import { previewTerminalTheme } from "@renderer/terminal/appearance";
 import { DEFAULT_TERMINAL_FONT_SIZE } from "@renderer/terminal/appearance-model";
 import { listLocalFontFamilies } from "@renderer/terminal/local-fonts";
 
 /**
- * Settings → Appearance: the app surface's theme picker, the Monaco editor
- * theme, and the terminal's.
+ * Settings → Appearance: the canvas editor, the light/dark choice, the Monaco
+ * editor theme, and the terminal's.
+ *
+ * Handoff: UI slop pass stripped tutorial descriptions/tooltips from this pane
+ * (Terminal keeps one Ghostty trust line). Don't add helper text back —
+ * `.cursor/rules/ui-copy.mdc`.
+ *
+ * Four sections, and the first two are separate on purpose. The canvas is a
+ * gradient; the appearance is light, dark or follow-the-system; the per-mode
+ * dials in the engine exist precisely so ONE canvas renders correctly in BOTH
+ * modes. They are also scoped independently — a workspace can override either
+ * alone — so a single "App theme" section owning both would be the one shape
+ * that cannot express what is stored.
  *
  * The terminal half is where decision #67 becomes visible. Volli NEVER writes
  * the user's own ghostty config; it writes an overlay file in ghostty's own
@@ -78,19 +92,16 @@ export function AppearanceSettings() {
   return (
     <>
       <AppThemeSection />
+      <AppearanceModeSection />
 
-      <SettingsSection
-        title="Editor"
-        icon={BracketsCurlyIcon}
-        description="Monaco syntax highlighting theme for file and document editors."
-      >
+      <SettingsSection title="Editor" icon={BracketsCurlyIcon}>
         <EditorThemeRow />
       </SettingsSection>
 
       <SettingsSection
         title="Terminal"
         icon={TerminalWindowIcon}
-        description="Layered over your Ghostty config. Volli never edits that file."
+        description="Volli never edits your Ghostty config."
       >
         <TerminalThemeRow row={rows.theme} />
         <FontFamilyRow row={rows["font-family"]} />
@@ -119,32 +130,65 @@ export function AppearanceSettings() {
 }
 
 /**
- * Placeholder for the canvas editor.
+ * The scope every control on this page writes to. Module-level so its identity
+ * is stable — the editor holds it in `useCallback` dependencies, and a fresh
+ * object each render would rebuild every handler on every paint of a surface
+ * whose whole point is that it repaints continuously while you drag.
+ */
+const GLOBAL_SCOPE: ThemeScope = { kind: "global" };
+
+/**
+ * The app-wide canvas.
  *
- * The seed-based picker and its theme-file editor stood here and are gone with
- * the system behind them; the stop editor that replaces them is the next change
- * on this branch, and it lands in exactly this slot. A panel that says so is the
- * honest interim — an empty section would read as a broken pane, and half a
- * control would be a surface arguing with the window it cannot yet change.
+ * Reads `globalCanvas` rather than whatever is on screen, and that distinction
+ * is the page's one subtlety: a workspace can override the canvas, so the window
+ * you are looking at while you edit may not be the one this section owns. The
+ * note below says so instead of letting an edit look like it failed.
+ *
+ * The mode it renders the pad and the contrast report at is the GLOBAL scope's
+ * own resolution too — the same reason. A workspace pinned to light must not
+ * make this section describe a light canvas the app-wide setting never asked for.
  */
 function AppThemeSection() {
+  const canvas = useThemeStore((state) => state.globalCanvas);
+  const appearance = useThemeStore((state) => state.globalAppearance);
+  const systemPrefersDark = useThemeStore((state) => state.systemPrefersDark);
+  const shadowed = useThemeStore((state) => (state.projectOverride?.canvas ?? null) !== null);
+  const resolved = resolveAppearance(appearance, systemPrefersDark);
+
   return (
-    <SettingsSection
-      title="App theme"
-      icon={PaletteIcon}
-      description="The gradient this window is painted with, and whether it renders light or dark."
-    >
-      <div
-        data-testid="appearance-canvas-placeholder"
-        className="rounded-lg border border-border bg-background px-4 py-6 text-center"
-      >
-        <p className="text-sm text-foreground">The canvas editor lands next.</p>
-        <p className="mt-1 text-ui text-muted-foreground">
-          Volli is painted from a canvas you author — a gradient, its saturation and its texture —
-          which renders correctly in both light and dark. The controls for it arrive in the next
-          change; until then the window wears the shipped default.
+    <SettingsSection title="App theme" icon={PaletteIcon}>
+      <CanvasEditor scope={GLOBAL_SCOPE} canvas={canvas} resolved={resolved} />
+      {shadowed ? (
+        <p data-testid="appearance-canvas-shadowed" className="pt-3">
+          <ThemeOriginPill emphasized={false}>Workspace override</ThemeOriginPill>
         </p>
-      </div>
+      ) : null}
+    </SettingsSection>
+  );
+}
+
+/**
+ * Light, dark, or follow the system — its own section because it is its own
+ * setting.
+ *
+ * The canvas does not name a mode: the per-mode dials exist precisely so ONE
+ * authored gradient renders correctly in both, and the two are scoped
+ * independently (a workspace may override either alone). A mode control living
+ * inside the canvas editor would quietly claim the opposite.
+ */
+function AppearanceModeSection() {
+  const appearance = useThemeStore((state) => state.globalAppearance);
+
+  return (
+    <SettingsSection title="Light & dark" icon={CircleHalfIcon}>
+      <SettingsRow label="Mode">
+        <AppearanceModeChoice
+          value={appearance}
+          testId="appearance-mode"
+          onChange={(next) => void useThemeStore.getState().setGlobalAppearance(next)}
+        />
+      </SettingsRow>
     </SettingsSection>
   );
 }

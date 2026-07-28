@@ -28,13 +28,8 @@
  * own.
  */
 
-import {
-  DEFAULT_THEME,
-  generateThemeTokens,
-  resolveAppearance,
-  windowBackground,
-} from "@volli/shared";
-import type { Appearance, Canvas, FirstPaintHint, ThemeDefinition } from "@volli/shared";
+import { resolveAppearance, windowBackground } from "@volli/shared";
+import type { Appearance, Canvas, FirstPaintHint } from "@volli/shared";
 
 /**
  * Everything main can read synchronously at window construction. Passed as one
@@ -88,17 +83,4 @@ export const FIRST_PAINT_APPEARANCE_ARG = "--volli-first-paint-appearance=";
  */
 export function firstPaintArguments(paint: FirstPaintHint): string[] {
   return [`${FIRST_PAINT_APPEARANCE_ARG}${paint.appearance}`];
-}
-
-/**
- * The window background for a seed-based {@link ThemeDefinition}.
- *
- * DYING with the theme picker that still writes those (see `theme-repo.ts`):
- * it exists so a theme chosen in the old picker still repaints the window edge
- * while both systems are live. The canvas path does not go through here — it
- * takes the background the renderer actually painted, via the `first-paint`
- * hint, rather than re-deriving one and hoping the two agree.
- */
-export function legacyThemeBackgroundColor(theme: ThemeDefinition | null): string {
-  return generateThemeTokens(theme ?? DEFAULT_THEME)["--background"];
 }

@@ -12,7 +12,14 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { hexToOklch } from "../color";
 import { addStop, withPrimaryHex } from "./edit";
-import { baseFillHex, canvasBackground, effectiveStopHexes, grainLayer } from "./gradient";
+import {
+  accentChroma,
+  baseFillHex,
+  canvasBackground,
+  effectiveChroma,
+  effectiveStopHexes,
+  grainLayer,
+} from "./gradient";
 import { DEFAULT_CANVAS } from "./parse";
 import { ARC_TUNING } from "./tuning";
 import type { Canvas, ResolvedAppearance } from "./types";
@@ -86,6 +93,54 @@ describe("the appearance transform", () => {
         effectiveOf(canvasOf("#ff0000", { vibrancy: 1 }), resolved)[0].C + HEX_DUST,
       );
     }
+  });
+});
+
+describe("the accent's chroma", () => {
+  /** The shipped canvas's authored chroma — the one the accent has to be able to reach. */
+  const EMBER = hexToOklch("#e8652a").C;
+
+  it("reaches the authored chroma exactly at vibrancy 1, in a way the gradient's cannot", () => {
+    // The defect this function exists to fix, stated as the two numbers side by
+    // side: at full vibrancy the BACKGROUND still gives up 38% of ember's chroma
+    // to `darkGain` and then meets `darkCap` at roughly half of it, which is
+    // correct for a wall and wrong for a button. The accent tops out on the
+    // authored color itself.
+    expect(accentChroma(EMBER, 1)).toBeCloseTo(EMBER, 12);
+    expect(effectiveChroma(EMBER, "dark", 1)).toBeLessThan(EMBER * 0.55);
+    expect(effectiveChroma(EMBER, "light", 1)).toBeLessThan(EMBER);
+  });
+
+  it("still bottoms out on the same near-neutral floor the gradient does", () => {
+    // Vibrancy stays in charge, which is the half of the old behavior that was
+    // right: a wash with no color in it must not leave a saturated accent
+    // stranded on top of it.
+    for (const hex of EXTREMES) {
+      const authored = hexToOklch(hex).C;
+      expect(accentChroma(authored, 0)).toBeCloseTo(authored * ARC_TUNING.chroma.floor, 12);
+    }
+  });
+
+  it("climbs with vibrancy and never overshoots what was authored", () => {
+    // The achromatic pair is left out on purpose: it has no chroma to climb, so
+    // it would only test that 0 stays 0 — which the floor case above already
+    // says. Every hue that HAS a chroma has to spend it monotonically.
+    for (const hex of ["#e8652a", "#ff0000", "#00ff00", "#0000ff"]) {
+      const authored = hexToOklch(hex).C;
+      let previous = -1;
+      for (let vibrancy = 0; vibrancy <= 1.0001; vibrancy += 0.05) {
+        const chroma = accentChroma(authored, vibrancy);
+        expect(chroma).toBeGreaterThan(previous);
+        expect(chroma).toBeLessThanOrEqual(authored + HEX_DUST);
+        previous = chroma;
+      }
+    }
+  });
+
+  it("clamps a vibrancy from outside the unit range, exactly as the gradient's does", () => {
+    // `parseCanvas` clamps, but this is also called with dial values mid-drag.
+    expect(accentChroma(EMBER, -1)).toBe(accentChroma(EMBER, 0));
+    expect(accentChroma(EMBER, 4)).toBe(accentChroma(EMBER, 1));
   });
 });
 

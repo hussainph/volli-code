@@ -6,7 +6,7 @@
  */
 
 import type { Appearance, Canvas } from "./theme/canvas/types";
-import type { ProjectThemeOverride } from "./theme/persistence";
+import type { ProjectThemeOverride } from "./theme/project-override";
 
 /**
  * A tracked project. Mirrors the SQLite `projects` row shape (migration

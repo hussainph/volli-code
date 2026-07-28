@@ -161,16 +161,16 @@ function parseConfigLine(line: string): [key: string, value: string] | null {
  * ignored so unrelated config content can't break parsing.
  *
  * `appearance` decides which half of a `light:X,dark:Y` `theme` pair `themeName`
- * carries. It defaults to `dark` for ONE reason: the only caller that cannot yet
- * name a mode is `apps/desktop/src/main/ghostty-config.ts`, which reads the
- * config chain at boot and on every file-watch tick, long before it is told what
- * the window resolved to. That default never reaches the screen — the renderer
- * re-resolves the name against the live appearance — and it should be deleted
- * the moment main threads the resolved mode through `readGhosttyAppearance`.
+ * carries, and is REQUIRED. It used to default to `dark`, because main read the
+ * config chain at boot and on every file-watch tick before anything told it what
+ * the window had resolved to — a default that never reached the screen (the
+ * renderer re-resolves against the live mode) but did quietly encode dark-only
+ * as an assumption. Main threads the resolved mode through
+ * `readGhosttyAppearance` now, so there is nothing left for a default to cover.
  */
 export function parseGhosttyTerminalPrefs(
   text: string,
-  appearance: ResolvedAppearance = "dark",
+  appearance: ResolvedAppearance,
 ): GhosttyTerminalPrefs {
   const fontFamilies: string[] = [];
   const features = new Map<string, boolean>();

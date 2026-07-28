@@ -90,14 +90,10 @@ import type {
   OverlayEdits,
   ProjectThemeOverride,
   ShippedEditorThemeId,
-  ThemeDefinition,
   ThemeSetProjectResult,
   ThemeStateInput,
   ThemeStateResult,
   TerminalOverlayWriteResult,
-  CustomThemeListResult,
-  CustomThemeReadResult,
-  CustomThemeWriteResult,
   Appearance,
   Canvas,
   FirstPaintHint,
@@ -551,25 +547,15 @@ const api = {
    * so no renderer request can reach the user's own ghostty config (#67).
    */
   theme: {
-    /** The authored global theme + a project's per-surface override + the resolved terminal chain. */
+    /** The resolved terminal chain for a scope, plus the editor id and the project's per-surface override. */
     state: (input: ThemeStateInput = {}): Promise<ThemeStateResult> =>
       invoke("volli:theme-state", input),
     /**
-     * Persists the authored global theme; resolves with the fresh state FOR
+     * Persists the global Monaco/shiki theme id; `null` clears it so the editor
+     * derives from the resolved appearance. Resolves with the fresh state FOR
      * THE CALLER'S SCOPE (#123) — pass the project the window is showing, or
      * `null` from the global scope. The write is global either way; the scope
-     * only decides what the answer describes, so a project that overrides the
-     * app surface keeps wearing its own theme.
-     */
-    setGlobal: (
-      theme: ThemeDefinition,
-      projectId: string | null = null,
-    ): Promise<ThemeStateResult> =>
-      invoke("volli:theme-set-global", projectId === null ? { theme } : { theme, projectId }),
-    /**
-     * Persists the global Monaco/shiki theme id; `null` clears it so the editor
-     * derives from the active app theme slug. Resolves with the fresh state for
-     * the CALLER's scope, exactly like {@link setGlobal} (#123).
+     * only decides what the answer describes.
      */
     setGlobalEditor: (
       editorThemeId: ShippedEditorThemeId | null,
@@ -632,26 +618,6 @@ const api = {
       edits: OverlayEdits,
     ): Promise<TerminalOverlayWriteResult> =>
       invoke("volli:theme-terminal-overlay-write", { scope: "project", projectId, edits }),
-    /**
-     * The user's own themes — one JSON file each under
-     * `<userData>/volli/themes/<slug>.json` (#71), so a theme stays an openable,
-     * shareable artifact. Every verb names a SLUG; main resolves the path, so
-     * nothing here can reach a file outside that directory. `save` and
-     * `deleteCustomTheme` answer with the fresh catalog, which is why there is
-     * no separate refetch (or change event) to wire up.
-     */
-    listCustomThemes: (): Promise<CustomThemeListResult> => invoke("volli:theme-file-list"),
-    readCustomTheme: (slug: string): Promise<CustomThemeReadResult> =>
-      invoke("volli:theme-file-read", { slug }),
-    saveCustomTheme: (theme: ThemeDefinition): Promise<CustomThemeWriteResult> =>
-      invoke("volli:theme-file-write", { theme }),
-    deleteCustomTheme: (slug: string): Promise<CustomThemeListResult> =>
-      invoke("volli:theme-file-delete", { slug }),
-    /** Reveals the theme's file in Finder. */
-    revealCustomTheme: (slug: string): Promise<Result> =>
-      invoke("volli:theme-file-reveal", { slug }),
-    /** Opens the theme's file in the user's default editor. */
-    openCustomTheme: (slug: string): Promise<Result> => invoke("volli:theme-file-open", { slug }),
   },
 };
 

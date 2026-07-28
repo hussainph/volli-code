@@ -50,12 +50,7 @@ const fakeRoot = {
   },
 } as unknown as HTMLElement;
 
-const MIDNIGHT: ThemeDefinition = {
-  ...DEFAULT_THEME,
-  name: "Midnight",
-  slug: "midnight",
-  seed: "#4c6ef5",
-};
+const MIDNIGHT: ThemeDefinition = { ...DEFAULT_THEME, seed: "#4c6ef5" };
 
 type Globals = { document?: unknown; getComputedStyle?: unknown };
 let originalDocument: unknown;

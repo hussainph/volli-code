@@ -1,17 +1,15 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
-import { DEFAULT_THEME, THEME_TOKEN_NAMES } from "@volli/shared";
-import type { Canvas, ThemeDefinition } from "@volli/shared";
+import { THEME_TOKEN_NAMES } from "@volli/shared";
+import type { Canvas } from "@volli/shared";
 
 import {
   getFirstPaintHint,
   getGlobalAppearance,
   getGlobalCanvas,
-  getGlobalTheme,
   getRawGlobalTheme,
   setFirstPaintHint,
   setGlobalAppearance,
   setGlobalCanvas,
-  setGlobalTheme,
   getGlobalEditorThemeId,
   setGlobalEditorThemeId,
 } from "./theme-repo";
@@ -43,58 +41,6 @@ let ctx: TestDb;
 
 afterEach(() => {
   ctx.cleanup();
-});
-
-describe("global theme (app_state kv)", () => {
-  it("reports null until a theme has been chosen", () => {
-    ctx = openTestDb();
-    expect(getGlobalTheme(ctx.db)).toBeNull();
-  });
-
-  it("round-trips the authored definition", () => {
-    ctx = openTestDb();
-    const theme: ThemeDefinition = { ...DEFAULT_THEME, name: "Sea", slug: "sea", seed: "#3a7d9a" };
-
-    setGlobalTheme(ctx.db, theme, 1000);
-
-    expect(getGlobalTheme(ctx.db)).toEqual(theme);
-  });
-
-  it("replaces rather than accumulates on a second write", () => {
-    ctx = openTestDb();
-    setGlobalTheme(ctx.db, DEFAULT_THEME, 1000);
-    setGlobalTheme(ctx.db, { ...DEFAULT_THEME, slug: "sea" }, 2000);
-
-    expect(getGlobalTheme(ctx.db)?.slug).toBe("sea");
-    expect(ctx.db.prepare("SELECT COUNT(*) as n FROM app_state").get()).toEqual({ n: 1 });
-  });
-
-  // docs/plans/theming-engine.md § Derived rules: the resolved token set is
-  // derived at render time and stored NOWHERE. Asserted against what actually
-  // landed in the row, not against what the writer intended to send.
-  it("never persists a resolved token set", () => {
-    ctx = openTestDb();
-    const smuggled = {
-      ...DEFAULT_THEME,
-      tokens: Object.fromEntries(THEME_TOKEN_NAMES.map((name) => [name, "#000000"])),
-    } as ThemeDefinition;
-
-    setGlobalTheme(ctx.db, smuggled, 1000);
-
-    const stored = getRawGlobalTheme(ctx.db);
-    expect(stored).not.toBeNull();
-    expect(stored).not.toContain("--");
-    expect(stored).not.toContain("tokens");
-  });
-
-  it("degrades to null on a stored value that is not a readable theme", () => {
-    ctx = openTestDb();
-    ctx.db
-      .prepare("INSERT INTO app_state (key, value, updated_at) VALUES ('theme', ?, 0)")
-      .run("{ not json");
-
-    expect(getGlobalTheme(ctx.db)).toBeNull();
-  });
 });
 
 describe("global editor theme id (app_state kv)", () => {
@@ -304,13 +250,25 @@ describe("global canvas (app_state kv)", () => {
   });
 
   // Decision 7: existing theme data resets to the shipped default rather than
-  // being converted. It falls out of the guards — a ThemeDefinition is not a
-  // canvas — so no migration has to translate anything.
+  // being converted. It falls out of the guards — the seed-based system's
+  // authored theme is not a canvas — so no migration has to translate anything.
   it("reads a database written by the seed-based system as unset", () => {
     ctx = openTestDb();
-    setGlobalTheme(ctx.db, DEFAULT_THEME, 1000);
+    ctx.db.prepare("INSERT INTO app_state (key, value, updated_at) VALUES ('theme', ?, 0)").run(
+      JSON.stringify({
+        name: "Ember",
+        slug: "ember",
+        seed: "#e8652a",
+        accent: null,
+        grain: 0,
+        canvas: { kind: "solid" },
+        overrides: {},
+        appearance: "dark",
+      }),
+    );
 
     expect(getGlobalCanvas(ctx.db)).toBeNull();
+    expect(getRawGlobalTheme(ctx.db)).toContain("ember");
   });
 });
 

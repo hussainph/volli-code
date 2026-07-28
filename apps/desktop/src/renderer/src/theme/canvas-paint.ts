@@ -42,8 +42,12 @@ import { applyThemeTokens } from "@renderer/theme/apply";
  * which is what lets the generated `:root` blocks carry a first-paint value for
  * it: a property the stylesheet declares and JS overrides is paintable before
  * any JS has run, and an element styled inline is not.
+ *
+ * Exported for `scope-transition.ts`, which reads the value off the root
+ * immediately before this module overwrites it — that outgoing gradient is what
+ * the eased repaint crossfades FROM.
  */
-const CANVAS_VARIABLE = "--canvas";
+export const CANVAS_VARIABLE = "--canvas";
 
 /**
  * The on-canvas copy ladder, head first.

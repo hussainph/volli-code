@@ -358,10 +358,9 @@ describe("--primary-text, the accent at body-copy contrast", () => {
     expect(hexToOklch(tokens["--primary-text"]).h).toBeCloseTo(hexToOklch("#e8652a").h, 0);
   });
 
-  it("is deterministic and independent of the non-color fields", () => {
+  it("is deterministic", () => {
     const base = generateThemeTokens(DEFAULT_THEME)["--primary-text"];
     expect(generateThemeTokens(DEFAULT_THEME)["--primary-text"]).toBe(base);
-    expect(generateThemeTokens({ ...DEFAULT_THEME, grain: 0.9 })["--primary-text"]).toBe(base);
   });
 
   it("can be overridden like any other token", () => {
@@ -564,19 +563,6 @@ describe("determinism and idempotence", () => {
   it("makes ember a fixed point on the very first pass", () => {
     const once = generateThemeTokens(DEFAULT_THEME);
     expect(generateThemeTokens(themeFor(once["--primary"]))).toEqual(once);
-  });
-
-  it("does not depend on non-color fields of the definition", () => {
-    const base = generateThemeTokens(DEFAULT_THEME);
-    expect(
-      generateThemeTokens({
-        ...DEFAULT_THEME,
-        name: "Something Else",
-        slug: "something-else",
-        grain: 0.9,
-        canvas: { kind: "gradient", stops: ["#000000", "#ffffff"] },
-      }),
-    ).toEqual(base);
   });
 });
 

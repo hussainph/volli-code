@@ -13,7 +13,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { diffManagedContent, errorMessage, ticketBranchName } from "@volli/shared";
-import type { FirstPaintHint, VolliIpcEvent } from "@volli/shared";
+import type { FirstPaintHint, ResolvedAppearance, VolliIpcEvent } from "@volli/shared";
 import type { ManagedConflict } from "./harness-install";
 import { isInternalNavigationTarget } from "./navigation";
 import type { DbHandle } from "./data-ipc";
@@ -28,7 +28,7 @@ import type { PtyManager } from "./pty";
 import { registerThemeIpcHandlers } from "./theme-ipc";
 import { defaultFsDeps } from "./fs-deps";
 import { getFirstPaintHint, getGlobalAppearance, getGlobalCanvas } from "./db/theme-repo";
-import { firstPaintArguments, legacyThemeBackgroundColor, resolveFirstPaint } from "./window-theme";
+import { firstPaintArguments, resolveFirstPaint } from "./window-theme";
 import { registerFileIpcHandlers } from "./volli-fs";
 import { broadcastDataChanged, broadcastSessionsInterrupted } from "./broadcast";
 import { startOrphanSweep } from "./orphan-sweep";
@@ -314,10 +314,6 @@ app.whenReady().then(async () => {
   // resolve `app.getPath("userData")`, the same injection stance as the db path
   // and the attachment store below.
   const fsDeps = defaultFsDeps(app.getPath("userData"));
-  // Ghostty config read + live-reload watch, feeding restty's appearance. The
-  // `userData` root is where Volli's own ghostty OVERLAY files live (decision
-  // #67).
-  registerGhosttyConfigIpc(fsDeps);
 
   // Open (creating + migrating if needed) the SQLite db before the window
   // exists, so the renderer's boot-time volli:data-bootstrap call always has
@@ -359,6 +355,34 @@ app.whenReady().then(async () => {
       console.error("[volli] failed to sweep stale sessions:", errorMessage(error));
     }
   }
+  // Read fresh per call rather than once at boot: `activate` can re-create the
+  // window, and the user can flip the mode, long after this point.
+  const currentFirstPaint = (): FirstPaintHint => {
+    const systemPrefersDark = nativeTheme.shouldUseDarkColors;
+    const blank = { hint: null, canvas: null, appearance: null, systemPrefersDark };
+    if (!dbHandle.ok) return resolveFirstPaint(blank);
+    try {
+      return resolveFirstPaint({
+        hint: getFirstPaintHint(dbHandle.db),
+        canvas: getGlobalCanvas(dbHandle.db),
+        appearance: getGlobalAppearance(dbHandle.db),
+        systemPrefersDark,
+      });
+    } catch (error) {
+      // Never fatal: a window with a slightly-wrong edge color beats no window.
+      console.warn("[volli] failed to read the stored canvas:", errorMessage(error));
+      return resolveFirstPaint(blank);
+    }
+  };
+  // The one answer to "what mode is the app in?" that main has, shared by the
+  // window edge and by every ghostty chain read — a `theme = light:X,dark:Y`
+  // pair resolves to a different half in each.
+  const currentAppearance = (): ResolvedAppearance => currentFirstPaint().appearance;
+  // Ghostty config read + live-reload watch, feeding restty's appearance. The
+  // `userData` root is where Volli's own ghostty OVERLAY files live (decision
+  // #67). Registered after the db opens because the chain read needs the
+  // resolved mode, which lives in `app_state`.
+  registerGhosttyConfigIpc(fsDeps, currentAppearance);
   // Assigned once registerTerminalIpcHandlers runs below; the worktree
   // remove/orphan-delete guards read it lazily (only at invoke time, long after
   // boot) to refuse touching a directory a live session still runs in.
@@ -398,27 +422,11 @@ app.whenReady().then(async () => {
   // change can't reveal the previous palette.
   registerThemeIpcHandlers(
     dbHandle,
-    { fs: fsDeps, now: Date.now },
+    { fs: fsDeps, now: Date.now, appearance: currentAppearance },
     {
-      onGlobalThemeChanged: (theme) => {
-        // The theme is already persisted by the time this runs, so a generator
-        // failure must not turn a successful write into a rejected set-global.
-        // Leave the windows on their current edge color rather than repainting
-        // to the default: a theme that can't generate never reached the
-        // renderer's own surfaces either, so the old color is the honest one.
-        let color: string;
-        try {
-          color = legacyThemeBackgroundColor(theme);
-        } catch (error) {
-          console.warn("[volli] failed to derive the window background:", errorMessage(error));
-          return;
-        }
-        for (const window of BrowserWindow.getAllWindows()) window.setBackgroundColor(color);
-      },
-      // The canvas-era equivalent, and a simpler one: the renderer has already
-      // run the whole pipeline, so main takes the color it actually painted
-      // rather than re-deriving one and hoping the two agree. No try/catch —
-      // there is nothing here to fail.
+      // The renderer has already run the whole pipeline, so main takes the color
+      // it actually painted rather than re-deriving one and hoping the two
+      // agree. No try/catch — there is nothing here to fail.
       onFirstPaintChanged: (paint) => {
         for (const window of BrowserWindow.getAllWindows()) {
           window.setBackgroundColor(paint.background);
@@ -443,25 +451,6 @@ app.whenReady().then(async () => {
   // needs only runtimePaths (a pure join), so it can precede the window it feeds.
   const ptyManager = registerTerminalIpcHandlers(dbHandle, runtimePaths);
   ptyManagerRef = ptyManager;
-  // Read fresh per window rather than once at boot: `activate` can re-create
-  // the window long after the user has changed the canvas.
-  const currentFirstPaint = (): FirstPaintHint => {
-    const systemPrefersDark = nativeTheme.shouldUseDarkColors;
-    const blank = { hint: null, canvas: null, appearance: null, systemPrefersDark };
-    if (!dbHandle.ok) return resolveFirstPaint(blank);
-    try {
-      return resolveFirstPaint({
-        hint: getFirstPaintHint(dbHandle.db),
-        canvas: getGlobalCanvas(dbHandle.db),
-        appearance: getGlobalAppearance(dbHandle.db),
-        systemPrefersDark,
-      });
-    } catch (error) {
-      // Never fatal: a window with a slightly-wrong edge color beats no window.
-      console.warn("[volli] failed to read the stored canvas:", errorMessage(error));
-      return resolveFirstPaint(blank);
-    }
-  };
   const mainWindow = createWindow(ptyManager, currentFirstPaint());
 
   // Startup orphan sweep (worktree-support §7): prunes stale git metadata and

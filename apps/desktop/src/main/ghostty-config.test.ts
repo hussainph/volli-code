@@ -40,11 +40,34 @@ vi.mock("node:fs", () => ({
 vi.mock("node:os", () => ({ homedir: () => "/Users/test" }));
 
 import {
-  readGhosttyAppearance,
-  registerGhosttyConfigIpc,
+  readGhosttyAppearance as readGhosttyAppearanceFor,
+  registerGhosttyConfigIpc as registerGhosttyConfigIpcWith,
   type GhosttyConfigDeps,
 } from "./ghostty-config";
-import type { GhosttyAppearancePayload, GhosttyConfigResult } from "@volli/shared";
+import type {
+  GhosttyAppearancePayload,
+  GhosttyConfigResult,
+  ResolvedAppearance,
+} from "@volli/shared";
+
+/**
+ * The two entry points with the resolved mode named once.
+ *
+ * Neither takes a default any more — a `theme = light:X,dark:Y` pair resolves to
+ * a different half in each mode, and the parser used to assume `dark` for
+ * callers that could not name one. Cases that are not ABOUT that resolution say
+ * nothing about the mode; the ones that are pass it explicitly.
+ */
+const readGhosttyAppearance = (
+  deps: GhosttyConfigDeps,
+  ticketPrefix: string | null = null,
+  appearance: ResolvedAppearance = "dark",
+): GhosttyAppearancePayload => readGhosttyAppearanceFor(deps, appearance, ticketPrefix);
+
+const registerGhosttyConfigIpc = (
+  deps: GhosttyConfigDeps,
+  appearance: () => ResolvedAppearance = () => "dark",
+): void => registerGhosttyConfigIpcWith(deps, appearance);
 
 /** Builds deterministic injected deps from a path→text map and a set of existing paths. */
 function makeDeps(

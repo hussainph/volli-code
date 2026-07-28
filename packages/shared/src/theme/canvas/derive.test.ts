@@ -18,7 +18,7 @@ import { THEME_CONTRAST_FLOORS } from "../generate";
 import { THEME_TOKEN_NAMES, type ThemeTokenName } from "../tokens";
 import { deriveCanvasTokens, deriveLabelInk, windowBackground } from "./derive";
 import { copyFloors } from "./floors";
-import { baseFillHex } from "./gradient";
+import { accentChroma, baseFillHex } from "./gradient";
 import { DEFAULT_CANVAS } from "./parse";
 import type { Canvas, ResolvedAppearance } from "./types";
 
@@ -360,6 +360,182 @@ describe("deriveCanvasTokens", () => {
       const strong = hexToOklch(tokens["--border-strong"]).L;
       const at = `${hex} @ v${vibrancy} — hover ${hover.toFixed(4)} strong ${strong.toFixed(4)}`;
       expect({ at, hairline: strong - hover < 0.01 }).toEqual({ at, hairline: true });
+    }
+  });
+});
+
+/**
+ * The accent, which is the one family in the set that is NOT seeded at the
+ * chroma the gradient paints.
+ *
+ * Two things have to hold together, and only together: the accent has to be able
+ * to reach the color the app is branded in, and reaching it must not warm a
+ * single grey on the way. So the table below pins where the accent lands, and
+ * the block after it pins that everything else is byte-identical to what the
+ * one-seed derivation produced.
+ */
+describe("the accent", () => {
+  /** Every accent token, and nothing else — the exact set the second seed reaches. */
+  const ACCENT_TOKENS: ThemeTokenName[] = [
+    "--primary",
+    "--primary-foreground",
+    "--primary-text",
+    "--ring",
+    "--sidebar-primary",
+    "--sidebar-primary-foreground",
+    "--sidebar-ring",
+  ];
+
+  it("walks from a near-neutral chrome to the brand color exactly, as vibrancy travels", () => {
+    // The four rows the curve was settled on. Vibrancy 1 is the row that
+    // matters most: ember `#e8652a` is an exact fixed point of `generate.ts`'s
+    // accent math (its authored L 0.6614 IS `PRIMARY_LIGHTNESS`), so a canvas
+    // authored on the brand color at full vibrancy has to come back out as the
+    // brand color. Under the gradient's own cap it could not — the dark ceiling
+    // held it to 51% of ember's chroma at EVERY setting of the slider, which
+    // made the app's accent unreachable in its own default theme.
+    //
+    // Vibrancy 0 is the other end of the same statement, and it is what says
+    // the accent goes through `generateAccentTokens` rather than a second read
+    // of `generateThemeTokens`: 0.0248 is below that function's authored-seed
+    // chroma floor, so a seed pushed through it would come back `#b38776` — a
+    // visible ember on a wash with no color in it at all.
+    const authored = hexToOklch("#e8652a").C;
+    const rows = [
+      { vibrancy: 0, chroma: 0.0248, primary: "#a08e87" },
+      { vibrancy: 0.3, chroma: 0.0864, primary: "#c08168" },
+      { vibrancy: 0.6, chroma: 0.1285, primary: "#d37550" },
+      { vibrancy: 1, chroma: 0.1769, primary: "#e8652a" },
+    ];
+    for (const row of rows) {
+      const canvas = { ...DEFAULT_CANVAS, vibrancy: row.vibrancy };
+      expect({
+        vibrancy: row.vibrancy,
+        chroma: Number(accentChroma(authored, row.vibrancy).toFixed(4)),
+        primary: deriveCanvasTokens(canvas, "dark")["--primary"],
+      }).toEqual({ vibrancy: row.vibrancy, chroma: row.chroma, primary: row.primary });
+    }
+    // 0.6 is what the app ships at, so it is also the default's accent.
+    expect(deriveCanvasTokens(DEFAULT_CANVAS, "dark")["--primary"]).toBe("#d37550");
+  });
+
+  it("is one color in both appearances, unlike every surface around it", () => {
+    // The accent's curve carries no mode, so a light↔dark flip repaints the
+    // whole window and leaves the one color the app is recognized by where it
+    // was. It used to differ between the two (dark capped at 0.09, light at
+    // 0.16) purely as a side effect of being seeded off the backdrop.
+    for (const { hex, vibrancy } of everyCase().filter((one) => one.resolved === "dark")) {
+      const canvas = canvasOf(hex, vibrancy);
+      const dark = deriveCanvasTokens(canvas, "dark");
+      const light = deriveCanvasTokens(canvas, "light");
+      const at = `${hex} @ v${vibrancy}`;
+      expect({ at, primary: light["--primary"], label: light["--primary-foreground"] }).toEqual({
+        at,
+        primary: dark["--primary"],
+        label: dark["--primary-foreground"],
+      });
+      // …with the one exception that proves the rule: accent-as-TEXT is solved
+      // against the card it is read on, and the card is a different color in
+      // each mode. Same hue and chroma, second lightness.
+      expect({ at, sameInk: light["--primary-text"] === dark["--primary-text"] }).toEqual({
+        at,
+        sameInk: false,
+      });
+    }
+  });
+
+  it("leaves every other token byte-identical to the single-seed derivation", () => {
+    // The scoping assertion, and the reason the accent gets its own generator
+    // call rather than a raised seed. `generateThemeTokens` derives the whole
+    // neutral ladder from its seed's chroma — every rung, and every foreground
+    // solved against a rung — so seeding it at the accent's number would put a
+    // visible warmth into all 24 hexes below. These are the values the shipped
+    // canvas produced BEFORE the accent was split off, transcribed.
+    const expected: Record<ResolvedAppearance, Record<string, string>> = {
+      dark: {
+        "--rail": "#170f0b",
+        "--background": "#1c1310",
+        "--card": "#211815",
+        "--popover": "#251b18",
+        "--secondary": "#271d1a",
+        "--muted": "#271d1a",
+        "--accent": "#2d2220",
+        "--sidebar": "#211815",
+        "--foreground": "#e8e4e2",
+        "--card-foreground": "#e8e4e2",
+        "--popover-foreground": "#e8e4e2",
+        "--secondary-foreground": "#e8e4e2",
+        "--muted-foreground": "#bdbab8",
+        "--accent-foreground": "#e8e4e2",
+        "--sidebar-foreground": "#d0cdcb",
+        "--sidebar-accent": "#2d2220",
+        "--sidebar-accent-foreground": "#e8e4e2",
+        "--border": "#312623",
+        "--border-hover": "#3c312c",
+        "--border-strong": "#423632",
+        "--input": "#312623",
+        "--sidebar-border": "#2d241f",
+        "--destructive": "#e5484d",
+        "--destructive-foreground": "#ffffff",
+      },
+      light: {
+        "--rail": "#edd1c6",
+        "--background": "#fdded2",
+        "--card": "#f4d4c8",
+        "--popover": "#f7d8cc",
+        "--secondary": "#eacabd",
+        "--muted": "#eacabd",
+        "--accent": "#dab9ad",
+        "--sidebar": "#e2c3b7",
+        "--foreground": "#120906",
+        "--card-foreground": "#120906",
+        "--popover-foreground": "#120906",
+        "--secondary-foreground": "#120906",
+        "--muted-foreground": "#514541",
+        "--accent-foreground": "#120906",
+        "--sidebar-foreground": "#080302",
+        "--sidebar-accent": "#dab9ad",
+        "--sidebar-accent-foreground": "#120906",
+        "--border": "#d8b6a9",
+        "--border-hover": "#d3b0a3",
+        "--border-strong": "#d5b2a5",
+        "--input": "#d8b6a9",
+        "--sidebar-border": "#ddbbad",
+        "--destructive": "#e5484d",
+        "--destructive-foreground": "#ffffff",
+      },
+    };
+    for (const resolved of MODES) {
+      const tokens = deriveCanvasTokens(DEFAULT_CANVAS, resolved);
+      const neutrals = Object.fromEntries(
+        THEME_TOKEN_NAMES.filter((name) => !ACCENT_TOKENS.includes(name)).map((name) => [
+          name,
+          tokens[name],
+        ]),
+      );
+      expect({ resolved, neutrals }).toEqual({ resolved, neutrals: expected[resolved] });
+    }
+    // The two lists together are the whole token set: nothing is asserted twice
+    // and nothing is left unasserted between this test and the table above.
+    expect(ACCENT_TOKENS.length + Object.keys(expected.dark).length).toBe(THEME_TOKEN_NAMES.length);
+  });
+
+  it("out-saturates every surface it sits on, at the vibrancy where it reaches the brand", () => {
+    // The same statement seen from the other end: at vibrancy 1 the accent IS
+    // ember, and the page and the card behind it are still greys with a warmth
+    // you can sense rather than name. If a later edit ever lets the seeds cross,
+    // this is what says so.
+    const canvas = { ...DEFAULT_CANVAS, vibrancy: 1 };
+    for (const resolved of MODES) {
+      const tokens = deriveCanvasTokens(canvas, resolved);
+      const primary = hexToOklch(tokens["--primary"]).C;
+      for (const surface of ["--background", "--card", "--rail", "--sidebar"] as const) {
+        const at = `${surface} @ ${resolved}`;
+        expect({ at, quieter: hexToOklch(tokens[surface]).C < primary / 2 }).toEqual({
+          at,
+          quieter: true,
+        });
+      }
     }
   });
 });

@@ -339,6 +339,60 @@ export function generateThemeTokens(theme: ThemeDefinition): ThemeTokens {
   return { ...tokens, ...theme.overrides };
 }
 
+/**
+ * The accent family and nothing else: `--primary`, its label, and the four
+ * aliases of the two.
+ *
+ * `--primary-text` is deliberately NOT a member. It is the accent solved as
+ * *copy*, which means solved against the surface it is read on — `--background`
+ * here, `--card` in the canvas layer — so it belongs to whoever knows that
+ * surface, and a value in this record would be one solved against neither.
+ */
+export type AccentTokens = Pick<
+  ThemeTokens,
+  | "--primary"
+  | "--primary-foreground"
+  | "--ring"
+  | "--sidebar-primary"
+  | "--sidebar-primary-foreground"
+  | "--sidebar-ring"
+>;
+
+/**
+ * Step 6–7 on its own: a seed hex in, the accent family out, at the seed's
+ * chroma **verbatim**.
+ *
+ * That last part is the whole reason this is a second entry point rather than a
+ * read of {@link generateThemeTokens}'s output. That function clamps the accent
+ * into {@link ACCENT_CHROMA_RANGE} because a *seed* is a color a person picked
+ * and a floor is what stops a nearly-grey pick producing a washed-out accent.
+ * The canvas layer's accent is not picked, it is COMPUTED — from the gradient's
+ * own chroma, scaled by vibrancy — so a floor there would put a hard bottom under
+ * the one slider whose bottom end is supposed to mean "near-neutral chrome"
+ * (`canvas/gradient.ts`'s `accentChroma`).
+ *
+ * The muddy-black guard is not needed either, and for a reason rather than by
+ * omission: it exists to stop the FLOOR being forced onto a hue that is float
+ * residue, and there is no floor here to force. A colorless seed asks for
+ * chroma ~0 and gets it.
+ *
+ * Everything else is shared with the full generator — {@link solveAccentPair},
+ * {@link pickAccentLabel}, the same Lc floor on the button label — so the two
+ * cannot disagree about anything except the one thing they are meant to.
+ */
+export function generateAccentTokens(seed: string): AccentTokens {
+  const { C, h } = hexToOklch(seed);
+  const { primary, primaryForeground } = solveAccentPair(C, h);
+  return {
+    "--primary": primary,
+    "--primary-foreground": primaryForeground,
+    "--ring": primary,
+    "--sidebar-primary": primary,
+    "--sidebar-primary-foreground": primaryForeground,
+    "--sidebar-ring": primary,
+  };
+}
+
 /** Lc floor for text on `--primary` — a label is copy, held to copy's floor. */
 const PRIMARY_FOREGROUND_LC = MUTED_LC;
 

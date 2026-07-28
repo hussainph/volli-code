@@ -1,16 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
-import {
-  DEFAULT_CANVAS,
-  DEFAULT_THEME,
-  generateThemeTokens,
-  windowBackground,
-} from "@volli/shared";
+import { DEFAULT_CANVAS, windowBackground } from "@volli/shared";
 import type { Canvas } from "@volli/shared";
 
 import {
   FIRST_PAINT_APPEARANCE_ARG,
   firstPaintArguments,
-  legacyThemeBackgroundColor,
   resolveFirstPaint,
   windowBackgroundColor,
 } from "./window-theme";
@@ -114,14 +108,5 @@ describe("firstPaintArguments", () => {
     expect(firstPaintArguments({ appearance: "dark", background: "#123456" })).toEqual([
       "--volli-first-paint-appearance=dark",
     ]);
-  });
-});
-
-describe("legacyThemeBackgroundColor", () => {
-  it("still tracks the seed generator, so the dying picker keeps repainting the edge", () => {
-    expect(legacyThemeBackgroundColor(DEFAULT_THEME)).toBe(
-      generateThemeTokens(DEFAULT_THEME)["--background"],
-    );
-    expect(legacyThemeBackgroundColor(null)).toBe(legacyThemeBackgroundColor(DEFAULT_THEME));
   });
 });

@@ -18,14 +18,16 @@
  * │    0ms   data-theme-transition="scope" goes on <html>, and the pending
  * │          style recalc is flushed — the transition has to be LIVE before
  * │          the tokens move, or the browser has nothing to interpolate from
+ * │    0ms   the gradient now on <html> is copied to --canvas-outgoing and
+ * │          data-canvas-fade goes on, mounting the layer that fades it out
  * │    0ms   every color token is rewritten in one pass (theme/apply.ts)
  * │    0ms   background / text / border / shadow colors start easing, all of
  * │          them together, on --theme-scope-ease: fast start, long gentle
  * │          settle, NO overshoot (this is a state change, not a thrown object
  * │          — bounce would imply momentum that nothing here carries)
- * │  300ms   the crossfade lands
- * │  340ms   the attribute comes off; ordinary hover transitions go back to
- * │          their own durations
+ * │  300ms   the crossfade lands — tokens AND gradient, one duration, one curve
+ * │  340ms   both attributes come off, the outgoing gradient is dropped, and
+ * │          ordinary hover transitions go back to their own durations
  * │
  * │ Reduced motion: globals.css's media query collapses the crossfade to
  * │ 120ms. Nothing translates or scales at any point, so there is no
@@ -41,7 +43,23 @@
  * That rule lives in globals.css, unlayered so it outranks Tailwind's own
  * `transition-colors` utilities for the duration; this module owns when it is
  * on, and for how long.
+ *
+ * THE GRADIENT NEEDS ITS OWN HALF, and this module owns that too. The canvas is
+ * a multi-stop `background-image` on `<html>`, and no two gradient strings have
+ * a value in between — CSS swaps them discretely however long the transition is.
+ * Left alone that is WORSE than no animation: for a third of a second the card,
+ * the sidebar and the text are still the outgoing workspace's colors, easing
+ * over the incoming workspace's wallpaper. So the outgoing gradient is copied to
+ * {@link CANVAS_OUTGOING_VARIABLE} and painted a second time on a layer that
+ * fades out over the new one (globals.css's `[data-canvas-fade]` rule): opacity
+ * interpolates between any two canvases, and it is compositor-friendly.
+ *
+ * Both halves are one window — one duration, one curve, one hold timer, and one
+ * reduced-motion collapse — because two timings would be two crossfades that
+ * only look like one until something is retuned.
  */
+
+import { CANVAS_VARIABLE } from "@renderer/theme/canvas-paint";
 
 /**
  * The timing, in one place. `crossfade` is mirrored by
@@ -56,7 +74,7 @@ export const SCOPE_REPAINT = {
   tail: 40,
 } as const;
 
-/** How long `data-theme-transition` stays on the root element. */
+/** How long both root attributes below stay on the root element. */
 export const SCOPE_REPAINT_HOLD_MS = SCOPE_REPAINT.crossfade + SCOPE_REPAINT.tail;
 
 /** The root attribute globals.css keys the transition off. */
@@ -64,6 +82,28 @@ export const SCOPE_TRANSITION_ATTRIBUTE = "data-theme-transition";
 
 /** Its only value today; named so the CSS selector and the writer cannot drift. */
 export const SCOPE_TRANSITION_VALUE = "scope";
+
+/**
+ * The root attribute that mounts the gradient's fading copy — a SECOND
+ * attribute rather than a second meaning for the one above, and that separation
+ * is load-bearing.
+ *
+ * A CSS animation only restarts when the element carrying it is created afresh,
+ * so an overlapping scope change has to take this off, let the style flush, and
+ * put it back. Doing that to `data-theme-transition` would strip
+ * `transition-property` off every element in the window mid-crossfade and SNAP
+ * the colors to their current targets — the exact defect the re-entrant hold
+ * below exists to avoid. Two attributes, one lifetime: they are armed together
+ * and dropped together, so a stuck layer is not reachable without a stuck
+ * transition, which the timer rules out.
+ */
+export const CANVAS_FADE_ATTRIBUTE = "data-canvas-fade";
+
+/** Its only value; named for the same reason {@link SCOPE_TRANSITION_VALUE} is. */
+export const CANVAS_FADE_VALUE = "outgoing";
+
+/** The custom property that layer paints — the gradient being faded OUT. */
+export const CANVAS_OUTGOING_VARIABLE = "--canvas-outgoing";
 
 /** What the theme store knows about a repaint it is about to perform. */
 export interface ScopeRepaintInput {
@@ -128,34 +168,65 @@ export function shouldEaseScopeRepaint({
 let holding: { timer: ReturnType<typeof setTimeout>; target: HTMLElement } | null = null;
 
 /**
- * Arms the crossfade on `root` (the document element by default) and takes it
- * off again once the swap has settled.
+ * Puts a root back to rest: no transition, no fading layer, no spent gradient
+ * left inline.
  *
- * Called immediately BEFORE the tokens are rewritten. The forced style read is
- * not superstition: the attribute and the new token values would otherwise land
- * in a single style recalc, and while the spec says the after-change style's
- * transition still applies, flushing makes the two-step explicit and identical
- * across engines — cheap once per project switch, and the alternative is a
- * silent hard cut that only shows up in a screen recording.
+ * One function because "armed" is a state of THREE things that must never be
+ * separable — the timer's expiry and the hand-off to a different root are the
+ * same disarm asked for from two places.
+ */
+function disarm(target: HTMLElement): void {
+  target.removeAttribute(SCOPE_TRANSITION_ATTRIBUTE);
+  target.removeAttribute(CANVAS_FADE_ATTRIBUTE);
+  target.style.removeProperty(CANVAS_OUTGOING_VARIABLE);
+}
+
+/**
+ * Arms the crossfade on `root` (the document element by default) — tokens and
+ * gradient both — and takes it off again once the swap has settled.
  *
- * Re-entrant: a second scope change mid-crossfade keeps the attribute on and
- * restarts the hold, so the colors simply re-target from wherever they are
- * rather than snapping when the first timer fires.
+ * Called immediately BEFORE the tokens are rewritten, which is also the only
+ * moment the OUTGOING gradient can be read: `--canvas` is still the one on
+ * screen, and `paintCanvas` is about to overwrite it. Reading the inline value
+ * rather than the computed one is deliberate — inline is what that function
+ * writes, so an empty answer means nothing has ever been painted, which is the
+ * first paint, which never eases anyway. In that case the gradient simply cuts,
+ * exactly as it did before this layer existed.
+ *
+ * The forced style read is not superstition, and it now does two jobs. The
+ * attribute and the new token values would otherwise land in a single style
+ * recalc, and while the spec says the after-change style's transition still
+ * applies, flushing makes the two-step explicit and identical across engines.
+ * The same flush is also what destroys the previous fading layer, so re-arming
+ * mid-fade builds a NEW one whose animation starts from the top instead of
+ * resuming a spent one at opacity 0.
+ *
+ * Re-entrant: a second scope change mid-crossfade keeps the transition attribute
+ * on and restarts the hold, so the colors simply re-target from wherever they
+ * are rather than snapping when the first timer fires.
  */
 export function beginScopeRepaint(root?: HTMLElement): void {
   const target = root ?? document.documentElement;
+  const outgoing = target.style.getPropertyValue(CANVAS_VARIABLE);
   target.setAttribute(SCOPE_TRANSITION_ATTRIBUTE, SCOPE_TRANSITION_VALUE);
-  // Flush: makes the transition current style before the caller moves the tokens.
+  // Off before the flush, on after it: that is the whole restart mechanism.
+  target.removeAttribute(CANVAS_FADE_ATTRIBUTE);
+  // Flush: makes the transition current style before the caller moves the
+  // tokens, and retires any layer left over from a fade still in flight.
   void target.offsetWidth;
+  if (outgoing !== "") {
+    target.style.setProperty(CANVAS_OUTGOING_VARIABLE, outgoing);
+    target.setAttribute(CANVAS_FADE_ATTRIBUTE, CANVAS_FADE_VALUE);
+  }
   if (holding !== null) {
     clearTimeout(holding.timer);
-    // A different root: its timer is gone, so take the attribute off here or it
-    // stays armed forever.
-    if (holding.target !== target) holding.target.removeAttribute(SCOPE_TRANSITION_ATTRIBUTE);
+    // A different root: its timer is gone, so disarm it here or it stays armed
+    // forever — with a full-window gradient layer frozen on top of it.
+    if (holding.target !== target) disarm(holding.target);
   }
   const timer = setTimeout(() => {
     holding = null;
-    target.removeAttribute(SCOPE_TRANSITION_ATTRIBUTE);
+    disarm(target);
   }, SCOPE_REPAINT_HOLD_MS);
   holding = { timer, target };
 }
