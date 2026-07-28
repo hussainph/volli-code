@@ -3,7 +3,7 @@
  *
  * Deliberately NOT dnd-kit. The board's real drag is sortable, keyboard
  * accessible and writes through a store; none of that is what the open question
- * asks about, and wiring it here would mean the four variants differ in their
+ * asks about, and wiring it here would mean the picker shapes differ in their
  * plumbing as well as their design. What the question needs is exactly three
  * live facts — where the pointer is, which column it is over, and whether the
  * modifier is down — reported continuously with no dwell and no debounce
@@ -11,135 +11,199 @@
  *
  * The one thing worth stating about fidelity: this cannot tell you how the
  * picker feels against dnd-kit's own drag-overlay transform or its collision
- * detection. It can tell you whether the palette is readable, reachable, and
- * whether holding a modifier mid-drag is something a hand can actually do.
+ * detection. It can tell you whether a shape is readable, reachable, and
+ * whether holding (or having held) a modifier mid-drag is something a hand can
+ * actually do.
  *
- * ── THE HYBRID VARIANT'S TWO TIERS ──────────────────────────────────────────
- * The `held`/`always`/`card`/`column` variants all read `chosenIndex` /
- * `modifierHeld`, and that code path below is untouched — literally the same
- * lines as before. The `hybrid` variant is a second, parallel state machine
- * (`digitSelection` for bare digits, `overlayOpen`/`overlayCell` for the ⌥
- * overlay) that only ever turns on when the caller passes `hybrid: true`, i.e.
- * only while that variant is the one on screen. The two machines never read
- * each other's state, so there is no risk of the new tiers changing what the
- * original three variants do with a keypress.
+ * ── TWO LAYERS, NOT FIVE VARIANTS ───────────────────────────────────────────
+ * The owner rejected the earlier five-way comparison outright: the dragged
+ * card's ghost sat on top of the very palette it asked you to read, and the
+ * thin palette rows were "a needle in a haystack" to aim at holding a card. So
+ * there is now exactly one baseline (always on, no modifier) and exactly one
+ * modifier-gated layer, compared here as three SHAPES rather than three whole
+ * mechanisms:
  *
- * Tier 1 (bare digits, no modifier): `digitSelection` is column-bound — it
- * carries the status it was chosen for, and a pointer move that lands on a
- * DIFFERENT real column clears it back to "move only" (the default). The
- * clear compares against the selection's own bound column, not against
- * whatever the previously-hovered column was — that distinction matters right
- * after the ⌥ overlay closes, where the pointer's real board position is
- * usually stale (or off every column entirely) relative to the far-away
- * column the overlay just let you reach; comparing to "the last hovered
- * value" would wipe that selection on the very next mousemove, comparing to
+ * Baseline — bare digits, scoped to the hovered column. A plain drop arms
+ * whatever the target COLUMN is already armed with (an `arming` value this
+ * hook does not itself hold — see `automation-trigger.tsx`'s `resolveAutomation`
+ * — this hook only ever deals in indices and counts). `digitSelection` is the
+ * one override that baseline layer can produce: it carries the column it was
+ * chosen for, and a pointer move onto a DIFFERENT real column clears it back to
+ * that column's own default. The clear compares against the selection's own
+ * bound column, not against whatever the previously-hovered column was — that
+ * distinction matters right after a picker closes, where the pointer's real
+ * board position is usually stale (or off every column entirely) relative to
+ * wherever the picker just let the choice happen; comparing to "the last
+ * hovered value" would wipe the choice on the very next mousemove, comparing to
  * "the selection's own column" does not.
  *
- * Tier 2 (⌥ overlay): opens sticky on Alt keydown and stays open — release or
- * Escape close it, not Alt keyup, because the user is already holding the
- * mouse button and must not lose a highlighted cell by lifting the wrong
- * finger. While open, `overlayCell` (not the board hit-test) is the thing a
- * release commits, which is the overlay's entire reason to exist: it reaches
- * columns the pointer never has to visit. Escape closes it and folds the
- * highlighted cell into `digitSelection` — "the selection intact" — so tier 1
- * picks up exactly where the overlay left off; a second Escape (now with the
- * overlay already closed) falls through to the same whole-drag cancel every
- * other variant already has.
+ * ⌥ picker — three shapes (`t9` / `radial` / `expand`), selected by
+ * `pickerShape`, sharing one `pickerCell`: the picker's live highlight. All
+ * three eventually resolve to the SAME shape of value the baseline layer
+ * produces — a column + an index that is `null` for the explicit "Move only"
+ * choice — which is why closing a picker (Escape, or ⌥ going back up for the
+ * held `radial` shape) simply folds `pickerCell` into `digitSelection` and lets
+ * the baseline layer's own column-bound persistence and clearing take over from
+ * there. `t9` alone opens STICKY on ⌥ keydown (it stays open past keyup — it is
+ * a surface you navigate away from the board, and steering to a tile must not
+ * cost a sustained second-hand modifier). `radial` and `expand` are both HELD,
+ * closing (and folding) the moment ⌥ comes back up: `radial` because it is
+ * answered with a single flick and "let go to commit" is the same gesture shape
+ * as the flick itself, and `expand` because holding costs nothing there — the
+ * pointer never leaves the column that grew, so there is nothing to steer to,
+ * and a column left conspicuously enlarged with no modifier held would have
+ * nothing on screen explaining why.
+ *
+ * Whichever shape, opening a picker preselects what a plain release would
+ * already have done (`defaultIndexFor`), never "Move only" — see that option's
+ * own doc for why that is a correctness rule and not a nicety. A release (mouseup) while a picker is open commits
+ * `pickerCell` directly, bypassing `digitSelection` entirely — see `onUp`.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import * as React from "react";
 import { TICKET_STATUSES, type TicketStatus } from "@volli/shared";
 
-/** The modifier that reveals the palette (legacy variants) / opens the overlay (hybrid). Alt/Option: Shift and Meta are already taken by the board. */
+/** The modifier that opens a picker. Alt/Option: Shift and Meta are already taken by the board. */
 const MODIFIER = "Alt";
 
-/** Tier 2's highlighted target. `index: null` is the explicit "move only, arm nothing" cell — reachable because the overlay's whole point is that the pointer's real position stops mattering. */
-export interface OverlayCell {
+/** Which ⌥ picker shape is on screen — see the module doc. */
+export type PickerShape = "t9" | "radial" | "expand";
+
+/**
+ * One column + automation pairing. Used both for the picker's live highlight
+ * (`pickerCell`) and the baseline layer's committed override (`digitSelection`)
+ * — they used to be two differently-shaped types, but now that a picker's own
+ * "Move only" tile/wedge has to fold into the exact same override a bare digit
+ * produces, there is only one shape worth naming.
+ *
+ * `index: null` means "Move only", explicitly chosen — never the absence of a
+ * choice. Absence is instead the OUTER `| null` on whichever field holds one of
+ * these (`digitSelection`, `pickerCell`).
+ */
+export interface AutomationTarget {
   status: TicketStatus;
   index: number | null;
 }
 
-/** Tier 1's column-bound digit choice. The "move only" default is represented by the field being `null`, not by a member of this shape. */
-export interface DigitSelection {
-  status: TicketStatus;
-  index: number;
+/** The wedge fan's cap, `radial` shape only — the spec's number. Exported so the component's rendering and this hook's hit-testing can never disagree about how many wedges exist. */
+export const RADIAL_MAX_AUTOMATIONS = 5;
+
+/** Wedges fan out starting due north and proceed clockwise — a clock face is the one radial layout nobody has to learn. */
+const RADIAL_START_ANGLE = -Math.PI / 2;
+
+/**
+ * The angle (radians, `atan2` convention) of wedge `index` of `total` — shared
+ * by this hook's own hit-testing (`updateRadialFromPoint`) and the component's
+ * rendering (`RadialWedge`), so the highlighted wedge and the one drawn under
+ * the cursor's direction can never drift apart.
+ */
+export function radialWedgeAngle(index: number, total: number): number {
+  return RADIAL_START_ANGLE + (index / total) * Math.PI * 2;
 }
+
+/** Below this many pixels from the anchor there IS no direction yet — a geometric floor, not a time-based debounce; the very first flick past it resolves on the same frame. */
+const RADIAL_DEADZONE_PX = 10;
 
 export interface DragSim {
   /** The ticket id being dragged, or `null` when at rest. */
   ticketId: string | null;
+  /**
+   * The column the drag STARTED in — captured once at pointer-down, never
+   * re-derived from anything live. Every picker shape has to keep saying
+   * where a ticket came from even after its card stops tracking the cursor
+   * (parked in `t9`, shrunk in `radial`/`expand`) or the pointer has crossed
+   * several columns since — position was the only thing carrying that fact,
+   * and this is what replaces it once position no longer can. `null` only
+   * when at rest.
+   */
+  origin: TicketStatus | null;
   /** Viewport coordinates of the pointer, for positioning the floating card. */
   point: { x: number; y: number };
   /** Column currently under the pointer, hit-tested every move. */
   hovered: TicketStatus | null;
-  /** Whether {@link MODIFIER} is held right now. */
+  /** Whether {@link MODIFIER} is down right now — raw key state, independent of whether a picker actually opened for it (`radial`/`expand` need a hovered column to open at all). */
   modifierHeld: boolean;
-  /** Index into the offered automations, driven by the digit accelerator. Legacy variants only — always `0` while `hybrid` is active. */
-  chosenIndex: number;
-  setChosenIndex: (index: number) => void;
-  /** Attach to a card: begins a drag on pointer-down. */
-  start: (ticketId: string) => (event: React.PointerEvent) => void;
-  /** What the last completed drop resolved to — the scratch shows it as a toast line. */
-  lastDrop: { ticketId: string; status: TicketStatus; automationIndex: number } | null;
+  /** Attach to a card: begins a drag on pointer-down, remembering `origin` for the whole drag. */
+  start: (ticketId: string, origin: TicketStatus) => (event: React.PointerEvent) => void;
+  /**
+   * What the last completed drop resolved to. `overrideIndex` is `undefined`
+   * when nothing overrode the column's own armed default, `null` for an
+   * explicit "Move only", and a number indexing that column's offered
+   * automations otherwise — the caller (which alone knows what `arming` is)
+   * resolves this into an `Automation | null`.
+   */
+  lastDrop: {
+    ticketId: string;
+    status: TicketStatus;
+    overrideIndex: number | null | undefined;
+  } | null;
 
-  /** Hybrid tier 1: see the module doc. Always `null` outside the hybrid variant. */
-  digitSelection: DigitSelection | null;
-  /** Hybrid tier 2: true from ⌥ keydown until release/Escape. Always `false` outside the hybrid variant. */
-  overlayOpen: boolean;
-  /** The overlay's highlighted cell while {@link DragSim.overlayOpen}. `null` only when the overlay has never been opened this drag. */
-  overlayCell: OverlayCell | null;
-  /** Wired to each overlay cell's pointer-enter, so hover highlights without a click — the same mouse button is already down for the drag. */
-  setOverlayCell: (cell: OverlayCell) => void;
+  /** The baseline layer's current override — see the module doc. `null` means no column has one right now. */
+  digitSelection: AutomationTarget | null;
+
+  /** True while a ⌥ picker is open, whichever shape. */
+  pickerOpen: boolean;
+  /** The open picker's live highlight. `null` only when no picker has been opened this drag. */
+  pickerCell: AutomationTarget | null;
+  /** Wired to a picker target's pointer-enter, so hover highlights without a click — the mouse button that would click is already held down driving the drag. */
+  setPickerCell: (cell: AutomationTarget) => void;
+  /** `radial` shape only: the anchor its wedges fan out from — the pointer position at the moment ⌥ went down. `null` for every other shape, and before `radial` has ever opened. */
+  radialCenter: { x: number; y: number } | null;
 }
 
 export interface UseDragSimOptions {
-  /**
-   * How many automations the LEGACY digit accelerator may reach. Capped by
-   * the caller at what one hand can cover — the plan's constraint. Unused
-   * while `hybrid` is true.
-   */
-  legacyOptionCount: number;
-  /**
-   * True only while the hybrid variant is the one on screen. Gates the two
-   * hybrid state machines on and the legacy `chosenIndex`/Escape-cancels-
-   * immediately path off, so the two designs never contaminate each other —
-   * see the module doc.
-   */
-  hybrid: boolean;
-  /**
-   * How many automations column `status` offers (excluding "move only").
-   * Hybrid-only: validates a bare digit, and clamps ⌥-overlay arrow-key
-   * navigation. Ignored while `hybrid` is false.
-   */
+  /** Which ⌥ picker shape is active — swapping this mid-drag is not a supported gesture, only a tab switch between drags. */
+  pickerShape: PickerShape;
+  /** How many automations column `status` offers (excluding "Move only"). Validates a digit and clamps navigation, without this hook ever needing to know what an `Automation` actually is. */
   automationCountFor: (status: TicketStatus) => number;
+  /**
+   * The index of a column's DEFAULT Automation, or null when it has none.
+   *
+   * Opening a picker must preselect the same thing a plain release would run.
+   * Without this the picker opened on "Move only" while releasing without the
+   * modifier ran the column's default — one gesture, two outcomes, with ⌥
+   * silently deciding which. The modifier is there to let you SEE the choice,
+   * never to change it out from under you.
+   */
+  defaultIndexFor: (status: TicketStatus) => number | null;
 }
 
 export function useDragSim({
-  legacyOptionCount,
-  hybrid,
+  pickerShape,
   automationCountFor,
+  defaultIndexFor,
 }: UseDragSimOptions): DragSim {
   const [ticketId, setTicketId] = React.useState<string | null>(null);
+  const [origin, setOrigin] = React.useState<TicketStatus | null>(null);
   const [point, setPoint] = React.useState({ x: 0, y: 0 });
   const [hovered, setHovered] = React.useState<TicketStatus | null>(null);
   const [modifierHeld, setModifierHeld] = React.useState(false);
-  const [chosenIndex, setChosenIndex] = React.useState(0);
   const [lastDrop, setLastDrop] = React.useState<DragSim["lastDrop"]>(null);
-  const [digitSelection, setDigitSelection] = React.useState<DigitSelection | null>(null);
-  const [overlayOpen, setOverlayOpen] = React.useState(false);
-  const [overlayCell, setOverlayCell] = React.useState<OverlayCell | null>(null);
+  const [digitSelection, setDigitSelection] = React.useState<AutomationTarget | null>(null);
+  const [pickerOpen, setPickerOpen] = React.useState(false);
+  const [pickerCell, setPickerCell] = React.useState<AutomationTarget | null>(null);
+  const [radialCenter, setRadialCenter] = React.useState<{ x: number; y: number } | null>(null);
 
   // Read through a ref inside the listeners so they can stay mounted for the
   // whole drag without re-subscribing on every pointer move.
   const state = React.useRef({
+    point,
     hovered,
-    chosenIndex,
     ticketId,
     digitSelection,
-    overlayOpen,
-    overlayCell,
+    pickerOpen,
+    pickerCell,
+    radialCenter,
   });
-  state.current = { hovered, chosenIndex, ticketId, digitSelection, overlayOpen, overlayCell };
+  state.current = {
+    point,
+    hovered,
+    ticketId,
+    digitSelection,
+    pickerOpen,
+    pickerCell,
+    radialCenter,
+  };
 
   React.useEffect(() => {
     if (ticketId === null) return;
@@ -153,27 +217,113 @@ export function useDragSim({
       return (column?.dataset.labColumn as TicketStatus | undefined) ?? null;
     }
 
-    /** Tier 2: move the overlay's highlighted column, carrying the automation index across if the destination still offers it. */
-    function moveOverlayColumn(delta: number) {
-      const cell = state.current.overlayCell;
+    function resetDragState() {
+      setTicketId(null);
+      setOrigin(null);
+      setHovered(null);
+      setModifierHeld(false);
+      setDigitSelection(null);
+      setPickerOpen(false);
+      setPickerCell(null);
+      setRadialCenter(null);
+    }
+
+    /** Ends the drag by committing `cell` directly — the picker-open branch of both a real release and its keyboard stand-in, Enter. */
+    function commitDrop(cell: AutomationTarget) {
+      const ticket = state.current.ticketId;
+      if (ticket !== null) {
+        setLastDrop({ ticketId: ticket, status: cell.status, overrideIndex: cell.index });
+      }
+      resetDragState();
+    }
+
+    /** Closes whichever picker is open, folding its highlight into `digitSelection` so the baseline layer picks up exactly where it left off. */
+    function closePicker() {
+      const cell = state.current.pickerCell;
+      setPickerOpen(false);
+      setPickerCell(null);
+      setRadialCenter(null);
+      setDigitSelection(cell !== null ? { status: cell.status, index: cell.index } : null);
+    }
+
+    function openPicker() {
+      const selection = state.current.digitSelection;
+      const hoveredNow = state.current.hovered;
+
+      if (pickerShape === "t9") {
+        // Not anchored to the pointer at all — it's a centred dialog — so it
+        // opens on whatever the drag already has an opinion about: the bound
+        // override if there is one, else wherever the pointer happens to be,
+        // else the first column. Reachable from anywhere is the whole point.
+        const status = selection?.status ?? hoveredNow ?? TICKET_STATUSES[0];
+        const index =
+          selection !== null && selection.status === status
+            ? selection.index
+            : defaultIndexFor(status);
+        setPickerCell({ status, index });
+        setPickerOpen(true);
+        return;
+      }
+
+      // `radial` and `expand` are both anchored to a column that's already
+      // decided — the one under the pointer. Neither has anything to open
+      // around without one.
+      if (hoveredNow === null) return;
+      if (pickerShape === "radial") setRadialCenter(state.current.point);
+      const index =
+        selection !== null && selection.status === hoveredNow
+          ? selection.index
+          : defaultIndexFor(hoveredNow);
+      setPickerCell({ status: hoveredNow, index });
+      setPickerOpen(true);
+    }
+
+    /** `t9` only: move the highlighted column, carrying the automation index across if the destination still offers it. */
+    function moveColumn(delta: number) {
+      const cell = state.current.pickerCell;
       if (cell === null) return;
       const currentIndex = TICKET_STATUSES.indexOf(cell.status);
       const nextIndex = (currentIndex + delta + TICKET_STATUSES.length) % TICKET_STATUSES.length;
       const nextStatus = TICKET_STATUSES[nextIndex];
       const count = automationCountFor(nextStatus);
       const carried = cell.index !== null && cell.index < count ? cell.index : null;
-      setOverlayCell({ status: nextStatus, index: carried });
+      setPickerCell({ status: nextStatus, index: carried });
     }
 
-    /** Tier 2: move within one column's targets — "move only" then 0..count-1, wrapping. */
-    function moveOverlayIndex(delta: number) {
-      const cell = state.current.overlayCell;
+    /** `t9` and `expand`: move within one column's targets — "Move only" then 0..count-1, wrapping. */
+    function moveIndex(delta: number) {
+      const cell = state.current.pickerCell;
       if (cell === null) return;
       const count = automationCountFor(cell.status);
-      const total = count + 1; // +1 for the "move only" slot.
+      const total = count + 1; // +1 for the "Move only" slot.
       const current = cell.index === null ? 0 : cell.index + 1;
       const next = (current + delta + total) % total;
-      setOverlayCell({ status: cell.status, index: next === 0 ? null : next - 1 });
+      setPickerCell({ status: cell.status, index: next === 0 ? null : next - 1 });
+    }
+
+    /** Any open shape: a digit picks a tile/wedge within the highlighted column directly — see the module doc's note that `radial` keeps digits working alongside the flick. */
+    function setDigitInPicker(digit: string) {
+      const cell = state.current.pickerCell;
+      if (cell === null) return;
+      const index = Number(digit) - 1;
+      if (index < automationCountFor(cell.status)) setPickerCell({ status: cell.status, index });
+    }
+
+    /** `radial` only, on every pointer move while it's open: the nearest wedge to the current angle from the fixed anchor — see the module doc on why this is a dead zone, not a debounce. */
+    function updateRadialFromPoint(x: number, y: number) {
+      const center = state.current.radialCenter;
+      const cell = state.current.pickerCell;
+      if (center === null || cell === null) return;
+      const dx = x - center.x;
+      const dy = y - center.y;
+      if (Math.hypot(dx, dy) < RADIAL_DEADZONE_PX) return;
+      const total = Math.min(automationCountFor(cell.status), RADIAL_MAX_AUTOMATIONS) + 1;
+      const step = (Math.PI * 2) / total;
+      const twoPi = Math.PI * 2;
+      const normalized = (((Math.atan2(dy, dx) - RADIAL_START_ANGLE) % twoPi) + twoPi) % twoPi;
+      const wedge = Math.round(normalized / step) % total;
+      const index = wedge === 0 ? null : wedge - 1;
+      if (cell.index !== index) setPickerCell({ status: cell.status, index });
     }
 
     function onMove(event: PointerEvent) {
@@ -184,155 +334,148 @@ export function useDragSim({
       // modifier ALREADY down would otherwise never see a keydown.
       setModifierHeld(event.altKey);
 
-      // Tier 1's column-bound reset. Compared against the SELECTION's own
-      // column, not the previous `hovered` value — see the module doc for why
-      // that distinction matters right after the ⌥ overlay closes.
-      if (hybrid && !state.current.overlayOpen) {
+      if (!state.current.pickerOpen) {
+        // Baseline layer's column-bound reset — compared against the
+        // SELECTION's own column, not the previous `hovered` value; see the
+        // module doc for why that distinction matters right after a picker
+        // closes.
         const selection = state.current.digitSelection;
         if (selection !== null && next !== null && next !== selection.status) {
-          setDigitSelection(null);
-        }
-      }
-    }
-
-    function onUp(event: PointerEvent) {
-      const boardStatus = hitTest(event.clientX, event.clientY);
-      const ticket = state.current.ticketId;
-
-      if (ticket !== null) {
-        if (hybrid) {
-          // Tier 2 wins if the overlay is open: the committed target is the
-          // highlighted CELL, not whatever the pointer happens to be over.
-          const cell = state.current.overlayCell;
-          if (state.current.overlayOpen && cell !== null) {
-            setLastDrop({
-              ticketId: ticket,
-              status: cell.status,
-              automationIndex: cell.index === null ? 0 : cell.index + 1,
-            });
-          } else if (boardStatus !== null) {
-            // Tier 1: the bare-digit selection, only if it's still bound to
-            // the column the pointer is actually releasing over.
-            const selection = state.current.digitSelection;
-            const automationIndex =
-              selection !== null && selection.status === boardStatus ? selection.index + 1 : 0;
-            setLastDrop({ ticketId: ticket, status: boardStatus, automationIndex });
-          }
-        } else if (boardStatus !== null) {
-          setLastDrop({
-            ticketId: ticket,
-            status: boardStatus,
-            automationIndex: state.current.chosenIndex,
-          });
-        }
-      }
-
-      setTicketId(null);
-      setHovered(null);
-      setModifierHeld(false);
-      setChosenIndex(0);
-      setDigitSelection(null);
-      setOverlayOpen(false);
-      setOverlayCell(null);
-    }
-
-    function onKey(event: KeyboardEvent) {
-      if (event.key === MODIFIER) {
-        setModifierHeld(event.type === "keydown");
-        // Tier 2: Alt keydown opens the overlay STICKY — it does not close on
-        // keyup, because the user is already holding the mouse button down
-        // and releasing Alt must never discard a highlighted cell.
-        if (hybrid && event.type === "keydown" && !state.current.overlayOpen) {
-          const selection = state.current.digitSelection;
-          const initialStatus = selection?.status ?? state.current.hovered ?? TICKET_STATUSES[0];
-          const initialIndex =
-            selection !== null && selection.status === initialStatus ? selection.index : null;
-          setOverlayCell({ status: initialStatus, index: initialIndex });
-          setOverlayOpen(true);
-        }
-      }
-      if (event.type !== "keydown") return;
-
-      if (hybrid) {
-        if (state.current.overlayOpen) {
-          // Tier 2: digits pick an automation within the highlighted column;
-          // arrows move the highlight; Escape closes the overlay (not the
-          // drag) and carries the highlight into tier 1.
-          const digit = /^Digit([1-9])$/.exec(event.code)?.[1];
-          if (digit !== undefined) {
-            const index = Number(digit) - 1;
-            const cell = state.current.overlayCell;
-            if (cell !== null && index < automationCountFor(cell.status)) {
-              event.preventDefault();
-              setOverlayCell({ status: cell.status, index });
-            }
-          }
-          if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-            event.preventDefault();
-            moveOverlayColumn(event.key === "ArrowRight" ? 1 : -1);
-          }
-          if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-            event.preventDefault();
-            moveOverlayIndex(event.key === "ArrowDown" ? 1 : -1);
-          }
-          if (event.key === "Escape") {
-            const cell = state.current.overlayCell;
-            setOverlayOpen(false);
-            setDigitSelection(
-              cell !== null && cell.index !== null
-                ? { status: cell.status, index: cell.index }
-                : null,
-            );
-            return;
-          }
-          return;
-        }
-
-        // Tier 1: bare `code`-based digit — see why `code` and not `key`
-        // below. Same digit again clears back to "move only", so a
-        // mis-keyed choice is recoverable without aborting the drag.
-        //
-        // `code`, NOT `key`. The original reason this mattered was macOS's
-        // Option dead-key layer (⌥2 arrives as key "€", not "2"). Tier 1 has
-        // no modifier at all, so that reason is gone — but `code` still
-        // matters, for a different reason: it's the PHYSICAL key, unaffected
-        // by keyboard layout. On AZERTY the unshifted top row reads
-        // `& é " ' ( - è _ ç à`, not digits, so `event.key` for the physically
-        // "1" key is `&`. Reading `code` keeps 1–9 meaning "the same physical
-        // row" everywhere, which is what an accelerator has to be to be
-        // learnable at all.
-        const digit = /^Digit([1-9])$/.exec(event.code)?.[1];
-        if (digit !== undefined) {
-          const index = Number(digit) - 1;
-          const hoveredStatus = state.current.hovered;
-          if (hoveredStatus !== null && index < automationCountFor(hoveredStatus)) {
-            event.preventDefault();
-            setDigitSelection((current) =>
-              current !== null && current.status === hoveredStatus && current.index === index
-                ? null
-                : { status: hoveredStatus, index },
-            );
-          }
-        }
-        if (event.key === "Escape") {
-          // No overlay open: this Escape cancels the whole drag, same as
-          // every other variant.
-          setTicketId(null);
-          setHovered(null);
           setDigitSelection(null);
         }
         return;
       }
 
-      // ---- legacy path, unchanged: held / always / card / column variants ----
-      const digit = /^Digit([1-9])$/.exec(event.code)?.[1];
-      if (digit !== undefined && Number(digit) <= legacyOptionCount) {
-        event.preventDefault();
-        setChosenIndex(Number(digit) - 1);
+      if (pickerShape === "expand") {
+        // Spatially anchored, same as the baseline layer: the expanded
+        // column simply follows the hover, carrying the whole tile grid with
+        // it instead of a bare digit.
+        if (next === null) return;
+        const cell = state.current.pickerCell;
+        if (cell !== null && cell.status === next) return;
+        const count = automationCountFor(next);
+        const carried =
+          cell !== null && cell.index !== null && cell.index < count ? cell.index : null;
+        setPickerCell({ status: next, index: carried });
+        return;
       }
+
+      if (pickerShape === "radial") updateRadialFromPoint(event.clientX, event.clientY);
+    }
+
+    function onUp(event: PointerEvent) {
+      const ticket = state.current.ticketId;
+      if (ticket !== null) {
+        if (state.current.pickerOpen && state.current.pickerCell !== null) {
+          commitDrop(state.current.pickerCell);
+          return; // commitDrop already reset everything.
+        }
+        const boardStatus = hitTest(event.clientX, event.clientY);
+        if (boardStatus !== null) {
+          const selection = state.current.digitSelection;
+          const overrideIndex =
+            selection !== null && selection.status === boardStatus ? selection.index : undefined;
+          setLastDrop({ ticketId: ticket, status: boardStatus, overrideIndex });
+        }
+      }
+      resetDragState();
+    }
+
+    function onKey(event: KeyboardEvent) {
+      if (event.key === MODIFIER) {
+        const down = event.type === "keydown";
+        setModifierHeld(down);
+        if (down && !state.current.pickerOpen) {
+          openPicker();
+        } else if (!down && pickerShape !== "t9" && state.current.pickerOpen) {
+          // HELD for `radial` and `expand`; sticky only for `t9`.
+          //
+          // radial — letting go of ⌥ mid-flick IS the commit gesture, folding
+          // the wedge under the cursor into `digitSelection` the way Escape
+          // does elsewhere.
+          //
+          // expand — the owner's rule: "if the user lets go of the Option key,
+          // it collapses back into a smaller option." It is the only shape
+          // where holding costs nothing, because the pointer never has to
+          // travel to a separate surface to use it — the column you are already
+          // over is the one that grew. Sticky would leave a column
+          // conspicuously enlarged with no modifier held to explain why.
+          //
+          // t9 stays sticky: it is a surface you navigate away from the board,
+          // and requiring a sustained second-hand modifier while steering to a
+          // tile would throw away the cell you had highlighted.
+          closePicker();
+        }
+      }
+      if (event.type !== "keydown") return;
+
       if (event.key === "Escape") {
+        if (state.current.pickerOpen) {
+          closePicker();
+          return;
+        }
+        // No picker open: cancel the whole drag, same as ever.
         setTicketId(null);
         setHovered(null);
+        setDigitSelection(null);
+        return;
+      }
+
+      if (event.key === "Enter" && state.current.pickerOpen && state.current.pickerCell !== null) {
+        // The keyboard equivalent of releasing the mouse over the highlighted
+        // cell right now — `t9`'s "release or Enter commits."
+        commitDrop(state.current.pickerCell);
+        return;
+      }
+
+      if (state.current.pickerOpen) {
+        const digit = /^Digit([1-9])$/.exec(event.code)?.[1];
+        if (digit !== undefined) {
+          event.preventDefault();
+          setDigitInPicker(digit);
+        }
+        if (pickerShape === "t9") {
+          if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+            event.preventDefault();
+            moveColumn(event.key === "ArrowRight" ? 1 : -1);
+          }
+          if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+            event.preventDefault();
+            moveIndex(event.key === "ArrowDown" ? 1 : -1);
+          }
+        } else if (pickerShape === "expand") {
+          if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+            event.preventDefault();
+            moveIndex(event.key === "ArrowDown" ? 1 : -1);
+          }
+        }
+        return;
+      }
+
+      // ---- baseline layer: bare `code`-based digit, scoped to the hovered column ----
+      //
+      // `code`, NOT `key`. On macOS's Option dead-key layer ⌥2 arrives as key
+      // "€", not "2" — irrelevant here since this layer has no modifier at
+      // all, but `code` still matters for a different reason: it's the
+      // PHYSICAL key, unaffected by keyboard layout. On AZERTY the unshifted
+      // top row reads `& é " ' ( - è _ ç à`, not digits, so `event.key` for
+      // the physically "1" key is `&`. Reading `code` keeps 1–9 meaning "the
+      // same physical row" everywhere, which is what an accelerator has to be
+      // to be learnable at all.
+      const digit = /^Digit([1-9])$/.exec(event.code)?.[1];
+      if (digit !== undefined) {
+        const index = Number(digit) - 1;
+        const hoveredStatus = state.current.hovered;
+        if (hoveredStatus !== null && index < automationCountFor(hoveredStatus)) {
+          event.preventDefault();
+          // Same digit again clears back to the column's own default, so a
+          // mis-keyed choice is recoverable without aborting the drag.
+          setDigitSelection((current) =>
+            current !== null && current.status === hoveredStatus && current.index === index
+              ? null
+              : { status: hoveredStatus, index },
+          );
+        }
       }
     }
 
@@ -346,38 +489,39 @@ export function useDragSim({
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keyup", onKey);
     };
-  }, [ticketId, legacyOptionCount, hybrid, automationCountFor]);
+  }, [ticketId, pickerShape, automationCountFor, defaultIndexFor]);
 
   const start = React.useCallback(
-    (id: string) => (event: React.PointerEvent) => {
+    (id: string, startOrigin: TicketStatus) => (event: React.PointerEvent) => {
       // Left button only, and preventDefault so the browser's own text/image
       // drag never starts underneath ours.
       if (event.button !== 0) return;
       event.preventDefault();
       setTicketId(id);
+      setOrigin(startOrigin);
       setPoint({ x: event.clientX, y: event.clientY });
       setModifierHeld(event.altKey);
-      setChosenIndex(0);
       setLastDrop(null);
       setDigitSelection(null);
-      setOverlayOpen(false);
-      setOverlayCell(null);
+      setPickerOpen(false);
+      setPickerCell(null);
+      setRadialCenter(null);
     },
     [],
   );
 
   return {
     ticketId,
+    origin,
     point,
     hovered,
     modifierHeld,
-    chosenIndex,
-    setChosenIndex,
     start,
     lastDrop,
     digitSelection,
-    overlayOpen,
-    overlayCell,
-    setOverlayCell,
+    pickerOpen,
+    pickerCell,
+    setPickerCell,
+    radialCenter,
   };
 }

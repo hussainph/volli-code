@@ -1,6 +1,6 @@
 /**
  * Firing an Automation — the three surfaces of #86, with the prototype-gated
- * one built five ways.
+ * one built three ways.
  *
  * The plan is explicit that dragging is NOT the primary path (#86): the common
  * modality is ticket-centric, and a ticket open in front of you has no column to
@@ -16,15 +16,16 @@
  *     already mid-context does not need setting up again.
  *   • ARMING (#86b, #88) — a column holds at most one armed Automation, and an
  *     unarmed column says so quietly rather than saying nothing.
- *   • DRAG (#86c) — the open question. Five variants against the plan's stated
- *     constraints: no dwell and no debounce anywhere, name AND harness legible
- *     rather than bare numbers, drop targets identical to today, and the dragged
- *     card always naming what will run. The default tab, Hybrid, replaces the
- *     ⌥-gated palette's numbering with unmodified digits (index 0 was "Move
- *     only" before; now "move only" is simply what a release without a digit
- *     does) and adds a second, sticky ⌥ overlay for reaching a column the
- *     pointer isn't near — see `use-drag-sim`'s module doc for how the two
- *     tiers are kept from touching the other four variants' own state.
+ *   • DRAG (#86c) — a plain drop has NO palette at all: it arms whichever
+ *     Automation the target COLUMN is already armed with (the same concept
+ *     `ArmingTab` models — this tab shares its `arming` state with it), and an
+ *     unarmed column is a perfectly good target that says so quietly rather
+ *     than firing nothing silently. Bare digits `1`–`9`, scoped to whichever
+ *     column the pointer is over, still override that default — the same
+ *     digit twice clears back to it. ⌥ is reserved for the rarer case:
+ *     choosing without trusting the column default, compared here as three
+ *     shapes (`t9` / `radial` / `expand`) — see `use-drag-sim`'s module doc for
+ *     how the baseline digit layer and the ⌥ picker share one override shape.
  *
  * Every surface here is drawn INSIDE the chrome it will really live in — a mock
  * ticket header, a real board with real cards. A control judged on an empty page
@@ -62,6 +63,7 @@ import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import {
   TICKET_STATUS_LABELS,
   TICKET_STATUSES,
+  type HarnessId,
   type Ticket,
   type TicketStatus,
 } from "@volli/shared";
@@ -75,18 +77,28 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@renderer/components/ui/tooltip";
 import { cn } from "@renderer/lib/utils";
 
 import { HarnessMark, HarnessTag } from "../automation/harness-identity";
 import { SEEDED_AUTOMATIONS, type Automation } from "../automation/model";
-import { useDragSim, type OverlayCell } from "../automation/use-drag-sim";
+import {
+  radialWedgeAngle,
+  RADIAL_MAX_AUTOMATIONS,
+  useDragSim,
+  type AutomationTarget,
+  type PickerShape,
+} from "../automation/use-drag-sim";
 import { project, ticketById, tickets } from "../fixtures";
 
 export const title = "Automation · trigger";
-export const note = "Arming, the in-ticket advance button, and five drag pickers (#86/#89)";
-
-/** Digits stop here: an accelerator you have to look at your hand to use is not one. */
-const MAX_ACCELERATORS = 4;
+export const note =
+  "Column defaults, the in-ticket advance button, and three ⌥ drag pickers (#86/#89)";
 
 /**
  * How long a drop confirmation stays before it starts leaving, and how long the
@@ -207,11 +219,43 @@ function offeredFor(status: TicketStatus): Automation[] {
   );
 }
 
-/** The initial arming: one Automation per column, matching the seeded set — but see #88. */
-const SEEDED_ARMING: Partial<Record<TicketStatus, string>> = {};
+/**
+ * The initial arming for THIS LAB ONLY — three columns pre-armed so the drag
+ * picker (Change 1) has something to demonstrate the moment the tab opens.
+ * The real product ships every seeded Automation UNARMED: seeded-and-armed
+ * would spend tokens on someone's very first drag, which is exactly the
+ * surprise the automation-only-de-escalates rule (#20) exists to prevent.
+ *
+ * Shared between the Arming and Drag tabs (lifted to `AutomationTriggerScratch`)
+ * so dropping a card in the Drag tab and re-arming a column from the Arming tab
+ * are provably the same piece of state, not two mocks that happen to agree.
+ */
+const LAB_PREARMED_ARMING: Partial<Record<TicketStatus, string>> = {
+  todo: "atm-grill",
+  doing: "atm-implement",
+  needs_review: "atm-review",
+};
 
 function automationById(id: string | undefined): Automation | null {
   return SEEDED_AUTOMATIONS.find((automation) => automation.id === id) ?? null;
+}
+
+/**
+ * What actually fires for `status`, given the column's own arming and any
+ * override chosen this drag. `overrideIndex` is the hook's own tri-state:
+ * `undefined` (nothing overrode the default), `null` (explicit "Move only"),
+ * or an index into `offeredFor(status)`. This is the one place that tri-state
+ * turns into a real `Automation | null` — the hook itself never needs to know
+ * what an Automation is.
+ */
+function resolveAutomation(
+  status: TicketStatus,
+  arming: Partial<Record<TicketStatus, string>>,
+  overrideIndex: number | null | undefined,
+): Automation | null {
+  if (overrideIndex === undefined) return automationById(arming[status]);
+  if (overrideIndex === null) return null;
+  return offeredFor(status)[overrideIndex] ?? null;
 }
 
 /** `VLT-14`. Built from the project rather than stored, exactly as the app does it. */
@@ -301,10 +345,10 @@ function BoardCard({
 type TicketState = "unarmed" | "armed" | "resumable";
 
 const TICKET_STATE_NOTES: Record<TicketState, string> = {
-  unarmed: "Target column has no armed Automation — a plain status change, exactly as today.",
-  armed: "Target column is armed. The button names the move AND what will run.",
+  unarmed: "Target column has no default Automation — a plain status change, exactly as today.",
+  armed: "Target column has a default. The button names the move AND what will run.",
   resumable:
-    "Same armed column, but this ticket has a session worth resuming — #89: resume wins, and a fresh Run stays one click away.",
+    "Same column, but this ticket has a session worth resuming — #89: resume wins, and a fresh Run stays one click away.",
 };
 
 /** The ticket the header mock is built around — Doing, so the move it offers is the real next one. */
@@ -465,6 +509,119 @@ function InTicketTab() {
 /* --------------------------------------------------------------------- arming */
 
 /**
+ * The column-header arm control (#86b) — one component, used identically in the
+ * Arming and Drag tabs.
+ *
+ * Change 1's whole premise is "the column header already says what it runs, so
+ * the drag no longer re-asks" — a premise that only holds if the control that
+ * says it is the SAME control in both places. If the Drag tab grew its own
+ * lookalike, the two tabs would be testing different products again, exactly
+ * the thing `BoardCard` already exists to prevent one level down.
+ */
+/**
+ * Choosing a column's default Automation — a lightning bolt in the column's
+ * top-right corner, and nothing else.
+ *
+ * This replaced a small card sitting under the column header that named the
+ * chosen Automation and its harness. Two things were wrong with it. It read as
+ * a piece of CONTENT — a card, in a column full of cards, that was not a ticket
+ * — and it spent two lines of vertical space, permanently, on a fact that
+ * matters at exactly two moments: when you set it, and when you are dragging
+ * something into the column. The second moment now has its own answer (the
+ * hovered column lists what it can run), so at rest a single icon carries it.
+ *
+ * ── ON THE WORD "ARM" ─────────────────────────────────────────────────────
+ * The plan calls this arming, and every label here used to say so. Nobody talks
+ * like that: it is writing code, not loading a weapon. The domain word is now
+ * DEFAULT — a column has a default Automation, you select it, you clear it. The
+ * internal identifiers below still say `arm` in places; those are follow-on
+ * renames, not user-visible copy, and none of them reach a screen.
+ * ──────────────────────────────────────────────────────────────────────────
+ */
+function ColumnDefaultControl({
+  status,
+  armed,
+  offered,
+  onArm,
+  onDisarm,
+}: {
+  status: TicketStatus;
+  armed: Automation | null;
+  offered: Automation[];
+  onArm: (automationId: string) => void;
+  onDisarm: () => void;
+}) {
+  const chosen = armed !== null;
+  return (
+    <DropdownMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              aria-label={
+                chosen ? `Default automation: ${armed.name}` : "Select default automation"
+              }
+              className={cn(
+                "ml-auto flex size-5 shrink-0 items-center justify-center rounded-md transition-colors duration-150 ease-out",
+                chosen
+                  ? "text-primary hover:bg-accent"
+                  : "text-muted-foreground/50 hover:bg-accent hover:text-foreground",
+              )}
+            >
+              <LightningIcon weight={chosen ? "fill" : "regular"} />
+            </button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        {/* The tooltip is the only place the chosen Automation is named at
+            rest, so when one IS chosen it must name it rather than repeat the
+            verb — "Select default automation" over a column that already has
+            one tells you nothing you can act on. */}
+        <TooltipContent side="top">
+          {chosen ? (
+            <span className="flex items-center gap-1.5">
+              Default: {armed.name}
+              <HarnessMark harnessId={armed.runtime.harnessId} />
+            </span>
+          ) : (
+            "Select default automation"
+          )}
+        </TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent align="end" className="w-72">
+        <DropdownMenuLabel>
+          Runs when a ticket is moved into {TICKET_STATUS_LABELS[status]}
+        </DropdownMenuLabel>
+        {offered.map((automation) => (
+          <DropdownMenuItem
+            key={automation.id}
+            onSelect={() => onArm(automation.id)}
+            className="justify-between gap-6"
+          >
+            <span className="flex items-center gap-1.5">
+              {armed?.id === automation.id ? (
+                <LightningIcon weight="fill" className="text-primary" />
+              ) : null}
+              {automation.name}
+            </span>
+            <HarnessTag harnessId={automation.runtime.harnessId} className="text-xs" />
+          </DropdownMenuItem>
+        ))}
+        <DropdownMenuSeparator />
+        {/* In-situ creation (#86a): authoring must never require a trip to settings. */}
+        <DropdownMenuItem>New automation for this column…</DropdownMenuItem>
+        {chosen ? (
+          <DropdownMenuItem onSelect={onDisarm}>
+            <XIcon />
+            Clear default
+          </DropdownMenuItem>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
  * Column-header arming (#86b), against a populated board.
  *
  * The affordance has to carry two facts at once — that a column CAN be armed,
@@ -476,9 +633,15 @@ function InTicketTab() {
  * The quiet dashed hint on an unarmed column is #88's discoverability answer:
  * seeded automations are useless if nobody learns that columns fire.
  */
-function ArmingTab() {
-  const [arming, setArming] = React.useState<Partial<Record<TicketStatus, string>>>(SEEDED_ARMING);
-
+function ArmingTab({
+  arming,
+  onArm,
+  onDisarm,
+}: {
+  arming: Partial<Record<TicketStatus, string>>;
+  onArm: (status: TicketStatus, automationId: string) => void;
+  onDisarm: (status: TicketStatus) => void;
+}) {
   return (
     <div className="flex flex-col gap-4">
       <div className="overflow-hidden rounded-xl border border-border bg-background">
@@ -495,81 +658,16 @@ function ArmingTab() {
                     {TICKET_STATUS_LABELS[status]}
                   </span>
                   <span className="font-mono text-xs text-muted-foreground">{inColumn.length}</span>
+                  <ColumnDefaultControl
+                    status={status}
+                    armed={armed}
+                    offered={offered}
+                    onArm={(id) => onArm(status, id)}
+                    onDisarm={() => onDisarm(status)}
+                  />
                 </div>
 
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    {armed === null ? (
-                      // Unarmed: dashed, muted, and honest about being an offer.
-                      //
-                      // The `key` is load-bearing, not decoration: both branches
-                      // are <button>, so React reuses the DOM node and the
-                      // element is never "newly added" — which is the condition
-                      // @starting-style animates on. Without distinct keys,
-                      // arming a column swaps its contents with no transition at
-                      // all and the `starting:` classes look broken.
-                      <button
-                        key="unarmed"
-                        type="button"
-                        className="flex items-center gap-1.5 rounded-md border border-dashed border-border px-2 py-1 text-xs text-muted-foreground transition-[color,border-color,opacity,transform,translate,scale] duration-150 ease-out hover:border-solid hover:text-foreground starting:scale-[0.98] starting:opacity-0 motion-reduce:starting:scale-100"
-                      >
-                        <LightningIcon />
-                        Arm an automation
-                      </button>
-                    ) : (
-                      <button
-                        key="armed"
-                        type="button"
-                        className="flex flex-col items-start gap-0.5 rounded-md border border-border bg-card px-2 py-1 text-left transition-[color,border-color,opacity,transform,translate,scale] duration-150 ease-out hover:border-ring starting:scale-[0.98] starting:opacity-0 motion-reduce:starting:scale-100"
-                      >
-                        <span className="flex items-center gap-1.5 text-xs text-foreground">
-                          <LightningIcon weight="fill" className="text-primary" />
-                          {armed.name}
-                        </span>
-                        <HarnessTag
-                          harnessId={armed.runtime.harnessId}
-                          className="pl-0.5 text-xs"
-                        />
-                      </button>
-                    )}
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="w-72">
-                    <DropdownMenuLabel>
-                      Fires when a ticket is moved into {TICKET_STATUS_LABELS[status]}
-                    </DropdownMenuLabel>
-                    {offered.map((automation) => (
-                      <DropdownMenuItem
-                        key={automation.id}
-                        onSelect={() =>
-                          setArming((current) => ({ ...current, [status]: automation.id }))
-                        }
-                        className="justify-between gap-6"
-                      >
-                        <span>{automation.name}</span>
-                        <HarnessTag harnessId={automation.runtime.harnessId} className="text-xs" />
-                      </DropdownMenuItem>
-                    ))}
-                    <DropdownMenuSeparator />
-                    {/* In-situ creation (#86a): authoring must never require a trip to settings. */}
-                    <DropdownMenuItem>New automation for this column…</DropdownMenuItem>
-                    {armed !== null ? (
-                      <DropdownMenuItem
-                        onSelect={() =>
-                          setArming((current) => {
-                            const next = { ...current };
-                            delete next[status];
-                            return next;
-                          })
-                        }
-                      >
-                        <XIcon />
-                        Disarm
-                      </DropdownMenuItem>
-                    ) : null}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-
-                <div className="flex flex-col gap-1.5 pt-2">
+                <div className="flex flex-col gap-1.5">
                   {inColumn.map((ticket) => (
                     <BoardCard key={ticket.id} ticket={ticket} />
                   ))}
@@ -581,10 +679,11 @@ function ArmingTab() {
       </div>
 
       <p className="max-w-prose text-xs text-muted-foreground">
-        At most one per column, structurally — arming is a property of the column, so two
-        automations claiming one column is not a state that can be reached. Arming is not
-        retroactive: it governs tickets that arrive afterwards, never the{" "}
-        {tickets.filter((t) => t.status === "doing").length} already sitting in Doing.
+        One default per column, structurally — it is a property of the column, so two automations
+        claiming the same column is not a state that can be reached. The default is not retroactive:
+        it governs tickets that arrive afterwards, never the{" "}
+        {tickets.filter((t) => t.status === "doing").length} already sitting in Doing. Set it with
+        the bolt in the column&rsquo;s corner.
       </p>
     </div>
   );
@@ -592,78 +691,117 @@ function ArmingTab() {
 
 /* ----------------------------------------------------------------------- drag */
 
-type DragVariant = "hybrid" | "held" | "always" | "card" | "column";
-
-const DRAG_VARIANTS: { id: DragVariant; label: string; claim: string }[] = [
+const PICKER_VARIANTS: { id: PickerShape; label: string; claim: string }[] = [
   {
-    id: "hybrid",
-    label: "Hybrid · digits + ⌥ overlay",
+    id: "t9",
+    label: "T9 dialpad · ⌥ sticky",
     claim:
-      "No palette to reveal at all: 1–9 arm an automation in whichever column the pointer is already over, no modifier needed. ⌥ is reserved for the rarer case — reaching a column that's scrolled away or far from the pointer — where it opens a sticky overlay of every column × automation as a target you can hover or arrow-key to, and release commits whichever cell is lit.",
+      "A centred overlay: every column as a tab across the top, that column's automations as large tiles below. The dragged card PARKS into the overlay's own header instead of floating over it — nothing here can be occluded by the thing it's choosing for. Sticky: opens on ⌥ down and stays open past keyup, since letting go of Alt must never discard a highlighted tile while the mouse button is still driving the drag.",
   },
   {
-    id: "held",
-    label: "Header palette · ⌥ held",
+    id: "radial",
+    label: "Radial wedges · ⌥ held",
     claim:
-      "The plan's sketched direction. The strip is out of the way until asked for, so the ordinary drop stays untaxed — but it costs a modifier mid-drag, which is the thing to actually test with your hand.",
+      "The column is already decided — wherever the pointer already is. This only picks the automation, by FLICKING the pointer toward a direction rather than aiming at a target. Held, not sticky: letting go of ⌥ IS the commit, the same gesture shape as the flick itself.",
   },
   {
-    id: "always",
-    label: "Header palette · always",
+    id: "expand",
+    label: "Expand in place · ⌥ held",
     claim:
-      "The same strip, with the modifier removed. Tests whether ⌥ was load-bearing or merely cautious: everything is visible the whole drag, at the cost of the board shouting on every ordinary move.",
-  },
-  {
-    id: "card",
-    label: "Attached to the card",
-    claim:
-      "The palette rides under the dragged card, so the names are where the eye already is. Nothing to travel to — but it occludes the board exactly where you are aiming.",
-  },
-  {
-    id: "column",
-    label: "Under the hovered column",
-    claim:
-      "The list appears beneath the hovered column header only. Strongest spatial link between automation and destination; the weakness is that it moves every time you cross a column.",
+      'No second surface at all — the column already under the pointer grows, and its automations become large landing targets inside it. The other columns recede. Spatial continuity is the whole bet: nothing new appears, the thing already being pointed at gets bigger. Kept sticky rather than the spec\'s suggested "held": exploring the enlarged tiles by moving the mouse felt better without also having to keep a key down the whole time.',
   },
 ];
 
-/** The dragged card's own label — constant across variants, because the plan requires it. */
+/** Every field a Move summary needs to read as a real statement of what a drop will do — never blank, even when nothing will run. */
+function MoveSummary({
+  origin,
+  destination,
+  automation,
+  compact = false,
+}: {
+  origin: TicketStatus;
+  destination: TicketStatus | null;
+  automation: Automation | null;
+  compact?: boolean;
+}) {
+  return (
+    <p
+      className={cn(
+        "flex flex-wrap items-center gap-x-1.5 gap-y-0.5",
+        compact ? "text-label" : "text-xs",
+      )}
+    >
+      <span className="text-muted-foreground">{TICKET_STATUS_LABELS[origin]}</span>
+      <ArrowRightIcon className="shrink-0 text-muted-foreground" />
+      {destination === null ? (
+        <span className="text-muted-foreground">…</span>
+      ) : (
+        <span className="font-medium text-foreground">{TICKET_STATUS_LABELS[destination]}</span>
+      )}
+      <span
+        className={cn(
+          "flex items-center gap-1",
+          automation === null ? "text-muted-foreground" : "text-primary-text",
+        )}
+      >
+        <LightningIcon weight={automation === null ? "regular" : "fill"} />
+        {automation === null ? "nothing runs" : automation.name}
+        {automation !== null ? <HarnessMark harnessId={automation.runtime.harnessId} /> : null}
+      </span>
+    </p>
+  );
+}
+
+/**
+ * The dragged card's own label. Always names the ticket by REF first — never
+ * truncated, per the owner's note that the ref is the identity and the title is
+ * the only part allowed to give way — and the move it is about to make, via
+ * {@link MoveSummary}, so the summary reads as a real statement even when
+ * nothing will run.
+ *
+ * `compact` is the shrunk form `radial` pins at its wedge anchor: ref + origin
+ * + move only, no title, since it sits fixed at a point the cursor has already
+ * moved away from to flick a direction.
+ */
 function DragGhost({
   ticket,
+  origin,
+  destination,
   point,
   automation,
   hint,
+  compact = false,
 }: {
   ticket: Ticket;
+  origin: TicketStatus;
+  destination: TicketStatus | null;
   point: { x: number; y: number };
   automation: Automation | null;
-  /** The hybrid variant's discoverability line — undefined everywhere else. */
+  /** The baseline layer's discoverability line — omitted while a picker owns the story instead. */
   hint?: string;
+  compact?: boolean;
 }) {
+  if (compact) {
+    return (
+      <div
+        className="pointer-events-none fixed z-[160] w-fit max-w-56 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-card px-2.5 py-1.5 shadow-lg"
+        style={{ left: point.x, top: point.y }}
+      >
+        <p className="font-mono text-xs text-foreground">{ticketRef(ticket)}</p>
+        <MoveSummary origin={origin} destination={destination} automation={automation} compact />
+      </div>
+    );
+  }
   return (
     <div
       className="pointer-events-none fixed z-[100] w-64 rotate-2 rounded-lg border border-border bg-card px-3 py-2 shadow-lg"
       style={{ left: point.x - 24, top: point.y - 18 }}
     >
+      <p className="font-mono text-label text-muted-foreground">{ticketRef(ticket)}</p>
       <p className="line-clamp-2 text-sm text-foreground">{ticket.title}</p>
-      {/* "The dragged card always names what will run" — including when the
-          answer is nothing, which is the case that stops a silent Run. */}
-      <p
-        className={cn(
-          "flex items-center gap-1.5 pt-1 text-xs",
-          automation === null ? "text-muted-foreground" : "text-primary-text",
-        )}
-      >
-        <LightningIcon weight={automation === null ? "regular" : "fill"} />
-        {automation === null ? (
-          "Move only"
-        ) : (
-          <>
-            {automation.name}
-            <HarnessTag harnessId={automation.runtime.harnessId} />
-          </>
-        )}
-      </p>
+      <div className="pt-1">
+        <MoveSummary origin={origin} destination={destination} automation={automation} />
+      </div>
       {/* A status line, not a tooltip — quiet on purpose. Bare digits are
           otherwise invisible until someone happens to press one. */}
       {hint !== undefined ? <p className="pt-1 text-label text-muted-foreground">{hint}</p> : null}
@@ -671,160 +809,427 @@ function DragGhost({
   );
 }
 
-/** One row of the palette, in every variant — name leads, harness follows, digit last. */
-function PaletteRow({
-  automation,
-  index,
-  chosen,
-  onChoose,
+/** `t9`'s tab hover: carries the highlighted index to the new column when it's still valid there, exactly like the hook's own arrow-key navigation — hover and arrows have to agree, or one of them will feel like the "real" one. */
+function carryIndexTo(cell: AutomationTarget, nextStatus: TicketStatus): AutomationTarget {
+  if (cell.status === nextStatus) return cell;
+  const count = offeredFor(nextStatus).length;
+  return {
+    status: nextStatus,
+    index: cell.index !== null && cell.index < count ? cell.index : null,
+  };
+}
+
+/**
+ * Shape (a): the two-stage dialpad. A centred overlay because "reachable from
+ * anywhere" is the whole point — the pointer's board position stops mattering
+ * completely, unlike (b)/(c) which are both anchored to wherever it already is.
+ *
+ * The dragged card PARKS into the header here rather than floating over the
+ * tiles — that parking is the actual fix for the occlusion complaint; every
+ * other shape merely shrinks or relocates the ghost, this one removes it from
+ * the pointer's business entirely. The header still has to say what the ghost
+ * used to say (which ticket, where it came from, where it's headed) since
+ * parking is exactly what stops the card's own position from carrying that.
+ */
+function T9Overlay({
+  ticket,
+  origin,
+  cell,
+  setCell,
+  arming,
 }: {
-  automation: Automation | null;
-  index: number;
-  chosen: boolean;
-  onChoose: () => void;
+  ticket: Ticket;
+  origin: TicketStatus;
+  cell: AutomationTarget;
+  setCell: (cell: AutomationTarget) => void;
+  arming: Partial<Record<TicketStatus, string>>;
 }) {
+  const status = cell.status;
+  const offered = offeredFor(status);
+  const armed = automationById(arming[status]);
+  const resolved = resolveAutomation(status, arming, cell.index);
+  const moveOnlyChosen = cell.index === null;
+
   return (
-    <button
-      type="button"
-      onPointerUp={onChoose}
-      onPointerEnter={onChoose}
-      aria-pressed={chosen}
+    <div className="fixed inset-0 z-[150] flex items-center justify-center bg-background/90 p-6 backdrop-blur-sm">
+      <div className="flex w-full max-w-xl flex-col gap-3 rounded-xl border border-border bg-card p-3 shadow-lg">
+        {/* The parked ghost — see the module doc. Nothing in this overlay may
+            sit under the card being dragged; parking it here is how. */}
+        <div className="flex flex-col gap-1 rounded-lg border border-border bg-popover px-3 py-2">
+          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="shrink-0 font-mono text-foreground">{ticketRef(ticket)}</span>
+            <span className="min-w-0 flex-1 truncate">{ticket.title}</span>
+          </p>
+          <MoveSummary origin={origin} destination={status} automation={resolved} />
+        </div>
+
+        <div className="flex gap-1 overflow-x-auto rounded-lg bg-muted/40 p-1">
+          {TICKET_STATUSES.map((candidate) => (
+            <button
+              key={candidate}
+              type="button"
+              onPointerEnter={() => setCell(carryIndexTo(cell, candidate))}
+              aria-pressed={candidate === status}
+              className={cn(
+                "flex-1 whitespace-nowrap rounded-md px-2 py-1.5 text-xs transition-colors duration-100 ease-out",
+                candidate === status
+                  ? "bg-accent text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {TICKET_STATUS_LABELS[candidate]}
+            </button>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          {offered.map((automation, index) => {
+            const chosen = cell.index === index;
+            return (
+              <button
+                key={automation.id}
+                type="button"
+                onPointerEnter={() => setCell({ status, index })}
+                aria-pressed={chosen}
+                className={cn(
+                  "flex flex-col items-start gap-1 rounded-lg border p-2.5 text-left transition-colors duration-100 ease-out",
+                  chosen ? "border-ring bg-accent" : "border-border hover:border-ring/60",
+                )}
+              >
+                <span className="flex w-full items-center gap-1.5">
+                  <kbd className="rounded border border-border px-1 font-mono text-[10px] text-muted-foreground">
+                    {index + 1}
+                  </kbd>
+                  <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
+                    {automation.name}
+                  </span>
+                  {armed?.id === automation.id ? (
+                    <span className="shrink-0 text-label text-primary">default</span>
+                  ) : null}
+                </span>
+                <HarnessTag harnessId={automation.runtime.harnessId} className="text-xs" />
+              </button>
+            );
+          })}
+          {offered.length === 0 ? (
+            <p className="col-span-2 px-2 py-3 text-center text-xs text-muted-foreground">
+              No automations offered in {TICKET_STATUS_LABELS[status]}
+            </p>
+          ) : null}
+        </div>
+
+        <button
+          type="button"
+          onPointerEnter={() => setCell({ status, index: null })}
+          aria-pressed={moveOnlyChosen}
+          className={cn(
+            "flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-xs transition-colors duration-100 ease-out",
+            moveOnlyChosen
+              ? "border-ring bg-accent text-foreground"
+              : "border-dashed border-border text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <LightningIcon />
+          Move only
+        </button>
+
+        <p className="text-center text-label text-muted-foreground">
+          ←/→ or hover a column · ↑/↓ or 1–9 a tile · release or Enter to commit · Esc to go back
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/** Fixed pixel radius the wedges are drawn at — independent of the hook's own hit-testing dead zone, which is purely a threshold, not a rendered distance. */
+const RADIAL_RADIUS_PX = 92;
+
+function RadialWedge({
+  angleIndex,
+  total,
+  center,
+  chosen,
+  label,
+  harnessId,
+  digit,
+}: {
+  angleIndex: number;
+  total: number;
+  center: { x: number; y: number };
+  chosen: boolean;
+  label: string;
+  harnessId?: HarnessId;
+  digit?: number;
+}) {
+  const angle = radialWedgeAngle(angleIndex, total);
+  const x = center.x + RADIAL_RADIUS_PX * Math.cos(angle);
+  const y = center.y + RADIAL_RADIUS_PX * Math.sin(angle);
+  return (
+    <div
       className={cn(
-        // 100ms, not 150: this one is on the selection path, and selection
-        // feedback that eases in slowly reads as a laggy click even though the
-        // state changed on the same frame as the pointer event.
-        "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-xs transition-colors duration-100 ease-out",
-        chosen ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground",
+        "pointer-events-none absolute flex -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-xs shadow-sm transition-colors duration-100 ease-out",
+        chosen
+          ? "border-ring bg-accent text-foreground"
+          : "border-border bg-popover text-muted-foreground",
       )}
+      style={{ left: x, top: y }}
     >
-      {/* Two marks, two different facts: the bolt means "a Run will start", the
-          harness mark means "and this is who runs it". Collapsing them into one
-          glyph would lose the distinction the palette exists to make. */}
-      <LightningIcon
-        weight={chosen ? "fill" : "regular"}
-        className={chosen ? "text-primary" : ""}
-      />
-      <span className="truncate">{automation === null ? "Move only" : automation.name}</span>
-      <span className="ml-auto shrink-0">
-        {automation === null ? null : <HarnessTag harnessId={automation.runtime.harnessId} />}
-      </span>
-      {index < MAX_ACCELERATORS ? (
-        <kbd className="shrink-0 rounded border border-border px-1 font-mono text-[10px] text-muted-foreground">
-          {index + 1}
-        </kbd>
-      ) : null}
-    </button>
+      {digit !== undefined ? (
+        <kbd className="rounded border border-border px-1 font-mono text-[10px]">{digit}</kbd>
+      ) : (
+        <LightningIcon />
+      )}
+      {label}
+      {harnessId !== undefined ? <HarnessMark harnessId={harnessId} className="size-3" /> : null}
+    </div>
   );
 }
 
 /**
- * Hybrid tier 2: the ⌥ overlay. Every column, side by side, each offering its
- * automations plus an explicit "Move only" as large hover targets — the whole
- * point being that the pointer's real position on the board underneath stops
- * mattering, so a column scrolled out of view is exactly as reachable as the
- * one already under the cursor.
+ * Shape (b): direction, not aim. The column was already decided — the pointer
+ * was over it the moment ⌥ went down — so this only ever asks "which
+ * automation", and it asks it the cheapest way a hand can answer: a flick.
  *
- * Cells only ever get `onPointerEnter`, never a click handler: the mouse
- * button that would click is already held down driving the drag, so hover is
- * the only gesture available to the pointer here. The keyboard path (arrows +
- * digits) lives entirely in `use-drag-sim`, since it has to share one
- * `overlayCell` with this hover path rather than keeping a second copy of it.
+ * No wedge here owns a pointer handler. Selection is computed once, in
+ * `use-drag-sim`'s own `pointermove` listener, from the raw angle between the
+ * anchor and the cursor — the wedges are `pointer-events-none` throughout.
  */
-function HybridOverlay({
-  overlayCell,
-  setOverlayCell,
+function RadialPicker({
+  ticket,
+  origin,
+  center,
+  cell,
+  arming,
 }: {
-  overlayCell: OverlayCell | null;
-  setOverlayCell: (cell: OverlayCell) => void;
+  ticket: Ticket;
+  origin: TicketStatus;
+  center: { x: number; y: number };
+  cell: AutomationTarget;
+  arming: Partial<Record<TicketStatus, string>>;
 }) {
-  return (
-    <div className="fixed inset-0 z-[150] flex items-center justify-center bg-background/85 p-6 backdrop-blur-sm">
-      <div className="flex max-h-full flex-col gap-2">
-        <p className="text-center text-xs text-muted-foreground">
-          Hover, or ←/→ · ↑/↓ · 1–9, to pick a target — release to commit it, Esc to go back
-        </p>
-        <div className="flex gap-2 overflow-x-auto">
-          {TICKET_STATUSES.map((status) => {
-            const offered = offeredFor(status);
-            const columnActive = overlayCell?.status === status;
-            const moveOnlyChosen = columnActive && overlayCell?.index === null;
+  const allOffered = offeredFor(cell.status);
+  const offered = allOffered.slice(0, RADIAL_MAX_AUTOMATIONS);
+  const overflow = allOffered.length - offered.length;
+  const total = offered.length + 1;
+  const resolved = resolveAutomation(cell.status, arming, cell.index);
 
-            return (
-              <div
-                key={status}
-                className={cn(
-                  "flex w-48 shrink-0 flex-col gap-px rounded-lg border border-border bg-card p-2 transition-[background-color,box-shadow] duration-150 ease-out",
-                  columnActive && "border-ring ring-1 ring-ring",
-                )}
-              >
-                <p className="px-1 pb-1 text-ui font-medium text-foreground">
-                  {TICKET_STATUS_LABELS[status]}
-                </p>
-                {/* The explicit "move only, arm nothing" target — reachable
-                    here even though the pointer isn't expressing it by simply
-                    being elsewhere, which is the whole reason it has to be a
-                    real row rather than an absence. */}
-                <button
-                  type="button"
-                  onPointerEnter={() => setOverlayCell({ status, index: null })}
-                  aria-pressed={moveOnlyChosen}
-                  className={cn(
-                    "flex items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs transition-colors duration-100 ease-out",
-                    moveOnlyChosen ? "bg-accent text-foreground" : "text-muted-foreground",
-                  )}
-                >
-                  <LightningIcon weight={moveOnlyChosen ? "fill" : "regular"} />
-                  Move only
-                </button>
-                {offered.map((automation, index) => {
-                  const chosenCell = columnActive && overlayCell?.index === index;
-                  return (
-                    <button
-                      key={automation.id}
-                      type="button"
-                      onPointerEnter={() => setOverlayCell({ status, index })}
-                      aria-pressed={chosenCell}
-                      className={cn(
-                        "flex items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs transition-colors duration-100 ease-out",
-                        chosenCell ? "bg-accent text-foreground" : "text-muted-foreground",
-                      )}
-                    >
-                      {/* The digit the hint above promises. Without it "1–9" is a
-                          claim the overlay never backs up, and the mapping has to
-                          be counted rather than read. */}
-                      <span
-                        className={cn(
-                          "w-3 shrink-0 text-center font-mono text-label tabular-nums",
-                          chosenCell ? "text-primary" : "text-muted-foreground/70",
-                        )}
-                      >
-                        {index + 1}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate">{automation.name}</span>
-                      {/* The MARK, not the full tag. Repeating "Claude Code" down
-                          every row cost ~70px each and truncated the automation
-                          NAME to "Imple…" — the harness is context, the name is
-                          the thing being chosen, and the glyph was built to carry
-                          identity without the label precisely for rows like this. */}
-                      <HarnessMark
-                        harnessId={automation.runtime.harnessId}
-                        className="ml-auto size-3.5"
-                      />
-                    </button>
-                  );
-                })}
-                {offered.length === 0 ? (
-                  // A column offering nothing is still a legitimate target —
-                  // it has to be reachable and say so, not just fall silent.
-                  <p className="px-2 py-1 text-label text-muted-foreground">
-                    No automations offered here
-                  </p>
-                ) : null}
-              </div>
-            );
-          })}
-        </div>
-      </div>
+  return (
+    <div className="pointer-events-none fixed inset-0 z-[150]">
+      {/* The compass ring — a quiet spatial cue, not a hit target. */}
+      <div
+        aria-hidden
+        className="absolute rounded-full border border-dashed border-border/60"
+        style={{
+          left: center.x - RADIAL_RADIUS_PX,
+          top: center.y - RADIAL_RADIUS_PX,
+          width: RADIAL_RADIUS_PX * 2,
+          height: RADIAL_RADIUS_PX * 2,
+        }}
+      />
+
+      {/* "Move only" is wedge 0, due north. */}
+      <RadialWedge
+        angleIndex={0}
+        total={total}
+        center={center}
+        chosen={cell.index === null}
+        label="Move only"
+      />
+      {offered.map((automation, index) => (
+        <RadialWedge
+          key={automation.id}
+          angleIndex={index + 1}
+          total={total}
+          center={center}
+          chosen={cell.index === index}
+          label={automation.name}
+          harnessId={automation.runtime.harnessId}
+          digit={index + 1}
+        />
+      ))}
+      {overflow > 0 ? (
+        // Honest about the cap rather than silently dropping the rest —
+        // every one of them is still a digit away.
+        <p
+          className="absolute -translate-x-1/2 text-label text-muted-foreground"
+          style={{ left: center.x, top: center.y + RADIAL_RADIUS_PX + 28 }}
+        >
+          +{overflow} more reachable by 1–9
+        </p>
+      ) : null}
+
+      {/* The shrunk ghost — nothing may sit over the wedges, so the card
+          collapses to a small chip pinned at the anchor rather than tracking
+          the cursor, which is now busy pointing at a direction instead of a
+          position. Still states the ref and the move, per the owner's note
+          that shrinking the ghost must not also erase what it was saying. */}
+      <DragGhost
+        ticket={ticket}
+        origin={origin}
+        destination={cell.status}
+        point={center}
+        automation={resolved}
+        compact
+      />
+    </div>
+  );
+}
+
+/**
+ * Shape (c)'s enlarged targets, inside the column already being pointed at.
+ * Hover sets the highlight directly — same reasoning as the t9 tiles: the
+ * mouse button driving the drag can't also click, so entering a tile IS the
+ * selection.
+ */
+/**
+ * What a column can run, shown inside the column itself — compact while you are
+ * merely over it, grown into real landing targets while ⌥ is held.
+ *
+ * The two states are the same rows at two sizes rather than two components, so
+ * ⌥ reads as the list GROWING rather than as one control being swapped for
+ * another. That distinction is the whole reason the digits stay meaningful:
+ * `2` picks the same thing whether or not the row is currently big enough to
+ * drop onto.
+ *
+ * Collapsed rows are deliberately NOT pointer targets. They are ~22px, which is
+ * the needle-in-a-haystack size that made the previous design bad to aim at, and
+ * offering them as targets anyway would be inviting the miss. Collapsed, the
+ * keyboard drives; expanded, the pointer does.
+ */
+function ColumnAutomationList({
+  status,
+  cell,
+  setCell,
+  arming,
+  digitSelection,
+  expanded,
+}: {
+  status: TicketStatus;
+  cell: AutomationTarget | null;
+  setCell: (cell: AutomationTarget) => void;
+  arming: Partial<Record<TicketStatus, string>>;
+  digitSelection: AutomationTarget | null;
+  expanded: boolean;
+}) {
+  const offered = offeredFor(status);
+  const armed = automationById(arming[status]);
+
+  if (offered.length === 0) {
+    return (
+      <p className="mb-2 rounded-md border border-dashed border-border px-2 py-1.5 text-label text-muted-foreground">
+        Nothing offered here — dropping moves the ticket and starts nothing.
+      </p>
+    );
+  }
+
+  /**
+   * Which row is lit. While ⌥ is open the picker cell owns it; otherwise it is
+   * whatever the digits chose, and failing that the column's own default —
+   * because a plain release runs the default, so the default is what is
+   * currently "selected" whether or not anyone touched a key.
+   */
+  const activeIndex =
+    expanded && cell !== null
+      ? cell.index
+      : digitSelection !== null && digitSelection.status === status
+        ? digitSelection.index
+        : offered.findIndex((automation) => automation.id === armed?.id) === -1
+          ? null
+          : offered.findIndex((automation) => automation.id === armed?.id);
+
+  return (
+    <div
+      className={cn(
+        "mb-2 flex flex-col rounded-lg transition-[gap,padding] duration-150 ease-out",
+        expanded ? "gap-1.5 border border-border bg-popover p-1.5" : "gap-px",
+      )}
+    >
+      {offered.map((automation, index) => {
+        const chosen = activeIndex === index;
+        return (
+          <button
+            key={automation.id}
+            type="button"
+            // Only a grown row accepts the pointer. See the component doc.
+            //
+            // `pointermove`, NOT `pointerenter`: the column grows UNDER a
+            // stationary cursor, so whichever row happens to land beneath the
+            // pointer fires `pointerenter` immediately and steals the
+            // selection — the user never moved, the interface moved. That
+            // silently replaced the column's default with "Move only" roughly
+            // every time, which is the one substitution this whole layer exists
+            // to prevent. `pointermove` fires only on real movement, so the
+            // preselected choice survives until a hand actually changes it.
+            onPointerMove={
+              expanded
+                ? () => {
+                    if (cell?.index !== index) setCell({ status, index });
+                  }
+                : undefined
+            }
+            tabIndex={-1}
+            aria-pressed={chosen}
+            className={cn(
+              "flex items-center gap-2 rounded-md border border-transparent text-left transition-[background-color,border-color,color,padding] duration-150 ease-out",
+              expanded ? "px-2.5 py-2 text-xs" : "px-1.5 py-0.5 text-label",
+              expanded ? "" : "pointer-events-none",
+              chosen
+                ? expanded
+                  ? "border-ring bg-accent text-foreground"
+                  : "text-foreground"
+                : "text-muted-foreground",
+            )}
+          >
+            <kbd
+              className={cn(
+                "shrink-0 rounded border font-mono",
+                chosen ? "border-primary text-primary" : "border-border text-muted-foreground",
+                expanded ? "px-1 text-[10px]" : "px-1 text-[9px]",
+              )}
+            >
+              {index + 1}
+            </kbd>
+            <span className={cn("min-w-0 flex-1 truncate", expanded && "font-medium")}>
+              {automation.name}
+            </span>
+            {armed?.id === automation.id ? (
+              <span className="shrink-0 text-label text-primary">default</span>
+            ) : null}
+            {expanded ? (
+              <HarnessTag harnessId={automation.runtime.harnessId} className="shrink-0 text-xs" />
+            ) : (
+              <HarnessMark harnessId={automation.runtime.harnessId} />
+            )}
+          </button>
+        );
+      })}
+      <button
+        type="button"
+        onPointerMove={
+          expanded
+            ? () => {
+                if (cell?.index !== null) setCell({ status, index: null });
+              }
+            : undefined
+        }
+        tabIndex={-1}
+        aria-pressed={activeIndex === null}
+        className={cn(
+          "flex items-center gap-1.5 rounded-md border text-left transition-[background-color,border-color,color,padding] duration-150 ease-out",
+          expanded ? "px-2.5 py-2 text-xs" : "pointer-events-none px-1.5 py-0.5 text-label",
+          activeIndex === null
+            ? "border-solid border-ring bg-accent text-foreground"
+            : "border-dashed border-border text-muted-foreground",
+        )}
+      >
+        <LightningIcon />
+        Move only
+      </button>
+      {expanded ? null : (
+        <p className="px-1.5 pt-1 text-label text-muted-foreground/70">
+          1–9 to pick · ⌥ to enlarge
+        </p>
+      )}
     </div>
   );
 }
@@ -856,72 +1261,55 @@ interface MoveEntry {
   phase: "armed" | "fired";
 }
 
-function DragTab() {
-  const [variant, setVariant] = React.useState<DragVariant>("hybrid");
+function DragTab({
+  arming,
+  onArm,
+  onDisarm,
+}: {
+  arming: Partial<Record<TicketStatus, string>>;
+  onArm: (status: TicketStatus, automationId: string) => void;
+  onDisarm: (status: TicketStatus) => void;
+}) {
+  const [variant, setVariant] = React.useState<PickerShape>("expand");
 
-  // "Move only" is index 0 in every palette. Making the no-Run choice the
-  // default is what keeps a drag from ever silently spending tokens — the
-  // accelerator has to be pressed to opt IN.
-  const optionsFor = React.useCallback(
-    (status: TicketStatus | null): (Automation | null)[] =>
-      status === null ? [null] : [null, ...offeredFor(status)],
-    [],
-  );
-
-  // Hybrid-only: how many automations (excluding "move only") a column offers
-  // — `use-drag-sim` needs this as a plain count to validate a digit and to
-  // clamp ⌥-overlay navigation, without the hook having to know about
-  // `Automation` objects at all.
   const automationCountFor = React.useCallback(
     (status: TicketStatus) => offeredFor(status).length,
     [],
   );
 
-  const drag = useDragSim({
-    legacyOptionCount: MAX_ACCELERATORS,
-    hybrid: variant === "hybrid",
-    automationCountFor,
-  });
+  /**
+   * Where a column's default sits in its own offered list — the hook deals only
+   * in indices, and `arming` lives here. Returns null when the column has no
+   * default, which is also "Move only", and correctly so: with no default, a
+   * plain release and an immediately-released picker both run nothing.
+   */
+  const defaultIndexFor = React.useCallback(
+    (status: TicketStatus) => {
+      const defaultId = arming[status];
+      if (defaultId === undefined) return null;
+      const index = offeredFor(status).findIndex((automation) => automation.id === defaultId);
+      return index === -1 ? null : index;
+    },
+    [arming],
+  );
 
-  // The truthful set: what a release RIGHT NOW would offer. Over no column that
-  // is "Move only" and nothing else, which is what keeps the ghost honest when
-  // the pointer wanders into the gutter.
-  const options = optionsFor(drag.hovered);
+  const drag = useDragSim({ pickerShape: variant, automationCountFor, defaultIndexFor });
 
-  // What the ghost names as "what will run". The legacy variants read
-  // `chosenIndex` (unchanged); the hybrid variant has its own two-tier
-  // resolution — the ⌥ overlay's highlighted cell wins while it's open
-  // (release commits THAT, not whatever the pointer is over), otherwise the
-  // bare-digit selection if it's still bound to the hovered column, otherwise
-  // "move only".
-  let chosen: Automation | null = null;
-  if (variant === "hybrid") {
-    if (drag.overlayOpen && drag.overlayCell !== null) {
-      const cell = drag.overlayCell;
-      chosen = cell.index === null ? null : (offeredFor(cell.status)[cell.index] ?? null);
-    } else if (drag.digitSelection !== null && drag.digitSelection.status === drag.hovered) {
-      const selection = drag.digitSelection;
-      chosen = offeredFor(selection.status)[selection.index] ?? null;
-    }
-  } else {
-    chosen = options[drag.chosenIndex] ?? null;
-  }
-
-  // The displayed set, which lags the truthful one by exactly one column-exit.
-  // A palette fading out after you leave a column would otherwise re-render as
-  // the single "Move only" row on its way out — a content flicker in the corner
-  // of your eye that looks like the palette changed its mind. Written during
-  // render (like `use-drag-sim`'s own listener ref) because it is a cache of
-  // this render's inputs, not state anything reacts to.
-  const lastHovered = React.useRef<TicketStatus | null>(null);
-  if (drag.hovered !== null) lastHovered.current = drag.hovered;
-  const paletteOptions = optionsFor(drag.hovered ?? lastHovered.current);
-
-  const paletteVisible =
-    drag.ticketId !== null &&
-    drag.hovered !== null &&
-    (variant === "always" || variant === "card" || drag.modifierHeld || variant === "column");
   const draggedTicket = tickets.find((ticket) => ticket.id === drag.ticketId) ?? null;
+
+  // The baseline layer's resolved automation — what a release RIGHT NOW would
+  // arm, over whichever column the pointer is actually over. `null` when the
+  // pointer is over the gutter, matching the ghost's own honesty about that.
+  const chosen: Automation | null =
+    drag.hovered === null
+      ? null
+      : resolveAutomation(
+          drag.hovered,
+          arming,
+          drag.digitSelection !== null && drag.digitSelection.status === drag.hovered
+            ? drag.digitSelection.index
+            : undefined,
+        );
 
   // Feedback belongs where the eye already is. A line at the bottom of the page
   // is a result nobody reads, because at the moment of release you are looking
@@ -1046,7 +1434,7 @@ function DragTab() {
       setConfirmation(null);
       return;
     }
-    const automation = optionsFor(drop.status)[drop.automationIndex] ?? null;
+    const automation = resolveAutomation(drop.status, arming, drop.overrideIndex);
     const droppedTicket = tickets.find((candidate) => candidate.id === drop.ticketId);
     if (droppedTicket === undefined) return;
 
@@ -1092,26 +1480,22 @@ function DragTab() {
     setConfirmation(null);
     scheduleFire(drop.ticketId);
     return undefined;
-  }, [drag.lastDrop, drag.point, optionsFor, scheduleFire]);
+  }, [drag.lastDrop, drag.point, arming, scheduleFire]);
 
-  const palette = (
-    <div className="flex flex-col gap-px">
-      {paletteOptions.map((automation, index) => (
-        <PaletteRow
-          key={automation?.id ?? "none"}
-          automation={automation}
-          index={index}
-          chosen={index === drag.chosenIndex}
-          onChoose={() => drag.setChosenIndex(index)}
-        />
-      ))}
-    </div>
-  );
+  const dragActive = drag.ticketId !== null && draggedTicket !== null && drag.origin !== null;
+
+  // A single narrowed handle for the three bottom-level renders below, so
+  // `drag.origin`'s nullability only has to be proven once instead of cast
+  // away at each call site.
+  const activeDrag =
+    draggedTicket !== null && drag.origin !== null
+      ? { ticket: draggedTicket, origin: drag.origin }
+      : null;
 
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-1">
-        {DRAG_VARIANTS.map((option) => (
+        {PICKER_VARIANTS.map((option) => (
           <button
             key={option.id}
             type="button"
@@ -1124,72 +1508,12 @@ function DragTab() {
         ))}
       </div>
       <p className="max-w-prose text-xs text-muted-foreground">
-        {DRAG_VARIANTS.find((option) => option.id === variant)?.claim}
+        {PICKER_VARIANTS.find((option) => option.id === variant)?.claim}
       </p>
 
       {/* The board. Drop targets are the columns and only the columns, in every
-          variant — the plan forbids the picker from adding or subdividing one. */}
+          shape — the plan forbids the picker from adding or subdividing one. */}
       <div className="relative overflow-hidden rounded-xl border border-border bg-background">
-        <div className="flex h-8 items-center gap-3 border-b border-border px-3">
-          <span className="shrink-0 text-xs text-muted-foreground">Board</span>
-          {/* The header strip. It is never a drop target — it is a readout that
-              happens to be clickable, which is why it lives in chrome the drag
-              can't land on.
-
-              Mounted for the whole drag and merely faded, rather than mounted
-              and unmounted: it lives in fixed-height chrome, so keeping it
-              costs no layout, and it buys a real exit transition — releasing ⌥
-              fades the strip out instead of blinking it away. */}
-          {(variant === "held" || variant === "always") && drag.ticketId !== null ? (
-            <div className="relative flex min-w-0 flex-1 items-center">
-              <div
-                className={cn(
-                  "flex items-center gap-1 transition-[opacity,transform,translate,scale] duration-150 ease-out",
-                  paletteVisible
-                    ? "opacity-100"
-                    : "pointer-events-none scale-[0.98] opacity-0 motion-reduce:scale-100",
-                )}
-              >
-                {paletteOptions.map((automation, index) => (
-                  <button
-                    key={automation?.id ?? "none"}
-                    type="button"
-                    onPointerEnter={() => drag.setChosenIndex(index)}
-                    aria-pressed={index === drag.chosenIndex}
-                    className={cn(
-                      "flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs transition-colors duration-100 ease-out",
-                      index === drag.chosenIndex
-                        ? "bg-accent text-foreground"
-                        : "text-muted-foreground",
-                    )}
-                  >
-                    <LightningIcon weight={index === drag.chosenIndex ? "fill" : "regular"} />
-                    {automation === null ? "Move only" : automation.name}
-                    {automation === null ? null : (
-                      <HarnessTag harnessId={automation.runtime.harnessId} />
-                    )}
-                    {index < MAX_ACCELERATORS ? (
-                      <kbd className="rounded border border-border px-1 font-mono text-[10px]">
-                        {index + 1}
-                      </kbd>
-                    ) : null}
-                  </button>
-                ))}
-              </div>
-              {variant === "held" ? (
-                <span
-                  className={cn(
-                    "pointer-events-none absolute left-0 text-xs whitespace-nowrap text-muted-foreground transition-opacity duration-150 ease-out",
-                    paletteVisible ? "opacity-0" : "opacity-100",
-                  )}
-                >
-                  Hold ⌥ to choose an automation
-                </span>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-
         <div className="flex gap-2 overflow-x-auto p-2">
           {TICKET_STATUSES.map((status) => {
             // Real count for the bulk-undo control (requirement 2, surface
@@ -1199,6 +1523,23 @@ function DragTab() {
               (entry) =>
                 entry.automation !== null && entry.phase === "armed" && entry.toStatus === status,
             ).length;
+            const armed = automationById(arming[status]);
+            const offered = offeredFor(status);
+
+            const isExpandTarget =
+              dragActive &&
+              variant === "expand" &&
+              drag.pickerOpen &&
+              drag.pickerCell?.status === status;
+            const isExpandOther =
+              dragActive &&
+              variant === "expand" &&
+              drag.pickerOpen &&
+              drag.pickerCell?.status !== status;
+            const expandResolved =
+              isExpandTarget && drag.pickerCell !== null
+                ? resolveAutomation(status, arming, drag.pickerCell.index)
+                : null;
 
             return (
               <div
@@ -1210,14 +1551,38 @@ function DragTab() {
                   // background used to ease. 150ms is appearance only: the hit
                   // test that decides the drop already happened on the move
                   // event that triggered this class change.
-                  "flex w-52 shrink-0 flex-col rounded-lg bg-muted/40 p-2 transition-[background-color,box-shadow] duration-150 ease-out",
-                  drag.hovered === status && "bg-accent/60 ring-1 ring-ring",
+                  "flex shrink-0 flex-col rounded-lg bg-muted/40 p-2 transition-[background-color,box-shadow,width,opacity] duration-150 ease-out",
+                  isExpandTarget ? "w-72" : "w-52",
+                  isExpandOther && "opacity-50",
+                  drag.hovered === status && !drag.pickerOpen && "bg-accent/60 ring-1 ring-ring",
                 )}
               >
                 <div className="flex items-center gap-2 px-1 pb-1.5">
-                  <span className="text-ui font-medium text-foreground">
-                    {TICKET_STATUS_LABELS[status]}
-                  </span>
+                  {isExpandTarget && draggedTicket !== null && drag.origin !== null ? (
+                    // The parked ghost for THIS shape — the column just grew
+                    // to hold the targets, so the card gets out of their way
+                    // by living in the header instead of floating over them.
+                    // Still has to name the ticket and the move, per the
+                    // owner's note — the enlarged column makes the
+                    // DESTINATION obvious, but not where the ticket came from.
+                    <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <span className="shrink-0 font-mono text-foreground">
+                          {ticketRef(draggedTicket)}
+                        </span>
+                        <span className="min-w-0 truncate">{draggedTicket.title}</span>
+                      </span>
+                      <MoveSummary
+                        origin={drag.origin}
+                        destination={status}
+                        automation={expandResolved}
+                      />
+                    </div>
+                  ) : (
+                    <span className="text-ui font-medium text-foreground">
+                      {TICKET_STATUS_LABELS[status]}
+                    </span>
+                  )}
                   {armedInColumn > 0 ? (
                     // Shown for one armed card too, not just the bulk case:
                     // the header is a second, deliberate surface for the SAME
@@ -1233,65 +1598,36 @@ function DragTab() {
                       {armedInColumn === 1 ? "Undo move" : `Undo ${armedInColumn} moves`}
                     </button>
                   ) : null}
+                  {/* Same control as `ArmingTab`, same `arming` state — a bolt
+                      in the corner rather than a card under the header. */}
+                  <ColumnDefaultControl
+                    status={status}
+                    armed={armed}
+                    offered={offered}
+                    onArm={(id) => onArm(status, id)}
+                    onDisarm={() => onDisarm(status)}
+                  />
                 </div>
 
-                {/* Enter-only, unlike the other two variants. This palette sits in
-                    the column's flow, so an exiting copy would hold the layout
-                    open under a column you have already left — pushing cards
-                    around the exact region you are aiming at. Instant removal is
-                    the calmer of the two. */}
-                {variant === "column" && paletteVisible && drag.hovered === status ? (
-                  <div className="mb-1.5 rounded-md border border-border bg-popover p-1 transition-[opacity,transform,translate,scale] duration-150 ease-out starting:scale-[0.98] starting:opacity-0 motion-reduce:starting:scale-100">
-                    {palette}
-                  </div>
-                ) : null}
-
-                {/* Hybrid tier 1's legend — read-only, digits are keyboard-only.
-                    Shown for the hovered column only, so re-entering a
-                    different column visibly swaps the list (and the reset
-                    the module doc promises) rather than silently carrying a
-                    stale selection over. */}
-                {variant === "hybrid" &&
-                !drag.overlayOpen &&
-                drag.hovered === status &&
-                drag.ticketId !== null ? (
-                  <div className="mb-1.5 flex flex-col gap-px rounded-md border border-border bg-popover p-1">
-                    <p className="flex items-center gap-1.5 px-1 py-0.5 text-xs text-muted-foreground">
-                      <LightningIcon />
-                      Move only
-                      <span className="ml-auto text-label">default</span>
-                    </p>
-                    {offeredFor(status).map((automation, index) => {
-                      const isChosen =
-                        drag.digitSelection !== null &&
-                        drag.digitSelection.status === status &&
-                        drag.digitSelection.index === index;
-                      return (
-                        <p
-                          key={automation.id}
-                          className={cn(
-                            "flex items-center gap-1.5 rounded px-1 py-0.5 text-xs",
-                            isChosen ? "bg-accent text-foreground" : "text-muted-foreground",
-                          )}
-                        >
-                          <LightningIcon
-                            weight={isChosen ? "fill" : "regular"}
-                            className={isChosen ? "text-primary" : ""}
-                          />
-                          <span className="truncate">{automation.name}</span>
-                          <span className="ml-auto shrink-0">
-                            <HarnessTag
-                              harnessId={automation.runtime.harnessId}
-                              className="text-xs"
-                            />
-                          </span>
-                          <kbd className="shrink-0 rounded border border-border px-1 font-mono text-[10px] text-muted-foreground">
-                            {index + 1}
-                          </kbd>
-                        </p>
-                      );
-                    })}
-                  </div>
+                {/* ONE list, two sizes.
+                    Hovering a column mid-drag shows everything it can run, in a
+                    compact form, with the digit that picks each. Holding ⌥ grows
+                    the SAME rows into landing targets you can drop onto, and
+                    releasing ⌥ shrinks them back. Rendering two different
+                    components for the two states was the earlier mistake: the
+                    collapsed one was a read-only legend and the expanded one a
+                    grid, so ⌥ appeared to replace the list rather than resize
+                    it, and the digits looked like they belonged to a different
+                    control than the targets. */}
+                {dragActive && (isExpandTarget || (!drag.pickerOpen && drag.hovered === status)) ? (
+                  <ColumnAutomationList
+                    status={status}
+                    cell={isExpandTarget ? drag.pickerCell : null}
+                    setCell={drag.setPickerCell}
+                    arming={arming}
+                    digitSelection={drag.digitSelection}
+                    expanded={isExpandTarget}
+                  />
                 ) : null}
 
                 <div className="flex flex-col gap-1.5">
@@ -1312,7 +1648,7 @@ function DragTab() {
                           key={ticket.id}
                           ticket={ticket}
                           dimmed={drag.ticketId === ticket.id}
-                          onPointerDown={drag.start(ticket.id)}
+                          onPointerDown={drag.start(ticket.id, effectiveStatus(ticket))}
                           armed={armedChrome}
                         />
                       );
@@ -1325,13 +1661,18 @@ function DragTab() {
       </div>
 
       <p className="text-xs text-muted-foreground">
-        {variant === "hybrid"
-          ? "Drag a card. 1–9 (no modifier) arms an automation in whichever column the pointer is over; the same digit again clears it. ⌥ opens an overlay of every column × automation to hover or arrow-key through — release commits its highlighted cell. Esc closes the overlay first, then cancels the drag."
-          : `Drag a card. ⌥ reveals the palette in the ⌥-held variant; 1–${MAX_ACCELERATORS} pick; Esc cancels.`}{" "}
-        Dropping a card that names an Automation ARMS it for {(TIMING.ARM_MS / 1000).toFixed(1)}s
-        before it fires — Undo on the card or "Undo moves" in the column header reverts the move
-        itself. Once fired, the pulsing border means a session is (simulated as) running; the lab
-        still starts nothing for real.
+        Drag a card — dropping anywhere in a column arms whatever that column is already armed with
+        (or nothing, quietly, if it's unarmed). 1–9, no modifier, overrides that default for
+        whichever column the pointer is over; the same digit again clears back to it.{" "}
+        {variant === "t9"
+          ? "⌥ opens a centred dialpad — arrow keys or hover pick the column and the tile, release or Enter commits."
+          : variant === "radial"
+            ? "⌥ opens a wedge fan at the cursor — flick toward a direction to pick, no aiming required; letting go of ⌥ commits it. Digits still work too."
+            : "⌥ grows the hovered column into large landing targets right where you're already pointing; the other columns recede."}{" "}
+        Esc backs a picker out one step, or cancels the whole drag if none is open. Dropping ARMS
+        for {(TIMING.ARM_MS / 1000).toFixed(1)}s before it fires — Undo on the card or "Undo moves"
+        in the column header reverts the move itself. Once fired, the pulsing border means a session
+        is (simulated as) running; the lab still starts nothing for real.
       </p>
 
       {confirmation !== null ? (
@@ -1353,19 +1694,8 @@ function DragTab() {
               which ate the AUTOMATION NAME — the one fact the confirmation
               exists to deliver. Nothing here may be elided; two lines is fine. */}
           <p className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-foreground">
-            <LightningIcon
-              weight={confirmation.automation === null ? "regular" : "fill"}
-              className={
-                confirmation.automation === null ? "text-muted-foreground" : "text-primary"
-              }
-            />
-            <span>
-              Moved to {TICKET_STATUS_LABELS[confirmation.status]}
-              {confirmation.automation === null ? "" : ` · ${confirmation.automation.name}`}
-            </span>
-            {confirmation.automation === null ? null : (
-              <HarnessTag harnessId={confirmation.automation.runtime.harnessId} />
-            )}
+            <LightningIcon weight="regular" className="text-muted-foreground" />
+            <span>Moved to {TICKET_STATUS_LABELS[confirmation.status]}</span>
           </p>
           {/* The confirmation is the only thing standing between this prototype
               and someone believing a Run started. It says so every time. */}
@@ -1375,38 +1705,39 @@ function DragTab() {
         </div>
       ) : null}
 
-      {drag.ticketId !== null && draggedTicket !== null ? (
-        <>
-          <DragGhost
-            ticket={draggedTicket}
-            point={drag.point}
-            automation={chosen}
-            hint={variant === "hybrid" ? "1–9 to arm · ⌥ for all columns" : undefined}
-          />
-          {variant === "card" ? (
-            // Only opacity and transform are transitioned. `left`/`top` update
-            // every pointer move and must stay untransitioned, or the palette
-            // trails the hand steering it — the one place where "add some
-            // motion" would have become a delay.
-            <div
-              className={cn(
-                "fixed z-[101] w-64 rounded-md border border-border bg-popover p-1 shadow-lg transition-[opacity,transform,translate,scale] duration-150 ease-out",
-                paletteVisible
-                  ? "pointer-events-auto opacity-100"
-                  : "pointer-events-none scale-[0.98] opacity-0 motion-reduce:scale-100",
-              )}
-              style={{ left: drag.point.x - 24, top: drag.point.y + 44 }}
-            >
-              {palette}
-            </div>
-          ) : null}
-        </>
+      {activeDrag !== null && !drag.pickerOpen ? (
+        <DragGhost
+          ticket={activeDrag.ticket}
+          origin={activeDrag.origin}
+          destination={drag.hovered}
+          point={drag.point}
+          automation={chosen}
+          hint="1–9 overrides this column's default · ⌥ to pick without it"
+        />
       ) : null}
 
-      {/* Tier 2, mounted only while it's open — see `HybridOverlay`'s own doc
-          for why hover here never needs a click. */}
-      {variant === "hybrid" && drag.overlayOpen ? (
-        <HybridOverlay overlayCell={drag.overlayCell} setOverlayCell={drag.setOverlayCell} />
+      {activeDrag !== null && variant === "t9" && drag.pickerOpen && drag.pickerCell !== null ? (
+        <T9Overlay
+          ticket={activeDrag.ticket}
+          origin={activeDrag.origin}
+          cell={drag.pickerCell}
+          setCell={drag.setPickerCell}
+          arming={arming}
+        />
+      ) : null}
+
+      {activeDrag !== null &&
+      variant === "radial" &&
+      drag.pickerOpen &&
+      drag.pickerCell !== null &&
+      drag.radialCenter !== null ? (
+        <RadialPicker
+          ticket={activeDrag.ticket}
+          origin={activeDrag.origin}
+          center={drag.radialCenter}
+          cell={drag.pickerCell}
+          arming={arming}
+        />
       ) : null}
     </div>
   );
@@ -1414,18 +1745,39 @@ function DragTab() {
 
 /* -------------------------------------------------------------------- scratch */
 
-const TABS = [
-  { id: "ticket", label: "In ticket", render: () => <InTicketTab /> },
-  { id: "arming", label: "Arming", render: () => <ArmingTab /> },
-  { id: "drag", label: "Drag picker", render: () => <DragTab /> },
+const TAB_OPTIONS = [
+  { id: "ticket", label: "In ticket" },
+  { id: "arming", label: "Column defaults" },
+  { id: "drag", label: "Drag picker" },
 ] as const;
 
 export default function AutomationTriggerScratch() {
-  const [tab, setTab] = React.useState<(typeof TABS)[number]["id"]>("ticket");
+  const [tab, setTab] = React.useState<(typeof TAB_OPTIONS)[number]["id"]>("ticket");
+
+  // Lifted here, not owned by either tab, so arming a column from the Arming
+  // tab and arming it by dropping a card in the Drag tab are provably the same
+  // piece of state — see `LAB_PREARMED_ARMING`.
+  const [arming, setArming] =
+    React.useState<Partial<Record<TicketStatus, string>>>(LAB_PREARMED_ARMING);
+
+  const armColumn = React.useCallback((status: TicketStatus, automationId: string) => {
+    setArming((current) => ({ ...current, [status]: automationId }));
+  }, []);
+  const disarmColumn = React.useCallback((status: TicketStatus) => {
+    setArming((current) => {
+      const next = { ...current };
+      delete next[status];
+      return next;
+    });
+  }, []);
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* Keyframes and `@property` for the arm→fire storyboard, tied to TIMING so
+    // `delayDuration={0}`: the bolt is a small, unlabelled icon and its tooltip
+    // is the ONLY place a column's default is named at rest. A hover delay on
+    // the sole carrier of a fact is a delay on reading the interface.
+    <TooltipProvider delayDuration={0}>
+      <div className="flex flex-col gap-4">
+        {/* Keyframes and `@property` for the arm→fire storyboard, tied to TIMING so
           the CSS can never drift from the timer that drives it.
 
           This lives at the SCRATCH root, not inside a tab. It was originally
@@ -1434,21 +1786,28 @@ export default function AutomationTriggerScratch() {
           keyframes defined anywhere in the document — the bar sat empty and the
           ring never turned. Both tabs share `BoardCard`, so anything it needs
           has to be mounted for as long as any tab that uses it. */}
-      <style>{ARM_STYLE}</style>
-      <div className="flex items-center gap-1">
-        {TABS.map((option) => (
-          <button
-            key={option.id}
-            type="button"
-            onClick={() => setTab(option.id)}
-            aria-pressed={option.id === tab}
-            className="rounded-full px-3 py-1 text-ui text-muted-foreground transition-colors hover:text-foreground aria-pressed:bg-accent aria-pressed:text-foreground"
-          >
-            {option.label}
-          </button>
-        ))}
+        <style>{ARM_STYLE}</style>
+        <div className="flex items-center gap-1">
+          {TAB_OPTIONS.map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              onClick={() => setTab(option.id)}
+              aria-pressed={option.id === tab}
+              className="rounded-full px-3 py-1 text-ui text-muted-foreground transition-colors hover:text-foreground aria-pressed:bg-accent aria-pressed:text-foreground"
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+        {tab === "ticket" ? <InTicketTab /> : null}
+        {tab === "arming" ? (
+          <ArmingTab arming={arming} onArm={armColumn} onDisarm={disarmColumn} />
+        ) : null}
+        {tab === "drag" ? (
+          <DragTab arming={arming} onArm={armColumn} onDisarm={disarmColumn} />
+        ) : null}
       </div>
-      {TABS.find((option) => option.id === tab)?.render()}
-    </div>
+    </TooltipProvider>
   );
 }
