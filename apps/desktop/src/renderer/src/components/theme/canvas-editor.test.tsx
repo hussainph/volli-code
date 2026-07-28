@@ -103,7 +103,7 @@ describe("CanvasEditor", () => {
     }
   });
 
-  it("names what is unreachable, by how much, and what it costs", () => {
+  it("names what is unreachable, and says nothing else", () => {
     // The state the whole report exists for: the engine clamps an impossible
     // floor to the best its surface allows and says nothing, so this is the only
     // surface in the app that can tell anyone.
@@ -111,14 +111,19 @@ describe("CanvasEditor", () => {
 
     expect(html).toContain('data-testid="canvas-contrast-stranded"');
     expect(html).toContain("Sidebar nav can&#x27;t reach its contrast floor");
-    // Named against the SURFACE it is painted on — the rung that ran out of room.
-    expect(html).toContain("--sidebar");
-    // The floor asked for, the ceiling reached, and the gap between them.
-    expect(html).toContain("asks for Lc");
-    expect(html).toContain("short.");
-    // Not a warning triangle and a shrug: what a shortfall here actually means.
-    expect(html).toContain("colour space running out");
-    expect(html).toContain("Nav rows and section headings");
+  });
+
+  // A blocked state earns one line and one action (AGENTS.md, UI copy). The
+  // numbers behind it are already on screen in the readout above, and the
+  // reason is a property of colour space rather than of anything the user can
+  // act on — so it belongs in the module comment, which is where it lives.
+  it("does not lecture: no token names, no solver arithmetic, no colour-space essay", () => {
+    const html = render(STRANDING, "light");
+    const alert = html.slice(html.indexOf('data-testid="canvas-contrast-stranded"'));
+
+    for (const lecture of ["--sidebar", "asks for Lc", "colour space", "Nav rows and section"]) {
+      expect(alert).not.toContain(lecture);
+    }
   });
 
   it("annotates a hairline ceiling in the readout without raising an alarm over it", () => {
