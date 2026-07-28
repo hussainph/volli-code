@@ -1135,9 +1135,11 @@ function WindowSpecimen({ ink, seam }: { ink: ArcInk; seam: ArcSeam }) {
         Search tickets and sessions
       </div>
       <div className="flex min-h-0 flex-1">
-        {/* Project rail — tier 1 as well: it is the same distance out. In the
-            `continuous` seam this is the ONLY lifted surface, which is the
-            whole bet: one chrome/canvas boundary instead of two. */}
+        {/* Project rail — tier 1 as well: it is the same distance out. Which is
+            why the two ends of the seam table are both visible here: under
+            `continuous` this band is the ONLY lifted surface (one chrome/canvas
+            boundary instead of two), and under `shell` it is the only one that
+            is NOT (the frame stays flat, and the dial moves the sidebar alone). */}
         <div style={tier(1)} className="flex w-8 shrink-0 flex-col items-center gap-1.5 pt-2">
           <span className="size-5 rounded-md bg-primary" />
           <span className="size-5 rounded-md bg-background/40" />

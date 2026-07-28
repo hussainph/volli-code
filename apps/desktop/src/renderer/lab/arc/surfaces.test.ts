@@ -157,12 +157,36 @@ describe("seams", () => {
   });
 
   it("keeps the two-rung ladder for every seam that has one", () => {
-    for (const seam of ["float", "inset", "shell"] as const) {
+    // `shell` is deliberately absent — see below. `continuous` too, for the
+    // mirror-image reason: it has one rung at the OTHER end.
+    for (const seam of ["float", "inset"] as const) {
       const state = canvasOf("#e8652a", { seam, lift: 1 });
       expect({ seam, laddered: tierL(state, 1) > tierL(state, 0) }).toEqual({
         seam,
         laddered: true,
       });
+    }
+  });
+
+  it("pins the chrome to the canvas under `shell`, and moves the sidebar alone", () => {
+    // The frame this seam draws runs bare gradient around all four sides of the
+    // unit, so any outer-tier share at all puts a hard edge along every wall of
+    // it — chrome band against the gutter above, project rail against the gutter
+    // beside. Inert is the only value that keeps a frame reading as one thing.
+    //
+    // Asserted at BOTH ends of the dial, because sinking is a separate code path
+    // (a different target colour, a different alpha) and a share reintroduced
+    // there would be just as visible.
+    for (const lift of [1, -1]) {
+      const state = canvasOf("#e8652a", { seam: "shell", lift });
+      const elevation = elevationOf(state);
+      expect({ lift, outer: elevation.tiers[0] }).toEqual({
+        lift,
+        outer: { veil: "transparent", surfaces: [] },
+      });
+      // …and the inner half still moves, or pinning the chrome would have been
+      // achieved by turning the whole seam off.
+      expect({ lift, moved: tierL(state, 1) !== tierL(state, 0) }).toEqual({ lift, moved: true });
     }
   });
 

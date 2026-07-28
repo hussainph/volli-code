@@ -190,6 +190,12 @@ html[data-lab-canvas] [data-slot="sidebar"] .session-row-dim.text-xs {
  * outside it) and the recessed one (each tier nearer the ink); at lift 0 every
  * variable is `transparent` and the rules are inert.
  *
+ * WHICH tiers move is the seam's call, not this file's — both of these rules
+ * stay unconditional and a seam that wants a tier pinned gives it a share of
+ * zero, which reaches here as `transparent`. So `continuous` moves only the
+ * first of them and `shell` only the second, with no selector below aware of
+ * either. If the chrome does not respond to the dial, that table is why.
+ *
  * Painted as a `background-image` rather than a `background-color` on purpose.
  * The primary sidebar already wears `bg-sidebar-veil`, which is a color — an
  * image composites ON TOP of it, so the veil keeps doing its job (holding the

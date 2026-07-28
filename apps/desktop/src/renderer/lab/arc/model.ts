@@ -163,13 +163,29 @@ export const ARC_TUNING = {
      * third material. The outer tier takes the entire alpha in exchange, since
      * the rail is then the only thing left to carry the chrome/canvas boundary.
      *
+     * `shell` is that same move made at the other end, and for the same reason.
+     * Its geometry insets the sidebar+card unit and runs bare gradient all the
+     * way around it — so an outer tier with ANY share draws a hard edge along
+     * every wall of that frame, chrome band against the 8px above the unit and
+     * project rail against the 8px beside it. That edge is the "sharp chrome"
+     * this seam was supposed to remove: the frame is meant to read as one
+     * uninterrupted background with a single object floating in it, and a
+     * lifted band across its top says the frame has two parts. Pinning the
+     * outer tier to the canvas is what Slack's arrangement actually rests on —
+     * its search bar, workspace rail and the margin around the channel list are
+     * all one flat colour, and the only thing that moves is the inner sidebar.
+     * `inset` and `float` keep their share because both leave the outer tier
+     * ADJACENT to another surface rather than to bare gradient (`inset` shows no
+     * gradient at all; `float`'s trifurcation is the baseline the rest are
+     * judged against), so there is no frame for it to break.
+     *
      * Listed most-joined to most-floating, because {@link ARC_SEAMS} reads its
      * offer order straight off these keys.
      */
     seams: {
       continuous: [1, 0],
       inset: [0.45, 1],
-      shell: [0.45, 1],
+      shell: [0, 1],
       float: [0.45, 1],
     },
   },
@@ -350,7 +366,10 @@ export const MAX_STOPS = ARC_TUNING.harmony.length;
  *    bordered outline and touch along a seam with no gutter at all, and the
  *    canvas becomes a full frame around them rather than the reverse-L that
  *    `continuous` leaves. The middle lightness stops needing an explanation
- *    because it is no longer a separate surface — it is one half of one.
+ *    because it is no longer a separate surface — it is one half of one. It is
+ *    also the one seam where the chrome band and rail take NO lift at all: a
+ *    frame only reads as a frame if it is uniform, so the dial moves the inner
+ *    sidebar alone (see the share table).
  *  - `float` — what the tiers shipped as: filled square sidebar, floating
  *    rounded card. Kept so the others can be judged against it.
  *
