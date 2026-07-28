@@ -203,7 +203,17 @@ export const ARC_TUNING = {
     ],
   },
 
-  /** The two candidate foregrounds the flip chooses between. */
+  /**
+   * The two candidate foregrounds the flip chooses between, and the ladder
+   * under whichever one wins.
+   *
+   * Three tiers rather than two, mirroring what the card already has
+   * (`LIGHT_FLOORS` in `tokens.ts`): a head, a section/label tier, and a mute.
+   * The canvas needs its own copy because the card's is solved against `--card`
+   * and this text does not sit on `--card` — but it needs the same SHAPE, or
+   * the sidebar and the paper beside it would rank their copy differently and
+   * the window would read as two design languages.
+   */
   ink: {
     /** Not pure white: a trace of the primary's hue keeps the text part of the canvas. */
     lightL: 0.965,
@@ -213,11 +223,76 @@ export const ARC_TUNING = {
     darkC: 0.02,
     /**
      * How far the muted ink slides from the chosen ink toward the base fill's
-     * L. Measured against a vibrancy-1 light base fill (the binding surface):
-     * 0.3 → Lc 54.3, 0.22 → 58.3, 0.15 → clears 60 with the mute still a
-     * visible tier below the full ink.
+     * L, at `textWeight` 0 → 1.
+     *
+     * A LIGHTNESS slide rather than a solved Lc floor, and that is the one real
+     * decision in this block. Lc is the wrong unit for tier SEPARATION here,
+     * because the ink sits at whichever end of the scale APCA's curve is
+     * compressed at: measured on the ember default, a slide of 0.15 costs 3.7 Lc
+     * in light mode (62.4 → 58.7) and 21.3 in dark (94.1 → 72.8) — the same
+     * perceptual step, two wildly different numbers. Sliding gives one ladder
+     * that LOOKS the same in both modes; solving to matched Lc drops would give
+     * two that measure the same and look nothing alike. Lc is still what guards
+     * the bottom of the ladder — see {@link mutedFloor}.
+     *
+     * Backwards against the dial, exactly like `LIGHT_FLOORS.labelTowardSecondary`:
+     * turning copy weight UP means the tiers move toward the full ink, which is
+     * a smaller slide rather than a larger one.
+     *
+     * Centred on 0.27 rather than on the 0.15 this replaced, and that is a
+     * correction rather than a preference. 0.15 was tuned when this was the
+     * ONLY step under the ink; asking it to hold two tiers left both of them
+     * inside the range where a ladder measures as a ladder and does not read as
+     * one. Swept on the running sidebar at 0.20 / 0.25 / 0.30 / 0.35 / 0.40:
+     * 0.20 still crowds the title above it, 0.35 goes soft, 0.40 is faint. The
+     * dial spans that verdict and 0.5 lands in the middle of it.
      */
-    mutedTowardBase: 0.15,
+    mutedTowardBase: { min: 0.34, max: 0.2 },
+    /**
+     * Where the section/label tier sits between the full ink and the mute, at
+     * `textWeight` 0 → 1 — a POSITION between two tiers, never a slide of its
+     * own.
+     *
+     * Stated relatively for the same reason `LIGHT_FLOORS.labelTowardSecondary`
+     * is: a third independent slide could cross either neighbour once the floor
+     * below starts clamping, while a fraction of the mute's own slide cannot —
+     * it is bounded by construction at every dial position, every canvas and
+     * every mode. It also inherits the clamp for free: if the mute compresses
+     * because the canvas ran out of contrast, the label tier compresses with it
+     * instead of jumping past.
+     *
+     * Never reaches 0. At the top of the dial every tier is asked to move toward
+     * the head, but a label that arrived exactly ON it would leave the sidebar
+     * with two tiers again — which is the defect this ladder exists to remove,
+     * reachable by dragging one slider to its end.
+     */
+    labelTowardMuted: { min: 0.65, max: 0.35 },
+    /**
+     * The worst-surface Lc the muted tier may never fall under, whatever the
+     * dial asks for.
+     *
+     * The canvas has nothing like the card's headroom — full ink measures Lc
+     * 62.4 on the ember default against body copy's 90 on paper — so a slide
+     * that is comfortable on one gradient can strand the bottom tier on the
+     * next. Swept across every swatch the editor offers, both modes, three
+     * vibrancies, every seam and one/three stops: at flush lift or above the
+     * head never drops under Lc 61.9, and 48 is the floor that still leaves the
+     * hardest of those canvases 0.30 of slide to spend — enough for the full
+     * three rungs. It sits above APCA's 45 for large or bold text, which is the
+     * relevant line for an 11px meta row that the sidebar also promotes to full
+     * ink on hover.
+     *
+     * Binding it is not a failure — it is the degradation. The ladder
+     * COMPRESSES toward the head (see {@link maxReadableSlide}), so a canvas
+     * with no room left shows two tiers or one rather than three unreadable
+     * ones, and no tier can ever cross another on the way. The case that really
+     * exercises it is a strongly SUNK canvas (lift −1), where the veil darkens
+     * the chrome until the head ink itself measures 37.6 and every rung
+     * collapses onto it — a pre-existing property of that end of the lift dial,
+     * and the honest response to it is one readable tier rather than three
+     * unreadable ones.
+     */
+    mutedFloor: 48,
   },
 
   /** A stop dragged on the pad, as a fraction of the window. */
@@ -356,14 +431,22 @@ export interface ArcCanvasState {
   seam: ArcSeam;
 }
 
-/** The chosen foreground plus the numbers that chose it. */
+/** The chosen foreground, the ladder under it, and the numbers that chose it. */
 export interface ArcInk {
   /** What on-canvas text paints in. */
   ink: string;
+  /**
+   * One step down: section headings and group labels — the canvas's mirror of
+   * the card's `--lab-label-ink` tier.
+   */
+  inkLabel: string;
   /** The same ink pulled toward the base fill, for secondary rows. */
   inkMuted: string;
   /** APCA Lc of {@link ink} against the pool it reads WORST on. */
   worstLc: number;
+  /** The tiers under it, on the same worst-case surface list. */
+  labelLc: number;
+  mutedLc: number;
   /** The two candidates' scores, so the editor can show how close the call was. */
   lightLc: number;
   darkLc: number;
@@ -682,9 +765,65 @@ function worstContrast(candidate: string, surfaces: readonly string[]): number {
   return Math.min(...surfaces.map((surface) => Math.abs(apcaLc(candidate, surface))));
 }
 
+/** A tuning range at a dial position, clamped to the dial's own travel. */
+function atWeight({ min, max }: { min: number; max: number }, textWeight: number): number {
+  return lerp(min, max, clamp(textWeight, 0, 1));
+}
+
+/**
+ * Halvings in the readable-slide search: 1/1024 of the slide, comfortably finer
+ * than one step of the 8-bit hex it ends up as.
+ */
+const SLIDE_SEARCH_STEPS = 10;
+
+/**
+ * The furthest a tier may slide toward the base fill before it stops clearing
+ * `floor` on the surface it reads worst on.
+ *
+ * Searched rather than solved, and searched rather than merely clamped
+ * afterwards, for three reasons that all point the same way. There is no closed
+ * form: the score is a MINIMUM over several surfaces, so the binding one can
+ * change partway along the slide and any inverse would have to know which. A
+ * solver would have to be handed one background and would therefore answer for
+ * a surface the text does not only sit on — the exact averaging this module
+ * exists to refuse. And a search cannot throw, where
+ * `solveLightnessForContrast` does when the target is unreachable: `textWeight`
+ * is a slider, and a canvas vivid enough to strand the bottom tier is a canvas
+ * the owner is allowed to drag to.
+ *
+ * Monotone, which is what makes bisection valid here rather than merely
+ * convenient. Every surface lies between the base fill's lightness and the
+ * pools', and the ink sits outside that span on whichever side its flip put it
+ * — so walking toward the base fill walks toward every surface at once, and the
+ * worst score only ever falls.
+ *
+ * Both ends are answers, not errors. `1` means the floor never binds and the
+ * dial is free; `0` means this canvas has no room for a ladder at all, and the
+ * honest response is a flat one — every tier on the head ink — rather than
+ * three tiers nobody can read.
+ */
+function maxReadableSlide(
+  slide: (t: number) => string,
+  surfaces: readonly string[],
+  floor: number,
+): number {
+  const reaches = (t: number) => worstContrast(slide(t), surfaces) >= floor;
+  if (!reaches(0)) return 0;
+  if (reaches(1)) return 1;
+  let low = 0;
+  let high = 1;
+  for (let step = 0; step < SLIDE_SEARCH_STEPS; step += 1) {
+    const mid = (low + high) / 2;
+    if (reaches(mid)) low = mid;
+    else high = mid;
+  }
+  return low;
+}
+
 /**
  * Picks the on-canvas foreground: Arc's two precomputed swatches, chosen by
- * measurement rather than by a lightness threshold.
+ * measurement rather than by a lightness threshold — then builds the two tiers
+ * that rank under it.
  *
  * Two candidates and not a solve, because a canvas has no single background to
  * solve against — text crosses several pools, so the honest question is which
@@ -692,6 +831,13 @@ function worstContrast(candidate: string, surfaces: readonly string[]): number {
  * stops for exactly that reason: an average would happily pick an ink that is
  * unreadable over one pool because it is excellent over the other two, which is
  * the failure this whole flip exists to prevent.
+ *
+ * The ladder under the winner walks toward the BASE FILL, which is what keeps
+ * it correct in both appearances without a branch: the base fill is the far
+ * side of the canvas from whichever ink won, so "toward the base fill" is
+ * "toward the surface" whether the ink is near-black on a pastel or near-white
+ * on a near-black. A ladder stated as "lighter" or "darker" would invert the
+ * moment the flip did.
  */
 export function arcInk(
   state: ArcCanvasState,
@@ -711,7 +857,8 @@ export function arcInk(
    */
   liftedSurfaces: readonly string[] = [],
 ): ArcInk {
-  const { lightL, lightC, darkL, darkC, mutedTowardBase } = ARC_TUNING.ink;
+  const { lightL, lightC, darkL, darkC, mutedTowardBase, labelTowardMuted, mutedFloor } =
+    ARC_TUNING.ink;
   const { h } = hexToOklch(state.stops[state.primaryIndex].hex);
   const lightInk = oklchToHex(lightL, lightC, h);
   const darkInk = oklchToHex(darkL, darkC, h);
@@ -731,10 +878,28 @@ export function arcInk(
 
   const chosen = hexToOklch(ink);
   const base = hexToOklch(arcBaseFillHex(state, resolved));
+  const slide = (t: number) => toHex({ ...chosen, L: lerp(chosen.L, base.L, t) });
+
+  // The dial's ask, capped by what the canvas can actually carry. Taking the
+  // minimum rather than reporting a failure is the whole degradation story: the
+  // ladder gets shorter on a canvas with no headroom, and never unreadable.
+  const mutedSlide = Math.min(
+    atWeight(mutedTowardBase, state.textWeight),
+    maxReadableSlide(slide, surfaces, mutedFloor),
+  );
+  // A FRACTION of the slide above, so the label tier is bounded by its two
+  // neighbours by construction — it inherits the cap without being told about
+  // it, and cannot cross either of them at any dial position.
+  const inkLabel = slide(mutedSlide * atWeight(labelTowardMuted, state.textWeight));
+  const inkMuted = slide(mutedSlide);
+
   return {
     ink,
-    inkMuted: toHex({ ...chosen, L: lerp(chosen.L, base.L, mutedTowardBase) }),
+    inkLabel,
+    inkMuted,
     worstLc: chooseLight ? lightLc : darkLc,
+    labelLc: worstContrast(inkLabel, surfaces),
+    mutedLc: worstContrast(inkMuted, surfaces),
     lightLc,
     darkLc,
   };

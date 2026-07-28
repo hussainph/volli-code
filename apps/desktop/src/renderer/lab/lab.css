@@ -84,6 +84,102 @@ html[data-lab-canvas] [data-slot="sidebar"],
 html[data-lab-canvas] .app-region-drag {
   --foreground: var(--lab-canvas-ink) !important;
   --muted-foreground: var(--lab-canvas-ink-muted) !important;
+  /* The furniture rung — see the ladder block below. Set here rather than in
+     that block because it is the DEFAULT everything on the canvas inherits;
+     the rules there are the exceptions to it. Overriding a token the seam
+     already set `!important` on `html` needs no `!important` of its own: that
+     flag only settles a contest between declarations on the SAME element, and
+     these are two elements with an inheritance between them. */
+  --sidebar-foreground: var(--lab-canvas-ink-label);
+}
+
+/* THE ON-CANVAS COPY LADDER — which of the sidebar's tiers reads at which rung
+ * (`ARC_TUNING.ink` in arc/model.ts).
+ *
+ * Scoped CSS rather than tokens, and it is the same argument the `--lab-label-ink`
+ * rule at the bottom of this file makes, seen from the other side. That one says
+ * `--muted-foreground` means two different colors depending on which side of the
+ * card's edge it is read from, so the card's label tier has to be a rule INSIDE
+ * the card. This is the mirror: these tiers are the canvas's answer to the same
+ * question, so they have to be rules inside the subtrees that sit ON the canvas.
+ * Neither can be a root token without following the wrong surface out.
+ *
+ * The assignment, in one sentence: **the sidebar's furniture recedes and its
+ * content leads.**
+ *
+ *  - `--lab-canvas-ink` (head) — session TITLES, and nothing else. The only text
+ *    in the sidebar that changes with what you are doing.
+ *  - `--lab-canvas-ink-label` — the surface itself: the project name, the nav
+ *    destinations, the footer, and the section headings that organize them.
+ *    Learned once, then recognized by icon and position rather than read.
+ *  - `--lab-canvas-ink-muted` — attributes of the line above them: ticket id,
+ *    session state, timestamps, the project prefix. Read on demand, per row.
+ *
+ * Which way round the top two rungs go was the actual decision, and the type
+ * scale settles it. A nav row is 14px and a session title is 12px, so SIZE
+ * already ranks the nav above the list; putting the nav at the head as well
+ * makes colour and size pull the same way and leaves four permanent words —
+ * Board, Terminals, Files, Configure — as the loudest thing on a surface whose
+ * subject is the work. Ranking the title above the nav makes the two pull
+ * against each other and roughly cancel, which is what "present but recessive"
+ * actually looks like. Tried both on a saturated, a near-white and a dark
+ * canvas; this is the one where the eye lands on the session list first.
+ *
+ * The head rung is deliberately NARROW — one role, not a category. Three tiers
+ * have to fit under a full ink measuring Lc 62.4 on the ember default (against
+ * body copy's 90 on paper), so every extra role admitted to the top pushes
+ * another one down onto a rung that is already carrying two. Four semantic
+ * tiers sharing two inks is exactly the state this replaced. */
+
+/* Section headings, at their own rung — and no longer at an ALPHA.
+ *
+ * `SidebarGroupLabel` ships `text-sidebar-foreground/70`, which composites
+ * against whatever is behind it; over a gradient that is a different color at
+ * the top of the sidebar than at the bottom, so one label reads at two
+ * contrasts and neither of them was measured. A solved tier is the fix, and the
+ * `color` (rather than a token override) is what actually kills the alpha —
+ * redefining `--sidebar-foreground` on the element would only change what the
+ * 70% is taken OF.
+ *
+ * `.uppercase` catches the second heading level, the `SessionTier` rows
+ * ("NEEDS YOU", "ACTIVE") that are a plain div rather than a group label.
+ * Counted in the running sidebar, that class matches three elements and all
+ * three are headings — which is why one this generic is precise here. It is
+ * also the rule that should survive a fourth: 11px letterspaced caps in a
+ * sidebar IS a section heading, whatever component drew it.
+ *
+ * Each heading's COUNT rides with it rather than dropping to the mute. The two
+ * bracket the row from opposite edges and read as one unit; demoting the number
+ * turns a heading into a heading with an afterthought stuck to it. */
+html[data-lab-canvas] [data-slot="sidebar"] [data-slot="sidebar-group-label"],
+html[data-lab-canvas] [data-slot="sidebar"] .uppercase {
+  color: var(--lab-canvas-ink-label);
+}
+
+/* The session row's first line, at the head rung — and the data-dependent flip
+ * in `active-sessions.tsx` neutralized from here, since the app source is not
+ * this lab's to edit.
+ *
+ * That component swaps the title between `text-muted-foreground` and
+ * `text-sidebar-foreground` on `row.lastRun !== null`, so a title's RANK moved
+ * with whether its session had run yet — two rows of equal standing painting as
+ * two different tiers. Setting both tokens to the same value on the title
+ * itself is what makes the swap a no-op: whichever class the component picked,
+ * it now resolves to the head rung.
+ *
+ * Overriding the two TOKENS rather than `color` is what keeps the row's hover
+ * and selected promotion working. That promotion is a third class
+ * (`text-sidebar-accent-foreground`), so it reads a token this rule never
+ * touches; a `color` declaration at this specificity would have silently killed
+ * it instead.
+ *
+ * The class pair names "the row's first line" the same way `--lab-label-ink`'s
+ * does at the bottom of this file — the meta line beneath it wears
+ * `session-row-dim` too, and `text-xs` against its `text-label` is what tells
+ * them apart. */
+html[data-lab-canvas] [data-slot="sidebar"] .session-row-dim.text-xs {
+  --sidebar-foreground: var(--lab-canvas-ink);
+  --muted-foreground: var(--lab-canvas-ink);
 }
 
 /* LIGHT-MODE ELEVATION — the lift overlays and the shadow set (arc/surfaces.ts).

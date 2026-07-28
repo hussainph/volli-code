@@ -138,9 +138,25 @@ const MODES: readonly { mode: ArcMode; label: string; Icon: Icon }[] = [
 ];
 
 const NAV_ROWS: readonly { label: string; Icon: Icon }[] = [
-  { label: "VLT-14 · Arc canvas", Icon: TicketIcon },
+  { label: "Board", Icon: TicketIcon },
   { label: "Sessions", Icon: TerminalWindowIcon },
   { label: "Settings", Icon: GearIcon },
+];
+
+/**
+ * Two session rows, quoted from `active-sessions.tsx` — a title over a meta
+ * line, which is the pair the canvas ladder's bottom two rungs exist for.
+ *
+ * Here because the tiers cannot be judged apart from each other: the whole
+ * question the `textWeight` dial now answers on this side of the window is
+ * whether a title, the nav row above it and the meta under it read as three
+ * things, and a specimen that showed the head rung alone would answer none of
+ * it. Both lines carry ONE title, so the flip `lab.css` neutralizes on the real
+ * component has nothing left to say here either.
+ */
+const SESSION_ROWS: readonly { title: string; meta: string }[] = [
+  { title: "Ghostty config adapter", meta: "VLT-11 · Needs review" },
+  { title: "Warm-park sessions", meta: "VLT-12 · Working" },
 ];
 
 /**
@@ -1128,24 +1144,45 @@ function WindowSpecimen({ ink, seam }: { ink: ArcInk; seam: ArcSeam }) {
         </div>
         {/* Primary sidebar — tier 2, one step nearer than the rail, or the bare
             canvas when the seam gives it a share of zero. */}
+        {/* The default ink here is the LABEL rung, not the head — the seam's
+            arrangement quoted rather than restated: on the canvas the sidebar's
+            furniture recedes and only its content leads, so the nav, the
+            project name and the section heading all inherit, and the two things
+            that step out of that (the selected row, a session title) say so
+            explicitly. */}
         <div
           style={{
             ...tier(2),
-            color: ink.ink,
+            color: ink.inkLabel,
             boxShadow: shell ? "var(--lab-shadow-card)" : undefined,
             clipPath: clipRight,
           }}
-          className={`flex w-24 shrink-0 flex-col gap-0.5 p-1.5 ${sidebarGeometry}`}
+          className={`flex w-28 shrink-0 flex-col gap-0.5 p-1.5 ${sidebarGeometry}`}
         >
           <span className="truncate px-1 text-label font-medium">Voltaic</span>
           {NAV_ROWS.map(({ label, Icon: RowIcon }, index) => (
             <span
               key={label}
-              style={index === 0 ? undefined : { color: ink.inkMuted }}
+              // The selected row, which the app promotes to the head rung
+              // through `--sidebar-accent-foreground`.
+              style={index === 0 ? { color: ink.ink } : undefined}
               className="flex items-center gap-1 rounded px-1 py-0.5 text-label"
             >
               <RowIcon weight="fill" size={10} />
               <span className="truncate">{label}</span>
+            </span>
+          ))}
+          <span className="mt-1 truncate px-1 text-label font-semibold uppercase">Sessions</span>
+          {/* Renamed off the module's own `title` export, which is the scratch's
+              name in the picker — not the session's. */}
+          {SESSION_ROWS.map(({ title: session, meta }) => (
+            <span key={meta} className="flex flex-col px-1 text-label">
+              <span className="truncate" style={{ color: ink.ink }}>
+                {session}
+              </span>
+              <span className="truncate" style={{ color: ink.inkMuted }}>
+                {meta}
+              </span>
             </span>
           ))}
         </div>
@@ -1285,7 +1322,8 @@ function settingsDigest(
     label === null
       ? `label       — (dark has no label tier)`
       : `label       ${label} · Lc ${Math.abs(apcaLc(label, tokens["--card"])).toFixed(1)} on card`,
-    `canvas ink  ${ink.ink} · worst Lc ${ink.worstLc.toFixed(1)}`,
+    `canvas ink  ${ink.ink} / ${ink.inkLabel} / ${ink.inkMuted}`,
+    `canvas Lc   ${ink.worstLc.toFixed(1)} head / ${ink.labelLc.toFixed(1)} label / ${ink.mutedLc.toFixed(1)} muted, each on its own worst surface`,
     `text floors Lc ${floors.body.toFixed(0)} body / ${floors.secondary.toFixed(0)} secondary / label ${Math.round((1 - floors.labelTowardSecondary) * 100)}% toward body`,
   ].join("\n");
 
@@ -1375,10 +1413,28 @@ function Readout({
           </>
         )}
       </p>
+      {/* The canvas's own ladder, head → label → mute, every rung scored on the
+          surface it reads WORST on rather than on the sidebar it happens to be
+          sitting in. Three numbers rather than one because `textWeight` now
+          moves all three, and the only way to tell a compressed ladder (the
+          floor binding on a vivid canvas) from a tuned one is to watch the gaps
+          rather than the head. */}
+      <p className={`flex items-center gap-1.5 font-mono text-label ${chrome.mute}`}>
+        {(["ink", "inkLabel", "inkMuted"] as const).map((rung) => (
+          <span
+            key={rung}
+            aria-hidden
+            className="size-3 rounded-full"
+            style={{ background: ink[rung] }}
+          />
+        ))}
+        canvas Lc <span className="tabular-nums">{ink.worstLc.toFixed(1)}</span> ·{" "}
+        <span className="tabular-nums">{ink.labelLc.toFixed(1)}</span> ·{" "}
+        <span className="tabular-nums">{ink.mutedLc.toFixed(1)}</span>
+      </p>
       <div className="flex items-center justify-between gap-3">
         <p className={`font-mono text-label ${chrome.mute}`}>
-          {resolved} · ink {ink.ink} · worst Lc{" "}
-          <span className="tabular-nums">{ink.worstLc.toFixed(1)}</span>
+          {resolved} · ink {ink.ink}
           <span className={chrome.faint}>
             {" "}
             (other {Math.min(ink.lightLc, ink.darkLc).toFixed(1)})

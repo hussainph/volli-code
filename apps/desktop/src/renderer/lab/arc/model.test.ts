@@ -13,6 +13,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   addStop,
+  arcBaseFillHex,
   arcCanvasBackground,
   arcInk,
   ARC_TUNING,
@@ -124,6 +125,103 @@ describe("foreground flip", () => {
       stops: [single.stops[0], { hex: "#6f6f6f", x: 0.2, y: 0.8 }],
     };
     expect(arcInk(hostile, "light").worstLc).toBeLessThanOrEqual(arcInk(single, "light").worstLc);
+  });
+});
+
+describe("canvas ink ladder", () => {
+  /** Every dial position worth checking, ends included. */
+  const WEIGHTS = [0, 0.25, 0.5, 0.75, 1];
+
+  /** A surface list neither candidate ink can survive — see the degradation test. */
+  const NO_ROOM = ["#000000", "#7f7f7f", "#ffffff"];
+
+  it("moves with the text-weight dial, which is the whole reason it exists", () => {
+    // The defect this replaced: the canvas mute was a fixed 0.15 slide, so the
+    // dial that owns copy weight reached the card's three tiers and nothing on
+    // the gradient at all. Measured on the ember default in light mode, the two
+    // lower rungs now travel #4f423d → #392d28 and #3d302b → #261a16 across it.
+    const light = WEIGHTS.map((textWeight) => arcInk(canvasOf("#e8652a", { textWeight }), "light"));
+    expect(new Set(light.map((ink) => ink.inkMuted)).size).toBe(WEIGHTS.length);
+    expect(new Set(light.map((ink) => ink.inkLabel)).size).toBe(WEIGHTS.length);
+    // Backwards against the dial, like `LIGHT_FLOORS.labelTowardSecondary`:
+    // heavier copy means nearer the head, which is a HIGHER score, not a lower
+    // one. The head itself never moves — the dial ranks the copy under it.
+    for (let at = 1; at < light.length; at += 1) {
+      expect(light[at].mutedLc).toBeGreaterThan(light[at - 1].mutedLc);
+      expect(light[at].labelLc).toBeGreaterThan(light[at - 1].labelLc);
+      expect(light[at].ink).toBe(light[0].ink);
+    }
+  });
+
+  it("walks toward the canvas in both modes, so no rung can invert the flip", () => {
+    for (const hex of EXTREMES) {
+      for (const resolved of ["light", "dark"] as const) {
+        for (const textWeight of WEIGHTS) {
+          const state = canvasOf(hex, { mode: resolved, textWeight });
+          const ink = arcInk(state, resolved);
+          const base = hexToOklch(arcBaseFillHex(state, resolved)).L;
+          const [head, label, muted] = [ink.ink, ink.inkLabel, ink.inkMuted].map(
+            (candidate) => hexToOklch(candidate).L,
+          );
+          // Stated as a DISTANCE from the base fill rather than as "lighter" or
+          // "darker", which is what makes one assertion cover both directions:
+          // the ink is near-black over a pastel and near-white over a
+          // near-black, and a ladder phrased in either direction would invert
+          // the moment the flip did.
+          expect(Math.abs(base - label)).toBeLessThanOrEqual(Math.abs(base - head) + HEX_DUST);
+          expect(Math.abs(base - muted)).toBeLessThanOrEqual(Math.abs(base - label) + HEX_DUST);
+          // …and the scores fall in the order the rungs are ranked in. The
+          // tolerance is one 8-bit step of the slide, worth well under an Lc.
+          expect(ink.labelLc).toBeLessThanOrEqual(ink.worstLc + 1);
+          expect(ink.mutedLc).toBeLessThanOrEqual(ink.labelLc + 1);
+        }
+      }
+    }
+  });
+
+  it("keeps three distinct rungs at every dial position, never two", () => {
+    // Why `labelTowardMuted.max` is 0.35 and not 0: at the top of the dial
+    // every rung is asked to move toward the head, and a label arriving exactly
+    // ON it would leave the sidebar with the two inks this ladder was built to
+    // replace — reachable by dragging one slider to its end.
+    for (const textWeight of WEIGHTS) {
+      for (const resolved of ["light", "dark"] as const) {
+        const ink = arcInk(canvasOf("#e8652a", { mode: resolved, textWeight }), resolved);
+        expect(new Set([ink.ink, ink.inkLabel, ink.inkMuted]).size).toBe(3);
+      }
+    }
+  });
+
+  it("holds the bottom rung above its floor on every canvas that has room", () => {
+    const { mutedFloor } = ARC_TUNING.ink;
+    for (const hex of EXTREMES) {
+      for (const resolved of ["light", "dark"] as const) {
+        for (const vibrancy of [0, 1]) {
+          for (const textWeight of WEIGHTS) {
+            const ink = arcInk(canvasOf(hex, { mode: resolved, vibrancy, textWeight }), resolved);
+            // "Above the floor, unless the HEAD was already under it" — the
+            // second clause is the honest one, since a ladder cannot rank text
+            // above an ink that is itself unreadable. Measured across the whole
+            // sweep, the binding case is the widest slide the dial asks for at
+            // weight 0: Lc 49.6 on ember light, 48.2 on a vivid yellow dark.
+            expect(ink.mutedLc).toBeGreaterThanOrEqual(Math.min(ink.worstLc, mutedFloor) - 1);
+          }
+        }
+      }
+    }
+  });
+
+  it("collapses to one rung rather than three unreadable ones when a canvas has no room", () => {
+    // The real case is a strongly SUNK canvas (lift −1), where the veil darkens
+    // the chrome until neither candidate clears the floor — the head ink itself
+    // measured Lc 37.6 there. Reproduced as a hostile surface list because a
+    // lift belongs to `surfaces.ts`, and this module only ever receives what it
+    // composited to.
+    const ink = arcInk(canvasOf("#e8652a", { textWeight: 0 }), "light", NO_ROOM);
+    expect(ink.worstLc).toBeLessThan(ARC_TUNING.ink.mutedFloor);
+    // Flat: not inverted, not thrown, and not three rungs nobody can read.
+    expect(ink.inkLabel).toBe(ink.ink);
+    expect(ink.inkMuted).toBe(ink.ink);
   });
 });
 

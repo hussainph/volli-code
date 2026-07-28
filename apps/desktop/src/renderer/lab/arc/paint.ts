@@ -15,7 +15,8 @@
  *     owns the app's canvas layer and the two foregrounds painted directly ON
  *     it — as `!important` rules, because `applyTheme` writes those tokens
  *     inline and nothing weaker reaches them.
- *  2. The three `--lab-canvas*` custom properties the seam reads.
+ *  2. The `--lab-canvas*` custom properties the seam reads — the gradient
+ *     itself and the three-rung ink ladder painted on it.
  *  3. The whole derived app token set, via `applyThemeTokens` (see tokens.ts).
  *     This is what makes the opaque content card inherit the canvas instead of
  *     staying stock dark under it, and what makes the light/dark ink flip reach
@@ -48,7 +49,15 @@ const CANVAS_ATTRIBUTE = "data-lab-canvas";
  */
 const SEAM_ATTRIBUTE = "data-lab-seam";
 const CANVAS_VARIABLE = "--lab-canvas";
+/**
+ * The on-canvas copy ladder, head first. All three carry the `--lab-canvas-ink`
+ * prefix because they are one family solved together (`arcInk`) — which is also
+ * what keeps the middle one distinguishable from `--lab-label-ink` below, the
+ * card's label tier, whose name it otherwise nearly repeats. Prefix says which
+ * side of the card's edge a tier belongs to; suffix says which rung.
+ */
 const INK_VARIABLE = "--lab-canvas-ink";
+const INK_LABEL_VARIABLE = "--lab-canvas-ink-label";
 const INK_MUTED_VARIABLE = "--lab-canvas-ink-muted";
 /**
  * The elevation set — cumulative lift per on-canvas tier, the micro-label ink,
@@ -71,6 +80,7 @@ const SHADOW_VARIABLES = {
 const CANVAS_VARIABLES = [
   CANVAS_VARIABLE,
   INK_VARIABLE,
+  INK_LABEL_VARIABLE,
   INK_MUTED_VARIABLE,
   ...LIFT_VARIABLES,
   LABEL_VARIABLE,
@@ -158,12 +168,13 @@ export function applyArcCanvas(state: ArcCanvasState | null): void {
   // is darker than any pool — so an ink chosen against the gradient alone would
   // be chosen against surfaces that are no longer the hardest ones on screen.
   const elevation = arcElevation(state, resolved, tokens);
-  const { ink, inkMuted } = arcInk(state, resolved, elevation.surfaces);
+  const { ink, inkLabel, inkMuted } = arcInk(state, resolved, elevation.surfaces);
   // The app set first: it is the widest write, and the seam's `!important`
   // rules sit above it for the two tokens that paint on the canvas itself.
   applyThemeTokens(tokens);
   root.style.setProperty(CANVAS_VARIABLE, arcCanvasBackground(state, resolved));
   root.style.setProperty(INK_VARIABLE, ink);
+  root.style.setProperty(INK_LABEL_VARIABLE, inkLabel);
   root.style.setProperty(INK_MUTED_VARIABLE, inkMuted);
   LIFT_VARIABLES.forEach((name, tier) => {
     root.style.setProperty(name, elevation.tiers[tier].veil);
