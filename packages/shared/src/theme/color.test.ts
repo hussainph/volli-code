@@ -4,11 +4,15 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   apcaLc,
+  clamp,
+  compositeHex,
   gamutMap,
+  hexChannels,
   hexToOklch,
   hexToRgb,
   isHexColor,
   isInGamut,
+  lerp,
   linearToSrgb,
   oklabToOklch,
   oklchToHex,
@@ -16,6 +20,55 @@ import {
   rgbToHex,
   srgbToLinear,
 } from "./color";
+
+describe("clamp and lerp", () => {
+  it("clamps to both bounds and passes anything already inside", () => {
+    expect(clamp(-1, 0, 1)).toBe(0);
+    expect(clamp(4, 0, 1)).toBe(1);
+    expect(clamp(0.25, 0, 1)).toBe(0.25);
+  });
+
+  it("interpolates, including backwards ranges", () => {
+    expect(lerp(0, 10, 0.25)).toBe(2.5);
+    // Backwards on purpose: several tuning ranges run high → low, so a lerp that
+    // assumed an ordering would silently reverse half the tables.
+    expect(lerp(0.55, 0.1, 1)).toBeCloseTo(0.1, 10);
+  });
+});
+
+describe("hexChannels", () => {
+  it("returns the three bytes the compositor works in", () => {
+    expect(hexChannels("#e8652a")).toEqual([232, 101, 42]);
+    expect(hexChannels("#000000")).toEqual([0, 0, 0]);
+    expect(hexChannels("#ffffff")).toEqual([255, 255, 255]);
+  });
+
+  it("accepts everything hexToRgb does, and rejects what it rejects", () => {
+    expect(hexChannels("#fa0")).toEqual(hexChannels("#ffaa00"));
+    // The hand-rolled slice/parseInt copies this replaces answered NaN here and
+    // poisoned whatever they were mixed into.
+    expect(() => hexChannels("rebeccapurple")).toThrow(/rebeccapurple/);
+  });
+});
+
+describe("compositeHex", () => {
+  it("returns the under color at alpha 0 and the over color at alpha 1", () => {
+    expect(compositeHex("#ffffff", 0, "#e8652a")).toBe("#e8652a");
+    expect(compositeHex("#ffffff", 1, "#e8652a")).toBe("#ffffff");
+  });
+
+  it("mixes in 8-bit sRGB, because that is what the browser paints", () => {
+    // A perceptual mix would predict a pixel the compositor never produces, and
+    // every Lc measured against it would be measuring a surface that is not on
+    // screen. Half of 0 and 255 is 128 in bytes, not the OKLCH midpoint.
+    expect(compositeHex("#ffffff", 0.5, "#000000")).toBe("#808080");
+  });
+
+  it("clamps an alpha outside 0–1 rather than emitting a channel that cannot exist", () => {
+    expect(compositeHex("#ffffff", 2, "#000000")).toBe("#ffffff");
+    expect(compositeHex("#ffffff", -1, "#000000")).toBe("#000000");
+  });
+});
 
 describe("hexToRgb", () => {
   it("parses #rrggbb into 0–1 channels", () => {

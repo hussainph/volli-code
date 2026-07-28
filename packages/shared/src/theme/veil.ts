@@ -18,6 +18,7 @@
  * encodes hierarchy, made structural.
  */
 
+import { hexChannels } from "./color";
 import type { ThemeTokenName, ThemeTokens } from "./tokens";
 
 /**
@@ -60,11 +61,6 @@ export type ThemeVeilTokenName = (typeof VEILS)[number]["name"];
 /** A resolved veil set: every name mapped to an `rgb(R G B / a)` string. */
 export type ThemeVeilTokens = Record<ThemeVeilTokenName, string>;
 
-/** One `#rrggbb` channel, 0–255. */
-function channel(hex: string, index: number): number {
-  return parseInt(hex.slice(1 + index * 2, 3 + index * 2), 16);
-}
-
 /**
  * Generates the veil set for an already-generated token set.
  *
@@ -75,11 +71,9 @@ function channel(hex: string, index: number): number {
  */
 export function generateVeilTokens(tokens: ThemeTokens): ThemeVeilTokens {
   const solved = VEILS.map(({ name, target, base }) => {
-    const channels = [0, 1, 2].map((index) =>
-      Math.round(
-        (channel(tokens[target], index) - channel(tokens[base], index) * (1 - VEIL_ALPHA)) /
-          VEIL_ALPHA,
-      ),
+    const under = hexChannels(tokens[base]);
+    const channels = hexChannels(tokens[target]).map((value, index) =>
+      Math.round((value - under[index] * (1 - VEIL_ALPHA)) / VEIL_ALPHA),
     );
     return [name, `rgb(${channels.join(" ")} / ${VEIL_ALPHA})`] as const;
   });

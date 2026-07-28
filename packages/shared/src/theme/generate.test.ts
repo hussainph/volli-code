@@ -3,7 +3,13 @@ import { APCAcontrast, sRGBtoY } from "apca-w3";
 
 import { apcaLc, hexToOklch, hexToRgb, oklchToHex } from "./color";
 import { DEFAULT_THEME, type ThemeDefinition } from "./definition";
-import { generateThemeTokens, pickAccentLabel, solveLightnessForContrast } from "./generate";
+import {
+  generateThemeTokens,
+  pickAccentLabel,
+  solveLightnessForContrast,
+  solveLightnessOrCeiling,
+  THEME_CONTRAST_FLOORS,
+} from "./generate";
 import { THEME_TOKEN_NAMES, type ThemeTokens } from "./tokens";
 
 describe("generateThemeTokens", () => {
@@ -689,6 +695,71 @@ describe("solveLightnessForContrast", () => {
     // target and a solved one were indistinguishable at the call site.
     expect(() => solveLightnessForContrast(110, 0.011, 40, "#faf7f5")).toThrow(/Lc 110/);
     expect(() => solveLightnessForContrast(110, 0.011, 40, "#15100e")).toThrow(/#15100e/);
+  });
+});
+
+describe("solveLightnessOrCeiling", () => {
+  // The same solver with the throw traded for a clamp — for callers whose INK is
+  // not fixed. The generator's backgrounds are constants, so a floor it cannot
+  // meet is a bug; the canvas layer solves at whatever chroma and hue a user's
+  // gradient implies, where an unreachable ask is a Tuesday.
+
+  it("is the solver itself whenever the target is reachable", () => {
+    for (const background of ["#15100e", "#faf7f5"]) {
+      expect(solveLightnessOrCeiling(60, 0.011, 40, background)).toBe(
+        solveLightnessForContrast(60, 0.011, 40, background),
+      );
+    }
+  });
+
+  it("returns the best the surface allows instead of throwing", () => {
+    // Lc 110 is past black-on-white, so nothing at this hue reaches it. The
+    // honest answer is everything the arm has rather than an exception that
+    // blanks a window on a swatch click — asserted as the CONTRAST delivered,
+    // since the nearest lightness that still measures the ceiling is a step or
+    // two in from the bound once the hex is quantised.
+    for (const [background, bound] of [
+      ["#faf7f5", 0],
+      ["#15100e", 1],
+    ] as const) {
+      const ceiling = apcaLc(oklchToHex(bound, 0.011, 40), background);
+      const solved = solveLightnessOrCeiling(110, 0.011, 40, background);
+      expect({ background, lc: apcaLc(oklchToHex(solved, 0.011, 40), background) }).toEqual({
+        background,
+        lc: expect.closeTo(ceiling, 4),
+      });
+    }
+  });
+
+  it("clamps a chromatic ink that simply cannot reach the ask", () => {
+    // The real case, and the reason this exists at all: a saturated hue on
+    // tinted paper, where the ceiling is measured at that chroma rather than at
+    // black. Copy stops darkening when the color space runs out instead of
+    // falling off it.
+    const ceiling = apcaLc(oklchToHex(0, 0.16, 60), "#f2ede4");
+    expect(ceiling).toBeLessThan(100);
+    const solved = solveLightnessOrCeiling(100, 0.16, 60, "#f2ede4");
+    expect(apcaLc(oklchToHex(solved, 0.16, 60), "#f2ede4")).toBeCloseTo(ceiling, 4);
+  });
+});
+
+describe("THEME_CONTRAST_FLOORS", () => {
+  it("states the floors this generator actually solves to", () => {
+    // The table is a restatement for sweeps, not a second source of truth: every
+    // number in it is the constant the solve uses. Asserted against the emitted
+    // set so a floor edited in one place and not the other fails here.
+    const tokens = generateThemeTokens(DEFAULT_THEME);
+    for (const { text, surface, floor, what } of THEME_CONTRAST_FLOORS) {
+      const lc = Math.abs(apcaLc(tokens[text], tokens[surface]));
+      expect({ what, meets: lc >= floor }).toEqual({ what, meets: true });
+    }
+  });
+
+  it("names each floor's own surface rather than one page for all of them", () => {
+    // The mistake it exists to prevent: a floor asserted against `--background`
+    // for a token painted on `--card` or on a button.
+    expect(THEME_CONTRAST_FLOORS.map(({ surface }) => surface)).toContain("--primary");
+    expect(THEME_CONTRAST_FLOORS.map(({ surface }) => surface)).toContain("--sidebar");
   });
 });
 

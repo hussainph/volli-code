@@ -27,10 +27,14 @@
  * impure one, and it is deliberately the only thing in `arc/` that reaches for
  * a runtime rather than the document — see its note on why it waits.
  */
-import { apcaLc, hexToOklch, oklchToHex, type ThemeTokens } from "@volli/shared";
+import {
+  apcaLc,
+  hexToOklch,
+  oklchToHex,
+  type ResolvedAppearance,
+  type ThemeTokens,
+} from "@volli/shared";
 import type { ThemeRegistrationResolved } from "shiki";
-
-import type { ArcResolvedMode } from "./model";
 
 /** The name the theme registers under. One name, redefined in place on every repaint. */
 export const ARC_EDITOR_THEME_ID = "volli-arc";
@@ -103,7 +107,7 @@ function withAlpha(hex: string, alpha: number): string {
  */
 export function arcEditorTheme(
   tokens: ThemeTokens,
-  resolved: ArcResolvedMode,
+  resolved: ResolvedAppearance,
 ): ThemeRegistrationResolved {
   const background = tokens["--background"];
   const foreground = tokens["--foreground"];

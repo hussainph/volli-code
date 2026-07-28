@@ -40,30 +40,34 @@ import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
 
-import { apcaLc, hexToOklch, type ThemeTokens } from "@volli/shared";
-
 import {
   addStop,
-  arcCanvasBackground,
-  arcGrainLayer,
-  arcInk,
-  DEFAULT_ARC_CANVAS,
+  apcaLc,
+  canvasBackground,
+  canvasElevation,
+  canvasInk,
+  copyFloors,
+  DEFAULT_CANVAS,
+  deriveCanvasTokens,
+  deriveLabelInk,
   effectiveStopHexes,
+  grainLayer,
+  hexToOklch,
   MAX_STOPS,
   moveStop,
   removeStop,
-  resolveArcMode,
+  resolveAppearance,
   withPrimaryHex,
   withPrimaryIndex,
-  type ArcCanvasState,
-  type ArcInk,
-  type ArcMode,
-  type ArcResolvedMode,
-  type ArcStop,
-} from "../arc/model";
-import { applyArcCanvas, loadArcCanvas, saveArcCanvas } from "../arc/paint";
-import { arcElevation } from "../arc/surfaces";
-import { copyFloors, deriveArcLabelInk, deriveArcTokens } from "../arc/tokens";
+  type Appearance,
+  type Canvas,
+  type CanvasInk,
+  type CanvasStop,
+  type ResolvedAppearance,
+  type ThemeTokens,
+} from "@volli/shared";
+
+import { applyArcCanvas, loadArcCanvas, saveArcCanvas, type LabCanvas } from "../arc/paint";
 import { labTheme, setLabTheme } from "../theme-choice";
 
 export const title = "Canvas — Arc gradient editor";
@@ -129,7 +133,7 @@ const SWATCH_PAGES: readonly (readonly string[])[] = [
   ],
 ];
 
-const MODES: readonly { mode: ArcMode; label: string; Icon: Icon }[] = [
+const MODES: readonly { mode: Appearance; label: string; Icon: Icon }[] = [
   { mode: "auto", label: "Auto", Icon: SparkleIcon },
   { mode: "light", label: "Light", Icon: SunIcon },
   { mode: "dark", label: "Dark", Icon: MoonStarsIcon },
@@ -203,7 +207,7 @@ interface CardChrome {
   dialDotOn: string;
 }
 
-const CHROME: Record<ArcResolvedMode, CardChrome> = {
+const CHROME: Record<ResolvedAppearance, CardChrome> = {
   dark: {
     card: "border-white/10 bg-black/45 text-white",
     well: "bg-white/8",
@@ -373,9 +377,9 @@ function ModeRow({
   chrome,
   onChange,
 }: {
-  mode: ArcMode;
+  mode: Appearance;
   chrome: CardChrome;
-  onChange(next: ArcMode): void;
+  onChange(next: Appearance): void;
 }) {
   return (
     <div className={`flex items-center gap-1 rounded-full p-1 ${chrome.well}`}>
@@ -404,7 +408,7 @@ function PadOrb({
   onMove,
   onPromote,
 }: {
-  stop: ArcStop;
+  stop: CanvasStop;
   index: number;
   primary: boolean;
   padRef: React.RefObject<HTMLDivElement | null>;
@@ -458,7 +462,7 @@ function GradientPad({
   onMove,
   onPromote,
 }: {
-  state: ArcCanvasState;
+  state: Canvas;
   gradient: string;
   onMove(index: number, x: number, y: number): void;
   onPromote(index: number): void;
@@ -747,7 +751,7 @@ function GrainDial({
   const center = DIAL_SIZE / 2;
   const angle = DIAL_MIN_ANGLE + (DIAL_MAX_ANGLE - DIAL_MIN_ANGLE) * value;
   const radians = (angle * Math.PI) / 180;
-  const grain = arcGrainLayer(value);
+  const grain = grainLayer(value);
 
   return (
     <div
@@ -834,7 +838,7 @@ function tier(index: 1 | 2): React.CSSProperties {
  *
  * So: judge color, contrast and separation here. Judge layout on App shell.
  */
-function WindowSpecimen({ ink }: { ink: ArcInk }) {
+function WindowSpecimen({ ink }: { ink: CanvasInk }) {
   // The window's geometry, quoted from `lab.css` at the miniature's scale — the
   // one place this file deliberately restates a rule rather than reading a
   // property. It has to: the real rules are keyed on `data-slot` selectors this
@@ -1031,32 +1035,31 @@ function ComponentSpecimens() {
  * same keystroke and only one of them is a choice worth keeping.
  *
  * The state block stays valid JSON and keeps its exact field names, so it drops
- * straight into `DEFAULT_ARC_CANVAS` — which is where these values are headed.
+ * straight into `DEFAULT_CANVAS` — which is where these values are headed.
  */
 function settingsDigest(
-  state: ArcCanvasState,
-  resolved: ArcResolvedMode,
+  state: Canvas,
+  appearance: Appearance,
+  resolved: ResolvedAppearance,
   tokens: ThemeTokens,
-  ink: ArcInk,
-  label: string | null,
+  ink: CanvasInk,
+  label: string,
   towardPaper: number,
 ): string {
   const floors = copyFloors(resolved);
-  const derived = deriveArcTokens(state, resolved);
+  const derived = deriveCanvasTokens(state, resolved);
   const railDrop = Math.abs(
     hexToOklch(derived["--background"]).L - hexToOklch(derived["--rail"]).L,
   );
   const measured = [
-    `viewed in   ${resolved}${state.mode === "auto" ? " (auto)" : ""}`,
+    `viewed in   ${resolved}${appearance === "auto" ? " (auto)" : ""}`,
     `sidebar     ${percent(towardPaper)} of the way from canvas to paper`,
     `background  ${tokens["--background"]}`,
     `card        ${tokens["--card"]}`,
     `rail        ${tokens["--rail"]} (ΔL ${railDrop.toFixed(3)} under background)`,
     `foreground  ${tokens["--foreground"]} · Lc ${Math.abs(apcaLc(tokens["--foreground"], tokens["--background"])).toFixed(1)} on background`,
     `muted       ${tokens["--muted-foreground"]} · Lc ${Math.abs(apcaLc(tokens["--muted-foreground"], tokens["--card"])).toFixed(1)} on card`,
-    label === null
-      ? `label       — (dark has no label tier)`
-      : `label       ${label} · Lc ${Math.abs(apcaLc(label, tokens["--card"])).toFixed(1)} on card`,
+    `label       ${label} · Lc ${Math.abs(apcaLc(label, tokens["--card"])).toFixed(1)} on card`,
     `canvas ink  ${ink.ink} / ${ink.inkLabel} / ${ink.inkMuted}`,
     `canvas Lc   ${ink.worstLc.toFixed(1)} head / ${ink.labelLc.toFixed(1)} label / ${ink.mutedLc.toFixed(1)} muted, each on its own worst surface`,
     `text floors Lc ${floors.body.toFixed(0)} body / ${floors.secondary.toFixed(0)} secondary / label ${Math.round((1 - floors.labelTowardSecondary) * 100)}% toward body`,
@@ -1067,6 +1070,7 @@ function settingsDigest(
 
 function Readout({
   state,
+  appearance,
   effective,
   resolved,
   ink,
@@ -1077,13 +1081,15 @@ function Readout({
   chrome,
   onReset,
 }: {
-  state: ArcCanvasState;
+  state: Canvas;
+  /** What the editor is set to, which `resolved` has already answered `auto` for. */
+  appearance: Appearance;
   effective: readonly string[];
-  resolved: ArcResolvedMode;
-  ink: ArcInk;
+  resolved: ResolvedAppearance;
+  ink: CanvasInk;
   tokens: ThemeTokens;
-  /** The micro-label tier, or null in dark mode where there isn't one. */
-  label: string | null;
+  /** The micro-label tier — solved in both appearances, so always a colour. */
+  label: string;
   /**
    * Where the sidebar landed between canvas and paper. At either end it is one
    * of the two materials the window already has; anywhere in between it is a
@@ -1115,7 +1121,7 @@ function Readout({
   const panel = tokens["--card"];
   const bodyLc = Math.abs(apcaLc(tokens["--foreground"], surface));
   const mutedLc = Math.abs(apcaLc(tokens["--muted-foreground"], panel));
-  const labelLc = label === null ? null : Math.abs(apcaLc(label, panel));
+  const labelLc = Math.abs(apcaLc(label, panel));
 
   return (
     <div className={`flex flex-col gap-2 rounded-2xl border p-3 backdrop-blur-xl ${chrome.card}`}>
@@ -1145,12 +1151,8 @@ function Readout({
         <span aria-hidden className="size-3 rounded-full" style={{ background: surface }} />
         card {surface} · body <span className="tabular-nums">{bodyLc.toFixed(1)}</span> · muted{" "}
         <span className="tabular-nums">{mutedLc.toFixed(1)}</span>
-        {labelLc === null ? null : (
-          <>
-            {" · label "}
-            <span className="tabular-nums">{labelLc.toFixed(1)}</span>
-          </>
-        )}
+        {" · label "}
+        <span className="tabular-nums">{labelLc.toFixed(1)}</span>
       </p>
       {/* The canvas's own ladder, head → label → mute, every rung scored on the
           surface it reads WORST on rather than on the sidebar it happens to be
@@ -1188,7 +1190,9 @@ function Readout({
               // that looked like it worked would send the owner off to paste
               // nothing.
               void navigator.clipboard
-                .writeText(settingsDigest(state, resolved, tokens, ink, label, towardPaper))
+                .writeText(
+                  settingsDigest(state, appearance, resolved, tokens, ink, label, towardPaper),
+                )
                 .then(() => setCopied(true))
                 .catch(() => setCopied(false));
             }}
@@ -1219,7 +1223,10 @@ export default function CanvasScratch() {
   // One read at mount, two answers: what the controls open on, and whether the
   // seam is already armed.
   const [restored] = React.useState(loadArcCanvas);
-  const [state, setState] = React.useState<ArcCanvasState>(restored ?? DEFAULT_ARC_CANVAS);
+  const [state, setState] = React.useState<Canvas>(restored?.canvas ?? DEFAULT_CANVAS);
+  // Beside the canvas rather than inside it: the shared model scopes appearance
+  // independently, so the editor is the one place the two are held together.
+  const [appearance, setAppearance] = React.useState<Appearance>(restored?.appearance ?? "auto");
   // A reset takes the seam back down and LEAVES it down — "reset" has to mean
   // the app's own canvas is showing again, not that the default got re-applied.
   const [live, setLive] = React.useState(restored !== null);
@@ -1228,18 +1235,29 @@ export default function CanvasScratch() {
   // pointermoves between renders, and each one has to build on the position the
   // previous one committed, not on the one the last render closed over.
   const stateRef = React.useRef(state);
-  const mutate = React.useCallback((update: (current: ArcCanvasState) => ArcCanvasState) => {
-    const next = update(stateRef.current);
-    stateRef.current = next;
-    setState(next);
+  const appearanceRef = React.useRef(appearance);
+  /** The one write path: remember it, paint it, and arm the seam. */
+  const commit = React.useCallback((choice: LabCanvas) => {
+    stateRef.current = choice.canvas;
+    appearanceRef.current = choice.appearance;
+    setState(choice.canvas);
+    setAppearance(choice.appearance);
     setLive(true);
-    saveArcCanvas(next);
-    applyArcCanvas(next);
+    saveArcCanvas(choice);
+    applyArcCanvas(choice);
   }, []);
+  const mutate = React.useCallback(
+    (update: (current: Canvas) => Canvas) => {
+      commit({ canvas: update(stateRef.current), appearance: appearanceRef.current });
+    },
+    [commit],
+  );
 
   const reset = React.useCallback(() => {
-    stateRef.current = DEFAULT_ARC_CANVAS;
-    setState(DEFAULT_ARC_CANVAS);
+    stateRef.current = DEFAULT_CANVAS;
+    appearanceRef.current = "auto";
+    setState(DEFAULT_CANVAS);
+    setAppearance("auto");
     setLive(false);
     saveArcCanvas(null);
     applyArcCanvas(null);
@@ -1253,22 +1271,22 @@ export default function CanvasScratch() {
   }, []);
 
   const systemDark = useSystemDark();
-  const resolved = resolveArcMode(state.mode, systemDark);
-  const gradient = React.useMemo(() => arcCanvasBackground(state, resolved), [state, resolved]);
+  const resolved = resolveAppearance(appearance, systemDark);
+  const gradient = React.useMemo(() => canvasBackground(state, resolved), [state, resolved]);
   const effective = React.useMemo(() => effectiveStopHexes(state, resolved), [state, resolved]);
-  const tokens = React.useMemo(() => deriveArcTokens(state, resolved), [state, resolved]);
+  const tokens = React.useMemo(() => deriveCanvasTokens(state, resolved), [state, resolved]);
   // The same order `paint.ts` uses, and for the same reason: the lifted tiers
   // are surfaces the ink has to survive, so scoring without them would print a
   // worst-case number the window does not actually hold to.
   const elevation = React.useMemo(
-    () => arcElevation(state, resolved, tokens),
+    () => canvasElevation(state, resolved, tokens),
     [state, resolved, tokens],
   );
   const ink = React.useMemo(
-    () => arcInk(state, resolved, elevation.surfaces),
+    () => canvasInk(state, resolved, elevation.surfaces),
     [state, resolved, elevation],
   );
-  const labelInk = React.useMemo(() => deriveArcLabelInk(state, resolved), [state, resolved]);
+  const labelInk = React.useMemo(() => deriveLabelInk(tokens, resolved), [tokens, resolved]);
   const primary = state.stops[state.primaryIndex];
   // The card follows the canvas it is floating on, not the app's dark-only
   // theme — see CHROME. It tracks `resolved`, so `auto` moves it too.
@@ -1297,9 +1315,9 @@ export default function CanvasScratch() {
           className={`flex flex-col gap-3 rounded-2xl border shadow-2xl backdrop-blur-xl ${chrome.card}`}
         >
           <ModeRow
-            mode={state.mode}
+            mode={appearance}
             chrome={chrome}
-            onChange={(mode) => mutate((current) => ({ ...current, mode }))}
+            onChange={(mode) => commit({ canvas: stateRef.current, appearance: mode })}
           />
 
           <GradientPad
@@ -1339,6 +1357,7 @@ export default function CanvasScratch() {
 
         <Readout
           state={state}
+          appearance={appearance}
           effective={effective}
           resolved={resolved}
           ink={ink}

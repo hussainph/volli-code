@@ -25,20 +25,41 @@
  *
  * Only (1) and (2) are torn down again — see {@link applyArcCanvas}.
  */
+import {
+  canvasBackground,
+  canvasElevation,
+  canvasInk,
+  deriveCanvasTokens,
+  deriveLabelInk,
+  parseCanvas,
+  resolveAppearance,
+  type Appearance,
+  type Canvas,
+} from "@volli/shared";
+
 import { applyThemeTokens } from "@renderer/theme/apply";
 
-import {
-  arcCanvasBackground,
-  arcInk,
-  clampArcCanvasState,
-  resolveArcMode,
-  type ArcCanvasState,
-} from "./model";
 import { applyArcEditorTheme, arcEditorTheme } from "./editor-theme";
-import { arcElevation } from "./surfaces";
-import { deriveArcLabelInk, deriveArcTokens } from "./tokens";
 
 const STORAGE_KEY = "volli-lab:arc-canvas";
+
+/**
+ * What the lab remembers: the gradient, and the appearance the editor is set to.
+ *
+ * Two fields rather than one because the canvas model no longer carries a mode —
+ * appearance is scoped independently in the app, so a `Canvas` that named one
+ * could not express "this workspace overrides the canvas but not the
+ * appearance". The editor still owns both, which is why the pair is assembled
+ * HERE rather than pushed back into the shared type.
+ */
+export interface LabCanvas {
+  canvas: Canvas;
+  appearance: Appearance;
+}
+
+function isAppearance(value: unknown): value is Appearance {
+  return value === "auto" || value === "light" || value === "dark";
+}
 
 /**
  * Armed state for the `lab.css` seam; its value is the RESOLVED mode.
@@ -97,15 +118,25 @@ const SYSTEM_DARK_QUERY = "(prefers-color-scheme: dark)";
  * has been taken down. See {@link watchSystemAppearance} for why this exists
  * rather than a re-read of storage.
  */
-let applied: ArcCanvasState | null = null;
+let applied: LabCanvas | null = null;
 
-/** The stored canvas, or null when there is none — or when what is stored is no longer paintable. */
-export function loadArcCanvas(): ArcCanvasState | null {
+/**
+ * The stored canvas, or null when there is none — or when what is stored is no
+ * longer paintable.
+ *
+ * The appearance rides in the same entry under its old name, `mode`, so every
+ * canvas stored before the split still loads with the appearance it was saved
+ * at. `parseCanvas` ignores the key; this reads it.
+ */
+export function loadArcCanvas(): LabCanvas | null {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (raw === null) return null;
     const parsed: unknown = JSON.parse(raw);
-    return clampArcCanvasState(parsed);
+    const canvas = parseCanvas(parsed);
+    if (canvas === null) return null;
+    const mode = (parsed as { mode?: unknown }).mode;
+    return { canvas, appearance: isAppearance(mode) ? mode : "auto" };
   } catch {
     // An unreadable or unparseable entry means "no canvas". A dev-tool
     // preference is never worth failing a page load over.
@@ -113,11 +144,14 @@ export function loadArcCanvas(): ArcCanvasState | null {
   }
 }
 
-/** Remembers `state` for the next reload; `null` clears the key. */
-export function saveArcCanvas(state: ArcCanvasState | null): void {
+/** Remembers `choice` for the next reload; `null` clears the key. */
+export function saveArcCanvas(choice: LabCanvas | null): void {
   try {
-    if (state === null) window.localStorage.removeItem(STORAGE_KEY);
-    else window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    if (choice === null) window.localStorage.removeItem(STORAGE_KEY);
+    else {
+      const stored = { ...choice.canvas, mode: choice.appearance };
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+    }
   } catch {
     // Storage full or blocked — the canvas still applies for this session.
   }
@@ -148,11 +182,11 @@ function systemPrefersDark(): boolean {
  * one caller that genuinely takes a canvas DOWN (the editor's Reset) re-applies
  * the standing lab theme itself.
  */
-export function applyArcCanvas(state: ArcCanvasState | null): void {
+export function applyArcCanvas(choice: LabCanvas | null): void {
   const root = document.documentElement;
-  applied = state;
+  applied = choice;
 
-  if (state === null) {
+  if (choice === null) {
     root.removeAttribute(CANVAS_ATTRIBUTE);
     for (const name of CANVAS_VARIABLES) root.style.removeProperty(name);
     // Disarming only stops FUTURE editors being caught up; the one on screen
@@ -163,31 +197,29 @@ export function applyArcCanvas(state: ArcCanvasState | null): void {
     return;
   }
 
-  const resolved = resolveArcMode(state.mode, systemPrefersDark());
-  const tokens = deriveArcTokens(state, resolved);
+  const { canvas } = choice;
+  const resolved = resolveAppearance(choice.appearance, systemPrefersDark());
+  const tokens = deriveCanvasTokens(canvas, resolved);
   // Elevation before ink, because the ink's worst case depends on it: a lifted
   // tier is a surface the on-canvas text now sits on, and at NEGATIVE lift it
   // is darker than any pool — so an ink chosen against the gradient alone would
   // be chosen against surfaces that are no longer the hardest ones on screen.
-  const elevation = arcElevation(state, resolved, tokens);
-  const { ink, inkLabel, inkMuted } = arcInk(state, resolved, elevation.surfaces);
+  const elevation = canvasElevation(canvas, resolved, tokens);
+  const { ink, inkLabel, inkMuted } = canvasInk(canvas, resolved, elevation.surfaces);
   // The app set first: it is the widest write, and the seam's `!important`
   // rules sit above it for the two tokens that paint on the canvas itself.
   applyThemeTokens(tokens);
-  root.style.setProperty(CANVAS_VARIABLE, arcCanvasBackground(state, resolved));
+  root.style.setProperty(CANVAS_VARIABLE, canvasBackground(canvas, resolved));
   root.style.setProperty(INK_VARIABLE, ink);
   root.style.setProperty(INK_LABEL_VARIABLE, inkLabel);
   root.style.setProperty(INK_MUTED_VARIABLE, inkMuted);
   LIFT_VARIABLES.forEach((name, tier) => {
     root.style.setProperty(name, elevation.tiers[tier].veil);
   });
-  // Solved in both modes now that `textWeight` reaches dark; the fallback stays
-  // because the signature still admits null and a token this seam always reads
-  // must always have a value.
-  root.style.setProperty(
-    LABEL_VARIABLE,
-    deriveArcLabelInk(state, resolved) ?? tokens["--muted-foreground"],
-  );
+  // Solved in both modes, and off the token set that was just derived rather
+  // than off the canvas a second time — the label tier is a position between two
+  // of these exact hexes, so a second derivation could only disagree with them.
+  root.style.setProperty(LABEL_VARIABLE, deriveLabelInk(tokens, resolved));
   for (const [tier, name] of Object.entries(SHADOW_VARIABLES)) {
     root.style.setProperty(name, elevation.shadows[tier as keyof typeof SHADOW_VARIABLES]);
   }
@@ -219,7 +251,7 @@ export function watchSystemAppearance(): void {
   watching = true;
   window.matchMedia(SYSTEM_DARK_QUERY).addEventListener("change", () => {
     const current = applied ?? loadArcCanvas();
-    if (current === null || current.mode !== "auto") return;
+    if (current === null || current.appearance !== "auto") return;
     applyArcCanvas(current);
   });
 }

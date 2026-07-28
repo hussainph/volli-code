@@ -29,7 +29,7 @@ export * from "./theme/tokens";
 export * from "./theme/definition";
 export * from "./theme/color";
 export * from "./theme/legacy-canvas";
-export * from "./theme/canvas/types";
+export * from "./theme/canvas";
 export * from "./theme/generate";
 export * from "./theme/veil";
 export * from "./theme/ghostty-overlay";
