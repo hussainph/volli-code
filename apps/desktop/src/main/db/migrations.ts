@@ -305,12 +305,11 @@ ALTER TABLE sessions ADD COLUMN exit_code INTEGER;
 `;
 
 /**
- * Migration 013: per-project theming (docs/plans/theming-engine.md, decisions
- * #69/#72). Four nullable columns on `projects`, one per surface plus the
- * auto-tint seed — additive, every existing row starts `NULL`, and `NULL`
- * means *inherit the global theme*, which is what makes "per-project theming
- * is off by default" (#72) the literal storage state rather than a UI
- * convention.
+ * Migration 013: per-project theming (decisions #69/#72). Four nullable columns
+ * on `projects`, one per surface plus the auto-tint seed — additive, every
+ * existing row starts `NULL`, and `NULL` means *inherit the global theme*,
+ * which is what makes "per-project theming is off by default" (#72) the
+ * literal storage state rather than a UI convention.
  *
  * Deliberately FOUR columns rather than one JSON blob: resolution is per
  * surface, never per token (#69), so "what is overridden" must be answerable

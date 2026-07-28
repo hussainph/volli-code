@@ -2,8 +2,8 @@
 
 The app-wide layout and type system, settled in a design review (July 2026, decision #31 in
 CONCEPT.md). Motion tokens live in `globals.css`; **color tokens are generated** from a theme seed by
-`@volli/shared` (decisions #66–#78, `docs/plans/theming-engine.md`) and `globals.css` carries the
-generated default as its first-paint fallback — so nothing here should ever hard-code a color. This
+`@volli/shared` (decisions #66–#78) and `globals.css` carries the generated default as its
+first-paint fallback — so nothing here should ever hard-code a color. This
 doc covers the **spatial** language: how surfaces use width, where whitespace goes, and which
 type step each kind of text sits on. `docs/BOARD-UI.md` is the board's feature-level spec; where it
 states raw values, the tokens here are authoritative.

@@ -1,6 +1,6 @@
 /**
  * Veils: how an opaque surface survives the canvas layer moving in underneath
- * it (#74, docs/plans/theming-engine.md § Canvas + shaders).
+ * it (#74).
  *
  * Once the backdrop is a gradient rather than a flat `--rail`, every surface
  * that sat on it has to choose. Staying opaque hides the canvas the user just

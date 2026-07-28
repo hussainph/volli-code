@@ -22,7 +22,7 @@ describe("generateThemeTokens", () => {
     // --primary is pinned at PRIMARY_LIGHTNESS for its job as a *fill*, which
     // leaves it at Lc 41 as text on --background — fine for icons, below the
     // floor for body copy. --primary-text is the second accent lightness that
-    // fixes every such site at once (docs/plans/theming-engine.md § Fold-ins).
+    // fixes every such site at once.
     expect(generateThemeTokens(DEFAULT_THEME)["--primary-text"]).toMatch(/^#[0-9a-f]{6}$/);
   });
 });
@@ -79,10 +79,7 @@ describe("the ember golden", () => {
     expect(generateThemeTokens(DEFAULT_THEME)["--destructive"]).toBe("#e5484d");
   });
 
-  it("matches the worked example in docs/plans/theming-engine.md", () => {
-    // The doc tabulates the ember ladder by hand. Agreement is exact on the
-    // rungs below, and within one 8-bit step on the rest — the residual is
-    // the doc rounding its intermediate chroma, not a difference in method.
+  it("pins the ember ladder's background, card and accent rungs", () => {
     const tokens = generateThemeTokens(DEFAULT_THEME);
     expect(tokens["--background"]).toBe("#15100e");
     expect(tokens["--card"]).toBe("#1b1412");
@@ -341,9 +338,9 @@ describe("--primary-text, the accent at body-copy contrast", () => {
   });
 
   it("fixes the Lc 41 finding that motivated it", () => {
-    // docs/plans/theming-engine.md § Fold-ins: ember's --primary is Lc 41 as
-    // body copy. Both halves are pinned so the gap cannot silently close from
-    // the wrong end — --primary must stay the fill it is.
+    // Ember's --primary is Lc 41 as body copy. Both halves are pinned so the
+    // gap cannot silently close from the wrong end — --primary must stay the
+    // fill it is.
     const tokens = generateThemeTokens(DEFAULT_THEME);
     expect(referenceLc(tokens["--primary"], tokens["--background"])).toBeCloseTo(41, 0);
     expect(referenceLc(tokens["--primary-text"], tokens["--background"])).toBeGreaterThanOrEqual(

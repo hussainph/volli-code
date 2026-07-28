@@ -575,10 +575,10 @@ const api = {
     },
   },
   /**
-   * Theming (docs/plans/theming-engine.md). Only AUTHORED inputs cross this
-   * door: the resolved token set is generated in the renderer at render time
-   * and stored nowhere. A terminal overlay write names a SCOPE, never a path,
-   * so no renderer request can reach the user's own ghostty config (#67).
+   * Theming. Only AUTHORED inputs cross this door: the resolved token set is
+   * generated in the renderer at render time and stored nowhere. A terminal
+   * overlay write names a SCOPE, never a path, so no renderer request can
+   * reach the user's own ghostty config (#67).
    */
   theme: {
     /** The resolved terminal chain for a scope, plus the editor id and the project's per-surface override. */

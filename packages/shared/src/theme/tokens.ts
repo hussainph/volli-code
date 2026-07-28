@@ -57,8 +57,7 @@ export const THEME_TOKEN_NAMES = [
   "--sidebar-primary",
   "--sidebar-primary-foreground",
   "--sidebar-ring",
-  // Hue-locked semantics (never follow the seed — see the escape list in
-  // docs/plans/theming-engine.md § Derived rules).
+  // Hue-locked semantics (never follow the seed).
   "--destructive",
   "--destructive-foreground",
 ] as const;

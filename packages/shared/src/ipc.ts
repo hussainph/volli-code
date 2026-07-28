@@ -379,7 +379,7 @@ export interface VolliFileIpcContract {
 
 export type FileIpcChannel = keyof VolliFileIpcContract;
 
-// ---- theming (docs/plans/theming-engine.md) --------------------------------
+// ---- theming ----------------------------------------------------------------
 
 /** `{ projectId? }` — a theme read is global unless a project scopes it (#69). */
 export interface ThemeStateInput {

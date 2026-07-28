@@ -313,8 +313,7 @@ describe("apcaLc", () => {
     }
   });
 
-  it("reproduces the doc's audit of the tokens shipping today", () => {
-    // Two findings recorded in docs/plans/theming-engine.md § Fold-ins.
+  it("scores the two shipped tokens that sit below the body-copy floor", () => {
     expect(apcaLc("#9a9a9a", "#111111")).toBeCloseTo(47, 0);
     expect(apcaLc("#e8652a", "#111111")).toBeCloseTo(41, 0);
   });

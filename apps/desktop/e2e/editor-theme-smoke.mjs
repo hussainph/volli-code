@@ -1,5 +1,5 @@
 /**
- * End-to-end smoke for Monaco editor theming (issue #122 / theming-engine PR 3).
+ * End-to-end smoke for Monaco editor theming (issue #122).
  *
  * Drives the REAL packaged app through Playwright against an isolated profile
  * and a seeded git repo. Proves what unit tests cannot see:

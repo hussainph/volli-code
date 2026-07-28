@@ -1,6 +1,6 @@
 /**
- * The app-surface theme generator (docs/plans/theming-engine.md § Surface 3):
- * one seed color in, the full `globals.css` token set out.
+ * The app-surface theme generator: one seed color in, the full `globals.css`
+ * token set out.
  *
  * The load-bearing idea is that the user picks **hue and chroma, never
  * lightness**. Every `L` below is a constant in this file, and gamut mapping
@@ -58,9 +58,8 @@ const PRIMARY_LIGHTNESS = 0.661;
  * a button fill and to keep ember an exact fixed point of the accent math. At
  * that lightness it scores Lc 41 as body copy — fine for an icon, below the
  * floor for a paragraph link. So the accent gets a *second* lightness rather
- * than a compromised single one, and body-sized accent text uses that
- * (docs/plans/theming-engine.md § Fold-ins). The floor matches
- * `--muted-foreground`'s, because these are the same job.
+ * than a compromised single one, and body-sized accent text uses that. The
+ * floor matches `--muted-foreground`'s, because these are the same job.
  */
 const PRIMARY_TEXT_LC = MUTED_LC;
 
