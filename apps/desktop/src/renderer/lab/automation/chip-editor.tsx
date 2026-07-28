@@ -39,11 +39,10 @@
  * ──────────────────────────────────────────────────────────────────────────
  */
 import * as React from "react";
-import type { HarnessId } from "@volli/shared";
 
 import { cn } from "@renderer/lib/utils";
 
-import { chipFor, tokenizeInstructions, type InstructionToken } from "./model";
+import { tokenizeInstructions, type AuthoringMode, type InstructionToken } from "./model";
 
 /**
  * Every metric-affecting style, in one place, applied to both layers. Editing
@@ -61,18 +60,22 @@ function TokenSpan({ token }: { token: InstructionToken }) {
   if (token.kind === "text") return <span>{token.value}</span>;
 
   if (token.kind === "chip") {
-    const known = chipFor(token.token) !== undefined;
     // The braces stay — they are in the textarea — but drop to a third of the
     // opacity so the eye reads the token name and treats the syntax as framing.
+    //
+    // `known` is false for EVERY chip in Basic mode, not just misspelled ones,
+    // and it paints destructive on purpose: in Basic mode nothing resolves the
+    // placeholder, so the agent would be handed the literal braces. That is a
+    // mistake worth showing as one.
     return (
       <span
         className={cn(
           "rounded",
-          known ? "bg-primary/20 text-primary-text" : "bg-destructive/20 text-destructive",
+          token.known ? "bg-primary/20 text-primary-text" : "bg-destructive/20 text-destructive",
         )}
         style={{
           boxShadow: haloShadow(
-            known ? "color-mix(in oklab, var(--primary) 20%, transparent)" : "transparent",
+            token.known ? "color-mix(in oklab, var(--primary) 20%, transparent)" : "transparent",
           ),
         }}
       >
@@ -83,9 +86,10 @@ function TokenSpan({ token }: { token: InstructionToken }) {
     );
   }
 
-  // A command this harness knows reads as a solid object; one it does not is
-  // never blocked, only marked — a dotted underline, which #82 calls a "quiet
-  // unverified affordance" and which costs no metrics.
+  // A skill Volli can see reads as a solid object; one it cannot is never
+  // blocked, only marked — a dotted underline, a quiet unverified affordance
+  // that costs no metrics. Absence here is not proof of absence: the harness
+  // discovers its own skill directories and Volli does not enumerate them.
   return token.known ? (
     <span
       className="rounded bg-accent text-foreground"
@@ -111,11 +115,11 @@ export const ChipEditor = React.forwardRef<
   {
     value: string;
     onChange: (value: string) => void;
-    harnessId: HarnessId;
+    mode: AuthoringMode;
     placeholder?: string;
     className?: string;
   }
->(function ChipEditor({ value, onChange, harnessId, placeholder, className }, ref) {
+>(function ChipEditor({ value, onChange, mode, placeholder, className }, ref) {
   const areaRef = React.useRef<HTMLTextAreaElement>(null);
   const paintRef = React.useRef<HTMLDivElement>(null);
 
@@ -139,7 +143,7 @@ export const ChipEditor = React.forwardRef<
     },
   }));
 
-  const tokens = tokenizeInstructions(value, harnessId);
+  const tokens = tokenizeInstructions(value, mode);
 
   /**
    * Grow the textarea to fit its own content, every time the content changes.

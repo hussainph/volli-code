@@ -48,6 +48,7 @@
  * the drop confirmation says so at the moment it would otherwise be believed.
  */
 import * as React from "react";
+import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
 import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
@@ -86,9 +87,113 @@ const MAX_ACCELERATORS = 4;
  * How long a drop confirmation stays before it starts leaving, and how long the
  * leaving itself takes. Short enough that a second drop never queues behind the
  * first, long enough to be read by someone whose eyes were on the card.
+ *
+ * Only used for a "Move only" drop now — see {@link TIMING} for the drop that
+ * carries an Automation, which no longer confirms-and-forgets.
  */
 const CONFIRM_HOLD_MS = 1500;
 const CONFIRM_LEAVE_MS = 200;
+
+/**
+ * The arm → undo → fire → active storyboard.
+ *
+ * Today's drop fires an Automation the instant it lands, and that is exactly
+ * the shape of bug this file's own module doc warns against: a slipped
+ * mouse-down-plus-move is an OS-level accident, and it must never be able to
+ * launch a paid agent on its own. So a drop that carries an Automation ARMS
+ * instead of firing, and only fires once a window passes undisturbed.
+ *
+ *   0ms  card lands in the column, ARMED. Progress bar begins filling at the
+ *        card's bottom edge. Undo is available on the card and in the column
+ *        header.
+ * 3500ms FIRES. Progress bar completes and leaves. The card's border begins a
+ *        looping pulse in the primary theme colour — the standing signifier
+ *        that this card has at least one agentic session in progress. The
+ *        pulse does not stop; it means "live", not "finishing".
+ *
+ * `ARM_MS` is the one number that matters; `PULSE_LOOP_MS` is an independent
+ * cosmetic period for the standing signifier and carries no safety meaning.
+ */
+const TIMING = {
+  ARM_MS: 3500,
+  PULSE_LOOP_MS: 2600,
+} as const;
+
+/**
+ * The arm/fire visuals, in one `<style>` block rather than `globals.css` — this
+ * file is lab-only and must not touch app-wide CSS. Durations are interpolated
+ * from {@link TIMING} rather than restated, so the constant stays the single
+ * source of truth for both the JS timer and the CSS animation it narrates.
+ *
+ * Two techniques, one per phase:
+ *
+ * - The progress bar is a plain `width` keyframe — a JS-driven per-frame width
+ *   would be both janky and a second source of truth for a number that only
+ *   matters once (when it hits 100%).
+ * - The pulse is a rotating `conic-gradient` behind a padding+mask "ring",
+ *   animated through `@property` so the angle interpolates smoothly instead of
+ *   snapping between keyframes (unregistered custom properties don't tween).
+ *   It reads as a highlight travelling the perimeter, not a plain opacity
+ *   breath — and because it is a `::after` laid outside the card's own box
+ *   (negative `inset`) rather than a real `border`, turning it on never
+ *   changes the card's layout or metrics.
+ *
+ * `prefers-reduced-motion` turns the smooth fill into a stepped one (still a
+ * CSS animation, just chunkier) and the rotating pulse into a steady ring —
+ * the 3.5s safety window and the "this card is live" signifier both survive,
+ * only the motion is removed.
+ */
+const ARM_STYLE = `
+@property --lab-arm-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+@keyframes lab-arm-fill {
+  from { width: 0%; }
+  to { width: 100%; }
+}
+@keyframes lab-arm-spin {
+  to { --lab-arm-angle: 360deg; }
+}
+.lab-arm-progress {
+  animation: lab-arm-fill ${TIMING.ARM_MS}ms linear forwards;
+}
+.lab-arm-pulse {
+  position: relative;
+}
+.lab-arm-pulse::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: conic-gradient(
+    from var(--lab-arm-angle),
+    transparent 0deg,
+    var(--primary) 70deg,
+    transparent 150deg,
+    transparent 360deg
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: lab-arm-spin ${TIMING.PULSE_LOOP_MS}ms linear infinite;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lab-arm-progress {
+    animation-timing-function: steps(7, jump-end);
+  }
+  .lab-arm-pulse::after {
+    animation: none;
+    background: var(--primary);
+    opacity: 0.6;
+  }
+}
+`;
 
 /** Which automations may be offered for a column (#79's `columnScope`). */
 function offeredFor(status: TicketStatus): Automation[] {
@@ -119,6 +224,13 @@ function StatusChip({ status }: { status: TicketStatus }) {
   );
 }
 
+/** What {@link BoardCard} renders while a dropped Automation is armed or firing — see {@link TIMING}. */
+interface ArmedChrome {
+  automation: Automation;
+  phase: "armed" | "fired";
+  onUndo: () => void;
+}
+
 /**
  * One board card, shared by the Arming and Drag tabs.
  *
@@ -131,22 +243,50 @@ function BoardCard({
   ticket,
   dimmed = false,
   onPointerDown,
+  armed,
 }: {
   ticket: Ticket;
   dimmed?: boolean;
   onPointerDown?: (event: React.PointerEvent) => void;
+  armed?: ArmedChrome;
 }) {
   return (
     <div
       onPointerDown={onPointerDown}
       className={cn(
-        "rounded-lg border border-border bg-card px-2.5 py-1.5 select-none",
+        "relative rounded-lg border border-border bg-card px-2.5 py-1.5 select-none",
         onPointerDown !== undefined && "cursor-grab touch-none",
         dimmed && "opacity-40",
+        // Room reserved for the progress strip so it never sits over the title.
+        armed?.phase === "armed" && "pb-3",
+        armed?.phase === "fired" && "lab-arm-pulse",
       )}
     >
       <p className="font-mono text-label text-muted-foreground">{ticketRef(ticket)}</p>
       <p className="line-clamp-2 text-xs text-foreground">{ticket.title}</p>
+
+      {armed !== undefined && armed.phase === "armed" ? (
+        <>
+          {/* On-card undo (requirement 2, surface one): reverts the MOVE, not
+              merely the automation, which is why it calls the same `onUndo`
+              the column header's bulk control does. `stopPropagation` on
+              pointer-down keeps this click from being read as the start of a
+              new drag by the card's own `onPointerDown`. */}
+          <button
+            type="button"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={armed.onUndo}
+            className="absolute right-1.5 top-1.5 flex items-center gap-1 rounded-full border border-border bg-popover px-1.5 py-px text-label text-muted-foreground transition-colors hover:border-ring hover:text-foreground"
+          >
+            <ArrowCounterClockwiseIcon weight="fill" />
+            Undo
+          </button>
+          <span
+            aria-hidden
+            className="lab-arm-progress absolute inset-x-0 bottom-0 h-[3px] rounded-b-lg bg-primary"
+          />
+        </>
+      ) : null}
     </div>
   );
 }
@@ -570,6 +710,23 @@ interface DropConfirmation {
   automation: Automation | null;
 }
 
+/**
+ * Where one ticket sits after a real (simulated) drop, and — when the drop
+ * carried an Automation — where it is in the arm→fire storyboard.
+ *
+ * `automation: null` is a plain move: no agent to arm or fire, so it relocates
+ * once and carries no `phase` chrome ever after. Only an automation-bearing
+ * move goes through `"armed"` → `"fired"`, and only `"armed"` is undoable —
+ * `"fired"` already happened.
+ */
+interface MoveEntry {
+  /** The column the card returns to on Undo — not necessarily its ORIGINAL column, see `undoMove`. */
+  fromStatus: TicketStatus;
+  toStatus: TicketStatus;
+  automation: Automation | null;
+  phase: "armed" | "fired";
+}
+
 function DragTab() {
   const [variant, setVariant] = React.useState<DragVariant>("held");
 
@@ -612,6 +769,115 @@ function DragTab() {
   const [confirmation, setConfirmation] = React.useState<DropConfirmation | null>(null);
   const [confirmationLeaving, setConfirmationLeaving] = React.useState(false);
 
+  // The arm→fire storyboard's state, one entry per ticket that has ever moved
+  // this session. A plain `Record`, not `Map`, so it composes with `setState`
+  // the same way every other piece of local state here does.
+  const [moves, setMoves] = React.useState<Record<string, MoveEntry>>({});
+  // The one `window.setTimeout` per armed ticket, keyed so a second drop of the
+  // SAME card (re-armed before it fires) replaces rather than races its timer,
+  // and so Undo can cancel the fire it is pre-empting.
+  const armTimers = React.useRef<Map<string, number>>(new Map());
+
+  React.useEffect(
+    () => () => {
+      for (const id of armTimers.current.values()) window.clearTimeout(id);
+      armTimers.current.clear();
+    },
+    [],
+  );
+
+  /** Where a ticket actually sits — its last simulated drop, or its fixture status if it has never moved. */
+  const effectiveStatus = React.useCallback(
+    (ticket: Ticket): TicketStatus => moves[ticket.id]?.toStatus ?? ticket.status,
+    [moves],
+  );
+
+  const scheduleFire = React.useCallback((ticketId: string) => {
+    const existing = armTimers.current.get(ticketId);
+    if (existing !== undefined) window.clearTimeout(existing);
+    const timeoutId = window.setTimeout(() => {
+      armTimers.current.delete(ticketId);
+      setMoves((current) => {
+        const entry = current[ticketId];
+        // Guard against a fire landing after Undo already deleted the entry,
+        // or after some later re-arm replaced it.
+        if (entry === undefined || entry.phase !== "armed") return current;
+        return { ...current, [ticketId]: { ...entry, phase: "fired" } };
+      });
+    }, TIMING.ARM_MS);
+    armTimers.current.set(ticketId, timeoutId);
+  }, []);
+
+  /**
+   * Reverts one ticket's move by landing it at ITS ENTRY's `fromStatus` — not
+   * necessarily the ticket's original fixture column. A card dropped once,
+   * then re-dragged and dropped again before the first drop resolved, has a
+   * `fromStatus` that is already a mid-flight column; undoing the SECOND drop
+   * must land it there, not teleport it past that back to where it started
+   * the whole session. When `fromStatus` and the true original agree (the
+   * ordinary, single-drop case) this collapses to plain deletion.
+   *
+   * Mutates the draft record in place — callers always pass a fresh shallow
+   * copy from inside a `setMoves` updater, never `current` itself.
+   */
+  const revertEntry = React.useCallback((ticketId: string, draft: Record<string, MoveEntry>) => {
+    const timeoutId = armTimers.current.get(ticketId);
+    if (timeoutId !== undefined) {
+      window.clearTimeout(timeoutId);
+      armTimers.current.delete(ticketId);
+    }
+    const entry = draft[ticketId];
+    if (entry === undefined) return;
+    const original = tickets.find((candidate) => candidate.id === ticketId)?.status;
+    if (original !== undefined && entry.fromStatus === original) {
+      delete draft[ticketId];
+    } else {
+      draft[ticketId] = {
+        fromStatus: entry.fromStatus,
+        toStatus: entry.fromStatus,
+        automation: null,
+        phase: "fired",
+      };
+    }
+  }, []);
+
+  /**
+   * Undo surface one (on the card): reverts the MOVE, returning the ticket to
+   * where it came from — not merely cancelling the Automation and leaving the
+   * card sitting in the destination column. Only reachable while `phase ===
+   * "armed"`; once fired, this ticket's row disappears from the button.
+   */
+  const undoMove = React.useCallback(
+    (ticketId: string) => {
+      setMoves((current) => {
+        const next = { ...current };
+        revertEntry(ticketId, next);
+        return next;
+      });
+    },
+    [revertEntry],
+  );
+
+  /**
+   * Undo surface two (column header): reverts EVERY still-armed card that
+   * landed in this column at once — the multi-card drop case, where the
+   * header is the only place a bulk revert can live. Fired cards are left
+   * alone; they already ran.
+   */
+  const undoColumn = React.useCallback(
+    (status: TicketStatus) => {
+      setMoves((current) => {
+        const next = { ...current };
+        for (const [ticketId, entry] of Object.entries(current)) {
+          if (entry.phase !== "armed" || entry.toStatus !== status) continue;
+          revertEntry(ticketId, next);
+        }
+        return next;
+      });
+    },
+    [revertEntry],
+  );
+
   React.useEffect(() => {
     const drop = drag.lastDrop;
     if (drop === null) {
@@ -620,27 +886,53 @@ function DragTab() {
       setConfirmation(null);
       return;
     }
-    setConfirmation({
-      key: Date.now(),
-      // `use-drag-sim` reports the pointer on every move and does not touch it
-      // on release, so this is the release point — no need to widen the hook's
-      // contract to carry a coordinate it already has.
-      x: drag.point.x,
-      y: drag.point.y,
-      status: drop.status,
-      automation: optionsFor(drop.status)[drop.automationIndex] ?? null,
-    });
-    setConfirmationLeaving(false);
-    const fade = window.setTimeout(() => setConfirmationLeaving(true), CONFIRM_HOLD_MS);
-    const clear = window.setTimeout(
-      () => setConfirmation(null),
-      CONFIRM_HOLD_MS + CONFIRM_LEAVE_MS,
-    );
-    return () => {
-      window.clearTimeout(fade);
-      window.clearTimeout(clear);
-    };
-  }, [drag.lastDrop, drag.point, optionsFor]);
+    const automation = optionsFor(drop.status)[drop.automationIndex] ?? null;
+    const droppedTicket = tickets.find((candidate) => candidate.id === drop.ticketId);
+    if (droppedTicket === undefined) return;
+
+    setMoves((current) => ({
+      ...current,
+      [drop.ticketId]: {
+        fromStatus: current[drop.ticketId]?.toStatus ?? droppedTicket.status,
+        toStatus: drop.status,
+        automation,
+        // A plain move has nothing to arm, so it is born "fired" — that phase
+        // only means "not undoable here", since `automation === null` already
+        // hides every piece of arm/fire chrome on the card.
+        phase: automation === null ? "fired" : "armed",
+      },
+    }));
+
+    if (automation === null) {
+      // Nothing to arm: relocate immediately and keep the old quick toast.
+      setConfirmation({
+        key: Date.now(),
+        // `use-drag-sim` reports the pointer on every move and does not touch it
+        // on release, so this is the release point — no need to widen the hook's
+        // contract to carry a coordinate it already has.
+        x: drag.point.x,
+        y: drag.point.y,
+        status: drop.status,
+        automation: null,
+      });
+      setConfirmationLeaving(false);
+      const fade = window.setTimeout(() => setConfirmationLeaving(true), CONFIRM_HOLD_MS);
+      const clear = window.setTimeout(
+        () => setConfirmation(null),
+        CONFIRM_HOLD_MS + CONFIRM_LEAVE_MS,
+      );
+      return () => {
+        window.clearTimeout(fade);
+        window.clearTimeout(clear);
+      };
+    }
+
+    // An Automation is riding this drop: ARM rather than fire (see TIMING).
+    // The card itself narrates the rest — no toast competes with it.
+    setConfirmation(null);
+    scheduleFire(drop.ticketId);
+    return undefined;
+  }, [drag.lastDrop, drag.point, optionsFor, scheduleFire]);
 
   const palette = (
     <div className="flex flex-col gap-px">
@@ -739,57 +1031,97 @@ function DragTab() {
         </div>
 
         <div className="flex gap-2 overflow-x-auto p-2">
-          {TICKET_STATUSES.map((status) => (
-            <div
-              key={status}
-              data-lab-column={status}
-              className={cn(
-                // The ring is a box-shadow, which `transition-colors` does not
-                // cover — which is why the highlight used to snap on and the
-                // background used to ease. 150ms is appearance only: the hit
-                // test that decides the drop already happened on the move
-                // event that triggered this class change.
-                "flex w-52 shrink-0 flex-col rounded-lg bg-muted/40 p-2 transition-[background-color,box-shadow] duration-150 ease-out",
-                drag.hovered === status && "bg-accent/60 ring-1 ring-ring",
-              )}
-            >
-              <div className="flex items-center gap-2 px-1 pb-1.5">
-                <span className="text-ui font-medium text-foreground">
-                  {TICKET_STATUS_LABELS[status]}
-                </span>
-              </div>
+          {TICKET_STATUSES.map((status) => {
+            // Real count for the bulk-undo control (requirement 2, surface
+            // two) — every ticket still ARMED (not yet fired) that landed in
+            // THIS column, regardless of which column it came from.
+            const armedInColumn = Object.values(moves).filter(
+              (entry) =>
+                entry.automation !== null && entry.phase === "armed" && entry.toStatus === status,
+            ).length;
 
-              {/* Enter-only, unlike the other two variants. This palette sits in
-                  the column's flow, so an exiting copy would hold the layout
-                  open under a column you have already left — pushing cards
-                  around the exact region you are aiming at. Instant removal is
-                  the calmer of the two. */}
-              {variant === "column" && paletteVisible && drag.hovered === status ? (
-                <div className="mb-1.5 rounded-md border border-border bg-popover p-1 transition-[opacity,transform,translate,scale] duration-150 ease-out starting:scale-[0.98] starting:opacity-0 motion-reduce:starting:scale-100">
-                  {palette}
+            return (
+              <div
+                key={status}
+                data-lab-column={status}
+                className={cn(
+                  // The ring is a box-shadow, which `transition-colors` does not
+                  // cover — which is why the highlight used to snap on and the
+                  // background used to ease. 150ms is appearance only: the hit
+                  // test that decides the drop already happened on the move
+                  // event that triggered this class change.
+                  "flex w-52 shrink-0 flex-col rounded-lg bg-muted/40 p-2 transition-[background-color,box-shadow] duration-150 ease-out",
+                  drag.hovered === status && "bg-accent/60 ring-1 ring-ring",
+                )}
+              >
+                <div className="flex items-center gap-2 px-1 pb-1.5">
+                  <span className="text-ui font-medium text-foreground">
+                    {TICKET_STATUS_LABELS[status]}
+                  </span>
+                  {armedInColumn > 0 ? (
+                    // Shown for one armed card too, not just the bulk case:
+                    // the header is a second, deliberate surface for the SAME
+                    // action as the on-card Undo, so it has to stay coherent
+                    // whether it is undoing one move or several — hence the
+                    // singular wording rather than hiding at count 1.
+                    <button
+                      type="button"
+                      onClick={() => undoColumn(status)}
+                      className="ml-auto flex shrink-0 items-center gap-1 rounded-full px-1.5 py-px text-label text-muted-foreground transition-colors hover:text-foreground"
+                    >
+                      <ArrowCounterClockwiseIcon weight="fill" />
+                      {armedInColumn === 1 ? "Undo move" : `Undo ${armedInColumn} moves`}
+                    </button>
+                  ) : null}
                 </div>
-              ) : null}
 
-              <div className="flex flex-col gap-1.5">
-                {tickets
-                  .filter((ticket) => ticket.status === status)
-                  .map((ticket) => (
-                    <BoardCard
-                      key={ticket.id}
-                      ticket={ticket}
-                      dimmed={drag.ticketId === ticket.id}
-                      onPointerDown={drag.start(ticket.id)}
-                    />
-                  ))}
+                {/* Enter-only, unlike the other two variants. This palette sits in
+                    the column's flow, so an exiting copy would hold the layout
+                    open under a column you have already left — pushing cards
+                    around the exact region you are aiming at. Instant removal is
+                    the calmer of the two. */}
+                {variant === "column" && paletteVisible && drag.hovered === status ? (
+                  <div className="mb-1.5 rounded-md border border-border bg-popover p-1 transition-[opacity,transform,translate,scale] duration-150 ease-out starting:scale-[0.98] starting:opacity-0 motion-reduce:starting:scale-100">
+                    {palette}
+                  </div>
+                ) : null}
+
+                <div className="flex flex-col gap-1.5">
+                  {tickets
+                    .filter((ticket) => effectiveStatus(ticket) === status)
+                    .map((ticket) => {
+                      const move = moves[ticket.id];
+                      const armedChrome: ArmedChrome | undefined =
+                        move !== undefined && move.automation !== null
+                          ? {
+                              automation: move.automation,
+                              phase: move.phase,
+                              onUndo: () => undoMove(ticket.id),
+                            }
+                          : undefined;
+                      return (
+                        <BoardCard
+                          key={ticket.id}
+                          ticket={ticket}
+                          dimmed={drag.ticketId === ticket.id}
+                          onPointerDown={drag.start(ticket.id)}
+                          armed={armedChrome}
+                        />
+                      );
+                    })}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
       <p className="text-xs text-muted-foreground">
         Drag a card. ⌥ reveals the palette in the first variant; 1–{MAX_ACCELERATORS} pick; Esc
-        cancels.
+        cancels. Dropping a card that names an Automation ARMS it for{" "}
+        {(TIMING.ARM_MS / 1000).toFixed(1)}s before it fires — Undo on the card or "Undo moves" in
+        the column header reverts the move itself. Once fired, the pulsing border means a session is
+        (simulated as) running; the lab still starts nothing for real.
       </p>
 
       {confirmation !== null ? (
@@ -872,6 +1204,16 @@ export default function AutomationTriggerScratch() {
 
   return (
     <div className="flex flex-col gap-4">
+      {/* Keyframes and `@property` for the arm→fire storyboard, tied to TIMING so
+          the CSS can never drift from the timer that drives it.
+
+          This lives at the SCRATCH root, not inside a tab. It was originally
+          nested in the drag-picker section, which meant the Arming tab rendered
+          armed cards carrying `.lab-arm-progress` and `.lab-arm-pulse` with no
+          keyframes defined anywhere in the document — the bar sat empty and the
+          ring never turned. Both tabs share `BoardCard`, so anything it needs
+          has to be mounted for as long as any tab that uses it. */}
+      <style>{ARM_STYLE}</style>
       <div className="flex items-center gap-1">
         {TABS.map((option) => (
           <button

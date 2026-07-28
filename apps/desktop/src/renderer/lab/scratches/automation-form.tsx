@@ -44,6 +44,7 @@
 import * as React from "react";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
+import { LockSimpleIcon } from "@phosphor-icons/react/dist/csr/LockSimple";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import {
@@ -71,14 +72,17 @@ import { cn } from "@renderer/lib/utils";
 import { ChipEditor, type ChipEditorHandle } from "../automation/chip-editor";
 import { HarnessTag } from "../automation/harness-identity";
 import {
+  APPENDED_CLI_NOTE,
   blankAutomation,
   CONTEXT_CHIPS,
   HARNESS_ADAPTERS,
   SEEDED_AUTOMATIONS,
-  SLASH_COMMANDS,
+  SKILLS,
   tokenizeInstructions,
   type Automation,
+  type AuthoringMode,
   type AutomationScope,
+  type Skill,
 } from "../automation/model";
 
 export const title = "Automation · form";
@@ -116,6 +120,37 @@ function scopeSummary(columnScope: Automation["columnScope"]): string {
   if (columnScope.length === 0) return "No columns";
   if (columnScope.length === 1) return TICKET_STATUS_LABELS[columnScope[0]];
   return `${columnScope.length} columns`;
+}
+
+/**
+ * Never ship a blank name field. Shortcuts doesn't force one, and the
+ * documented result is a junk drawer of "Untitled" automations — so a fresh
+ * Automation gets a real, editable name the moment it exists, derived from the
+ * two things that are already known: where it fires and what it says. It stays
+ * live (see `untouchedNameIds` in the scratch component below) until the author
+ * types into the name field themselves, at which point it is theirs.
+ */
+function suggestName(automation: Automation): string {
+  const trigger =
+    automation.columnScope === "any" || automation.columnScope.length === 0
+      ? null
+      : TICKET_STATUS_LABELS[automation.columnScope[0]];
+  const gist = firstLine(automation.instructions);
+  if (gist === "") return trigger === null ? "New automation" : `New automation in ${trigger}`;
+  return trigger === null ? gist : `${gist} in ${trigger}`;
+}
+
+/** The first non-blank line of Instructions, capped — a title, not a quote. */
+function firstLine(text: string): string {
+  const line = text.split("\n").find((candidate) => candidate.trim() !== "") ?? "";
+  const trimmed = line.trim();
+  return trimmed.length > 48 ? `${trimmed.slice(0, 45)}…` : trimmed;
+}
+
+/** Suggested names are worth replacing outright, not editing around — select
+ *  the whole field on focus so the first keystroke clears it. */
+function selectOnFocus(event: React.FocusEvent<HTMLInputElement>) {
+  event.target.select();
 }
 
 /* ------------------------------------------------------------------ controls */
@@ -303,23 +338,169 @@ function RuntimeControl({
 }
 
 /**
- * The Instructions editor: {@link ChipEditor} plus the two insert affordances.
+ * The Basic/Advanced switch (model.ts's "WHY TWO MODES"). It has to read as a
+ * real, honestly-named setting you can leave alone, not a fork you must resolve
+ * before you can start writing — so it borrows the quiet chip-menu idiom
+ * {@link TriggerControl} and {@link RuntimeControl} already use, rather than the
+ * segmented-tab idiom the LAB itself uses for Layout at the very bottom of this
+ * file. A segmented tab announces "pick one first"; a chip announces "here is
+ * what's active, change it if you need to" — and the second is the honest
+ * description of what switching modes costs here.
  *
- * There is no preview panel any more and no "show what gets sent" toggle. The
- * editor paints chips and commands where they sit, so a second rendering of the
- * same text below it would be showing the same thing twice — and a toggle that
- * reveals what the field means is an admission the field does not.
+ * Switching never touches `instructions` — see the callers, which patch only
+ * `mode`. Prose written in Advanced is still there, untouched, if you drop back
+ * to Basic; its `{{placeholders}}` just stop resolving, which is what
+ * {@link ChipEditor} paints red and the note below the editor explains once.
+ */
+function ModeControl({
+  mode,
+  onChange,
+}: {
+  mode: AuthoringMode;
+  onChange: (mode: AuthoringMode) => void;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          className={cn(chipClass(), "ml-auto")}
+          title="How this Automation's Instructions are authored"
+        >
+          {mode === "basic" ? "Basic" : "Advanced"}
+          <CaretDownIcon weight="bold" className="size-3" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-64">
+        <DropdownMenuItem
+          onSelect={() => onChange("basic")}
+          className="flex-col items-start gap-0.5"
+        >
+          <span className="flex w-full items-center gap-1.5">
+            Basic
+            {mode === "basic" ? <CheckIcon weight="bold" className="ml-auto size-3.5" /> : null}
+          </span>
+          <span className="text-xs text-muted-foreground">
+            Prose and Skills. The agent fetches its own ticket context.
+          </span>
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onSelect={() => onChange("advanced")}
+          className="flex-col items-start gap-0.5"
+        >
+          <span className="flex w-full items-center gap-1.5">
+            Advanced
+            {mode === "advanced" ? <CheckIcon weight="bold" className="ml-auto size-3.5" /> : null}
+          </span>
+          <span className="text-xs text-muted-foreground">
+            {"Adds {{placeholders}} for when the ORDER of context matters."}
+          </span>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
+ * Skills, grouped by {@link Skill.source} rather than by harness — see the
+ * module doc on why the table this replaced was keyed wrong. The grouping
+ * survives because it is a real distinction to an author: a bundled skill will
+ * be there on every machine, a project one only in this repo, a user one only on
+ * yours. Empty groups don't render rather than showing a hollow heading.
+ */
+function SkillPicker({ onInsert }: { onInsert: (snippet: string) => void }) {
+  const groups: Array<{ source: Skill["source"]; label: string }> = [
+    { source: "bundled", label: "Bundled with Volli" },
+    { source: "project", label: "Found in this project" },
+    { source: "user", label: "Found on your machine" },
+  ];
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="xs" className="text-muted-foreground">
+          /<span>Skill</span>
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-72">
+        {groups.map((group) => {
+          const skills = SKILLS.filter((skill) => skill.source === group.source);
+          if (skills.length === 0) return null;
+          return (
+            <React.Fragment key={group.source}>
+              <DropdownMenuLabel>{group.label}</DropdownMenuLabel>
+              {skills.map((skill) => (
+                <DropdownMenuItem
+                  key={skill.name}
+                  onSelect={() => onInsert(skill.name)}
+                  className="justify-between gap-6"
+                >
+                  <span className="font-mono">{skill.name}</span>
+                  <span className="text-xs text-muted-foreground">{skill.detail}</span>
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuSeparator />
+            </React.Fragment>
+          );
+        })}
+        <DropdownMenuLabel className="font-normal text-muted-foreground">
+          Anything else you type is kept, and marked unverified.
+        </DropdownMenuLabel>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
+ * `APPENDED_CLI_NOTE`, verbatim, attached to the Instructions field rather than
+ * described or hidden behind a disclosure (model.ts's "WHY TWO MODES"). It is
+ * the thing that makes Basic mode work, so an author has to be able to see
+ * exactly what the agent was told before deciding how much of it to repeat in
+ * their own prose — a paraphrase or a collapsed drawer would both cost them
+ * that.
  *
- * What survives from the preview is the one thing the paint layer states quietly
- * rather than says: a command this harness does not know is underlined, not
- * explained. That underline is deliberately cheap (#82 — never blocked, only
- * marked), so the count gets one line underneath, and only when there is
- * something to count.
+ * It sits flush against the editor's own border (`-mt-px`, no radius at the
+ * seam) so the pair reads as one field with two parts, not two fields — this
+ * text is compositionally PART OF the prompt, not a sibling note about it. The
+ * dashed rule and the lock glyph are the only things marking it read-only;
+ * everything below stays full-contrast foreground text, because greying it into
+ * a caption would read as "ignorable", which is the one lie this box exists to
+ * prevent.
+ */
+function AppendedCliNote() {
+  return (
+    <div className="-mt-px rounded-b-lg border border-dashed border-border bg-muted/40 px-3 py-2">
+      <div className="flex items-center gap-1.5 pb-1.5 text-xs text-muted-foreground">
+        <LockSimpleIcon weight="fill" className="size-3 shrink-0" />
+        Appended to every run, not editable here — this is what lets the agent fetch its own
+        context.
+      </div>
+      <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-foreground">
+        {APPENDED_CLI_NOTE}
+      </pre>
+    </div>
+  );
+}
+
+/**
+ * The Instructions editor: {@link ChipEditor}, the mode-appropriate insert
+ * affordances, and {@link AppendedCliNote} underneath.
  *
- * The command list still opens from a button rather than on typing `/`. The real
- * picker is `/`-triggered; what is being judged here is the TIER structure —
- * that a compiled-in `/code-review` and a scanned `/tdd` are both offered and
- * visibly different in origin — and that survives the cheaper trigger.
+ * There is no preview panel and no "show what gets sent" toggle. The editor
+ * paints chips and skills where they sit, so a second rendering of the same text
+ * below it would be showing the same thing twice — and a toggle that reveals
+ * what the field means is an admission the field does not.
+ *
+ * Basic mode offers only Skills — no Context chip row, no insert-chip buttons,
+ * because Basic has nothing for them to resolve against. If the author types a
+ * `{{placeholder}}` anyway, {@link ChipEditor} already paints it destructive; the
+ * one line under the editor says why, ONCE, regardless of how many appear,
+ * rather than annotating each occurrence a second time.
+ *
+ * The Skill list still opens from a button rather than on typing `/`. The real
+ * picker is `/`-triggered; what is being judged here is the SOURCE structure —
+ * that a bundled `/volli` and a project `/tdd` are both offered and visibly
+ * different in origin — and that survives the cheaper trigger.
  *
  * `heightClass` rather than `rows`: the editor is two stacked layers inside a
  * bordered box, so its height is the box's, not a textarea attribute's. Callers
@@ -328,19 +509,18 @@ function RuntimeControl({
  */
 function InstructionsEditor({
   automation,
-  onChange,
+  update,
   heightClass,
 }: {
   automation: Automation;
-  onChange: (instructions: string) => void;
+  update: (patch: Partial<Automation>) => void;
   heightClass: string;
 }) {
   const editorRef = React.useRef<ChipEditorHandle>(null);
-  const harnessId = automation.runtime.harnessId;
-  const commands = SLASH_COMMANDS[harnessId];
-  const unverified = tokenizeInstructions(automation.instructions, harnessId).filter(
-    (token) => token.kind === "command" && !token.known,
-  ).length;
+  const { mode, instructions } = automation;
+  const tokens = tokenizeInstructions(instructions, mode);
+  const unverifiedSkills = tokens.filter((token) => token.kind === "skill" && !token.known).length;
+  const strayPlaceholders = mode === "basic" && tokens.some((token) => token.kind === "chip");
 
   function insert(snippet: string) {
     editorRef.current?.insert(snippet);
@@ -348,83 +528,61 @@ function InstructionsEditor({
 
   return (
     <div className="flex flex-col gap-2">
-      <ChipEditor
-        ref={editorRef}
-        value={automation.instructions}
-        onChange={onChange}
-        harnessId={harnessId}
-        placeholder="What should the agent do?"
-        // A min and a max, never a fixed height: the editor grows with what you
-        // write and then scrolls inside itself rather than pushing the settings
-        // strip off the page — the same bounded-growth rule the New-ticket
-        // composer's body already follows.
-        className={heightClass}
-      />
-
-      <div className="flex flex-wrap items-center gap-1.5">
-        {CONTEXT_CHIPS.map((chip) => (
-          <button
-            key={chip.token}
-            type="button"
-            title={`Resolves to ${chip.resolves}`}
-            onClick={() => insert(`{{${chip.token}}}`)}
-            className="rounded-full border border-dashed border-border px-2 py-0.5 font-mono text-xs text-muted-foreground transition-colors hover:border-solid hover:text-foreground"
-          >
-            {chip.label}
-          </button>
-        ))}
-
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="xs" className="text-muted-foreground">
-              /<span>Command</span>
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-72">
-            <DropdownMenuLabel className="flex items-center gap-1">
-              Built in to <HarnessTag harnessId={harnessId} muted={false} />
-            </DropdownMenuLabel>
-            {commands
-              .filter((command) => command.tier === "builtin")
-              .map((command) => (
-                <DropdownMenuItem
-                  key={command.name}
-                  onSelect={() => insert(command.name)}
-                  className="justify-between gap-6"
-                >
-                  <span className="font-mono">{command.name}</span>
-                  <span className="text-xs text-muted-foreground">{command.detail}</span>
-                </DropdownMenuItem>
-              ))}
-            <DropdownMenuSeparator />
-            <DropdownMenuLabel>Found in this project</DropdownMenuLabel>
-            {commands
-              .filter((command) => command.tier === "scanned")
-              .map((command) => (
-                <DropdownMenuItem
-                  key={command.name}
-                  onSelect={() => insert(command.name)}
-                  className="justify-between gap-6"
-                >
-                  <span className="font-mono">{command.name}</span>
-                  <span className="text-xs text-muted-foreground">{command.detail}</span>
-                </DropdownMenuItem>
-              ))}
-            <DropdownMenuSeparator />
-            <DropdownMenuLabel className="font-normal text-muted-foreground">
-              Anything else you type is kept, and marked unverified.
-            </DropdownMenuLabel>
-          </DropdownMenuContent>
-        </DropdownMenu>
+      <div className="flex flex-col">
+        <ChipEditor
+          ref={editorRef}
+          value={instructions}
+          onChange={(value) => update({ instructions: value })}
+          mode={mode}
+          placeholder="What should the agent do?"
+          // A min and a max, never a fixed height: the editor grows with what
+          // you write and then scrolls inside itself rather than pushing the
+          // settings strip off the page — the same bounded-growth rule the
+          // New-ticket composer's body already follows.
+          className={cn(heightClass, "rounded-b-none")}
+        />
+        <AppendedCliNote />
       </div>
 
-      {/* Last, not between the editor and its toolbar: appearing and disappearing
-          as you type must not shift the buttons you are aiming at. */}
-      {unverified > 0 ? (
+      <div className="flex flex-wrap items-center gap-1.5">
+        {mode === "advanced"
+          ? CONTEXT_CHIPS.map((chip) => (
+              <button
+                key={chip.token}
+                type="button"
+                title={`Resolves to ${chip.resolves}`}
+                onClick={() => insert(`{{${chip.token}}}`)}
+                className="rounded-full border border-dashed border-border px-2 py-0.5 font-mono text-xs text-muted-foreground transition-colors hover:border-solid hover:text-foreground"
+              >
+                {chip.label}
+              </button>
+            ))
+          : null}
+
+        <SkillPicker onInsert={insert} />
+
+        <ModeControl mode={mode} onChange={(next) => update({ mode: next })} />
+      </div>
+
+      {/* Both notes can be true at once (an Advanced automation switched to
+          Basic with an unresolved skill AND a stray placeholder), so they stack
+          rather than compete for one slot. Last, not between the editor and its
+          toolbar: appearing and disappearing as you type must not shift the
+          buttons you are aiming at. */}
+      {strayPlaceholders ? (
         <p className={cn("flex items-center gap-1.5 text-xs text-muted-foreground", ENTER_CLASS)}>
           <WarningIcon className="size-3.5 shrink-0" />
-          {unverified === 1 ? "1 command isn't" : `${unverified} commands aren't`} one{" "}
-          {HARNESS_ADAPTERS[harnessId].label} knows. Sent as written.
+          {
+            "{{ }} doesn't resolve in Basic mode — the agent sees the literal braces. Switch to"
+          }{" "}
+          Advanced, or write it as prose.
+        </p>
+      ) : null}
+      {unverifiedSkills > 0 ? (
+        <p className={cn("flex items-center gap-1.5 text-xs text-muted-foreground", ENTER_CLASS)}>
+          <WarningIcon className="size-3.5 shrink-0" />
+          {unverifiedSkills === 1 ? "1 skill isn't" : `${unverifiedSkills} skills aren't`} one Volli
+          can see here. Sent as written — the harness may still find it.
         </p>
       ) : null}
     </div>
@@ -502,6 +660,7 @@ function ComposerLayout({
       <input
         value={automation.name}
         onChange={(event) => update({ name: event.target.value })}
+        onFocus={selectOnFocus}
         placeholder="Automation name"
         aria-label="Automation name"
         className="w-full border-none bg-transparent text-title font-medium text-foreground outline-none placeholder:text-muted-foreground"
@@ -512,7 +671,7 @@ function ComposerLayout({
           would be the first thing to contradict that. */}
       <InstructionsEditor
         automation={automation}
-        onChange={(instructions) => update({ instructions })}
+        update={update}
         heightClass="min-h-[320px] max-h-[52vh]"
       />
 
@@ -559,6 +718,7 @@ function SectionedLayout({
       <input
         value={automation.name}
         onChange={(event) => update({ name: event.target.value })}
+        onFocus={selectOnFocus}
         placeholder="Automation name"
         aria-label="Automation name"
         className="w-full border-none bg-transparent text-heading font-medium text-foreground outline-none placeholder:text-muted-foreground"
@@ -588,7 +748,7 @@ function SectionedLayout({
         </div>
         <InstructionsEditor
           automation={automation}
-          onChange={(instructions) => update({ instructions })}
+          update={update}
           heightClass="min-h-[260px] max-h-[44vh]"
         />
       </div>
@@ -720,22 +880,57 @@ export default function AutomationFormScratch() {
   const [scope, setScope] = React.useState<AutomationScope>("project");
   const [selectedId, setSelectedId] = React.useState(SEEDED_AUTOMATIONS[0].id);
   const [layout, setLayout] = React.useState<Layout>("composer");
+  // Automations whose name is still the auto-suggestion rather than something
+  // the author typed — see `suggestName`. Seeded automations start out of this
+  // set; they already have real names.
+  const [untouchedNameIds, setUntouchedNameIds] = React.useState<Set<string>>(new Set());
 
   const selected = automations.find((automation) => automation.id === selectedId) ?? automations[0];
 
   const update = React.useCallback(
     (patch: Partial<Automation>) => {
+      // A direct edit to the name field is the one thing that ends the
+      // auto-suggestion — from here the author owns the title.
+      if ("name" in patch) {
+        setUntouchedNameIds((ids) => {
+          if (!ids.has(selected.id)) return ids;
+          const next = new Set(ids);
+          next.delete(selected.id);
+          return next;
+        });
+      }
       setAutomations((current) =>
-        current.map((automation) =>
-          automation.id === selected.id ? { ...automation, ...patch } : automation,
-        ),
+        current.map((automation) => {
+          if (automation.id !== selected.id) return automation;
+          const next = { ...automation, ...patch };
+          // Anything else changing (trigger, instructions) keeps the name in
+          // sync for as long as it is still the auto-suggestion.
+          if (!("name" in patch) && untouchedNameIds.has(automation.id)) {
+            next.name = suggestName(next);
+          }
+          return next;
+        }),
       );
     },
-    [selected.id],
+    [selected.id, untouchedNameIds],
   );
 
   function create() {
-    const fresh = { ...blankAutomation(scope), id: `atm-${automations.length + 1}` };
+    // Trigger arrives pre-specified where possible (Notion puts "new
+    // automation" in the column toolbar, so the trigger is half-filled before
+    // the form even opens). This lab has no board to invoke "New automation"
+    // FROM, so it models the same entry point: the button behaves as though it
+    // were clicked from a column, not from a neutral "Any column" state.
+    // Todo stands in for that column; TriggerControl right below is the
+    // obvious way to change it.
+    const enteredFromColumn: TicketStatus = "todo";
+    const fresh: Automation = {
+      ...blankAutomation(scope),
+      id: `atm-${automations.length + 1}`,
+      columnScope: [enteredFromColumn],
+    };
+    fresh.name = suggestName(fresh);
+    setUntouchedNameIds((ids) => new Set(ids).add(fresh.id));
     setAutomations((current) => [...current, fresh]);
     setSelectedId(fresh.id);
   }
