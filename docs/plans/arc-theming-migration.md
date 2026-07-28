@@ -1,10 +1,17 @@
 # Arc theming — lab to app
 
 The vivid canvas built in `apps/desktop/src/renderer/lab/arc/` replaces the seed-based
-theming system wholesale. This is the plan for doing that in five stacked PRs.
+theming system wholesale. This is the plan for doing that.
 
-Status: **plan**. The lab side is settled and committed (`6ae34ad`); nothing in
-`apps/desktop/src/renderer/src/` has moved yet.
+Status: **in progress**, on one branch rather than five stacked PRs — the owner asked
+for the whole migration in one go. The section numbering below still describes the
+work in the original order because the commits follow it.
+
+**A validation pass found four of this document's calls wrong.** They are corrected in
+place and marked ⚠︎ **superseded** where the original reasoning is worth keeping. The
+short version: the export decision rested on an importer that does not exist, the
+first-paint decision rested on a CSS mechanism that cannot express the setting, the e2e
+rewrite is about a third the size feared, and one "defect" claim is only true at zoom 1.
 
 ---
 
@@ -70,12 +77,15 @@ all written as custom properties, exactly as `lab/arc/paint.ts` does today.
 | # | Decision | Choice | Consequence |
 | --- | --- | --- | --- |
 | 1 | Premade themes | **None ship.** Ember is the built-in default only. | The 6 built-in slugs and everything keyed off them are deleted. |
-| 2 | Authoring | **The stop editor ships** as a real feature; users save canvases. | New UI, new persistence, new IPC. |
+| 2 | Authoring | **The stop editor ships** as a real feature. **One canvas per scope, edited in place** — no named library. | New UI, new persistence, new IPC. ⚠︎ *Superseded in part:* "users save canvases" implied a `canvases` table with save/rename/duplicate/delete. Rejected — Arc itself does not work that way (a Space has one theme you edit), and a library buys a whole management surface for a capability nobody asked for. Migration 014 is two nullable columns on `projects`, not a table. |
 | 3 | Vibrancy + grain | **Ship with the editor.** | Vibrancy is not cosmetic — it feeds the light ladder's tint gain, so it is a ladder input. |
 | 4 | Appearance | **light / dark / auto, global + per-workspace.** | `class="dark"` gets unpinned. Resolution logic doubles. |
 | 5 | Legibility | **Solve ink against the canvas; warn when a floor is physically unreachable.** No band clamp. | The old `canvasLayerBackground` read-time clamp is deleted. The editor gains a warning state. |
 | 6 | Monaco editor theme | **Keep the separate picker.** | The lab's canvas-derived `arcEditorTheme` **does not port**. The editor is the one surface that will not match the canvas. Only the slug-keyed fallback dies; default becomes One Dark Pro. |
-| 7 | Existing theme data | **Reset to Ember.** No seed→canvas conversion. | Migration drops the old rows rather than translating them. |
+| 7 | Existing theme data | **Reset to Ember.** No seed→canvas conversion. | The two systems share the `theme` kv key through the transition and each one's payload fails the other's guard, so the reset falls out of the guards rather than needing conversion code. The user's `<userData>/volli/themes/*.json` files are **left on disk**, orphaned — inert, and deleting a user's authored work to tidy up is not a trade this migration gets to make. |
+| 8 | Export format | **Do nothing.** ⚠︎ *Reverses the original call.* | The premise was false: `export.ts:5` — "Export only: there is deliberately no import/restore path here." There is no importer to keep compatible, and the document already carries `format` plus a live `schemaVersion` off `PRAGMA user_version`, which becomes 14 for free. Worse, `export.test.ts:257` derives from `PRAGMA table_info('projects')` and requires every column to have an exported field — so "leave 013's columns dead but drop them from the export" was the one option that test forbids. Keep emitting them; add the two new fields. |
+| 9 | First paint | **Preload stamps the mode class.** ⚠︎ *Replaces the media-query fallback.* | `@media (prefers-color-scheme: light)` knows the *system*, not the *setting* — a user on a light Mac who chose dark gets a light first paint and a flip, the same flash from the other side. An inline `<script>` is silently blocked by CSP (`index.html:15` has no `'unsafe-inline'`). Preload runs before any page script and main hands it the resolved mode via `additionalArguments`, so it honours an explicit choice, which the media query cannot. |
+| 10 | Light mode | **Ships now**, reversing #70's deferral. | The engine's light half is built and tuned; what was never exercised is the app. The terminal is therefore **not** the untouched surface §5 claims — `ghostty-config.ts` always took the `dark:` half of a `light:X,dark:Y` pair, and `terminal/appearance.ts`'s 16-entry fallback palette is hand-tuned for near-black and fails *silently* under light, because the tokens parse either way. |
 
 ---
 
@@ -101,24 +111,32 @@ pass unchanged apart from import paths.
 | Item | Shape |
 | --- | --- |
 | Global canvas | `app_state` key `theme` — payload becomes a `Canvas`, not a `ThemeDefinition` |
-| Saved canvases | new `canvases` table: `id`, `name`, `canvas` (JSON), `created_at`, `updated_at` |
 | Global appearance | `app_state` key `appearance` — `"light" \| "dark" \| "auto"` |
-| Per-workspace | migration **014** adds `projects.theme_canvas_id`, `projects.theme_appearance` |
+| First-paint hint | `app_state` key `first-paint` — `{appearance, background}`, see below |
+| Per-workspace | migration **014** adds `projects.theme_canvas` (JSON) and `projects.theme_appearance`, both nullable and independently overridable |
 | Migration 013's 4 columns | left dead (SQLite `DROP COLUMN` is not safe on older versions); stop reading them |
-| IPC | replaces the 6 `volli:theme-file-*` channels with canvas CRUD on the same descriptor-table pattern |
+| IPC | replaces the 6 `volli:theme-file-*` channels with five **write** channels on the same descriptor-table pattern — reads already ride `volli:data-bootstrap` |
+
+⚠︎ *Superseded:* there is **no `canvases` table** (decision 2) and no `theme_canvas_id`
+— a workspace stores its canvas inline, because there is nothing for an id to point at.
 
 The custom-themes-as-JSON-files layer (`shared/theme/custom-themes.ts`,
-`main/theme-files.ts`) is **replaced by the table**, not ported. That deletes the slug
+`main/theme-files.ts`) is **replaced by the columns**, not ported. That deletes the slug
 path-traversal boundary along with it — worth noting as a security surface that simply
-stops existing.
+stops existing. It outlives PR2 in practice: the renderer's picker calls all six channels,
+so they die with the picker, not with the storage.
 
-**Export format — decided: version it.** `main/db/export.ts` emits `themeAppSlug` /
-`themeSeed` per project in a durable external format. Rather than emit them forever as
-dead `null`s, the export gains a version field and drops them, carrying
-`themeCanvasId` / `themeAppearance` instead. The importer must accept the previous,
-unversioned shape and treat a missing version as v1 — an export taken before this change
-is the only kind that exists today, so refusing it would strand the owner's own backups.
-Cover both directions with a test.
+**Export format — decided: nothing to do.** See decision 8. Keep emitting 013's four
+fields (a test requires it while the columns exist), add `themeCanvas` / `themeAppearance`
+as raw stored strings, and write no version field and no importer.
+
+**The first-paint hint.** Main must set the window background and the mode class before
+the renderer boots, and per-workspace scoping (decision 4) means it cannot derive them:
+the active workspace lives inside a Zustand persist envelope that `app-state-repo.ts`
+deliberately never parses. So the renderer writes back what it actually resolved, and main
+reads that one row synchronously at window construction. It is a **hint** — the
+`{canvas, appearance}` pair stays authoritative — and one enum plus one hex is not a
+resolved token set, so the rule against persisting those is intact.
 
 ### PR3 — the paint path
 
@@ -132,25 +150,32 @@ Cover both directions with a test.
 - Regenerate the `globals.css` literal fallback from the new pipeline at Ember.
 
 **First paint — decided: `auto` stays the default, so the flash gets solved, not accepted.**
-The CSS fallback can only describe one mode, so on a light system under `auto` first paint
-would be dark-Ember and then flip. `globals.css` therefore gains a
-`@media (prefers-color-scheme: light)` block holding the light-Ember token set alongside
-the dark one.
+
+⚠︎ *The mechanism is superseded — see decision 9.* The original call was a
+`@media (prefers-color-scheme: light)` block in `globals.css`. It cannot work: that query
+knows the **system**, not the **setting**, so a user on a light Mac who explicitly chose
+dark gets a light first paint and then a flip — the same flash, arriving from the other
+side. And the obvious repair, an inline `<script>` that stamps the class, is silently
+blocked by CSP (`index.html:15` carries no `'unsafe-inline'` in `script-src`).
+
+**What ships instead:** preload stamps the class. Preload runs before any page script, and
+main has already read the resolved mode out of the `first-paint` hint synchronously at
+window construction and passed it in `additionalArguments`. Main sets
+`BrowserWindow.backgroundColor` from the same hint, so the window edge is right before the
+document paints anything. No media query, no CSP change, and it honours an explicit
+choice.
 
 Two consequences that must not be lost:
 
-- **The new block is generated, exactly like the first.** It is `generateThemeTokens` at
-  Ember run through the light ladder, pasted verbatim. The *regenerate, never hand-tune*
-  rule in `CLAUDE.md` now covers two blocks, and both must be regenerated together — a
-  hand-tuned light block that drifts from the dark one is the failure mode this rule exists
-  to prevent.
-- **The media query is a first-paint fallback only, not the appearance mechanism.** Once
-  the renderer boots, the resolved appearance is authoritative and is written as inline
-  custom properties that outrank it. A user on a light system who has explicitly chosen
-  dark must not see a light flash on the way in, so the resolved mode has to be readable
-  before first paint — persist it somewhere main can read at window construction and hand
-  it to the renderer, rather than waiting on a store hydrate. `windowBackgroundColor`
-  needs the same value for the same reason.
+- **`globals.css` carries two blocks and both are generated** — `:root, :root.dark` and
+  `:root.light`. The *regenerate, never hand-tune* rule in `CLAUDE.md` now covers both, and
+  they must be regenerated together: a light block that drifts from the dark one is exactly
+  the failure that rule exists to prevent. Both must also carry the **canvas** tokens
+  (`--canvas`, the ink rungs, the lift veils, the shadow tiers), or first paint shows a
+  gradient with no lift, ink or shadows.
+- **Neither block is the appearance mechanism.** Once the renderer boots, the resolved
+  appearance is authoritative and is written as inline custom properties that outrank both.
+  The blocks exist only for the frames before that.
 
 **Done when:** the app renders the canvas with no theme picker involved, in both modes,
 and the terminal repaints through `applyThemeTokens`' existing choke point.
@@ -192,20 +217,42 @@ Only now. Full list in §4.
 | Docs | `apps/docs/.../guides/theming.mdx`, `assets/screenshots/theme-picker.png`, the `docs-shots.mjs` step that regenerates it |
 | Tests | `catalog.test.ts`, `builtin-themes.test.ts`, `custom-themes.test.ts`, `theme-files.test.ts`, `canvas.test.ts`, `canvas-layer.test.ts`, `theme-picker*.test.*`, `theme-editor-model.test.ts`, grain tests |
 
+### Also dies — missing from the list above
+
+The audit found nine items the original table assigned to neither list. Every one of them
+would have compiled after the deletions and been wrong.
+
+| Item | Why it was missed |
+| --- | --- |
+| `renderer/src/theme/theme-canvas.tsx` + its test | Imports `nextCanvasLayers` from `canvas-layer.ts`; on no list |
+| `components/app-shell.tsx:11,12,60,64,214` | Imports `canvasBackground`, reads `.grain`/`.canvas` off the theme. If those fields survive as vestigial, `GrainOverlay` keeps painting a PNG tile **over** the new gradient grain — double grain, no failure |
+| `shared/theme/persistence.ts` + `persistence.test.ts` | Owns **both** the dying theme payload and the *surviving* editor kv. Must be split, not deleted — `main/db/theme-repo.ts:18-26` imports five of its exports |
+| `shared/theme/definition.ts` | Holds `DEFAULT_THEME`, which Ember-as-default and `window-theme.ts:29` both depend on. §4 deletes `builtin-themes.ts` but `DEFAULT_THEME` was never there |
+| `command-palette.tsx:27,34,95-106` | The "Change theme" entry lives here, **not** in `chrome-bar.tsx` as the Picker UI row claims — `chrome-bar.tsx:42,93,95` only holds dialog state |
+| `editor-theme-catalog.test.ts:57-99` | Slug-mapping cases; only the e2e counterpart was called out |
+| `theme/apply.test.ts:150-235` | Tint/slug-resolve cases |
+| `components/theme/project-appearance-model.test.ts`, `editor-settings-model.test.ts` | Auto-tint and `appThemeSlug` cases |
+| `globals.css:283-302`, `:174` | The canvas-fade keyframes half of `canvas-layer`, and `html { color-scheme: dark }` |
+
+Plus three dark-only assumptions outside the theming code entirely, live because
+decision 10 ships light: `shared/ghostty-config.ts:46`, `terminal/appearance.ts:28-56`,
+`components/ui/sonner.tsx:14`. And `renderer/index.html:2-3` and `AGENTS.md:31`, which
+both assert the pin as policy.
+
 ## 5. Survives
 
 | Item | Why |
 | --- | --- |
 | `shared/theme/color.ts` (all 16 exports) | Pure OKLCH/APCA math; the new ladder is built on it |
 | `THEME_TOKEN_NAMES`, `ThemeTokens`, `HUE_LOCKED_TOKENS`, `isThemeTokenName` | Still the output contract |
-| `generateThemeTokens`, `solveLightnessForContrast`, `neutralChroma`, `pickAccentLabel` | The base ladder both modes build on |
+| `generateThemeTokens`, `solveLightnessForContrast`, `neutralChroma`, `pickAccentLabel` | The base ladder both modes build on. ⚠︎ **Not "unchanged"** — it takes a `ThemeDefinition`, a type §4 guts. §8 is right that the type must be split; §1 and §5 are wrong. It reads only `seed`, `accent` and `overrides`, so a three-field input type is a faithful narrowing |
 | `shared/theme/veil.ts` | The canvas re-solves veils per paint |
 | `applyThemeTokens` + its `refreshTerminalTokenTheme` hook | The single DOM write and the terminal's repaint choke point |
-| `scope-transition.ts` | The crossfade is scope-agnostic |
-| `windowBackgroundColor` | Main still needs one `--background` hex |
-| `app_state` table, `getAllAppState` / `setAppState` | Generic kv; the new payload rides it |
+| `scope-transition.ts` | The crossfade is scope-agnostic — ⚠︎ but `shouldEaseScopeRepaint` is keyed on projectId alone, so a light↔dark flip has no scope change and would **hard-cut**. Extend the trigger |
+| `windowBackgroundColor` | Main still needs one hex — ⚠︎ but it now returns the canvas's **base fill**, not `--background`: with a canvas armed, the card's rung is no longer what Chromium paints at the window edge |
+| `app_state` table, `getAllAppState` / `setAppState` | Generic kv; the new payload rides it. ⚠︎ There is no delete verb — removing the stale `volli:theme` row needed a new `deleteAppState` |
 | Editor surface (`editor-themes.ts`, `monaco-theme.ts`, its IPC and kv) | Separate surface — decision 6 |
-| Terminal surface (`ghostty-overlay.ts`, `theme-overlay.ts`) | Separate surface, untouched |
+| Terminal surface (`ghostty-overlay.ts`, `theme-overlay.ts`) | ⚠︎ **Not untouched** once light ships — see decision 10 |
 | `project-identity.ts` `PROJECT_COLORS` / `projectColor` | Project-tile palette, independent of theming |
 | "Never persist resolved tokens" (`apply.ts:6-16`) | Architectural invariant the new system must also honour |
 
@@ -216,10 +263,10 @@ Only now. Full list in §4.
 | Layer | Work |
 | --- | --- |
 | `@volli/shared` | Ported canvas tests come across as-is (PR1). Add golden-hex coverage for Ember at both modes so a ladder change fails loudly. |
-| DB | Migration 014 up/down; canvas CRUD; the reset-to-Ember path from a database holding old slug rows. |
+| DB | Migration 014 **up only** — ⚠︎ this runner has no down-migrations (`interface Migration` is `{version, name, sql}`); the original "up/down" row asked for something that does not exist. Plus the reset-to-Ember path from a database holding old slug rows. |
 | Store | Rewrite `stores/theme.test.ts` for the new shape. The scope-resolution matrix doubles — canvas × appearance, global × workspace. |
-| e2e | **`theming-smoke.mjs` (~1000 lines) is a rewrite, not a patch** — every case drives the picker that no longer exists. `canvas-shots.mjs` and `grain-smoke.mjs` die with the old canvas model. `editor-theme-smoke.mjs` needs its slug-mapping case removed. |
-| Local-only | Desktop e2e do not run in CI. Run `theming-smoke`, `editor-theme-smoke` and `live-preview-smoke` locally before shipping each PR that touches the renderer. |
+| e2e | ⚠︎ **Not the rewrite this row feared.** Of `theming-smoke.mjs`'s 27 cases (1174 lines, not ~1000), only **7** are picker choreography. Ten assert ghostty-overlay non-mutation and relaunch persistence — surfaces §5 says survive untouched — and ten are scope precedence. It is a new harness around mostly-intact assertions: seed a saved `Canvas` instead of a theme file, enter through the editor instead of `ThemePicker`. `canvas-shots.mjs` (452) and `grain-smoke.mjs` (197) do die with the old canvas model. `editor-theme-smoke.mjs` (287) needs only its case 5 pruned. |
+| Local-only | Desktop e2e do not run in CI. Run `theming-smoke` and `editor-theme-smoke` locally before shipping. ⚠︎ `live-preview-smoke.mjs` is **not** a theme smoke — it is 273 lines of Document Mode markdown reveal rules and contains neither "theme" nor "canvas". |
 
 ---
 
@@ -242,17 +289,22 @@ Both are pinned by tests in the lab, so neither can drift silently.
    a retune, not a port.
 
 3. **A stale one-pixel rule.** `[data-slot="sidebar-inset"]`'s `margin-left: -1px` in
-   `lab.css` was justified by a `--sidebar-width` "fractional-rounding tax" that does not
-   exist. With the container's border zeroed, the two halves meet exactly, so it is now a
-   pure 1px overlap. Harmless where the sidebar draws no right border; resolve it during
-   the port rather than carrying the rationale over.
+   `lab.css` was justified by a `--sidebar-width` "fractional-rounding tax". Zeroing the
+   container's `border-right-width` (`lab.css:423-424`) was the real 1px source, so the
+   rule is now a pure overlap and should go.
+
+   ⚠︎ But the stated reason is wrong: fractional widths **are** reachable.
+   `sidebar-resize-handle.tsx:46` sets the width from `(clientX - startX) / uiScale`, so
+   any zoom ≠ 1 produces a non-integer. Drop the rule to 0, but verify at a **zoomed,
+   dragged** sidebar rather than assuming integrality.
 
 ---
 
 ## 8. Risks
 
-- **The e2e rewrite is the single largest piece of work outside the editor UI**, and it
-  does not run in CI, so it will only fail locally. Budget for it explicitly.
+- ⚠︎ **The e2e rewrite was over-estimated** — see §6. It is a new harness around
+  assertions that mostly survive, not 27 net-new cases. It still does not run in CI, so it
+  will only ever fail locally, which is the part of this risk that stands.
 - **Unpinning `class="dark"`** touches every surface that assumed dark. The light path is
   well-tested in the lab but has never run against the whole app.
 - **Decision 6 leaves a visible seam**: the Monaco editor will not match the canvas. That
