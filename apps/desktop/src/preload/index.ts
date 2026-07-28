@@ -98,6 +98,10 @@ import type {
   CustomThemeListResult,
   CustomThemeReadResult,
   CustomThemeWriteResult,
+  Appearance,
+  Canvas,
+  FirstPaintHint,
+  ProjectCanvasWriteResult,
 } from "@volli/shared";
 
 /** Typed `ipcRenderer.invoke` bound to the shared contract: the channel literal fixes both the argument tuple and the result type, so a wrong pairing is a compile error. */
@@ -113,6 +117,39 @@ const send = <C extends keyof VolliSendContract>(
 ): void => {
   ipcRenderer.send(channel, ...args);
 };
+
+/**
+ * The flag main appends to this window's `process.argv` (`additionalArguments`)
+ * carrying the appearance it resolved for first paint.
+ *
+ * A command-line flag rather than an IPC call because of WHEN it is needed: the
+ * mode class has to be on `<html>` before the first frame, and `invoke()`
+ * returns a promise — anything awaited is a frame too late, which is the light
+ * flash the whole first-paint hint exists to prevent. `sendSync` would block
+ * main; argv is already there when the preload's first statement runs.
+ *
+ * Must match `FIRST_PAINT_APPEARANCE_ARG` in `src/main/window-theme.ts`, which
+ * builds it. Duplicated as a literal because preload may not import
+ * @volli/shared at runtime (see CAUTION in vite.config.ts) and main is not
+ * importable from here at all; a test in main pins the two together.
+ */
+const FIRST_PAINT_ARG_PREFIX = "--volli-first-paint-appearance=";
+
+/**
+ * The resolved mode main handed this window. Never `auto` — what main passes is
+ * what it RESOLVED, because an unresolved mode is the one value a first paint
+ * cannot act on.
+ *
+ * `null` means no window built by `createWindow` is behind this preload (the
+ * flag is absent or unreadable), so the caller keeps whatever the document
+ * already declares rather than guessing at a mode.
+ */
+function firstPaintAppearance(): "light" | "dark" | null {
+  const flag = process.argv.find((arg) => arg.startsWith(FIRST_PAINT_ARG_PREFIX));
+  if (flag === undefined) return null;
+  const value = flag.slice(FIRST_PAINT_ARG_PREFIX.length);
+  return value === "light" || value === "dark" ? value : null;
+}
 
 // Minimal typed API surface exposed to the renderer.
 const api = {
@@ -502,6 +539,45 @@ const api = {
       projectId: string,
       override: ProjectThemeOverride | null,
     ): Promise<ThemeSetProjectResult> => invoke("volli:theme-set-project", { projectId, override }),
+    /**
+     * The canvas (docs/plans/arc-theming-migration.md): five writes, no reads.
+     * Everything these persist comes back through `data.bootstrap()` — the
+     * global canvas and appearance as `app_state` rows, a project's as columns
+     * on its row — so there is deliberately no `canvas.state()` twin.
+     */
+    setGlobalCanvas: (canvas: Canvas): Promise<Result> =>
+      invoke("volli:theme-canvas-set-global", { canvas }),
+    /** Persists the global light/dark/auto choice. */
+    setGlobalAppearance: (appearance: Appearance): Promise<Result> =>
+      invoke("volli:theme-appearance-set-global", { appearance }),
+    /** Persists one workspace's canvas; `null` clears it back to inheriting the global one. */
+    setProjectCanvas: (
+      projectId: string,
+      canvas: Canvas | null,
+    ): Promise<ProjectCanvasWriteResult> =>
+      invoke("volli:theme-canvas-set-project", { projectId, canvas }),
+    /** Persists one workspace's appearance; `null` clears it back to inheriting. */
+    setProjectAppearance: (
+      projectId: string,
+      appearance: Appearance | null,
+    ): Promise<ProjectCanvasWriteResult> =>
+      invoke("volli:theme-appearance-set-project", { projectId, appearance }),
+    /**
+     * Records the mode and background this paint resolved to, so the NEXT
+     * launch constructs its window with both already known. A hint, not an
+     * authority: `{canvas, appearance}` stays the pair everything is derived
+     * from, and this row is overwritten on every paint.
+     */
+    setFirstPaint: (hint: FirstPaintHint): Promise<Result> =>
+      invoke("volli:theme-first-paint-set", hint),
+    /**
+     * What main resolved for THIS window before the renderer existed — the
+     * value the inline script in `index.html` stamps the mode class from, read
+     * synchronously off the process arguments rather than over IPC because a
+     * round trip cannot be awaited before first paint. `null` only when the
+     * flag is missing — keep the document's declared mode in that case.
+     */
+    firstPaintAppearance,
     /** Rewrites keys in Volli's global ghostty overlay (`null` removes a key). */
     writeGlobalOverlay: (edits: OverlayEdits): Promise<TerminalOverlayWriteResult> =>
       invoke("volli:theme-terminal-overlay-write", { scope: "global", edits }),

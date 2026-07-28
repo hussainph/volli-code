@@ -193,7 +193,7 @@ describe("migrate — fresh install", () => {
     const db = openRawDb(dbPath);
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(13);
+    expect(db.pragma("user_version", { simple: true })).toBe(14);
     db.close();
   });
 
@@ -345,7 +345,7 @@ describe("migrate — 002 to 004 upgrade path", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(13);
+    expect(db.pragma("user_version", { simple: true })).toBe(14);
     const project = db.prepare("SELECT * FROM projects WHERE id = 'p1'").get() as {
       name: string;
     };
@@ -399,7 +399,7 @@ describe("migrate — 002 to 004 upgrade path", () => {
     const latestVersion = db.pragma("user_version", { simple: true }) as number;
     migrate(db, dbPath); // second call: nothing pending
 
-    expect(db.pragma("user_version", { simple: true })).toBe(13);
+    expect(db.pragma("user_version", { simple: true })).toBe(14);
     // No backup should exist for the already-latest version — the second
     // migrate() call had nothing to apply.
     expect(existsSync(`${dbPath}.backup-v${latestVersion}`)).toBe(false);
@@ -414,7 +414,7 @@ describe("migrate — 004 to 005 upgrade path (ticket-number counter backfill)",
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(13);
+    expect(db.pragma("user_version", { simple: true })).toBe(14);
     const projects = db
       .prepare("SELECT id, next_ticket_number FROM projects ORDER BY id")
       .all() as { id: string; next_ticket_number: number }[];
@@ -467,7 +467,7 @@ describe("migrate — 005 to 006 upgrade path (truthful session metadata)", () =
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(13);
+    expect(db.pragma("user_version", { simple: true })).toBe(14);
     expect(db.prepare("SELECT launch_kind, placement FROM sessions WHERE id = 's1'").get()).toEqual(
       { launch_kind: "unknown", placement: "unknown" },
     );
@@ -483,7 +483,7 @@ describe("migrate — 006 to 007 upgrade path (execution preferences)", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(13);
+    expect(db.pragma("user_version", { simple: true })).toBe(14);
     expect(db.prepare("SELECT preferred_harness_id FROM tickets WHERE id = 't1'").get()).toEqual({
       preferred_harness_id: "claude-code",
     });
@@ -502,7 +502,7 @@ describe("migrate — 007 to 008 upgrade path (worktree setup command)", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(13);
+    expect(db.pragma("user_version", { simple: true })).toBe(14);
     expect(db.prepare("SELECT name, setup_command FROM projects WHERE id = 'p1'").get()).toEqual({
       name: "Project",
       setup_command: null,
@@ -519,7 +519,7 @@ describe("migrate — 008 to 009 upgrade path (durable draft-PR url)", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(13);
+    expect(db.pragma("user_version", { simple: true })).toBe(14);
     expect(db.prepare("SELECT title, pr_url FROM tickets WHERE id = 't1'").get()).toEqual({
       title: "Ticket",
       pr_url: null,
@@ -536,7 +536,7 @@ describe("migrate — 010 to 011 upgrade path (ticket attachments)", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(13);
+    expect(db.pragma("user_version", { simple: true })).toBe(14);
     expect(tableExists(db, "ticket_attachments")).toBe(true);
     expect(db.prepare("SELECT COUNT(*) as n FROM ticket_attachments").get()).toEqual({ n: 0 });
     expect(db.prepare("SELECT title FROM tickets WHERE id = 't1'").get()).toEqual({
@@ -567,7 +567,7 @@ describe("migrate — 011 to 012 upgrade path (session exit code)", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(13);
+    expect(db.pragma("user_version", { simple: true })).toBe(14);
     expect(db.prepare("SELECT ended_at, exit_code FROM sessions WHERE id = 's1'").get()).toEqual({
       ended_at: 5,
       exit_code: null,
@@ -593,7 +593,7 @@ describe("migrate — 012 to 013 upgrade path (per-surface theme override)", () 
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(13);
+    expect(db.pragma("user_version", { simple: true })).toBe(14);
     // Decision #69: the override is PER SURFACE, and NULL = inherit — so an
     // upgraded project keeps the global theme on every surface.
     expect(
@@ -625,6 +625,83 @@ describe("migrate — 012 to 013 upgrade path (per-surface theme override)", () 
         "theme_seed",
       ]),
     );
+    db.close();
+  });
+});
+
+describe("migrate — 013 to 014 upgrade path (per-project canvas + appearance)", () => {
+  it("adds two nullable columns to an existing project, both inheriting", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    for (const migration of MIGRATIONS.filter((m) => m.version <= 13)) {
+      db.exec(migration.sql);
+    }
+    db.pragma("user_version = 13");
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+
+    migrate(db, dbPath);
+
+    expect(db.pragma("user_version", { simple: true })).toBe(14);
+    // NULL = inherit, exactly as 013 meant it: an upgraded project keeps the
+    // global canvas and the global appearance.
+    expect(
+      db.prepare("SELECT theme_canvas, theme_appearance FROM projects WHERE id = 'p1'").get(),
+    ).toEqual({ theme_canvas: null, theme_appearance: null });
+    expect(existsSync(`${dbPath}.backup-v13`)).toBe(true);
+    db.close();
+  });
+
+  it("keeps 013's four columns rather than dropping them", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+
+    // They stop being READ (projects-repo.ts), but SQLite's DROP COLUMN is not
+    // safe here and `db/export.ts` carries every projects column by
+    // construction — so dead data, not deleted data.
+    expect(columnNames(db, "projects")).toEqual(
+      expect.arrayContaining([
+        "theme_app_slug",
+        "theme_terminal_name",
+        "theme_editor_id",
+        "theme_seed",
+        "theme_canvas",
+        "theme_appearance",
+      ]),
+    );
+    db.close();
+  });
+
+  it("refuses an appearance outside the three-word vocabulary", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+
+    expect(() =>
+      db.prepare("UPDATE projects SET theme_appearance = 'sepia' WHERE id = 'p1'").run(),
+    ).toThrow();
+    for (const value of ["light", "dark", "auto", null]) {
+      expect(() =>
+        db.prepare("UPDATE projects SET theme_appearance = ? WHERE id = 'p1'").run(value),
+      ).not.toThrow();
+    }
+    db.close();
+  });
+
+  it("does not add a canvases table — one canvas per scope, edited in place", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+
+    expect(tableExists(db, "canvases")).toBe(false);
     db.close();
   });
 });

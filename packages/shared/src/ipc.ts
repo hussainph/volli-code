@@ -19,6 +19,7 @@ import type {
   TerminalBusyResult,
   TerminalIoResult,
 } from "./terminal";
+import type { Appearance, Canvas, ResolvedAppearance } from "./theme/canvas/types";
 import type { ThemeDefinition } from "./theme/definition";
 import type { ShippedEditorThemeId } from "./theme/editor-themes";
 import type { ProjectThemeOverride } from "./theme/persistence";
@@ -461,8 +462,69 @@ export type CustomThemeReadResult = Result<{ theme: ThemeDefinition }>;
 /** Resolves with the file written AND the fresh catalog, so the picker repaints without a second round trip. */
 export type CustomThemeWriteResult = Result<{ path: string; themes: ThemeDefinition[] }>;
 
+// ---- canvas theming writes (docs/plans/arc-theming-migration.md) ------------
+// WRITES ONLY. There is no `volli:canvas-state` read channel and there must not
+// be one: the global canvas, the global appearance and the first-paint hint are
+// `app_state` rows, and every project's canvas is a `projects` column — so
+// `volli:data-bootstrap` already ships all of it, in one round trip, at the one
+// moment the renderer needs it. A second read path would be a second answer to
+// "what is the theme?", which is exactly the drift the single-authoritative-
+// pair rule exists to prevent.
+
+/** `{ canvas }` — the authored gradient, replacing whatever the global scope held. */
+export interface CanvasSetGlobalInput {
+  canvas: Canvas;
+}
+
+/** `{ appearance }` — light, dark, or follow-the-system, at the global scope. */
+export interface AppearanceSetGlobalInput {
+  appearance: Appearance;
+}
+
+/** `{ projectId, canvas }` — `null` clears the override back to inheriting the global canvas. */
+export interface CanvasSetProjectInput {
+  projectId: string;
+  canvas: Canvas | null;
+}
+
+/** `{ projectId, appearance }` — `null` clears the override back to inheriting the global appearance. */
+export interface AppearanceSetProjectInput {
+  projectId: string;
+  appearance: Appearance | null;
+}
+
+/**
+ * The first-paint HINT: the mode the renderer resolved to, and the canvas
+ * background it painted.
+ *
+ * This is a cache, not an authority. `{canvas, appearance}` remains the only
+ * authoritative pair — this row exists solely because main has to answer "what
+ * color is this window's edge, and is it light or dark?" *synchronously, at
+ * window construction*, before any renderer exists to ask. Whenever the two
+ * disagree, the pair wins and this row is overwritten on the next paint.
+ *
+ * It is NOT a violation of "never persist the resolved token set" (`apply.ts`):
+ * what is stored is one enum and one hex — the two values main physically
+ * cannot derive without the renderer — not the 31-token ladder. Persisting the
+ * ladder would let a stale copy of it out-vote the authored canvas, which is the
+ * bug that rule is about; one background color cannot, because nothing reads it
+ * after first paint.
+ */
+export interface FirstPaintHint {
+  /** `auto` already resolved — main stamps this mode before the renderer boots. */
+  appearance: ResolvedAppearance;
+  /** The canvas background as a hex color; `BrowserWindow`'s `backgroundColor`. */
+  background: string;
+}
+
 export type ThemeStateResult = Result<{ value: ThemeStatePayload }>;
 export type ThemeSetProjectResult = Result<{ project: Project; value: ThemeStatePayload }>;
+/**
+ * A project-scoped canvas/appearance write answers with the authoritative row —
+ * the `volli:project-*` precedent — so the renderer adopts the stored
+ * `row_version`/`updatedAt` instead of predicting them.
+ */
+export type ProjectCanvasWriteResult = Result<{ project: Project }>;
 /** Resolves with the overlay file written and the freshly re-resolved terminal appearance, so the renderer can repaint without a second round trip. */
 export type TerminalOverlayWriteResult = Result<{
   path: string;
@@ -496,6 +558,30 @@ export interface VolliThemeIpcContract {
   };
   /** Persists one project's per-surface override (migration 013); `null` clears it. */
   "volli:theme-set-project": { args: [input: ThemeSetProjectInput]; result: ThemeSetProjectResult };
+  /**
+   * Persists the authored global canvas (`app_state.theme`). Answers with a bare
+   * ack: the caller already holds what it sent, and every reader gets the row
+   * back through `volli:data-bootstrap`.
+   */
+  "volli:theme-canvas-set-global": { args: [input: CanvasSetGlobalInput]; result: Result };
+  /** Persists the global appearance (`app_state.appearance`). */
+  "volli:theme-appearance-set-global": { args: [input: AppearanceSetGlobalInput]; result: Result };
+  /** Persists one project's canvas override (migration 014); `null` clears it. */
+  "volli:theme-canvas-set-project": {
+    args: [input: CanvasSetProjectInput];
+    result: ProjectCanvasWriteResult;
+  };
+  /** Persists one project's appearance override (migration 014); `null` clears it. */
+  "volli:theme-appearance-set-project": {
+    args: [input: AppearanceSetProjectInput];
+    result: ProjectCanvasWriteResult;
+  };
+  /**
+   * Records what the renderer actually resolved and painted, so the NEXT launch
+   * can construct its window with the right edge color and the right mode class
+   * before anything runs. A hint, never an authority — see {@link FirstPaintHint}.
+   */
+  "volli:theme-first-paint-set": { args: [input: FirstPaintHint]; result: Result };
   /** Rewrites keys in a Volli ghostty overlay — global or per-project. Never the user's own config. */
   "volli:theme-terminal-overlay-write": {
     args: [input: TerminalOverlayWriteInput];

@@ -18,6 +18,12 @@
  *    the renderer can send that reaches the user's own ghostty config
  *    (decision #67) or any file outside the themes directory.
  *
+ * The canvas half (docs/plans/arc-theming-migration.md) is five WRITES and no
+ * reads, which is the shape the rest of this surface will collapse into: what
+ * is stored is `app_state` rows and `projects` columns, and `volli:data-bootstrap`
+ * already ships both. `volli:theme-state` exists only because the terminal
+ * chain has to be resolved off the filesystem, and the canvas has no such need.
+ *
  * Registered through the shared guard→body→envelope registry (issue #98):
  * `THEME_IPC` (@volli/shared) supplies the validators, this module supplies
  * only the handler bodies, and a failed db open degrades every channel to a
@@ -28,11 +34,17 @@ import { shell } from "electron";
 import type Database from "better-sqlite3";
 import { customThemePath, DEFAULT_THEME, THEME_CHANNELS, THEME_IPC } from "@volli/shared";
 import type {
+  AppearanceSetGlobalInput,
+  AppearanceSetProjectInput,
+  CanvasSetGlobalInput,
+  CanvasSetProjectInput,
   CustomThemeListResult,
   CustomThemeReadResult,
   CustomThemeWriteInput,
   CustomThemeWriteResult,
+  FirstPaintHint,
   GhosttyAppearancePayload,
+  ProjectCanvasWriteResult,
   Result,
   ThemeDefinition,
   ThemeSlugInput,
@@ -48,10 +60,18 @@ import type {
   TerminalOverlayWriteResult,
 } from "@volli/shared";
 import type { DbHandle } from "./data-ipc";
-import { getProjectById, updateProjectThemeOverride } from "./db/projects-repo";
+import {
+  getProjectById,
+  updateProjectAppearance,
+  updateProjectCanvas,
+  updateProjectThemeOverride,
+} from "./db/projects-repo";
 import {
   getGlobalEditorThemeId,
   getGlobalTheme,
+  setFirstPaintHint,
+  setGlobalAppearance,
+  setGlobalCanvas,
   setGlobalEditorThemeId,
   setGlobalTheme,
 } from "./db/theme-repo";
@@ -96,6 +116,14 @@ export interface ThemeIpcHooks {
    * at exactly the moments the user notices.
    */
   onGlobalThemeChanged?(theme: ThemeDefinition): void;
+  /**
+   * The renderer finished a paint and recorded what it resolved. Main repaints
+   * every window's `backgroundColor` from it — the canvas-era replacement for
+   * {@link onGlobalThemeChanged}, and a strictly better one: the renderer has
+   * already run the whole pipeline, so main takes the color it actually painted
+   * instead of re-deriving one and hoping the two agree.
+   */
+  onFirstPaintChanged?(hint: FirstPaintHint): void;
 }
 
 /** A project's ticket prefix (the per-project overlay's file name), or a typed error. */
@@ -219,6 +247,45 @@ export function registerThemeIpcHandlers(
       const state = buildThemeState(db, deps, input.projectId);
       if (!state.ok) return state;
       return { ok: true, project, value: state.value };
+    },
+
+    // ── the canvas (docs/plans/arc-theming-migration.md) ──────────────────
+    // WRITES ONLY, and every one of them answers with an ack rather than fresh
+    // state: the global canvas and appearance are `app_state` rows and a
+    // project's are `projects` columns, so `volli:data-bootstrap` already ships
+    // every one of them. The caller holds what it just sent; a re-read here
+    // would only be a second place for "what is the theme?" to be answered.
+
+    "volli:theme-canvas-set-global": (input: CanvasSetGlobalInput): Result => {
+      setGlobalCanvas(db, input.canvas, deps.now());
+      return { ok: true };
+    },
+
+    "volli:theme-appearance-set-global": (input: AppearanceSetGlobalInput): Result => {
+      setGlobalAppearance(db, input.appearance, deps.now());
+      return { ok: true };
+    },
+
+    "volli:theme-canvas-set-project": (input: CanvasSetProjectInput): ProjectCanvasWriteResult => {
+      const project = updateProjectCanvas(db, input.projectId, input.canvas, deps.now());
+      if (project === undefined) return { ok: false, error: "Unknown project" };
+      return { ok: true, project };
+    },
+
+    "volli:theme-appearance-set-project": (
+      input: AppearanceSetProjectInput,
+    ): ProjectCanvasWriteResult => {
+      const project = updateProjectAppearance(db, input.projectId, input.appearance, deps.now());
+      if (project === undefined) return { ok: false, error: "Unknown project" };
+      return { ok: true, project };
+    },
+
+    "volli:theme-first-paint-set": (input: FirstPaintHint): Result => {
+      setFirstPaintHint(db, input, deps.now());
+      // After the write, so a window never repaints to a background that failed
+      // to persist — the same ordering `volli:theme-set-global` uses.
+      hooks.onFirstPaintChanged?.(input);
+      return { ok: true };
     },
 
     // ── custom theme files (#71) ──────────────────────────────────────────

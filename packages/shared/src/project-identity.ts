@@ -5,6 +5,7 @@
  * Ported behavior-for-behavior from the Swift original.
  */
 
+import type { Appearance, Canvas } from "./theme/canvas/types";
 import type { ProjectThemeOverride } from "./theme/persistence";
 
 /**
@@ -32,6 +33,20 @@ export interface Project {
    * wherever its own field is null.
    */
   themeOverride?: ProjectThemeOverride | null;
+  /**
+   * This workspace's own canvas (migration 014), or `null` to inherit the
+   * global one. Whole or not at all — a canvas is a gradient, and half of one
+   * is not a thing you can paint, which is why this is one nullable field
+   * rather than 013's per-surface set.
+   */
+  themeCanvas?: Canvas | null;
+  /**
+   * This workspace's own light/dark/auto choice (migration 014), or `null` to
+   * inherit the global one. Scoped SEPARATELY from {@link themeCanvas}: one
+   * canvas is designed to render correctly in both modes, so overriding the
+   * gradient and overriding the mode are independent things to want.
+   */
+  themeAppearance?: Appearance | null;
   /** Index into {@link PROJECT_COLORS}, assigned round-robin at creation. */
   colorIndex: number;
   /** Rail order; dense, rewritten `0..n-1` whenever the rail is reordered. */

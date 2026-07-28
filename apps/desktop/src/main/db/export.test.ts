@@ -10,11 +10,29 @@ import {
 } from "./export";
 import { addTicketLabel, getOrCreateLabel } from "./labels-repo";
 import { MIGRATIONS } from "./migrations";
-import { insertProject, updateProjectThemeOverride } from "./projects-repo";
+import {
+  insertProject,
+  updateProjectAppearance,
+  updateProjectCanvas,
+  updateProjectThemeOverride,
+} from "./projects-repo";
 import { insertSession } from "./sessions-repo";
 import { openTestDb, testProject, testSession, testTicket } from "./test-helpers";
 import type { TestDb } from "./test-helpers";
 import { archiveTicket, insertTicket } from "./tickets-repo";
+import type { Canvas } from "@volli/shared";
+
+/**
+ * Field order matters here and only here: the export carries the canvas as its
+ * stored string, so the expectation below stringifies this literal and the
+ * repo's own field-by-field rebuild has to agree with it key for key.
+ */
+const exportedCanvas: Canvas = {
+  stops: [{ hex: "#e8652a", x: 0.2, y: 0.15 }],
+  primaryIndex: 0,
+  vibrancy: 0.6,
+  grain: 0.15,
+};
 
 let ctx: TestDb;
 
@@ -78,6 +96,11 @@ describe("buildExportDocument — populated db", () => {
       { appThemeSlug: "sea", terminalThemeName: "Nord", editorThemeId: "vs-dark", seed: "#3a7d9a" },
       60,
     );
+    // Migration 014's two. Carried as the STORED strings, like the global
+    // canvas riding `app_state` — one hand-edited row must not be able to throw
+    // an export that a user is running to rescue their data.
+    updateProjectCanvas(ctx.db, project.id, exportedCanvas, 61);
+    updateProjectAppearance(ctx.db, project.id, "auto", 62);
 
     const liveTicket = testTicket(project.id, {
       id: "ticket-live",
@@ -140,12 +163,14 @@ describe("buildExportDocument — populated db", () => {
         themeTerminalName: "Nord",
         themeEditorId: "vs-dark",
         themeSeed: "#3a7d9a",
+        themeCanvas: JSON.stringify(exportedCanvas),
+        themeAppearance: "auto",
         colorIndex: project.colorIndex,
         sortOrder: project.sortOrder,
-        // Bumped by the theme-override write above.
-        rowVersion: 2,
+        // Bumped by the three theme writes above.
+        rowVersion: 4,
         createdAt: project.createdAt,
-        updatedAt: 60,
+        updatedAt: 62,
       },
     ]);
 

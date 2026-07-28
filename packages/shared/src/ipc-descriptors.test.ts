@@ -1519,18 +1519,126 @@ describe("THEME_IPC descriptor table", () => {
     });
   });
 
+  describe("the canvas channels (migration 014)", () => {
+    const canvas = {
+      stops: [
+        { hex: "#e8652a", x: 0.2, y: 0.15 },
+        { hex: "#3a7d9a", x: 0.8, y: 0.9 },
+      ],
+      primaryIndex: 1,
+      vibrancy: 0.6,
+      grain: 0.15,
+    };
+
+    it("accepts a canvas the pipeline can actually paint", () => {
+      expect(THEME_IPC["volli:theme-canvas-set-global"].guard([{ canvas }])).toBe(true);
+      expect(THEME_IPC["volli:theme-canvas-set-project"].guard([{ projectId: "p1", canvas }])).toBe(
+        true,
+      );
+      // null clears the project override back to inheriting — not a malformed canvas.
+      expect(
+        THEME_IPC["volli:theme-canvas-set-project"].guard([{ projectId: "p1", canvas: null }]),
+      ).toBe(true);
+    });
+
+    // The guard IS `parseCanvas` — the package's one storage boundary for this
+    // shape — rather than a second hand-written copy of the same rules, so a
+    // canvas cannot be storable but un-resendable.
+    it("refuses a canvas nothing downstream could derive a ladder from", () => {
+      const { guard, invalidError } = THEME_IPC["volli:theme-canvas-set-global"];
+
+      expect(guard([{ canvas: { ...canvas, stops: [] } }])).toBe(false);
+      expect(guard([{ canvas: { ...canvas, primaryIndex: 7 } }])).toBe(false);
+      expect(guard([{ canvas: { ...canvas, stops: [{ hex: "nope", x: 0, y: 0 }] } }])).toBe(false);
+      expect(guard([{ canvas: { ...canvas, vibrancy: "high" } }])).toBe(false);
+      expect(guard([{ canvas: null }])).toBe(false);
+      expect(guard([])).toBe(false);
+      expect(invalidError).toBe("Invalid canvas");
+    });
+
+    // Ranges are the parser's to clamp, not this boundary's to refuse: a
+    // vibrancy of 4 is a stale value that still says what the user meant, and
+    // refusing it here would make the accepted set smaller than the storable one.
+    it("admits an out-of-range scalar rather than second-guessing the parser", () => {
+      expect(
+        THEME_IPC["volli:theme-canvas-set-global"].guard([
+          { canvas: { ...canvas, vibrancy: 4, grain: -1 } },
+        ]),
+      ).toBe(true);
+    });
+
+    it("takes only the three appearance words, and null to clear a project's", () => {
+      const global = THEME_IPC["volli:theme-appearance-set-global"];
+      const project = THEME_IPC["volli:theme-appearance-set-project"];
+
+      for (const appearance of ["light", "dark", "auto"]) {
+        expect(global.guard([{ appearance }])).toBe(true);
+        expect(project.guard([{ projectId: "p1", appearance }])).toBe(true);
+      }
+      expect(project.guard([{ projectId: "p1", appearance: null }])).toBe(true);
+      // Null at the GLOBAL scope has nothing to inherit from — there is no
+      // "unset" to fall back to, so it is a malformed request, not a clear.
+      expect(global.guard([{ appearance: null }])).toBe(false);
+      expect(global.guard([{ appearance: "sepia" }])).toBe(false);
+      expect(project.guard([{ appearance: "dark" }])).toBe(false);
+      expect(global.invalidError).toBe("Invalid appearance");
+    });
+
+    it("refuses an unresolved first-paint appearance, and a background that is not a color", () => {
+      const { guard, invalidError } = THEME_IPC["volli:theme-first-paint-set"];
+
+      expect(guard([{ appearance: "dark", background: "#141210" }])).toBe(true);
+      expect(guard([{ appearance: "light", background: "#f4efe9" }])).toBe(true);
+      // `auto` is the one value main cannot act on at window construction.
+      expect(guard([{ appearance: "auto", background: "#141210" }])).toBe(false);
+      expect(guard([{ appearance: "dark", background: "rebeccapurple" }])).toBe(false);
+      expect(guard([{ appearance: "dark" }])).toBe(false);
+      expect(guard([])).toBe(false);
+      expect(invalidError).toBe("Invalid first-paint hint");
+    });
+
+    // Every project-scoped row carries a second required field, so it has an
+    // arity check and an id check the global rows do not. Both are the arms a
+    // malformed renderer call actually lands on, and neither is reachable
+    // through the payload cases above.
+    it("refuses a project-scoped write with no id, a wrong-typed id, or the wrong arity", () => {
+      const canvasRow = THEME_IPC["volli:theme-canvas-set-project"];
+      const appearanceRow = THEME_IPC["volli:theme-appearance-set-project"];
+
+      for (const row of [canvasRow, appearanceRow]) {
+        expect(row.guard([])).toBe(false);
+        expect(row.guard([{ projectId: "p1" }, { projectId: "p2" }])).toBe(false);
+        expect(row.guard(["p1"])).toBe(false);
+        expect(row.guard([null])).toBe(false);
+      }
+
+      expect(canvasRow.guard([{ projectId: 7, canvas }])).toBe(false);
+      expect(appearanceRow.guard([{ projectId: 7, appearance: "dark" }])).toBe(false);
+    });
+
+    it("refuses a first-paint hint that is not a record at all", () => {
+      expect(THEME_IPC["volli:theme-first-paint-set"].guard(["dark"])).toBe(false);
+      expect(THEME_IPC["volli:theme-first-paint-set"].guard([null])).toBe(false);
+    });
+  });
+
   describe("THEME_CHANNELS derivation", () => {
     it("derives from the descriptor table's keys", () => {
       expect(THEME_CHANNELS).toEqual(Object.keys(THEME_IPC));
     });
 
     it("covers the whole theme surface", () => {
-      expect(THEME_CHANNELS).toHaveLength(11);
+      expect(THEME_CHANNELS).toHaveLength(16);
       expect(THEME_CHANNELS).toContain("volli:theme-state");
       expect(THEME_CHANNELS).toContain("volli:theme-set-global-editor");
       expect(THEME_CHANNELS).toContain("volli:theme-terminal-overlay-write");
       expect(THEME_CHANNELS).toContain("volli:theme-file-list");
       expect(THEME_CHANNELS).toContain("volli:theme-file-open");
+      expect(THEME_CHANNELS).toContain("volli:theme-canvas-set-global");
+      expect(THEME_CHANNELS).toContain("volli:theme-appearance-set-global");
+      expect(THEME_CHANNELS).toContain("volli:theme-canvas-set-project");
+      expect(THEME_CHANNELS).toContain("volli:theme-appearance-set-project");
+      expect(THEME_CHANNELS).toContain("volli:theme-first-paint-set");
     });
   });
 });

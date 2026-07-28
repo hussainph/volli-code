@@ -5,6 +5,8 @@ import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { DEFAULT_THEME, THEME_CHANNELS } from "@volli/shared";
 import type {
+  Canvas,
+  ProjectCanvasWriteResult,
   CustomThemeListResult,
   CustomThemeReadResult,
   CustomThemeWriteResult,
@@ -37,8 +39,13 @@ vi.mock("electron", () => ({
 
 import { registerThemeIpcHandlers } from "./theme-ipc";
 import { defaultFsDeps } from "./fs-deps";
-import { getGlobalTheme } from "./db/theme-repo";
-import { insertProject } from "./db/projects-repo";
+import {
+  getFirstPaintHint,
+  getGlobalAppearance,
+  getGlobalCanvas,
+  getGlobalTheme,
+} from "./db/theme-repo";
+import { getProjectById, insertProject } from "./db/projects-repo";
 import { openTestDb, testProject } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 
@@ -616,5 +623,143 @@ describe("volli:theme-file-open", () => {
       });
     }
     expect(openPath).not.toHaveBeenCalled();
+  });
+});
+
+describe("canvas writes (migration 014)", () => {
+  const canvas: Canvas = {
+    stops: [
+      { hex: "#e8652a", x: 0.2, y: 0.15 },
+      { hex: "#3a7d9a", x: 0.8, y: 0.9 },
+    ],
+    primaryIndex: 0,
+    vibrancy: 0.6,
+    grain: 0.15,
+  };
+
+  it("persists the global canvas and answers with a bare ack", () => {
+    setup();
+
+    expect(invoke<Result>("volli:theme-canvas-set-global", { canvas })).toEqual({ ok: true });
+    expect(getGlobalCanvas(ctx.db)).toEqual(canvas);
+  });
+
+  it("persists the global appearance", () => {
+    setup();
+
+    expect(invoke<Result>("volli:theme-appearance-set-global", { appearance: "light" })).toEqual({
+      ok: true,
+    });
+    expect(getGlobalAppearance(ctx.db)).toBe("light");
+  });
+
+  it("answers a project write with the authoritative row, not a prediction", () => {
+    const { projectId } = setup();
+
+    const result = invoke<ProjectCanvasWriteResult>("volli:theme-canvas-set-project", {
+      projectId,
+      canvas,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.project.themeCanvas).toEqual(canvas);
+    // Re-read, not predicted: what came back is what a subsequent bootstrap
+    // would ship.
+    expect(getProjectById(ctx.db, projectId)).toEqual(result.project);
+  });
+
+  it("clears a project override on null", () => {
+    const { projectId } = setup();
+    invoke<ProjectCanvasWriteResult>("volli:theme-canvas-set-project", { projectId, canvas });
+    invoke<ProjectCanvasWriteResult>("volli:theme-appearance-set-project", {
+      projectId,
+      appearance: "dark",
+    });
+
+    invoke<ProjectCanvasWriteResult>("volli:theme-canvas-set-project", {
+      projectId,
+      canvas: null,
+    });
+    const cleared = invoke<ProjectCanvasWriteResult>("volli:theme-appearance-set-project", {
+      projectId,
+      appearance: null,
+    });
+
+    expect(cleared.ok).toBe(true);
+    if (!cleared.ok) return;
+    expect(cleared.project.themeCanvas).toBeNull();
+    expect(cleared.project.themeAppearance).toBeNull();
+  });
+
+  it("reports an unknown project instead of writing nothing and claiming success", () => {
+    setup();
+
+    expect(
+      invoke<ProjectCanvasWriteResult>("volli:theme-canvas-set-project", {
+        projectId: "nope",
+        canvas,
+      }),
+    ).toEqual({ ok: false, error: "Unknown project" });
+    expect(
+      invoke<ProjectCanvasWriteResult>("volli:theme-appearance-set-project", {
+        projectId: "nope",
+        appearance: "dark",
+      }),
+    ).toEqual({ ok: false, error: "Unknown project" });
+  });
+
+  // The guard is the shared descriptor's, so a malformed canvas is refused
+  // before the handler runs and nothing reaches SQLite.
+  it("refuses a canvas whose primaryIndex names no stop", () => {
+    setup();
+
+    expect(
+      invoke<Result>("volli:theme-canvas-set-global", {
+        canvas: { ...canvas, primaryIndex: 7 },
+      }),
+    ).toEqual({ ok: false, error: "Invalid canvas" });
+    expect(getGlobalCanvas(ctx.db)).toBeNull();
+  });
+
+  it("refuses an appearance outside the three-word vocabulary", () => {
+    setup();
+
+    expect(invoke<Result>("volli:theme-appearance-set-global", { appearance: "sepia" })).toEqual({
+      ok: false,
+      error: "Invalid appearance",
+    });
+    expect(getGlobalAppearance(ctx.db)).toBeNull();
+  });
+
+  it("records the first-paint hint and repaints every window's edge from it", () => {
+    const project = testProject({ ticketPrefix: "VC" });
+    insertProject(ctx.db, project);
+    const deps = { fs: defaultFsDeps(userDataDir), now: Date.now };
+    const onFirstPaintChanged = vi.fn();
+    registerThemeIpcHandlers(
+      { ok: true, db: ctx.db },
+      { ...deps, fs: { ...deps.fs, homeDir: join(userDataDir, "fake-home"), env: {} } },
+      { onFirstPaintChanged },
+    );
+
+    const hint = { appearance: "light", background: "#f4efe9" } as const;
+    expect(invoke<Result>("volli:theme-first-paint-set", hint)).toEqual({ ok: true });
+
+    expect(getFirstPaintHint(ctx.db)).toEqual(hint);
+    // Fired AFTER the write, so a window never repaints to a background that
+    // failed to persist.
+    expect(onFirstPaintChanged).toHaveBeenCalledWith(hint);
+  });
+
+  // `auto` is the one value main cannot act on at window construction, which is
+  // the entire point of the row.
+  it("refuses an unresolved first-paint appearance", () => {
+    setup();
+
+    expect(
+      invoke<Result>("volli:theme-first-paint-set", { appearance: "auto", background: "#141210" }),
+    ).toEqual({ ok: false, error: "Invalid first-paint hint" });
+    expect(getFirstPaintHint(ctx.db)).toBeNull();
   });
 });

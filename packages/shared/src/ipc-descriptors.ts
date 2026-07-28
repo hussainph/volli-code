@@ -10,6 +10,9 @@ import type {
   ThemeIpcChannel,
   VolliInvokeContract,
 } from "./ipc";
+import { parseCanvas } from "./theme/canvas";
+import type { Appearance } from "./theme/canvas/types";
+import { isHexColor } from "./theme/color";
 import { isValidThemeSlug } from "./theme/custom-themes";
 import { isShippedEditorThemeId } from "./theme/editor-themes";
 import { isValidOverlayKey, isValidOverlayValue } from "./theme/ghostty-overlay";
@@ -588,6 +591,22 @@ function isThemeSlugArgs(args: unknown[]): boolean {
   );
 }
 
+/**
+ * The closed appearance vocabulary — the same three words migration 014's
+ * `CHECK` admits, and the same three {@link Appearance} names.
+ *
+ * Exported because main's repo layer parses this enum back out of `app_state`
+ * and off a `projects` column, and a second hand-written copy of a three-word
+ * list is how a value becomes storable but not re-sendable.
+ *
+ * TODO(canvas-engine): move this next to `resolveAppearance` in
+ * `theme/canvas/appearance.ts`, where the type lives — it is here only because
+ * that module had not landed when the descriptors needed it.
+ */
+export function isAppearance(value: unknown): value is Appearance {
+  return value === "light" || value === "dark" || value === "auto";
+}
+
 export const THEME_IPC: { readonly [C in ThemeIpcChannel]: IpcRequestDescriptor<C> } = {
   "volli:theme-state": {
     guard: (args): args is IpcArgs<"volli:theme-state"> => {
@@ -628,6 +647,51 @@ export const THEME_IPC: { readonly [C in ThemeIpcChannel]: IpcRequestDescriptor<
       return input["override"] === null || isProjectThemeOverride(input["override"]);
     },
     invalidError: "Invalid project theme override",
+  },
+  // ── the canvas writes (migration 014) ──────────────────────────────────
+  // Every one of these is a WRITE with no read twin: the stored state rides
+  // `volli:data-bootstrap` back to the renderer, so there is nothing to answer
+  // with beyond the authoritative row a project write already returns.
+  "volli:theme-canvas-set-global": {
+    guard: (args): args is IpcArgs<"volli:theme-canvas-set-global"> =>
+      args.length === 1 && isRecord(args[0]) && parseCanvas(args[0]["canvas"]) !== null,
+    invalidError: "Invalid canvas",
+  },
+  "volli:theme-appearance-set-global": {
+    guard: (args): args is IpcArgs<"volli:theme-appearance-set-global"> =>
+      args.length === 1 && isRecord(args[0]) && isAppearance(args[0]["appearance"]),
+    invalidError: "Invalid appearance",
+  },
+  "volli:theme-canvas-set-project": {
+    guard: (args): args is IpcArgs<"volli:theme-canvas-set-project"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (!isRecord(input) || typeof input["projectId"] !== "string") return false;
+      return input["canvas"] === null || parseCanvas(input["canvas"]) !== null;
+    },
+    invalidError: "Invalid canvas",
+  },
+  "volli:theme-appearance-set-project": {
+    guard: (args): args is IpcArgs<"volli:theme-appearance-set-project"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (!isRecord(input) || typeof input["projectId"] !== "string") return false;
+      return input["appearance"] === null || isAppearance(input["appearance"]);
+    },
+    invalidError: "Invalid appearance",
+  },
+  // `auto` is NOT accepted here: the hint records what the renderer RESOLVED,
+  // and an unresolved mode is exactly the value main cannot act on at window
+  // construction — the one thing this row exists to make possible.
+  "volli:theme-first-paint-set": {
+    guard: (args): args is IpcArgs<"volli:theme-first-paint-set"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (!isRecord(input)) return false;
+      if (input["appearance"] !== "light" && input["appearance"] !== "dark") return false;
+      return typeof input["background"] === "string" && isHexColor(input["background"]);
+    },
+    invalidError: "Invalid first-paint hint",
   },
   // The renderer names a SCOPE, never a path — so the "Volli never writes the
   // user's own ghostty config" invariant (#67) holds at the IPC boundary as
