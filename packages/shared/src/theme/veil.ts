@@ -18,7 +18,7 @@
  * encodes hierarchy, made structural.
  */
 
-import { hexChannels } from "./color";
+import { clamp, hexChannels } from "./color";
 import type { ThemeTokenName, ThemeTokens } from "./tokens";
 
 /**
@@ -68,12 +68,24 @@ export type ThemeVeilTokens = Record<ThemeVeilTokenName, string>;
  * the *composited byte*, and the compositor works in gamma-encoded channels. A
  * perceptually-solved veil would land a step or two off and the pixel-identity
  * guarantee for `kind: "solid"` would quietly stop being true.
+ *
+ * Each solved channel is clamped to 0–255 before the `rgb()` string is built.
+ * That is a floor on wrongness, not a second solve: where a channel lands
+ * outside range, the target rung is genuinely unreachable at {@link VEIL_ALPHA}
+ * — no `C` composites to it — so the pixel-identity guarantee above does not
+ * hold there regardless of what this function does. Clamping only decides what
+ * happens with an already-broken solve: the closest reachable color, versus an
+ * `rgb()` string a compositor clamps itself (silently, to the *wrong* color,
+ * which is the bug this guards). `ladder.ts`'s light rung ordering narrows how
+ * often this triggers — it does not eliminate it, and saturated seeds (e.g. a
+ * fully-vivid cyan) still reach it, which is why this function must not assume
+ * its input is in range.
  */
 export function generateVeilTokens(tokens: ThemeTokens): ThemeVeilTokens {
   const solved = VEILS.map(({ name, target, base }) => {
     const under = hexChannels(tokens[base]);
     const channels = hexChannels(tokens[target]).map((value, index) =>
-      Math.round((value - under[index] * (1 - VEIL_ALPHA)) / VEIL_ALPHA),
+      clamp(Math.round((value - under[index] * (1 - VEIL_ALPHA)) / VEIL_ALPHA), 0, 255),
     );
     return [name, `rgb(${channels.join(" ")} / ${VEIL_ALPHA})`] as const;
   });

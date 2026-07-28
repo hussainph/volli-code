@@ -27,16 +27,6 @@ export interface CanvasStop {
 }
 
 /**
- * The most stops a canvas can carry.
- *
- * Derived from the harmony table in `tuning.ts` rather than stated beside it —
- * the two disagreeing fails silently (a hue lookup past the end of the table
- * yields `undefined` and NaNs into `#NaNNaNNaN`, a blank window and no error),
- * so there must not be a second number to keep in step. Re-exported from
- * `tuning.ts`; declared there, next to the table it counts.
- */
-
-/**
  * A canvas, as the user authors it — and only as the user authors it.
  *
  * Four fields, where the lab's editor had eleven. Six were dials that were
