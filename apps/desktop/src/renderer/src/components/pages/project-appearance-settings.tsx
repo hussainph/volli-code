@@ -56,7 +56,7 @@ import { getBuiltinTheme } from "restty";
 /**
  * Configure → Appearance: one project's per-surface theming (#69).
  *
- * Handoff: same UI slop pass as appearance-settings.tsx — see ui-copy.mdc.
+ * Handoff: same UI slop pass as appearance-settings.tsx — see AGENTS.md.
  *
  * The vocabulary is a tri-state PER SURFACE, and the section — not the picker —
  * owns it. Every surface starts on **Inherit** (#72: per-project theming is off

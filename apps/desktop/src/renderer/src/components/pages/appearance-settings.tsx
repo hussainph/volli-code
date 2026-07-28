@@ -43,7 +43,7 @@ import { listLocalFontFamilies } from "@renderer/terminal/local-fonts";
  *
  * Handoff: UI slop pass stripped tutorial descriptions/tooltips from this pane
  * (Terminal keeps one Ghostty trust line). Don't add helper text back —
- * `.cursor/rules/ui-copy.mdc`.
+ * AGENTS.md / CLAUDE.md ("UI copy: let controls talk").
  *
  * Four sections, and the first two are separate on purpose. The canvas is a
  * gradient; the appearance is light, dark or follow-the-system; the per-mode

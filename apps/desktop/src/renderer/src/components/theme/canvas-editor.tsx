@@ -4,7 +4,7 @@
  *
  * Handoff: another agent paused you and stripped the tutorial UI copy from
  * here (row descriptions, tooltips, contrast lectures). Labels + controls only
- * from now on — `.cursor/rules/ui-copy.mdc`.
+ * from now on — AGENTS.md / CLAUDE.md ("UI copy: let controls talk").
  *
  * Ported from `lab/scratches/canvas.tsx`, which is where the interaction was
  * designed: the pad is a MINIMAP (a stop's position on it is where its pool

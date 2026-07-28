@@ -1,10 +1,12 @@
 ---
-description: UI copy discipline — no tutorial helper text on controls; let controls speak
+description: UI copy discipline — mirrors AGENTS.md / CLAUDE.md; Cursor-only hook
 globs: apps/desktop/src/renderer/**/*.tsx
 alwaysApply: false
 ---
 
 # UI copy — let the controls talk
+
+Canonical rule: **AGENTS.md** and **CLAUDE.md** conventions ("UI copy: let controls talk"). This file is a Cursor shortcut; other tools read those docs.
 
 Volli is a dense workbench (Linear, Arc, Raycast). Settings and editors are **not** onboarding wizards.
 

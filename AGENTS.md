@@ -33,6 +33,7 @@ App data lives under Electron's `userData` directory as a fresh start, separate 
 - Use ember orange `#E8652A` as the accent and preserve the frosted/dark two-tier sidebar direction.
 - Give every context-menu action a neighboring Phosphor icon. Pass the icon through the shared context-menu primitive so it renders with `weight="fill"`; use this same filled Phosphor treatment for new context-menu actions.
 - Never incidentally unmount live terminals, including when selecting a card. Keep session state model-resident and views lazy.
+- **UI copy: let controls talk.** Settings and editors are not onboarding wizards. Do not add `description` on `SettingsSection`/`SettingsRow`, tutorial tooltips, or paragraphs under controls unless the user asked. Labels are nouns; the control is the explanation (pad, slider, segmented pill, origin chip). Rare exceptions only: irreversible confirms, one-line trust boundaries (e.g. Ghostty), blocked states with one recovery action. Module comments carry architecture; UI strings do not repeat them. Reference: Linear, Arc, macOS System Settings.
 - Use strict TypeScript and no `any` at module boundaries.
 
 ## Commands
