@@ -83,8 +83,8 @@ export interface ResolvedThemeSurface<T> {
  * What one workspace overrides, as the RENDERER resolves it.
  *
  * Deliberately not `@volli/shared`'s `ProjectThemeOverride`, which is still the
- * migration-013 row (`appThemeSlug` / `seed` / …) that the main process reads
- * and writes. The two are assembled from different places — canvas and
+ * live half of the migration-013 row (`terminalThemeName` / `editorThemeId`)
+ * that the main process reads and writes. The two are assembled from different places — canvas and
  * appearance are migration-014 columns that ride in on the bootstrap payload's
  * `Project`, while the terminal and editor names come from the 013 row — and
  * this is the shape the resolution below actually needs. Every field is

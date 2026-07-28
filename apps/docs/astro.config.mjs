@@ -26,7 +26,9 @@ export default defineConfig({
           "https://github.com/hussainph/volli-code/edit/main/apps/docs/",
       },
       components: {
-        // The site is dark-only, matching the app and volli.app. Overriding
+        // The site is dark-only, matching volli.app. (The app itself is not,
+        // since the canvas ships light and dark — but the marketing site and
+        // these docs are one surface and share its palette.) Overriding
         // ThemeSelect with an empty component removes the light/dark toggle;
         // volli.css pins the palette so a light-preferring visitor still gets
         // dark.

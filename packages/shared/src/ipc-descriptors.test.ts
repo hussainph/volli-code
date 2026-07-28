@@ -1346,10 +1346,8 @@ describe("THEME_IPC descriptor table", () => {
   describe("volli:theme-set-project", () => {
     const { guard, invalidError } = THEME_IPC["volli:theme-set-project"];
     const override = {
-      appThemeSlug: null,
       terminalThemeName: "Nord",
       editorThemeId: null,
-      seed: null,
     };
 
     it("accepts a per-surface override and a null (clear-to-inherit)", () => {
@@ -1358,7 +1356,7 @@ describe("THEME_IPC descriptor table", () => {
     });
 
     it("rejects a partial override shape or a missing project", () => {
-      expect(guard([{ projectId: "p1", override: { appThemeSlug: "x" } }])).toBe(false);
+      expect(guard([{ projectId: "p1", override: { terminalThemeName: "x" } }])).toBe(false);
       expect(guard([{ override }])).toBe(false);
     });
 

@@ -10,9 +10,13 @@
  *                          session and real output in it.
  *
  * `theme-picker.png` used to be the third. Its surface — Settings → Appearance's
- * app-theme picker — went with the seed-based theming system, and the canvas
- * editor that replaces it has not landed yet. The step comes back with that
- * editor rather than shooting the interim placeholder.
+ * app-theme picker — went with the seed-based theming system, and the file is
+ * deleted.
+ *
+ * TODO: re-add the step as `canvas-editor.png`, shooting Settings → Appearance
+ * with the canvas editor open — the pad and its orbs, the stop chips, the swatch
+ * row, the vibrancy and grain sliders, and the contrast readout. The Theming
+ * guide carries a matching TODO and embeds no image until that shot exists.
  *
  * Two things are deliberate here and worth keeping:
  *

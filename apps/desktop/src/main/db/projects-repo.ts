@@ -38,28 +38,29 @@ interface ProjectRow {
 }
 
 /**
- * The row's four migration-013 theme columns as a domain override — or `null`
- * when every one of them is NULL. Collapsing the all-inherit case to `null`
- * keeps "does this project override anything?" a single check for every reader,
+ * Two of the row's four migration-013 theme columns as a domain override — or
+ * `null` when both are NULL. Collapsing the all-inherit case to `null` keeps
+ * "does this project override anything?" a single check for every reader,
  * instead of an object whose fields all have to be interrogated.
  *
  * HALF DYING, and it is worth being exact about which half. Migration 014's
  * `theme_canvas`/`theme_appearance` are what the APP surface means now (see
- * `mapCanvas` below), so `theme_app_slug` and `theme_seed` are written `null`
- * and read by nobody — they went with the seed-based picker. The other two did
- * not: the terminal and editor surfaces are separate systems (a ghostty overlay
- * file, a Monaco/shiki id) that still resolve global → project off this row, and
- * `renderer/src/stores/theme.ts` reads both out of `volli:theme-state`'s
- * `projectOverride`. The two dead columns stay because `db/export.test.ts`
- * requires every column on `projects` to have an exported field, and SQLite
- * `DROP COLUMN` is not safe on the versions we support.
+ * `mapCanvas` below), so `theme_app_slug` and `theme_seed` are read by nobody —
+ * they went with the seed-based picker, and `@volli/shared`'s
+ * `ProjectThemeOverride` no longer even carries fields for them. The other two
+ * did not: the terminal and editor surfaces are separate systems (a ghostty
+ * overlay file, a Monaco/shiki id) that still resolve global → project off
+ * this row, and `renderer/src/stores/theme.ts` reads both out of
+ * `volli:theme-state`'s `projectOverride`. The two dead COLUMNS stay because
+ * `db/export.test.ts` requires every column on `projects` to have an exported
+ * field, and SQLite `DROP COLUMN` is not safe on the versions we support —
+ * `updateProjectThemeOverride` below still writes them (always `null`, since
+ * nothing upstream can populate them anymore).
  */
 function mapThemeOverride(row: ProjectRow): ProjectThemeOverride | null {
   const override: ProjectThemeOverride = {
-    appThemeSlug: row.theme_app_slug,
     terminalThemeName: row.theme_terminal_name,
     editorThemeId: row.theme_editor_id,
-    seed: row.theme_seed,
   };
   return isProjectThemeOverrideEmpty(override) ? null : override;
 }
@@ -171,9 +172,11 @@ export function updateProjectSetupCommand(
  *
  * `null` clears every surface back to inheriting the global theme; a partial
  * override clears only the surfaces whose fields are null, because resolution
- * is per surface and never per token (#69). All four columns are written on
- * every call, so the stored row always equals the override the caller asked
- * for — no read-modify-write, no stale surface left behind.
+ * is per surface and never per token (#69). All four columns are still
+ * written on every call — `theme_app_slug`/`theme_seed` always to `null`,
+ * since `ProjectThemeOverride` no longer carries fields for them (see
+ * `mapThemeOverride` above) — so the stored row always equals the override
+ * the caller asked for, plus the two dead columns quietly staying empty.
  */
 export function updateProjectThemeOverride(
   db: Database.Database,
@@ -187,14 +190,7 @@ export function updateProjectThemeOverride(
         SET theme_app_slug = ?, theme_terminal_name = ?, theme_editor_id = ?, theme_seed = ?,
             row_version = row_version + 1, updated_at = ?
       WHERE id = ?`,
-  ).run(
-    override?.appThemeSlug ?? null,
-    override?.terminalThemeName ?? null,
-    override?.editorThemeId ?? null,
-    override?.seed ?? null,
-    now,
-    id,
-  );
+  ).run(null, override?.terminalThemeName ?? null, override?.editorThemeId ?? null, null, now, id);
   return getProjectById(db, id);
 }
 

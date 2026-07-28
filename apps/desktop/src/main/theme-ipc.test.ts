@@ -175,10 +175,8 @@ describe("volli:theme-state", () => {
     invoke("volli:theme-set-project", {
       projectId,
       override: {
-        appThemeSlug: null,
         terminalThemeName: "Nord",
         editorThemeId: null,
-        seed: null,
       } satisfies ProjectThemeOverride,
     });
 
@@ -223,10 +221,8 @@ describe("volli:theme-set-global-editor", () => {
   it("writes globally but answers in the caller's project scope (#123)", () => {
     const { projectId } = setup();
     const override: ProjectThemeOverride = {
-      appThemeSlug: null,
       terminalThemeName: null,
       editorThemeId: "dracula",
-      seed: null,
     };
     invoke("volli:theme-set-project", { projectId, override });
 
@@ -277,24 +273,22 @@ describe("volli:theme-set-project", () => {
     const result = invoke<ThemeSetProjectResult>("volli:theme-set-project", {
       projectId,
       override: {
-        appThemeSlug: "sea",
-        terminalThemeName: null,
-        editorThemeId: null,
-        seed: "#3a7d9a",
+        terminalThemeName: "Nord",
+        editorThemeId: "dracula",
       },
     });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.project.themeOverride?.appThemeSlug).toBe("sea");
-    expect(result.value.projectOverride?.seed).toBe("#3a7d9a");
+    expect(result.project.themeOverride?.terminalThemeName).toBe("Nord");
+    expect(result.value.projectOverride?.editorThemeId).toBe("dracula");
   });
 
   it("clears back to inheriting on a null override", () => {
     const { projectId } = setup();
     invoke("volli:theme-set-project", {
       projectId,
-      override: { appThemeSlug: "sea", terminalThemeName: null, editorThemeId: null, seed: null },
+      override: { terminalThemeName: "Nord", editorThemeId: null },
     });
 
     const result = invoke<ThemeSetProjectResult>("volli:theme-set-project", {
@@ -320,7 +314,7 @@ describe("volli:theme-set-project", () => {
 
     const result = invoke<ThemeSetProjectResult>("volli:theme-set-project", {
       projectId,
-      override: { appThemeSlug: "sea", terminalThemeName: null, editorThemeId: null, seed: null },
+      override: { terminalThemeName: "Nord", editorThemeId: null },
     });
 
     expect(result).toEqual({ ok: false, error: "Unknown project" });

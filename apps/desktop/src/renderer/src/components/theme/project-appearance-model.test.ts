@@ -23,7 +23,9 @@ describe("projectEditorChoice", () => {
   });
 
   it("reads a null editor id as Inherit", () => {
-    expect(projectEditorChoice(override({ appThemeSlug: "sunset" }))).toEqual({ kind: "inherit" });
+    expect(projectEditorChoice(override({ terminalThemeName: "sunset" }))).toEqual({
+      kind: "inherit",
+    });
   });
 
   it("reads a stored catalog id as the theme choice", () => {
@@ -37,11 +39,11 @@ describe("projectEditorChoice", () => {
 describe("withProjectEditorChoice", () => {
   it("stores a catalog id, leaving the app surface alone", () => {
     expect(
-      withProjectEditorChoice(override({ appThemeSlug: "sunset" }), {
+      withProjectEditorChoice(override({ terminalThemeName: "sunset" }), {
         kind: "theme",
         themeId: "nord",
       }),
-    ).toEqual(override({ appThemeSlug: "sunset", editorThemeId: "nord" }));
+    ).toEqual(override({ terminalThemeName: "sunset", editorThemeId: "nord" }));
   });
 
   it("collapses to no override when the editor was the last surface set", () => {

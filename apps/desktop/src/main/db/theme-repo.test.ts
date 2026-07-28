@@ -89,39 +89,36 @@ describe("project theme override", () => {
       ctx.db,
       id,
       {
-        appThemeSlug: null,
         terminalThemeName: "Catppuccin Mocha",
         editorThemeId: null,
-        seed: null,
       },
       1000,
     );
 
     expect(updated?.themeOverride).toEqual({
-      appThemeSlug: null,
       terminalThemeName: "Catppuccin Mocha",
       editorThemeId: null,
-      seed: null,
     });
     expect(getProjectById(ctx.db, id)?.themeOverride?.terminalThemeName).toBe("Catppuccin Mocha");
   });
 
-  it("stores the auto-tint seed independently of the surface slugs", () => {
+  // The dead `theme_app_slug`/`theme_seed` columns (migration 013) are no longer
+  // reachable through `ProjectThemeOverride` — this write always lands `null` in
+  // both, whatever the caller asks for.
+  it("always writes null into the two dead migration-013 columns", () => {
     const id = seedProject();
 
     updateProjectThemeOverride(
       ctx.db,
       id,
-      { appThemeSlug: null, terminalThemeName: null, editorThemeId: null, seed: "#6e8b5e" },
+      { terminalThemeName: "Nord", editorThemeId: "nord" },
       1000,
     );
 
-    expect(getProjectById(ctx.db, id)?.themeOverride).toEqual({
-      appThemeSlug: null,
-      terminalThemeName: null,
-      editorThemeId: null,
-      seed: "#6e8b5e",
-    });
+    const row = ctx.db
+      .prepare("SELECT theme_app_slug, theme_seed FROM projects WHERE id = ?")
+      .get(id) as { theme_app_slug: string | null; theme_seed: string | null };
+    expect(row).toEqual({ theme_app_slug: null, theme_seed: null });
   });
 
   it("clears every surface back to inherit on null", () => {
@@ -129,7 +126,7 @@ describe("project theme override", () => {
     updateProjectThemeOverride(
       ctx.db,
       id,
-      { appThemeSlug: "sea", terminalThemeName: "Nord", editorThemeId: "nord", seed: "#3a7d9a" },
+      { terminalThemeName: "Nord", editorThemeId: "nord" },
       1000,
     );
 
@@ -144,7 +141,7 @@ describe("project theme override", () => {
     const updated = updateProjectThemeOverride(
       ctx.db,
       id,
-      { appThemeSlug: null, terminalThemeName: null, editorThemeId: null, seed: null },
+      { terminalThemeName: null, editorThemeId: null },
       1000,
     );
 
@@ -160,7 +157,7 @@ describe("project theme override", () => {
     updateProjectThemeOverride(
       ctx.db,
       id,
-      { appThemeSlug: "sea", terminalThemeName: null, editorThemeId: null, seed: null },
+      { terminalThemeName: "Nord", editorThemeId: null },
       4242,
     );
 

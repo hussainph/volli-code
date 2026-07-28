@@ -43,6 +43,8 @@ import type {
   Appearance,
   Canvas,
   GhosttyAppearancePayload,
+  Project,
+  ProjectCanvasWriteResult,
   ProjectThemeOverride,
   ResolvedAppearance,
   ShippedEditorThemeId,
@@ -99,8 +101,20 @@ export interface ThemeGateway {
   state(input: { projectId?: string }): Promise<ThemeStateResult>;
   setGlobalCanvas(canvas: Canvas): Promise<Result>;
   setGlobalAppearance(appearance: Appearance): Promise<Result>;
-  setProjectCanvas(projectId: string, canvas: Canvas | null): Promise<Result>;
-  setProjectAppearance(projectId: string, appearance: Appearance | null): Promise<Result>;
+  /**
+   * Both workspace writes resolve with the **authoritative row**, re-read after
+   * the update — not a bare ok. That row is the point: a workspace's canvas and
+   * appearance are columns the projects store holds, and it is the only copy
+   * (see `projects.ts`'s selection listener, which builds every scope from it).
+   * A write that persisted without handing the fresh row back left that copy
+   * stale, so the next workspace switch rebuilt the scope from a `null` column
+   * and the override silently reverted to the global canvas.
+   */
+  setProjectCanvas(projectId: string, canvas: Canvas | null): Promise<ProjectCanvasWriteResult>;
+  setProjectAppearance(
+    projectId: string,
+    appearance: Appearance | null,
+  ): Promise<ProjectCanvasWriteResult>;
   /**
    * Records what was actually painted so the NEXT launch can build its window
    * with the right edge color and the right mode class before anything runs. A
@@ -116,6 +130,25 @@ export interface ThemeGateway {
     projectId: string,
     override: ProjectThemeOverride | null,
   ): Promise<ThemeSetProjectResult>;
+}
+
+/**
+ * Where a freshly-written workspace row goes.
+ *
+ * A registrar rather than an import, because the dependency between these two
+ * stores is one-directional and has to stay that way: `projects.ts` imports
+ * this module to hand a scope over on selection. Reaching back the other way
+ * would close the cycle, so the projects store registers itself here instead
+ * and this module keeps knowing nothing about it.
+ *
+ * Null until something registers — the store persists exactly as before, and a
+ * headless test simply observes no adoption.
+ */
+let projectRowSink: ((project: Project) => void) | null = null;
+
+/** Called by `projects.ts` at module scope. */
+export function setProjectRowSink(sink: (project: Project) => void): void {
+  projectRowSink = sink;
 }
 
 /** The seams the store drives: the IPC bridge, and the DOM / Monaco repaint. */
@@ -462,7 +495,7 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
       const editorThemeId = state.projectOverride?.editorThemeId ?? null;
       const terminalThemeName = state.projectOverride?.terminalThemeName ?? null;
       if (editorThemeId === null && terminalThemeName === null) return null;
-      return { appThemeSlug: null, seed: null, terminalThemeName, editorThemeId };
+      return { terminalThemeName, editorThemeId };
     };
 
     /** The scope descriptor a project-scoped write has to re-adopt afterwards. */
@@ -673,6 +706,10 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
           if (inScope) setAndRepaint({ projectOverride: previous });
           return false;
         }
+        // The projects store holds the ONLY copy of this row, and every scope
+        // is rebuilt from it. Without this the write survives in SQLite and
+        // dies in memory.
+        projectRowSink?.(result.project);
         return true;
       },
 
@@ -696,6 +733,8 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
           if (inScope) setAndRepaint({ projectOverride: previous });
           return false;
         }
+        // Same reason as the canvas write above.
+        projectRowSink?.(result.project);
         return true;
       },
 

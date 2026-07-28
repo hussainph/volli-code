@@ -24,14 +24,14 @@ numbers of 1 or more.
 
 ### Appearance
 
-**Settings → Appearance → App theme** is the app-wide theme picker. See
-[Theming](/guides/theming/) for how it works and how to build your own. Two
+**Settings → Appearance → App theme** holds the canvas editor, and **Light &
+dark** the light/dark/auto choice. See [Theming](/guides/theming/) for both. Two
 more surfaces live in this pane.
 
 **Editor.** The syntax-highlighting theme for the editor Volli uses for files
-and documents. Leave it on **Matches app theme** and it follows your app theme
-automatically. Pick one explicitly and the row shows **Set by Volli**, with a
-button to reset it back to automatic.
+and documents. It's an independent choice: nothing derives it from your canvas.
+Leave it alone and the row shows **Default**; pick one explicitly and it shows
+**Set by Volli**, with a button to reset it back.
 
 **Terminal.** Font family and font size, plus the terminal's color theme
 (covered in [Theming](/guides/theming/#what-the-terminal-does)). Each row shows
@@ -40,11 +40,6 @@ by this project**, or **Built-in default**, with a revert button on anything
 Volli set. Reverting removes the key from Volli's overlay file rather than
 touching your Ghostty config. Two buttons under **Config files** reveal the
 Ghostty config and Volli's overlay file in Finder.
-
-A custom theme, built from the App theme editor, is a plain JSON file at
-`<userData>/volli/themes/<slug>.json`, one per theme. Its context menu in the
-picker has **Duplicate**, **Rename**, **Open file**, and **Delete**, so you can
-hand-edit or share a theme file directly.
 
 ### Harness Runtimes
 
@@ -87,9 +82,9 @@ first time a worktree is created; reopening an existing session skips it.
 
 ### Appearance
 
-**Configure → Appearance → App theme** lets this project override the global
-theme. Covered in
-[Theming](/guides/theming/#use-a-different-theme-for-one-project).
+**Configure → Appearance** lets this project override the app-wide canvas, the
+light/dark choice, the editor theme, and the terminal theme, each independently.
+Covered in [Theming](/guides/theming/#use-a-different-theme-for-one-project).
 
 ### Worktrees
 

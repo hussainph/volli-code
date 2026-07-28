@@ -23,10 +23,9 @@ unless a terminal has focus.
 | `⌘]` | Forward |
 | `⌘+` / `⌘-` / `⌘0` | Zoom the app in, out, or back to actual size |
 
-The command palette searches tickets and sessions across every project, and
-carries **Change theme…** as an action. Selecting a session opens it; selecting
-a ticket opens its workspace, switching projects on the way if it belongs to
-another one.
+The command palette searches tickets and sessions across every project.
+Selecting a session opens it; selecting a ticket opens its workspace, switching
+projects on the way if it belongs to another one.
 
 `C` is a bare keypress with no modifier, so Volli suppresses it while you're
 typing: in text fields, in the editor, in a terminal, or with a dialog already
@@ -76,12 +75,12 @@ terminal instead, where it usually means "interrupt".
 Font-size shortcuts change the focused terminal only. To scale the whole app,
 move focus out of the terminal first.
 
-## Theme picker
+## Canvas editor
 
-| Shortcut | Action |
-| --- | --- |
-| `Enter` | Apply the highlighted theme |
-| `Esc` | Cancel and revert the preview |
+| Shortcut | Action | When |
+| --- | --- | --- |
+| `←` `→` `↑` `↓` | Move the color 1% across the pad | A pad orb has focus |
+| `⇧` + an arrow | Move the color 5% across the pad | A pad orb has focus |
+| `Enter` | Apply the typed hex | The primary color's hex field has focus |
 
-Moving through the list previews each theme live. Nothing is saved until you
-press `Enter`. See [Theming](/guides/theming/).
+Every other edit saves as you make it. See [Theming](/guides/theming/).

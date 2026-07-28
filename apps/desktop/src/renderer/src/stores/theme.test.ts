@@ -20,6 +20,7 @@ import {
   createThemeStore,
   effectiveAppearance,
   effectiveCanvas,
+  setProjectRowSink,
   type ThemeGateway,
   type ThemeProjectScope,
 } from "./theme";
@@ -114,8 +115,16 @@ function fakeGateway(over: Partial<ThemeGateway> = {}): ThemeGateway {
     state: vi.fn(async () => ({ ok: true as const, value: statePayload() })),
     setGlobalCanvas: vi.fn(async () => ({ ok: true as const })),
     setGlobalAppearance: vi.fn(async () => ({ ok: true as const })),
-    setProjectCanvas: vi.fn(async () => ({ ok: true as const })),
-    setProjectAppearance: vi.fn(async () => ({ ok: true as const })),
+    // Both echo the authoritative row back, exactly as main does — the columns
+    // the write just moved, on the project it moved them for.
+    setProjectCanvas: vi.fn(async (projectId: string, canvas: Canvas | null) => ({
+      ok: true as const,
+      project: { id: projectId, themeCanvas: canvas } as never,
+    })),
+    setProjectAppearance: vi.fn(async (projectId: string, appearance: Appearance | null) => ({
+      ok: true as const,
+      project: { id: projectId, themeAppearance: appearance } as never,
+    })),
     setFirstPaint: vi.fn(async () => ({ ok: true as const })),
     // Echoes the scope it was called in, exactly as main does: the write is
     // global, the answer describes the caller's scope (#123).
@@ -280,8 +289,6 @@ describe("hydrate", () => {
         value: statePayload({
           projectId: "p1",
           projectOverride: {
-            appThemeSlug: null,
-            seed: null,
             terminalThemeName: "Nord",
             editorThemeId: "dracula",
           },
@@ -642,6 +649,47 @@ describe("the workspace scope", () => {
     expect(effectiveCanvas(store.getState())).toEqual(TEAL);
   });
 
+  /*
+   * The bug this pins was invisible from inside this store and cost a real
+   * boot: both writes persisted to SQLite and repainted correctly, so every
+   * assertion above passed — while the authoritative row came back and was
+   * dropped on the floor. The projects store holds the only copy of those
+   * columns and rebuilds every scope from it, so the next workspace switch read
+   * a stale `null` and reverted the workspace to the global canvas. Switching
+   * away and back is what REVEALED it; the write was already gone.
+   */
+  it("hands the freshly-written row back, for BOTH workspace writes", async () => {
+    const rows: { id: string }[] = [];
+    setProjectRowSink((project) => rows.push(project));
+    const { store } = freshStore({
+      state: vi.fn(async () => ({ ok: true as const, value: statePayload({ projectId: "p1" }) })),
+    });
+    store.getState().hydrateGlobal(appState(DEFAULT_CANVAS, "dark"));
+    await store.getState().hydrate(projectScope());
+
+    await store.getState().setProjectCanvas("p1", TEAL);
+    await store.getState().setProjectAppearance("p1", "light");
+
+    expect(rows).toEqual([
+      { id: "p1", themeCanvas: TEAL },
+      { id: "p1", themeAppearance: "light" },
+    ]);
+  });
+
+  it("does not hand a row back when the write failed", async () => {
+    const rows: { id: string }[] = [];
+    setProjectRowSink((project) => rows.push(project));
+    const { store } = freshStore({
+      state: vi.fn(async () => ({ ok: true as const, value: statePayload({ projectId: "p1" }) })),
+      setProjectCanvas: vi.fn(async () => ({ ok: false as const, error: "disk full" })),
+    });
+    store.getState().hydrateGlobal(appState(DEFAULT_CANVAS, "dark"));
+    await store.getState().hydrate(projectScope());
+
+    expect(await store.getState().setProjectCanvas("p1", TEAL)).toBe(false);
+    expect(rows).toEqual([]);
+  });
+
   it("persists without painting for a workspace it is NOT showing", async () => {
     // Adopting another workspace's canvas here would paint one project's window
     // with another's.
@@ -776,8 +824,6 @@ describe("the editor surface", () => {
     expect(await store.getState().setProjectEditorTheme("p1", "dracula")).toBe(true);
 
     expect(gateway.setProject).toHaveBeenCalledWith("p1", {
-      appThemeSlug: null,
-      seed: null,
       terminalThemeName: null,
       editorThemeId: "dracula",
     });
@@ -985,8 +1031,6 @@ describe("carrying the 013 row through a canvas write", () => {
         value: statePayload({
           projectId: "p1",
           projectOverride: {
-            appThemeSlug: null,
-            seed: null,
             terminalThemeName: "Nord",
             editorThemeId: "dracula",
           },
