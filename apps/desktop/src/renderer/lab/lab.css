@@ -188,8 +188,22 @@ html[data-lab-canvas][data-lab-seam="inset"] [data-slot="sidebar-inset"] {
  * the widest layer reaches (30px blur, −6 spread, +10 y). Nothing else is lost
  * to it: the card already clips its content with `overflow-hidden`, popovers
  * portal to the body, and the seam edge is square in this mode anyway. */
+/* The one number the rest of this seam is built from. `primary-sidebar.tsx`
+ * sizes its two absolutely-positioned presentation panes (the expanded and
+ * collapsed layers) from `--sidebar-width`/`--sidebar-width-icon` minus
+ * `--rail-width` alone — it has no way to know this seam then narrows the
+ * sidebar's own box by a margin, so a hand-copied `0.5rem` here and a bare
+ * width calc there were free to drift apart, and did: measured in a 1280x800
+ * window, the sidebar box ran 68→317 but the expanded pane's content reached
+ * 327, 10px past the wall, and the resize handle (sized off the unmargined
+ * rail gap) spanned y 40→800 against a wall at 48→792. Naming the margin once
+ * and reusing it in every correction below makes that drift impossible rather
+ * than just fixed for today. */
+html[data-lab-canvas][data-lab-seam="shell"] {
+  --lab-shell-inset: 0.5rem;
+}
 html[data-lab-canvas][data-lab-seam="shell"] [data-slot="sidebar"].bg-sidebar-veil {
-  margin: 0.5rem 0 0.5rem 0.5rem;
+  margin: var(--lab-shell-inset) 0 var(--lab-shell-inset) var(--lab-shell-inset);
   border: 1px solid var(--border);
   border-right-width: 0;
   border-radius: var(--radius-xl) 0 0 var(--radius-xl);
@@ -212,7 +226,7 @@ html[data-lab-canvas][data-lab-seam="shell"] [data-slot="sidebar-inset"] {
    * middle. Overlapping is the robust fix rather than matching the rounding:
    * the card paints after the sidebar and this mode gives the sidebar no right
    * border, so the covered column is one pixel of its fill and nothing else. */
-  margin: 0.5rem 0.5rem 0.5rem -1px;
+  margin: var(--lab-shell-inset) var(--lab-shell-inset) var(--lab-shell-inset) -1px;
   border-left-width: 0;
   border-radius: 0 var(--radius-xl) var(--radius-xl) 0;
   clip-path: inset(-60px -60px -60px 0);
@@ -223,6 +237,125 @@ html[data-lab-canvas][data-lab-seam="shell"] [data-slot="sidebar-inset"] {
  * the fourth. Only lifted here, where a shadow has to escape it. */
 html[data-lab-canvas][data-lab-seam="shell"] [data-slot="sidebar"].overflow-hidden {
   overflow: visible;
+}
+/* `primary-sidebar.tsx`'s two presentation panes are sized in TSX from
+ * `--sidebar-width`/`--sidebar-width-icon` minus `--rail-width` alone — fixed
+ * widths, deliberately, so their text doesn't reflow frame-by-frame while the
+ * collapse transition animates the sidebar's width (`100%` would reintroduce
+ * that). That calc has no idea this seam then narrows the sidebar's own box
+ * by `--lab-shell-inset`, so both panes ran exactly that far past the right
+ * wall: measured, the expanded pane's content hit 327 against a wall at 317,
+ * and the collapsed strip was 48px wide inside a 39px box, landing its icons
+ * at rightGap −2 (shoved off the edge) instead of a centered, equal gap.
+ *
+ * Both formulas below subtract 2px beyond the inset, not just the inset:
+ * 1px is this sidebar's own `border: 1px solid` on the left (the pane lives
+ * INSIDE that border, so it gets one less pixel than the border-box math
+ * gives the sidebar itself), and the second 1px is the same `--sidebar-width`
+ * fractional-rounding tax the sidebar-inset margin below corrects for with
+ * its own −1px (measured there: gap ends at 318, sidebar at 317). Landing
+ * exactly on the true content box rather than a pixel or two past it is what
+ * lets the collapsed strip's icons come out centered by construction (see
+ * `align-items: center` below) instead of by a hand-tuned offset. */
+html[data-lab-canvas][data-lab-seam="shell"] [data-sidebar-presentation="expanded"] {
+  width: calc(var(--sidebar-width) - var(--rail-width) - var(--lab-shell-inset) - 2px);
+  /* Air against the fold, and deliberately only a little.
+   *
+   * This padding STACKS on each tier's own inset rather than replacing it —
+   * the tiers (`SidebarHeader` at `px-4`, `SidebarGroup` at `p-2`) are
+   * full-bleed to the pane, so whatever goes here lands on top of 8px or 16px
+   * that is already there. Measuring the pane's own edge makes any value look
+   * one-for-one; measuring the INK is what shows the cost. At 13px the nav
+   * rows read 8px left against 21px right and the header 16 against 29, which
+   * puts the selected row's pill visibly off-centre — the same lopsidedness
+   * the rail rule below exists to remove, reintroduced one level in.
+   *
+   * 6px is the compromise: rows land 8/14, header 16/22. Enough that nothing
+   * crowds the seam, small enough that the asymmetry reads as intent rather
+   * than as a mistake. Asymmetry at all is the right shape here — the right
+   * wall is a hard fold against the card, the left edge is a soft one against
+   * the canvas — but it has to stay under the threshold where the pill stops
+   * looking centred. Symmetric would mean padding both flanks, which spends
+   * sidebar width to solve a problem only one edge has. */
+  padding-right: 6px;
+}
+html[data-lab-canvas][data-lab-seam="shell"] [data-sidebar-presentation="collapsed"] {
+  width: calc(var(--sidebar-width-icon) - var(--rail-width) - var(--lab-shell-inset) - 2px);
+}
+/* The width fix above corrects the STRIP's own box, but doesn't move a single
+ * icon: `SidebarMenuButton` is `size-8!` (a hardcoded 32px, not a var) and
+ * `SidebarMenu`/`SidebarGroup` stretch that button flush against the strip's
+ * own left edge via fixed `p-2` padding — neither dimension is aware of the
+ * strip's width at all, so shrinking that width leaves every icon exactly
+ * where it was. Measured: leftGap 9 / rightGap −2 before this rule, and
+ * still 9 / −2 with only the width fix applied — proof the two bugs are
+ * independent, not the same one restated.
+ * `align-items: center` on the menu's cross axis is the fix, not a computed
+ * `left` offset: the icon's 32px is wider than the strip's own content box
+ * once the inset is subtracted (32 > content), so centering necessarily
+ * overflows the menu equally on both sides — into the identical `p-2` on
+ * either flank — which is what makes the two gaps come out equal without
+ * this rule needing to know the icon's size or the padding's width itself.
+ * A `left: <computed>` offset would need to hardcode both (32px icon, 8px
+ * padding) as literals with no var backing them, which is exactly the
+ * disconnected-numbers bug this seam is being fixed for — just relocated
+ * into this rule instead of removed. Measured after (with the width formula's
+ * extra −2px landing the strip's right edge exactly on the true wall):
+ * leftGap 4 / rightGap 3, down from 9 / −2 — the remaining 1px is this
+ * sidebar's own 1px left border, which has nothing matching it on the right
+ * (`border-right-width: 0`), so a perfectly pane-centered icon still reads
+ * 1px off when measured against the sidebar's outer, not inner, edge. */
+html[data-lab-canvas][data-lab-seam="shell"]
+  [data-sidebar-presentation="collapsed"]
+  [data-slot="sidebar-menu"] {
+  align-items: center;
+}
+/* The grip is `absolute inset-y-0 right-0` against the fixed sidebar
+ * container, which spans the full contain-layout row (y 40→800 in an 800px
+ * window) — 8px taller at each end than the wall this seam actually draws
+ * (y 48→792, from the sidebar's own `--lab-shell-inset` margin). `right` is
+ * already correct since the sidebar half has no right margin; only the two
+ * ends needed pulling in to the same inset. */
+html[data-lab-canvas][data-lab-seam="shell"] [data-slot="sidebar-resize-handle"] {
+  top: var(--lab-shell-inset);
+  bottom: var(--lab-shell-inset);
+}
+/* …and the OTHER thing at those coordinates, which is what was actually being
+ * seen. `sidebar-container` carries a 1px right border of its own (computed
+ * `0px 1px 0px 0px`) and, being `fixed inset-y-0`, spans the whole content row
+ * — y 40→800 against a unit that runs 48→792. The card's −1px margin paints
+ * over that border for the unit's own height, so the only parts left showing
+ * are the 8px above and the 8px below: a stub of grey line poking out of each
+ * rounded corner, which reads exactly like the resize grip overflowing. Two
+ * unrelated elements, same 1px column at x=317, same symptom; fixing the grip
+ * alone left the visible half untouched.
+ *
+ * Zeroed rather than inset, because in this seam it has nothing to divide. The
+ * sidebar and the card meet as a colour change with no gutter, and both halves
+ * already give up the border facing that seam — a third line drawn down the
+ * middle would contradict the one thing the shell is claiming. */
+html[data-lab-canvas][data-lab-seam="shell"] [data-slot="sidebar-container"] {
+  border-right-width: 0;
+}
+/* Same bug, seen from outside the unit instead of inside it: `project-rail.tsx`
+ * centers its tile column (`items-center`) and its `AddProjectTile` row
+ * (`justify-center`) inside the rail's own 60px box (`--rail-width`), which is
+ * correct everywhere else — a 36px tile centers at 12→48, 12px either side.
+ * `shell` doesn't touch the rail at all, but it DOES move what the eye reads
+ * as the rail's far edge: that edge used to be the rail's own right side (60);
+ * now the sidebar unit starts 8px further out (68), so the perceived band is
+ * 0→68, not 0→60, and a tile centered on the wrong band lands 12px from the
+ * viewport edge but 20px from the unit.
+ * The fix is `padding-left`, not `padding-left: calc(inset / 2)`: this centers
+ * twice (`items-center`/`justify-center` inside a `flex` row that stretches to
+ * the rail's own full padding-box), and each stretch-then-center layer between
+ * the padding and the tile halves whatever asymmetry the padding introduces —
+ * confirmed empirically, not assumed: `padding-left: 4px` (half the inset)
+ * only moved the tile to 14/18, not the equal split its "half of 8" reasoning
+ * expected. The full inset is what survives that halving: measured, 8px lands
+ * both tiles at 16/16. */
+html[data-lab-canvas][data-lab-seam="shell"] [data-workspace-rail] {
+  padding-left: var(--lab-shell-inset);
 }
 /* Raised-on-a-surface: the active tab in every strip, and the board's cards.
  * This is the tier the owner's screenshot is of — a tab reads as a tab because
