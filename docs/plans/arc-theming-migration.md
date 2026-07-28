@@ -110,9 +110,13 @@ The custom-themes-as-JSON-files layer (`shared/theme/custom-themes.ts`,
 path-traversal boundary along with it — worth noting as a security surface that simply
 stops existing.
 
-**Open call:** `main/db/export.ts` emits `themeAppSlug` / `themeSeed` per project in a
-durable external format. Either keep emitting them as `null` or version the export.
-Decide in this PR; do not leave it implicit.
+**Export format — decided: version it.** `main/db/export.ts` emits `themeAppSlug` /
+`themeSeed` per project in a durable external format. Rather than emit them forever as
+dead `null`s, the export gains a version field and drops them, carrying
+`themeCanvasId` / `themeAppearance` instead. The importer must accept the previous,
+unversioned shape and treat a missing version as v1 — an export taken before this change
+is the only kind that exists today, so refusing it would strand the owner's own backups.
+Cover both directions with a test.
 
 ### PR3 — the paint path
 
@@ -125,11 +129,26 @@ Decide in this PR; do not leave it implicit.
   first paint.
 - Regenerate the `globals.css` literal fallback from the new pipeline at Ember.
 
-**First-paint trap:** the CSS fallback can only be one mode. With appearance `auto` on a
-light system, first paint will be dark-Ember and flip. Either emit a
-`@media (prefers-color-scheme: light)` block alongside, or accept the flash — decide here,
-and if the media block wins, `globals.css` gains a second generated section that is
-subject to the same *regenerate, never hand-tune* rule.
+**First paint — decided: `auto` stays the default, so the flash gets solved, not accepted.**
+The CSS fallback can only describe one mode, so on a light system under `auto` first paint
+would be dark-Ember and then flip. `globals.css` therefore gains a
+`@media (prefers-color-scheme: light)` block holding the light-Ember token set alongside
+the dark one.
+
+Two consequences that must not be lost:
+
+- **The new block is generated, exactly like the first.** It is `generateThemeTokens` at
+  Ember run through the light ladder, pasted verbatim. The *regenerate, never hand-tune*
+  rule in `CLAUDE.md` now covers two blocks, and both must be regenerated together — a
+  hand-tuned light block that drifts from the dark one is the failure mode this rule exists
+  to prevent.
+- **The media query is a first-paint fallback only, not the appearance mechanism.** Once
+  the renderer boots, the resolved appearance is authoritative and is written as inline
+  custom properties that outrank it. A user on a light system who has explicitly chosen
+  dark must not see a light flash on the way in, so the resolved mode has to be readable
+  before first paint — persist it somewhere main can read at window construction and hand
+  it to the renderer, rather than waiting on a store hydrate. `windowBackgroundColor`
+  needs the same value for the same reason.
 
 **Done when:** the app renders the canvas with no theme picker involved, in both modes,
 and the terminal repaints through `applyThemeTokens`' existing choke point.
