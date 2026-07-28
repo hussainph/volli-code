@@ -25,12 +25,17 @@ import { useUiStore } from "@renderer/stores/ui";
 import { toast } from "sonner";
 
 const WORKSPACE_RAIL_WIDTH = 60;
-const COLLAPSED_NAV_WIDTH = 48;
+// 56px of nav strip + the 1px `border-r` sidebar-container spends on itself
+// (--sidebar-edge below). The width tokens are BORDER-box, so the two panes
+// inside only ever share one pixel less than the number written here — 57 is
+// what leaves the strip a true 56, which centers the menu's 32px pill on the
+// same 12px flanks the project rail gives its 36px tile inside 60.
+const COLLAPSED_NAV_WIDTH = 57;
 
 /**
  * Window shell, sidebar-09 composition: a collapsible two-pane sidebar (60px
  * project rail + resizable primary sidebar) beside the main content.
- * Collapsing (⌘B) keeps the rail plus a 48px icon strip of the primary nav
+ * Collapsing (⌘B) keeps the rail plus a 56px icon strip of the primary nav
  * (sidebar-07 style), so navigation stays one click away.
  *
  * ChromeBar owns the top 40px of window chrome and sits above the sidebar +
@@ -93,13 +98,21 @@ export function AppShell() {
           "--sidebar-width": terminalFocused
             ? "0px"
             : `${sidebarWidth - (WORKSPACE_RAIL_WIDTH - workspaceRailWidth)}px`,
-          // Collapsed = optional workspace rail + 48px nav icon strip.
+          // Collapsed = optional workspace rail + 56px nav icon strip.
           "--sidebar-width-icon": terminalFocused
             ? "0px"
             : `${COLLAPSED_NAV_WIDTH + workspaceRailWidth}px`,
           // 60px: a ring-2/offset-3 selected tile (36px + 10) keeps 7px of
           // air to each rail edge.
           "--rail-width": `${workspaceRailWidth}px`,
+          // The hairline `sidebar-container` spends on its own `border-r`
+          // (ui/sidebar.tsx). Both width tokens above are border-box widths of
+          // that element, so the rail and the primary pane divide one pixel
+          // less than either says — anything sized off the token arithmetic
+          // has to give this back or it overhangs by exactly 1px, and the
+          // parent's overflow-hidden shaves it off the right. Named once here
+          // rather than as a bare literal in each pane's `calc()`.
+          "--sidebar-edge": "1px",
         } as React.CSSProperties
       }
     >
