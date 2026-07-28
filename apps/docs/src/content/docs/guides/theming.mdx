@@ -1,6 +1,6 @@
 ---
 title: Theming
-description: Paint Volli from a canvas of one to three colors, choose light or dark, override either for one project, and understand what the terminal does.
+description: Edit Volli's canvas to change every color in the app. Place one to three colors, set vibrancy and grain, choose light or dark, and override both per project.
 sidebar:
   label: Theming
 ---
@@ -8,17 +8,15 @@ sidebar:
 import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
 
 Volli paints its window from a **canvas**: one to three colors placed on the
-window, plus a vibrancy and a grain amount. Every surface, text tier, border and
-accent in the app is derived from that canvas, and re-derived the moment you
-change it.
+window, plus a vibrancy and a grain amount. Every surface, text tier, border,
+and accent in the app derives from that canvas and repaints when you change it.
 
-The canvas Volli ships with is a single ember stop, `#e8652a`, at 60% vibrancy
-and 15% grain.
+Volli ships with one ember color, `#e8652a`, at 60% vibrancy and 15% grain.
 
 {/* TODO: capture Settings → Appearance with the canvas editor open (pad, stop
-    chips, swatch row, vibrancy and grain sliders, contrast readout) and embed
-    it here. The docs-shots.mjs step for it hasn't been written yet, and this
-    page deliberately references no image until a real one exists. */}
+    chips, swatch row, vibrancy slider, grain dial, contrast readout). No
+    screenshot exists yet and docs-shots.mjs has no step for this pane, so the
+    page references no image. */}
 
 ## What a canvas is
 
@@ -26,123 +24,115 @@ A canvas has four parts:
 
 - **Colors**, called stops. One to three of them, each anchored at a point in
   the window, where its color pools and fades outward.
-- **A primary.** The dominant stop. It's drawn larger, fades last, and is what
-  the app's whole color set is derived from. The other stops take their hue from
-  it too.
-- **Vibrancy.** How chromatic the canvas is, from a near-neutral wash to as
-  saturated as each mode allows.
+- **A primary.** The dominant stop. It's drawn larger, fades last, and the rest
+  of the app's colors derive from it.
+- **Vibrancy.** How saturated the canvas is, from a near-neutral wash up to the
+  most each mode allows.
 - **Grain.** A noise layer over the gradient. Zero turns it off.
 
-Nothing else about the look is a setting. How far panels lift off the canvas,
-how much the cards are tinted, shadow depth and text weight are all tuned per
-mode inside Volli, which is what lets one canvas render correctly in both light
-and dark.
+That's the whole of it. Panel elevation, card tint, shadow depth, and text
+weight aren't settings; Volli holds a fixed set of each for light and for dark,
+so one canvas covers both modes.
 
 ## Edit the canvas
 
 Go to **Settings → Appearance → App theme**. Every edit paints the real app as
-you make it and is saved when you let go of the control, so there's no separate
-preview mode and no apply button.
+you make it and saves when you release the control. There's no apply button.
 
 ### The pad
 
 The pad is a minimap of your window, at the same 16:10 proportions, so where a
-stop sits on the pad is where its color pools on screen.
+color sits on the pad is where it pools on screen. Each stop is a circle.
 
-- **Drag an orb** to move that stop.
-- **Press an orb** without dragging to make it the primary.
-- **Arrow keys** nudge a focused orb by 1%, or 5% with `Shift` held.
+- **Drag a circle** to move that stop.
+- **Click a circle** without dragging to make it the primary.
+- **Arrow keys** move a focused circle by 1%, or 5% with `Shift` held.
 
-Orbs always show the color you picked, never the transformed version the window
-paints, so switching between light and dark never rewrites what you authored.
+The circles show the colors you picked. What the window paints is a lighter or
+darker version of each, depending on the mode.
 
 ### Colors
 
-Below the pad, one chip per stop shows its hex, the color it actually paints as
+Below the pad, one chip per stop shows its hex, a swatch of what it paints as
 in the current mode, and which stop is the primary. Click a chip to promote it.
 
-**+** adds a color, up to three. **−** removes one, and never the primary, so
-removing a color can't recolor the window out from under you.
+**+** adds a color, up to three. **−** removes the last stop that isn't the
+primary, so it never changes the color the rest of the app derives from.
 
 Only the primary's color is editable. The others follow it around the color
-wheel: two stops sit opposite each other, three sit at even thirds. That's what
-keeps a multi-color canvas one family rather than three unrelated colors sharing
-a window. Positions are never derived — a stop stays exactly where you put it.
+wheel: two stops sit opposite each other, three sit at even thirds. Changing a
+color never moves a stop, so positions stay where you put them.
 
-The row under the chips sets the primary's color: nine presets a page, two
-pages, with chevrons to move between them, and a hex field beside them. The
-field takes `#rgb` and `#rrggbb`, with or without the `#`. Typing a value that
-parses previews it live, and `Enter` or leaving the field keeps it. A half-typed
-value is never applied, and the field snaps back to the color in force.
+The row under the chips sets the primary's color. It holds nine presets a page,
+two pages, with chevrons to move between them, and a hex field. The field takes
+`#rgb` and `#rrggbb`, with or without the `#`. A value that parses previews as
+you type; `Enter` or leaving the field keeps it, and `Esc` puts the previous
+color back. A half-typed value is never applied.
 
 ### Vibrancy and grain
 
-Both are sliders from 0 to 100%, each with a swatch beside it showing what the
-value is actually doing. Vibrancy isn't only cosmetic: a more chromatic canvas
-has a lower contrast ceiling, which the readout below it picks up.
+Both run from 0 to 100%. Vibrancy is a slider, with a swatch beside it showing
+the color at that setting. Grain is a dial: drag it round, or focus it and use
+the arrow keys.
+
+Vibrancy also affects contrast. The more saturated the canvas, the lower the
+contrast text on it can reach, and the readout below picks that up.
 
 ### Contrast
 
-Under the sliders, Volli reports what your canvas's text measures — **body
-copy**, **secondary copy** and **sidebar nav** — as an APCA `Lc` score against
-the floor each one asks for.
+Under those controls, Volli lists what text on your canvas measures: **Body
+copy**, **Secondary copy**, and **Sidebar nav**, each as an APCA `Lc` score
+against the floor it needs.
 
-A reading marked as being at this canvas's ceiling means no ink of any color
-could clear that floor on that surface. It's a property of the colors you
-picked, not a fault.
+A reading marked as being at this canvas's ceiling means no text color at all
+clears that floor on that surface.
 
-When a floor is missed by more than the color values can even express, an alert
-names what's affected. If some lower vibrancy clears it, the alert offers that
-value as a button you can press. If nothing clears it, the color itself is the
-lever.
+A small shortfall only shows in the readout. A larger one raises an alert
+naming what's affected, with an **Ease vibrancy to …** button when a lower
+vibrancy would clear it. If no vibrancy clears it, change the color.
 
 ## Light, dark, and auto
 
 **Settings → Appearance → Light & dark** has one control: **Light**, **Dark**,
 or **Auto**. Auto follows macOS.
 
-It's a separate setting from the canvas on purpose. One canvas renders in both
-modes, because Volli holds a tuned set of values for each, so the mode is a
-choice you make independently of the colors — and a project can override either
-one on its own.
+Mode and canvas are separate settings. The same canvas renders in both modes,
+and a project can override either one on its own.
 
 ## Use a different theme for one project
 
-Open **Configure → Appearance** for that project. Four sections — **App theme**,
-**Light & dark**, **Editor** and **Terminal** — each with its own **Inherit** /
-**Custom** switch.
+Open **Configure → Appearance** for that project. It has four sections, each
+with its own **Inherit** / **Custom** switch: **App theme**, **Light & dark**,
+**Editor**, and **Terminal**.
 
-Every section starts on **Inherit** and names what the project is currently
-following. Switching to **Custom** pins whatever the section is already showing,
-so the switch changes what the setting *means* without changing what's on
-screen; you then edit from there. The canvas editor under **App theme** is the
-same one Settings mounts, scoped to this project, and a drag in it repaints this
+Every section starts on **Inherit** and says what the project is following.
+**Custom** pins whatever the section is already showing, so switching to it
+changes nothing on screen until you edit. **App theme** opens the same canvas
+editor Settings uses, scoped to this project: dragging in it repaints this
 window and saves to this project alone.
 
-Click **Inherit** to remove the override rather than store a second setting. The
-project then follows any future change you make globally, and reads exactly like
-a project you never touched.
+Switch back to **Inherit** to drop the override. The project follows the
+app-wide setting again, including any later change you make to it.
 
-While a project overrides the canvas, **Settings → Appearance → App theme**
-marks itself **Workspace override**, because the window you're looking at while
-you edit isn't the one that section owns.
+While the project you're in overrides the canvas, **Settings → Appearance → App
+theme** marks itself **Workspace override**. Edits there still go to the
+app-wide canvas, not to the one this window is showing.
 
 ## What the terminal does
 
-The terminal is the one surface that doesn't always follow your canvas, because
-Ghostty configuration takes precedence over Volli's.
+The terminal is the one surface that doesn't always follow your canvas. Ghostty
+configuration takes precedence over Volli's.
 
 - **If you haven't set a Ghostty theme**, the terminal takes its background,
-  foreground, cursor and normal red from the app's derived colors, and repaints
-  as soon as you change the canvas or the mode.
+  foreground, cursor, and normal red from the app's derived colors, and
+  repaints as soon as you change the canvas or the mode.
 - **If a Ghostty theme is set**, in your own `~/.config/ghostty/config` or
   through Volli's terminal settings, that theme wins. A `theme = light:X,dark:Y`
   pair is re-read on every mode change, so you get the half that matches.
 
-The other fifteen ANSI colors are a fixed set per mode: a restrained palette
-tuned for a near-black ground in dark, and GitHub Light Default in light. They
-are terminal-domain colors with no equivalent in the app's palette, so Volli
-doesn't invent one.
+The other fifteen ANSI colors are fixed per mode: a restrained set tuned for a
+near-black background in dark, and GitHub Light Default in light. Volli has no
+app color to derive them from.
 
 <Aside type="note">
   Volli never edits your Ghostty config. It writes overlay files layered on top
