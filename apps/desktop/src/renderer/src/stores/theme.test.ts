@@ -188,6 +188,36 @@ function deferred<Value>() {
 /** Lets a fire-and-forget `.then()` chain (the first-paint write) settle. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
+/**
+ * A hand-driven animation-frame clock.
+ *
+ * These tests run under vitest's `node` environment, where there is no
+ * `requestAnimationFrame` at all — so the store takes the immediate-paint
+ * branch and the preview coalescing is never reached unless the frames are
+ * installed and fired by hand. `afterEach`'s `unstubAllGlobals` removes them
+ * again, so no other case sees a window that suddenly has frames.
+ */
+function frameClock() {
+  let nextHandle = 0;
+  const queued = new Map<number, FrameRequestCallback>();
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    nextHandle += 1;
+    queued.set(nextHandle, callback);
+    return nextHandle;
+  });
+  vi.stubGlobal("cancelAnimationFrame", (handle: number) => {
+    queued.delete(handle);
+  });
+  return {
+    /** Runs every queued frame, as the display would. */
+    flush() {
+      const callbacks = [...queued.values()];
+      queued.clear();
+      for (const callback of callbacks) callback(0);
+    },
+  };
+}
+
 beforeEach(() => {
   vi.mocked(toast.error).mockClear();
 });
@@ -557,6 +587,18 @@ describe("preview", () => {
     expect(effectiveCanvas(store.getState())).toEqual(DEFAULT_CANVAS);
   });
 
+  it("does not repaint when there was no preview to cancel", () => {
+    // Escape reaches this whether or not a gesture is running, and every paint
+    // invalidates the terminals' token-derived palette.
+    const { store, paint } = freshStore();
+    store.getState().hydrateGlobal(appState(PLUM, "dark"));
+    const before = paint.painted.length;
+
+    store.getState().cancelPreview();
+
+    expect(paint.painted).toHaveLength(before);
+  });
+
   it("previews an appearance independently of a canvas", () => {
     const { store } = freshStore();
     store.getState().hydrateGlobal(appState(DEFAULT_CANVAS, "dark"));
@@ -622,12 +664,92 @@ describe("preview", () => {
     expect(gateway.setGlobalAppearance).toHaveBeenCalledWith("light");
   });
 
+  it("commits an appearance on its own, to the workspace scope it was previewed in", async () => {
+    // The two halves are scoped independently, so a workspace appearance
+    // preview must reach the workspace's own write and leave its canvas — which
+    // was never being previewed — untouched.
+    const { store, gateway } = freshStore({
+      state: vi.fn(async () => ({ ok: true as const, value: statePayload({ projectId: "p1" }) })),
+    });
+    store.getState().hydrateGlobal(appState(DEFAULT_CANVAS, "dark"));
+    await store.getState().hydrate(projectScope());
+    store.getState().startAppearancePreview("light");
+
+    expect(await store.getState().commitPreview({ kind: "project", projectId: "p1" })).toBe(true);
+
+    expect(gateway.setProjectAppearance).toHaveBeenCalledWith("p1", "light");
+    expect(gateway.setProjectCanvas).not.toHaveBeenCalled();
+    expect(gateway.setGlobalAppearance).not.toHaveBeenCalled();
+  });
+
   it("commits nothing when there is no preview to commit", async () => {
     const { store, gateway } = freshStore();
 
     expect(await store.getState().commitPreview({ kind: "global" })).toBe(false);
 
     expect(gateway.setGlobalCanvas).not.toHaveBeenCalled();
+  });
+});
+
+describe("the preview frame", () => {
+  it("paints once however many preview edits land inside one frame", () => {
+    // A drag delivers pointer events faster than the display refreshes — a
+    // trackpad runs well past 120Hz — and every one of them used to reach the
+    // DOM, so all but the last were document-wide style recalculations nobody
+    // could look at.
+    const frames = frameClock();
+    const { store, paint } = freshStore();
+    store.getState().hydrateGlobal(appState(DEFAULT_CANVAS, "dark"));
+    const beforeDrag = paint.painted.length;
+
+    store.getState().startPreview(TEAL);
+    store.getState().startPreview(PLUM);
+    store.getState().startPreview(TEAL);
+    expect(paint.painted).toHaveLength(beforeDrag);
+
+    frames.flush();
+
+    // One paint, and it is the NEWEST canvas: the frame reads the store when it
+    // fires, so the state is never what is deferred — only the paint is.
+    expect(paint.painted).toHaveLength(beforeDrag + 1);
+    expect(paint.painted.at(-1)).toEqual({ canvas: TEAL, resolved: "dark", transient: true });
+    // Every edit is visible to the editor's own controls immediately; only the
+    // document's ~50 properties wait for the frame.
+    expect(effectiveCanvas(store.getState())).toBe(TEAL);
+  });
+
+  it("keeps following the pointer after a frame has fired", () => {
+    // The coalescing keeps ONE frame in flight and lets later requests ride it,
+    // so the in-flight marker has to be cleared by the frame that runs — a drag
+    // that stopped scheduling after its first frame would simply freeze.
+    const frames = frameClock();
+    const { store, paint } = freshStore();
+    store.getState().hydrateGlobal(appState(DEFAULT_CANVAS, "dark"));
+    store.getState().startPreview(TEAL);
+    frames.flush();
+
+    store.getState().startPreview(PLUM);
+    frames.flush();
+
+    expect(paint.painted.at(-1)).toEqual({ canvas: PLUM, resolved: "dark", transient: true });
+  });
+
+  it("drops the queued frame on commit, so the release is the last thing painted", async () => {
+    // A frame surviving into a commit repaints from state the commit has
+    // already cleared: the window snapped back to the stored canvas for one
+    // frame on every release, and the document was left showing a transient
+    // paint after the committing one had already run.
+    const frames = frameClock();
+    const { store, paint } = freshStore();
+    store.getState().hydrateGlobal(appState(DEFAULT_CANVAS, "dark"));
+    store.getState().startPreview(TEAL);
+
+    await store.getState().commitPreview({ kind: "global" });
+    const afterCommit = paint.painted.length;
+    frames.flush();
+
+    expect(paint.painted).toHaveLength(afterCommit);
+    expect(paint.painted.at(-1)).toEqual({ canvas: TEAL, resolved: "dark", transient: false });
   });
 });
 
@@ -933,6 +1055,23 @@ describe("the terminal chain", () => {
 
     expect(gateway.state).toHaveBeenCalledWith({ projectId: "p1" });
   });
+
+  it("re-reads an inheriting workspace without inventing a canvas for it", async () => {
+    // The re-read rebuilds its own scope from what this workspace overrides,
+    // which for an inheriting one is nothing — handing a canvas back here would
+    // pin the global gradient onto the workspace as if it had chosen it.
+    const { store } = freshStore({
+      state: vi.fn(async () => ({ ok: true as const, value: statePayload({ projectId: "p1" }) })),
+    });
+    store.getState().hydrateGlobal(appState(PLUM, "dark"));
+    await store.getState().hydrate(projectScope());
+
+    store.getState().acceptGlobalTerminal(TERMINAL);
+    await settle();
+
+    expect(store.getState().projectOverride).toBeNull();
+    expect(effectiveCanvas(store.getState())).toEqual(PLUM);
+  });
 });
 
 describe("appliedCanvas", () => {
@@ -952,6 +1091,18 @@ describe("appliedCanvas", () => {
     await store.getState().hydrate(projectScope({ canvas: TEAL }));
 
     expect(appliedCanvas(store.getState(), { kind: "project", projectId: "p1" })).toEqual(TEAL);
+  });
+
+  it("reports the global canvas for a loaded workspace that inherits it", async () => {
+    // What the editor tags as "Current" for a workspace with no canvas of its
+    // own is the global one — it is what that workspace is actually wearing.
+    const { store } = freshStore({
+      state: vi.fn(async () => ({ ok: true as const, value: statePayload({ projectId: "p1" }) })),
+    });
+    store.getState().hydrateGlobal(appState(PLUM, "dark"));
+    await store.getState().hydrate(projectScope());
+
+    expect(appliedCanvas(store.getState(), { kind: "project", projectId: "p1" })).toEqual(PLUM);
   });
 
   it("never borrows another workspace's override", async () => {
@@ -1157,6 +1308,26 @@ describe("overlapping and out-of-scope writes", () => {
     });
 
     expect(await store.getState().setProjectEditorTheme("p1", "nord")).toBe(false);
+  });
+
+  it("reports a failed write for a workspace it is not showing, with nothing to roll back", async () => {
+    // Both out-of-scope writes skipped the optimistic paint, so the failure
+    // path has no override to restore — repainting here would put another
+    // workspace's canvas on this window on the way out of an error.
+    const { store, paint } = freshStore({
+      state: vi.fn(async () => ({ ok: true as const, value: statePayload({ projectId: "p1" }) })),
+      setProjectCanvas: vi.fn(async () => ({ ok: false as const, error: "no such project" })),
+      setProjectAppearance: vi.fn(async () => ({ ok: false as const, error: "no such project" })),
+    });
+    store.getState().hydrateGlobal(appState(PLUM, "dark"));
+    await store.getState().hydrate(projectScope({ canvas: TEAL }));
+    const before = paint.painted.length;
+
+    expect(await store.getState().setProjectCanvas("p2", DEFAULT_CANVAS)).toBe(false);
+    expect(await store.getState().setProjectAppearance("p2", "light")).toBe(false);
+
+    expect(paint.painted).toHaveLength(before);
+    expect(effectiveCanvas(store.getState())).toEqual(TEAL);
   });
 
   it("persists an appearance for a workspace it is not showing, without repainting", async () => {

@@ -228,6 +228,20 @@ describe("global canvas (app_state kv)", () => {
     expect(getRawGlobalTheme(ctx.db)).not.toContain("resolved");
   });
 
+  // The write refuses rather than storing it or quietly substituting the
+  // default: this is the last layer before the row, the IPC envelope turns the
+  // throw into a typed `{ ok: false }` the renderer surfaces, and a write that
+  // silently stored something else would be the worst of the three outcomes.
+  it("refuses a canvas that cannot be painted, and leaves the row alone", () => {
+    ctx = openTestDb();
+    setGlobalCanvas(ctx.db, testCanvas(), 1000);
+
+    expect(() => setGlobalCanvas(ctx.db, testCanvas({ primaryIndex: 7 }), 2000)).toThrow(
+      /cannot be painted/,
+    );
+    expect(getGlobalCanvas(ctx.db)).toEqual(testCanvas());
+  });
+
   it("degrades to null on a stored value that is not a readable canvas", () => {
     ctx = openTestDb();
     ctx.db
@@ -341,6 +355,27 @@ describe("first-paint hint (app_state kv)", () => {
     ctx.db
       .prepare("INSERT INTO app_state (key, value, updated_at) VALUES ('first-paint', ?, 0)")
       .run("{ not json");
+
+    expect(getFirstPaintHint(ctx.db)).toBeNull();
+  });
+
+  // Read before the window that would show an error exists, so every unreadable
+  // shape has to land on null rather than on a throw — including the ones that
+  // parse cleanly into something that is not a record of a paint.
+  it("degrades to null on a payload that parses to something other than a record", () => {
+    ctx = openTestDb();
+    ctx.db
+      .prepare("INSERT INTO app_state (key, value, updated_at) VALUES ('first-paint', ?, 0)")
+      .run(JSON.stringify(null));
+
+    expect(getFirstPaintHint(ctx.db)).toBeNull();
+  });
+
+  it("degrades to null on a hint with no background color to build a window from", () => {
+    ctx = openTestDb();
+    ctx.db
+      .prepare("INSERT INTO app_state (key, value, updated_at) VALUES ('first-paint', ?, 0)")
+      .run(JSON.stringify({ appearance: "dark", background: "" }));
 
     expect(getFirstPaintHint(ctx.db)).toBeNull();
   });

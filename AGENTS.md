@@ -43,6 +43,7 @@ App data lives under Electron's `userData` directory as a fresh start, separate 
 - `pnpm run build` then `pnpm start` — build and run the packaged application locally.
 - `vp run -r typecheck` — type-check the workspace.
 - `vp run -r test` — run workspace tests.
+- `vp run -r test:coverage` — a separate gate that CI enforces, holding `packages/shared` and a protected renderer surface at 100%. Thresholds only evaluate under `--coverage`, so a green `vp run -r test` says nothing about coverage. Run it before pushing anything that adds a branch or a store action.
 - `vp check` — run `vp fmt` and `vp lint`.
 - `act pull_request --container-architecture linux/amd64` — run CI locally before submitting a PR.
 - Ensure all PRs pass CI/CD checks before shipping.

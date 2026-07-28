@@ -31,6 +31,7 @@ A macOS desktop app (Electron + React + TypeScript) merging Linear-style kanban 
 - `pnpm dev` — full dev loop (renderer HMR + main/preload watch + Electron auto-relaunch). `pnpm run build` then `pnpm start` runs the built app.
 - `pnpm lab` — the UI lab on :5174 (runs alongside `pnpm dev`); add an idea by dropping one file into `src/renderer/lab/scratches/`.
 - `vp run -r typecheck` · `vp run -r test` · `vp check` (= `vp fmt` + `vp lint`) — the quality stack. `vp` is the global toolchain CLI (Node/pnpm pinned in root `package.json`).
+- `vp run -r test:coverage` — **a separate gate, and CI runs it.** Holds `packages/shared` and a protected renderer surface at 100%; thresholds only evaluate under `--coverage`, so a green `vp run -r test` says nothing about it. Run it before pushing anything that adds a branch or a store action.
 - `vp install` / `pnpm install` for deps; `pnpm run ensure:electron` (`apps/desktop`) prefetches Electron's lazily-fetched binary.
 - CI: PRs run one lean Linux job and must be green before shipping. **Desktop e2e smokes (`apps/desktop/e2e/*.mjs`) do NOT run in CI — run the relevant ones locally before shipping any desktop-touching PR.** The macOS smoke lane is manual-only (`gh workflow run ci.yml -f desktop-smoke=true`); `act pull_request --container-architecture linux/amd64` mirrors the Linux job locally.
 
