@@ -388,7 +388,8 @@ export interface ThemeStateInput {
 
 /**
  * Persists the global Monaco/shiki theme id (`app_state.theme_editor`).
- * `null` clears it so the editor derives from the resolved appearance.
+ * `null` clears it back to the shipped default editor theme, independent of
+ * appearance.
  */
 export interface ThemeSetGlobalEditorInput {
   editorThemeId: ShippedEditorThemeId | null;
@@ -425,8 +426,8 @@ export type TerminalOverlayWriteInput = {
  */
 export interface ThemeStatePayload {
   /**
-   * Global Monaco/shiki theme id from `app_state`. `null` means derive from the
-   * resolved appearance — never a resolved token set.
+   * Global Monaco/shiki theme id from `app_state`. `null` means the shipped
+   * default editor theme (appearance-independent) — never a resolved token set.
    */
   editorThemeId: ShippedEditorThemeId | null;
   /** The scoping project's per-surface override; null when unscoped or fully inheriting. */
@@ -519,7 +520,8 @@ export interface VolliThemeIpcContract {
   "volli:theme-state": { args: [input: ThemeStateInput]; result: ThemeStateResult };
   /**
    * Persists the global editor theme id (`app_state.theme_editor`). `null` clears
-   * it so Monaco derives from the resolved appearance. Resolves with fresh state.
+   * it back to the shipped default editor theme, independent of appearance.
+   * Resolves with fresh state.
    */
   "volli:theme-set-global-editor": {
     args: [input: ThemeSetGlobalEditorInput];

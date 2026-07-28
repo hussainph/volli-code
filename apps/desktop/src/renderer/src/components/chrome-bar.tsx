@@ -128,9 +128,7 @@ function TerminalFocusControls() {
         className="pointer-events-none absolute left-1/2 top-[21px] flex max-w-[45vw] -translate-x-1/2 -translate-y-1/2 items-center gap-2 text-xs text-muted-foreground"
       >
         <span className="shrink-0 font-medium text-foreground">{ticketLabel}</span>
-        <span aria-hidden="true" className="text-border">
-          /
-        </span>
+        <span aria-hidden="true">/</span>
         <span className="truncate">{sessionTitle ?? "Terminal"}</span>
       </div>
       <div className="flex-1" />

@@ -10,8 +10,7 @@ import type {
   ThemeIpcChannel,
   VolliInvokeContract,
 } from "./ipc";
-import { parseCanvas } from "./theme/canvas";
-import type { Appearance } from "./theme/canvas/types";
+import { isAppearance, parseCanvas } from "./theme/canvas";
 import { isHexColor } from "./theme/color";
 import { isShippedEditorThemeId } from "./theme/editor-themes";
 import { isValidOverlayKey, isValidOverlayValue } from "./theme/ghostty-overlay";
@@ -577,22 +576,6 @@ function isOverlayEdits(value: unknown): value is Record<string, string | null> 
  */
 function isCallerScope(value: unknown): boolean {
   return value === undefined || typeof value === "string";
-}
-
-/**
- * The closed appearance vocabulary — the same three words migration 014's
- * `CHECK` admits, and the same three {@link Appearance} names.
- *
- * Exported because main's repo layer parses this enum back out of `app_state`
- * and off a `projects` column, and a second hand-written copy of a three-word
- * list is how a value becomes storable but not re-sendable.
- *
- * TODO(canvas-engine): move this next to `resolveAppearance` in
- * `theme/canvas/appearance.ts`, where the type lives — it is here only because
- * that module had not landed when the descriptors needed it.
- */
-export function isAppearance(value: unknown): value is Appearance {
-  return value === "light" || value === "dark" || value === "auto";
 }
 
 export const THEME_IPC: { readonly [C in ThemeIpcChannel]: IpcRequestDescriptor<C> } = {

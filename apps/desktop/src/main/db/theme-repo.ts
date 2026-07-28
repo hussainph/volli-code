@@ -36,6 +36,7 @@
  */
 import type Database from "better-sqlite3";
 import {
+  APPEARANCE_APP_STATE_KEY,
   isAppearance,
   parseCanvas,
   parseGlobalEditorThemeId,
@@ -46,18 +47,6 @@ import {
 import type { Appearance, Canvas, FirstPaintHint, ShippedEditorThemeId } from "@volli/shared";
 import { setAppState } from "./app-state-repo";
 import { prepared } from "./prepared";
-
-/**
- * The `app_state` key the global appearance lives under. Absent means the user
- * has never chosen one, which the resolver reads as `auto`.
- *
- * TODO(canvas-engine): move these two beside `THEME_APP_STATE_KEY` in
- * `@volli/shared`'s `theme/app-state.ts` — the renderer reads the same rows out
- * of the bootstrap payload (and keeps its own copy of the appearance key in
- * `stores/theme.ts`), and three hand-typed copies of a key string is two too
- * many.
- */
-export const APPEARANCE_APP_STATE_KEY = "appearance";
 
 /** The `app_state` key the first-paint hint lives under. See this module's header. */
 export const FIRST_PAINT_APP_STATE_KEY = "first-paint";
@@ -175,14 +164,14 @@ export function setFirstPaintHint(db: Database.Database, hint: FirstPaintHint, n
 
 // ── the editor surface (decision 6: its own surface, its own row) ────────────
 
-/** The authored global editor theme id, or null when unset (derive from the resolved appearance). */
+/** The authored global editor theme id, or null when unset (the shipped default editor theme, appearance-independent). */
 export function getGlobalEditorThemeId(db: Database.Database): ShippedEditorThemeId | null {
   return parseGlobalEditorThemeId(readAppState(db, THEME_EDITOR_APP_STATE_KEY));
 }
 
 /**
- * Upserts the global editor theme id. `null` clears it so Monaco derives from
- * the resolved appearance.
+ * Upserts the global editor theme id. `null` clears it back to the shipped
+ * default editor theme, independent of appearance.
  */
 export function setGlobalEditorThemeId(
   db: Database.Database,

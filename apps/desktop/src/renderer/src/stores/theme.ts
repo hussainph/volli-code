@@ -33,10 +33,12 @@
  */
 
 import {
+  APPEARANCE_APP_STATE_KEY,
   DEFAULT_CANVAS,
   errorMessage,
   isAppearance,
   parseCanvas,
+  THEME_APP_STATE_KEY,
   windowBackground,
 } from "@volli/shared";
 import type {
@@ -74,15 +76,6 @@ import { beginScopeRepaint, shouldEaseScopeRepaint } from "@renderer/theme/scope
 import { resolveEditorThemeId } from "@renderer/editor/editor-theme-catalog";
 import { refreshMonacoEditorTheme } from "@renderer/editor/monaco-theme";
 import { writeThrough } from "@renderer/stores/mutate";
-
-/**
- * The `app_state` keys the global half of theming rides on. Hand-typed here to
- * match `main/db/theme-repo.ts`, which owns the writes — the renderer only
- * reads them out of the bootstrap payload, and a shared constant for them is
- * the TODO already standing in that file.
- */
-export const CANVAS_APP_STATE_KEY = "theme";
-export const APPEARANCE_APP_STATE_KEY = "appearance";
 
 /** Which scope a commit writes to (#69). */
 export type ThemeScope = { kind: "global" } | { kind: "project"; projectId: string };
@@ -618,7 +611,7 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
         // seed→canvas conversion — falling out of the guard rather than needing
         // a migration to do it.
         let stored: Canvas | null = null;
-        const raw = appState[CANVAS_APP_STATE_KEY];
+        const raw = appState[THEME_APP_STATE_KEY];
         if (raw !== undefined && raw.length > 0) {
           try {
             stored = parseCanvas(JSON.parse(raw));

@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
 import {
+  APPEARANCE_APP_STATE_KEY,
   DEFAULT_CANVAS,
+  THEME_APP_STATE_KEY,
   windowBackground,
   type Appearance,
   type Canvas,
@@ -13,8 +15,6 @@ import {
 } from "@volli/shared";
 
 import {
-  APPEARANCE_APP_STATE_KEY,
-  CANVAS_APP_STATE_KEY,
   activeTheme,
   appliedCanvas,
   createThemeStore,
@@ -168,7 +168,7 @@ function freshStore(over: Partial<ThemeGateway> = {}) {
 /** The bootstrap payload's raw `app_state` rows, as main writes them. */
 function appState(canvas?: Canvas, appearance?: Appearance): Record<string, string> {
   const rows: Record<string, string> = {};
-  if (canvas !== undefined) rows[CANVAS_APP_STATE_KEY] = JSON.stringify(canvas);
+  if (canvas !== undefined) rows[THEME_APP_STATE_KEY] = JSON.stringify(canvas);
   if (appearance !== undefined) rows[APPEARANCE_APP_STATE_KEY] = appearance;
   return rows;
 }
@@ -259,7 +259,7 @@ describe("hydrateGlobal", () => {
     const { store } = freshStore();
 
     store.getState().hydrateGlobal({
-      [CANVAS_APP_STATE_KEY]: JSON.stringify({ name: "Ember", slug: "ember", seed: "#e8652a" }),
+      [THEME_APP_STATE_KEY]: JSON.stringify({ name: "Ember", slug: "ember", seed: "#e8652a" }),
     });
 
     expect(store.getState().globalCanvas).toEqual(DEFAULT_CANVAS);
@@ -268,7 +268,7 @@ describe("hydrateGlobal", () => {
   it("survives an unparseable row rather than failing the boot it runs inside", () => {
     const { store } = freshStore();
 
-    store.getState().hydrateGlobal({ [CANVAS_APP_STATE_KEY]: "{ not json" });
+    store.getState().hydrateGlobal({ [THEME_APP_STATE_KEY]: "{ not json" });
 
     expect(store.getState().globalCanvas).toEqual(DEFAULT_CANVAS);
   });

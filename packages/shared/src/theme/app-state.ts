@@ -11,7 +11,7 @@
  *
  * The keys are stated here rather than in main's repo layer because both sides
  * read them: main writes the rows, and the renderer reads the same rows back out
- * of the bootstrap payload. Two hand-typed copies of a key string is one too
+ * of the bootstrap payload. Three hand-typed copies of a key string is two too
  * many.
  *
  * Pure: string constants and shape guards only, no Node/DOM.
@@ -23,16 +23,22 @@ import { isShippedEditorThemeId, type ShippedEditorThemeId } from "./editor-them
 export const THEME_APP_STATE_KEY = "theme";
 
 /**
+ * The `app_state` key the global light/dark/auto appearance lives under. Absent
+ * means the user has never chosen one, which resolves as `auto`.
+ */
+export const APPEARANCE_APP_STATE_KEY = "appearance";
+
+/**
  * The `app_state` key for the global Monaco/shiki editor theme id.
- * Absent or null means “derive from the resolved appearance” — never a resolved
- * token set.
+ * Absent or null means the shipped default editor theme (One Dark Pro) —
+ * appearance-independent, and never a resolved token set.
  */
 export const THEME_EDITOR_APP_STATE_KEY = "theme_editor";
 
 /**
- * The string stored under {@link THEME_EDITOR_APP_STATE_KEY}. Empty means
- * “derive from the app” (same as a missing row); a non-empty value is the
- * authored catalog id.
+ * The string stored under {@link THEME_EDITOR_APP_STATE_KEY}. Empty means the
+ * shipped default editor theme (same as a missing row); a non-empty value is
+ * the authored catalog id.
  */
 export function serializeGlobalEditorThemeId(editorThemeId: ShippedEditorThemeId | null): string {
   return editorThemeId !== null && isShippedEditorThemeId(editorThemeId) ? editorThemeId : "";
@@ -40,7 +46,7 @@ export function serializeGlobalEditorThemeId(editorThemeId: ShippedEditorThemeId
 
 /**
  * Reads the authored global editor theme id back out of `app_state`. Null for
- * absent, empty, “clear back to derive”, or a non-catalog value (corrupt /
+ * absent, empty, “clear back to default”, or a non-catalog value (corrupt /
  * hand-edited row) — the renderer maps that through `resolveEditorThemeId`.
  * Only {@link isShippedEditorThemeId} values survive.
  */

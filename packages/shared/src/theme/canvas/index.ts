@@ -24,7 +24,7 @@
 
 export * from "./types";
 export { MAX_STOPS } from "./tuning";
-export { resolveAppearance } from "./appearance";
+export { isAppearance, resolveAppearance } from "./appearance";
 export { DEFAULT_CANVAS, parseCanvas } from "./parse";
 export { canvasBackground, effectiveStopHexes, grainLayer } from "./gradient";
 export { addStop, moveStop, removeStop, withPrimaryHex, withPrimaryIndex } from "./edit";
