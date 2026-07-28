@@ -12,9 +12,9 @@
  * Arming a canvas writes THREE things:
  *
  *  1. `data-lab-canvas` on the root, which arms the `lab.css` seam. That seam
- *     owns the app's canvas layer and the two foregrounds painted directly ON
- *     it — as `!important` rules, because `applyTheme` writes those tokens
- *     inline and nothing weaker reaches them.
+ *     owns the app's canvas layer, its geometry, and the two foregrounds
+ *     painted directly ON it — the foregrounds as `!important` rules, because
+ *     `applyTheme` writes those tokens inline and nothing weaker reaches them.
  *  2. The `--lab-canvas*` custom properties the seam reads — the gradient
  *     itself and the three-rung ink ladder painted on it.
  *  3. The whole derived app token set, via `applyThemeTokens` (see tokens.ts).
@@ -40,14 +40,17 @@ import { deriveArcLabelInk, deriveArcTokens } from "./tokens";
 
 const STORAGE_KEY = "volli-lab:arc-canvas";
 
-/** Armed state for the `lab.css` seam; its value is the RESOLVED mode. */
-const CANVAS_ATTRIBUTE = "data-lab-canvas";
 /**
- * The structural half of the same seam, carried separately because it does not
- * follow the appearance: whether the card floats is a layout decision, and a
- * window that rearranged itself when the sun went down would be a bug.
+ * Armed state for the `lab.css` seam; its value is the RESOLVED mode.
+ *
+ * The ONE attribute, since the window's arrangement settled. It used to be two
+ * — this one plus a `data-lab-seam` naming which of four ways the sidebar, the
+ * canvas and the card met — and the second went with the choice: an attribute
+ * that can only ever hold one value is not a switch, it is a claim that the
+ * stylesheet is waiting for a value nobody will send. Every rule that keyed on
+ * it now scopes on this alone.
  */
-const SEAM_ATTRIBUTE = "data-lab-seam";
+const CANVAS_ATTRIBUTE = "data-lab-canvas";
 const CANVAS_VARIABLE = "--lab-canvas";
 /**
  * The on-canvas copy ladder, head first. All three carry the `--lab-canvas-ink`
@@ -151,7 +154,6 @@ export function applyArcCanvas(state: ArcCanvasState | null): void {
 
   if (state === null) {
     root.removeAttribute(CANVAS_ATTRIBUTE);
-    root.removeAttribute(SEAM_ATTRIBUTE);
     for (const name of CANVAS_VARIABLES) root.style.removeProperty(name);
     // Disarming only stops FUTURE editors being caught up; the one on screen
     // keeps the derived theme until something sets another. Same asymmetry as
@@ -192,11 +194,6 @@ export function applyArcCanvas(state: ArcCanvasState | null): void {
   // The editor is not a custom property — Monaco owns its own pixels — so it
   // gets the derived set pushed at it rather than inheriting one.
   applyArcEditorTheme(arcEditorTheme(tokens, resolved));
-  // Seam first: its rules are all geometry, so they carry no dependency on the
-  // custom properties above and every one of them is scoped by the canvas
-  // attribute anyway — arming it early costs nothing and keeps the switch a
-  // single line.
-  root.setAttribute(SEAM_ATTRIBUTE, state.seam);
   root.setAttribute(CANVAS_ATTRIBUTE, resolved);
 }
 

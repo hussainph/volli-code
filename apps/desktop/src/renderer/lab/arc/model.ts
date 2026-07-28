@@ -121,10 +121,11 @@ export const ARC_TUNING = {
    *
    * A signed amount rather than a mode, because the two arrangements worth
    * comparing are the same arrangement with the sign turned over. Positive
-   * lifts each tier toward paper (frosted: the window reads canvas → chrome →
-   * sidebar → card, each step closer); negative sinks it away from it
-   * (recessed: the light ladder's original direction, where the sidebar is a
-   * shadowed trough). Zero is neither: every tier is the bare canvas.
+   * walks each tier toward paper (frosted: the window reads canvas → chrome →
+   * sidebar → card, each step closer); negative walks it away from paper
+   * (recessed). Zero is neither: every tier is the bare canvas. Where the
+   * settled canvas sits on that axis is {@link ARC_SETTLED.lift}; what a step
+   * along it COSTS is here.
    *
    * **Both modes**, and the reason it reads as one mechanism rather than two is
    * that "toward paper" is a direction on the ladder, not a direction on the
@@ -135,9 +136,8 @@ export const ARC_TUNING = {
    * both, and it is the SIGN of the lightness step that flips, not the model.
    *
    * That is also why the sink target is derived rather than declared — see
-   * `liftTarget` in surfaces.ts. Hardcoding "sink means darker" would make the
-   * slider's two halves travel the same way in dark, where paper is already the
-   * darker end.
+   * `liftTarget` in surfaces.ts. Hardcoding "sink means darker" would send both
+   * signs the same way in dark, where paper is already the darker end.
    */
   lift: {
     /**
@@ -159,66 +159,62 @@ export const ARC_TUNING = {
      * back inside it.
      *
      * What no alpha fixes is the SPREAD across seeds in dark: a dark blue seed
-     * puts the canvas at L 0.205 with paper at 0.176, so the entire distance the
-     * dial can travel is 0.029 and every setting is invisible. That is a
+     * puts the canvas at L 0.205 with paper at 0.176, so the entire distance
+     * this arm can travel is 0.029 and every setting is invisible. That is a
      * property of that canvas rather than of this number — the fix is Vibrancy
-     * or a lighter seed, and the honest behaviour here is a dial that runs out
-     * of room rather than one that invents some.
+     * or a lighter seed, and the honest behaviour here is a mechanism that runs
+     * out of room rather than one that invents some.
+     *
+     * At {@link ARC_SETTLED.lift} it is the LIGHT row that gets read: light's
+     * paper is the lighter end of the ladder, so reaching it is a positive lift.
+     * Dark's row stays measured rather than deleted because which arm a mode
+     * takes is a consequence of where its paper sits, and that is a property of
+     * the ladder rather than of the appearance — see `liftTarget`.
      */
     liftAlpha: { light: 0.7, dark: 0.5 },
     /**
      * The sinking counterpart, smaller in both modes and by a wider margin in
-     * dark.
+     * dark — and, at the settled lift, the row DARK reads.
      *
      * Same asymmetry, same cause, seen from each end: sink walks toward whatever
      * ink is on the FAR side of the canvas from the paper, so in light it is a
      * dark overlay on a pastel wash and in dark it is a near-white one on a dim
      * wash. Both of those move lightness faster than their lifting counterpart
      * does — a dark overlay drains a pastel quickly, and a light overlay near
-     * black gains even quicker — so matched alphas would make the two halves of
-     * the slider travel at different rates.
+     * black gains even quicker — so matched alphas would make the two signs
+     * travel at different rates.
+     *
+     * Which is why dark ends up here rather than on the row above: its paper is
+     * the DARKER end of the ladder, so a sidebar that reads as lifted has to
+     * walk away from it, and 0.12 against light's 0.7 is what makes those two
+     * walks the same length (+0.022 and +0.023 on the ember default).
      */
     sinkAlpha: { light: 0.3, dark: 0.12 },
     /**
-     * Each on-canvas tier's share of that alpha, in the order the seam applies
-     * them: the chrome band and the project rail first, the inner sidebar
-     * second. Cumulative by construction — a tier's share is its DISTANCE from
-     * the canvas, so the sidebar always separates from the rail as well as from
-     * the gradient.
+     * Each on-canvas tier's share of that alpha, outward from the gradient: the
+     * chrome band and the project rail first, the inner sidebar second.
+     * Cumulative by construction — a tier's share is its DISTANCE from the
+     * canvas, so the sidebar always separates from the rail as well as from the
+     * gradient.
      *
-     * Keyed by {@link ArcSeam} because the shares and the geometry are one
-     * decision, not two. `continuous` is the whole reason this is a table: it
-     * gives the sidebar a share of ZERO, which is not "a bit less lift" but a
-     * different arrangement — the sidebar stops being a surface and becomes the
-     * canvas, so the strip of gradient between it and the card stops being a
-     * third material. The outer tier takes the entire alpha in exchange, since
-     * the rail is then the only thing left to carry the chrome/canvas boundary.
-     *
-     * `shell` is that same move made at the other end, and for the same reason.
-     * Its geometry insets the sidebar+card unit and runs bare gradient all the
-     * way around it — so an outer tier with ANY share draws a hard edge along
-     * every wall of that frame, chrome band against the 8px above the unit and
-     * project rail against the 8px beside it. That edge is the "sharp chrome"
-     * this seam was supposed to remove: the frame is meant to read as one
+     * The zero is the whole statement, and it is the settled seam's. The window
+     * insets the sidebar+card unit and runs bare gradient all the way around
+     * it, so an outer tier with ANY share would draw a hard edge along every
+     * wall of that frame — chrome band against the 8px above the unit, project
+     * rail against the 8px beside it. That edge is the sharp chrome the
+     * arrangement exists to remove: the frame is meant to read as one
      * uninterrupted background with a single object floating in it, and a
      * lifted band across its top says the frame has two parts. Pinning the
      * outer tier to the canvas is what Slack's arrangement actually rests on —
      * its search bar, workspace rail and the margin around the channel list are
      * all one flat colour, and the only thing that moves is the inner sidebar.
-     * `inset` and `float` keep their share because both leave the outer tier
-     * ADJACENT to another surface rather than to bare gradient (`inset` shows no
-     * gradient at all; `float`'s trifurcation is the baseline the rest are
-     * judged against), so there is no frame for it to break.
      *
-     * Listed most-joined to most-floating, because {@link ARC_SEAMS} reads its
-     * offer order straight off these keys.
+     * So the chrome band and rail ARE the canvas, and the sidebar takes the
+     * entire alpha. Three other arrangements were tried against this one
+     * (`continuous`, `inset`, `float`) and each spent some of the alpha out
+     * here; the frame is what survived, and this row is what it costs.
      */
-    seams: {
-      continuous: [1, 0],
-      inset: [0.45, 1],
-      shell: [0, 1],
-      float: [0.45, 1],
-    },
+    shares: [0, 1],
   },
 
   /**
@@ -228,8 +224,8 @@ export const ARC_TUNING = {
    * luminance left for a shadow to remove. The argument is sound and it was
    * about the wrong backdrop: it describes the APP's dark theme, whose page sits
    * at L 0.18, not this canvas, which is a vivid wash measuring L 0.21–0.44
-   * across the seeds. There is real luminance there to take away, so the dial
-   * has something to buy in both modes.
+   * across the seeds. There is real luminance there to take away, so a shadow
+   * buys something in both modes.
    *
    * The color is the canvas's own hue at low lightness, never neutral black. A
    * neutral shadow over a warm pastel reads as dirt on the canvas — the grey
@@ -246,7 +242,7 @@ export const ARC_TUNING = {
    * here: `card` and `overlay` fall on the canvas and read clearly, while
    * `raised` falls on `--card` (L 0.20) where there genuinely is little left to
    * remove. Dark signals in-card elevation by making a surface lighter, which is
-   * the token ladder's job and not this dial's.
+   * the token ladder's job and not this table's.
    */
   shadow: {
     color: { light: { L: 0.32, C: 0.05 }, dark: { L: 0.06, C: 0.03 } },
@@ -297,17 +293,19 @@ export const ARC_TUNING = {
      * two that measure the same and look nothing alike. Lc is still what guards
      * the bottom of the ladder — see {@link mutedFloor}.
      *
-     * Backwards against the dial, exactly like `LIGHT_FLOORS.labelTowardSecondary`:
-     * turning copy weight UP means the tiers move toward the full ink, which is
-     * a smaller slide rather than a larger one.
+     * Backwards against the weight, exactly like
+     * `LIGHT_FLOORS.labelTowardSecondary`: turning copy weight UP means the
+     * tiers move toward the full ink, which is a smaller slide rather than a
+     * larger one.
      *
      * Centred on 0.27 rather than on the 0.15 this replaced, and that is a
      * correction rather than a preference. 0.15 was tuned when this was the
      * ONLY step under the ink; asking it to hold two tiers left both of them
      * inside the range where a ladder measures as a ladder and does not read as
      * one. Swept on the running sidebar at 0.20 / 0.25 / 0.30 / 0.35 / 0.40:
-     * 0.20 still crowds the title above it, 0.35 goes soft, 0.40 is faint. The
-     * dial spans that verdict and 0.5 lands in the middle of it.
+     * 0.20 still crowds the title above it, 0.35 goes soft, 0.40 is faint. This
+     * range spans that verdict, and {@link ARC_SETTLED.textWeight} sits near its
+     * open end in both modes — 0.32 in light, 0.31 in dark.
      */
     mutedTowardBase: { min: 0.34, max: 0.2 },
     /**
@@ -318,41 +316,39 @@ export const ARC_TUNING = {
      * Stated relatively for the same reason `LIGHT_FLOORS.labelTowardSecondary`
      * is: a third independent slide could cross either neighbour once the floor
      * below starts clamping, while a fraction of the mute's own slide cannot —
-     * it is bounded by construction at every dial position, every canvas and
-     * every mode. It also inherits the clamp for free: if the mute compresses
-     * because the canvas ran out of contrast, the label tier compresses with it
-     * instead of jumping past.
+     * it is bounded by construction at every weight, every canvas and every
+     * mode. It also inherits the clamp for free: if the mute compresses because
+     * the canvas ran out of contrast, the label tier compresses with it instead
+     * of jumping past.
      *
-     * Never reaches 0. At the top of the dial every tier is asked to move toward
-     * the head, but a label that arrived exactly ON it would leave the sidebar
-     * with two tiers again — which is the defect this ladder exists to remove,
-     * reachable by dragging one slider to its end.
+     * Never reaches 0. At the top of the range every tier is asked to move
+     * toward the head, but a label that arrived exactly ON it would leave the
+     * sidebar with two tiers again — which is the defect this ladder exists to
+     * remove.
      */
     labelTowardMuted: { min: 0.65, max: 0.35 },
     /**
      * The worst-surface Lc the muted tier may never fall under, whatever the
-     * dial asks for.
+     * slide asks for.
      *
      * The canvas has nothing like the card's headroom — full ink measures Lc
      * 62.4 on the ember default against body copy's 90 on paper — so a slide
      * that is comfortable on one gradient can strand the bottom tier on the
      * next. Swept across every swatch the editor offers, both modes, three
-     * vibrancies, every seam and one/three stops: at flush lift or above the
-     * head never drops under Lc 61.9, and 48 is the floor that still leaves the
-     * hardest of those canvases 0.30 of slide to spend — enough for the full
-     * three rungs. It sits above APCA's 45 for large or bold text, which is the
-     * relevant line for an 11px meta row that the sidebar also promotes to full
-     * ink on hover.
+     * vibrancies and one/three stops: the head never drops under Lc 61.9, and 48
+     * is the floor that still leaves the hardest of those canvases 0.30 of slide
+     * to spend — enough for the full three rungs. It sits above APCA's 45 for
+     * large or bold text, which is the relevant line for an 11px meta row that
+     * the sidebar also promotes to full ink on hover.
      *
      * Binding it is not a failure — it is the degradation. The ladder
      * COMPRESSES toward the head (see {@link maxReadableSlide}), so a canvas
      * with no room left shows two tiers or one rather than three unreadable
-     * ones, and no tier can ever cross another on the way. The case that really
-     * exercises it is a strongly SUNK canvas (lift −1), where the veil darkens
-     * the chrome until the head ink itself measures 37.6 and every rung
-     * collapses onto it — a pre-existing property of that end of the lift dial,
-     * and the honest response to it is one readable tier rather than three
-     * unreadable ones.
+     * ones, and no tier can ever cross another on the way. What used to exercise
+     * it hardest was a strongly sunk canvas, where the veil darkened the chrome
+     * until the head ink itself measured 37.6 and every rung collapsed onto it;
+     * {@link ARC_SETTLED.lift} no longer travels anywhere near that far, but the
+     * floor stays because the seed does not have to be one of the editor's.
      */
     mutedFloor: 48,
   },
@@ -388,56 +384,119 @@ export const ARC_TUNING = {
 export const MAX_STOPS = ARC_TUNING.harmony.length;
 
 /**
- * How the window's regions meet — the one structural choice in an otherwise
- * entirely chromatic model.
+ * The five settings that used to be dials on {@link ArcCanvasState}, at the
+ * values the tuning pass ended on.
  *
- * It exists because separation and cohesion pull opposite ways and the middle
- * of that pull is the worst place to stand. Lifting the sidebar toward paper
- * fixes the rail/sidebar blend, but it also parks the sidebar at a lightness
- * that is neither the canvas nor the card — and with an 8px gutter of raw
- * gradient between it and the card, the window ends up showing three
- * backgrounds and explaining none of them. Every option here is a way of
- * getting back to two things that mean something:
+ * A separate table from {@link ARC_TUNING} because the two answer different
+ * questions, and keeping that distinction is the point rather than tidiness.
+ * Everything up there is a constant of the MODEL — a band edge, a cap, an alpha
+ * — true of every canvas the owner might author. Everything here is a CHOICE,
+ * made on screen against the app's own chrome, that stopped changing. A later
+ * disagreement with one of these is an argument about taste and belongs in this
+ * block; a disagreement with the other table is an argument about the math.
  *
- *  - `continuous` — the sidebar rejoins the canvas (share 0) and only the
- *    chrome band and rail lift. The gutter stops being a band because the
- *    sidebar beside it is the same material. Arc's own arrangement.
- *  - `inset` — the card gives up its gutter, radius and shadow and meets the
- *    sidebar at a hairline. Nothing floats, so nothing needs air around it; the
- *    canvas becomes purely the chrome, and the paper purely the work.
- *  - `shell` — Slack's answer, and the only one that questions the premise. The
- *    other three all treat the sidebar and the card as two objects and argue
- *    about the space between them; this one says they are ONE object with a
- *    colour change down the middle. Sidebar and card share a single rounded,
- *    bordered outline and touch along a seam with no gutter at all, and the
- *    canvas becomes a full frame around them rather than the reverse-L that
- *    `continuous` leaves. The middle lightness stops needing an explanation
- *    because it is no longer a separate surface — it is one half of one. It is
- *    also the one seam where the chrome band and rail take NO lift at all: a
- *    frame only reads as a frame if it is uniform, so the dial moves the inner
- *    sidebar alone (see the share table).
- *  - `float` — what the tiers shipped as: filled square sidebar, floating
- *    rounded card. Kept so the others can be judged against it.
+ * Three of the five are per-mode, and none of the three is a branch bolted on
+ * afterwards: each targets a quantity that measures differently at the two ends
+ * of the lightness axis, so one intent needed solving twice. The two that are
+ * NOT per-mode are the ones whose intent is already stated in mode-independent
+ * units, and they were checked in both rather than assumed.
  *
- * Derived from the tuning table rather than declared beside it, for the same
- * reason as {@link MAX_STOPS}: a seam with no share would compute `undefined`
- * alphas and paint nothing, with no error to find it by.
+ * Every number below was solved against the ember default at vibrancy 0.6 — the
+ * canvas the app ships with — and then measured across the editor's other seeds
+ * to confirm it does not fall apart on them.
  */
-export type ArcSeam = keyof typeof ARC_TUNING.lift.seams;
+export const ARC_SETTLED = {
+  /**
+   * Surface elevation: where the on-canvas tiers sit on {@link ARC_TUNING.lift}'s
+   * signed axis.
+   *
+   * Opposite signs, one result. Measured on the ember default, the sidebar
+   * lands ΔL +0.023 above the canvas in light and +0.022 above it in dark — the
+   * same pane, lit the same way, in both appearances. It takes a POSITIVE lift
+   * to get there in light (paper is the lighter end, 0.780 → 0.923) and a
+   * negative one in dark (paper is the darker end, 0.278 → 0.197), because the
+   * dark card is a well cut into a bright wash rather than a panel raised off a
+   * dim one. Reading the pair as "frosted in light, recessed in dark" gets the
+   * mechanism right and the picture backwards.
+   *
+   * A quarter rather than the half the dial opened on: at 0.5 the sidebar
+   * cleared the canvas by twice as much and started reading as a second card
+   * rather than as a pane of the window, which is the failure at the far end of
+   * the same axis the tiny shipped veil failed at the near end of.
+   */
+  lift: { light: 0.25, dark: -0.25 },
 
-/**
- * The seams in the order the editor offers them, READ OFF the tuning table
- * rather than restated — so a seam can never exist without a segment to reach
- * it, and the segments can never drift out of the order the table documents.
- * (String keys enumerate in insertion order, which is what makes the table's
- * own ordering the single place that decision lives.)
- */
-export const ARC_SEAMS = Object.keys(ARC_TUNING.lift.seams) as readonly ArcSeam[];
+  /**
+   * How far the paper ladder is mixed toward the canvas's own colour, 0–1 — a
+   * fraction of the canvas mixed IN, not a chroma multiplier (see `tokens.ts`,
+   * where the mix happens).
+   *
+   * The same in both modes, and that is a measurement rather than a
+   * convenience: the mix is stated as a fraction of the distance between two
+   * surfaces, so it already means the same thing on a pastel and on a
+   * near-black. The dark path scales it by `DARK_LADDER.tintScale` for the one
+   * asymmetry that IS real — the distance being crossed there is longer.
+   *
+   * 0.25 is the top of the range the editor offered, which is the honest place
+   * for it to have landed: the owner's directive was that the card belong to
+   * the canvas's family, and every value under it read as a card that merely
+   * had a tint applied.
+   */
+  cardTint: 0.25,
 
-/** Whether `value` names a seam this module can actually paint. */
-export function isArcSeam(value: unknown): value is ArcSeam {
-  return typeof value === "string" && value in ARC_TUNING.lift.seams;
-}
+  /**
+   * How far apart the ladder's rungs sit inside the card — solved, in each
+   * mode, for the ONE rung pair the complaint was actually about: `--rail`
+   * under `--background`, the tab strip beneath a tab.
+   *
+   * Two numbers because the target is |ΔL| and perceptual step size is not
+   * symmetric about mid-grey. The light ladder is a mirror of the dark
+   * generator's and inherited a spacing that does not survive the mirror, so it
+   * needs a much bigger correction to reach a gap that reads: 0.042 near paper
+   * against 0.020 near black. Solving one number for both would be picking
+   * which mode to leave broken.
+   *
+   * Measured at {@link cardTint} 0.25 and nowhere else, because the gap is
+   * tint-dependent — the mix pulls every rung toward one target, so the gaps
+   * scale by (1 − mix) and a spread solved at a lower tint lands short here.
+   *
+   *  - light `0.943` → rail ΔL 0.0420. Band that rounds to 0.042: 0.921–0.964.
+   *  - dark `0.627` → rail ΔL 0.0197, the closest the 8-bit rungs come to
+   *    0.020. Band: 0.571–0.683, and the ceiling at spread 1 is only 0.0242 —
+   *    dark has far less room here, which is the other half of why the two
+   *    numbers cannot be one.
+   */
+  surfaceSpread: { light: 0.943, dark: 0.627 },
+
+  /**
+   * Copy weight: where secondary and label text sit between their old floors
+   * and near-body (see `LIGHT_FLOORS` / `DARK_FLOORS` in `tokens.ts`, and
+   * `ARC_TUNING.ink` for the canvas's own ladder).
+   *
+   * Per-mode because the ranges it indexes are, and they are per-mode because
+   * each starts at its own generator's floor — 68 in light, 60 in dark. The
+   * same dial position would therefore mean two different Lc, so the number
+   * that was frozen is the Lc and the weight is read back off it.
+   *
+   *  - light `0.133` → secondary Lc 69.9 on `--card`, label 51% of the way from
+   *    secondary to body. Band satisfying both: 0.122–0.144.
+   *  - dark `0.222` → secondary Lc 64.0, label 55%. Band: 0.211–0.233.
+   */
+  textWeight: { light: 0.133, dark: 0.222 },
+
+  /**
+   * Elevation shadow strength, 0–1 — a scale on every layer's alpha in
+   * {@link ARC_TUNING.shadow}.
+   *
+   * One number for both modes because the per-mode part of a shadow is its
+   * COLOUR, which that table already carries: light's rung sits under the light
+   * band and dark's under the darkest canvas, so the same strength removes a
+   * comparable share of whatever luminance is there. What 0.75 buys over the
+   * 0.6 the dial opened on is the contact edge on the tab — the tier the
+   * owner's screenshot was of — without the wide layer turning into a smudge.
+   */
+  shadow: 0.75,
+} as const;
 
 /** One color pool: what it is, and where in the window it is anchored. */
 export interface ArcStop {
@@ -454,46 +513,26 @@ export type ArcMode = "auto" | "light" | "dark";
 /** `auto` already answered — what the transform and the ink flip actually run against. */
 export type ArcResolvedMode = "light" | "dark";
 
+/**
+ * A canvas, as the user authors it — and ONLY as the user authors it.
+ *
+ * Five fields, where there were eleven. The six that left were dials the owner
+ * tuned and then settled; they now live in {@link ARC_SETTLED}, which is what
+ * makes this interface the shape of the feature rather than the shape of the
+ * editor. What is left is exactly what a Settings pane would offer: the
+ * gradient, its saturation, its texture, and the appearance to resolve against.
+ */
 export interface ArcCanvasState {
   /** One to {@link MAX_STOPS}, in the order they were added. */
   stops: ArcStop[];
   /** The dominant pool: bigger, later-fading, and the one every other color is derived from. */
   primaryIndex: number;
+  /** Light, dark, or follow the system — resolved at paint time by {@link resolveArcMode}. */
   mode: ArcMode;
   /** 0 = near-neutral wash, 1 = as saturated as the caps allow. */
   vibrancy: number;
   /** 0 = no noise layer at all. */
   grain: number;
-  /**
-   * Light-mode surface elevation, −1 (recessed) → 0 (flush) → 1 (frosted).
-   * See {@link ARC_TUNING.lift}; ignored in dark mode.
-   */
-  lift: number;
-  /**
-   * How far the paper ladder is mixed toward the canvas's own color, 0–1.
-   * A fraction of the canvas mixed IN, not a chroma multiplier — see
-   * `tokens.ts`, which is where the mix happens.
-   */
-  cardTint: number;
-  /**
-   * How far apart the light ladder's rungs sit, 0 (as mirrored from the dark
-   * generator) → 1. Separates the surfaces INSIDE the card the way `lift`
-   * separates the ones on the canvas. See `LIGHT_LADDER.spread`.
-   */
-  surfaceSpread: number;
-  /**
-   * Light-mode copy weight, 0–1: where secondary and label text sit between
-   * their old floors and near-body. See `LIGHT_FLOORS` in `tokens.ts`.
-   */
-  textWeight: number;
-  /** Light-mode elevation shadow strength, 0–1. Scales every layer's alpha. */
-  shadow: number;
-  /**
-   * How the sidebar, the canvas and the card meet. Unlike every other field
-   * here it is structural rather than chromatic, and it applies in BOTH modes —
-   * whether the card floats is not a question the appearance answers.
-   */
-  seam: ArcSeam;
 }
 
 /** The chosen foreground, the ladder under it, and the numbers that chose it. */
@@ -523,17 +562,6 @@ export const DEFAULT_ARC_CANVAS: ArcCanvasState = {
   mode: "auto",
   vibrancy: 0.6,
   grain: 0.15,
-  lift: 0.55,
-  cardTint: 0.05,
-  surfaceSpread: 0.5,
-  textWeight: 0.5,
-  shadow: 0.6,
-  // Not `float`, which is what the tiers first shipped as. A lifted sidebar
-  // beside a floating card puts a strip of bare gradient between two surfaces
-  // that are already different from it and from each other, and no amount of
-  // tuning the fill makes a third material read as anything but a third
-  // material. `continuous` spends the same lift on the rail instead.
-  seam: "continuous",
 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -830,7 +858,7 @@ function worstContrast(candidate: string, surfaces: readonly string[]): number {
   return Math.min(...surfaces.map((surface) => Math.abs(apcaLc(candidate, surface))));
 }
 
-/** A tuning range at a dial position, clamped to the dial's own travel. */
+/** A tuning range at a copy weight, clamped to the range's own travel. */
 function atWeight({ min, max }: { min: number; max: number }, textWeight: number): number {
   return lerp(min, max, clamp(textWeight, 0, 1));
 }
@@ -852,9 +880,9 @@ const SLIDE_SEARCH_STEPS = 10;
  * solver would have to be handed one background and would therefore answer for
  * a surface the text does not only sit on — the exact averaging this module
  * exists to refuse. And a search cannot throw, where
- * `solveLightnessForContrast` does when the target is unreachable: `textWeight`
- * is a slider, and a canvas vivid enough to strand the bottom tier is a canvas
- * the owner is allowed to drag to.
+ * `solveLightnessForContrast` does when the target is unreachable: the gradient
+ * is still the owner's to author, and a canvas vivid enough to strand the
+ * bottom tier is a canvas the stop editor is allowed to reach.
  *
  * Monotone, which is what makes bisection valid here rather than merely
  * convenient. Every surface lies between the base fill's lightness and the
@@ -863,7 +891,7 @@ const SLIDE_SEARCH_STEPS = 10;
  * worst score only ever falls.
  *
  * Both ends are answers, not errors. `1` means the floor never binds and the
- * dial is free; `0` means this canvas has no room for a ladder at all, and the
+ * full slide is spent; `0` means this canvas has no room for a ladder at all, and the
  * honest response is a flat one — every tier on the head ink — rather than
  * three tiers nobody can read.
  */
@@ -913,12 +941,11 @@ export function arcInk(
    * the veils are mixed from the app token set, and this module sits UNDER
    * that: `tokens.ts` imports it, so it cannot import back.
    *
-   * Optional, and empty is the honest default: at lift 0 there are no lifted
-   * surfaces, and the callers that only want the gradient's own answer (the
-   * editor's readout, the model tests) should get exactly that. It matters most
-   * when lift is NEGATIVE — a sunk tier is darker than every pool, so an ink
-   * scored only against the pools would be scored against the surfaces it does
-   * not actually have to survive.
+   * Optional, and empty is the honest default: the callers that only want the
+   * gradient's own answer (the model tests) should get exactly that. What it
+   * buys the real caller is the sink arm — dark's settled lift walks the sidebar
+   * to a tier LIGHTER than every pool, so an ink scored on the pools alone would
+   * be scored against surfaces it does not actually have to survive.
    */
   liftedSurfaces: readonly string[] = [],
 ): ArcInk {
@@ -945,17 +972,21 @@ export function arcInk(
   const base = hexToOklch(arcBaseFillHex(state, resolved));
   const slide = (t: number) => toHex({ ...chosen, L: lerp(chosen.L, base.L, t) });
 
-  // The dial's ask, capped by what the canvas can actually carry. Taking the
-  // minimum rather than reporting a failure is the whole degradation story: the
-  // ladder gets shorter on a canvas with no headroom, and never unreadable.
+  // The same copy weight the card's own tiers are solved at, so the sidebar out
+  // on the gradient and the paper beside it rank their text by one decision
+  // rather than two.
+  const textWeight = ARC_SETTLED.textWeight[resolved];
+  // The ask, capped by what the canvas can actually carry. Taking the minimum
+  // rather than reporting a failure is the whole degradation story: the ladder
+  // gets shorter on a canvas with no headroom, and never unreadable.
   const mutedSlide = Math.min(
-    atWeight(mutedTowardBase, state.textWeight),
+    atWeight(mutedTowardBase, textWeight),
     maxReadableSlide(slide, surfaces, mutedFloor),
   );
   // A FRACTION of the slide above, so the label tier is bounded by its two
   // neighbours by construction — it inherits the cap without being told about
-  // it, and cannot cross either of them at any dial position.
-  const inkLabel = slide(mutedSlide * atWeight(labelTowardMuted, state.textWeight));
+  // it, and cannot cross either of them at any weight.
+  const inkLabel = slide(mutedSlide * atWeight(labelTowardMuted, textWeight));
   const inkMuted = slide(mutedSlide);
 
   return {
@@ -1012,6 +1043,15 @@ function clampStop(value: unknown): ArcStop | null {
  * matters. A vibrancy of 4 is a stale value from an earlier tuning pass and
  * still says what the user meant; a missing `stops` array says nothing, and
  * guessing at it would silently resurrect a canvas nobody authored.
+ *
+ * Extra keys are IGNORED, which is the third case and the one the freeze
+ * created. Every canvas stored while `lift`, `cardTint`, `surfaceSpread`,
+ * `textWeight`, `shadow` and `seam` were still dials carries all six, and the
+ * settings they name are no longer the user's to state — so reading them back
+ * would resurrect a tuning pass that has already been decided, and rejecting
+ * the entry would throw away the gradient the owner actually authored. Reading
+ * only the fields this shape still has does both right things at once, and it
+ * is why the destructure below names them one by one instead of spreading.
  */
 export function clampArcCanvasState(value: unknown): ArcCanvasState | null {
   if (typeof value !== "object" || value === null) return null;
@@ -1036,38 +1076,6 @@ export function clampArcCanvasState(value: unknown): ArcCanvasState | null {
     mode,
     vibrancy: clamp(vibrancy, 0, 1),
     grain: clamp(grain, 0, 1),
-    ...tuning(value as Record<string, unknown>),
-  };
-}
-
-/**
- * The tuning fields — the five light dials and the seam — DEFAULTED rather than
- * required, the one place this guard reads an absent field as an answer instead
- * of a question.
- *
- * The distinction it draws is the same one the guard draws everywhere else,
- * just landing the other way. A missing `stops` says nothing and guessing at it
- * resurrects a canvas nobody authored; a missing `lift` says "this was stored
- * before the dial existed", and the honest reading of that is the default the
- * dial ships with. Rejecting instead would throw away a canvas the owner tuned,
- * every time a knob is added — which would make the editor's own persistence
- * the thing that punishes iterating on it.
- */
-function tuning(
-  value: Record<string, unknown>,
-): Pick<ArcCanvasState, "lift" | "cardTint" | "surfaceSpread" | "textWeight" | "shadow" | "seam"> {
-  const unit = (raw: unknown, fallback: number, min = 0): number =>
-    isUnit(raw) ? clamp(raw, min, 1) : fallback;
-  return {
-    lift: unit(value.lift, DEFAULT_ARC_CANVAS.lift, -1),
-    cardTint: unit(value.cardTint, DEFAULT_ARC_CANVAS.cardTint),
-    surfaceSpread: unit(value.surfaceSpread, DEFAULT_ARC_CANVAS.surfaceSpread),
-    textWeight: unit(value.textWeight, DEFAULT_ARC_CANVAS.textWeight),
-    shadow: unit(value.shadow, DEFAULT_ARC_CANVAS.shadow),
-    // Membership-checked rather than clamped, since a seam has no range to fall
-    // back into — but still defaulted rather than rejected, exactly like the
-    // dials, so a canvas stored before the seam existed survives the upgrade.
-    seam: isArcSeam(value.seam) ? value.seam : DEFAULT_ARC_CANVAS.seam,
   };
 }
 

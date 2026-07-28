@@ -21,7 +21,7 @@
  *    every lightness is a constant in it and every foreground is APCA-solved —
  *    so hand-building a second dark ladder here would be inventing a way to be
  *    wrong. {@link DARK_LADDER} therefore holds no rungs: only how far the
- *    dials may push the generator's, read back out of its own output.
+ *    settled settings push the generator's, read back out of its own output.
  *  - **Light** has no shipped counterpart (the app is dark-only, `class="dark"`
  *    pinned), so {@link LIGHT_LADDER} is a mirror of `generate.ts`: same shape,
  *    same floor list, same solver, inverted rungs. It deliberately reuses that
@@ -30,10 +30,11 @@
  *    is exactly the light-mode case its own docstring says it was generalized
  *    for.
  *
- * Both paths take the same three dials in the same order — spread the rungs,
- * mix them toward the canvas, then solve the copy against where they ended up.
- * Dark used to take none of them, which made half the editor's controls
- * disappear when the sun went down.
+ * Both paths apply the same three settings in the same order — spread the
+ * rungs, mix them toward the canvas, then solve the copy against where they
+ * ended up. All three come from {@link ARC_SETTLED}, and all three are per-mode
+ * or measured in both; dark used to take none of them, which made half the
+ * window inherited rather than chosen.
  *
  * Pure and deterministic, like the generator it mirrors. No DOM: `paint.ts`
  * writes the result.
@@ -51,6 +52,7 @@ import {
 } from "@volli/shared";
 
 import {
+  ARC_SETTLED,
   effectiveChroma,
   effectiveStopHexes,
   type ArcCanvasState,
@@ -164,19 +166,19 @@ export const LIGHT_LADDER = {
 } as const;
 
 /**
- * The dark counterpart — what the three token dials do to a ladder this module
- * does not author.
+ * The dark counterpart — what the three token settings do to a ladder this
+ * module does not author.
  *
  * Dark still delegates its rungs to `generateThemeTokens`, and that is not
  * negotiable: every lightness in it is a measured constant and every foreground
- * is APCA-solved. So this table holds no rungs of its own. It states how far the
- * dials may move the generator's, and the surfaces they are allowed to move.
+ * is APCA-solved. So this table holds no rungs of its own. It states how far
+ * the settings may move the generator's, and the surfaces they may move.
  *
  * Reading the rung lightnesses back OUT of the generated set rather than
  * transcribing them here is the point of that arrangement: a copy would be a
  * second source of truth that drifts silently the first time the generator is
- * retuned, and the failure would look like a spread dial that stopped landing
- * where its readout said.
+ * retuned, and the failure would look like a spread that stopped landing where
+ * its measurement said.
  */
 export const DARK_LADDER = {
   /**
@@ -208,19 +210,20 @@ export const DARK_LADDER = {
    * That asymmetry is the honest one rather than an oversight. Light's range
    * starts at 1 and only opens up because its ladder is a MIRROR with a known
    * defect: perceptual step size is not symmetric about mid-grey, so rungs
-   * transcribed from the dark table came out too tight near paper and the dial's
-   * job there is a correction. Dark's rungs are the originals, measured at the
-   * lightness they were measured for, so its dial has nothing to correct — it
+   * transcribed from the dark table came out too tight near paper, so the whole
+   * range there is a correction. Dark's rungs are the originals, measured at the
+   * lightness they were measured for, so it has nothing to correct — the range
    * exists to let the ladder be tightened as well as opened.
    *
-   * Centred so 0.5 is exactly 1.0, which means the middle of the dial reproduces
-   * the shipped dark ladder byte for byte. That is the anchor a later adjustment
-   * should be checked against.
+   * Centred so 0.5 is exactly 1.0, which means the midpoint reproduces the
+   * shipped dark ladder byte for byte. That is the anchor a later adjustment
+   * should be checked against — and {@link ARC_SETTLED.surfaceSpread.dark} sits
+   * above it, at gain 1.10.
    */
   spread: { min: 0.6, max: 1.4 },
 
   /**
-   * What fraction of light's tint the same dial position buys here.
+   * What fraction of light's tint the same setting buys here.
    *
    * Below 1 on purpose, and the reason is the distance being mixed across. The
    * light path mixes the paper toward a pastel that is already near it, so a
@@ -229,15 +232,16 @@ export const DARK_LADDER = {
    * of the way out of the dark ladder — and take every foreground solved against
    * it along, since those are re-solved on the moved rung.
    *
-   * Scaling the dial rather than clamping it keeps the control linear over its
-   * whole travel. A ceiling would give the top of the slider a dead zone, which
-   * is the one thing a dial being tuned by eye must not have.
+   * Scaling rather than clamping keeps the mapping linear over its whole range.
+   * A ceiling would give its top end a dead zone, which is the one thing a
+   * number being chosen by eye must not have — and {@link ARC_SETTLED.cardTint}
+   * did land at the top end.
    */
   tintScale: 0.55,
 } as const;
 
 /**
- * What light-mode copy is held to, as a function of `state.textWeight`.
+ * What light-mode copy is held to, at `ARC_SETTLED.textWeight.light`.
  *
  * The dark ladder gets ONE floor per role because it only ever paints on
  * near-black; light mode gets a range because the owner's judgment is the input
@@ -284,7 +288,7 @@ export const LIGHT_FLOORS = {
    * The ceiling is set by `body`, not by taste: body scores about 84.6 on the
    * card (its 90 is measured a rung up), so a secondary allowed past that would
    * end up DARKER than the copy it is subordinate to. 82 leaves the tier intact
-   * at the very top of the dial with a couple of Lc to spare.
+   * at the very top of the range with a couple of Lc to spare.
    */
   secondary: { min: 68, max: 82 },
   /**
@@ -299,9 +303,9 @@ export const LIGHT_FLOORS = {
    * run out of color space the way a fourth independent solve can, since both
    * of its endpoints are already-solved inks.
    *
-   * The travel runs BACKWARDS against the weight dial (0.55 → 0.10): turning
-   * copy weight up means moving labels toward body, which is a smaller
-   * fraction, not a larger one.
+   * The travel runs BACKWARDS against the weight (0.55 → 0.10): more copy
+   * weight means labels move toward body, which is a smaller fraction, not a
+   * larger one.
    */
   labelTowardSecondary: { min: 0.55, max: 0.1 },
   /** Sidebar nav. Unmoved — `lab.css` flips it to the canvas ink anyway. */
@@ -309,26 +313,27 @@ export const LIGHT_FLOORS = {
 } as const;
 
 /**
- * The same contract in dark — what `textWeight` moves once the dial reaches
- * this mode.
+ * The same contract in dark — where `textWeight` lands this mode's copy.
  *
  * The shape is deliberately identical to {@link LIGHT_FLOORS}, and so is the
  * one structural decision in it: the range STARTS at the declared floor and
  * only reaches upward. It is tempting to centre it on the shipped value instead
- * so the middle of the dial is a null — that was the first cut here, and the
- * sweep caught it. `ARC_TOKEN_FLOORS` is a contract, and a dial whose lower half
- * sits under it is a control for generating violations: at weight 0 it measured
+ * so that a weight of 0.5 is a null — that was the first cut here, and the
+ * sweep caught it. `ARC_TOKEN_FLOORS` is a contract, and a range whose lower
+ * half sits under it can only ever generate violations: at weight 0 it measured
  * Lc 50.5 against a declared 60.
  *
  * So dark reads exactly as light does — the old floor at 0, near-body at 1 —
- * and the null lives at the BOTTOM of the travel in both modes rather than in
+ * and the null lives at the BOTTOM of the range in both modes rather than in
  * the middle. What differs is only where each starts, because each starts at
- * its own generator's floor.
+ * its own generator's floor, and that is the whole reason
+ * {@link ARC_SETTLED.textWeight} is per-mode: one position on two ranges that
+ * begin 8 Lc apart is two different asks.
  *
- * The travel is a little wider than light's on secondary (18 Lc against 14),
+ * The range is a little wider than light's on secondary (18 Lc against 14),
  * because APCA's curve is shallower at the dark end: the same Lc step buys less
  * visible change on a near-black page than on paper, and a range that measured
- * the same would read as a smaller dial.
+ * the same would read as a smaller move.
  */
 export const DARK_FLOORS = {
   /** Body copy, on `--background` — the generator's own floor, unmoved. */
@@ -345,11 +350,15 @@ export const DARK_FLOORS = {
   sidebar: 75,
 } as const;
 
-/** What copy is held to at this weight — the numbers actually solved for. */
-export function copyFloors(
-  resolved: ArcResolvedMode,
-  textWeight: number,
-): {
+/**
+ * What copy is held to in this mode — the numbers actually solved for.
+ *
+ * Still a lerp rather than four literals, because the ranges above are where
+ * the argument lives and {@link ARC_SETTLED.textWeight} is only a position on
+ * them. Collapsing it would land the same hexes and throw away the reason they
+ * are those hexes.
+ */
+export function copyFloors(resolved: ArcResolvedMode): {
   /** Lc, on `--background`. */
   body: number;
   /** Lc, on `--card`. */
@@ -359,7 +368,7 @@ export function copyFloors(
   /** Lc, on `--sidebar`. */
   sidebar: number;
 } {
-  const t = clamp01(textWeight);
+  const t = clamp01(ARC_SETTLED.textWeight[resolved]);
   const { body, secondary, labelTowardSecondary, sidebar } =
     resolved === "dark" ? DARK_FLOORS : LIGHT_FLOORS;
   return {
@@ -420,18 +429,18 @@ function clamp01(value: number): number {
 }
 
 /**
- * `solveLightnessForContrast`, made safe to hand a floor that a dial can push
- * past what the hue can physically deliver.
+ * `solveLightnessForContrast`, made safe to hand a floor that this canvas's own
+ * ink cannot physically deliver.
  *
  * That solver THROWS when no lightness reaches the target, which is right for
  * the generator (a floor it cannot meet is a bug in the ladder) and wrong here:
- * `textWeight` is a slider, and the top of its travel asks for Lc 98 from a
- * chromatic ink on tinted paper — reachable at some hues and tints, not at
- * others, with the boundary somewhere in the middle of the dial. A thrown error
- * there would blank the lab mid-drag.
+ * the floor is fixed but the INK is not, since its chroma and hue come from
+ * whatever gradient is on the window. A saturated seed on tinted paper can put
+ * the ask past what that hue reaches, and a thrown error there would blank the
+ * lab on a swatch click.
  *
  * So the ceiling is measured first and the ask is clamped to it, by the same
- * expression the solver guards with. The result is a dial that stops moving
+ * expression the solver guards with. The result is copy that stops darkening
  * when the color space runs out instead of falling off it.
  */
 function solveClamped(targetLc: number, C: number, h: number, surface: string): number {
@@ -474,9 +483,9 @@ function lightTokens(
   // what keeps vibrancy in charge: at vibrancy 0 the canvas is a near-neutral
   // wash, so mixing 5% of it in is 5% of nearly nothing, and quiet stays quiet.
   const canvas = hexToOklch(effectiveStopHexes(state, "light")[state.primaryIndex]);
-  const mix = Math.min(1, Math.max(0, state.cardTint));
+  const mix = clamp01(ARC_SETTLED.cardTint);
 
-  const spread = spreadFactor(state.surfaceSpread);
+  const spread = spreadFactor(ARC_SETTLED.surfaceSpread.light);
 
   const ladder = {} as Record<ThemeTokenName, string>;
   for (const { tokens, L, k } of LIGHT_LADDER.rungs) {
@@ -494,7 +503,7 @@ function lightTokens(
   }
   const card = ladder["--card"];
   const sidebar = ladder["--sidebar"];
-  const floors = copyFloors("light", state.textWeight);
+  const floors = copyFloors("light");
 
   // Every foreground here is solved against a CARD surface and nothing else.
   // Secondary copy also appears on the canvas — in a sidebar that gave up its
@@ -548,7 +557,7 @@ function lightTokens(
 }
 
 /**
- * The dark ladder, with the three token dials applied to it.
+ * The dark ladder, with the three token settings applied to it.
  *
  * The opposite construction to {@link lightTokens}, and deliberately so. That
  * one BUILDS a ladder from authored rungs because light has no shipped
@@ -579,14 +588,14 @@ function darkTokens(state: ArcCanvasState, dark: ThemeTokens): ThemeTokens {
   const spread = spreadCurve(
     origin,
     Math.max(...rungs.map((rung) => Math.abs(rung.L - origin))),
-    lerp(range.min, range.max, clamp01(state.surfaceSpread)),
+    lerp(range.min, range.max, clamp01(ARC_SETTLED.surfaceSpread.dark)),
   );
 
   // The canvas AS PAINTED, exactly as the light path mixes toward: at vibrancy 0
   // the wash is near-neutral, so mixing 5% of it in is 5% of nearly nothing and
   // quiet stays quiet.
   const canvas = hexToOklch(effectiveStopHexes(state, "dark")[state.primaryIndex]);
-  const mix = clamp01(state.cardTint) * tintScale;
+  const mix = clamp01(ARC_SETTLED.cardTint) * tintScale;
 
   const ladder = {} as Record<ThemeTokenName, string>;
   for (const rung of rungs) {
@@ -601,7 +610,7 @@ function darkTokens(state: ArcCanvasState, dark: ThemeTokens): ThemeTokens {
     );
   }
 
-  const floors = copyFloors("dark", state.textWeight);
+  const floors = copyFloors("dark");
   // The ink's own chroma and hue, taken from the generator's solved body copy so
   // the re-solve moves lightness ONLY. Anything else here would be inventing a
   // second opinion about how chromatic dark text should be.
@@ -664,12 +673,12 @@ export function deriveArcTokens(state: ArcCanvasState, resolved: ArcResolvedMode
  * tier should exist at all — so this returns a bare hex and `paint.ts` writes
  * it as a `--lab-` property that only the seam reads.
  *
- * Solved in BOTH modes now. It used to return null in dark on the grounds that
- * the dark ladder's secondary tier already read at the weight the owner wanted,
- * so there was nothing to override — true while `textWeight` could not reach
- * dark, and false the moment it could. A tier that exists at one appearance and
- * not the other would make the dial change the NUMBER of copy rungs on screen
- * as well as their weight.
+ * Solved in BOTH modes. It used to return null in dark on the grounds that the
+ * dark ladder's secondary tier already read at the weight the owner wanted, so
+ * there was nothing to override — true while `textWeight` was light-only, and
+ * false the moment it stopped being. A tier that exists at one appearance and
+ * not the other would make the system appearance change the NUMBER of copy
+ * rungs on screen as well as their weight.
  */
 export function deriveArcLabelInk(state: ArcCanvasState, resolved: ArcResolvedMode): string | null {
   const tokens = deriveArcTokens(state, resolved);
@@ -681,6 +690,6 @@ export function deriveArcLabelInk(state: ArcCanvasState, resolved: ArcResolvedMo
   // Chroma and hue come from body: the two are within a rounding step of each
   // other (same `tint`, same `hue`) and taking them from one end rather than
   // interpolating keeps the three tiers exactly one family.
-  const t = copyFloors(resolved, state.textWeight).labelTowardSecondary;
+  const t = copyFloors(resolved).labelTowardSecondary;
   return oklchToHex(lerp(body.L, secondary.L, t), body.C, body.h);
 }

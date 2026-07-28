@@ -16,6 +16,7 @@ import {
   arcBaseFillHex,
   arcCanvasBackground,
   arcInk,
+  ARC_SETTLED,
   ARC_TUNING,
   MAX_STOPS,
   clampArcCanvasState,
@@ -32,6 +33,11 @@ import {
 const HEX_DUST = 0.002;
 
 const EXTREMES = ["#000000", "#ffffff", "#ff0000", "#00ff00", "#0000ff"];
+
+/** A tuning range at a copy weight — `atWeight` in the module, restated. */
+function at(range: { min: number; max: number }, t: number): number {
+  return range.min + (range.max - range.min) * t;
+}
 
 /** A one-stop canvas on `hex`, with everything else at the defaults. */
 function canvasOf(hex: string, patch: Partial<ArcCanvasState> = {}): ArcCanvasState {
@@ -129,66 +135,72 @@ describe("foreground flip", () => {
 });
 
 describe("canvas ink ladder", () => {
-  /** Every dial position worth checking, ends included. */
-  const WEIGHTS = [0, 0.25, 0.5, 0.75, 1];
-
   /** A surface list neither candidate ink can survive — see the degradation test. */
   const NO_ROOM = ["#000000", "#7f7f7f", "#ffffff"];
 
-  it("moves with the text-weight dial, which is the whole reason it exists", () => {
-    // The defect this replaced: the canvas mute was a fixed 0.15 slide, so the
-    // dial that owns copy weight reached the card's three tiers and nothing on
-    // the gradient at all. Measured on the ember default in light mode, the two
-    // lower rungs now travel #4f423d → #392d28 and #3d302b → #261a16 across it.
-    const light = WEIGHTS.map((textWeight) => arcInk(canvasOf("#e8652a", { textWeight }), "light"));
-    expect(new Set(light.map((ink) => ink.inkMuted)).size).toBe(WEIGHTS.length);
-    expect(new Set(light.map((ink) => ink.inkLabel)).size).toBe(WEIGHTS.length);
-    // Backwards against the dial, like `LIGHT_FLOORS.labelTowardSecondary`:
-    // heavier copy means nearer the head, which is a HIGHER score, not a lower
-    // one. The head itself never moves — the dial ranks the copy under it.
-    for (let at = 1; at < light.length; at += 1) {
-      expect(light[at].mutedLc).toBeGreaterThan(light[at - 1].mutedLc);
-      expect(light[at].labelLc).toBeGreaterThan(light[at - 1].labelLc);
-      expect(light[at].ink).toBe(light[0].ink);
+  it("slides each rung by the settled copy weight, per mode", () => {
+    // What this replaced was a fixed 0.15 slide, which reached the card's three
+    // tiers and nothing on the gradient at all. The weight is now a constant
+    // again — but a per-mode one, read from the same table the card's floors
+    // come from, so the sidebar out on the canvas and the paper beside it rank
+    // their copy by one decision rather than two.
+    //
+    // Asserted as the ARITHMETIC the settled weight implies rather than as
+    // hexes, so a retune of `mutedTowardBase` is caught here as a wrong slide
+    // instead of as three unexplained colours.
+    const { mutedTowardBase, labelTowardMuted } = ARC_TUNING.ink;
+    for (const resolved of ["light", "dark"] as const) {
+      const weight = ARC_SETTLED.textWeight[resolved];
+      const state = canvasOf("#e8652a", { mode: resolved });
+      const ink = arcInk(state, resolved);
+      const head = hexToOklch(ink.ink).L;
+      const base = hexToOklch(arcBaseFillHex(state, resolved)).L;
+      const muted = at(mutedTowardBase, weight);
+      const label = muted * at(labelTowardMuted, weight);
+      expect({ resolved, L: hexToOklch(ink.inkMuted).L }).toEqual({
+        resolved,
+        L: expect.closeTo(head + (base - head) * muted, 2),
+      });
+      expect({ resolved, L: hexToOklch(ink.inkLabel).L }).toEqual({
+        resolved,
+        L: expect.closeTo(head + (base - head) * label, 2),
+      });
     }
   });
 
   it("walks toward the canvas in both modes, so no rung can invert the flip", () => {
     for (const hex of EXTREMES) {
       for (const resolved of ["light", "dark"] as const) {
-        for (const textWeight of WEIGHTS) {
-          const state = canvasOf(hex, { mode: resolved, textWeight });
-          const ink = arcInk(state, resolved);
-          const base = hexToOklch(arcBaseFillHex(state, resolved)).L;
-          const [head, label, muted] = [ink.ink, ink.inkLabel, ink.inkMuted].map(
-            (candidate) => hexToOklch(candidate).L,
-          );
-          // Stated as a DISTANCE from the base fill rather than as "lighter" or
-          // "darker", which is what makes one assertion cover both directions:
-          // the ink is near-black over a pastel and near-white over a
-          // near-black, and a ladder phrased in either direction would invert
-          // the moment the flip did.
-          expect(Math.abs(base - label)).toBeLessThanOrEqual(Math.abs(base - head) + HEX_DUST);
-          expect(Math.abs(base - muted)).toBeLessThanOrEqual(Math.abs(base - label) + HEX_DUST);
-          // …and the scores fall in the order the rungs are ranked in. The
-          // tolerance is one 8-bit step of the slide, worth well under an Lc.
-          expect(ink.labelLc).toBeLessThanOrEqual(ink.worstLc + 1);
-          expect(ink.mutedLc).toBeLessThanOrEqual(ink.labelLc + 1);
-        }
+        const state = canvasOf(hex, { mode: resolved });
+        const ink = arcInk(state, resolved);
+        const base = hexToOklch(arcBaseFillHex(state, resolved)).L;
+        const [head, label, muted] = [ink.ink, ink.inkLabel, ink.inkMuted].map(
+          (candidate) => hexToOklch(candidate).L,
+        );
+        // Stated as a DISTANCE from the base fill rather than as "lighter" or
+        // "darker", which is what makes one assertion cover both directions:
+        // the ink is near-black over a pastel and near-white over a
+        // near-black, and a ladder phrased in either direction would invert
+        // the moment the flip did.
+        expect(Math.abs(base - label)).toBeLessThanOrEqual(Math.abs(base - head) + HEX_DUST);
+        expect(Math.abs(base - muted)).toBeLessThanOrEqual(Math.abs(base - label) + HEX_DUST);
+        // …and the scores fall in the order the rungs are ranked in. The
+        // tolerance is one 8-bit step of the slide, worth well under an Lc.
+        expect(ink.labelLc).toBeLessThanOrEqual(ink.worstLc + 1);
+        expect(ink.mutedLc).toBeLessThanOrEqual(ink.labelLc + 1);
       }
     }
   });
 
-  it("keeps three distinct rungs at every dial position, never two", () => {
-    // Why `labelTowardMuted.max` is 0.35 and not 0: at the top of the dial
-    // every rung is asked to move toward the head, and a label arriving exactly
-    // ON it would leave the sidebar with the two inks this ladder was built to
-    // replace — reachable by dragging one slider to its end.
-    for (const textWeight of WEIGHTS) {
-      for (const resolved of ["light", "dark"] as const) {
-        const ink = arcInk(canvasOf("#e8652a", { mode: resolved, textWeight }), resolved);
-        expect(new Set([ink.ink, ink.inkLabel, ink.inkMuted]).size).toBe(3);
-      }
+  it("keeps three distinct rungs in both modes, never two", () => {
+    // Why `labelTowardMuted` never reaches 0: every rung is asked to move
+    // toward the head, and a label arriving exactly ON it would leave the
+    // sidebar with the two inks this ladder was built to replace. The settled
+    // weights sit well inside that range, and this is what keeps a later one
+    // from being pushed to its end.
+    for (const resolved of ["light", "dark"] as const) {
+      const ink = arcInk(canvasOf("#e8652a", { mode: resolved }), resolved);
+      expect(new Set([ink.ink, ink.inkLabel, ink.inkMuted]).size).toBe(3);
     }
   });
 
@@ -197,27 +209,21 @@ describe("canvas ink ladder", () => {
     for (const hex of EXTREMES) {
       for (const resolved of ["light", "dark"] as const) {
         for (const vibrancy of [0, 1]) {
-          for (const textWeight of WEIGHTS) {
-            const ink = arcInk(canvasOf(hex, { mode: resolved, vibrancy, textWeight }), resolved);
-            // "Above the floor, unless the HEAD was already under it" — the
-            // second clause is the honest one, since a ladder cannot rank text
-            // above an ink that is itself unreadable. Measured across the whole
-            // sweep, the binding case is the widest slide the dial asks for at
-            // weight 0: Lc 49.6 on ember light, 48.2 on a vivid yellow dark.
-            expect(ink.mutedLc).toBeGreaterThanOrEqual(Math.min(ink.worstLc, mutedFloor) - 1);
-          }
+          const ink = arcInk(canvasOf(hex, { mode: resolved, vibrancy }), resolved);
+          // "Above the floor, unless the HEAD was already under it" — the
+          // second clause is the honest one, since a ladder cannot rank text
+          // above an ink that is itself unreadable.
+          expect(ink.mutedLc).toBeGreaterThanOrEqual(Math.min(ink.worstLc, mutedFloor) - 1);
         }
       }
     }
   });
 
   it("collapses to one rung rather than three unreadable ones when a canvas has no room", () => {
-    // The real case is a strongly SUNK canvas (lift −1), where the veil darkens
-    // the chrome until neither candidate clears the floor — the head ink itself
-    // measured Lc 37.6 there. Reproduced as a hostile surface list because a
-    // lift belongs to `surfaces.ts`, and this module only ever receives what it
-    // composited to.
-    const ink = arcInk(canvasOf("#e8652a", { textWeight: 0 }), "light", NO_ROOM);
+    // Reproduced as a hostile surface list rather than as a canvas, because
+    // what strands the ladder is what the LIFT composited to and that belongs
+    // to `surfaces.ts` — this module only ever receives the result.
+    const ink = arcInk(canvasOf("#e8652a"), "light", NO_ROOM);
     expect(ink.worstLc).toBeLessThan(ARC_TUNING.ink.mutedFloor);
     // Flat: not inverted, not thrown, and not three rungs nobody can read.
     expect(ink.inkLabel).toBe(ink.ink);
@@ -366,46 +372,40 @@ describe("clampArcCanvasState", () => {
       stops: [{ hex: "#e8652a", x: 1.4, y: -3 }],
       vibrancy: 4,
       grain: -1,
-      lift: -9,
-      cardTint: 3,
-      shadow: -0.5,
     });
     expect(clamped).toEqual({
       ...DEFAULT_ARC_CANVAS,
       stops: [{ hex: "#e8652a", x: 1, y: 0 }],
       vibrancy: 1,
       grain: 0,
-      // Lift is the one dial with a signed range, so its floor is −1 rather
-      // than the 0 every other control clamps to.
-      lift: -1,
-      cardTint: 1,
-      shadow: 0,
     });
   });
 
-  it("defaults the light dials instead of rejecting a canvas stored before they existed", () => {
-    // The guard's own asymmetry, asserted: a missing SHAPE is a question it
-    // refuses to answer, a missing DIAL is one it answers with the default.
-    // Without this, adding a knob would silently discard every canvas the owner
-    // had already tuned — the editor's persistence punishing the editor's
-    // iteration.
-    const legacy = {
-      stops: [{ hex: "#e8652a", x: 0.68, y: 0.3 }],
-      primaryIndex: 0,
-      mode: "auto",
-      vibrancy: 0.6,
-      grain: 0.15,
+  it("loads a canvas stored while the settled settings were still dials", () => {
+    // The freeze's own compatibility clause. `localStorage` is full of entries
+    // written when `lift`, `cardTint`, `surfaceSpread`, `textWeight`, `shadow`
+    // and `seam` were fields on this shape, and every one of them now names a
+    // decision that is no longer the user's to state.
+    //
+    // So they are IGNORED rather than read or rejected. Reading them would
+    // resurrect a tuning pass that has already been settled; rejecting the
+    // entry would throw away the gradient the owner actually authored, which is
+    // the only part of it that was ever his. What comes back is the canvas, at
+    // the settled everything-else.
+    const stored = {
+      ...DEFAULT_ARC_CANVAS,
+      lift: 0.55,
+      cardTint: 0.05,
+      surfaceSpread: 0.5,
+      textWeight: 0.5,
+      shadow: 0.6,
+      seam: "continuous",
     };
-    expect(clampArcCanvasState(legacy)).toEqual(DEFAULT_ARC_CANVAS);
-  });
-
-  it("falls back on a seam it cannot paint rather than trusting the string", () => {
-    // The seam is the one tuning field with no range to clamp into, so its
-    // guard is membership instead. Trusting it would index the share table with
-    // a key it does not hold, and `undefined` shares NaN their way into an
-    // alpha — a blank sidebar and no error to find it by.
-    const stored = { ...DEFAULT_ARC_CANVAS, seam: "frosted" };
-    expect(clampArcCanvasState(stored)?.seam).toBe(DEFAULT_ARC_CANVAS.seam);
-    expect(clampArcCanvasState({ ...DEFAULT_ARC_CANVAS, seam: "inset" })?.seam).toBe("inset");
+    expect(clampArcCanvasState(stored)).toEqual(DEFAULT_ARC_CANVAS);
+    // …including an entry whose extra fields are junk. They are not read, so
+    // they cannot fail a guard either.
+    expect(clampArcCanvasState({ ...DEFAULT_ARC_CANVAS, lift: "frosted", seam: 7 })).toEqual(
+      DEFAULT_ARC_CANVAS,
+    );
   });
 });

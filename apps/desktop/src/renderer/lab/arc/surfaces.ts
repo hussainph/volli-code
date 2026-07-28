@@ -13,12 +13,11 @@
  * So the canvas gets two mechanisms the app's own ladder does not have:
  *
  *  - **Lift** — a translucent overlay per on-canvas tier, cumulative outward
- *    from the gradient. Signed, because the two arrangements worth comparing
- *    are the same arrangement with the sign turned over: positive walks the
- *    chrome and the rail, then the sidebar, toward paper, so the window reads
- *    canvas → chrome → sidebar → card with every step closer to you; negative
- *    walks them the other way, restoring the recessed reading the light ladder
- *    started with. One dial, both models, and zero is the bare canvas.
+ *    from the gradient. Signed, because the two modes reach the same picture
+ *    from opposite ends: positive walks a tier toward paper, negative away from
+ *    it, and paper is the LIGHTER end of the ladder in light and the darker one
+ *    in dark. So {@link ARC_SETTLED.lift} is +0.25 in light and −0.25 in dark
+ *    and both land the sidebar ~ΔL 0.022 above the canvas.
  *  - **Shadow** — the blurred halo under a raised surface. A shadow works by
  *    removing luminance, so it needs a backdrop with some: that is why the app
  *    ships none on its L 0.18 page, and why this canvas — a vivid wash at
@@ -28,8 +27,9 @@
  * mode is not whether they apply but which way the ladder points: `--background`
  * is the lightest surface in light and one of the darkest in dark, so "toward
  * paper" is a direction on the ladder rather than on the lightness axis. Every
- * mode-dependent number is measured and lives in `ARC_TUNING`; nothing below
- * branches on `resolved` except to read one of those.
+ * mode-dependent number is measured and lives in `ARC_TUNING` or
+ * `ARC_SETTLED`; nothing below branches on `resolved` except to read one of
+ * those.
  *
  * Pure and DOM-free like its neighbours. It sits above both of them —
  * `model.ts` owns the gradient, `tokens.ts` owns the paper, and elevation is
@@ -40,6 +40,7 @@ import { hexToOklch, oklchToHex, type ThemeTokens } from "@volli/shared";
 
 import {
   arcBaseFillHex,
+  ARC_SETTLED,
   ARC_TUNING,
   compositeHex,
   effectiveStopHexes,
@@ -49,7 +50,7 @@ import {
 
 /** One tier's overlay, and what it lands on. */
 export interface ArcLiftTier {
-  /** The overlay as a paintable `rgb(R G B / a)`, or `transparent` at lift 0. */
+  /** The overlay as a paintable `rgb(R G B / a)`, or `transparent` at share 0. */
   veil: string;
   /**
    * What the tier composites to over every pool AND the base fill — the pixels
@@ -61,26 +62,23 @@ export interface ArcLiftTier {
 export interface ArcElevation {
   /**
    * Outward from the canvas: the chrome band and project rail first, the inner
-   * sidebar second. Always as many as the seam's share row, so the stylesheet
-   * can index them by position rather than by name.
+   * sidebar second. Always as many as {@link ARC_TUNING.lift.shares}, so the
+   * stylesheet can index them by position rather than by name.
    */
   tiers: ArcLiftTier[];
   /**
    * Where the sidebar ends up between the canvas and the paper, 0–1 — the
-   * number the seam choice is really about. A sidebar at 0 or 1 is one of the
-   * two materials the window already has; anything in between is a third, which
-   * is exactly what reads as an unexplained band. Reported rather than used, so
-   * the editor can show the position instead of the alpha that produced it.
+   * number the window's arrangement is really about. A sidebar at 0 or 1 is one
+   * of the two materials the window already has; anything in between is a
+   * third, which is exactly what reads as an unexplained band. Reported rather
+   * than used, so the editor's digest can show the position instead of the
+   * alpha that produced it.
    */
   sidebarTowardPaper: number;
   /** Every tier's composited surfaces, flattened — what {@link arcInk} scores against. */
   surfaces: string[];
-  /** `box-shadow` values, or `none` at strength 0 / in dark mode. */
+  /** `box-shadow` values, in both modes — see {@link arcShadows}. */
   shadows: { raised: string; card: string; overlay: string };
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
 }
 
 /**
@@ -94,27 +92,31 @@ function clamp(value: number, min: number, max: number): number {
  * is the far end of the canvas's own family, so a sunk tier stays in the family
  * instead of turning grey.
  *
- * WHICH ink is measured, not assumed, and that one line is what lets the same
- * dial serve both modes. "Sink" means away from the paper, and the paper is not
- * always the lighter end: in light it sits above the canvas (ember 0.78 →
+ * WHICH ink is measured, not assumed, and that one line is what lets one signed
+ * amount serve both modes. "Sink" means away from the paper, and the paper is
+ * not always the lighter end: in light it sits above the canvas (ember 0.78 →
  * 0.949) and in dark below it (0.276 → 0.176), because the dark card is a well
  * cut into a bright wash. Hardcoding the dark ink — which is what this did while
- * it was light-only — would send both halves of the slider the same way in dark,
- * a control with two labels and one behaviour.
+ * it was light-only — would send both signs the same way in dark, and dark's
+ * settled lift is the negative one.
  *
  * Comparing the two lightnesses rather than branching on `resolved` is
  * deliberate beyond tidiness: the light band runs to L 0.90 and a dark canvas
  * reaches 0.44, so the mode is a proxy for the thing that actually matters and
  * the measurement is the thing itself.
+ *
+ * Always an answer, never null. It used to admit the flush case, back when the
+ * lift was a slider that ran through zero; the settled pair does not, so the
+ * only thing that can pin a tier to the canvas now is a share of zero — which
+ * is a statement about which tiers are surfaces, and belongs one level up.
  */
 function liftTarget(
   state: ArcCanvasState,
   resolved: ArcResolvedMode,
   tokens: ThemeTokens,
-): { hex: string; alpha: number } | null {
+): { hex: string; alpha: number } {
   const { liftAlpha, sinkAlpha } = ARC_TUNING.lift;
-  const lift = clamp(state.lift, -1, 1);
-  if (lift === 0) return null;
+  const lift = ARC_SETTLED.lift[resolved];
   const paper = tokens["--background"];
   if (lift > 0) return { hex: paper, alpha: lift * liftAlpha[resolved] };
   const { lightL, lightC, darkL, darkC } = ARC_TUNING.ink;
@@ -135,15 +137,15 @@ function liftTarget(
  * would double-count — but the two were never independent enough for that to
  * hold. Measured on the dark ladder, `--sidebar` (L 0.199) sits BELOW a dark
  * canvas (0.276 on ember), so the veil was already walking the sidebar toward
- * the card: the same direction as a positive lift, at a fixed amount, with no
- * dial on it. So `lab.css` now drops that veil whenever a canvas is armed in
- * either mode, and this is the one mechanism that positions the on-canvas
- * tiers.
+ * the card: the same direction as a positive lift, at a fixed amount, and
+ * nothing to turn it off with. So `lab.css` now drops that veil whenever a
+ * canvas is armed in either mode, and this is the one mechanism that positions
+ * the on-canvas tiers.
  *
  * Two things fall out of that, both wanted. Lift 0 means the same thing in both
- * modes — every tier IS the canvas — and the seam share table finally applies
- * in dark, so `continuous` genuinely puts the sidebar back on the gradient
- * there instead of only claiming to.
+ * modes — every tier IS the canvas — and the share row applies in dark as well,
+ * so the chrome band and rail genuinely stay on the gradient there instead of
+ * only claiming to.
  */
 export function arcElevation(
   state: ArcCanvasState,
@@ -151,18 +153,19 @@ export function arcElevation(
   tokens: ThemeTokens,
 ): ArcElevation {
   const inert: ArcLiftTier = { veil: "transparent", surfaces: [] };
-  const shares = ARC_TUNING.lift.seams[state.seam];
+  const shares = ARC_TUNING.lift.shares;
 
   // Every pool plus the base fill: a tier spans the whole window, so it sits on
   // all of them and its worst reading is the one that counts.
   const beneath = [...effectiveStopHexes(state, resolved), arcBaseFillHex(state, resolved)];
   const target = liftTarget(state, resolved, tokens);
   const tiers = shares.map((share) => {
-    // A share of zero is `continuous` saying the tier is not a surface at all.
-    // Returning the inert answer rather than a 0-alpha overlay keeps that a
-    // structural statement: nothing to paint, and nothing added to the list of
-    // surfaces the ink has to survive — the bare canvas is already in it.
-    if (target === null || share === 0) return inert;
+    // A share of zero says the tier is not a surface at all — which is what the
+    // outer one is. Returning the inert answer rather than a 0-alpha overlay
+    // keeps that a structural statement: nothing to paint, and nothing added to
+    // the list of surfaces the ink has to survive, since the bare canvas is
+    // already in it.
+    if (share === 0) return inert;
     const alpha = target.alpha * share;
     const { r, g, b } = channels(target.hex);
     return {
@@ -172,10 +175,11 @@ export function arcElevation(
   });
 
   // An alpha toward `--background` IS the share of the way to paper — but only
-  // while the lift is positive. Sinking walks the other way entirely, so there
-  // is no position between canvas and paper to report and 0 is the honest one.
+  // while the lift is positive, which is light's case and not dark's. Sinking
+  // walks the other way entirely, so there is no position between canvas and
+  // paper to report and 0 is the honest one.
   const inner = shares[shares.length - 1] ?? 0;
-  const sidebarTowardPaper = state.lift > 0 ? (target?.alpha ?? 0) * inner : 0;
+  const sidebarTowardPaper = ARC_SETTLED.lift[resolved] > 0 ? target.alpha * inner : 0;
 
   return {
     tiers,
@@ -201,15 +205,19 @@ function channels(hex: string): { r: number; g: number; b: number } {
  * and on a pastel canvas that is the difference between a shadow and a stain —
  * grey over a warm wash desaturates the pixels beneath it, so the shadow reads
  * as dirt on the gradient instead of as an absence of light.
+ *
+ * All three tiers always cast. The card's used to drop out under a seam that
+ * took its gutter away — a halo with no ground to fall on is a dark line inside
+ * the sidebar's edge — but the settled window gives the card a gutter on three
+ * sides and abuts the sidebar on the fourth, where a `clip-path` in `lab.css`
+ * stops the two halves shading each other. Geometry solves it there, so there
+ * is nothing for this function to special-case.
  */
 export function arcShadows(
   state: ArcCanvasState,
   resolved: ArcResolvedMode,
 ): { raised: string; card: string; overlay: string } {
-  const strength = clamp(state.shadow, 0, 1);
-  if (strength === 0) {
-    return { raised: "none", card: "none", overlay: "none" };
-  }
+  const strength = ARC_SETTLED.shadow;
   const { color, raised, card, overlay } = ARC_TUNING.shadow;
   const { h } = hexToOklch(state.stops[state.primaryIndex].hex);
   const { L, C } = color[resolved];
@@ -222,14 +230,5 @@ export function arcShadows(
       )
       .join(", ");
 
-  return {
-    raised: layers(raised),
-    // The `inset` seam takes the card's gutter away, and a shadow with no
-    // ground to fall on is just a dark line inside the sidebar's edge. The
-    // other two tiers are unaffected: a tab is still raised on the card, and a
-    // popover still floats over the whole window, whatever the card's own edge
-    // is doing.
-    card: state.seam === "inset" ? "none" : layers(card),
-    overlay: layers(overlay),
-  };
+  return { raised: layers(raised), card: layers(card), overlay: layers(overlay) };
 }

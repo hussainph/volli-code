@@ -49,7 +49,6 @@ import {
   arcInk,
   DEFAULT_ARC_CANVAS,
   effectiveStopHexes,
-  ARC_SEAMS,
   MAX_STOPS,
   moveStop,
   removeStop,
@@ -60,7 +59,6 @@ import {
   type ArcInk,
   type ArcMode,
   type ArcResolvedMode,
-  type ArcSeam,
   type ArcStop,
 } from "../arc/model";
 import { applyArcCanvas, loadArcCanvas, saveArcCanvas } from "../arc/paint";
@@ -353,10 +351,6 @@ function stepOnArrow(
   event: React.KeyboardEvent,
   value: number,
   onChange: (next: number) => void,
-  // The lift dial is the one control here that runs through zero, so the bounds
-  // are a parameter rather than a `clamp01` baked in.
-  min = 0,
-  max = 1,
 ): void {
   const step = event.shiftKey ? 0.1 : 0.02;
   const direction =
@@ -367,271 +361,11 @@ function stepOnArrow(
         : 0;
   if (direction === 0) return;
   event.preventDefault();
-  onChange(Math.min(max, Math.max(min, value + direction * step)));
-}
-
-/**
- * A plain labelled track — the shape the four light-mode dials share.
- *
- * Deliberately not another wave or another dial. The vibrancy slider and the
- * grain dial are shaped like what they do because each of them is ONE thing
- * with a memorable identity; four more sculpted controls in a 340px card would
- * be four things to learn and a column of ornament. These read as a settings
- * block, which is what they are.
- *
- * The origin is `min`, or zero when the range spans it: a signed dial that
- * filled from its left end would draw the same bar for "slightly recessed" and
- * "strongly frosted" and only the thumb would say which.
- */
-function TuneSlider({
-  label,
-  value,
-  min,
-  max,
-  readout,
-  chrome,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  /** What the number means, in the units the owner is judging in. */
-  readout: string;
-  chrome: CardChrome;
-  onChange(next: number): void;
-}) {
-  const trackRef = React.useRef<HTMLDivElement>(null);
-  const toFraction = (raw: number) => (raw - min) / (max - min);
-  const handlers = useDrag({
-    onDrag(event) {
-      const track = trackRef.current;
-      if (track === null) return;
-      const rect = track.getBoundingClientRect();
-      const fraction = clamp01((event.clientX - rect.left) / rect.width);
-      onChange(min + fraction * (max - min));
-    },
-  });
-
-  const origin = toFraction(Math.min(Math.max(0, min), max));
-  const position = toFraction(value);
-  const [from, to] = origin <= position ? [origin, position] : [position, origin];
-
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-baseline justify-between gap-2">
-        <span className={`text-label ${chrome.mute}`}>{label}</span>
-        <span className={`font-mono text-label tabular-nums ${chrome.faint}`}>{readout}</span>
-      </div>
-      <div
-        ref={trackRef}
-        {...handlers}
-        onKeyDown={(event) => stepOnArrow(event, value, onChange, min, max)}
-        role="slider"
-        tabIndex={0}
-        aria-label={label}
-        aria-valuemin={min}
-        aria-valuemax={max}
-        aria-valuenow={Number(value.toFixed(2))}
-        aria-valuetext={readout}
-        className={`relative h-4 cursor-ew-resize touch-none rounded-full outline-none focus-visible:ring-2 ${chrome.focus}`}
-      >
-        <div className={`absolute inset-x-0 top-1.5 h-1 rounded-full ${chrome.well}`} />
-        {/* `bg-current` at partial weight: the fill inherits the card's own ink,
-            which the CHROME table has already flipped for the mode, so this
-            needs no entry of its own. */}
-        <div
-          aria-hidden
-          style={{ left: `${from * 100}%`, right: `${(1 - to) * 100}%` }}
-          className="absolute top-1.5 h-1 rounded-full bg-current opacity-45"
-        />
-        {/* White in both modes, like the vibrancy thumb — same hardware family. */}
-        <div
-          aria-hidden
-          style={{ left: `calc(${position * 100}% - 6px)` }}
-          className="absolute top-0.5 size-3 rounded-full bg-white shadow"
-        />
-      </div>
-    </div>
-  );
+  onChange(clamp01(value + direction * step));
 }
 
 function percent(value: number): string {
   return `${Math.round(value * 100)}%`;
-}
-
-/** What each seam is, in the four words a segment has room for. */
-const SEAM_LABELS: Record<ArcSeam, { label: string; hint: string }> = {
-  continuous: {
-    label: "Canvas",
-    hint: "The sidebar rejoins the gradient; only the chrome band and rail lift. The gutter beside the card stops being a third material because the sidebar is the same one.",
-  },
-  inset: {
-    label: "Inset",
-    hint: "Nothing floats: the card gives up its gutter, radius and shadow and meets the sidebar at a hairline. Canvas becomes the chrome, paper becomes the work.",
-  },
-  shell: {
-    label: "Shell",
-    hint: "Slack's arrangement: the sidebar and the card become one inset unit with a colour change down the middle — a single rounded outline, no gutter between them, and the canvas running all the way around as a frame.",
-  },
-  float: {
-    label: "Float",
-    hint: "What the tiers first shipped as: a filled square sidebar beside a floating rounded card. Kept to judge the others against.",
-  },
-};
-
-/**
- * How the sidebar, the canvas and the card meet.
- *
- * Above the light dials rather than inside them, because it is the only
- * structural control on the card and it applies in both appearances — the five
- * below it are all chromatic and all light-only.
- *
- * The readout under the segments is the diagnosis, not decoration. The complaint
- * that produced this control was "three background colours", and the cause is a
- * single number: how far the sidebar sits between the canvas and the paper.
- * At either end it is one of the two materials the window already has. Anywhere
- * in between — 39% at the shipped defaults — it is a third one, and that is
- * visible as soon as a strip of bare gradient runs alongside it.
- */
-function SeamRow({
-  seam,
-  towardPaper,
-  resolved,
-  chrome,
-  onChange,
-}: {
-  seam: ArcSeam;
-  towardPaper: number;
-  resolved: ArcResolvedMode;
-  chrome: CardChrome;
-  onChange(next: ArcSeam): void;
-}) {
-  const detail =
-    resolved === "dark"
-      ? "geometry only in dark — the veil already separates the tiers"
-      : towardPaper === 0
-        ? "sidebar sits ON the canvas — two materials"
-        : `sidebar ${percent(towardPaper)} of the way from canvas to paper`;
-
-  return (
-    <div className="flex flex-col gap-2">
-      <span className={`text-label uppercase ${chrome.faint}`}>Seam</span>
-      <div className={`flex items-center gap-1 rounded-full p-1 ${chrome.well}`}>
-        {ARC_SEAMS.map((candidate) => (
-          <button
-            key={candidate}
-            type="button"
-            onClick={() => onChange(candidate)}
-            aria-pressed={candidate === seam}
-            title={SEAM_LABELS[candidate].hint}
-            className={`flex-1 rounded-full px-2 py-1.5 text-label transition-colors ${chrome.segment}`}
-          >
-            {SEAM_LABELS[candidate].label}
-          </button>
-        ))}
-      </div>
-      <p className={`text-label ${chrome.faint}`}>{detail}</p>
-    </div>
-  );
-}
-
-/**
- * The five dials that position the surfaces, in one block.
- *
- * Every one of them runs in BOTH modes now. They were light-only, and the block
- * carried an "inert in dark" note to say so — which was honest about a state
- * that should not have existed: half the editor going dead on an appearance
- * flip made dark mode a thing you inherited rather than a thing you tuned.
- *
- * The readouts below all measure the DERIVED set at the resolved mode rather
- * than a fixed one. That matters most for the spread readout: the same dial
- * position means a different multiplier in each ladder (light's corrects a
- * mirror that came out too tight; dark's adjusts the generator's own rungs
- * around a null at 0.5), so a number computed against one mode while the other
- * is on screen would be a readout for a window nobody is looking at.
- */
-function LightTuning({
-  state,
-  resolved,
-  chrome,
-  onChange,
-}: {
-  state: ArcCanvasState;
-  resolved: ArcResolvedMode;
-  chrome: CardChrome;
-  onChange(patch: Partial<ArcCanvasState>): void;
-}) {
-  const floors = copyFloors(resolved, state.textWeight);
-  // Measured off the derived set rather than off the slider, so the readout is
-  // the thing on screen and not a restatement of the input.
-  const derived = deriveArcTokens(state, resolved);
-  // Absolute, because the rail sits BELOW the page in light and above it in
-  // dark. The readout is about how far apart they are, and a sign here would
-  // only report which ladder is on screen — which the mode row already says.
-  const railDrop = Math.abs(
-    hexToOklch(derived["--background"]).L - hexToOklch(derived["--rail"]).L,
-  );
-
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-baseline justify-between gap-2">
-        <span className={`text-label uppercase ${chrome.faint}`}>Surfaces</span>
-      </div>
-      <TuneSlider
-        label="Lift"
-        value={state.lift}
-        min={-1}
-        max={1}
-        readout={
-          state.lift === 0 ? "flush" : `${state.lift > 0 ? "frost" : "sink"} ${percent(state.lift)}`
-        }
-        chrome={chrome}
-        onChange={(lift) => onChange({ lift })}
-      />
-      <TuneSlider
-        label="Card tint"
-        value={state.cardTint}
-        min={0}
-        max={0.25}
-        readout={percent(state.cardTint)}
-        chrome={chrome}
-        onChange={(cardTint) => onChange({ cardTint })}
-      />
-      <TuneSlider
-        label="Surface spread"
-        value={state.surfaceSpread}
-        min={0}
-        max={1}
-        // The rung the complaint was actually about: the tab strip under a tab,
-        // which the mirrored ladder put ΔL 0.019 from the page it sits on.
-        readout={`rail ΔL ${railDrop.toFixed(3)}`}
-        chrome={chrome}
-        onChange={(surfaceSpread) => onChange({ surfaceSpread })}
-      />
-      <TuneSlider
-        label="Text weight"
-        value={state.textWeight}
-        min={0}
-        max={1}
-        // The floors, not the slider position: Lc is the unit the decision is
-        // actually made in, and "0.50" says nothing you can check on screen.
-        // Body / label / secondary, all measured on `--card`.
-        readout={`Lc ${floors.body.toFixed(0)} · ${floors.secondary.toFixed(0)} · lbl ${Math.round((1 - floors.labelTowardSecondary) * 100)}%`}
-        chrome={chrome}
-        onChange={(textWeight) => onChange({ textWeight })}
-      />
-      <TuneSlider
-        label="Shadow"
-        value={state.shadow}
-        min={0}
-        max={1}
-        readout={percent(state.shadow)}
-        chrome={chrome}
-        onChange={(shadow) => onChange({ shadow })}
-      />
-    </div>
-  );
 }
 
 function ModeRow({
@@ -1100,13 +834,12 @@ function tier(index: 1 | 2): React.CSSProperties {
  *
  * So: judge color, contrast and separation here. Judge layout on App shell.
  */
-function WindowSpecimen({ ink, seam }: { ink: ArcInk; seam: ArcSeam }) {
-  // The seam's geometry, quoted from `lab.css` at the miniature's scale — the
+function WindowSpecimen({ ink }: { ink: ArcInk }) {
+  // The window's geometry, quoted from `lab.css` at the miniature's scale — the
   // one place this file deliberately restates a rule rather than reading a
-  // property. It has to: the seam's real rules are keyed on `data-slot`
-  // selectors this specimen must not wear (see above), so the alternative to
-  // restating them is a specimen that shows the same picture for all four
-  // options and settles nothing.
+  // property. It has to: the real rules are keyed on `data-slot` selectors this
+  // specimen must not wear (see above), so the alternative to restating them is
+  // a specimen that shows a floating card while the window shows a shell.
   //
   // The shadows stay INLINE while the geometry is classes, and that split is
   // not cosmetic: `shadow-[var(--lab-shadow-card)]` compiles, matches, and
@@ -1114,21 +847,13 @@ function WindowSpecimen({ ink, seam }: { ink: ArcInk; seam: ArcSeam }) {
   // `--tw-shadow` colour machinery, which cannot parse a two-layer value it
   // did not author — measured `rgba(0, 0, 0, 0) 0px 0px 0px 0px`. A specimen
   // that silently drops the property it exists to show is the lab lying.
-  const shell = seam === "shell";
-  const floats = seam !== "inset";
-  const cardGeometry = shell
-    ? "m-1 ml-0 rounded-r-lg border border-l-0 border-border"
-    : floats
-      ? "m-1 rounded-lg border border-border"
-      : "border-l border-border";
-  const sidebarGeometry = shell
-    ? "m-1 mr-0 overflow-hidden rounded-l-lg border border-r-0 border-border"
-    : "";
-  // The seam-side clip, quoted from `lab.css` at this scale — without it the
+  const cardGeometry = "m-1 ml-0 rounded-r-lg border border-l-0 border-border";
+  const sidebarGeometry = "m-1 mr-0 overflow-hidden rounded-l-lg border border-r-0 border-border";
+  // The seam-side clips, quoted from `lab.css` at this scale — without them the
   // two halves' shadows cross into each other and draw a bar down the middle of
-  // the one thing the shell claims not to have.
-  const clipRight = shell ? "inset(-60px 0 -60px -60px)" : undefined;
-  const clipLeft = shell ? "inset(-60px -60px -60px 0)" : undefined;
+  // the one thing this arrangement claims not to have.
+  const clipRight = "inset(-60px 0 -60px -60px)";
+  const clipLeft = "inset(-60px -60px -60px 0)";
 
   return (
     <div
@@ -1143,17 +868,15 @@ function WindowSpecimen({ ink, seam }: { ink: ArcInk; seam: ArcSeam }) {
         Search tickets and sessions
       </div>
       <div className="flex min-h-0 flex-1">
-        {/* Project rail — tier 1 as well: it is the same distance out. Which is
-            why the two ends of the seam table are both visible here: under
-            `continuous` this band is the ONLY lifted surface (one chrome/canvas
-            boundary instead of two), and under `shell` it is the only one that
-            is NOT (the frame stays flat, and the dial moves the sidebar alone). */}
+        {/* Project rail — tier 1 as well: it is the same distance out, and at
+            the settled share row that means it stays flat. The frame around the
+            unit reads as one thing only if nothing crosses it, so tier 1 is
+            pinned to the canvas and the sidebar alone moves. */}
         <div style={tier(1)} className="flex w-8 shrink-0 flex-col items-center gap-1.5 pt-2">
           <span className="size-5 rounded-md bg-primary" />
           <span className="size-5 rounded-md bg-background/40" />
         </div>
-        {/* Primary sidebar — tier 2, one step nearer than the rail, or the bare
-            canvas when the seam gives it a share of zero. */}
+        {/* Primary sidebar — tier 2, and the one surface the lift moves. */}
         {/* The default ink here is the LABEL rung, not the head — the seam's
             arrangement quoted rather than restated: on the canvas the sidebar's
             furniture recedes and only its content leads, so the nav, the
@@ -1164,7 +887,7 @@ function WindowSpecimen({ ink, seam }: { ink: ArcInk; seam: ArcSeam }) {
           style={{
             ...tier(2),
             color: ink.inkLabel,
-            boxShadow: shell ? "var(--lab-shadow-card)" : undefined,
+            boxShadow: "var(--lab-shadow-card)",
             clipPath: clipRight,
           }}
           className={`flex w-28 shrink-0 flex-col gap-0.5 p-1.5 ${sidebarGeometry}`}
@@ -1196,10 +919,10 @@ function WindowSpecimen({ ink, seam }: { ink: ArcInk; seam: ArcSeam }) {
             </span>
           ))}
         </div>
-        {/* The content card: opaque paper, floating — or flush, in `inset`. */}
+        {/* The content card: opaque paper, the other half of the unit. */}
         <div
           style={{
-            boxShadow: floats ? "var(--lab-shadow-card)" : undefined,
+            boxShadow: "var(--lab-shadow-card)",
             clipPath: clipLeft,
           }}
           className={`flex min-w-0 flex-1 flex-col overflow-hidden bg-background ${cardGeometry}`}
@@ -1318,14 +1041,14 @@ function settingsDigest(
   label: string | null,
   towardPaper: number,
 ): string {
-  const floors = copyFloors(resolved, state.textWeight);
+  const floors = copyFloors(resolved);
   const derived = deriveArcTokens(state, resolved);
   const railDrop = Math.abs(
     hexToOklch(derived["--background"]).L - hexToOklch(derived["--rail"]).L,
   );
   const measured = [
-    `seam        ${state.seam} — sidebar ${percent(towardPaper)} canvas→paper`,
     `viewed in   ${resolved}${state.mode === "auto" ? " (auto)" : ""}`,
+    `sidebar     ${percent(towardPaper)} of the way from canvas to paper`,
     `background  ${tokens["--background"]}`,
     `card        ${tokens["--card"]}`,
     `rail        ${tokens["--rail"]} (ΔL ${railDrop.toFixed(3)} under background)`,
@@ -1361,7 +1084,11 @@ function Readout({
   tokens: ThemeTokens;
   /** The micro-label tier, or null in dark mode where there isn't one. */
   label: string | null;
-  /** Where the sidebar landed between canvas and paper — see {@link SeamRow}. */
+  /**
+   * Where the sidebar landed between canvas and paper. At either end it is one
+   * of the two materials the window already has; anywhere in between it is a
+   * third, which is what reads as an unexplained band.
+   */
   towardPaper: number;
   live: boolean;
   chrome: CardChrome;
@@ -1607,25 +1334,6 @@ export default function CanvasScratch() {
               onChange={(grain) => mutate((current) => ({ ...current, grain }))}
             />
           </div>
-
-          <div className={`h-px ${chrome.well}`} />
-
-          <SeamRow
-            seam={state.seam}
-            towardPaper={elevation.sidebarTowardPaper}
-            resolved={resolved}
-            chrome={chrome}
-            onChange={(seam) => mutate((current) => ({ ...current, seam }))}
-          />
-
-          <div className={`h-px ${chrome.well}`} />
-
-          <LightTuning
-            state={state}
-            resolved={resolved}
-            chrome={chrome}
-            onChange={(patch) => mutate((current) => ({ ...current, ...patch }))}
-          />
         </div>
         <div className="flex-1" />
 
@@ -1647,7 +1355,7 @@ export default function CanvasScratch() {
           and the alternative is squeezing every specimen until none of them
           shows what it is for. */}
       <div className="absolute inset-y-6 right-6 flex w-[360px] flex-col gap-3 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        <WindowSpecimen ink={ink} seam={state.seam} />
+        <WindowSpecimen ink={ink} />
         <ComponentSpecimens />
       </div>
     </div>

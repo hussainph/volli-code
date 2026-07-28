@@ -182,30 +182,30 @@ html[data-lab-canvas] [data-slot="sidebar"] .session-row-dim.text-xs {
   --muted-foreground: var(--lab-canvas-ink);
 }
 
-/* LIGHT-MODE ELEVATION — the lift overlays and the shadow set (arc/surfaces.ts).
+/* ELEVATION — the lift overlays and the shadow set (arc/surfaces.ts).
  *
  * Two tiers, applied outward from the gradient: tier 1 is the chrome band and
- * the project rail, tier 2 the inner sidebar. The dial is signed, so the SAME
- * rules produce the frosted arrangement (each tier nearer paper than the one
- * outside it) and the recessed one (each tier nearer the ink); at lift 0 every
- * variable is `transparent` and the rules are inert.
+ * the project rail, tier 2 the inner sidebar. The lift is signed, so the SAME
+ * rules serve both appearances — light walks its tiers toward paper and dark
+ * away from it, and both arrive at a sidebar sitting just above its canvas.
  *
- * WHICH tiers move is the seam's call, not this file's — both of these rules
- * stay unconditional and a seam that wants a tier pinned gives it a share of
- * zero, which reaches here as `transparent`. So `continuous` moves only the
- * first of them and `shell` only the second, with no selector below aware of
- * either. If the chrome does not respond to the dial, that table is why.
+ * WHICH tiers move is the share row's call, not this file's — both of these
+ * rules stay unconditional and a tier that is meant to stay on the canvas is
+ * given a share of zero, which reaches here as `transparent`. That is the
+ * settled arrangement's own answer for tier 1: the frame reads as a frame only
+ * if it is uniform, so the chrome band and rail ARE the gradient and the rule
+ * below paints nothing. If the chrome does not respond, that table is why.
  *
  * Painted as a `background-image` rather than a `background-color` on purpose.
  * The primary sidebar already wears `bg-sidebar-veil`, which is a color — an
  * image composites ON TOP of it, so the veil keeps doing its job (holding the
  * sidebar's rung over every stop of the gradient) and the lift is a second,
  * independent layer above it. Setting a color instead would silently replace
- * the veil, and lift 0 would stop meaning "unchanged".
+ * the veil, and a share of zero would stop meaning "unchanged".
  *
- * Unprefixed by mode because `arc/paint.ts` already answers that: dark writes
- * `transparent` and `none` into every one of these. One place decides, and it
- * is the one that can measure. */
+ * Unprefixed by mode because `arc/paint.ts` already answers that: it resolves
+ * the appearance once and writes the measured value for it into every one of
+ * these. One place decides, and it is the one that can measure. */
 html[data-lab-canvas] .app-region-drag {
   background-image: linear-gradient(var(--lab-lift-1), var(--lab-lift-1));
 }
@@ -247,8 +247,7 @@ html[data-lab-canvas] [data-slot="sidebar-inset"] {
   box-shadow: var(--lab-shadow-card);
 }
 
-/* SEAM GEOMETRY — how the sidebar, the canvas and the card meet
- * (`ArcSeam` in arc/model.ts).
+/* SEAM GEOMETRY — how the sidebar, the canvas and the card meet.
  *
  * The problem all of this answers: a lifted sidebar sits at a lightness that is
  * neither the canvas nor the paper, and `SidebarInset`'s `m-2` leaves 8px of
@@ -257,30 +256,22 @@ html[data-lab-canvas] [data-slot="sidebar-inset"] {
  *
  * NOT scoped to light mode, unlike everything above it. Whether the card floats
  * is a structural decision, and a window that rearranged itself when the system
- * went dark would be a bug rather than a theme. What the seam changes in dark is
- * only geometry — the lift shares it also carries are already neutralized there
- * by `arc/paint.ts`.
+ * went dark would be a bug rather than a theme.
  *
- * `continuous` needs no rule at all, which is the argument for it: the sidebar
- * simply takes a lift share of zero, so it IS the canvas and the gutter beside
- * it stops being a band. Everything below is a different answer to the same
- * question. */
-
-/* `inset` — nothing floats, so nothing needs air around it. The card gives up
- * its gutter, its radius and its shadow (zeroed in `arcShadows`, since a shadow
- * with no ground to fall on is just a dark line) and meets the sidebar at a
- * hairline. The canvas becomes purely the chrome; the paper, purely the work. */
-html[data-lab-canvas][data-lab-seam="inset"] [data-slot="sidebar-inset"] {
-  margin: 0;
-  border-width: 0 0 0 1px;
-  border-radius: 0;
-}
-
-/* `shell` — Slack's arrangement, and the only one that stops treating the
- * sidebar and the card as two objects. They become ONE inset unit with a colour
- * change down the middle: a single rounded outline around the pair, no gutter
- * between them, and the canvas running all the way around the outside as a
- * frame rather than the reverse-L the other seams leave.
+ * Scoped on `data-lab-canvas` alone, and it used to take a second attribute.
+ * Four arrangements were tried — the sidebar rejoining the canvas, the card
+ * giving up its gutter, this one, and the filled-square/floating-card pair the
+ * tiers first shipped as — so `arc/paint.ts` wrote a `data-lab-seam` naming
+ * which was armed and every rule below matched on it. The choice is made, and
+ * an attribute with one possible value is not a switch: it is a selector
+ * inviting the next reader to go looking for the other three. It went with the
+ * choice; the rules stayed.
+ *
+ * What survived is Slack's arrangement, and the only one that stops treating
+ * the sidebar and the card as two objects. They become ONE inset unit with a
+ * colour change down the middle: a single rounded outline around the pair, no
+ * gutter between them, and the canvas running all the way around the outside as
+ * a frame rather than the reverse-L the alternatives left.
  *
  * Built as two half-boxes because the DOM has no element that wraps exactly
  * these two: the sidebar lives inside the collapsible `Sidebar` (with the
@@ -298,7 +289,7 @@ html[data-lab-canvas][data-lab-seam="inset"] [data-slot="sidebar-inset"] {
  * the widest layer reaches (30px blur, −6 spread, +10 y). Nothing else is lost
  * to it: the card already clips its content with `overflow-hidden`, popovers
  * portal to the body, and the seam edge is square in this mode anyway. */
-/* The two numbers the rest of this seam is built from: the margin that insets
+/* The two numbers the rest of this geometry is built from: the margin that insets
  * the unit, and the hairline it draws around it. `primary-sidebar.tsx` sizes
  * its two absolutely-positioned presentation panes (the expanded and collapsed
  * layers) from `--sidebar-width`/`--sidebar-width-icon` minus `--rail-width`
@@ -310,11 +301,11 @@ html[data-lab-canvas][data-lab-seam="inset"] [data-slot="sidebar-inset"] {
  * resize handle (sized off the unmargined rail gap) spanned y 40→800 against a
  * wall at 48→792. Naming both once and reusing them in every correction below
  * makes that drift impossible rather than just fixed for today. */
-html[data-lab-canvas][data-lab-seam="shell"] {
+html[data-lab-canvas] {
   --lab-shell-inset: 0.5rem;
   --lab-shell-edge: 1px;
 }
-html[data-lab-canvas][data-lab-seam="shell"] [data-slot="sidebar"].bg-sidebar-veil {
+html[data-lab-canvas] [data-slot="sidebar"].bg-sidebar-veil {
   margin: var(--lab-shell-inset) 0 var(--lab-shell-inset) var(--lab-shell-inset);
   border: var(--lab-shell-edge) solid var(--border);
   border-right-width: 0;
@@ -329,7 +320,7 @@ html[data-lab-canvas][data-lab-seam="shell"] [data-slot="sidebar"].bg-sidebar-ve
    * 808 in an 800px window, then 792. */
   height: auto;
 }
-html[data-lab-canvas][data-lab-seam="shell"] [data-slot="sidebar-inset"] {
+html[data-lab-canvas] [data-slot="sidebar-inset"] {
   /* −1px, not 0. The two halves are laid out by different boxes — the card
    * follows `sidebar-gap`, which rounds the fractional `--sidebar-width` up,
    * while the sidebar fills `sidebar-inner`, which lands a pixel short of it
@@ -347,7 +338,7 @@ html[data-lab-canvas][data-lab-seam="shell"] [data-slot="sidebar-inset"] {
  * edge to slide behind — which also clips the sidebar half's shadow at the top
  * and bottom of the unit, leaving the frame shaded on three sides and bare on
  * the fourth. Only lifted here, where a shadow has to escape it. */
-html[data-lab-canvas][data-lab-seam="shell"] [data-slot="sidebar"].overflow-hidden {
+html[data-lab-canvas] [data-slot="sidebar"].overflow-hidden {
   overflow: visible;
 }
 /* `primary-sidebar.tsx`'s two presentation panes are sized in TSX from
@@ -367,7 +358,7 @@ html[data-lab-canvas][data-lab-seam="shell"] [data-slot="sidebar"].overflow-hidd
  * spent again on `--lab-shell-edge`, the sidebar half's own left border, which
  * the pane lives inside. Identical width, different border; subtracting it
  * under its own name is what keeps the two independent if either moves. */
-html[data-lab-canvas][data-lab-seam="shell"] [data-sidebar-presentation="expanded"] {
+html[data-lab-canvas] [data-sidebar-presentation="expanded"] {
   width: calc(
     var(--sidebar-width) - var(--rail-width) - var(--lab-shell-inset) - var(--lab-shell-edge)
   );
@@ -391,7 +382,7 @@ html[data-lab-canvas][data-lab-seam="shell"] [data-sidebar-presentation="expande
    * sidebar width to solve a problem only one edge has. */
   padding-right: 6px;
 }
-html[data-lab-canvas][data-lab-seam="shell"] [data-sidebar-presentation="collapsed"] {
+html[data-lab-canvas] [data-sidebar-presentation="collapsed"] {
   width: calc(
     var(--sidebar-width-icon) - var(--rail-width) - var(--lab-shell-inset) - var(--lab-shell-edge)
   );
@@ -411,7 +402,7 @@ html[data-lab-canvas][data-lab-seam="shell"] [data-sidebar-presentation="collaps
  * (y 48→792, from the sidebar's own `--lab-shell-inset` margin). `right` is
  * already correct since the sidebar half has no right margin; only the two
  * ends needed pulling in to the same inset. */
-html[data-lab-canvas][data-lab-seam="shell"] [data-slot="sidebar-resize-handle"] {
+html[data-lab-canvas] [data-slot="sidebar-resize-handle"] {
   top: var(--lab-shell-inset);
   bottom: var(--lab-shell-inset);
 }
@@ -429,15 +420,15 @@ html[data-lab-canvas][data-lab-seam="shell"] [data-slot="sidebar-resize-handle"]
  * sidebar and the card meet as a colour change with no gutter, and both halves
  * already give up the border facing that seam — a third line drawn down the
  * middle would contradict the one thing the shell is claiming. */
-html[data-lab-canvas][data-lab-seam="shell"] [data-slot="sidebar-container"] {
+html[data-lab-canvas] [data-slot="sidebar-container"] {
   border-right-width: 0;
 }
 /* Same bug, seen from outside the unit instead of inside it: `project-rail.tsx`
  * centers its tile column (`items-center`) and its `AddProjectTile` row
  * (`justify-center`) inside the rail's own 60px box (`--rail-width`), which is
  * correct everywhere else — a 36px tile centers at 12→48, 12px either side.
- * `shell` doesn't touch the rail at all, but it DOES move what the eye reads
- * as the rail's far edge: that edge used to be the rail's own right side (60);
+ * This geometry doesn't touch the rail at all, but it DOES move what the eye
+ * reads as the rail's far edge: that edge used to be the rail's own right side (60);
  * now the sidebar unit starts 8px further out (68), so the perceived band is
  * 0→68, not 0→60, and a tile centered on the wrong band lands 12px from the
  * viewport edge but 20px from the unit.
@@ -464,7 +455,7 @@ html[data-lab-canvas][data-lab-seam="shell"] [data-slot="sidebar-container"] {
  * Deriving the cap from `--rail-width` rather than adding a hidden-state rule
  * of its own is what keeps it honest: the padding can never exceed the box it
  * is padding, whatever width that box is next given. */
-html[data-lab-canvas][data-lab-seam="shell"] [data-workspace-rail] {
+html[data-lab-canvas] [data-workspace-rail] {
   padding-left: min(var(--lab-shell-inset), var(--rail-width));
 }
 /* Raised-on-a-surface: the active tab in every strip, and the board's cards.
