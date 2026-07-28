@@ -784,6 +784,52 @@ article.bg-card {
   background-color: var(--muted-foreground);
 }
 
+/* Range inputs — painted in tokens rather than accented, for the same reason
+ * the scrollbars above are.
+ *
+ * `accent-color: var(--primary)` looked like the one-line answer and is a trap:
+ * setting it takes Chromium off the `color-scheme` path for the WHOLE control,
+ * so the UNFILLED half of the track stops following light/dark and is painted
+ * from the dark-control palette in both — measured #3b3b3b either way, where a
+ * bare `<input type="range">` correctly goes #3b3b3b → #efefef. On a pastel
+ * canvas that is a near-black groove. One property cannot express two halves,
+ * so both halves are declared here.
+ *
+ * `--slider-fill` is the filled share, written by whoever renders the input (see
+ * `UnitSlider`, canvas-editor.tsx). A range that doesn't set it reads as an
+ * empty track — quiet, not broken. */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 1rem;
+  background: transparent;
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: linear-gradient(
+    to right,
+    var(--primary) 0 var(--slider-fill, 0%),
+    var(--border-strong) var(--slider-fill, 0%) 100%
+  );
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  /* Centres a 14px thumb on a 4px track: (4 − 14) / 2. */
+  margin-top: -5px;
+  border-radius: 9999px;
+  background: var(--primary);
+  box-shadow: var(--shadow-raised);
+}
+input[type="range"]:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
 /* Whole-window repaint (#69, theme/scope-transition.ts): when the app changes
  * THEME SCOPE — a workspace switch — or flips light↔dark, the swap eases instead
  * of hard-cutting. The first is what tells you the window now belongs to a

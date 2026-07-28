@@ -1,5 +1,7 @@
 /**
- * Regenerates the two token blocks at the top of `src/renderer/src/globals.css`.
+ * Regenerates every hand-copy of the shipped canvas's output: the two token
+ * blocks at the top of `src/renderer/src/globals.css`, and the terminal's
+ * literal fallback tokens in `src/renderer/src/terminal/appearance.ts`.
  *
  *     node apps/desktop/scripts/generate-theme-css.mjs        # rewrite in place
  *     node apps/desktop/scripts/generate-theme-css.mjs --check # fail if stale (CI-able)
@@ -12,13 +14,21 @@
  * exactly the failure that rule exists to prevent, and two blocks is precisely
  * where hand-tuning starts to look affordable. So it is one command.
  *
- * WHAT IT WRITES. Everything between the BEGIN/END markers below: the 31 app
- * tokens (`generateThemeTokens` → the canvas ladder), the 3 veils solved from
- * them, and the 10 canvas properties (`CANVAS_TOKEN_NAMES` in
+ * The terminal's fallback joined it after proving the point the hard way. That
+ * table is the palette a config-less terminal wears before the stylesheet has
+ * applied, it carried a note saying to regenerate it alongside these blocks, and
+ * it spent the whole canvas migration holding the PREVIOUS system's hexes —
+ * because nothing but the note connected them. Now one command writes both, and
+ * `terminal/appearance.test.ts` fails if either drifts.
+ *
+ * WHAT IT WRITES. Everything between the BEGIN/END markers in both files: the 31
+ * app tokens (`generateThemeTokens` → the canvas ladder), the 3 veils solved
+ * from them, and the 10 canvas properties (`CANVAS_TOKEN_NAMES` in
  * `renderer/src/theme/canvas-paint.ts`) — the gradient, the on-canvas ink
- * ladder, the lift veils and the shadow tiers. All at `DEFAULT_CANVAS`. Nothing
- * outside the markers is touched, so the hand-authored non-color tokens (radius,
- * type scale, layout) stay where they are: theming moves color, never geometry.
+ * ladder, the lift veils and the shadow tiers — plus the four of those the
+ * terminal fallback needs. All at `DEFAULT_CANVAS`. Nothing outside the markers
+ * is touched, so the hand-authored non-color tokens (radius, type scale, layout)
+ * stay where they are: theming moves color, never geometry.
  *
  * HOW IT LOADS `@volli/shared`. That package ships raw TypeScript with
  * extensionless relative imports, which Node's ESM resolver rejects on its own.
@@ -63,9 +73,13 @@ const {
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const GLOBALS_CSS = resolvePath(HERE, "../src/renderer/src/globals.css");
+const TERMINAL_APPEARANCE_TS = resolvePath(HERE, "../src/renderer/src/terminal/appearance.ts");
 
 const BEGIN = "/* GENERATED THEME TOKENS — BEGIN */";
 const END = "/* GENERATED THEME TOKENS — END */";
+
+const TERMINAL_BEGIN = "/* GENERATED TERMINAL FALLBACK TOKENS — BEGIN */";
+const TERMINAL_END = "/* GENERATED TERMINAL FALLBACK TOKENS — END */";
 
 /**
  * Comments that ride along with specific tokens, so regenerating never costs
@@ -189,15 +203,73 @@ function block() {
   );
 }
 
-const source = readFileSync(GLOBALS_CSS, "utf8");
-const start = source.indexOf(BEGIN);
-const end = source.indexOf(END);
-if (start === -1 || end === -1) {
-  throw new Error(`globals.css is missing the ${BEGIN} / ${END} markers`);
+/** `#rrggbb` → the `rgb(0x…, 0x…, 0x…)` call `terminal/appearance.ts` is written in. */
+function rgbCall(hex) {
+  const parts = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+  if (parts === null) throw new Error(`expected a 6-digit hex, got ${hex}`);
+  return `rgb(0x${parts[1]}, 0x${parts[2]}, 0x${parts[3]})`;
 }
 
 /**
- * Runs the repo formatter over the file just written.
+ * The four app tokens the terminal's config-less palette is assembled from —
+ * `FallbackTokens` in `terminal/appearance.ts`, field by field, beside the token
+ * each field stands in for. Kept in that order so a regeneration is a value
+ * diff and never a reordering.
+ */
+const TERMINAL_FALLBACK_FIELDS = [
+  ["background", "--background"],
+  ["foreground", "--foreground"],
+  ["cursor", "--primary"],
+  ["ansiRed", "--destructive"],
+];
+
+/** One appearance's entry in the `FALLBACK_TOKENS` record. */
+function terminalFallbackEntry(resolved) {
+  const tokens = deriveCanvasTokens(DEFAULT_CANVAS, resolved);
+  let body = "";
+  for (const [field, name] of TERMINAL_FALLBACK_FIELDS) {
+    body += `    ${field}: ${rgbCall(tokens[name])}, // ${name}\n`;
+  }
+  return `  ${resolved}: {\n${body}  },\n`;
+}
+
+function terminalBlock() {
+  return (
+    `${TERMINAL_BEGIN}\n` +
+    "export const FALLBACK_TOKENS: Record<ResolvedAppearance, FallbackTokens> = {\n" +
+    terminalFallbackEntry("dark") +
+    terminalFallbackEntry("light") +
+    "};\n" +
+    TERMINAL_END
+  );
+}
+
+/** Every file this command owns a marked block in. */
+const TARGETS = [
+  { path: GLOBALS_CSS, name: "globals.css", begin: BEGIN, end: END, body: block() },
+  {
+    path: TERMINAL_APPEARANCE_TS,
+    name: "terminal/appearance.ts",
+    begin: TERMINAL_BEGIN,
+    end: TERMINAL_END,
+    body: terminalBlock(),
+  },
+];
+
+/** Replaces one file's marked block, answering with what the file said BEFORE. */
+function rewrite({ path, name, begin, end, body }) {
+  const source = readFileSync(path, "utf8");
+  const start = source.indexOf(begin);
+  const stop = source.indexOf(end);
+  if (start === -1 || stop === -1) {
+    throw new Error(`${name} is missing the ${begin} / ${end} markers`);
+  }
+  writeFileSync(path, source.slice(0, start) + body + source.slice(stop + end.length));
+  return source;
+}
+
+/**
+ * Runs the repo formatter over the files just written.
  *
  * Not a nicety. `vp fmt` normalizes what this emits — `0.0300` → `0.03`,
  * `68.0%` → `68%`, and it wraps the gradient's long value across lines — so a
@@ -208,28 +280,35 @@ if (start === -1 || end === -1) {
  * Prefers the workspace binary and falls back to whatever is on PATH, because
  * `vp` is a global toolchain CLI that may or may not be installed locally.
  */
-function format() {
+function format(paths) {
   const local = resolvePath(HERE, "../../../node_modules/.bin/vp");
   const bin = existsSync(local) ? local : "vp";
-  const run = spawnSync(bin, ["fmt", GLOBALS_CSS], { stdio: "ignore" });
+  const run = spawnSync(bin, ["fmt", ...paths], { stdio: "ignore" });
   if (run.status !== 0) {
-    throw new Error(`\`${bin} fmt\` failed on globals.css — cannot verify the generated block`);
+    throw new Error(`\`${bin} fmt\` failed — cannot verify the generated blocks`);
   }
 }
 
-writeFileSync(GLOBALS_CSS, source.slice(0, start) + block() + source.slice(end + END.length));
-format();
-const next = readFileSync(GLOBALS_CSS, "utf8");
+const before = TARGETS.map(rewrite);
+format(TARGETS.map(({ path }) => path));
+const after = TARGETS.map(({ path }) => readFileSync(path, "utf8"));
+const moved = TARGETS.filter((_, index) => after[index] !== before[index]);
 
 if (process.argv.includes("--check")) {
   // Written, formatted, compared, and put back: --check must leave the tree
   // exactly as it found it whichever way the answer comes out.
-  writeFileSync(GLOBALS_CSS, source);
-  if (next !== source) {
-    console.error("globals.css is stale — run `node apps/desktop/scripts/generate-theme-css.mjs`.");
+  TARGETS.forEach(({ path }, index) => writeFileSync(path, before[index]));
+  if (moved.length > 0) {
+    console.error(
+      `${moved.map(({ name }) => name).join(", ")} stale — run \`node apps/desktop/scripts/generate-theme-css.mjs\`.`,
+    );
     process.exit(1);
   }
-  console.log("globals.css is up to date.");
+  console.log(`${TARGETS.map(({ name }) => name).join(", ")} are up to date.`);
 } else {
-  console.log(next === source ? "globals.css already up to date." : `Wrote ${GLOBALS_CSS}`);
+  console.log(
+    moved.length === 0
+      ? "already up to date."
+      : `Wrote ${moved.map(({ path }) => path).join(", ")}`,
+  );
 }

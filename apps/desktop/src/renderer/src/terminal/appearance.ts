@@ -24,6 +24,19 @@ type ThemeColor = { r: number; g: number; b: number; a?: number };
 
 const rgb = (r: number, g: number, b: number): ThemeColor => ({ r, g, b });
 
+/**
+ * What the token-derived theme calls itself in each mode.
+ *
+ * Exported because the Terminal settings row has to print this name for a
+ * terminal that no layer named a theme for, and a second literal there went
+ * stale the moment light shipped — the picker said "Volli Dark" over a terminal
+ * rendering Volli Light.
+ */
+export const TOKEN_THEME_NAMES: Record<ResolvedAppearance, string> = {
+  dark: "Volli Dark",
+  light: "Volli Light",
+};
+
 /** The four app tokens this fallback theme is built from, for one appearance. */
 interface FallbackTokens {
   background: ThemeColor;
@@ -33,26 +46,33 @@ interface FallbackTokens {
 }
 
 /**
- * Literal fallbacks mirroring globals.css (i.e. the generated Ember theme) in
+ * Literal fallbacks mirroring globals.css (i.e. the shipped default canvas) in
  * each mode, used only when a token is missing or unparseable — e.g. the
- * stylesheet has not applied yet. Generated, never hand-tuned: regenerate these
- * whenever globals.css's blocks are regenerated, exactly as CLAUDE.md requires
- * of the stylesheet itself.
+ * stylesheet has not applied yet.
+ *
+ * Emitted by the same command that writes globals.css's two blocks, and for the
+ * same reason: this is the fourth copy of those hexes, and the only one nothing
+ * on screen would contradict if it drifted. `appearance.test.ts` re-derives them
+ * from `@volli/shared` and fails on any gap, because the previous note here —
+ * "regenerate these whenever globals.css is regenerated" — was a comment, and a
+ * comment is not a mechanism.
  */
-const FALLBACK_TOKENS: Record<ResolvedAppearance, FallbackTokens> = {
+/* GENERATED TERMINAL FALLBACK TOKENS — BEGIN */
+export const FALLBACK_TOKENS: Record<ResolvedAppearance, FallbackTokens> = {
   dark: {
-    background: rgb(0x15, 0x10, 0x0e),
-    foreground: rgb(0xeb, 0xe3, 0xdf),
-    cursor: rgb(0xe8, 0x65, 0x2a), // --primary (ember orange)
+    background: rgb(0x1c, 0x13, 0x10), // --background
+    foreground: rgb(0xe8, 0xe4, 0xe2), // --foreground
+    cursor: rgb(0xd3, 0x75, 0x50), // --primary
     ansiRed: rgb(0xe5, 0x48, 0x4d), // --destructive
   },
   light: {
-    background: rgb(0xfd, 0xde, 0xd2),
-    foreground: rgb(0x12, 0x09, 0x06),
-    cursor: rgb(0xd6, 0x74, 0x4d),
-    ansiRed: rgb(0xe5, 0x48, 0x4d),
+    background: rgb(0xfd, 0xde, 0xd2), // --background
+    foreground: rgb(0x12, 0x09, 0x06), // --foreground
+    cursor: rgb(0xd3, 0x75, 0x50), // --primary
+    ansiRed: rgb(0xe5, 0x48, 0x4d), // --destructive
   },
 };
+/* GENERATED TERMINAL FALLBACK TOKENS — END */
 
 /**
  * Selection fill. Dark's is a neutral grey lifted off the near-black ground;
@@ -180,7 +200,7 @@ function buildTokenTheme(): { theme: GhosttyTheme; complete: boolean } {
   const appearance: ResolvedAppearance = isDarkSurface(bg) ? "dark" : "light";
   return {
     theme: {
-      name: appearance === "dark" ? "Volli Dark" : "Volli Light",
+      name: TOKEN_THEME_NAMES[appearance],
       raw: {},
       colors: {
         background: bg,

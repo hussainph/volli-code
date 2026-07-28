@@ -343,6 +343,11 @@ function PadOrb({
       {...handlers}
       onKeyDown={nudge}
       onKeyUp={onSettle}
+      // The two controls below settle on blur for a reason that applies to a
+      // nudged orb identically, and this was the one that had not been given it:
+      // focus leaving while an arrow key is still down sends the `keyup` to
+      // whatever took focus, so the moved stop stays painted and unwritten.
+      onBlur={onSettle}
       data-testid={`canvas-stop-orb-${index}`}
       aria-label={`Colour ${index + 1}, ${stop.hex}${primary ? ", primary" : ""}`}
       aria-pressed={primary}
@@ -519,12 +524,13 @@ function PrimaryColourRow({
   hex,
   onPick,
   onPreview,
-  onSettle,
+  onAbandon,
 }: {
   hex: string;
   onPick(next: string): void;
   onPreview(next: string): void;
-  onSettle(): void;
+  /** Escape: drop the running preview, write nothing. See `CanvasEditor`'s `abandon`. */
+  onAbandon(): void;
 }) {
   const normalized = hex.toLowerCase();
   const [page, setPage] = React.useState(() => Math.max(0, swatchPageOf(normalized)));
@@ -619,9 +625,14 @@ function PrimaryColourRow({
             event.preventDefault();
             settle();
           }
+          // Escape ABANDONS. It used to put the field back and then call the
+          // COMMIT path beside it — two lines contradicting each other, with the
+          // window keeping the colour the user was backing out of. Not
+          // `preventDefault`ed: Escape has to keep reaching whatever surface is
+          // hosting this editor.
           if (event.key === "Escape") {
             setDraft(normalized);
-            onSettle();
+            onAbandon();
           }
         }}
         className="h-6 w-24 shrink-0 px-2 font-mono text-ui"
@@ -640,6 +651,11 @@ function PrimaryColourRow({
  * The chip beside it is what the lab's hand-drawn track was for: a value this
  * subtle cannot be judged from a number, so the control shows what it is
  * setting.
+ *
+ * `--slider-fill` is how much of the track is filled; globals.css's
+ * `::-webkit-slider-runnable-track` rule reads it. The track is declared there
+ * rather than left to `accent-color`, which cannot paint an unfilled half that
+ * follows the appearance — see that rule.
  */
 function UnitSlider({
   id,
@@ -673,7 +689,8 @@ function UnitSlider({
         onPointerUp={onSettle}
         onKeyUp={onSettle}
         onBlur={onSettle}
-        className="w-44 accent-primary"
+        style={{ "--slider-fill": percentLabel(value) } as React.CSSProperties}
+        className="w-44"
       />
       <span className="w-9 text-right text-ui text-muted-foreground tabular-nums">
         {percentLabel(value)}
@@ -979,6 +996,29 @@ export function CanvasEditor({
     void useThemeStore.getState().commitPreview(scope);
   }, [scope]);
 
+  /**
+   * The other end of a gesture: what is painted is thrown away, and nothing is
+   * written.
+   *
+   * `cancelPreview` is the store action for this and had NO caller anywhere,
+   * which left the editor with only one way to finish an edit — commit it. Two
+   * different abandonments were paying for that. Escape in the hex field called
+   * `settle` while resetting the field beside it, so backing out of a colour
+   * PERSISTED it. And an editor that unmounted mid-gesture (Settings closed, the
+   * category switched, the workspace switched) left the window wearing a canvas
+   * that is stored nowhere and that no surface is left to commit or undo.
+   *
+   * Cheap in the ordinary case: every completed gesture ends in `settle`, which
+   * clears the preview synchronously, and the store no-ops when there is nothing
+   * to cancel.
+   */
+  const abandon = React.useCallback((): void => {
+    useThemeStore.getState().cancelPreview();
+  }, []);
+
+  /** Leaving mid-gesture is an abandonment like any other. */
+  React.useEffect(() => abandon, [abandon]);
+
   /** A discrete edit — one click, one write. */
   const commit = React.useCallback(
     (update: (current: Canvas) => Canvas): void => {
@@ -1024,7 +1064,7 @@ export function CanvasEditor({
           hex={canvas.stops[canvas.primaryIndex].hex}
           onPick={(next) => commit((current) => withPrimaryHex(current, next))}
           onPreview={(next) => edit((current) => withPrimaryHex(current, next))}
-          onSettle={settle}
+          onAbandon={abandon}
         />
       </div>
 

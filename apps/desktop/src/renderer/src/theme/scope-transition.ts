@@ -203,7 +203,20 @@ function disarm(target: HTMLElement): void {
  *
  * Re-entrant: a second scope change mid-crossfade keeps the transition attribute
  * on and restarts the hold, so the colors simply re-target from wherever they
- * are rather than snapping when the first timer fires.
+ * are rather than snapping when the first timer fires. The hold EXTENDS rather
+ * than stacking — one timer, cleared and re-armed — which is what makes two
+ * changes in quick succession one window instead of two.
+ *
+ * ONE ARM PER CHANGE, and it is worth writing down because the measurement that
+ * says otherwise is easy to take. `animationstart` for the gradient layer does
+ * not fire when the attribute lands; it fires on the first rendering lifecycle
+ * that samples the animation, measured at 40–100ms later on an idle window and
+ * far longer when frames are starved. So a recorder attached between two changes
+ * can collect the previous one's start alongside the current one's and read as a
+ * single flip arming twice. Verified by patching `setAttribute` and stack-tracing
+ * every arm through a full run: one call per flip, all of them from the store's
+ * own repaint path. Anything counting fades has to start from a root at rest —
+ * see `e2e/canvas-theming-smoke.mjs`'s `watchScopeRepaint`.
  */
 export function beginScopeRepaint(root?: HTMLElement): void {
   const target = root ?? document.documentElement;

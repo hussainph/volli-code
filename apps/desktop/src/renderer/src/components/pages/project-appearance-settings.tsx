@@ -13,7 +13,7 @@ import {
 
 import {
   editorThemeItems,
-  FALLBACK_TERMINAL_THEME_LABEL,
+  fallbackTerminalThemeLabel,
   revealPath,
   terminalThemeItems,
 } from "@renderer/components/theme/appearance-catalog";
@@ -49,7 +49,7 @@ import {
   resolveEditorThemeId,
 } from "@renderer/editor/editor-theme-catalog";
 import { writeThrough } from "@renderer/stores/mutate";
-import { useThemeStore, type ThemeScope } from "@renderer/stores/theme";
+import { effectiveAppearance, useThemeStore, type ThemeScope } from "@renderer/stores/theme";
 import { previewTerminalTheme } from "@renderer/terminal/appearance";
 import { getBuiltinTheme } from "restty";
 
@@ -373,6 +373,9 @@ const endTerminalPreview = (): void => previewTerminalTheme(null);
  */
 function ProjectTerminalThemeSection({ projectId }: { projectId: string }) {
   const terminal = useThemeStore((state) => state.terminal);
+  // The fallback palette carries a name per mode, so the label has to follow the
+  // resolved appearance — see `fallbackTerminalThemeLabel`.
+  const resolved = useThemeStore(effectiveAppearance);
   const items = React.useMemo(() => terminalThemeItems(), []);
   const rows = React.useMemo(
     () =>
@@ -439,7 +442,7 @@ function ProjectTerminalThemeSection({ projectId }: { projectId: string }) {
           <ThemeComboBox
             ariaLabel="Project terminal theme"
             searchLabel="Search terminal themes"
-            buttonLabel={rows.theme.value ?? FALLBACK_TERMINAL_THEME_LABEL}
+            buttonLabel={rows.theme.value ?? fallbackTerminalThemeLabel(resolved)}
             empty="No matching theme."
             items={items}
             activeValue={choice.kind === "theme" ? choice.name : null}
@@ -452,7 +455,7 @@ function ProjectTerminalThemeSection({ projectId }: { projectId: string }) {
         <InheritNote>
           Following app-wide —{" "}
           <span className="text-foreground">
-            {rows.theme.value ?? FALLBACK_TERMINAL_THEME_LABEL}
+            {rows.theme.value ?? fallbackTerminalThemeLabel(resolved)}
           </span>
           .
         </InheritNote>

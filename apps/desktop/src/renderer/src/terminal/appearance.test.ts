@@ -9,14 +9,23 @@ import {
   vi,
 } from "vite-plus/test";
 import { getBuiltinTheme } from "restty";
-import { DEFAULT_THEME, generateThemeTokens, type ThemeDefinition } from "@volli/shared";
+import {
+  DEFAULT_CANVAS,
+  DEFAULT_THEME,
+  deriveCanvasTokens,
+  generateThemeTokens,
+  type ResolvedAppearance,
+  type ThemeDefinition,
+} from "@volli/shared";
 import type { GhosttyAppearancePayload, GhosttyConfigResult } from "@volli/shared";
 
 import { applyThemeTokens } from "@renderer/theme/apply";
 
 import { DEFAULT_TERMINAL_FONT_SIZE } from "./appearance-model";
+import { parseHexColor } from "./css-color";
 
 import {
+  FALLBACK_TOKENS,
   getCurrentAppearance,
   onTerminalAppearanceChanged,
   previewTerminalTheme,
@@ -78,15 +87,16 @@ beforeEach(() => {
 });
 
 /**
- * A light token set. The generator is dark-only today, so the four tokens the
- * terminal fallback reads are written straight in — which is also the honest
- * fixture, since what this module consumes is `getComputedStyle`, not a theme.
+ * A light token set — the shipped canvas's own, taken from the pipeline rather
+ * than written out, so it cannot become a set of hexes the app never renders.
+ * Only the four properties this module reads are stood up: what it consumes is
+ * `getComputedStyle`, not a theme.
  */
 function applyLightTokens(): void {
-  tokenValues.set("--background", "#fdded2");
-  tokenValues.set("--foreground", "#120906");
-  tokenValues.set("--primary", "#d6744d");
-  tokenValues.set("--destructive", "#e5484d");
+  const light = deriveCanvasTokens(DEFAULT_CANVAS, "light");
+  for (const name of ["--background", "--foreground", "--primary", "--destructive"] as const) {
+    tokenValues.set(name, light[name]);
+  }
   refreshTerminalTokenTheme();
 }
 
@@ -144,6 +154,32 @@ function currentPalette(): { background: Rgb; entry: (index: number) => Rgb } {
  * alternative to accepting that is inventing a palette instead of using one.
  */
 const MIN_CHROMATIC_CONTRAST = 2.5;
+
+/**
+ * The literal fallbacks, against the pipeline that is supposed to have produced
+ * them.
+ *
+ * This is the mechanism the module's own docstring used to be. That comment said
+ * "regenerate these whenever globals.css's blocks are regenerated" and nobody
+ * did — the table sat on the PREVIOUS theming system's hexes right through the
+ * canvas migration, and nothing could notice, because the only moment they are
+ * read is the frame before the stylesheet applies. `generate-theme-css.mjs`
+ * writes them now; this is what makes a stale copy fail out loud.
+ */
+describe("the literal fallback tokens", () => {
+  const APPEARANCES: readonly ResolvedAppearance[] = ["dark", "light"];
+
+  it.each(APPEARANCES)("are the shipped canvas's own %s output", (resolved) => {
+    const tokens = deriveCanvasTokens(DEFAULT_CANVAS, resolved);
+
+    expect(FALLBACK_TOKENS[resolved]).toEqual({
+      background: parseHexColor(tokens["--background"]),
+      foreground: parseHexColor(tokens["--foreground"]),
+      cursor: parseHexColor(tokens["--primary"]),
+      ansiRed: parseHexColor(tokens["--destructive"]),
+    });
+  });
+});
 
 describe("the token-derived terminal fallback", () => {
   it("paints a config-less terminal from the live app tokens", () => {
@@ -316,10 +352,11 @@ describe("the token-derived terminal fallback", () => {
     tokenValues.clear();
     refreshTerminalTokenTheme();
 
-    // The globals.css literals — --background / --primary of the generated
-    // Ember default, which is what the fallbacks mirror.
-    expect(getCurrentAppearance().theme.colors.background).toEqual({ r: 0x15, g: 0x10, b: 0x0e });
-    expect(getCurrentAppearance().theme.colors.cursor).toEqual({ r: 0xe8, g: 0x65, b: 0x2a });
+    // Read from the table rather than restated: which hexes it holds is pinned
+    // against the pipeline above, and a second copy here is the same rot this
+    // whole pass is about.
+    expect(getCurrentAppearance().theme.colors.background).toEqual(FALLBACK_TOKENS.dark.background);
+    expect(getCurrentAppearance().theme.colors.cursor).toEqual(FALLBACK_TOKENS.dark.cursor);
 
     // Nothing was cached, so the very next theme read picks the tokens up.
     applyThemeTokens(generateThemeTokens(MIDNIGHT), fakeRoot);

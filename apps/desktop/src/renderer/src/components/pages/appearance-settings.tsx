@@ -13,7 +13,7 @@ import { getBuiltinTheme } from "restty";
 import { SettingsRow, SettingsSection } from "@renderer/components/pages/settings-shell";
 import {
   editorThemeItems,
-  FALLBACK_TERMINAL_THEME_LABEL,
+  fallbackTerminalThemeLabel,
   revealPath,
   terminalThemeItems,
 } from "@renderer/components/theme/appearance-catalog";
@@ -32,7 +32,7 @@ import {
 import { Button } from "@renderer/components/ui/button";
 import { listEditorThemes } from "@renderer/editor/editor-theme-catalog";
 import { writeThrough } from "@renderer/stores/mutate";
-import { useThemeStore, type ThemeScope } from "@renderer/stores/theme";
+import { effectiveAppearance, useThemeStore, type ThemeScope } from "@renderer/stores/theme";
 import { previewTerminalTheme } from "@renderer/terminal/appearance";
 import { DEFAULT_TERMINAL_FONT_SIZE } from "@renderer/terminal/appearance-model";
 import { listLocalFontFamilies } from "@renderer/terminal/local-fonts";
@@ -333,6 +333,9 @@ const endPreview = (): void => previewTerminalTheme(null);
  */
 function TerminalThemeRow({ row }: { row: TerminalSettingRow }) {
   const items = React.useMemo(() => terminalThemeItems(), []);
+  // A string, so it is safe as a selector result (see `activeTheme`'s note), and
+  // it is what makes the fallback label follow a mode flip live.
+  const resolved = useThemeStore(effectiveAppearance);
 
   return (
     <SettingsRow label={row.label}>
@@ -340,7 +343,7 @@ function TerminalThemeRow({ row }: { row: TerminalSettingRow }) {
       <ThemeComboBox
         ariaLabel="Terminal theme"
         searchLabel="Search terminal themes"
-        buttonLabel={row.value ?? FALLBACK_TERMINAL_THEME_LABEL}
+        buttonLabel={row.value ?? fallbackTerminalThemeLabel(resolved)}
         empty="No matching theme."
         items={items}
         activeValue={row.value}
