@@ -1,10 +1,18 @@
 import { TICKET_PRIORITY_LABELS, type TicketPriority } from "@volli/shared";
 
-// Design pass pending: the low/medium fill hexes are a first pass, not final
-// tokens — see docs note tracking this.
+/**
+ * All three fills are tokens, so the ladder survives a mode flip: the raw slate
+ * and tan hexes this used to carry were picked against a near-black card and
+ * both drop under 2:1 on a light one — a priority signal that quietly stops
+ * being a signal.
+ *
+ * The ladder still reads as one: muted grey → the accent at body-copy lightness
+ * → the hue-locked red. Each is solved against the surface it is drawn on, in
+ * whichever mode is running.
+ */
 const FILLED_COLOR: Record<TicketPriority, string> = {
-  low: "#7d8ca3",
-  medium: "#b8935f",
+  low: "var(--muted-foreground)",
+  medium: "var(--primary-text)",
   high: "var(--destructive)",
 };
 const UNFILLED_COLOR = "var(--border-strong)";

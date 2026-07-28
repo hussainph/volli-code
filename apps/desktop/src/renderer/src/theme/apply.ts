@@ -1,64 +1,101 @@
 /**
- * The application layer: generated tokens → live CSS custom properties, and
- * the per-surface global → project resolution that decides WHICH theme gets
- * generated in the first place (decision #69).
+ * The application layer: derived tokens → live CSS custom properties, and the
+ * per-surface global → workspace resolution that decides WHICH canvas gets
+ * derived in the first place (decision #69).
  *
- * Two rules from docs/plans/theming-engine.md are enforced here rather than
- * merely documented:
+ * Two rules are enforced here rather than merely documented:
  *
  *  - **The resolved token set is never persisted.** This module takes an
- *    authored {@link ThemeDefinition} in and writes CSS out; nothing it
- *    produces is storable, because everything it produces is recomputed from
- *    `{global theme, project override}` at render time. (VS Code's
- *    most-complained-about theming bug is auto-switching writing the
- *    *resolved* theme back over the user's authored intent.)
- *  - **Resolution is per surface, never per token.** A project overrides the
- *    app surface, the terminal, or the editor as whole units, so "what is
- *    overridden here" is always answerable — and {@link ResolvedThemeSurface}
- *    carries the answer to the UI instead of making it re-derive one.
+ *    authored {@link Canvas} in and writes CSS out; nothing it produces is
+ *    storable, because everything it produces is recomputed from
+ *    `{canvas, appearance}` at render time. (VS Code's most-complained-about
+ *    theming bug is auto-switching writing the *resolved* theme back over the
+ *    user's authored intent.)
+ *  - **Resolution is per surface, never per token.** A workspace overrides the
+ *    canvas, the appearance, the terminal, or the editor as whole units, so
+ *    "what is overridden here" is always answerable — and
+ *    {@link ResolvedThemeSurface} carries the answer to the UI instead of
+ *    making it re-derive one.
  *
- * `globals.css` authors the shipped ember theme's generated values verbatim,
- * so the first paint already carries the right palette and this module's
- * writes are a no-op until the user picks something else.
+ * `globals.css` authors the default canvas's generated values verbatim, in both
+ * modes, so the first paint already carries the right palette and this module's
+ * writes are a no-op until the user authors something else.
  */
 
 import {
-  generateThemeTokens,
   generateVeilTokens,
+  resolveAppearance,
   THEME_TOKEN_NAMES,
   THEME_VEIL_TOKEN_NAMES,
 } from "@volli/shared";
-import type { ProjectThemeOverride, ThemeDefinition, ThemeTokens } from "@volli/shared";
+import type { Appearance, Canvas, ResolvedAppearance, ThemeTokens } from "@volli/shared";
 
 import { refreshTerminalTokenTheme } from "@renderer/terminal/appearance";
 
 /**
+ * How a paint should treat the work that only matters once a value settles.
+ *
+ * `transient` marks a paint that is already known to be superseded — one frame
+ * of a drag. The properties still land, because following the pointer is the
+ * whole point of a live preview; what is deferred is
+ * {@link refreshTerminalTokenTheme}, the one part of a paint whose cost has
+ * nothing to do with how much changed.
+ *
+ * That call drops every live terminal's cached palette and makes each one
+ * rebuild it by reading ~20 custom properties back off `<html>` with
+ * `getComputedStyle` — a forced style recalculation of the whole document,
+ * issued immediately after this function has just written ~50 properties to
+ * that same element, followed by a full repaint per terminal. At pointer-event
+ * rates that is the drag's stutter, and every one of those palettes is thrown
+ * away by the next frame.
+ *
+ * This module stays the single choke point for COMMITTED colour changes:
+ * `transient` defaults to false, so every path except an in-flight preview
+ * still refreshes, and the paint that ends a gesture is a committed one.
+ */
+export interface ThemeApplyOptions {
+  /** True while a gesture is still running; the terminals are told on settle. */
+  transient?: boolean;
+}
+
+/**
  * Writes every themeable color token onto `root` (the document element by
- * default), replacing whatever `globals.css` authored.
+ * default), replacing whatever `globals.css` authored, plus any `extra`
+ * properties the caller owns.
+ *
+ * `extra` is how the canvas pipeline's own properties (the gradient, the ink
+ * ladder, the lift veils, the shadows — `CANVAS_TOKEN_NAMES` in
+ * `canvas-paint.ts`) reach the document without being smuggled into
+ * {@link ThemeTokens}, which is `generateThemeTokens`'s output contract and
+ * nothing else's. One write function, two vocabularies, no third DOM writer.
  *
  * Also drops the terminal's token-derived fallback palette
  * ({@link refreshTerminalTokenTheme}): a config-less terminal paints itself
- * from these same tokens and caches the result, so without this a theme change
+ * from these same tokens and caches the result, so without this a canvas change
  * leaves every such terminal rendering the previous palette until relaunch.
  * Doing it here rather than at each call site makes the apply path the single
- * choke point — there is no way to change the app's colors without the
- * terminals hearing about it.
+ * choke point — there is no way to commit a change to the app's colors without
+ * the terminals hearing about it. See {@link ThemeApplyOptions} for the one
+ * case that defers it.
  */
-export function applyThemeTokens(tokens: ThemeTokens, root?: HTMLElement): void {
+export function applyThemeTokens(
+  tokens: ThemeTokens,
+  root?: HTMLElement,
+  extra?: Readonly<Record<string, string>>,
+  options: ThemeApplyOptions = {},
+): void {
   const target = root ?? document.documentElement;
   for (const name of THEME_TOKEN_NAMES) target.style.setProperty(name, tokens[name]);
   // The veils (#74) are solved FROM the set above, so they move with it. A
   // surface that gave up its fill to sit on the canvas composites through one
   // of these; leaving them behind would freeze the sidebar on the previous
-  // theme's rung while the rail beneath it repaints.
+  // canvas's rung while the rail beneath it repaints.
   const veils = generateVeilTokens(tokens);
   for (const name of THEME_VEIL_TOKEN_NAMES) target.style.setProperty(name, veils[name]);
-  refreshTerminalTokenTheme();
-}
-
-/** Generates and applies an authored theme in one step — the ordinary caller's entry point. */
-export function applyTheme(theme: ThemeDefinition, root?: HTMLElement): void {
-  applyThemeTokens(generateThemeTokens(theme), root);
+  if (extra !== undefined) {
+    for (const [name, value] of Object.entries(extra)) target.style.setProperty(name, value);
+  }
+  if (options.transient !== true) refreshTerminalTokenTheme();
 }
 
 /** Which scope supplied a surface's value. */
@@ -71,121 +108,108 @@ export interface ResolvedThemeSurface<T> {
 }
 
 /**
- * The three surfaces (#66) as currently resolved. Each is independent: a
- * project overriding its terminal theme leaves the app surface and the editor
- * inheriting, and the UI can say so per row.
+ * What one workspace overrides, as the RENDERER resolves it.
+ *
+ * Deliberately not `@volli/shared`'s `ProjectThemeOverride`, which is still the
+ * live half of the migration-013 row (`terminalThemeName` / `editorThemeId`)
+ * that the main process reads and writes. The two are assembled from different places — canvas and
+ * appearance are migration-014 columns that ride in on the bootstrap payload's
+ * `Project`, while the terminal and editor names come from the 013 row — and
+ * this is the shape the resolution below actually needs. Every field is
+ * independently nullable, and `null` means "inherit the global choice".
+ */
+export interface ProjectSurfaceOverride {
+  /** This workspace's own gradient, or null to inherit the global one. */
+  canvas: Canvas | null;
+  /** This workspace's own light/dark/auto, or null to inherit. Scoped separately from the canvas. */
+  appearance: Appearance | null;
+  /** Ghostty theme name, as written into the workspace's terminal overlay. */
+  terminalThemeName: string | null;
+  /** Monaco/shiki theme id. */
+  editorThemeId: string | null;
+}
+
+/** Every surface inheriting — the state every workspace starts in (#72). */
+export const EMPTY_SURFACE_OVERRIDE: ProjectSurfaceOverride = {
+  canvas: null,
+  appearance: null,
+  terminalThemeName: null,
+  editorThemeId: null,
+};
+
+/**
+ * The four surfaces as currently resolved, plus the one derived value every
+ * consumer would otherwise re-derive.
+ *
+ * `resolved` is `auto` already answered. It is carried rather than recomputed
+ * downstream because recomputing it needs `matchMedia`, which makes every
+ * consumer impure and gives the app as many opinions about "is it dark right
+ * now" as there are readers.
  */
 export interface ActiveTheme {
-  /** The authored app-surface theme to generate tokens from. */
-  app: ResolvedThemeSurface<ThemeDefinition>;
+  /** The authored canvas to derive tokens from. */
+  canvas: ResolvedThemeSurface<Canvas>;
+  /** The authored light/dark/auto choice in force. */
+  appearance: ResolvedThemeSurface<Appearance>;
+  /** {@link appearance} with `auto` answered — what every derivation actually runs against. */
+  resolved: ResolvedAppearance;
   /** Ghostty theme name, or null to keep whatever the ghostty config chain resolves. */
   terminal: ResolvedThemeSurface<string | null>;
-  /** Monaco/shiki theme id, or null for the app's own derived editor theme. */
+  /** Monaco/shiki theme id, or null for the shipped editor default. */
   editor: ResolvedThemeSurface<string | null>;
 }
 
-/** The derived-tint theme's slug (#72). Never persisted — the project stores the SEED, not this. */
-export const PROJECT_TINT_SLUG = "project-tint";
-
-/** A surface the project did not override — it takes the global choice. */
+/** A surface the workspace did not override — it takes the global choice. */
 function inherited<T>(value: T): ResolvedThemeSurface<T> {
   return { value, scope: "global" };
 }
 
-/**
- * The auto-tint (#72) is the one resolution path that has to BUILD a theme
- * rather than pick one, and the built value is read as a zustand selector
- * result (`effectiveTheme`). zustand v5 routes selectors through React's
- * `useSyncExternalStore`, which compares each render's snapshot with
- * `Object.is` — so a freshly-constructed object there is not a wasted
- * allocation, it is an infinite render loop ("The result of getSnapshot should
- * be cached").
- *
- * So the derived theme is memoized on the exact pair it is derived from: the
- * same `{global theme, project override}` REFERENCES in, the identical theme
- * reference out. Both keys are weak, so a discarded theme or override takes
- * its entry with it, and nothing is shared between unrelated input pairs —
- * stability is a property of the inputs, not of call ordering.
- */
-const tintCache = new WeakMap<ThemeDefinition, WeakMap<ProjectThemeOverride, ThemeDefinition>>();
-
-function tintedTheme(
-  global: ThemeDefinition,
-  override: ProjectThemeOverride,
-  seed: string,
-): ThemeDefinition {
-  let byOverride = tintCache.get(global);
-  if (byOverride === undefined) {
-    byOverride = new WeakMap<ProjectThemeOverride, ThemeDefinition>();
-    tintCache.set(global, byOverride);
-  }
-  const cached = byOverride.get(override);
-  if (cached !== undefined) return cached;
-  // Only the seed moves: grain, canvas and the authored overrides stay the
-  // user's global choices, so a tinted project still looks like their app.
-  const tinted: ThemeDefinition = {
-    ...global,
-    name: `${global.name} (tinted)`,
-    slug: PROJECT_TINT_SLUG,
-    seed,
-  };
-  byOverride.set(override, tinted);
-  return tinted;
+/** A surface the workspace set. */
+function overridden<T>(value: T): ResolvedThemeSurface<T> {
+  return { value, scope: "project" };
 }
 
 /**
- * Resolves what a scope actually renders with: the global theme, with each
- * surface a project set replacing its inherited value.
+ * Picks one surface: the workspace's value when it has one, the global
+ * otherwise.
  *
- * The app surface has one wrinkle the other two don't. A project may name a
- * theme (`appThemeSlug`) *or* carry only a seed — #72's "Auto-tint from this
- * project's color", derived from the `colorIndex` the project already has. A
- * named theme wins when both are set: it is the more specific statement of
- * intent, and the seed is retained so a later switch back to auto-tint doesn't
- * have to re-derive it.
+ * It PICKS rather than builds, and that is load-bearing for the canvas. The
+ * result is read through a zustand selector, and zustand v5 routes selectors
+ * through `useSyncExternalStore`, which compares snapshots with `Object.is` — so
+ * a freshly-constructed object there is an infinite render loop, not a wasted
+ * allocation. The seed system's auto-tint had to build a theme here and paid for
+ * it with a `WeakMap` memo; nothing in this resolution constructs a value, so
+ * that whole hazard is gone for the VALUE. It is not gone for the SELECTOR: a
+ * selector that wraps this in `{canvas, scope}` reintroduces it exactly. Return
+ * the `Canvas` reference itself.
+ */
+function pick<T>(override: T | null, global: T): ResolvedThemeSurface<T> {
+  return override === null ? inherited(global) : overridden(override);
+}
+
+/**
+ * Resolves what a scope actually renders with.
  *
- * An unresolvable slug (a custom theme file the user deleted) never throws: it
- * lands exactly where a project that named no theme lands — its seed tint if it
- * carries one, and only otherwise the global theme. A missing theme must
- * degrade to a look the project already asked for, never to a blank window.
+ * Canvas and appearance resolve INDEPENDENTLY. A workspace may override the
+ * gradient, the mode, both, or neither — one canvas is built to render
+ * correctly in both appearances (that is what the per-mode dials in
+ * `ARC_SETTLED` are for), so overriding the gradient and overriding the mode are
+ * genuinely different things to want.
  */
 export function resolveActiveTheme(
-  global: ThemeDefinition,
-  projectOverride: ProjectThemeOverride | null,
-  catalog: readonly ThemeDefinition[] = [],
+  globalCanvas: Canvas,
+  globalAppearance: Appearance,
+  projectOverride: ProjectSurfaceOverride | null,
+  systemPrefersDark: boolean,
   globalEditorThemeId: string | null = null,
 ): ActiveTheme {
-  if (projectOverride === null) {
-    return {
-      app: inherited(global),
-      terminal: inherited(null),
-      editor: inherited(globalEditorThemeId),
-    };
-  }
-
-  const named =
-    projectOverride.appThemeSlug === null
-      ? undefined
-      : [global, ...catalog].find((theme) => theme.slug === projectOverride.appThemeSlug);
-
-  let app: ResolvedThemeSurface<ThemeDefinition>;
-  if (named !== undefined) {
-    app = { value: named, scope: "project" };
-  } else if (projectOverride.seed !== null) {
-    app = { value: tintedTheme(global, projectOverride, projectOverride.seed), scope: "project" };
-  } else {
-    app = inherited(global);
-  }
-
+  const override = projectOverride ?? EMPTY_SURFACE_OVERRIDE;
+  const appearance = pick(override.appearance, globalAppearance);
   return {
-    app,
-    terminal:
-      projectOverride.terminalThemeName === null
-        ? inherited(null)
-        : { value: projectOverride.terminalThemeName, scope: "project" },
-    editor:
-      projectOverride.editorThemeId === null
-        ? inherited(globalEditorThemeId)
-        : { value: projectOverride.editorThemeId, scope: "project" },
+    canvas: pick(override.canvas, globalCanvas),
+    appearance,
+    resolved: resolveAppearance(appearance.value, systemPrefersDark),
+    terminal: pick(override.terminalThemeName, null),
+    editor: pick(override.editorThemeId, globalEditorThemeId),
   };
 }

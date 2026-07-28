@@ -4,8 +4,8 @@
  * only tickets get one (`ticket_events`, migration 001).
  */
 import type Database from "better-sqlite3";
-import { isProjectThemeOverrideEmpty } from "@volli/shared";
-import type { Project, ProjectThemeOverride } from "@volli/shared";
+import { isAppearance, isProjectThemeOverrideEmpty, parseCanvas } from "@volli/shared";
+import type { Appearance, Canvas, Project, ProjectThemeOverride } from "@volli/shared";
 import { prepared } from "./prepared";
 
 interface ProjectRow {
@@ -20,6 +20,9 @@ interface ProjectRow {
   theme_terminal_name: string | null;
   theme_editor_id: string | null;
   theme_seed: string | null;
+  /** Migration 014 — the authored canvas as JSON, and the appearance; NULL = inherit. */
+  theme_canvas: string | null;
+  theme_appearance: string | null;
   color_index: number;
   sort_order: number;
   row_version: number;
@@ -35,19 +38,52 @@ interface ProjectRow {
 }
 
 /**
- * The row's four theme columns as a domain override — or `null` when every one
- * of them is NULL. Collapsing the all-inherit case to `null` keeps "does this
- * project override anything?" a single check for every reader, instead of an
- * object whose fields all have to be interrogated.
+ * Two of the row's four migration-013 theme columns as a domain override — or
+ * `null` when both are NULL. Collapsing the all-inherit case to `null` keeps
+ * "does this project override anything?" a single check for every reader,
+ * instead of an object whose fields all have to be interrogated.
+ *
+ * HALF DYING, and it is worth being exact about which half. Migration 014's
+ * `theme_canvas`/`theme_appearance` are what the APP surface means now (see
+ * `mapCanvas` below), so `theme_app_slug` and `theme_seed` are read by nobody —
+ * they went with the seed-based picker, and `@volli/shared`'s
+ * `ProjectThemeOverride` no longer even carries fields for them. The other two
+ * did not: the terminal and editor surfaces are separate systems (a ghostty
+ * overlay file, a Monaco/shiki id) that still resolve global → project off
+ * this row, and `renderer/src/stores/theme.ts` reads both out of
+ * `volli:theme-state`'s `projectOverride`. The two dead COLUMNS stay because
+ * `db/export.test.ts` requires every column on `projects` to have an exported
+ * field, and SQLite `DROP COLUMN` is not safe on the versions we support —
+ * `updateProjectThemeOverride` below still writes them (always `null`, since
+ * nothing upstream can populate them anymore).
  */
 function mapThemeOverride(row: ProjectRow): ProjectThemeOverride | null {
   const override: ProjectThemeOverride = {
-    appThemeSlug: row.theme_app_slug,
     terminalThemeName: row.theme_terminal_name,
     editorThemeId: row.theme_editor_id,
-    seed: row.theme_seed,
   };
   return isProjectThemeOverrideEmpty(override) ? null : override;
+}
+
+/**
+ * The row's canvas column as a domain canvas — or `null` for absent, malformed,
+ * or "this is a payload from the system this one replaces".
+ *
+ * Degrading rather than throwing is the same stance the global canvas takes
+ * (`theme-repo.ts`): a project's row is read at boot, in a loop over every
+ * project, before there is any UI to surface a failure in. One hand-edited row
+ * must not take the rail down with it — it inherits the global canvas, which is
+ * both survivable and visible.
+ */
+function mapCanvas(row: ProjectRow): Canvas | null {
+  if (row.theme_canvas === null || row.theme_canvas.length === 0) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.theme_canvas);
+  } catch {
+    return null;
+  }
+  return parseCanvas(parsed);
 }
 
 function mapProject(row: ProjectRow): Project {
@@ -59,6 +95,10 @@ function mapProject(row: ProjectRow): Project {
     baseBranch: row.base_branch,
     setupCommand: row.setup_command,
     themeOverride: mapThemeOverride(row),
+    themeCanvas: mapCanvas(row),
+    // The CHECK on the column already limits this to the three words, so a
+    // value that fails the guard means a db edited around it — inherit.
+    themeAppearance: isAppearance(row.theme_appearance) ? row.theme_appearance : null,
     colorIndex: row.color_index,
     sortOrder: row.sort_order,
     createdAt: row.created_at,
@@ -132,9 +172,11 @@ export function updateProjectSetupCommand(
  *
  * `null` clears every surface back to inheriting the global theme; a partial
  * override clears only the surfaces whose fields are null, because resolution
- * is per surface and never per token (#69). All four columns are written on
- * every call, so the stored row always equals the override the caller asked
- * for — no read-modify-write, no stale surface left behind.
+ * is per surface and never per token (#69). All four columns are still
+ * written on every call — `theme_app_slug`/`theme_seed` always to `null`,
+ * since `ProjectThemeOverride` no longer carries fields for them (see
+ * `mapThemeOverride` above) — so the stored row always equals the override
+ * the caller asked for, plus the two dead columns quietly staying empty.
  */
 export function updateProjectThemeOverride(
   db: Database.Database,
@@ -148,14 +190,62 @@ export function updateProjectThemeOverride(
         SET theme_app_slug = ?, theme_terminal_name = ?, theme_editor_id = ?, theme_seed = ?,
             row_version = row_version + 1, updated_at = ?
       WHERE id = ?`,
-  ).run(
-    override?.appThemeSlug ?? null,
-    override?.terminalThemeName ?? null,
-    override?.editorThemeId ?? null,
-    override?.seed ?? null,
-    now,
-    id,
-  );
+  ).run(null, override?.terminalThemeName ?? null, override?.editorThemeId ?? null, null, now, id);
+  return getProjectById(db, id);
+}
+
+/**
+ * Sets this project's canvas override (migration 014) and returns the
+ * authoritative row; `null` clears it back to inheriting the global canvas.
+ *
+ * The canvas is rebuilt field by field on the way in by `parseCanvas`, exactly
+ * as the global one is — storing the caller's object by reference is how a
+ * resolved token set would end up in a column.
+ */
+export function updateProjectCanvas(
+  db: Database.Database,
+  id: string,
+  canvas: Canvas | null,
+  now: number,
+): Project | undefined {
+  let payload: string | null = null;
+  if (canvas !== null) {
+    const stored = parseCanvas(canvas);
+    // Throws rather than storing something else, exactly as `setGlobalCanvas`
+    // does: the IPC envelope turns it into a typed error the renderer surfaces,
+    // and a write that quietly stored a different canvas is the one outcome
+    // nobody can debug.
+    if (stored === null) throw new Error("Refusing to store a canvas that cannot be painted");
+    payload = JSON.stringify(stored);
+  }
+  prepared(
+    db,
+    `UPDATE projects
+        SET theme_canvas = ?, row_version = row_version + 1, updated_at = ?
+      WHERE id = ?`,
+  ).run(payload, now, id);
+  return getProjectById(db, id);
+}
+
+/**
+ * Sets this project's appearance override (migration 014) and returns the
+ * authoritative row; `null` clears it back to inheriting the global choice.
+ * Written independently of the canvas — the two are separately scoped, so a
+ * single "set the project's theme" write would make overriding one of them
+ * silently clear the other.
+ */
+export function updateProjectAppearance(
+  db: Database.Database,
+  id: string,
+  appearance: Appearance | null,
+  now: number,
+): Project | undefined {
+  prepared(
+    db,
+    `UPDATE projects
+        SET theme_appearance = ?, row_version = row_version + 1, updated_at = ?
+      WHERE id = ?`,
+  ).run(appearance, now, id);
   return getProjectById(db, id);
 }
 

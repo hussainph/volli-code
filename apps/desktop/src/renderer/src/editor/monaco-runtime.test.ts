@@ -332,10 +332,7 @@ describe("prepareMonacoEditorThemes", () => {
       themes: [loadOneDarkPro],
       langs: [],
     });
-    expect(resolveEditorThemeId).toHaveBeenCalledWith({
-      editorThemeId: null,
-      appThemeSlug: "ember",
-    });
+    expect(resolveEditorThemeId).toHaveBeenCalledWith({ editorThemeId: null });
     await vi.waitFor(() => {
       expect(setTheme).toHaveBeenCalledWith("one-dark-pro");
     });

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-import { DEFAULT_THEME } from "./theme/definition";
 import {
   DATA_CHANNELS,
   DATA_IPC,
@@ -1295,8 +1294,6 @@ describe("FILE_IPC descriptor table", () => {
 });
 
 describe("THEME_IPC descriptor table", () => {
-  const theme = DEFAULT_THEME;
-
   describe("volli:theme-state", () => {
     const { guard, invalidError } = THEME_IPC["volli:theme-state"];
 
@@ -1313,40 +1310,6 @@ describe("THEME_IPC descriptor table", () => {
 
     it("carries the handler's exact invalid-input message", () => {
       expect(invalidError).toBe("Invalid theme request");
-    });
-  });
-
-  describe("volli:theme-set-global", () => {
-    const { guard, invalidError } = THEME_IPC["volli:theme-set-global"];
-
-    it("accepts a well-formed authored definition", () => {
-      expect(guard([{ theme }])).toBe(true);
-    });
-
-    // The scope the write is MADE FROM, so the answer can describe it (#123).
-    it("accepts the caller's project scope and rejects a non-string one", () => {
-      expect(guard([{ theme, projectId: "p1" }])).toBe(true);
-      expect(guard([{ theme, projectId: 7 }])).toBe(false);
-    });
-
-    it("rejects a definition with a bad canvas, seed, or appearance", () => {
-      expect(guard([{ theme: { ...theme, canvas: { kind: "hologram" } } }])).toBe(false);
-      expect(guard([{ theme: { ...theme, seed: 42 } }])).toBe(false);
-      expect(guard([{ theme: { ...theme, appearance: "sepia" } }])).toBe(false);
-    });
-
-    // The resolved token set is derived, never sent or stored — but an
-    // authored SPARSE override map is legitimate intent (#71), so the guard
-    // must accept the latter while the repo layer strips the former.
-    it("accepts a sparse authored override map and rejects a non-token key", () => {
-      expect(guard([{ theme: { ...theme, overrides: { "--border-strong": "#4a3227" } } }])).toBe(
-        true,
-      );
-      expect(guard([{ theme: { ...theme, overrides: { "--not-a-token": "#000" } } }])).toBe(false);
-    });
-
-    it("carries the handler's exact invalid-input message", () => {
-      expect(invalidError).toBe("Invalid theme");
     });
   });
 
@@ -1383,10 +1346,8 @@ describe("THEME_IPC descriptor table", () => {
   describe("volli:theme-set-project", () => {
     const { guard, invalidError } = THEME_IPC["volli:theme-set-project"];
     const override = {
-      appThemeSlug: null,
       terminalThemeName: "Nord",
       editorThemeId: null,
-      seed: null,
     };
 
     it("accepts a per-surface override and a null (clear-to-inherit)", () => {
@@ -1395,7 +1356,7 @@ describe("THEME_IPC descriptor table", () => {
     });
 
     it("rejects a partial override shape or a missing project", () => {
-      expect(guard([{ projectId: "p1", override: { appThemeSlug: "x" } }])).toBe(false);
+      expect(guard([{ projectId: "p1", override: { terminalThemeName: "x" } }])).toBe(false);
       expect(guard([{ override }])).toBe(false);
     });
 
@@ -1471,51 +1432,106 @@ describe("THEME_IPC descriptor table", () => {
     });
   });
 
-  describe("the custom-theme-file channels", () => {
-    // The renderer names a SLUG, never a path — and the slug rule is imported
-    // from the path builder, not restated, so this boundary cannot drift from
-    // the directory it protects.
-    const slugChannels = [
-      "volli:theme-file-read",
-      "volli:theme-file-delete",
-      "volli:theme-file-reveal",
-      "volli:theme-file-open",
-    ] as const;
+  describe("the canvas channels (migration 014)", () => {
+    const canvas = {
+      stops: [
+        { hex: "#e8652a", x: 0.2, y: 0.15 },
+        { hex: "#3a7d9a", x: 0.8, y: 0.9 },
+      ],
+      primaryIndex: 1,
+      vibrancy: 0.6,
+      grain: 0.15,
+    };
 
-    it("accepts a slug a theme file could actually be named for", () => {
-      for (const channel of slugChannels) {
-        expect(THEME_IPC[channel].guard([{ slug: "tokyo-night" }])).toBe(true);
-      }
+    it("accepts a canvas the pipeline can actually paint", () => {
+      expect(THEME_IPC["volli:theme-canvas-set-global"].guard([{ canvas }])).toBe(true);
+      expect(THEME_IPC["volli:theme-canvas-set-project"].guard([{ projectId: "p1", canvas }])).toBe(
+        true,
+      );
+      // null clears the project override back to inheriting — not a malformed canvas.
+      expect(
+        THEME_IPC["volli:theme-canvas-set-project"].guard([{ projectId: "p1", canvas: null }]),
+      ).toBe(true);
     });
 
-    it("refuses any slug that could escape the themes directory", () => {
-      for (const channel of slugChannels) {
-        const { guard, invalidError } = THEME_IPC[channel];
-        for (const slug of ["", "..", "../evil", "/etc/passwd", "..\\evil", "a/b", "Ember"]) {
-          expect(guard([{ slug }])).toBe(false);
-        }
-        expect(guard([{ slug: 7 }])).toBe(false);
-        expect(guard([])).toBe(false);
-        expect(guard([{ slug: "ember" }, "stray"])).toBe(false);
-        expect(invalidError).toBe("Invalid theme slug");
-      }
-    });
+    // The guard IS `parseCanvas` — the package's one storage boundary for this
+    // shape — rather than a second hand-written copy of the same rules, so a
+    // canvas cannot be storable but un-resendable.
+    it("refuses a canvas nothing downstream could derive a ladder from", () => {
+      const { guard, invalidError } = THEME_IPC["volli:theme-canvas-set-global"];
 
-    it("takes no arguments to list the catalog", () => {
-      const { guard, invalidError } = THEME_IPC["volli:theme-file-list"];
-
-      expect(guard([])).toBe(true);
-      expect(guard([{}])).toBe(false);
-      expect(invalidError).toBe("Invalid theme request");
-    });
-
-    it("requires a whole authored theme to write one", () => {
-      const { guard, invalidError } = THEME_IPC["volli:theme-file-write"];
-
-      expect(guard([{ theme: DEFAULT_THEME }])).toBe(true);
-      expect(guard([{ theme: { name: "X" } }])).toBe(false);
+      expect(guard([{ canvas: { ...canvas, stops: [] } }])).toBe(false);
+      expect(guard([{ canvas: { ...canvas, primaryIndex: 7 } }])).toBe(false);
+      expect(guard([{ canvas: { ...canvas, stops: [{ hex: "nope", x: 0, y: 0 }] } }])).toBe(false);
+      expect(guard([{ canvas: { ...canvas, vibrancy: "high" } }])).toBe(false);
+      expect(guard([{ canvas: null }])).toBe(false);
       expect(guard([])).toBe(false);
-      expect(invalidError).toBe("Invalid theme");
+      expect(invalidError).toBe("Invalid canvas");
+    });
+
+    // Ranges are the parser's to clamp, not this boundary's to refuse: a
+    // vibrancy of 4 is a stale value that still says what the user meant, and
+    // refusing it here would make the accepted set smaller than the storable one.
+    it("admits an out-of-range scalar rather than second-guessing the parser", () => {
+      expect(
+        THEME_IPC["volli:theme-canvas-set-global"].guard([
+          { canvas: { ...canvas, vibrancy: 4, grain: -1 } },
+        ]),
+      ).toBe(true);
+    });
+
+    it("takes only the three appearance words, and null to clear a project's", () => {
+      const global = THEME_IPC["volli:theme-appearance-set-global"];
+      const project = THEME_IPC["volli:theme-appearance-set-project"];
+
+      for (const appearance of ["light", "dark", "auto"]) {
+        expect(global.guard([{ appearance }])).toBe(true);
+        expect(project.guard([{ projectId: "p1", appearance }])).toBe(true);
+      }
+      expect(project.guard([{ projectId: "p1", appearance: null }])).toBe(true);
+      // Null at the GLOBAL scope has nothing to inherit from — there is no
+      // "unset" to fall back to, so it is a malformed request, not a clear.
+      expect(global.guard([{ appearance: null }])).toBe(false);
+      expect(global.guard([{ appearance: "sepia" }])).toBe(false);
+      expect(project.guard([{ appearance: "dark" }])).toBe(false);
+      expect(global.invalidError).toBe("Invalid appearance");
+    });
+
+    it("refuses an unresolved first-paint appearance, and a background that is not a color", () => {
+      const { guard, invalidError } = THEME_IPC["volli:theme-first-paint-set"];
+
+      expect(guard([{ appearance: "dark", background: "#141210" }])).toBe(true);
+      expect(guard([{ appearance: "light", background: "#f4efe9" }])).toBe(true);
+      // `auto` is the one value main cannot act on at window construction.
+      expect(guard([{ appearance: "auto", background: "#141210" }])).toBe(false);
+      expect(guard([{ appearance: "dark", background: "rebeccapurple" }])).toBe(false);
+      expect(guard([{ appearance: "dark" }])).toBe(false);
+      expect(guard([])).toBe(false);
+      expect(invalidError).toBe("Invalid first-paint hint");
+    });
+
+    // Every project-scoped row carries a second required field, so it has an
+    // arity check and an id check the global rows do not. Both are the arms a
+    // malformed renderer call actually lands on, and neither is reachable
+    // through the payload cases above.
+    it("refuses a project-scoped write with no id, a wrong-typed id, or the wrong arity", () => {
+      const canvasRow = THEME_IPC["volli:theme-canvas-set-project"];
+      const appearanceRow = THEME_IPC["volli:theme-appearance-set-project"];
+
+      for (const row of [canvasRow, appearanceRow]) {
+        expect(row.guard([])).toBe(false);
+        expect(row.guard([{ projectId: "p1" }, { projectId: "p2" }])).toBe(false);
+        expect(row.guard(["p1"])).toBe(false);
+        expect(row.guard([null])).toBe(false);
+      }
+
+      expect(canvasRow.guard([{ projectId: 7, canvas }])).toBe(false);
+      expect(appearanceRow.guard([{ projectId: 7, appearance: "dark" }])).toBe(false);
+    });
+
+    it("refuses a first-paint hint that is not a record at all", () => {
+      expect(THEME_IPC["volli:theme-first-paint-set"].guard(["dark"])).toBe(false);
+      expect(THEME_IPC["volli:theme-first-paint-set"].guard([null])).toBe(false);
     });
   });
 
@@ -1525,12 +1541,16 @@ describe("THEME_IPC descriptor table", () => {
     });
 
     it("covers the whole theme surface", () => {
-      expect(THEME_CHANNELS).toHaveLength(11);
+      expect(THEME_CHANNELS).toHaveLength(9);
       expect(THEME_CHANNELS).toContain("volli:theme-state");
       expect(THEME_CHANNELS).toContain("volli:theme-set-global-editor");
+      expect(THEME_CHANNELS).toContain("volli:theme-set-project");
       expect(THEME_CHANNELS).toContain("volli:theme-terminal-overlay-write");
-      expect(THEME_CHANNELS).toContain("volli:theme-file-list");
-      expect(THEME_CHANNELS).toContain("volli:theme-file-open");
+      expect(THEME_CHANNELS).toContain("volli:theme-canvas-set-global");
+      expect(THEME_CHANNELS).toContain("volli:theme-appearance-set-global");
+      expect(THEME_CHANNELS).toContain("volli:theme-canvas-set-project");
+      expect(THEME_CHANNELS).toContain("volli:theme-appearance-set-project");
+      expect(THEME_CHANNELS).toContain("volli:theme-first-paint-set");
     });
   });
 });

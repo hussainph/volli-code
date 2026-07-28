@@ -1,32 +1,35 @@
 import * as React from "react";
 import { BracketsCurlyIcon } from "@phosphor-icons/react/dist/csr/BracketsCurly";
+import { CircleHalfIcon } from "@phosphor-icons/react/dist/csr/CircleHalf";
 import { FileTextIcon } from "@phosphor-icons/react/dist/csr/FileText";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import {
   isShippedEditorThemeId,
-  projectColor,
+  resolveAppearance,
   type Project,
   type ShippedEditorThemeId,
 } from "@volli/shared";
 
 import {
   editorThemeItems,
-  FALLBACK_TERMINAL_THEME_LABEL,
+  fallbackTerminalThemeLabel,
   revealPath,
   terminalThemeItems,
 } from "@renderer/components/theme/appearance-catalog";
 import { SettingsRow, SettingsSection } from "@renderer/components/pages/settings-shell";
-import { ThemeComboBox, ThemeOriginPill } from "@renderer/components/theme/theme-combo-box";
-import { ThemePicker } from "@renderer/components/theme/theme-picker";
+import { AppearanceModeChoice, CanvasEditor } from "@renderer/components/theme/canvas-editor";
 import {
-  autoTintChoice,
-  projectAppChoice,
+  describeAppearance,
+  projectAppearanceChoice,
+  projectCanvasChoice,
+} from "@renderer/components/theme/canvas-editor-model";
+import { ThemeComboBox, ThemeOriginPill } from "@renderer/components/theme/theme-combo-box";
+import {
   projectEditorChoice,
   projectTerminalChoice,
   projectTerminalOverlayEdits,
   terminalCustomSeed,
-  type ProjectAppChoice,
   type ProjectTerminalChoice,
 } from "@renderer/components/theme/project-appearance-model";
 import {
@@ -35,18 +38,25 @@ import {
   type TerminalSettingRow,
 } from "@renderer/components/theme/terminal-settings-model";
 import { planEditorThemePreview } from "@renderer/components/theme/editor-settings-model";
+import {
+  SegmentedChoice,
+  SURFACE_MODES,
+  type SurfaceMode,
+} from "@renderer/components/theme/segmented-choice";
 import { Button } from "@renderer/components/ui/button";
 import {
   DEFAULT_EDITOR_THEME_ID,
   resolveEditorThemeId,
 } from "@renderer/editor/editor-theme-catalog";
 import { writeThrough } from "@renderer/stores/mutate";
-import { effectiveTheme, useThemeStore, type ThemeScope } from "@renderer/stores/theme";
+import { effectiveAppearance, useThemeStore, type ThemeScope } from "@renderer/stores/theme";
 import { previewTerminalTheme } from "@renderer/terminal/appearance";
 import { getBuiltinTheme } from "restty";
 
 /**
  * Configure → Appearance: one project's per-surface theming (#69).
+ *
+ * Handoff: same UI slop pass as appearance-settings.tsx — see AGENTS.md.
  *
  * The vocabulary is a tri-state PER SURFACE, and the section — not the picker —
  * owns it. Every surface starts on **Inherit** (#72: per-project theming is off
@@ -54,16 +64,14 @@ import { getBuiltinTheme } from "restty";
  * "inherit" marker, so a project that has been reset reads exactly like one
  * that was never touched. **Custom** opens on whatever the surface is already
  * showing, so switching modes pins the look rather than changing it: for the
- * app surface that is #72's auto-tint from the project's own rail color, for
- * the editor it is the catalog id currently resolved, for the terminal it is
- * the theme name the ghostty chain resolves (and nothing, when the chain names
- * none — Volli will not invent a name to write into a file the user owns).
+ * editor that is the catalog id currently resolved, for the terminal it is the
+ * theme name the ghostty chain resolves (and nothing, when the chain names none
+ * — Volli will not invent a name to write into a file the user owns).
  *
- * The picker itself is scope-agnostic by construction: {@link ThemePicker} is
- * the SAME component Settings and ⌘K mount, handed `{kind: "project", …}`, and
- * everything downstream of that — preview, Enter-to-commit, Escape-to-revert —
- * is unchanged. "Override this project's theme" is not a second capability, it
- * is the one capability scoped.
+ * The app surface is TWO tri-states rather than one, because a workspace's
+ * gradient and its light/dark choice are two independent columns on its row
+ * (migration 014) and either can be overridden alone. Both are authored by the
+ * same canvas editor the global page mounts, scoped here.
  *
  * The terminal is the one surface with no store setter, by design: its source
  * of truth is the project's ghostty overlay FILE, so this writes the overlay
@@ -79,9 +87,9 @@ export function ProjectAppearanceSettings({ project }: { project: Project }) {
   // the project alone, so a failed hydrate can't spin.
   React.useEffect(() => {
     if (useThemeStore.getState().projectId !== project.id) {
-      void useThemeStore.getState().hydrate(project.id);
+      void useThemeStore.getState().hydrate(projectScope(project));
     }
-  }, [project.id]);
+  }, [project]);
 
   if (!inScope) {
     // The effect fires once per project, and the store toasts a failed read
@@ -94,7 +102,7 @@ export function ProjectAppearanceSettings({ project }: { project: Project }) {
         <Button
           variant="outline"
           size="sm"
-          onClick={() => void useThemeStore.getState().hydrate(project.id)}
+          onClick={() => void useThemeStore.getState().hydrate(projectScope(project))}
         >
           Retry
         </Button>
@@ -109,10 +117,25 @@ export function ProjectAppearanceSettings({ project }: { project: Project }) {
   return (
     <>
       <ProjectAppThemeSection key={project.id} project={project} />
+      <ProjectAppearanceModeSection key={project.id} project={project} />
       <ProjectEditorThemeSection key={project.id} projectId={project.id} />
       <ProjectTerminalThemeSection key={project.id} projectId={project.id} />
     </>
   );
+}
+
+/**
+ * The workspace's own theming columns (migration 014), as the theme store's
+ * scope descriptor. Read off the project ROW rather than fetched: the row
+ * already arrived in the bootstrap payload, and a second read path would be a
+ * second answer to "what is this workspace's canvas?".
+ */
+function projectScope(project: Project) {
+  return {
+    projectId: project.id,
+    canvas: project.themeCanvas ?? null,
+    appearance: project.themeAppearance ?? null,
+  };
 }
 
 /** The quiet one-liner an inheriting surface shows instead of a control it isn't using. */
@@ -121,169 +144,125 @@ function InheritNote({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * The app's segmented-control idiom (ui/button.tsx's pill scale, same shape as
- * the board's view toggle and the diff presentation toggle), driven by a data
- * array rather than repeated blocks so a third segment is a row, not a branch.
+ * This workspace's own gradient.
  *
- * Re-selecting the active segment is a NO-OP, which matters here more than it
- * usually does: "Custom" means a different stored value per surface, so
- * clicking it while already Custom would re-run that surface's entry write —
- * and on the app surface that write is the auto-tint, which would silently
- * throw away the theme the user had picked.
- */
-function SegmentedChoice<Key extends string>({
-  ariaLabel,
-  testId,
-  value,
-  options,
-  onChange,
-}: {
-  ariaLabel: string;
-  testId: string;
-  value: Key;
-  options: readonly { key: Key; label: string }[];
-  onChange(key: Key): void;
-}) {
-  return (
-    <div
-      role="group"
-      aria-label={ariaLabel}
-      data-testid={testId}
-      className="flex items-center gap-1"
-    >
-      {options.map((option) => (
-        <Button
-          key={option.key}
-          size="sm"
-          variant={option.key === value ? "secondary" : "ghost"}
-          aria-pressed={option.key === value}
-          data-choice={option.key}
-          onClick={() => {
-            if (option.key !== value) onChange(option.key);
-          }}
-        >
-          {option.label}
-        </Button>
-      ))}
-    </div>
-  );
-}
-
-/** Every surface's top-level tri-state, in the section header where it reads as the section's own mode. */
-const SURFACE_MODES = [
-  { key: "inherit", label: "Inherit" },
-  { key: "custom", label: "Custom" },
-] as const;
-
-type SurfaceMode = (typeof SURFACE_MODES)[number]["key"];
-
-/** The app surface's two Custom flavors (#72: auto-tint is the one it opens on). */
-const APP_SOURCES = [
-  { key: "auto-tint", label: "Auto-tint" },
-  { key: "theme", label: "Pick a theme" },
-] as const;
-
-type AppSource = (typeof APP_SOURCES)[number]["key"];
-
-/**
- * App surface: Inherit, #72's auto-tint from the project's own color, or any
- * theme in the library.
+ * Same tri-state as every other surface on this page, and the same rule behind
+ * it: **Custom** opens on the canvas the workspace is ALREADY wearing — the
+ * app-wide one — so the switch changes what the choice means without changing
+ * what is on screen. **Inherit** clears the column rather than storing a marker,
+ * so a workspace that has been reset reads exactly like one never touched.
  *
- * `picking` is local and deliberately NOT stored: choosing "Pick a theme" is
- * the act of opening the library, not a choice about how the project looks, and
- * writing an override the moment the segment moves would repaint the app to a
- * theme the user hasn't chosen yet. The stored choice still wins whenever it is
- * a named theme, so the segment can never contradict the window.
+ * The editor's own preview mechanism is scope-aware, so a drag here paints this
+ * window and commits to this workspace's `projects` row — the global canvas is
+ * never touched by it.
  */
 function ProjectAppThemeSection({ project }: { project: Project }) {
-  const override = useThemeStore((state) => state.projectOverride);
-  const globalName = useThemeStore((state) => state.global.name);
-  const choice = projectAppChoice(override);
-  const [picking, setPicking] = React.useState(false);
+  const own = useThemeStore((state) => state.projectOverride?.canvas ?? null);
+  const globalCanvas = useThemeStore((state) => state.globalCanvas);
+  const appearance = useThemeStore((state) => state.projectOverride?.appearance ?? null);
+  const globalAppearance = useThemeStore((state) => state.globalAppearance);
+  const systemPrefersDark = useThemeStore((state) => state.systemPrefersDark);
+
+  const choice = projectCanvasChoice(own);
+  // The scope descriptor is memoised for the same reason the global page's is a
+  // module constant: the editor holds it in `useCallback` dependencies.
   const scope = React.useMemo<ThemeScope>(
     () => ({ kind: "project", projectId: project.id }),
     [project.id],
   );
-
-  // The theme files are hand-editable (#71), so entering this pane re-reads the
-  // library rather than trusting whatever boot last saw.
-  React.useEffect(() => {
-    void useThemeStore.getState().loadCustomThemes();
-  }, []);
-
-  const write = (next: ProjectAppChoice): void => {
-    void useThemeStore.getState().setProjectAppChoice(project.id, next);
-  };
-
-  const source: AppSource = choice.kind === "theme" || picking ? "theme" : "auto-tint";
-  const tint = choice.kind === "auto-tint" ? choice.seed : projectColor(project.colorIndex);
+  // Resolved for THIS workspace — its own appearance override when it has one.
+  const resolved = resolveAppearance(appearance ?? globalAppearance, systemPrefersDark);
 
   return (
     <SettingsSection
       title="App theme"
       icon={PaletteIcon}
-      description="What this project's window wears. Every other project is unaffected."
       action={
         <SegmentedChoice
-          ariaLabel="App theme scope"
-          testId="project-appearance-app-mode"
+          ariaLabel="Canvas scope"
+          testId="project-appearance-canvas-mode"
           value={choice.kind === "inherit" ? "inherit" : "custom"}
           options={SURFACE_MODES}
           onChange={(mode: SurfaceMode) => {
-            setPicking(false);
-            // Custom opens pre-selected on the auto-tint (#72), so the switch
-            // itself shows what per-project theming does.
-            write(mode === "inherit" ? { kind: "inherit" } : autoTintChoice(project.colorIndex));
+            void useThemeStore
+              .getState()
+              .setProjectCanvas(project.id, mode === "inherit" ? null : globalCanvas);
           }}
         />
       }
     >
       {choice.kind === "inherit" ? (
-        <InheritNote>
-          Following the app-wide theme — <span className="text-foreground">{globalName}</span>.
-        </InheritNote>
+        <div data-testid="project-appearance-canvas-inherit">
+          <InheritNote>Following app-wide canvas.</InheritNote>
+        </div>
       ) : (
         <>
-          <SettingsRow
-            label="Source"
-            description="Auto-tint reseeds the app-wide theme from this project's color; everything else stays yours."
-          >
-            <SegmentedChoice
-              ariaLabel="App theme source"
-              testId="project-appearance-app-source"
-              value={source}
-              options={APP_SOURCES}
-              onChange={(next: AppSource) => {
-                setPicking(next === "theme");
-                if (next === "auto-tint") write(autoTintChoice(project.colorIndex));
-              }}
-            />
-          </SettingsRow>
-          {source === "auto-tint" ? (
-            <SettingsRow label="Tint" description="Taken from this project's color in the rail.">
-              <span
-                aria-hidden
-                className="size-4 rounded-full border border-border"
-                style={{ backgroundColor: tint }}
-              />
-              <span className="font-mono text-xs uppercase text-muted-foreground">{tint}</span>
-            </SettingsRow>
-          ) : (
-            // The picker is one more block in this card, so it takes the card's
-            // own rhythm — SettingsRow's hairline + 16px, not a floating margin.
-            // Without the divider it read as a panel that had drifted loose from
-            // the Source row above it, while every other block in these three
-            // sections is separated by that hairline.
-            <div className="border-t border-border/60 pt-4">
-              <div
-                data-testid="project-appearance-theme-picker"
-                className="overflow-hidden rounded-lg border border-border bg-background"
-              >
-                <ThemePicker autoFocus={false} scope={scope} />
-              </div>
-            </div>
-          )}
+          <div className="pb-3">
+            <ThemeOriginPill emphasized>Set by this project</ThemeOriginPill>
+          </div>
+          <CanvasEditor scope={scope} canvas={choice.canvas} resolved={resolved} />
         </>
+      )}
+    </SettingsSection>
+  );
+}
+
+/**
+ * This workspace's light/dark choice — a second column, and a second tri-state.
+ *
+ * Separate from the canvas above because the two are genuinely independent: a
+ * workspace may pin dark while inheriting the gradient, or take its own gradient
+ * and still follow the app-wide mode. Folding them into one control would make
+ * three of those four states unreachable.
+ *
+ * Custom pins whatever is currently inherited, `auto` included — "follows the
+ * system, in this workspace only" is a real choice and not the same as inheriting
+ * an `auto` that could later be changed app-wide.
+ */
+function ProjectAppearanceModeSection({ project }: { project: Project }) {
+  const own = useThemeStore((state) => state.projectOverride?.appearance ?? null);
+  const globalAppearance = useThemeStore((state) => state.globalAppearance);
+  const systemPrefersDark = useThemeStore((state) => state.systemPrefersDark);
+
+  const choice = projectAppearanceChoice(own);
+  const inherited = describeAppearance(
+    globalAppearance,
+    resolveAppearance(globalAppearance, systemPrefersDark),
+  );
+
+  const write = (appearance: typeof globalAppearance | null): void => {
+    void useThemeStore.getState().setProjectAppearance(project.id, appearance);
+  };
+
+  return (
+    <SettingsSection
+      title="Light & dark"
+      icon={CircleHalfIcon}
+      action={
+        <SegmentedChoice
+          ariaLabel="Appearance scope"
+          testId="project-appearance-mode-scope"
+          value={choice.kind === "inherit" ? "inherit" : "custom"}
+          options={SURFACE_MODES}
+          onChange={(mode: SurfaceMode) => write(mode === "inherit" ? null : globalAppearance)}
+        />
+      }
+    >
+      {choice.kind === "inherit" ? (
+        <div data-testid="project-appearance-mode-inherit">
+          <InheritNote>
+            Following app-wide — <span className="text-foreground">{inherited}</span>.
+          </InheritNote>
+        </div>
+      ) : (
+        <SettingsRow label="Mode">
+          <ThemeOriginPill emphasized>Set by this project</ThemeOriginPill>
+          <AppearanceModeChoice
+            value={choice.appearance}
+            testId="project-appearance-mode"
+            onChange={write}
+          />
+        </SettingsRow>
       )}
     </SettingsSection>
   );
@@ -294,18 +273,16 @@ function ProjectAppThemeSection({ project }: { project: Project }) {
  *
  * Mirrors the global row exactly — same catalog, same apply-then-revert preview
  * through the theme store (never a direct Monaco call, or `paintedEditor`
- * desyncs from App-theme preview) — with the inherited id resolved from the
- * project's EFFECTIVE app theme, so a tinted project's "Automatic" says what
- * Monaco will actually wear here.
+ * desyncs) — with the inherited id resolved exactly as the global row resolves
+ * it, so "Inherit" says what Monaco will actually wear here.
  */
 function ProjectEditorThemeSection({ projectId }: { projectId: string }) {
   const override = useThemeStore((state) => state.projectOverride);
   const globalEditorThemeId = useThemeStore((state) => state.editorThemeId);
-  const appThemeSlug = useThemeStore((state) => effectiveTheme(state).slug);
   const items = React.useMemo(() => editorThemeItems(), []);
 
   const choice = projectEditorChoice(override);
-  const inherited = resolveEditorThemeId({ editorThemeId: globalEditorThemeId, appThemeSlug });
+  const inherited = resolveEditorThemeId({ editorThemeId: globalEditorThemeId });
   const resolvedId = choice.kind === "theme" ? choice.themeId : inherited;
   const label = items.find((item) => item.value === resolvedId)?.label ?? resolvedId;
 
@@ -316,7 +293,6 @@ function ProjectEditorThemeSection({ projectId }: { projectId: string }) {
     <SettingsSection
       title="Editor"
       icon={BracketsCurlyIcon}
-      description="Monaco syntax highlighting for files and documents opened in this project."
       action={
         <SegmentedChoice
           ariaLabel="Editor theme scope"
@@ -333,7 +309,7 @@ function ProjectEditorThemeSection({ projectId }: { projectId: string }) {
     >
       {choice.kind === "inherit" ? (
         <InheritNote>
-          Following the app-wide editor theme — <span className="text-foreground">{label}</span>.
+          Following app-wide — <span className="text-foreground">{label}</span>.
         </InheritNote>
       ) : (
         <SettingsRow label="Theme">
@@ -397,6 +373,9 @@ const endTerminalPreview = (): void => previewTerminalTheme(null);
  */
 function ProjectTerminalThemeSection({ projectId }: { projectId: string }) {
   const terminal = useThemeStore((state) => state.terminal);
+  // The fallback palette carries a name per mode, so the label has to follow the
+  // resolved appearance — see `fallbackTerminalThemeLabel`.
+  const resolved = useThemeStore(effectiveAppearance);
   const items = React.useMemo(() => terminalThemeItems(), []);
   const rows = React.useMemo(
     () =>
@@ -444,7 +423,7 @@ function ProjectTerminalThemeSection({ projectId }: { projectId: string }) {
     <SettingsSection
       title="Terminal"
       icon={TerminalWindowIcon}
-      description="Layered over your Ghostty config and Volli's global overlay. Volli never edits your config."
+      description="Volli never edits your Ghostty config."
       action={
         <SegmentedChoice
           ariaLabel="Terminal theme scope"
@@ -463,7 +442,7 @@ function ProjectTerminalThemeSection({ projectId }: { projectId: string }) {
           <ThemeComboBox
             ariaLabel="Project terminal theme"
             searchLabel="Search terminal themes"
-            buttonLabel={rows.theme.value ?? FALLBACK_TERMINAL_THEME_LABEL}
+            buttonLabel={rows.theme.value ?? fallbackTerminalThemeLabel(resolved)}
             empty="No matching theme."
             items={items}
             activeValue={choice.kind === "theme" ? choice.name : null}
@@ -474,14 +453,14 @@ function ProjectTerminalThemeSection({ projectId }: { projectId: string }) {
         </SettingsRow>
       ) : (
         <InheritNote>
-          Following Ghostty and Volli&rsquo;s global overlay —{" "}
+          Following app-wide —{" "}
           <span className="text-foreground">
-            {rows.theme.value ?? FALLBACK_TERMINAL_THEME_LABEL}
+            {rows.theme.value ?? fallbackTerminalThemeLabel(resolved)}
           </span>
           .
         </InheritNote>
       )}
-      <SettingsRow label="Config file" description="Takes any Ghostty key, hand-written.">
+      <SettingsRow label="Config file">
         <Button
           variant="outline"
           size="sm"

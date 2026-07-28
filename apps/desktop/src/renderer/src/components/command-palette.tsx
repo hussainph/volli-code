@@ -1,6 +1,5 @@
 import * as React from "react";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
-import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
 import { Command } from "cmdk";
@@ -19,19 +18,13 @@ import { useWorkspaceStore } from "@renderer/stores/workspace";
 interface CommandPaletteProps {
   open: boolean;
   onOpenChange(open: boolean): void;
-  /**
-   * ⌘K's theming entry (#73's third entry point). The palette closes itself
-   * and hands off to the shared picker, which its host owns — a live preview
-   * has to be visible against the app, not behind this dialog's scrim.
-   */
-  onChangeTheme(): void;
 }
 
 /** No tickets/sessions to show while closed — keeps the derivation below free. */
 const EMPTY_COMMAND_PALETTE_ITEMS: CommandPaletteItems = { tickets: [], sessions: [] };
 
 /** Universal ⌘K destination picker for every ticket and every open session. */
-export function CommandPalette({ open, onOpenChange, onChangeTheme }: CommandPaletteProps) {
+export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const projects = useProjectsStore((state) => state.projects);
   const selectedProjectId = useProjectsStore((state) => state.selectedProjectId);
   const ticketsByProject = useBoardStore((state) => state.ticketsByProject);
@@ -65,7 +58,9 @@ export function CommandPalette({ open, onOpenChange, onChangeTheme }: CommandPal
       onOpenChange={onOpenChange}
       label="Search tickets and sessions"
       loop
-      overlayClassName="fixed inset-0 z-50 bg-black/55 backdrop-blur-[2px]"
+      // One notch heavier than the dialog scrim (this one also blurs), split by
+      // mode for the reason spelled out on DialogOverlay.
+      overlayClassName="fixed inset-0 z-50 bg-black/35 backdrop-blur-[2px] dark:bg-black/55"
       contentClassName="fixed top-[18%] left-1/2 z-50 w-[min(640px,calc(100vw-32px))] -translate-x-1/2 overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-2xl outline-none"
     >
       <div className="flex h-12 items-center gap-2 border-b border-border px-4">
@@ -85,27 +80,6 @@ export function CommandPalette({ open, onOpenChange, onChangeTheme }: CommandPal
         <Command.Empty className="py-10 text-center text-sm text-muted-foreground">
           No matching tickets or sessions.
         </Command.Empty>
-
-        <Command.Group
-          heading="Actions"
-          className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-label [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group-heading]]:uppercase"
-        >
-          <Command.Item
-            value="change theme appearance colors"
-            keywords={["theme", "appearance", "colors", "dark"]}
-            onSelect={() => {
-              onOpenChange(false);
-              onChangeTheme();
-            }}
-            className="flex cursor-pointer items-center gap-3 rounded-lg px-2.5 py-2 outline-none data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground"
-          >
-            <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-card text-muted-foreground">
-              <PaletteIcon weight="fill" className="size-3.5" />
-            </span>
-            <span className="min-w-0 flex-1 truncate text-sm font-medium">Change theme…</span>
-            <span className="shrink-0 text-label text-muted-foreground">Appearance</span>
-          </Command.Item>
-        </Command.Group>
 
         {items.sessions.length > 0 ? (
           <Command.Group

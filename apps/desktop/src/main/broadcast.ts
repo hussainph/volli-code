@@ -31,6 +31,23 @@ export function broadcastDataChanged(change: Omit<DataChangedEvent, "entity"> = 
 }
 
 /**
+ * Tells every window the OS flipped light↔dark, carrying
+ * `nativeTheme.shouldUseDarkColors`.
+ *
+ * Only main can. Chromium resolves the renderer's `prefers-color-scheme` query
+ * against the root element's used `color-scheme`, which the app stamps for
+ * itself — so over there the query reports the mode already painted and never
+ * moves on its own, and a scope on `auto` would sit on a stale answer forever.
+ * `nativeTheme` is the source; this is the only way its change reaches a window.
+ */
+export function broadcastSystemAppearance(prefersDark: boolean): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.webContents.isDestroyed()) continue;
+    window.webContents.send("volli:system-appearance-changed" satisfies VolliIpcEvent, prefersDark);
+  }
+}
+
+/**
  * Announces a backward-move interrupt (issue #78, CONCEPT #20) to every
  * window: automation may de-escalate a ticket's agents, but never silently —
  * the renderer toasts this where the mover is looking. Callers fire it only

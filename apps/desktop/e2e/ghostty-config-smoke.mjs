@@ -220,13 +220,21 @@ async function main() {
   const probe = join(SCRATCH, "alt-probe.txt");
   await fs.rm(probe, { force: true });
 
+  // `--user-data-dir` relocates Electron's profile, which the HOME override
+  // alone does NOT do on macOS. Two things depend on it. The app would
+  // otherwise open the real <userData>/volli.db, whose non-empty state makes
+  // bootstrap's firstRun false and skips the localStorage import this smoke's
+  // project seeding relies on — VOLLI_DB_PATH answers that on its own. The
+  // second is why the flag is here: the single-instance lock is keyed on the
+  // profile, so sharing it with a running `pnpm dev` made this smoke quit at
+  // launch with exit code 0 and no window. It now runs alongside the dev app,
+  // the same way the other smokes do (see lib/smoke-kit.mjs `launch`).
+  const userDataDir = join(home, "user-data");
+  await fs.mkdir(userDataDir, { recursive: true });
+
   const app = await _electron.launch({
     executablePath: ELECTRON,
-    args: [APP_DIR],
-    // VOLLI_DB_PATH: the HOME override does NOT relocate Electron's userData
-    // on macOS, so without it the app opens the real <userData>/volli.db —
-    // whose non-empty state makes bootstrap's firstRun false, skipping the
-    // localStorage import this smoke's project seeding relies on.
+    args: [APP_DIR, `--user-data-dir=${userDataDir}`],
     env: {
       ...process.env,
       HOME: home,

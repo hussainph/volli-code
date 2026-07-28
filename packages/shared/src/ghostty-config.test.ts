@@ -5,7 +5,18 @@ import {
   mergeGhosttyConfigTexts,
   parseGhosttyTerminalPrefs,
   resolveGhosttyConfigText,
+  resolveGhosttyThemeName,
 } from "./ghostty-config";
+import type { ResolvedAppearance } from "./theme/canvas";
+
+/**
+ * `parseGhosttyTerminalPrefs` with the mode named once, so a case that is not
+ * ABOUT light/dark resolution doesn't have to state one. The parser itself takes
+ * no default — that assumption is exactly what these tests must not re-introduce
+ * — so the choice lives here, in the tests, where it is visible.
+ */
+const parsePrefs = (text: string, appearance: ResolvedAppearance = "dark"): GhosttyTerminalPrefs =>
+  parseGhosttyTerminalPrefs(text, appearance);
 
 /** The all-unset result, so tests can assert full objects concisely. */
 const EMPTY_PREFS: GhosttyTerminalPrefs = {
@@ -18,6 +29,26 @@ const EMPTY_PREFS: GhosttyTerminalPrefs = {
   macosOptionAsAlt: null,
 };
 
+describe("resolveGhosttyThemeName", () => {
+  it("takes the half matching the appearance", () => {
+    const pair = "light:Rose Pine Dawn,dark:Rose Pine";
+    expect(resolveGhosttyThemeName(pair, "light")).toBe("Rose Pine Dawn");
+    expect(resolveGhosttyThemeName(pair, "dark")).toBe("Rose Pine");
+  });
+
+  // A user who wrote only one half meant it: falling through to the raw
+  // `light:Rose Pine Dawn` string would name a theme that cannot exist.
+  it("falls back to the other half when the pair is one-sided", () => {
+    expect(resolveGhosttyThemeName("light:Rose Pine Dawn", "dark")).toBe("Rose Pine Dawn");
+    expect(resolveGhosttyThemeName("dark:Rose Pine", "light")).toBe("Rose Pine");
+  });
+
+  it("uses an unprefixed value verbatim, in either appearance", () => {
+    expect(resolveGhosttyThemeName("Nord", "light")).toBe("Nord");
+    expect(resolveGhosttyThemeName("Nord", "dark")).toBe("Nord");
+  });
+});
+
 describe("parseGhosttyTerminalPrefs", () => {
   it("ignores comments and blank lines", () => {
     const text = `
@@ -26,25 +57,23 @@ describe("parseGhosttyTerminalPrefs", () => {
 
 font-size = 14
 `;
-    expect(parseGhosttyTerminalPrefs(text)).toEqual({ ...EMPTY_PREFS, fontSize: 14 });
+    expect(parsePrefs(text)).toEqual({ ...EMPTY_PREFS, fontSize: 14 });
   });
 
   it("strips one pair of surrounding double quotes", () => {
-    expect(parseGhosttyTerminalPrefs('theme = "Front End Delight"').themeName).toBe(
-      "Front End Delight",
-    );
+    expect(parsePrefs('theme = "Front End Delight"').themeName).toBe("Front End Delight");
   });
 
   it("leaves unmatched or interior quotes literal", () => {
-    expect(parseGhosttyTerminalPrefs('theme = "unterminated').themeName).toBe('"unterminated');
-    expect(parseGhosttyTerminalPrefs('theme = weird"quote').themeName).toBe('weird"quote');
+    expect(parsePrefs('theme = "unterminated').themeName).toBe('"unterminated');
+    expect(parsePrefs('theme = weird"quote').themeName).toBe('weird"quote');
   });
 
   it("is insensitive to spacing around =", () => {
-    expect(parseGhosttyTerminalPrefs("font-size=14").fontSize).toBe(14);
-    expect(parseGhosttyTerminalPrefs("font-size = 14").fontSize).toBe(14);
-    expect(parseGhosttyTerminalPrefs("font-size =14").fontSize).toBe(14);
-    expect(parseGhosttyTerminalPrefs("font-size= 14").fontSize).toBe(14);
+    expect(parsePrefs("font-size=14").fontSize).toBe(14);
+    expect(parsePrefs("font-size = 14").fontSize).toBe(14);
+    expect(parsePrefs("font-size =14").fontSize).toBe(14);
+    expect(parsePrefs("font-size= 14").fontSize).toBe(14);
   });
 
   it("accumulates repeatable font-family values in order", () => {
@@ -52,7 +81,7 @@ font-size = 14
 font-family = Fira Code
 font-family = JetBrains Mono
 `;
-    expect(parseGhosttyTerminalPrefs(text).fontFamilies).toEqual(["Fira Code", "JetBrains Mono"]);
+    expect(parsePrefs(text).fontFamilies).toEqual(["Fira Code", "JetBrains Mono"]);
   });
 
   it("resets font-family accumulation on an empty value", () => {
@@ -61,7 +90,7 @@ font-family = Fira Code
 font-family =
 font-family = JetBrains Mono
 `;
-    expect(parseGhosttyTerminalPrefs(text).fontFamilies).toEqual(["JetBrains Mono"]);
+    expect(parsePrefs(text).fontFamilies).toEqual(["JetBrains Mono"]);
   });
 
   it("ignores styled font-family variants", () => {
@@ -69,17 +98,17 @@ font-family = JetBrains Mono
 font-family = Fira Code
 font-family-bold = Fira Code Bold
 `;
-    expect(parseGhosttyTerminalPrefs(text).fontFamilies).toEqual(["Fira Code"]);
+    expect(parsePrefs(text).fontFamilies).toEqual(["Fira Code"]);
   });
 
   it("parses font-size as a float", () => {
-    expect(parseGhosttyTerminalPrefs("font-size = 13.5").fontSize).toBe(13.5);
+    expect(parsePrefs("font-size = 13.5").fontSize).toBe(13.5);
   });
 
   it("treats invalid or non-positive font-size as null", () => {
-    expect(parseGhosttyTerminalPrefs("font-size = not-a-number").fontSize).toBeNull();
-    expect(parseGhosttyTerminalPrefs("font-size = -5").fontSize).toBeNull();
-    expect(parseGhosttyTerminalPrefs("font-size = 0").fontSize).toBeNull();
+    expect(parsePrefs("font-size = not-a-number").fontSize).toBeNull();
+    expect(parsePrefs("font-size = -5").fontSize).toBeNull();
+    expect(parsePrefs("font-size = 0").fontSize).toBeNull();
   });
 
   it("resets font-size to null on an empty value", () => {
@@ -87,7 +116,7 @@ font-family-bold = Fira Code Bold
 font-size = 14
 font-size =
 `;
-    expect(parseGhosttyTerminalPrefs(text).fontSize).toBeNull();
+    expect(parsePrefs(text).fontSize).toBeNull();
   });
 
   it("lets the last theme occurrence win", () => {
@@ -95,7 +124,7 @@ font-size =
 theme = Rose Pine
 theme = Nord
 `;
-    expect(parseGhosttyTerminalPrefs(text).themeName).toBe("Nord");
+    expect(parsePrefs(text).themeName).toBe("Nord");
   });
 
   it("resets theme to null on an empty value", () => {
@@ -103,33 +132,33 @@ theme = Nord
 theme = Nord
 theme =
 `;
-    expect(parseGhosttyTerminalPrefs(text).themeName).toBeNull();
+    expect(parsePrefs(text).themeName).toBeNull();
   });
 
-  it("picks the dark variant from a light/dark theme pair", () => {
-    expect(parseGhosttyTerminalPrefs("theme = light:Rose Pine Dawn,dark:Rose Pine").themeName).toBe(
-      "Rose Pine",
-    );
+  it("picks the half of a theme pair matching the appearance it was given", () => {
+    const pair = "theme = light:Rose Pine Dawn,dark:Rose Pine";
+    expect(parsePrefs(pair, "dark").themeName).toBe("Rose Pine");
+    expect(parsePrefs(pair, "light").themeName).toBe("Rose Pine Dawn");
+  });
+
+  // The app was dark-only when this parser was written, so the default keeps
+  // that behavior for the one caller that cannot name a mode yet (main's config
+  // read). Pinned so deleting the default is a deliberate, visible change.
+  it("defaults to the dark half when no appearance is named", () => {
+    expect(parsePrefs("theme = light:Rose Pine Dawn,dark:Rose Pine").themeName).toBe("Rose Pine");
   });
 
   it("tolerates spaces after commas in a theme pair", () => {
-    expect(
-      parseGhosttyTerminalPrefs("theme = light:Rose Pine Dawn, dark:Rose Pine").themeName,
-    ).toBe("Rose Pine");
+    expect(parsePrefs("theme = light:Rose Pine Dawn, dark:Rose Pine").themeName).toBe("Rose Pine");
   });
 
-  it("falls back to the light variant when only light: is present", () => {
-    expect(parseGhosttyTerminalPrefs("theme = light:Rose Pine Dawn").themeName).toBe(
-      "Rose Pine Dawn",
-    );
-  });
-
-  it("uses a plain theme value as-is", () => {
-    expect(parseGhosttyTerminalPrefs("theme = Nord").themeName).toBe("Nord");
+  it("uses a plain theme value as-is in both appearances", () => {
+    expect(parsePrefs("theme = Nord", "dark").themeName).toBe("Nord");
+    expect(parsePrefs("theme = Nord", "light").themeName).toBe("Nord");
   });
 
   it("skips entries without a light:/dark: prefix inside a variant pair", () => {
-    expect(parseGhosttyTerminalPrefs("theme = Nord Storm,dark:Dusk").themeName).toBe("Dusk");
+    expect(parsePrefs("theme = Nord Storm,dark:Dusk").themeName).toBe("Dusk");
   });
 
   it("skips junk lines with no =", () => {
@@ -138,7 +167,7 @@ this is not a config line
 font-size = 14
 another junk line
 `;
-    expect(parseGhosttyTerminalPrefs(text).fontSize).toBe(14);
+    expect(parsePrefs(text).fontSize).toBe(14);
   });
 
   it("keeps a hex color value intact (no trailing-comment stripping)", () => {
@@ -147,7 +176,7 @@ another junk line
 background = #123abc
 font-size = 14
 `;
-    const result = parseGhosttyTerminalPrefs(text);
+    const result = parsePrefs(text);
     expect(result.fontSize).toBe(14);
     // Sanity: the parser doesn't treat `#123abc` as a trailing comment that
     // would have truncated the value or broken subsequent line parsing.
@@ -155,41 +184,41 @@ font-size = 14
   });
 
   it("returns empty defaults for an empty config", () => {
-    expect(parseGhosttyTerminalPrefs("")).toEqual(EMPTY_PREFS);
+    expect(parsePrefs("")).toEqual(EMPTY_PREFS);
   });
 
   describe("ligatures (font-feature)", () => {
     it("is null when neither calt nor liga is mentioned", () => {
-      expect(parseGhosttyTerminalPrefs("font-feature = ss01").ligatures).toBeNull();
-      expect(parseGhosttyTerminalPrefs("").ligatures).toBeNull();
+      expect(parsePrefs("font-feature = ss01").ligatures).toBeNull();
+      expect(parsePrefs("").ligatures).toBeNull();
     });
 
     it("is false when calt is disabled", () => {
-      expect(parseGhosttyTerminalPrefs("font-feature = -calt").ligatures).toBe(false);
+      expect(parsePrefs("font-feature = -calt").ligatures).toBe(false);
     });
 
     it("is false when liga is disabled", () => {
-      expect(parseGhosttyTerminalPrefs("font-feature = -liga").ligatures).toBe(false);
+      expect(parsePrefs("font-feature = -liga").ligatures).toBe(false);
     });
 
     it("handles multiple comma-separated tags in one value", () => {
-      expect(parseGhosttyTerminalPrefs("font-feature = -liga, -dlig").ligatures).toBe(false);
+      expect(parsePrefs("font-feature = -liga, -dlig").ligatures).toBe(false);
     });
 
     it("skips empty segments from doubled or trailing commas", () => {
-      expect(parseGhosttyTerminalPrefs("font-feature = ,-calt,").ligatures).toBe(false);
+      expect(parsePrefs("font-feature = ,-calt,").ligatures).toBe(false);
     });
 
     it("tolerates whitespace around comma-separated tags", () => {
-      expect(parseGhosttyTerminalPrefs("font-feature =  -calt ,  ss01 ").ligatures).toBe(false);
+      expect(parsePrefs("font-feature =  -calt ,  ss01 ").ligatures).toBe(false);
     });
 
     it("is true when calt is enabled with a bare tag", () => {
-      expect(parseGhosttyTerminalPrefs("font-feature = calt").ligatures).toBe(true);
+      expect(parsePrefs("font-feature = calt").ligatures).toBe(true);
     });
 
     it("is true when calt is re-enabled with a + prefix", () => {
-      expect(parseGhosttyTerminalPrefs("font-feature = +calt").ligatures).toBe(true);
+      expect(parsePrefs("font-feature = +calt").ligatures).toBe(true);
     });
 
     it("tracks re-enable across occurrences (last write wins per tag)", () => {
@@ -197,7 +226,7 @@ font-size = 14
 font-feature = -calt
 font-feature = +calt
 `;
-      expect(parseGhosttyTerminalPrefs(text).ligatures).toBe(true);
+      expect(parsePrefs(text).ligatures).toBe(true);
     });
 
     it("stays false when one of calt/liga is disabled even if the other is on", () => {
@@ -205,7 +234,7 @@ font-feature = +calt
 font-feature = liga
 font-feature = -calt
 `;
-      expect(parseGhosttyTerminalPrefs(text).ligatures).toBe(false);
+      expect(parsePrefs(text).ligatures).toBe(false);
     });
 
     it("resets all tracked features on an empty value", () => {
@@ -213,79 +242,69 @@ font-feature = -calt
 font-feature = -calt
 font-feature =
 `;
-      expect(parseGhosttyTerminalPrefs(text).ligatures).toBeNull();
+      expect(parsePrefs(text).ligatures).toBeNull();
     });
   });
 
   describe("scrollback-limit", () => {
     it("parses a non-negative integer byte count", () => {
-      expect(parseGhosttyTerminalPrefs("scrollback-limit = 10000000").scrollbackLimitBytes).toBe(
-        10000000,
-      );
-      expect(parseGhosttyTerminalPrefs("scrollback-limit = 0").scrollbackLimitBytes).toBe(0);
+      expect(parsePrefs("scrollback-limit = 10000000").scrollbackLimitBytes).toBe(10000000);
+      expect(parsePrefs("scrollback-limit = 0").scrollbackLimitBytes).toBe(0);
     });
 
     it("is null for invalid or negative values", () => {
-      expect(parseGhosttyTerminalPrefs("scrollback-limit = -1").scrollbackLimitBytes).toBeNull();
-      expect(parseGhosttyTerminalPrefs("scrollback-limit = 1.5").scrollbackLimitBytes).toBeNull();
-      expect(parseGhosttyTerminalPrefs("scrollback-limit = huge").scrollbackLimitBytes).toBeNull();
+      expect(parsePrefs("scrollback-limit = -1").scrollbackLimitBytes).toBeNull();
+      expect(parsePrefs("scrollback-limit = 1.5").scrollbackLimitBytes).toBeNull();
+      expect(parsePrefs("scrollback-limit = huge").scrollbackLimitBytes).toBeNull();
     });
 
     it("last occurrence wins and empty resets", () => {
       expect(
-        parseGhosttyTerminalPrefs("scrollback-limit = 100\nscrollback-limit = 200")
-          .scrollbackLimitBytes,
+        parsePrefs("scrollback-limit = 100\nscrollback-limit = 200").scrollbackLimitBytes,
       ).toBe(200);
       expect(
-        parseGhosttyTerminalPrefs("scrollback-limit = 100\nscrollback-limit =")
-          .scrollbackLimitBytes,
+        parsePrefs("scrollback-limit = 100\nscrollback-limit =").scrollbackLimitBytes,
       ).toBeNull();
     });
   });
 
   describe("mouse-reporting", () => {
     it("parses ghostty booleans only", () => {
-      expect(parseGhosttyTerminalPrefs("mouse-reporting = true").mouseReporting).toBe(true);
-      expect(parseGhosttyTerminalPrefs("mouse-reporting = false").mouseReporting).toBe(false);
+      expect(parsePrefs("mouse-reporting = true").mouseReporting).toBe(true);
+      expect(parsePrefs("mouse-reporting = false").mouseReporting).toBe(false);
     });
 
     it("is null for non-boolean values", () => {
-      expect(parseGhosttyTerminalPrefs("mouse-reporting = yes").mouseReporting).toBeNull();
-      expect(parseGhosttyTerminalPrefs("mouse-reporting = 1").mouseReporting).toBeNull();
+      expect(parsePrefs("mouse-reporting = yes").mouseReporting).toBeNull();
+      expect(parsePrefs("mouse-reporting = 1").mouseReporting).toBeNull();
     });
 
     it("last occurrence wins and empty resets", () => {
-      expect(
-        parseGhosttyTerminalPrefs("mouse-reporting = true\nmouse-reporting = false").mouseReporting,
-      ).toBe(false);
-      expect(
-        parseGhosttyTerminalPrefs("mouse-reporting = true\nmouse-reporting =").mouseReporting,
-      ).toBeNull();
+      expect(parsePrefs("mouse-reporting = true\nmouse-reporting = false").mouseReporting).toBe(
+        false,
+      );
+      expect(parsePrefs("mouse-reporting = true\nmouse-reporting =").mouseReporting).toBeNull();
     });
   });
 
   describe("macos-option-as-alt", () => {
     it("parses true/false/left/right", () => {
-      expect(parseGhosttyTerminalPrefs("macos-option-as-alt = true").macosOptionAsAlt).toBe(true);
-      expect(parseGhosttyTerminalPrefs("macos-option-as-alt = false").macosOptionAsAlt).toBe(false);
-      expect(parseGhosttyTerminalPrefs("macos-option-as-alt = left").macosOptionAsAlt).toBe("left");
-      expect(parseGhosttyTerminalPrefs("macos-option-as-alt = right").macosOptionAsAlt).toBe(
-        "right",
-      );
+      expect(parsePrefs("macos-option-as-alt = true").macosOptionAsAlt).toBe(true);
+      expect(parsePrefs("macos-option-as-alt = false").macosOptionAsAlt).toBe(false);
+      expect(parsePrefs("macos-option-as-alt = left").macosOptionAsAlt).toBe("left");
+      expect(parsePrefs("macos-option-as-alt = right").macosOptionAsAlt).toBe("right");
     });
 
     it("is null for invalid values", () => {
-      expect(parseGhosttyTerminalPrefs("macos-option-as-alt = maybe").macosOptionAsAlt).toBeNull();
+      expect(parsePrefs("macos-option-as-alt = maybe").macosOptionAsAlt).toBeNull();
     });
 
     it("last occurrence wins and empty resets", () => {
       expect(
-        parseGhosttyTerminalPrefs("macos-option-as-alt = left\nmacos-option-as-alt = right")
-          .macosOptionAsAlt,
+        parsePrefs("macos-option-as-alt = left\nmacos-option-as-alt = right").macosOptionAsAlt,
       ).toBe("right");
       expect(
-        parseGhosttyTerminalPrefs("macos-option-as-alt = left\nmacos-option-as-alt =")
-          .macosOptionAsAlt,
+        parsePrefs("macos-option-as-alt = left\nmacos-option-as-alt =").macosOptionAsAlt,
       ).toBeNull();
     });
   });
@@ -320,7 +339,7 @@ describe("resolveGhosttyConfigText", () => {
     const { text, warnings } = resolveGhosttyConfigText("/cfg/config", readerFor(files));
     expect(warnings).toEqual([]);
     // The merged text feeds a last-wins parse; the parent value must survive.
-    expect(parseGhosttyTerminalPrefs(text ?? "").themeName).toBe("Parent");
+    expect(parsePrefs(text ?? "").themeName).toBe("Parent");
   });
 
   it("resolves relative include paths against the containing file's directory", () => {
@@ -329,14 +348,14 @@ describe("resolveGhosttyConfigText", () => {
       "/cfg/sub/extra.conf": "font-size = 16\n",
     };
     const { text } = resolveGhosttyConfigText("/cfg/config", readerFor(files));
-    expect(parseGhosttyTerminalPrefs(text ?? "").fontSize).toBe(16);
+    expect(parsePrefs(text ?? "").fontSize).toBe(16);
   });
 
   it("skips a missing optional (?) include silently", () => {
     const files = { "/cfg/config": "config-file = ?maybe.conf\nfont-size = 12\n" };
     const { text, warnings } = resolveGhosttyConfigText("/cfg/config", readerFor(files));
     expect(warnings).toEqual([]);
-    expect(parseGhosttyTerminalPrefs(text ?? "").fontSize).toBe(12);
+    expect(parsePrefs(text ?? "").fontSize).toBe(12);
   });
 
   it("warns (without throwing) on a missing non-optional include", () => {
@@ -355,7 +374,7 @@ describe("resolveGhosttyConfigText", () => {
     const { text, warnings } = resolveGhosttyConfigText("/cfg/config", readerFor(files));
     expect(warnings).toEqual([]);
     // Top wins over Mid wins over Bottom.
-    expect(parseGhosttyTerminalPrefs(text ?? "").themeName).toBe("Top");
+    expect(parsePrefs(text ?? "").themeName).toBe("Top");
   });
 
   it("terminates on an include cycle (A → B → A)", () => {
@@ -365,7 +384,7 @@ describe("resolveGhosttyConfigText", () => {
     };
     const { text, warnings } = resolveGhosttyConfigText("/cfg/a.conf", readerFor(files));
     expect(warnings).toEqual([]);
-    const prefs = parseGhosttyTerminalPrefs(text ?? "");
+    const prefs = parsePrefs(text ?? "");
     expect(prefs.fontSize).toBe(10);
     expect(prefs.themeName).toBe("Cycle");
   });
@@ -392,19 +411,19 @@ describe("resolveGhosttyConfigText", () => {
       readerFor(files),
     );
     expect(warnings).toEqual([]);
-    expect(parseGhosttyTerminalPrefs(text ?? "").fontSize).toBe(11);
+    expect(parsePrefs(text ?? "").fontSize).toBe(11);
   });
 
   it("preserves .. segments a relative entry path cannot collapse", () => {
     const files = { "../ghostty/config": "font-size = 8\n" };
     const { text } = resolveGhosttyConfigText("cfg/../../ghostty/config", readerFor(files));
-    expect(parseGhosttyTerminalPrefs(text ?? "").fontSize).toBe(8);
+    expect(parsePrefs(text ?? "").fontSize).toBe(8);
   });
 
   it("drops a .. that would climb above the root of an absolute path", () => {
     const files = { "/cfg/config": "font-size = 7\n" };
     const { text } = resolveGhosttyConfigText("/../cfg/config", readerFor(files));
-    expect(parseGhosttyTerminalPrefs(text ?? "").fontSize).toBe(7);
+    expect(parsePrefs(text ?? "").fontSize).toBe(7);
   });
 
   it("resolves a relative include from an entry file at the filesystem root", () => {
@@ -414,7 +433,7 @@ describe("resolveGhosttyConfigText", () => {
     };
     const { text, warnings } = resolveGhosttyConfigText("/config", readerFor(files));
     expect(warnings).toEqual([]);
-    expect(parseGhosttyTerminalPrefs(text ?? "").fontSize).toBe(15);
+    expect(parsePrefs(text ?? "").fontSize).toBe(15);
   });
 
   it("uses an absolute include path as-is, ignoring the containing directory", () => {
@@ -424,13 +443,13 @@ describe("resolveGhosttyConfigText", () => {
     };
     const { text, warnings } = resolveGhosttyConfigText("/cfg/config", readerFor(files));
     expect(warnings).toEqual([]);
-    expect(parseGhosttyTerminalPrefs(text ?? "").fontSize).toBe(13);
+    expect(parsePrefs(text ?? "").fontSize).toBe(13);
   });
 
   it("normalizes a fully-collapsed relative entry path to '.'", () => {
     const files = { ".": "font-size = 6\n" };
     const { text } = resolveGhosttyConfigText("cfg/..", readerFor(files));
-    expect(parseGhosttyTerminalPrefs(text ?? "").fontSize).toBe(6);
+    expect(parsePrefs(text ?? "").fontSize).toBe(6);
   });
 
   it("resets accumulated includes when a config-file line has an empty value (ghostty semantics)", () => {
@@ -441,7 +460,7 @@ describe("resolveGhosttyConfigText", () => {
     };
     const { text, warnings } = resolveGhosttyConfigText("/cfg/config", readerFor(files));
     expect(warnings).toEqual([]);
-    expect(parseGhosttyTerminalPrefs(text ?? "").themeName).toBe("Kept");
+    expect(parsePrefs(text ?? "").themeName).toBe("Kept");
     // The reset discards a.conf entirely — it is never read or emitted.
     expect(text).not.toContain("font-size = 1");
   });

@@ -10,19 +10,28 @@
  */
 
 import { errorMessage } from "@volli/shared";
-import type { ShippedEditorThemeId } from "@volli/shared";
+import type { ResolvedAppearance, ShippedEditorThemeId } from "@volli/shared";
 import { listBuiltinThemeNames } from "restty";
 
 import type { ThemeComboBoxItem } from "@renderer/components/theme/theme-combo-box";
 import { listEditorThemes } from "@renderer/editor/editor-theme-catalog";
 import { toastError } from "@renderer/lib/toast";
+import { TOKEN_THEME_NAMES } from "@renderer/terminal/appearance";
 
 /**
  * What the terminal wears when no layer names a theme: the palette derived from
  * the app's own tokens (terminal/appearance.ts), which has no catalog entry to
  * check-mark — so it is a LABEL, never a value anything writes.
+ *
+ * Takes the appearance because that palette has two names, one per mode, and a
+ * constant here could only ever be right about one of them: under light the row
+ * read "Volli Dark" over a terminal that was rendering Volli Light. The names
+ * come from the module that builds the theme, so the label and the palette
+ * cannot disagree.
  */
-export const FALLBACK_TERMINAL_THEME_LABEL = "Volli Dark";
+export function fallbackTerminalThemeLabel(resolved: ResolvedAppearance): string {
+  return TOKEN_THEME_NAMES[resolved];
+}
 
 /** The shipped Monaco/shiki catalog, with each theme's family folded into its search terms. */
 export function editorThemeItems(): ThemeComboBoxItem<ShippedEditorThemeId>[] {

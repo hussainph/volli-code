@@ -10,8 +10,14 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default: "bg-primary text-primary-foreground hover:bg-primary/90",
+        // `--destructive-foreground`, not a literal white: the destructive red
+        // is hue-locked, but the ink that reads on it is solved rather than
+        // assumed, so the label follows whatever actually lands on that fill.
+        // The two `dark:` steps stay — a full-strength red and a 20% ring are
+        // both louder against a dark canvas than a light one, which is a real
+        // difference between the modes rather than a leftover from dark-only.
         destructive:
-          "bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:bg-destructive/60 dark:focus-visible:ring-destructive/40",
+          "bg-destructive text-destructive-foreground hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:bg-destructive/60 dark:focus-visible:ring-destructive/40",
         outline:
           "border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
         secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",

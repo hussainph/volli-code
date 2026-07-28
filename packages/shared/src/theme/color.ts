@@ -31,6 +31,24 @@ export interface Oklch {
   h: number;
 }
 
+/**
+ * The two scalar helpers every module downstream of this one needs, here rather
+ * than re-declared in each.
+ *
+ * They were private three times over — in the generator, in the canvas model and
+ * again in the canvas token derivation — which is three chances for one of them
+ * to acquire a subtly different edge case. There is nothing to argue about in
+ * either, so there is nothing to gain from a second copy.
+ */
+export function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+/** Linear interpolation from `from` to `to`. `t` is not clamped — callers that need that do it. */
+export function lerp(from: number, to: number, t: number): number {
+  return from + (to - from) * t;
+}
+
 const HEX_PATTERN = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i;
 
 /** Whether `value` is `#rgb` or `#rrggbb`, with or without a leading `#` — same acceptance as {@link hexToRgb}. */
@@ -65,6 +83,42 @@ function channelToHex(value: number): string {
  */
 export function rgbToHex({ r, g, b }: Rgb): string {
   return `#${channelToHex(r)}${channelToHex(g)}${channelToHex(b)}`;
+}
+
+/**
+ * The three 8-bit channels of a hex color, 0–255 — the unit the compositor
+ * actually works in.
+ *
+ * Everything that has to predict a *pixel* rather than a perception needs these:
+ * the veil solve, the canvas's lift overlays, every `rgb(R G B / a)` this app
+ * emits. Built on {@link hexToRgb} so there is one hex parser rather than one
+ * per caller — the three hand-rolled `slice`/`parseInt` copies this replaces all
+ * returned `NaN` on a malformed input, where this throws like the rest of the
+ * module.
+ */
+export function hexChannels(hex: string): [number, number, number] {
+  const { r, g, b } = hexToRgb(hex);
+  return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+}
+
+/**
+ * `over` at `alpha` composited on `under`, as a hex.
+ *
+ * In 8-bit sRGB rather than OKLCH for the same reason `veil.ts` solves there:
+ * what has to match is the byte the compositor produces, and the compositor
+ * works in gamma-encoded channels. A perceptual mix would predict a pixel the
+ * browser never paints, and every measurement taken against it — every ink
+ * score, every reported Lc — would be measuring a surface that isn't on screen.
+ */
+export function compositeHex(over: string, alpha: number, under: string): string {
+  const top = hexChannels(over);
+  const bottom = hexChannels(under);
+  const bytes = top.map((value, index) =>
+    clamp(Math.round(value * alpha + bottom[index] * (1 - alpha)), 0, 255)
+      .toString(16)
+      .padStart(2, "0"),
+  );
+  return `#${bytes.join("")}`;
 }
 
 /**

@@ -1,9 +1,19 @@
-import { app, BrowserWindow, dialog, net, Notification, protocol, session, shell } from "electron";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  nativeTheme,
+  net,
+  Notification,
+  protocol,
+  session,
+  shell,
+} from "electron";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { diffManagedContent, errorMessage, ticketBranchName } from "@volli/shared";
-import type { VolliIpcEvent } from "@volli/shared";
+import type { FirstPaintHint, ResolvedAppearance, VolliIpcEvent } from "@volli/shared";
 import type { ManagedConflict } from "./harness-install";
 import { isInternalNavigationTarget } from "./navigation";
 import type { DbHandle } from "./data-ipc";
@@ -17,10 +27,14 @@ import { confirmDestructiveClose, registerTerminalIpcHandlers } from "./pty";
 import type { PtyManager } from "./pty";
 import { registerThemeIpcHandlers } from "./theme-ipc";
 import { defaultFsDeps } from "./fs-deps";
-import { getGlobalTheme } from "./db/theme-repo";
-import { windowBackgroundColor } from "./window-theme";
+import { getFirstPaintHint, getGlobalAppearance, getGlobalCanvas } from "./db/theme-repo";
+import { firstPaintArguments, resolveFirstPaint } from "./window-theme";
 import { registerFileIpcHandlers } from "./volli-fs";
-import { broadcastDataChanged, broadcastSessionsInterrupted } from "./broadcast";
+import {
+  broadcastDataChanged,
+  broadcastSessionsInterrupted,
+  broadcastSystemAppearance,
+} from "./broadcast";
 import { startOrphanSweep } from "./orphan-sweep";
 import { worktreeDeps } from "./worktree-runtime";
 import { getRetentionWatcher } from "./retention-runtime";
@@ -129,7 +143,7 @@ function openExternal(target: string): void {
   }
 }
 
-function createWindow(ptyManager: PtyManager, backgroundColor: string): BrowserWindow {
+function createWindow(ptyManager: PtyManager, firstPaint: FirstPaintHint): BrowserWindow {
   const mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -144,15 +158,27 @@ function createWindow(ptyManager: PtyManager, backgroundColor: string): BrowserW
     titleBarStyle: "hiddenInset",
     // Centers the 12px traffic-light group inside ChromeBar's 40px band
     // ((40 - 12) / 2 = 14). Must stay in sync with ChromeBar's h-10 height
-    // (chrome-bar.tsx), the same way backgroundColor below tracks --background.
+    // (chrome-bar.tsx), the same way backgroundColor below tracks the canvas.
     trafficLightPosition: { x: 10, y: 14 },
-    // The active theme's generated --background (window-theme.ts runs the same
-    // pure generator the renderer does) — prevents the white flash before
-    // first paint, and keeps the window edge from flashing the OLD palette
-    // during a resize after a theme change.
-    backgroundColor,
+    // The canvas's own base fill (window-theme.ts runs the same pure pipeline
+    // the renderer does, preferring the background the renderer last actually
+    // painted) — prevents the white flash before first paint, and keeps the
+    // window edge from flashing the OLD palette during a resize after a canvas
+    // change.
+    backgroundColor: firstPaint.background,
     webPreferences: {
       preload: join(__dirname, "preload.cjs"),
+      // Two facts the renderer needs before it can run a line of its own: the
+      // resolved light/dark mode, so the preload can stamp the mode class BEFORE
+      // the first frame (an `invoke()` round trip resolves a frame too late,
+      // which is the flash this whole path exists to prevent), and what the
+      // system is asking for, which is what an `auto` appearance resolves
+      // against and which the renderer cannot read for itself — its own
+      // `prefers-color-scheme` query answers from the `color-scheme` this app
+      // stamped. `nativeTheme` is read here, at construction, for the same
+      // reason `currentFirstPaint` reads it: `activate` can build a window long
+      // after boot.
+      additionalArguments: firstPaintArguments(firstPaint, nativeTheme.shouldUseDarkColors),
       contextIsolation: true,
       nodeIntegration: false,
       // Electron 20+ already defaults this on; explicit so it can't silently
@@ -298,10 +324,6 @@ app.whenReady().then(async () => {
   // resolve `app.getPath("userData")`, the same injection stance as the db path
   // and the attachment store below.
   const fsDeps = defaultFsDeps(app.getPath("userData"));
-  // Ghostty config read + live-reload watch, feeding restty's appearance. The
-  // `userData` root is where Volli's own ghostty OVERLAY files live (decision
-  // #67).
-  registerGhosttyConfigIpc(fsDeps);
 
   // Open (creating + migrating if needed) the SQLite db before the window
   // exists, so the renderer's boot-time volli:data-bootstrap call always has
@@ -343,6 +365,34 @@ app.whenReady().then(async () => {
       console.error("[volli] failed to sweep stale sessions:", errorMessage(error));
     }
   }
+  // Read fresh per call rather than once at boot: `activate` can re-create the
+  // window, and the user can flip the mode, long after this point.
+  const currentFirstPaint = (): FirstPaintHint => {
+    const systemPrefersDark = nativeTheme.shouldUseDarkColors;
+    const blank = { hint: null, canvas: null, appearance: null, systemPrefersDark };
+    if (!dbHandle.ok) return resolveFirstPaint(blank);
+    try {
+      return resolveFirstPaint({
+        hint: getFirstPaintHint(dbHandle.db),
+        canvas: getGlobalCanvas(dbHandle.db),
+        appearance: getGlobalAppearance(dbHandle.db),
+        systemPrefersDark,
+      });
+    } catch (error) {
+      // Never fatal: a window with a slightly-wrong edge color beats no window.
+      console.warn("[volli] failed to read the stored canvas:", errorMessage(error));
+      return resolveFirstPaint(blank);
+    }
+  };
+  // The one answer to "what mode is the app in?" that main has, shared by the
+  // window edge and by every ghostty chain read — a `theme = light:X,dark:Y`
+  // pair resolves to a different half in each.
+  const currentAppearance = (): ResolvedAppearance => currentFirstPaint().appearance;
+  // Ghostty config read + live-reload watch, feeding restty's appearance. The
+  // `userData` root is where Volli's own ghostty OVERLAY files live (decision
+  // #67). Registered after the db opens because the chain read needs the
+  // resolved mode, which lives in `app_state`.
+  registerGhosttyConfigIpc(fsDeps, currentAppearance);
   // Assigned once registerTerminalIpcHandlers runs below; the worktree
   // remove/orphan-delete guards read it lazily (only at invoke time, long after
   // boot) to refuse touching a directory a live session still runs in.
@@ -382,25 +432,29 @@ app.whenReady().then(async () => {
   // change can't reveal the previous palette.
   registerThemeIpcHandlers(
     dbHandle,
-    { fs: fsDeps, now: Date.now },
+    { fs: fsDeps, now: Date.now, appearance: currentAppearance },
     {
-      onGlobalThemeChanged: (theme) => {
-        // The theme is already persisted by the time this runs, so a generator
-        // failure must not turn a successful write into a rejected set-global.
-        // Leave the windows on their current edge color rather than repainting
-        // to the default: a theme that can't generate never reached the
-        // renderer's own surfaces either, so the old color is the honest one.
-        let color: string;
-        try {
-          color = windowBackgroundColor(theme);
-        } catch (error) {
-          console.warn("[volli] failed to derive the window background:", errorMessage(error));
-          return;
+      // The renderer has already run the whole pipeline, so main takes the color
+      // it actually painted rather than re-deriving one and hoping the two
+      // agree. No try/catch — there is nothing here to fail.
+      onFirstPaintChanged: (paint) => {
+        for (const window of BrowserWindow.getAllWindows()) {
+          window.setBackgroundColor(paint.background);
         }
-        for (const window of BrowserWindow.getAllWindows()) window.setBackgroundColor(color);
       },
     },
   );
+  // The OTHER half of `auto`: the system flipping while the app is running.
+  // Only main can see it — the renderer's `prefers-color-scheme` query resolves
+  // against the `color-scheme` this app stamps, so it reports the mode already
+  // painted and never changes on its own. Every window hears about the flip and
+  // re-resolves; a scope on an explicit light or dark ignores it, which is a
+  // question only the renderer can answer for the scope it is showing.
+  // `currentAppearance` above needs no such wiring: it reads `nativeTheme`
+  // fresh on every call already.
+  nativeTheme.on("updated", () => {
+    broadcastSystemAppearance(nativeTheme.shouldUseDarkColors);
+  });
   // Boots the PTY multiplexer (persists a durable record per session) and its
   // before-quit teardown (kills all PTYs, gated on busy sessions); needs the
   // db, so it registers here. The returned manager feeds each window's own
@@ -418,19 +472,7 @@ app.whenReady().then(async () => {
   // needs only runtimePaths (a pure join), so it can precede the window it feeds.
   const ptyManager = registerTerminalIpcHandlers(dbHandle, runtimePaths);
   ptyManagerRef = ptyManager;
-  // Read fresh per window rather than once at boot: `activate` can re-create
-  // the window long after the user has changed themes.
-  const currentWindowBackground = (): string => {
-    if (!dbHandle.ok) return windowBackgroundColor(null);
-    try {
-      return windowBackgroundColor(getGlobalTheme(dbHandle.db) ?? null);
-    } catch (error) {
-      // Never fatal: a window with a slightly-wrong edge color beats no window.
-      console.warn("[volli] failed to read the stored theme:", errorMessage(error));
-      return windowBackgroundColor(null);
-    }
-  };
-  const mainWindow = createWindow(ptyManager, currentWindowBackground());
+  const mainWindow = createWindow(ptyManager, currentFirstPaint());
 
   // Startup orphan sweep (worktree-support §7): prunes stale git metadata and
   // removes clean orphaned worktree dirs (branches retained); dirty orphans are
@@ -707,7 +749,7 @@ app.whenReady().then(async () => {
     // On macOS it's common to re-create a window when the dock icon is
     // clicked and there are no other windows open.
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow(ptyManager, currentWindowBackground());
+      createWindow(ptyManager, currentFirstPaint());
     }
   });
 });

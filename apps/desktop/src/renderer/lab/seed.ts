@@ -32,7 +32,6 @@ import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/worksp
 
 import type { ApiOverrides } from "./fake-api";
 import { labels, project, projects, sessions, signals, tickets } from "./fixtures";
-import { labTheme } from "./theme-choice";
 
 /**
  * A ticket whose worktree is safe to reclaim — the one row that renders the
@@ -130,11 +129,10 @@ export function seedBoard(): void {
  * terminal for a PTY that never existed. Anything a lab scratch is allowed to
  * set, this puts back.
  *
- * The theme is the lab's standing choice ({@link labTheme}), NOT the shipped
- * default — a theme picked in the Theming scratch has to survive the trip to
- * the surfaces worth judging it on. It is seeded `hydrated: true` for the same
- * reason: left un-hydrated, surfaces that gate on it (the pickers) would render
- * their loading state forever, which is a lie about a lab that has no main
+ * The theme store is seeded `hydrated: true` and otherwise left on its own
+ * defaults: the shipped canvas is already on the document from `globals.css`,
+ * and surfaces that gate on `hydrated` (Configure → Appearance) would otherwise
+ * render their loading state forever — a lie about a lab that has no main
  * process to be waiting on.
  */
 export function seedApp(): void {
@@ -142,8 +140,8 @@ export function seedApp(): void {
   seedBoard();
   useThemeStore.setState({
     hydrated: true,
-    global: labTheme(),
     preview: null,
+    previewAppearance: null,
     projectId: project.id,
     projectOverride: null,
   });

@@ -168,21 +168,17 @@ const EDITOR_THEMES: readonly EditorThemeDefinition[] = [
   },
 ];
 
-/** Fallback when the app theme slug is unknown or unset. */
-export const DEFAULT_EDITOR_THEME_ID = "one-dark-pro";
-
 /**
- * App-surface theme slug → closest popular shiki catalog id.
- * Unknown custom slugs fall through to `DEFAULT_EDITOR_THEME_ID`.
+ * What the editor wears when nothing has been chosen.
+ *
+ * A flat default, not a derivation. The seed system mapped each of its six
+ * theme slugs to a "closest" shiki theme, and both halves of that map are gone:
+ * there are no slugs, and the canvas deliberately does not drive the editor
+ * (decision 6 — Monaco owns its own pixels, and a syntax theme derived from a
+ * gradient is a worse syntax theme). The editor is the one surface that will not
+ * match the canvas, and this is the constant that says so.
  */
-const APP_SLUG_TO_EDITOR_THEME: Readonly<Record<string, string>> = {
-  ember: "one-dark-pro",
-  midnight: "tokyo-night",
-  moss: "everforest-dark",
-  iris: "catppuccin-mocha",
-  rose: "rose-pine",
-  graphite: "github-dark",
-};
+export const DEFAULT_EDITOR_THEME_ID = "one-dark-pro";
 
 // Shared IPC vocabulary ↔ renderer catalog: same ids, same order. A mismatch
 // means someone added a shiki theme here without updating @volli/shared (or
@@ -210,19 +206,18 @@ export function editorThemeImporterFor(id: string): EditorThemeImporter | null {
 }
 
 /**
- * Resolve the Monaco/shiki theme id to apply.
- * Explicit `editorThemeId` wins when it is in the catalog; otherwise map from
- * the active app theme slug (unknown → ember default).
+ * Resolve the Monaco/shiki theme id to apply: the authored id when it names a
+ * shipped theme, and {@link DEFAULT_EDITOR_THEME_ID} otherwise.
+ *
+ * "Otherwise" covers three cases that must not be told apart — nothing chosen,
+ * cleared back to the default, and an id from a build that shipped a theme this
+ * one doesn't. All three mean "the editor has no choice of its own", and the
+ * honest answer to that is one default rather than a guess.
  */
-export function resolveEditorThemeId(input: {
-  editorThemeId: string | null | undefined;
-  appThemeSlug: string | null | undefined;
-}): string {
+export function resolveEditorThemeId(input: { editorThemeId: string | null | undefined }): string {
   const explicit = input.editorThemeId;
   if (typeof explicit === "string" && explicit.length > 0 && isShippedEditorThemeId(explicit)) {
     return explicit;
   }
-
-  const slug = input.appThemeSlug ?? "";
-  return APP_SLUG_TO_EDITOR_THEME[slug] ?? DEFAULT_EDITOR_THEME_ID;
+  return DEFAULT_EDITOR_THEME_ID;
 }

@@ -37,7 +37,14 @@ export function NavList({ collapsed = false }: NavListProps) {
 
   return (
     <SidebarGroup className={collapsed ? "p-2" : undefined}>
-      <SidebarMenu>
+      {/* Centering on the cross axis is what actually moves the icons: the
+          button is a hardcoded `size-8!` (32px) and `SidebarGroup` a hardcoded
+          `p-2`, so neither dimension is aware of the strip's width and widening
+          the strip alone just dumps the extra space on the right. Centering
+          puts that fixed 32px in the middle of whatever the content box really
+          is, so the flanks come out equal by construction — no literal here to
+          keep in step with the button's size or the group's padding. */}
+      <SidebarMenu className={collapsed ? "items-center" : undefined}>
         {NAV_ITEMS.map(({ key, label, icon: Icon }) => (
           <SidebarMenuItem key={key}>
             {/* tooltip only shows in the collapsed icon strip (stock behavior).

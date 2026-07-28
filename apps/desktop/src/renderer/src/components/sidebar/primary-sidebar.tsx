@@ -27,6 +27,12 @@ import { useUiStore } from "@renderer/stores/ui";
  * The outer sidebar clips and cross-fades those layers while its width moves,
  * so text never reflows through intermediate widths and the collapsed icons
  * keep stable, symmetrical positions.
+ *
+ * Both layers size themselves off the shell's width tokens rather than `100%`,
+ * so `--sidebar-edge` has to come out of both: those tokens are border-box
+ * widths of `sidebar-container`, which spends a pixel of them on its own
+ * `border-r` (app-shell.tsx). Without it each layer is 1px wider than the pane
+ * clipping it and the overhang is shaved off the right.
  */
 export function PrimarySidebar() {
   const { state: sidebarState } = useSidebar();
@@ -43,7 +49,7 @@ export function PrimarySidebar() {
         inert={collapsed}
         data-sidebar-presentation="expanded"
         className={cn(
-          "absolute inset-y-0 left-0 flex min-h-0 w-[calc(var(--sidebar-width)-var(--rail-width))] flex-col overflow-hidden",
+          "absolute inset-y-0 left-0 flex min-h-0 w-[calc(var(--sidebar-width)-var(--rail-width)-var(--sidebar-edge))] flex-col overflow-hidden",
           "transition-[opacity,transform] duration-[120ms] ease-swift group-data-[motion=instant]/sidebar-wrapper:transition-none motion-reduce:transform-none motion-reduce:transition-opacity motion-reduce:duration-100",
           collapsed
             ? "pointer-events-none -translate-x-1.5 opacity-0"
@@ -96,7 +102,7 @@ export function PrimarySidebar() {
         inert={!collapsed}
         data-sidebar-presentation="collapsed"
         className={cn(
-          "absolute inset-y-0 left-0 flex w-[calc(var(--sidebar-width-icon)-var(--rail-width))] flex-col overflow-hidden",
+          "absolute inset-y-0 left-0 flex w-[calc(var(--sidebar-width-icon)-var(--rail-width)-var(--sidebar-edge))] flex-col overflow-hidden",
           "transition-[opacity,transform] duration-[120ms] ease-swift group-data-[motion=instant]/sidebar-wrapper:transition-none motion-reduce:transform-none motion-reduce:transition-opacity motion-reduce:duration-100",
           collapsed
             ? "translate-x-0 opacity-100 delay-[30ms]"
@@ -128,7 +134,10 @@ function SettingsMenuButton({
   onSelect(): void;
 }) {
   return (
-    <SidebarMenu>
+    // Centered on the cross axis in the icon strip, for the reason nav-list.tsx
+    // spells out: the button's 32px is fixed and the group's padding is fixed,
+    // so only the menu can put it in the middle of the strip's real width.
+    <SidebarMenu className={collapsed ? "items-center" : undefined}>
       <SidebarMenuItem>
         <SidebarMenuButton
           aria-label={collapsed ? "Settings" : undefined}

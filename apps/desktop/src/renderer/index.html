@@ -1,6 +1,11 @@
 <!doctype html>
-<!-- class="dark" is pinned: dark-only theme for now (see globals.css). -->
-<html class="dark">
+<!-- No mode class here on purpose. Preload stamps `light` or `dark` on this
+     element before any page script runs, from the hint main resolved at window
+     construction (see `stampFirstPaintAppearance` in src/preload/index.ts) — a
+     media query would only know the SYSTEM, and an inline script is blocked by
+     the CSP below. With neither class, globals.css's `:root` block renders
+     dark, exactly as the old pin did. -->
+<html>
   <head>
     <meta charset="UTF-8" />
     <title>Volli Code</title>

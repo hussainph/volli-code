@@ -1,4 +1,4 @@
-import type { Project, Ticket } from "@volli/shared";
+import type { Canvas, Project, Ticket } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
 import { useBoardStore } from "./board";
@@ -8,8 +8,10 @@ import {
   createProjectsStore,
   decodeProjectsUiState,
   encodeProjectsUiState,
+  useProjectsStore,
 } from "./projects";
 import { scratchScope, ticketScope, useSessionsStore } from "./sessions";
+import { useThemeStore } from "./theme";
 import { useWorkspaceStore } from "./workspace";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
@@ -39,6 +41,14 @@ afterEach(() => {
 
 /** Flush a fire-and-forget promise's `.then`/`.catch` chain. */
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+/** A workspace canvas nothing else in this file can be mistaken for. */
+const WORKSPACE_CANVAS: Canvas = {
+  stops: [{ hex: "#2ba39c", x: 0.2, y: 0.7 }],
+  primaryIndex: 0,
+  vibrancy: 0.9,
+  grain: 0,
+};
 
 function project(overrides: Partial<Project> & { id: string; path: string }): Project {
   return {
@@ -844,6 +854,61 @@ describe("hydrate", () => {
     store.getState().hydrate([project({ id: "a", path: "/a" })], null);
 
     expect(onSelectedProjectChange).not.toHaveBeenCalled();
+  });
+});
+
+describe("adoptProject", () => {
+  // The theme store owns the workspace canvas/appearance writes, but the row
+  // those columns live on is this store's — and this store's copy is the only
+  // one. The bug: a workspace canvas write persisted correctly while the stale
+  // row stayed in memory, so the next workspace switch rebuilt the scope from a
+  // `null` column and the workspace reverted to the global canvas.
+  it("takes the authoritative copy of the written row and leaves every other alone", () => {
+    const [a, b] = [project({ id: "a", path: "/a" }), project({ id: "b", path: "/b" })];
+    const { store } = freshStore();
+    store.getState().hydrate([a, b], a.id);
+
+    store.getState().adoptProject({ ...a, themeCanvas: WORKSPACE_CANVAS, updatedAt: 10 });
+
+    expect(store.getState().projects[0]?.themeCanvas).toEqual(WORKSPACE_CANVAS);
+    expect(store.getState().projects[1]).toBe(b);
+  });
+
+  it("ignores a row for a project that is no longer here", () => {
+    // A workspace removed while its canvas write was still in flight must not
+    // come back when the authoritative row lands.
+    const a = project({ id: "a", path: "/a" });
+    const { store } = freshStore();
+    store.getState().hydrate([a], a.id);
+    const before = store.getState().projects;
+
+    store.getState().adoptProject(project({ id: "removed", path: "/gone" }));
+
+    expect(store.getState().projects).toBe(before);
+  });
+
+  // The registration at this module's foot is the whole connection between the
+  // two stores — the theme store cannot import back without closing a cycle, so
+  // a dropped registrar would leave both sides individually correct and the
+  // write still dead in memory. Driven through both real singletons, because
+  // the wiring is what is under test.
+  it("is where a workspace canvas write from the theme store lands", async () => {
+    const a = project({ id: "a", path: "/a" });
+    const written: Project = { ...a, themeCanvas: WORKSPACE_CANVAS, updatedAt: 10 };
+    vi.stubGlobal("window", {
+      api: {
+        terminal: { kill: vi.fn().mockResolvedValue({ ok: true }) },
+        appState: { set: vi.fn().mockResolvedValue({ ok: true }) },
+        theme: {
+          setProjectCanvas: vi.fn().mockResolvedValue({ ok: true, project: written }),
+        },
+      },
+    });
+    useProjectsStore.getState().hydrate([a], null);
+
+    await useThemeStore.getState().setProjectCanvas(a.id, WORKSPACE_CANVAS);
+
+    expect(useProjectsStore.getState().projects).toEqual([written]);
   });
 });
 

@@ -6,12 +6,19 @@ import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle"
 import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
 import { Toaster as Sonner, type ToasterProps } from "sonner";
 
-// This app is dark-only (no next-themes provider, see globals.css) — theme is
-// hardcoded rather than read from a theme context.
+import { useResolvedAppearance } from "@renderer/lib/resolved-appearance";
+
+// Sonner needs the mode as a PROP — it swaps its own internal variables rather
+// than exposing them all — so this is one of the few places the resolved
+// appearance is read in JS instead of expressed as a token. The surface colors
+// below stay tokens regardless, so `theme` only decides the parts sonner keeps
+// to itself (its shadow and its close button).
 const Toaster = ({ ...props }: ToasterProps) => {
+  const appearance = useResolvedAppearance();
+
   return (
     <Sonner
-      theme="dark"
+      theme={appearance}
       className="toaster group"
       icons={{
         success: <CheckCircleIcon weight="fill" className="size-4" />,

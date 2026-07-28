@@ -55,50 +55,24 @@ describe("editorThemeImporterFor", () => {
 });
 
 describe("resolveEditorThemeId", () => {
-  it("defaults ember (and the shared default constant) to one-dark-pro", () => {
+  it("defaults to one-dark-pro when no id is authored", () => {
     expect(DEFAULT_EDITOR_THEME_ID).toBe("one-dark-pro");
-    expect(resolveEditorThemeId({ editorThemeId: null, appThemeSlug: "ember" })).toBe(
-      "one-dark-pro",
-    );
+    expect(resolveEditorThemeId({ editorThemeId: null })).toBe("one-dark-pro");
+    expect(resolveEditorThemeId({ editorThemeId: undefined })).toBe("one-dark-pro");
   });
 
-  it.each([
-    ["ember", "one-dark-pro"],
-    ["midnight", "tokyo-night"],
-    ["moss", "everforest-dark"],
-    ["iris", "catppuccin-mocha"],
-    ["rose", "rose-pine"],
-    ["graphite", "github-dark"],
-  ] as const)("maps app slug %s → %s when editorThemeId is unset", (slug, expected) => {
-    expect(resolveEditorThemeId({ editorThemeId: null, appThemeSlug: slug })).toBe(expected);
-    expect(resolveEditorThemeId({ editorThemeId: undefined, appThemeSlug: slug })).toBe(expected);
+  it("honors an explicit catalog editorThemeId", () => {
+    expect(resolveEditorThemeId({ editorThemeId: "dracula" })).toBe("dracula");
   });
 
-  it("falls back to one-dark-pro for unknown app theme slugs", () => {
-    expect(resolveEditorThemeId({ editorThemeId: null, appThemeSlug: "my-custom-theme" })).toBe(
-      DEFAULT_EDITOR_THEME_ID,
-    );
-    expect(resolveEditorThemeId({ editorThemeId: null, appThemeSlug: null })).toBe(
-      DEFAULT_EDITOR_THEME_ID,
-    );
+  it("falls back to the default for a non-shipped, non-empty id", () => {
+    // The whole of the fallback behaviour now: an id that names no catalog
+    // theme is indistinguishable from nothing chosen.
+    expect(resolveEditorThemeId({ editorThemeId: "not-a-theme" })).toBe(DEFAULT_EDITOR_THEME_ID);
   });
 
-  it("honors an explicit catalog editorThemeId over the app slug", () => {
-    expect(resolveEditorThemeId({ editorThemeId: "dracula", appThemeSlug: "ember" })).toBe(
-      "dracula",
-    );
-  });
-
-  it("ignores an unknown explicit editorThemeId and maps from the app slug", () => {
-    expect(resolveEditorThemeId({ editorThemeId: "volli-dark", appThemeSlug: "midnight" })).toBe(
-      "tokyo-night",
-    );
-    expect(resolveEditorThemeId({ editorThemeId: "not-a-theme", appThemeSlug: "unknown" })).toBe(
-      DEFAULT_EDITOR_THEME_ID,
-    );
-    expect(resolveEditorThemeId({ editorThemeId: "", appThemeSlug: "moss" })).toBe(
-      "everforest-dark",
-    );
+  it("falls back to the default for an empty string", () => {
+    expect(resolveEditorThemeId({ editorThemeId: "" })).toBe(DEFAULT_EDITOR_THEME_ID);
   });
 });
 

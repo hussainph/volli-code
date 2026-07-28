@@ -3,7 +3,13 @@ import { APCAcontrast, sRGBtoY } from "apca-w3";
 
 import { apcaLc, hexToOklch, hexToRgb, oklchToHex } from "./color";
 import { DEFAULT_THEME, type ThemeDefinition } from "./definition";
-import { generateThemeTokens, pickAccentLabel, solveLightnessForContrast } from "./generate";
+import {
+  generateThemeTokens,
+  pickAccentLabel,
+  solveLightnessForContrast,
+  solveLightnessOrCeiling,
+  THEME_CONTRAST_FLOORS,
+} from "./generate";
 import { THEME_TOKEN_NAMES, type ThemeTokens } from "./tokens";
 
 describe("generateThemeTokens", () => {
@@ -16,7 +22,7 @@ describe("generateThemeTokens", () => {
     // --primary is pinned at PRIMARY_LIGHTNESS for its job as a *fill*, which
     // leaves it at Lc 41 as text on --background — fine for icons, below the
     // floor for body copy. --primary-text is the second accent lightness that
-    // fixes every such site at once (docs/plans/theming-engine.md § Fold-ins).
+    // fixes every such site at once.
     expect(generateThemeTokens(DEFAULT_THEME)["--primary-text"]).toMatch(/^#[0-9a-f]{6}$/);
   });
 });
@@ -73,10 +79,7 @@ describe("the ember golden", () => {
     expect(generateThemeTokens(DEFAULT_THEME)["--destructive"]).toBe("#e5484d");
   });
 
-  it("matches the worked example in docs/plans/theming-engine.md", () => {
-    // The doc tabulates the ember ladder by hand. Agreement is exact on the
-    // rungs below, and within one 8-bit step on the rest — the residual is
-    // the doc rounding its intermediate chroma, not a difference in method.
+  it("pins the ember ladder's background, card and accent rungs", () => {
     const tokens = generateThemeTokens(DEFAULT_THEME);
     expect(tokens["--background"]).toBe("#15100e");
     expect(tokens["--card"]).toBe("#1b1412");
@@ -335,9 +338,9 @@ describe("--primary-text, the accent at body-copy contrast", () => {
   });
 
   it("fixes the Lc 41 finding that motivated it", () => {
-    // docs/plans/theming-engine.md § Fold-ins: ember's --primary is Lc 41 as
-    // body copy. Both halves are pinned so the gap cannot silently close from
-    // the wrong end — --primary must stay the fill it is.
+    // Ember's --primary is Lc 41 as body copy. Both halves are pinned so the
+    // gap cannot silently close from the wrong end — --primary must stay the
+    // fill it is.
     const tokens = generateThemeTokens(DEFAULT_THEME);
     expect(referenceLc(tokens["--primary"], tokens["--background"])).toBeCloseTo(41, 0);
     expect(referenceLc(tokens["--primary-text"], tokens["--background"])).toBeGreaterThanOrEqual(
@@ -352,10 +355,9 @@ describe("--primary-text, the accent at body-copy contrast", () => {
     expect(hexToOklch(tokens["--primary-text"]).h).toBeCloseTo(hexToOklch("#e8652a").h, 0);
   });
 
-  it("is deterministic and independent of the non-color fields", () => {
+  it("is deterministic", () => {
     const base = generateThemeTokens(DEFAULT_THEME)["--primary-text"];
     expect(generateThemeTokens(DEFAULT_THEME)["--primary-text"]).toBe(base);
-    expect(generateThemeTokens({ ...DEFAULT_THEME, grain: 0.9 })["--primary-text"]).toBe(base);
   });
 
   it("can be overridden like any other token", () => {
@@ -559,19 +561,6 @@ describe("determinism and idempotence", () => {
     const once = generateThemeTokens(DEFAULT_THEME);
     expect(generateThemeTokens(themeFor(once["--primary"]))).toEqual(once);
   });
-
-  it("does not depend on non-color fields of the definition", () => {
-    const base = generateThemeTokens(DEFAULT_THEME);
-    expect(
-      generateThemeTokens({
-        ...DEFAULT_THEME,
-        name: "Something Else",
-        slug: "something-else",
-        grain: 0.9,
-        canvas: { kind: "gradient", stops: ["#000000", "#ffffff"] },
-      }),
-    ).toEqual(base);
-  });
 });
 
 describe("overrides", () => {
@@ -689,6 +678,71 @@ describe("solveLightnessForContrast", () => {
     // target and a solved one were indistinguishable at the call site.
     expect(() => solveLightnessForContrast(110, 0.011, 40, "#faf7f5")).toThrow(/Lc 110/);
     expect(() => solveLightnessForContrast(110, 0.011, 40, "#15100e")).toThrow(/#15100e/);
+  });
+});
+
+describe("solveLightnessOrCeiling", () => {
+  // The same solver with the throw traded for a clamp — for callers whose INK is
+  // not fixed. The generator's backgrounds are constants, so a floor it cannot
+  // meet is a bug; the canvas layer solves at whatever chroma and hue a user's
+  // gradient implies, where an unreachable ask is a Tuesday.
+
+  it("is the solver itself whenever the target is reachable", () => {
+    for (const background of ["#15100e", "#faf7f5"]) {
+      expect(solveLightnessOrCeiling(60, 0.011, 40, background)).toBe(
+        solveLightnessForContrast(60, 0.011, 40, background),
+      );
+    }
+  });
+
+  it("returns the best the surface allows instead of throwing", () => {
+    // Lc 110 is past black-on-white, so nothing at this hue reaches it. The
+    // honest answer is everything the arm has rather than an exception that
+    // blanks a window on a swatch click — asserted as the CONTRAST delivered,
+    // since the nearest lightness that still measures the ceiling is a step or
+    // two in from the bound once the hex is quantised.
+    for (const [background, bound] of [
+      ["#faf7f5", 0],
+      ["#15100e", 1],
+    ] as const) {
+      const ceiling = apcaLc(oklchToHex(bound, 0.011, 40), background);
+      const solved = solveLightnessOrCeiling(110, 0.011, 40, background);
+      expect({ background, lc: apcaLc(oklchToHex(solved, 0.011, 40), background) }).toEqual({
+        background,
+        lc: expect.closeTo(ceiling, 4),
+      });
+    }
+  });
+
+  it("clamps a chromatic ink that simply cannot reach the ask", () => {
+    // The real case, and the reason this exists at all: a saturated hue on
+    // tinted paper, where the ceiling is measured at that chroma rather than at
+    // black. Copy stops darkening when the color space runs out instead of
+    // falling off it.
+    const ceiling = apcaLc(oklchToHex(0, 0.16, 60), "#f2ede4");
+    expect(ceiling).toBeLessThan(100);
+    const solved = solveLightnessOrCeiling(100, 0.16, 60, "#f2ede4");
+    expect(apcaLc(oklchToHex(solved, 0.16, 60), "#f2ede4")).toBeCloseTo(ceiling, 4);
+  });
+});
+
+describe("THEME_CONTRAST_FLOORS", () => {
+  it("states the floors this generator actually solves to", () => {
+    // The table is a restatement for sweeps, not a second source of truth: every
+    // number in it is the constant the solve uses. Asserted against the emitted
+    // set so a floor edited in one place and not the other fails here.
+    const tokens = generateThemeTokens(DEFAULT_THEME);
+    for (const { text, surface, floor, what } of THEME_CONTRAST_FLOORS) {
+      const lc = Math.abs(apcaLc(tokens[text], tokens[surface]));
+      expect({ what, meets: lc >= floor }).toEqual({ what, meets: true });
+    }
+  });
+
+  it("names each floor's own surface rather than one page for all of them", () => {
+    // The mistake it exists to prevent: a floor asserted against `--background`
+    // for a token painted on `--card` or on a button.
+    expect(THEME_CONTRAST_FLOORS.map(({ surface }) => surface)).toContain("--primary");
+    expect(THEME_CONTRAST_FLOORS.map(({ surface }) => surface)).toContain("--sidebar");
   });
 });
 

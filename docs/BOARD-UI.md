@@ -29,7 +29,8 @@ board open (`ensureSeeded`). Delete that file with the SQLite ticket layer.
 Board (flex min-h-0 flex-1 flex-col)
 ├─ BoardHeader   <PageHeader> (px-gutter py-3, DESIGN.md) — title · count · FilterBar
 └─ canvas        flex min-h-0 flex-1 items-start gap-3 overflow-x-auto px-gutter pb-4
-   ├─ BoardColumn ×shown   w-72 flex-none max-h-full min-h-0 flex-col rounded-lg bg-muted/40
+                 cursor-grab · scrollbar hidden · drag-to-pan (useBoardCanvasPan)
+   ├─ BoardColumn ×shown   w-72 flex-none max-h-[85%] min-h-0 flex-col rounded-lg bg-muted/40
    │  ├─ header  px-3 pt-2.5 pb-2 — label (text-ui medium) · count (mono xs muted)
    │  ├─ body    flex-1 min-h-0 overflow-y-auto px-2 pb-2 gap-2   ← the ONLY vertical scroller
    │  └─ footer  + New ghost button ⇄ inline composer
@@ -38,8 +39,15 @@ Board (flex min-h-0 flex-1 flex-col)
 
 Scroll contract: the **canvas** is the only horizontal scroller; each
 **column body** is the only vertical scroller; the page itself never
-scrolls. Columns are `items-start` children capped by `max-h-full`, so short
-columns hug their content and long ones scroll internally.
+scrolls. Columns are `items-start` children capped by `max-h-[85%]`, so short
+columns hug their content, long ones scroll internally, and a strip of canvas
+background always stays below the columns for mouse drag-to-pan (Trello-style).
+
+Horizontal navigation (mouse-friendly): left-drag the empty canvas (gaps /
+padding below columns), middle-drag anywhere on the canvas, Shift+wheel, or
+wheel on the canvas background. Trackpad sideways gestures keep working via
+native overflow. The horizontal scrollbar is hidden — the grab cursor is the
+affordance.
 
 ## Card anatomy (user decision: Linear-standard)
 

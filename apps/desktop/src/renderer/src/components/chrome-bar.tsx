@@ -8,7 +8,6 @@ import { SidebarIcon } from "@phosphor-icons/react/dist/csr/Sidebar";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
 
 import { CommandPalette } from "@renderer/components/command-palette";
-import { ThemePickerDialog } from "@renderer/components/theme/theme-picker";
 import { Button } from "@renderer/components/ui/button";
 import { SidebarTrigger } from "@renderer/components/ui/sidebar";
 import { useCommandPaletteShortcut } from "@renderer/hooks/use-command-palette-shortcut";
@@ -35,12 +34,6 @@ export function ChromeBar() {
   const fullScreen = useFullScreen();
   const terminalFocusTarget = useUiStore((state) => state.terminalFocusTarget);
   const [commandPaletteOpen, setCommandPaletteOpen] = useCommandPaletteShortcut();
-  // Local, per the codebase's dialog rule: one opener (⌘K's theme action), so
-  // no global ui-store flag. It lives up here rather than inside the palette
-  // because the picker previews against the live app — it must outlive the
-  // palette that launched it, and must not sit behind the palette's scrim.
-  const [themePickerOpen, setThemePickerOpen] = React.useState(false);
-
   React.useEffect(() => {
     if (terminalFocusTarget !== null) setCommandPaletteOpen(false);
   }, [terminalFocusTarget, setCommandPaletteOpen]);
@@ -51,8 +44,8 @@ export function ChromeBar() {
           flex row, so it stays put when the traffic-light spacer collapses. */}
       {/* No fill (#74): the band was already painted in the backdrop's own
           token, so it has nothing of its own to give up — it now sits on the
-          canvas layer like the rail does. The ⌘K pill keeps its
-          `bg-white/[0.06]`, which was already written as a material over a
+          canvas layer like the rail does. The ⌘K pill keeps its own material
+          (`bg-foreground/6`), which was already written as a material over a
           fill rather than as a fill of its own. */}
       <div className="app-region-drag relative flex h-10 shrink-0 items-center">
         {/* Clears the traffic lights (start x:10, group renders ≈60px wide,
@@ -87,12 +80,7 @@ export function ChromeBar() {
           </>
         )}
       </div>
-      <CommandPalette
-        open={commandPaletteOpen}
-        onOpenChange={setCommandPaletteOpen}
-        onChangeTheme={() => setThemePickerOpen(true)}
-      />
-      <ThemePickerDialog open={themePickerOpen} onOpenChange={setThemePickerOpen} />
+      <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
     </>
   );
 }
@@ -140,9 +128,7 @@ function TerminalFocusControls() {
         className="pointer-events-none absolute left-1/2 top-[21px] flex max-w-[45vw] -translate-x-1/2 -translate-y-1/2 items-center gap-2 text-xs text-muted-foreground"
       >
         <span className="shrink-0 font-medium text-foreground">{ticketLabel}</span>
-        <span aria-hidden="true" className="text-border">
-          /
-        </span>
+        <span aria-hidden="true">/</span>
         <span className="truncate">{sessionTitle ?? "Terminal"}</span>
       </div>
       <div className="flex-1" />
@@ -282,11 +268,20 @@ function CommandPaletteTrigger({ onClick }: { onClick(): void }) {
       // top-[21px] (not top-1/2): band center is 20px, but the sibling
       // icon-buttons carry translate-y-px to meet the traffic lights at ~21px.
       // Anchor the pill's -translate-y-1/2 center to 21px so it aligns with them.
-      className="app-region-no-drag absolute left-1/2 top-[21px] flex h-[26px] w-[380px] max-w-[40vw] -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-md border border-border/60 bg-white/[0.06] px-2 text-left text-ui text-muted-foreground transition-colors hover:border-border hover:bg-white/[0.08] focus-visible:border-ring/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/40"
+      //
+      // The fill is a MATERIAL over the canvas rather than a rung of the ladder,
+      // so it is a wash of the ink: `--foreground` runs toward white in dark and
+      // toward black in light, which is the direction a material has to move in
+      // each mode. A literal white lightens a light canvas and disappears.
+      className="app-region-no-drag absolute left-1/2 top-[21px] flex h-[26px] w-[380px] max-w-[40vw] -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-md border border-border/60 bg-foreground/6 px-2 text-left text-ui text-muted-foreground transition-colors hover:border-border hover:bg-foreground/8 focus-visible:border-ring/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/40"
     >
       <MagnifyingGlassIcon className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate">Search tickets and sessions</span>
-      <kbd className="shrink-0 rounded border border-border/70 bg-black/10 px-1.5 py-px font-sans text-label leading-none text-muted-foreground">
+      {/* The keycap reads as cut out of the pill, so it goes the other way:
+          toward the canvas floor. `--background` is near-black in dark (what
+          the literal used to be) and near-white in light, which is what a key
+          cap looks like on a light chrome. */}
+      <kbd className="shrink-0 rounded border border-border/70 bg-background/10 px-1.5 py-px font-sans text-label leading-none text-muted-foreground">
         ⌘K
       </kbd>
       <CaretDownIcon aria-hidden className="size-3 shrink-0" weight="bold" />
