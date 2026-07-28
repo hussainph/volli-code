@@ -12,7 +12,7 @@ import {
   deriveCanvasStops,
   canvasLayerBackground,
   MESH_HUE_SPREAD,
-} from "./canvas";
+} from "./legacy-canvas";
 
 /** Ember, the shipped seed. */
 const EMBER = "#e8652a";

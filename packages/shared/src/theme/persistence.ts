@@ -19,7 +19,7 @@
  * Pure: JSON + shape guards only, no Node/DOM.
  */
 
-import { CANVAS_MAX_STOPS } from "./canvas";
+import { CANVAS_MAX_STOPS } from "./legacy-canvas";
 import { isHexColor } from "./color";
 import type { ThemeCanvas, ThemeDefinition } from "./definition";
 import { isShippedEditorThemeId, type ShippedEditorThemeId } from "./editor-themes";
