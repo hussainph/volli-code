@@ -179,8 +179,9 @@ export function applyArcCanvas(state: ArcCanvasState | null): void {
   LIFT_VARIABLES.forEach((name, tier) => {
     root.style.setProperty(name, elevation.tiers[tier].veil);
   });
-  // The dark ladder has no label tier to override, so its own secondary token
-  // is what the seam should land on — see `deriveArcLabelInk`.
+  // Solved in both modes now that `textWeight` reaches dark; the fallback stays
+  // because the signature still admits null and a token this seam always reads
+  // must always have a value.
   root.style.setProperty(
     LABEL_VARIABLE,
     deriveArcLabelInk(state, resolved) ?? tokens["--muted-foreground"],

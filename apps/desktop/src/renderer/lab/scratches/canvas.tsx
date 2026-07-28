@@ -65,7 +65,7 @@ import {
 } from "../arc/model";
 import { applyArcCanvas, loadArcCanvas, saveArcCanvas } from "../arc/paint";
 import { arcElevation } from "../arc/surfaces";
-import { deriveArcLabelInk, deriveArcTokens, lightFloors } from "../arc/tokens";
+import { copyFloors, deriveArcLabelInk, deriveArcTokens } from "../arc/tokens";
 import { labTheme, setLabTheme } from "../theme-choice";
 
 export const title = "Canvas — Arc gradient editor";
@@ -537,13 +537,19 @@ function SeamRow({
 }
 
 /**
- * The five dials that only light mode uses, in one block.
+ * The five dials that position the surfaces, in one block.
  *
- * Shown in both modes rather than hidden in dark, and the note says why: they
- * are still the state you are editing, and a control that vanishes when you
- * flip appearance reads as a control you lost rather than one that does not
- * apply. `arc/paint.ts` neutralizes them for dark; this only has to be honest
- * about it.
+ * Every one of them runs in BOTH modes now. They were light-only, and the block
+ * carried an "inert in dark" note to say so — which was honest about a state
+ * that should not have existed: half the editor going dead on an appearance
+ * flip made dark mode a thing you inherited rather than a thing you tuned.
+ *
+ * The readouts below all measure the DERIVED set at the resolved mode rather
+ * than a fixed one. That matters most for the spread readout: the same dial
+ * position means a different multiplier in each ladder (light's corrects a
+ * mirror that came out too tight; dark's adjusts the generator's own rungs
+ * around a null at 0.5), so a number computed against one mode while the other
+ * is on screen would be a readout for a window nobody is looking at.
  */
 function LightTuning({
   state,
@@ -556,19 +562,21 @@ function LightTuning({
   chrome: CardChrome;
   onChange(patch: Partial<ArcCanvasState>): void;
 }) {
-  const floors = lightFloors(state.textWeight);
+  const floors = copyFloors(resolved, state.textWeight);
   // Measured off the derived set rather than off the slider, so the readout is
   // the thing on screen and not a restatement of the input.
-  const light = deriveArcTokens(state, "light");
-  const railDrop = hexToOklch(light["--background"]).L - hexToOklch(light["--rail"]).L;
+  const derived = deriveArcTokens(state, resolved);
+  // Absolute, because the rail sits BELOW the page in light and above it in
+  // dark. The readout is about how far apart they are, and a sign here would
+  // only report which ladder is on screen — which the mode row already says.
+  const railDrop = Math.abs(
+    hexToOklch(derived["--background"]).L - hexToOklch(derived["--rail"]).L,
+  );
 
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-baseline justify-between gap-2">
-        <span className={`text-label uppercase ${chrome.faint}`}>Light surfaces</span>
-        {resolved === "dark" ? (
-          <span className={`text-label ${chrome.faint}`}>inert in dark</span>
-        ) : null}
+        <span className={`text-label uppercase ${chrome.faint}`}>Surfaces</span>
       </div>
       <TuneSlider
         label="Lift"
@@ -1310,9 +1318,11 @@ function settingsDigest(
   label: string | null,
   towardPaper: number,
 ): string {
-  const floors = lightFloors(state.textWeight);
-  const light = deriveArcTokens(state, "light");
-  const railDrop = hexToOklch(light["--background"]).L - hexToOklch(light["--rail"]).L;
+  const floors = copyFloors(resolved, state.textWeight);
+  const derived = deriveArcTokens(state, resolved);
+  const railDrop = Math.abs(
+    hexToOklch(derived["--background"]).L - hexToOklch(derived["--rail"]).L,
+  );
   const measured = [
     `seam        ${state.seam} — sidebar ${percent(towardPaper)} canvas→paper`,
     `viewed in   ${resolved}${state.mode === "auto" ? " (auto)" : ""}`,

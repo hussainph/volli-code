@@ -14,6 +14,8 @@
  */
 import {
   apcaLc,
+  DEFAULT_THEME,
+  generateThemeTokens,
   hexToOklch,
   isHexColor,
   oklchToHex,
@@ -22,12 +24,18 @@ import {
 } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
-import { DEFAULT_ARC_CANVAS, type ArcCanvasState, type ArcResolvedMode } from "./model";
+import {
+  DEFAULT_ARC_CANVAS,
+  effectiveChroma,
+  type ArcCanvasState,
+  type ArcResolvedMode,
+} from "./model";
 import {
   ARC_TOKEN_FLOORS,
+  copyFloors,
+  DARK_LADDER,
   deriveArcLabelInk,
   deriveArcTokens,
-  lightFloors,
   LIGHT_LADDER,
 } from "./tokens";
 
@@ -74,6 +82,132 @@ describe("deriveArcTokens", () => {
       }
     }
     expect(failures).toEqual([]);
+  });
+
+  it("clears them at every DIAL position too, or hits the physical ceiling trying", () => {
+    // The sweep above moves the canvas and leaves the dials where they ship.
+    // That was enough while spread, tint and weight only reached light — dark
+    // was the generator's own output, already proven. Now that all three move
+    // the dark ladder too, "the floors hold" is a claim about the corners of a
+    // three-dial cube, and the corners are where a re-solve against a moved
+    // surface goes wrong. Extremes only: the interior is interpolation between
+    // them, and a floor is a monotone thing to miss.
+    //
+    // The escape clause is not a softened assertion, it is the honest contract.
+    // A floor can be asked for on a surface where NO ink of any hue reaches it:
+    // at spread 1 the light `--sidebar` is pushed to L 0.839, where pure black
+    // scores 74.9 against a declared 75. That is the spread dial outrunning the
+    // colour space rather than the solver failing, and it is pre-existing — the
+    // dial already reached there in light before dark had one. So the assertion
+    // is the one that can actually be kept: every token either meets its floor
+    // or is AT the best its surface allows, which still catches any token short
+    // for a reason other than physics.
+    //
+    // The ceiling is measured from the two extremes of the space rather than
+    // from the ink's own hue, so it stays an upper bound on every candidate:
+    // nothing at any chroma beats black or white on a given surface.
+    const failures: string[] = [];
+    for (const { hex, vibrancy, resolved } of everyCase()) {
+      for (const surfaceSpread of [0, 1]) {
+        for (const cardTint of [0, 0.25]) {
+          for (const textWeight of [0, 1]) {
+            const state = { ...canvasOf(hex, vibrancy), surfaceSpread, cardTint, textWeight };
+            const tokens = deriveArcTokens(state, resolved);
+            for (const { text, surface, floor, what } of ARC_TOKEN_FLOORS) {
+              const lc = Math.abs(apcaLc(tokens[text], tokens[surface]));
+              const ceiling = Math.max(
+                Math.abs(apcaLc("#000000", tokens[surface])),
+                Math.abs(apcaLc("#ffffff", tokens[surface])),
+              );
+              if (lc < floor && lc < ceiling - 0.5) {
+                failures.push(
+                  `${what} scored ${lc.toFixed(1)} < ${floor} (ceiling ${ceiling.toFixed(1)}) — ${hex} @ v${vibrancy} ${resolved} spread${surfaceSpread} tint${cardTint} weight${textWeight}`,
+                );
+              }
+            }
+          }
+        }
+      }
+    }
+    expect(failures.slice(0, 8)).toEqual([]);
+  });
+
+  it("keeps the unreachable corner to the one surface that is genuinely capped", () => {
+    // The escape clause above is only honest if it stays narrow. This pins the
+    // exception: at the DEFAULT spread every floor is reachable in both modes,
+    // so the cap is a property of the top of that dial and not a standing hole
+    // in the contract. If a retune makes some other rung uncapped-at-default,
+    // this fails and the clause above has to be re-argued.
+    const capped: string[] = [];
+    for (const { hex, vibrancy, resolved } of everyCase()) {
+      const tokens = deriveArcTokens(canvasOf(hex, vibrancy), resolved);
+      for (const { surface, floor, what } of ARC_TOKEN_FLOORS) {
+        const ceiling = Math.max(
+          Math.abs(apcaLc("#000000", tokens[surface])),
+          Math.abs(apcaLc("#ffffff", tokens[surface])),
+        );
+        if (ceiling < floor) capped.push(`${what} — ${hex} @ v${vibrancy} ${resolved}`);
+      }
+    }
+    expect(capped).toEqual([]);
+  });
+
+  it("leaves the dark ladder exactly as generated at the dials' null position", () => {
+    // `DARK_LADDER.spread` is centred so 0.5 is a multiplier of 1.0, and the
+    // documented claim is that the middle of the dial reproduces the shipped
+    // ladder byte for byte. Asserting it is what stops a later retune of that
+    // range from quietly moving dark's resting appearance — the range may widen
+    // or narrow, but its centre is a fixed point.
+    //
+    // Tint is zeroed rather than left at its shipped 0.05 because that dial has
+    // no null: any mix at all moves the rungs, by design.
+    for (const { hex, vibrancy } of everyCase().filter((one) => one.resolved === "dark")) {
+      const state = { ...canvasOf(hex, vibrancy), surfaceSpread: 0.5, cardTint: 0 };
+      const tokens = deriveArcTokens(state, "dark");
+      // The generator called directly, on the seed `deriveArcTokens` builds. The
+      // seed derivation is restated here rather than reached for, which is the
+      // same deliberate duplication `ARC_TOKEN_FLOORS` makes: if that derivation
+      // changes and this does not, the test fails, and that is the intended
+      // failure mode rather than a maintenance cost.
+      const { C, h } = hexToOklch(hex);
+      const generated = generateThemeTokens({
+        ...DEFAULT_THEME,
+        seed: oklchToHex(LIGHT_LADDER.seedCarrierL, effectiveChroma(C, "dark", vibrancy), h),
+      });
+      const label = `${hex} @ v${vibrancy}`;
+      expect({ label, surfaces: DARK_LADDER.surfaces.map((name) => tokens[name]) }).toEqual({
+        label,
+        surfaces: DARK_LADDER.surfaces.map((name) => generated[name]),
+      });
+      // …and the rung the spread dial is judged on is a real gap, either way up.
+      const gap = Math.abs(hexToOklch(tokens["--background"]).L - hexToOklch(tokens["--rail"]).L);
+      expect({ case: `${hex} @ v${vibrancy}`, separated: gap > 0.01 }).toEqual({
+        case: `${hex} @ v${vibrancy}`,
+        separated: true,
+      });
+    }
+  });
+
+  it("moves the dark ladder in the direction the spread dial says", () => {
+    // The dial's whole contract in dark: below 0.5 the rungs close on the page,
+    // above it they open away. Measured on `--rail` against `--background`,
+    // which is the pair the readout reports and the one the tab strip is made
+    // of. Stated as |ΔL| because dark's rail sits BELOW the page and light's
+    // above — the direction of the ladder is not what this is testing.
+    for (const { hex, vibrancy } of everyCase().filter((one) => one.resolved === "dark")) {
+      const gapAt = (surfaceSpread: number) => {
+        const tokens = deriveArcTokens(
+          { ...canvasOf(hex, vibrancy), surfaceSpread, cardTint: 0 },
+          "dark",
+        );
+        return Math.abs(hexToOklch(tokens["--background"]).L - hexToOklch(tokens["--rail"]).L);
+      };
+      const [tight, middle, open] = [gapAt(0), gapAt(0.5), gapAt(1)];
+      expect({ case: `${hex} @ v${vibrancy}`, opens: tight < middle && middle < open }).toEqual({
+        case: `${hex} @ v${vibrancy}`,
+        opens: true,
+      });
+    }
   });
 
   it("emits every token name as a paintable hex", () => {
@@ -189,7 +323,7 @@ describe("deriveArcTokens", () => {
       for (const textWeight of [0, 0.5, 1]) {
         const state = { ...canvasOf(hex, vibrancy), textWeight };
         const tokens = deriveArcTokens(state, "light");
-        const floors = lightFloors(textWeight);
+        const floors = copyFloors("light", textWeight);
         const label = deriveArcLabelInk(state, "light");
         // Each tier on the surface it is SOLVED against — the whole point of
         // the correction. Measuring both on the lightest rung is what let

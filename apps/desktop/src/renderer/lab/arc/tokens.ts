@@ -14,13 +14,14 @@
  *     (`--muted-foreground` and friends) is unreadable on a light surface until
  *     the whole token set flips with it.
  *
- * Two paths, and only one of them is new work:
+ * Two paths, built from opposite ends:
  *
- *  - **Dark** delegates entirely to the app's own `generateThemeTokens`, seeded
- *    from the canvas's primary. That generator is the proven ladder — every
- *    lightness is a constant in it and every foreground is APCA-solved — so
- *    hand-building a second dark ladder here would be inventing a way to be
- *    wrong.
+ *  - **Dark** starts from the app's own `generateThemeTokens`, seeded from the
+ *    canvas's primary, and MOVES it. That generator is the proven ladder —
+ *    every lightness is a constant in it and every foreground is APCA-solved —
+ *    so hand-building a second dark ladder here would be inventing a way to be
+ *    wrong. {@link DARK_LADDER} therefore holds no rungs: only how far the
+ *    dials may push the generator's, read back out of its own output.
  *  - **Light** has no shipped counterpart (the app is dark-only, `class="dark"`
  *    pinned), so {@link LIGHT_LADDER} is a mirror of `generate.ts`: same shape,
  *    same floor list, same solver, inverted rungs. It deliberately reuses that
@@ -28,6 +29,11 @@
  *    it — the solver already chooses its search arm FROM the background, which
  *    is exactly the light-mode case its own docstring says it was generalized
  *    for.
+ *
+ * Both paths take the same three dials in the same order — spread the rungs,
+ * mix them toward the canvas, then solve the copy against where they ended up.
+ * Dark used to take none of them, which made half the editor's controls
+ * disappear when the sun went down.
  *
  * Pure and deterministic, like the generator it mirrors. No DOM: `paint.ts`
  * writes the result.
@@ -158,6 +164,79 @@ export const LIGHT_LADDER = {
 } as const;
 
 /**
+ * The dark counterpart — what the three token dials do to a ladder this module
+ * does not author.
+ *
+ * Dark still delegates its rungs to `generateThemeTokens`, and that is not
+ * negotiable: every lightness in it is a measured constant and every foreground
+ * is APCA-solved. So this table holds no rungs of its own. It states how far the
+ * dials may move the generator's, and the surfaces they are allowed to move.
+ *
+ * Reading the rung lightnesses back OUT of the generated set rather than
+ * transcribing them here is the point of that arrangement: a copy would be a
+ * second source of truth that drifts silently the first time the generator is
+ * retuned, and the failure would look like a spread dial that stopped landing
+ * where its readout said.
+ */
+export const DARK_LADDER = {
+  /**
+   * The surfaces and edges the spread and the tint move — everything in the
+   * token set that is a FILL. Foregrounds are excluded because they are solved
+   * against these afterward, and the accent family because `--primary` is a
+   * solved pair whose floor is measured on the button itself.
+   */
+  surfaces: [
+    "--rail",
+    "--background",
+    "--card",
+    "--popover",
+    "--secondary",
+    "--muted",
+    "--accent",
+    "--sidebar",
+    "--sidebar-accent",
+    "--border",
+    "--border-hover",
+    "--border-strong",
+    "--input",
+    "--sidebar-border",
+  ] satisfies readonly ThemeTokenName[],
+
+  /**
+   * The spread multiplier's range — and unlike light's, it straddles 1.
+   *
+   * That asymmetry is the honest one rather than an oversight. Light's range
+   * starts at 1 and only opens up because its ladder is a MIRROR with a known
+   * defect: perceptual step size is not symmetric about mid-grey, so rungs
+   * transcribed from the dark table came out too tight near paper and the dial's
+   * job there is a correction. Dark's rungs are the originals, measured at the
+   * lightness they were measured for, so its dial has nothing to correct — it
+   * exists to let the ladder be tightened as well as opened.
+   *
+   * Centred so 0.5 is exactly 1.0, which means the middle of the dial reproduces
+   * the shipped dark ladder byte for byte. That is the anchor a later adjustment
+   * should be checked against.
+   */
+  spread: { min: 0.6, max: 1.4 },
+
+  /**
+   * What fraction of light's tint the same dial position buys here.
+   *
+   * Below 1 on purpose, and the reason is the distance being mixed across. The
+   * light path mixes the paper toward a pastel that is already near it, so a
+   * quarter of it is a tint; the dark canvas is a saturated wash sitting 0.10 of
+   * lightness ABOVE the page, so an identical fraction would drag the card most
+   * of the way out of the dark ladder — and take every foreground solved against
+   * it along, since those are re-solved on the moved rung.
+   *
+   * Scaling the dial rather than clamping it keeps the control linear over its
+   * whole travel. A ceiling would give the top of the slider a dead zone, which
+   * is the one thing a dial being tuned by eye must not have.
+   */
+  tintScale: 0.55,
+} as const;
+
+/**
  * What light-mode copy is held to, as a function of `state.textWeight`.
  *
  * The dark ladder gets ONE floor per role because it only ever paints on
@@ -229,8 +308,48 @@ export const LIGHT_FLOORS = {
   sidebar: 75,
 } as const;
 
-/** {@link LIGHT_FLOORS} with the weight applied — the numbers actually solved for. */
-export function lightFloors(textWeight: number): {
+/**
+ * The same contract in dark — what `textWeight` moves once the dial reaches
+ * this mode.
+ *
+ * The shape is deliberately identical to {@link LIGHT_FLOORS}, and so is the
+ * one structural decision in it: the range STARTS at the declared floor and
+ * only reaches upward. It is tempting to centre it on the shipped value instead
+ * so the middle of the dial is a null — that was the first cut here, and the
+ * sweep caught it. `ARC_TOKEN_FLOORS` is a contract, and a dial whose lower half
+ * sits under it is a control for generating violations: at weight 0 it measured
+ * Lc 50.5 against a declared 60.
+ *
+ * So dark reads exactly as light does — the old floor at 0, near-body at 1 —
+ * and the null lives at the BOTTOM of the travel in both modes rather than in
+ * the middle. What differs is only where each starts, because each starts at
+ * its own generator's floor.
+ *
+ * The travel is a little wider than light's on secondary (18 Lc against 14),
+ * because APCA's curve is shallower at the dark end: the same Lc step buys less
+ * visible change on a near-black page than on paper, and a range that measured
+ * the same would read as a smaller dial.
+ */
+export const DARK_FLOORS = {
+  /** Body copy, on `--background` — the generator's own floor, unmoved. */
+  body: 90,
+  /** Secondary copy, on `--card`: the generator's own floor at 0, near-body at 1. */
+  secondary: { min: 60, max: 78 },
+  /**
+   * Micro-labels — a POSITION between body and secondary, exactly as in light.
+   * Same travel and same backwards direction: turning copy weight up moves
+   * labels toward body, which is a smaller fraction rather than a larger one.
+   */
+  labelTowardSecondary: { min: 0.55, max: 0.1 },
+  /** Sidebar nav. Unmoved, and `lab.css` flips it to the canvas ink anyway. */
+  sidebar: 75,
+} as const;
+
+/** What copy is held to at this weight — the numbers actually solved for. */
+export function copyFloors(
+  resolved: ArcResolvedMode,
+  textWeight: number,
+): {
   /** Lc, on `--background`. */
   body: number;
   /** Lc, on `--card`. */
@@ -240,8 +359,9 @@ export function lightFloors(textWeight: number): {
   /** Lc, on `--sidebar`. */
   sidebar: number;
 } {
-  const t = Math.min(1, Math.max(0, textWeight));
-  const { body, secondary, labelTowardSecondary, sidebar } = LIGHT_FLOORS;
+  const t = clamp01(textWeight);
+  const { body, secondary, labelTowardSecondary, sidebar } =
+    resolved === "dark" ? DARK_FLOORS : LIGHT_FLOORS;
   return {
     body,
     secondary: lerp(secondary.min, secondary.max, t),
@@ -255,30 +375,48 @@ function lerp(from: number, to: number, t: number): number {
 }
 
 /**
- * A rung's authored lightness → its lightness at this spread — see
- * {@link LIGHT_LADDER.spread}.
+ * A rung's lightness → its lightness at this spread, for EITHER ladder.
  *
  * Built once per derivation and returned as a closure because the fade needs
  * the ladder's FULL depth to normalize against, and re-deriving that inside the
  * loop would compute the same constant eleven times while making the rule
  * itself harder to read than the one sentence it is.
  *
- * The top rung is the origin, so `--background` is a fixed point at every
- * setting: paper is the one surface with nowhere to go, and a ladder whose
- * lightest rung drifted with a spacing control would turn a spacing control
- * into a brightness control.
+ * `origin` is a fixed point at every setting, and it is `--background` in both
+ * ladders: the page is the one surface with nowhere to go, and a ladder whose
+ * anchor drifted with a spacing control would turn a spacing control into a
+ * brightness control.
+ *
+ * The distance from that origin is SIGNED, which is what lets one function
+ * serve both. Light's rungs all sit below paper, so the sign never varies and
+ * the original form (`paper - drop * …`) was equivalent. Dark's do not: `--rail`
+ * is below `--background` and `--card` above it, so a formula that assumed one
+ * direction would push half the ladder the wrong way. The fade normalizes on
+ * |distance| for the same reason.
  */
+function spreadCurve(origin: number, deepest: number, gain: number): (L: number) => number {
+  return (L) => {
+    const delta = L - origin;
+    // Full gain at the origin, none at the far end, linear between.
+    const reach = deepest === 0 ? 1 : Math.min(1, Math.abs(delta) / deepest);
+    return origin + delta * lerp(gain, 1, reach);
+  };
+}
+
+/** {@link spreadCurve} over the light ladder's authored rungs. */
 function spreadFactor(surfaceSpread: number): (L: number) => number {
   const { min, max } = LIGHT_LADDER.spread;
-  const gain = lerp(min, max, Math.min(1, Math.max(0, surfaceSpread)));
   const rungs = LIGHT_LADDER.rungs;
   const paper = rungs[0].L;
-  const deepest = paper - rungs[rungs.length - 1].L;
-  return (L) => {
-    const drop = paper - L;
-    // Full gain at the paper end, none at the far end, linear between.
-    return paper - drop * lerp(gain, 1, drop / deepest);
-  };
+  return spreadCurve(
+    paper,
+    paper - rungs[rungs.length - 1].L,
+    lerp(min, max, clamp01(surfaceSpread)),
+  );
+}
+
+function clamp01(value: number): number {
+  return Math.min(1, Math.max(0, value));
 }
 
 /**
@@ -356,7 +494,7 @@ function lightTokens(
   }
   const card = ladder["--card"];
   const sidebar = ladder["--sidebar"];
-  const floors = lightFloors(state.textWeight);
+  const floors = copyFloors("light", state.textWeight);
 
   // Every foreground here is solved against a CARD surface and nothing else.
   // Secondary copy also appears on the canvas — in a sidebar that gave up its
@@ -410,6 +548,94 @@ function lightTokens(
 }
 
 /**
+ * The dark ladder, with the three token dials applied to it.
+ *
+ * The opposite construction to {@link lightTokens}, and deliberately so. That
+ * one BUILDS a ladder from authored rungs because light has no shipped
+ * counterpart; this one starts from the generator's output and moves it, because
+ * dark does. Every rung lightness, chroma and hue below is read back out of
+ * `dark` rather than restated — the one arrangement in which a later retune of
+ * `generate.ts` cannot leave this file quietly describing a ladder that no
+ * longer exists.
+ *
+ * Same three steps as the light path, in the same order and for the same
+ * reasons: spread the rungs, mix them toward the canvas, then solve the copy
+ * against where they ended up. Order matters at both joints — spreading a mixed
+ * ladder would let the tint decide the spacing, and solving before either would
+ * hold copy to surfaces it no longer sits on.
+ *
+ * What is NOT touched: `--primary`/`--primary-foreground` (a solved pair whose
+ * floor is measured on the button itself, so it holds on whatever page the
+ * button lands on) and the hue-locked `--destructive` family.
+ */
+function darkTokens(state: ArcCanvasState, dark: ThemeTokens): ThemeTokens {
+  const { surfaces, spread: range, tintScale } = DARK_LADDER;
+
+  const rungs = surfaces.map((token) => {
+    const { L, C, h } = hexToOklch(dark[token]);
+    return { token, L, C, h };
+  });
+  const origin = hexToOklch(dark["--background"]).L;
+  const spread = spreadCurve(
+    origin,
+    Math.max(...rungs.map((rung) => Math.abs(rung.L - origin))),
+    lerp(range.min, range.max, clamp01(state.surfaceSpread)),
+  );
+
+  // The canvas AS PAINTED, exactly as the light path mixes toward: at vibrancy 0
+  // the wash is near-neutral, so mixing 5% of it in is 5% of nearly nothing and
+  // quiet stays quiet.
+  const canvas = hexToOklch(effectiveStopHexes(state, "dark")[state.primaryIndex]);
+  const mix = clamp01(state.cardTint) * tintScale;
+
+  const ladder = {} as Record<ThemeTokenName, string>;
+  for (const rung of rungs) {
+    // Each rung keeps its OWN chroma and hue rather than taking a common tint.
+    // The generator varies chroma per rung on purpose (a constant reads as
+    // draining of color across a ladder), and that variation is exactly what
+    // this function has no business re-deciding.
+    ladder[rung.token] = oklchToHex(
+      lerp(spread(rung.L), canvas.L, mix),
+      lerp(rung.C, canvas.C, mix),
+      rung.h,
+    );
+  }
+
+  const floors = copyFloors("dark", state.textWeight);
+  // The ink's own chroma and hue, taken from the generator's solved body copy so
+  // the re-solve moves lightness ONLY. Anything else here would be inventing a
+  // second opinion about how chromatic dark text should be.
+  const { C: inkC, h: inkH } = hexToOklch(dark["--foreground"]);
+  const ink = (targetLc: number, surface: string) =>
+    oklchToHex(solveClamped(targetLc, inkC, inkH, surface), inkC, inkH);
+
+  // Body on `--background`, secondary on `--card`, nav on `--sidebar` — the same
+  // three surfaces the light path solves against, so the two modes rank their
+  // copy identically. A window that ordered its tiers one way in light and
+  // another in dark would be two design languages wearing one theme.
+  const foreground = ink(floors.body, ladder["--background"]);
+  const accent = hexToOklch(dark["--primary"]);
+
+  return {
+    ...dark,
+    ...ladder,
+    "--foreground": foreground,
+    "--card-foreground": foreground,
+    "--popover-foreground": foreground,
+    "--secondary-foreground": foreground,
+    "--accent-foreground": foreground,
+    "--sidebar-accent-foreground": foreground,
+    "--muted-foreground": ink(floors.secondary, ladder["--card"]),
+    "--sidebar-foreground": ink(floors.sidebar, ladder["--sidebar"]),
+    "--primary-text": oklchToHex(
+      solveClamped(60, accent.C, accent.h, ladder["--card"]),
+      accent.C,
+      accent.h,
+    ),
+  };
+}
+
+/**
  * The full app token set a canvas implies — what the inner card, its copy and
  * its controls become while this gradient is on the window.
  *
@@ -425,7 +651,7 @@ export function deriveArcTokens(state: ArcCanvasState, resolved: ArcResolvedMode
     ...DEFAULT_THEME,
     seed: oklchToHex(LIGHT_LADDER.seedCarrierL, chroma, h),
   });
-  return resolved === "dark" ? dark : lightTokens(state, chroma, h, dark);
+  return resolved === "dark" ? darkTokens(state, dark) : lightTokens(state, chroma, h, dark);
 }
 
 /**
@@ -438,13 +664,14 @@ export function deriveArcTokens(state: ArcCanvasState, resolved: ArcResolvedMode
  * tier should exist at all — so this returns a bare hex and `paint.ts` writes
  * it as a `--lab-` property that only the seam reads.
  *
- * Null in dark mode, and null is the answer rather than a fallback color: the
- * dark ladder's secondary tier already reads at the weight the owner wanted
- * from the light one, so there is nothing to override and the seam should not
- * match at all.
+ * Solved in BOTH modes now. It used to return null in dark on the grounds that
+ * the dark ladder's secondary tier already read at the weight the owner wanted,
+ * so there was nothing to override — true while `textWeight` could not reach
+ * dark, and false the moment it could. A tier that exists at one appearance and
+ * not the other would make the dial change the NUMBER of copy rungs on screen
+ * as well as their weight.
  */
 export function deriveArcLabelInk(state: ArcCanvasState, resolved: ArcResolvedMode): string | null {
-  if (resolved === "dark") return null;
   const tokens = deriveArcTokens(state, resolved);
   const body = hexToOklch(tokens["--foreground"]);
   const secondary = hexToOklch(tokens["--muted-foreground"]);
@@ -454,6 +681,6 @@ export function deriveArcLabelInk(state: ArcCanvasState, resolved: ArcResolvedMo
   // Chroma and hue come from body: the two are within a rounding step of each
   // other (same `tint`, same `hue`) and taking them from one end rather than
   // interpolating keeps the three tiers exactly one family.
-  const t = lightFloors(state.textWeight).labelTowardSecondary;
+  const t = copyFloors(resolved, state.textWeight).labelTowardSecondary;
   return oklchToHex(lerp(body.L, secondary.L, t), body.C, body.h);
 }
