@@ -215,22 +215,30 @@ html[data-lab-canvas] .app-region-drag {
 html[data-lab-canvas] [data-slot="sidebar"].bg-sidebar-veil {
   background-image: linear-gradient(var(--lab-lift-2), var(--lab-lift-2));
 }
-/* …and in LIGHT mode the veil under it is dropped, so lift owns the tier
+/* …and the veil under it is dropped, in BOTH modes, so lift owns the tier
  * relationship outright.
  *
- * The two were working against each other. `--sidebar-veil` reproduces the
- * ladder's sidebar rung over whatever is beneath it, and the light ladder puts
- * that rung BELOW the rail — so the veil pulls the sidebar 0.015 of lightness
- * DOWN at the same moment lift pushes it up, and the outer/inner gap the owner
- * asked for lost a third of itself to a correction aimed at the other mode.
+ * The two were working against each other in light: `--sidebar-veil` reproduces
+ * the ladder's sidebar rung over whatever is beneath it, and the light ladder
+ * puts that rung BELOW the rail — so the veil pulled the sidebar 0.015 of
+ * lightness DOWN at the same moment lift pushed it up, and the outer/inner gap
+ * the owner asked for lost a third of itself to a correction aimed at the other
+ * mode.
  *
- * The rationale the veil was built on is a dark-mode one — "the sidebar is a
- * lighter rung than the rail, so plain transparency would darken it" — and
- * light mode is exactly where it does not hold. Dark keeps it untouched.
+ * Dark was exempted on the grounds that the veil is a dark-mode idea doing its
+ * job there — and that turned out to be the same collision, not its absence.
+ * The dark ladder's `--sidebar` is L 0.199 while a dark canvas measures 0.276
+ * (ember), so the veil reproduces a rung that is DARKER than the gradient under
+ * it: it was already walking the sidebar toward the card, which is exactly what
+ * a positive lift does, at a fixed amount with no dial on it. Two mechanisms
+ * pushing the same way is not separation, it is a dial whose zero is somewhere
+ * other than zero.
  *
- * What this costs at lift 0 is that same 0.015: the invisible amount this whole
- * exercise started from. */
-html[data-lab-canvas="light"] [data-slot="sidebar"].bg-sidebar-veil {
+ * What it costs is the veil's own step at lift 0 — 0.015 in light, rather more
+ * in dark. That is the point rather than the price: lift 0 now means the same
+ * sentence in both modes (every on-canvas tier IS the canvas), which is what
+ * makes the seam table's share of zero mean anything in dark. */
+html[data-lab-canvas] [data-slot="sidebar"].bg-sidebar-veil {
   background-color: transparent;
 }
 

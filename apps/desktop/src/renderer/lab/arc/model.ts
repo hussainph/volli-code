@@ -116,38 +116,69 @@ export const ARC_TUNING = {
   },
 
   /**
-   * Light-mode surface elevation — how far the surfaces sitting ON the canvas
-   * move away from it.
+   * Surface elevation — how far the surfaces sitting ON the canvas move away
+   * from it.
    *
    * A signed amount rather than a mode, because the two arrangements worth
    * comparing are the same arrangement with the sign turned over. Positive
    * lifts each tier toward paper (frosted: the window reads canvas → chrome →
-   * sidebar → card, each step closer); negative sinks it toward the ink
+   * sidebar → card, each step closer); negative sinks it away from it
    * (recessed: the light ladder's original direction, where the sidebar is a
-   * shadowed trough). Zero is neither, and is exactly today's picture.
+   * shadowed trough). Zero is neither: every tier is the bare canvas.
    *
-   * Light only. Dark already separates its tiers by a veil that reads clearly
-   * near-black (ΔL 0.022 measured, against light's 0.015 on a far brighter
-   * backdrop), which is the whole reason this exists for one mode and not both.
+   * **Both modes**, and the reason it reads as one mechanism rather than two is
+   * that "toward paper" is a direction on the ladder, not a direction on the
+   * lightness axis. Measured across seeds at vibrancy 1, `--background` sits
+   * ABOVE the canvas in light (ember 0.78 → 0.949) and BELOW it in dark (0.276
+   * → 0.176): the dark card is a well cut into a bright wash, not a panel
+   * raised off a dim one. So the same target produces the frosted reading in
+   * both, and it is the SIGN of the lightness step that flips, not the model.
+   *
+   * That is also why the sink target is derived rather than declared — see
+   * `liftTarget` in surfaces.ts. Hardcoding "sink means darker" would make the
+   * slider's two halves travel the same way in dark, where paper is already the
+   * darker end.
    */
   lift: {
     /**
      * Alpha at lift 1, for the tier furthest from the canvas.
      *
-     * 0.7 rather than a gentler number because the alpha buys a share of a
-     * headroom that is not fixed: the distance between the canvas and the paper
-     * closes as the canvas gets lighter, and at the top of the light band
+     * Light is 0.7 rather than a gentler number because the alpha buys a share
+     * of a headroom that is not fixed: the distance between the canvas and the
+     * paper closes as the canvas gets lighter, and at the top of the light band
      * (a near-white seed) it is barely 0.10 of lightness for BOTH tiers to
      * divide. At 0.5 the outer tier's share of that landed at ΔL 0.022 —
      * inside the same invisible range this whole module exists to escape.
+     *
+     * Dark is LOWER for the opposite reason, and the number comes from matching
+     * what light actually delivers rather than from taste. The overlay
+     * composites in sRGB bytes, where the curve is far steeper near black, so
+     * the same alpha buys much more lightness down there. Measured at 0.7 in
+     * dark: ember −0.072, a white seed −0.146 — against light's own 0.070–0.119
+     * band across the same seeds. 0.5 brings dark's top end (−0.101 on white)
+     * back inside it.
+     *
+     * What no alpha fixes is the SPREAD across seeds in dark: a dark blue seed
+     * puts the canvas at L 0.205 with paper at 0.176, so the entire distance the
+     * dial can travel is 0.029 and every setting is invisible. That is a
+     * property of that canvas rather than of this number — the fix is Vibrancy
+     * or a lighter seed, and the honest behaviour here is a dial that runs out
+     * of room rather than one that invents some.
      */
-    liftAlpha: 0.7,
+    liftAlpha: { light: 0.7, dark: 0.5 },
     /**
-     * The sinking counterpart, deliberately smaller. A dark overlay on a pastel
-     * canvas costs lightness far faster than a paper one gains it, so matched
-     * alphas would make the two halves of the slider travel at different rates.
+     * The sinking counterpart, smaller in both modes and by a wider margin in
+     * dark.
+     *
+     * Same asymmetry, same cause, seen from each end: sink walks toward whatever
+     * ink is on the FAR side of the canvas from the paper, so in light it is a
+     * dark overlay on a pastel wash and in dark it is a near-white one on a dim
+     * wash. Both of those move lightness faster than their lifting counterpart
+     * does — a dark overlay drains a pastel quickly, and a light overlay near
+     * black gains even quicker — so matched alphas would make the two halves of
+     * the slider travel at different rates.
      */
-    sinkAlpha: 0.3,
+    sinkAlpha: { light: 0.3, dark: 0.12 },
     /**
      * Each on-canvas tier's share of that alpha, in the order the seam applies
      * them: the chrome band and the project rail first, the inner sidebar
@@ -191,19 +222,34 @@ export const ARC_TUNING = {
   },
 
   /**
-   * Light-mode elevation shadows — the blurred halo a raised surface casts.
+   * Elevation shadows — the blurred halo a raised surface casts.
    *
-   * Light mode only, and for a structural reason rather than a taste one: on a
-   * near-black canvas a shadow has almost no luminance left to remove, so dark
-   * mode signals elevation by making a surface LIGHTER and a shadow there is
-   * cost without effect. That asymmetry is why the app has none today.
+   * This was light-only, on the argument that a near-black canvas has almost no
+   * luminance left for a shadow to remove. The argument is sound and it was
+   * about the wrong backdrop: it describes the APP's dark theme, whose page sits
+   * at L 0.18, not this canvas, which is a vivid wash measuring L 0.21–0.44
+   * across the seeds. There is real luminance there to take away, so the dial
+   * has something to buy in both modes.
    *
    * The color is the canvas's own hue at low lightness, never neutral black. A
    * neutral shadow over a warm pastel reads as dirt on the canvas — the grey
    * desaturates the pixels under it instead of darkening them.
+   *
+   * Both rungs sit BELOW every canvas their mode can produce, which is the one
+   * thing this pair has to get right: light's 0.32 clears the light band's floor
+   * (0.78 on the darkest seed) comfortably, but reusing it in dark would put the
+   * shadow ABOVE a dim canvas (0.205 on a dark blue seed) and the halo would
+   * glow instead of fall. 0.06 sits under the darkest canvas and under the paper
+   * besides, so it darkens whatever it lands on.
+   *
+   * Where it BITES is uneven in dark, and that is honest rather than fixable
+   * here: `card` and `overlay` fall on the canvas and read clearly, while
+   * `raised` falls on `--card` (L 0.20) where there genuinely is little left to
+   * remove. Dark signals in-card elevation by making a surface lighter, which is
+   * the token ladder's job and not this dial's.
    */
   shadow: {
-    color: { L: 0.32, C: 0.05 },
+    color: { light: { L: 0.32, C: 0.05 }, dark: { L: 0.06, C: 0.03 } },
     /** Peak alphas at strength 1. Every layer scales linearly from here. */
     raised: [
       { y: 1, blur: 2, spread: 0, alpha: 0.12 },

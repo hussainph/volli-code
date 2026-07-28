@@ -10,19 +10,26 @@
  * where a given ΔL reads far larger. Two panes that differ by a hundredth of a
  * lightness unit on a bright saturated backdrop are one pane.
  *
- * So light mode gets two mechanisms dark mode does not need:
+ * So the canvas gets two mechanisms the app's own ladder does not have:
  *
  *  - **Lift** — a translucent overlay per on-canvas tier, cumulative outward
  *    from the gradient. Signed, because the two arrangements worth comparing
  *    are the same arrangement with the sign turned over: positive walks the
  *    chrome and the rail, then the sidebar, toward paper, so the window reads
  *    canvas → chrome → sidebar → card with every step closer to you; negative
- *    walks them toward the ink, restoring the recessed reading the light ladder
- *    started with. One dial, both models, and zero is exactly today's picture.
- *  - **Shadow** — the blurred halo under a raised surface. It is a light-mode
- *    tool for a structural reason and not a stylistic one: a shadow works by
- *    removing luminance, and on a near-black canvas there is almost none left
- *    to remove. That is why the app ships none.
+ *    walks them the other way, restoring the recessed reading the light ladder
+ *    started with. One dial, both models, and zero is the bare canvas.
+ *  - **Shadow** — the blurred halo under a raised surface. A shadow works by
+ *    removing luminance, so it needs a backdrop with some: that is why the app
+ *    ships none on its L 0.18 page, and why this canvas — a vivid wash at
+ *    L 0.21–0.44 even in dark — can carry one.
+ *
+ * BOTH RUN IN BOTH MODES, which they did not originally. What changes with the
+ * mode is not whether they apply but which way the ladder points: `--background`
+ * is the lightest surface in light and one of the darkest in dark, so "toward
+ * paper" is a direction on the ladder rather than on the lightness axis. Every
+ * mode-dependent number is measured and lives in `ARC_TUNING`; nothing below
+ * branches on `resolved` except to read one of those.
  *
  * Pure and DOM-free like its neighbours. It sits above both of them —
  * `model.ts` owns the gradient, `tokens.ts` owns the paper, and elevation is
@@ -83,31 +90,60 @@ function clamp(value: number, min: number, max: number): number {
  * point of this module importing the token set: a frosted sidebar that walked
  * toward some locally-invented "paper" would drift away from the card as the
  * card's own tint changed, and the two surfaces reading as the same material is
- * the entire effect. Sinking walks toward the canvas ink for the same reason —
- * it is the darkest color the canvas family contains, so a sunk tier stays in
- * the family instead of turning grey.
+ * the entire effect. Sinking walks toward a canvas ink for the same reason — it
+ * is the far end of the canvas's own family, so a sunk tier stays in the family
+ * instead of turning grey.
+ *
+ * WHICH ink is measured, not assumed, and that one line is what lets the same
+ * dial serve both modes. "Sink" means away from the paper, and the paper is not
+ * always the lighter end: in light it sits above the canvas (ember 0.78 →
+ * 0.949) and in dark below it (0.276 → 0.176), because the dark card is a well
+ * cut into a bright wash. Hardcoding the dark ink — which is what this did while
+ * it was light-only — would send both halves of the slider the same way in dark,
+ * a control with two labels and one behaviour.
+ *
+ * Comparing the two lightnesses rather than branching on `resolved` is
+ * deliberate beyond tidiness: the light band runs to L 0.90 and a dark canvas
+ * reaches 0.44, so the mode is a proxy for the thing that actually matters and
+ * the measurement is the thing itself.
  */
 function liftTarget(
   state: ArcCanvasState,
+  resolved: ArcResolvedMode,
   tokens: ThemeTokens,
 ): { hex: string; alpha: number } | null {
   const { liftAlpha, sinkAlpha } = ARC_TUNING.lift;
   const lift = clamp(state.lift, -1, 1);
   if (lift === 0) return null;
-  if (lift > 0) return { hex: tokens["--background"], alpha: lift * liftAlpha };
-  const { darkL, darkC } = ARC_TUNING.ink;
+  const paper = tokens["--background"];
+  if (lift > 0) return { hex: paper, alpha: lift * liftAlpha[resolved] };
+  const { lightL, lightC, darkL, darkC } = ARC_TUNING.ink;
   const { h } = hexToOklch(state.stops[state.primaryIndex].hex);
-  return { hex: oklchToHex(darkL, darkC, h), alpha: -lift * sinkAlpha };
+  const away =
+    hexToOklch(paper).L > hexToOklch(arcBaseFillHex(state, resolved)).L
+      ? { L: darkL, C: darkC }
+      : { L: lightL, C: lightC };
+  return { hex: oklchToHex(away.L, away.C, h), alpha: -lift * sinkAlpha[resolved] };
 }
 
 /**
  * The elevation a canvas implies: the lift overlays for each on-canvas tier,
  * what they composite to, and the shadow set.
  *
- * Dark mode returns the inert answer — no overlays, no shadows — rather than a
- * quieter version of the light one. Its tiers are already separated by the
- * veil, and stacking a second mechanism on top would double-count the
- * separation the veil exists to provide.
+ * Runs in both modes. Dark used to return the inert answer on the grounds that
+ * its tiers were already separated by `--sidebar-veil` and a second mechanism
+ * would double-count — but the two were never independent enough for that to
+ * hold. Measured on the dark ladder, `--sidebar` (L 0.199) sits BELOW a dark
+ * canvas (0.276 on ember), so the veil was already walking the sidebar toward
+ * the card: the same direction as a positive lift, at a fixed amount, with no
+ * dial on it. So `lab.css` now drops that veil whenever a canvas is armed in
+ * either mode, and this is the one mechanism that positions the on-canvas
+ * tiers.
+ *
+ * Two things fall out of that, both wanted. Lift 0 means the same thing in both
+ * modes — every tier IS the canvas — and the seam share table finally applies
+ * in dark, so `continuous` genuinely puts the sidebar back on the gradient
+ * there instead of only claiming to.
  */
 export function arcElevation(
   state: ArcCanvasState,
@@ -116,19 +152,11 @@ export function arcElevation(
 ): ArcElevation {
   const inert: ArcLiftTier = { veil: "transparent", surfaces: [] };
   const shares = ARC_TUNING.lift.seams[state.seam];
-  if (resolved === "dark") {
-    return {
-      tiers: shares.map(() => inert),
-      surfaces: [],
-      sidebarTowardPaper: 0,
-      shadows: { raised: "none", card: "none", overlay: "none" },
-    };
-  }
 
   // Every pool plus the base fill: a tier spans the whole window, so it sits on
   // all of them and its worst reading is the one that counts.
   const beneath = [...effectiveStopHexes(state, resolved), arcBaseFillHex(state, resolved)];
-  const target = liftTarget(state, tokens);
+  const target = liftTarget(state, resolved, tokens);
   const tiers = shares.map((share) => {
     // A share of zero is `continuous` saying the tier is not a surface at all.
     // Returning the inert answer rather than a 0-alpha overlay keeps that a
@@ -179,12 +207,13 @@ export function arcShadows(
   resolved: ArcResolvedMode,
 ): { raised: string; card: string; overlay: string } {
   const strength = clamp(state.shadow, 0, 1);
-  if (resolved === "dark" || strength === 0) {
+  if (strength === 0) {
     return { raised: "none", card: "none", overlay: "none" };
   }
   const { color, raised, card, overlay } = ARC_TUNING.shadow;
   const { h } = hexToOklch(state.stops[state.primaryIndex].hex);
-  const { r, g, b } = channels(oklchToHex(color.L, color.C, h));
+  const { L, C } = color[resolved];
+  const { r, g, b } = channels(oklchToHex(L, C, h));
   const layers = (spec: readonly { y: number; blur: number; spread: number; alpha: number }[]) =>
     spec
       .map(

@@ -9,10 +9,10 @@
  * rather than merely small, or every surface in the app would carry a faint
  * unexplained wash forever.
  */
-import { apcaLc, hexToOklch } from "@volli/shared";
+import { apcaLc, hexToOklch, oklchToHex } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
-import { arcBaseFillHex, DEFAULT_ARC_CANVAS, type ArcCanvasState } from "./model";
+import { arcBaseFillHex, ARC_TUNING, DEFAULT_ARC_CANVAS, type ArcCanvasState } from "./model";
 import { arcElevation, arcShadows } from "./surfaces";
 import { deriveArcTokens } from "./tokens";
 
@@ -99,16 +99,67 @@ describe("lift", () => {
     expect(elevation.shadows).toEqual({ raised: "none", card: "none", overlay: "none" });
   });
 
-  it("leaves dark mode alone at every setting", () => {
-    // Dark already separates its tiers with a veil that reads. Stacking lift on
-    // top would double-count exactly the separation the veil provides.
-    for (const lift of [-1, -0.5, 0.5, 1]) {
-      const elevation = elevationOf(canvasOf("#e8652a", { lift, shadow: 1 }), "dark");
-      expect({ lift, veils: elevation.tiers.map((tier) => tier.veil) }).toEqual({
-        lift,
-        veils: ["transparent", "transparent"],
-      });
-      expect({ lift, card: elevation.shadows.card }).toEqual({ lift, card: "none" });
+  it("is inert at zero in DARK too, not just light", () => {
+    // The other half of the contract above, and the one that had to be earned:
+    // dark used to be inert at every setting, so its zero was free. Now that the
+    // dial runs there, zero has to be a real zero — `lab.css` drops the sidebar
+    // veil in both modes on the strength of this, and a faint overlay left
+    // behind here would be a wash nobody could switch off.
+    const elevation = elevationOf(canvasOf("#e8652a", { lift: 0, shadow: 0 }), "dark");
+    expect(elevation.tiers.map((tier) => tier.veil)).toEqual(["transparent", "transparent"]);
+    expect(elevation.surfaces).toEqual([]);
+    expect(elevation.shadows).toEqual({ raised: "none", card: "none", overlay: "none" });
+  });
+
+  it("sends the two halves of the dial opposite ways in BOTH modes", () => {
+    // The invariant that replaces "dark is inert", and the one the derived sink
+    // target exists for. Lift walks toward `--background` and sink away from it
+    // — but `--background` is the LIGHTEST surface in light and one of the
+    // darkest in dark, so a hardcoded "sink means darker" (which is what this
+    // was while it was light-only) would send both halves the same way in dark.
+    //
+    // Stated as a sign comparison rather than as two absolute ΔLs because the
+    // two modes disagree about which sign is which, and that disagreement is
+    // precisely the thing under test.
+    for (const mode of ["light", "dark"] as const) {
+      for (const hex of HUES) {
+        const canvasL = hexToOklch(arcBaseFillHex(canvasOf(hex), mode)).L;
+        const at = (lift: number) => {
+          const surfaces = elevationOf(canvasOf(hex, { ...LADDER, lift }), mode).tiers[1].surfaces;
+          // The base fill is last — the same surface `canvasL` is measured on.
+          return hexToOklch(surfaces[surfaces.length - 1]).L - canvasL;
+        };
+        const [up, down] = [at(1), at(-1)];
+        expect({ mode, hex, opposed: up * down < 0 }).toEqual({ mode, hex, opposed: true });
+        // …and lifting always closes on the paper, whichever side that is.
+        const towardPaper = hexToOklch(deriveArcTokens(canvasOf(hex), mode)["--background"]).L;
+        expect({ mode, hex, closes: Math.sign(up) === Math.sign(towardPaper - canvasL) }).toEqual({
+          mode,
+          hex,
+          closes: true,
+        });
+      }
+    }
+  });
+
+  it("keeps every shadow below the canvas it falls on, in both modes", () => {
+    // A shadow works by removing luminance, so its colour has to be darker than
+    // the backdrop or the halo glows instead of falling. Light's rung was chosen
+    // against the light band and reusing it in dark would have failed exactly
+    // here: 0.32 sits ABOVE a dark blue canvas at 0.205.
+    for (const mode of ["light", "dark"] as const) {
+      for (const hex of HUES) {
+        const state = canvasOf(hex, { shadow: 1 });
+        const { L, C } = ARC_TUNING.shadow.color[mode];
+        const shadowL = hexToOklch(oklchToHex(L, C, hexToOklch(hex).h)).L;
+        const canvasL = hexToOklch(arcBaseFillHex(state, mode)).L;
+        expect({ mode, hex, darker: shadowL < canvasL }).toEqual({ mode, hex, darker: true });
+        expect({ mode, hex, casts: arcShadows(state, mode).card !== "none" }).toEqual({
+          mode,
+          hex,
+          casts: true,
+        });
+      }
     }
   });
 
