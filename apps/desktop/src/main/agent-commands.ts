@@ -45,6 +45,7 @@ import { listAllLabels } from "./db/labels-repo";
 import { listProjects } from "./db/projects-repo";
 import { getSession, listSessions, setHarnessSessionId } from "./db/sessions-repo";
 import { getTicket, listArchivedTicketsByProject, listTicketsByProject } from "./db/tickets-repo";
+import { recordHarnessDelivery } from "./harness-registry";
 import { readWorktreeDiff, readWorktreeStatus, runGitCapturing } from "./worktree";
 import type { RunGit } from "./worktree";
 import { isInside } from "./worktree/paths";
@@ -879,12 +880,22 @@ export function createAgentCommandService(
         if (harnessSessionId !== null) {
           setHarnessSessionId(options.db, session.id, harnessSessionId);
         }
+        // The event arrived, so the harness can plainly deliver it: the ledger
+        // learns that here, at the one place a delivery is observed, and before
+        // anything is decided about this one. What comes back is what Volli now
+        // knows about the capability — `absent` only for a harness it has no
+        // record of at all.
+        const status = recordHarnessDelivery(options.db, session.harnessId, event, now());
         // ONE event earns a notification: a human is blocking the agent's
         // progress. `subagent.completed` is telemetry — a subagent finishing is
         // not the parent finishing — and `permission.requested` is bound to the
         // same native signal as `input.needed` on every harness that has one, so
         // notifying on both would double every notification it earns.
-        if (event === "input.needed") {
+        //
+        // And only a verified capability interrupts a human. A declaration
+        // cannot earn a notification (the plan doc's rule), which costs a real
+        // delivery nothing — it verified itself one line above.
+        if (event === "input.needed" && status === "verified") {
           const ticket = session.ticketId ? getTicket(options.db, session.ticketId) : undefined;
           const ticketProject = ticket
             ? projects.find(({ id }) => id === ticket.projectId)

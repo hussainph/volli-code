@@ -4,9 +4,10 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import type { AgentRequest, HarnessEventNotice } from "@volli/shared";
+import type { AgentRequest, HarnessEventNotice, HarnessId } from "@volli/shared";
 
 import { createAttachment } from "./db/attachments-repo";
+import { getRegisteredHarness, recordHarnessTrust } from "./db/harness-registry-repo";
 import { insertProject } from "./db/projects-repo";
 import { getSession, insertSession } from "./db/sessions-repo";
 import { insertTicket } from "./db/tickets-repo";
@@ -1358,6 +1359,7 @@ describe("agent command service", () => {
     function hookService(
       options: Partial<Parameters<typeof createAgentCommandService>[0]> = {},
       ticketId: string | null = null,
+      harnessId: HarnessId = "claude-code",
     ) {
       ctx = openTestDb();
       insertProject(
@@ -1367,10 +1369,7 @@ describe("agent command service", () => {
       if (ticketId !== null) {
         insertTicket(ctx.db, testTicket("project-one", { id: ticketId, ticketNumber: 12 }));
       }
-      insertSession(
-        ctx.db,
-        testSession("project-one", ticketId, { id: sessionId, harnessId: "claude-code" }),
-      );
+      insertSession(ctx.db, testSession("project-one", ticketId, { id: sessionId, harnessId }));
       const service = createAgentCommandService({
         db: ctx.db,
         appVersion: "1.2.3",
@@ -1467,6 +1466,54 @@ describe("agent command service", () => {
         await hook({ harness: "claude-code", event });
       }
 
+      expect(notices).toEqual([]);
+    });
+
+    it("writes a delivery into the ledger of the registered harness that sent it", async () => {
+      const registered = "my-harness" as HarnessId;
+      const notices: [string, string][] = [];
+      const { hook } = hookService(
+        { notify: (title, message) => notices.push([title, message]) },
+        "ticket-registered",
+        registered,
+      );
+      recordHarnessTrust(
+        ctx.db,
+        {
+          slug: registered,
+          manifestPath: "/home/dev/.agents/harnesses/my-harness/harness.json",
+          manifestSha256: "a1",
+          decision: "trusted",
+          // Claims nothing: the ledger is about deliveries, and this one has
+          // promised none.
+          declaredEvents: [],
+        },
+        1000,
+      );
+
+      await hook({ harness: registered, event: "input.needed" });
+
+      expect(getRegisteredHarness(ctx.db, registered)?.verifiedEvents).toEqual(["input.needed"]);
+      // The first one a harness ever sends is exactly the one a human is
+      // waiting on — verifying it must not cost it its notification.
+      expect(notices).toEqual([["VC-12 needs you", "my-harness is waiting on a human"]]);
+    });
+
+    it("records an event from a harness it has no record of, and notifies nobody", async () => {
+      const notices: [string, string][] = [];
+      const pushed: HarnessEventNotice[] = [];
+      const { hook } = hookService(
+        {
+          notify: (title, message) => notices.push([title, message]),
+          onHarnessEvent: (notice) => pushed.push(notice),
+        },
+        "ticket-unknown",
+        "ghost-harness" as HarnessId,
+      );
+
+      await hook({ harness: "ghost-harness", event: "input.needed" });
+
+      expect(pushed.map((notice) => notice.event)).toEqual(["input.needed"]);
       expect(notices).toEqual([]);
     });
   });

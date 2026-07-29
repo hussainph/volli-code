@@ -4,12 +4,15 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
+import type { HarnessId } from "@volli/shared";
+
 import {
   decideRegisteredHarnesses,
+  recordHarnessDelivery,
   scanHarnessManifests,
   trustedHarnessAdapters,
 } from "./harness-registry";
-import { recordHarnessTrust } from "./db/harness-registry-repo";
+import { getRegisteredHarness, recordHarnessTrust } from "./db/harness-registry-repo";
 import { openTestDb, type TestDb } from "./db/test-helpers";
 
 let root: string;
@@ -205,5 +208,54 @@ describe("decideRegisteredHarnesses", () => {
 
     expect(decided[0]?.decision).toBe("blocked");
     expect(trustedHarnessAdapters(decided)).toEqual([]);
+  });
+});
+
+describe("recordHarnessDelivery", () => {
+  const registered = "my-harness" as HarnessId;
+
+  function trust(declaredEvents: readonly ("input.needed" | "turn.completed")[]): void {
+    recordHarnessTrust(
+      fixture.db,
+      {
+        slug: registered,
+        manifestPath: join(root, "harnesses/my-harness/harness.json"),
+        manifestSha256: "a1",
+        decision: "trusted",
+        declaredEvents,
+      },
+      1000,
+    );
+  }
+
+  it("writes the delivery down before it reads the ledger back", () => {
+    trust([]);
+
+    // Nothing was claimed, so nothing could have been verified in advance: the
+    // first arrival is the evidence, and it counts on the way in rather than
+    // after a second one nobody may ever send.
+    expect(recordHarnessDelivery(fixture.db, registered, "input.needed", 1100)).toBe("verified");
+    expect(getRegisteredHarness(fixture.db, registered)?.verifiedEvents).toEqual(["input.needed"]);
+  });
+
+  it("leaves a claim that has never arrived unconfirmed", () => {
+    trust(["input.needed", "turn.completed"]);
+
+    recordHarnessDelivery(fixture.db, registered, "input.needed", 1100);
+
+    const record = getRegisteredHarness(fixture.db, registered);
+    expect(record?.verifiedEvents).toEqual(["input.needed"]);
+    expect(record?.declaredEvents).toContain("turn.completed");
+  });
+
+  it("calls an event from a harness it has no record of absent", () => {
+    expect(recordHarnessDelivery(fixture.db, "ghost" as HarnessId, "input.needed", 1100)).toBe(
+      "absent",
+    );
+  });
+
+  it("needs no ledger for a harness Volli ships an adapter for", () => {
+    expect(recordHarnessDelivery(fixture.db, "claude-code", "input.needed", 1100)).toBe("verified");
+    expect(getRegisteredHarness(fixture.db, "claude-code")).toBeUndefined();
   });
 });

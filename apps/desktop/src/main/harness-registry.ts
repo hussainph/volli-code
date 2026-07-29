@@ -19,10 +19,22 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type Database from "better-sqlite3";
-import { harnessTrustDecision, parseHarnessManifest } from "@volli/shared";
-import type { HarnessAdapter, HarnessTrustDecision, ManifestError } from "@volli/shared";
+import {
+  harnessEventStatus,
+  harnessTrustDecision,
+  isFirstClassHarnessId,
+  parseHarnessManifest,
+} from "@volli/shared";
+import type {
+  HarnessAdapter,
+  HarnessEvent,
+  HarnessEventStatus,
+  HarnessId,
+  HarnessTrustDecision,
+  ManifestError,
+} from "@volli/shared";
 
-import { getRegisteredHarness } from "./db/harness-registry-repo";
+import { getRegisteredHarness, markHarnessEventVerified } from "./db/harness-registry-repo";
 
 /** The filename inside each `~/.agents/harnesses/<slug>/` directory. */
 const MANIFEST_FILENAME = "harness.json";
@@ -141,4 +153,36 @@ export function trustedHarnessAdapters(
     .filter((manifest) => manifest.decision === "trusted" && manifest.adapter !== null)
     .map((manifest) => manifest.adapter)
     .filter((adapter) => adapter !== null);
+}
+
+/**
+ * Records that a harness really delivered `event`, and answers what Volli knows
+ * about that capability now that it has.
+ *
+ * The ledger is written BEFORE it is read, because delivery is the evidence.
+ * Asking first and recording after would swallow the first `input.needed` a
+ * harness ever sends — the one a human is already waiting on — and a harness
+ * that blocks once per session would never earn a notification at all.
+ *
+ * A first-class harness has no row and needs none: its bindings are Volli's own
+ * code, checked against the installed binary before they were written down, so
+ * there is no claim here for a ledger to keep honest. Everything else is a
+ * registered manifest, and one Volli has no record of — deleted, never
+ * confirmed — gets its event recorded and nothing else. Automation follows
+ * evidence, and a harness the app no longer knows has produced none.
+ */
+export function recordHarnessDelivery(
+  db: Database.Database,
+  harnessId: HarnessId,
+  event: HarnessEvent,
+  now: number,
+): HarnessEventStatus {
+  if (isFirstClassHarnessId(harnessId)) return "verified";
+  markHarnessEventVerified(db, harnessId, event, now);
+  const record = getRegisteredHarness(db, harnessId);
+  if (record === undefined) return "absent";
+  return harnessEventStatus(event, {
+    declared: new Set(record.declaredEvents),
+    verified: new Set(record.verifiedEvents),
+  });
 }
