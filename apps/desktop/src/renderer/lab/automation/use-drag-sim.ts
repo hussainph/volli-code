@@ -20,8 +20,7 @@
  * card's ghost sat on top of the very palette it asked you to read, and the
  * thin palette rows were "a needle in a haystack" to aim at holding a card. So
  * there is now exactly one baseline (always on, no modifier) and exactly one
- * modifier-gated layer, compared here as three SHAPES rather than three whole
- * mechanisms:
+ * modifier-gated layer:
  *
  * Baseline — bare digits, scoped to the hovered column. A plain drop arms
  * whatever the target COLUMN is already armed with (an `arming` value this
@@ -37,43 +36,37 @@
  * hovered value" would wipe the choice on the very next mousemove, comparing to
  * "the selection's own column" does not.
  *
- * ⌥ picker — three shapes (`t9` / `radial` / `expand`), selected by
- * `pickerShape`, sharing one `pickerCell`: the picker's live highlight. All
- * three eventually resolve to the SAME shape of value the baseline layer
+ * ⌥ picker — the hovered column GROWS in place, its `pickerCell` being the
+ * live highlight. It resolves to the SAME shape of value the baseline layer
  * produces — a column + an index that is `null` for the explicit "Move only"
- * choice — which is why closing a picker (Escape, or ⌥ going back up for the
- * held `radial` shape) simply folds `pickerCell` into `digitSelection` and lets
- * the baseline layer's own column-bound persistence and clearing take over from
- * there. `t9` alone opens STICKY on ⌥ keydown (it stays open past keyup — it is
- * a surface you navigate away from the board, and steering to a tile must not
- * cost a sustained second-hand modifier). `radial` and `expand` are both HELD,
- * closing (and folding) the moment ⌥ comes back up: `radial` because it is
- * answered with a single flick and "let go to commit" is the same gesture shape
- * as the flick itself, and `expand` because holding costs nothing there — the
- * pointer never leaves the column that grew, so there is nothing to steer to,
- * and a column left conspicuously enlarged with no modifier held would have
- * nothing on screen explaining why.
+ * choice — which is why closing it (Escape, or ⌥ coming back up) simply folds
+ * `pickerCell` into `digitSelection` and lets the baseline layer's own
+ * column-bound persistence and clearing take over from there.
  *
- * Whichever shape, opening a picker preselects what a plain release would
- * already have done (`defaultIndexFor`), never "Move only" — see that option's
- * own doc for why that is a correctness rule and not a nicety. A release (mouseup) while a picker is open commits
- * `pickerCell` directly, bypassing `digitSelection` entirely — see `onUp`.
+ * ⌥ is HELD, not sticky: holding costs nothing here because the pointer never
+ * leaves the column that grew, so there is nothing to steer to — and a column
+ * left conspicuously enlarged with no modifier down would have nothing on
+ * screen explaining why. Opening preselects what a plain release would already
+ * have done (`defaultIndexFor`), never "Move only" — see that option's own doc
+ * for why that is a correctness rule and not a nicety. A release while it is
+ * open commits `pickerCell` directly, bypassing `digitSelection` — see `onUp`.
+ *
+ * Two other shapes (a centred `t9` dialpad and a `radial` wedge fan) were built
+ * and compared here; the owner picked this one after using all three, and they
+ * were deleted rather than left to rot as dead variants.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import * as React from "react";
-import { TICKET_STATUSES, type TicketStatus } from "@volli/shared";
+import { type TicketStatus } from "@volli/shared";
 
 /** The modifier that opens a picker. Alt/Option: Shift and Meta are already taken by the board. */
 const MODIFIER = "Alt";
-
-/** Which ⌥ picker shape is on screen — see the module doc. */
-export type PickerShape = "t9" | "radial" | "expand";
 
 /**
  * One column + automation pairing. Used both for the picker's live highlight
  * (`pickerCell`) and the baseline layer's committed override (`digitSelection`)
  * — they used to be two differently-shaped types, but now that a picker's own
- * "Move only" tile/wedge has to fold into the exact same override a bare digit
+ * "Move only" row has to fold into the exact same override a bare digit
  * produces, there is only one shape worth naming.
  *
  * `index: null` means "Move only", explicitly chosen — never the absence of a
@@ -84,25 +77,6 @@ export interface AutomationTarget {
   status: TicketStatus;
   index: number | null;
 }
-
-/** The wedge fan's cap, `radial` shape only — the spec's number. Exported so the component's rendering and this hook's hit-testing can never disagree about how many wedges exist. */
-export const RADIAL_MAX_AUTOMATIONS = 5;
-
-/** Wedges fan out starting due north and proceed clockwise — a clock face is the one radial layout nobody has to learn. */
-const RADIAL_START_ANGLE = -Math.PI / 2;
-
-/**
- * The angle (radians, `atan2` convention) of wedge `index` of `total` — shared
- * by this hook's own hit-testing (`updateRadialFromPoint`) and the component's
- * rendering (`RadialWedge`), so the highlighted wedge and the one drawn under
- * the cursor's direction can never drift apart.
- */
-export function radialWedgeAngle(index: number, total: number): number {
-  return RADIAL_START_ANGLE + (index / total) * Math.PI * 2;
-}
-
-/** Below this many pixels from the anchor there IS no direction yet — a geometric floor, not a time-based debounce; the very first flick past it resolves on the same frame. */
-const RADIAL_DEADZONE_PX = 10;
 
 export interface DragSim {
   /** The ticket id being dragged, or `null` when at rest. */
@@ -121,7 +95,7 @@ export interface DragSim {
   point: { x: number; y: number };
   /** Column currently under the pointer, hit-tested every move. */
   hovered: TicketStatus | null;
-  /** Whether {@link MODIFIER} is down right now — raw key state, independent of whether a picker actually opened for it (`radial`/`expand` need a hovered column to open at all). */
+  /** Whether {@link MODIFIER} is down right now — raw key state, independent of whether a picker actually opened for it (it needs a hovered column to open at all). */
   modifierHeld: boolean;
   /** Attach to a card: begins a drag on pointer-down, remembering `origin` for the whole drag. */
   start: (ticketId: string, origin: TicketStatus) => (event: React.PointerEvent) => void;
@@ -141,19 +115,15 @@ export interface DragSim {
   /** The baseline layer's current override — see the module doc. `null` means no column has one right now. */
   digitSelection: AutomationTarget | null;
 
-  /** True while a ⌥ picker is open, whichever shape. */
+  /** True while the ⌥ picker is open. */
   pickerOpen: boolean;
   /** The open picker's live highlight. `null` only when no picker has been opened this drag. */
   pickerCell: AutomationTarget | null;
   /** Wired to a picker target's pointer-enter, so hover highlights without a click — the mouse button that would click is already held down driving the drag. */
   setPickerCell: (cell: AutomationTarget) => void;
-  /** `radial` shape only: the anchor its wedges fan out from — the pointer position at the moment ⌥ went down. `null` for every other shape, and before `radial` has ever opened. */
-  radialCenter: { x: number; y: number } | null;
 }
 
 export interface UseDragSimOptions {
-  /** Which ⌥ picker shape is active — swapping this mid-drag is not a supported gesture, only a tab switch between drags. */
-  pickerShape: PickerShape;
   /** How many automations column `status` offers (excluding "Move only"). Validates a digit and clamps navigation, without this hook ever needing to know what an `Automation` actually is. */
   automationCountFor: (status: TicketStatus) => number;
   /**
@@ -168,11 +138,7 @@ export interface UseDragSimOptions {
   defaultIndexFor: (status: TicketStatus) => number | null;
 }
 
-export function useDragSim({
-  pickerShape,
-  automationCountFor,
-  defaultIndexFor,
-}: UseDragSimOptions): DragSim {
+export function useDragSim({ automationCountFor, defaultIndexFor }: UseDragSimOptions): DragSim {
   const [ticketId, setTicketId] = React.useState<string | null>(null);
   const [origin, setOrigin] = React.useState<TicketStatus | null>(null);
   const [point, setPoint] = React.useState({ x: 0, y: 0 });
@@ -182,7 +148,6 @@ export function useDragSim({
   const [digitSelection, setDigitSelection] = React.useState<AutomationTarget | null>(null);
   const [pickerOpen, setPickerOpen] = React.useState(false);
   const [pickerCell, setPickerCell] = React.useState<AutomationTarget | null>(null);
-  const [radialCenter, setRadialCenter] = React.useState<{ x: number; y: number } | null>(null);
 
   // Read through a ref inside the listeners so they can stay mounted for the
   // whole drag without re-subscribing on every pointer move.
@@ -193,7 +158,6 @@ export function useDragSim({
     digitSelection,
     pickerOpen,
     pickerCell,
-    radialCenter,
   });
   state.current = {
     point,
@@ -202,7 +166,6 @@ export function useDragSim({
     digitSelection,
     pickerOpen,
     pickerCell,
-    radialCenter,
   };
 
   React.useEffect(() => {
@@ -225,7 +188,6 @@ export function useDragSim({
       setDigitSelection(null);
       setPickerOpen(false);
       setPickerCell(null);
-      setRadialCenter(null);
     }
 
     /** Ends the drag by committing `cell` directly — the picker-open branch of both a real release and its keyboard stand-in, Enter. */
@@ -242,7 +204,6 @@ export function useDragSim({
       const cell = state.current.pickerCell;
       setPickerOpen(false);
       setPickerCell(null);
-      setRadialCenter(null);
       setDigitSelection(cell !== null ? { status: cell.status, index: cell.index } : null);
     }
 
@@ -250,26 +211,9 @@ export function useDragSim({
       const selection = state.current.digitSelection;
       const hoveredNow = state.current.hovered;
 
-      if (pickerShape === "t9") {
-        // Not anchored to the pointer at all — it's a centred dialog — so it
-        // opens on whatever the drag already has an opinion about: the bound
-        // override if there is one, else wherever the pointer happens to be,
-        // else the first column. Reachable from anywhere is the whole point.
-        const status = selection?.status ?? hoveredNow ?? TICKET_STATUSES[0];
-        const index =
-          selection !== null && selection.status === status
-            ? selection.index
-            : defaultIndexFor(status);
-        setPickerCell({ status, index });
-        setPickerOpen(true);
-        return;
-      }
-
-      // `radial` and `expand` are both anchored to a column that's already
-      // decided — the one under the pointer. Neither has anything to open
-      // around without one.
+      // Anchored to a column that's already decided — the one under the
+      // pointer. There is nothing to open around without one.
       if (hoveredNow === null) return;
-      if (pickerShape === "radial") setRadialCenter(state.current.point);
       const index =
         selection !== null && selection.status === hoveredNow
           ? selection.index
@@ -279,18 +223,6 @@ export function useDragSim({
     }
 
     /** `t9` only: move the highlighted column, carrying the automation index across if the destination still offers it. */
-    function moveColumn(delta: number) {
-      const cell = state.current.pickerCell;
-      if (cell === null) return;
-      const currentIndex = TICKET_STATUSES.indexOf(cell.status);
-      const nextIndex = (currentIndex + delta + TICKET_STATUSES.length) % TICKET_STATUSES.length;
-      const nextStatus = TICKET_STATUSES[nextIndex];
-      const count = automationCountFor(nextStatus);
-      const carried = cell.index !== null && cell.index < count ? cell.index : null;
-      setPickerCell({ status: nextStatus, index: carried });
-    }
-
-    /** `t9` and `expand`: move within one column's targets — "Move only" then 0..count-1, wrapping. */
     function moveIndex(delta: number) {
       const cell = state.current.pickerCell;
       if (cell === null) return;
@@ -307,23 +239,6 @@ export function useDragSim({
       if (cell === null) return;
       const index = Number(digit) - 1;
       if (index < automationCountFor(cell.status)) setPickerCell({ status: cell.status, index });
-    }
-
-    /** `radial` only, on every pointer move while it's open: the nearest wedge to the current angle from the fixed anchor — see the module doc on why this is a dead zone, not a debounce. */
-    function updateRadialFromPoint(x: number, y: number) {
-      const center = state.current.radialCenter;
-      const cell = state.current.pickerCell;
-      if (center === null || cell === null) return;
-      const dx = x - center.x;
-      const dy = y - center.y;
-      if (Math.hypot(dx, dy) < RADIAL_DEADZONE_PX) return;
-      const total = Math.min(automationCountFor(cell.status), RADIAL_MAX_AUTOMATIONS) + 1;
-      const step = (Math.PI * 2) / total;
-      const twoPi = Math.PI * 2;
-      const normalized = (((Math.atan2(dy, dx) - RADIAL_START_ANGLE) % twoPi) + twoPi) % twoPi;
-      const wedge = Math.round(normalized / step) % total;
-      const index = wedge === 0 ? null : wedge - 1;
-      if (cell.index !== index) setPickerCell({ status: cell.status, index });
     }
 
     function onMove(event: PointerEvent) {
@@ -346,7 +261,7 @@ export function useDragSim({
         return;
       }
 
-      if (pickerShape === "expand") {
+      {
         // Spatially anchored, same as the baseline layer: the expanded
         // column simply follows the hover, carrying the whole tile grid with
         // it instead of a bare digit.
@@ -359,8 +274,6 @@ export function useDragSim({
         setPickerCell({ status: next, index: carried });
         return;
       }
-
-      if (pickerShape === "radial") updateRadialFromPoint(event.clientX, event.clientY);
     }
 
     function onUp(event: PointerEvent) {
@@ -387,7 +300,7 @@ export function useDragSim({
         setModifierHeld(down);
         if (down && !state.current.pickerOpen) {
           openPicker();
-        } else if (!down && pickerShape !== "t9" && state.current.pickerOpen) {
+        } else if (!down && state.current.pickerOpen) {
           // HELD for `radial` and `expand`; sticky only for `t9`.
           //
           // radial — letting go of ⌥ mid-flick IS the commit gesture, folding
@@ -434,20 +347,9 @@ export function useDragSim({
           event.preventDefault();
           setDigitInPicker(digit);
         }
-        if (pickerShape === "t9") {
-          if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-            event.preventDefault();
-            moveColumn(event.key === "ArrowRight" ? 1 : -1);
-          }
-          if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-            event.preventDefault();
-            moveIndex(event.key === "ArrowDown" ? 1 : -1);
-          }
-        } else if (pickerShape === "expand") {
-          if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-            event.preventDefault();
-            moveIndex(event.key === "ArrowDown" ? 1 : -1);
-          }
+        if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+          event.preventDefault();
+          moveIndex(event.key === "ArrowDown" ? 1 : -1);
         }
         return;
       }
@@ -489,7 +391,7 @@ export function useDragSim({
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keyup", onKey);
     };
-  }, [ticketId, pickerShape, automationCountFor, defaultIndexFor]);
+  }, [ticketId, automationCountFor, defaultIndexFor]);
 
   const start = React.useCallback(
     (id: string, startOrigin: TicketStatus) => (event: React.PointerEvent) => {
@@ -505,7 +407,6 @@ export function useDragSim({
       setDigitSelection(null);
       setPickerOpen(false);
       setPickerCell(null);
-      setRadialCenter(null);
     },
     [],
   );
@@ -522,6 +423,5 @@ export function useDragSim({
     pickerOpen,
     pickerCell,
     setPickerCell,
-    radialCenter,
   };
 }

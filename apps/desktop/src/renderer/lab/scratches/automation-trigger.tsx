@@ -1,6 +1,5 @@
 /**
- * Firing an Automation — the three surfaces of #86, with the prototype-gated
- * one built three ways.
+ * Firing an Automation — the three surfaces of #86.
  *
  * The plan is explicit that dragging is NOT the primary path (#86): the common
  * modality is ticket-centric, and a ticket open in front of you has no column to
@@ -16,16 +15,18 @@
  *     already mid-context does not need setting up again.
  *   • ARMING (#86b, #88) — a column holds at most one armed Automation, and an
  *     unarmed column says so quietly rather than saying nothing.
- *   • DRAG (#86c) — a plain drop has NO palette at all: it arms whichever
- *     Automation the target COLUMN is already armed with (the same concept
- *     `ArmingTab` models — this tab shares its `arming` state with it), and an
- *     unarmed column is a perfectly good target that says so quietly rather
- *     than firing nothing silently. Bare digits `1`–`9`, scoped to whichever
+ *   • DRAG (#86c) — a plain drop has NO palette at all: it runs whichever
+ *     Automation the target COLUMN has as its default (the same concept
+ *     `ArmingTab` models — this tab shares its `arming` state with it), and a
+ *     column without one is a perfectly good target that says so quietly
+ *     rather than running nothing silently. Bare digits `1`–`9`, scoped to whichever
  *     column the pointer is over, still override that default — the same
- *     digit twice clears back to it. ⌥ is reserved for the rarer case:
- *     choosing without trusting the column default, compared here as three
- *     shapes (`t9` / `radial` / `expand`) — see `use-drag-sim`'s module doc for
- *     how the baseline digit layer and the ⌥ picker share one override shape.
+ *     digit twice clears back to it. Holding ⌥ GROWS that column's list into
+ *     large landing targets in place; letting go shrinks it back. The dragged
+ *     card docks into the hovered column's header rather than following the
+ *     cursor, because a ghost tracking the pointer pixel-for-pixel advertises
+ *     a precision that a column-sized target does not have — and because it
+ *     covered the very list it was asking you to read.
  *
  * Every surface here is drawn INSIDE the chrome it will really live in — a mock
  * ticket header, a real board with real cards. A control judged on an empty page
@@ -63,7 +64,6 @@ import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import {
   TICKET_STATUS_LABELS,
   TICKET_STATUSES,
-  type HarnessId,
   type Ticket,
   type TicketStatus,
 } from "@volli/shared";
@@ -87,18 +87,11 @@ import { cn } from "@renderer/lib/utils";
 
 import { HarnessMark, HarnessTag } from "../automation/harness-identity";
 import { SEEDED_AUTOMATIONS, type Automation } from "../automation/model";
-import {
-  radialWedgeAngle,
-  RADIAL_MAX_AUTOMATIONS,
-  useDragSim,
-  type AutomationTarget,
-  type PickerShape,
-} from "../automation/use-drag-sim";
+import { useDragSim, type AutomationTarget } from "../automation/use-drag-sim";
 import { project, ticketById, tickets } from "../fixtures";
 
 export const title = "Automation · trigger";
-export const note =
-  "Column defaults, the in-ticket advance button, and three ⌥ drag pickers (#86/#89)";
+export const note = "Column defaults, the in-ticket advance button, and the drag picker (#86/#89)";
 
 /**
  * How long a drop confirmation stays before it starts leaving, and how long the
@@ -691,27 +684,6 @@ function ArmingTab({
 
 /* ----------------------------------------------------------------------- drag */
 
-const PICKER_VARIANTS: { id: PickerShape; label: string; claim: string }[] = [
-  {
-    id: "t9",
-    label: "T9 dialpad · ⌥ sticky",
-    claim:
-      "A centred overlay: every column as a tab across the top, that column's automations as large tiles below. The dragged card PARKS into the overlay's own header instead of floating over it — nothing here can be occluded by the thing it's choosing for. Sticky: opens on ⌥ down and stays open past keyup, since letting go of Alt must never discard a highlighted tile while the mouse button is still driving the drag.",
-  },
-  {
-    id: "radial",
-    label: "Radial wedges · ⌥ held",
-    claim:
-      "The column is already decided — wherever the pointer already is. This only picks the automation, by FLICKING the pointer toward a direction rather than aiming at a target. Held, not sticky: letting go of ⌥ IS the commit, the same gesture shape as the flick itself.",
-  },
-  {
-    id: "expand",
-    label: "Expand in place · ⌥ held",
-    claim:
-      'No second surface at all — the column already under the pointer grows, and its automations become large landing targets inside it. The other columns recede. Spatial continuity is the whole bet: nothing new appears, the thing already being pointed at gets bigger. Kept sticky rather than the spec\'s suggested "held": exploring the enlarged tiles by moving the mouse felt better without also having to keep a key down the whole time.',
-  },
-];
-
 /** Every field a Move summary needs to read as a real statement of what a drop will do — never blank, even when nothing will run. */
 function MoveSummary({
   origin,
@@ -809,278 +781,6 @@ function DragGhost({
   );
 }
 
-/** `t9`'s tab hover: carries the highlighted index to the new column when it's still valid there, exactly like the hook's own arrow-key navigation — hover and arrows have to agree, or one of them will feel like the "real" one. */
-function carryIndexTo(cell: AutomationTarget, nextStatus: TicketStatus): AutomationTarget {
-  if (cell.status === nextStatus) return cell;
-  const count = offeredFor(nextStatus).length;
-  return {
-    status: nextStatus,
-    index: cell.index !== null && cell.index < count ? cell.index : null,
-  };
-}
-
-/**
- * Shape (a): the two-stage dialpad. A centred overlay because "reachable from
- * anywhere" is the whole point — the pointer's board position stops mattering
- * completely, unlike (b)/(c) which are both anchored to wherever it already is.
- *
- * The dragged card PARKS into the header here rather than floating over the
- * tiles — that parking is the actual fix for the occlusion complaint; every
- * other shape merely shrinks or relocates the ghost, this one removes it from
- * the pointer's business entirely. The header still has to say what the ghost
- * used to say (which ticket, where it came from, where it's headed) since
- * parking is exactly what stops the card's own position from carrying that.
- */
-function T9Overlay({
-  ticket,
-  origin,
-  cell,
-  setCell,
-  arming,
-}: {
-  ticket: Ticket;
-  origin: TicketStatus;
-  cell: AutomationTarget;
-  setCell: (cell: AutomationTarget) => void;
-  arming: Partial<Record<TicketStatus, string>>;
-}) {
-  const status = cell.status;
-  const offered = offeredFor(status);
-  const armed = automationById(arming[status]);
-  const resolved = resolveAutomation(status, arming, cell.index);
-  const moveOnlyChosen = cell.index === null;
-
-  return (
-    <div className="fixed inset-0 z-[150] flex items-center justify-center bg-background/90 p-6 backdrop-blur-sm">
-      <div className="flex w-full max-w-xl flex-col gap-3 rounded-xl border border-border bg-card p-3 shadow-lg">
-        {/* The parked ghost — see the module doc. Nothing in this overlay may
-            sit under the card being dragged; parking it here is how. */}
-        <div className="flex flex-col gap-1 rounded-lg border border-border bg-popover px-3 py-2">
-          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <span className="shrink-0 font-mono text-foreground">{ticketRef(ticket)}</span>
-            <span className="min-w-0 flex-1 truncate">{ticket.title}</span>
-          </p>
-          <MoveSummary origin={origin} destination={status} automation={resolved} />
-        </div>
-
-        <div className="flex gap-1 overflow-x-auto rounded-lg bg-muted/40 p-1">
-          {TICKET_STATUSES.map((candidate) => (
-            <button
-              key={candidate}
-              type="button"
-              onPointerEnter={() => setCell(carryIndexTo(cell, candidate))}
-              aria-pressed={candidate === status}
-              className={cn(
-                "flex-1 whitespace-nowrap rounded-md px-2 py-1.5 text-xs transition-colors duration-100 ease-out",
-                candidate === status
-                  ? "bg-accent text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {TICKET_STATUS_LABELS[candidate]}
-            </button>
-          ))}
-        </div>
-
-        <div className="grid grid-cols-2 gap-2">
-          {offered.map((automation, index) => {
-            const chosen = cell.index === index;
-            return (
-              <button
-                key={automation.id}
-                type="button"
-                onPointerEnter={() => setCell({ status, index })}
-                aria-pressed={chosen}
-                className={cn(
-                  "flex flex-col items-start gap-1 rounded-lg border p-2.5 text-left transition-colors duration-100 ease-out",
-                  chosen ? "border-ring bg-accent" : "border-border hover:border-ring/60",
-                )}
-              >
-                <span className="flex w-full items-center gap-1.5">
-                  <kbd className="rounded border border-border px-1 font-mono text-[10px] text-muted-foreground">
-                    {index + 1}
-                  </kbd>
-                  <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
-                    {automation.name}
-                  </span>
-                  {armed?.id === automation.id ? (
-                    <span className="shrink-0 text-label text-primary">default</span>
-                  ) : null}
-                </span>
-                <HarnessTag harnessId={automation.runtime.harnessId} className="text-xs" />
-              </button>
-            );
-          })}
-          {offered.length === 0 ? (
-            <p className="col-span-2 px-2 py-3 text-center text-xs text-muted-foreground">
-              No automations offered in {TICKET_STATUS_LABELS[status]}
-            </p>
-          ) : null}
-        </div>
-
-        <button
-          type="button"
-          onPointerEnter={() => setCell({ status, index: null })}
-          aria-pressed={moveOnlyChosen}
-          className={cn(
-            "flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-xs transition-colors duration-100 ease-out",
-            moveOnlyChosen
-              ? "border-ring bg-accent text-foreground"
-              : "border-dashed border-border text-muted-foreground hover:text-foreground",
-          )}
-        >
-          <LightningIcon />
-          Move only
-        </button>
-
-        <p className="text-center text-label text-muted-foreground">
-          ←/→ or hover a column · ↑/↓ or 1–9 a tile · release or Enter to commit · Esc to go back
-        </p>
-      </div>
-    </div>
-  );
-}
-
-/** Fixed pixel radius the wedges are drawn at — independent of the hook's own hit-testing dead zone, which is purely a threshold, not a rendered distance. */
-const RADIAL_RADIUS_PX = 92;
-
-function RadialWedge({
-  angleIndex,
-  total,
-  center,
-  chosen,
-  label,
-  harnessId,
-  digit,
-}: {
-  angleIndex: number;
-  total: number;
-  center: { x: number; y: number };
-  chosen: boolean;
-  label: string;
-  harnessId?: HarnessId;
-  digit?: number;
-}) {
-  const angle = radialWedgeAngle(angleIndex, total);
-  const x = center.x + RADIAL_RADIUS_PX * Math.cos(angle);
-  const y = center.y + RADIAL_RADIUS_PX * Math.sin(angle);
-  return (
-    <div
-      className={cn(
-        "pointer-events-none absolute flex -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-xs shadow-sm transition-colors duration-100 ease-out",
-        chosen
-          ? "border-ring bg-accent text-foreground"
-          : "border-border bg-popover text-muted-foreground",
-      )}
-      style={{ left: x, top: y }}
-    >
-      {digit !== undefined ? (
-        <kbd className="rounded border border-border px-1 font-mono text-[10px]">{digit}</kbd>
-      ) : (
-        <LightningIcon />
-      )}
-      {label}
-      {harnessId !== undefined ? <HarnessMark harnessId={harnessId} className="size-3" /> : null}
-    </div>
-  );
-}
-
-/**
- * Shape (b): direction, not aim. The column was already decided — the pointer
- * was over it the moment ⌥ went down — so this only ever asks "which
- * automation", and it asks it the cheapest way a hand can answer: a flick.
- *
- * No wedge here owns a pointer handler. Selection is computed once, in
- * `use-drag-sim`'s own `pointermove` listener, from the raw angle between the
- * anchor and the cursor — the wedges are `pointer-events-none` throughout.
- */
-function RadialPicker({
-  ticket,
-  origin,
-  center,
-  cell,
-  arming,
-}: {
-  ticket: Ticket;
-  origin: TicketStatus;
-  center: { x: number; y: number };
-  cell: AutomationTarget;
-  arming: Partial<Record<TicketStatus, string>>;
-}) {
-  const allOffered = offeredFor(cell.status);
-  const offered = allOffered.slice(0, RADIAL_MAX_AUTOMATIONS);
-  const overflow = allOffered.length - offered.length;
-  const total = offered.length + 1;
-  const resolved = resolveAutomation(cell.status, arming, cell.index);
-
-  return (
-    <div className="pointer-events-none fixed inset-0 z-[150]">
-      {/* The compass ring — a quiet spatial cue, not a hit target. */}
-      <div
-        aria-hidden
-        className="absolute rounded-full border border-dashed border-border/60"
-        style={{
-          left: center.x - RADIAL_RADIUS_PX,
-          top: center.y - RADIAL_RADIUS_PX,
-          width: RADIAL_RADIUS_PX * 2,
-          height: RADIAL_RADIUS_PX * 2,
-        }}
-      />
-
-      {/* "Move only" is wedge 0, due north. */}
-      <RadialWedge
-        angleIndex={0}
-        total={total}
-        center={center}
-        chosen={cell.index === null}
-        label="Move only"
-      />
-      {offered.map((automation, index) => (
-        <RadialWedge
-          key={automation.id}
-          angleIndex={index + 1}
-          total={total}
-          center={center}
-          chosen={cell.index === index}
-          label={automation.name}
-          harnessId={automation.runtime.harnessId}
-          digit={index + 1}
-        />
-      ))}
-      {overflow > 0 ? (
-        // Honest about the cap rather than silently dropping the rest —
-        // every one of them is still a digit away.
-        <p
-          className="absolute -translate-x-1/2 text-label text-muted-foreground"
-          style={{ left: center.x, top: center.y + RADIAL_RADIUS_PX + 28 }}
-        >
-          +{overflow} more reachable by 1–9
-        </p>
-      ) : null}
-
-      {/* The shrunk ghost — nothing may sit over the wedges, so the card
-          collapses to a small chip pinned at the anchor rather than tracking
-          the cursor, which is now busy pointing at a direction instead of a
-          position. Still states the ref and the move, per the owner's note
-          that shrinking the ghost must not also erase what it was saying. */}
-      <DragGhost
-        ticket={ticket}
-        origin={origin}
-        destination={cell.status}
-        point={center}
-        automation={resolved}
-        compact
-      />
-    </div>
-  );
-}
-
-/**
- * Shape (c)'s enlarged targets, inside the column already being pointed at.
- * Hover sets the highlight directly — same reasoning as the t9 tiles: the
- * mouse button driving the drag can't also click, so entering a tile IS the
- * selection.
- */
 /**
  * What a column can run, shown inside the column itself — compact while you are
  * merely over it, grown into real landing targets while ⌥ is held.
@@ -1270,8 +970,6 @@ function DragTab({
   onArm: (status: TicketStatus, automationId: string) => void;
   onDisarm: (status: TicketStatus) => void;
 }) {
-  const [variant, setVariant] = React.useState<PickerShape>("expand");
-
   const automationCountFor = React.useCallback(
     (status: TicketStatus) => offeredFor(status).length,
     [],
@@ -1293,7 +991,7 @@ function DragTab({
     [arming],
   );
 
-  const drag = useDragSim({ pickerShape: variant, automationCountFor, defaultIndexFor });
+  const drag = useDragSim({ automationCountFor, defaultIndexFor });
 
   const draggedTicket = tickets.find((ticket) => ticket.id === drag.ticketId) ?? null;
 
@@ -1494,23 +1192,6 @@ function DragTab({
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-1">
-        {PICKER_VARIANTS.map((option) => (
-          <button
-            key={option.id}
-            type="button"
-            onClick={() => setVariant(option.id)}
-            aria-pressed={option.id === variant}
-            className="rounded-full px-2.5 py-0.5 text-label text-muted-foreground transition-colors hover:text-foreground aria-pressed:bg-accent aria-pressed:text-foreground"
-          >
-            {option.label}
-          </button>
-        ))}
-      </div>
-      <p className="max-w-prose text-xs text-muted-foreground">
-        {PICKER_VARIANTS.find((option) => option.id === variant)?.claim}
-      </p>
-
       {/* The board. Drop targets are the columns and only the columns, in every
           shape — the plan forbids the picker from adding or subdividing one. */}
       <div className="relative overflow-hidden rounded-xl border border-border bg-background">
@@ -1527,19 +1208,27 @@ function DragTab({
             const offered = offeredFor(status);
 
             const isExpandTarget =
-              dragActive &&
-              variant === "expand" &&
-              drag.pickerOpen &&
-              drag.pickerCell?.status === status;
+              dragActive && drag.pickerOpen && drag.pickerCell?.status === status;
             const isExpandOther =
-              dragActive &&
-              variant === "expand" &&
-              drag.pickerOpen &&
-              drag.pickerCell?.status !== status;
+              dragActive && drag.pickerOpen && drag.pickerCell?.status !== status;
             const expandResolved =
               isExpandTarget && drag.pickerCell !== null
                 ? resolveAutomation(status, arming, drag.pickerCell.index)
                 : null;
+
+            /**
+             * The dragged card DOCKS into this column's header the moment the
+             * pointer is over the column — not only once ⌥ has grown it.
+             *
+             * The floating ghost is `w-64`, wider than the 208px column, so it
+             * blanketed the very list it was asking you to read. Offsetting or
+             * shrinking it only moves the collision somewhere else; the real
+             * observation is that once the WHOLE COLUMN is the target, a ghost
+             * tracking the cursor pixel-for-pixel is advertising a precision
+             * that no longer exists. So the card lands in the header, the
+             * cursor is freed to point at rows, and nothing overlaps anything.
+             */
+            const isDocked = dragActive && drag.hovered === status;
 
             return (
               <div
@@ -1558,13 +1247,14 @@ function DragTab({
                 )}
               >
                 <div className="flex items-center gap-2 px-1 pb-1.5">
-                  {isExpandTarget && draggedTicket !== null && drag.origin !== null ? (
-                    // The parked ghost for THIS shape — the column just grew
-                    // to hold the targets, so the card gets out of their way
-                    // by living in the header instead of floating over them.
-                    // Still has to name the ticket and the move, per the
-                    // owner's note — the enlarged column makes the
-                    // DESTINATION obvious, but not where the ticket came from.
+                  {isDocked && draggedTicket !== null && drag.origin !== null ? (
+                    // The docked card. It replaces the column's own name while
+                    // it is here, which is the right trade: the name is a label
+                    // you already read on the way in, and the ticket you are
+                    // holding is the thing you need confirmed. It still states
+                    // where the ticket came FROM — the column makes the
+                    // destination obvious and nothing else carries the origin
+                    // once the card has stopped tracking the cursor.
                     <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
                         <span className="shrink-0 font-mono text-foreground">
@@ -1575,7 +1265,7 @@ function DragTab({
                       <MoveSummary
                         origin={drag.origin}
                         destination={status}
-                        automation={expandResolved}
+                        automation={expandResolved ?? chosen}
                       />
                     </div>
                   ) : (
@@ -1663,16 +1353,13 @@ function DragTab({
       <p className="text-xs text-muted-foreground">
         Drag a card — dropping anywhere in a column arms whatever that column is already armed with
         (or nothing, quietly, if it's unarmed). 1–9, no modifier, overrides that default for
-        whichever column the pointer is over; the same digit again clears back to it.{" "}
-        {variant === "t9"
-          ? "⌥ opens a centred dialpad — arrow keys or hover pick the column and the tile, release or Enter commits."
-          : variant === "radial"
-            ? "⌥ opens a wedge fan at the cursor — flick toward a direction to pick, no aiming required; letting go of ⌥ commits it. Digits still work too."
-            : "⌥ grows the hovered column into large landing targets right where you're already pointing; the other columns recede."}{" "}
-        Esc backs a picker out one step, or cancels the whole drag if none is open. Dropping ARMS
-        for {(TIMING.ARM_MS / 1000).toFixed(1)}s before it fires — Undo on the card or "Undo moves"
-        in the column header reverts the move itself. Once fired, the pulsing border means a session
-        is (simulated as) running; the lab still starts nothing for real.
+        whichever column the pointer is over; the same digit again clears back to it. ⌥ grows the
+        hovered column into large landing targets right where you&rsquo;re already pointing; the
+        other columns recede, and letting ⌥ go shrinks it back. Esc backs a picker out one step, or
+        cancels the whole drag if none is open. Dropping ARMS for{" "}
+        {(TIMING.ARM_MS / 1000).toFixed(1)}s before it fires — Undo on the card or "Undo moves" in
+        the column header reverts the move itself. Once fired, the pulsing border means a session is
+        (simulated as) running; the lab still starts nothing for real.
       </p>
 
       {confirmation !== null ? (
@@ -1705,38 +1392,18 @@ function DragTab({
         </div>
       ) : null}
 
-      {activeDrag !== null && !drag.pickerOpen ? (
+      {/* The floating ghost now exists ONLY in the gutter between columns.
+          Over a column the card is docked in that column's header instead (see
+          `isDocked`), so nothing follows the cursor while there is a list to
+          read or a target to point at. */}
+      {activeDrag !== null && drag.hovered === null ? (
         <DragGhost
           ticket={activeDrag.ticket}
           origin={activeDrag.origin}
-          destination={drag.hovered}
+          destination={null}
           point={drag.point}
-          automation={chosen}
-          hint="1–9 overrides this column's default · ⌥ to pick without it"
-        />
-      ) : null}
-
-      {activeDrag !== null && variant === "t9" && drag.pickerOpen && drag.pickerCell !== null ? (
-        <T9Overlay
-          ticket={activeDrag.ticket}
-          origin={activeDrag.origin}
-          cell={drag.pickerCell}
-          setCell={drag.setPickerCell}
-          arming={arming}
-        />
-      ) : null}
-
-      {activeDrag !== null &&
-      variant === "radial" &&
-      drag.pickerOpen &&
-      drag.pickerCell !== null &&
-      drag.radialCenter !== null ? (
-        <RadialPicker
-          ticket={activeDrag.ticket}
-          origin={activeDrag.origin}
-          center={drag.radialCenter}
-          cell={drag.pickerCell}
-          arming={arming}
+          automation={null}
+          hint="Drop on a column to run its default · 1–9 to override · ⌥ to enlarge"
         />
       ) : null}
     </div>
