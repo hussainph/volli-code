@@ -1,5 +1,6 @@
 import {
   createSessionHarnessState,
+  HARNESS_EVENT_GRACE_MS,
   receiveHarnessEvent,
   type HarnessEvent,
   type HarnessEventNotice,
@@ -10,8 +11,22 @@ import {
 } from "@volli/shared";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { subscribeHarnessEvents, ticketScope, useSessionsStore } from "../../stores/sessions";
+import {
+  subscribeHarnessEvents,
+  ticketScope,
+  useSessionsStore,
+  type SessionLaunch,
+} from "../../stores/sessions";
+
 import { buildActiveSessionListing } from "./active-session-listing";
+
+/** A bare shell launch: no harness command line was written, so no expectation. */
+const shellLaunch = (title: string): SessionLaunch => ({
+  title,
+  harnessId: "claude-code",
+  launchKind: "shell",
+  createdAt: 0,
+});
 
 function ticket(overrides: Partial<Ticket> & { id: string; status: Ticket["status"] }): Ticket {
   return {
@@ -877,6 +892,107 @@ describe("buildActiveSessionListing — harness-reported attention", () => {
 
     expect(result.active.map((row) => row.activitySource)).toEqual(["silent"]);
   });
+
+  it("describes the pane it was promoted by, not whichever pane happened to be in front", () => {
+    // A split whose visible pane is a plain shell and whose background pane is
+    // the agent that just asked for a human. The row is promoted by the agent,
+    // so everything it says has to be about the agent.
+    const split = {
+      sessionId: "s1",
+      title: "Implement UI",
+      scope: { kind: "ticket", projectId: "p1", ticketId: "t1" } as const,
+      layout: {
+        kind: "split",
+        id: "sp1",
+        direction: "vertical",
+        ratio: 0.5,
+        first: { kind: "pane", sessionId: "s1", exitCode: null },
+        second: { kind: "pane", sessionId: "s2", exitCode: null },
+      } as const,
+      activePaneId: "s1",
+    };
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: { t1: { activeSessionId: "s1", tabs: [split] } },
+      eventsByTicket: {},
+      records: [
+        record({ id: "s1", ticketId: "t1", launchKind: "shell", placement: "split" }),
+        record({ id: "s2", ticketId: "t1", launchKind: "agent" }),
+      ],
+      lastOutputAt: {},
+      parkState: {},
+      harness: { s2: reporting("input.needed") },
+      now: 100_000,
+    });
+
+    expect(result.needsYou).toMatchObject([
+      {
+        activity: "waiting",
+        // Previously "inferred", read off the shell in front — the row claimed
+        // a harness-declared wait and denied that anything was reporting.
+        activitySource: "reported",
+        source: "Claude Code",
+        target: { tabId: "s1", paneId: "s2" },
+      },
+    ]);
+    expect(result.active).toEqual([]);
+  });
+});
+
+describe("buildActiveSessionListing — fed by a real launch", () => {
+  afterEach(() => {
+    useSessionsStore.setState({ byOwner: {}, sessionOwner: {}, harness: {} });
+  });
+
+  it("lets a launch whose wrapper was bypassed decay into 'not reporting' on its own", () => {
+    // No hand-built harness state anywhere: the store registers the
+    // expectation when the tab lands, which is what makes the silence below a
+    // fact about the wrapper rather than an absence of information.
+    useSessionsStore.getState().addSession(ticketScope("p1", "t1"), "s1", {
+      title: "Implement UI",
+      harnessId: "claude-code",
+      launchKind: "agent",
+      createdAt: 1000,
+    });
+
+    const listing = (now: number) =>
+      buildActiveSessionListing({
+        tickets: [ticket({ id: "t1", status: "doing" })],
+        containers: useSessionsStore.getState().byOwner,
+        eventsByTicket: {},
+        records: [],
+        lastOutputAt: {},
+        parkState: {},
+        harness: useSessionsStore.getState().harness,
+        now,
+      });
+
+    expect(listing(1000 + HARNESS_EVENT_GRACE_MS).active.map((row) => row.activitySource)).toEqual([
+      "inferred",
+    ]);
+    expect(
+      listing(1000 + HARNESS_EVENT_GRACE_MS + 1).active.map((row) => row.activitySource),
+    ).toEqual(["silent"]);
+  });
+
+  it("never accuses a bare shell of not reporting, however long it sits there", () => {
+    useSessionsStore
+      .getState()
+      .addSession(ticketScope("p1", "t1"), "s1", shellLaunch("Terminal 1"));
+
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: useSessionsStore.getState().byOwner,
+      eventsByTicket: {},
+      records: [],
+      lastOutputAt: {},
+      parkState: {},
+      harness: useSessionsStore.getState().harness,
+      now: 10_000_000,
+    });
+
+    expect(result.active.map((row) => row.activitySource)).toEqual(["inferred"]);
+  });
 });
 
 describe("buildActiveSessionListing — fed by the live harness channel", () => {
@@ -899,7 +1015,9 @@ describe("buildActiveSessionListing — fed by the live harness channel", () => 
         },
       },
     });
-    useSessionsStore.getState().addSession(ticketScope("p1", "t1"), "s1", "Implement UI");
+    useSessionsStore
+      .getState()
+      .addSession(ticketScope("p1", "t1"), "s1", shellLaunch("Implement UI"));
     subscribeHarnessEvents();
 
     push?.({

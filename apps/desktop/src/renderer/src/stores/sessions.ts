@@ -22,6 +22,7 @@ import { create } from "zustand";
 import {
   createSessionHarnessState,
   getHarnessAdapter,
+  harnessTier,
   HARNESS_EVENTS,
   receiveHarnessEvent,
   supportedEvents,
@@ -29,6 +30,7 @@ import {
   type HarnessEvent,
   type SessionActivityState,
   type SessionHarnessState,
+  type SessionRecord,
 } from "@volli/shared";
 
 export type TerminalSplitDirection = "vertical" | "horizontal";
@@ -94,6 +96,24 @@ export interface SessionContainer {
   activeSessionId: string | null;
 }
 
+/**
+ * What a landing tab knows about the process main just spawned for it. Main is
+ * the only party that can say whether a harness command line was actually
+ * written into that shell (`launchKind`), which harness it named
+ * (`harnessId`), and when the process really started (`createdAt`) — and it
+ * already hands the whole durable {@link SessionRecord} back from
+ * `terminal.create`. The store takes this slice of it rather than a bare title
+ * so that knowledge survives the trip: the boot pipeline used to read
+ * `session.title` off the record and drop the rest on the floor, which is why
+ * nothing in the shipped app ever declared a harness expectation and the
+ * degradation tier below was unreachable outside tests.
+ *
+ * `createdAt` rides along instead of being stamped at landing time: the grace
+ * window for a first event is measured from the launch, and a slow boot would
+ * otherwise silently shorten it.
+ */
+export type SessionLaunch = Pick<SessionRecord, "title" | "harnessId" | "launchKind" | "createdAt">;
+
 /** Output within this window reads as `working`; quiet-but-live reads as `idle`. */
 const WORKING_WINDOW_MS = 10_000;
 /** Coalesce output bumps: at most one `lastOutputAt` write per session per second. */
@@ -151,22 +171,32 @@ interface SessionsState {
    */
   parkState: Record<string, { parked: boolean; keepAwake: boolean }>;
   /**
-   * sessionId → what that session's harness has actually reported. Present only
-   * for sessions registered at launch by {@link SessionsState.expectHarnessEvents};
-   * an absent entry means "nothing is reporting here", which is the honest
-   * default and what every pre-existing session already looks like.
+   * sessionId → what that session's harness has actually reported. Present for
+   * sessions {@link SessionsState.addSession} registered at launch, plus any a
+   * delivered event registered on arrival; an absent entry means "nothing is
+   * reporting here", which is the honest default and what every bare shell and
+   * every pre-existing session already looks like.
    */
   harness: Record<string, SessionHarnessState>;
   /** Owner ids with a terminal-create (tab or split leaf) in flight — disables their "New session". */
   starting: Record<string, true>;
   /**
-   * Adds a fresh single-pane tab titled `title`. Main seeds every tab title on
-   * the durable record (`Session N` for ticket sessions, `Terminal N` for
-   * scratch) and the sole product caller always forwards it, so the title is
-   * required here — no store-side fallback counter.
+   * Lands a freshly booted PTY as a single-pane tab, titled and — when the
+   * launch was an agent kickoff or resume — registered with what its harness is
+   * expected to report. `launch` is the durable record's own account of the
+   * spawn rather than a caller-assembled one, and it is required rather than
+   * optional for the reason `declared` is required on
+   * {@link sessionActivityState}: a defaulted expectation would make "the
+   * harness isn't reporting" and "a caller forgot to say" the same observation,
+   * and that is precisely the confusion this state exists to remove.
    */
-  addSession(scope: SessionScope, sessionId: string, title: string): void;
-  /** Insert a fresh PTY/engine as a sibling of sourcePaneId. */
+  addSession(scope: SessionScope, sessionId: string, launch: SessionLaunch): void;
+  /**
+   * Insert a fresh PTY/engine as a sibling of sourcePaneId. It takes no
+   * {@link SessionLaunch} because a split never carries one: nothing in the app
+   * can kick an agent off into a split, so main stamps every split record
+   * `shell`, and a bare shell has no harness expectation to declare.
+   */
   addSplit(
     ownerId: string,
     tabId: string,
@@ -186,10 +216,12 @@ interface SessionsState {
   /** Records a warm-park push from main; sourced from `window.api.terminal.onParkState`. */
   setParkState(sessionId: string, parked: boolean, keepAwake: boolean): void;
   /**
-   * Registers what a launch expects its harness to report, at spawn — before
-   * the agent has produced a byte. The expectation is what makes silence
-   * legible later: without it, a wrapper that was bypassed is indistinguishable
-   * from a harness that never had hooks.
+   * Registers what a session's harness is expected to report, before it has
+   * produced a byte. The expectation is what makes silence legible later:
+   * without it, a wrapper that was bypassed is indistinguishable from a harness
+   * that never had hooks. {@link SessionsState.addSession} calls it for every
+   * agent launch; {@link subscribeHarnessEvents} calls it for the reporting
+   * sessions a launch could not have known about.
    */
   expectHarnessEvents(sessionId: string, input: CreateSessionHarnessStateInput): void;
   /** Folds one canonical harness event pushed from main onto that session's state. */
@@ -297,6 +329,35 @@ function forgetTabIndexes(
   delete harness[tab.sessionId];
 }
 
+/**
+ * The harness expectation a launch earns, or null when it earns none.
+ *
+ * Only an `agent` launch earns one. Volli wrote that command line itself,
+ * through its own wrapper, so silence on the channel afterwards is a fact
+ * about the wrapper — a stale PATH, a `volli doctor --fix` never run — and
+ * worth saying out loud. A bare shell promised nothing: every split, every
+ * ticket tab opened without a kickoff, every scratch terminal must be able to
+ * sit quietly for an hour without the sidebar accusing it of not reporting.
+ *
+ * A harness the renderer ships no adapter for earns none either. A trusted
+ * manifest joins main's registry alone, so there is nothing here to read its
+ * capabilities off, and a guess would go wrong in both directions: claim
+ * `hooked` and a perfectly working harness gets called silent, claim less and
+ * we vouch for events it may not send. Its first delivery registers it
+ * instead — see {@link subscribeHarnessEvents}.
+ */
+function launchExpectation(launch: SessionLaunch): SessionHarnessState | null {
+  if (launch.launchKind !== "agent") return null;
+  const adapter = getHarnessAdapter(launch.harnessId);
+  if (adapter === undefined) return null;
+  return createSessionHarnessState({
+    harnessId: launch.harnessId,
+    expectedTier: harnessTier(adapter),
+    declaredEvents: [...supportedEvents(adapter)],
+    startedAt: launch.createdAt,
+  });
+}
+
 /** Factory so tests get isolated instances. */
 export function createSessionsStore() {
   return create<SessionsState>()((set) => ({
@@ -307,7 +368,7 @@ export function createSessionsStore() {
     harness: {},
     starting: {},
 
-    addSession(scope, sessionId, title) {
+    addSession(scope, sessionId, launch) {
       set((state) => {
         const id = ownerKey(scope);
         const current = state.byOwner[id] ?? EMPTY_CONTAINER;
@@ -316,17 +377,25 @@ export function createSessionsStore() {
         }
         const tab: SessionTab = {
           sessionId,
-          title,
+          title: launch.title,
           scope,
           layout: { kind: "pane", sessionId, exitCode: null },
           activePaneId: sessionId,
         };
+        // Declared here rather than by the caller, and in the same write that
+        // lands the tab: this is the one moment the app both knows a hooked
+        // harness was kicked off and owns the state that has to remember it,
+        // so the expectation cannot be forgotten at one launch site and honored
+        // at another.
+        const expectation = launchExpectation(launch);
         return {
           byOwner: {
             ...state.byOwner,
             [id]: { tabs: [...current.tabs, tab], activeSessionId: sessionId },
           },
           sessionOwner: { ...state.sessionOwner, [sessionId]: id },
+          harness:
+            expectation === null ? state.harness : { ...state.harness, [sessionId]: expectation },
         };
       });
     },
@@ -588,16 +657,17 @@ export const useSessionsStore = createSessionsStore();
  * never leave a second listener double-applying events.
  *
  * A notice for a session with no expectation yet REGISTERS one before folding
- * the event in. Registration at launch would only ever cover a kickoff we
- * issued — a resumed session, or an agent the user started by hand inside a
- * wrapped shell, reports just as truthfully and would otherwise be dropped by
- * `applyHarnessEvent`'s unregistered guard. Seeding on delivery is the plan's
- * own rule ("an event becomes verified on first real delivery") rather than a
- * shortcut around it: the tier is `hooked` because an event demonstrably
- * arrived, and the declared-event set comes from the adapter, so cursor — whose
- * source maps both blocking signals to null — still cannot raise a `waiting`
- * it isn't able to vouch for. A manifest-registered harness joins main's
- * registry alone, so this lookup misses for one; there the delivery is all the
+ * the event in. {@link SessionsState.addSession} covers the launches Volli
+ * itself issued as agents through an adapter this process ships; what it cannot
+ * cover still reports just as truthfully and would otherwise be dropped by
+ * `applyHarnessEvent`'s unregistered guard — an agent the user started by hand
+ * inside a wrapped shell, and a manifest-registered harness that joined main's
+ * registry alone. Seeding on delivery is the plan's own rule ("an event becomes
+ * verified on first real delivery") rather than a shortcut around it: the tier
+ * is `hooked` because an event demonstrably arrived, and the declared-event set
+ * comes from the adapter, so cursor — whose source maps both blocking signals
+ * to null — still cannot raise a `waiting` it isn't able to vouch for. For the
+ * manifest harness the lookup misses entirely; there the delivery is all the
  * evidence there is, and disbelieving it would hide a harness that IS reporting.
  */
 export function subscribeHarnessEvents(): () => void {

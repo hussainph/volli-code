@@ -1,5 +1,10 @@
-import type { HarnessEventNotice, HarnessId } from "@volli/shared";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import {
+  HARNESS_EVENT_GRACE_MS,
+  sessionHarnessStatus,
+  type HarnessEventNotice,
+  type HarnessId,
+} from "@volli/shared";
 import {
   createSessionsStore,
   findSessionPane,
@@ -10,9 +15,25 @@ import {
   subscribeHarnessEvents,
   ticketScope,
   useSessionsStore,
+  type SessionLaunch,
 } from "./sessions";
 
 const P = scratchScope("p");
+
+/** A bare shell launch: no harness command line was written, so no expectation. */
+const shellLaunch = (title: string): SessionLaunch => ({
+  title,
+  harnessId: "claude-code",
+  launchKind: "shell",
+  createdAt: 0,
+});
+
+/** A kickoff/resume launch of `harnessId` at `createdAt` — the wrapper's own doing. */
+const agentLaunch = (
+  harnessId: HarnessId,
+  createdAt = 1000,
+  title = "Session 1",
+): SessionLaunch => ({ title, harnessId, launchKind: "agent", createdAt });
 
 describe("sessionActivityState", () => {
   it("is exited whenever the shell has exited, regardless of recency or park state", () => {
@@ -53,7 +74,7 @@ describe("sessionActivityState", () => {
 describe("addSession", () => {
   it("appends a scratch tab with the given title, stamps its scope, and activates it", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
 
     const container = store.getState().byOwner["p"];
     expect(container?.tabs).toEqual([
@@ -71,7 +92,7 @@ describe("addSession", () => {
 
   it("uses the supplied title (main's Session N) for ticket sessions", () => {
     const store = createSessionsStore();
-    store.getState().addSession(ticketScope("proj", "t1"), "s1", "Session 1");
+    store.getState().addSession(ticketScope("proj", "t1"), "s1", shellLaunch("Session 1"));
 
     const container = store.getState().byOwner["t1"];
     expect(container?.tabs[0]?.title).toBe("Session 1");
@@ -85,9 +106,9 @@ describe("addSession", () => {
 
   it("keeps insertion order across appended tabs and activates each", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
-    store.getState().addSession(P, "s2", "Terminal 2");
-    store.getState().addSession(P, "s3", "Terminal 3");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
+    store.getState().addSession(P, "s2", shellLaunch("Terminal 2"));
+    store.getState().addSession(P, "s3", shellLaunch("Terminal 3"));
 
     const container = store.getState().byOwner["p"];
     expect(container?.tabs.map((t) => t.title)).toEqual(["Terminal 1", "Terminal 2", "Terminal 3"]);
@@ -96,8 +117,8 @@ describe("addSession", () => {
 
   it("scopes sessions per owner", () => {
     const store = createSessionsStore();
-    store.getState().addSession(scratchScope("a"), "a1", "Terminal 1");
-    store.getState().addSession(scratchScope("b"), "b1", "Terminal 1");
+    store.getState().addSession(scratchScope("a"), "a1", shellLaunch("Terminal 1"));
+    store.getState().addSession(scratchScope("b"), "b1", shellLaunch("Terminal 1"));
 
     expect(store.getState().byOwner["a"]?.tabs.map((t) => t.sessionId)).toEqual(["a1"]);
     expect(store.getState().byOwner["b"]?.tabs[0]?.title).toBe("Terminal 1");
@@ -105,19 +126,93 @@ describe("addSession", () => {
 
   it("ignores a duplicate sessionId in the same owner", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     const before = store.getState().byOwner;
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
 
     expect(store.getState().byOwner).toBe(before);
+  });
+});
+
+describe("addSession — the launch expectation", () => {
+  it("declares what a hooked agent launch promised, before a byte has arrived", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", agentLaunch("claude-code"));
+
+    expect(store.getState().harness["s1"]).toEqual({
+      harnessId: "claude-code",
+      expectedTier: "hooked",
+      declaresInputNeeded: true,
+      // Main's launch clock, not the renderer's: the grace window is measured
+      // from when the process started, so a slow boot can't shorten it.
+      startedAt: 1000,
+      delivered: false,
+      declared: null,
+    });
+  });
+
+  it("reads the promise off the adapter, not off the fact that an agent launched", () => {
+    const store = createSessionsStore();
+    // cursor's own source maps both blocking signals to null, so it launches
+    // hooked and still cannot claim a human is blocking it.
+    store.getState().addSession(P, "s1", agentLaunch("cursor"));
+
+    expect(store.getState().harness["s1"]?.declaresInputNeeded).toBe(false);
+  });
+
+  it("leaves a bare shell with nothing to report", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
+
+    // A shell never promised anything, so it must never be accused of silence.
+    expect(store.getState().harness["s1"]).toBeUndefined();
+  });
+
+  it("lets a harness the renderer has no adapter for prove itself on delivery", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", agentLaunch("my-agent" as HarnessId));
+
+    // A trusted manifest joins main's registry alone; guessing a tier here
+    // would either accuse a working harness or vouch for events it can't send.
+    expect(store.getState().harness["s1"]).toBeUndefined();
+  });
+
+  it("registers nothing twice for a duplicate landing", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", agentLaunch("claude-code"));
+    store.getState().applyHarnessEvent("s1", "turn.started");
+    const delivered = store.getState().harness["s1"];
+
+    store.getState().addSession(P, "s1", agentLaunch("claude-code", 9000));
+
+    // A re-landing must not reset the clock on a session already reporting.
+    expect(store.getState().harness["s1"]).toBe(delivered);
+  });
+
+  it("decays a bypassed wrapper into Known once the grace window passes", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", agentLaunch("claude-code"));
+    const state = store.getState().harness["s1"]!;
+
+    // The launch went through our wrapper's argv but the user's PATH still
+    // pointed at the real binary, so no hook ever fires. Inside the window we
+    // are still waiting; past it, the promise is broken and says so.
+    expect(sessionHarnessStatus(state, 1000 + HARNESS_EVENT_GRACE_MS).activitySource).toBe(
+      "inferred",
+    );
+    expect(sessionHarnessStatus(state, 1000 + HARNESS_EVENT_GRACE_MS + 1)).toEqual({
+      tier: "known",
+      activitySource: "silent",
+      input: "unconfirmed",
+    });
   });
 });
 
 describe("setActiveSession", () => {
   it("activates an existing session", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
-    store.getState().addSession(P, "s2", "Terminal 2");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
+    store.getState().addSession(P, "s2", shellLaunch("Terminal 2"));
 
     store.getState().setActiveSession("p", "s1");
     expect(store.getState().byOwner["p"]?.activeSessionId).toBe("s1");
@@ -125,7 +220,7 @@ describe("setActiveSession", () => {
 
   it("is a no-op for an unknown owner or session", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     const before = store.getState().byOwner;
 
     store.getState().setActiveSession("missing", "s1");
@@ -137,7 +232,7 @@ describe("setActiveSession", () => {
 describe("split panes", () => {
   it("inserts a fresh session leaf beside the focused pane, activates it, and indexes it", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
 
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
 
@@ -155,7 +250,7 @@ describe("split panes", () => {
 
   it("supports nested splits without duplicating or replacing sibling leaves", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
     store.getState().addSplit("p", "s1", "s1", "s3", "horizontal");
 
@@ -165,7 +260,7 @@ describe("split panes", () => {
 
   it("works for a ticket tab too — ticket sessions gain the full split machinery", () => {
     const store = createSessionsStore();
-    store.getState().addSession(ticketScope("proj", "t1"), "s1", "Session 1");
+    store.getState().addSession(ticketScope("proj", "t1"), "s1", shellLaunch("Session 1"));
     store.getState().addSplit("t1", "s1", "s1", "s2", "vertical");
 
     const tab = store.getState().byOwner["t1"]!.tabs[0]!;
@@ -175,7 +270,7 @@ describe("split panes", () => {
 
   it("splits a pane that lives in the second child of an existing split", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
 
     // s2 is the SECOND child of the split — this recurses past an unchanged
@@ -202,7 +297,7 @@ describe("split panes", () => {
 
   it("rebuilds a split when removing a deep pane collapses its nested first subtree but leaves the second sibling intact", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
     store.getState().addSplit("p", "s1", "s1", "s3", "horizontal");
     // layout: split(s2, vertical){ first: split(s3, horizontal){first: s1, second: s3}, second: s2 }
@@ -222,7 +317,7 @@ describe("split panes", () => {
 
   it("leaves a nested split subtree untouched (same reference) when the split target lives outside it entirely", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
     store.getState().addSplit("p", "s1", "s1", "s3", "horizontal");
     // layout: split(s2, vertical){ first: split(s3, horizontal){first: s1, second: s3}, second: s2 }
@@ -240,7 +335,7 @@ describe("split panes", () => {
 
   it("rebuilds a split when removing a deep pane collapses its nested second subtree but leaves the first sibling intact", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
     store.getState().addSplit("p", "s1", "s2", "s3", "horizontal");
     // layout: split(s2, vertical){ first: s1, second: split(s3, horizontal){first: s2, second: s3} }
@@ -260,7 +355,7 @@ describe("split panes", () => {
 
   it("ignores unknown owners, tabs, source panes, and duplicate pane ids", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     const before = store.getState().byOwner;
 
     store.getState().addSplit("missing", "s1", "s1", "s2", "vertical");
@@ -273,7 +368,7 @@ describe("split panes", () => {
 
   it("closes one leaf, collapses its parent split, focuses a neighbor, and drops its index", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
     store.getState().setParkState("s2", true, false);
 
@@ -291,7 +386,7 @@ describe("split panes", () => {
 
   it("keeps the tab-root routing entry (dropping only its output/park stamps) when the root pane closes, so rename still lands", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
     store.getState().bumpOutput("s1", 1000);
     store.getState().setParkState("s1", true, false);
@@ -311,7 +406,7 @@ describe("split panes", () => {
 
   it("clears the retained tab-root routing entry when the whole tab later closes", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
     store.getState().setParkState("s1", true, false);
     store.getState().closePane("p", "s1", "s1"); // root pane gone; sessionOwner[s1] retained
@@ -325,7 +420,7 @@ describe("split panes", () => {
 
   it("collapses a nested split while leaving the sibling subtree intact", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
     store.getState().addSplit("p", "s1", "s1", "s3", "horizontal");
 
@@ -337,7 +432,7 @@ describe("split panes", () => {
 
   it("ignores invalid pane-close targets and refuses to remove a tab's only leaf", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     const before = store.getState().byOwner;
 
     store.getState().closePane("missing", "s1", "s1");
@@ -350,7 +445,7 @@ describe("split panes", () => {
 
   it("updates only the targeted split ratio and clamps unsafe extremes", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
 
     store.getState().setSplitRatio("p", "s1", "s2", 0.99);
@@ -360,7 +455,7 @@ describe("split panes", () => {
 
   it("updates a nested split and ignores unknown split/owner/tab ids", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
     store.getState().addSplit("p", "s1", "s1", "s3", "horizontal");
 
@@ -380,7 +475,7 @@ describe("split panes", () => {
 describe("setActivePane", () => {
   it("focuses a pane inside a split tree", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
 
     store.getState().setActivePane("p", "s1", "s1");
@@ -390,7 +485,7 @@ describe("setActivePane", () => {
 
   it("is a no-op for the active pane or unknown owner, tab, and pane", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     const before = store.getState().byOwner;
 
     store.getState().setActivePane("p", "s1", "s1");
@@ -405,9 +500,9 @@ describe("setActivePane", () => {
 describe("closeSession", () => {
   it("removes the tab, selects the neighbor, and clears its indexes", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
-    store.getState().addSession(P, "s2", "Terminal 2");
-    store.getState().addSession(P, "s3", "Terminal 3");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
+    store.getState().addSession(P, "s2", shellLaunch("Terminal 2"));
+    store.getState().addSession(P, "s3", shellLaunch("Terminal 3"));
     store.getState().setActiveSession("p", "s2");
     store.getState().bumpOutput("s2", 1000);
     store.getState().setParkState("s2", true, true);
@@ -424,8 +519,8 @@ describe("closeSession", () => {
 
   it("leaves the active tab untouched when a different (non-active) tab is closed", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
-    store.getState().addSession(P, "s2", "Terminal 2"); // s2 becomes active
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
+    store.getState().addSession(P, "s2", shellLaunch("Terminal 2")); // s2 becomes active
 
     store.getState().closeSession("p", "s1"); // close the NON-active tab
 
@@ -436,7 +531,7 @@ describe("closeSession", () => {
 
   it("sets activeSessionId to null when closing the only tab", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
 
     store.getState().closeSession("p", "s1");
 
@@ -447,7 +542,7 @@ describe("closeSession", () => {
 
   it("is a no-op for an unknown owner or session", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     const before = store.getState().byOwner;
 
     store.getState().closeSession("missing", "s1");
@@ -459,7 +554,7 @@ describe("closeSession", () => {
 describe("renameSession", () => {
   it("retitles the tab identified by its root sessionId", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
 
     store.getState().renameSession("s1", "Deploy");
 
@@ -468,7 +563,7 @@ describe("renameSession", () => {
 
   it("is a no-op for an unchanged title or an unknown session", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Fixed");
+    store.getState().addSession(P, "s1", shellLaunch("Fixed"));
     const before = store.getState().byOwner;
 
     store.getState().renameSession("s1", "Fixed");
@@ -491,8 +586,8 @@ describe("renameSession", () => {
 describe("markExited", () => {
   it("records the exit code on the matching tab, routing across owners", () => {
     const store = createSessionsStore();
-    store.getState().addSession(scratchScope("a"), "a1", "Terminal 1");
-    store.getState().addSession(ticketScope("proj", "t1"), "b1", "Session 1");
+    store.getState().addSession(scratchScope("a"), "a1", shellLaunch("Terminal 1"));
+    store.getState().addSession(ticketScope("proj", "t1"), "b1", shellLaunch("Session 1"));
 
     store.getState().markExited("b1", 130);
 
@@ -506,7 +601,7 @@ describe("markExited", () => {
 
   it("records an exit on a nested split leaf without changing its sibling", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
     store.getState().addSplit("p", "s1", "s1", "s3", "horizontal");
 
@@ -520,7 +615,7 @@ describe("markExited", () => {
 
   it("is a no-op for an unknown session", () => {
     const store = createSessionsStore();
-    store.getState().addSession(scratchScope("a"), "a1", "Terminal 1");
+    store.getState().addSession(scratchScope("a"), "a1", shellLaunch("Terminal 1"));
     const before = store.getState().byOwner;
 
     store.getState().markExited("ghost", 0);
@@ -539,7 +634,7 @@ describe("markExited", () => {
 
   it("is a no-op when the routing index outlives the pane it points to (defensive)", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     // s1's own routing index is intact, but "ghost" is (incorrectly) routed to
     // the same owner without any pane in its tabs to match.
     store.setState((state) => ({ sessionOwner: { ...state.sessionOwner, ghost: "p" } }));
@@ -554,14 +649,14 @@ describe("markExited", () => {
 describe("bumpOutput", () => {
   it("records the timestamp for a tracked session", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().bumpOutput("s1", 5000);
     expect(store.getState().lastOutputAt["s1"]).toBe(5000);
   });
 
   it("throttles to one write per second", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().bumpOutput("s1", 5000);
     store.getState().bumpOutput("s1", 5500); // within 1s — ignored
     expect(store.getState().lastOutputAt["s1"]).toBe(5000);
@@ -571,7 +666,7 @@ describe("bumpOutput", () => {
 
   it("ignores an untracked session, and a post-close chunk is free", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().bumpOutput("scratch", 5000);
     expect(store.getState().lastOutputAt["scratch"]).toBeUndefined();
 
@@ -584,7 +679,7 @@ describe("bumpOutput", () => {
 describe("setParkState", () => {
   it("records park+keepAwake for a previously untracked session", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
 
     store.getState().setParkState("s1", true, false);
 
@@ -593,7 +688,7 @@ describe("setParkState", () => {
 
   it("updates an existing entry when either field changes", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().setParkState("s1", true, false);
 
     store.getState().setParkState("s1", true, true); // pinned while still parked
@@ -603,7 +698,7 @@ describe("setParkState", () => {
 
   it("is a no-op when park state is unchanged", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().setParkState("s1", true, false);
     const before = store.getState().parkState;
 
@@ -614,7 +709,7 @@ describe("setParkState", () => {
 
   it("ignores a push for a session the store no longer tracks", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().setParkState("s1", true, false);
     store.getState().closeSession("p", "s1");
 
@@ -660,12 +755,12 @@ describe("setStarting", () => {
 describe("forgetOwner", () => {
   it("drops the container, its sessions' indexes, and its starting flag", () => {
     const store = createSessionsStore();
-    store.getState().addSession(scratchScope("a"), "a1", "Terminal 1");
-    store.getState().addSession(scratchScope("a"), "a2", "Terminal 2");
+    store.getState().addSession(scratchScope("a"), "a1", shellLaunch("Terminal 1"));
+    store.getState().addSession(scratchScope("a"), "a2", shellLaunch("Terminal 2"));
     store.getState().bumpOutput("a1", 1000);
     store.getState().setParkState("a1", true, false);
     store.getState().setStarting("a", true);
-    store.getState().addSession(scratchScope("b"), "b1", "Terminal 1");
+    store.getState().addSession(scratchScope("b"), "b1", shellLaunch("Terminal 1"));
 
     store.getState().forgetOwner("a");
 
@@ -686,7 +781,7 @@ describe("forgetOwner", () => {
 
   it("is a no-op for an owner with no sessions and no starting flag", () => {
     const store = createSessionsStore();
-    store.getState().addSession(scratchScope("a"), "a1", "Terminal 1");
+    store.getState().addSession(scratchScope("a"), "a1", shellLaunch("Terminal 1"));
     const before = store.getState().byOwner;
     store.getState().forgetOwner("never-added");
     expect(store.getState().byOwner).toBe(before);
@@ -696,8 +791,8 @@ describe("forgetOwner", () => {
 describe("findTabBySessionId", () => {
   it("finds the owner + tab for a root session id across owners", () => {
     const store = createSessionsStore();
-    store.getState().addSession(scratchScope("a"), "a1", "Terminal 1");
-    store.getState().addSession(ticketScope("proj", "t1"), "b1", "Session 1");
+    store.getState().addSession(scratchScope("a"), "a1", shellLaunch("Terminal 1"));
+    store.getState().addSession(ticketScope("proj", "t1"), "b1", shellLaunch("Session 1"));
 
     expect(findTabBySessionId(store.getState().byOwner, "b1")?.ownerId).toBe("t1");
     expect(findTabBySessionId(store.getState().byOwner, "ghost")).toBeNull();
@@ -715,7 +810,7 @@ const HOOKED_LAUNCH = {
 describe("applyHarnessEvent", () => {
   it("puts a session into the state its harness declares", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().expectHarnessEvents("s1", HOOKED_LAUNCH);
 
     store.getState().applyHarnessEvent("s1", "input.needed");
@@ -725,7 +820,7 @@ describe("applyHarnessEvent", () => {
 
   it("ignores an event for a session no launch ever registered", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     const before = store.getState().harness;
 
     store.getState().applyHarnessEvent("s1", "input.needed");
@@ -737,7 +832,7 @@ describe("applyHarnessEvent", () => {
 describe("expectHarnessEvents", () => {
   it("refuses to register a session the store no longer knows", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().closeSession("p", "s1");
 
     // A launch that lost its race with a close must not leave a live-looking
@@ -749,7 +844,7 @@ describe("expectHarnessEvents", () => {
 
   it("forgets a session's harness state when its tab closes", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().expectHarnessEvents("s1", HOOKED_LAUNCH);
 
     store.getState().closeSession("p", "s1");
@@ -796,7 +891,7 @@ describe("subscribeHarnessEvents", () => {
   });
 
   it("puts the session a blocking event names into `waiting`", () => {
-    useSessionsStore.getState().addSession(P, "s1", "Terminal 1");
+    useSessionsStore.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     const channel = stubChannel();
 
     subscribeHarnessEvents();
@@ -806,7 +901,7 @@ describe("subscribeHarnessEvents", () => {
   });
 
   it("clears a waiting session on the agent's next observable move", () => {
-    useSessionsStore.getState().addSession(P, "s1", "Terminal 1");
+    useSessionsStore.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     const channel = stubChannel();
 
     subscribeHarnessEvents();
@@ -817,7 +912,7 @@ describe("subscribeHarnessEvents", () => {
   });
 
   it("keeps waiting when only a subagent finished", () => {
-    useSessionsStore.getState().addSession(P, "s1", "Terminal 1");
+    useSessionsStore.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     const channel = stubChannel();
 
     subscribeHarnessEvents();
@@ -828,7 +923,7 @@ describe("subscribeHarnessEvents", () => {
   });
 
   it("believes a registered harness the renderer ships no adapter for", () => {
-    useSessionsStore.getState().addSession(P, "s1", "Terminal 1");
+    useSessionsStore.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     const channel = stubChannel();
 
     subscribeHarnessEvents();
@@ -841,7 +936,7 @@ describe("subscribeHarnessEvents", () => {
   });
 
   it("refuses a blocking event from a harness whose own source can't send one", () => {
-    useSessionsStore.getState().addSession(P, "s1", "Terminal 1");
+    useSessionsStore.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     const channel = stubChannel();
 
     subscribeHarnessEvents();

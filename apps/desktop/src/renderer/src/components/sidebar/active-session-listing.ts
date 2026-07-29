@@ -141,31 +141,59 @@ const CONCLUDED_PRIORITY = 5;
  */
 const NEEDS_YOU_PRIORITY = { blocked: 0, waiting: 1, done: 2, bare: 3 } as const;
 
-function tabActivity(tab: SessionTab, input: ActivityInput): SessionActivityState {
-  return sessionPanes(tab.layout)
-    .map((pane) => paneActivity(pane, input))
-    .toSorted((a, b) => ACTIVITY_PRIORITY[a] - ACTIVITY_PRIORITY[b])[0]!;
+/** One of a tab's panes, with the activity it is currently in. */
+interface PaneState {
+  paneId: string;
+  activity: SessionActivityState;
 }
 
+/**
+ * A tab's panes with their activity, highest-priority first. The head is the
+ * pane a row is promoted (or not) on — and it has to be the pane the rest of
+ * the row describes too. Reading activity from the whole tab while reading its
+ * source, its record and its click target from `activePaneId` let one row say
+ * two things at once: in a split whose background pane had just declared
+ * `input.needed`, that pane pulled the row into "Needs you" while the source
+ * line described the plain shell in front, so the row claimed a
+ * harness-declared wait and reported that nothing was reporting — and the
+ * click landed on the pane that wasn't asking for anything.
+ */
+function tabPaneStates(tab: SessionTab, input: ActivityInput): PaneState[] {
+  return sessionPanes(tab.layout)
+    .map((pane) => ({ paneId: pane.sessionId, activity: paneActivity(pane, input) }))
+    .toSorted((a, b) => ACTIVITY_PRIORITY[a.activity] - ACTIVITY_PRIORITY[b.activity]);
+}
+
+/** The pane a tab's row speaks for when no agent signal names another. */
+function tabSubject(tab: SessionTab, input: ActivityInput): PaneState {
+  return tabPaneStates(tab, input)[0]!;
+}
+
+/**
+ * A row for one live tab, every word of it about `subject` — the single pane
+ * the row speaks for. Activity, where that activity came from, the durable
+ * record behind the source label, and the pane a click opens are all read off
+ * that one id here rather than chosen per call site, because choosing them
+ * separately is how the row learned to contradict itself.
+ */
 function sessionRow(
   ticket: Ticket,
   tab: SessionTab,
-  paneId: string,
-  record: SessionRecord | undefined,
-  activity: SessionActivityState,
-  activitySource: SessionActivitySource,
+  subject: PaneState,
   attention: SessionAttention | null,
+  input: ActivityInput,
+  recordsById: ReadonlyMap<string, SessionRecord>,
 ): ActiveSessionRow {
   return {
     id: `session:${tab.sessionId}`,
     ticket,
     title: tab.title,
-    source: sessionSource(record),
-    activity,
-    activitySource,
+    source: sessionSource(recordsById.get(subject.paneId)),
+    activity: subject.activity,
+    activitySource: paneActivitySource(subject.paneId, input),
     attention,
     lastRun: null,
-    target: { tabId: tab.sessionId, paneId },
+    target: { tabId: tab.sessionId, paneId: subject.paneId },
   };
 }
 
@@ -293,16 +321,16 @@ export function buildActiveSessionListing(
    * guarantee counts; a promoted row still counts, since the ticket is visible.
    */
   const placeLiveTab = (ticket: Ticket, tab: SessionTab): boolean => {
-    const activity = tabActivity(tab, input);
+    const subject = tabSubject(tab, input);
+    const activity = subject.activity;
     if (activity === "exited") return false;
     const row = sessionRow(
       ticket,
       tab,
-      tab.activePaneId,
-      recordsById.get(tab.activePaneId),
-      activity,
-      paneActivitySource(tab.activePaneId, input),
+      subject,
       activity === "waiting" ? { signal: "waiting", reason: null } : null,
+      input,
+      recordsById,
     );
     if (activity === "waiting") {
       needsYouEntries.push({
@@ -327,7 +355,7 @@ export function buildActiveSessionListing(
           sessionPanes(tab.layout).some((pane) => pane.sessionId === signaledPaneId),
       );
       const liveTabs = (container?.tabs ?? []).filter(
-        (tab) => tabActivity(tab, input) !== "exited",
+        (tab) => tabSubject(tab, input).activity !== "exited",
       );
       const fallbackTab =
         liveTabs.find((tab) => tab.sessionId === container?.activeSessionId) ?? liveTabs.at(-1);
@@ -339,26 +367,25 @@ export function buildActiveSessionListing(
           ? { payload: signal.payload, paneId: signaledPaneId, createdAt: signal.createdAt }
           : null;
       if (attentionTab !== undefined) {
-        const activity = tabActivity(attentionTab, input);
+        const paneStates = tabPaneStates(attentionTab, input);
+        // A CLI signal names the exact pane that raised it, so that pane is
+        // what the row is about; absent one, the tab's highest-priority pane
+        // is. `signaledTab` was found BY this pane's presence in it, so the
+        // lookup cannot miss.
+        const subject =
+          exactSignal === null
+            ? paneStates[0]!
+            : paneStates.find((pane) => pane.paneId === exactSignal.paneId)!;
         // The agent's own signal wins where there is one: a hook payload knows
         // that a human is needed, but only the CLI signal knows what for.
         const attention: SessionAttention | null =
           exactSignal !== null
             ? { signal: exactSignal.payload.signal, reason: exactSignal.payload.reason }
-            : activity === "waiting"
+            : subject.activity === "waiting"
               ? { signal: "waiting", reason: null }
               : null;
-        const targetPaneId = exactSignal === null ? attentionTab.activePaneId : exactSignal.paneId;
         needsYouEntries.push({
-          row: sessionRow(
-            ticket,
-            attentionTab,
-            targetPaneId,
-            recordsById.get(targetPaneId),
-            activity,
-            paneActivitySource(targetPaneId, input),
-            attention,
-          ),
+          row: sessionRow(ticket, attentionTab, subject, attention, input, recordsById),
           priority:
             attention === null ? NEEDS_YOU_PRIORITY.bare : NEEDS_YOU_PRIORITY[attention.signal],
           recency: exactSignal?.createdAt ?? ticket.updatedAt,
