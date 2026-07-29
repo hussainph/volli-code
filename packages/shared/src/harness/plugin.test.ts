@@ -9,8 +9,8 @@ const INPUT = {
 } as const;
 
 const BINDINGS: readonly HarnessEventBinding[] = [
-  { event: "turn.completed", native: "session.idle", delivery: "async", timeoutMs: 5000 },
-  { event: "input.needed", native: "hooks:permission.asked", delivery: "async", timeoutMs: 5000 },
+  { event: "turn.completed", native: "session.idle", delivery: "async" },
+  { event: "input.needed", native: "hooks:permission.asked", delivery: "async" },
 ];
 
 interface PluginModule {

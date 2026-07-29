@@ -21,7 +21,6 @@ function bareAdapter(overrides: Partial<HarnessAdapter> = {}): HarnessAdapter {
     label: "My Harness",
     command: "my-harness",
     promptFlag: null,
-    detection: { executable: "my-harness" },
     surfaces: { skillsDir: null, commandsDir: null, instructionsFile: null },
     injection: { kind: "none" },
     sessionId: { kind: "none" },

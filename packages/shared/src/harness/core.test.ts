@@ -71,13 +71,13 @@ describe("managedWriteDecision", () => {
 });
 
 describe("harnessAdapters", () => {
-  it("covers every first-class harness with its own detection executable", () => {
+  it("covers every first-class harness with its own executable to detect", () => {
     expect(harnessAdapters.map((adapter) => adapter.id).toSorted()).toEqual(
       [...FIRST_CLASS_HARNESS_IDS].toSorted(),
     );
-    expect(harnessAdapters.every((adapter) => adapter.detection.executable.length > 0)).toBe(true);
+    expect(harnessAdapters.every((adapter) => adapter.command.length > 0)).toBe(true);
     const claude = harnessAdapters.find((adapter) => adapter.id === "claude-code");
-    expect(claude?.detection.executable).toBe("claude");
+    expect(claude?.command).toBe("claude");
   });
 });
 
@@ -90,7 +90,6 @@ function bareAdapter(overrides: Partial<HarnessAdapter> = {}): HarnessAdapter {
     label: "My Harness",
     command: "my-harness",
     promptFlag: null,
-    detection: { executable: "my-harness" },
     surfaces: NO_SURFACES,
     injection: { kind: "none" },
     sessionId: { kind: "none" },

@@ -53,14 +53,14 @@ export async function resolveOnPath(
 
 /**
  * Finds first-class harness executables on an explicit PATH, without invoking a
- * shell or the harness itself. Iterates the adapter registry so each harness's
- * detection rule lives in its own adapter module — adding a harness needs no
- * edit here.
+ * shell or the harness itself. Iterates the adapter registry, and resolves the
+ * `command` each adapter already declares — adding a harness needs no edit here,
+ * and there is no second name to keep in step with the one Volli launches.
  */
 export async function detectInstalledHarnesses(pathValue: string): Promise<HarnessId[]> {
   const detected: HarnessId[] = [];
   for (const adapter of harnessAdapters) {
-    if ((await resolveOnPath(pathValue, adapter.detection.executable)) !== null) {
+    if ((await resolveOnPath(pathValue, adapter.command)) !== null) {
       detected.push(adapter.id);
     }
   }

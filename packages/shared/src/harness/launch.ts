@@ -33,6 +33,23 @@ export const HARNESS_DIR_TOKEN = "{harnessDir}";
 /** The generated plugin's name inside the Volli-owned per-harness directory. */
 const PLUGIN_FILENAME = "volli-plugin.js";
 
+/**
+ * How long a harness may wait for one Volli hook before giving up on it.
+ *
+ * One number for every binding of every harness. It was a per-binding adapter
+ * field, and thirty bindings across four adapters all declared 5000 — so the
+ * field could only ever say the same thing thirty times, while inviting a
+ * thirty-first to disagree for no reason anyone could state.
+ *
+ * The value is a budget the hook client has to live inside, not a preference:
+ * `volli hook` spends half of it (see `SHORTEST_DECLARED_HOOK_TIMEOUT_MS` in the
+ * CLI) covering an `ELECTRON_RUN_AS_NODE` boot, a stdin read and a socket call.
+ * Every mechanism that renders it converts — claude-code and cursor want
+ * SECONDS — so the unit lives here and the conversions stay beside the schemas
+ * that need them.
+ */
+export const HOOK_TIMEOUT_MS = 5000;
+
 const HOOKS_MECHANISM = "hooks";
 const NOTIFY_MECHANISM = "notify";
 
@@ -195,7 +212,7 @@ function claudeHooks(
         {
           type: "command",
           command: hookCommandLine(input, binding),
-          timeout: Math.ceil(binding.timeoutMs / 1000),
+          timeout: Math.ceil(HOOK_TIMEOUT_MS / 1000),
         },
       ],
     });
@@ -290,7 +307,7 @@ function cursorHooksFile(
   for (const binding of bindings) {
     const native = nativeName(binding);
     const group = hooks[native] ?? [];
-    group.push(cursorHookEntry(hookCommandLine(input, binding), binding.timeoutMs));
+    group.push(cursorHookEntry(hookCommandLine(input, binding), HOOK_TIMEOUT_MS));
     hooks[native] = group;
   }
   return { path: CURSOR_HOOKS_PATH, content: renderCursorHooks(hooks), merge: "cursor-hooks" };

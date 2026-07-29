@@ -53,12 +53,11 @@ const registeredAdapter = (): HarnessAdapter => ({
   label: "My Agent",
   command: "my-agent",
   promptFlag: "-p",
-  detection: { executable: "my-agent" },
   surfaces: { skillsDir: null, commandsDir: null, instructionsFile: null },
   injection: { kind: "claude-settings-json", flag: "--settings" },
   sessionId: { kind: "reported" },
   resume: { byId: null, latest: null, userResumeTokens: [] },
-  events: [{ event: "input.needed", native: "Notification", delivery: "async", timeoutMs: 5000 }],
+  events: [{ event: "input.needed", native: "Notification", delivery: "async" }],
   sessionMarkers: [],
   launchSettings: [],
 });
@@ -236,7 +235,7 @@ describe("addSession — the launch expectation", () => {
     useHarnessCatalogStore.getState().setRegistered([
       {
         ...registeredAdapter(),
-        events: [{ event: "turn.started", native: "Start", delivery: "async", timeoutMs: 5000 }],
+        events: [{ event: "turn.started", native: "Start", delivery: "async" }],
       },
     ]);
     const store = createSessionsStore();
@@ -1035,7 +1034,7 @@ describe("subscribeHarnessEvents", () => {
     useHarnessCatalogStore.getState().setRegistered([
       {
         ...registeredAdapter(),
-        events: [{ event: "turn.started", native: "Start", delivery: "async", timeoutMs: 5000 }],
+        events: [{ event: "turn.started", native: "Start", delivery: "async" }],
       },
     ]);
     useSessionsStore.getState().addSession(P, "s1", shellLaunch("Terminal 1"));

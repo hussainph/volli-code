@@ -38,7 +38,7 @@ function manifest(overrides: Record<string, unknown> = {}): Record<string, unkno
     slug: "my-harness",
     label: "My Harness",
     command: "my-harness",
-    events: [{ event: "input.needed", native: "Notification", delivery: "async", timeoutMs: 5000 }],
+    events: [{ event: "input.needed", native: "Notification", delivery: "async" }],
     ...overrides,
   };
 }

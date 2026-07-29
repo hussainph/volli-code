@@ -35,7 +35,7 @@ import type {
 export const SUPPORTED_MANIFEST_VERSION = 1;
 
 export interface ManifestError {
-  /** Dotted/indexed path to the offending field (`events[1].timeoutMs`), or `""` for the document itself. */
+  /** Dotted/indexed path to the offending field (`events[1].delivery`), or `""` for the document itself. */
   path: string;
   message: string;
 }
@@ -322,13 +322,6 @@ function parseInjection(errors: Errors, value: unknown): HarnessConfigInjection 
   return none;
 }
 
-/**
- * The longest a binding may make a harness wait. Generous enough for every
- * mechanism observed (Claude Code's own default is 60s) and short enough that a
- * `sync` binding cannot hang a session on a Volli that never answers.
- */
-const MAX_EVENT_TIMEOUT_MS = 600_000;
-
 function parseEventBinding(
   errors: Errors,
   index: number,
@@ -339,7 +332,7 @@ function parseEventBinding(
     errors.add(path, "must be an object");
     return null;
   }
-  const { event, native, delivery, timeoutMs } = value;
+  const { event, native, delivery } = value;
   let ok = true;
   if (!isHarnessEvent(event)) {
     errors.add(`${path}.event`, `must be one of: ${HARNESS_EVENTS.join(", ")}`);
@@ -359,22 +352,8 @@ function parseEventBinding(
     errors.add(`${path}.delivery`, "must be async or sync");
     ok = false;
   }
-  if (
-    typeof timeoutMs !== "number" ||
-    !Number.isInteger(timeoutMs) ||
-    timeoutMs <= 0 ||
-    timeoutMs > MAX_EVENT_TIMEOUT_MS
-  ) {
-    errors.add(`${path}.timeoutMs`, `must be a whole number of ms, 1–${MAX_EVENT_TIMEOUT_MS}`);
-    ok = false;
-  }
   if (!ok || !isHarnessEvent(event) || !isArgvWord(native)) return null;
-  return {
-    event,
-    native,
-    delivery: delivery as "async" | "sync",
-    timeoutMs: timeoutMs as number,
-  };
+  return { event, native, delivery: delivery as "async" | "sync" };
 }
 
 function parseEvents(errors: Errors, value: unknown): readonly HarnessEventBinding[] {
@@ -599,7 +578,6 @@ export function parseHarnessManifest(raw: unknown): ManifestParse {
       label,
       command,
       promptFlag: isArgvWord(promptFlag) ? promptFlag : null,
-      detection: { executable: command },
       surfaces,
       injection,
       sessionId,

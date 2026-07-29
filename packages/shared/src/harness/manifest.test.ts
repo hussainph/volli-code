@@ -28,7 +28,6 @@ describe("parseHarnessManifest", () => {
     expect(result.adapter.id).toBe("my-harness");
     expect(result.adapter.label).toBe("My Harness");
     expect(result.adapter.command).toBe("my-harness");
-    expect(result.adapter.detection.executable).toBe("my-harness");
     expect(result.adapter.injection).toEqual({ kind: "none" });
     expect(result.adapter.events).toEqual([]);
   });
@@ -402,14 +401,14 @@ describe("parseHarnessManifest", () => {
     const result = parseHarnessManifest(
       minimal({
         events: [
-          { event: "input.needed", native: "Notification", delivery: "async", timeoutMs: 5000 },
-          { event: "turn.completed", native: "notify:done", delivery: "sync", timeoutMs: 1000 },
+          { event: "input.needed", native: "Notification", delivery: "async" },
+          { event: "turn.completed", native: "notify:done", delivery: "sync" },
         ],
       }),
     );
     expect(result.ok && result.adapter.events).toEqual([
-      { event: "input.needed", native: "Notification", delivery: "async", timeoutMs: 5000 },
-      { event: "turn.completed", native: "notify:done", delivery: "sync", timeoutMs: 1000 },
+      { event: "input.needed", native: "Notification", delivery: "async" },
+      { event: "turn.completed", native: "notify:done", delivery: "sync" },
     ]);
   });
 
@@ -417,24 +416,36 @@ describe("parseHarnessManifest", () => {
     const result = parseHarnessManifest(
       minimal({
         events: [
-          { event: "input.needed", native: "Notification", delivery: "async", timeoutMs: 5000 },
-          { event: "agent.vibed", native: "Vibe", delivery: "async", timeoutMs: 5000 },
+          { event: "input.needed", native: "Notification", delivery: "async" },
+          { event: "agent.vibed", native: "Vibe", delivery: "async" },
         ],
       }),
     );
     expect(errorPaths(result)).toEqual(["events[1].event"]);
   });
 
-  it("refuses a binding Volli could not deliver or would wait forever on", () => {
+  it("refuses a binding Volli could not deliver", () => {
     const bad = (binding: Record<string, unknown>): string[] =>
       errorPaths(parseHarnessManifest(minimal({ events: [binding] })));
-    const base = { event: "turn.started", native: "Start", delivery: "async", timeoutMs: 5000 };
+    const base = { event: "turn.started", native: "Start", delivery: "async" };
     expect(bad({ ...base, native: "" })).toEqual(["events[0].native"]);
     expect(bad({ ...base, delivery: "whenever" })).toEqual(["events[0].delivery"]);
-    expect(bad({ ...base, timeoutMs: 0 })).toEqual(["events[0].timeoutMs"]);
-    expect(bad({ ...base, timeoutMs: 1000.5 })).toEqual(["events[0].timeoutMs"]);
-    expect(bad({ ...base, timeoutMs: 60 * 60 * 1000 })).toEqual(["events[0].timeoutMs"]);
+    expect(bad({ ...base, delivery: undefined })).toEqual(["events[0].delivery"]);
     expect(bad(["turn.started"] as unknown as Record<string, unknown>)).toEqual(["events[0]"]);
+  });
+
+  // A manifest written against the build that had a per-binding `timeoutMs` is
+  // not refused for carrying one — Volli sets the timeout now, and an unknown
+  // field is ignored here the way it is everywhere else.
+  it("ignores a timeout a manifest still declares", () => {
+    const result = parseHarnessManifest(
+      minimal({
+        events: [{ event: "turn.started", native: "Start", delivery: "async", timeoutMs: 5000 }],
+      }),
+    );
+    expect(result.ok && result.adapter.events).toEqual([
+      { event: "turn.started", native: "Start", delivery: "async" },
+    ]);
   });
 
   it("refuses events that are not a list", () => {
@@ -484,8 +495,8 @@ describe("a hostile manifest", () => {
   const hostile = minimal({
     injection: { kind: "claude-settings-json", flag: "--settings" },
     events: [
-      { event: "turn.completed", native: "__proto__", delivery: "async", timeoutMs: 5000 },
-      { event: "turn.started", native: "hooks:constructor", delivery: "async", timeoutMs: 5000 },
+      { event: "turn.completed", native: "__proto__", delivery: "async" },
+      { event: "turn.started", native: "hooks:constructor", delivery: "async" },
     ],
     launchSettings: [
       { path: "__proto__.polluted", value: "yes" },
@@ -538,9 +549,7 @@ describe("a manifest-derived adapter", () => {
     minimal({
       injection: { kind: "claude-settings-json", flag: "--settings" },
       surfaces: { skillsDir: "{home}/.my-harness/skills", instructionsFile: "{home}/AGENTS.md" },
-      events: [
-        { event: "input.needed", native: "Notification", delivery: "async", timeoutMs: 5000 },
-      ],
+      events: [{ event: "input.needed", native: "Notification", delivery: "async" }],
     }),
   );
 

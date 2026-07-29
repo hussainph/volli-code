@@ -35,7 +35,6 @@ function bareAdapter(overrides: Partial<HarnessAdapter> = {}): HarnessAdapter {
     label: "My Harness",
     command: "my-harness",
     promptFlag: null,
-    detection: { executable: "my-harness" },
     surfaces: { skillsDir: null, commandsDir: null, instructionsFile: null },
     injection: { kind: "none" },
     sessionId: { kind: "none" },
@@ -123,7 +122,7 @@ describe("buildLaunchConfig", () => {
     const config = buildLaunchConfig(
       bareAdapter({
         injection: { kind: "config-dir-env", envVar: "MY_CONFIG_DIR", filename: "cli-config.json" },
-        events: [{ event: "turn.completed", native: "stop", delivery: "async", timeoutMs: 5000 }],
+        events: [{ event: "turn.completed", native: "stop", delivery: "async" }],
       }),
       INPUT,
     );
@@ -182,9 +181,7 @@ describe("buildLaunchConfig", () => {
     const config = buildLaunchConfig(
       bareAdapter({
         injection: { kind: "opencode-plugin", envVar: "X_CONFIG", filename: "x.json" },
-        events: [
-          { event: "input.needed", native: "asked-a-question", delivery: "async", timeoutMs: 1000 },
-        ],
+        events: [{ event: "input.needed", native: "asked-a-question", delivery: "async" }],
       }),
       INPUT,
     );
@@ -245,7 +242,7 @@ describe("buildLaunchConfig", () => {
     const config = buildLaunchConfig(
       bareAdapter({
         injection: { kind: "codex-config-override", flag: "-c" },
-        events: [{ event: "turn.started", native: "OnPrompt", delivery: "async", timeoutMs: 1000 }],
+        events: [{ event: "turn.started", native: "OnPrompt", delivery: "async" }],
       }),
       INPUT,
     );
@@ -272,7 +269,7 @@ describe("buildLaunchConfig", () => {
     const config = buildLaunchConfig(
       bareAdapter({
         injection: { kind: "codex-config-override", flag: "-c" },
-        events: [{ event: "input.needed", native: "Ask", delivery: "sync", timeoutMs: 1000 }],
+        events: [{ event: "input.needed", native: "Ask", delivery: "sync" }],
       }),
       INPUT,
     );
@@ -330,8 +327,8 @@ describe("buildLaunchConfig", () => {
       bareAdapter({
         injection,
         events: [
-          { event: "turn.completed", native: "__proto__", delivery: "async", timeoutMs: 1000 },
-          { event: "turn.started", native: "constructor", delivery: "async", timeoutMs: 1000 },
+          { event: "turn.completed", native: "__proto__", delivery: "async" },
+          { event: "turn.started", native: "constructor", delivery: "async" },
         ],
         launchSettings: [
           { path: "__proto__.polluted", value: "yes" },
@@ -377,7 +374,7 @@ describe("buildLaunchConfig", () => {
     const config = buildLaunchConfig(
       bareAdapter({
         injection: { kind: "config-dir-env", envVar: "X_CONFIG_DIR", filename: "x.json" },
-        events: [{ event: "turn.completed", native: "stop", delivery: "async", timeoutMs: 1000 }],
+        events: [{ event: "turn.completed", native: "stop", delivery: "async" }],
       }),
       { ...INPUT, socketPath: "/tmp/it's here/volli.sock" },
     );

@@ -157,7 +157,6 @@ describe("installHarnessSkills", () => {
     label: "My Harness",
     command: "my-harness",
     promptFlag: null,
-    detection: { executable: "my-harness" },
     surfaces: {
       skillsDir: "{home}/.my-harness/skills",
       commandsDir: null,

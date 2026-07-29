@@ -128,13 +128,14 @@ Each kind is named after the harness it was written against, and declaring it cl
 Each binding maps one harness-native signal to one Volli event:
 
 \`\`\`
-{ "event": "input.needed", "native": "Notification", "delivery": "async", "timeoutMs": 5000 }
+{ "event": "input.needed", "native": "Notification", "delivery": "async" }
 \`\`\`
 
 - \`event\` — one of \`session.started\`, \`session.ended\`, \`turn.started\`, \`turn.completed\`, \`input.needed\`, \`permission.requested\`, \`tool.started\`, \`subagent.completed\`.
 - \`native\` — the harness's own name for the signal. Opaque to Volli. When a harness delivers signals by more than one mechanism, prefix the name with the mechanism (\`hooks:PermissionRequest\`, \`notify:agent-turn-complete\`).
 - \`delivery\` — \`async\` reports and returns. \`sync\` blocks the harness until Volli answers.
-- \`timeoutMs\` — a whole number of milliseconds, 1 to 600000.
+
+Volli sets the hook timeout itself, the same for every binding of every harness. A binding does not declare one.
 
 \`input.needed\` means a human is blocking the agent. It drives the sidebar's "Needs you" tier and the native notification.
 
@@ -179,9 +180,9 @@ Declaring an event gains nothing on its own. An event becomes verified on its fi
     "userResumeTokens": ["--resume", "-r"]
   },
   "events": [
-    { "event": "session.started", "native": "SessionStart", "delivery": "async", "timeoutMs": 5000 },
-    { "event": "turn.completed", "native": "Stop", "delivery": "async", "timeoutMs": 5000 },
-    { "event": "input.needed", "native": "Notification", "delivery": "async", "timeoutMs": 5000 }
+    { "event": "session.started", "native": "SessionStart", "delivery": "async" },
+    { "event": "turn.completed", "native": "Stop", "delivery": "async" },
+    { "event": "input.needed", "native": "Notification", "delivery": "async" }
   ],
   "launchSettings": [{ "path": "notifications.enabled", "value": false }]
 }
@@ -189,7 +190,7 @@ Declaring an event gains nothing on its own. An event becomes verified on its fi
 
 ## Errors
 
-A manifest that does not validate is reported field by field, each error naming a path such as \`events[1].timeoutMs\`. Fix the named fields and the manifest is re-read.
+A manifest that does not validate is reported field by field, each error naming a path such as \`events[1].delivery\`. Fix the named fields and the manifest is re-read.
 `;
 
 /** The slash-command doc for a harness that reads commands but no skills. */

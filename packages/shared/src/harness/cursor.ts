@@ -30,7 +30,6 @@ export const cursorAdapter: HarnessAdapter = {
   label: HARNESS_LABELS.cursor,
   command: "cursor-agent",
   promptFlag: null,
-  detection: { executable: "cursor-agent" },
   surfaces: {
     skillsDir: "{home}/.cursor/skills",
     // `~/.cursor/commands` does not exist for the CLI.
@@ -46,11 +45,11 @@ export const cursorAdapter: HarnessAdapter = {
     userResumeTokens: ["--resume", "--continue"],
   },
   events: [
-    { event: "session.started", native: "sessionStart", delivery: "async", timeoutMs: 5000 },
-    { event: "session.ended", native: "sessionEnd", delivery: "async", timeoutMs: 5000 },
-    { event: "turn.started", native: "beforeSubmitPrompt", delivery: "async", timeoutMs: 5000 },
-    { event: "turn.completed", native: "stop", delivery: "async", timeoutMs: 5000 },
-    { event: "tool.started", native: "preToolUse", delivery: "async", timeoutMs: 5000 },
+    { event: "session.started", native: "sessionStart", delivery: "async" },
+    { event: "session.ended", native: "sessionEnd", delivery: "async" },
+    { event: "turn.started", native: "beforeSubmitPrompt", delivery: "async" },
+    { event: "turn.completed", native: "stop", delivery: "async" },
+    { event: "tool.started", native: "preToolUse", delivery: "async" },
   ],
   launchSettings: [],
   // Empty until a marker is observed on a real cursor-agent session — a guessed

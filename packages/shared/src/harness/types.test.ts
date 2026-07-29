@@ -17,7 +17,6 @@ function bareAdapter(overrides: Partial<HarnessAdapter> = {}): HarnessAdapter {
     label: "My Harness",
     command: "my-harness",
     promptFlag: null,
-    detection: { executable: "my-harness" },
     surfaces: { skillsDir: null, commandsDir: null, instructionsFile: null },
     injection: { kind: "none" },
     sessionId: { kind: "none" },
@@ -33,8 +32,8 @@ describe("supportedEvents", () => {
   it("reports the canonical events, never the native names they arrived under", () => {
     const adapter = bareAdapter({
       events: [
-        { event: "turn.completed", native: "Stop", delivery: "async", timeoutMs: 5000 },
-        { event: "input.needed", native: "Notification", delivery: "async", timeoutMs: 5000 },
+        { event: "turn.completed", native: "Stop", delivery: "async" },
+        { event: "input.needed", native: "Notification", delivery: "async" },
       ],
     });
     expect([...supportedEvents(adapter)]).toEqual(["turn.completed", "input.needed"]);
@@ -47,9 +46,8 @@ describe("supportedEvents", () => {
           event: "input.needed",
           native: "hooks:PermissionRequest",
           delivery: "async",
-          timeoutMs: 1,
         },
-        { event: "input.needed", native: "notify:blocked", delivery: "async", timeoutMs: 1 },
+        { event: "input.needed", native: "notify:blocked", delivery: "async" },
       ],
     });
     expect(supportedEvents(adapter).size).toBe(1);
@@ -62,9 +60,7 @@ describe("supportedEvents", () => {
 });
 
 describe("harnessTier", () => {
-  const oneEvent = [
-    { event: "turn.completed", native: "Stop", delivery: "async", timeoutMs: 5000 },
-  ] as const;
+  const oneEvent = [{ event: "turn.completed", native: "Stop", delivery: "async" }] as const;
 
   it("is hooked only when a harness can both be configured and report", () => {
     expect(

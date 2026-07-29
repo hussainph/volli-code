@@ -23,22 +23,22 @@
  * `HarnessEventOrder` in `@volli/shared` for what that stamp does and does not
  * prove.
  */
-import { harnessAdapters } from "@volli/shared";
+import { HOOK_TIMEOUT_MS } from "@volli/shared";
 import type { AgentRequest, AgentResponse } from "@volli/shared";
 
 /**
- * The shortest timeout any adapter declares for a hook binding, read off the
- * adapters themselves. A copied number would drift the moment a harness bound
- * an event on a tighter one, and the drift is invisible: the hook keeps working
- * everywhere except against the harness that shortened it.
+ * The timeout every hook binding is written with, read off the one place that
+ * writes it rather than copied. A copied number would drift the moment the
+ * launch builder changed it, and the drift is invisible: the hook keeps working
+ * right up until a harness kills it mid-report.
  *
- * The built-ins are what is visible from here. A registered manifest that
- * declares something tighter is its author's own budget to keep — reading
- * manifests on the hook path would spend more of it than the number could save.
+ * Re-exported under this name because that is the question the budget below
+ * asks — the shortest deadline any harness is holding us to. It used to be a
+ * `Math.min` over every adapter's per-binding field, back when there was one;
+ * all thirty bindings declared the same 5000, so the fold could only ever return
+ * the constant it now reads directly.
  */
-export const SHORTEST_DECLARED_HOOK_TIMEOUT_MS = Math.min(
-  ...harnessAdapters.flatMap((adapter) => adapter.events.map((binding) => binding.timeoutMs)),
-);
+export const SHORTEST_DECLARED_HOOK_TIMEOUT_MS = HOOK_TIMEOUT_MS;
 
 /**
  * What one invocation may spend in total, from the moment the process started.

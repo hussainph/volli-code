@@ -62,7 +62,6 @@ export interface HarnessEventBinding {
    * of its own — but the model has to be able to say it.
    */
   delivery: "async" | "sync";
-  timeoutMs: number;
 }
 
 /**
@@ -267,10 +266,15 @@ export interface HarnessAdapter {
    * declares a command line Volli will execute, and the trust dialog's claim
    * about what it runs is only literally true if arguments can come from
    * nowhere but the declared argv arrays.
+   *
+   * It is also the name detection resolves on the user's PATH. There was a
+   * separate `detection: { executable }` for that and it held this same string
+   * in all four built-ins and in the manifest parser, which assigned it FROM
+   * here — two fields that could only ever agree, one of which could be edited
+   * without the other.
    */
   readonly command: string;
   readonly promptFlag: string | null;
-  readonly detection: { executable: string };
   readonly surfaces: HarnessSurfaces;
   readonly injection: HarnessConfigInjection;
   readonly sessionId: HarnessSessionIdSource;

@@ -18,8 +18,8 @@ function registered(): HarnessAdapter {
     command: "my-harness",
     injection: { kind: "claude-settings-json", flag: "--settings" },
     events: [
-      { event: "input.needed", native: "Notification", delivery: "async", timeoutMs: 5000 },
-      { event: "turn.completed", native: "Stop", delivery: "async", timeoutMs: 5000 },
+      { event: "input.needed", native: "Notification", delivery: "async" },
+      { event: "turn.completed", native: "Stop", delivery: "async" },
     ],
   });
   if (!parsed.ok) throw new Error("expected a valid manifest");

@@ -20,7 +20,6 @@ export const opencodeAdapter: HarnessAdapter = {
   label: HARNESS_LABELS.opencode,
   command: "opencode",
   promptFlag: "--prompt",
-  detection: { executable: "opencode" },
   surfaces: {
     skillsDir: null,
     commandsDir: "{home}/.config/opencode/command",
@@ -34,14 +33,13 @@ export const opencodeAdapter: HarnessAdapter = {
     userResumeTokens: ["--session", "-s", "--continue", "-c"],
   },
   events: [
-    { event: "turn.started", native: "message.updated", delivery: "async", timeoutMs: 5000 },
-    { event: "turn.completed", native: "session.idle", delivery: "async", timeoutMs: 5000 },
-    { event: "input.needed", native: "permission.asked", delivery: "async", timeoutMs: 5000 },
+    { event: "turn.started", native: "message.updated", delivery: "async" },
+    { event: "turn.completed", native: "session.idle", delivery: "async" },
+    { event: "input.needed", native: "permission.asked", delivery: "async" },
     {
       event: "permission.requested",
       native: "permission.asked",
       delivery: "async",
-      timeoutMs: 5000,
     },
   ],
   launchSettings: [],

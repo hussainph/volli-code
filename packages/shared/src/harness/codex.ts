@@ -40,7 +40,6 @@ export const codexAdapter: HarnessAdapter = {
   label: HARNESS_LABELS.codex,
   command: "codex",
   promptFlag: null,
-  detection: { executable: "codex" },
   surfaces: {
     skillsDir: "{home}/.codex/skills",
     commandsDir: null,
@@ -59,26 +58,22 @@ export const codexAdapter: HarnessAdapter = {
       event: "turn.started",
       native: "hooks:UserPromptSubmit",
       delivery: "async",
-      timeoutMs: 5000,
     },
     {
       event: "turn.completed",
       native: "notify:agent-turn-complete",
       delivery: "async",
-      timeoutMs: 5000,
     },
     {
       event: "permission.requested",
       native: "hooks:PermissionRequest",
       delivery: "async",
-      timeoutMs: 5000,
     },
     // A permission prompt is the only way codex says a human is blocking it.
     {
       event: "input.needed",
       native: "hooks:PermissionRequest",
       delivery: "async",
-      timeoutMs: 5000,
     },
   ],
   launchSettings: [],

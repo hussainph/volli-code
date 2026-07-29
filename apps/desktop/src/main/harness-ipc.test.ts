@@ -60,7 +60,7 @@ function manifest(overrides: Record<string, unknown> = {}): Record<string, unkno
     slug: "my-harness",
     label: "My Harness",
     command: "my-harness",
-    events: [{ event: "input.needed", native: "Notification", delivery: "async", timeoutMs: 5000 }],
+    events: [{ event: "input.needed", native: "Notification", delivery: "async" }],
     ...overrides,
   };
 }
@@ -441,7 +441,6 @@ const adapter = (id: HarnessId): HarnessAdapter => ({
   label: `Label for ${id}`,
   command: id,
   promptFlag: null,
-  detection: { executable: id },
   surfaces: { skillsDir: null, commandsDir: null, instructionsFile: null },
   injection: { kind: "none" },
   sessionId: { kind: "none" },
