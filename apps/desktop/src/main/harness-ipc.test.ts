@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { HARNESS_CHANNELS, parseHarnessId } from "@volli/shared";
+import { HARNESS_CHANNELS, HARNESS_EVENT_GRACE_MS, parseHarnessId } from "@volli/shared";
 import type {
   HarnessAdapter,
   HarnessId,
@@ -35,6 +35,7 @@ import {
   recordHarnessDelivery,
   scanHarnessManifests,
 } from "./harness-registry";
+import { recordHarnessChannelEvent, recordHarnessLaunch } from "./db/harness-channel-repo";
 import { getRegisteredHarness } from "./db/harness-registry-repo";
 import { openTestDb, type TestDb } from "./db/test-helpers";
 
@@ -97,6 +98,7 @@ function setup(
     resolveBinary?: (command: string) => Promise<string | null>;
     regenerateRuntime?: () => Promise<void>;
     launchableHarnesses?: readonly HarnessAdapter[];
+    now?: number;
   } = {},
 ): void {
   regenerateRuntime = vi.fn(options.regenerateRuntime ?? (() => Promise.resolve()));
@@ -109,7 +111,7 @@ function setup(
       launchArgv: () => ["--volli-hook", "/tmp/volli.sock"],
       regenerateRuntime,
       launchableHarnesses: () => options.launchableHarnesses ?? [],
-      now: () => 1000,
+      now: () => options.now ?? 1000,
     },
   );
 }
@@ -465,7 +467,7 @@ describe("volli:harness-registered", () => {
   it("names nothing when the launch path resolved nothing", () => {
     setup();
 
-    expect(registered()).toEqual({ ok: true, harnesses: [] });
+    expect(registered()).toEqual({ ok: true, harnesses: [], channels: [] });
   });
 
   it("hands back whole adapters, so a caller reads capabilities rather than a summary", () => {
@@ -473,7 +475,11 @@ describe("volli:harness-registered", () => {
 
     const result = registered();
 
-    expect(result).toEqual({ ok: true, harnesses: [adapter(registeredSlug("my-harness"))] });
+    expect(result).toEqual({
+      ok: true,
+      harnesses: [adapter(registeredSlug("my-harness"))],
+      channels: [],
+    });
   });
 
   it("drops the built-ins, which the renderer already ships", () => {
@@ -491,7 +497,67 @@ describe("volli:harness-registered", () => {
     await write("my-harness", manifest());
     setup();
 
-    expect(registered()).toEqual({ ok: true, harnesses: [] });
+    expect(registered()).toEqual({ ok: true, harnesses: [], channels: [] });
+  });
+
+  // The channel roll-up rides this read rather than a channel of its own, and
+  // unlike `harnesses` it covers the built-ins — they are precisely the four
+  // the durable record used to be switched off for.
+  it("carries the channel state of every harness it has observed, built-ins included", () => {
+    recordHarnessLaunch(fixture.db, "claude-code", 1000);
+    recordHarnessChannelEvent(fixture.db, "claude-code", 1100);
+    setup({ now: 2000 });
+
+    const result = registered();
+
+    expect(result).toEqual({
+      ok: true,
+      harnesses: [],
+      channels: [{ harnessId: "claude-code", state: "reporting" }],
+    });
+  });
+
+  it("says a built-in is silent once its wrapper ran and the window closed on nothing", () => {
+    recordHarnessLaunch(fixture.db, "cursor", 1000);
+    setup({ now: 1000 + HARNESS_EVENT_GRACE_MS });
+
+    expect(registered()).toMatchObject({
+      channels: [{ harnessId: "cursor", state: "silent" }],
+    });
+  });
+
+  // Codex has no session until there is a turn, so nothing fires at boot. Two
+  // timestamps cannot tell its broken channel from a terminal nobody typed
+  // into, and the adapter's `startupEvent: null` is what says so.
+  it("never accuses a harness that has no boot-time event, however long it stays quiet", () => {
+    recordHarnessLaunch(fixture.db, "codex", 1000);
+    setup({ now: 1000 + HARNESS_EVENT_GRACE_MS * 1000 });
+
+    expect(registered()).toMatchObject({
+      channels: [{ harnessId: "codex", state: "unproven" }],
+    });
+  });
+
+  it("reads a registered harness's promise off the launchable set", () => {
+    const slug = registeredSlug("my-harness");
+    const speaks = { ...adapter(slug), startupEvent: "session.started" as const };
+    recordHarnessLaunch(fixture.db, slug, 1000);
+    setup({ launchableHarnesses: [speaks], now: 1000 + HARNESS_EVENT_GRACE_MS });
+
+    expect(registered()).toMatchObject({
+      channels: [{ harnessId: "my-harness", state: "silent" }],
+    });
+  });
+
+  // An id neither the built-ins nor the launchable set can describe — a
+  // manifest untrusted since that launch — promised nothing anyone read.
+  it("never accuses a harness it can no longer describe", () => {
+    recordHarnessLaunch(fixture.db, registeredSlug("my-harness"), 1000);
+    setup({ now: 1000 + HARNESS_EVENT_GRACE_MS });
+
+    expect(registered()).toMatchObject({
+      channels: [{ harnessId: "my-harness", state: "unproven" }],
+    });
   });
 });
 

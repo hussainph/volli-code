@@ -7,6 +7,7 @@
 import type { ChangeSetSnapshot } from "./change-set";
 import type { FileKind, FileSource, IndexedFile } from "./file-ref";
 import type { HarnessTrustPrompt, HarnessTrustVerdict } from "./harness/trust";
+import type { HarnessChannelStatus } from "./harness/channel";
 import type { HarnessAdapter, HarnessEvent } from "./harness/types";
 import type { DirEntry } from "./fs-entries";
 import type { Label } from "./label";
@@ -429,9 +430,17 @@ export interface HarnessTrustSetInput {
  * registered harness's tier and its declared events with the exact functions it
  * reads a built-in's, instead of a parallel shape that would have to be widened
  * every time an adapter grows a field.
+ *
+ * `channels` rides the same read rather than earning a channel of its own: this
+ * is already the per-harness metadata the picker fetches when it opens, and a
+ * second round-trip would only give the two answers different ages. Unlike
+ * `harnesses` it covers the BUILT-INS too — they are the ones the durable record
+ * was switched off for — and it carries only harnesses something has been
+ * observed about. A harness absent from it is `unproven`, which is also what a
+ * renderer that never looks at the field believes about all of them.
  */
 export type HarnessRegisteredResult =
-  | { ok: true; harnesses: HarnessAdapter[] }
+  | { ok: true; harnesses: HarnessAdapter[]; channels: HarnessChannelStatus[] }
   | { ok: false; error: string };
 
 /**

@@ -1285,7 +1285,7 @@ describe("hydrateHarnessCatalog", () => {
   });
 
   it("mirrors what main says it will launch", async () => {
-    stubCatalog({ ok: true, harnesses: [registeredAdapter()] });
+    stubCatalog({ ok: true, harnesses: [registeredAdapter()], channels: [] });
 
     await hydrateHarnessCatalog();
 

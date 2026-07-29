@@ -17,6 +17,7 @@
  * Non-monotonic by construction, which is the whole feature.
  */
 import type { HarnessId } from "../ticket";
+import type { HarnessEvent } from "./types";
 
 /** The two timestamps, as `harness_channel` holds them. `null` — never observed. */
 export interface HarnessChannel {
@@ -37,8 +38,8 @@ export interface HarnessChannel {
  * **reporting** — the most recent launch produced an event. **silent** — the
  * most recent launch went through our wrapper, the grace window has passed, and
  * nothing came: the config we injected did not take. **unproven** — nothing has
- * launched through the wrapper yet, or the newest launch is still inside the
- * window. Say nothing.
+ * launched through the wrapper yet, the newest launch is still inside the
+ * window, or the harness has no boot-time event to be missing. Say nothing.
  */
 export type HarnessChannelState = "reporting" | "silent" | "unproven";
 
@@ -49,12 +50,29 @@ export interface HarnessChannelStatus {
 }
 
 /**
- * The comparison, against an injected clock and an explicit window.
+ * The comparison, against an injected clock, an explicit window, and the one
+ * thing that licenses an accusation.
  *
- * `reporting` is tested before the window, and that ordering is load-bearing:
- * the window exists only to defer an ACCUSATION, never to withhold a fact. An
- * event that has already landed for this launch is proof the channel works,
- * whether it arrived in the first second or the last.
+ * `startupEvent` is the adapter's own field: the event that fires on harness
+ * boot, before the user has done anything. `null`
+ * means the channel cannot prove itself alive until the agent acts — codex is
+ * exactly this, and it was verified in the TUI: it has no session until there
+ * is a turn, so `SessionStart` arrives beside the first prompt and not before.
+ * For such a harness, silence is indistinguishable from a user who has not
+ * typed yet, and calling it `silent` would resurrect in the durable layer the
+ * false accusation this whole model exists to kill. It stays `unproven`
+ * forever instead, however long the silence runs.
+ *
+ * Pass `null` when the adapter cannot be looked up at all. An id nothing here
+ * can describe — a manifest untrusted since the launch, a harness this build
+ * does not ship — has made no promise anyone read, and the honest failure is
+ * the quiet one.
+ *
+ * `reporting` is tested before both, and that ordering is load-bearing: the
+ * window and the gate defer an ACCUSATION, never withhold a fact. An event that
+ * has already landed for this launch proves the channel works, whether it
+ * arrived in the first second, in the last, or from a harness nobody expected
+ * to speak at boot.
  *
  * `graceMs` is a parameter rather than an import because the constant lives
  * with the per-session model (`HARNESS_EVENT_GRACE_MS`, `session.ts`), which
@@ -63,6 +81,7 @@ export interface HarnessChannelStatus {
  */
 export function harnessChannelState(
   channel: Pick<HarnessChannel, "lastLaunchAt" | "lastEventAt">,
+  startupEvent: HarnessEvent | null,
   now: number,
   graceMs: number,
 ): HarnessChannelState {
@@ -71,5 +90,6 @@ export function harnessChannelState(
   // no launch for an event to be missing from.
   if (lastLaunchAt === null) return "unproven";
   if (lastEventAt !== null && lastEventAt >= lastLaunchAt) return "reporting";
+  if (startupEvent === null) return "unproven";
   return now - lastLaunchAt < graceMs ? "unproven" : "silent";
 }

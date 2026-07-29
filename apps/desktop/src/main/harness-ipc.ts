@@ -27,16 +27,21 @@
  *    do. See {@link HarnessIpcDeps.regenerateRuntime}.
  */
 
+import type Database from "better-sqlite3";
 import {
   errorMessage,
+  getHarnessAdapter,
+  harnessChannelState,
   harnessTrustPrompt,
   HARNESS_CHANNELS,
+  HARNESS_EVENT_GRACE_MS,
   HARNESS_IPC,
   isFirstClassHarnessId,
   supportedEvents,
 } from "@volli/shared";
 import type {
   HarnessAdapter,
+  HarnessChannelStatus,
   HarnessIpcChannel,
   HarnessPendingResult,
   HarnessRegisteredResult,
@@ -46,6 +51,7 @@ import type {
 } from "@volli/shared";
 
 import type { DbHandle } from "./data-ipc";
+import { listHarnessChannels } from "./db/harness-channel-repo";
 import {
   getRegisteredHarness,
   recordHarnessTrust,
@@ -120,6 +126,35 @@ async function pendingManifests(
     });
   }
   return waiting;
+}
+
+/**
+ * What the two recorded timestamps say about each harness's event channel right
+ * now.
+ *
+ * The `startupEvent` lookup is the part that cannot be skipped. A harness with
+ * no boot-time event — codex, which has no session until there is a turn — is
+ * indistinguishable, from two timestamps alone, between a broken channel and a
+ * terminal nobody has typed into, so the derivation is told what the adapter
+ * promises and declines to accuse one that promised nothing. An id neither the
+ * built-ins nor the launchable set can describe gets the same treatment for the
+ * same reason.
+ */
+function channelStates(db: Database.Database, deps: HarnessIpcDeps): HarnessChannelStatus[] {
+  const registered = new Map(deps.launchableHarnesses().map((adapter) => [adapter.id, adapter]));
+  const now = deps.now();
+  return listHarnessChannels(db).map((channel) => {
+    const adapter = getHarnessAdapter(channel.harnessId) ?? registered.get(channel.harnessId);
+    return {
+      harnessId: channel.harnessId,
+      state: harnessChannelState(
+        channel,
+        adapter?.startupEvent ?? null,
+        now,
+        HARNESS_EVENT_GRACE_MS,
+      ),
+    };
+  });
 }
 
 /**
@@ -216,6 +251,13 @@ export function registerHarnessIpcHandlers(handle: DbHandle, deps: HarnessIpcDep
       // the first place (the reserved namespaces), so dropping them here leaves
       // exactly the set the renderer has no other way to learn.
       harnesses: deps.launchableHarnesses().filter((adapter) => !isFirstClassHarnessId(adapter.id)),
+      // The other half, and the one that DOES include the built-ins. Derived
+      // here rather than sent as two integers because the comparison needs a
+      // clock, main has one, and a renderer holding a snapshot would re-derive
+      // a state whose inputs cannot change while it holds it — this read is
+      // repeated every time a surface offering a harness opens, which is
+      // exactly when the answer could have moved.
+      channels: channelStates(db, deps),
     }),
   };
 
