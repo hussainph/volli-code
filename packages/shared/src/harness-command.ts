@@ -49,6 +49,45 @@ export function composeTicketPrompt(input: {
 }
 
 /**
+ * The absolute path of the generated wrapper for a harness, or `null` when
+ * Volli did not write one (the harness was not detected, or the census that
+ * would have proved it absent could not run).
+ *
+ * Required wherever a launch line is built, and deliberately not optional: a
+ * bare command name is resolved by the session's shell through `PATH`, and on
+ * macOS a login shell rebuilds `PATH` — `/etc/zprofile` runs `path_helper`,
+ * then every user prepend lands on top — so Volli's own `bin/` finishes far
+ * down the list and the wrapper never runs. That defect passed every test on
+ * this branch for its whole life because nothing asserted the resolution, only
+ * the membership. An optional parameter would let the next call site
+ * reintroduce it silently; a required one makes the omission a compile error.
+ */
+export type HarnessWrapperPath = string | null;
+
+/**
+ * Answers {@link HarnessWrapperPath} for a harness. Threaded into the places
+ * that build a launch line, because which harness is launching is only known
+ * once the session's scope resolves — a single pre-resolved path could not
+ * cover a kickoff and a resume of different harnesses.
+ */
+export type HarnessWrapperLookup = (harnessId: HarnessId) => HarnessWrapperPath;
+
+/**
+ * The word that invokes a harness inside a Volli PTY: the generated wrapper by
+ * absolute path when there is one, and otherwise the harness's own command,
+ * left to `PATH` exactly as before.
+ *
+ * The fallback is not a lesser form of the same thing — it launches the harness
+ * genuinely unwrapped, reporting no events — so a caller that cannot supply a
+ * wrapper is choosing the Known tier, not merely a different spelling.
+ */
+export function harnessExecutable(harnessId: HarnessId, wrapperPath: HarnessWrapperPath): string {
+  if (wrapperPath !== null) return shellSingleQuote(wrapperPath);
+  const adapter = getHarnessAdapter(harnessId);
+  return adapter?.command ?? harnessId;
+}
+
+/**
  * The full interactive launch command line for a harness, with `prompt` passed
  * as its initial prompt (single-quoted via {@link shellSingleQuote}). Verified
  * against the installed CLIs:
@@ -61,13 +100,23 @@ export function composeTicketPrompt(input: {
  * - `cursor` → `cursor-agent <prompt>` (the CLI's binary is `cursor-agent`;
  *   `cursor` is the editor's shell command).
  *
+ * The executable is the generated wrapper's absolute path whenever one exists
+ * (see {@link HarnessWrapperPath}) — a Volli-initiated launch must never be
+ * left to `PATH` to resolve.
+ *
  * A harness with no registered adapter is launched by its own slug with a
  * positional prompt — the Declared tier still starts, it just starts blind.
  */
-export function buildHarnessCommand(harnessId: HarnessId, prompt: string): string {
+export function buildHarnessCommand(
+  harnessId: HarnessId,
+  prompt: string,
+  wrapperPath: HarnessWrapperPath,
+): string {
   const quoted = shellSingleQuote(prompt);
   const adapter = getHarnessAdapter(harnessId);
-  return [adapter?.command ?? harnessId, adapter?.promptFlag, quoted].filter(Boolean).join(" ");
+  return [harnessExecutable(harnessId, wrapperPath), adapter?.promptFlag, quoted]
+    .filter(Boolean)
+    .join(" ");
 }
 
 /** The last `/`-segment of a relative path — the materialized file's own basename. */
@@ -139,12 +188,14 @@ export function renderResumeArgv(template: readonly string[], harnessSessionId: 
 export function buildResumeCommand(
   adapter: HarnessAdapter,
   harnessSessionId: string | null,
+  wrapperPath: HarnessWrapperPath,
 ): string | null {
+  const executable = harnessExecutable(adapter.id, wrapperPath);
   if (harnessSessionId && adapter.resume.byId) {
-    return [adapter.command, ...renderResumeArgv(adapter.resume.byId, harnessSessionId)].join(" ");
+    return [executable, ...renderResumeArgv(adapter.resume.byId, harnessSessionId)].join(" ");
   }
   if (adapter.resume.latest) {
-    return [adapter.command, ...adapter.resume.latest].join(" ");
+    return [executable, ...adapter.resume.latest].join(" ");
   }
   return null;
 }
@@ -153,10 +204,27 @@ export function buildResumeCommand(
 export function buildHarnessResumeCommand(
   harnessId: string,
   harnessSessionId: string | null,
+  wrapperPath: HarnessWrapperPath,
 ): string | null {
   const parsed = parseHarnessId(harnessId);
   const adapter = parsed ? getHarnessAdapter(parsed) : undefined;
-  return adapter ? buildResumeCommand(adapter, harnessSessionId) : null;
+  return adapter ? buildResumeCommand(adapter, harnessSessionId, wrapperPath) : null;
+}
+
+/**
+ * Whether a harness can be resumed at all — the question a UI asks when it
+ * decides to offer the action, which is not the question a launch asks.
+ *
+ * Separate from {@link buildHarnessResumeCommand} because the renderer has no
+ * business holding a shell command line, and no way to know where a wrapper
+ * lives: those paths are main's. Capability is adapter data, so it answers here
+ * without one.
+ */
+export function canResumeHarness(harnessId: string, harnessSessionId: string | null): boolean {
+  const parsed = parseHarnessId(harnessId);
+  const adapter = parsed ? getHarnessAdapter(parsed) : undefined;
+  if (!adapter) return false;
+  return Boolean((harnessSessionId && adapter.resume.byId) || adapter.resume.latest);
 }
 
 /**

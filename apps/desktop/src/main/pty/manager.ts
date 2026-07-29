@@ -7,6 +7,9 @@ import { agentSessionEnv, createSessionRecord, errorMessage, resolveShell } from
 import type {
   CreateTerminalSessionRequest,
   CreateTerminalSessionResult,
+  HarnessId,
+  HarnessWrapperLookup,
+  HarnessWrapperPath,
   SessionActivityState,
   SessionLaunchKind,
   TerminalBusyResult,
@@ -192,6 +195,14 @@ export class PtyManager {
   }
 
   /**
+   * Where this launch's wrapper for a harness lives — read at call time, not at
+   * construction, because `agentRuntime.wrapperPaths` is filled in once the
+   * wrappers are generated, which happens after the manager exists.
+   */
+  private readonly wrapperFor: HarnessWrapperLookup = (harnessId) =>
+    wrapperPathFor(this.agentRuntime ?? undefined, harnessId);
+
+  /**
    * Lazy dynamic import of node-pty. Isolated in a method so tests can
    * `vi.mock("node-pty")` and so the native module is touched only when a
    * session is actually created.
@@ -207,7 +218,7 @@ export class PtyManager {
     const db = this.db;
     if (db === null) return { ok: false, error: this.dbError };
 
-    const resolved = resolveScope(db, request, this.attachmentsRootPath);
+    const resolved = resolveScope(db, request, this.attachmentsRootPath, this.wrapperFor);
     if (!resolved.ok) return resolved;
     const scope = resolved.scope;
 
@@ -440,7 +451,13 @@ export class PtyManager {
         // Compose the worktree session's first line now that ensure resolved the
         // identity (resume line verbatim, else a preamble-opened kickoff, else
         // nothing). It still flows through the setup gate below.
-        const launchCommand = composeWorktreeLaunchCommand(db, worktree, identity, cwd);
+        const launchCommand = composeWorktreeLaunchCommand(
+          db,
+          worktree,
+          identity,
+          cwd,
+          this.wrapperFor,
+        );
         const setupCommand = worktree.setupCommand?.trim() ?? "";
         if (worktreeOutcome.created && setupCommand.length > 0) {
           // `file` is the resolved shell the PTY was spawned with — the sentinel
@@ -792,4 +809,26 @@ export interface AgentRuntimeEnvironment {
    * installed.
    */
   harnessEnv?: Readonly<Record<string, string>>;
+  /**
+   * Where each harness's generated wrapper lives, so a launch line names it by
+   * absolute path instead of leaving the shell to resolve a bare command
+   * through a `PATH` the login shell has already rebuilt out from under us
+   * (see {@link HarnessWrapperPath}). Empty until the wrappers are generated,
+   * which is why every read goes through {@link wrapperPathFor} rather than
+   * assuming a hit.
+   */
+  wrapperPaths?: ReadonlyMap<HarnessId, string>;
+}
+
+/**
+ * The wrapper for `harnessId`, or `null` when this launch has none — the shape
+ * every launch-line builder takes. `null` is a real answer (the harness was not
+ * detected, or the wrappers have not been generated yet), and it means the
+ * harness runs unwrapped and reports nothing.
+ */
+export function wrapperPathFor(
+  runtime: AgentRuntimeEnvironment | undefined,
+  harnessId: HarnessId,
+): HarnessWrapperPath {
+  return runtime?.wrapperPaths?.get(harnessId) ?? null;
 }

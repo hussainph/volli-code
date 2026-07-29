@@ -486,11 +486,11 @@ app.whenReady().then(async () => {
   // the socket bind; both start right after, still awaited inside whenReady with
   // the same failure semantics (logged, non-fatal). registerTerminalIpcHandlers
   // needs only runtimePaths (a pure join), so it can precede the window it feeds.
-  // Mutable on purpose: `harnessEnv` is filled in once the wrappers have been
-  // generated (below, after the shim they call back through exists), and the
-  // manager reads this object per spawn rather than copying it. A session
-  // created in the window before then simply launches unwrapped — which is the
-  // Known tier, already a state the session header can state.
+  // Mutable on purpose: `harnessEnv` and `wrapperPaths` are filled in once the
+  // wrappers have been generated (below, after the shim they call back through
+  // exists), and the manager reads this object per spawn rather than copying
+  // it. A session created in the window before then simply launches unwrapped —
+  // which is the Known tier, already a state the session header can state.
   const agentRuntime: AgentRuntimeEnvironment = {
     socketPath: runtimePaths.socketPath,
     binDir: runtimePaths.binDir,
@@ -766,6 +766,9 @@ app.whenReady().then(async () => {
           adapterCensus: detected !== null && dbHandle.ok ? "complete" : "partial",
         });
         agentRuntime.harnessEnv = runtime.env;
+        // Where each wrapper landed, so a launch line names it by absolute path
+        // instead of trusting a PATH the session's login shell rebuilds.
+        agentRuntime.wrapperPaths = runtime.wrapperPaths;
       } catch (error) {
         console.error("[volli] failed to generate harness wrappers:", errorMessage(error));
       }

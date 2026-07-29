@@ -6,6 +6,7 @@ import {
   buildResumeCommand,
   renderResumeArgv,
   buildHarnessResumeCommand,
+  canResumeHarness,
   composeAttachmentsSection,
   composeTicketPrompt,
   shellSingleQuote,
@@ -87,73 +88,112 @@ describe("composeTicketPrompt", () => {
 
 describe("buildHarnessCommand", () => {
   it("launches Claude Code with a positional quoted prompt", () => {
-    expect(buildHarnessCommand("claude-code", "hi there")).toBe("claude 'hi there'");
+    expect(buildHarnessCommand("claude-code", "hi there", null)).toBe("claude 'hi there'");
   });
 
   it("launches Codex with a positional quoted prompt (interactive TUI, not exec)", () => {
-    expect(buildHarnessCommand("codex", "hi there")).toBe("codex 'hi there'");
+    expect(buildHarnessCommand("codex", "hi there", null)).toBe("codex 'hi there'");
   });
 
   it("launches Opencode with --prompt (default TUI, not run)", () => {
-    expect(buildHarnessCommand("opencode", "hi there")).toBe("opencode --prompt 'hi there'");
+    expect(buildHarnessCommand("opencode", "hi there", null)).toBe("opencode --prompt 'hi there'");
   });
 
   it("launches Cursor's CLI, which is cursor-agent rather than cursor", () => {
-    expect(buildHarnessCommand("cursor", "hi there")).toBe("cursor-agent 'hi there'");
+    expect(buildHarnessCommand("cursor", "hi there", null)).toBe("cursor-agent 'hi there'");
   });
 
   it("launches an unregistered harness by its own slug with a positional prompt", () => {
     const custom = parseHarnessId("my-harness") as HarnessId;
-    expect(buildHarnessCommand(custom, "hi there")).toBe("my-harness 'hi there'");
+    expect(buildHarnessCommand(custom, "hi there", null)).toBe("my-harness 'hi there'");
   });
 
   it("quotes the prompt so shell metacharacters stay inert", () => {
-    expect(buildHarnessCommand("claude-code", "it's `$X`")).toBe("claude 'it'\\''s `$X`'");
+    expect(buildHarnessCommand("claude-code", "it's `$X`", null)).toBe("claude 'it'\\''s `$X`'");
   });
 
   it("has a template for every first-class harness", () => {
     for (const id of FIRST_CLASS_HARNESS_IDS) {
-      expect(buildHarnessCommand(id, "x")).toContain("'x'");
+      expect(buildHarnessCommand(id, "x", null)).toContain("'x'");
     }
+  });
+
+  // The blocker this parameter exists for: a bare command is resolved by the
+  // session's login shell, which on macOS has already rebuilt PATH out from
+  // under Volli's bin dir (path_helper, then every user prepend). A launch that
+  // names the wrapper by absolute path cannot lose that race.
+  it("names the generated wrapper by absolute path rather than the bare command", () => {
+    expect(buildHarnessCommand("claude-code", "hi", "/ud/bin/claude")).toBe(
+      "'/ud/bin/claude' 'hi'",
+    );
+  });
+
+  it("keeps the prompt flag between the wrapper and the prompt", () => {
+    expect(buildHarnessCommand("opencode", "hi", "/ud/bin/opencode")).toBe(
+      "'/ud/bin/opencode' --prompt 'hi'",
+    );
+  });
+
+  it("quotes the wrapper path, which on macOS contains spaces under Application Support", () => {
+    expect(
+      buildHarnessCommand("claude-code", "hi", "/Users/x/Library/Application Support/Volli/claude"),
+    ).toBe("'/Users/x/Library/Application Support/Volli/claude' 'hi'");
+  });
+
+  it("falls back to the bare command when no wrapper was generated", () => {
+    expect(buildHarnessCommand("claude-code", "hi", null)).toBe("claude 'hi'");
+  });
+
+  it("wraps an unregistered harness too, since a manifest earns a wrapper the same way", () => {
+    const custom = parseHarnessId("my-harness") as HarnessId;
+    expect(buildHarnessCommand(custom, "hi", "/ud/bin/my-harness")).toBe(
+      "'/ud/bin/my-harness' 'hi'",
+    );
   });
 });
 
 describe("buildHarnessResumeCommand", () => {
   it("resumes Claude Code by session id with --resume", () => {
-    expect(buildHarnessResumeCommand("claude-code", "abc123")).toBe("claude --resume 'abc123'");
+    expect(buildHarnessResumeCommand("claude-code", "abc123", null)).toBe(
+      "claude --resume 'abc123'",
+    );
   });
 
   it("falls back to Claude Code's --continue when no session id is known", () => {
-    expect(buildHarnessResumeCommand("claude-code", null)).toBe("claude --continue");
+    expect(buildHarnessResumeCommand("claude-code", null, null)).toBe("claude --continue");
   });
 
   it("resumes Codex by session id with resume", () => {
-    expect(buildHarnessResumeCommand("codex", "abc123")).toBe("codex resume 'abc123'");
+    expect(buildHarnessResumeCommand("codex", "abc123", null)).toBe("codex resume 'abc123'");
   });
 
   it("falls back to Codex's resume --last when no session id is known", () => {
-    expect(buildHarnessResumeCommand("codex", null)).toBe("codex resume --last");
+    expect(buildHarnessResumeCommand("codex", null, null)).toBe("codex resume --last");
   });
 
   it("resumes Opencode by session id with --session", () => {
-    expect(buildHarnessResumeCommand("opencode", "abc123")).toBe("opencode --session 'abc123'");
+    expect(buildHarnessResumeCommand("opencode", "abc123", null)).toBe(
+      "opencode --session 'abc123'",
+    );
   });
 
   it("falls back to Opencode's --continue when no session id is known", () => {
-    expect(buildHarnessResumeCommand("opencode", null)).toBe("opencode --continue");
+    expect(buildHarnessResumeCommand("opencode", null, null)).toBe("opencode --continue");
   });
 
   it("resumes Cursor by session id with --resume", () => {
-    expect(buildHarnessResumeCommand("cursor", "abc123")).toBe("cursor-agent --resume 'abc123'");
+    expect(buildHarnessResumeCommand("cursor", "abc123", null)).toBe(
+      "cursor-agent --resume 'abc123'",
+    );
   });
 
   it("returns null for a harness with no registered adapter, with or without a session id", () => {
-    expect(buildHarnessResumeCommand("custom-harness", "abc123")).toBeNull();
-    expect(buildHarnessResumeCommand("custom-harness", null)).toBeNull();
+    expect(buildHarnessResumeCommand("custom-harness", "abc123", null)).toBeNull();
+    expect(buildHarnessResumeCommand("custom-harness", null, null)).toBeNull();
   });
 
   it("returns null for a stored id that is not even a well-formed harness slug", () => {
-    expect(buildHarnessResumeCommand("Not A Harness", "abc123")).toBeNull();
+    expect(buildHarnessResumeCommand("Not A Harness", "abc123", null)).toBeNull();
   });
 
   it("substitutes the id wherever the template puts it, not only at the end", () => {
@@ -184,14 +224,56 @@ describe("buildHarnessResumeCommand", () => {
       events: [],
       launchSettings: [],
     };
-    expect(buildResumeCommand(declared, "abc123")).toBeNull();
-    expect(buildResumeCommand(declared, null)).toBeNull();
+    expect(buildResumeCommand(declared, "abc123", null)).toBeNull();
+    expect(buildResumeCommand(declared, null, null)).toBeNull();
   });
 
   it("quotes a session id that needs shell quoting, same as prompt quoting", () => {
-    expect(buildHarnessResumeCommand("claude-code", "it's a session")).toBe(
+    expect(buildHarnessResumeCommand("claude-code", "it's a session", null)).toBe(
       "claude --resume 'it'\\''s a session'",
     );
+  });
+
+  it("names the wrapper by absolute path on a by-id resume", () => {
+    expect(buildHarnessResumeCommand("claude-code", "abc123", "/ud/bin/claude")).toBe(
+      "'/ud/bin/claude' --resume 'abc123'",
+    );
+  });
+
+  it("names the wrapper by absolute path on a latest-in-cwd resume too", () => {
+    expect(buildHarnessResumeCommand("codex", null, "/ud/bin/codex")).toBe(
+      "'/ud/bin/codex' resume --last",
+    );
+  });
+});
+
+describe("canResumeHarness", () => {
+  it("is true for a harness that resumes by id when an id is known", () => {
+    expect(canResumeHarness("claude-code", "abc123")).toBe(true);
+  });
+
+  it("is true with no id when the harness can resume the latest in cwd", () => {
+    expect(canResumeHarness("claude-code", null)).toBe(true);
+  });
+
+  it("is false for a harness with no registered adapter", () => {
+    expect(canResumeHarness("custom-harness", "abc123")).toBe(false);
+  });
+
+  it("is false for a stored id that is not a well-formed harness slug", () => {
+    expect(canResumeHarness("Not A Harness", "abc123")).toBe(false);
+  });
+
+  // The capability question a UI asks must not depend on where a wrapper
+  // lives — those paths are main's, and the renderer has none.
+  it("agrees with the command builder for every first-class harness", () => {
+    for (const id of FIRST_CLASS_HARNESS_IDS) {
+      for (const sessionId of ["abc123", null]) {
+        expect(canResumeHarness(id, sessionId)).toBe(
+          buildHarnessResumeCommand(id, sessionId, null) !== null,
+        );
+      }
+    }
   });
 });
 

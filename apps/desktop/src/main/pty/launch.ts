@@ -5,6 +5,7 @@ import {
   composeAttachmentsSection,
   worktreeOrientationPreamble,
 } from "@volli/shared";
+import type { HarnessWrapperLookup } from "@volli/shared";
 import { listAttachments } from "../db/attachments-repo";
 import type { EnsureOutcome } from "../worktree";
 import type { SessionScope } from "./scope";
@@ -29,6 +30,7 @@ export function composeWorktreeLaunchCommand(
   worktree: NonNullable<SessionScope["worktree"]>,
   identity: EnsureOutcome["identity"],
   worktreeCwd: string,
+  wrapperFor: HarnessWrapperLookup,
 ): string | null {
   if (worktree.resumeCommand !== null) {
     return worktree.resumeCommand;
@@ -47,6 +49,7 @@ export function composeWorktreeLaunchCommand(
     return buildHarnessCommand(
       worktree.kickoff.harnessId,
       `${preamble}\n\n${worktree.kickoff.prompt}${attachmentsSuffix}`,
+      wrapperFor(worktree.kickoff.harnessId),
     );
   }
   return null;

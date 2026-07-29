@@ -10,7 +10,7 @@ import {
   projectSessionEnv,
   ticketSessionEnv,
 } from "@volli/shared";
-import type { CreateTerminalSessionRequest, HarnessId } from "@volli/shared";
+import type { CreateTerminalSessionRequest, HarnessId, HarnessWrapperLookup } from "@volli/shared";
 import { materializeAttachments } from "../attachment-materialize";
 import { getProjectById } from "../db/projects-repo";
 import {
@@ -93,6 +93,7 @@ export function resolveScope(
   db: Database.Database,
   request: CreateTerminalSessionRequest,
   attachmentsRootPath: string,
+  wrapperFor: HarnessWrapperLookup,
 ): ScopeResolution {
   // Presentation metadata is non-security-sensitive, but still normalize the
   // IPC value so an untyped caller cannot persist arbitrary vocabulary.
@@ -125,7 +126,11 @@ export function resolveScope(
       }
       // The resume line needs no worktree identity (no orientation preamble),
       // so it composes up front. A harness with no resume support yields null.
-      const resumeCommand = buildHarnessResumeCommand(prior.harnessId, prior.harnessSessionId);
+      const resumeCommand = buildHarnessResumeCommand(
+        prior.harnessId,
+        prior.harnessSessionId,
+        wrapperFor(prior.harnessId),
+      );
       if (resumeCommand === null) {
         return {
           ok: false,
@@ -189,7 +194,7 @@ export function resolveScope(
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }
-      launchCommand = buildHarnessCommand(kickoff.harnessId, prompt);
+      launchCommand = buildHarnessCommand(kickoff.harnessId, prompt, wrapperFor(kickoff.harnessId));
     }
     return {
       ok: true,

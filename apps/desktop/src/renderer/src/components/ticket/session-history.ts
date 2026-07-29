@@ -1,5 +1,5 @@
 import {
-  buildHarnessResumeCommand,
+  canResumeHarness,
   harnessLabel,
   type SessionActivityState,
   type SessionHarnessState,
@@ -134,14 +134,17 @@ export function groupSessionRows(rows: readonly TicketSessionRow[]): {
  * pre-metadata `unknown` record has no harness session to resume), has
  * actually ended (a still-live session has nothing to resume INTO — it's
  * already running), and its harness knows how to resume at all — an
- * unrecognized/generic harness id makes {@link buildHarnessResumeCommand}
- * return `null` for both its by-id and latest-in-cwd fallbacks.
+ * unrecognized/generic harness id makes {@link canResumeHarness} false for both
+ * its by-id and latest-in-cwd fallbacks.
+ *
+ * Capability, not a command line: the resume line names the generated wrapper
+ * by absolute path, and those paths are main's alone.
  */
 export function canResumeSession(record: SessionRecord): boolean {
   return (
     record.launchKind === "agent" &&
     record.endedAt !== null &&
-    buildHarnessResumeCommand(record.harnessId, record.harnessSessionId) !== null
+    canResumeHarness(record.harnessId, record.harnessSessionId)
   );
 }
 

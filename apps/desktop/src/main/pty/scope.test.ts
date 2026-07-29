@@ -8,7 +8,7 @@ import {
   projectSessionEnv,
   ticketSessionEnv,
 } from "@volli/shared";
-import type { CreateTerminalSessionRequest, HarnessId } from "@volli/shared";
+import type { CreateTerminalSessionRequest, HarnessId, HarnessWrapperLookup } from "@volli/shared";
 import { createAttachment } from "../db/attachments-repo";
 import { importAttachmentFile } from "../attachment-store";
 import { insertProject } from "../db/projects-repo";
@@ -20,6 +20,13 @@ import { resolveScope } from "./scope";
 
 let ctx: TestDb;
 const tmpDirs: string[] = [];
+
+/** No wrapper was generated — the harness is launched by bare name, unwrapped. */
+const noWrapper: HarnessWrapperLookup = () => null;
+
+/** Every harness has a wrapper, under Volli's own bin dir. */
+const wrapped: HarnessWrapperLookup = (harnessId) =>
+  `/ud/bin/${harnessId === "claude-code" ? "claude" : harnessId}`;
 
 /** A throwaway real directory (attachments root / project checkout), cleaned in afterEach. */
 async function tmpDir(prefix: string): Promise<string> {
@@ -66,7 +73,12 @@ describe("resolveScope — scratch", () => {
     const project = testProject({ id: "proj-1", path: "/repo/project-1" });
     insertProject(ctx.db, project);
 
-    const result = resolveScope(ctx.db, scratchRequest({ cwd: "/repo/elsewhere" }), "/attach-root");
+    const result = resolveScope(
+      ctx.db,
+      scratchRequest({ cwd: "/repo/elsewhere" }),
+      "/attach-root",
+      noWrapper,
+    );
 
     expect(result).toEqual({
       ok: true,
@@ -93,7 +105,7 @@ describe("resolveScope — scratch", () => {
     insertProject(ctx.db, project);
     insertSession(ctx.db, testSession("proj-1", null));
 
-    const result = resolveScope(ctx.db, scratchRequest(), "/attach-root");
+    const result = resolveScope(ctx.db, scratchRequest(), "/attach-root", noWrapper);
     if (!result.ok) throw new Error("expected a scope");
     expect(result.scope.title).toBe("Terminal 2");
   });
@@ -101,7 +113,12 @@ describe("resolveScope — scratch", () => {
   it("still resolves ok for an unresolvable project — empty env, null artifactsRoot", () => {
     ctx = openTestDb();
 
-    const result = resolveScope(ctx.db, scratchRequest({ workspaceId: "ghost" }), "/attach-root");
+    const result = resolveScope(
+      ctx.db,
+      scratchRequest({ workspaceId: "ghost" }),
+      "/attach-root",
+      noWrapper,
+    );
     if (!result.ok) throw new Error("expected a scope");
     expect(result.scope.env).toEqual({});
     expect(result.scope.artifactsRoot).toBeNull();
@@ -112,12 +129,18 @@ describe("resolveScope — scratch", () => {
     ctx = openTestDb();
     insertProject(ctx.db, testProject({ id: "proj-1", path: "/repo/project-1" }));
 
-    const split = resolveScope(ctx.db, scratchRequest({ placement: "split" }), "/attach-root");
-    const omitted = resolveScope(ctx.db, scratchRequest(), "/attach-root");
+    const split = resolveScope(
+      ctx.db,
+      scratchRequest({ placement: "split" }),
+      "/attach-root",
+      noWrapper,
+    );
+    const omitted = resolveScope(ctx.db, scratchRequest(), "/attach-root", noWrapper);
     const bogus = resolveScope(
       ctx.db,
       scratchRequest({ placement: "floating" as "tab" }),
       "/attach-root",
+      noWrapper,
     );
     if (!split.ok || !omitted.ok || !bogus.ok) throw new Error("expected scopes");
     expect(split.scope.placement).toBe("split");
@@ -141,6 +164,7 @@ describe("resolveScope — ticket", () => {
         ticket: { ticketId: "ghost" },
       },
       "/attach-root",
+      noWrapper,
     );
     expect(result).toEqual({ ok: false, error: "Unknown ticket" });
   });
@@ -169,6 +193,7 @@ describe("resolveScope — ticket", () => {
         ticket: { ticketId: "tk1" },
       },
       "/attach-root",
+      noWrapper,
     );
     expect(result).toEqual({
       ok: true,
@@ -218,6 +243,7 @@ describe("resolveScope — ticket", () => {
         ticket: { ticketId: "tk1", kickoff: { harnessId: "codex", prompt: "run the tests" } },
       },
       attachRoot,
+      noWrapper,
     );
     if (!result.ok) throw new Error(`expected a scope, got ${result.error}`);
 
@@ -232,6 +258,29 @@ describe("resolveScope — ticket", () => {
     await expect(
       fs.readFile(join(projectDir, ".volli", "attachments", "spec.png"), "utf8"),
     ).resolves.toBe("spec bytes");
+  });
+
+  // A kickoff must reach the wrapper, not whatever the session's login shell
+  // finds on a PATH it has already rebuilt — the defect this parameter closes.
+  it("launches a non-worktree kickoff through the generated wrapper's absolute path", () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "proj-1", path: "/repo/project-1" }));
+    insertTicket(ctx.db, testTicket("proj-1", { id: "tk1", ticketNumber: 1, usesWorktree: false }));
+
+    const result = resolveScope(
+      ctx.db,
+      {
+        workspaceId: "proj-1",
+        cwd: "/repo/project-1",
+        cols: 80,
+        rows: 24,
+        ticket: { ticketId: "tk1", kickoff: { harnessId: "codex" as HarnessId, prompt: "go" } },
+      },
+      "/attach-root",
+      wrapped,
+    );
+    if (!result.ok) throw new Error(`expected a scope, got ${result.error}`);
+    expect(result.scope.launchCommand).toBe("'/ud/bin/codex' 'go'");
   });
 
   it("surfaces a materialize failure (an attachment's bytes are missing) as the scope error", async () => {
@@ -256,6 +305,7 @@ describe("resolveScope — ticket", () => {
         ticket: { ticketId: "tk1", kickoff: { harnessId: "codex", prompt: "go" } },
       },
       "/no-such-attach-root",
+      noWrapper,
     );
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("expected a materialize failure");
@@ -282,6 +332,7 @@ describe("resolveScope — worktree", () => {
         ticket: { ticketId: "wt1", kickoff: { harnessId: "codex", prompt: "go" } },
       },
       "/attach-root",
+      noWrapper,
     );
     if (!result.ok) throw new Error(`expected a scope, got ${result.error}`);
 
@@ -313,6 +364,7 @@ describe("resolveScope — worktree", () => {
         ticket: { ticketId: "tk1" },
       },
       "/attach-root",
+      noWrapper,
     );
     if (!result.ok) throw new Error("expected a scope");
     expect(result.scope.title).toBe("Session 2");
@@ -364,15 +416,32 @@ describe("resolveScope — resume", () => {
       ctx.db,
       resumeRequest(prior.id, { kickoff: { harnessId: "codex", prompt: "go" } }),
       "/attach-root",
+      noWrapper,
     );
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("expected failure");
     expect(result.error).toContain("cannot both");
   });
 
+  // A resume is as much a Volli-initiated launch as a kickoff, and loses the
+  // same PATH race if it names a bare command.
+  it("resumes through the generated wrapper's absolute path", () => {
+    setup();
+    const prior = insertEndedAgent("tk1", "abc-123");
+
+    const result = resolveScope(ctx.db, resumeRequest(prior.id), "/attach-root", wrapped);
+    if (!result.ok) throw new Error(`expected a scope, got ${result.error}`);
+    expect(result.scope.launchCommand).toBe("'/ud/bin/claude' --resume 'abc-123'");
+  });
+
   it("rejects resuming an unknown session", () => {
     setup();
-    const result = resolveScope(ctx.db, resumeRequest("no-such-session"), "/attach-root");
+    const result = resolveScope(
+      ctx.db,
+      resumeRequest("no-such-session"),
+      "/attach-root",
+      noWrapper,
+    );
     if (result.ok) throw new Error("expected failure");
     expect(result.error).toContain("unknown session");
   });
@@ -384,7 +453,7 @@ describe("resolveScope — resume", () => {
       testTicket("proj-1", { id: "tk2", ticketNumber: 13, usesWorktree: false }),
     );
     const prior = insertEndedAgent("tk2", "abc-123");
-    const result = resolveScope(ctx.db, resumeRequest(prior.id), "/attach-root");
+    const result = resolveScope(ctx.db, resumeRequest(prior.id), "/attach-root", noWrapper);
     if (result.ok) throw new Error("expected failure");
     expect(result.error).toContain("another ticket");
   });
@@ -392,7 +461,7 @@ describe("resolveScope — resume", () => {
   it("rejects resuming a non-agent (shell) session", () => {
     setup();
     const prior = insertEndedAgent("tk1", null, { launchKind: "shell" });
-    const result = resolveScope(ctx.db, resumeRequest(prior.id), "/attach-root");
+    const result = resolveScope(ctx.db, resumeRequest(prior.id), "/attach-root", noWrapper);
     if (result.ok) throw new Error("expected failure");
     expect(result.error).toContain("agent session");
   });
@@ -400,7 +469,7 @@ describe("resolveScope — resume", () => {
   it("rejects resuming a session that is still live", () => {
     setup();
     const prior = insertEndedAgent("tk1", "abc-123", { endedAt: null });
-    const result = resolveScope(ctx.db, resumeRequest(prior.id), "/attach-root");
+    const result = resolveScope(ctx.db, resumeRequest(prior.id), "/attach-root", noWrapper);
     if (result.ok) throw new Error("expected failure");
     expect(result.error).toContain("still live");
   });
@@ -410,7 +479,7 @@ describe("resolveScope — resume", () => {
     const prior = insertEndedAgent("tk1", "abc-123", {
       harnessId: "made-up-harness" as HarnessId,
     });
-    const result = resolveScope(ctx.db, resumeRequest(prior.id), "/attach-root");
+    const result = resolveScope(ctx.db, resumeRequest(prior.id), "/attach-root", noWrapper);
     if (result.ok) throw new Error("expected failure");
     expect(result.error).toContain("does not support resuming");
   });
@@ -418,7 +487,7 @@ describe("resolveScope — resume", () => {
   it("puts the resume line in launchCommand for a valid non-worktree resume", () => {
     setup();
     const prior = insertEndedAgent("tk1", "abc-123");
-    const result = resolveScope(ctx.db, resumeRequest(prior.id), "/attach-root");
+    const result = resolveScope(ctx.db, resumeRequest(prior.id), "/attach-root", noWrapper);
     if (!result.ok) throw new Error(`expected a scope, got ${result.error}`);
     expect(result.scope.launchKind).toBe("agent");
     expect(result.scope.harnessId).toBe("claude-code");
@@ -429,7 +498,7 @@ describe("resolveScope — resume", () => {
   it("defers the resume line onto worktree.resumeCommand for a valid worktree resume", () => {
     setup({ usesWorktree: true });
     const prior = insertEndedAgent("tk1", "wt-abc");
-    const result = resolveScope(ctx.db, resumeRequest(prior.id), "/attach-root");
+    const result = resolveScope(ctx.db, resumeRequest(prior.id), "/attach-root", noWrapper);
     if (!result.ok) throw new Error(`expected a scope, got ${result.error}`);
     expect(result.scope.launchCommand).toBeNull();
     expect(result.scope.worktree?.resumeCommand).toBe("claude --resume 'wt-abc'");
@@ -439,7 +508,7 @@ describe("resolveScope — resume", () => {
   it("inherits the prior session's previousSessionId and harnessSessionId onto the resume scope", () => {
     setup();
     const prior = insertEndedAgent("tk1", "seed-xyz");
-    const result = resolveScope(ctx.db, resumeRequest(prior.id), "/attach-root");
+    const result = resolveScope(ctx.db, resumeRequest(prior.id), "/attach-root", noWrapper);
     if (!result.ok) throw new Error(`expected a scope, got ${result.error}`);
     expect(result.scope.resume).toEqual({
       previousSessionId: prior.id,

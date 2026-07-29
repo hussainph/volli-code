@@ -15,7 +15,7 @@ import {
   renderWrapperScript,
   shellSingleQuote,
 } from "@volli/shared";
-import type { HarnessAdapter } from "@volli/shared";
+import type { HarnessAdapter, HarnessId } from "@volli/shared";
 
 export interface HarnessRuntimeInput {
   /** Volli's own `bin/` — the same directory the `volli` shim lives in. */
@@ -40,6 +40,16 @@ export interface HarnessRuntimeInput {
 export interface HarnessRuntime {
   /** Absolute paths of the wrappers now on disk. */
   wrappers: string[];
+  /**
+   * Where each harness's wrapper lives, by harness id — what a launch line has
+   * to name instead of a bare command.
+   *
+   * A miss is meaningful and must not be papered over: it says Volli wrote no
+   * wrapper for that harness this launch, so a launch resolves the harness
+   * through `PATH` and reports nothing. Callers spell that as the Known tier
+   * rather than pretending a wrapper exists.
+   */
+  wrapperPaths: ReadonlyMap<HarnessId, string>;
   /**
    * Merged into every Volli PTY's environment alongside `agentSessionEnv`. The
    * wrapper reads its argv out of `VOLLI_HARNESS_ARGV_<SLUG>` here, and a
@@ -110,12 +120,14 @@ async function writeExecutable(path: string, content: string): Promise<void> {
 export async function ensureHarnessRuntime(input: HarnessRuntimeInput): Promise<HarnessRuntime> {
   await mkdir(input.binDir, { recursive: true });
   const wrappers: string[] = [];
+  const wrapperPaths = new Map<HarnessId, string>();
   const env: Record<string, string> = {};
   for (const adapter of input.adapters) {
     if (!isBareHarnessCommand(adapter.command)) continue;
     const wrapperPath = join(input.binDir, adapter.command);
     await writeExecutable(wrapperPath, renderWrapperScript(adapter, { binDir: input.binDir }));
     wrappers.push(wrapperPath);
+    wrapperPaths.set(adapter.id, wrapperPath);
 
     const harnessDir = harnessDirFor(input.harnessRoot, adapter);
     const config = buildLaunchConfig(adapter, {
@@ -161,5 +173,5 @@ export async function ensureHarnessRuntime(input: HarnessRuntimeInput): Promise<
       await rm(join(input.binDir, entry), { force: true });
     }
   }
-  return { wrappers, env };
+  return { wrappers, wrapperPaths, env };
 }
