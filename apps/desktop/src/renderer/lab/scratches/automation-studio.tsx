@@ -19,22 +19,31 @@
  * about, and the duplication is the honest render of `columns: [backlog, todo]`.
  * ──────────────────────────────────────────────────────────────────────────
  *
- * ── STAGES, AND THE AMBIGUITY THEY KILL ───────────────────────────────────
- * The editor's spine used to be a tree of `after` pointers, drawn with an
- * indent rail. Two things were wrong with it and they were the same thing: an
- * indented child reads as a BRANCH, so the surface implied a conditional Volli
- * cannot evaluate — and even read charitably, a reader had to decode the rail
- * to learn whether two cards were sequential or simultaneous.
+ * ── THE SPINE IS A LIST WITH LABELLED EDGES ───────────────────────────────
+ * The version before this one grouped steps into rows and called the groups
+ * STAGES, with a hover-revealed `+ Stage` between rows and a hover-revealed
+ * `+ Alongside` inside one. Two invented nouns, and both buttons invisible
+ * until the pointer happened to be over the right region — no signifier
+ * anywhere that either existed.
  *
- * Now the geometry carries it with no rail at all. Down the page is time and
- * the gutter numbers it; across the row is at-once. Two `+` affordances, in the
- * two places those two things live: `Stage` on the divider BETWEEN rows,
- * `Alongside` at the end of a row. You cannot click the wrong one by accident,
- * because they are not in the same place and they do not look alike.
- * See {@link Stage}.
+ * What made the node canvas easy was never the canvas. It was that every
+ * affordance was permanently on screen and shaped like what it did. So:
+ *
+ *   • ONE add control, always visible, full width, at the end of the list —
+ *     the same shape as Cursor's `+ Add Trigger` and `+ Add Tool or MCP`.
+ *   • The relationship between two steps is a control ON the edge between
+ *     them, always visible, reading `then` or `at the same time`. It is the
+ *     `also: true` field of the file, spelled in the words a person would use.
+ *
+ * No nouns to learn, nothing hidden, and one list rather than a grid — a
+ * simultaneous pair reads from the edge label instead of from a layout the
+ * reader has to infer.
  * ──────────────────────────────────────────────────────────────────────────
  */
 import * as React from "react";
+import { ArrowDownIcon } from "@phosphor-icons/react/dist/csr/ArrowDown";
+import { ArrowsSplitIcon } from "@phosphor-icons/react/dist/csr/ArrowsSplit";
+import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { FileCodeIcon } from "@phosphor-icons/react/dist/csr/FileCode";
 import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
 import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
@@ -45,10 +54,17 @@ import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import { TICKET_STATUS_LABELS, TICKET_STATUSES, type TicketStatus } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@renderer/components/ui/dropdown-menu";
 import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { cn } from "@renderer/lib/utils";
 
-import { HarnessMark, harnessLabelFor } from "../automation/harness-identity";
+import { HarnessMark } from "../automation/harness-identity";
 import { StepCard } from "../automation/step-card";
 import { TriggerCard } from "../automation/trigger-card";
 import {
@@ -58,27 +74,24 @@ import {
   type FileDiagnostic,
 } from "../automation/file";
 import {
-  addToStage,
-  allSteps,
+  appendStep,
   blankStep,
-  firstLine,
   freshStepId,
   harnessTrail,
-  HARNESS_ADAPTERS,
-  insertStage,
   removeStep,
   renameStep,
   replaceStep,
   SEEDED_AUTOMATIONS,
+  setJoin,
   triggerSummary,
   type Automation,
   type AutomationScope,
   type AutomationStep,
-  type Stage,
+  type StepJoin,
 } from "../automation/model";
 
 export const title = "Automation · studio";
-export const note = "A rail to pick one, a spine to write it, a board to see where it fires.";
+export const note = "A rail to pick one, a composer to write it, a board to see where it fires.";
 export const viewport = "window" as const;
 
 /* ------------------------------------------------------------ run state */
@@ -368,56 +381,6 @@ function BoardView({
 
 /* -------------------------------------------------------------- the spine */
 
-/** The collapsed face: everything that differs between two steps, and nothing else. */
-function StepChip({
-  step,
-  selected,
-  onOpen,
-}: {
-  step: AutomationStep;
-  selected: boolean;
-  onOpen: () => void;
-}) {
-  const { runtime } = step;
-  const adapter = HARNESS_ADAPTERS[runtime.harnessId];
-  const dials = [
-    adapter.effort === null ? null : runtime.effort,
-    adapter.approvals === null ? null : runtime.approvals,
-  ].filter((value): value is string => value !== null && value !== "");
-
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      aria-expanded={selected}
-      className={cn(
-        "flex min-w-0 flex-1 basis-56 cursor-pointer flex-col gap-0.5 rounded-lg border bg-card px-3 py-2.5 text-left",
-        "transition-[border-color] duration-150 ease-out motion-reduce:transition-none",
-        "hover:border-muted-foreground/40",
-        "outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
-        selected ? "border-primary/50" : "border-border",
-      )}
-    >
-      <span className="flex items-baseline gap-1.5 overflow-hidden">
-        <HarnessMark harnessId={runtime.harnessId} className="translate-y-0.5" />
-        <span className="shrink-0 text-ui text-foreground">
-          {harnessLabelFor(runtime.harnessId)}
-        </span>
-        <span className="truncate font-mono text-label text-muted-foreground">{runtime.model}</span>
-      </span>
-      {/* Its own line rather than trailing the model, because the model name is
-          long and variable and would push the safety-relevant half of the
-          runtime off the end of exactly the steps that need watching. */}
-      <span className="truncate font-mono text-label text-muted-foreground">
-        {dials.join(" · ")}
-      </span>
-      <span className="truncate text-label text-muted-foreground">
-        {firstLine(step.instructions) || "No instructions"}
-      </span>
-    </button>
-  );
-}
-
 /**
  * The step id, committed on blur or Enter rather than per keystroke.
  *
@@ -463,7 +426,7 @@ function StepIdField({
         }
       }}
       spellCheck={false}
-      aria-label="Step id"
+      aria-label="Step name"
       aria-invalid={invalid}
       className={cn(
         "min-w-0 flex-1 rounded bg-transparent px-1 py-0.5 font-mono text-label text-muted-foreground",
@@ -474,166 +437,87 @@ function StepIdField({
   );
 }
 
-function StepEditor({
-  step,
-  taken,
-  showId,
-  onChange,
-  onRename,
-  onRemove,
-  onCollapse,
-}: {
-  step: AutomationStep;
-  taken: Set<string>;
-  /** The id is only a name you will ever read when the file writes `## headings` at all. */
-  showId: boolean;
-  onChange: (step: AutomationStep) => void;
-  onRename: (next: string) => void;
-  onRemove: (() => void) | null;
-  onCollapse: () => void;
-}) {
-  return (
-    <div className="flex flex-col gap-1.5">
-      {showId || onRemove !== null ? (
-        <div className="flex items-center gap-2 px-0.5">
-          {showId ? <StepIdField id={step.id} taken={taken} onCommit={onRename} /> : <span />}
-          {onRemove === null ? null : (
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label={`Remove ${step.id}`}
-              onClick={onRemove}
-            >
-              <TrashIcon />
-            </Button>
-          )}
-          <Button variant="ghost" size="xs" onClick={onCollapse}>
-            Done
-          </Button>
-        </div>
-      ) : null}
-      <StepCard step={step} onChange={onChange} onDuplicate={null} onRemove={null} />
-    </div>
-  );
-}
-
 /**
- * The divider between two stages, and the only place a new stage can be made.
+ * The edge between two steps, and the only control over when the lower one
+ * starts.
  *
- * The connector runs through it at full height so the spine stays continuous
- * whether or not you are hovering — the line is structure, the button is an
- * affordance, and only the button hides.
+ * It sits ON the connector for the same reason a graph editor puts a label on
+ * an edge: the relationship belongs to the gap, not to either card. It is
+ * always visible — an affordance you have to discover by hovering is an
+ * affordance most people never learn exists — and it says `then` or `at the
+ * same time`, which are the words rather than a vocabulary.
  */
-function StageGap({ onInsert }: { onInsert: () => void }) {
+function Connector({ join, onChange }: { join: StepJoin; onChange: (join: StepJoin) => void }) {
+  const together = join === "with";
   return (
-    <div className="group/gap relative flex h-7 items-center">
-      <span aria-hidden className="absolute left-2 h-full w-px bg-muted-foreground/30" />
-      <button
-        type="button"
-        onClick={onInsert}
-        className={cn(
-          "ml-6 flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-label text-muted-foreground",
-          "opacity-0 group-hover/gap:opacity-100 focus-visible:opacity-100",
-          "transition-[opacity,color] duration-150 ease-out motion-reduce:transition-none",
-          "hover:text-primary-text",
-          "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
-        )}
-      >
-        <PlusIcon weight="bold" className="size-3" />
-        Stage
-      </button>
-    </div>
-  );
-}
-
-/**
- * One stage: its steps side by side, its number in the gutter, and its open
- * step's editor beneath it.
- *
- * The editor is a full-width row under the chips rather than an expansion of
- * the chip itself, because a stage of two would otherwise have to choose
- * between a 20rem editor and a layout that jumps when you open one.
- */
-function StageRow({
-  stage,
-  index,
-  openId,
-  taken,
-  showIds,
-  removable,
-  onOpen,
-  onCollapse,
-  onChange,
-  onRename,
-  onRemove,
-  onAlongside,
-}: {
-  stage: Stage;
-  index: number;
-  openId: string | null;
-  taken: Set<string>;
-  showIds: boolean;
-  removable: boolean;
-  onOpen: (id: string) => void;
-  onCollapse: () => void;
-  onChange: (step: AutomationStep) => void;
-  onRename: (from: string, to: string) => void;
-  onRemove: (id: string) => void;
-  onAlongside: () => void;
-}) {
-  const open = stage.find((step) => step.id === openId) ?? null;
-
-  return (
-    <div className="group/stage flex gap-2">
-      <span
-        aria-hidden
-        className="w-4 shrink-0 pt-2.5 text-center font-mono text-label tabular-nums text-muted-foreground"
-      >
-        {index + 1}
-      </span>
-      <div className="flex min-w-0 flex-1 flex-col gap-2">
-        <div className="flex flex-wrap items-stretch gap-2">
-          {stage.map((step) => (
-            <StepChip
-              key={step.id}
-              step={step}
-              selected={step.id === openId}
-              onOpen={() => (step.id === openId ? onCollapse() : onOpen(step.id))}
-            />
-          ))}
-          {/* Dashed, inside the row, and the same height as the chips it sits
-              beside — the shape says "another one of these, here", where the
-              Stage button below says "another row". */}
-          <button
-            type="button"
-            onClick={onAlongside}
+    <div className="relative flex h-9 items-center">
+      {/* Drawn on `muted-foreground`, not `border`: the flow between two steps
+          is the one thing this column exists to show, and on the border token it
+          came out fainter than the outline of the cards it was joining. */}
+      <span aria-hidden className="absolute left-4 h-full w-px bg-muted-foreground/25" />
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="xs"
             className={cn(
-              "flex shrink-0 cursor-pointer items-center gap-1 self-stretch rounded-lg border border-dashed border-border px-2.5 text-label text-muted-foreground",
-              "opacity-0 group-focus-within/stage:opacity-100 group-hover/stage:opacity-100 focus-visible:opacity-100",
-              "transition-[opacity,color,border-color] duration-150 ease-out motion-reduce:transition-none",
-              "hover:border-muted-foreground/50 hover:text-foreground",
-              "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+              "relative ml-7 gap-1.5 border bg-background",
+              together
+                ? "border-primary/40 text-primary-text"
+                : "border-border text-muted-foreground",
             )}
           >
-            <PlusIcon weight="bold" className="size-3" />
-            Alongside
-          </button>
-        </div>
-
-        {open === null ? null : (
-          <StepEditor
-            key={open.id}
-            step={open}
-            taken={taken}
-            showId={showIds}
-            onChange={onChange}
-            onRename={(next) => onRename(open.id, next)}
-            onRemove={removable ? () => onRemove(open.id) : null}
-            onCollapse={onCollapse}
-          />
-        )}
-      </div>
+            {together ? <ArrowsSplitIcon weight="bold" /> : <ArrowDownIcon weight="bold" />}
+            {together ? "at the same time" : "then"}
+            <CaretDownIcon weight="bold" className="size-3 opacity-60" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-52">
+          <DropdownMenuRadioGroup
+            value={join}
+            onValueChange={(value) => onChange(value as StepJoin)}
+          >
+            <DropdownMenuRadioItem value="then">then</DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="with">at the same time</DropdownMenuRadioItem>
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
+  );
+}
+
+/**
+ * Always on screen, full width, and shaped like the thing it makes.
+ *
+ * Lifted from Cursor's automation page, where `+ Add Trigger` and `+ Add Tool
+ * or MCP` are permanent dashed rows rather than hover-revealed marks. The whole
+ * reason a node canvas felt easy was that its handles were always there.
+ */
+function AddStep({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "flex w-full cursor-pointer items-center gap-2 rounded-xl border border-dashed border-border px-3 py-3 text-ui text-muted-foreground",
+        "transition-[background-color,border-color,color] duration-150 ease-out motion-reduce:transition-none",
+        "hover:border-muted-foreground/50 hover:bg-accent/40 hover:text-foreground",
+        "outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
+      )}
+    >
+      <PlusIcon weight="bold" className="size-3.5 shrink-0" />
+      Add step
+    </button>
+  );
+}
+
+/** A muted heading over each block, so the page reads as a form rather than a canvas. */
+function Section({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <section className="flex flex-col gap-2">
+      <h2 className="px-0.5 text-label text-muted-foreground">{label}</h2>
+      {children}
+    </section>
   );
 }
 
@@ -673,8 +557,6 @@ function Editor({
   onChange: (automation: Automation) => void;
   onDelete: () => void;
 }) {
-  const steps = allSteps(automation);
-  const [openId, setOpenId] = React.useState<string | null>(steps[0]?.id ?? null);
   const [sourceOpen, setSourceOpen] = React.useState(false);
   const [source, setSource] = React.useState(() => formatAutomationFile(automation));
   const [diagnostics, setDiagnostics] = React.useState<FileDiagnostic[]>([]);
@@ -704,30 +586,18 @@ function Editor({
     onChange({ ...parsed.automation, id: automation.id });
   }
 
-  function patchStages(stages: Stage[]) {
-    onChange({ ...automation, stages });
+  const steps = automation.steps;
+
+  function patchSteps(next: AutomationStep[]) {
+    onChange({ ...automation, steps: next });
   }
 
   const taken = new Set(steps.map((step) => step.id));
   // Ids only reach the file as `## headings` once there is more than one step to
   // head. Showing the field on a one-step automation would be offering to name
   // something nothing will ever print.
-  const showIds = steps.length > 1;
+  const named = steps.length > 1;
   const errors = diagnostics.filter((diagnostic) => diagnostic.severity === "error").length;
-
-  function addStage(at: number) {
-    const harnessId = steps.at(-1)?.runtime.harnessId ?? "claude-code";
-    const step = blankStep(harnessId, freshStepId(automation.stages, harnessId));
-    patchStages(insertStage(automation.stages, at, step));
-    setOpenId(step.id);
-  }
-
-  function addAlongside(at: number) {
-    const harnessId = automation.stages[at][0].runtime.harnessId;
-    const step = blankStep(harnessId, freshStepId(automation.stages, harnessId));
-    patchStages(addToStage(automation.stages, at, step));
-    setOpenId(step.id);
-  }
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -764,39 +634,61 @@ function Editor({
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto flex w-full max-w-[44rem] flex-col p-4">
-            <TriggerCard
-              trigger={automation.trigger}
-              onChange={(trigger) => onChange({ ...automation, trigger })}
-            />
+          <div className="mx-auto flex w-full max-w-[42rem] flex-col gap-6 p-6">
+            <Section label="Trigger">
+              <TriggerCard
+                trigger={automation.trigger}
+                onChange={(trigger) => onChange({ ...automation, trigger })}
+              />
+            </Section>
 
-            {automation.stages.map((stage, index) => (
-              <React.Fragment key={stage[0].id}>
-                <StageGap onInsert={() => addStage(index)} />
-                <StageRow
-                  stage={stage}
-                  index={index}
-                  openId={openId}
-                  taken={taken}
-                  showIds={showIds}
-                  removable={steps.length > 1}
-                  onOpen={setOpenId}
-                  onCollapse={() => setOpenId(null)}
-                  onChange={(next) => patchStages(replaceStep(automation.stages, next))}
-                  onRename={(from, to) => {
-                    patchStages(renameStep(automation.stages, from, to));
-                    setOpenId((current) => (current === from ? to : current));
-                  }}
-                  onRemove={(id) => {
-                    patchStages(removeStep(automation.stages, id));
-                    setOpenId((current) => (current === id ? null : current));
-                  }}
-                  onAlongside={() => addAlongside(index)}
-                />
-              </React.Fragment>
-            ))}
+            <Section label="Steps">
+              {steps.map((step, index) => (
+                <React.Fragment key={step.id}>
+                  {index === 0 ? null : (
+                    <Connector
+                      join={step.join}
+                      onChange={(join) => patchSteps(setJoin(steps, step.id, join))}
+                    />
+                  )}
+                  <StepCard
+                    step={step}
+                    name={
+                      named ? (
+                        <StepIdField
+                          id={step.id}
+                          taken={taken}
+                          onCommit={(next) => patchSteps(renameStep(steps, step.id, next))}
+                        />
+                      ) : null
+                    }
+                    onChange={(next) => patchSteps(replaceStep(steps, next))}
+                    onDuplicate={() => {
+                      const copy = {
+                        ...step,
+                        id: freshStepId(steps, step.runtime.harnessId),
+                        join: "then" as const,
+                      };
+                      patchSteps([...steps, copy]);
+                    }}
+                    onRemove={
+                      steps.length > 1 ? () => patchSteps(removeStep(steps, step.id)) : null
+                    }
+                  />
+                </React.Fragment>
+              ))}
 
-            <StageGap onInsert={() => addStage(automation.stages.length)} />
+              <AddStep
+                onClick={() => {
+                  // The harness of the step above, because the overwhelmingly
+                  // common second step is "the same agent, next instruction".
+                  const harnessId = steps.at(-1)?.runtime.harnessId ?? "claude-code";
+                  patchSteps(
+                    appendStep(steps, blankStep(harnessId, freshStepId(steps, harnessId))),
+                  );
+                }}
+              />
+            </Section>
           </div>
         </div>
       </div>
@@ -873,7 +765,7 @@ export default function AutomationStudioScratch() {
       scope,
       name: "",
       trigger: { kind: "enters-column", columns: column === null ? [] : [column] },
-      stages: [[blankStep("claude-code", "claude-code")]],
+      steps: [blankStep("claude-code", "claude-code")],
     };
     setAutomations((current) => [...current, fresh]);
     setSelectedId(id);

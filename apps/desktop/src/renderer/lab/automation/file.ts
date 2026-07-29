@@ -40,16 +40,16 @@
  * for the n=2 one.
  * ──────────────────────────────────────────────────────────────────────────
  *
- * ── HOW A FLAT LIST SPELLS STAGES ─────────────────────────────────────────
- * `steps:` is one flat ordered list and `also: true` is the only structure in
- * it: a step marked `also` starts alongside the one above it instead of after
- * it. Everything else runs in file order, top to bottom.
+ * ── THE ONLY STRUCTURE IN THE LIST ────────────────────────────────────────
+ * `steps:` is one flat ordered list and `also: true` is the whole of the
+ * control flow: a step marked `also` starts alongside the one above it instead
+ * of after it. Everything else runs in file order, top to bottom.
  *
  *     steps:
- *       - id: codex          ← stage 1
+ *       - id: codex
  *       - id: cursor
- *         also: true         ← stage 1, beside codex
- *       - id: triage         ← stage 2, once both have finished
+ *         also: true         ← starts with codex, not after it
+ *       - id: triage         ← once both have finished
  *
  * The predecessor was `after: <step id>`, a named parent, which bought a general
  * tree — and a general tree is exactly what this format must not offer. Volli
@@ -61,7 +61,8 @@
  * It is also the one spelling with nothing to break. A pointer can dangle, cycle,
  * or orphan its children when a step is deleted, and every one of those needed a
  * diagnostic. A flag reads as English, cannot refer to a step that is not there,
- * and survives any rename — because it names nothing.
+ * and survives any rename — because it names nothing. It is the same field the
+ * editor puts on the connector between two cards, spelled the same way.
  * ──────────────────────────────────────────────────────────────────────────
  *
  * ── ON PARSING ────────────────────────────────────────────────────────────
@@ -90,7 +91,7 @@ import {
   type AutomationStep,
   type AuthoringMode,
   type LabHarnessId,
-  type Stage,
+  type StepJoin,
   type Trigger,
   type TriggerKind,
 } from "./model";
@@ -340,14 +341,7 @@ function childValue(entry: Entry, key: string): { value: string; line: number } 
 
 const STEP_KEYS = new Set(["id", "harness", "model", "effort", "approvals", "mode", "also"]);
 
-/** A step plus the one bit of structure the file carries about it. */
-interface ReadStep {
-  step: AutomationStep;
-  /** True when this step joins the stage above rather than opening a new one. */
-  also: boolean;
-}
-
-function readStep(entry: Entry, index: number, diagnostics: FileDiagnostic[]): ReadStep {
+function readStep(entry: Entry, index: number, diagnostics: FileDiagnostic[]): AutomationStep {
   for (const child of entry.children) {
     if (!STEP_KEYS.has(child.key)) {
       diagnostics.push({
@@ -440,10 +434,10 @@ function readStep(entry: Entry, index: number, diagnostics: FileDiagnostic[]): R
   }
 
   const rawAlso = childValue(entry, "also");
-  let also = false;
+  let join: StepJoin = "then";
   if (rawAlso !== undefined) {
     if (rawAlso.value === "true" || rawAlso.value === "false") {
-      also = rawAlso.value === "true";
+      join = rawAlso.value === "true" ? "with" : "then";
     } else {
       diagnostics.push({
         line: rawAlso.line,
@@ -451,17 +445,17 @@ function readStep(entry: Entry, index: number, diagnostics: FileDiagnostic[]): R
         message: `\`also\` is true or false, not \`${rawAlso.value}\``,
       });
     }
-    if (also && index === 0) {
+    if (join === "with" && index === 0) {
       diagnostics.push({
         line: rawAlso.line,
         severity: "warning",
         message: `\`${id}\` is the first step — there is nothing above it to run alongside`,
       });
-      also = false;
+      join = "then";
     }
   }
 
-  return { step: { id, runtime, mode, instructions: "" }, also };
+  return { id, join, runtime, mode, instructions: "" };
 }
 
 /** Reads an automation file. Never throws — everything wrong becomes a diagnostic. */
@@ -527,10 +521,10 @@ export function parseAutomationFile(text: string, fallbackName = "Untitled"): Pa
     diagnostics.push({ line: stepsEntry?.line ?? null, severity: "error", message: "No `steps`" });
   }
 
-  const read = items.map((item, index) => readStep(item, index, diagnostics));
+  const steps = items.map((item, index) => readStep(item, index, diagnostics));
 
-  for (const [index, { step }] of read.entries()) {
-    if (read.findIndex((other) => other.step.id === step.id) !== index) {
+  for (const [index, step] of steps.entries()) {
+    if (steps.findIndex((other) => other.id === step.id) !== index) {
       diagnostics.push({
         line: items[index].line,
         severity: "error",
@@ -539,18 +533,9 @@ export function parseAutomationFile(text: string, fallbackName = "Untitled"): Pa
     }
   }
 
-  // `also` reads back as grouping in one pass, because the flag only ever refers
-  // to the line above it — which is the whole reason it is a flag.
-  const stages: Stage[] = [];
-  for (const { step, also } of read) {
-    if (also && stages.length > 0) stages[stages.length - 1].push(step);
-    else stages.push([step]);
-  }
-
-  const steps = read.map((entry) => entry.step);
   attachInstructions(steps, body, diagnostics);
   return {
-    automation: { id: `atm-${slugify(name || fallbackName)}`, scope, name, trigger, stages },
+    automation: { id: `atm-${slugify(name || fallbackName)}`, scope, name, trigger, steps },
     diagnostics,
   };
 }
@@ -606,8 +591,14 @@ function emptyAutomation(name: string, instructions: string): Automation {
     scope: "project",
     name,
     trigger: { kind: "enters-column", columns: [] },
-    stages: [
-      [{ id: "claude-code", runtime: defaultRuntime("claude-code"), mode: "prose", instructions }],
+    steps: [
+      {
+        id: "claude-code",
+        join: "then",
+        runtime: defaultRuntime("claude-code"),
+        mode: "prose",
+        instructions,
+      },
     ],
   };
 }
@@ -635,28 +626,26 @@ export function formatAutomationFile(automation: Automation): string {
   }
 
   lines.push("steps:");
-  for (const stage of automation.stages) {
-    for (const [index, step] of stage.entries()) {
-      const adapter = HARNESS_ADAPTERS[step.runtime.harnessId];
-      lines.push(`  - id: ${step.id}`);
-      // Directly under the id, because it is the one key that is about where the
-      // step sits rather than about how it runs.
-      if (index > 0) lines.push(`    also: true`);
-      lines.push(`    harness: ${step.runtime.harnessId}`);
-      lines.push(`    model: ${step.runtime.model}`);
-      if (adapter.effort !== null && step.runtime.effort !== null) {
-        lines.push(`    effort: ${step.runtime.effort}`);
-      }
-      if (adapter.approvals !== null && step.runtime.approvals !== null) {
-        lines.push(`    approvals: ${step.runtime.approvals}`);
-      }
-      if (step.mode !== "prose") lines.push(`    mode: ${step.mode}`);
+  for (const [index, step] of automation.steps.entries()) {
+    const adapter = HARNESS_ADAPTERS[step.runtime.harnessId];
+    lines.push(`  - id: ${step.id}`);
+    // Directly under the id, because it is the one key that is about where the
+    // step sits rather than about how it runs.
+    if (index > 0 && step.join === "with") lines.push(`    also: true`);
+    lines.push(`    harness: ${step.runtime.harnessId}`);
+    lines.push(`    model: ${step.runtime.model}`);
+    if (adapter.effort !== null && step.runtime.effort !== null) {
+      lines.push(`    effort: ${step.runtime.effort}`);
     }
+    if (adapter.approvals !== null && step.runtime.approvals !== null) {
+      lines.push(`    approvals: ${step.runtime.approvals}`);
+    }
+    if (step.mode !== "prose") lines.push(`    mode: ${step.mode}`);
   }
 
   lines.push("---", "");
 
-  const steps = automation.stages.flat();
+  const steps = automation.steps;
   if (steps.length === 1) {
     lines.push(steps[0].instructions.trim(), "");
   } else {

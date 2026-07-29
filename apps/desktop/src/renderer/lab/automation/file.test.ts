@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { automationFilePath, formatAutomationFile, parseAutomationFile, slugify } from "./file";
-import { allSteps, SEEDED_AUTOMATIONS, type Automation } from "./model";
+import { SEEDED_AUTOMATIONS, toStages, type Automation } from "./model";
 
 /** Only the messages, so a test reads as the complaint a person would get. */
 function messages(text: string): string[] {
@@ -59,17 +59,17 @@ describe("parseAutomationFile", () => {
     expect(automation.name).toBe("Implement");
     expect(automation.scope).toBe("project");
     expect(automation.trigger).toEqual({ kind: "enters-column", columns: ["doing"] });
-    expect(automation.stages).toHaveLength(1);
-    expect(automation.stages[0]).toHaveLength(1);
-    expect(automation.stages[0][0].id).toBe("implement");
-    expect(automation.stages[0][0].runtime).toEqual({
+    expect(automation.steps).toHaveLength(1);
+    expect(automation.steps[0].id).toBe("implement");
+    expect(automation.steps[0].join).toBe("then");
+    expect(automation.steps[0].runtime).toEqual({
       harnessId: "claude-code",
       model: "claude-opus-5",
       effort: "high",
       approvals: "acceptEdits",
     });
-    expect(automation.stages[0][0].mode).toBe("prose");
-    expect(automation.stages[0][0].instructions).toBe(
+    expect(automation.steps[0].mode).toBe("prose");
+    expect(automation.steps[0].instructions).toBe(
       "Implement this ticket. Match the conventions of the code you are changing.",
     );
   });
@@ -78,32 +78,30 @@ describe("parseAutomationFile", () => {
     const { automation, diagnostics } = parseAutomationFile(TWO_STEP);
 
     expect(diagnostics).toEqual([]);
-    expect(allSteps(automation).map((step) => step.id)).toEqual(["codex", "cursor"]);
-    expect(automation.stages[0][0].instructions).toBe("Review {{change_set}} on {{branch}}.");
-    expect(automation.stages[0][1].instructions).toBe(
+    expect(automation.steps.map((step) => step.id)).toEqual(["codex", "cursor"]);
+    expect(automation.steps[0].instructions).toBe("Review {{change_set}} on {{branch}}.");
+    expect(automation.steps[1].instructions).toBe(
       "Read {{change_set}} looking only for what it BREAKS.",
     );
-    expect(allSteps(automation).every((step) => step.mode === "placeholders")).toBe(true);
+    expect(automation.steps.every((step) => step.mode === "placeholders")).toBe(true);
   });
 
-  it("puts an `also` step in the same stage as the one above it", () => {
+  it("reads `also` as running with the step above, not after it", () => {
     // The whole point of the two-opinion seed: two readers running at once, not
     // one reading after the other. Under the old `join` model this was the case
     // that silently became a chain.
     const { automation } = parseAutomationFile(TWO_STEP);
-    expect(automation.stages).toHaveLength(1);
-    expect(automation.stages[0].map((step) => step.id)).toEqual(["codex", "cursor"]);
+    expect(automation.steps.map((step) => step.join)).toEqual(["then", "with"]);
+    expect(toStages(automation.steps)).toHaveLength(1);
   });
 
-  it("opens a new stage for a step with no `also`", () => {
+  it("runs a step with no `also` after the one above it", () => {
     const { automation, diagnostics } = parseAutomationFile(
       TWO_STEP.replace("    also: true\n", ""),
     );
     expect(diagnostics).toEqual([]);
-    expect(automation.stages.map((stage) => stage.map((step) => step.id))).toEqual([
-      ["codex"],
-      ["cursor"],
-    ]);
+    expect(automation.steps.map((step) => step.join)).toEqual(["then", "then"]);
+    expect(toStages(automation.steps)).toHaveLength(2);
   });
 
   it("reads `run-by-hand` as the manual trigger", () => {
@@ -124,7 +122,7 @@ Red, green, refactor.
     expect(diagnostics).toEqual([]);
     expect(automation.trigger).toEqual({ kind: "manual" });
     expect(automation.scope).toBe("global");
-    expect(automation.stages).toHaveLength(1);
+    expect(automation.steps).toHaveLength(1);
   });
 
   it("ignores comments and blank lines in frontmatter", () => {
@@ -188,7 +186,7 @@ describe("parseAutomationFile diagnostics", () => {
     expect(diagnostics.map((diagnostic) => diagnostic.message)).toContain(
       "`implement` is the first step — there is nothing above it to run alongside",
     );
-    expect(automation.stages).toHaveLength(1);
+    expect(automation.steps[0].join).toBe("then");
   });
 
   it("catches duplicate ids", () => {
@@ -251,7 +249,7 @@ describe("formatAutomationFile", () => {
       expect(reparsed.name).toBe(automation.name);
       expect(reparsed.scope).toBe(automation.scope);
       expect(reparsed.trigger).toEqual(automation.trigger);
-      expect(reparsed.stages).toEqual(automation.stages);
+      expect(reparsed.steps).toEqual(automation.steps);
     }
   });
 
@@ -280,7 +278,7 @@ describe("formatAutomationFile", () => {
   it("does not write a dial the adapter does not have", () => {
     const cursorOnly: Automation = {
       ...SEEDED_AUTOMATIONS[2],
-      stages: [[SEEDED_AUTOMATIONS[2].stages[0][1]]],
+      steps: [{ ...SEEDED_AUTOMATIONS[2].steps[1], join: "then" }],
     };
     expect(formatAutomationFile(cursorOnly)).not.toContain("effort:");
   });

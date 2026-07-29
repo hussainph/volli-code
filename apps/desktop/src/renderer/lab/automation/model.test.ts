@@ -1,76 +1,104 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  addToStage,
+  appendStep,
   blankStep,
   freshStepId,
-  insertStage,
   removeStep,
   renameStep,
   replaceStep,
-  type Stage,
+  setJoin,
+  toStages,
+  type AutomationStep,
 } from "./model";
 
-/** Ids only, because the structure is the whole thing under test. */
-function shape(stages: Stage[]): string[][] {
-  return stages.map((stage) => stage.map((step) => step.id));
+/**
+ * `a |b c` — steps in order, with `|` marking the ones that start alongside the
+ * step before them. It reads the way the connector labels in the editor do.
+ */
+function spine(spec: string): AutomationStep[] {
+  const steps: AutomationStep[] = [];
+  for (const [index, token] of spec.split(" ").entries()) {
+    const step = blankStep("claude-code", token.replace("|", ""));
+    if (token.startsWith("|") && index > 0) step.join = "with";
+    steps.push(step);
+  }
+  return steps;
 }
 
-function spine(...groups: string[][]): Stage[] {
-  return groups.map((ids) => ids.map((id) => blankStep("claude-code", id)));
+function shape(steps: AutomationStep[]): string {
+  return steps
+    .map((step, index) => (step.join === "with" && index > 0 ? `|${step.id}` : step.id))
+    .join(" ");
 }
 
-describe("stage edits", () => {
-  it("inserts a stage between the two it was asked to sit between", () => {
-    const before = spine(["a"], ["c"]);
-    const after = insertStage(before, 1, blankStep("codex", "b"));
-    expect(shape(after)).toEqual([["a"], ["b"], ["c"]]);
-    // Pure: the caller's array is the one React compares against.
-    expect(shape(before)).toEqual([["a"], ["c"]]);
-  });
-
-  it("appends a stage at the end", () => {
-    expect(shape(insertStage(spine(["a"]), 1, blankStep("codex", "b")))).toEqual([["a"], ["b"]]);
-  });
-
-  it("adds a step alongside the ones already in a stage", () => {
-    expect(shape(addToStage(spine(["a"], ["b"]), 1, blankStep("codex", "c")))).toEqual([
-      ["a"],
-      ["b", "c"],
+describe("toStages", () => {
+  it("groups a `with` step onto the one above it", () => {
+    expect(toStages(spine("codex |cursor triage")).map((stage) => stage.map((s) => s.id))).toEqual([
+      ["codex", "cursor"],
+      ["triage"],
     ]);
   });
 
-  it("removes a step and keeps its stage when others remain", () => {
-    expect(shape(removeStep(spine(["a", "b"], ["c"]), "a"))).toEqual([["b"], ["c"]]);
+  it("gives every step its own stage when nothing is joined", () => {
+    expect(toStages(spine("a b c"))).toHaveLength(3);
   });
 
-  it("removes the stage with the last step in it", () => {
+  it("ignores `with` on the first step, which has nothing above it", () => {
+    const leading: AutomationStep[] = [{ ...blankStep("codex", "a"), join: "with" }];
+    expect(toStages(leading)).toHaveLength(1);
+  });
+});
+
+describe("list edits", () => {
+  it("appends at the end, running after everything", () => {
+    expect(shape(appendStep(spine("a |b"), blankStep("codex", "c")))).toBe("a |b c");
+  });
+
+  it("appends as `then` even when the new step arrives marked otherwise", () => {
+    const stray: AutomationStep = { ...blankStep("codex", "c"), join: "with" };
+    expect(shape(appendStep(spine("a"), stray))).toBe("a c");
+  });
+
+  it("flips one connector and leaves the rest alone", () => {
+    expect(shape(setJoin(spine("a b c"), "b", "with"))).toBe("a |b c");
+    expect(shape(setJoin(spine("a |b |c"), "c", "then"))).toBe("a |b c");
+  });
+
+  it("refuses to join the first step to something above it", () => {
+    // There is nothing above it, and accepting would put the model in a state
+    // the file cannot spell.
+    expect(shape(setJoin(spine("a b"), "a", "with"))).toBe("a b");
+  });
+
+  it("removes a step", () => {
+    expect(shape(removeStep(spine("a b c"), "b"))).toBe("a c");
+  });
+
+  it("promotes whatever becomes first, so nothing waits on a step that is gone", () => {
     // Under `after` pointers this was the hard case — the deleted step's
-    // children had to be re-parented or they would dangle. A stage has nothing
-    // pointing at it, so it just goes.
-    expect(shape(removeStep(spine(["a"], ["b"], ["c"]), "b"))).toEqual([["a"], ["c"]]);
+    // children had to be re-parented or they would dangle.
+    expect(shape(removeStep(spine("a |b c"), "a"))).toBe("b c");
   });
 
   it("renaming touches one id and nothing else", () => {
-    const renamed = renameStep(spine(["a", "b"], ["c"]), "a", "grill");
-    expect(shape(renamed)).toEqual([["grill", "b"], ["c"]]);
+    expect(shape(renameStep(spine("a |b"), "a", "grill"))).toBe("grill |b");
   });
 
   it("replaces a step in place", () => {
-    const before = spine(["a", "b"]);
-    const edited = { ...before[0][1], instructions: "hello" };
-    const after = replaceStep(before, edited);
-    expect(after[0][1].instructions).toBe("hello");
-    expect(after[0][0].instructions).toBe("");
+    const before = spine("a b");
+    const after = replaceStep(before, { ...before[1], instructions: "hello" });
+    expect(after[1].instructions).toBe("hello");
+    expect(after[0].instructions).toBe("");
   });
 });
 
 describe("freshStepId", () => {
   it("uses the base when it is free", () => {
-    expect(freshStepId(spine(["a"]), "codex")).toBe("codex");
+    expect(freshStepId(spine("a"), "codex")).toBe("codex");
   });
 
   it("suffixes past every taken id rather than the first one", () => {
-    expect(freshStepId(spine(["codex", "codex-2"], ["codex-3"]), "codex")).toBe("codex-4");
+    expect(freshStepId(spine("codex codex-2 codex-3"), "codex")).toBe("codex-4");
   });
 });
