@@ -172,13 +172,16 @@ describe("SessionRecord", () => {
   });
 });
 
-/** A hooked claude-code-shaped session: reports input.needed, launched at t=1000. */
+/** When the wrapper announced itself — the moment the grace window runs from. */
+const ANNOUNCED_AT = 1000;
+
+/** A hooked claude-code-shaped session: reports input.needed, announced at t=1000. */
 function hookedSession(): SessionHarnessState {
   return createSessionHarnessState({
     harnessId: "claude-code",
     expectedTier: "hooked",
     declaredEvents: ["session.started", "turn.started", "input.needed"],
-    startedAt: 1000,
+    startedAt: ANNOUNCED_AT,
   });
 }
 
@@ -322,9 +325,26 @@ describe("sessionHarnessStatus", () => {
 
   it("drops a hooked launch to known once the grace window passes with nothing delivered", () => {
     const state = hookedSession();
-    expect(sessionHarnessStatus(state, state.startedAt + HARNESS_EVENT_GRACE_MS + 1)).toEqual({
+    expect(sessionHarnessStatus(state, ANNOUNCED_AT + HARNESS_EVENT_GRACE_MS + 1)).toEqual({
       tier: "known",
       activitySource: "silent",
+      input: "unconfirmed",
+    });
+  });
+
+  // The window is anchored to the announce, and an un-announced session has no
+  // anchor. Nothing has proved a harness is running in that terminal, so there
+  // is no launch to accuse — however long it sits there.
+  it("never turns silent while no announce has proved a launch", () => {
+    const unannounced = createSessionHarnessState({
+      harnessId: "claude-code",
+      expectedTier: "hooked",
+      declaredEvents: ["session.started", "input.needed"],
+      startedAt: null,
+    });
+    expect(sessionHarnessStatus(unannounced, HARNESS_EVENT_GRACE_MS * 100)).toEqual({
+      tier: "hooked",
+      activitySource: "inferred",
       input: "unconfirmed",
     });
   });
@@ -345,7 +365,7 @@ describe("sessionHarnessStatus", () => {
 
   it("infers rather than claims while a hooked launch's grace window is still open", () => {
     const state = hookedSession();
-    expect(sessionHarnessStatus(state, state.startedAt + HARNESS_EVENT_GRACE_MS)).toEqual({
+    expect(sessionHarnessStatus(state, ANNOUNCED_AT + HARNESS_EVENT_GRACE_MS)).toEqual({
       tier: "hooked",
       activitySource: "inferred",
       input: "unconfirmed",

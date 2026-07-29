@@ -997,10 +997,11 @@ describe("buildActiveSessionListing — fed by a real launch", () => {
     useSessionsStore.setState({ byOwner: {}, sessionOwner: {}, harness: {} });
   });
 
-  it("lets a launch whose wrapper was bypassed decay into 'not reporting' on its own", () => {
+  it("lets an announced launch that never reports decay into 'not reporting' on its own", () => {
     // No hand-built harness state anywhere: the store registers the
-    // expectation when the tab lands, which is what makes the silence below a
-    // fact about the wrapper rather than an absence of information.
+    // expectation when the tab lands and anchors it when the wrapper announces,
+    // which is what makes the silence below a fact about the injected hooks
+    // rather than an absence of information.
     useSessionsStore.getState().addSession(ticketScope("p1", "t1"), "s1", {
       title: "Implement UI",
       harnessId: "claude-code",
@@ -1020,11 +1021,19 @@ describe("buildActiveSessionListing — fed by a real launch", () => {
         now,
       });
 
-    expect(listing(1000 + HARNESS_EVENT_GRACE_MS).active.map((row) => row.activitySource)).toEqual([
+    // Nothing has run yet — the terminal may sit here all day without being
+    // accused of anything.
+    expect(
+      listing(1000 + HARNESS_EVENT_GRACE_MS + 1).active.map((row) => row.activitySource),
+    ).toEqual(["inferred"]);
+
+    useSessionsStore.getState().announceHarness("s1", "claude-code", 5000);
+
+    expect(listing(5000 + HARNESS_EVENT_GRACE_MS).active.map((row) => row.activitySource)).toEqual([
       "inferred",
     ]);
     expect(
-      listing(1000 + HARNESS_EVENT_GRACE_MS + 1).active.map((row) => row.activitySource),
+      listing(5000 + HARNESS_EVENT_GRACE_MS + 1).active.map((row) => row.activitySource),
     ).toEqual(["silent"]);
   });
 

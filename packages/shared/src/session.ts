@@ -273,8 +273,25 @@ export interface SessionHarnessState {
    * human is blocking it).
    */
   declaresInputNeeded: boolean;
-  /** Epoch ms of launch — the grace window for the first event is measured from here. */
-  startedAt: number;
+  /**
+   * Epoch ms of the `session harness` announce — the moment the wrapper
+   * demonstrably ran — and the anchor the grace window for the first event is
+   * measured from.
+   *
+   * `null` until one arrives, and the window does not run while it is. Anchored
+   * here rather than at the PTY spawn because the PTY is the user's login
+   * shell: at that instant nothing has been launched, the harness may not have
+   * been typed yet, and a window started there is a stopwatch on the user. The
+   * announce is fired by the harness's own process, so N seconds of silence
+   * after one is a statement about the channel — the config we injected did not
+   * take — which is a diagnosis rather than a guess.
+   *
+   * A launch that never announces therefore never turns silent. That is the
+   * safe direction: it means the wrapper was bypassed entirely, which is a
+   * missing call rather than a dead channel, and accusing a harness of not
+   * reporting on evidence we never asked it for is the failure worth avoiding.
+   */
+  startedAt: number | null;
   /** Whether ANY canonical event has ever arrived. Declared is not delivered. */
   delivered: boolean;
   /** The newest hook-declared activity state; `null` means PTY derivation owns it. */
@@ -293,8 +310,8 @@ export interface CreateSessionHarnessStateInput {
   expectedTier: HarnessTier;
   /** The canonical events the launched adapter declares bindings for. */
   declaredEvents: readonly HarnessEvent[];
-  /** Epoch ms of launch. */
-  startedAt: number;
+  /** Epoch ms of the announce that proved this launch, or `null` if none has. */
+  startedAt: number | null;
 }
 
 /** The zero state for a session that has just launched and reported nothing yet. */
@@ -394,19 +411,20 @@ export interface SessionHarnessStatus {
 }
 
 /**
- * How long a hooked launch has to deliver its first event before we stop
- * believing it will. `session.started` fires at harness boot, so this only has
- * to cover process start plus one hook round-trip; anything longer leaves the
- * session hanging in a "waiting for events" state that will never resolve.
+ * How long a hooked launch has to deliver its first event, counted from the
+ * announce that proved the launch, before we stop believing it will. The
+ * adapter's `startupEvent` fires at harness boot, so this only has to cover the
+ * announce plus one hook round-trip; anything longer leaves the session hanging
+ * in a "waiting for events" state that will never resolve.
  */
 export const HARNESS_EVENT_GRACE_MS = 20_000;
 
 /**
  * What a session's harness is actually doing for us, right now. Derived rather
- * than stored: the Hooked tier is revoked by the passage of time (the user ran
- * the real binary directly, bypassing our wrapper, so no hook will ever fire),
- * and deriving it against an injected clock means that revocation needs no
- * timer, no write, and no way to be missed.
+ * than stored: the Hooked tier is revoked by the passage of time since the
+ * launch announced itself and said nothing further — the hooks we injected
+ * did not take — and deriving it against an injected clock means that
+ * revocation needs no timer, no write, and no way to be missed.
  */
 export function sessionHarnessStatus(
   state: SessionHarnessState,
@@ -424,7 +442,10 @@ export function sessionHarnessStatus(
     return { tier: state.expectedTier, activitySource: "inferred", input };
   }
   if (state.delivered) return { tier: "hooked", activitySource: "reported", input };
-  if (now - state.startedAt <= HARNESS_EVENT_GRACE_MS) {
+  // No announce, no window. Nothing has proved a harness is running in this
+  // terminal yet, so there is no launch to hold to a promise — see
+  // {@link SessionHarnessState.startedAt}.
+  if (state.startedAt === null || now - state.startedAt <= HARNESS_EVENT_GRACE_MS) {
     return { tier: "hooked", activitySource: "inferred", input };
   }
   return { tier: "known", activitySource: "silent", input };

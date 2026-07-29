@@ -177,9 +177,10 @@ describe("addSession — the launch expectation", () => {
       harnessId: "claude-code",
       expectedTier: "hooked",
       declaresInputNeeded: true,
-      // Main's launch clock, not the renderer's: the grace window is measured
-      // from when the process started, so a slow boot can't shorten it.
-      startedAt: 1000,
+      // No anchor yet. The PTY has spawned a login shell; the harness is a
+      // command that shell has not run. `announceHarness` sets this when the
+      // wrapper calls in, and the grace window starts from there.
+      startedAt: null,
       delivered: false,
       declared: null,
       newestFiredAt: null,
@@ -225,7 +226,7 @@ describe("addSession — the launch expectation", () => {
       harnessId: "my-agent",
       expectedTier: "hooked",
       declaresInputNeeded: true,
-      startedAt: 1000,
+      startedAt: null,
       delivered: false,
       declared: null,
       newestFiredAt: null,
@@ -257,22 +258,38 @@ describe("addSession — the launch expectation", () => {
     expect(store.getState().harness["s1"]).toBe(delivered);
   });
 
-  it("decays a bypassed wrapper into Known once the grace window passes", () => {
+  it("decays an announced launch into Known once its grace window passes", () => {
     const store = createSessionsStore();
     store.getState().addSession(P, "s1", agentLaunch("claude-code"));
+    // The wrapper called in, so a harness demonstrably started here. Everything
+    // after this is about the hooks it was launched with, not about how long
+    // the user took to type — which is why the anchor is the announce.
+    store.getState().announceHarness("s1", "claude-code", 5000);
     const state = store.getState().harness["s1"]!;
 
-    // The launch went through our wrapper's argv but the user's PATH still
-    // pointed at the real binary, so no hook ever fires. Inside the window we
-    // are still waiting; past it, the promise is broken and says so.
-    expect(sessionHarnessStatus(state, 1000 + HARNESS_EVENT_GRACE_MS).activitySource).toBe(
+    // Inside the window we are still waiting; past it, the injected config
+    // demonstrably did not take, and that says so.
+    expect(sessionHarnessStatus(state, 5000 + HARNESS_EVENT_GRACE_MS).activitySource).toBe(
       "inferred",
     );
-    expect(sessionHarnessStatus(state, 1000 + HARNESS_EVENT_GRACE_MS + 1)).toEqual({
+    expect(sessionHarnessStatus(state, 5000 + HARNESS_EVENT_GRACE_MS + 1)).toEqual({
       tier: "known",
       activitySource: "silent",
       input: "unconfirmed",
     });
+  });
+
+  // The window used to start at the PTY spawn, which timed the user rather than
+  // the harness: a terminal opened at breakfast and typed into at noon was
+  // "not reporting" for four hours over a harness that had never run.
+  it("never turns silent on a launch no wrapper has announced", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", agentLaunch("claude-code"));
+    const state = store.getState().harness["s1"]!;
+
+    expect(sessionHarnessStatus(state, 1000 + HARNESS_EVENT_GRACE_MS * 100).activitySource).toBe(
+      "inferred",
+    );
   });
 });
 

@@ -434,6 +434,13 @@ export function launchAdapter(harnessId: HarnessId): HarnessAdapter | undefined 
  * perfectly working harness gets called silent, claim less and we vouch for
  * events it may not send. Its first delivery registers it instead — see
  * {@link subscribeHarnessEvents}.
+ *
+ * The expectation is stated here but its CLOCK does not start here, which is
+ * why `startedAt` is null. This is the PTY spawning a login shell; the harness
+ * is a command that shell has not run yet, and counting silence from this
+ * moment timed how long the user took to type. `announceHarness` sets the
+ * anchor when the wrapper calls in, and until it does, this session is expected
+ * to report but is not yet owed anything.
  */
 function launchExpectation(launch: SessionLaunch): SessionHarnessState | null {
   if (launch.launchKind !== "agent") return null;
@@ -443,7 +450,7 @@ function launchExpectation(launch: SessionLaunch): SessionHarnessState | null {
     harnessId: launch.harnessId,
     expectedTier: harnessTier(adapter),
     declaredEvents: [...supportedEvents(adapter)],
-    startedAt: launch.createdAt,
+    startedAt: null,
   });
 }
 
