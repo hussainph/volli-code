@@ -248,6 +248,13 @@ interface SessionsState {
    * the user has since quit is the exact stale-needs-you the sidebar must not
    * keep showing. The grace window restarts too — this harness has only just
    * started, and has had no time to report.
+   *
+   * A replacement EVEN WHEN the harness announced is the one already believed to
+   * be running, which is not idempotence thrown away but the point: an announce
+   * is a launch, and a relaunch of the same harness in the same terminal is a
+   * fresh channel that has proved nothing. Keeping the previous launch's
+   * `delivered` there is how a quit-and-restart inherited a reputation it had
+   * not earned.
    */
   announceHarness(sessionId: string, harnessId: HarnessId, at: number): void;
   setStarting(ownerId: string, starting: boolean): void;
@@ -704,10 +711,6 @@ export function createSessionsStore() {
       set((state) => {
         // The same late-push guard the park pushes carry.
         if (!(sessionId in state.sessionOwner)) return state;
-        // Main only broadcasts a CHANGE, but a store this cheap to make
-        // idempotent should be: an announce agreeing with what is already here
-        // must not restart a grace window or discard a delivered `waiting`.
-        if (state.harness[sessionId]?.harnessId === harnessId) return state;
         const adapter = launchAdapter(harnessId);
         // Nothing here can describe it (a harness trusted since this renderer
         // last asked the catalog), so there is no honest expectation to state —
@@ -828,11 +831,17 @@ export function subscribeHarnessEvents(): () => void {
  * resume affordance reads through `effectiveHarnessId`; the live harness state
  * carries what is expected to report. Updating only one leaves the ticket rail
  * naming a harness the sidebar has already stopped believing in.
+ *
+ * They move on different conditions, which is what `notice.changed` is for.
+ * Every announce is a launch, so the live state is always rebuilt; the durable
+ * record only names WHICH harness, so it is repointed only when that moved. An
+ * unconditional repoint would hand the rail a new record object per launch,
+ * carrying the value it already had.
  */
 export function subscribeSessionHarness(): () => void {
   return window.api.sessions.onHarnessChange((notice) => {
     useSessionsStore.getState().announceHarness(notice.sessionId, notice.harnessId, notice.at);
-    if (notice.ticketId !== null) {
+    if (notice.changed && notice.ticketId !== null) {
       useTicketSessionRecordsStore
         .getState()
         .setActiveHarness(notice.ticketId, notice.sessionId, notice.harnessId);

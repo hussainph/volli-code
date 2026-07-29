@@ -1528,21 +1528,39 @@ describe("agent command service", () => {
           projectId: "project-one",
           ticketId: null,
           harnessId: "claude-code",
+          changed: true,
           at: 4242,
         },
       ]);
     });
 
-    // This runs on every harness launch, and almost every one agrees with what
-    // Volli already believes. That case must cost a read and nothing else.
-    it("writes and announces nothing when the harness has not changed", async () => {
+    // THE SECOND BUG, and the one the mint above exists to serve: quit claude,
+    // run claude again in the same terminal. The slug did not change, but a
+    // launch demonstrably happened, and the renderer's grace window is anchored
+    // to hearing about it. Announcing nothing left the second launch wearing
+    // the first one's already-delivered channel.
+    it("announces every launch, including one that agrees with what is believed", async () => {
       const { announce, notices } = announceService("claude-code");
 
       const response = await announce("claude-code");
 
       expect(response).toMatchObject({ ok: true, data: { changed: false } });
+      // The write is still gated: re-storing the value already there buys
+      // nothing.
       expect(getSession(ctx.db, sessionId)?.activeHarnessId).toBeNull();
-      expect(notices).toEqual([]);
+      expect(notices).toEqual([
+        {
+          sessionId,
+          projectId: "project-one",
+          ticketId: null,
+          harnessId: "claude-code",
+          changed: false,
+          at: 4242,
+        },
+      ]);
+
+      await announce("claude-code");
+      expect(notices).toHaveLength(2);
     });
 
     it("compares against what is RUNNING, not what launched", async () => {
@@ -1551,11 +1569,14 @@ describe("agent command service", () => {
 
       const again = await announce("claude-code");
       expect(again).toMatchObject({ ok: true, data: { changed: false } });
-      expect(notices).toEqual([]);
+      expect(notices).toEqual([
+        expect.objectContaining({ harnessId: "claude-code", changed: false }),
+      ]);
 
       const back = await announce("opencode");
       expect(back).toMatchObject({ ok: true, data: { changed: true } });
       expect(getSession(ctx.db, sessionId)?.activeHarnessId).toBe("opencode");
+      expect(notices).toHaveLength(2);
     });
 
     it("requires VOLLI_SESSION context", async () => {

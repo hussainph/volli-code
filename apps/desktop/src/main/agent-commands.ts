@@ -1160,20 +1160,30 @@ export function createAgentCommandService(
         const announced = firingHarnessId(options.db, session, slug);
         if (!announced.ok) return announced.response;
         const harnessId = announced.harnessId;
-        // This runs on EVERY harness launch, and the overwhelmingly common case
-        // is a session announcing the harness it already believes is running.
-        // Nothing is written and nothing is broadcast for that.
+        // The WRITE is gated on a change: `active_harness_id` records which
+        // harness is running, and re-storing the value already there is a
+        // durable write bought for nothing.
+        //
+        // The BROADCAST is not, and that distinction is the point. This call is
+        // proof that a launch just happened — the wrapper runs once per
+        // invocation, out of the harness's own process — and the renderer's
+        // grace window is anchored to it. Gating the broadcast on a changed
+        // slug meant the second launch in one terminal (quit claude, run claude
+        // again: the exact case the mint below exists for) was never announced,
+        // so it inherited the first launch's `startedAt` and its already
+        // `delivered` channel, and could never be judged silent. `changed`
+        // stays ON the notice — the renderer still needs it to decide whether
+        // to repoint the durable record's labels — but it stops being the gate.
         const changed = harnessId !== effectiveHarnessId(session);
-        if (changed) {
-          setActiveHarnessId(options.db, session.id, harnessId);
-          options.onSessionHarness?.({
-            sessionId: session.id,
-            projectId: session.projectId,
-            ticketId: session.ticketId,
-            harnessId,
-            at: now(),
-          });
-        }
+        if (changed) setActiveHarnessId(options.db, session.id, harnessId);
+        options.onSessionHarness?.({
+          sessionId: session.id,
+          projectId: session.projectId,
+          ticketId: session.ticketId,
+          harnessId,
+          changed,
+          at: now(),
+        });
         // Only when the caller asked. The wrapper asks exactly when the adapter
         // it was rendered from takes an id on argv, and that is the only place
         // the answer is known — a registered manifest's adapter never reaches

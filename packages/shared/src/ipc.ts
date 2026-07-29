@@ -861,8 +861,12 @@ export interface HarnessEventNotice {
  * Folding it into the event union would have every reader of that union
  * pattern-matching around a member that answers none of its questions.
  *
- * Fired only on a CHANGE. The wrapper announces on every invocation, and the
- * overwhelmingly common announce agrees with what Volli already believes.
+ * Fired on every announce, INCLUDING the overwhelmingly common one that agrees
+ * with what Volli already believes. An announce is a LAUNCH — the wrapper runs
+ * once per invocation, from the harness's own process — and a launch is the
+ * moment the reporting channel starts owing us an event. Firing only on a
+ * changed slug meant quitting a harness and starting the same one again in one
+ * terminal left the second launch wearing the first one's reputation.
  */
 export interface SessionHarnessNotice {
   /** The FULL session id — this addresses live renderer state, not a human reader. */
@@ -872,6 +876,12 @@ export interface SessionHarnessNotice {
   ticketId: string | null;
   /** The harness now running there. The session's LAUNCH harness is unchanged. */
   harnessId: HarnessId;
+  /**
+   * Whether this announce named a DIFFERENT harness than the session was
+   * already believed to be running. Not a gate on the notice — every launch is
+   * broadcast — but the durable record only has to be repointed when it moved.
+   */
+  changed: boolean;
   /** Epoch ms the announce was ingested (main's clock). */
   at: number;
 }

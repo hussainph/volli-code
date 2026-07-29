@@ -414,6 +414,38 @@ async function main() {
       return { ok, detail: `code=${run.code} stderr=${JSON.stringify(run.stderr)}` };
     });
 
+    // === 12. every launch announces, not only a changed one =================
+    // The grace window is anchored to the announce, so a relaunch of the SAME
+    // harness in the SAME terminal has to produce its own. Main used to gate
+    // the broadcast on the slug differing, which left the second launch here
+    // carrying the first one's `startedAt` and its already-delivered channel.
+    // Both runs below name claude-code, which the session already believes is
+    // running, so before the fix this collected zero notices.
+    //
+    // Asserted on the preload channel the renderer's store subscribes to — the
+    // wire is as far in as a smoke can see; the fold itself (`startedAt` moves,
+    // `delivered` clears) is `stores/sessions.test.ts`'s job.
+    await attempt(12, "announces a relaunch of the harness already running", async () => {
+      await page.evaluate(() => {
+        window.volliAnnounceProbe = [];
+        window.api.sessions.onHarnessChange((notice) => window.volliAnnounceProbe.push(notice));
+      });
+      await runWrapper(wrapperPath, ["hello"], base);
+      await runWrapper(wrapperPath, ["hello"], base);
+      const notices = await waitUntil("both relaunches to announce", async () => {
+        const seen = await page.evaluate(() => window.volliAnnounceProbe ?? []);
+        return seen.length >= 2 ? seen : null;
+      }).catch(() => []);
+      const ok =
+        notices.length === 2 &&
+        notices.every((n) => n.harnessId === "claude-code" && n.changed === false) &&
+        notices[1].at >= notices[0].at;
+      return {
+        ok,
+        detail: `notices=${JSON.stringify(notices.map((n) => [n.harnessId, n.changed, n.at]))}`,
+      };
+    });
+
     await page.evaluate((id) => window.api.terminal.kill(id), created.sessionId).catch(() => {});
     deadAppProbe = { shimPath, socketPath, sessionId: created.sessionId };
   } finally {

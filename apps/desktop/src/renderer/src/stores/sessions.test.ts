@@ -1116,7 +1116,25 @@ const ANNOUNCE: SessionHarnessNotice = {
   projectId: "p",
   ticketId: "t1",
   harnessId: "claude-code",
+  changed: true,
   at: 9000,
+};
+
+/** The cached durable record the announce mirrors onto. */
+const RECORD = {
+  id: "s1",
+  projectId: "p",
+  ticketId: "t1",
+  harnessId: "opencode" as HarnessId,
+  activeHarnessId: null as HarnessId | null,
+  harnessSessionId: null,
+  launchKind: "agent" as const,
+  placement: "tab" as const,
+  title: "Session 1",
+  cwd: "/repo",
+  createdAt: 0,
+  endedAt: null,
+  exitCode: null,
 };
 
 describe("announceHarness / subscribeSessionHarness", () => {
@@ -1154,13 +1172,22 @@ describe("announceHarness / subscribeSessionHarness", () => {
     expect(state?.startedAt).toBe(9000);
   });
 
-  it("is a no-op when the announce agrees with what is already believed", () => {
+  // Quit claude, run claude again in the same terminal. The slug did not
+  // change, but the channel did: the second launch has delivered nothing, and
+  // must be judged from its own announce rather than inheriting the first
+  // launch's record of having reported.
+  it("restarts the window when the SAME harness announces a second launch", () => {
     useSessionsStore.getState().addSession(P, "s1", agentLaunch("claude-code"));
-    const before = useSessionsStore.getState().harness["s1"];
+    useSessionsStore.getState().applyHarnessEvent("s1", "input.needed", null);
+    expect(useSessionsStore.getState().harness["s1"]?.delivered).toBe(true);
 
     useSessionsStore.getState().announceHarness("s1", "claude-code" as HarnessId, 9000);
 
-    expect(useSessionsStore.getState().harness["s1"]).toBe(before);
+    const state = useSessionsStore.getState().harness["s1"];
+    expect(state?.harnessId).toBe("claude-code");
+    expect(state?.delivered).toBe(false);
+    expect(state?.declared).toBeNull();
+    expect(state?.startedAt).toBe(9000);
   });
 
   // Guessing goes wrong in both directions, so an id nothing here can describe
@@ -1182,27 +1209,7 @@ describe("announceHarness / subscribeSessionHarness", () => {
   // The durable record is the other half: it is what every label and resume
   // affordance reads, so the rail would keep naming opencode without this.
   it("mirrors the announce onto the ticket's cached durable record", () => {
-    useTicketSessionRecordsStore.setState({
-      byTicket: {
-        t1: [
-          {
-            id: "s1",
-            projectId: "p",
-            ticketId: "t1",
-            harnessId: "opencode",
-            activeHarnessId: null,
-            harnessSessionId: null,
-            launchKind: "agent",
-            placement: "tab",
-            title: "Session 1",
-            cwd: "/repo",
-            createdAt: 0,
-            endedAt: null,
-            exitCode: null,
-          },
-        ],
-      },
-    });
+    useTicketSessionRecordsStore.setState({ byTicket: { t1: [RECORD] } });
     const channel = stubAnnounceChannel();
 
     subscribeSessionHarness();
@@ -1212,6 +1219,24 @@ describe("announceHarness / subscribeSessionHarness", () => {
     expect(record?.activeHarnessId).toBe("claude-code");
     // The launch stays exactly what it was — it is history, not a live fact.
     expect(record?.harnessId).toBe("opencode");
+  });
+
+  // A relaunch of the same harness is broadcast, but names nothing new. The
+  // rail's record must not be rebuilt to carry the value it already had.
+  it("leaves the durable record untouched when the announce named no change", () => {
+    useSessionsStore.getState().addSession(P, "s1", agentLaunch("claude-code"));
+    useTicketSessionRecordsStore.setState({
+      byTicket: { t1: [{ ...RECORD, activeHarnessId: "claude-code" }] },
+    });
+    const before = useTicketSessionRecordsStore.getState().byTicket["t1"];
+    const channel = stubAnnounceChannel();
+
+    subscribeSessionHarness();
+    channel.push({ ...ANNOUNCE, changed: false });
+
+    expect(useTicketSessionRecordsStore.getState().byTicket["t1"]).toBe(before);
+    // The live state still restarted — that is the half `changed` does not gate.
+    expect(useSessionsStore.getState().harness["s1"]?.startedAt).toBe(9000);
   });
 
   it("has no record to mirror onto for a scratch session", () => {
