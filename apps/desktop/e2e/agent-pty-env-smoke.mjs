@@ -10,15 +10,21 @@
  *   • VOLLI_SOCKET  = the app's live socket path,
  *   • VOLLI_TICKET  = the ticket's display ID,
  *   • VOLLI_SESSION = the spawned session's id,
- *   • `<userData>/bin` reaches the session's PATH and its shim is executable.
- *     Absolute precedence is NOT asserted: macOS `path_helper` re-hoists
- *     /etc/paths entries in every login shell, so an installed
- *     /usr/local/bin/volli can win `command -v`. Session identity does not
- *     depend on which shim wins — see the note on check 4.
+ *   • `<userData>/bin` is FIRST on the session's PATH, and `volli` resolves to
+ *     this profile's own shim.
+ *
+ * That last one used to assert only membership, and membership is not the
+ * property. macOS `path_helper` re-hoists /etc/paths in every login shell, so
+ * the bin dir was a member of PATH throughout an outage in which no wrapper
+ * ever ran — this check printed the disagreeing `resolved`/`want` pair and
+ * passed anyway. Volli now re-asserts the prepend after the user's own shell
+ * startup (see `shell-init`), so primacy is a property it can and must hold.
  *
  * ZDOTDIR points at a PATH-neutral scratch rc so the developer's own dotfiles
  * can't reorder PATH under the fake — the same shadow technique the kickoff
- * smoke uses. Consent is pre-answered "defer" via the documented test seam.
+ * smoke uses. Note that this no longer makes check 4 pass: the session's own
+ * ZDOTDIR is Volli's generated chain, which sources this scratch rc and then
+ * prepends. Consent is pre-answered "defer" via the documented test seam.
  *
  *   Run:
  *     vp run --filter @volli/desktop build
@@ -183,7 +189,7 @@ async function main() {
     // binDir is on the session PATH and this profile's shim is executable.
     await attempt(
       4,
-      "generated shim is executable and binDir reaches the session PATH",
+      "generated shim is executable and binDir is FIRST on the session PATH",
       async () => {
         const shimOk = value("SHIM") === "ok";
         const binDir = join(realUserData, "bin");
@@ -195,12 +201,20 @@ async function main() {
             detail: `shim=${shimOk} spawnPath=${JSON.stringify(spawnPath)} wantPrefix=${JSON.stringify(`${binDir}:`)}`,
           };
         }
+        // Membership was the assertion here, and membership is not the
+        // property: the bin dir was a member of PATH throughout the outage
+        // where no wrapper ever ran, because a macOS login shell rebuilds PATH
+        // and pushed it to position 20 of 30. This check PRINTED the disagreeing
+        // `resolved`/`want` pair and passed anyway. Assert position, and assert
+        // what `volli` actually resolves to — the two facts that were wrong.
         const shellPath = value("SHELLPATH");
-        const onPath = shellPath !== null && shellPath.split(":").includes(binDir);
-        const ok = shimOk && onPath;
+        const entries = shellPath === null ? [] : shellPath.split(":");
+        const index = entries.indexOf(binDir);
+        const resolved = value("VOLLI");
+        const ok = shimOk && index === 0 && resolved === shimPath;
         return {
           ok,
-          detail: `shim=${shimOk} binDirOnPath=${onPath} resolved=${JSON.stringify(value("VOLLI"))} want=${JSON.stringify(shimPath)}`,
+          detail: `shim=${shimOk} binDirPosition=${index === -1 ? "absent" : `${index + 1} of ${entries.length}`} resolved=${JSON.stringify(resolved)} want=${JSON.stringify(shimPath)}`,
         };
       },
     );
