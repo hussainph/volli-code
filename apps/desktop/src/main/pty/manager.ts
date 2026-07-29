@@ -308,9 +308,15 @@ export class PtyManager {
       // The harness configuration goes UNDER the agent contract, so nothing a
       // wrapper reads can shadow VOLLI_SESSION/VOLLI_SOCKET/PATH — the three
       // values every `volli` invocation in this shell resolves itself by.
+      //
+      // `agentSessionEnv`'s PATH prepend is the value the shell STARTS with;
+      // the shell chain in `shellEnv` is what puts it back in front once the
+      // user's own startup has finished rearranging it. Both are needed: the
+      // prepend covers a non-zsh session and everything before the first
+      // prompt, the chain covers everything after.
       const sessionEnv = this.agentRuntime
         ? agentSessionEnv(
-            { ...scope.env, ...this.agentRuntime.harnessEnv },
+            { ...scope.env, ...this.agentRuntime.harnessEnv, ...this.agentRuntime.shellEnv },
             {
               sessionId,
               socketPath: this.agentRuntime.socketPath,
@@ -818,6 +824,12 @@ export interface AgentRuntimeEnvironment {
    * assuming a hit.
    */
   wrapperPaths?: ReadonlyMap<HarnessId, string>;
+  /**
+   * What activates the generated zsh startup chain (`ZDOTDIR` and friends), so
+   * a harness the user types by hand resolves to the wrapper too. Empty for a
+   * shell with no post-startup hook — see `ensureShellInit`.
+   */
+  shellEnv?: Readonly<Record<string, string>>;
 }
 
 /**

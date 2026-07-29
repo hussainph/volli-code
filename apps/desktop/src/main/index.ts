@@ -16,6 +16,7 @@ import {
   diffManagedContent,
   errorMessage,
   getHarnessAdapter,
+  resolveShell,
   ticketBranchName,
 } from "@volli/shared";
 import type { FirstPaintHint, ResolvedAppearance, VolliIpcEvent } from "@volli/shared";
@@ -53,6 +54,7 @@ import {
 } from "./harness-registry";
 import { registerHarnessIpcHandlers } from "./harness-ipc";
 import { ensureHarnessRuntime, harnessLaunchArgv } from "./harness-runtime";
+import { ensureShellInit } from "./shell-init";
 import { startAgentSocket, type AgentSocketServer } from "./agent-socket";
 import { loginShellPath } from "./login-path";
 import {
@@ -769,6 +771,16 @@ app.whenReady().then(async () => {
         // Where each wrapper landed, so a launch line names it by absolute path
         // instead of trusting a PATH the session's login shell rebuilds.
         agentRuntime.wrapperPaths = runtime.wrapperPaths;
+        // And the other half: the startup chain that puts binDir back in front
+        // after the user's own shell startup, so a harness the user types by
+        // hand reaches the wrapper too. Generated after the wrappers, since
+        // there is nothing worth pointing PATH at until they exist.
+        agentRuntime.shellEnv = await ensureShellInit({
+          zdotDir: runtimePaths.zdotDir,
+          binDir: runtimePaths.binDir,
+          shellPath: resolveShell(process.env).file,
+          inheritedZdotDir: process.env["ZDOTDIR"],
+        });
       } catch (error) {
         console.error("[volli] failed to generate harness wrappers:", errorMessage(error));
       }

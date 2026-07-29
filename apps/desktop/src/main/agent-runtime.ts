@@ -87,6 +87,12 @@ export interface VolliRuntimePaths {
   cliBundlePath: string;
   /** Root of the per-harness Volli-owned config directories (`<userData>/harness/<slug>/`). */
   harnessRoot: string;
+  /**
+   * The Volli-owned `ZDOTDIR` (`<userData>/shell/zsh/`) whose startup files
+   * source the user's own and then put `binDir` back in front of `PATH` — the
+   * only hook that runs after arbitrary user shell startup.
+   */
+  zdotDir: string;
   /** The stable app directory Electron should launch in dev; packaged executables need no entry. */
   appEntry: string | null;
 }
@@ -108,6 +114,7 @@ export function volliRuntimePaths(input: {
       : resolve(input.mainProcessDir, "../../../packages/cli/dist/volli.cjs"),
     cliBundlePath: join(binDir, "volli.cjs"),
     harnessRoot: join(input.userDataPath, "harness"),
+    zdotDir: join(input.userDataPath, "shell", "zsh"),
     appEntry: input.isPackaged ? null : resolve(input.mainProcessDir, ".."),
   };
 }
