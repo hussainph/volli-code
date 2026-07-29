@@ -5,7 +5,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import {
   buildLaunchConfig,
@@ -13,6 +13,7 @@ import {
   HARNESS_DIR_TOKEN,
   isBareHarnessCommand,
   renderWrapperScript,
+  shadowsSystemCommand,
   shellSingleQuote,
 } from "@volli/shared";
 import type { HarnessAdapter, HarnessId } from "@volli/shared";
@@ -35,6 +36,21 @@ export interface HarnessRuntimeInput {
    * wrapper is removed — see the reconcile below.
    */
   adapterCensus: "complete" | "partial";
+  /**
+   * Where a command resolves on the user's real `PATH`, Volli's own `bin/`
+   * skipped — used to refuse a wrapper that would shadow a system tool. `null`
+   * means the command resolves nowhere, which is not a reason to refuse: the
+   * wrapper's own "cannot find" is a better error than the shell's.
+   */
+  resolveCommand: (command: string) => Promise<string | null>;
+}
+
+/** A wrapper Volli declined to write, and why — surfaced by `volli doctor`. */
+export interface RefusedWrapper {
+  harnessId: HarnessId;
+  command: string;
+  /** What that name resolves to today, which is what makes it unsafe to shadow. */
+  resolvedPath: string;
 }
 
 export interface HarnessRuntime {
@@ -50,6 +66,8 @@ export interface HarnessRuntime {
    * rather than pretending a wrapper exists.
    */
   wrapperPaths: ReadonlyMap<HarnessId, string>;
+  /** Wrappers refused because the name would shadow a system tool. */
+  refused: RefusedWrapper[];
   /**
    * Merged into every Volli PTY's environment alongside `agentSessionEnv`. The
    * wrapper reads its argv out of `VOLLI_HARNESS_ARGV_<SLUG>` here, and a
@@ -121,9 +139,22 @@ export async function ensureHarnessRuntime(input: HarnessRuntimeInput): Promise<
   await mkdir(input.binDir, { recursive: true });
   const wrappers: string[] = [];
   const wrapperPaths = new Map<HarnessId, string>();
+  const refused: RefusedWrapper[] = [];
   const env: Record<string, string> = {};
   for (const adapter of input.adapters) {
     if (!isBareHarnessCommand(adapter.command)) continue;
+    // Now that the bin dir genuinely wins PATH inside a session, a wrapper named
+    // after a system tool would shadow it for every command in every Volli
+    // terminal — and would prepend injected argv to it besides.
+    const resolvedCommand = await input.resolveCommand(adapter.command);
+    if (resolvedCommand !== null && shadowsSystemCommand(resolvedCommand)) {
+      refused.push({
+        harnessId: adapter.id,
+        command: adapter.command,
+        resolvedPath: resolvedCommand,
+      });
+      continue;
+    }
     const wrapperPath = join(input.binDir, adapter.command);
     await writeExecutable(wrapperPath, renderWrapperScript(adapter, { binDir: input.binDir }));
     wrappers.push(wrapperPath);
@@ -167,11 +198,13 @@ export async function ensureHarnessRuntime(input: HarnessRuntimeInput): Promise<
   // on. Keeping a stale wrapper costs one confusing error; removing a live one
   // costs the whole feature until someone notices.
   if (input.adapterCensus === "complete") {
-    const current = new Set(input.adapters.map((adapter) => adapter.command));
+    // Keyed on what was actually WRITTEN, not on what was offered: a wrapper
+    // refused above must also be swept away if an earlier launch wrote it.
+    const current = new Set(wrappers.map((path) => basename(path)));
     for (const entry of await readdir(input.binDir)) {
       if (current.has(entry) || !isBareHarnessCommand(entry)) continue;
       await rm(join(input.binDir, entry), { force: true });
     }
   }
-  return { wrappers, wrapperPaths, env };
+  return { wrappers, wrapperPaths, refused, env };
 }

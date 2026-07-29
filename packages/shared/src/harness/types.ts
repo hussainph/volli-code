@@ -149,6 +149,40 @@ export function isBareHarnessCommand(command: string): boolean {
   return BARE_HARNESS_COMMAND_RE.test(command) && !RESERVED_HARNESS_COMMANDS.has(command);
 }
 
+/**
+ * Directories whose commands Volli must never shadow. A wrapper is written
+ * under the harness's own `command` name into a directory that now genuinely
+ * wins `PATH` inside a session — so a manifest declaring `git` would put a
+ * Volli script in front of git for every command in every Volli terminal, and
+ * the wrapper prepends its injected argv whenever `VOLLI_SESSION` is set, which
+ * in a Volli PTY is always.
+ *
+ * This was inert while the bin dir lost the `PATH` race; making the wrapper win
+ * is what turns it into a real hazard, so the guard lands with the fix. It is
+ * about a careless manifest, not a hostile one — a hostile manifest is already
+ * gated behind a human confirming the exact command line it will run.
+ */
+const SYSTEM_COMMAND_DIRS: readonly string[] = [
+  "/bin",
+  "/sbin",
+  "/usr/bin",
+  "/usr/sbin",
+  "/usr/libexec",
+];
+
+/**
+ * Whether writing a wrapper named after this command would shadow a system
+ * tool, given where the command resolves on the user's real `PATH`.
+ *
+ * Asked of the RESOLVED path rather than a denylist of names, so it covers
+ * every core tool without anyone having to have thought of it — and so a
+ * harness that merely shares a name with something in `/opt/homebrew/bin` is
+ * not refused for it.
+ */
+export function shadowsSystemCommand(resolvedPath: string): boolean {
+  return SYSTEM_COMMAND_DIRS.some((dir) => resolvedPath.startsWith(`${dir}/`));
+}
+
 export interface HarnessAdapter {
   readonly id: HarnessId;
   readonly label: string;

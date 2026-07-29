@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { parseHarnessId, type HarnessId } from "../ticket";
-import { harnessTier, supportedEvents, type HarnessAdapter } from "./types";
+import { harnessTier, shadowsSystemCommand, supportedEvents, type HarnessAdapter } from "./types";
 
 /** A minimal Declared-tier adapter — nothing injected, nothing reported, no resume. */
 function bareAdapter(overrides: Partial<HarnessAdapter> = {}): HarnessAdapter {
@@ -94,5 +94,27 @@ describe("harnessTier", () => {
 
   it("is declared when a harness offers neither configuration nor resume", () => {
     expect(harnessTier(bareAdapter())).toBe("declared");
+  });
+});
+
+describe("shadowsSystemCommand", () => {
+  it("refuses the system directories a wrapper must never sit in front of", () => {
+    expect(shadowsSystemCommand("/usr/bin/git")).toBe(true);
+    expect(shadowsSystemCommand("/bin/ls")).toBe(true);
+    expect(shadowsSystemCommand("/sbin/ping")).toBe(true);
+    expect(shadowsSystemCommand("/usr/sbin/cron")).toBe(true);
+    expect(shadowsSystemCommand("/usr/libexec/path_helper")).toBe(true);
+  });
+
+  // The ordinary case — every coding agent worth wrapping installs here.
+  it("allows a command that resolves anywhere a harness actually installs", () => {
+    expect(shadowsSystemCommand("/opt/homebrew/bin/claude")).toBe(false);
+    expect(shadowsSystemCommand("/Users/x/.local/bin/codex")).toBe(false);
+    expect(shadowsSystemCommand("/usr/local/bin/opencode")).toBe(false);
+  });
+
+  it("matches on a path segment, not a prefix, so /usr/binary is not /usr/bin", () => {
+    expect(shadowsSystemCommand("/usr/binary/thing")).toBe(false);
+    expect(shadowsSystemCommand("/binary/thing")).toBe(false);
   });
 });

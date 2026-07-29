@@ -863,6 +863,21 @@ export function createAgentCommandService(
         }
         const session = getSession(options.db, sessionId);
         if (!session) return failure("SESSION_NOT_FOUND", `No session matches ${sessionId}.`);
+        // A session row outlives its PTY, and `VOLLI_SESSION` outlives both: it
+        // is exported into the session's environment, so anything that escapes
+        // that environment carries it forever — a tmux server started inside a
+        // Volli terminal, a disowned daemon, or simply a hook that fires as its
+        // own shell is exiting. Without this guard such an event is accepted in
+        // full: it rewrites the resume seed, records a verified delivery, fires
+        // a native "needs you" notification, and the renderer registers a fresh
+        // expectation for it — resurrecting a dead session in the sidebar.
+        //
+        // Ended is ended. The event is refused rather than swallowed, so a
+        // harness that really is still reporting says so in its own exit code
+        // instead of leaving Volli quietly wrong.
+        if (session.endedAt !== null) {
+          return failure("SESSION_ENDED", `Session ${shortSessionId(session.id)} has ended.`);
+        }
         const event = request.args["event"];
         if (!isHarnessEvent(event)) {
           return failure(

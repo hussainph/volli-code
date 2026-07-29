@@ -9,7 +9,7 @@ import type { AgentRequest, HarnessEventNotice, HarnessId } from "@volli/shared"
 import { createAttachment } from "./db/attachments-repo";
 import { getRegisteredHarness, recordHarnessTrust } from "./db/harness-registry-repo";
 import { insertProject } from "./db/projects-repo";
-import { getSession, insertSession } from "./db/sessions-repo";
+import { endSession, getSession, insertSession } from "./db/sessions-repo";
 import { insertTicket } from "./db/tickets-repo";
 import { openTestDb, testProject, testSession, testTicket } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
@@ -1385,6 +1385,39 @@ describe("agent command service", () => {
         });
       return { hook };
     }
+
+    // VOLLI_SESSION outlives the PTY that exported it — a tmux server or
+    // daemon started inside a session carries it forever — so an event can
+    // arrive long after the session ended. Accepting one resurrects a dead
+    // session: notification, sidebar row, rewritten resume seed.
+    it("refuses an event for a session that has already ended", async () => {
+      const notices: HarnessEventNotice[] = [];
+      const notified: string[] = [];
+      const { hook } = hookService({
+        onHarnessEvent: (notice) => notices.push(notice),
+        notify: (title: string) => notified.push(title),
+      });
+      endSession(ctx.db, sessionId, 5000, 0);
+
+      const response = await hook({ harness: "claude-code", event: "input.needed" });
+
+      expect(response).toMatchObject({ ok: false, error: { code: "SESSION_ENDED" } });
+      expect(notices).toEqual([]);
+      expect(notified).toEqual([]);
+    });
+
+    it("does not let a late event rewrite an ended session's resume seed", async () => {
+      const { hook } = hookService();
+      endSession(ctx.db, sessionId, 5000, 0);
+
+      await hook({
+        harness: "claude-code",
+        event: "session.started",
+        harnessSessionId: "from-a-leaked-environment",
+      });
+
+      expect(getSession(ctx.db, sessionId)?.harnessSessionId).toBeNull();
+    });
 
     it("records the harness session id an event carries, so resume needs no separate link", async () => {
       const { hook } = hookService();

@@ -41,6 +41,7 @@ describe("ensureHarnessRuntime", () => {
       socketPath: join(paths.binDir, "..", "volli.sock"),
       adapters: [adapterFor("claude-code")],
       adapterCensus: "complete",
+      resolveCommand: () => Promise.resolve(null),
     });
 
     const wrapperPath = join(paths.binDir, "claude");
@@ -55,6 +56,7 @@ describe("ensureHarnessRuntime", () => {
       socketPath: join(paths.binDir, "..", "volli.sock"),
       adapters: [adapterFor("claude-code")],
       adapterCensus: "complete",
+      resolveCommand: () => Promise.resolve(null),
     } as const;
     await mkdir(paths.binDir, { recursive: true });
     await writeFile(join(paths.binDir, "claude"), "#!/bin/sh\n# stale\n", { mode: 0o755 });
@@ -74,6 +76,7 @@ describe("ensureHarnessRuntime", () => {
       socketPath: join(paths.binDir, "..", "volli.sock"),
       adapters: [{ ...adapterFor("claude-code"), command: "volli" }],
       adapterCensus: "complete",
+      resolveCommand: () => Promise.resolve(null),
     });
 
     expect(runtime.wrappers).toEqual([]);
@@ -88,6 +91,7 @@ describe("ensureHarnessRuntime", () => {
       socketPath: join(paths.binDir, "..", "volli.sock"),
       adapters: [{ ...adapterFor("claude-code"), command: "../../usr/bin/env" }],
       adapterCensus: "complete",
+      resolveCommand: () => Promise.resolve(null),
     });
 
     expect(runtime.wrappers).toEqual([]);
@@ -101,6 +105,7 @@ describe("ensureHarnessRuntime", () => {
       socketPath,
       adapters: [adapterFor("claude-code"), adapterFor("codex")],
       adapterCensus: "complete",
+      resolveCommand: () => Promise.resolve(null),
     });
 
     await ensureHarnessRuntime({
@@ -108,6 +113,7 @@ describe("ensureHarnessRuntime", () => {
       socketPath,
       adapters: [adapterFor("claude-code")],
       adapterCensus: "complete",
+      resolveCommand: () => Promise.resolve(null),
     });
 
     await expect(readFile(join(paths.binDir, "codex"), "utf8")).rejects.toMatchObject({
@@ -129,16 +135,99 @@ describe("ensureHarnessRuntime", () => {
       socketPath,
       adapters: [registered],
       adapterCensus: "complete",
+      resolveCommand: () => Promise.resolve(null),
     });
 
     // A manifest that was edited, deleted or untrusted simply stops being
     // handed in — no table anywhere names its slug, so the reconcile has to
     // read the directory to find the wrapper it left behind.
-    await ensureHarnessRuntime({ ...paths, socketPath, adapters: [], adapterCensus: "complete" });
+    await ensureHarnessRuntime({
+      ...paths,
+      socketPath,
+      adapters: [],
+      adapterCensus: "complete",
+      resolveCommand: () => Promise.resolve(null),
+    });
 
     await expect(readFile(join(paths.binDir, "my-harness"), "utf8")).rejects.toMatchObject({
       code: "ENOENT",
     });
+  });
+
+  // Inert while the bin dir lost the PATH race; a live hazard now that it wins.
+  // A wrapper named `git` would sit in front of git for every command in every
+  // Volli terminal, with injected argv prepended besides.
+  it("refuses a wrapper whose name would shadow a system tool", async () => {
+    const paths = await scratch();
+    const shadowing: HarnessAdapter = {
+      ...adapterFor("claude-code"),
+      id: "sneaky" as HarnessId,
+      command: "git",
+    };
+
+    const runtime = await ensureHarnessRuntime({
+      ...paths,
+      socketPath: join(paths.binDir, "..", "volli.sock"),
+      adapters: [shadowing],
+      adapterCensus: "complete",
+      resolveCommand: () => Promise.resolve("/usr/bin/git"),
+    });
+
+    await expect(readFile(join(paths.binDir, "git"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(runtime.refused).toEqual([
+      { harnessId: "sneaky", command: "git", resolvedPath: "/usr/bin/git" },
+    ]);
+    expect(runtime.wrapperPaths.has("sneaky" as HarnessId)).toBe(false);
+  });
+
+  it("sweeps away a shadowing wrapper an earlier launch had written", async () => {
+    const paths = await scratch();
+    const socketPath = join(paths.binDir, "..", "volli.sock");
+    const shadowing: HarnessAdapter = {
+      ...adapterFor("claude-code"),
+      id: "sneaky" as HarnessId,
+      command: "git",
+    };
+    // An earlier launch, before the guard could resolve the command.
+    await ensureHarnessRuntime({
+      ...paths,
+      socketPath,
+      adapters: [shadowing],
+      adapterCensus: "complete",
+      resolveCommand: () => Promise.resolve(null),
+    });
+    expect(await readFile(join(paths.binDir, "git"), "utf8")).toContain("#!/bin/sh");
+
+    await ensureHarnessRuntime({
+      ...paths,
+      socketPath,
+      adapters: [shadowing],
+      adapterCensus: "complete",
+      resolveCommand: () => Promise.resolve("/usr/bin/git"),
+    });
+
+    await expect(readFile(join(paths.binDir, "git"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  // A harness that merely shares a name with something in /opt/homebrew/bin is
+  // the ordinary case — refusing it would break real installs.
+  it("writes the wrapper when the command resolves outside the system directories", async () => {
+    const paths = await scratch();
+
+    const runtime = await ensureHarnessRuntime({
+      ...paths,
+      socketPath: join(paths.binDir, "..", "volli.sock"),
+      adapters: [adapterFor("claude-code")],
+      adapterCensus: "complete",
+      resolveCommand: () => Promise.resolve("/opt/homebrew/bin/claude"),
+    });
+
+    expect(await readFile(join(paths.binDir, "claude"), "utf8")).toContain("#!/bin/sh");
+    expect(runtime.refused).toEqual([]);
   });
 
   it("keeps every wrapper when the adapter list is not a census of the host", async () => {
@@ -149,6 +238,7 @@ describe("ensureHarnessRuntime", () => {
       socketPath,
       adapters: [adapterFor("claude-code"), adapterFor("codex")],
       adapterCensus: "complete",
+      resolveCommand: () => Promise.resolve(null),
     });
 
     // Detection failed this launch, so nothing here is known to be gone —
@@ -159,6 +249,7 @@ describe("ensureHarnessRuntime", () => {
       socketPath,
       adapters: [],
       adapterCensus: "partial",
+      resolveCommand: () => Promise.resolve(null),
     });
 
     expect(await readFile(join(paths.binDir, "codex"), "utf8")).toContain("#!/bin/sh");
@@ -176,6 +267,7 @@ describe("ensureHarnessRuntime", () => {
       socketPath: join(paths.binDir, "..", "volli.sock"),
       adapters: [],
       adapterCensus: "complete",
+      resolveCommand: () => Promise.resolve(null),
     });
 
     expect(await readFile(join(paths.binDir, "volli"), "utf8")).toContain("launcher");
@@ -190,6 +282,7 @@ describe("ensureHarnessRuntime", () => {
       socketPath: "/tmp/volli.sock",
       adapters: [adapterFor("claude-code")],
       adapterCensus: "complete",
+      resolveCommand: () => Promise.resolve(null),
     });
 
     const argv = runtime.env["VOLLI_HARNESS_ARGV_CLAUDE_CODE"] ?? "";
@@ -212,6 +305,7 @@ describe("ensureHarnessRuntime", () => {
       socketPath: "/tmp/volli.sock",
       adapters: [adapterFor("cursor")],
       adapterCensus: "complete",
+      resolveCommand: () => Promise.resolve(null),
     });
 
     const harnessDir = join(paths.harnessRoot, "cursor");

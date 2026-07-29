@@ -766,6 +766,15 @@ app.whenReady().then(async () => {
           // absent harness: detection answers for the built-ins, the db for the
           // registered manifests.
           adapterCensus: detected !== null && dbHandle.ok ? "complete" : "partial",
+          // The same walk the wrapper does at run time, so a manifest whose
+          // command would shadow a system tool is refused a wrapper rather
+          // than silently put in front of it.
+          resolveCommand: async (command) => {
+            const pathValue = await loginShellPath();
+            return pathValue === null
+              ? null
+              : resolveOnPath(pathValue, command, runtimePaths.binDir);
+          },
         });
         agentRuntime.harnessEnv = runtime.env;
         // Where each wrapper landed, so a launch line names it by absolute path
