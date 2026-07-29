@@ -149,10 +149,10 @@ describe("parseHarnessManifest", () => {
 
   it("reads an argv injection strategy", () => {
     const result = parseHarnessManifest(
-      minimal({ injection: { kind: "argv-settings-json", flag: "--settings" } }),
+      minimal({ injection: { kind: "claude-settings-json", flag: "--settings" } }),
     );
     expect(result.ok && result.adapter.injection).toEqual({
-      kind: "argv-settings-json",
+      kind: "claude-settings-json",
       flag: "--settings",
     });
   });
@@ -161,14 +161,14 @@ describe("parseHarnessManifest", () => {
     const result = parseHarnessManifest(
       minimal({
         injection: {
-          kind: "plugin-config-env",
+          kind: "opencode-plugin",
           envVar: "MY_HARNESS_CONFIG",
           filename: "volli.json",
         },
       }),
     );
     expect(result.ok && result.adapter.injection).toEqual({
-      kind: "plugin-config-env",
+      kind: "opencode-plugin",
       envVar: "MY_HARNESS_CONFIG",
       filename: "volli.json",
     });
@@ -176,10 +176,10 @@ describe("parseHarnessManifest", () => {
 
   it("reads the config-override and config-directory strategies too", () => {
     const override = parseHarnessManifest(
-      minimal({ injection: { kind: "argv-config-override", flag: "-c" } }),
+      minimal({ injection: { kind: "codex-config-override", flag: "-c" } }),
     );
     expect(override.ok && override.adapter.injection).toEqual({
-      kind: "argv-config-override",
+      kind: "codex-config-override",
       flag: "-c",
     });
     const dir = parseHarnessManifest(
@@ -219,7 +219,7 @@ describe("parseHarnessManifest", () => {
 
   it("refuses an argv injection with no flag to carry it", () => {
     expect(
-      errorPaths(parseHarnessManifest(minimal({ injection: { kind: "argv-config-override" } }))),
+      errorPaths(parseHarnessManifest(minimal({ injection: { kind: "codex-config-override" } }))),
     ).toEqual(["injection.flag"]);
   });
 
@@ -354,7 +354,7 @@ describe("parseHarnessManifest", () => {
   it("refuses Volli's own namespace, which is how the app talks to its wrapper", () => {
     for (const envVar of ["VOLLI_SESSION", "VOLLI_SOCKET", "VOLLI_HARNESS_ARGV_CLAUDE_CODE"]) {
       const result = parseHarnessManifest(
-        minimal({ injection: { kind: "plugin-config-env", envVar, filename: "volli.json" } }),
+        minimal({ injection: { kind: "opencode-plugin", envVar, filename: "volli.json" } }),
       );
       expect(errorPaths(result)).toEqual(["injection.envVar"]);
     }
@@ -482,7 +482,7 @@ describe("parseHarnessManifest", () => {
  */
 describe("a hostile manifest", () => {
   const hostile = minimal({
-    injection: { kind: "argv-settings-json", flag: "--settings" },
+    injection: { kind: "claude-settings-json", flag: "--settings" },
     events: [
       { event: "turn.completed", native: "__proto__", delivery: "async", timeoutMs: 5000 },
       { event: "turn.started", native: "hooks:constructor", delivery: "async", timeoutMs: 5000 },
@@ -536,7 +536,7 @@ describe("a hostile manifest", () => {
 describe("a manifest-derived adapter", () => {
   const registered = parseHarnessManifest(
     minimal({
-      injection: { kind: "argv-settings-json", flag: "--settings" },
+      injection: { kind: "claude-settings-json", flag: "--settings" },
       surfaces: { skillsDir: "{home}/.my-harness/skills", instructionsFile: "{home}/AGENTS.md" },
       events: [
         { event: "input.needed", native: "Notification", delivery: "async", timeoutMs: 5000 },

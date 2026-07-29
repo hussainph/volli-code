@@ -16,7 +16,7 @@ function registered(): HarnessAdapter {
     slug: "my-harness",
     label: "My Harness",
     command: "my-harness",
-    injection: { kind: "argv-settings-json", flag: "--settings" },
+    injection: { kind: "claude-settings-json", flag: "--settings" },
     events: [
       { event: "input.needed", native: "Notification", delivery: "async", timeoutMs: 5000 },
       { event: "turn.completed", native: "Stop", delivery: "async", timeoutMs: 5000 },

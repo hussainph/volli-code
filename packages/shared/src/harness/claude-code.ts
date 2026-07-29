@@ -26,7 +26,7 @@ export const claudeCodeAdapter: HarnessAdapter = {
     // everything the fenced block would have said.
     instructionsFile: null,
   },
-  injection: { kind: "argv-settings-json", flag: "--settings" },
+  injection: { kind: "claude-settings-json", flag: "--settings" },
   sessionId: { kind: "argv", flag: "--session-id", format: "uuid" },
   resume: {
     byId: ["--resume", "{id}"],

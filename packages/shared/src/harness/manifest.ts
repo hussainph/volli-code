@@ -258,8 +258,8 @@ function isVolliOwnedFilename(value: unknown): value is string {
 }
 
 /** The argv-carried strategies, keyed by the flag field each one needs. */
-const ARGV_INJECTION_KINDS = new Set(["argv-settings-json", "argv-config-override"]);
-const ENV_INJECTION_KINDS = new Set(["config-dir-env", "plugin-config-env"]);
+const ARGV_INJECTION_KINDS = new Set(["claude-settings-json", "codex-config-override"]);
+const ENV_INJECTION_KINDS = new Set(["config-dir-env", "opencode-plugin"]);
 
 /**
  * The mechanism Volli configures this harness through at launch. Every arm
@@ -283,9 +283,9 @@ function parseInjection(errors: Errors, value: unknown): HarnessConfigInjection 
       errors.add("injection.flag", "must be a single argv word");
       return none;
     }
-    return kind === "argv-settings-json"
-      ? { kind: "argv-settings-json", flag }
-      : { kind: "argv-config-override", flag };
+    return kind === "claude-settings-json"
+      ? { kind: "claude-settings-json", flag }
+      : { kind: "codex-config-override", flag };
   }
 
   if (typeof kind === "string" && ENV_INJECTION_KINDS.has(kind)) {
@@ -312,12 +312,12 @@ function parseInjection(errors: Errors, value: unknown): HarnessConfigInjection 
     if (bad || typeof envVar !== "string" || !isVolliOwnedFilename(filename)) return none;
     return kind === "config-dir-env"
       ? { kind: "config-dir-env", envVar, filename }
-      : { kind: "plugin-config-env", envVar, filename };
+      : { kind: "opencode-plugin", envVar, filename };
   }
 
   errors.add(
     "injection.kind",
-    "must be none, argv-settings-json, argv-config-override, config-dir-env or plugin-config-env",
+    "must be none, claude-settings-json, codex-config-override, config-dir-env or opencode-plugin",
   );
   return none;
 }

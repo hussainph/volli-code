@@ -101,11 +101,13 @@ Paths start with \`{home}/\`, which Volli replaces with the user's home director
 
 One object, discriminated by \`kind\`. Every kind either passes configuration on the command line or points an environment variable at a file Volli owns. There is no kind that merges into the user's own configuration.
 
+Each kind is named after the harness it was written against, and declaring it claims your harness reads what that one reads — the same flag, the same hook schema, the same file.
+
 - \`{"kind": "none"}\` — the harness takes no configuration at launch.
-- \`{"kind": "argv-settings-json", "flag": "--settings"}\` — the flag takes a settings JSON string.
-- \`{"kind": "argv-config-override", "flag": "-c"}\` — the flag takes one \`key=value\` override, repeated.
-- \`{"kind": "config-dir-env", "envVar": "MY_CONFIG_DIR", "filename": "config.json"}\` — the variable names a directory; the harness finds \`filename\` inside it.
-- \`{"kind": "plugin-config-env", "envVar": "MY_CONFIG", "filename": "config.json"}\` — the variable names the file itself.
+- \`{"kind": "claude-settings-json", "flag": "--settings"}\` — the flag takes Claude Code's settings JSON as a string.
+- \`{"kind": "codex-config-override", "flag": "-c"}\` — the flag takes one TOML \`key=value\` override, repeated.
+- \`{"kind": "config-dir-env", "envVar": "MY_CONFIG_DIR", "filename": "config.json"}\` — the variable names a directory; the harness finds \`filename\` inside it, holding \`{"<Native>": [{"command": "…"}]}\`.
+- \`{"kind": "opencode-plugin", "envVar": "MY_CONFIG", "filename": "config.json"}\` — the variable names the file itself, and Volli also emits the plugin module that file loads.
 
 \`filename\` is a bare filename. Volli writes it under its own per-harness directory; a manifest cannot write anywhere else.
 
@@ -169,7 +171,7 @@ Declaring an event gains nothing on its own. An event becomes verified on its fi
     "commandsDir": null,
     "instructionsFile": "{home}/.acme/AGENTS.md"
   },
-  "injection": { "kind": "argv-settings-json", "flag": "--settings" },
+  "injection": { "kind": "claude-settings-json", "flag": "--settings" },
   "sessionId": { "kind": "argv", "flag": "--session-id" },
   "resume": {
     "byId": ["--resume", "{id}"],

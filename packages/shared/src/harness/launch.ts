@@ -10,10 +10,12 @@
  * into is a worktree Volli created; it is the reason {@link
  * HarnessWorkspaceFile} exists, and the reason exactly one merge does.
  *
- * The switch is on `injection.kind`, never on the harness's identity. A kind
- * names both a mechanism and the native config shape that mechanism expects,
- * so a registered harness declaring `config-dir-env` gets the same treatment a
- * built-in does.
+ * The switch is on `injection.kind`, never on the harness's identity — so a
+ * registered harness declaring `claude-settings-json` gets exactly what
+ * claude-code gets. The kinds are named after the binaries they were written
+ * against because that is all they ever were: each arm hardcodes one harness's
+ * hook schema, and a name that hid this behind a mechanism class is what let
+ * `config-dir-env` write cursor's hooks somewhere cursor never reads.
  */
 import { shellSingleQuote } from "../harness-command";
 import { cursorHookEntry, mergeCursorHooks, renderCursorHooks } from "./cursor-hooks";
@@ -328,7 +330,7 @@ function injected(adapter: HarnessAdapter, input: HarnessLaunchInput): HarnessLa
     case "none": {
       return { files: [], workspaceFiles: [], argv: [], env: {} };
     }
-    case "argv-settings-json": {
+    case "claude-settings-json": {
       const settings = settingsObject(adapter, claudeHooks(adapter.events, input));
       return {
         files: [],
@@ -337,7 +339,7 @@ function injected(adapter: HarnessAdapter, input: HarnessLaunchInput): HarnessLa
         env: {},
       };
     }
-    case "argv-config-override": {
+    case "codex-config-override": {
       // Two mechanisms, one harness, and nothing written to disk: hook bindings
       // become an inline `hooks` table, notify bindings the legacy argv key.
       const hooked = adapter.events.filter((binding) => mechanismOf(binding) === HOOKS_MECHANISM);
@@ -386,7 +388,7 @@ function injected(adapter: HarnessAdapter, input: HarnessLaunchInput): HarnessLa
         env: {},
       };
     }
-    case "plugin-config-env": {
+    case "opencode-plugin": {
       // A plugin, not a command hook: the config can only NAME a module, so the
       // module is emitted here too. Naming one nothing writes would leave the
       // harness loading a file that does not exist — reporting nothing, while

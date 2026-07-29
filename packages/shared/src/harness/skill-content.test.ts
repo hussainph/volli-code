@@ -37,10 +37,10 @@ describe("VOLLI_PLUGIN_DOC", () => {
   it("documents the whole event union and every injection kind", () => {
     for (const event of HARNESS_EVENTS) expect(VOLLI_PLUGIN_DOC).toContain(event);
     for (const kind of [
-      "argv-settings-json",
-      "argv-config-override",
+      "claude-settings-json",
+      "codex-config-override",
       "config-dir-env",
-      "plugin-config-env",
+      "opencode-plugin",
     ]) {
       expect(VOLLI_PLUGIN_DOC).toContain(kind);
     }

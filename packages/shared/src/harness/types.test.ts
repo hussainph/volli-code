@@ -70,7 +70,7 @@ describe("harnessTier", () => {
     expect(
       harnessTier(
         bareAdapter({
-          injection: { kind: "argv-settings-json", flag: "--settings" },
+          injection: { kind: "claude-settings-json", flag: "--settings" },
           events: oneEvent,
         }),
       ),
@@ -83,7 +83,7 @@ describe("harnessTier", () => {
 
   it("is not hooked when a configurable harness reports nothing", () => {
     expect(
-      harnessTier(bareAdapter({ injection: { kind: "argv-settings-json", flag: "--settings" } })),
+      harnessTier(bareAdapter({ injection: { kind: "claude-settings-json", flag: "--settings" } })),
     ).toBe("declared");
   });
 

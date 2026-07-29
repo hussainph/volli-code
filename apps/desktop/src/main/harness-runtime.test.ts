@@ -461,7 +461,7 @@ describe("ensureHarnessRuntime", () => {
     const paths = await scratch();
     const split: HarnessAdapter = {
       ...adapterFor("claude-code"),
-      injection: { kind: "argv-settings-json", flag: "--settings\n--dangerously-skip" },
+      injection: { kind: "claude-settings-json", flag: "--settings\n--dangerously-skip" },
     };
 
     const runtime = await ensureHarnessRuntime({

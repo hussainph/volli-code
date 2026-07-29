@@ -134,7 +134,7 @@ describe("first-class harness capabilities", () => {
   it("hooks claude-code on inline settings JSON and a session id we mint", () => {
     const claude = adapterFor("claude-code");
     expect(harnessTier(claude)).toBe("hooked");
-    expect(claude.injection).toEqual({ kind: "argv-settings-json", flag: "--settings" });
+    expect(claude.injection).toEqual({ kind: "claude-settings-json", flag: "--settings" });
     expect(claude.sessionId).toEqual({ kind: "argv", flag: "--session-id", format: "uuid" });
     expect([...supportedEvents(claude)].toSorted()).toEqual([...HARNESS_EVENTS].toSorted());
   });
@@ -169,7 +169,7 @@ describe("first-class harness capabilities", () => {
     const opencode = adapterFor("opencode");
     expect(opencode.sessionId).toEqual({ kind: "reported" });
     expect(opencode.injection).toEqual({
-      kind: "plugin-config-env",
+      kind: "opencode-plugin",
       envVar: "OPENCODE_CONFIG",
       filename: "opencode.json",
     });

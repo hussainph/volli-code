@@ -79,29 +79,39 @@ export function nativeName(binding: Pick<HarnessEventBinding, "native">): string
 
 /**
  * How a harness accepts configuration AT LAUNCH — never by editing the user's
- * own config. Each kind names both a mechanism and the native config shape
- * that mechanism expects, which is why the launch builder can switch on it
- * without ever knowing which harness it is holding.
+ * own config. The launch builder switches on the kind and never on the
+ * harness's identity, which is what lets a registered manifest be configured
+ * the way a built-in is.
+ *
+ * Each kind is NAMED AFTER THE BINARY it was written against, because that is
+ * all a kind ever was. A name like `argv-settings-json` reads as a claim about a
+ * mechanism class — "this harness takes settings JSON on a flag" — while the arm
+ * behind it also fixes one binary's hook schema, one filename and one search
+ * order. `config-dir-env` is what that costs when nobody re-checks it: it was
+ * written for cursor from a mechanism it does not use, and every hook it wrote
+ * was unreachable for a whole branch. A kind named after a binary is a
+ * falsifiable statement about that binary and one version of it, and a manifest
+ * declaring it is declaring "my harness reads exactly what THAT one reads".
  */
 export type HarnessConfigInjection =
   | { kind: "none" }
   /** claude-code: `--settings` takes a settings JSON string, merged additively over the user's scopes. */
-  | { kind: "argv-settings-json"; flag: string }
+  | { kind: "claude-settings-json"; flag: string }
   /** codex: `-c key=value`, repeated once per override. */
-  | { kind: "argv-config-override"; flag: string }
+  | { kind: "codex-config-override"; flag: string }
   /**
    * A directory named by an environment variable holds `filename`, in the flat
    * `{ "<Native>": [{ command }] }` hook shape.
    *
-   * No built-in declares this any more, and the reason is worth keeping: it was
-   * written FOR cursor, on the strength of `CURSOR_CONFIG_DIR` redirecting
-   * `cli-config.json`. That variable really does redirect that file — and
-   * `cursor-agent` reads hooks from somewhere else entirely, so every hook
-   * Volli wrote through this kind was unreachable. A kind named after a
-   * mechanism class rather than a binary is what let the mistake survive
-   * unexamined; `docs/plans/harness-architecture-v2.md` §1 proposes retiring
-   * the whole set of them in favour of one BYO mechanism. Until that lands this
-   * stays, because a registered manifest may already declare it.
+   * The one kind still named after a mechanism, and the reason is worth
+   * keeping: it was written FOR cursor, on the strength of `CURSOR_CONFIG_DIR`
+   * redirecting `cli-config.json`. That variable really does redirect that file
+   * — and `cursor-agent` reads hooks from somewhere else entirely, so every hook
+   * Volli wrote through this kind was unreachable. The generic name is what let
+   * the mistake survive unexamined. No built-in declares it any more;
+   * `docs/plans/harness-architecture-v2.md` §1 replaces it with one BYO
+   * mechanism (`hook-file`), and until that lands this stays, because a
+   * registered manifest may already declare it.
    */
   | { kind: "config-dir-env"; envVar: string; filename: string }
   /**
@@ -111,13 +121,13 @@ export type HarnessConfigInjection =
    * rung Volli can own per ticket is the project one, `.cursor/hooks.json`
    * relative to the working directory, which is a Volli-created worktree.
    *
-   * Named after the binary, not a mechanism: it fixes cursor's schema, cursor's
-   * filename and cursor's search order all at once, and saying so is what makes
-   * it falsifiable against one live run.
+   * It fixes cursor's schema, cursor's filename and cursor's search order all at
+   * once — which is what every one of these kinds does, and why they are all
+   * named this way now.
    */
   | { kind: "cursor-hooks-file" }
   /** opencode: `OPENCODE_CONFIG` points at `filename` itself, layered over the user's config. */
-  | { kind: "plugin-config-env"; envVar: string; filename: string };
+  | { kind: "opencode-plugin"; envVar: string; filename: string };
 
 /**
  * Where a harness's own session id comes from. `argv` means Volli mints it at

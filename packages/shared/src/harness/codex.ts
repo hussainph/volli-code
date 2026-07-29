@@ -46,7 +46,7 @@ export const codexAdapter: HarnessAdapter = {
     commandsDir: null,
     instructionsFile: "{home}/.codex/AGENTS.md",
   },
-  injection: { kind: "argv-config-override", flag: "-c" },
+  injection: { kind: "codex-config-override", flag: "-c" },
   // The id is discovered from the rollout file, not accepted at launch.
   sessionId: { kind: "none" },
   resume: {

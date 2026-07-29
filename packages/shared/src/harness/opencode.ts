@@ -26,7 +26,7 @@ export const opencodeAdapter: HarnessAdapter = {
     commandsDir: "{home}/.config/opencode/command",
     instructionsFile: null,
   },
-  injection: { kind: "plugin-config-env", envVar: "OPENCODE_CONFIG", filename: "opencode.json" },
+  injection: { kind: "opencode-plugin", envVar: "OPENCODE_CONFIG", filename: "opencode.json" },
   sessionId: { kind: "reported" },
   resume: {
     byId: ["--session", "{id}"],

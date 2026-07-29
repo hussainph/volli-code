@@ -1,5 +1,5 @@
 /**
- * The plugin file a `plugin-config-env` harness loads, generated as source.
+ * The plugin file an `opencode-plugin` harness loads, generated as source.
  *
  * This is the one injection kind whose config cannot carry a command line: it
  * names a JavaScript module, and the module is what reports. So the module has

@@ -55,7 +55,7 @@ const registeredAdapter = (): HarnessAdapter => ({
   promptFlag: "-p",
   detection: { executable: "my-agent" },
   surfaces: { skillsDir: null, commandsDir: null, instructionsFile: null },
-  injection: { kind: "argv-settings-json", flag: "--settings" },
+  injection: { kind: "claude-settings-json", flag: "--settings" },
   sessionId: { kind: "reported" },
   resume: { byId: null, latest: null, userResumeTokens: [] },
   events: [{ event: "input.needed", native: "Notification", delivery: "async", timeoutMs: 5000 }],

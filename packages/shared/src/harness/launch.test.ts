@@ -181,7 +181,7 @@ describe("buildLaunchConfig", () => {
   it("emits a registered manifest its own plugin, from the bindings it declared", () => {
     const config = buildLaunchConfig(
       bareAdapter({
-        injection: { kind: "plugin-config-env", envVar: "X_CONFIG", filename: "x.json" },
+        injection: { kind: "opencode-plugin", envVar: "X_CONFIG", filename: "x.json" },
         events: [
           { event: "input.needed", native: "asked-a-question", delivery: "async", timeoutMs: 1000 },
         ],
@@ -244,7 +244,7 @@ describe("buildLaunchConfig", () => {
   it("routes an unnamespaced binding to the inline hooks table, so a plain manifest reports", () => {
     const config = buildLaunchConfig(
       bareAdapter({
-        injection: { kind: "argv-config-override", flag: "-c" },
+        injection: { kind: "codex-config-override", flag: "-c" },
         events: [{ event: "turn.started", native: "OnPrompt", delivery: "async", timeoutMs: 1000 }],
       }),
       INPUT,
@@ -271,7 +271,7 @@ describe("buildLaunchConfig", () => {
   it("marks a blocking binding as one, since codex can say so and the rest cannot", () => {
     const config = buildLaunchConfig(
       bareAdapter({
-        injection: { kind: "argv-config-override", flag: "-c" },
+        injection: { kind: "codex-config-override", flag: "-c" },
         events: [{ event: "input.needed", native: "Ask", delivery: "sync", timeoutMs: 1000 }],
       }),
       INPUT,
@@ -282,7 +282,7 @@ describe("buildLaunchConfig", () => {
   it("carries a harness's forced settings through whichever mechanism it uses", () => {
     const config = buildLaunchConfig(
       bareAdapter({
-        injection: { kind: "argv-config-override", flag: "-c" },
+        injection: { kind: "codex-config-override", flag: "-c" },
         launchSettings: [{ path: "notifications.enabled", value: false }],
       }),
       INPUT,
@@ -294,7 +294,7 @@ describe("buildLaunchConfig", () => {
   it("keeps a forced string setting quoted, so TOML reads it as a string", () => {
     const config = buildLaunchConfig(
       bareAdapter({
-        injection: { kind: "argv-config-override", flag: "-c" },
+        injection: { kind: "codex-config-override", flag: "-c" },
         launchSettings: [{ path: "notify.channel", value: "disabled" }],
       }),
       INPUT,
@@ -339,14 +339,14 @@ describe("buildLaunchConfig", () => {
         ],
       });
 
-    // `plugin-config-env` is absent on purpose: it renders through `plugin.ts`,
+    // `opencode-plugin` is absent on purpose: it renders through `plugin.ts`,
     // which still keys a plain object by native name and throws on
     // `constructor` before it can pollute anything. The parser refusal covers
     // it today; hardening that module is a separate change to a separate file.
     it("builds every mechanism it renders itself without touching Object.prototype", () => {
       const injections = [
-        { kind: "argv-settings-json", flag: "--settings" },
-        { kind: "argv-config-override", flag: "-c" },
+        { kind: "claude-settings-json", flag: "--settings" },
+        { kind: "codex-config-override", flag: "-c" },
         { kind: "config-dir-env", envVar: "X_CONFIG_DIR", filename: "x.json" },
       ] as const;
       for (const injection of injections) {
@@ -362,7 +362,7 @@ describe("buildLaunchConfig", () => {
 
     it("carries the name through as data, so nothing is silently dropped either", () => {
       const config = buildLaunchConfig(
-        hostile({ kind: "argv-settings-json", flag: "--settings" }),
+        hostile({ kind: "claude-settings-json", flag: "--settings" }),
         INPUT,
       );
       const settings = JSON.parse(config.argv[1] ?? "{}") as Record<string, unknown>;
