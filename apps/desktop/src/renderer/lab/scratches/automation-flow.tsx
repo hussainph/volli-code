@@ -16,6 +16,24 @@
  * to the form. If it cannot, the graph is a diagram of a form, and we should
  * keep the form.
  *
+ * ── THE ANSWER IS: ONE AT A TIME ──────────────────────────────────────────
+ * Every step expanded at once is unreadable — two open cards are 1150px of
+ * node and the shape they are in is gone, which is the thing the graph was
+ * for. Every step collapsed to an icon and a name is the canvas products'
+ * answer, and it is too little here: every step is an agent, so "an agent runs"
+ * is not news.
+ *
+ * So the node has two sizes and exactly one is open. Collapsed carries the four
+ * facts that actually differ between steps — which harness, which model, what
+ * it costs and what it is allowed to touch, and the first line of what it is
+ * told. Expanded is the whole editor. Opening one moves the camera to it;
+ * closing hands the graph back. The sibling stays small beside it, so you never
+ * lose the structure while you work inside a piece of it.
+ *
+ * That is a third answer, and it is better than either of the two the survey
+ * found. It also explains the survey: n8n's node face is thin because an n8n
+ * node is a Gmail call, and there is nothing to say about it but "Gmail".
+ *
  * ── WHAT THE GRAPH GENUINELY MODELS BETTER ────────────────────────────────
  * One thing, and it is not decoration: the `join`. In the form, "run these two
  * together" versus "run this after that" is a pill on a vertical spine, which
@@ -25,16 +43,18 @@
  * `together` or `then`, because the layout already says it.
  *
  * ── THE COSTS, WHICH ARE ALSO FINDINGS ────────────────────────────────────
- * 1. A node you can type in cannot be dragged by its body, so every node needs
- *    a grab bar it would not otherwise have, and the whole interior needs
- *    `nodrag`/`nowheel` or the canvas eats your scroll and your text selection.
- *    The affordance budget goes up before the capability does.
- * 2. Two parallel steps are ~1150px of node. On a 1560px window with a sidebar
- *    that is already panning, and Volli's real chrome is not this generous.
- * 3. Position is now state that can disagree with the program. `Tidy` exists
+ * 1. A node you can type in cannot be dragged by its body, so it needs a grab
+ *    bar, and its interior needs `nodrag`/`nowheel` or the canvas eats your
+ *    scroll and your text selection. Collapsing bought this back for most
+ *    nodes — a collapsed one has nothing to select, so it drags by its body and
+ *    the bar only appears on the one node that earns it.
+ * 2. Position is now state that can disagree with the program. `Tidy` exists
  *    because of that, and n8n, Make, Gumloop and Zapier all ship the same
  *    button — which is the tell. Every canvas product has a button that means
  *    "undo my layout"; a form never needs one.
+ * 3. The camera is now a thing that has to be right. Expanding without moving
+ *    the viewport leaves half the card you just opened below the fold; moving
+ *    it too eagerly loses your place. Both are bugs a form cannot have.
  * ──────────────────────────────────────────────────────────────────────────
  */
 import * as React from "react";
@@ -52,6 +72,7 @@ import {
   type Node,
   type NodeProps,
 } from "@xyflow/react";
+import { ArrowsInSimpleIcon } from "@phosphor-icons/react/dist/csr/ArrowsInSimple";
 import { DotsSixIcon } from "@phosphor-icons/react/dist/csr/DotsSix";
 import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
@@ -60,10 +81,12 @@ import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
 
+import { HarnessMark, harnessLabelFor } from "../automation/harness-identity";
 import { StepCard } from "../automation/step-card";
 import { TriggerCard } from "../automation/trigger-card";
 import {
   blankStep,
+  HARNESS_ADAPTERS,
   SEEDED_AUTOMATIONS,
   type AutomationStep,
   type Trigger,
@@ -86,9 +109,19 @@ const NODE = {
   // whatever is in it, which is the price of laying the graph out arithmetically
   // rather than measuring — and it is the price the form does not pay.
   stepHeight: 486,
+  collapsedWidth: 300,
+  collapsedHeight: 96,
   gapX: 40,
   gapY: 92,
 } as const;
+
+function widthOf(expanded: boolean): number {
+  return expanded ? NODE.stepWidth : NODE.collapsedWidth;
+}
+
+function heightOf(expanded: boolean): number {
+  return expanded ? NODE.stepHeight : NODE.collapsedHeight;
+}
 
 /**
  * Depth is the join, read as a graph: a `with` step is a sibling of the one
@@ -125,14 +158,46 @@ function childrenOf(steps: FlowStep[], id: string): FlowStep[] {
  * A tree layout: each node centred over its own children, siblings packed by
  * subtree width rather than by count, so a branch that itself branches does not
  * sit on top of its neighbour.
+ *
+ * Sizes are per-node rather than constant, because exactly one step is expanded
+ * at a time. A row's height is its tallest member, so expanding a node pushes
+ * the rows below it down and leaves its siblings where they were — the graph
+ * reflows around the thing you opened rather than rearranging itself.
  */
-function layout(steps: FlowStep[]): Map<string, { x: number; y: number }> {
+function layout(
+  steps: FlowStep[],
+  expandedId: string | null,
+): Map<string, { x: number; y: number }> {
+  const isOpen = (id: string) => id === expandedId;
+
   function subtreeWidth(id: string): number {
     const kids = childrenOf(steps, id);
-    if (kids.length === 0) return NODE.stepWidth;
+    const own = widthOf(isOpen(id));
+    if (kids.length === 0) return own;
     const packed =
       kids.reduce((total, kid) => total + subtreeWidth(kid.id), 0) + NODE.gapX * (kids.length - 1);
-    return Math.max(NODE.stepWidth, packed);
+    return Math.max(own, packed);
+  }
+
+  // Row offsets first: a node's y depends on how tall every row above it is,
+  // which is not knowable while walking down.
+  const depthOf = new Map<string, number>();
+  function measure(id: string, depth: number) {
+    if (id !== ROOT) depthOf.set(id, depth);
+    for (const kid of childrenOf(steps, id)) measure(kid.id, depth + 1);
+  }
+  measure(ROOT, -1);
+
+  const rowHeight = new Map<number, number>();
+  for (const step of steps) {
+    const depth = depthOf.get(step.id) ?? 0;
+    rowHeight.set(depth, Math.max(rowHeight.get(depth) ?? 0, heightOf(isOpen(step.id))));
+  }
+  const rowY = new Map<number, number>();
+  let y = NODE.triggerHeight;
+  for (let depth = 0; rowHeight.has(depth); depth += 1) {
+    rowY.set(depth, y);
+    y += (rowHeight.get(depth) ?? 0) + NODE.gapY;
   }
 
   const positions = new Map<string, { x: number; y: number }>();
@@ -140,8 +205,8 @@ function layout(steps: FlowStep[]): Map<string, { x: number; y: number }> {
   function place(id: string, centreX: number, depth: number) {
     if (id !== ROOT) {
       positions.set(id, {
-        x: centreX - NODE.stepWidth / 2,
-        y: NODE.triggerHeight + depth * (NODE.stepHeight + NODE.gapY),
+        x: centreX - widthOf(isOpen(id)) / 2,
+        y: rowY.get(depth) ?? NODE.triggerHeight,
       });
     }
     const kids = childrenOf(steps, id);
@@ -171,6 +236,8 @@ interface TriggerData extends Record<string, unknown> {
 interface StepData extends Record<string, unknown> {
   step: FlowStep;
   removable: boolean;
+  expanded: boolean;
+  onToggle: () => void;
   onChange: (step: AutomationStep) => void;
   onRemove: () => void;
   /** `child` hangs below this step; `sibling` sits beside it under the same parent. */
@@ -244,20 +311,96 @@ function TriggerNode({ data }: NodeProps<Node<TriggerData, "trigger">>) {
   );
 }
 
-function StepNode({ data }: NodeProps<Node<StepData, "step">>) {
+/** The first thing the prompt actually says, for the collapsed face. */
+function firstLine(text: string): string {
+  return text.split("\n").find((line) => line.trim().length > 0) ?? "";
+}
+
+/**
+ * The collapsed face: who runs it, on what, and what it opens with.
+ *
+ * Which is a deliberately short list. The canvas products put an icon and a
+ * name here and nothing else, and that is too little for Volli — every step is
+ * an agent, so "an agent runs" is not news; WHICH agent, on which model, at
+ * what cost, and what it is told are the four things that differ. The runtime
+ * line is mono because it is machine vocabulary and reads faster as a command
+ * fragment than as a sentence.
+ */
+function CollapsedStep({ step }: { step: FlowStep }) {
+  const { runtime } = step;
+  const adapter = HARNESS_ADAPTERS[runtime.harnessId];
+  const dials = [
+    adapter.effort === null ? null : runtime.effort,
+    adapter.approvals === null ? null : runtime.approvals,
+  ].filter((value): value is string => value !== null && value !== "");
+
   return (
-    <div className="relative" style={{ width: NODE.stepWidth }}>
+    <div
+      className="flex flex-col justify-center gap-0.5 px-2.5"
+      style={{ height: NODE.collapsedHeight }}
+    >
+      <span className="flex items-baseline gap-1.5 overflow-hidden">
+        <HarnessMark harnessId={runtime.harnessId} className="translate-y-0.5" />
+        <span className="shrink-0 text-ui text-foreground">
+          {harnessLabelFor(runtime.harnessId)}
+        </span>
+        <span className="truncate font-mono text-label text-muted-foreground">{runtime.model}</span>
+      </span>
+      {/* Its own line rather than trailing the model, because the model name is
+          long and variable and would push the safety-relevant half of the
+          runtime off the end of exactly the steps that need watching. */}
+      <span className="truncate font-mono text-label text-muted-foreground">
+        {dials.join(" · ")}
+      </span>
+      <span className="truncate text-label text-muted-foreground">
+        {firstLine(step.instructions) || "No instructions"}
+      </span>
+    </div>
+  );
+}
+
+function StepNode({ data }: NodeProps<Node<StepData, "step">>) {
+  const { expanded, step } = data;
+
+  return (
+    <div className="relative" style={{ width: widthOf(expanded) }}>
       <Handle type="target" position={Position.Top} className="!bg-border" />
-      <GrabBar label="Run">
-        {data.removable ? (
-          <Button variant="ghost" size="icon-xs" aria-label="Remove step" onClick={data.onRemove}>
-            <TrashIcon />
+
+      {/* A collapsed node has nothing to select or scroll inside it, so it can
+          be dragged by its body and does not need a grab bar. The bar is the
+          cost of being editable, and it is only paid where editing happens. */}
+      {expanded ? (
+        <GrabBar label="Run">
+          <Button variant="ghost" size="icon-xs" aria-label="Collapse step" onClick={data.onToggle}>
+            <ArrowsInSimpleIcon />
           </Button>
-        ) : null}
-      </GrabBar>
-      <div className="nodrag nowheel overflow-y-auto" style={{ height: NODE.stepHeight - 26 }}>
-        <StepCard step={data.step} onChange={data.onChange} onDuplicate={null} onRemove={null} />
-      </div>
+          {data.removable ? (
+            <Button variant="ghost" size="icon-xs" aria-label="Remove step" onClick={data.onRemove}>
+              <TrashIcon />
+            </Button>
+          ) : null}
+        </GrabBar>
+      ) : null}
+
+      {expanded ? (
+        <div className="nodrag nowheel overflow-y-auto" style={{ height: NODE.stepHeight - 26 }}>
+          <StepCard step={step} onChange={data.onChange} onDuplicate={null} onRemove={null} />
+        </div>
+      ) : (
+        <button
+          type="button"
+          onDoubleClick={data.onToggle}
+          onClick={data.onToggle}
+          className={cn(
+            "w-full overflow-hidden rounded-lg border border-border bg-card text-left",
+            "transition-colors duration-150 ease-out hover:border-muted-foreground/40",
+            "motion-reduce:transition-none",
+          )}
+        >
+          <CollapsedStep step={step} />
+        </button>
+      )}
+
       <AddHandle side="bottom" onClick={() => data.onAdd("child")} label="Add a step after this" />
       <AddHandle side="right" onClick={() => data.onAdd("sibling")} label="Add a step alongside" />
       <Handle type="source" position={Position.Bottom} className="!bg-border" />
@@ -287,6 +430,10 @@ function Canvas() {
   const [trigger, setTrigger] = React.useState<Trigger>(SEEDED_AUTOMATIONS[2].trigger);
   const [name, setName] = React.useState(SEEDED_AUTOMATIONS[2].name);
   const [steps, setSteps] = React.useState<FlowStep[]>(SEED);
+  // One at a time. Two open cards is two 560px columns and the shape is gone
+  // again, which is the thing collapsing was for; and "click into it" only
+  // means something if there is a single thing you are inside of.
+  const [expandedId, setExpandedId] = React.useState<string | null>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([]);
   const [edges, setEdges] = useEdgesState<Edge>([]);
   const { fitView } = useReactFlow();
@@ -319,6 +466,10 @@ function Canvas() {
     setSteps((current) => {
       const seed = current.find((step) => step.id === parentId) ?? current.at(-1);
       const next = blankStep(seed?.runtime.harnessId ?? "claude-code");
+      // A new step is empty, so it opens: collapsed it would say nothing but
+      // its inherited harness, and you would have to click it to do the thing
+      // you were already doing.
+      setExpandedId(next.id);
       return [...current, { ...next, parentId }];
     });
   }, []);
@@ -328,11 +479,11 @@ function Canvas() {
    * automation, so typing a prompt does not relayout the canvas under the
    * cursor — the graph only moves when the graph changes.
    */
-  const signature = steps.map((step) => `${step.id}<${step.parentId}`).join("|");
+  const signature = `${expandedId}#${steps.map((step) => `${step.id}<${step.parentId}`).join("|")}`;
 
   React.useEffect(() => {
     const current = stepsRef.current;
-    const positions = layout(current);
+    const positions = layout(current, expandedId);
     const built: FlowNode[] = [
       {
         id: ROOT,
@@ -349,10 +500,14 @@ function Canvas() {
         id: step.id,
         type: "step" as const,
         position: positions.get(step.id) ?? { x: 0, y: NODE.triggerHeight },
-        dragHandle: ".flow-drag",
+        // Only an expanded node has a grab bar; a collapsed one drags by its
+        // body, so it must not name a handle that is not rendered.
+        dragHandle: step.id === expandedId ? ".flow-drag" : undefined,
         data: {
           step,
           removable: current.length > 1,
+          expanded: step.id === expandedId,
+          onToggle: () => setExpandedId((open) => (open === step.id ? null : step.id)),
           onChange: updateStep,
           onRemove: () => removeStep(step.id),
           onAdd: (relation: "child" | "sibling") =>
@@ -362,7 +517,29 @@ function Canvas() {
     ];
     setNodes(built);
     setEdges(edgesFor(current));
-  }, [signature, addStep, removeStep, updateStep, setNodes, setEdges, trigger]);
+  }, [signature, expandedId, addStep, removeStep, updateStep, setNodes, setEdges, trigger]);
+
+  /**
+   * The camera follows what you opened.
+   *
+   * Without this, expanding a node lays out a 486px card and leaves the
+   * viewport where it was, so half of the thing you just clicked into is below
+   * the fold and your first act is to scroll. "Click into it" has to mean the
+   * canvas moves; collapsing hands the whole graph back.
+   *
+   * Deferred a frame because the node it is aiming at is measured by the effect
+   * above, which has not run when this one is queued on the same change.
+   */
+  React.useEffect(() => {
+    const at = window.setTimeout(() => {
+      void fitView(
+        expandedId === null
+          ? { duration: 260, padding: 0.2, maxZoom: 1 }
+          : { duration: 260, padding: 0.12, maxZoom: 1, nodes: [{ id: expandedId }] },
+      );
+    }, 16);
+    return () => window.clearTimeout(at);
+  }, [expandedId, fitView]);
 
   // Prompt edits must reach the node without rebuilding the graph, or every
   // keystroke would reset positions and blur the editor.
@@ -377,7 +554,7 @@ function Canvas() {
   }, [steps, setNodes]);
 
   function tidy() {
-    const positions = layout(stepsRef.current);
+    const positions = layout(stepsRef.current, expandedId);
     setNodes((current) =>
       current.map((node) =>
         node.id === ROOT
@@ -385,7 +562,10 @@ function Canvas() {
           : { ...node, position: positions.get(node.id) ?? node.position },
       ),
     );
-    window.setTimeout(() => void fitView({ duration: 240, padding: 0.15 }), 0);
+    // maxZoom 1, or a two-node graph fits by scaling ITSELF up to fill the
+    // window and the whole point of collapsing — that a step is a small thing —
+    // is undone by the camera.
+    window.setTimeout(() => void fitView({ duration: 240, padding: 0.2, maxZoom: 1 }), 0);
   }
 
   return (
@@ -411,7 +591,7 @@ function Canvas() {
           nodeTypes={NODE_TYPES}
           colorMode="dark"
           fitView
-          fitViewOptions={{ padding: 0.15 }}
+          fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
           minZoom={0.25}
           proOptions={{ hideAttribution: false }}
           nodesConnectable={false}
