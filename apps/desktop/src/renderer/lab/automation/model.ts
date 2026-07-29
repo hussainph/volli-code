@@ -23,18 +23,31 @@
  * groups, and it cannot find that out from a list with one entry.
  * ──────────────────────────────────────────────────────────────────────────
  *
- * ── WHY STEPS ─────────────────────────────────────────────────────────────
+ * ── WHY STAGES, AND WHY NOT A GRAPH ───────────────────────────────────────
  * A step is `{runtime, instructions}` — one session, one harness, one prompt.
- * v1 ships one step per automation and must LOOK like a form with one runtime
- * and one prompt, not like a workflow builder collapsed to n=1.
+ * A STAGE is a list of steps that start together. An Automation is a list of
+ * stages, run in order. That is the entire control flow, and the shape is the
+ * point:
  *
- * The list exists anyway because the two things most likely to be asked for next
- * both decompose into steps and nothing else: "review this with Codex AND with
- * Claude Code" is two parallel steps, and "when this finishes, do that" is two
- * sequential ones. Building the container now costs one array and one connector;
- * retrofitting it later costs the whole layout. See `SEEDED_AUTOMATIONS`'s
- * "Two-opinion review", which is the one seed with a second step precisely so the
- * shape gets judged rather than assumed.
+ *   • vertical position is TIME — stage 2 begins when every step in stage 1 has
+ *     exited;
+ *   • horizontal position is AT ONCE — steps inside one stage all start when
+ *     the stage does.
+ *
+ * Two earlier models failed, both by trying to be more general than the runtime
+ * can honour. `join: "with" | "after"` on a flat array meant "same parent as
+ * whoever precedes me", which cannot express a tree and silently re-parents a
+ * sibling when you insert in the middle. Replacing it with `after: <step id>`
+ * fixed that and bought a general tree — at which point a step indented under
+ * another one reads as a BRANCH, and the surface starts implying a conditional
+ * it has no way to evaluate. Volli would have to decide "did that step succeed"
+ * from harness events, and the five adapters do not agree on what they emit or
+ * when. A shape that promises if-then over an event stream that inconsistent is
+ * a shape that lies.
+ *
+ * Stages promise only what a process exit code can actually deliver, and they
+ * are unambiguous to read: there is no pointer to dangle, no cycle to detect, no
+ * orphan when you delete, and nothing a reader has to decode from a rail.
  * ──────────────────────────────────────────────────────────────────────────
  *
  * ── WHY TWO AUTHORING MODES ───────────────────────────────────────────────
@@ -363,26 +376,19 @@ export type AutomationScope = "global" | "project";
 export type AuthoringMode = "prose" | "placeholders";
 
 export interface AutomationStep {
-  id: string;
   /**
-   * The step this one waits for, or `null` to hang off the trigger.
-   *
-   * This replaced `join: "with" | "after"`, where `"with"` meant "same parent as
-   * whoever precedes me in the array". That rule reads fine and cannot express a
-   * tree: inserting a step in the middle silently re-parents the one after it,
-   * which the canvas prototype found by drawing two reviewers and watching the
-   * second become a child of the first. A named parent has no such state.
+   * Unique within the automation, and user-facing: it is the `## heading` this
+   * step's prose lives under in the file. Not a pointer — nothing else refers to
+   * it — so renaming one can only ever move a heading.
    */
-  after: string | null;
+  id: string;
   runtime: AutomationRuntime;
   mode: AuthoringMode;
   instructions: string;
 }
 
-/** The steps hanging directly off `parent` (`null` = off the trigger), in file order. */
-export function childrenOf(steps: AutomationStep[], parent: string | null): AutomationStep[] {
-  return steps.filter((step) => step.after === parent);
-}
+/** Steps that start together. Never empty — removing the last one removes the stage. */
+export type Stage = AutomationStep[];
 
 /** The first non-empty line, for the collapsed face. */
 export function firstLine(text: string): string {
@@ -399,17 +405,67 @@ export interface Automation {
   scope: AutomationScope;
   name: string;
   trigger: Trigger;
-  steps: AutomationStep[];
+  /** In order. Stage `n + 1` starts when every step in stage `n` has exited. */
+  stages: Stage[];
+}
+
+/** Every step, in run order. */
+export function allSteps(automation: Automation): AutomationStep[] {
+  return automation.stages.flat();
 }
 
 /** The step whose harness stands for the automation in one-mark surfaces. */
 export function primaryRuntime(automation: Automation): AutomationRuntime {
-  return automation.steps[0].runtime;
+  return automation.stages[0][0].runtime;
 }
 
 /** Every harness this automation would start, in step order, deduplicated. */
 export function harnessTrail(automation: Automation): LabHarnessId[] {
-  return [...new Set(automation.steps.map((step) => step.runtime.harnessId))];
+  return [...new Set(allSteps(automation).map((step) => step.runtime.harnessId))];
+}
+
+/* ------------------------------------------------------------ stage edits */
+
+/**
+ * Every structural edit the editor can make, as pure functions over `Stage[]`.
+ *
+ * They live here rather than in the scratch because they are the part that was
+ * actually broken before — under `after` pointers, "remove" had to re-parent
+ * orphans and "rename" had to rewrite every reference, and both were one-off
+ * loops inside a component with no test around them. Over stages each of these
+ * is a slice, which is the argument for the model in one paragraph.
+ */
+
+/** Swaps a step for an edited copy of itself, in place. */
+export function replaceStep(stages: Stage[], next: AutomationStep): Stage[] {
+  return stages.map((stage) => stage.map((step) => (step.id === next.id ? next : step)));
+}
+
+/** Renaming moves the `## heading` its prose lives under. Nothing else moves. */
+export function renameStep(stages: Stage[], from: string, to: string): Stage[] {
+  return stages.map((stage) =>
+    stage.map((step) => (step.id === from ? { ...step, id: to } : step)),
+  );
+}
+
+/** Removes a step, and the stage with it when it was the last one there. */
+export function removeStep(stages: Stage[], id: string): Stage[] {
+  const kept: Stage[] = [];
+  for (const stage of stages) {
+    const remaining = stage.filter((step) => step.id !== id);
+    if (remaining.length > 0) kept.push(remaining);
+  }
+  return kept;
+}
+
+/** A new stage at `at`, running on its own between whatever sits either side. */
+export function insertStage(stages: Stage[], at: number, step: AutomationStep): Stage[] {
+  return [...stages.slice(0, at), [step], ...stages.slice(at)];
+}
+
+/** A step added to an existing stage — it starts alongside the ones already there. */
+export function addToStage(stages: Stage[], at: number, step: AutomationStep): Stage[] {
+  return stages.map((stage, index) => (index === at ? [...stage, step] : stage));
 }
 
 /**
@@ -547,18 +603,24 @@ export function tokenizeInstructions(text: string, mode: AuthoringMode): Instruc
   return tokens;
 }
 
-let stepSeq = 0;
+/**
+ * An unused step id built from `base`: `codex`, then `codex-2`, and so on.
+ *
+ * Named for the harness rather than numbered, because the id is the `## heading`
+ * a person reads in the file — `## codex` says what that section is, `## step-3`
+ * says only that it was the third one added.
+ */
+export function freshStepId(stages: Stage[], base: string): string {
+  const taken = new Set(stages.flat().map((step) => step.id));
+  if (!taken.has(base)) return base;
+  let suffix = 2;
+  while (taken.has(`${base}-${suffix}`)) suffix += 1;
+  return `${base}-${suffix}`;
+}
 
 /** A fresh step. Prose by default — placeholders is the escape hatch, not the door. */
-export function blankStep(harnessId: LabHarnessId, after: string | null = null): AutomationStep {
-  stepSeq += 1;
-  return {
-    id: `step-${stepSeq}`,
-    after,
-    runtime: defaultRuntime(harnessId),
-    mode: "prose",
-    instructions: "",
-  };
+export function blankStep(harnessId: LabHarnessId, id: string): AutomationStep {
+  return { id, runtime: defaultRuntime(harnessId), mode: "prose", instructions: "" };
 }
 
 function seedStep(
@@ -567,9 +629,8 @@ function seedStep(
   patch: Partial<AutomationRuntime>,
   mode: AuthoringMode,
   instructions: string,
-  after: string | null = null,
 ): AutomationStep {
-  return { id, after, runtime: { ...defaultRuntime(harnessId), ...patch }, mode, instructions };
+  return { id, runtime: { ...defaultRuntime(harnessId), ...patch }, mode, instructions };
 }
 
 /**
@@ -578,26 +639,31 @@ function seedStep(
  * the exact surprise the automation-only-de-escalates rule exists to prevent.
  *
  * Four of the five are prose, written the way a person actually writes a prompt.
- * "Two-opinion review" is deliberately the one that is BOTH placeholders-mode and
- * two-step, because it is the single case that stresses everything at once: the
- * diff has to LEAD and the ticket body has to be demoted underneath it, and the
- * whole point of a second reader is that it is a different reader. If the
- * multi-step container is wrong, it is wrong here first.
+ * "Two-opinion review" is deliberately the one that stresses everything at once:
+ * placeholders mode, two readers running side by side in one stage, and a third
+ * step in a SECOND stage that cannot start until both have finished. If the
+ * stage container is wrong, it is wrong here first.
+ *
+ * "Grill the ticket" fires in two columns, which is the other case worth seeding
+ * — on the board it appears in both lanes, because one file genuinely does fire
+ * in both places and a board that showed it once would have to pick a lie.
  */
 export const SEEDED_AUTOMATIONS: Automation[] = [
   {
     id: "atm-grill",
     scope: "project",
     name: "Grill the ticket",
-    trigger: { kind: "enters-column", columns: ["todo"] },
-    steps: [
-      seedStep(
-        "grill",
-        "claude-code",
-        { model: "claude-opus-5", effort: "high", approvals: "plan" },
-        "prose",
-        "Before writing any code, interrogate this ticket with me. Read it, then find the parts that are underspecified, the assumptions I have not stated, and anything that contradicts what is already in the codebase.\n\nAsk one question at a time. When we agree on the shape, write it back into the ticket body.",
-      ),
+    trigger: { kind: "enters-column", columns: ["backlog", "todo"] },
+    stages: [
+      [
+        seedStep(
+          "grill",
+          "claude-code",
+          { model: "claude-opus-5", effort: "high", approvals: "plan" },
+          "prose",
+          "Before writing any code, interrogate this ticket with me. Read it, then find the parts that are underspecified, the assumptions I have not stated, and anything that contradicts what is already in the codebase.\n\nAsk one question at a time. When we agree on the shape, write it back into the ticket body.",
+        ),
+      ],
     ],
   },
   {
@@ -605,14 +671,16 @@ export const SEEDED_AUTOMATIONS: Automation[] = [
     scope: "project",
     name: "Implement",
     trigger: { kind: "enters-column", columns: ["doing"] },
-    steps: [
-      seedStep(
-        "implement",
-        "claude-code",
-        { model: "claude-opus-5", effort: "high", approvals: "acceptEdits" },
-        "prose",
-        "Implement this ticket. Match the conventions of the code you are changing rather than importing new ones, and run the project's checks before you tell me it is done.\n\nIf the ticket turns out to be wrong, stop and say so instead of building the wrong thing well.",
-      ),
+    stages: [
+      [
+        seedStep(
+          "implement",
+          "claude-code",
+          { model: "claude-opus-5", effort: "high", approvals: "acceptEdits" },
+          "prose",
+          "Implement this ticket. Match the conventions of the code you are changing rather than importing new ones, and run the project's checks before you tell me it is done.\n\nIf the ticket turns out to be wrong, stop and say so instead of building the wrong thing well.",
+        ),
+      ],
     ],
   },
   {
@@ -620,21 +688,32 @@ export const SEEDED_AUTOMATIONS: Automation[] = [
     scope: "project",
     name: "Two-opinion review",
     trigger: { kind: "enters-column", columns: ["needs_review"] },
-    steps: [
-      seedStep(
-        "codex",
-        "codex",
-        { model: "gpt-5.1-codex", effort: "high", approvals: "read-only" },
-        "placeholders",
-        "Review {{change_set}} on {{branch}}.\n\nThe ticket it claims to implement, for context only: {{brief}}\n\nBe specific about what is wrong and where. Do not restate what the diff already says.",
-      ),
-      seedStep(
-        "cursor",
-        "cursor",
-        { model: "sonnet-4-thinking", approvals: "sandbox" },
-        "placeholders",
-        "Read {{change_set}} looking only for what it BREAKS — call sites it missed, invariants it quietly drops, tests that now pass for the wrong reason.\n\nIgnore style. Another reviewer has the ticket; you have the blast radius.",
-      ),
+    stages: [
+      [
+        seedStep(
+          "codex",
+          "codex",
+          { model: "gpt-5.1-codex", effort: "high", approvals: "read-only" },
+          "placeholders",
+          "Review {{change_set}} on {{branch}}.\n\nThe ticket it claims to implement, for context only: {{brief}}\n\nBe specific about what is wrong and where. Do not restate what the diff already says.",
+        ),
+        seedStep(
+          "cursor",
+          "cursor",
+          { model: "sonnet-4-thinking", approvals: "sandbox" },
+          "placeholders",
+          "Read {{change_set}} looking only for what it BREAKS — call sites it missed, invariants it quietly drops, tests that now pass for the wrong reason.\n\nIgnore style. Another reviewer has the ticket; you have the blast radius.",
+        ),
+      ],
+      [
+        seedStep(
+          "triage",
+          "claude-code",
+          { model: "claude-sonnet-5", effort: "medium", approvals: "plan" },
+          "prose",
+          "Two reviewers have just finished on this branch and both have commented on the ticket. Read what they said.\n\nMerge them into one list, drop anything they disagree about that the diff settles either way, and mark each item blocker or nit. Say plainly if neither of them found anything.",
+        ),
+      ],
     ],
   },
   {
@@ -642,14 +721,16 @@ export const SEEDED_AUTOMATIONS: Automation[] = [
     scope: "project",
     name: "Wrap up",
     trigger: { kind: "enters-column", columns: ["done"] },
-    steps: [
-      seedStep(
-        "wrapup",
-        "claude-code",
-        { model: "claude-sonnet-5", effort: "medium", approvals: "acceptEdits" },
-        "prose",
-        "This work is ready to land. Write the PR body from the ticket and from what actually changed — the ticket for the intent, the diff for the substance.\n\nFlag anything in the change set that the ticket never asked for.",
-      ),
+    stages: [
+      [
+        seedStep(
+          "wrapup",
+          "claude-code",
+          { model: "claude-sonnet-5", effort: "medium", approvals: "acceptEdits" },
+          "prose",
+          "This work is ready to land. Write the PR body from the ticket and from what actually changed — the ticket for the intent, the diff for the substance.\n\nFlag anything in the change set that the ticket never asked for.",
+        ),
+      ],
     ],
   },
   {
@@ -657,14 +738,16 @@ export const SEEDED_AUTOMATIONS: Automation[] = [
     scope: "global",
     name: "TDD loop",
     trigger: { kind: "manual" },
-    steps: [
-      seedStep(
-        "tdd",
-        "pi",
-        { model: "anthropic/claude-opus-5", effort: "high" },
-        "prose",
-        "/tdd\n\nRed, green, refactor. Write the failing test first and show it to me failing before you make it pass.",
-      ),
+    stages: [
+      [
+        seedStep(
+          "tdd",
+          "pi",
+          { model: "anthropic/claude-opus-5", effort: "high" },
+          "prose",
+          "/tdd\n\nRed, green, refactor. Write the failing test first and show it to me failing before you make it pass.",
+        ),
+      ],
     ],
   },
 ];
@@ -676,6 +759,6 @@ export function blankAutomation(scope: AutomationScope, from: TicketStatus | nul
     scope,
     name: "",
     trigger: { kind: "enters-column", columns: from === null ? [] : [from] },
-    steps: [blankStep("claude-code")],
+    stages: [[blankStep("claude-code", "claude-code")]],
   };
 }
