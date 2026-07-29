@@ -14,7 +14,7 @@ function deps(overrides: Partial<Parameters<typeof runHook>[1]> = {}) {
   const recorded: Recorded = { requests: [], stdinReads: 0 };
   const dependencies: Parameters<typeof runHook>[1] = {
     env: { VOLLI_SESSION: "session-7", VOLLI_SOCKET: "/profiles/volli.sock" },
-    cwd: "/work/volli",
+    cwd: () => "/work/volli",
     readStdin: async () => {
       recorded.stdinReads += 1;
       return "";
@@ -114,6 +114,20 @@ describe("runHook", () => {
       await expect(runHook(argv, dependencies)).resolves.toBe(0);
       expect(recorded.requests).toEqual([]);
     }
+  });
+
+  it("still reports when the directory it fired in has been deleted under it", async () => {
+    const { recorded, dependencies } = deps({
+      cwd: () => {
+        throw Object.assign(new Error("uv_cwd ENOENT"), { code: "ENOENT" });
+      },
+    });
+
+    // A worktree removed under a live PTY takes `process.cwd()` with it. The
+    // session id is the addressing, so the event still resolves — dropping it
+    // over a field the door does not read would lose the report that matters.
+    await expect(runHook(["claude-code", "input.needed"], dependencies)).resolves.toBe(0);
+    expect(recorded.requests[0]?.ctx.cwd).toBe("");
   });
 
   it("ignores a flag it does not know rather than refusing to report", async () => {

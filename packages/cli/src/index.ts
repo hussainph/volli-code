@@ -13,6 +13,23 @@ import { launchApp, requireLaunchSocketPath } from "./runtime";
 const env = process.env;
 const socketPath = env.VOLLI_SOCKET;
 
+/**
+ * Whether this process is a fired hook rather than a typed command. It decides
+ * what a failure is allowed to look like: a harness reads a hook's exit code as
+ * a decision (Claude Code takes 2 as "block this action") and its stdout as a
+ * reply, so a hook exits 0 in silence however badly it went — a dead Volli must
+ * never be able to wedge or mislead a live agent.
+ */
+const isHookInvocation = process.argv[2] === "hook";
+
+if (isHookInvocation) {
+  // The outermost guard, and the only one that catches what no `try` encloses:
+  // a throw from a stray timer, an unhandled rejection, a crash in something we
+  // called. Silent on both streams, and 0 by leaving the exit code alone.
+  process.on("uncaughtException", () => {});
+  process.on("unhandledRejection", () => {});
+}
+
 function detachedSpawn(executable: string, args: string[], childEnv: NodeJS.ProcessEnv): void {
   const child = spawn(executable, args, {
     detached: true,
@@ -67,14 +84,23 @@ async function main(): Promise<void> {
   // hook rather than typed, it must cost a harness running outside Volli
   // nothing, and it never renders anything for a reader — so it has no business
   // reaching the argument parser, the renderer, or the help system.
-  if (process.argv[2] === "hook") {
-    process.exitCode = await runHook(process.argv.slice(3), {
-      env,
-      cwd: process.cwd(),
-      readStdin: readStdinPayload,
-      request: (path, request, options) =>
-        requestAgent(path, request, { timeoutMs: options?.timeoutMs ?? 10_000 }),
-    });
+  //
+  // Nothing the invocation needs is resolved outside this guard, `process.cwd()`
+  // least of all: a session's worktree can be removed under a live PTY, and
+  // reading the working directory then throws ENOENT before the hook has had a
+  // chance to report anything.
+  if (isHookInvocation) {
+    try {
+      await runHook(process.argv.slice(3), {
+        env,
+        cwd: () => process.cwd(),
+        readStdin: readStdinPayload,
+        request: (path, request, options) =>
+          requestAgent(path, request, { timeoutMs: options?.timeoutMs ?? 10_000 }),
+      });
+    } catch {
+      // Silent on stdout and stderr alike, exiting 0 by leaving the code alone.
+    }
     return;
   }
   const exitCode = await runCli(process.argv.slice(2), {
@@ -107,4 +133,11 @@ async function main(): Promise<void> {
   process.exitCode = exitCode;
 }
 
-void main();
+// A rejection escaping here used to reach Node as an unhandled one: exit 1 and a
+// stack on stderr, which for a hook is the two things it may never emit. A typed
+// command still reports itself and fails, just in one legible line.
+void main().catch((error: unknown) => {
+  if (isHookInvocation) return;
+  process.exitCode = 1;
+  process.stderr.write(`volli: ${error instanceof Error ? error.message : String(error)}\n`);
+});

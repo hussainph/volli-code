@@ -100,7 +100,13 @@ function harnessSessionIdFrom(payload: string): string | null {
 
 export interface HookDependencies {
   env: Readonly<Record<string, string | undefined>>;
-  cwd: string;
+  /**
+   * The directory the hook fired in. A function rather than a value, because
+   * resolving it can throw: a session's worktree is deletable under a live PTY,
+   * and `process.cwd()` then fails with ENOENT. Evaluated inside the report,
+   * where every other failure already lands.
+   */
+  cwd(): string;
   /** The hook payload, for the harnesses that deliver it on stdin. */
   readStdin(): Promise<string>;
   request(
@@ -108,6 +114,20 @@ export interface HookDependencies {
     request: AgentRequest,
     options?: { timeoutMs?: number },
   ): Promise<AgentResponse>;
+}
+
+/**
+ * Where the hook fired, or `""` when that directory no longer exists. The
+ * session id is the addressing — main resolves the event off `VOLLI_SESSION`
+ * and never reads this — so a deleted worktree costs the report a field nobody
+ * consults, and must not cost it the report.
+ */
+function currentDirectory(deps: HookDependencies): string {
+  try {
+    return deps.cwd();
+  } catch {
+    return "";
+  }
 }
 
 /**
@@ -138,7 +158,7 @@ export async function runHook(rest: readonly string[], deps: HookDependencies): 
           event: invocation.event,
           ...(harnessSessionId === null ? {} : { harnessSessionId }),
         },
-        ctx: { cwd: deps.cwd, env: { socket: socketPath, session } },
+        ctx: { cwd: currentDirectory(deps), env: { socket: socketPath, session } },
       },
       { timeoutMs: HOOK_TIMEOUT_MS },
     );
