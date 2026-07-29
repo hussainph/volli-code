@@ -19,7 +19,14 @@
  * per-chunk hot path stays O(1).
  */
 import { create } from "zustand";
-import type { SessionActivityState } from "@volli/shared";
+import {
+  createSessionHarnessState,
+  receiveHarnessEvent,
+  type CreateSessionHarnessStateInput,
+  type HarnessEvent,
+  type SessionActivityState,
+  type SessionHarnessState,
+} from "@volli/shared";
 
 export type TerminalSplitDirection = "vertical" | "horizontal";
 
@@ -90,23 +97,32 @@ const WORKING_WINDOW_MS = 10_000;
 const OUTPUT_THROTTLE_MS = 1_000;
 
 /**
- * Honest PTY-derived session status (ticket-detail-mvp decision #5): `working`
- * when output landed within ~10s, `idle` when live but quiet, `parked` when the
- * warm-park tier has SIGSTOP'd the session's process tree to reclaim memory
- * (decision #32), `exited` once the shell is gone. `exited` wins over
- * everything else (a parked pane can't come back exited, but the check order
- * keeps the derivation defensive); `parked` then wins over working/idle. Pure
- * so the derivation is unit-tested independent of the clock; hook-driven states
- * (waiting-for-input, …) reuse this vocabulary later.
+ * Honest session status (ticket-detail-mvp decision #5): `working` when output
+ * landed within ~10s, `idle` when live but quiet, `parked` when the warm-park
+ * tier has SIGSTOP'd the session's process tree to reclaim memory (decision
+ * #32), `exited` once the shell is gone.
+ *
+ * Precedence, outside in. `exited` wins over everything (a parked pane can't
+ * come back exited, but the check order keeps the derivation defensive), then
+ * `parked` — both are facts about the process, and no hook payload outranks the
+ * process being stopped or gone. Then `declared`, the harness's own word for
+ * what it is doing, which beats output recency because recency is a proxy and
+ * the hook is the thing itself: an agent blocked at a permission prompt emits
+ * nothing, so derivation reads it as `idle` — exactly backwards. Absent a
+ * declared state the original output-recency derivation is unchanged.
+ *
+ * Pure and clock-injected, so every rung is unit-testable.
  */
 export function sessionActivityState(
   lastOutputAt: number | null,
   exited: boolean,
   now: number,
   parked: boolean,
+  declared: SessionActivityState | null = null,
 ): SessionActivityState {
   if (exited) return "exited";
   if (parked) return "parked";
+  if (declared !== null) return declared;
   if (lastOutputAt !== null && now - lastOutputAt <= WORKING_WINDOW_MS) return "working";
   return "idle";
 }
@@ -124,6 +140,13 @@ interface SessionsState {
    * against auto-park. Pushed by `onParkState` on every park/wake/pin change.
    */
   parkState: Record<string, { parked: boolean; keepAwake: boolean }>;
+  /**
+   * sessionId → what that session's harness has actually reported. Present only
+   * for sessions registered at launch by {@link SessionsState.expectHarnessEvents};
+   * an absent entry means "nothing is reporting here", which is the honest
+   * default and what every pre-existing session already looks like.
+   */
+  harness: Record<string, SessionHarnessState>;
   /** Owner ids with a terminal-create (tab or split leaf) in flight — disables their "New session". */
   starting: Record<string, true>;
   /**
@@ -152,6 +175,15 @@ interface SessionsState {
   bumpOutput(sessionId: string, now: number): void;
   /** Records a warm-park push from main; sourced from `window.api.terminal.onParkState`. */
   setParkState(sessionId: string, parked: boolean, keepAwake: boolean): void;
+  /**
+   * Registers what a launch expects its harness to report, at spawn — before
+   * the agent has produced a byte. The expectation is what makes silence
+   * legible later: without it, a wrapper that was bypassed is indistinguishable
+   * from a harness that never had hooks.
+   */
+  expectHarnessEvents(sessionId: string, input: CreateSessionHarnessStateInput): void;
+  /** Folds one canonical harness event pushed from main onto that session's state. */
+  applyHarnessEvent(sessionId: string, event: HarnessEvent): void;
   setStarting(ownerId: string, starting: boolean): void;
   forgetOwner(ownerId: string): void;
 }
@@ -236,12 +268,14 @@ function forgetTabIndexes(
   sessionOwner: Record<string, string>,
   lastOutputAt: Record<string, number>,
   parkState: Record<string, { parked: boolean; keepAwake: boolean }>,
+  harness: Record<string, SessionHarnessState>,
   tab: SessionTab,
 ): void {
   for (const pane of sessionPanes(tab.layout)) {
     delete sessionOwner[pane.sessionId];
     delete lastOutputAt[pane.sessionId];
     delete parkState[pane.sessionId];
+    delete harness[pane.sessionId];
   }
   // Also clear the tab-root routing entry: `closePane` deliberately RETAINS
   // `sessionOwner[tab.sessionId]` when the root pane is closed (the id stays the
@@ -250,6 +284,7 @@ function forgetTabIndexes(
   delete sessionOwner[tab.sessionId];
   delete lastOutputAt[tab.sessionId];
   delete parkState[tab.sessionId];
+  delete harness[tab.sessionId];
 }
 
 /** Factory so tests get isolated instances. */
@@ -259,6 +294,7 @@ export function createSessionsStore() {
     sessionOwner: {},
     lastOutputAt: {},
     parkState: {},
+    harness: {},
     starting: {},
 
     addSession(scope, sessionId, title) {
@@ -321,12 +357,14 @@ export function createSessionsStore() {
         const sessionOwner = { ...state.sessionOwner };
         const lastOutputAt = { ...state.lastOutputAt };
         const parkState = { ...state.parkState };
-        forgetTabIndexes(sessionOwner, lastOutputAt, parkState, removed);
+        const harness = { ...state.harness };
+        forgetTabIndexes(sessionOwner, lastOutputAt, parkState, harness, removed);
         return {
           byOwner: { ...state.byOwner, [ownerId]: { ...current, tabs, activeSessionId } },
           sessionOwner,
           lastOutputAt,
           parkState,
+          harness,
         };
       });
     },
@@ -353,10 +391,13 @@ export function createSessionsStore() {
         const sessionOwner = { ...state.sessionOwner };
         const lastOutputAt = { ...state.lastOutputAt };
         const parkState = { ...state.parkState };
-        // `lastOutputAt`/`parkState` are keyed per-pane, so the closed pane's
-        // entries always go — it can no longer produce output or be parked.
+        const harness = { ...state.harness };
+        // `lastOutputAt`/`parkState`/`harness` are keyed per-pane, so the closed
+        // pane's entries always go — it can no longer produce output, be parked,
+        // or have a harness reporting on its behalf.
         delete lastOutputAt[sessionId];
         delete parkState[sessionId];
+        delete harness[sessionId];
         // `sessionOwner` routes rename/exit lookups. Asymmetry: when the closed
         // pane IS the tab root (sessionId === tabId), the tab keeps that id as
         // its stable identity — rename/routing still resolve through it — so we
@@ -370,6 +411,7 @@ export function createSessionsStore() {
           sessionOwner,
           lastOutputAt,
           parkState,
+          harness,
         };
       });
     },
@@ -474,6 +516,23 @@ export function createSessionsStore() {
       });
     },
 
+    expectHarnessEvents(sessionId, input) {
+      set((state) => {
+        // Same late-push guard the park pushes carry: a launch that lost its
+        // race with a close must not leave a live-looking entry behind.
+        if (!(sessionId in state.sessionOwner)) return state;
+        return { harness: { ...state.harness, [sessionId]: createSessionHarnessState(input) } };
+      });
+    },
+
+    applyHarnessEvent(sessionId, event) {
+      set((state) => {
+        const current = state.harness[sessionId];
+        if (current === undefined) return state;
+        return { harness: { ...state.harness, [sessionId]: receiveHarnessEvent(current, event) } };
+      });
+    },
+
     setStarting(ownerId, starting) {
       set((state) => {
         const isStarting = ownerId in state.starting;
@@ -497,10 +556,11 @@ export function createSessionsStore() {
         const sessionOwner = { ...state.sessionOwner };
         const lastOutputAt = { ...state.lastOutputAt };
         const parkState = { ...state.parkState };
+        const harness = { ...state.harness };
         for (const tab of current?.tabs ?? []) {
-          forgetTabIndexes(sessionOwner, lastOutputAt, parkState, tab);
+          forgetTabIndexes(sessionOwner, lastOutputAt, parkState, harness, tab);
         }
-        return { byOwner, starting, sessionOwner, lastOutputAt, parkState };
+        return { byOwner, starting, sessionOwner, lastOutputAt, parkState, harness };
       });
     },
   }));

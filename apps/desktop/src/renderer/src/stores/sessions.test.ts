@@ -32,6 +32,19 @@ describe("sessionActivityState", () => {
     expect(sessionActivityState(1000, false, 11_001, false)).toBe("idle");
     expect(sessionActivityState(null, false, 50_000, false)).toBe("idle");
   });
+
+  it("prefers a hook-declared state over anything output recency would say", () => {
+    // The point of the whole channel: quiet at a permission prompt derives
+    // `idle`, and recent output while a prompt is up derives `working`.
+    expect(sessionActivityState(null, false, 50_000, false, "waiting")).toBe("waiting");
+    expect(sessionActivityState(1000, false, 1000, false, "waiting")).toBe("waiting");
+  });
+
+  it("lets the process outrank the harness: a stopped or gone shell isn't waiting", () => {
+    // A last hook payload can outlive the process it described.
+    expect(sessionActivityState(null, true, 1000, false, "waiting")).toBe("exited");
+    expect(sessionActivityState(null, false, 1000, true, "waiting")).toBe("parked");
+  });
 });
 
 describe("addSession", () => {
@@ -685,5 +698,59 @@ describe("findTabBySessionId", () => {
 
     expect(findTabBySessionId(store.getState().byOwner, "b1")?.ownerId).toBe("t1");
     expect(findTabBySessionId(store.getState().byOwner, "ghost")).toBeNull();
+  });
+});
+
+/** The launch expectation a hooked claude-code session is registered with. */
+const HOOKED_LAUNCH = {
+  harnessId: "claude-code",
+  expectedTier: "hooked",
+  declaredEvents: ["session.started", "turn.started", "input.needed"],
+  startedAt: 1000,
+} as const;
+
+describe("applyHarnessEvent", () => {
+  it("puts a session into the state its harness declares", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().expectHarnessEvents("s1", HOOKED_LAUNCH);
+
+    store.getState().applyHarnessEvent("s1", "input.needed");
+
+    expect(store.getState().harness["s1"]?.declared).toBe("waiting");
+  });
+
+  it("ignores an event for a session no launch ever registered", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", "Terminal 1");
+    const before = store.getState().harness;
+
+    store.getState().applyHarnessEvent("s1", "input.needed");
+
+    expect(store.getState().harness).toBe(before);
+  });
+});
+
+describe("expectHarnessEvents", () => {
+  it("refuses to register a session the store no longer knows", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().closeSession("p", "s1");
+
+    // A launch that lost its race with a close must not leave a live-looking
+    // harness entry behind for a PTY that is already gone.
+    store.getState().expectHarnessEvents("s1", HOOKED_LAUNCH);
+
+    expect(store.getState().harness["s1"]).toBeUndefined();
+  });
+
+  it("forgets a session's harness state when its tab closes", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().expectHarnessEvents("s1", HOOKED_LAUNCH);
+
+    store.getState().closeSession("p", "s1");
+
+    expect(store.getState().harness["s1"]).toBeUndefined();
   });
 });
