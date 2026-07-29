@@ -8,7 +8,9 @@ import {
   createSessionRecord,
   errorMessage,
   getHarnessAdapter,
+  harnessAdapters,
   resolveShell,
+  scrubInheritedSessionEnv,
 } from "@volli/shared";
 import type {
   CreateTerminalSessionRequest,
@@ -359,11 +361,24 @@ export class PtyManager {
         cwd,
         cols: request.cols,
         rows: request.rows,
-        // Inherit the user's environment; force TERM so the terminal emulator
-        // negotiates 256-color regardless of the parent's TERM; layer the ticket
-        // env (VOLLI_TICKET/VOLLI_ARTIFACTS_DIR) on top for ticket sessions,
-        // or just VOLLI_ARTIFACTS_DIR for scratch sessions.
-        env: { ...process.env, TERM: "xterm-256color", ...sessionEnv } as Record<string, string>,
+        // Inherit the user's environment MINUS every marker saying an agent
+        // session is already running in it — Volli is routinely launched from a
+        // terminal that is itself inside one, and `process.env` here is whatever
+        // launched the app, so those markers would otherwise be ambient in every
+        // terminal this window ever opens (see `scrubInheritedSessionEnv`; PATH,
+        // HOME and every credential survive it untouched). Then force TERM so
+        // the terminal emulator negotiates 256-color regardless of the parent's
+        // TERM; layer the ticket env (VOLLI_TICKET/VOLLI_ARTIFACTS_DIR) on top
+        // for ticket sessions, or just VOLLI_ARTIFACTS_DIR for scratch sessions.
+        //
+        // Scrubbed against the merged built-in + registered set when it exists,
+        // falling back to the built-ins for the same reason {@link adapterFor}
+        // does: a session can be created before the harness runtime regenerates.
+        env: {
+          ...scrubInheritedSessionEnv(process.env, this.agentRuntime?.adapters ?? harnessAdapters),
+          TERM: "xterm-256color",
+          ...sessionEnv,
+        },
       });
       // Same race, other side of the spawn: never register against a window
       // whose `destroyed` event already fired.

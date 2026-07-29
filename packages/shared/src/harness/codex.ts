@@ -82,4 +82,7 @@ export const codexAdapter: HarnessAdapter = {
     },
   ],
   launchSettings: [],
+  // Empty until a marker is observed on a real codex session — a guessed name is
+  // a variable deleted from the user's environment for no reason.
+  sessionMarkers: [],
 };

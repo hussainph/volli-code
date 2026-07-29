@@ -24,6 +24,7 @@ function bareAdapter(overrides: Partial<HarnessAdapter> = {}): HarnessAdapter {
     resume: { byId: null, latest: null, userResumeTokens: [] },
     events: [],
     launchSettings: [],
+    sessionMarkers: [],
     ...overrides,
   };
 }

@@ -49,4 +49,20 @@ export const claudeCodeAdapter: HarnessAdapter = {
     { event: "subagent.completed", native: "SubagentStop", delivery: "async", timeoutMs: 5000 },
   ],
   launchSettings: [{ path: "preferredNotifChannel", value: "notifications_disabled" }],
+  // Read off a live `claude` session's own environment, not from documentation.
+  // `CLAUDE_CODE_CHILD_SESSION` is the one with teeth: inherited, claude decides
+  // it is a nested run and disables transcript saving, which is the feature the
+  // whole board depends on. The rest are the same marker wearing other hats —
+  // the run's id, how it was entered, the bridge session it belongs to, the
+  // binary and pid that started it. None is a credential; `ANTHROPIC_API_KEY`
+  // and `CLAUDE_CONFIG_DIR` are, and deliberately are not here.
+  sessionMarkers: [
+    "CLAUDECODE",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_BRIDGE_SESSION_ID",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_PID",
+  ],
 };

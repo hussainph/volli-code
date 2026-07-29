@@ -45,4 +45,7 @@ export const opencodeAdapter: HarnessAdapter = {
     },
   ],
   launchSettings: [],
+  // Empty until a marker is observed on a real opencode session — a guessed name
+  // is a variable deleted from the user's environment for no reason.
+  sessionMarkers: [],
 };

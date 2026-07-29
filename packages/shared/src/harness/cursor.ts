@@ -40,4 +40,7 @@ export const cursorAdapter: HarnessAdapter = {
     { event: "tool.started", native: "preToolUse", delivery: "async", timeoutMs: 5000 },
   ],
   launchSettings: [],
+  // Empty until a marker is observed on a real cursor-agent session — a guessed
+  // name is a variable deleted from the user's environment for no reason.
+  sessionMarkers: [],
 };

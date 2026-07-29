@@ -168,6 +168,7 @@ describe("installHarnessSkills", () => {
     resume: { byId: null, latest: null, userResumeTokens: [] },
     events: [],
     launchSettings: [],
+    sessionMarkers: [],
   };
 
   it("delivers the skill pack to a registered harness, not only to the built-ins", async () => {

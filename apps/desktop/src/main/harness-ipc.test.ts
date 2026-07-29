@@ -448,6 +448,7 @@ const adapter = (id: HarnessId): HarnessAdapter => ({
   resume: { byId: null, latest: null, userResumeTokens: [] },
   events: [],
   launchSettings: [],
+  sessionMarkers: [],
 });
 
 /** The slug a manifest would be registered under, minted the way main mints it. */

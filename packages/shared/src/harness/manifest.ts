@@ -606,6 +606,15 @@ export function parseHarnessManifest(raw: unknown): ManifestParse {
       resume,
       events,
       launchSettings,
+      // Not a manifest field, and not an oversight. Every other field says what
+      // Volli should DO for this harness; this one names variables Volli deletes
+      // from the user's own environment before any shell starts, so a manifest
+      // declaring `SSH_AUTH_SOCK` or `AWS_PROFILE` would quietly break every
+      // terminal in the app — including ones that never run this harness — from
+      // a file that only had to appear on disk. A registered harness whose
+      // markers really do need clearing gets them here, in code, once they have
+      // been observed.
+      sessionMarkers: [],
     },
   };
 }

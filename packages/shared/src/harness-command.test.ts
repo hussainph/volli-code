@@ -41,6 +41,7 @@ function registered(overrides: Partial<HarnessAdapter> = {}): HarnessAdapter {
     resume: { byId: null, latest: null, userResumeTokens: [] },
     events: [],
     launchSettings: [],
+    sessionMarkers: [],
     ...overrides,
   };
 }
@@ -277,6 +278,7 @@ describe("buildHarnessResumeCommand", () => {
       resume: { byId: null, latest: null, userResumeTokens: [] },
       events: [],
       launchSettings: [],
+      sessionMarkers: [],
     };
     expect(buildResumeCommand(declared, "abc123", null)).toBeNull();
     expect(buildResumeCommand(declared, null, null)).toBeNull();

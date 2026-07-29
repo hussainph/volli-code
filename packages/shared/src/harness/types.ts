@@ -250,6 +250,29 @@ export interface HarnessAdapter {
    * harness handed the wrong one either rejects the key or, worse, ignores it.
    */
   readonly launchSettings: readonly { path: string; value: string | number | boolean }[];
+  /**
+   * The variables this harness stamps to say "one of MY sessions is already
+   * running here". Volli clears them out of the INHERITED environment before it
+   * spawns a session shell, so a Volli terminal is a fresh top-level session
+   * rather than a child of whatever happened to launch the app — Volli launched
+   * from a terminal that is itself inside an agent session otherwise passes that
+   * session's markers to every terminal it opens. Observed: `claude` reads its
+   * own child-session marker and turns transcript saving off for the whole run.
+   *
+   * Not the manifest's reserved names, which answer the opposite question.
+   * Reserved names are what a manifest may not SET, so they are stated as whole
+   * namespaces (`ANTHROPIC_*`, `CLAUDE_*`) — deliberately over-broad, because
+   * over-refusing a manifest costs a manifest author one error message. These
+   * are DELETED from the user's own environment, where the same breadth is a
+   * bug: `ANTHROPIC_API_KEY` is their credential and `CLAUDE_CONFIG_DIR` their
+   * configuration, and a terminal that starts without either is broken, not
+   * clean.
+   *
+   * So list names, conservatively, and only ones seen set on a real session: a
+   * marker named here that a harness never sets costs nothing at all, and one
+   * name too many costs the user a terminal that cannot authenticate.
+   */
+  readonly sessionMarkers: readonly string[];
 }
 
 /**
