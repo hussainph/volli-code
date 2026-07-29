@@ -33,13 +33,11 @@ steps:
     model: gpt-5.1-codex
     effort: high
     approvals: read-only
-    mode: placeholders
   - id: cursor
     also: true
     harness: cursor
     model: sonnet-4-thinking
     approvals: sandbox
-    mode: placeholders
 ---
 
 ## codex
@@ -68,7 +66,6 @@ describe("parseAutomationFile", () => {
       effort: "high",
       approvals: "acceptEdits",
     });
-    expect(automation.steps[0].mode).toBe("prose");
     expect(automation.steps[0].instructions).toBe(
       "Implement this ticket. Match the conventions of the code you are changing.",
     );
@@ -83,7 +80,6 @@ describe("parseAutomationFile", () => {
     expect(automation.steps[1].instructions).toBe(
       "Read {{change_set}} looking only for what it BREAKS.",
     );
-    expect(automation.steps.every((step) => step.mode === "placeholders")).toBe(true);
   });
 
   it("reads `also` as running with the step above, not after it", () => {
@@ -195,6 +191,14 @@ describe("parseAutomationFile diagnostics", () => {
     );
   });
 
+  it("names `mode` as gone rather than honouring a file that still carries it", () => {
+    // Placeholders mode was deleted. A file written while it existed parses, and
+    // says so, rather than quietly running with a field nothing reads.
+    expect(
+      messages(ONE_STEP.replace("    effort: high", "    mode: placeholders\n    effort: high")),
+    ).toContain("Ignored unknown step key `mode`");
+  });
+
   it("warns rather than silently dropping an unknown key", () => {
     expect(messages(ONE_STEP.replace("name: Implement", "name: Implement\nretries: 3"))).toContain(
       "Ignored unknown key `retries`",
@@ -256,7 +260,6 @@ describe("formatAutomationFile", () => {
   it("omits defaults so a simple automation stays a short file", () => {
     const text = formatAutomationFile(SEEDED_AUTOMATIONS[1]);
     expect(text).not.toContain("scope:");
-    expect(text).not.toContain("mode:");
     expect(text).not.toContain("also:");
     expect(text).not.toContain("## ");
   });
@@ -291,12 +294,13 @@ describe("paths", () => {
     expect(slugify("???")).toBe("untitled");
   });
 
-  it("puts project automations in the repo and global ones in config", () => {
-    expect(automationFilePath(SEEDED_AUTOMATIONS[2])).toBe(
-      ".volli/automations/two-opinion-review.md",
+  it("keys project automations by project, and global ones by nothing", () => {
+    // Neither lands in the repo: `.volli/` ignores itself, and Volli is
+    // single-player, so "checked in" buys review nobody performs at the cost of
+    // writing into someone's working tree.
+    expect(automationFilePath(SEEDED_AUTOMATIONS[2], "volli-code")).toBe(
+      "projects/volli-code/automations/two-opinion-review.md",
     );
-    expect(automationFilePath(SEEDED_AUTOMATIONS[4])).toBe(
-      "~/.config/volli/automations/tdd-loop.md",
-    );
+    expect(automationFilePath(SEEDED_AUTOMATIONS[4], "volli-code")).toBe("automations/tdd-loop.md");
   });
 });

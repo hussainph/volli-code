@@ -1,7 +1,7 @@
 /**
  * The Instructions editor: a real textarea with a painted highlight layer
- * behind it, so Context chips and harness commands read as objects instead of
- * as `{{double_brace}}` ASCII.
+ * behind it, so skill references read as objects and stray `{{braces}}` read as
+ * the mistake they now are.
  *
  * WHY THIS SHAPE. The first version of this form had a plain textarea plus a
  * separate "what gets sent" preview panel underneath. That panel was a
@@ -42,7 +42,7 @@ import * as React from "react";
 
 import { cn } from "@renderer/lib/utils";
 
-import { tokenizeInstructions, type AuthoringMode, type InstructionToken } from "./model";
+import { tokenizeInstructions, type InstructionToken } from "./model";
 
 /**
  * Every metric-affecting style, in one place, applied to both layers. Editing
@@ -59,26 +59,14 @@ function haloShadow(color: string): string {
 function TokenSpan({ token }: { token: InstructionToken }) {
   if (token.kind === "text") return <span>{token.value}</span>;
 
-  if (token.kind === "chip") {
-    // The braces stay — they are in the textarea — but drop to a third of the
-    // opacity so the eye reads the token name and treats the syntax as framing.
-    //
-    // `known` is false for EVERY chip in Basic mode, not just misspelled ones,
-    // and it paints destructive on purpose: in Basic mode nothing resolves the
-    // placeholder, so the agent would be handed the literal braces. That is a
-    // mistake worth showing as one.
+  if (token.kind === "brace") {
+    // Always destructive. Nothing resolves `{{braces}}` any more, so the agent
+    // would be handed them verbatim — and the people most likely to type one
+    // are the ones who used placeholders mode while it existed. The braces
+    // themselves drop to a third opacity so the eye reads the name and treats
+    // the syntax as framing.
     return (
-      <span
-        className={cn(
-          "rounded",
-          token.known ? "bg-primary/20 text-primary-text" : "bg-destructive/20 text-destructive",
-        )}
-        style={{
-          boxShadow: haloShadow(
-            token.known ? "color-mix(in oklab, var(--primary) 20%, transparent)" : "transparent",
-          ),
-        }}
-      >
+      <span className="rounded bg-destructive/20 text-destructive">
         <span className="opacity-35">{"{{"}</span>
         {token.token}
         <span className="opacity-35">{"}}"}</span>
@@ -115,11 +103,10 @@ export const ChipEditor = React.forwardRef<
   {
     value: string;
     onChange: (value: string) => void;
-    mode: AuthoringMode;
     placeholder?: string;
     className?: string;
   }
->(function ChipEditor({ value, onChange, mode, placeholder, className }, ref) {
+>(function ChipEditor({ value, onChange, placeholder, className }, ref) {
   const areaRef = React.useRef<HTMLTextAreaElement>(null);
   const paintRef = React.useRef<HTMLDivElement>(null);
 
@@ -143,7 +130,7 @@ export const ChipEditor = React.forwardRef<
     },
   }));
 
-  const tokens = tokenizeInstructions(value, mode);
+  const tokens = tokenizeInstructions(value);
 
   /**
    * Grow the textarea to fit its own content, every time the content changes.

@@ -52,7 +52,7 @@
  * store it.
  * ──────────────────────────────────────────────────────────────────────────
  *
- * ── WHY TWO AUTHORING MODES ───────────────────────────────────────────────
+ * ── WHY THE PROMPT IS ONLY PROSE ──────────────────────────────────────────
  * The original design gave every Automation a set of `{{context}}` placeholders
  * that Volli resolved before handing the prompt to the agent. Research into the
  * category found that nobody else does this: every shipped agent tool either
@@ -61,11 +61,18 @@
  * doing it well means Volli guessing, at author time, which slice of the ticket
  * matters for a run that has not happened yet.
  *
- * So PROSE mode has no substitutions at all. The prompt is prose, and every
- * prompt is appended with {@link APPENDED_CLI_NOTE}, which tells the agent it
- * has the `volli` CLI and which ticket it is on. The agent pulls what it wants.
- * PLACEHOLDERS mode restores them for the cases where you genuinely need to
- * control ordering — the review seed is the honest example.
+ * That left placeholders as an opt-in second mode "for the cases where you
+ * genuinely need to control ordering", which the two-opinion review seed was
+ * written to demonstrate. Rewriting that seed as prose settled it: the prose
+ * version is SHORTER and clearer than the one with `{{change_set}}` and
+ * `{{brief}}` in it, because the ordering it was fighting to control was never
+ * load-bearing. A mode whose only witness argues against it is a mode.
+ *
+ * So there is one way to write a prompt: prose, appended with
+ * {@link APPENDED_CLI_NOTE}, which tells the agent it has the `volli` CLI and
+ * which ticket it is on. The agent pulls what it wants. `{{braces}}` are still
+ * RECOGNISED — and always painted as a mistake, because they will be sent
+ * literally and someone will type them out of habit.
  * ──────────────────────────────────────────────────────────────────────────
  *
  * The one thing this models with real care is the part the UI cannot fake: an
@@ -369,15 +376,6 @@ export function triggerSummary(trigger: Trigger): string {
 export type AutomationScope = "global" | "project";
 
 /**
- * How one step's Instructions are authored.
- *
- * `prose` — prose only. Skills may be referenced; `{{placeholders}}` are not
- * resolved and are shown as a mistake if typed.
- * `placeholders` — they resolve against live ticket state at launch.
- */
-export type AuthoringMode = "prose" | "placeholders";
-
-/**
  * When a step starts, relative to the one above it.
  *
  * The values are the words the UI puts on the connector between two cards —
@@ -395,7 +393,6 @@ export interface AutomationStep {
   id: string;
   join: StepJoin;
   runtime: AutomationRuntime;
-  mode: AuthoringMode;
   instructions: string;
 }
 
@@ -543,31 +540,6 @@ export const SKILLS: Skill[] = [
   { name: "/security-review", detail: "~/.config/skills/security-review", source: "user" },
 ];
 
-/** A placeholder resolved against live ticket state at launch — placeholders mode only. */
-export interface ContextChip {
-  token: string;
-  label: string;
-  /** What it turns into, in one phrase — the form shows this, not a schema. */
-  resolves: string;
-}
-
-export const CONTEXT_CHIPS: ContextChip[] = [
-  {
-    token: "brief",
-    label: "Runtime Brief",
-    resolves: "orientation, body, attachments, CLI paragraph",
-  },
-  { token: "change_set", label: "Change Set", resolves: "the diff vs the merge base" },
-  { token: "comments", label: "Comments", resolves: "the ticket's comment timeline" },
-  { token: "pr", label: "Pull request", resolves: "PR url, state and checks" },
-  { token: "branch", label: "Branch", resolves: "branch name and base branch" },
-];
-
-/** `{{brief}}` → the chip, if it is one of ours. */
-export function chipFor(token: string): ContextChip | undefined {
-  return CONTEXT_CHIPS.find((chip) => chip.token === token);
-}
-
 /** `/volli` → the skill, if it is one of ours. */
 export function skillFor(name: string): Skill | undefined {
   return SKILLS.find((skill) => skill.name === name);
@@ -581,21 +553,22 @@ export function skillFor(name: string): Skill | undefined {
  */
 export type InstructionToken = { at: number } & (
   | { kind: "text"; value: string }
-  | { kind: "chip"; token: string; known: boolean }
+  | { kind: "brace"; token: string }
   | { kind: "skill"; name: string; known: boolean }
 );
 
 /**
- * Splits Instructions into prose, chips and skill references so the editor can
- * paint each differently. One pass, because the three token shapes can't nest.
+ * Splits Instructions into prose, stray braces and skill references so the
+ * editor can paint each differently. One pass, because the three token shapes
+ * can't nest.
  *
- * `mode` changes only what counts as KNOWN, never what is recognised: a
- * `{{chip}}` in prose mode is still found, and still tokenised as a chip — it is
- * just marked unknown, because in prose mode nothing will resolve it and the
- * agent would receive the literal braces. Silently painting it as valid would be
- * the worst of the options.
+ * `{{braces}}` are recognised precisely so they can be painted as WRONG.
+ * Nothing resolves them any more, so the agent would receive them verbatim —
+ * and the people most likely to type one are the ones who used the feature
+ * while it existed. Silently rendering them as ordinary prose is the one
+ * option that guarantees the mistake ships.
  */
-export function tokenizeInstructions(text: string, mode: AuthoringMode): InstructionToken[] {
+export function tokenizeInstructions(text: string): InstructionToken[] {
   const pattern = /\{\{(\w+)\}\}|(?:^|(?<=\s))(\/[\w-]+)/g;
   const tokens: InstructionToken[] = [];
   let cursor = 0;
@@ -604,12 +577,7 @@ export function tokenizeInstructions(text: string, mode: AuthoringMode): Instruc
     const at = match.index;
     if (at > cursor) tokens.push({ kind: "text", at: cursor, value: text.slice(cursor, at) });
     if (match[1] !== undefined) {
-      tokens.push({
-        kind: "chip",
-        at,
-        token: match[1],
-        known: mode === "placeholders" && chipFor(match[1]) !== undefined,
-      });
+      tokens.push({ kind: "brace", at, token: match[1] });
     } else {
       // Never blocked, only marked: an unrecognised skill renders as prose with
       // a quiet unverified affordance. Volli cannot see every skill directory a
@@ -637,20 +605,19 @@ export function freshStepId(steps: AutomationStep[], base: string): string {
   return `${base}-${suffix}`;
 }
 
-/** A fresh step. Prose by default — placeholders is the escape hatch, not the door. */
+/** A fresh step. */
 export function blankStep(harnessId: LabHarnessId, id: string): AutomationStep {
-  return { id, join: "then", runtime: defaultRuntime(harnessId), mode: "prose", instructions: "" };
+  return { id, join: "then", runtime: defaultRuntime(harnessId), instructions: "" };
 }
 
 function seedStep(
   id: string,
   harnessId: LabHarnessId,
   patch: Partial<AutomationRuntime>,
-  mode: AuthoringMode,
   instructions: string,
   join: StepJoin = "then",
 ): AutomationStep {
-  return { id, join, runtime: { ...defaultRuntime(harnessId), ...patch }, mode, instructions };
+  return { id, join, runtime: { ...defaultRuntime(harnessId), ...patch }, instructions };
 }
 
 /**
@@ -658,11 +625,16 @@ function seedStep(
  * unarmed. Seeded-and-armed would spend tokens on someone's first drag, which is
  * the exact surprise the automation-only-de-escalates rule exists to prevent.
  *
- * Four of the five are prose, written the way a person actually writes a prompt.
- * "Two-opinion review" is deliberately the one that stresses everything at once:
- * placeholders mode, two readers running side by side in one stage, and a third
- * step in a SECOND stage that cannot start until both have finished. If the
- * stage container is wrong, it is wrong here first.
+ * Every one is prose, written the way a person actually writes a prompt.
+ * "Two-opinion review" stresses the structure: two readers running side by side,
+ * and a third step after them that cannot start until both have finished. If the
+ * list-with-a-flag is wrong, it is wrong here first.
+ *
+ * It is also the seed that killed placeholders mode. It used to open `Review
+ * {{change_set}} on {{branch}}.` with `{{brief}}` demoted underneath, and the
+ * prose rewrite is both shorter and clearer — the agent has `volli diff` and
+ * `volli ticket show` from {@link APPENDED_CLI_NOTE} and does not need to be
+ * handed a pre-ordered digest.
  *
  * "Grill the ticket" fires in two columns, which is the other case worth seeding
  * — on the board it appears in both lanes, because one file genuinely does fire
@@ -679,7 +651,6 @@ export const SEEDED_AUTOMATIONS: Automation[] = [
         "grill",
         "claude-code",
         { model: "claude-opus-5", effort: "high", approvals: "plan" },
-        "prose",
         "Before writing any code, interrogate this ticket with me. Read it, then find the parts that are underspecified, the assumptions I have not stated, and anything that contradicts what is already in the codebase.\n\nAsk one question at a time. When we agree on the shape, write it back into the ticket body.",
       ),
     ],
@@ -694,7 +665,6 @@ export const SEEDED_AUTOMATIONS: Automation[] = [
         "implement",
         "claude-code",
         { model: "claude-opus-5", effort: "high", approvals: "acceptEdits" },
-        "prose",
         "Implement this ticket. Match the conventions of the code you are changing rather than importing new ones, and run the project's checks before you tell me it is done.\n\nIf the ticket turns out to be wrong, stop and say so instead of building the wrong thing well.",
       ),
     ],
@@ -709,22 +679,19 @@ export const SEEDED_AUTOMATIONS: Automation[] = [
         "codex",
         "codex",
         { model: "gpt-5.1-codex", effort: "high", approvals: "read-only" },
-        "placeholders",
-        "Review {{change_set}} on {{branch}}.\n\nThe ticket it claims to implement, for context only: {{brief}}\n\nBe specific about what is wrong and where. Do not restate what the diff already says.",
+        "Review the change set on this branch against the ticket it claims to implement.\n\nBe specific about what is wrong and where. Do not restate what the diff already says.",
       ),
       seedStep(
         "cursor",
         "cursor",
         { model: "sonnet-4-thinking", approvals: "sandbox" },
-        "placeholders",
-        "Read {{change_set}} looking only for what it BREAKS — call sites it missed, invariants it quietly drops, tests that now pass for the wrong reason.\n\nIgnore style. Another reviewer has the ticket; you have the blast radius.",
+        "Read the change set looking only for what it BREAKS — call sites it missed, invariants it quietly drops, tests that now pass for the wrong reason.\n\nIgnore style. Another reviewer has the ticket; you have the blast radius.",
         "with",
       ),
       seedStep(
         "triage",
         "claude-code",
         { model: "claude-sonnet-5", effort: "medium", approvals: "plan" },
-        "prose",
         "Two reviewers have just finished on this branch and both have commented on the ticket. Read what they said.\n\nMerge them into one list, drop anything they disagree about that the diff settles either way, and mark each item blocker or nit. Say plainly if neither of them found anything.",
       ),
     ],
@@ -739,7 +706,6 @@ export const SEEDED_AUTOMATIONS: Automation[] = [
         "wrapup",
         "claude-code",
         { model: "claude-sonnet-5", effort: "medium", approvals: "acceptEdits" },
-        "prose",
         "This work is ready to land. Write the PR body from the ticket and from what actually changed — the ticket for the intent, the diff for the substance.\n\nFlag anything in the change set that the ticket never asked for.",
       ),
     ],
@@ -754,7 +720,6 @@ export const SEEDED_AUTOMATIONS: Automation[] = [
         "tdd",
         "pi",
         { model: "anthropic/claude-opus-5", effort: "high" },
-        "prose",
         "/tdd\n\nRed, green, refactor. Write the failing test first and show it to me failing before you make it pass.",
       ),
     ],

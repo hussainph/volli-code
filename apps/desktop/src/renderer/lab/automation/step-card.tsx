@@ -39,7 +39,6 @@ import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import { Button } from "@renderer/components/ui/button";
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -57,7 +56,6 @@ import { ChipEditor, type ChipEditorHandle } from "./chip-editor";
 import { ApprovalsPicker, RuntimePicker } from "./runtime-picker";
 import {
   APPENDED_CLI_NOTE,
-  CONTEXT_CHIPS,
   SKILLS,
   tokenizeInstructions,
   type AutomationStep,
@@ -120,19 +118,15 @@ function AppendedContext() {
  */
 function StepMenu({
   step,
-  onChange,
   onInsert,
   onDuplicate,
   onRemove,
 }: {
   step: AutomationStep;
-  onChange: (step: AutomationStep) => void;
   onInsert: (snippet: string) => void;
   onDuplicate: (() => void) | null;
   onRemove: (() => void) | null;
 }) {
-  const placeholders = step.mode === "placeholders";
-
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -168,34 +162,6 @@ function StepMenu({
             </DropdownMenuSubContent>
           </DropdownMenuPortal>
         </DropdownMenuSub>
-
-        {/* Only reachable once placeholders is on, because in prose mode a chip
-            is sent as literal braces — offering to insert one would be offering
-            to make a mistake. */}
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger disabled={!placeholders}>Insert context</DropdownMenuSubTrigger>
-          <DropdownMenuPortal>
-            <DropdownMenuSubContent className="w-72">
-              {CONTEXT_CHIPS.map((chip) => (
-                <DropdownMenuItem
-                  key={chip.token}
-                  onSelect={() => onInsert(`{{${chip.token}}}`)}
-                  className="justify-between gap-6"
-                >
-                  <span className="font-mono">{chip.token}</span>
-                  <span className="text-xs text-muted-foreground">{chip.resolves}</span>
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuSubContent>
-          </DropdownMenuPortal>
-        </DropdownMenuSub>
-
-        <DropdownMenuCheckboxItem
-          checked={placeholders}
-          onCheckedChange={(on) => onChange({ ...step, mode: on ? "placeholders" : "prose" })}
-        >
-          Resolve placeholders
-        </DropdownMenuCheckboxItem>
 
         {onDuplicate === null && onRemove === null ? null : (
           <>
@@ -238,10 +204,10 @@ export function StepCard({
   onRemove: (() => void) | null;
 }) {
   const editorRef = React.useRef<ChipEditorHandle>(null);
-  const { mode, instructions } = step;
-  const tokens = tokenizeInstructions(instructions, mode);
+  const { instructions } = step;
+  const tokens = tokenizeInstructions(instructions);
   const unverifiedSkills = tokens.filter((token) => token.kind === "skill" && !token.known).length;
-  const strayPlaceholders = mode === "prose" && tokens.some((token) => token.kind === "chip");
+  const strayBraces = tokens.some((token) => token.kind === "brace");
 
   return (
     <div className="flex flex-col overflow-hidden rounded-xl border border-border bg-card">
@@ -256,7 +222,6 @@ export function StepCard({
         ref={editorRef}
         value={instructions}
         onChange={(value) => onChange({ ...step, instructions: value })}
-        mode={mode}
         placeholder="What should this agent do? / for skills"
         // A min and a max, never a fixed height: the editor grows with what you
         // write and then scrolls inside itself rather than pushing the row below
@@ -277,7 +242,6 @@ export function StepCard({
           <AppendedContext />
           <StepMenu
             step={step}
-            onChange={onChange}
             onInsert={(snippet) => editorRef.current?.insert(snippet)}
             onDuplicate={onDuplicate}
             onRemove={onRemove}
@@ -288,9 +252,9 @@ export function StepCard({
       {/* Both notes can be true at once, so they stack rather than compete for
           one slot — and they sit last, because appearing and disappearing as you
           type must not shift the buttons you are aiming at. */}
-      {strayPlaceholders || unverifiedSkills > 0 ? (
+      {strayBraces || unverifiedSkills > 0 ? (
         <div className="flex flex-col gap-1 border-t border-border bg-muted/30 px-3 py-1.5">
-          {strayPlaceholders ? (
+          {strayBraces ? (
             <p
               className={cn(
                 "flex items-center gap-1.5 text-label text-muted-foreground",
@@ -298,7 +262,7 @@ export function StepCard({
               )}
             >
               <WarningIcon className="size-3.5 shrink-0" />
-              {"{{ }} is sent literally unless placeholders are resolved"}
+              {"{{ }} is sent to the agent literally — write it in prose instead"}
             </p>
           ) : null}
           {unverifiedSkills > 0 ? (

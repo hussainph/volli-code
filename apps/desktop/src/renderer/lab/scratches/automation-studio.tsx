@@ -68,6 +68,7 @@ import { HarnessMark } from "../automation/harness-identity";
 import { StepCard } from "../automation/step-card";
 import { TriggerCard } from "../automation/trigger-card";
 import {
+  APP_DATA_DIR,
   automationFilePath,
   formatAutomationFile,
   parseAutomationFile,
@@ -120,6 +121,14 @@ const RUN_STATE: Record<string, RunState> = {
 function runStateOf(id: string): RunState {
   return RUN_STATE[id] ?? { kind: "idle" };
 }
+
+/**
+ * The project these seeds belong to. Lab fiction: the shipped surface reads it
+ * off the Project record, which is also what keys the automations directory —
+ * a ticket's worktree is a different PATH than its project root, so a
+ * path-keyed store would lose every automation the moment one was created.
+ */
+const LAB_PROJECT_SLUG = "volli-code";
 
 /** Only the running one pulses — two moving states means neither reads as urgent. */
 function RunDot({ state }: { state: RunState }) {
@@ -259,6 +268,12 @@ function IndexRail({
             ))}
         </div>
       ))}
+
+      {/* Named once, at the foot of the list the paths are relative to — rather
+          than repeated in full on every automation's header. */}
+      <p className="mt-auto px-2 pt-3 font-mono text-label break-words text-muted-foreground/60">
+        {APP_DATA_DIR}
+      </p>
     </nav>
   );
 }
@@ -614,8 +629,11 @@ function Editor({
               "focus-visible:ring-[3px] focus-visible:ring-ring/50",
             )}
           />
+          {/* Relative to {@link APP_DATA_DIR}, which is named once above the
+              rail rather than repeated on every automation — the shipped
+              version would put a Reveal in Finder action here instead. */}
           <span className="shrink-0 font-mono text-label text-muted-foreground">
-            {automationFilePath(automation)}
+            {automationFilePath(automation, LAB_PROJECT_SLUG)}
           </span>
           <Button
             variant="ghost"

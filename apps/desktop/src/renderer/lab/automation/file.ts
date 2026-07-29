@@ -89,7 +89,6 @@ import {
   type Automation,
   type AutomationScope,
   type AutomationStep,
-  type AuthoringMode,
   type LabHarnessId,
   type StepJoin,
   type Trigger,
@@ -339,7 +338,7 @@ function childValue(entry: Entry, key: string): { value: string; line: number } 
   return found === undefined ? undefined : { value: found.value, line: found.line };
 }
 
-const STEP_KEYS = new Set(["id", "harness", "model", "effort", "approvals", "mode", "also"]);
+const STEP_KEYS = new Set(["id", "harness", "model", "effort", "approvals", "also"]);
 
 function readStep(entry: Entry, index: number, diagnostics: FileDiagnostic[]): AutomationStep {
   for (const child of entry.children) {
@@ -419,20 +418,6 @@ function readStep(entry: Entry, index: number, diagnostics: FileDiagnostic[]): A
     }
   }
 
-  const rawMode = childValue(entry, "mode");
-  let mode: AuthoringMode = "prose";
-  if (rawMode !== undefined) {
-    if (rawMode.value === "prose" || rawMode.value === "placeholders") {
-      mode = rawMode.value;
-    } else {
-      diagnostics.push({
-        line: rawMode.line,
-        severity: "error",
-        message: `\`mode\` is prose or placeholders, not \`${rawMode.value}\``,
-      });
-    }
-  }
-
   const rawAlso = childValue(entry, "also");
   let join: StepJoin = "then";
   if (rawAlso !== undefined) {
@@ -455,7 +440,7 @@ function readStep(entry: Entry, index: number, diagnostics: FileDiagnostic[]): A
     }
   }
 
-  return { id, join, runtime, mode, instructions: "" };
+  return { id, join, runtime, instructions: "" };
 }
 
 /** Reads an automation file. Never throws — everything wrong becomes a diagnostic. */
@@ -596,7 +581,6 @@ function emptyAutomation(name: string, instructions: string): Automation {
         id: "claude-code",
         join: "then",
         runtime: defaultRuntime("claude-code"),
-        mode: "prose",
         instructions,
       },
     ],
@@ -640,7 +624,6 @@ export function formatAutomationFile(automation: Automation): string {
     if (adapter.approvals !== null && step.runtime.approvals !== null) {
       lines.push(`    approvals: ${step.runtime.approvals}`);
     }
-    if (step.mode !== "prose") lines.push(`    mode: ${step.mode}`);
   }
 
   lines.push("---", "");
@@ -669,23 +652,46 @@ export function slugify(name: string): string {
 }
 
 /**
- * Where the file lives.
- *
- * Project automations sit in the repo so they travel with it and get reviewed
- * like anything else; global ones sit in the user's config dir because they are
- * not a fact about any one codebase.
- *
- * NOTE, and it is load-bearing: `.volli/` today writes itself a `.gitignore`
- * containing `*` ({@link VOLLI_GITIGNORE_CONTENT}), so nothing under it is
- * committed. A format whose entire argument is "check this in" cannot live
- * under a directory that ignores itself — shipping this means that gitignore
- * grows an `!automations/` exception, or automations move out of `.volli`
- * entirely. Flagged here rather than fixed, because that constant is read by
- * main-process code on another branch.
+ * Volli's own data directory — `app.getPath("userData")`, spelled for display.
+ * macOS only, which the app already is.
  */
-export function automationFilePath(automation: Automation): string {
+export const APP_DATA_DIR = "~/Library/Application Support/Volli";
+
+/**
+ * Where the file lives, relative to {@link APP_DATA_DIR}.
+ *
+ * ── WHY NOT IN THE REPO ───────────────────────────────────────────────────
+ * The first draft put project automations at `.volli/automations/`, on the
+ * argument every reference product makes: a Playbook or an AGENTS.md is checked
+ * in, so it travels with the code and gets reviewed like anything else.
+ *
+ * Two things killed it. The small one: `.volli/` writes itself a `.gitignore`
+ * containing `*`, so nothing under it is committed — a format whose whole claim
+ * is "check this in" cannot live in a directory that ignores itself, and the
+ * alternative was teaching that gitignore an `!automations/` exception so one
+ * subdirectory of Volli's scratch space becomes repo source. That is a confusing
+ * split inside one directory.
+ *
+ * The load-bearing one: Volli is local-first and single-player. "Checked in"
+ * buys team review and portability, and there is no team. What actually makes
+ * this a file rather than a SQLite row is that it is hand-editable, diffable and
+ * writable by an agent — and none of that needs the repo. Meanwhile writing to
+ * someone's working tree is a real imposition, especially in a repo they do not
+ * own, and it puts Volli's config in every `git status` forever.
+ *
+ * So both scopes live in Volli's own directory, and project automations are
+ * keyed by the PROJECT rather than by the working directory — a ticket's
+ * worktree is a different path than its project root, and a path-keyed store
+ * would lose them every time one was created.
+ *
+ * The door is still open in one line: reading `.volli/automations/*.md` when
+ * present, for a repo that genuinely wants to commit one, is additive. Not
+ * built, because nothing has asked for it.
+ * ──────────────────────────────────────────────────────────────────────────
+ */
+export function automationFilePath(automation: Automation, projectSlug: string): string {
   const file = `${slugify(automation.name)}.md`;
   return automation.scope === "global"
-    ? `~/.config/volli/automations/${file}`
-    : `.volli/automations/${file}`;
+    ? `automations/${file}`
+    : `projects/${projectSlug}/automations/${file}`;
 }
