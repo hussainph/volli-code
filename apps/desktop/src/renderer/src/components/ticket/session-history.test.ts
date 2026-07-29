@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { HarnessId, SessionRecord } from "@volli/shared";
+import { createSessionHarnessState, type HarnessId, type SessionRecord } from "@volli/shared";
 
 import {
+  buildTicketSessionRows,
   canResumeSession,
   filterSessionHistory,
   groupSessionRows,
   latestResumableSession,
   sessionSourceLabel,
   type TicketSessionRow,
+  type TicketSessionRowsInput,
 } from "./session-history";
+import { ticketScope, type SessionTab } from "../../stores/sessions";
 
 function record(overrides: Partial<SessionRecord> = {}): SessionRecord {
   return {
@@ -39,6 +42,147 @@ function row(overrides: Partial<TicketSessionRow> = {}): TicketSessionRow {
     ...overrides,
   };
 }
+
+function tab(overrides: Partial<SessionTab> & { sessionId: string }): SessionTab {
+  return {
+    sessionId: overrides.sessionId,
+    title: overrides.title ?? "Session 1",
+    scope: overrides.scope ?? ticketScope("p1", "t1"),
+    layout: overrides.layout ?? { kind: "pane", sessionId: overrides.sessionId, exitCode: null },
+    activePaneId: overrides.activePaneId ?? overrides.sessionId,
+  };
+}
+
+function rowsInput(overrides: Partial<TicketSessionRowsInput> = {}): TicketSessionRowsInput {
+  return {
+    records: [record()],
+    tabs: [tab({ sessionId: "s1" })],
+    lastOutputAt: {},
+    parkState: {},
+    harness: {},
+    settingUp: false,
+    now: 1_000_000,
+    ...overrides,
+  };
+}
+
+describe("buildTicketSessionRows", () => {
+  it("reads a live, quiet pane as an open idle row titled by its live tab", () => {
+    expect(buildTicketSessionRows(rowsInput())).toEqual([
+      {
+        record: record(),
+        title: "Session 1",
+        isOpen: true,
+        isRoot: true,
+        tabId: "s1",
+        status: "idle",
+      },
+    ]);
+  });
+
+  it("names the worktree setup script a live pane is waiting on instead of its raw activity", () => {
+    const rows = buildTicketSessionRows(
+      rowsInput({ settingUp: true, lastOutputAt: { s1: 999_999 } }),
+    );
+    expect(rows[0]?.status).toBe("setup");
+  });
+
+  it("keeps an exited pane's real status during setup rather than claiming setup is still running", () => {
+    const rows = buildTicketSessionRows(
+      rowsInput({
+        settingUp: true,
+        tabs: [tab({ sessionId: "s1", layout: { kind: "pane", sessionId: "s1", exitCode: 1 } })],
+      }),
+    );
+    expect(rows[0]?.status).toBe("exited");
+  });
+
+  it("reads a harness-declared block as waiting, which no amount of PTY silence can say", () => {
+    const rows = buildTicketSessionRows(
+      rowsInput({
+        harness: {
+          s1: {
+            ...createSessionHarnessState({
+              harnessId: "claude-code",
+              expectedTier: "hooked",
+              declaredEvents: ["input.needed"],
+              startedAt: 0,
+            }),
+            delivered: true,
+            declared: "waiting",
+          },
+        },
+      }),
+    );
+    expect(rows[0]?.status).toBe("waiting");
+  });
+
+  it("reads a record with no open pane as an exited row under its own durable title", () => {
+    expect(
+      buildTicketSessionRows(
+        rowsInput({ records: [record({ title: "Old run", endedAt: 500 })], tabs: [] }),
+      ),
+    ).toEqual([
+      {
+        record: record({ title: "Old run", endedAt: 500 }),
+        title: "Old run",
+        isOpen: false,
+        isRoot: false,
+        tabId: undefined,
+        status: "exited",
+      },
+    ]);
+  });
+
+  it("keeps a live split pane live, under its own title but its tab's id", () => {
+    const rows = buildTicketSessionRows(
+      rowsInput({
+        records: [record({ id: "s1" }), record({ id: "s2", title: "Server logs" })],
+        tabs: [
+          tab({
+            sessionId: "s1",
+            title: "Renamed tab",
+            layout: {
+              kind: "split",
+              id: "s2",
+              direction: "vertical",
+              ratio: 0.5,
+              first: { kind: "pane", sessionId: "s1", exitCode: null },
+              second: { kind: "pane", sessionId: "s2", exitCode: null },
+            },
+          }),
+        ],
+        lastOutputAt: { s2: 999_999 },
+      }),
+    );
+
+    expect(rows).toEqual([
+      {
+        record: record({ id: "s1" }),
+        title: "Renamed tab",
+        isOpen: true,
+        isRoot: true,
+        tabId: "s1",
+        status: "idle",
+      },
+      {
+        record: record({ id: "s2", title: "Server logs" }),
+        title: "Server logs",
+        isOpen: true,
+        isRoot: false,
+        tabId: "s1",
+        status: "working",
+      },
+    ]);
+  });
+
+  it("reads a parked pane as parked", () => {
+    const rows = buildTicketSessionRows(
+      rowsInput({ parkState: { s1: { parked: true, keepAwake: false } } }),
+    );
+    expect(rows[0]?.status).toBe("parked");
+  });
+});
 
 describe("sessionSourceLabel", () => {
   it("uses the actual harness only for sessions that launched an agent", () => {
