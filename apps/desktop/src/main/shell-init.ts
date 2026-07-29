@@ -6,7 +6,7 @@
  * only thing that can work here — live in `@volli/shared`'s `shell-init`. This
  * writes them and reports the environment a PTY needs to pick them up.
  */
-import { mkdir, realpath, writeFile } from "node:fs/promises";
+import { mkdir, realpath } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import {
@@ -15,6 +15,12 @@ import {
   VOLLI_BIN_DIR_ENV,
   VOLLI_USER_ZDOTDIR_ENV,
 } from "@volli/shared";
+
+// The chain and the wrappers are the two halves of one generated runtime, and
+// they answer a hostile path the same way — borrowed rather than copied, because
+// a second copy of this rule is a copy that will one day only be fixed in the
+// other file.
+import { writeGeneratedFile } from "./harness-runtime";
 
 export interface ShellInitInput {
   /** The Volli-owned `ZDOTDIR` the generated files are written into. */
@@ -82,8 +88,12 @@ async function isOwnZdotDir(inherited: string, zdotDir: string): Promise<boolean
 export async function ensureShellInit(input: ShellInitInput): Promise<Record<string, string>> {
   if (!isZshShell(input.shellPath)) return {};
   await mkdir(input.zdotDir, { recursive: true });
+  // Every PTY sources this chain, which makes it the most valuable path in the
+  // app to redirect: a symlink planted at one of these names would have Volli
+  // write the file the user's every shell then executes. The write refuses
+  // instead, loudly — see {@link writeGeneratedFile}.
   for (const { name, content } of renderZshInitFiles()) {
-    await writeFile(join(input.zdotDir, name), content, { encoding: "utf8", mode: 0o600 });
+    await writeGeneratedFile(join(input.zdotDir, name), content, 0o600);
   }
   // Only when the user actually had one, and only when it is theirs — otherwise
   // the scripts' own `$HOME` default is right, and naming it here would bake

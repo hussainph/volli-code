@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -510,6 +510,59 @@ describe("ensureHarnessRuntime", () => {
     expect(await readFile(join(paths.binDir, "cursor-agent"), "utf8")).toContain(
       `export 'CURSOR_CONFIG_DIR=${harnessDir}'`,
     );
+  });
+
+  // A config file is written in place, so a symlink left at its name would have
+  // Volli write the hook config through to wherever it points — and the harness
+  // would then run whatever came back. The write refuses instead, and refuses
+  // loudly: a wrapper naming a config Volli never wrote is worse than no wrapper.
+  it("refuses to write a harness config through a symlink, and writes no wrapper for it", async () => {
+    const paths = await scratch();
+    const harnessDir = join(paths.harnessRoot, "cursor");
+    const elsewhere = join(scratchRoot, "somebody-elses.json");
+    await writeFile(elsewhere, "untouched", "utf8");
+    await mkdir(harnessDir, { recursive: true });
+    await symlink(elsewhere, join(harnessDir, "cli-config.json"));
+
+    await expect(
+      ensureHarnessRuntime({
+        ...paths,
+        socketPath: "/tmp/volli.sock",
+        adapters: [adapterFor("cursor")],
+        adapterCensus: "complete",
+        resolveCommand: () => Promise.resolve(null),
+      }),
+    ).rejects.toThrow(/Refusing to manage non-regular file .*cli-config\.json/);
+
+    expect(await readFile(elsewhere, "utf8")).toBe("untouched");
+    await expect(access(join(paths.binDir, "cursor-agent"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("writes a harness config that no link is sitting on", async () => {
+    const paths = await scratch();
+
+    await ensureHarnessRuntime({
+      ...paths,
+      socketPath: "/tmp/volli.sock",
+      adapters: [adapterFor("cursor")],
+      adapterCensus: "complete",
+      resolveCommand: () => Promise.resolve(null),
+    });
+
+    const configPath = join(paths.harnessRoot, "cursor", "cli-config.json");
+    expect((await stat(configPath)).isFile()).toBe(true);
+    // And it is still a plain replace on the next pass — the guard refuses a
+    // foreign path, not Volli's own previous write.
+    await ensureHarnessRuntime({
+      ...paths,
+      socketPath: "/tmp/volli.sock",
+      adapters: [adapterFor("cursor")],
+      adapterCensus: "complete",
+      resolveCommand: () => Promise.resolve(null),
+    });
+    expect((await stat(configPath)).isFile()).toBe(true);
   });
 });
 

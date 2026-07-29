@@ -4,8 +4,8 @@
  * launch configuration those wrappers apply.
  */
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { chmod, lstat, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 
 import {
   buildLaunchConfig,
@@ -131,6 +131,49 @@ export function harnessLaunchArgv(
   return config.argv.map((token) => token.replaceAll(HARNESS_DIR_TOKEN, harnessDir));
 }
 
+/**
+ * Replaces one generated file without ever writing THROUGH whatever is already
+ * at its path.
+ *
+ * {@link writeExecutable} gets this for free: it lands on a fresh temp and
+ * renames, and `rename` replaces a symlink rather than following it. A file
+ * written in place does not — `writeFile` opens the path, so a symlink someone
+ * left there silently redirects Volli's write to wherever it points. Both files
+ * that go through here are read by something Volli then runs (a harness's own
+ * configuration, and the zsh chain every PTY sources), which makes a redirected
+ * write here worth more than any other write the app makes.
+ *
+ * The refusal is a THROW rather than a skip, and says the same thing
+ * `harness-install.ts` says about the same rule: a managed write that could not
+ * happen is precisely the silent mutation failure this codebase refuses to
+ * carry. It is also a different answer from "nothing was there" — an ENOENT is
+ * not a failure at all here, it is the ordinary first write — because the two
+ * ask opposite things of the user. Absent means regenerate; occupied means
+ * something that is not Volli's owns this path, and regenerating will refuse
+ * again forever. `volli doctor --fix`, which is the remedy doctor prints for a
+ * missing chain, reports the refusal verbatim instead of hiding it.
+ */
+export async function writeGeneratedFile(
+  path: string,
+  content: string,
+  mode: number,
+): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  try {
+    const entry = await lstat(path);
+    if (!entry.isFile()) throw new Error(`Refusing to manage non-regular file ${path}`);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const temporaryPath = `${path}.volli-${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporaryPath, content, { encoding: "utf8", flag: "wx", mode });
+    await rename(temporaryPath, path);
+  } finally {
+    await rm(temporaryPath, { force: true });
+  }
+}
+
 /** Replaces one generated file in place: atomic temp + rename, never a partial script. */
 async function writeExecutable(path: string, content: string): Promise<void> {
   const temporaryPath = `${path}.tmp-${randomUUID()}`;
@@ -212,6 +255,16 @@ export async function ensureHarnessRuntime(input: HarnessRuntimeInput): Promise<
       continue;
     }
 
+    // The harness's own generated configuration, written BEFORE the wrapper
+    // that names it. The wrapper exports these paths, so a harness whose
+    // configuration Volli could not write must not get a wrapper claiming
+    // otherwise — and a refusal here (see {@link writeGeneratedFile}) leaves
+    // this harness unwrapped rather than launched against a file somebody else
+    // owns.
+    for (const file of config.files) {
+      await writeGeneratedFile(resolve(file.path), resolve(file.content), 0o600);
+    }
+
     // The wrapper carries everything true of THIS harness: the binary the trust
     // dialog named (the same resolution the shadow guard just performed), and
     // the configuration variables the harness itself reads — which belong to the
@@ -229,10 +282,6 @@ export async function ensureHarnessRuntime(input: HarnessRuntimeInput): Promise<
     wrappers.push(wrapperPath);
     wrapperPaths.set(adapter.id, wrapperPath);
 
-    if (config.files.length > 0) await mkdir(harnessDir, { recursive: true });
-    for (const file of config.files) {
-      await writeFile(resolve(file.path), resolve(file.content), { encoding: "utf8", mode: 0o600 });
-    }
     // One word per line, and no quoting: the wrapper applies this by field
     // splitting on newlines rather than by parsing it, so a `--settings` payload
     // full of quotes and braces arrives as the one word it left as.

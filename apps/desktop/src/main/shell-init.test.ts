@@ -146,4 +146,36 @@ describe("ensureShellInit", () => {
     expect(content).not.toContain("stale");
     expect(content).toContain("VOLLI_BIN_DIR");
   });
+
+  // Every PTY sources this chain, which makes a symlink planted at one of its
+  // names the most valuable redirect in the app: Volli would write the file the
+  // user's every shell then executes. The write refuses rather than follows —
+  // and refuses out loud, because a chain silently written somewhere else is a
+  // chain doctor would go on reporting as present.
+  it("refuses to write a chain file through a symlink", async () => {
+    const root = await tmpDir();
+    const zdotDir = join(root, "zsh");
+    await fs.mkdir(zdotDir, { recursive: true });
+    const elsewhere = join(root, "somebody-elses.zshenv");
+    await fs.writeFile(elsewhere, "# not ours\n");
+    await fs.symlink(elsewhere, join(zdotDir, ZSH_INIT_FILENAMES[0]!));
+
+    await expect(shellInit({ zdotDir })).rejects.toThrow(
+      new RegExp(`Refusing to manage non-regular file .*${ZSH_INIT_FILENAMES[0]}`),
+    );
+    expect(await fs.readFile(elsewhere, "utf8")).toBe("# not ours\n");
+  });
+
+  // The refusal above must not read as the ordinary first write. Absent means
+  // "regenerate"; occupied means "something else owns this path", and
+  // `doctor --fix` would repeat the refusal forever if the two were one answer.
+  it("treats an absent chain file as the ordinary first write", async () => {
+    const root = await tmpDir();
+    const zdotDir = join(root, "never-written", "zsh");
+
+    await expect(shellInit({ zdotDir })).resolves.toMatchObject({ ZDOTDIR: zdotDir });
+    for (const name of ZSH_INIT_FILENAMES) {
+      expect((await fs.lstat(join(zdotDir, name))).isFile()).toBe(true);
+    }
+  });
 });
