@@ -449,11 +449,19 @@ function StepBranch({
   const forked = generation.length > 1;
 
   return (
-    <div className={cn("flex flex-col gap-3", forked && "border-l border-border pl-4")}>
+    // The rail is drawn on `muted-foreground`, not `border`. Structure is the
+    // one thing this surface exists to make visible, and on the border token it
+    // came out fainter than the outline of the cards it was joining.
+    <div
+      className={cn("flex flex-col gap-3", forked && "border-l border-muted-foreground/30 pl-4")}
+    >
       {generation.map((step) => (
         <div key={step.id} className="relative flex flex-col gap-3">
           {forked ? (
-            <span aria-hidden className="absolute top-6 -left-4 w-4 border-t border-border" />
+            <span
+              aria-hidden
+              className="absolute top-5 -left-4 w-4 border-t border-muted-foreground/30"
+            />
           ) : null}
 
           {step.id === openId ? (
@@ -620,6 +628,7 @@ function DetailView({
           >
             <FileCodeIcon />
             Source
+            {errors > 0 ? <span className="text-destructive">{errors}</span> : null}
           </Button>
         </header>
 
@@ -629,6 +638,11 @@ function DetailView({
               trigger={automation.trigger}
               onChange={(trigger) => onChange({ ...automation, trigger })}
             />
+
+            {/* The trigger fires the first generation, and without this the
+                spine simply started below an unrelated card. Negative margin so
+                the connector eats the column gap rather than adding to it. */}
+            <span aria-hidden className="-my-2 ml-4 h-4 w-px bg-muted-foreground/30" />
 
             <StepBranch
               steps={automation.steps}
@@ -676,16 +690,6 @@ function DetailView({
 
       {sourceOpen ? (
         <aside className="flex w-[34rem] min-w-0 shrink-0 flex-col border-l border-border">
-          <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
-            <span className="font-mono text-label text-muted-foreground">
-              {automationFilePath(automation)}
-            </span>
-            {errors > 0 ? (
-              <span className="ml-auto text-label text-destructive">
-                {errors === 1 ? "1 error" : `${errors} errors`}
-              </span>
-            ) : null}
-          </div>
           {/* Editable, and that is the point: the file is what an Automation IS,
               so a source panel you can only read would be asserting the opposite
               — that the file is a report the UI prints. */}
