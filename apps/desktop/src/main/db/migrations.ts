@@ -367,6 +367,49 @@ ALTER TABLE projects ADD COLUMN theme_appearance TEXT
   CHECK (theme_appearance IS NULL OR theme_appearance IN ('light','dark','auto'));
 `;
 
+/**
+ * Migration 015: the trust verdict for a registered harness (harness-events,
+ * "Bring your own harness"). A manifest at
+ * `~/.agents/harnesses/<slug>/harness.json` is the DECLARATION — the author's
+ * file, editable at any moment, and no business of ours. What belongs here is
+ * only what Volli itself decided about it.
+ *
+ * Which is why `manifest_sha256` is stored and the manifest's CONTENTS are not.
+ * Mirroring command, argv and surfaces into columns would create a second copy
+ * the author cannot edit, and "drop a file in and it works" would stop being
+ * true the moment the two disagreed. The hash is enough to answer the only
+ * question this table exists for: are these the bytes somebody actually ruled
+ * on? Anything else is re-read from disk.
+ *
+ * `declared_events` and `verified_events` are both JSON arrays of canonical
+ * event names, and the asymmetry between them is the point. Declared is a claim
+ * and gates nothing; verified is a fact, written on first real delivery, and it
+ * alone drives automatic board moves and notifications. A verdict recorded
+ * against new bytes resets verified, because the old evidence was about a
+ * command line that no longer exists.
+ *
+ * No `harness_id` foreign key anywhere: a slug is registered here BEFORE any
+ * session has ever used it, and sessions keep their `harness_id` as free text
+ * (migration 003) precisely so an unregistered harness still records history.
+ *
+ * Deliberately absent from `db/export.ts`, which otherwise carries every table:
+ * a verdict is a decision about the files on THIS machine, and permission to
+ * execute a command line is not something an export document should carry.
+ */
+const MIGRATION_015_REGISTERED_HARNESSES = `
+CREATE TABLE registered_harnesses (
+  slug            TEXT PRIMARY KEY,
+  manifest_path   TEXT NOT NULL,
+  manifest_sha256 TEXT NOT NULL,
+  decision        TEXT NOT NULL CHECK (decision IN ('trusted','blocked')),
+  declared_events TEXT NOT NULL DEFAULT '[]',
+  verified_events TEXT NOT NULL DEFAULT '[]',
+  decided_at      INTEGER NOT NULL,
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL
+);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -429,6 +472,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 14,
     name: "projects theme canvas + appearance — the per-project half of the Arc canvas",
     sql: MIGRATION_014_PROJECT_CANVAS,
+  },
+  {
+    version: 15,
+    name: "registered_harnesses — the trust verdict and event ledger for a manifest",
+    sql: MIGRATION_015_REGISTERED_HARNESSES,
   },
 ];
 
