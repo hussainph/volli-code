@@ -12,7 +12,8 @@
  * built-in does.
  */
 import { shellSingleQuote } from "../harness-command";
-import type { HarnessAdapter, HarnessEventBinding } from "./types";
+import { renderEventPlugin } from "./plugin";
+import { nativeName, type HarnessAdapter, type HarnessEventBinding } from "./types";
 
 /**
  * Stands in for the Volli-owned per-harness directory
@@ -27,6 +28,9 @@ export const HARNESS_DIR_TOKEN = "{harnessDir}";
  * `--strict-config`, so a wrong guess here fails silently.
  */
 const CODEX_HOOKS_PATH_KEY = "hooks_path";
+
+/** The generated plugin's name inside the Volli-owned per-harness directory. */
+const PLUGIN_FILENAME = "volli-plugin.js";
 
 const HOOKS_MECHANISM = "hooks";
 const NOTIFY_MECHANISM = "notify";
@@ -73,12 +77,6 @@ function hookArgv(input: HarnessLaunchInput, binding: HarnessEventBinding): read
  */
 function hookCommandLine(input: HarnessLaunchInput, binding: HarnessEventBinding): string {
   return hookArgv(input, binding).map(shellSingleQuote).join(" ");
-}
-
-/** The harness's own name for a signal, with any mechanism namespace stripped. */
-function nativeName(binding: HarnessEventBinding): string {
-  const separator = binding.native.indexOf(":");
-  return separator === -1 ? binding.native : binding.native.slice(separator + 1);
 }
 
 /**
@@ -222,13 +220,19 @@ function injected(adapter: HarnessAdapter, input: HarnessLaunchInput): HarnessLa
       };
     }
     case "plugin-config-env": {
-      // A plugin, not a command hook: the config only has to name it, and the
-      // plugin reaches Volli over VOLLI_SOCKET like everything else does.
+      // A plugin, not a command hook: the config can only NAME a module, so the
+      // module is emitted here too. Naming one nothing writes would leave the
+      // harness loading a file that does not exist — reporting nothing, while
+      // still declaring bindings and so still reading as Hooked.
       const settings = settingsObject(adapter, {});
-      settings["plugin"] = [`${HARNESS_DIR_TOKEN}/volli-plugin.js`];
+      const pluginPath = `${HARNESS_DIR_TOKEN}/${PLUGIN_FILENAME}`;
+      settings["plugin"] = [pluginPath];
       const path = `${HARNESS_DIR_TOKEN}/${injection.filename}`;
       return {
-        files: [{ path, content: `${JSON.stringify(settings, null, 2)}\n` }],
+        files: [
+          { path, content: `${JSON.stringify(settings, null, 2)}\n` },
+          { path: pluginPath, content: renderEventPlugin(adapter.events, input) },
+        ],
         argv: [],
         // The variable names the FILE itself, layered over the user's config.
         env: { [injection.envVar]: path },

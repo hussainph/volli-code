@@ -92,12 +92,70 @@ describe("buildLaunchConfig", () => {
     expect(Object.keys(written.hooks)).not.toContain("Notification");
   });
 
-  it("layers opencode's config over the user's and names the plugin that does the reporting", () => {
+  it("layers opencode's config over the user's and emits the plugin it names", () => {
     const config = buildLaunchConfig(adapterFor("opencode"), INPUT);
     expect(config.env["OPENCODE_CONFIG"]).toBe(`${HARNESS_DIR_TOKEN}/opencode.json`);
 
-    const written = JSON.parse(config.files[0]?.content ?? "{}") as { plugin: string[] };
-    expect(written.plugin).toEqual([`${HARNESS_DIR_TOKEN}/volli-plugin.js`]);
+    const settings = config.files.find((file) => file.path.endsWith("/opencode.json"));
+    const { plugin } = JSON.parse(settings?.content ?? "{}") as { plugin: string[] };
+
+    // The referent, not the reference: a config naming a file nothing writes
+    // loads a plugin that does not exist, and the harness reports forever in
+    // silence. This is the assertion the original test was missing.
+    expect(config.files.map((file) => file.path)).toContain(plugin[0]);
+  });
+
+  it("carries opencode's bindings into the plugin, both events sharing one native name", () => {
+    const config = buildLaunchConfig(adapterFor("opencode"), INPUT);
+    const source = config.files.find((file) => file.path.endsWith(".js"))?.content ?? "";
+
+    // The native names come from a live event dump, not the stale SDK types —
+    // a plugin listening for `permission.updated` would never hear a thing.
+    expect(source).toContain("session.idle");
+    expect(source).toContain("permission.asked");
+    expect(source).toContain("message.updated");
+    expect(source).not.toContain("permission.updated");
+
+    // One native signal, two canonical events: the plugin has to report both.
+    const bindings = JSON.parse(source.match(/^const BINDINGS = (.+);$/m)?.[1] ?? "{}") as Record<
+      string,
+      string[]
+    >;
+    expect(bindings["permission.asked"]).toEqual(["input.needed", "permission.requested"]);
+    expect(bindings["session.idle"]).toEqual(["turn.completed"]);
+  });
+
+  it("hands the plugin the hook argv as an array, so the spaced shim path stays one word", () => {
+    const config = buildLaunchConfig(adapterFor("opencode"), INPUT);
+    const source = config.files.find((file) => file.path.endsWith(".js"))?.content ?? "";
+
+    // A JSON array literal in the source, not a joined command line: the shim
+    // lives under `Application Support/`, and any form the plugin would have to
+    // re-split on spaces shreds that path.
+    const argv = JSON.parse(source.match(/^const HOOK_ARGV = (.+);$/m)?.[1] ?? "[]") as string[];
+    expect(argv).toEqual([...INPUT.hookArgv]);
+    expect(source).toContain(JSON.stringify(INPUT.socketPath));
+    expect(source).not.toContain(".split(");
+  });
+
+  it("emits a registered manifest its own plugin, from the bindings it declared", () => {
+    const config = buildLaunchConfig(
+      bareAdapter({
+        injection: { kind: "plugin-config-env", envVar: "X_CONFIG", filename: "x.json" },
+        events: [
+          { event: "input.needed", native: "asked-a-question", delivery: "async", timeoutMs: 1000 },
+        ],
+      }),
+      INPUT,
+    );
+    const settings = config.files.find((file) => file.path.endsWith("/x.json"));
+    const { plugin } = JSON.parse(settings?.content ?? "{}") as { plugin: string[] };
+    const source = config.files.find((file) => file.path === plugin[0])?.content ?? "";
+
+    // Nothing here is opencode's: a kind names a mechanism, not a harness, or
+    // the manifest schema advertises an injection path that only Volli can use.
+    expect(source).toContain("asked-a-question");
+    expect(source).toContain("input.needed");
   });
 
   it("splits codex across its two mechanisms: a hooks file and the legacy notify key", () => {
