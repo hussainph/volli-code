@@ -235,11 +235,12 @@ describe("harnessLaunchArgv", () => {
       shimPath: paths.shimPath,
     });
 
-    // codex injects its hook config by path, so a `{harnessDir}` still standing
-    // here would be a confirmation naming a file that does not exist.
+    // codex injects its hooks inline, so what has to be resolved here is the
+    // shim every hook command line names — a token still standing would be a
+    // confirmation naming a binary that does not exist.
     expect(argv.length).toBeGreaterThan(0);
     expect(argv.join(" ")).not.toContain("{harnessDir}");
-    expect(argv.join(" ")).toContain(join(paths.harnessRoot, "codex"));
+    expect(argv.join(" ")).toContain(paths.shimPath);
   });
 
   it("is empty for a harness Volli configures by environment rather than argv", async () => {

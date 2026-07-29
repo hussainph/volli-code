@@ -22,13 +22,6 @@ import { nativeName, type HarnessAdapter, type HarnessEventBinding } from "./typ
  */
 export const HARNESS_DIR_TOKEN = "{harnessDir}";
 
-/**
- * Codex's config key naming an external hooks file. PROVISIONAL alongside the
- * rest of the codex injection path; codex ignores unrecognized keys without
- * `--strict-config`, so a wrong guess here fails silently.
- */
-const CODEX_HOOKS_PATH_KEY = "hooks_path";
-
 /** The generated plugin's name inside the Volli-owned per-harness directory. */
 const PLUGIN_FILENAME = "volli-plugin.js";
 
@@ -141,7 +134,73 @@ function claudeHooks(
   return hooks;
 }
 
-/** The flatter `{ native: [{ command }] }` shape cursor and codex both use. */
+/**
+ * The subset of TOML a `-c` override value needs. Numbers are absent on
+ * purpose: the one numeric field codex's hook handler accepts is `timeout`, a
+ * bare `u64` whose unit the binary does not state, and guessing wrong by the
+ * factor between seconds and milliseconds either lets a wedged hook hang or
+ * kills every hook before it opens the socket. Omitted, codex's own default
+ * applies.
+ */
+type TomlInline = string | boolean | readonly TomlInline[] | { readonly [key: string]: TomlInline };
+
+/**
+ * A TOML inline value. Strings go through `JSON.stringify` because a TOML basic
+ * string and a JSON string agree on every escape a path or a socket can
+ * contain — and `-c` parses TOML, where JSON's `key: value` is a syntax error.
+ */
+function tomlInline(value: TomlInline): string {
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return `[${value.map(tomlInline).join(",")}]`;
+  const table = value as { readonly [key: string]: TomlInline };
+  return `{${Object.entries(table)
+    .map(([key, inner]) => `${key}=${tomlInline(inner)}`)
+    .join(",")}}`;
+}
+
+/**
+ * Codex's hooks, as one `-c hooks.<Event>=…` override each. Hooks are an inline
+ * table in codex's own config — there is no key naming an external hooks file,
+ * and because codex ignores unknown keys without `--strict-config`, pointing at
+ * one reported nothing and said nothing about it.
+ *
+ * Bindings are grouped by native name before rendering: `-c` is last-write-wins
+ * per key, so two events sharing one native name (codex says a human is
+ * blocking only by asking permission, which is both `permission.requested` and
+ * `input.needed`) have to arrive as two matcher groups of a single override or
+ * the first is silently dropped.
+ *
+ * `matcher` is left off — it is optional, and the events bound here have no
+ * tool name to filter on. `command` is a single string, not an argv array,
+ * which is why it goes through the shell-quoting `hookCommandLine` does: the
+ * shim lives under `Application Support/`, and an unquoted path is shredded on
+ * the only OS we ship.
+ */
+function codexHookOverrides(
+  bindings: readonly HarnessEventBinding[],
+  input: HarnessLaunchInput,
+): string[] {
+  const groups = new Map<string, TomlInline[]>();
+  for (const binding of bindings) {
+    const native = nativeName(binding);
+    const group = groups.get(native) ?? [];
+    group.push({
+      hooks: [
+        {
+          type: "command",
+          command: hookCommandLine(input, binding),
+          // Codex is the one mechanism that can express what `delivery` means.
+          async: binding.delivery === "async",
+        },
+      ],
+    });
+    groups.set(native, group);
+  }
+  return [...groups].map(([native, value]) => `hooks.${native}=${tomlInline(value)}`);
+}
+
+/** The flatter `{ native: [{ command }] }` shape cursor uses. */
 function commandHooks(
   bindings: readonly HarnessEventBinding[],
   input: HarnessLaunchInput,
@@ -175,24 +234,13 @@ function injected(adapter: HarnessAdapter, input: HarnessLaunchInput): HarnessLa
       return { files: [], argv: [injection.flag, JSON.stringify(settings)], env: {} };
     }
     case "argv-config-override": {
-      // Two mechanisms, one harness: namespaced bindings go to their own file,
-      // everything else is a `key=value` override.
+      // Two mechanisms, one harness, and nothing written to disk: hook bindings
+      // become an inline `hooks` table, notify bindings the legacy argv key.
       const hooked = adapter.events.filter((binding) => mechanismOf(binding) === HOOKS_MECHANISM);
       const notified = adapter.events.filter(
         (binding) => mechanismOf(binding) === NOTIFY_MECHANISM,
       );
-      const overrides: string[] = [];
-      const files: { path: string; content: string }[] = [];
-      if (hooked.length > 0) {
-        const path = `${HARNESS_DIR_TOKEN}/hooks.json`;
-        files.push({
-          path,
-          content: `${JSON.stringify({ hooks: commandHooks(hooked, input) }, null, 2)}\n`,
-        });
-        // `-c` parses its value as TOML, so a path with spaces has to arrive as
-        // a quoted string or the override fails to parse.
-        overrides.push(`${CODEX_HOOKS_PATH_KEY}=${JSON.stringify(path)}`);
-      }
+      const overrides = codexHookOverrides(hooked, input);
       for (const binding of notified) {
         overrides.push(`notify=${JSON.stringify(hookArgv(input, binding))}`);
       }
@@ -200,7 +248,7 @@ function injected(adapter: HarnessAdapter, input: HarnessLaunchInput): HarnessLa
         overrides.push(`${setting.path}=${JSON.stringify(setting.value)}`);
       }
       return {
-        files,
+        files: [],
         argv: overrides.flatMap((override) => [injection.flag, override]),
         env: {},
       };

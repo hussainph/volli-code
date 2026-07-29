@@ -158,21 +158,21 @@ describe("buildLaunchConfig", () => {
     expect(source).toContain("input.needed");
   });
 
-  it("splits codex across its two mechanisms: a hooks file and the legacy notify key", () => {
+  it("splits codex across its two mechanisms: the inline hooks table and the legacy notify key", () => {
     const config = buildLaunchConfig(adapterFor("codex"), INPUT);
     const overrides = config.argv.filter((token) => token !== "-c");
 
-    expect(config.files.map((file) => file.path)).toEqual([`${HARNESS_DIR_TOKEN}/hooks.json`]);
-    const hooks = JSON.parse(config.files[0]?.content ?? "{}") as {
-      hooks: Record<string, { command: string }[]>;
-    };
-    expect(Object.keys(hooks.hooks)).toEqual(["UserPromptSubmit", "PermissionRequest"]);
-    expect(hooks.hooks["UserPromptSubmit"]?.[0]?.command).toBe(
-      "'/vol/Application Support/Volli Code/bin/volli' 'hook' 'codex' 'turn.started' '--socket' '/tmp/volli.sock'",
-    );
+    // Codex has no key naming an external hooks file. Writing one and pointing
+    // at it is what silently reported nothing for the length of this branch.
+    expect(config.files).toEqual([]);
 
-    // Quoted: `-c` parses TOML, and the harness dir is a path with spaces in it.
-    expect(overrides).toContain(`hooks_path="${HARNESS_DIR_TOKEN}/hooks.json"`);
+    // One override per native event, the value a TOML array of matcher groups —
+    // this exact string is accepted by codex 0.144.6's own deserializer.
+    expect(overrides).toContain(
+      'hooks.UserPromptSubmit=[{hooks=[{type="command",' +
+        "command=\"'/vol/Application Support/Volli Code/bin/volli' 'hook' 'codex' " +
+        "'turn.started' '--socket' '/tmp/volli.sock'\",async=true}]}]",
+    );
 
     // notify takes a real argv array, so the spaced shim path stays one word —
     // this is the whole reason the hook prefix travels as argv, not a string.
@@ -187,7 +187,21 @@ describe("buildLaunchConfig", () => {
     ]);
   });
 
-  it("routes an unnamespaced binding to the hooks file, so a plain manifest still reports", () => {
+  it("gathers two events sharing one native name into a single override, not two", () => {
+    // `-c` is last-write-wins per key, so emitting `hooks.PermissionRequest`
+    // twice would silently drop `permission.requested` and report only the
+    // second binding. Both have to arrive as matcher groups of one override.
+    const overrides = buildLaunchConfig(adapterFor("codex"), INPUT).argv;
+    const permission = overrides.filter((token) => token.startsWith("hooks.PermissionRequest="));
+    expect(permission).toHaveLength(1);
+
+    const groups = permission[0]?.match(/{hooks=/g) ?? [];
+    expect(groups).toHaveLength(2);
+    expect(permission[0]).toContain("'permission.requested'");
+    expect(permission[0]).toContain("'input.needed'");
+  });
+
+  it("routes an unnamespaced binding to the inline hooks table, so a plain manifest reports", () => {
     const config = buildLaunchConfig(
       bareAdapter({
         injection: { kind: "argv-config-override", flag: "-c" },
@@ -195,10 +209,34 @@ describe("buildLaunchConfig", () => {
       }),
       INPUT,
     );
-    const hooks = JSON.parse(config.files[0]?.content ?? "{}") as {
-      hooks: Record<string, unknown>;
-    };
-    expect(Object.keys(hooks.hooks)).toEqual(["OnPrompt"]);
+    expect(config.files).toEqual([]);
+    expect(config.argv[0]).toBe("-c");
+    expect(config.argv[1]?.startsWith("hooks.OnPrompt=[")).toBe(true);
+  });
+
+  it("builds codex the same bytes every time, so its hook trust gate asks once", () => {
+    // Codex hashes the hook config it is trusted for. Anything varying between
+    // launches re-raises an interactive review, and one wrong keypress there
+    // silently disables our events for that session — so the session id reaches
+    // the harness through VOLLI_SESSION, never through here.
+    const first = buildLaunchConfig(adapterFor("codex"), INPUT);
+    const second = buildLaunchConfig(adapterFor("codex"), INPUT);
+    expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+
+    const hooks = first.argv.filter((token) => token.startsWith("hooks."));
+    expect(hooks.length).toBeGreaterThan(0);
+    expect(hooks.join(" ")).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}/i);
+  });
+
+  it("marks a blocking binding as one, since codex can say so and the rest cannot", () => {
+    const config = buildLaunchConfig(
+      bareAdapter({
+        injection: { kind: "argv-config-override", flag: "-c" },
+        events: [{ event: "input.needed", native: "Ask", delivery: "sync", timeoutMs: 1000 }],
+      }),
+      INPUT,
+    );
+    expect(config.argv[1]).toContain("async=false");
   });
 
   it("carries a harness's forced settings through whichever mechanism it uses", () => {
