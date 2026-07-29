@@ -8,6 +8,7 @@ import {
   composeAttachmentsSection,
   composeTicketPrompt,
   displayTicketId,
+  doctorSummary,
   errorMessage,
   FIRST_CLASS_HARNESS_IDS,
   HARNESS_EVENTS,
@@ -17,6 +18,7 @@ import {
   isFirstClassHarnessId,
   isValidBranchName,
   resolveAgentContext,
+  runDoctorChecks,
   shortSessionId,
   TICKET_PRIORITIES,
   TICKET_STATUS_LABELS,
@@ -28,6 +30,8 @@ import type {
   AgentRequest,
   AgentResponse,
   DataChangeKind,
+  DoctorFacts,
+  DoctorObservation,
   HarnessEvent,
   HarnessEventNotice,
   Project,
@@ -109,6 +113,20 @@ export interface AgentCommandServiceOptions {
    * means the fan-out is a no-op.
    */
   onHarnessEvent?: (notice: HarnessEventNotice) => void;
+  /**
+   * What only main can answer about the harness runtime — which wrappers it
+   * wrote, where the shim is, what the shell integration looks like. Injected
+   * rather than read here, because every one of these lives in the boot-time
+   * runtime state and none of it belongs in this file. Absent (tests) makes
+   * `doctor` report that it could not look.
+   */
+  doctorFacts?: () => Promise<DoctorFacts>;
+  /**
+   * Regenerates everything regenerable: wrappers, harness configs, the shell
+   * integration. Idempotent by construction — it is the same work boot does —
+   * so `--fix` is never destructive and never needs confirming.
+   */
+  doctorRepair?: () => Promise<void>;
 }
 
 export interface AgentCommandService {
@@ -528,6 +546,37 @@ function requestActor(
       };
 }
 
+/**
+ * The caller's observation, as it arrived over the socket. Every field is
+ * validated rather than trusted: a malformed one must fail loudly here, not
+ * become a silently wrong "ok" in a diagnostic whose entire job is to be
+ * trusted about this.
+ */
+function optionalText(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function parseDoctorObservation(request: AgentRequest): DoctorObservation | null {
+  const pathEntries = request.args["pathEntries"];
+  const resolved = request.args["resolved"];
+  if (!Array.isArray(pathEntries) || !pathEntries.every((entry) => typeof entry === "string")) {
+    return null;
+  }
+  if (typeof resolved !== "object" || resolved === null || Array.isArray(resolved)) return null;
+  return {
+    pathEntries,
+    sessionId: request.ctx.env.session ?? null,
+    zdotDir: optionalText(request.args["zdotDir"]),
+    resolved: Object.fromEntries(
+      Object.entries(resolved as Record<string, unknown>).map(([key, value]) => [
+        key,
+        optionalText(value),
+      ]),
+    ),
+    volliPath: optionalText(request.args["volliPath"]),
+  };
+}
+
 function isHarnessEvent(value: unknown): value is HarnessEvent {
   return typeof value === "string" && (HARNESS_EVENTS as readonly string[]).includes(value);
 }
@@ -937,6 +986,32 @@ export function createAgentCommandService(
           v: 1,
           ok: true,
           data: { session: shortSessionId(session.id), event, harnessSessionId },
+        };
+      }
+      if (request.cmd === "doctor") {
+        if (!options.doctorFacts) {
+          return failure("APP_UNREACHABLE", "The harness runtime is not available this launch.");
+        }
+        // The caller reports what it sees from inside the environment under
+        // test; main supplies only what it alone knows. Keeping those apart is
+        // the point — an observation main reconstructed would be exactly the
+        // kind of plausible, wrong answer this command exists to catch.
+        const observation = parseDoctorObservation(request);
+        if (observation === null) {
+          return failure("INVALID_REQUEST", "doctor requires the caller's observed environment.");
+        }
+        if (request.args["fix"] === true && options.doctorRepair) {
+          try {
+            await options.doctorRepair();
+          } catch (error) {
+            return failure("MUTATION_FAILED", `Repair failed: ${errorMessage(error)}`);
+          }
+        }
+        const checks = runDoctorChecks(observation, await options.doctorFacts());
+        return {
+          v: 1,
+          ok: true,
+          data: { checks, summary: doctorSummary(checks) },
         };
       }
       if (request.cmd === "ticket.list") {

@@ -16,6 +16,8 @@ export interface RunCliDependencies {
   readText: ReadTextFile;
   request(socketPath: string, request: AgentRequest): Promise<AgentResponse>;
   launch(timeoutMs: number): Promise<{ alreadyRunning: boolean }>;
+  /** What this process sees of its own environment — `volli doctor`'s evidence. */
+  observe(): Promise<Record<string, unknown>>;
 }
 
 function clientError(error: unknown): AgentError {
@@ -104,10 +106,17 @@ export async function runCli(
   }
   try {
     const invocation = await materializeFileArguments(parsed.invocation, dependencies.readText);
+    // `doctor` is the one command whose arguments are measurements rather than
+    // intent: what this process can see from inside the environment under test,
+    // which main has no way to observe and must not reconstruct.
+    const args =
+      command === "doctor"
+        ? { ...invocation.args, ...(await dependencies.observe()) }
+        : invocation.args;
     const request: AgentRequest = {
       v: 1,
       cmd: command,
-      args: invocation.args,
+      args,
       ctx: {
         cwd: dependencies.cwd,
         env: {

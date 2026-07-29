@@ -2057,3 +2057,117 @@ describe("agent command service", () => {
     expect(prompt).toContain("`main`");
   });
 });
+
+describe("doctor", () => {
+  const observation = {
+    pathEntries: ["/ud/bin", "/usr/bin"],
+    zdotDir: "/ud/shell/zsh",
+    resolved: { claude: "/ud/bin/claude" },
+    volliPath: "/ud/bin/volli",
+  };
+
+  function doctorService(options: Partial<Parameters<typeof createAgentCommandService>[0]> = {}) {
+    ctx = openTestDb();
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 4242,
+      doctorFacts: async () => ({
+        binDir: "/ud/bin",
+        wrappers: { claude: "/ud/bin/claude" },
+        refused: [],
+        shellInitDir: "/ud/shell/zsh",
+        shellInitPresent: true,
+        shimPath: "/ud/bin/volli",
+        liveSessionIds: [],
+        reporting: [],
+        skillConflicts: [],
+      }),
+      ...options,
+    });
+    return (args: Record<string, unknown>) =>
+      service.execute({ v: 1, cmd: "doctor", args, ctx: { cwd: "/repo", env: {} } });
+  }
+
+  it("returns a check per finding, with a summary", async () => {
+    const response = await doctorService()(observation);
+
+    expect(response).toMatchObject({ ok: true });
+    if (!response.ok) throw new Error("expected ok");
+    const data = response.data as { checks: { id: string }[]; summary: string };
+    expect(data.checks.map((check) => check.id)).toContain("path-position");
+    expect(data.summary).toContain("checks");
+  });
+
+  // A diagnostic that silently substitutes a default for a missing measurement
+  // is exactly the failure mode it exists to catch.
+  it("refuses a request carrying no observation rather than assuming one", async () => {
+    const doctor = doctorService();
+    for (const args of [
+      {},
+      { pathEntries: "not-a-list" },
+      { pathEntries: [1] },
+      { pathEntries: [], resolved: [] },
+    ]) {
+      expect(await doctor(args)).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+    }
+  });
+
+  it("reports that it could not look when the harness runtime is unavailable", async () => {
+    ctx = openTestDb();
+    const service = createAgentCommandService({ db: ctx.db, appVersion: "1.2.3" });
+    const response = await service.execute({
+      v: 1,
+      cmd: "doctor",
+      args: observation,
+      ctx: { cwd: "/repo", env: {} },
+    });
+    expect(response).toMatchObject({ ok: false, error: { code: "APP_UNREACHABLE" } });
+  });
+
+  it("repairs before re-checking, so --fix reports the state it produced", async () => {
+    const order: string[] = [];
+    const doctor = doctorService({
+      doctorRepair: async () => {
+        order.push("repair");
+      },
+      doctorFacts: async () => {
+        order.push("facts");
+        return {
+          binDir: "/ud/bin",
+          wrappers: {},
+          refused: [],
+          shellInitDir: null,
+          shellInitPresent: false,
+          shimPath: "/ud/bin/volli",
+          liveSessionIds: [],
+          reporting: [],
+          skillConflicts: [],
+        };
+      },
+    });
+
+    await doctor({ ...observation, fix: true });
+    expect(order).toEqual(["repair", "facts"]);
+  });
+
+  it("does not repair unless asked", async () => {
+    let repaired = false;
+    await doctorService({
+      doctorRepair: async () => {
+        repaired = true;
+      },
+    })(observation);
+    expect(repaired).toBe(false);
+  });
+
+  it("surfaces a repair failure instead of reporting checks over a broken state", async () => {
+    const response = await doctorService({
+      doctorRepair: () => Promise.reject(new Error("disk full")),
+    })({ ...observation, fix: true });
+
+    expect(response).toMatchObject({ ok: false, error: { code: "MUTATION_FAILED" } });
+    if (response.ok) throw new Error("expected failure");
+    expect(response.error.message).toContain("disk full");
+  });
+});

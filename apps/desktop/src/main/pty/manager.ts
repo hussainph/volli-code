@@ -540,6 +540,15 @@ export class PtyManager {
     return Array.from(this.sessions.values(), (session) => session.cwd);
   }
 
+  /**
+   * The sessions with a PTY alive right now — what `volli doctor` compares a
+   * caller's `VOLLI_SESSION` against. The session TABLE outlives the process,
+   * so a row is no evidence a session is live; this map is.
+   */
+  liveSessionIds(): string[] {
+    return [...this.sessions.keys()];
+  }
+
   /** Read-only snapshot used by the CLI; it never writes to or controls the observed PTY. */
   peek(
     sessionId: string,

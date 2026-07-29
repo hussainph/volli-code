@@ -694,6 +694,24 @@ const PROJECT_LIST_SPEC: CommandSpec = {
   options: {},
 };
 
+const DOCTOR_SPEC: CommandSpec = {
+  summary: "Audit the harness integration and report what it is actually doing.",
+  example: "volli doctor --fix",
+  notes: [
+    "Reports outcomes, not configuration: whether typing a harness's name here really reaches Volli's wrapper.",
+    "Run it inside a Volli terminal — several checks describe the shell it runs in.",
+    "--fix regenerates the wrappers, harness configs and shell integration. Idempotent; it is the same work a boot does.",
+  ],
+  options: {
+    "--fix": {
+      kind: "flag",
+      key: "fix",
+      value: true,
+      help: "Regenerate everything regenerable, then re-check.",
+    },
+  },
+};
+
 const HELP_SPEC: CommandSpec = {
   summary: "Show this reference, a command's help, or a topic.",
   example: "volli help ticket create",
@@ -737,6 +755,7 @@ export const COMMAND_HELP: readonly CommandHelpEntry[] = [
   { name: "session link", group: "Session", spec: SESSION_LINK_SPEC },
   { name: "notify", group: "Session", spec: NOTIFY_SPEC },
   { name: "app launch", group: "App", spec: APP_LAUNCH_SPEC },
+  { name: "doctor", group: "App", spec: DOCTOR_SPEC },
   { name: "help", group: "App", spec: HELP_SPEC },
 ];
 
@@ -809,6 +828,7 @@ export function parseCliArgs(argv: readonly string[]): CliParseResult {
   if (argv[0] === "app" && argv[1] === "launch") {
     return parseWithSpec("app.launch", argv.slice(2), APP_LAUNCH_SPEC);
   }
+  if (argv[0] === "doctor") return parseWithSpec("doctor", argv.slice(1), DOCTOR_SPEC);
   if (argv[0] === "help") return parseHelp(argv.slice(1));
   return usage(unknownCommandMessage());
 }

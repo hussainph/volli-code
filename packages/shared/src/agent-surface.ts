@@ -27,6 +27,9 @@ export const AGENT_COMMANDS = [
   // not addressed to a human reader — `volli hook` fires it and discards the
   // answer, because a hook that fails must never wedge the agent it fired from.
   "hook",
+  // Diagnostics, not agent surface: what the harness integration is actually
+  // doing on this machine, measured from inside the environment under test.
+  "doctor",
 ] as const;
 
 export type AgentCommand = (typeof AGENT_COMMANDS)[number];

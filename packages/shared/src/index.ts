@@ -3,6 +3,7 @@ export * from "./file-save-policy";
 export * from "./file-workspace";
 export * from "./board";
 export * from "./ticket";
+export * from "./doctor";
 export * from "./harness-command";
 export * from "./harness";
 export * from "./agent-surface";

@@ -1,5 +1,7 @@
 import { TICKET_STATUS_LABELS } from "@volli/shared";
-import type { AgentError, AgentErrorCode, TicketStatus } from "@volli/shared";
+import type { AgentError, AgentErrorCode, DoctorCheck, TicketStatus } from "@volli/shared";
+
+import { renderDoctorReport } from "./doctor";
 
 /**
  * v1 output contract (decision 6): output is identical on a TTY and on a
@@ -306,7 +308,19 @@ function renderStableLines(command: string, data: unknown): string | null {
  * Renders server JSON directly or as the command's stable text contract.
  * See {@link RenderOptions} for the v1 TTY/pipe-identical output contract.
  */
+/** `doctor`'s reply is already a report; only its shape needs checking. */
+function doctorReport(data: unknown): string | null {
+  if (typeof data !== "object" || data === null) return null;
+  const { checks, summary } = data as { checks?: unknown; summary?: unknown };
+  if (!Array.isArray(checks) || typeof summary !== "string") return null;
+  return renderDoctorReport(checks as DoctorCheck[], summary);
+}
+
 function renderCliTextSuccess(command: string, data: unknown): string {
+  if (command === "doctor") {
+    const report = doctorReport(data);
+    if (report !== null) return report;
+  }
   if (command === "ticket.brief" && typeof data === "object" && data !== null) {
     const prompt = (data as { prompt?: unknown }).prompt;
     if (typeof prompt === "string") return prompt.endsWith("\n") ? prompt : `${prompt}\n`;

@@ -10,7 +10,7 @@ import {
   shell,
 } from "electron";
 import { existsSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   diffManagedContent,
@@ -19,13 +19,14 @@ import {
   resolveShell,
   ticketBranchName,
 } from "@volli/shared";
-import type { FirstPaintHint, ResolvedAppearance, VolliIpcEvent } from "@volli/shared";
+import type { FirstPaintHint, HarnessId, ResolvedAppearance, VolliIpcEvent } from "@volli/shared";
 import type { ManagedConflict } from "./harness-install";
 import { isInternalNavigationTarget } from "./navigation";
 import type { DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { openVolliDb } from "./db";
 import { endLiveSessions } from "./db/sessions-repo";
+import { listRegisteredHarnesses } from "./db/harness-registry-repo";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
 import { registerAppMenu } from "./menu";
@@ -54,6 +55,7 @@ import {
 } from "./harness-registry";
 import { registerHarnessIpcHandlers } from "./harness-ipc";
 import { ensureHarnessRuntime, harnessLaunchArgv } from "./harness-runtime";
+import type { RefusedWrapper } from "./harness-runtime";
 import { ensureShellInit } from "./shell-init";
 import { startAgentSocket, type AgentSocketServer } from "./agent-socket";
 import { loginShellPath } from "./login-path";
@@ -497,6 +499,69 @@ app.whenReady().then(async () => {
     socketPath: runtimePaths.socketPath,
     binDir: runtimePaths.binDir,
   };
+  /** Wrappers refused this launch because the name would shadow a system tool. */
+  let harnessRuntimeRefused: RefusedWrapper[] = [];
+
+  /**
+   * Regenerates every generated thing the harness runtime owns: the wrappers,
+   * their per-harness config files, and the shell integration. Runs at boot and
+   * again behind `volli doctor --fix` — idempotent by construction, which is
+   * what lets `--fix` be offered without a confirmation.
+   */
+  const regenerateHarnessRuntime = async (): Promise<void> => {
+    // The user's login-shell PATH, not main's: a Dock launch inherits launchd's
+    // four directories, where no harness has ever been installed. `null` means
+    // the shell could not be asked, which is why it reaches the census below
+    // rather than being flattened into an empty list.
+    const detected = await detectHarnesses();
+    // A registered manifest joins the wrapper set exactly as a built-in does —
+    // and only once someone confirmed the bytes it is made of, which is why
+    // every manifest is re-read and re-hashed here rather than trusted because
+    // it was trusted last launch.
+    const registered = dbHandle.ok
+      ? trustedHarnessAdapters(
+          decideRegisteredHarnesses(dbHandle.db, await scanHarnessManifests(harnessesDir)),
+        )
+      : [];
+    const runtime = await ensureHarnessRuntime({
+      binDir: runtimePaths.binDir,
+      harnessRoot: runtimePaths.harnessRoot,
+      socketPath: runtimePaths.socketPath,
+      shimPath,
+      adapters: [
+        ...(detected ?? [])
+          .map((id) => getHarnessAdapter(id))
+          .filter((adapter) => adapter !== undefined),
+        ...registered,
+      ],
+      // Both halves have to have run before an absent wrapper means an absent
+      // harness: detection answers for the built-ins, the db for the registered
+      // manifests.
+      adapterCensus: detected !== null && dbHandle.ok ? "complete" : "partial",
+      // The same walk the wrapper does at run time, so a manifest whose command
+      // would shadow a system tool is refused a wrapper rather than silently
+      // put in front of it.
+      resolveCommand: async (command) => {
+        const pathValue = await loginShellPath();
+        return pathValue === null ? null : resolveOnPath(pathValue, command, runtimePaths.binDir);
+      },
+    });
+    agentRuntime.harnessEnv = runtime.env;
+    // Where each wrapper landed, so a launch line names it by absolute path
+    // instead of trusting a PATH the session's login shell rebuilds.
+    agentRuntime.wrapperPaths = runtime.wrapperPaths;
+    harnessRuntimeRefused = runtime.refused;
+    // And the other half: the startup chain that puts binDir back in front
+    // after the user's own shell startup, so a harness the user types by hand
+    // reaches the wrapper too.
+    agentRuntime.shellEnv = await ensureShellInit({
+      zdotDir: runtimePaths.zdotDir,
+      binDir: runtimePaths.binDir,
+      shellPath: resolveShell(process.env).file,
+      inheritedZdotDir: process.env["ZDOTDIR"],
+    });
+  };
+
   const ptyManager = registerTerminalIpcHandlers(dbHandle, agentRuntime);
   ptyManagerRef = ptyManager;
   const mainWindow = createWindow(ptyManager, currentFirstPaint());
@@ -705,6 +770,37 @@ app.whenReady().then(async () => {
           // event a hook reports reaches every window, so a session's activity
           // state stops being guessed from PTY output alone.
           onHarnessEvent: (notice) => broadcastHarnessEvent(notice),
+          // What `volli doctor` cannot see from inside the shell it runs in.
+          // Read at CALL time, never captured: the wrappers are regenerated
+          // after this service is constructed, and again by `--fix`.
+          doctorFacts: async () => ({
+            binDir: runtimePaths.binDir,
+            wrappers: Object.fromEntries(
+              [...(agentRuntime.wrapperPaths ?? new Map<HarnessId, string>())].map(
+                ([, wrapperPath]) => [basename(wrapperPath), wrapperPath],
+              ),
+            ),
+            refused: harnessRuntimeRefused.map(({ command, resolvedPath }) => ({
+              command,
+              resolvedPath,
+            })),
+            shellInitDir: agentRuntime.shellEnv?.["ZDOTDIR"] ?? null,
+            shellInitPresent: existsSync(join(runtimePaths.zdotDir, ".zlogin")),
+            shimPath,
+            liveSessionIds: ptyManager.liveSessionIds(),
+            reporting: dbHandle.ok
+              ? listRegisteredHarnesses(dbHandle.db).map((record) => ({
+                  harnessId: record.slug,
+                  declared: record.declaredEvents.length,
+                  verified: record.verifiedEvents.length,
+                }))
+              : [],
+            // Conflicts are discovered by running the installer, which `doctor`
+            // deliberately does not do: a diagnostic must not write to the
+            // user's dotfiles as a side effect of being asked a question.
+            skillConflicts: [],
+          }),
+          doctorRepair: regenerateHarnessRuntime,
         }).execute
       : async () =>
           ({
@@ -737,59 +833,7 @@ app.whenReady().then(async () => {
       // which the session header already states as the Known tier rather than
       // claiming reporting that isn't happening.
       try {
-        // The user's login-shell PATH, not main's: a Dock launch inherits
-        // launchd's four directories, where no harness has ever been installed.
-        // `null` means the shell could not be asked, which is why it reaches the
-        // census below rather than being flattened into an empty list.
-        const detected = await detectHarnesses();
-        // A registered manifest joins the wrapper set exactly as a built-in
-        // does — and only once someone confirmed the bytes it is made of, which
-        // is why every manifest is re-read and re-hashed here rather than
-        // trusted because it was trusted last launch.
-        const registered = dbHandle.ok
-          ? trustedHarnessAdapters(
-              decideRegisteredHarnesses(dbHandle.db, await scanHarnessManifests(harnessesDir)),
-            )
-          : [];
-        const runtime = await ensureHarnessRuntime({
-          binDir: runtimePaths.binDir,
-          harnessRoot: runtimePaths.harnessRoot,
-          socketPath: runtimePaths.socketPath,
-          shimPath,
-          adapters: [
-            ...(detected ?? [])
-              .map((id) => getHarnessAdapter(id))
-              .filter((adapter) => adapter !== undefined),
-            ...registered,
-          ],
-          // Both halves have to have run before an absent wrapper means an
-          // absent harness: detection answers for the built-ins, the db for the
-          // registered manifests.
-          adapterCensus: detected !== null && dbHandle.ok ? "complete" : "partial",
-          // The same walk the wrapper does at run time, so a manifest whose
-          // command would shadow a system tool is refused a wrapper rather
-          // than silently put in front of it.
-          resolveCommand: async (command) => {
-            const pathValue = await loginShellPath();
-            return pathValue === null
-              ? null
-              : resolveOnPath(pathValue, command, runtimePaths.binDir);
-          },
-        });
-        agentRuntime.harnessEnv = runtime.env;
-        // Where each wrapper landed, so a launch line names it by absolute path
-        // instead of trusting a PATH the session's login shell rebuilds.
-        agentRuntime.wrapperPaths = runtime.wrapperPaths;
-        // And the other half: the startup chain that puts binDir back in front
-        // after the user's own shell startup, so a harness the user types by
-        // hand reaches the wrapper too. Generated after the wrappers, since
-        // there is nothing worth pointing PATH at until they exist.
-        agentRuntime.shellEnv = await ensureShellInit({
-          zdotDir: runtimePaths.zdotDir,
-          binDir: runtimePaths.binDir,
-          shellPath: resolveShell(process.env).file,
-          inheritedZdotDir: process.env["ZDOTDIR"],
-        });
+        await regenerateHarnessRuntime();
       } catch (error) {
         console.error("[volli] failed to generate harness wrappers:", errorMessage(error));
       }

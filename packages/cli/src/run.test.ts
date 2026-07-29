@@ -22,6 +22,7 @@ describe("runCli", () => {
       stdout: (text) => stdout.push(text),
       stderr: (text) => stderr.push(text),
       readText: async () => "",
+      observe: async () => ({}),
       request: async (socketPath, request) => {
         expect(socketPath).toBe("/profiles/volli.sock");
         requests.push(request);
@@ -64,6 +65,7 @@ describe("runCli", () => {
       stdout: (text) => stdout.push(text),
       stderr: (text) => stderr.push(text),
       readText: async () => "",
+      observe: async () => ({}),
       request: async () => {
         throw new AgentClientError("APP_UNREACHABLE", "not running");
       },
@@ -87,6 +89,7 @@ describe("runCli", () => {
       stdout: (text) => stdout.push(text),
       stderr: () => undefined,
       readText: async () => "",
+      observe: async () => ({}),
       request: async () => {
         requested = true;
         throw new Error("not reached");
@@ -110,6 +113,7 @@ describe("runCli", () => {
       stdout: (text) => output.push(text),
       stderr: () => undefined,
       readText: async () => "",
+      observe: async () => ({}),
       request: async () => ({ v: 1, ok: true, data: {} }) as const,
       launch: async () => ({ alreadyRunning: true }),
     });
@@ -136,6 +140,7 @@ describe("runCli", () => {
       stdout: (text: string) => output.push(text),
       stderr: (text: string) => errors.push(text),
       readText: async () => "",
+      observe: async () => ({}),
       request: async () => ({ v: 1, ok: true, data: {} }) as const,
       launch: async () => ({ alreadyRunning: true }),
     };
@@ -169,6 +174,7 @@ describe("runCli", () => {
       stdout: (text: string) => output.push(text),
       stderr: () => undefined,
       readText: async () => "",
+      observe: async () => ({}),
       request: async () => ({ v: 1, ok: true, data: {} }) as const,
       launch: async () => ({ alreadyRunning: true }),
     };
@@ -195,6 +201,7 @@ describe("runCli", () => {
       stdout: (text: string) => output.push(text),
       stderr: (text: string) => errors.push(text),
       readText: async () => "",
+      observe: async () => ({}),
       request: async () => ({ v: 1, ok: true, data: {} }) as const,
       launch: async (timeout: number) => {
         timeouts.push(timeout);
@@ -235,6 +242,7 @@ describe("runCli", () => {
       stdout: (text: string) => output.push(text),
       stderr: (text: string) => errors.push(text),
       readText: async () => "",
+      observe: async () => ({}),
       request: async () => ({ v: 1, ok: true, data: {} }) as const,
       launch: async () => ({ alreadyRunning: true }),
     };
@@ -253,6 +261,7 @@ describe("runCli", () => {
       stdout: (text: string) => output.push(text),
       stderr: (text: string) => errors.push(text),
       readText: async () => "",
+      observe: async () => ({}),
       launch: async () => ({ alreadyRunning: true }),
     };
     expect(
@@ -298,6 +307,7 @@ describe("runCli", () => {
         stdout: () => undefined,
         stderr: () => undefined,
         readText: async () => "",
+        observe: async () => ({}),
         request: async (_socket, request) => {
           requests.push(request);
           return { v: 1, ok: true, data: { projects: [] } };
@@ -312,6 +322,7 @@ describe("runCli", () => {
       stdout: () => undefined,
       stderr: () => undefined,
       readText: async () => "",
+      observe: async () => ({}),
       request: async (_socket, request) => {
         requests.push(request);
         return { v: 1, ok: true, data: { projects: [] } };
@@ -319,5 +330,50 @@ describe("runCli", () => {
       launch: async () => ({ alreadyRunning: true }),
     });
     expect(requests[1]?.ctx.env).toEqual({});
+  });
+});
+
+describe("runCli — doctor", () => {
+  // The observation is the command's whole evidence; main must receive it
+  // rather than reconstruct it.
+  it("sends what this process observed of its own environment", async () => {
+    const requests: AgentRequest[] = [];
+    const code = await runCli(["doctor"], {
+      env: { VOLLI_SOCKET: "/socket", VOLLI_SESSION: "s-1" },
+      cwd: "/work",
+      stdout: () => undefined,
+      stderr: () => undefined,
+      readText: async () => "",
+      observe: async () => ({ pathEntries: ["/ud/bin"], resolved: { claude: "/ud/bin/claude" } }),
+      request: async (_socket, request) => {
+        requests.push(request);
+        return { v: 1, ok: true, data: { checks: [], summary: "All 0 checks passed." } };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    expect(code).toBe(0);
+    expect(requests[0]?.args["pathEntries"]).toEqual(["/ud/bin"]);
+    expect(requests[0]?.args["resolved"]).toEqual({ claude: "/ud/bin/claude" });
+    expect(requests[0]?.ctx.env.session).toBe("s-1");
+  });
+
+  it("does not attach an observation to any other command", async () => {
+    const requests: AgentRequest[] = [];
+    await runCli(["board"], {
+      env: { VOLLI_SOCKET: "/socket" },
+      cwd: "/work",
+      stdout: () => undefined,
+      stderr: () => undefined,
+      readText: async () => "",
+      observe: async () => ({ pathEntries: ["/ud/bin"] }),
+      request: async (_socket, request) => {
+        requests.push(request);
+        return { v: 1, ok: true, data: {} };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    expect(requests[0]?.args["pathEntries"]).toBeUndefined();
   });
 });

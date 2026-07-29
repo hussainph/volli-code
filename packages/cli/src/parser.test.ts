@@ -511,3 +511,19 @@ describe("parseCliArgs", () => {
     });
   });
 });
+
+describe("doctor", () => {
+  it("parses with no options", () => {
+    const parsed = parseCliArgs(["doctor"]);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) throw new Error("expected a parse");
+    expect(parsed.invocation.command).toBe("doctor");
+    expect(parsed.invocation.args["fix"]).toBeUndefined();
+  });
+
+  it("parses --fix as a flag", () => {
+    const parsed = parseCliArgs(["doctor", "--fix"]);
+    if (!parsed.ok) throw new Error("expected a parse");
+    expect(parsed.invocation.args["fix"]).toBe(true);
+  });
+});

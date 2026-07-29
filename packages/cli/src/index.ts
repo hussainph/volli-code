@@ -7,6 +7,7 @@ import type { AgentRequest } from "@volli/shared";
 
 import { requestAgent } from "./client";
 import { runHook } from "./hook";
+import { observeEnvironment } from "./doctor";
 import { runCli } from "./run";
 import { launchApp, requireLaunchSocketPath } from "./runtime";
 
@@ -113,6 +114,8 @@ async function main(): Promise<void> {
     stdout: (text) => process.stdout.write(text),
     stderr: (text) => process.stderr.write(text),
     readText: (path) => readFile(path, "utf8"),
+    // Measured here, in the environment under test — see `doctor.ts`.
+    observe: () => observeEnvironment(),
     request: (path, request) => requestAgent(path, request, { timeoutMs: 10_000 }),
     launch: (timeoutMs) => {
       return launchApp(
