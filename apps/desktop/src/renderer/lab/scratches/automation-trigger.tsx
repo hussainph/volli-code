@@ -85,8 +85,13 @@ import {
 } from "@renderer/components/ui/tooltip";
 import { cn } from "@renderer/lib/utils";
 
-import { HarnessMark, HarnessTag } from "../automation/harness-identity";
-import { SEEDED_AUTOMATIONS, type Automation } from "../automation/model";
+import { HarnessMark, HarnessTag, HarnessTrail } from "../automation/harness-identity";
+import {
+  harnessTrail,
+  SEEDED_AUTOMATIONS,
+  triggerColumns,
+  type Automation,
+} from "../automation/model";
 import { useDragSim, type AutomationTarget } from "../automation/use-drag-sim";
 import { project, ticketById, tickets } from "../fixtures";
 
@@ -205,11 +210,33 @@ const ARM_STYLE = `
 }
 `;
 
-/** Which automations may be offered for a column (#79's `columnScope`). */
+/** Which automations may be offered for a column — the trigger's own columns. */
 function offeredFor(status: TicketStatus): Automation[] {
-  return SEEDED_AUTOMATIONS.filter(
-    (automation) => automation.columnScope === "any" || automation.columnScope.includes(status),
-  );
+  return SEEDED_AUTOMATIONS.filter((automation) => {
+    const columns = triggerColumns(automation.trigger);
+    return columns === "any" || columns.includes(status);
+  });
+}
+
+/**
+ * Which agent(s) an Automation would start.
+ *
+ * One harness names itself. Two or more only fit as marks — and this component
+ * exists because multi-step automations broke an assumption all three of these
+ * surfaces were making: each of them rendered ONE harness and silently dropped
+ * every step after the first. Naming that here rather than at six call sites is
+ * also how the next surface to grow this problem gets it right for free.
+ */
+function AutomationHarness({
+  automation,
+  className,
+}: {
+  automation: Automation;
+  className?: string;
+}) {
+  const trail = harnessTrail(automation);
+  if (trail.length === 1) return <HarnessTag harnessId={trail[0]} className={className} />;
+  return <HarnessTrail harnessIds={trail} className={className} />;
 }
 
 /**
@@ -436,7 +463,7 @@ function AdvanceButton({ state }: { state: TicketState }) {
                   <LightningIcon weight="fill" />
                   Start a fresh Run · {armed.name}
                 </span>
-                <HarnessTag harnessId={armed.runtime.harnessId} className="text-xs" />
+                <AutomationHarness automation={armed} className="text-xs" />
               </DropdownMenuItem>
               <DropdownMenuSeparator />
             </>
@@ -458,7 +485,7 @@ function AdvanceButton({ state }: { state: TicketState }) {
                 <PlayIcon weight="fill" />
                 {automation.name}
               </span>
-              <HarnessTag harnessId={automation.runtime.harnessId} className="text-xs" />
+              <AutomationHarness automation={automation} className="text-xs" />
             </DropdownMenuItem>
           ))}
         </DropdownMenuContent>
@@ -597,7 +624,7 @@ function ColumnDefaultControl({
           {chosen ? (
             <span className="flex items-center gap-1.5">
               Default: {armed.name}
-              <HarnessMark harnessId={armed.runtime.harnessId} />
+              <HarnessTrail harnessIds={harnessTrail(armed)} />
             </span>
           ) : (
             "Select default automation"
@@ -618,7 +645,7 @@ function ColumnDefaultControl({
               ) : null}
               {automation.name}
             </span>
-            <HarnessTag harnessId={automation.runtime.harnessId} className="text-xs" />
+            <AutomationHarness automation={automation} className="text-xs" />
           </DropdownMenuItem>
         ))}
         <DropdownMenuSeparator />
@@ -731,7 +758,7 @@ function MoveSummary({
       >
         <LightningIcon weight={automation === null ? "regular" : "fill"} />
         {automation === null ? "No automation" : automation.name}
-        {automation !== null ? <HarnessMark harnessId={automation.runtime.harnessId} /> : null}
+        {automation !== null ? <HarnessTrail harnessIds={harnessTrail(automation)} /> : null}
       </span>
     </p>
   );
@@ -954,14 +981,21 @@ function ColumnAutomationList({
             {expanded && armed?.id === automation.id ? (
               <span className="shrink-0 text-label text-primary">default</span>
             ) : null}
-            {/* The mark, never the full `HarnessTag`, at either size. Spelling
-                out "Claude Code" on every row cost the NAME its width — the one
+            {/* Marks, never the full `HarnessTag`, at either size. Spelling out
+                "Claude Code" on every row cost the NAME its width — the one
                 thing being chosen truncated to "Impleme…" so the harness could
-                be written out three times identically. */}
-            <HarnessMark
-              harnessId={automation.runtime.harnessId}
-              className={expanded ? "size-3.5" : undefined}
-            />
+                be written out three times identically. A multi-step automation
+                gets one mark per harness, which is also the only warning on this
+                surface that a single release is about to start two sessions. */}
+            <span className="flex shrink-0 items-center gap-0.5">
+              {harnessTrail(automation).map((harnessId) => (
+                <HarnessMark
+                  key={harnessId}
+                  harnessId={harnessId}
+                  className={expanded ? "size-3.5" : undefined}
+                />
+              ))}
+            </span>
           </button>
         );
       })}
