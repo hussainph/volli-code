@@ -1,3 +1,4 @@
+export * from "./channel";
 export * from "./core";
 export * from "./cursor-hooks";
 export * from "./diff";

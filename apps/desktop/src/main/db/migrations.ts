@@ -427,6 +427,45 @@ const MIGRATION_016_SESSION_ACTIVE_HARNESS = `
 ALTER TABLE sessions ADD COLUMN active_harness_id TEXT;
 `;
 
+/**
+ * Migration 017: whether a harness's event channel is working *now*.
+ *
+ * `registered_harnesses.verified_events` (015) is monotonic on purpose — one
+ * delivery pins a capability forever — which makes it structurally unable to
+ * say that automation STOPPED working. A harness upgrade that renames a hook
+ * field, a `volli doctor --fix` never run after a path change, a wrapper
+ * removed by a dotfile sync: every one of those reads as perfectly healthy for
+ * the rest of the install's life.
+ *
+ * So freshness gets its own two integers rather than a rewrite of a working
+ * ledger. `last_launch_at` is stamped by the `session harness` announce — the
+ * wrapper calling in one step before it execs, which is the only event that
+ * proves Volli's configuration was in the loop; a PTY spawn would also count a
+ * user running `/opt/homebrew/bin/claude` by hand and manufacture a false
+ * accusation out of it. `last_event_at` is stamped by an arriving hook.
+ *
+ * No third column. The state — reporting / silent / unproven — is the
+ * comparison of the two, computed at read time, and that is exactly what makes
+ * it forget: a harness whose latest launch said nothing is silent on that
+ * launch, whatever the previous hundred did. Storing the verdict would make it
+ * monotonic again by the back door.
+ *
+ * Both columns are nullable and there is no row until something happens: a
+ * harness nobody has launched has nothing to say about itself, and `NULL` is
+ * that, distinct from zero.
+ *
+ * Absent from `db/export.ts` for migration 015's reason — this is an
+ * observation about THIS machine's install, not domain data a document should
+ * carry.
+ */
+const MIGRATION_017_HARNESS_CHANNEL = `
+CREATE TABLE harness_channel (
+  harness_id     TEXT PRIMARY KEY,
+  last_launch_at INTEGER,
+  last_event_at  INTEGER
+);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -499,6 +538,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 16,
     name: "sessions.active_harness_id — the harness actually running, beside the launch one",
     sql: MIGRATION_016_SESSION_ACTIVE_HARNESS,
+  },
+  {
+    version: 17,
+    name: "harness_channel — is this harness's event channel working right now",
+    sql: MIGRATION_017_HARNESS_CHANNEL,
   },
 ];
 

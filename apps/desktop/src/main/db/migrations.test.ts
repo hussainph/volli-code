@@ -193,7 +193,7 @@ describe("migrate — fresh install", () => {
     const db = openRawDb(dbPath);
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(16);
+    expect(db.pragma("user_version", { simple: true })).toBe(17);
     db.close();
   });
 
@@ -345,7 +345,7 @@ describe("migrate — 002 to 004 upgrade path", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(16);
+    expect(db.pragma("user_version", { simple: true })).toBe(17);
     const project = db.prepare("SELECT * FROM projects WHERE id = 'p1'").get() as {
       name: string;
     };
@@ -399,7 +399,7 @@ describe("migrate — 002 to 004 upgrade path", () => {
     const latestVersion = db.pragma("user_version", { simple: true }) as number;
     migrate(db, dbPath); // second call: nothing pending
 
-    expect(db.pragma("user_version", { simple: true })).toBe(16);
+    expect(db.pragma("user_version", { simple: true })).toBe(17);
     // No backup should exist for the already-latest version — the second
     // migrate() call had nothing to apply.
     expect(existsSync(`${dbPath}.backup-v${latestVersion}`)).toBe(false);
@@ -414,7 +414,7 @@ describe("migrate — 004 to 005 upgrade path (ticket-number counter backfill)",
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(16);
+    expect(db.pragma("user_version", { simple: true })).toBe(17);
     const projects = db
       .prepare("SELECT id, next_ticket_number FROM projects ORDER BY id")
       .all() as { id: string; next_ticket_number: number }[];
@@ -467,7 +467,7 @@ describe("migrate — 005 to 006 upgrade path (truthful session metadata)", () =
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(16);
+    expect(db.pragma("user_version", { simple: true })).toBe(17);
     expect(db.prepare("SELECT launch_kind, placement FROM sessions WHERE id = 's1'").get()).toEqual(
       { launch_kind: "unknown", placement: "unknown" },
     );
@@ -483,7 +483,7 @@ describe("migrate — 006 to 007 upgrade path (execution preferences)", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(16);
+    expect(db.pragma("user_version", { simple: true })).toBe(17);
     expect(db.prepare("SELECT preferred_harness_id FROM tickets WHERE id = 't1'").get()).toEqual({
       preferred_harness_id: "claude-code",
     });
@@ -502,7 +502,7 @@ describe("migrate — 007 to 008 upgrade path (worktree setup command)", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(16);
+    expect(db.pragma("user_version", { simple: true })).toBe(17);
     expect(db.prepare("SELECT name, setup_command FROM projects WHERE id = 'p1'").get()).toEqual({
       name: "Project",
       setup_command: null,
@@ -519,7 +519,7 @@ describe("migrate — 008 to 009 upgrade path (durable draft-PR url)", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(16);
+    expect(db.pragma("user_version", { simple: true })).toBe(17);
     expect(db.prepare("SELECT title, pr_url FROM tickets WHERE id = 't1'").get()).toEqual({
       title: "Ticket",
       pr_url: null,
@@ -536,7 +536,7 @@ describe("migrate — 010 to 011 upgrade path (ticket attachments)", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(16);
+    expect(db.pragma("user_version", { simple: true })).toBe(17);
     expect(tableExists(db, "ticket_attachments")).toBe(true);
     expect(db.prepare("SELECT COUNT(*) as n FROM ticket_attachments").get()).toEqual({ n: 0 });
     expect(db.prepare("SELECT title FROM tickets WHERE id = 't1'").get()).toEqual({
@@ -567,7 +567,7 @@ describe("migrate — 011 to 012 upgrade path (session exit code)", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(16);
+    expect(db.pragma("user_version", { simple: true })).toBe(17);
     expect(db.prepare("SELECT ended_at, exit_code FROM sessions WHERE id = 's1'").get()).toEqual({
       ended_at: 5,
       exit_code: null,
@@ -593,7 +593,7 @@ describe("migrate — 012 to 013 upgrade path (per-surface theme override)", () 
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(16);
+    expect(db.pragma("user_version", { simple: true })).toBe(17);
     // Decision #69: the override is PER SURFACE, and NULL = inherit — so an
     // upgraded project keeps the global theme on every surface.
     expect(
@@ -645,7 +645,7 @@ describe("migrate — 013 to 014 upgrade path (per-project canvas + appearance)"
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(16);
+    expect(db.pragma("user_version", { simple: true })).toBe(17);
     // NULL = inherit, exactly as 013 meant it: an upgraded project keeps the
     // global canvas and the global appearance.
     expect(
@@ -716,7 +716,7 @@ describe("migrate — 014 to 015 upgrade path (registered harnesses)", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(16);
+    expect(db.pragma("user_version", { simple: true })).toBe(17);
     expect(tableExists(db, "registered_harnesses")).toBe(true);
     expect(db.prepare("SELECT COUNT(*) AS n FROM registered_harnesses").get()).toEqual({ n: 0 });
     expect(existsSync(`${dbPath}.backup-v14`)).toBe(true);
@@ -782,7 +782,7 @@ describe("migrate — 015 to 016 upgrade path (active harness)", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(16);
+    expect(db.pragma("user_version", { simple: true })).toBe(17);
     expect(
       db.prepare("SELECT harness_id, active_harness_id FROM sessions WHERE id = 's1'").get(),
     ).toEqual({ harness_id: "opencode", active_harness_id: null });
@@ -808,6 +808,69 @@ describe("migrate — 015 to 016 upgrade path (active harness)", () => {
     expect(
       db.prepare("SELECT harness_id, active_harness_id FROM sessions WHERE id = 's1'").get(),
     ).toEqual({ harness_id: "opencode", active_harness_id: "claude-code" });
+    db.close();
+  });
+});
+
+describe("migrate — 016 to 017 upgrade path (harness channel)", () => {
+  it("adds the channel table to an existing database, empty, without disturbing the ledger", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    for (const migration of MIGRATIONS.filter((m) => m.version <= 16)) db.exec(migration.sql);
+    db.pragma("user_version = 16");
+    db.prepare(
+      `INSERT INTO registered_harnesses
+         (slug, manifest_path, manifest_sha256, decision, declared_events, verified_events,
+          decided_at, created_at, updated_at)
+       VALUES ('my-harness', '/m.json', 'a1', 'trusted', '["input.needed"]', '["input.needed"]', 0, 0, 0)`,
+    ).run();
+
+    migrate(db, dbPath);
+
+    expect(db.pragma("user_version", { simple: true })).toBe(17);
+    expect(tableExists(db, "harness_channel")).toBe(true);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM harness_channel").get()).toEqual({ n: 0 });
+    expect(
+      db
+        .prepare("SELECT verified_events FROM registered_harnesses WHERE slug = 'my-harness'")
+        .get(),
+    ).toEqual({ verified_events: '["input.needed"]' });
+    expect(existsSync(`${dbPath}.backup-v16`)).toBe(true);
+    db.close();
+  });
+
+  // Two integers and the id they belong to. A third column holding the derived
+  // word would be the monotonic ledger all over again.
+  it("stores the two timestamps and nothing derived from them", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+
+    expect(columnNames(db, "harness_channel")).toEqual([
+      "harness_id",
+      "last_launch_at",
+      "last_event_at",
+    ]);
+    db.close();
+  });
+
+  it("admits a row that has only ever launched, and only ever reported", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+
+    db.prepare(
+      "INSERT INTO harness_channel (harness_id, last_launch_at) VALUES ('claude-code', 10)",
+    ).run();
+    db.prepare(
+      "INSERT INTO harness_channel (harness_id, last_event_at) VALUES ('codex', 20)",
+    ).run();
+
+    expect(db.prepare("SELECT * FROM harness_channel ORDER BY harness_id").all()).toEqual([
+      { harness_id: "claude-code", last_launch_at: 10, last_event_at: null },
+      { harness_id: "codex", last_launch_at: null, last_event_at: 20 },
+    ]);
     db.close();
   });
 });
