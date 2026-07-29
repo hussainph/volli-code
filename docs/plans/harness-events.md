@@ -269,16 +269,21 @@ production code.
   per subcommand, and `doctor` and `debug` accept overrides that `exec` rejects.
 - **cursor** was asserted against its written config only, not run.
 
-Two things a headless run cannot reach, and neither should be recorded as passing:
+`--print` never blocks on a human, so it raises no `Notification` however correct the binding
+is. That left the event the whole feature exists for unproven, and it took an interactive run
+to settle. Driving the real TUI under a pty — `script -q /dev/null` fails here with
+`tcgetattr/ioctl: Operation not supported on socket`, so allocate the pty pair directly, e.g.
+Python's `pty.fork` — with our production settings gives:
 
-- `--print` never blocks on a human, so Claude raises no permission prompt and `Notification`
-  cannot fire however correct the binding is. `input.needed` for claude-code has been proven
-  end-to-end through the shim, socket and renderer, but not from the binary itself.
-- Whether `preferredNotifChannel: "notifications_disabled"` suppresses the `Notification`
-  *hook* alongside the terminal notification is **still open**. The four events above fired
-  with that setting active, so it is not a blanket hook suppressor; that is not the same as
-  clearing the one event it could plausibly silence. Settling it needs an interactive TUI and
-  a tool call that genuinely requires approval.
+```json
+{ "hook_event_name": "Notification", "notification_type": "idle_prompt",
+  "message": "Claude is waiting for your input", "session_id": "…" }
+```
+
+So **`preferredNotifChannel: "notifications_disabled"` does not suppress the `Notification`
+hook.** It silences Claude's own terminal notification and leaves ours alone, which is exactly
+the arrangement the design assumed and had no evidence for. `input.needed` is confirmed
+reaching us from the real binary, not only through the shim.
 
 ## Corrections
 
