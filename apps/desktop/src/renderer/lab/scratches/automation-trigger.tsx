@@ -23,10 +23,10 @@
  *     column the pointer is over, still override that default — the same
  *     digit twice clears back to it. Holding ⌥ GROWS that column's list into
  *     large landing targets in place; letting go shrinks it back. The card
- *     tracks the cursor the whole way and never stops — an earlier version
- *     parked it in the column header to keep it off the list, which fixed the
- *     legibility and cost the drag its feel. The list is simply in front of it
- *     instead.
+ *     tracks the cursor the whole way and never stops, but it SHRINKS to a
+ *     one-line badge over a column, because the payload and the menu cannot
+ *     both own the same square inch and the payload is not the thing being
+ *     read. See {@link DragGhost} for the two attempts that came before it.
  *
  * Every surface here is drawn INSIDE the chrome it will really live in — a mock
  * ticket header, a real board with real cards. A control judged on an empty page
@@ -718,9 +718,36 @@ function MoveSummary({
  * {@link MoveSummary}, so the summary reads as a real statement even when
  * nothing will run.
  *
- * `compact` is the shrunk form `radial` pins at its wedge anchor: ref + origin
- * + move only, no title, since it sits fixed at a point the cursor has already
- * moved away from to flick a direction.
+ * ── THE TWO SIZES, AND WHY ────────────────────────────────────────────────
+ * A drag has two halves and they want opposite things. Nearly everywhere there
+ * is nothing underneath worth reading, and the card should be a card: full
+ * width, tilted, the title legible, obviously the object you picked up. Standing
+ * ON the automation panel is the exception — there a list is asking to be read,
+ * and 256×123 of opaque card is the single worst thing that could be sitting on
+ * top of it.
+ *
+ * The trigger is the PANEL, not the column. Anywhere else inside a column there
+ * is nothing but the column's own cards underneath, which are not targets and
+ * not being read, so the card has no reason to give anything up.
+ *
+ * Both attempts to fix that by moving something failed. Parking the card in the
+ * column header took the drag away from the hand. Sliding the list in front of
+ * the card kept the drag but buried the ticket. Neither is a real fix, because
+ * the two are competing for one square inch of screen and only one of them can
+ * have it.
+ *
+ * So the CARD gives way, and it gives way by shrinking rather than by moving:
+ * over a column it becomes one line — ref, the move, what will run — hung off
+ * the cursor like a drag badge. It still tracks the pointer exactly, so nothing
+ * is taken away; it just stops being the biggest thing on screen at the exact
+ * moment it stops being the thing you are reading. This is what every drag that
+ * has ever had to cross a menu does: Figma drops to a line, Trello to a
+ * placeholder, Finder to a badge. The payload goes quiet over the target.
+ *
+ * The title is what the compact form drops, because the ref is the identity —
+ * the one thing that may never be elided — and the title is the only part
+ * allowed to give way.
+ * ──────────────────────────────────────────────────────────────────────────
  */
 function DragGhost({
   ticket,
@@ -728,22 +755,31 @@ function DragGhost({
   destination,
   point,
   automation,
-  compact = false,
+  onList,
 }: {
   ticket: Ticket;
   origin: TicketStatus;
   destination: TicketStatus | null;
   point: { x: number; y: number };
   automation: Automation | null;
-  compact?: boolean;
+  /** Pointer is standing on the automation panel — the only place the card is in the way. */
+  onList: boolean;
 }) {
-  if (compact) {
+  // One line, and ABOVE the panel rather than behind it. Small enough now that
+  // being on top costs the list a sliver of one row, where the full card cost
+  // it the whole panel.
+  if (onList) {
     return (
       <div
-        className="pointer-events-none fixed z-[160] w-fit max-w-56 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-card px-2.5 py-1.5 shadow-lg"
-        style={{ left: point.x, top: point.y }}
+        className="pointer-events-none fixed z-[160] flex w-fit max-w-72 items-center gap-2 rounded-md border border-border bg-card py-1 pr-2 pl-2.5 shadow-lg"
+        // Hung down-and-right off the pointer, the way a drag badge is: the
+        // cursor tip stays clear, and everything above and left of the hand —
+        // which is where the rows you are choosing between live — stays visible.
+        style={{ left: point.x + 14, top: point.y + 14 }}
       >
-        <p className="font-mono text-xs text-foreground">{ticketRef(ticket)}</p>
+        <span className="shrink-0 font-mono text-label text-muted-foreground">
+          {ticketRef(ticket)}
+        </span>
         <MoveSummary origin={origin} destination={destination} automation={automation} compact />
       </div>
     );
@@ -822,21 +858,16 @@ function ColumnAutomationList({
 
   return (
     <div
+      // Hit-tested by `useDragSim` so the dragged card knows when it is standing
+      // on the panel specifically. Must stay on the container, not the rows:
+      // collapsed rows are `pointer-events-none`, so the container is what the
+      // hit test actually lands on.
+      data-lab-automation-list
       className={cn(
-        // THE LIST RIDES ABOVE THE DRAGGED CARD.
-        //
-        // The card is 256px of opaque `bg-card` locked to the cursor, and the
-        // rows it was asking you to read sat directly under it. The first fix
-        // was to stop the card following the cursor at all, which traded a
-        // legibility problem for a worse one: the drag stopped feeling like a
-        // drag. So the card keeps tracking the hand, and the list is simply in
-        // front of it — `z-[130]` against the ghost's `z-[100]`, on its own
-        // opaque panel in BOTH sizes so there is always something for the card
-        // to pass behind.
-        //
-        // It reads as depth rather than as breakage because the card is far
-        // wider than the panel and stays visible either side of it: cargo
-        // sliding behind the rack label it is being filed under.
+        // A real panel, not a bare stack of rows: it sits on top of the column's
+        // own cards, so it needs its own surface to be read against. The
+        // dragged card no longer competes with it — see {@link DragGhost},
+        // which shrinks to a one-line badge the moment it is over a column.
         "relative z-[130] mb-2 flex flex-col rounded-lg border border-border bg-popover shadow-md",
         "transition-[gap,padding] duration-150 ease-out",
         expanded ? "gap-1.5 p-1.5" : "gap-px p-1",
@@ -890,7 +921,11 @@ function ColumnAutomationList({
             <span className={cn("min-w-0 flex-1 truncate", expanded && "font-medium")}>
               {automation.name}
             </span>
-            {armed?.id === automation.id ? (
+            {/* Expanded only. Collapsed, the lit row already says what a plain
+                release runs, and the word cost "Grill the ticket" its last four
+                characters. Expanded it earns its width: a digit can move the
+                highlight off the default, and then the two facts differ. */}
+            {expanded && armed?.id === automation.id ? (
               <span className="shrink-0 text-label text-primary">default</span>
             ) : null}
             {/* The mark, never the full `HarnessTag`, at either size. Spelling
@@ -1345,13 +1380,11 @@ function DragTab({
         </div>
       ) : null}
 
-      {/* The card is under the hand for the whole gesture, everywhere, with no
-          state in which it stops tracking the cursor. Where it would cover the
-          column's automation list, the list is in front of it instead — see
-          `ColumnAutomationList`.
-
-          It carries the ticket and the move it is making. Nothing else — the
-          keys are not written on the card you are holding. */}
+      {/* Under the hand for the whole gesture, everywhere, with no state in
+          which it stops tracking the cursor — a full card until it is standing
+          on the automation panel, one line while it is. It carries the ticket
+          and the move it is making, and nothing else: the keys are not written
+          on the card you are holding. */}
       {activeDrag !== null ? (
         <DragGhost
           ticket={activeDrag.ticket}
@@ -1359,6 +1392,7 @@ function DragTab({
           destination={ghostDestination}
           point={drag.point}
           automation={ghostAutomation}
+          onList={drag.overList}
         />
       ) : null}
     </div>

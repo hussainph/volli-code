@@ -95,6 +95,13 @@ export interface DragSim {
   point: { x: number; y: number };
   /** Column currently under the pointer, hit-tested every move. */
   hovered: TicketStatus | null;
+  /**
+   * Pointer is on the hovered column's automation panel itself, not merely
+   * somewhere inside the column. Strictly narrower than {@link hovered}, and
+   * the two are not interchangeable: the dragged card gives up its full size on
+   * THIS, because over the column's own cards there is nothing to obscure.
+   */
+  overList: boolean;
   /** Whether {@link MODIFIER} is down right now — raw key state, independent of whether a picker actually opened for it (it needs a hovered column to open at all). */
   modifierHeld: boolean;
   /** Attach to a card: begins a drag on pointer-down, remembering `origin` for the whole drag. */
@@ -143,6 +150,8 @@ export function useDragSim({ automationCountFor, defaultIndexFor }: UseDragSimOp
   const [origin, setOrigin] = React.useState<TicketStatus | null>(null);
   const [point, setPoint] = React.useState({ x: 0, y: 0 });
   const [hovered, setHovered] = React.useState<TicketStatus | null>(null);
+  /** Pointer is on the automation panel itself, not just inside its column. */
+  const [overList, setOverList] = React.useState(false);
   const [modifierHeld, setModifierHeld] = React.useState(false);
   const [lastDrop, setLastDrop] = React.useState<DragSim["lastDrop"]>(null);
   const [digitSelection, setDigitSelection] = React.useState<AutomationTarget | null>(null);
@@ -180,10 +189,26 @@ export function useDragSim({ automationCountFor, defaultIndexFor }: UseDragSimOp
       return (column?.dataset.labColumn as TicketStatus | undefined) ?? null;
     }
 
+    /**
+     * Is the pointer actually ON the automation panel, as opposed to merely
+     * somewhere in the column that owns it?
+     *
+     * The dragged card shrinks out of the way on exactly this, and nothing
+     * coarser will do: over the column's cards there is nothing to obscure and
+     * the card should stay a card. Same elementFromPoint as {@link hitTest} for
+     * the same reason — the panel changes size when ⌥ is held, so a rect cached
+     * a frame ago is a rect for the wrong panel.
+     */
+    function overListTest(x: number, y: number): boolean {
+      const element = document.elementFromPoint(x, y);
+      return (element?.closest("[data-lab-automation-list]") ?? null) !== null;
+    }
+
     function resetDragState() {
       setTicketId(null);
       setOrigin(null);
       setHovered(null);
+      setOverList(false);
       setModifierHeld(false);
       setDigitSelection(null);
       setPickerOpen(false);
@@ -245,6 +270,7 @@ export function useDragSim({ automationCountFor, defaultIndexFor }: UseDragSimOp
       setPoint({ x: event.clientX, y: event.clientY });
       const next = hitTest(event.clientX, event.clientY);
       setHovered(next);
+      setOverList(overListTest(event.clientX, event.clientY));
       // Tracked on move as well as on key events: a drag that begins with the
       // modifier ALREADY down would otherwise never see a keydown.
       setModifierHeld(event.altKey);
@@ -416,6 +442,7 @@ export function useDragSim({ automationCountFor, defaultIndexFor }: UseDragSimOp
     origin,
     point,
     hovered,
+    overList,
     modifierHeld,
     start,
     lastDrop,
