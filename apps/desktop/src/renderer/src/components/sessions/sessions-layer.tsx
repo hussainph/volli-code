@@ -14,6 +14,7 @@ import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import {
   scratchScope,
   sessionPanes,
+  subscribeHarnessEvents,
   useSessionsStore,
   type TerminalSplitDirection,
 } from "@renderer/stores/sessions";
@@ -111,6 +112,13 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
   // (stores/worktree.ts) that the ticket-detail session chip, "starting"
   // affordance, and Details rail's failed-notice/retry all read from.
   React.useEffect(() => subscribeWorktreePhases(), []);
+
+  // The single subscription to the involuntary harness channel, for the same
+  // reason again (docs/plans/harness-events.md): the events address live
+  // sessions by the same id the PTY streams above carry, and this layer is the
+  // only component that outlives every surface reading them — the sidebar's
+  // "Needs you" tier, the ticket rail, the session header.
+  React.useEffect(() => subscribeHarnessEvents(), []);
 
   const createScratch = React.useCallback((project: Project) => {
     void createTerminalSession(scratchScope(project.id));

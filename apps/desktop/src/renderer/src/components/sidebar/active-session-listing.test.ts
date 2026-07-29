@@ -2,13 +2,15 @@ import {
   createSessionHarnessState,
   receiveHarnessEvent,
   type HarnessEvent,
+  type HarnessEventNotice,
   type SessionHarnessState,
   type SessionRecord,
   type Ticket,
   type TicketEvent,
 } from "@volli/shared";
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { subscribeHarnessEvents, ticketScope, useSessionsStore } from "../../stores/sessions";
 import { buildActiveSessionListing } from "./active-session-listing";
 
 function ticket(overrides: Partial<Ticket> & { id: string; status: Ticket["status"] }): Ticket {
@@ -874,5 +876,56 @@ describe("buildActiveSessionListing — harness-reported attention", () => {
     });
 
     expect(result.active.map((row) => row.activitySource)).toEqual(["silent"]);
+  });
+});
+
+describe("buildActiveSessionListing — fed by the live harness channel", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    useSessionsStore.setState({ byOwner: {}, sessionOwner: {}, harness: {} });
+  });
+
+  it("fills Needs you from one pushed event, with no agent cooperation", () => {
+    // The whole point of the involuntary channel: no `volli session blocked`,
+    // no ticket event, nothing the agent had to choose to do.
+    let push: ((notice: HarnessEventNotice) => void) | undefined;
+    vi.stubGlobal("window", {
+      api: {
+        sessions: {
+          onHarnessEvent: (callback: (notice: HarnessEventNotice) => void) => {
+            push = callback;
+            return () => {};
+          },
+        },
+      },
+    });
+    useSessionsStore.getState().addSession(ticketScope("p1", "t1"), "s1", "Implement UI");
+    subscribeHarnessEvents();
+
+    push?.({
+      sessionId: "s1",
+      projectId: "p1",
+      ticketId: "t1",
+      harnessId: "claude-code",
+      event: "input.needed",
+      harnessSessionId: null,
+      at: 90_000,
+    });
+
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: useSessionsStore.getState().byOwner,
+      eventsByTicket: {},
+      records: [],
+      lastOutputAt: {},
+      parkState: {},
+      harness: useSessionsStore.getState().harness,
+      now: 100_000,
+    });
+
+    expect(result.needsYou).toMatchObject([
+      { title: "Implement UI", activity: "waiting", attention: { signal: "waiting" } },
+    ]);
+    expect(result.active).toEqual([]);
   });
 });
