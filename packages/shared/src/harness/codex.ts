@@ -8,10 +8,18 @@ import type { HarnessAdapter } from "./types";
  * `agent-turn-complete` payload. Hence the `hooks:` / `notify:` namespace on
  * the native names — two mechanisms, one harness.
  *
- * PROVISIONAL: the `-c key=value` injection path is still being confirmed
- * against a live binary. Codex ignores unrecognized config keys without
- * `--strict-config`, so a botched install fails silently rather than loudly —
- * treat a codex session that never reports as unconfirmed, not as broken.
+ * `-c key=value` is confirmed against codex-cli 0.144.6: it parses its value as
+ * TOML rather than taking a string, verified by control — a malformed array
+ * fails `codex doctor` where a well-formed one passes. What remains unconfirmed
+ * is the key naming the external hooks file (see `CODEX_HOOKS_PATH_KEY`).
+ *
+ * Codex ignores unrecognized config keys without `--strict-config`, so a wrong
+ * key fails silently rather than loudly — treat a codex session that never
+ * reports as unconfirmed, not as broken.
+ *
+ * Its hook trust gate is hash-keyed and interactive: a changed hook config
+ * re-prompts, and one wrong keypress turns our events off for good. That is why
+ * the launch config carries nothing session-specific — see `buildLaunchConfig`.
  */
 export const codexAdapter: HarnessAdapter = {
   id: "codex",
