@@ -727,7 +727,7 @@ function MoveSummary({
         )}
       >
         <LightningIcon weight={automation === null ? "regular" : "fill"} />
-        {automation === null ? "nothing runs" : automation.name}
+        {automation === null ? "No automation" : automation.name}
         {automation !== null ? <HarnessMark harnessId={automation.runtime.harnessId} /> : null}
       </span>
     </p>
