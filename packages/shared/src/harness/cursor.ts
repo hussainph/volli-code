@@ -18,8 +18,12 @@ export const cursorAdapter: HarnessAdapter = {
   command: "cursor-agent",
   promptFlag: null,
   detection: { executable: "cursor-agent" },
-  // The CLI has no commands directory, and its skills surface is unverified.
-  surfaces: { skillsDir: null, commandsDir: null, instructionsFile: null },
+  surfaces: {
+    skillsDir: "{home}/.cursor/skills",
+    // `~/.cursor/commands` does not exist for the CLI.
+    commandsDir: null,
+    instructionsFile: "{home}/AGENTS.md",
+  },
   injection: { kind: "config-dir-env", envVar: "CURSOR_CONFIG_DIR", filename: "cli-config.json" },
   // `--new-session-id` exists but is hidden (`.hideHelp()`).
   sessionId: { kind: "argv", flag: "--new-session-id", format: "uuid" },

@@ -1,12 +1,12 @@
-import { isFirstClassHarnessId } from "../ticket";
-import type { FirstClassHarnessId, HarnessId } from "../ticket";
+import type { HarnessId } from "../ticket";
 import { claudeCodeAdapter } from "./claude-code";
 import { codexAdapter } from "./codex";
 import { cursorAdapter } from "./cursor";
 import { opencodeAdapter } from "./opencode";
+import { genericHarnessActions } from "./generic";
 import {
   VOLLI_CLI_REFERENCE,
-  VOLLI_OPENCODE_COMMAND,
+  VOLLI_COMMAND_DOC,
   VOLLI_ORCHESTRATION,
   VOLLI_SKILL,
 } from "./skill-content";
@@ -66,35 +66,68 @@ export function managedWriteDecision(input: {
   return "conflict";
 }
 
-/**
- * Per-harness baseline assets: real files under the user's own dotfiles, which
- * is why they are NOT adapter data. An adapter describes a harness; this table
- * describes what Volli writes, and only a built-in may write outside
- * Volli-owned directories (bring-your-own manifests may not).
- */
-const BASELINE_ASSETS: Partial<
-  Record<FirstClassHarnessId, (home: string, canonicalSkillPath: string) => InstallAction[]>
-> = {
-  "claude-code": (home, canonicalSkillPath) => [
-    {
-      kind: "symlink",
-      path: `${home}/.claude/skills/volli`,
-      target: canonicalSkillPath,
-      managed: true,
-    },
-  ],
-  opencode: (home) => [
-    {
-      kind: "write",
-      path: `${home}/.config/opencode/command/volli.md`,
-      content: VOLLI_OPENCODE_COMMAND,
-      managed: true,
-    },
-  ],
-};
+/** Stands in for the user's home directory in a {@link HarnessSurfaces} path. */
+export const HOME_TOKEN = "{home}";
+
+/** The canonical skill files every plan opens with, before any per-harness surface. */
+export const CANONICAL_SKILL_FILES = 3;
 
 function normalizedHome(home: string): string {
   return home.endsWith("/") ? home.slice(0, -1) : home;
+}
+
+function resolved(template: string, home: string): string {
+  return template.replaceAll(HOME_TOKEN, home);
+}
+
+/**
+ * The baseline assets a set of adapters earns, folded out of the surfaces each
+ * one declares — no identity anywhere, so a manifest-registered harness gets
+ * exactly what a built-in with the same surfaces gets.
+ *
+ * A harness receives the skill pack once: by symlink into its skills directory
+ * when it reads one, and otherwise as a slash-command doc, which is the only
+ * route left for a harness that has commands but no skills. An instructions
+ * file earns the fenced managed block on top, and two harnesses naming the
+ * same file share one action rather than fighting over it.
+ *
+ * Every path here lands in the USER's dotfiles, so a registered manifest's
+ * surfaces must be validated before they reach this fold — the rule is about
+ * which paths a manifest may claim, not about which adapters are built in.
+ */
+export function harnessBaselineActions(input: {
+  home: string;
+  adapters: readonly HarnessAdapter[];
+}): InstallAction[] {
+  const home = normalizedHome(input.home);
+  const canonical = `${home}/.agents/skills/volli`;
+  const byPath = new Map<string, InstallAction>();
+  const claim = (action: InstallAction): void => {
+    if (!byPath.has(action.path)) byPath.set(action.path, action);
+  };
+
+  for (const adapter of input.adapters) {
+    const { skillsDir, commandsDir, instructionsFile } = adapter.surfaces;
+    if (skillsDir) {
+      claim({
+        kind: "symlink",
+        path: `${resolved(skillsDir, home)}/volli`,
+        target: canonical,
+        managed: true,
+      });
+    } else if (commandsDir) {
+      claim({
+        kind: "write",
+        path: `${resolved(commandsDir, home)}/volli.md`,
+        content: VOLLI_COMMAND_DOC,
+        managed: true,
+      });
+    }
+    if (instructionsFile) {
+      for (const action of genericHarnessActions(resolved(instructionsFile, home))) claim(action);
+    }
+  }
+  return [...byPath.values()];
 }
 
 export function buildHarnessInstallPlan(input: {
@@ -104,33 +137,20 @@ export function buildHarnessInstallPlan(input: {
   if (input.detected.length === 0) return [];
   const home = normalizedHome(input.home);
   const canonical = `${home}/.agents/skills/volli`;
-  const actions: InstallAction[] = [
-    {
-      kind: "write",
-      path: `${canonical}/SKILL.md`,
-      content: VOLLI_SKILL,
-      managed: true,
-    },
-    {
-      kind: "write",
-      path: `${canonical}/cli.md`,
-      content: VOLLI_CLI_REFERENCE,
-      managed: true,
-    },
+  const detected = [...new Set(input.detected)]
+    .map((id) => getHarnessAdapter(id))
+    .filter((adapter) => adapter !== undefined);
+  return [
+    { kind: "write", path: `${canonical}/SKILL.md`, content: VOLLI_SKILL, managed: true },
+    { kind: "write", path: `${canonical}/cli.md`, content: VOLLI_CLI_REFERENCE, managed: true },
     {
       kind: "write",
       path: `${canonical}/orchestration.md`,
       content: VOLLI_ORCHESTRATION,
       managed: true,
     },
+    ...harnessBaselineActions({ home, adapters: detected }),
   ];
-  for (const id of new Set(input.detected)) {
-    // A registered-but-unknown harness contributes no baseline assets: the
-    // skill pack it can't host is exactly the tier it doesn't have.
-    const assets = isFirstClassHarnessId(id) ? BASELINE_ASSETS[id] : undefined;
-    actions.push(...(assets?.(home, canonical) ?? []));
-  }
-  return actions;
 }
 
 export * from "./types";

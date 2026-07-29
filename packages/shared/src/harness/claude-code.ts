@@ -21,8 +21,10 @@ export const claudeCodeAdapter: HarnessAdapter = {
   surfaces: {
     skillsDir: "{home}/.claude/skills",
     commandsDir: "{home}/.claude/commands",
-    // It reads CLAUDE.md, never AGENTS.md.
-    instructionsFile: "{home}/.claude/CLAUDE.md",
+    // It reads CLAUDE.md, never AGENTS.md — and a user's CLAUDE.md is theirs,
+    // so Volli claims no instructions file here. The skills symlink carries
+    // everything the fenced block would have said.
+    instructionsFile: null,
   },
   injection: { kind: "argv-settings-json", flag: "--settings" },
   sessionId: { kind: "argv", flag: "--session-id", format: "uuid" },
