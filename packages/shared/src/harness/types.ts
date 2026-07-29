@@ -9,7 +9,7 @@
  * ones: this package must stay free of Node/Electron/DOM imports, so main
  * substitutes them when it touches the filesystem.
  */
-import type { HarnessId } from "../ticket";
+import type { FirstClassHarnessId, HarnessId } from "../ticket";
 
 export type InstallAction =
   | { kind: "write"; path: string; content: string; managed: true }
@@ -68,9 +68,11 @@ export interface HarnessEventBinding {
 /**
  * The harness's own name for a signal, with any mechanism namespace stripped.
  * Lives here rather than in one renderer because every mechanism that writes a
- * native name has to strip it the same way.
+ * native name has to strip it the same way — including the manifest parser,
+ * which has to judge the name that will actually key an object, not the
+ * namespaced string it arrived as.
  */
-export function nativeName(binding: HarnessEventBinding): string {
+export function nativeName(binding: Pick<HarnessEventBinding, "native">): string {
   const separator = binding.native.indexOf(":");
   return separator === -1 ? binding.native : binding.native.slice(separator + 1);
 }
@@ -131,22 +133,61 @@ export interface HarnessSurfaces {
 /** A bare executable name: no directory traversal, no whitespace, nothing a shell would read. */
 const BARE_HARNESS_COMMAND_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
+/** Who a name inside Volli's `bin/` already belongs to. */
+export type HarnessCommandOwner = "volli-cli" | FirstClassHarnessId;
+
 /**
- * Names inside Volli's `bin/` that belong to the CLI launcher. A wrapper is
- * written under a harness's `command`, so the one thing standing between a
- * hostile (or merely careless) manifest and the launcher every agent reaches
- * Volli through is refusing these outright.
+ * The names inside Volli's `bin/` that are already spoken for: the CLI launcher
+ * every agent reaches Volli through, and the wrapper each built-in harness gets.
+ * A wrapper is written as `<binDir>/<command>` and that directory wins `PATH`
+ * inside a session, so a name claimed twice is one file written twice — the
+ * later writer silently taking over the earlier one's argv injection, or the
+ * launcher itself.
+ *
+ * Keyed case-folded, and that is not fastidiousness: APFS is case-INSENSITIVE by
+ * default, so on the only OS we ship `Volli` and `volli` are the same file, and
+ * a case-sensitive check hands a manifest the launcher's own path.
+ *
+ * The built-in half is spelled out rather than folded out of the adapter
+ * registry because every adapter module imports THIS one: reaching back for the
+ * registry closes an import cycle and leaves the map undefined while it
+ * evaluates. A built-in whose command drifted from this list would only ever
+ * over-refuse, which is the safe direction.
  */
-const RESERVED_HARNESS_COMMANDS: ReadonlySet<string> = new Set(["volli", "volli.cjs"]);
+const OWNED_HARNESS_COMMANDS: ReadonlyMap<string, HarnessCommandOwner> = new Map([
+  ["volli", "volli-cli"],
+  ["volli.cjs", "volli-cli"],
+  ["claude", "claude-code"],
+  ["codex", "codex"],
+  ["cursor-agent", "cursor"],
+  ["opencode", "opencode"],
+]);
+
+/**
+ * Who already owns `<binDir>/<command>`, or `null` when the name is free.
+ *
+ * Two edges ask, and they have to get the same answer. The manifest parser
+ * refuses any owned name outright — a registered harness is never a built-in, so
+ * for it "owned" and "forbidden" are the same word. The wrapper writer compares
+ * the owner against the adapter it is about to write for, which is what makes
+ * `bin/` one-to-one: `claude-code` may claim `claude`, and nobody else may.
+ */
+export function harnessCommandOwner(command: string): HarnessCommandOwner | null {
+  return OWNED_HARNESS_COMMANDS.get(command.toLowerCase()) ?? null;
+}
 
 /**
  * Whether `command` is a name Volli will execute and describe honestly: a bare
- * executable, and not one of Volli's own. Every argument a harness receives
- * comes from a declared argv array instead, which is what makes the trust
- * dialog's claim about the command line literally true.
+ * executable, and not the launcher's. Every argument a harness receives comes
+ * from a declared argv array instead, which is what makes the trust dialog's
+ * claim about the command line literally true.
+ *
+ * Deliberately silent about the built-ins' own commands — a built-in has to pass
+ * this to get its wrapper written at all. Ownership is {@link
+ * harnessCommandOwner}'s question, and callers that care ask it separately.
  */
 export function isBareHarnessCommand(command: string): boolean {
-  return BARE_HARNESS_COMMAND_RE.test(command) && !RESERVED_HARNESS_COMMANDS.has(command);
+  return BARE_HARNESS_COMMAND_RE.test(command) && harnessCommandOwner(command) !== "volli-cli";
 }
 
 /**
@@ -224,9 +265,22 @@ export interface HarnessAdapter {
  */
 export type HarnessTier = "hooked" | "known" | "declared";
 
+/**
+ * Whether a resume slot holds argv that would actually resume anything. An
+ * EMPTY array is not a resume path, and the distinction is the whole tier: `[]`
+ * is truthy, so testing the array itself promotes a resume-less harness to
+ * Known, and `buildResumeCommand` then hands back the bare executable — which
+ * starts a FRESH session while every surface says "resume".
+ */
+function hasResumeArgv(argv: readonly string[] | null): boolean {
+  return argv !== null && argv.length > 0;
+}
+
 export function harnessTier(adapter: HarnessAdapter): HarnessTier {
   if (adapter.injection.kind !== "none" && adapter.events.length > 0) return "hooked";
-  return adapter.resume.byId || adapter.resume.latest ? "known" : "declared";
+  return hasResumeArgv(adapter.resume.byId) || hasResumeArgv(adapter.resume.latest)
+    ? "known"
+    : "declared";
 }
 
 /** The canonical events an adapter claims, collapsed from its native bindings. */

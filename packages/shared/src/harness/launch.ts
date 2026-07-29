@@ -84,11 +84,32 @@ function mechanismOf(binding: HarnessEventBinding): string {
 }
 
 /**
- * Sets a dotted path on a plain JSON object, creating the objects it passes
- * through and reusing any already there, so two forced settings sharing a
- * prefix land in one object rather than clobbering each other. Leaves are
- * always scalars and never `null`, so the `typeof next === "object"` test on
- * the way down cannot mistake a leaf for a branch to descend into.
+ * A fresh object with NO prototype, for every object a manifest supplies keys
+ * to. On a plain `{}`, a manifest's key is not necessarily a key at all:
+ * assigning `__proto__` invokes an inherited setter and re-parents the object
+ * (one level into a walk, that is a write onto `Object.prototype` itself, for
+ * the whole main process), and reading `constructor` back yields a function
+ * where the code below expects an array it can push onto. With no prototype
+ * there is nothing to inherit and a key is only ever a key.
+ *
+ * The manifest parser refuses those names outright — this is the layer that
+ * means neither refusal is load-bearing alone, and it is also what protects the
+ * built-in adapters, which never pass through the parser.
+ */
+function bareObject<T = unknown>(): Record<string, T> {
+  return Object.create(null) as Record<string, T>;
+}
+
+/**
+ * Sets a dotted path on a JSON object, creating the objects it passes through
+ * and reusing any already there, so two forced settings sharing a prefix land
+ * in one object rather than clobbering each other. Leaves are always scalars
+ * and never `null`, so the `typeof next === "object"` test on the way down
+ * cannot mistake a leaf for a branch to descend into.
+ *
+ * Own properties only, and prototype-free objects the whole way down: a path
+ * segment naming the prototype chain has to land as an ordinary key here rather
+ * than reaching anything shared.
  */
 function setDotted(
   target: Record<string, unknown>,
@@ -102,8 +123,8 @@ function setDotted(
       cursor[segment] = value;
       return;
     }
-    const next = cursor[segment];
-    const child = typeof next === "object" ? (next as Record<string, unknown>) : {};
+    const next = Object.hasOwn(cursor, segment) ? cursor[segment] : undefined;
+    const child = typeof next === "object" ? (next as Record<string, unknown>) : bareObject();
     cursor[segment] = child;
     cursor = child;
   }
@@ -117,7 +138,7 @@ function claudeHooks(
   bindings: readonly HarnessEventBinding[],
   input: HarnessLaunchInput,
 ): Record<string, unknown> {
-  const hooks: Record<string, unknown[]> = {};
+  const hooks = bareObject<unknown[]>();
   for (const binding of bindings) {
     const group = hooks[nativeName(binding)] ?? [];
     group.push({
@@ -205,7 +226,7 @@ function commandHooks(
   bindings: readonly HarnessEventBinding[],
   input: HarnessLaunchInput,
 ): Record<string, unknown> {
-  const hooks: Record<string, unknown[]> = {};
+  const hooks = bareObject<unknown[]>();
   for (const binding of bindings) {
     const group = hooks[nativeName(binding)] ?? [];
     group.push({ command: hookCommandLine(input, binding) });
@@ -218,7 +239,8 @@ function settingsObject(
   adapter: HarnessAdapter,
   hooks: Record<string, unknown>,
 ): Record<string, unknown> {
-  const settings: Record<string, unknown> = Object.keys(hooks).length > 0 ? { hooks } : {};
+  const settings = bareObject();
+  if (Object.keys(hooks).length > 0) settings["hooks"] = hooks;
   for (const setting of adapter.launchSettings) setDotted(settings, setting.path, setting.value);
   return settings;
 }

@@ -75,6 +75,27 @@ describe("parseHarnessManifest", () => {
     expect(errorPaths(parseHarnessManifest(minimal({ command: "volli" })))).toEqual(["command"]);
   });
 
+  // APFS is case-insensitive by default: `Volli` and `volli` are one file on
+  // the only OS we ship, so a case-sensitive refusal writes the manifest's
+  // wrapper over the launcher every agent reaches Volli through.
+  it("refuses the launcher's name however it is capitalized", () => {
+    for (const command of ["Volli", "VOLLI", "Volli.cjs"]) {
+      const result = parseHarnessManifest(minimal({ command }));
+      expect(errorPaths(result)).toEqual(["command"]);
+      expect(result.ok ? "" : result.errors[0]?.message).toContain("CLI launcher");
+    }
+  });
+
+  // Two adapters writing `<binDir>/<command>` is one file written twice, and the
+  // later writer wins — silently replacing a built-in's hook injection.
+  it("refuses a command a harness Volli ships already launches", () => {
+    for (const command of ["claude", "codex", "cursor-agent", "opencode", "Claude"]) {
+      const result = parseHarnessManifest(minimal({ command }));
+      expect(errorPaths(result)).toEqual(["command"]);
+      expect(result.ok ? "" : result.errors[0]?.message).toContain("built-in");
+    }
+  });
+
   it("reads the prompt flag, and defaults it to a positional prompt", () => {
     const flagged = parseHarnessManifest(minimal({ promptFlag: "--prompt" }));
     expect(flagged.ok && flagged.adapter.promptFlag).toBe("--prompt");
@@ -277,6 +298,21 @@ describe("parseHarnessManifest", () => {
     ).toEqual(["resume.userResumeTokens"]);
   });
 
+  it("refuses a resume argv that is present but empty", () => {
+    // `[]` is not "no resume path" — it is "resume with no arguments", which
+    // would run the bare executable and start a fresh session under that word.
+    expect(errorPaths(parseHarnessManifest(minimal({ resume: { latest: [] } })))).toEqual([
+      "resume.latest",
+    ]);
+    expect(errorPaths(parseHarnessManifest(minimal({ resume: { byId: [] } })))).toEqual([
+      "resume.byId",
+    ]);
+    // A harness whose users cannot drive resume themselves is the ordinary
+    // case, so this one empty list stays legal.
+    const ok = parseHarnessManifest(minimal({ resume: { userResumeTokens: [] } }));
+    expect(ok.ok && ok.adapter.resume).toEqual({ byId: null, latest: null, userResumeTokens: [] });
+  });
+
   it("refuses an environment variable name a shell would not accept", () => {
     expect(
       errorPaths(
@@ -287,6 +323,51 @@ describe("parseHarnessManifest", () => {
         ),
       ),
     ).toEqual(["injection.envVar"]);
+  });
+
+  // An injection's variable is merged into EVERY pty in the session, not just
+  // the declaring harness's, so these names are the user's shell and every
+  // other agent beside it.
+  it("refuses an environment variable that belongs to the session, not to a harness", () => {
+    const envVarError = (envVar: string): { path: string; message: string } | undefined => {
+      const result = parseHarnessManifest(
+        minimal({ injection: { kind: "config-dir-env", envVar, filename: "volli.json" } }),
+      );
+      return result.ok ? undefined : result.errors[0];
+    };
+    for (const envVar of [
+      "HOME",
+      "PATH",
+      "SHELL",
+      "NODE_OPTIONS",
+      "GIT_CONFIG_GLOBAL",
+      "DYLD_INSERT_LIBRARIES",
+    ]) {
+      expect(envVarError(envVar)?.path).toBe("injection.envVar");
+      // The message names the variable — the file is fixed by a human or an
+      // agent reading exactly this line.
+      expect(envVarError(envVar)?.message).toContain(envVar);
+    }
+  });
+
+  it("refuses Volli's own namespace, which is how the app talks to its wrapper", () => {
+    for (const envVar of ["VOLLI_SESSION", "VOLLI_SOCKET", "VOLLI_HARNESS_ARGV_CLAUDE_CODE"]) {
+      const result = parseHarnessManifest(
+        minimal({ injection: { kind: "plugin-config-env", envVar, filename: "volli.json" } }),
+      );
+      expect(errorPaths(result)).toEqual(["injection.envVar"]);
+    }
+  });
+
+  it("refuses the variable another adapter is already configured through", () => {
+    // Folded out of the built-in registry, so this stays true if cursor's or
+    // opencode's own variable ever changes.
+    for (const envVar of ["CURSOR_CONFIG_DIR", "OPENCODE_CONFIG"]) {
+      const result = parseHarnessManifest(
+        minimal({ injection: { kind: "config-dir-env", envVar, filename: "volli.json" } }),
+      );
+      expect(errorPaths(result)).toEqual(["injection.envVar"]);
+    }
   });
 
   it("reads the event bindings a harness claims", () => {
@@ -362,6 +443,45 @@ describe("parseHarnessManifest", () => {
     expect(errorPaths(parseHarnessManifest(minimal({ launchSettings: {} })))).toEqual([
       "launchSettings",
     ]);
+  });
+});
+
+/**
+ * The parse runs in Electron main against a manifest NOBODY HAS TRUSTED YET —
+ * compiling it is how the trust dialog learns what to ask about — so a file
+ * appearing in `~/.agents/harnesses` must not be able to reach anything shared
+ * before a human has answered a single question about it.
+ */
+describe("a hostile manifest", () => {
+  const hostile = minimal({
+    injection: { kind: "argv-settings-json", flag: "--settings" },
+    events: [
+      { event: "turn.completed", native: "__proto__", delivery: "async", timeoutMs: 5000 },
+      { event: "turn.started", native: "hooks:constructor", delivery: "async", timeoutMs: 5000 },
+    ],
+    launchSettings: [
+      { path: "__proto__.polluted", value: "yes" },
+      { path: "constructor.prototype.polluted", value: "yes" },
+    ],
+  });
+
+  it("cannot name the prototype chain in a forced setting or a native event name", () => {
+    const result = parseHarnessManifest(hostile);
+    expect(errorPaths(result)).toEqual([
+      "events[0].native",
+      // Judged after the mechanism namespace is stripped: `hooks:constructor`
+      // is the same key wearing a prefix.
+      "events[1].native",
+      "launchSettings[0].path",
+      "launchSettings[1].path",
+    ]);
+  });
+
+  it("leaves Object.prototype exactly as it found it", () => {
+    parseHarnessManifest(hostile);
+    const witness: Record<string, unknown> = {};
+    expect(witness["polluted"]).toBeUndefined();
+    expect("polluted" in witness).toBe(false);
   });
 });
 

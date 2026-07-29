@@ -13,10 +13,17 @@
  */
 import { RESUME_ID_TOKEN } from "../harness-command";
 import { isFirstClassHarnessId, parseHarnessId, HARNESS_SLUG_RE } from "../ticket";
-import { HOME_TOKEN } from "./core";
-import { HARNESS_EVENTS, isBareHarnessCommand, isHarnessEvent } from "./types";
+import { harnessAdapters, HOME_TOKEN } from "./core";
+import {
+  HARNESS_EVENTS,
+  harnessCommandOwner,
+  isBareHarnessCommand,
+  isHarnessEvent,
+  nativeName,
+} from "./types";
 import type {
   HarnessAdapter,
+  HarnessCommandOwner,
   HarnessConfigInjection,
   HarnessEventBinding,
   HarnessResume,
@@ -72,6 +79,26 @@ function isArgvWord(value: unknown): value is string {
 }
 
 /**
+ * Names that do not address a config key but a rung of the prototype chain.
+ * Every one of them arrives from a manifest and is then used as an object key —
+ * a forced setting's dotted path, an event's native name — so `__proto__` writes
+ * onto `Object.prototype` for the whole process and `constructor` yields a
+ * function where the code that reads it back expects an array.
+ *
+ * This matters more than the usual because of WHERE it runs: main compiles a
+ * PENDING manifest — one nobody has trusted yet — because compiling it is how
+ * the trust dialog learns which command line it is asking about. A refusal here
+ * is the only thing between "a file appeared in `~/.agents/harnesses`" and
+ * arbitrary keys on `Object.prototype` in the Electron main process.
+ *
+ * The traversals are separately hardened (null-prototype objects, own-property
+ * reads — see `setDotted`), so neither layer is load-bearing alone.
+ */
+const PROTOTYPE_SEGMENTS: ReadonlySet<string> = new Set(["__proto__", "constructor", "prototype"]);
+
+const PROTOTYPE_SEGMENT_MESSAGE = `must not name a prototype-chain segment (${[...PROTOTYPE_SEGMENTS].join(", ")})`;
+
+/**
  * An asset path a manifest may claim. These resolve into the USER's dotfiles —
  * `harnessBaselineActions` writes a symlink or a fenced block at whatever a
  * surface names — so a manifest may only name a place under the home directory,
@@ -99,6 +126,76 @@ function surfacePath(errors: Errors, path: string, value: unknown): string | nul
 
 /** A name a shell can carry: uppercase, digits, underscores, leading letter. */
 const ENV_VAR_RE = /^[A-Z][A-Z0-9_]*$/;
+
+/**
+ * Variables a manifest may not claim, because the variable it declares is not
+ * scoped to it: `harness-runtime` merges every injection's `envVar` into the
+ * environment of EVERY pty in the session, so whatever a manifest names, it
+ * names for the user's shell and for every other agent running beside it.
+ *
+ * Three families, each a different kind of takeover. The ones that say where
+ * things are (`HOME`, `PATH`, `SHELL`, `TMPDIR`) point the whole session at a
+ * Volli-owned directory. The ones that say what to run before the program does
+ * (`NODE_OPTIONS`, `BASH_ENV`, `LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`) execute a
+ * manifest's choice of code inside every command an agent runs. And the ones
+ * that redirect git (`GIT_CONFIG_GLOBAL`, `GIT_SSH_COMMAND`, `GIT_DIR`) reach
+ * the worktrees the whole product is built on.
+ */
+const RESERVED_ENV_VARS: ReadonlySet<string> = new Set([
+  "HOME",
+  "PATH",
+  "SHELL",
+  "USER",
+  "LOGNAME",
+  "PWD",
+  "OLDPWD",
+  "TMPDIR",
+  "IFS",
+  "ENV",
+  "BASH_ENV",
+  "ZDOTDIR",
+  "NODE_OPTIONS",
+  "LD_PRELOAD",
+  "LD_LIBRARY_PATH",
+  "DYLD_INSERT_LIBRARIES",
+  "DYLD_LIBRARY_PATH",
+  "GIT_CONFIG_GLOBAL",
+  "GIT_CONFIG_SYSTEM",
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_SSH_COMMAND",
+]);
+
+/**
+ * Volli's own namespace, refused wholesale. It is how the app talks to the code
+ * it injects: `VOLLI_SOCKET` and `VOLLI_SESSION` are the only reason a fired
+ * hook can reach the planner, and `VOLLI_HARNESS_ARGV_<SLUG>` holds the argv a
+ * wrapper prepends — so claiming one of those is claiming another harness's
+ * command line, from a file that only had to appear on disk.
+ */
+const RESERVED_ENV_PREFIX = "VOLLI_";
+
+/**
+ * The injection variables the harnesses Volli ships already own. Folded out of
+ * the registry rather than restated, so a built-in that changes its variable
+ * carries this with it — and no cycle, because `core` knows nothing about
+ * manifests.
+ */
+function builtInInjectionEnvVars(): ReadonlySet<string> {
+  const names = new Set<string>();
+  for (const adapter of harnessAdapters) {
+    if ("envVar" in adapter.injection) names.add(adapter.injection.envVar);
+  }
+  return names;
+}
+
+/** Why a manifest may not have this variable, or `null` when it may. */
+function reservedEnvVarReason(name: string): string | null {
+  if (name.startsWith(RESERVED_ENV_PREFIX)) return "Volli's own namespace";
+  if (RESERVED_ENV_VARS.has(name)) return "part of the environment every session runs in";
+  if (builtInInjectionEnvVars().has(name)) return "how Volli configures a harness it ships";
+  return null;
+}
 
 /**
  * A file materialized under `<userData>/harness/<slug>/`, named by its basename
@@ -148,6 +245,12 @@ function parseInjection(errors: Errors, value: unknown): HarnessConfigInjection 
     if (typeof envVar !== "string" || !ENV_VAR_RE.test(envVar)) {
       errors.add("injection.envVar", "must be an UPPER_SNAKE environment variable name");
       bad = true;
+    } else {
+      const reason = reservedEnvVarReason(envVar);
+      if (reason !== null) {
+        errors.add("injection.envVar", `must not be ${envVar} — that name is ${reason}`);
+        bad = true;
+      }
     }
     if (!isVolliOwnedFilename(filename)) {
       errors.add(
@@ -194,6 +297,12 @@ function parseEventBinding(
   }
   if (!isArgvWord(native)) {
     errors.add(`${path}.native`, "must be the harness's own name for the signal");
+    ok = false;
+  } else if (PROTOTYPE_SEGMENTS.has(nativeName({ native }))) {
+    // Judged after the mechanism namespace is stripped, because the stripped
+    // name is what keys the hooks object — `hooks:__proto__` is the same attack
+    // wearing a prefix.
+    errors.add(`${path}.native`, PROTOTYPE_SEGMENT_MESSAGE);
     ok = false;
   }
   if (delivery !== "async" && delivery !== "sync") {
@@ -257,6 +366,10 @@ function parseLaunchSettings(
       errors.add(`${at}.path`, "must be a dotted path into the harness's own config");
       continue;
     }
+    if (settingPath.split(".").some((segment) => PROTOTYPE_SEGMENTS.has(segment))) {
+      errors.add(`${at}.path`, PROTOTYPE_SEGMENT_MESSAGE);
+      continue;
+    }
     // Scalars only: these render into JSON and TOML alike, and a nested object
     // would collide with the dotted path that is already how depth is expressed.
     if (
@@ -304,6 +417,28 @@ function argvList(errors: Errors, path: string, value: unknown): readonly string
 }
 
 /**
+ * A resume path: argv that resumes something, or `null` for a harness that has
+ * no such path. An EMPTY list is neither, and is refused rather than kept —
+ * `[]` reads as "resume with no arguments", which describes no harness that has
+ * ever existed, and every consumer treats the array itself as the evidence. A
+ * kept `[]` promotes the adapter to the Known tier and then resumes by running
+ * the bare executable, which starts a FRESH session under the word "resume".
+ *
+ * Refused here rather than only where it is read, because the parser is the
+ * only place that can say so out loud: a manifest gets an error naming the
+ * field, instead of a harness that silently loses its sessions.
+ */
+function resumeArgv(errors: Errors, path: string, value: unknown): readonly string[] | null {
+  const argv = argvList(errors, path, value);
+  if (argv === null) return null;
+  if (argv.length === 0) {
+    errors.add(path, "must not be empty — a harness with no resume path declares null");
+    return null;
+  }
+  return argv;
+}
+
+/**
  * Resume argv. `byId` is a TEMPLATE, so it must carry exactly one `{id}` — none
  * leaves the id nowhere to go, and two would substitute the same session id into
  * two positions the harness never meant to receive it.
@@ -315,14 +450,16 @@ function parseResume(errors: Errors, value: unknown): HarnessResume {
     errors.add("resume", "must be an object");
     return none;
   }
-  const byId = argvList(errors, "resume.byId", value["byId"]);
+  const byId = resumeArgv(errors, "resume.byId", value["byId"]);
   if (byId !== null && byId.filter((token) => token.includes(RESUME_ID_TOKEN)).length !== 1) {
     errors.add("resume.byId", `must contain exactly one "${RESUME_ID_TOKEN}" token`);
     return none;
   }
   return {
     byId,
-    latest: argvList(errors, "resume.latest", value["latest"]),
+    latest: resumeArgv(errors, "resume.latest", value["latest"]),
+    // Empty is meaningful here and only here: it is the ordinary case, a harness
+    // whose users have no way of driving resume themselves.
     userResumeTokens: argvList(errors, "resume.userResumeTokens", value["userResumeTokens"]) ?? [],
   };
 }
@@ -339,6 +476,13 @@ function parseSurfaces(errors: Errors, value: unknown): HarnessSurfaces {
     commandsDir: surfacePath(errors, "surfaces.commandsDir", value["commandsDir"]),
     instructionsFile: surfacePath(errors, "surfaces.instructionsFile", value["instructionsFile"]),
   };
+}
+
+/** The owner of a claimed command, as the error message names it. */
+function ownerDescription(owner: HarnessCommandOwner): string {
+  return owner === "volli-cli"
+    ? "the command Volli's own CLI launcher answers to"
+    : `the command the built-in ${owner} harness launches`;
 }
 
 export function parseHarnessManifest(raw: unknown): ManifestParse {
@@ -360,8 +504,22 @@ export function parseHarnessManifest(raw: unknown): ManifestParse {
   const label = errors.text(raw, "label");
 
   const command = errors.text(raw, "command");
-  if (command !== null && !isBareHarnessCommand(command)) {
-    errors.add("command", "must be a bare executable name — no path, whitespace or metacharacters");
+  if (command !== null) {
+    // Ownership first: `volli` and `claude` are both perfectly well-formed
+    // executable names, so the shape error would be a lie about why they are
+    // refused — and the person fixing the file only ever reads the message.
+    const owner = harnessCommandOwner(command);
+    if (owner !== null) {
+      errors.add(
+        "command",
+        `is already ${ownerDescription(owner)} — a wrapper name belongs to one`,
+      );
+    } else if (!isBareHarnessCommand(command)) {
+      errors.add(
+        "command",
+        "must be a bare executable name — no path, whitespace or metacharacters",
+      );
+    }
   }
 
   const promptFlagValue = errors.optional(raw, "promptFlag");

@@ -280,6 +280,59 @@ describe("buildLaunchConfig", () => {
     });
   });
 
+  /**
+   * The manifest parser refuses every name used here, so this is the OTHER
+   * layer on its own: a built-in never passes through that parser, and two
+   * refusals neither of which is load-bearing alone is the whole point.
+   */
+  describe("given prototype-chain names the parser would have refused", () => {
+    const hostile = (injection: HarnessAdapter["injection"]): HarnessAdapter =>
+      bareAdapter({
+        injection,
+        events: [
+          { event: "turn.completed", native: "__proto__", delivery: "async", timeoutMs: 1000 },
+          { event: "turn.started", native: "constructor", delivery: "async", timeoutMs: 1000 },
+        ],
+        launchSettings: [
+          { path: "__proto__.polluted", value: "yes" },
+          { path: "constructor.prototype.polluted", value: "yes" },
+        ],
+      });
+
+    // `plugin-config-env` is absent on purpose: it renders through `plugin.ts`,
+    // which still keys a plain object by native name and throws on
+    // `constructor` before it can pollute anything. The parser refusal covers
+    // it today; hardening that module is a separate change to a separate file.
+    it("builds every mechanism it renders itself without touching Object.prototype", () => {
+      const injections = [
+        { kind: "argv-settings-json", flag: "--settings" },
+        { kind: "argv-config-override", flag: "-c" },
+        { kind: "config-dir-env", envVar: "X_CONFIG_DIR", filename: "x.json" },
+      ] as const;
+      for (const injection of injections) {
+        // `constructor` is the half that throws rather than pollutes: on a plain
+        // object it reads back a function, and `group.push` on that is a
+        // TypeError inside the launch builder.
+        expect(() => buildLaunchConfig(hostile(injection), INPUT)).not.toThrow();
+      }
+      const witness: Record<string, unknown> = {};
+      expect(witness["polluted"]).toBeUndefined();
+      expect("polluted" in witness).toBe(false);
+    });
+
+    it("carries the name through as data, so nothing is silently dropped either", () => {
+      const config = buildLaunchConfig(
+        hostile({ kind: "argv-settings-json", flag: "--settings" }),
+        INPUT,
+      );
+      const settings = JSON.parse(config.argv[1] ?? "{}") as Record<string, unknown>;
+      expect(Object.hasOwn(settings, "__proto__")).toBe(true);
+      const hooks = JSON.parse(JSON.stringify(settings["hooks"] ?? {})) as Record<string, unknown>;
+      expect(Object.hasOwn(hooks, "__proto__")).toBe(true);
+      expect(Object.hasOwn(hooks, "constructor")).toBe(true);
+    });
+  });
+
   it("quotes a socket path that would otherwise break the hook command line", () => {
     const config = buildLaunchConfig(
       bareAdapter({

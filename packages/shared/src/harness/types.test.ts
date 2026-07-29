@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { parseHarnessId, type HarnessId } from "../ticket";
-import { harnessTier, shadowsSystemCommand, supportedEvents, type HarnessAdapter } from "./types";
+import {
+  harnessCommandOwner,
+  harnessTier,
+  isBareHarnessCommand,
+  shadowsSystemCommand,
+  supportedEvents,
+  type HarnessAdapter,
+} from "./types";
 
 /** A minimal Declared-tier adapter — nothing injected, nothing reported, no resume. */
 function bareAdapter(overrides: Partial<HarnessAdapter> = {}): HarnessAdapter {
@@ -94,6 +101,61 @@ describe("harnessTier", () => {
 
   it("is declared when a harness offers neither configuration nor resume", () => {
     expect(harnessTier(bareAdapter())).toBe("declared");
+  });
+
+  // `[]` is truthy, so the array itself is not the evidence: a harness promoted
+  // to Known on an empty resume argv resumes by running the bare executable,
+  // which starts a fresh session while every surface says "resume".
+  it("is declared when the resume argv is present but empty", () => {
+    expect(
+      harnessTier(bareAdapter({ resume: { byId: [], latest: [], userResumeTokens: [] } })),
+    ).toBe("declared");
+    expect(
+      harnessTier(
+        bareAdapter({ resume: { byId: [], latest: ["--continue"], userResumeTokens: [] } }),
+      ),
+    ).toBe("known");
+  });
+});
+
+describe("harnessCommandOwner", () => {
+  it("names Volli's own launcher, whatever case a manifest spells it in", () => {
+    expect(harnessCommandOwner("volli")).toBe("volli-cli");
+    expect(harnessCommandOwner("volli.cjs")).toBe("volli-cli");
+    // APFS is case-insensitive by default, so on the only OS we ship this is
+    // the same file as `volli` — a case-sensitive check hands it away.
+    expect(harnessCommandOwner("Volli")).toBe("volli-cli");
+    expect(harnessCommandOwner("VOLLI.CJS")).toBe("volli-cli");
+  });
+
+  it("names the built-in a command already belongs to", () => {
+    expect(harnessCommandOwner("claude")).toBe("claude-code");
+    expect(harnessCommandOwner("codex")).toBe("codex");
+    expect(harnessCommandOwner("cursor-agent")).toBe("cursor");
+    expect(harnessCommandOwner("Cursor-Agent")).toBe("cursor");
+    expect(harnessCommandOwner("opencode")).toBe("opencode");
+  });
+
+  it("leaves an unclaimed name free", () => {
+    expect(harnessCommandOwner("my-harness")).toBeNull();
+    expect(harnessCommandOwner("claudia")).toBeNull();
+  });
+});
+
+describe("isBareHarnessCommand", () => {
+  it("refuses the launcher's name in any case, and anything a shell would read", () => {
+    expect(isBareHarnessCommand("volli")).toBe(false);
+    expect(isBareHarnessCommand("Volli")).toBe(false);
+    expect(isBareHarnessCommand("/usr/local/bin/harness")).toBe(false);
+    expect(isBareHarnessCommand("my harness")).toBe(false);
+  });
+
+  // Ownership is a separate question: a built-in has to pass this to get its
+  // own wrapper written at all, and `harnessCommandOwner` is what stops a
+  // stranger claiming the same name.
+  it("still accepts a built-in's own command", () => {
+    expect(isBareHarnessCommand("claude")).toBe(true);
+    expect(isBareHarnessCommand("my-harness")).toBe(true);
   });
 });
 
