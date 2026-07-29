@@ -66,6 +66,16 @@ export interface HarnessEventBinding {
 }
 
 /**
+ * The harness's own name for a signal, with any mechanism namespace stripped.
+ * Lives here rather than in one renderer because every mechanism that writes a
+ * native name has to strip it the same way.
+ */
+export function nativeName(binding: HarnessEventBinding): string {
+  const separator = binding.native.indexOf(":");
+  return separator === -1 ? binding.native : binding.native.slice(separator + 1);
+}
+
+/**
  * How a harness accepts configuration AT LAUNCH — never by editing the user's
  * own config. Each kind names both a mechanism and the native config shape
  * that mechanism expects, which is why the launch builder can switch on it
