@@ -1,5 +1,6 @@
 import {
   canResumeHarness,
+  getHarnessAdapter,
   harnessLabel,
   type SessionActivityState,
   type SessionHarnessState,
@@ -139,12 +140,16 @@ export function groupSessionRows(rows: readonly TicketSessionRow[]): {
  *
  * Capability, not a command line: the resume line names the generated wrapper
  * by absolute path, and those paths are main's alone.
+ *
+ * The built-ins are the honest lookup to pass HERE, and only here: the renderer
+ * has no channel over which a registered manifest's adapter could reach it, so
+ * claiming to consult a wider set would be a lie about what this process knows.
  */
 export function canResumeSession(record: SessionRecord): boolean {
   return (
     record.launchKind === "agent" &&
     record.endedAt !== null &&
-    canResumeHarness(record.harnessId, record.harnessSessionId)
+    canResumeHarness(record.harnessId, record.harnessSessionId, getHarnessAdapter)
   );
 }
 

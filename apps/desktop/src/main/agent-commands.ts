@@ -13,6 +13,7 @@ import {
   FIRST_CLASS_HARNESS_IDS,
   getHarnessAdapter,
   HARNESS_EVENTS,
+  harnessEventOrder,
   harnessLabel,
   isHarnessEvent,
   isTicketPriority,
@@ -23,6 +24,7 @@ import {
   resolveAgentContext,
   runDoctorChecks,
   shortSessionId,
+  supersededHarnessEvent,
   supportedEvents,
   TICKET_PRIORITIES,
   TICKET_STATUS_LABELS,
@@ -723,10 +725,54 @@ function sessionForPublicId(
       };
 }
 
+/**
+ * How many sessions main keeps an ordering watermark for. `VOLLI_SESSION`
+ * outlives its PTY, so nothing here ever gets a reliable "this session is
+ * finished" signal to delete on, and an unbounded map on the involuntary
+ * channel's hot path is a leak with a long fuse. The cap is an order of
+ * magnitude past any real number of concurrently firing sessions, and the entry
+ * it evicts is the least recently heard from.
+ */
+const HARNESS_WATERMARK_LIMIT = 512;
+
+/**
+ * Records that a session has now been heard from at `firedAt`, evicting the
+ * stalest watermark once the map is full. The delete-then-set is what moves the
+ * entry to the young end — `Map` iterates in insertion order, which is the
+ * whole LRU this needs and the only reason it costs nothing.
+ */
+function rememberFiredAt(
+  watermarks: Map<string, number>,
+  sessionId: string,
+  firedAt: number,
+): void {
+  watermarks.delete(sessionId);
+  watermarks.set(sessionId, firedAt);
+  if (watermarks.size > HARNESS_WATERMARK_LIMIT) {
+    const stalest = watermarks.keys().next();
+    if (!stalest.done) watermarks.delete(stalest.value);
+  }
+}
+
 export function createAgentCommandService(
   options: AgentCommandServiceOptions,
 ): AgentCommandService {
   const now = options.now ?? Date.now;
+  /**
+   * The newest fire-time main has ingested per session — the same watermark the
+   * renderer keeps on its own `SessionHarnessState`, kept here too because main
+   * does two things the renderer never sees: it writes the resume seed, and it
+   * fires the one claim that cannot be taken back once it has interrupted a
+   * human. Neither may act on a delivery a newer one has already answered.
+   *
+   * In memory rather than in the db, deliberately. A watermark is worth
+   * something only while a session is live and firing; it is worth nothing after
+   * a restart, when a surviving row would order today's events against a process
+   * that no longer exists; and it is not worth a write per hook on the hottest
+   * involuntary path in the app. Losing one degrades that session to arrival
+   * order for one event, which is what every event got before this existed.
+   */
+  const watermarks = new Map<string, number>();
   // node:crypto's randomUUID is a standalone function (safe to reference
   // detached); the global `crypto.randomUUID` would lose its Crypto `this` when
   // called via this alias and throw "Value of 'this' must be of type Crypto".
@@ -1025,10 +1071,34 @@ export function createAgentCommandService(
         if (harnessSessionId === undefined) {
           return failure("INVALID_REQUEST", "The harness session id is not usable.");
         }
+        // THE ORDERING RULE, main's half. Each event arrives on its own
+        // short-lived hook process over its own connection, so two that fire
+        // close together race and `now()` stamps the winner of that race rather
+        // than the agent's own sequence. `firedAt` is what the firing end could
+        // prove about the order; `supersededHarnessEvent` is the single
+        // definition of stale, shared verbatim with the renderer so the two ends
+        // cannot drift into disagreeing about one session.
+        //
+        // What supersession withholds is STATE — anything a newer delivery has
+        // already answered. What it never withholds is the PROOF that a delivery
+        // happened: the ledger below, and the renderer's `delivered`. That
+        // proof is order-free, a fact about what this harness can do rather than
+        // a value a later fact replaces, and suppressing it would make Volli
+        // forget a capability it had just watched being exercised.
+        //
+        // An absent or equal `firedAt` is never superseded — see
+        // {@link HarnessEventOrder}. An older `volli` sends no stamp at all, and
+        // such an event must land exactly as it did before, not vanish for
+        // failing to prove its own age.
+        const firedAt = harnessEventOrder(request.args["firedAt"]);
+        const superseded = supersededHarnessEvent(watermarks.get(session.id) ?? null, firedAt);
+        if (firedAt !== null && !superseded) rememberFiredAt(watermarks, session.id, firedAt);
         // A reported id is what replaces `session link` on the critical path.
         // Idempotent overwrite, exactly as `session.link` is — a harness that
-        // rotates its id mid-session leaves the newest resume seed behind.
-        if (harnessSessionId !== null) {
+        // rotates its id mid-session leaves the newest resume seed behind. Which
+        // is precisely why a superseded one may not be written: newest by
+        // arrival is not newest, and this row seeds every future resume.
+        if (harnessSessionId !== null && !superseded) {
           setHarnessSessionId(options.db, session.id, harnessSessionId);
         }
         // The event arrived, so the harness can plainly deliver it: the ledger
@@ -1057,11 +1127,19 @@ export function createAgentCommandService(
         // of its choosing, and a hand-typed second harness is indistinguishable
         // from a confused descendant. Everything cheaper follows the evidence
         // instead: the ledger and the fan-out are attributed to what fired.
+        //
+        // And it is withheld from a superseded delivery, which is the failure
+        // that reads as noise rather than as a bug: an `input.needed` the agent
+        // emitted before a `turn.started` that has already landed announces a
+        // human is blocking something the agent moved past, and the user is
+        // interrupted for a prompt they already answered. A notification cannot
+        // be retracted, so it is the write that most needs to be sure.
         if (
           event === "input.needed" &&
           status === "verified" &&
           declaresInputNeeded(firing.harnessId) &&
-          firing.harnessId === session.harnessId
+          firing.harnessId === session.harnessId &&
+          !superseded
         ) {
           const ticket = session.ticketId ? getTicket(options.db, session.ticketId) : undefined;
           const ticketProject = ticket
@@ -1076,6 +1154,12 @@ export function createAgentCommandService(
             `${harnessLabel(session.harnessId)} is waiting on a human`,
           );
         }
+        // A superseded event is still announced, carrying its own `firedAt`, and
+        // the renderer applies the same rule to it independently. Filtering here
+        // instead would make the renderer's correctness depend on this map being
+        // intact — and it is evicted at a cap and empty after a relaunch, while
+        // the renderer's watermark lives with the session it describes. Two
+        // places apply one rule; neither is the other's guard.
         options.onHarnessEvent?.({
           sessionId: session.id,
           projectId: session.projectId,
@@ -1084,10 +1168,17 @@ export function createAgentCommandService(
           event,
           harnessSessionId,
           at: now(),
+          firedAt,
         });
         // The firing harness is echoed back so a caller (and a `doctor` reading
         // a transcript) can see which one Volli credited, rather than having to
-        // infer it from the session.
+        // infer it from the session. `superseded` rides the same seam, and is
+        // the only trace a rejected delivery leaves anywhere: the symptom of
+        // this rule misfiring is a session that sits showing a wait the user
+        // already answered, and nothing else in the app would ever explain it.
+        // Nothing consumes the field yet — `volli hook` discards its response by
+        // design — so it is legible to a socket transcript and to whatever
+        // diagnostic next needs it, and costs nothing until then.
         return {
           v: 1,
           ok: true,
@@ -1096,6 +1187,7 @@ export function createAgentCommandService(
             harness: firing.harnessId,
             event,
             harnessSessionId,
+            superseded,
           },
         };
       }

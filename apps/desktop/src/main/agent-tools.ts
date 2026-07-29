@@ -7,8 +7,8 @@ import { promisify } from "node:util";
 import {
   buildHarnessInstallPlan,
   harnessAdapters,
-  FIRST_CLASS_HARNESS_IDS,
   shellSingleQuote,
+  type HarnessAdapter,
   type HarnessId,
 } from "@volli/shared";
 
@@ -106,30 +106,34 @@ function managedManifestPath(home: string): string {
 }
 
 /**
- * Installs or refreshes the skill pack for currently detected harnesses. A
- * detection that could not run installs nothing, which is the same outcome an
- * empty host gets and costs only this refresh — the plan writes files, so
- * "unknown" must never be spelled as a plan of any other shape.
+ * Installs or refreshes the skill pack for the harnesses this host is treated
+ * as having. Which harnesses those are is the CALLER's answer, not this
+ * function's: detection speaks for the built-ins, the registry speaks for
+ * trusted manifests, and only the caller holds both. An empty set installs
+ * nothing at all — not even the canonical files — which is how "we could not
+ * find out" stays spelled the same as "there is nothing here", since the plan
+ * writes into the user's dotfiles and a guess is worse than a skipped refresh.
  */
-export async function installDetectedHarnessSkills(input: {
+export async function installHarnessSkills(input: {
   home: string;
-  deps?: LoginShellDeps;
+  adapters: readonly HarnessAdapter[];
 }): Promise<HarnessInstallResult> {
-  const detected = await detectHarnesses(input.deps);
-  const plan = buildHarnessInstallPlan({ home: input.home, detected: detected ?? [] });
+  const plan = buildHarnessInstallPlan({ home: input.home, adapters: input.adapters });
   return applyHarnessInstallPlan(plan, managedManifestPath(input.home));
 }
 
 /**
- * Removes the skill pack for every first-class harness. Detection is irrelevant
- * to removal — a harness the user has since uninstalled may still have Volli
- * files on disk — so the plan spans all {@link FIRST_CLASS_HARNESS_IDS}. Per-file hash
- * guards inside {@link uninstallHarnessPlan} keep hand-edited files.
+ * Removes the skill pack for `adapters`. Detection is irrelevant to removal — a
+ * harness the user has since uninstalled may still have Volli files on disk —
+ * so the caller passes the widest span it can name (every built-in, plus every
+ * currently-trusted manifest) rather than only what is present today. Per-file
+ * hash guards inside {@link uninstallHarnessPlan} keep hand-edited files.
  */
 export async function uninstallAllHarnessSkills(input: {
   home: string;
+  adapters: readonly HarnessAdapter[];
 }): Promise<HarnessUninstallResult> {
-  const plan = buildHarnessInstallPlan({ home: input.home, detected: FIRST_CLASS_HARNESS_IDS });
+  const plan = buildHarnessInstallPlan({ home: input.home, adapters: input.adapters });
   return uninstallHarnessPlan(plan, managedManifestPath(input.home));
 }
 

@@ -2,9 +2,11 @@ import { describe, it, expect } from "vite-plus/test";
 import {
   createSessionHarnessState,
   createSessionRecord,
+  harnessEventOrder,
   receiveHarnessEvent,
   HARNESS_EVENT_GRACE_MS,
   sessionHarnessStatus,
+  supersededHarnessEvent,
   isSessionActivityState,
   isSessionLaunchKind,
   isSessionPlacement,
@@ -165,17 +167,17 @@ function hookedSession(): SessionHarnessState {
 
 describe("receiveHarnessEvent", () => {
   it("declares waiting when the harness reports a human is blocking the agent", () => {
-    expect(receiveHarnessEvent(hookedSession(), "input.needed").declared).toBe("waiting");
+    expect(receiveHarnessEvent(hookedSession(), "input.needed", null).declared).toBe("waiting");
   });
 
   it("returns a waiting session to PTY derivation once the agent moves again", () => {
-    const waiting = receiveHarnessEvent(hookedSession(), "input.needed");
-    expect(receiveHarnessEvent(waiting, "turn.started").declared).toBeNull();
+    const waiting = receiveHarnessEvent(hookedSession(), "input.needed", null);
+    expect(receiveHarnessEvent(waiting, "turn.started", null).declared).toBeNull();
   });
 
   it("leaves a waiting session waiting when only a subagent finished", () => {
-    const waiting = receiveHarnessEvent(hookedSession(), "input.needed");
-    expect(receiveHarnessEvent(waiting, "subagent.completed").declared).toBe("waiting");
+    const waiting = receiveHarnessEvent(hookedSession(), "input.needed", null);
+    expect(receiveHarnessEvent(waiting, "subagent.completed", null).declared).toBe("waiting");
   });
 
   it("refuses a blocking event from a harness that cannot report one, but records the delivery", () => {
@@ -185,15 +187,115 @@ describe("receiveHarnessEvent", () => {
       declaredEvents: ["session.started", "turn.started", "turn.completed"],
       startedAt: 1000,
     });
-    const after = receiveHarnessEvent(cursor, "input.needed");
+    const after = receiveHarnessEvent(cursor, "input.needed", null);
     expect(after.declared).toBeNull();
     expect(after.delivered).toBe(true);
   });
 });
 
+describe("harnessEventOrder", () => {
+  it("reads a finite stamp and refuses everything that cannot order anything", () => {
+    expect(harnessEventOrder(1_700_000_000_000)).toBe(1_700_000_000_000);
+    expect(harnessEventOrder(0)).toBe(0);
+    expect(harnessEventOrder(-1)).toBe(-1);
+    expect(harnessEventOrder(Number.NaN)).toBeNull();
+    expect(harnessEventOrder(Number.POSITIVE_INFINITY)).toBeNull();
+    expect(harnessEventOrder("1700")).toBeNull();
+    expect(harnessEventOrder(undefined)).toBeNull();
+    expect(harnessEventOrder(null)).toBeNull();
+    expect(harnessEventOrder({ firedAt: 1 })).toBeNull();
+  });
+});
+
+describe("supersededHarnessEvent", () => {
+  it("is true only for a stamp it can prove is older", () => {
+    expect(supersededHarnessEvent(200, 100)).toBe(true);
+  });
+
+  it("lets an equal stamp through — the same millisecond is genuinely unordered", () => {
+    expect(supersededHarnessEvent(200, 200)).toBe(false);
+  });
+
+  it("lets an unstamped delivery through from either side", () => {
+    expect(supersededHarnessEvent(null, 100)).toBe(false);
+    expect(supersededHarnessEvent(200, null)).toBe(false);
+    expect(supersededHarnessEvent(null, null)).toBe(false);
+  });
+
+  it("lets a newer stamp through", () => {
+    expect(supersededHarnessEvent(100, 200)).toBe(false);
+  });
+});
+
+describe("receiveHarnessEvent — ordering", () => {
+  it("keeps a live wait when the event that would clear it was fired earlier", () => {
+    // The defect this exists for: the harness emitted `turn.started` at t=100
+    // and `input.needed` at t=200, their hook processes raced, and the older one
+    // arrives last. Believing arrival order shows Idle while the agent sits at a
+    // permission prompt — and nobody comes back to an Idle session.
+    const waiting = receiveHarnessEvent(hookedSession(), "input.needed", 200);
+    expect(waiting.declared).toBe("waiting");
+
+    const stale = receiveHarnessEvent(waiting, "turn.started", 100);
+    expect(stale.declared).toBe("waiting");
+    expect(stale.newestFiredAt).toBe(200);
+  });
+
+  it("still records the delivery a superseded event proves", () => {
+    const fresh = hookedSession();
+    expect(fresh.delivered).toBe(false);
+    const waiting = receiveHarnessEvent(fresh, "input.needed", 200);
+    const stale = receiveHarnessEvent(waiting, "turn.started", 100);
+    expect(stale.delivered).toBe(true);
+  });
+
+  it("refuses a stale blocking event rather than resurrecting an answered wait", () => {
+    const moving = receiveHarnessEvent(hookedSession(), "turn.started", 200);
+    expect(moving.declared).toBeNull();
+    expect(receiveHarnessEvent(moving, "input.needed", 100).declared).toBeNull();
+  });
+
+  it("applies an event fired in the same millisecond as the newest one", () => {
+    const waiting = receiveHarnessEvent(hookedSession(), "input.needed", 200);
+    expect(receiveHarnessEvent(waiting, "turn.started", 200).declared).toBeNull();
+  });
+
+  it("applies an unstamped event and leaves the watermark where it was", () => {
+    const waiting = receiveHarnessEvent(hookedSession(), "input.needed", 200);
+    const unstamped = receiveHarnessEvent(waiting, "turn.started", null);
+    expect(unstamped.declared).toBeNull();
+    expect(unstamped.newestFiredAt).toBe(200);
+  });
+
+  it("never starts ordering off a channel that has never stamped anything", () => {
+    const started = receiveHarnessEvent(hookedSession(), "session.started", null);
+    expect(started.newestFiredAt).toBeNull();
+    expect(receiveHarnessEvent(started, "input.needed", null).declared).toBe("waiting");
+  });
+
+  it("advances the watermark on a telemetry event without touching the declared state", () => {
+    const waiting = receiveHarnessEvent(hookedSession(), "input.needed", 200);
+    const telemetry = receiveHarnessEvent(waiting, "subagent.completed", 300);
+    expect(telemetry.declared).toBe("waiting");
+    expect(telemetry.newestFiredAt).toBe(300);
+  });
+
+  it("ignores a telemetry event that a newer delivery has already overtaken", () => {
+    const waiting = receiveHarnessEvent(hookedSession(), "input.needed", 200);
+    const stale = receiveHarnessEvent(waiting, "subagent.completed", 100);
+    expect(stale.newestFiredAt).toBe(200);
+    expect(stale.delivered).toBe(true);
+  });
+
+  it("starts unstamped and takes the first stamp it is given", () => {
+    expect(hookedSession().newestFiredAt).toBeNull();
+    expect(receiveHarnessEvent(hookedSession(), "session.started", 50).newestFiredAt).toBe(50);
+  });
+});
+
 describe("sessionHarnessStatus", () => {
   it("is reporting once a hooked session has delivered its first event", () => {
-    const started = receiveHarnessEvent(hookedSession(), "session.started");
+    const started = receiveHarnessEvent(hookedSession(), "session.started", null);
     expect(sessionHarnessStatus(started, 2000)).toEqual({
       tier: "hooked",
       activitySource: "reported",
@@ -242,6 +344,7 @@ describe("sessionHarnessStatus", () => {
         startedAt: 1000,
       }),
       "session.started",
+      null,
     );
     expect(sessionHarnessStatus(cursor, 2000)).toEqual({
       tier: "hooked",

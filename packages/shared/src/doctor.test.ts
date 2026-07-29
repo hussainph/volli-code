@@ -160,12 +160,50 @@ describe("runDoctorChecks — other findings", () => {
     const check = find(
       runDoctorChecks(
         observation(),
-        facts({ refused: [{ command: "git", resolvedPath: "/usr/bin/git" }] }),
+        facts({
+          refused: [
+            { command: "git", resolvedPath: "/usr/bin/git", reason: "shadows-system-command" },
+          ],
+        }),
       ),
       "refused-git",
     );
     expect(check.status).toBe("warn");
     expect(check.detail).toContain("/usr/bin/git");
+    expect(check.remedy).toContain("shadow a system tool");
+  });
+
+  // Every refusal ends in an unwrapped harness, so the outcome cannot be what
+  // distinguishes them — a message that named the shadow rule for a collision
+  // would send the user to check a system tool that was never involved.
+  it("says a refused wrapper's own reason rather than the shadow rule for all three", () => {
+    const owned = find(
+      runDoctorChecks(
+        observation(),
+        facts({
+          refused: [
+            { command: "claude", resolvedPath: "/data/bin/claude", reason: "name-already-owned" },
+          ],
+        }),
+      ),
+      "refused-claude",
+    );
+    expect(owned.detail).toContain("already owns the name");
+    expect(owned.remedy).toContain("one file per name");
+
+    const argv = find(
+      runDoctorChecks(
+        observation(),
+        facts({
+          refused: [
+            { command: "codex", resolvedPath: "/data/bin/codex", reason: "argv-not-transportable" },
+          ],
+        }),
+      ),
+      "refused-codex",
+    );
+    expect(argv.detail).toContain("newline or an empty word");
+    expect(argv.remedy).toContain("declared flags");
   });
 
   it("warns about a harness that declares events but has never delivered one", () => {

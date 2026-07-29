@@ -131,16 +131,28 @@ export function harnessBaselineActions(input: {
   return [...byPath.values()];
 }
 
+/**
+ * The canonical skill pack plus every surface `adapters` earns.
+ *
+ * Adapters, not ids — a plan built from ids can only ever mean the built-ins,
+ * because an id is resolved through a registry that a registered manifest is
+ * not in and (by design, see {@link getHarnessAdapter}) cannot join. Taking the
+ * adapters makes the caller name the set, which is the only place that knows
+ * whether a manifest has been registered AND trusted; it also puts this
+ * function on the same footing as {@link harnessBaselineActions}, which has
+ * been identity-free from the start.
+ *
+ * The caller owes this the home-containment guarantee: every path below lands
+ * in the user's dotfiles, and a registered manifest's surfaces are only safe
+ * here because they were validated at parse time.
+ */
 export function buildHarnessInstallPlan(input: {
   home: string;
-  detected: readonly HarnessId[];
+  adapters: readonly HarnessAdapter[];
 }): InstallAction[] {
-  if (input.detected.length === 0) return [];
+  if (input.adapters.length === 0) return [];
   const home = normalizedHome(input.home);
   const canonical = `${home}/.agents/skills/volli`;
-  const detected = [...new Set(input.detected)]
-    .map((id) => getHarnessAdapter(id))
-    .filter((adapter) => adapter !== undefined);
   return [
     { kind: "write", path: `${canonical}/SKILL.md`, content: VOLLI_SKILL, managed: true },
     { kind: "write", path: `${canonical}/cli.md`, content: VOLLI_CLI_REFERENCE, managed: true },
@@ -151,7 +163,7 @@ export function buildHarnessInstallPlan(input: {
       managed: true,
     },
     { kind: "write", path: `${canonical}/plugin.md`, content: VOLLI_PLUGIN_DOC, managed: true },
-    ...harnessBaselineActions({ home, adapters: detected }),
+    ...harnessBaselineActions({ home, adapters: input.adapters }),
   ];
 }
 

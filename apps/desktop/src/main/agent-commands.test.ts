@@ -1447,6 +1447,7 @@ describe("agent command service", () => {
           event: "input.needed",
           harnessSessionId: null,
           at: 4242,
+          firedAt: null,
         },
       ]);
     });
@@ -1645,6 +1646,135 @@ describe("agent command service", () => {
 
       expect(pushed.map((notice) => notice.event)).toEqual(["input.needed"]);
       expect(notices).toEqual([]);
+    });
+
+    // Each event reaches main on its own short-lived hook process over its own
+    // connection, so two fired close together arrive in the order they won
+    // their races in. Arrival order is main's clock's opinion, not the agent's.
+    describe("ordering", () => {
+      it("withholds the notification a stale input.needed would fire", async () => {
+        const notices: [string, string][] = [];
+        const { hook } = hookService(
+          { notify: (title, message) => notices.push([title, message]) },
+          "ticket-raced",
+        );
+
+        await hook({ harness: "claude-code", event: "turn.started", firedAt: 2000 });
+        await hook({ harness: "claude-code", event: "input.needed", firedAt: 1000 });
+
+        expect(notices).toEqual([]);
+      });
+
+      it("still notifies for a wait fired in the same millisecond as the newest event", async () => {
+        const notices: [string, string][] = [];
+        const { hook } = hookService(
+          { notify: (title, message) => notices.push([title, message]) },
+          "ticket-tied",
+        );
+
+        await hook({ harness: "claude-code", event: "turn.started", firedAt: 2000 });
+        await hook({ harness: "claude-code", event: "input.needed", firedAt: 2000 });
+
+        expect(notices).toEqual([["VC-12 needs you", "Claude Code is waiting on a human"]]);
+      });
+
+      // An older `volli` sends no stamp at all. Dropping its events for failing
+      // to prove their own age would be a strictly worse bug than the one this
+      // closes, and a much quieter one.
+      it("keeps believing an unstamped delivery after a stamped one", async () => {
+        const notices: [string, string][] = [];
+        const { hook } = hookService(
+          { notify: (title, message) => notices.push([title, message]) },
+          "ticket-unstamped",
+        );
+
+        await hook({ harness: "claude-code", event: "turn.started", firedAt: 2000 });
+        await hook({ harness: "claude-code", event: "input.needed" });
+
+        expect(notices).toEqual([["VC-12 needs you", "Claude Code is waiting on a human"]]);
+      });
+
+      it("refuses a stale resume seed rather than overwriting the newest one", async () => {
+        const { hook } = hookService();
+
+        await hook({
+          harness: "claude-code",
+          event: "session.started",
+          harnessSessionId: "current-run",
+          firedAt: 2000,
+        });
+        await hook({
+          harness: "claude-code",
+          event: "session.started",
+          harnessSessionId: "a-run-that-already-ended",
+          firedAt: 1000,
+        });
+
+        expect(getSession(ctx.db, sessionId)?.harnessSessionId).toBe("current-run");
+      });
+
+      // The renderer applies the same rule to the same key, so a superseded
+      // event is still announced rather than filtered here: main's watermark is
+      // in memory, evicted at a cap and empty after a relaunch, and the
+      // renderer's correctness must not rest on it.
+      it("announces a superseded event, carrying the stamp that makes it judgeable", async () => {
+        const pushed: HarnessEventNotice[] = [];
+        const { hook } = hookService({ onHarnessEvent: (notice) => pushed.push(notice) });
+
+        await hook({ harness: "claude-code", event: "turn.started", firedAt: 2000 });
+        const response = await hook({
+          harness: "claude-code",
+          event: "input.needed",
+          firedAt: 1000,
+        });
+
+        expect(pushed.map((notice) => [notice.event, notice.firedAt])).toEqual([
+          ["turn.started", 2000],
+          ["input.needed", 1000],
+        ]);
+        expect(response).toMatchObject({ ok: true, data: { superseded: true } });
+      });
+
+      it("says so in the response, the one trace a rejected delivery leaves", async () => {
+        const { hook } = hookService();
+
+        await expect(
+          hook({ harness: "claude-code", event: "turn.started", firedAt: 2000 }),
+        ).resolves.toMatchObject({ ok: true, data: { superseded: false } });
+        await expect(
+          hook({ harness: "claude-code", event: "input.needed" }),
+        ).resolves.toMatchObject({ ok: true, data: { superseded: false } });
+      });
+
+      it("ignores a stamp that cannot order anything, rather than refusing the event", async () => {
+        const pushed: HarnessEventNotice[] = [];
+        const { hook } = hookService({ onHarnessEvent: (notice) => pushed.push(notice) });
+
+        for (const firedAt of ["2000", Number.NaN, Number.POSITIVE_INFINITY, {}]) {
+          await expect(
+            hook({ harness: "claude-code", event: "turn.started", firedAt }),
+          ).resolves.toMatchObject({ ok: true, data: { superseded: false } });
+        }
+
+        expect(pushed.map((notice) => notice.firedAt)).toEqual([null, null, null, null]);
+      });
+
+      // The watermark is per session: one session firing does not make another
+      // session's older-but-perfectly-current event look stale.
+      it("keeps one session's watermark out of another's", async () => {
+        const notices: [string, string][] = [];
+        const { hook } = hookService(
+          { notify: (title, message) => notices.push([title, message]) },
+          "ticket-two-sessions",
+        );
+        const other = "99999999-3456-7890-abcd-ef1234567890";
+        insertSession(ctx.db, testSession("project-one", "ticket-two-sessions", { id: other }));
+
+        await hook({ harness: "claude-code", event: "turn.started", firedAt: 5000 });
+        await hook({ harness: "claude-code", event: "input.needed", firedAt: 1000 }, other);
+
+        expect(notices).toEqual([["VC-12 needs you", "Claude Code is waiting on a human"]]);
+      });
     });
   });
 

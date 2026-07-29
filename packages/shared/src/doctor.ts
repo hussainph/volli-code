@@ -15,6 +15,7 @@
  * the caller reports what it actually sees from inside the environment under
  * test, and the derivation below has no way to substitute an assumption for it.
  */
+import type { WrapperRefusal } from "./harness/wrapper";
 
 /** How much a finding matters. `warn` is a degraded but working install. */
 export type DoctorStatus = "ok" | "warn" | "fail";
@@ -66,8 +67,8 @@ export interface DoctorFacts {
   binDir: string;
   /** Wrapper absolute paths that exist on disk right now, by command name. */
   wrappers: Readonly<Record<string, string>>;
-  /** Wrappers refused because the name would shadow a system tool. */
-  refused: readonly { command: string; resolvedPath: string }[];
+  /** Wrappers Volli declined to write, each carrying the rule that declined it. */
+  refused: readonly { command: string; resolvedPath: string; reason: WrapperRefusal }[];
   /** The Volli-owned ZDOTDIR, or null when the session's shell has no hook. */
   shellInitDir: string | null;
   /** Whether the generated zsh chain is present on disk. */
@@ -166,17 +167,46 @@ function resolutionChecks(observation: DoctorObservation, facts: DoctorFacts): D
   });
 }
 
+/**
+ * What a refusal has to say for itself. Every reason ends in the same outcome —
+ * an unwrapped harness — so the outcome is the one thing the message must NOT
+ * lead with: three rules reported under one sentence sends a user to rename a
+ * command that was never the problem.
+ */
+function refusalReport(entry: DoctorFacts["refused"][number]): { detail: string; remedy: string } {
+  switch (entry.reason) {
+    case "shadows-system-command":
+      return {
+        detail: `a harness claims the name \`${entry.command}\`, which is ${entry.resolvedPath} on this system`,
+        remedy:
+          "Volli refuses to shadow a system tool. Rename the harness's command in its manifest.",
+      };
+    case "name-already-owned":
+      return {
+        detail: `another harness already owns the name \`${entry.command}\`, so ${entry.resolvedPath} was left as it was`,
+        remedy:
+          "Volli's bin holds one file per name. Rename the harness's command in its manifest.",
+      };
+    case "argv-not-transportable":
+      return {
+        detail: `the launch argv for \`${entry.command}\` holds a newline or an empty word, which ${entry.resolvedPath} could not have carried intact`,
+        remedy: "Remove the newline or empty argument from the harness's declared flags.",
+      };
+  }
+}
+
 /** A refused wrapper is a correct outcome, but the user should know the harness is unwrapped. */
 function refusedChecks(facts: DoctorFacts): DoctorCheck[] {
-  return facts.refused.map((entry) =>
-    bad(
+  return facts.refused.map((entry) => {
+    const report = refusalReport(entry);
+    return bad(
       `refused-${entry.command}`,
       `\`${entry.command}\` is not wrapped`,
       "warn",
-      `a harness claims the name \`${entry.command}\`, which is ${entry.resolvedPath} on this system`,
-      "Volli refuses to shadow a system tool. Rename the harness's command in its manifest.",
-    ),
-  );
+      report.detail,
+      report.remedy,
+    );
+  });
 }
 
 function shellInitCheck(observation: DoctorObservation, facts: DoctorFacts): DoctorCheck {

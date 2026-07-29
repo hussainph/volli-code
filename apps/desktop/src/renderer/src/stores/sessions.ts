@@ -28,6 +28,7 @@ import {
   supportedEvents,
   type CreateSessionHarnessStateInput,
   type HarnessEvent,
+  type HarnessEventOrder,
   type SessionActivityState,
   type SessionHarnessState,
   type SessionRecord,
@@ -224,8 +225,14 @@ interface SessionsState {
    * sessions a launch could not have known about.
    */
   expectHarnessEvents(sessionId: string, input: CreateSessionHarnessStateInput): void;
-  /** Folds one canonical harness event pushed from main onto that session's state. */
-  applyHarnessEvent(sessionId: string, event: HarnessEvent): void;
+  /**
+   * Folds one canonical harness event pushed from main onto that session's
+   * state. `firedAt` is the ordering key the delivery carried — required, not
+   * defaulted, for the reason `declared` is: events arrive on racing hook
+   * processes, so a caller that quietly omitted it would put the store back on
+   * arrival order, which is the defect and not a degradation of it.
+   */
+  applyHarnessEvent(sessionId: string, event: HarnessEvent, firedAt: HarnessEventOrder): void;
   setStarting(ownerId: string, starting: boolean): void;
   forgetOwner(ownerId: string): void;
 }
@@ -604,11 +611,17 @@ export function createSessionsStore() {
       });
     },
 
-    applyHarnessEvent(sessionId, event) {
+    applyHarnessEvent(sessionId, event, firedAt) {
       set((state) => {
         const current = state.harness[sessionId];
         if (current === undefined) return state;
-        return { harness: { ...state.harness, [sessionId]: receiveHarnessEvent(current, event) } };
+        // Supersession lives in `receiveHarnessEvent`, not here: main applies
+        // the same shared rule before it writes, and a second definition of
+        // stale on this side is exactly how the two ends would come to disagree
+        // about whether a session is waiting.
+        return {
+          harness: { ...state.harness, [sessionId]: receiveHarnessEvent(current, event, firedAt) },
+        };
       });
     },
 
@@ -669,6 +682,14 @@ export const useSessionsStore = createSessionsStore();
  * to null — still cannot raise a `waiting` it isn't able to vouch for. For the
  * manifest harness the lookup misses entirely; there the delivery is all the
  * evidence there is, and disbelieving it would hide a harness that IS reporting.
+ *
+ * Notices arrive in the order main ingested them, which is NOT the order the
+ * harness fired them — each event races here on its own hook process. The
+ * `firedAt` each one carries is what settles that, applied by
+ * `receiveHarnessEvent` rather than filtered here, so this end and main's end
+ * enforce one shared rule instead of two hand-copied ones. `startedAt` stays on
+ * `at`: the grace window measures how long Volli has been waiting to hear
+ * anything, and that is main's clock's question, not the harness's.
  */
 export function subscribeHarnessEvents(): () => void {
   return window.api.sessions.onHarnessEvent((notice) => {
@@ -682,6 +703,6 @@ export function subscribeHarnessEvents(): () => void {
         startedAt: notice.at,
       });
     }
-    state.applyHarnessEvent(notice.sessionId, notice.event);
+    state.applyHarnessEvent(notice.sessionId, notice.event, notice.firedAt);
   });
 }

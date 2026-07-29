@@ -148,6 +148,7 @@ describe("addSession — the launch expectation", () => {
       startedAt: 1000,
       delivered: false,
       declared: null,
+      newestFiredAt: null,
     });
   });
 
@@ -180,7 +181,7 @@ describe("addSession — the launch expectation", () => {
   it("registers nothing twice for a duplicate landing", () => {
     const store = createSessionsStore();
     store.getState().addSession(P, "s1", agentLaunch("claude-code"));
-    store.getState().applyHarnessEvent("s1", "turn.started");
+    store.getState().applyHarnessEvent("s1", "turn.started", null);
     const delivered = store.getState().harness["s1"];
 
     store.getState().addSession(P, "s1", agentLaunch("claude-code", 9000));
@@ -813,7 +814,7 @@ describe("applyHarnessEvent", () => {
     store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().expectHarnessEvents("s1", HOOKED_LAUNCH);
 
-    store.getState().applyHarnessEvent("s1", "input.needed");
+    store.getState().applyHarnessEvent("s1", "input.needed", null);
 
     expect(store.getState().harness["s1"]?.declared).toBe("waiting");
   });
@@ -823,9 +824,35 @@ describe("applyHarnessEvent", () => {
     store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     const before = store.getState().harness;
 
-    store.getState().applyHarnessEvent("s1", "input.needed");
+    store.getState().applyHarnessEvent("s1", "input.needed", null);
 
     expect(store.getState().harness).toBe(before);
+  });
+
+  it("refuses to let an event fired earlier clear a wait that is still real", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
+    store.getState().expectHarnessEvents("s1", HOOKED_LAUNCH);
+
+    // The two hook processes raced and the older one won. Arrival order would
+    // show Idle for an agent still sitting at a permission prompt.
+    store.getState().applyHarnessEvent("s1", "input.needed", 2000);
+    store.getState().applyHarnessEvent("s1", "turn.started", 1000);
+
+    expect(store.getState().harness["s1"]?.declared).toBe("waiting");
+  });
+
+  it("applies an event it cannot prove is stale, stamped equally or not at all", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
+    store.getState().expectHarnessEvents("s1", HOOKED_LAUNCH);
+    store.getState().applyHarnessEvent("s1", "input.needed", 2000);
+
+    store.getState().applyHarnessEvent("s1", "turn.started", 2000);
+    expect(store.getState().harness["s1"]?.declared).toBeNull();
+
+    store.getState().applyHarnessEvent("s1", "input.needed", null);
+    expect(store.getState().harness["s1"]?.declared).toBe("waiting");
   });
 });
 
@@ -882,6 +909,7 @@ const NOTICE: HarnessEventNotice = {
   event: "input.needed",
   harnessSessionId: null,
   at: 1000,
+  firedAt: null,
 };
 
 describe("subscribeHarnessEvents", () => {
@@ -954,6 +982,21 @@ describe("subscribeHarnessEvents", () => {
     channel.push(NOTICE);
 
     expect(useSessionsStore.getState().harness).toEqual({});
+  });
+
+  // Notices arrive in the order main ingested them, which is the order their
+  // hook processes won their races in — not the order the agent fired them.
+  it("orders by the stamp the delivery carried, not by the order it arrived", () => {
+    useSessionsStore.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
+    const channel = stubChannel();
+
+    subscribeHarnessEvents();
+    channel.push({ ...NOTICE, firedAt: 2000 });
+    channel.push({ ...NOTICE, event: "turn.started", at: 2000, firedAt: 1000 });
+
+    expect(useSessionsStore.getState().harness["s1"]?.declared).toBe("waiting");
+    // A stale delivery is still a delivery: it arrived, over a real socket.
+    expect(useSessionsStore.getState().harness["s1"]?.delivered).toBe(true);
   });
 
   it("hands back the channel's own unsubscribe", () => {

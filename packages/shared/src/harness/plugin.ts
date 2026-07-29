@@ -28,9 +28,17 @@ export interface EventPluginInput {
  * event because a harness may signal two things at once — opencode's
  * `permission.asked` is both `input.needed` and `permission.requested` — and a
  * map keyed the other way would drop one of them.
+ *
+ * Prototype-free, for the reason `launch.ts` gives at length: a native name is
+ * manifest data, and on a plain `{}` a manifest's key is not necessarily a key.
+ * `constructor` reads back as a function where the line below expects an array
+ * to spread, and `__proto__` re-parents the object instead of landing in it. The
+ * parser refuses both names outright — this is the layer that means neither
+ * refusal is load-bearing alone, and the one the built-in adapters, which never
+ * pass through the parser, rely on.
  */
 function bindingsByNative(bindings: readonly HarnessEventBinding[]): Record<string, string[]> {
-  const byNative: Record<string, string[]> = {};
+  const byNative = Object.create(null) as Record<string, string[]>;
   for (const binding of bindings) {
     const native = nativeName(binding);
     byNative[native] = [...(byNative[native] ?? []), binding.event];

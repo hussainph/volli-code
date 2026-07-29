@@ -10,7 +10,12 @@ import {
   projectSessionEnv,
   ticketSessionEnv,
 } from "@volli/shared";
-import type { CreateTerminalSessionRequest, HarnessId, HarnessWrapperLookup } from "@volli/shared";
+import type {
+  CreateTerminalSessionRequest,
+  HarnessAdapterLookup,
+  HarnessId,
+  HarnessWrapperLookup,
+} from "@volli/shared";
 import { materializeAttachments } from "../attachment-materialize";
 import { getProjectById } from "../db/projects-repo";
 import {
@@ -88,12 +93,17 @@ export type ScopeResolution = { ok: true; scope: SessionScope } | { ok: false; e
  * (VOLLI_TICKET env, MAIN-repo-root cwd, the ticket's harness, `Session N`
  * title) or a project-scoped scratch session (default harness, `Terminal N`).
  * The only failure is a ticket request naming a ticket that does not exist.
+ *
+ * `wrapperFor` and `adapterFor` travel together for the same reason: both
+ * answers belong to main's harness runtime, and a launch line built from one
+ * without the other would name the right binary while getting its flags wrong.
  */
 export function resolveScope(
   db: Database.Database,
   request: CreateTerminalSessionRequest,
   attachmentsRootPath: string,
   wrapperFor: HarnessWrapperLookup,
+  adapterFor: HarnessAdapterLookup,
 ): ScopeResolution {
   // Presentation metadata is non-security-sensitive, but still normalize the
   // IPC value so an untyped caller cannot persist arbitrary vocabulary.
@@ -130,6 +140,7 @@ export function resolveScope(
         prior.harnessId,
         prior.harnessSessionId,
         wrapperFor(prior.harnessId),
+        adapterFor,
       );
       if (resumeCommand === null) {
         return {
@@ -194,7 +205,12 @@ export function resolveScope(
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }
-      launchCommand = buildHarnessCommand(kickoff.harnessId, prompt, wrapperFor(kickoff.harnessId));
+      launchCommand = buildHarnessCommand(
+        kickoff.harnessId,
+        prompt,
+        wrapperFor(kickoff.harnessId),
+        adapterFor,
+      );
     }
     return {
       ok: true,

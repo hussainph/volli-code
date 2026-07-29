@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import { HARNESS_CHANNELS } from "@volli/shared";
 import type {
+  HarnessId,
   HarnessPendingResult,
   PendingHarnessManifest,
   Result,
@@ -27,7 +28,11 @@ vi.mock("electron", () => ({
 }));
 
 import { registerHarnessIpcHandlers } from "./harness-ipc";
-import { decideRegisteredHarnesses, scanHarnessManifests } from "./harness-registry";
+import {
+  decideRegisteredHarnesses,
+  recordHarnessDelivery,
+  scanHarnessManifests,
+} from "./harness-registry";
 import { getRegisteredHarness } from "./db/harness-registry-repo";
 import { openTestDb, type TestDb } from "./db/test-helpers";
 
@@ -71,11 +76,14 @@ async function write(dir: string, body: unknown): Promise<void> {
 
 /** The hash on disk right now for `slug` — the value a real prompt would have carried. */
 async function hashOf(slug: string): Promise<string> {
-  const scanned = await scanHarnessManifests(harnessesDir());
-  const found = scanned.find((entry) => entry.slug === slug);
+  const { manifests } = await scanHarnessManifests(harnessesDir());
+  const found = manifests.find((entry) => entry.slug === slug);
   if (found === undefined) throw new Error(`no manifest for ${slug}`);
   return found.manifestSha256;
 }
+
+/** Stands in for main's `regenerateHarnessRuntime` — the work a verdict is inert without. */
+let regenerateRuntime: ReturnType<typeof vi.fn<() => Promise<void>>>;
 
 /**
  * Registers the surface against the temp db and temp manifest dir. Every
@@ -83,8 +91,12 @@ async function hashOf(slug: string): Promise<string> {
  * so a test only mentions PATH when PATH is what it is about.
  */
 function setup(
-  options: { resolveBinary?: (command: string) => Promise<string | null> } = {},
+  options: {
+    resolveBinary?: (command: string) => Promise<string | null>;
+    regenerateRuntime?: () => Promise<void>;
+  } = {},
 ): void {
+  regenerateRuntime = vi.fn(options.regenerateRuntime ?? (() => Promise.resolve()));
   registerHarnessIpcHandlers(
     { ok: true, db: fixture.db },
     {
@@ -92,6 +104,7 @@ function setup(
       resolveBinary:
         options.resolveBinary ?? ((command) => Promise.resolve(`/opt/homebrew/bin/${command}`)),
       launchArgv: () => ["--volli-hook", "/tmp/volli.sock"],
+      regenerateRuntime,
       now: () => 1000,
     },
   );
@@ -207,7 +220,7 @@ describe("volli:harness-trust-set", () => {
 
     const decided = decideRegisteredHarnesses(
       fixture.db,
-      await scanHarnessManifests(harnessesDir()),
+      (await scanHarnessManifests(harnessesDir())).manifests,
     );
     expect(decided[0]?.decision).toBe("trusted");
     const record = getRegisteredHarness(fixture.db, "my-harness");
@@ -229,7 +242,7 @@ describe("volli:harness-trust-set", () => {
 
     const decided = decideRegisteredHarnesses(
       fixture.db,
-      await scanHarnessManifests(harnessesDir()),
+      (await scanHarnessManifests(harnessesDir())).manifests,
     );
     expect(decided[0]?.decision).toBe("blocked");
     expect(await pending()).toEqual({ ok: true, pending: [] });
@@ -290,6 +303,134 @@ describe("volli:harness-trust-set", () => {
   });
 });
 
+describe("volli:harness-trust-set — a verdict has to take effect", () => {
+  it("puts the wrappers behind the decision before it reports success", async () => {
+    await write("my-harness", manifest());
+    setup();
+    const waiting = await onlyPending();
+
+    expect(
+      await setTrust({
+        slug: "my-harness",
+        manifestSha256: waiting.manifestSha256,
+        decision: "trusted",
+      }),
+    ).toEqual({ ok: true });
+
+    // Without this the harness the user just approved has no wrapper until the
+    // next boot: trusted in the db, unconfigured and silent in a terminal.
+    expect(regenerateRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  it("regenerates for a block too — an unapplied one leaves the wrapper on disk", async () => {
+    await write("my-harness", manifest());
+    setup();
+    const waiting = await onlyPending();
+
+    await setTrust({
+      slug: "my-harness",
+      manifestSha256: waiting.manifestSha256,
+      decision: "blocked",
+    });
+
+    expect(regenerateRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces a setup failure instead of swallowing it", async () => {
+    await write("my-harness", manifest());
+    setup({ regenerateRuntime: () => Promise.reject(new Error("EROFS: read-only file system")) });
+    const waiting = await onlyPending();
+
+    expect(
+      await setTrust({
+        slug: "my-harness",
+        manifestSha256: waiting.manifestSha256,
+        decision: "trusted",
+      }),
+    ).toEqual({
+      ok: false,
+      error:
+        "my-harness could not be set up, so the decision was not kept: EROFS: read-only file system",
+    });
+  });
+
+  it("leaves no trusted-but-unwrapped harness behind when setup fails", async () => {
+    await write("my-harness", manifest());
+    setup({ regenerateRuntime: () => Promise.reject(new Error("EROFS")) });
+    const waiting = await onlyPending();
+
+    await setTrust({
+      slug: "my-harness",
+      manifestSha256: waiting.manifestSha256,
+      decision: "trusted",
+    });
+
+    // Back where it was: nothing recorded, so the surface keeps asking rather
+    // than showing a harness that reads as approved and cannot launch.
+    expect(getRegisteredHarness(fixture.db, "my-harness")).toBeUndefined();
+    expect((await onlyPending()).slug).toBe("my-harness");
+  });
+
+  it("restores the verdict a failed decision replaced, ledger and all", async () => {
+    await write("my-harness", manifest());
+    setup();
+    const waiting = await onlyPending();
+    await setTrust({
+      slug: "my-harness",
+      manifestSha256: waiting.manifestSha256,
+      decision: "trusted",
+    });
+    recordHarnessDelivery(fixture.db, "my-harness" as HarnessId, "input.needed", 1100);
+    const before = getRegisteredHarness(fixture.db, "my-harness");
+
+    setup({ regenerateRuntime: () => Promise.reject(new Error("EROFS")) });
+    await setTrust({
+      slug: "my-harness",
+      manifestSha256: waiting.manifestSha256,
+      decision: "blocked",
+    });
+
+    expect(getRegisteredHarness(fixture.db, "my-harness")).toEqual(before);
+  });
+});
+
+describe("a manifest directory that would not read", () => {
+  let warn: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warn.mockRestore();
+  });
+
+  /** A file where the directory belongs — ENOTDIR, whichever user the suite runs as. */
+  async function breakTheDirectory(): Promise<void> {
+    await writeFile(harnessesDir(), "", "utf8");
+  }
+
+  it("says so rather than answering that nothing is pending", async () => {
+    await breakTheDirectory();
+    setup();
+
+    expect(await pending()).toEqual({
+      ok: false,
+      error: `Could not read ${harnessesDir()}.`,
+    });
+  });
+
+  it("says so rather than that the manifest being ruled on does not exist", async () => {
+    await breakTheDirectory();
+    setup();
+
+    expect(
+      await setTrust({ slug: "my-harness", manifestSha256: "a1", decision: "trusted" }),
+    ).toEqual({ ok: false, error: `Could not read ${harnessesDir()}.` });
+    expect(regenerateRuntime).not.toHaveBeenCalled();
+  });
+});
+
 describe("a db that would not open", () => {
   it("answers every channel with the open failure rather than hanging or lying", async () => {
     registerHarnessIpcHandlers(
@@ -298,6 +439,7 @@ describe("a db that would not open", () => {
         harnessesDir: harnessesDir(),
         resolveBinary: () => Promise.resolve("/opt/homebrew/bin/my-harness"),
         launchArgv: () => [],
+        regenerateRuntime: () => Promise.resolve(),
         now: () => 1000,
       },
     );

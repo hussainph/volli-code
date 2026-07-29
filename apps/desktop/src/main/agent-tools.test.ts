@@ -1,15 +1,26 @@
-import { chmod, mkdtemp, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdtemp,
+  mkdir,
+  readFile,
+  readlink,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { buildHarnessInstallPlan, FIRST_CLASS_HARNESS_IDS } from "@volli/shared";
+import { buildHarnessInstallPlan, harnessAdapters } from "@volli/shared";
+import type { HarnessAdapter, HarnessId } from "@volli/shared";
 
 import { applyHarnessInstallPlan } from "./harness-install";
 import {
   detectHarnesses,
   detectInstalledHarnesses,
   globalCliLinkShellCommand,
+  installHarnessSkills,
   resolveOnPath,
   runAgentToolsConsent,
   uninstallAllHarnessSkills,
@@ -139,16 +150,63 @@ describe("globalCliLinkShellCommand", () => {
   });
 });
 
+describe("installHarnessSkills", () => {
+  /** The adapter shape a trusted manifest parses into: reachable by no id lookup. */
+  const registeredAdapter: HarnessAdapter = {
+    id: "my-harness" as HarnessId,
+    label: "My Harness",
+    command: "my-harness",
+    promptFlag: null,
+    detection: { executable: "my-harness" },
+    surfaces: {
+      skillsDir: "{home}/.my-harness/skills",
+      commandsDir: null,
+      instructionsFile: "{home}/.my-harness/AGENTS.md",
+    },
+    injection: { kind: "none" },
+    sessionId: { kind: "none" },
+    resume: { byId: null, latest: null, userResumeTokens: [] },
+    events: [],
+    launchSettings: [],
+  };
+
+  it("delivers the skill pack to a registered harness, not only to the built-ins", async () => {
+    root = await mkdtemp(join(tmpdir(), "volli-install-registered-"));
+
+    const result = await installHarnessSkills({ home: root, adapters: [registeredAdapter] });
+
+    const link = join(root, ".my-harness/skills/volli");
+    expect(result.conflicts).toEqual([]);
+    expect(result.written).toContain(link);
+    expect((await lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await readlink(link)).toBe(join(root, ".agents/skills/volli"));
+    expect(await readFile(join(root, ".my-harness/AGENTS.md"), "utf8")).toContain("volli:begin");
+    // The canonical pack the symlink points at has to exist, or the link dangles.
+    expect((await stat(join(root, ".agents/skills/volli/SKILL.md"))).isFile()).toBe(true);
+  });
+
+  it("writes nothing at all when the caller can name no harness", async () => {
+    root = await mkdtemp(join(tmpdir(), "volli-install-empty-"));
+
+    const result = await installHarnessSkills({ home: root, adapters: [] });
+
+    expect(result).toEqual({ written: [], skipped: [], conflicts: [] });
+    await expect(stat(join(root, ".agents/skills/volli/SKILL.md"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+});
+
 describe("uninstallAllHarnessSkills", () => {
   it("removes the skill pack for every first-class harness", async () => {
     root = await mkdtemp(join(tmpdir(), "volli-uninstall-test-"));
-    const plan = buildHarnessInstallPlan({ home: root, detected: FIRST_CLASS_HARNESS_IDS });
+    const plan = buildHarnessInstallPlan({ home: root, adapters: harnessAdapters });
     const manifestPath = join(root, ".agents/skills/volli/.volli-managed.json");
     await applyHarnessInstallPlan(plan, manifestPath);
     const skill = join(root, ".agents/skills/volli/SKILL.md");
     expect((await stat(skill)).isFile()).toBe(true);
 
-    const removal = await uninstallAllHarnessSkills({ home: root });
+    const removal = await uninstallAllHarnessSkills({ home: root, adapters: harnessAdapters });
     expect(removal.removed).toContain(skill);
     expect(removal.preserved).toEqual([]);
     await expect(readFile(skill, "utf8")).rejects.toMatchObject({ code: "ENOENT" });

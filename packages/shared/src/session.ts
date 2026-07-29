@@ -130,6 +130,77 @@ export function createSessionRecord(input: CreateSessionInput): SessionRecord {
 }
 
 /**
+ * When a delivery was FIRED, in epoch milliseconds off the clock of whatever
+ * fired it — `null` when it carries no such stamp.
+ *
+ * Every canonical event reaches Volli through its own short-lived `volli hook`
+ * process, over its own socket connection, and nothing in that arrangement
+ * preserves the order the harness emitted them in. Two hooks that fire a
+ * millisecond apart race through a process boot, a stdin read and a connect,
+ * any of which can reorder them by tens of milliseconds. Main's arrival stamp
+ * therefore orders the DELIVERIES and not the events, and last-arrival-wins on
+ * a `waiting` is how a session comes to show Idle while its agent sits at a
+ * permission prompt — the one failure this channel exists to prevent, because
+ * nobody ever comes back to a session that looks finished.
+ *
+ * The stamp is taken at the hook process's first instruction, ahead of all the
+ * variable latency it exists to see past. Three things it is NOT, each of which
+ * the name invites a reader to assume:
+ *
+ * It is not a sequence number. It is a wall clock, and wall clocks step — an
+ * NTP correction or a hand-set clock between two hook launches inverts two
+ * events that really were ordered. Both hooks run on the same machine, so there
+ * is no skew BETWEEN the processes to worry about; that is not the same as the
+ * clock being monotonic underneath them.
+ *
+ * It is not the moment of emission. The harness decides to fire, then spawns a
+ * process, and this is the second of those. That is much closer to the truth
+ * than arrival, which is the whole reason it is worth carrying, but it remains
+ * a proxy for something nothing on the wire can observe directly.
+ *
+ * It is not fine-grained. Two hooks that fire inside the same millisecond are
+ * genuinely unordered, and no amount of care here can invent an order for them.
+ *
+ * Which is why `null` is a value here and not a failure. An event carrying no
+ * ordering information is not unorderable-and-therefore-droppable — a `volli`
+ * older than the field, or a hook that could not read a clock, still reports
+ * something true — so {@link supersededHarnessEvent} refuses only what it can
+ * PROVE is stale and lets everything else through in arrival order, exactly as
+ * before.
+ */
+export type HarnessEventOrder = number | null;
+
+/**
+ * Reads an ordering key off an untrusted edge. Anything that is not a finite
+ * number reads as `null` rather than as grounds to refuse the delivery: a stamp
+ * this cannot use is exactly as much ordering information as no stamp at all,
+ * and the event around it is still true.
+ */
+export function harnessEventOrder(value: unknown): HarnessEventOrder {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * Whether a delivery has been overtaken by one already folded in. THE ordering
+ * rule, written once: main applies it before it writes, the renderer applies it
+ * before it renders, and two hand-copies of a rule this easy to get subtly
+ * wrong would diverge on the first edit to either.
+ *
+ * Superseded means strictly older with both keys present, and nothing else. An
+ * absent key on either side is an absence of evidence rather than evidence of
+ * staleness, and an equal key is a tie the clock genuinely cannot break — both
+ * are applied. That asymmetry is deliberate: this exists to stop Volli
+ * believing an event it can prove is stale, not to start disbelieving every
+ * event it cannot prove is fresh.
+ */
+export function supersededHarnessEvent(
+  newest: HarnessEventOrder,
+  firedAt: HarnessEventOrder,
+): boolean {
+  return newest !== null && firedAt !== null && firedAt < newest;
+}
+
+/**
  * What a harness has actually told us about one live session, as opposed to
  * what its adapter claims it can tell us. Declared capability and delivered
  * evidence are separate fields on purpose: the plan's honesty rule is that a
@@ -159,6 +230,13 @@ export interface SessionHarnessState {
   delivered: boolean;
   /** The newest hook-declared activity state; `null` means PTY derivation owns it. */
   declared: SessionActivityState | null;
+  /**
+   * The newest {@link HarnessEventOrder} folded in so far — the watermark a
+   * later delivery is judged against. `null` until a stamped delivery arrives,
+   * and `null` forever on a channel where none ever does: a key that cannot
+   * order itself must not begin ordering everything behind it.
+   */
+  newestFiredAt: HarnessEventOrder;
 }
 
 export interface CreateSessionHarnessStateInput {
@@ -181,6 +259,7 @@ export function createSessionHarnessState(
     startedAt: input.startedAt,
     delivered: false,
     declared: null,
+    newestFiredAt: null,
   };
 }
 
@@ -212,18 +291,33 @@ const TELEMETRY_EVENTS: ReadonlySet<HarnessEvent> = new Set(["subagent.completed
  * prompt, `tool.started` on the next tool, `turn.completed` on the next stop),
  * and that proof is what returns the session to PTY derivation. A `waiting`
  * therefore cannot outlive the agent's next observable action.
+ *
+ * **Which event is newest is not the order they arrived in.** `firedAt` is what
+ * decides that, for the reasons {@link HarnessEventOrder} lays out, and it is
+ * required rather than defaulted for the same reason `declared` is required at
+ * the store: a caller who has a key and forgets to pass it would silently get
+ * arrival order back, which is the bug. Pass `null` where there genuinely is
+ * none.
  */
 export function receiveHarnessEvent(
   state: SessionHarnessState,
   event: HarnessEvent,
+  firedAt: HarnessEventOrder,
 ): SessionHarnessState {
-  if (TELEMETRY_EVENTS.has(event)) return { ...state, delivered: true };
+  // A superseded delivery still proves the channel is alive. That proof is
+  // order-free — a fact about what the harness can do, which no later fact
+  // replaces — so it is kept while everything a newer event has already
+  // answered is withheld. Main draws the same line on its own side of the wire:
+  // one rule, and the two ends cannot drift into disagreeing about a session.
+  if (supersededHarnessEvent(state.newestFiredAt, firedAt)) return { ...state, delivered: true };
+  const newestFiredAt = firedAt ?? state.newestFiredAt;
+  if (TELEMETRY_EVENTS.has(event)) return { ...state, delivered: true, newestFiredAt };
   // A blocking event from a harness whose own source maps that signal to null
   // (cursor) is not evidence, it is noise from something in the pipe that
   // shouldn't be there. Record the delivery — the channel is demonstrably alive
   // — but never let it raise a needs-you state the harness cannot vouch for.
   const blocking = BLOCKING_EVENTS.has(event) && state.declaresInputNeeded;
-  return { ...state, delivered: true, declared: blocking ? "waiting" : null };
+  return { ...state, delivered: true, newestFiredAt, declared: blocking ? "waiting" : null };
 }
 
 /**

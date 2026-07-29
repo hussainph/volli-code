@@ -149,6 +149,57 @@ export function recordHarnessTrust(
 }
 
 /**
+ * Puts `slug` back exactly as `previous` left it, or removes the row when there
+ * was no previous — the undo for a verdict whose activation failed.
+ *
+ * Written by hand rather than as a transaction because the work being undone is
+ * not in SQLite: the verdict has to be committed before the wrappers can be
+ * generated from it, and better-sqlite3's transactions are synchronous, so no
+ * transaction can span the await in between.
+ *
+ * Every column is restored, not re-decided. `createdAt` and the verified ledger
+ * are history — a write that is being rolled back must not leave its fingerprint
+ * on when Volli first heard of this harness, or on what the harness has been
+ * seen to deliver.
+ */
+export function restoreRegisteredHarness(
+  db: Database.Database,
+  slug: string,
+  previous: RegisteredHarness | undefined,
+): void {
+  if (previous === undefined) {
+    prepared<[string], unknown>(db, "DELETE FROM registered_harnesses WHERE slug = ?").run(slug);
+    return;
+  }
+  prepared<[string, string, string, string, string, string, number, number, number], unknown>(
+    db,
+    `INSERT INTO registered_harnesses
+       (slug, manifest_path, manifest_sha256, decision, declared_events, verified_events,
+        decided_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(slug) DO UPDATE SET
+       manifest_path   = excluded.manifest_path,
+       manifest_sha256 = excluded.manifest_sha256,
+       decision        = excluded.decision,
+       declared_events = excluded.declared_events,
+       verified_events = excluded.verified_events,
+       decided_at      = excluded.decided_at,
+       created_at      = excluded.created_at,
+       updated_at      = excluded.updated_at`,
+  ).run(
+    previous.slug,
+    previous.manifestPath,
+    previous.manifestSha256,
+    previous.decision,
+    JSON.stringify(previous.declaredEvents),
+    JSON.stringify(previous.verifiedEvents),
+    previous.decidedAt,
+    previous.createdAt,
+    previous.updatedAt,
+  );
+}
+
+/**
  * Records that `event` has actually been delivered by `slug`. Returns whether
  * this was the first delivery — the caller uses that to announce a capability
  * exactly once, rather than on every hook fire.

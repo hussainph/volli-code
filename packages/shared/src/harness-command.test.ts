@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vite-plus/test";
 import { FIRST_CLASS_HARNESS_IDS, parseHarnessId, type HarnessId } from "./ticket";
 import type { HarnessAdapter } from "./harness/types";
+import { getHarnessAdapter } from "./harness/core";
 import {
   buildHarnessCommand,
   buildResumeCommand,
@@ -11,7 +12,43 @@ import {
   composeTicketPrompt,
   shellSingleQuote,
   worktreeOrientationPreamble,
+  type HarnessAdapterLookup,
 } from "./harness-command";
+
+/**
+ * The closed built-in registry, spelled the way a caller must now name it. Every
+ * case below that passes it is asserting built-in behaviour specifically — the
+ * registered cases pass a lookup that knows a manifest instead.
+ */
+const builtIns: HarnessAdapterLookup = getHarnessAdapter;
+
+/**
+ * A manifest-registered adapter: a real, fully-described harness that
+ * {@link getHarnessAdapter} answers `undefined` for and always will. Everything
+ * a launch reads off an adapter is defaulted to "declares nothing", so each case
+ * below adds only the field it is about.
+ */
+function registered(overrides: Partial<HarnessAdapter> = {}): HarnessAdapter {
+  return {
+    id: parseHarnessId("my-harness") as HarnessId,
+    label: "My Harness",
+    command: "my-harness",
+    promptFlag: null,
+    detection: { executable: "my-harness" },
+    surfaces: { skillsDir: null, commandsDir: null, instructionsFile: null },
+    injection: { kind: "none" },
+    sessionId: { kind: "none" },
+    resume: { byId: null, latest: null, userResumeTokens: [] },
+    events: [],
+    launchSettings: [],
+    ...overrides,
+  };
+}
+
+/** The lookup main supplies once a manifest is registered AND trusted. */
+function lookupOf(adapter: HarnessAdapter): HarnessAdapterLookup {
+  return (id) => (id === adapter.id ? adapter : getHarnessAdapter(id));
+}
 
 describe("shellSingleQuote", () => {
   it("wraps a plain string in single quotes", () => {
@@ -88,33 +125,41 @@ describe("composeTicketPrompt", () => {
 
 describe("buildHarnessCommand", () => {
   it("launches Claude Code with a positional quoted prompt", () => {
-    expect(buildHarnessCommand("claude-code", "hi there", null)).toBe("claude 'hi there'");
+    expect(buildHarnessCommand("claude-code", "hi there", null, builtIns)).toBe(
+      "claude 'hi there'",
+    );
   });
 
   it("launches Codex with a positional quoted prompt (interactive TUI, not exec)", () => {
-    expect(buildHarnessCommand("codex", "hi there", null)).toBe("codex 'hi there'");
+    expect(buildHarnessCommand("codex", "hi there", null, builtIns)).toBe("codex 'hi there'");
   });
 
   it("launches Opencode with --prompt (default TUI, not run)", () => {
-    expect(buildHarnessCommand("opencode", "hi there", null)).toBe("opencode --prompt 'hi there'");
+    expect(buildHarnessCommand("opencode", "hi there", null, builtIns)).toBe(
+      "opencode --prompt 'hi there'",
+    );
   });
 
   it("launches Cursor's CLI, which is cursor-agent rather than cursor", () => {
-    expect(buildHarnessCommand("cursor", "hi there", null)).toBe("cursor-agent 'hi there'");
+    expect(buildHarnessCommand("cursor", "hi there", null, builtIns)).toBe(
+      "cursor-agent 'hi there'",
+    );
   });
 
   it("launches an unregistered harness by its own slug with a positional prompt", () => {
     const custom = parseHarnessId("my-harness") as HarnessId;
-    expect(buildHarnessCommand(custom, "hi there", null)).toBe("my-harness 'hi there'");
+    expect(buildHarnessCommand(custom, "hi there", null, builtIns)).toBe("my-harness 'hi there'");
   });
 
   it("quotes the prompt so shell metacharacters stay inert", () => {
-    expect(buildHarnessCommand("claude-code", "it's `$X`", null)).toBe("claude 'it'\\''s `$X`'");
+    expect(buildHarnessCommand("claude-code", "it's `$X`", null, builtIns)).toBe(
+      "claude 'it'\\''s `$X`'",
+    );
   });
 
   it("has a template for every first-class harness", () => {
     for (const id of FIRST_CLASS_HARNESS_IDS) {
-      expect(buildHarnessCommand(id, "x", null)).toContain("'x'");
+      expect(buildHarnessCommand(id, "x", null, builtIns)).toContain("'x'");
     }
   });
 
@@ -123,30 +168,35 @@ describe("buildHarnessCommand", () => {
   // under Volli's bin dir (path_helper, then every user prepend). A launch that
   // names the wrapper by absolute path cannot lose that race.
   it("names the generated wrapper by absolute path rather than the bare command", () => {
-    expect(buildHarnessCommand("claude-code", "hi", "/ud/bin/claude")).toBe(
+    expect(buildHarnessCommand("claude-code", "hi", "/ud/bin/claude", builtIns)).toBe(
       "'/ud/bin/claude' 'hi'",
     );
   });
 
   it("keeps the prompt flag between the wrapper and the prompt", () => {
-    expect(buildHarnessCommand("opencode", "hi", "/ud/bin/opencode")).toBe(
+    expect(buildHarnessCommand("opencode", "hi", "/ud/bin/opencode", builtIns)).toBe(
       "'/ud/bin/opencode' --prompt 'hi'",
     );
   });
 
   it("quotes the wrapper path, which on macOS contains spaces under Application Support", () => {
     expect(
-      buildHarnessCommand("claude-code", "hi", "/Users/x/Library/Application Support/Volli/claude"),
+      buildHarnessCommand(
+        "claude-code",
+        "hi",
+        "/Users/x/Library/Application Support/Volli/claude",
+        builtIns,
+      ),
     ).toBe("'/Users/x/Library/Application Support/Volli/claude' 'hi'");
   });
 
   it("falls back to the bare command when no wrapper was generated", () => {
-    expect(buildHarnessCommand("claude-code", "hi", null)).toBe("claude 'hi'");
+    expect(buildHarnessCommand("claude-code", "hi", null, builtIns)).toBe("claude 'hi'");
   });
 
   it("wraps an unregistered harness too, since a manifest earns a wrapper the same way", () => {
     const custom = parseHarnessId("my-harness") as HarnessId;
-    expect(buildHarnessCommand(custom, "hi", "/ud/bin/my-harness")).toBe(
+    expect(buildHarnessCommand(custom, "hi", "/ud/bin/my-harness", builtIns)).toBe(
       "'/ud/bin/my-harness' 'hi'",
     );
   });
@@ -154,46 +204,50 @@ describe("buildHarnessCommand", () => {
 
 describe("buildHarnessResumeCommand", () => {
   it("resumes Claude Code by session id with --resume", () => {
-    expect(buildHarnessResumeCommand("claude-code", "abc123", null)).toBe(
+    expect(buildHarnessResumeCommand("claude-code", "abc123", null, builtIns)).toBe(
       "claude --resume 'abc123'",
     );
   });
 
   it("falls back to Claude Code's --continue when no session id is known", () => {
-    expect(buildHarnessResumeCommand("claude-code", null, null)).toBe("claude --continue");
+    expect(buildHarnessResumeCommand("claude-code", null, null, builtIns)).toBe(
+      "claude --continue",
+    );
   });
 
   it("resumes Codex by session id with resume", () => {
-    expect(buildHarnessResumeCommand("codex", "abc123", null)).toBe("codex resume 'abc123'");
+    expect(buildHarnessResumeCommand("codex", "abc123", null, builtIns)).toBe(
+      "codex resume 'abc123'",
+    );
   });
 
   it("falls back to Codex's resume --last when no session id is known", () => {
-    expect(buildHarnessResumeCommand("codex", null, null)).toBe("codex resume --last");
+    expect(buildHarnessResumeCommand("codex", null, null, builtIns)).toBe("codex resume --last");
   });
 
   it("resumes Opencode by session id with --session", () => {
-    expect(buildHarnessResumeCommand("opencode", "abc123", null)).toBe(
+    expect(buildHarnessResumeCommand("opencode", "abc123", null, builtIns)).toBe(
       "opencode --session 'abc123'",
     );
   });
 
   it("falls back to Opencode's --continue when no session id is known", () => {
-    expect(buildHarnessResumeCommand("opencode", null, null)).toBe("opencode --continue");
+    expect(buildHarnessResumeCommand("opencode", null, null, builtIns)).toBe("opencode --continue");
   });
 
   it("resumes Cursor by session id with --resume", () => {
-    expect(buildHarnessResumeCommand("cursor", "abc123", null)).toBe(
+    expect(buildHarnessResumeCommand("cursor", "abc123", null, builtIns)).toBe(
       "cursor-agent --resume 'abc123'",
     );
   });
 
   it("returns null for a harness with no registered adapter, with or without a session id", () => {
-    expect(buildHarnessResumeCommand("custom-harness", "abc123", null)).toBeNull();
-    expect(buildHarnessResumeCommand("custom-harness", null, null)).toBeNull();
+    expect(buildHarnessResumeCommand("custom-harness", "abc123", null, builtIns)).toBeNull();
+    expect(buildHarnessResumeCommand("custom-harness", null, null, builtIns)).toBeNull();
   });
 
   it("returns null for a stored id that is not even a well-formed harness slug", () => {
-    expect(buildHarnessResumeCommand("Not A Harness", "abc123", null)).toBeNull();
+    expect(buildHarnessResumeCommand("Not A Harness", "abc123", null, builtIns)).toBeNull();
   });
 
   it("substitutes the id wherever the template puts it, not only at the end", () => {
@@ -229,19 +283,19 @@ describe("buildHarnessResumeCommand", () => {
   });
 
   it("quotes a session id that needs shell quoting, same as prompt quoting", () => {
-    expect(buildHarnessResumeCommand("claude-code", "it's a session", null)).toBe(
+    expect(buildHarnessResumeCommand("claude-code", "it's a session", null, builtIns)).toBe(
       "claude --resume 'it'\\''s a session'",
     );
   });
 
   it("names the wrapper by absolute path on a by-id resume", () => {
-    expect(buildHarnessResumeCommand("claude-code", "abc123", "/ud/bin/claude")).toBe(
+    expect(buildHarnessResumeCommand("claude-code", "abc123", "/ud/bin/claude", builtIns)).toBe(
       "'/ud/bin/claude' --resume 'abc123'",
     );
   });
 
   it("names the wrapper by absolute path on a latest-in-cwd resume too", () => {
-    expect(buildHarnessResumeCommand("codex", null, "/ud/bin/codex")).toBe(
+    expect(buildHarnessResumeCommand("codex", null, "/ud/bin/codex", builtIns)).toBe(
       "'/ud/bin/codex' resume --last",
     );
   });
@@ -249,19 +303,19 @@ describe("buildHarnessResumeCommand", () => {
 
 describe("canResumeHarness", () => {
   it("is true for a harness that resumes by id when an id is known", () => {
-    expect(canResumeHarness("claude-code", "abc123")).toBe(true);
+    expect(canResumeHarness("claude-code", "abc123", builtIns)).toBe(true);
   });
 
   it("is true with no id when the harness can resume the latest in cwd", () => {
-    expect(canResumeHarness("claude-code", null)).toBe(true);
+    expect(canResumeHarness("claude-code", null, builtIns)).toBe(true);
   });
 
   it("is false for a harness with no registered adapter", () => {
-    expect(canResumeHarness("custom-harness", "abc123")).toBe(false);
+    expect(canResumeHarness("custom-harness", "abc123", builtIns)).toBe(false);
   });
 
   it("is false for a stored id that is not a well-formed harness slug", () => {
-    expect(canResumeHarness("Not A Harness", "abc123")).toBe(false);
+    expect(canResumeHarness("Not A Harness", "abc123", builtIns)).toBe(false);
   });
 
   // The capability question a UI asks must not depend on where a wrapper
@@ -269,11 +323,131 @@ describe("canResumeHarness", () => {
   it("agrees with the command builder for every first-class harness", () => {
     for (const id of FIRST_CLASS_HARNESS_IDS) {
       for (const sessionId of ["abc123", null]) {
-        expect(canResumeHarness(id, sessionId)).toBe(
-          buildHarnessResumeCommand(id, sessionId, null) !== null,
+        expect(canResumeHarness(id, sessionId, builtIns)).toBe(
+          buildHarnessResumeCommand(id, sessionId, null, builtIns) !== null,
         );
       }
     }
+  });
+});
+
+describe("a registered harness the built-in registry cannot see", () => {
+  it("honours a manifest's promptFlag instead of passing the prompt positionally", () => {
+    // The opencode shape, declared by a manifest rather than shipped. Resolved
+    // against the built-ins the same launch reads no flag at all and hands
+    // `my-harness` its prompt as a SUBCOMMAND.
+    const adapter = registered({ promptFlag: "--prompt" });
+    const id = adapter.id;
+
+    expect(buildHarnessCommand(id, "hi there", null, lookupOf(adapter))).toBe(
+      "my-harness --prompt 'hi there'",
+    );
+    expect(buildHarnessCommand(id, "hi there", null, builtIns)).toBe("my-harness 'hi there'");
+  });
+
+  it("keeps a manifest's promptFlag between the generated wrapper and the prompt", () => {
+    const adapter = registered({ promptFlag: "--prompt" });
+
+    expect(buildHarnessCommand(adapter.id, "hi", "/ud/bin/my-harness", lookupOf(adapter))).toBe(
+      "'/ud/bin/my-harness' --prompt 'hi'",
+    );
+  });
+
+  it("launches by the manifest's command, which need not be its slug", () => {
+    const adapter = registered({ command: "my-harness-cli" });
+
+    expect(buildHarnessCommand(adapter.id, "hi", null, lookupOf(adapter))).toBe(
+      "my-harness-cli 'hi'",
+    );
+    // Unresolvable, so the slug stands in for a command nobody has described.
+    expect(buildHarnessCommand(adapter.id, "hi", null, builtIns)).toBe("my-harness 'hi'");
+  });
+
+  it("resumes by id from a manifest's template, which the built-in lookup silently refuses", () => {
+    const adapter = registered({
+      resume: { byId: ["--session={id}"], latest: ["--continue"], userResumeTokens: ["--session"] },
+    });
+
+    expect(buildHarnessResumeCommand(adapter.id, "abc123", null, lookupOf(adapter))).toBe(
+      "my-harness --session='abc123'",
+    );
+    expect(buildHarnessResumeCommand(adapter.id, "abc123", null, builtIns)).toBeNull();
+  });
+
+  it("falls back to a manifest's latest-in-cwd resume when no session id is known", () => {
+    const adapter = registered({
+      resume: { byId: ["--session={id}"], latest: ["--continue"], userResumeTokens: [] },
+    });
+
+    expect(buildHarnessResumeCommand(adapter.id, null, null, lookupOf(adapter))).toBe(
+      "my-harness --continue",
+    );
+  });
+
+  it("names the wrapper by absolute path on a registered harness's resume", () => {
+    const adapter = registered({
+      resume: { byId: ["resume", "{id}"], latest: null, userResumeTokens: [] },
+    });
+
+    expect(
+      buildHarnessResumeCommand(adapter.id, "abc123", "/ud/bin/my-harness", lookupOf(adapter)),
+    ).toBe("'/ud/bin/my-harness' resume 'abc123'");
+  });
+
+  it("offers the resume action for a registered harness only to a lookup that knows it", () => {
+    const adapter = registered({
+      resume: { byId: ["--session={id}"], latest: null, userResumeTokens: [] },
+    });
+
+    expect(canResumeHarness(adapter.id, "abc123", lookupOf(adapter))).toBe(true);
+    expect(canResumeHarness(adapter.id, null, lookupOf(adapter))).toBe(false);
+    expect(canResumeHarness(adapter.id, "abc123", builtIns)).toBe(false);
+  });
+
+  it("agrees with the command builder for a registered harness, as it does for built-ins", () => {
+    const cases = [
+      registered(),
+      registered({ resume: { byId: ["--session={id}"], latest: null, userResumeTokens: [] } }),
+      registered({ resume: { byId: null, latest: ["--continue"], userResumeTokens: [] } }),
+      registered({ resume: { byId: [], latest: [], userResumeTokens: [] } }),
+    ];
+    for (const adapter of cases) {
+      for (const sessionId of ["abc123", null]) {
+        expect(canResumeHarness(adapter.id, sessionId, lookupOf(adapter))).toBe(
+          buildHarnessResumeCommand(adapter.id, sessionId, null, lookupOf(adapter)) !== null,
+        );
+      }
+    }
+  });
+});
+
+describe("empty resume argv is not a resume path", () => {
+  // `[]` is truthy. Testing the array rather than its length reports the harness
+  // as resumable and then builds a line that is only the executable — a FRESH
+  // session under the name of a resume, losing the work it claimed to pick up.
+  it("returns null rather than a bare executable when both slots are empty", () => {
+    const adapter = registered({ resume: { byId: [], latest: [], userResumeTokens: [] } });
+
+    expect(buildResumeCommand(adapter, "abc123", null)).toBeNull();
+    expect(buildResumeCommand(adapter, null, null)).toBeNull();
+    expect(buildResumeCommand(adapter, "abc123", "/ud/bin/my-harness")).toBeNull();
+  });
+
+  it("falls through an empty by-id template to a latest resume that does say something", () => {
+    const adapter = registered({
+      resume: { byId: [], latest: ["--continue"], userResumeTokens: [] },
+    });
+
+    expect(buildResumeCommand(adapter, "abc123", null)).toBe("my-harness --continue");
+  });
+
+  it("never offers the action for an adapter whose only resume argv is empty", () => {
+    const empty = registered({ resume: { byId: [], latest: [], userResumeTokens: [] } });
+    const emptyById = registered({ resume: { byId: [], latest: null, userResumeTokens: [] } });
+
+    expect(canResumeHarness(empty.id, "abc123", lookupOf(empty))).toBe(false);
+    expect(canResumeHarness(empty.id, null, lookupOf(empty))).toBe(false);
+    expect(canResumeHarness(emptyById.id, "abc123", lookupOf(emptyById))).toBe(false);
   });
 });
 

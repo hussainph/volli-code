@@ -9,14 +9,14 @@ import { basename, join } from "node:path";
 
 import {
   buildLaunchConfig,
+  harnessCommandOwner,
   harnessEnvSuffix,
   HARNESS_DIR_TOKEN,
   isBareHarnessCommand,
   renderWrapperScript,
   shadowsSystemCommand,
-  shellSingleQuote,
 } from "@volli/shared";
-import type { HarnessAdapter, HarnessId } from "@volli/shared";
+import type { HarnessAdapter, HarnessId, WrapperRefusal } from "@volli/shared";
 
 export interface HarnessRuntimeInput {
   /** Volli's own `bin/` — the same directory the `volli` shim lives in. */
@@ -49,7 +49,13 @@ export interface HarnessRuntimeInput {
 export interface RefusedWrapper {
   harnessId: HarnessId;
   command: string;
-  /** What that name resolves to today, which is what makes it unsafe to shadow. */
+  reason: WrapperRefusal;
+  /**
+   * The path that makes the refusal concrete: what the name resolves to today
+   * for a shadowed system tool, and the `bin/` entry that stays unwritten
+   * otherwise. Always a real path, never an explanation — `volli doctor` prints
+   * it as one.
+   */
   resolvedPath: string;
 }
 
@@ -66,14 +72,21 @@ export interface HarnessRuntime {
    * rather than pretending a wrapper exists.
    */
   wrapperPaths: ReadonlyMap<HarnessId, string>;
-  /** Wrappers refused because the name would shadow a system tool. */
+  /** Wrappers Volli declined to write, each with the rule that declined it. */
   refused: RefusedWrapper[];
   /**
-   * Merged into every Volli PTY's environment alongside `agentSessionEnv`. The
-   * wrapper reads its argv out of `VOLLI_HARNESS_ARGV_<SLUG>` here, and a
-   * harness configured by environment variable (cursor, opencode) finds its
-   * Volli-owned config through it. Session-independent — `buildLaunchConfig`
-   * cannot mint a session id, so one environment serves every launch.
+   * Merged into every Volli PTY's environment alongside `agentSessionEnv` —
+   * `VOLLI_HARNESS_ARGV_<SLUG>` and nothing else.
+   *
+   * Session-wide because a wrapper has to READ it, and reading it is the first
+   * thing a wrapper does; there is no earlier place to put it. That is the line:
+   * what a wrapper reads travels in the session, what a HARNESS reads is
+   * exported by its own wrapper one step before its exec. A config variable in
+   * the session (`OPENCODE_CONFIG` in a claude terminal) configures nothing and
+   * tells every agent about a harness that is not running.
+   *
+   * Session-independent — `buildLaunchConfig` cannot mint a session id, so one
+   * environment serves every launch.
    */
   env: Record<string, string>;
 }
@@ -143,6 +156,24 @@ export async function ensureHarnessRuntime(input: HarnessRuntimeInput): Promise<
   const env: Record<string, string> = {};
   for (const adapter of input.adapters) {
     if (!isBareHarnessCommand(adapter.command)) continue;
+    const wrapperPath = join(input.binDir, adapter.command);
+    // `bin/` is one file per name, and a write is the moment that becomes true
+    // or stops being. Two adapters claiming one command used to be two writes to
+    // one path, the later one silently inheriting the earlier one's argv
+    // injection — and the parser refusing an owned name for a REGISTERED
+    // manifest does not cover it, because the manifest that reaches this loop
+    // need not have passed today's parser. Compare the owner against the adapter
+    // actually being written: `claude-code` may claim `claude`, and nobody else.
+    const owner = harnessCommandOwner(adapter.command);
+    if (owner !== null && owner !== adapter.id) {
+      refused.push({
+        harnessId: adapter.id,
+        command: adapter.command,
+        reason: "name-already-owned",
+        resolvedPath: wrapperPath,
+      });
+      continue;
+    }
     // Now that the bin dir genuinely wins PATH inside a session, a wrapper named
     // after a system tool would shadow it for every command in every Volli
     // terminal — and would prepend injected argv to it besides.
@@ -151,14 +182,11 @@ export async function ensureHarnessRuntime(input: HarnessRuntimeInput): Promise<
       refused.push({
         harnessId: adapter.id,
         command: adapter.command,
+        reason: "shadows-system-command",
         resolvedPath: resolvedCommand,
       });
       continue;
     }
-    const wrapperPath = join(input.binDir, adapter.command);
-    await writeExecutable(wrapperPath, renderWrapperScript(adapter, { binDir: input.binDir }));
-    wrappers.push(wrapperPath);
-    wrapperPaths.set(adapter.id, wrapperPath);
 
     const harnessDir = harnessDirFor(input.harnessRoot, adapter);
     const config = buildLaunchConfig(adapter, {
@@ -166,18 +194,50 @@ export async function ensureHarnessRuntime(input: HarnessRuntimeInput): Promise<
       hookArgv: hookArgvFor(input.shimPath, adapter),
     });
     const resolve = (value: string): string => value.replaceAll(HARNESS_DIR_TOKEN, harnessDir);
+    const argv = config.argv.map(resolve);
+    // The hand-off below is one word per line, split by the wrapper on newlines
+    // alone. A word carrying one would arrive as two, and an empty word would
+    // vanish (newline is IFS whitespace, so runs of it collapse) — so refuse the
+    // wrapper rather than launch a harness with a command line silently taken
+    // apart. Every VALUE is rendered through JSON, which escapes the character;
+    // what is left is the injection FLAG an adapter declares, which reaches argv
+    // as written, and a Volli path with a newline in it.
+    if (argv.some((token) => token.includes("\n") || token.length === 0)) {
+      refused.push({
+        harnessId: adapter.id,
+        command: adapter.command,
+        reason: "argv-not-transportable",
+        resolvedPath: wrapperPath,
+      });
+      continue;
+    }
+
+    // The wrapper carries everything true of THIS harness: the binary the trust
+    // dialog named (the same resolution the shadow guard just performed), and
+    // the configuration variables the harness itself reads — which belong to the
+    // process the wrapper is about to exec, not to every PTY.
+    await writeExecutable(
+      wrapperPath,
+      renderWrapperScript(adapter, {
+        binDir: input.binDir,
+        binaryPath: resolvedCommand,
+        env: Object.fromEntries(
+          Object.entries(config.env).map(([name, value]) => [name, resolve(value)]),
+        ),
+      }),
+    );
+    wrappers.push(wrapperPath);
+    wrapperPaths.set(adapter.id, wrapperPath);
+
     if (config.files.length > 0) await mkdir(harnessDir, { recursive: true });
     for (const file of config.files) {
       await writeFile(resolve(file.path), resolve(file.content), { encoding: "utf8", mode: 0o600 });
     }
-    for (const [name, value] of Object.entries(config.env)) env[name] = resolve(value);
-    // The wrapper applies this with `eval "set -- $VOLLI_HARNESS_ARGV_<SLUG>"`,
-    // so each token is quoted here — an injected `--settings` payload is JSON
-    // full of quotes and braces, and must reach the harness as ONE word.
-    if (config.argv.length > 0) {
-      env[`VOLLI_HARNESS_ARGV_${harnessEnvSuffix(adapter)}`] = config.argv
-        .map((token) => shellSingleQuote(resolve(token)))
-        .join(" ");
+    // One word per line, and no quoting: the wrapper applies this by field
+    // splitting on newlines rather than by parsing it, so a `--settings` payload
+    // full of quotes and braces arrives as the one word it left as.
+    if (argv.length > 0) {
+      env[`VOLLI_HARNESS_ARGV_${harnessEnvSuffix(adapter)}`] = argv.join("\n");
     }
   }
   // A wrapper for a harness that is no longer on the host is worse than no

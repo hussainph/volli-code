@@ -239,13 +239,14 @@ describe("harnessBaselineActions", () => {
 
 describe("buildHarnessInstallPlan", () => {
   it("does nothing when no supported harness is detected", () => {
-    expect(buildHarnessInstallPlan({ home: "/home/dev", detected: [] })).toEqual([]);
+    expect(buildHarnessInstallPlan({ home: "/home/dev", adapters: [] })).toEqual([]);
   });
 
   it("keeps the assets it already ships for claude-code and opencode byte-identical", () => {
-    const claude = buildHarnessInstallPlan({ home: "/home/dev", detected: ["claude-code"] }).slice(
-      CANONICAL_SKILL_FILES,
-    );
+    const claude = buildHarnessInstallPlan({
+      home: "/home/dev",
+      adapters: [adapterFor("claude-code")],
+    }).slice(CANONICAL_SKILL_FILES);
     expect(claude).toEqual([
       {
         kind: "symlink",
@@ -255,9 +256,10 @@ describe("buildHarnessInstallPlan", () => {
       },
     ]);
 
-    const opencode = buildHarnessInstallPlan({ home: "/home/dev", detected: ["opencode"] }).slice(
-      CANONICAL_SKILL_FILES,
-    );
+    const opencode = buildHarnessInstallPlan({
+      home: "/home/dev",
+      adapters: [adapterFor("opencode")],
+    }).slice(CANONICAL_SKILL_FILES);
     expect(opencode).toEqual([
       {
         kind: "write",
@@ -271,7 +273,12 @@ describe("buildHarnessInstallPlan", () => {
   it("shares one canonical skill and never creates a Codex prompt", () => {
     const plan = buildHarnessInstallPlan({
       home: "/home/dev",
-      detected: ["claude-code", "codex", "cursor", "opencode"],
+      adapters: [
+        adapterFor("claude-code"),
+        adapterFor("codex"),
+        adapterFor("cursor"),
+        adapterFor("opencode"),
+      ],
     });
     const paths = plan.map((action) => action.path);
 
@@ -283,7 +290,10 @@ describe("buildHarnessInstallPlan", () => {
   });
 
   it("ships the manifest schema beside the skill, so an agent can register a harness", () => {
-    const plan = buildHarnessInstallPlan({ home: "/home/dev", detected: ["claude-code"] });
+    const plan = buildHarnessInstallPlan({
+      home: "/home/dev",
+      adapters: [adapterFor("claude-code")],
+    });
     expect(plan.slice(0, CANONICAL_SKILL_FILES).map((action) => action.path)).toEqual([
       "/home/dev/.agents/skills/volli/SKILL.md",
       "/home/dev/.agents/skills/volli/cli.md",
@@ -293,26 +303,71 @@ describe("buildHarnessInstallPlan", () => {
   });
 
   it("earns codex and cursor a fenced block in the instructions file each one reads", () => {
-    const plan = buildHarnessInstallPlan({ home: "/home/dev", detected: ["codex", "cursor"] });
+    const plan = buildHarnessInstallPlan({
+      home: "/home/dev",
+      adapters: [adapterFor("codex"), adapterFor("cursor")],
+    });
     const fenced = plan.filter((action) => action.kind === "fenced").map((action) => action.path);
     expect(fenced).toEqual(["/home/dev/.codex/AGENTS.md", "/home/dev/AGENTS.md"]);
   });
 
-  it("contributes nothing for a harness id with no registered adapter", () => {
-    const withCustom = buildHarnessInstallPlan({
-      home: "/home/dev",
-      detected: ["codex", parseHarnessId("my-harness") as HarnessId],
+  it("gives a registered adapter exactly what a built-in with the same surfaces gets", () => {
+    // The adapter a trusted manifest parses into — reachable by no id lookup,
+    // which is why this plan takes adapters at all.
+    const registered = bareAdapter({
+      surfaces: {
+        skillsDir: "{home}/.my-harness/skills",
+        commandsDir: null,
+        instructionsFile: "{home}/.my-harness/AGENTS.md",
+      },
     });
-    expect(withCustom).toEqual(buildHarnessInstallPlan({ home: "/home/dev", detected: ["codex"] }));
+    const plan = buildHarnessInstallPlan({ home: "/home/dev", adapters: [registered] });
+
+    expect(plan.slice(0, CANONICAL_SKILL_FILES).map((action) => action.path)).toEqual([
+      "/home/dev/.agents/skills/volli/SKILL.md",
+      "/home/dev/.agents/skills/volli/cli.md",
+      "/home/dev/.agents/skills/volli/orchestration.md",
+      "/home/dev/.agents/skills/volli/plugin.md",
+    ]);
+    expect(plan.slice(CANONICAL_SKILL_FILES)).toEqual([
+      {
+        kind: "symlink",
+        path: "/home/dev/.my-harness/skills/volli",
+        target: "/home/dev/.agents/skills/volli",
+        managed: true,
+      },
+      expect.objectContaining({ kind: "fenced", path: "/home/dev/.my-harness/AGENTS.md" }),
+    ]);
+  });
+
+  it("installs the canonical pack for a registered harness alone, with no built-in present", () => {
+    const registered = bareAdapter({
+      surfaces: { ...NO_SURFACES, commandsDir: "{home}/.my-harness/commands" },
+    });
+    expect(buildHarnessInstallPlan({ home: "/home/dev", adapters: [registered] })).toHaveLength(
+      CANONICAL_SKILL_FILES + 1,
+    );
   });
 
   it("normalizes a trailing home slash and de-duplicates harnesses", () => {
     const plan = buildHarnessInstallPlan({
       home: "/home/dev/",
-      detected: ["codex", "codex"],
+      adapters: [adapterFor("codex"), adapterFor("codex")],
     });
     expect(plan.filter((action) => action.path.includes(".codex"))).toHaveLength(2);
     expect(plan[0]?.path).toBe("/home/dev/.agents/skills/volli/SKILL.md");
+  });
+
+  it("de-duplicates two DIFFERENT harnesses that claim the same surface path", () => {
+    const surfaces = { ...NO_SURFACES, instructionsFile: "{home}/AGENTS.md" };
+    const plan = buildHarnessInstallPlan({
+      home: "/home/dev",
+      adapters: [
+        bareAdapter({ surfaces }),
+        bareAdapter({ id: parseHarnessId("other-harness") as HarnessId, surfaces }),
+      ],
+    });
+    expect(plan).toHaveLength(CANONICAL_SKILL_FILES + 1);
   });
 });
 

@@ -16,11 +16,18 @@ import {
   diffManagedContent,
   errorMessage,
   getHarnessAdapter,
+  harnessAdapters,
   resolveShell,
   ticketBranchName,
   VOLLI_USER_ZDOTDIR_ENV,
 } from "@volli/shared";
-import type { FirstPaintHint, HarnessId, ResolvedAppearance, VolliIpcEvent } from "@volli/shared";
+import type {
+  FirstPaintHint,
+  HarnessAdapter,
+  HarnessId,
+  ResolvedAppearance,
+  VolliIpcEvent,
+} from "@volli/shared";
 import type { ManagedConflict } from "./harness-install";
 import { isInternalNavigationTarget } from "./navigation";
 import type { DbHandle } from "./data-ipc";
@@ -62,7 +69,7 @@ import { startAgentSocket, type AgentSocketServer } from "./agent-socket";
 import { loginShellPath } from "./login-path";
 import {
   detectHarnesses,
-  installDetectedHarnessSkills,
+  installHarnessSkills,
   installGlobalCliLink,
   removeGlobalCliLinkIfOurs,
   resolveOnPath,
@@ -491,7 +498,7 @@ app.whenReady().then(async () => {
   // the socket bind; both start right after, still awaited inside whenReady with
   // the same failure semantics (logged, non-fatal). registerTerminalIpcHandlers
   // needs only runtimePaths (a pure join), so it can precede the window it feeds.
-  // Mutable on purpose: `harnessEnv` and `wrapperPaths` are filled in once the
+  // Mutable on purpose: `harnessEnv`, `wrapperPaths` and `adapters` are filled in once the
   // wrappers have been generated (below, after the shim they call back through
   // exists), and the manager reads this object per spawn rather than copying
   // it. A session created in the window before then simply launches unwrapped —
@@ -504,41 +511,71 @@ app.whenReady().then(async () => {
   let harnessRuntimeRefused: RefusedWrapper[] = [];
 
   /**
-   * Regenerates every generated thing the harness runtime owns: the wrappers,
-   * their per-harness config files, and the shell integration. Runs at boot and
-   * again behind `volli doctor --fix` — idempotent by construction, which is
-   * what lets `--fix` be offered without a confirmation.
+   * Every harness this host should be treated as having, and how sure we are of
+   * it: the built-ins the user's login shell can actually resolve, plus the
+   * manifests the user has registered and confirmed the bytes of.
+   *
+   * One answer, computed per pass and shared by everything that acts on "which
+   * harnesses exist" — the wrappers and the skill pack. Two independent
+   * derivations would eventually disagree, and the disagreement would look like
+   * a harness with a wrapper but no skill, or the reverse.
+   *
+   * `registered` comes back separately because removal spans more than
+   * existence does: uninstall has to name every harness that could have left
+   * files behind, not only the ones present now.
    */
-  const regenerateHarnessRuntime = async (): Promise<void> => {
+  const resolveHostAdapters = async (): Promise<{
+    adapters: HarnessAdapter[];
+    registered: readonly HarnessAdapter[];
+    census: "complete" | "partial";
+  }> => {
     // The user's login-shell PATH, not main's: a Dock launch inherits launchd's
     // four directories, where no harness has ever been installed. `null` means
     // the shell could not be asked, which is why it reaches the census below
     // rather than being flattened into an empty list.
     const detected = await detectHarnesses();
-    // A registered manifest joins the wrapper set exactly as a built-in does —
-    // and only once someone confirmed the bytes it is made of, which is why
-    // every manifest is re-read and re-hashed here rather than trusted because
-    // it was trusted last launch.
+    // A registered manifest joins this set exactly as a built-in does — and only
+    // once someone confirmed the bytes it is made of, which is why every
+    // manifest is re-read and re-hashed here rather than trusted because it was
+    // trusted last launch.
     const registered = dbHandle.ok
       ? trustedHarnessAdapters(
-          decideRegisteredHarnesses(dbHandle.db, await scanHarnessManifests(harnessesDir)),
+          decideRegisteredHarnesses(
+            dbHandle.db,
+            (await scanHarnessManifests(harnessesDir)).manifests,
+          ),
         )
       : [];
-    const runtime = await ensureHarnessRuntime({
-      binDir: runtimePaths.binDir,
-      harnessRoot: runtimePaths.harnessRoot,
-      socketPath: runtimePaths.socketPath,
-      shimPath,
+    return {
       adapters: [
         ...(detected ?? [])
           .map((id) => getHarnessAdapter(id))
           .filter((adapter) => adapter !== undefined),
         ...registered,
       ],
-      // Both halves have to have run before an absent wrapper means an absent
+      registered,
+      // Both halves have to have run before an absent harness means an absent
       // harness: detection answers for the built-ins, the db for the registered
       // manifests.
-      adapterCensus: detected !== null && dbHandle.ok ? "complete" : "partial",
+      census: detected !== null && dbHandle.ok ? "complete" : "partial",
+    };
+  };
+
+  /**
+   * Regenerates every generated thing the harness runtime owns: the wrappers,
+   * their per-harness config files, and the shell integration. Runs at boot and
+   * again behind `volli doctor --fix` — idempotent by construction, which is
+   * what lets `--fix` be offered without a confirmation.
+   */
+  const regenerateHarnessRuntime = async (): Promise<void> => {
+    const host = await resolveHostAdapters();
+    const runtime = await ensureHarnessRuntime({
+      binDir: runtimePaths.binDir,
+      harnessRoot: runtimePaths.harnessRoot,
+      socketPath: runtimePaths.socketPath,
+      shimPath,
+      adapters: host.adapters,
+      adapterCensus: host.census,
       // The same walk the wrapper does at run time, so a manifest whose command
       // would shadow a system tool is refused a wrapper rather than silently
       // put in front of it.
@@ -551,6 +588,10 @@ app.whenReady().then(async () => {
     // Where each wrapper landed, so a launch line names it by absolute path
     // instead of trusting a PATH the session's login shell rebuilds.
     agentRuntime.wrapperPaths = runtime.wrapperPaths;
+    // And what each of those wrappers is fronting, off this same pass: a launch
+    // line needs the harness's own prompt flag and resume argv, and a registered
+    // manifest's are knowable nowhere but here.
+    agentRuntime.adapters = host.adapters;
     harnessRuntimeRefused = runtime.refused;
     // And the other half: the startup chain that puts binDir back in front
     // after the user's own shell startup, so a harness the user types by hand
@@ -641,6 +682,10 @@ app.whenReady().then(async () => {
         socketPath: runtimePaths.socketPath,
         shimPath,
       }),
+    // A recorded verdict is inert on its own: until the wrappers, configs and
+    // shell chain are rebuilt from it, the harness the user just approved
+    // launches unconfigured and reports nothing.
+    regenerateRuntime: regenerateHarnessRuntime,
     now: Date.now,
   });
 
@@ -668,7 +713,13 @@ app.whenReady().then(async () => {
     // transient failure re-offers next boot instead of latching a broken state.
     let result;
     try {
-      result = await installDetectedHarnessSkills({ home: agentToolsHome });
+      // The same set the wrappers are generated from, so a registered manifest's
+      // declared surfaces earn it the skill pack the moment it is trusted —
+      // there is no second notion here of which harnesses this host has.
+      result = await installHarnessSkills({
+        home: agentToolsHome,
+        adapters: (await resolveHostAdapters()).adapters,
+      });
     } catch (error) {
       dialog.showErrorBox(
         "Agent Tools Installation Failed",
@@ -714,7 +765,13 @@ app.whenReady().then(async () => {
 
     let removal;
     try {
-      removal = await uninstallAllHarnessSkills({ home: agentToolsHome });
+      // Removal spans wider than existence: every built-in, whether or not it is
+      // installed today, plus every trusted manifest — a harness the user has
+      // since uninstalled still has Volli's files sitting in its dotfiles.
+      removal = await uninstallAllHarnessSkills({
+        home: agentToolsHome,
+        adapters: [...harnessAdapters, ...(await resolveHostAdapters()).registered],
+      });
     } catch (error) {
       dialog.showErrorBox(
         "Agent Tools Removal Failed",
@@ -785,9 +842,10 @@ app.whenReady().then(async () => {
                 ([, wrapperPath]) => [basename(wrapperPath), wrapperPath],
               ),
             ),
-            refused: harnessRuntimeRefused.map(({ command, resolvedPath }) => ({
+            refused: harnessRuntimeRefused.map(({ command, resolvedPath, reason }) => ({
               command,
               resolvedPath,
+              reason,
             })),
             shellInitDir: agentRuntime.shellEnv?.["ZDOTDIR"] ?? null,
             shellInitPresent: existsSync(join(runtimePaths.zdotDir, ".zlogin")),
@@ -871,7 +929,8 @@ app.whenReady().then(async () => {
       // resurface an admin prompt. Fully non-blocking and swallowed (logged) so a
       // failed refresh never blocks boot or spams dialogs; only a genuine
       // conflict warns.
-      void installDetectedHarnessSkills({ home: agentToolsHome })
+      void resolveHostAdapters()
+        .then((host) => installHarnessSkills({ home: agentToolsHome, adapters: host.adapters }))
         .then(async (result) => {
           if (result.conflicts.length > 0) await showSkillConflictWarning(result.conflicts);
         })

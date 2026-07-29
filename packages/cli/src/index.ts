@@ -140,6 +140,7 @@ async function main(): Promise<void> {
         // Boot counts: the harness started its own clock before this process
         // existed, and `process.uptime()` is the only place that time is legible.
         elapsedMs: () => Math.round(process.uptime() * 1000),
+        now: () => Date.now(),
         readStdin: readStdinPayload,
         request: (path, request, options) =>
           requestAgent(path, request, { timeoutMs: options?.timeoutMs ?? 10_000 }),

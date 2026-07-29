@@ -769,6 +769,7 @@ function reporting(event: HarnessEvent, startedAt = 90_000): SessionHarnessState
       startedAt,
     }),
     event,
+    null,
   );
 }
 
@@ -821,6 +822,7 @@ describe("buildActiveSessionListing — harness-reported attention", () => {
         startedAt: 90_000,
       }),
       "input.needed",
+      null,
     );
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "doing" })],
@@ -1028,6 +1030,7 @@ describe("buildActiveSessionListing — fed by the live harness channel", () => 
       event: "input.needed",
       harnessSessionId: null,
       at: 90_000,
+      firedAt: null,
     });
 
     const result = buildActiveSessionListing({

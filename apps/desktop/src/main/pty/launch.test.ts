@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
-import type { HarnessId, HarnessWrapperLookup } from "@volli/shared";
+import { getHarnessAdapter } from "@volli/shared";
+import type { HarnessAdapterLookup, HarnessId, HarnessWrapperLookup } from "@volli/shared";
 import { createAttachment } from "../db/attachments-repo";
 import { insertProject } from "../db/projects-repo";
 import { insertTicket } from "../db/tickets-repo";
@@ -48,12 +49,26 @@ const noWrapper: HarnessWrapperLookup = () => null;
 /** Every harness has a wrapper under Volli's own bin dir. */
 const wrapped: HarnessWrapperLookup = () => "/ud/bin/codex";
 
+/**
+ * The built-in adapters, which is the whole set these launch helpers ever see
+ * in a unit test — a registered manifest's adapter reaches them only through
+ * main's live harness runtime.
+ */
+const builtIns: HarnessAdapterLookup = getHarnessAdapter;
+
 describe("composeWorktreeLaunchCommand", () => {
   it("returns the pre-built resume line verbatim (no orientation preamble)", () => {
     setup();
     const worktree = worktreeScope({ resumeCommand: "claude --resume 'abc'" });
 
-    const line = composeWorktreeLaunchCommand(ctx.db, worktree, identity, "/wt/VC-1", noWrapper);
+    const line = composeWorktreeLaunchCommand(
+      ctx.db,
+      worktree,
+      identity,
+      "/wt/VC-1",
+      noWrapper,
+      builtIns,
+    );
     expect(line).toBe("claude --resume 'abc'");
   });
 
@@ -65,7 +80,14 @@ describe("composeWorktreeLaunchCommand", () => {
       kickoff: { harnessId: "codex" as HarnessId, prompt: "run tests" },
     });
 
-    const line = composeWorktreeLaunchCommand(ctx.db, worktree, identity, "/wt/VC-1", wrapped);
+    const line = composeWorktreeLaunchCommand(
+      ctx.db,
+      worktree,
+      identity,
+      "/wt/VC-1",
+      wrapped,
+      builtIns,
+    );
     expect(line).not.toBeNull();
     expect(line?.startsWith("'/ud/bin/codex' ")).toBe(true);
     expect(line).toContain("run tests");
@@ -77,7 +99,14 @@ describe("composeWorktreeLaunchCommand", () => {
       kickoff: { harnessId: "codex" as HarnessId, prompt: "run tests" },
     });
 
-    const line = composeWorktreeLaunchCommand(ctx.db, worktree, identity, "/wt/VC-1", noWrapper);
+    const line = composeWorktreeLaunchCommand(
+      ctx.db,
+      worktree,
+      identity,
+      "/wt/VC-1",
+      noWrapper,
+      builtIns,
+    );
     expect(line).not.toBeNull();
     expect(line).toContain("codex");
     expect(line).toContain("isolated git worktree");
@@ -99,7 +128,14 @@ describe("composeWorktreeLaunchCommand", () => {
       kickoff: { harnessId: "codex" as HarnessId, prompt: "run tests" },
     });
 
-    const line = composeWorktreeLaunchCommand(ctx.db, worktree, identity, "/wt/VC-1", noWrapper);
+    const line = composeWorktreeLaunchCommand(
+      ctx.db,
+      worktree,
+      identity,
+      "/wt/VC-1",
+      noWrapper,
+      builtIns,
+    );
     expect(line).not.toBeNull();
     expect(line).toContain("## Attachments");
     expect(line).toContain("https://example.com/design");
@@ -117,7 +153,14 @@ describe("composeWorktreeLaunchCommand", () => {
       baseBranch: "main",
     };
 
-    const line = composeWorktreeLaunchCommand(ctx.db, worktree, noBranch, "/wt/VC-1", noWrapper);
+    const line = composeWorktreeLaunchCommand(
+      ctx.db,
+      worktree,
+      noBranch,
+      "/wt/VC-1",
+      noWrapper,
+      builtIns,
+    );
     expect(line).not.toBeNull();
     expect(line).toContain("isolated git worktree");
     // The empty branch renders as bare backticks, never the string "null".
@@ -133,6 +176,7 @@ describe("composeWorktreeLaunchCommand", () => {
       identity,
       "/wt/VC-1",
       noWrapper,
+      builtIns,
     );
     expect(line).toBeNull();
   });

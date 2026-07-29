@@ -12,7 +12,8 @@
  *   3. suppression — the user's own `--resume` keeps the session id out,
  *   4. a missing VOLLI_HARNESS_ARGV_* still launches (no empty word, no error),
  *   5. VOLLI_HARNESS_BIN_* names the real binary outright,
- *   6. an unresolvable binary exits 127 loudly instead of passing through.
+ *   6. with nothing pinned and nothing on PATH, exits 127 loudly instead of
+ *      passing through.
  *
  * The environment is not recomputed here — it is read out of a live Volli PTY
  * (`printenv > file`, so a terminal's line wrapping can't corrupt the settings
@@ -195,7 +196,10 @@ async function main() {
       const ok =
         mode === 0o755 &&
         sessionEnv.VOLLI_SESSION.length > 0 &&
-        sessionEnv.VOLLI_HARNESS_ARGV_CLAUDE_CODE.startsWith("'--settings' '{");
+        // One word per line, unquoted: the wrapper field-splits this on
+        // newlines rather than parsing it, so a quoted payload here would be a
+        // payload the harness receives with its quotes still on.
+        sessionEnv.VOLLI_HARNESS_ARGV_CLAUDE_CODE.startsWith("--settings\n{");
       return { ok, detail: `mode=${mode.toString(8)} session=${sessionEnv.VOLLI_SESSION}` };
     });
 
@@ -275,13 +279,25 @@ async function main() {
     });
 
     // === 6. nothing to exec =================================================
+    // An empty PATH is no longer enough to reach this branch, and that is the
+    // point of the pin: main baked the binary it resolved into the wrapper, so
+    // the file a human approved runs whatever the session's PATH became. So the
+    // premise has to be the real one — the pinned file is GONE (uninstalled,
+    // moved) AND the walk finds nothing either.
     await attempt(6, "fails loudly rather than silently passing through", async () => {
-      const run = await runWrapper(wrapperPath, ["hello"], {
-        PATH: "/nonexistent",
-        VOLLI_SESSION: base.VOLLI_SESSION,
-      });
-      const ok = run.code === 127 && run.stderr.includes("volli: cannot find");
-      return { ok, detail: `code=${run.code} stderr=${JSON.stringify(run.stderr.trim())}` };
+      const pinned = join(fakeBin, "claude");
+      const hidden = `${pinned}.moved`;
+      await fs.rename(pinned, hidden);
+      try {
+        const run = await runWrapper(wrapperPath, ["hello"], {
+          PATH: "/nonexistent",
+          VOLLI_SESSION: base.VOLLI_SESSION,
+        });
+        const ok = run.code === 127 && run.stderr.includes("volli: cannot find");
+        return { ok, detail: `code=${run.code} stderr=${JSON.stringify(run.stderr.trim())}` };
+      } finally {
+        await fs.rename(hidden, pinned);
+      }
     });
 
     // === 7-8. the reporting half, end to end ==============================

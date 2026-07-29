@@ -1,17 +1,21 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { HarnessId } from "@volli/shared";
 
 import {
   decideRegisteredHarnesses,
+  MAX_MANIFEST_BYTES,
+  MAX_SCANNED_HARNESS_DIRS,
   recordHarnessDelivery,
   scanHarnessManifests,
   trustedHarnessAdapters,
 } from "./harness-registry";
+import type { HarnessManifestScan, ScannedHarnessManifest } from "./harness-registry";
+import { ensureHarnessRuntime } from "./harness-runtime";
 import { getRegisteredHarness, recordHarnessTrust } from "./db/harness-registry-repo";
 import { openTestDb, type TestDb } from "./db/test-helpers";
 
@@ -48,11 +52,18 @@ async function write(dir: string, body: unknown): Promise<string> {
   return path;
 }
 
+const harnessesDir = (): string => join(root, "harnesses");
+
+/** The manifests one scan read. Its `gap` is asserted directly where the gap is the subject. */
+async function scanManifests(): Promise<ScannedHarnessManifest[]> {
+  return (await scanHarnessManifests(harnessesDir())).manifests;
+}
+
 describe("scanHarnessManifests", () => {
   it("reads a manifest into an adapter, alongside the hash of the bytes it read", async () => {
     const path = await write("my-harness", manifest());
 
-    const [scanned, ...rest] = await scanHarnessManifests(join(root, "harnesses"));
+    const [scanned, ...rest] = await scanManifests();
 
     expect(rest).toEqual([]);
     expect(scanned?.slug).toBe("my-harness");
@@ -63,18 +74,20 @@ describe("scanHarnessManifests", () => {
   });
 
   it("finds nothing when nobody has registered a harness", async () => {
-    expect(await scanHarnessManifests(join(root, "harnesses"))).toEqual([]);
+    // Measured, and measured empty: the whole point of the gap is that this is
+    // not the same value a failure produces.
+    expect(await scanHarnessManifests(harnessesDir())).toEqual({ manifests: [], gap: null });
   });
 
   it("ignores a directory that holds no manifest", async () => {
     await mkdir(join(root, "harnesses", "empty"), { recursive: true });
-    expect(await scanHarnessManifests(join(root, "harnesses"))).toEqual([]);
+    expect(await scanHarnessManifests(harnessesDir())).toEqual({ manifests: [], gap: null });
   });
 
   it("reports unreadable JSON against the document rather than throwing at boot", async () => {
     await write("my-harness", "{ not json");
 
-    const [scanned] = await scanHarnessManifests(join(root, "harnesses"));
+    const [scanned] = await scanManifests();
 
     expect(scanned?.adapter).toBeNull();
     expect(scanned?.errors).toEqual([{ path: "", message: "must be readable JSON" }]);
@@ -83,7 +96,7 @@ describe("scanHarnessManifests", () => {
   it("keeps a hash for an invalid manifest, so fixing it counts as a change", async () => {
     await write("my-harness", manifest({ command: "/usr/bin/my-harness" }));
 
-    const [scanned] = await scanHarnessManifests(join(root, "harnesses"));
+    const [scanned] = await scanManifests();
 
     expect(scanned?.adapter).toBeNull();
     expect(scanned?.errors.map((error) => error.path)).toEqual(["command"]);
@@ -93,7 +106,7 @@ describe("scanHarnessManifests", () => {
   it("refuses a manifest whose slug is not the directory it was found in", async () => {
     await write("other-name", manifest());
 
-    const [scanned] = await scanHarnessManifests(join(root, "harnesses"));
+    const [scanned] = await scanManifests();
 
     expect(scanned?.adapter).toBeNull();
     expect(scanned?.errors).toEqual([
@@ -105,16 +118,147 @@ describe("scanHarnessManifests", () => {
     await write("b-harness", manifest({ slug: "b-harness", command: "b-harness" }));
     await write("a-harness", manifest({ slug: "a-harness", command: "a-harness" }));
 
-    const scanned = await scanHarnessManifests(join(root, "harnesses"));
+    const scanned = await scanManifests();
 
     expect(scanned.map((entry) => entry.slug)).toEqual(["a-harness", "b-harness"]);
+  });
+});
+
+describe("scanHarnessManifests — a scan that could not see everything", () => {
+  let warn: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warn.mockRestore();
+  });
+
+  it("does not report a directory it could not list as a directory with nothing in it", async () => {
+    // A file where the directory should be: ENOTDIR, the same shape as the
+    // EACCES/EMFILE/EIO this is really about, without depending on which user
+    // the suite runs as.
+    await writeFile(harnessesDir(), "", "utf8");
+
+    expect(await scanHarnessManifests(harnessesDir())).toEqual({
+      manifests: [],
+      gap: "directory-unreadable",
+    });
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it("does not report a manifest it could not read as a harness that is gone", async () => {
+    await write("readable", manifest({ slug: "readable", command: "readable" }));
+    // A manifest that points at itself: ELOOP, which is the same class of answer
+    // as the EACCES/EMFILE this is really about and needs no special user.
+    const looping = join(harnessesDir(), "blocked", "harness.json");
+    await mkdir(join(harnessesDir(), "blocked"), { recursive: true });
+    await symlink(looping, looping);
+
+    const scan = await scanHarnessManifests(harnessesDir());
+
+    // What it could read, it still reports — and it still says it read less than
+    // there was, which is what disqualifies the whole scan as a census.
+    expect(scan.manifests.map((entry) => entry.slug)).toEqual(["readable"]);
+    expect(scan.gap).toBe("manifest-unreadable");
+  });
+
+  it("stops at the ceiling and names what it skipped rather than capping in silence", async () => {
+    const slugs = Array.from({ length: MAX_SCANNED_HARNESS_DIRS + 2 }, (_, index) =>
+      // Zero-padded so directory order is the order the names imply.
+      "h".concat(String(index).padStart(3, "0")),
+    );
+    for (const slug of slugs) await write(slug, manifest({ slug, command: slug }));
+
+    const scan = await scanHarnessManifests(harnessesDir());
+
+    expect(scan.manifests).toHaveLength(MAX_SCANNED_HARNESS_DIRS);
+    expect(scan.gap).toBe("too-many-manifests");
+    const logged = warn.mock.calls.flat().join(" ");
+    for (const skipped of slugs.slice(MAX_SCANNED_HARNESS_DIRS)) {
+      expect(logged).toContain(skipped);
+    }
+  });
+
+  it("refuses a file too large to be a manifest, and says so — but that is a measurement", async () => {
+    await write("huge", "x".repeat(MAX_MANIFEST_BYTES + 1));
+
+    const scan = await scanHarnessManifests(harnessesDir());
+
+    // Nothing here could not be measured: the file was seen and rejected, so a
+    // caller reconciling wrappers is right to treat this harness as absent.
+    expect(scan).toEqual({ manifests: [], gap: null });
+    expect(warn.mock.calls.flat().join(" ")).toContain("huge");
+  });
+});
+
+/**
+ * The census `index.ts` derives, mirrored: `detected !== null && dbHandle.ok &&
+ * scan.gap === null`. It is inlined here because that expression is exactly what
+ * a failed scan must never be able to make "complete", and the wrapper sweep is
+ * what happens when it does.
+ */
+function censusFor(scan: HarnessManifestScan): "complete" | "partial" {
+  return scan.gap === null ? "complete" : "partial";
+}
+
+describe("a scan that failed cannot authorize a cleanup", () => {
+  it("keeps the wrappers of every registered harness when the manifest directory would not read", async () => {
+    const binDir = join(root, "bin");
+    await mkdir(binDir, { recursive: true });
+    // What last boot left behind for a registered harness the user trusted.
+    await writeFile(join(binDir, "my-harness"), "#!/bin/sh\n# volli wrapper\n", { mode: 0o755 });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await writeFile(harnessesDir(), "", "utf8"); // the transient blip
+
+    const scan = await scanHarnessManifests(harnessesDir());
+    const runtime = await ensureHarnessRuntime({
+      binDir,
+      harnessRoot: join(root, "harness"),
+      socketPath: join(root, "volli.sock"),
+      shimPath: join(binDir, "volli"),
+      // The scan yielded nothing, so there is nothing to trust and nothing to
+      // write — the exact shape in which a wrapper sweep would find every
+      // wrapper on disk unaccounted for.
+      adapters: trustedHarnessAdapters(decideRegisteredHarnesses(fixture.db, scan.manifests)),
+      adapterCensus: censusFor(scan),
+      resolveCommand: () => Promise.resolve(null),
+    });
+    warn.mockRestore();
+
+    expect(scan.gap).toBe("directory-unreadable");
+    expect(censusFor(scan)).toBe("partial");
+    expect(runtime.wrappers).toEqual([]);
+    expect(await readFile(join(binDir, "my-harness"), "utf8")).toContain("# volli wrapper");
+  });
+
+  it("removes the same wrapper once the directory reads and the harness really is gone", async () => {
+    const binDir = join(root, "bin");
+    await mkdir(binDir, { recursive: true });
+    await writeFile(join(binDir, "my-harness"), "#!/bin/sh\n# volli wrapper\n", { mode: 0o755 });
+    await mkdir(harnessesDir(), { recursive: true }); // measured, and genuinely empty
+
+    const scan = await scanHarnessManifests(harnessesDir());
+    await ensureHarnessRuntime({
+      binDir,
+      harnessRoot: join(root, "harness"),
+      socketPath: join(root, "volli.sock"),
+      shimPath: join(binDir, "volli"),
+      adapters: [],
+      adapterCensus: censusFor(scan),
+      resolveCommand: () => Promise.resolve(null),
+    });
+
+    expect(censusFor(scan)).toBe("complete");
+    await expect(readFile(join(binDir, "my-harness"), "utf8")).rejects.toThrow();
   });
 });
 
 describe("decideRegisteredHarnesses", () => {
   it("holds a manifest nobody has confirmed, whatever it declares", async () => {
     await write("my-harness", manifest());
-    const scanned = await scanHarnessManifests(join(root, "harnesses"));
+    const scanned = await scanManifests();
 
     const decided = decideRegisteredHarnesses(fixture.db, scanned);
 
@@ -124,7 +268,7 @@ describe("decideRegisteredHarnesses", () => {
 
   it("launches a manifest whose exact bytes were trusted", async () => {
     await write("my-harness", manifest());
-    const scanned = await scanHarnessManifests(join(root, "harnesses"));
+    const scanned = await scanManifests();
     recordHarnessTrust(
       fixture.db,
       {
@@ -145,7 +289,7 @@ describe("decideRegisteredHarnesses", () => {
 
   it("holds a trusted manifest again once a byte of it changes", async () => {
     await write("my-harness", manifest());
-    const before = await scanHarnessManifests(join(root, "harnesses"));
+    const before = await scanManifests();
     recordHarnessTrust(
       fixture.db,
       {
@@ -159,10 +303,7 @@ describe("decideRegisteredHarnesses", () => {
     );
     await write("my-harness", manifest({ label: "My Harness (edited)" }));
 
-    const decided = decideRegisteredHarnesses(
-      fixture.db,
-      await scanHarnessManifests(join(root, "harnesses")),
-    );
+    const decided = decideRegisteredHarnesses(fixture.db, await scanManifests());
 
     expect(decided[0]?.decision).toBe("reconfirm");
     expect(trustedHarnessAdapters(decided)).toEqual([]);
@@ -170,7 +311,7 @@ describe("decideRegisteredHarnesses", () => {
 
   it("never launches a manifest that does not parse, however it was ruled on", async () => {
     await write("my-harness", manifest({ command: "volli" }));
-    const scanned = await scanHarnessManifests(join(root, "harnesses"));
+    const scanned = await scanManifests();
     recordHarnessTrust(
       fixture.db,
       {
@@ -191,7 +332,7 @@ describe("decideRegisteredHarnesses", () => {
 
   it("keeps refusing a manifest the user blocked", async () => {
     await write("my-harness", manifest());
-    const scanned = await scanHarnessManifests(join(root, "harnesses"));
+    const scanned = await scanManifests();
     recordHarnessTrust(
       fixture.db,
       {

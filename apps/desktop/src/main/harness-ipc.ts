@@ -19,9 +19,18 @@
  *  - **The disk is re-read on every call.** Nothing is cached between the
  *    question and the answer, because the cache would be exactly the window an
  *    edit could slip through.
+ *  - **A verdict and the files generated from it land together, or neither
+ *    does.** Recording "trusted" changes nothing a launch can see; the wrappers
+ *    do. See {@link HarnessIpcDeps.regenerateRuntime}.
  */
 
-import { harnessTrustPrompt, HARNESS_CHANNELS, HARNESS_IPC, supportedEvents } from "@volli/shared";
+import {
+  errorMessage,
+  harnessTrustPrompt,
+  HARNESS_CHANNELS,
+  HARNESS_IPC,
+  supportedEvents,
+} from "@volli/shared";
 import type {
   HarnessAdapter,
   HarnessIpcChannel,
@@ -32,7 +41,11 @@ import type {
 } from "@volli/shared";
 
 import type { DbHandle } from "./data-ipc";
-import { recordHarnessTrust } from "./db/harness-registry-repo";
+import {
+  getRegisteredHarness,
+  recordHarnessTrust,
+  restoreRegisteredHarness,
+} from "./db/harness-registry-repo";
 import { decideRegisteredHarnesses, scanHarnessManifests } from "./harness-registry";
 import type { DecidedHarnessManifest } from "./harness-registry";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
@@ -49,6 +62,18 @@ export interface HarnessIpcDeps {
   resolveBinary(command: string): Promise<string | null>;
   /** The words a launch of `adapter` prepends — see `harnessLaunchArgv`. */
   launchArgv(adapter: HarnessAdapter): readonly string[];
+  /**
+   * Regenerates everything derived from the recorded verdicts: the PATH
+   * wrappers, the per-harness config files, the shell chain — main's
+   * `regenerateHarnessRuntime`, the same work boot and `volli doctor --fix` do.
+   *
+   * A verdict on its own is inert. Until this has run, the harness the user just
+   * approved has no wrapper, so it launches unconfigured and reports nothing —
+   * and the app says nothing about the difference. That is why it is a
+   * dependency of this surface rather than something a caller may remember to do
+   * afterwards, why it is awaited, and why a rejection here fails the write.
+   */
+  regenerateRuntime(): Promise<void>;
   now(): number;
 }
 
@@ -97,13 +122,25 @@ export function registerHarnessIpcHandlers(handle: DbHandle, deps: HarnessIpcDep
 
   const handlers: IpcHandlerTable<HarnessIpcChannel> = {
     "volli:harness-pending": async (): Promise<HarnessPendingResult> => {
-      const decided = decideRegisteredHarnesses(db, await scanHarnessManifests(deps.harnessesDir));
+      const scan = await scanHarnessManifests(deps.harnessesDir);
+      // A directory that would not open measured nothing, and "nothing is
+      // pending" is not what nothing measured means — it is the answer that
+      // hides a harness waiting on a human. A truncated or partly unreadable
+      // scan still answers with what it read: this list is what is waiting, not
+      // a claim about everything that exists.
+      if (scan.gap === "directory-unreadable") {
+        return { ok: false, error: `Could not read ${deps.harnessesDir}.` };
+      }
+      const decided = decideRegisteredHarnesses(db, scan.manifests);
       return { ok: true, pending: await pendingManifests(decided, deps) };
     },
 
     "volli:harness-trust-set": async (input: HarnessTrustSetInput): Promise<Result> => {
-      const scanned = await scanHarnessManifests(deps.harnessesDir);
-      const entry = scanned.find((manifest) => manifest.slug === input.slug);
+      const scan = await scanHarnessManifests(deps.harnessesDir);
+      if (scan.gap === "directory-unreadable") {
+        return { ok: false, error: `Could not read ${deps.harnessesDir}.` };
+      }
+      const entry = scan.manifests.find((manifest) => manifest.slug === input.slug);
       if (entry === undefined) {
         return { ok: false, error: `No harness manifest for ${input.slug}.` };
       }
@@ -116,6 +153,11 @@ export function registerHarnessIpcHandlers(handle: DbHandle, deps: HarnessIpcDep
       if (entry.adapter === null) {
         return { ok: false, error: `${input.slug} isn't a valid manifest.` };
       }
+      // The write has to come first: the regeneration reads the trusted set back
+      // out of the db, so a verdict that is not committed yet is a verdict the
+      // wrappers cannot be built from. Which makes the row, briefly, ahead of
+      // the world it describes — hence the undo below.
+      const previous = getRegisteredHarness(db, entry.slug);
       recordHarnessTrust(
         db,
         {
@@ -127,6 +169,24 @@ export function registerHarnessIpcHandlers(handle: DbHandle, deps: HarnessIpcDep
         },
         deps.now(),
       );
+      try {
+        await deps.regenerateRuntime();
+      } catch (error) {
+        // Rolled back rather than reported and left standing, because the state
+        // it would be left in is the dishonest one: a row reading "trusted" with
+        // no wrapper behind it drops off the pending list, so the surface stops
+        // asking about a harness that still cannot launch, and nothing in the app
+        // distinguishes it from one that works. Restoring the previous verdict
+        // puts the manifest back where it was — pending, and asked about again —
+        // which is what "the decision did not take" actually looks like. The same
+        // holds for a block: an unapplied one leaves the wrapper on disk, so the
+        // db must not claim otherwise.
+        restoreRegisteredHarness(db, entry.slug, previous);
+        return {
+          ok: false,
+          error: `${input.slug} could not be set up, so the decision was not kept: ${errorMessage(error)}`,
+        };
+      }
       return { ok: true };
     },
   };

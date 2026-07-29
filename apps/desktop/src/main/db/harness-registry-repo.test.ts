@@ -5,6 +5,7 @@ import {
   listRegisteredHarnesses,
   markHarnessEventVerified,
   recordHarnessTrust,
+  restoreRegisteredHarness,
 } from "./harness-registry-repo";
 import { openTestDb, type TestDb } from "./test-helpers";
 
@@ -94,6 +95,39 @@ describe("recordHarnessTrust", () => {
       "my-harness",
       "other",
     ]);
+  });
+});
+
+describe("restoreRegisteredHarness", () => {
+  it("removes the row entirely when there was nothing there before", () => {
+    recordHarnessTrust(fixture.db, manifest, 1000);
+
+    restoreRegisteredHarness(fixture.db, "my-harness", undefined);
+
+    expect(getRegisteredHarness(fixture.db, "my-harness")).toBeUndefined();
+  });
+
+  it("puts every column back, so a rolled-back write leaves no trace", () => {
+    recordHarnessTrust(fixture.db, manifest, 1000);
+    markHarnessEventVerified(fixture.db, "my-harness", "input.needed", 1100);
+    const before = getRegisteredHarness(fixture.db, "my-harness");
+    // The write being undone: a different verdict about different bytes, which
+    // moves the decision, the hash, the timestamps and the ledger at once.
+    recordHarnessTrust(
+      fixture.db,
+      { ...manifest, manifestSha256: "b2", decision: "blocked" },
+      1200,
+    );
+
+    restoreRegisteredHarness(fixture.db, "my-harness", before);
+
+    expect(getRegisteredHarness(fixture.db, "my-harness")).toEqual(before);
+  });
+
+  it("is a no-op on a harness that was never registered", () => {
+    restoreRegisteredHarness(fixture.db, "ghost", undefined);
+
+    expect(listRegisteredHarnesses(fixture.db)).toEqual([]);
   });
 });
 

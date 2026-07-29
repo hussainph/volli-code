@@ -3,10 +3,18 @@ import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import type Database from "better-sqlite3";
-import { agentSessionEnv, createSessionRecord, errorMessage, resolveShell } from "@volli/shared";
+import {
+  agentSessionEnv,
+  createSessionRecord,
+  errorMessage,
+  getHarnessAdapter,
+  resolveShell,
+} from "@volli/shared";
 import type {
   CreateTerminalSessionRequest,
   CreateTerminalSessionResult,
+  HarnessAdapter,
+  HarnessAdapterLookup,
   HarnessId,
   HarnessWrapperLookup,
   HarnessWrapperPath,
@@ -203,6 +211,18 @@ export class PtyManager {
     wrapperPathFor(this.agentRuntime ?? undefined, harnessId);
 
   /**
+   * Which adapter a harness id names for this launch — read at call time for
+   * the same reason {@link wrapperFor} is: the merged built-in + trusted set
+   * lands on `agentRuntime` only once the harness runtime has regenerated, and
+   * a session created before that still has to launch. Falling back to the
+   * built-ins is what makes that early session correct rather than adapterless;
+   * a registered harness simply cannot be the one launching that early.
+   */
+  private readonly adapterFor: HarnessAdapterLookup = (harnessId) =>
+    this.agentRuntime?.adapters?.find((adapter) => adapter.id === harnessId) ??
+    getHarnessAdapter(harnessId);
+
+  /**
    * Lazy dynamic import of node-pty. Isolated in a method so tests can
    * `vi.mock("node-pty")` and so the native module is touched only when a
    * session is actually created.
@@ -218,7 +238,13 @@ export class PtyManager {
     const db = this.db;
     if (db === null) return { ok: false, error: this.dbError };
 
-    const resolved = resolveScope(db, request, this.attachmentsRootPath, this.wrapperFor);
+    const resolved = resolveScope(
+      db,
+      request,
+      this.attachmentsRootPath,
+      this.wrapperFor,
+      this.adapterFor,
+    );
     if (!resolved.ok) return resolved;
     const scope = resolved.scope;
 
@@ -307,7 +333,10 @@ export class PtyManager {
       const now = Date.now();
       // The harness configuration goes UNDER the agent contract, so nothing a
       // wrapper reads can shadow VOLLI_SESSION/VOLLI_SOCKET/PATH — the three
-      // values every `volli` invocation in this shell resolves itself by.
+      // values every `volli` invocation in this shell resolves itself by. What
+      // rides along is only what a wrapper reads BEFORE it runs (its argv, its
+      // binary override); a harness's own configuration is exported by that
+      // harness's wrapper, so it is in scope for one process rather than all.
       //
       // `agentSessionEnv`'s PATH prepend is the value the shell STARTS with;
       // the shell chain in `shellEnv` is what puts it back in front once the
@@ -463,6 +492,7 @@ export class PtyManager {
           identity,
           cwd,
           this.wrapperFor,
+          this.adapterFor,
         );
         const setupCommand = worktree.setupCommand?.trim() ?? "";
         if (worktreeOutcome.created && setupCommand.length > 0) {
@@ -816,12 +846,15 @@ export interface AgentRuntimeEnvironment {
   socketPath: string;
   binDir: string;
   /**
-   * The harness launch configuration every wrapper in `binDir` reads at run
-   * time — `VOLLI_HARNESS_ARGV_<SLUG>` plus the config-pointing variables
-   * cursor and opencode take. Session-independent by construction (the harness
-   * session id is `VOLLI_SESSION`, applied by the wrapper, not built into the
-   * config), so one map covers every session; empty when no harness is
-   * installed.
+   * What the wrappers in `binDir` READ at run time: `VOLLI_HARNESS_ARGV_<SLUG>`,
+   * one namespaced variable per harness. Nothing a HARNESS reads is here — a
+   * config variable like `OPENCODE_CONFIG` is exported by opencode's own wrapper
+   * one step before its exec, because a variable that configures one harness has
+   * no business being set in every terminal that never runs it.
+   *
+   * Session-independent by construction (the harness session id is
+   * `VOLLI_SESSION`, applied by the wrapper, not built into the config), so one
+   * map covers every session; empty when no harness is installed.
    */
   harnessEnv?: Readonly<Record<string, string>>;
   /**
@@ -833,6 +866,16 @@ export interface AgentRuntimeEnvironment {
    * assuming a hit.
    */
   wrapperPaths?: ReadonlyMap<HarnessId, string>;
+  /**
+   * Every harness this host is treated as having — the detected built-ins plus
+   * the manifests the user registered and whose bytes were confirmed — so a
+   * launch line can be built from what the harness actually declares. Filled in
+   * alongside {@link wrapperPaths}, off the SAME resolution, because a wrapper
+   * and the flags fed through it must never come from two different ideas of
+   * which harnesses exist. Absent until then, which is why the lookup falls
+   * back to the built-ins rather than to nothing.
+   */
+  adapters?: readonly HarnessAdapter[];
   /**
    * What activates the generated zsh startup chain (`ZDOTDIR` and friends), so
    * a harness the user types by hand resolves to the wrapper too. Empty for a

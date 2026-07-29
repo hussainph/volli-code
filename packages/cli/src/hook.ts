@@ -15,6 +15,13 @@
  * Main is the authority on the canonical event vocabulary; this forwards what
  * it was given and lets that one door refuse. A second refusal here would be a
  * second copy of the union to drift from.
+ *
+ * The one thing it adds rather than forwards is `firedAt`, the moment this
+ * process started. Only the firing end can supply it: by the time an event
+ * reaches main it has raced every other hook through a boot and a connect, and
+ * arrival order is no longer the order the harness fired in. See
+ * `HarnessEventOrder` in `@volli/shared` for what that stamp does and does not
+ * prove.
  */
 import { harnessAdapters } from "@volli/shared";
 import type { AgentRequest, AgentResponse } from "@volli/shared";
@@ -135,6 +142,8 @@ export interface HookDependencies {
   cwd(): string;
   /** Milliseconds since this process started — boot included, since the harness counts it. */
   elapsedMs(): number;
+  /** The wall clock, read only to date this process's own start. */
+  now(): number;
   /** The hook payload, for the harnesses that deliver it on stdin. Bounded by `timeoutMs`. */
   readStdin(timeoutMs: number): Promise<string>;
   request(
@@ -174,6 +183,14 @@ export async function runHook(rest: readonly string[], deps: HookDependencies): 
     if (invocation === null) return 0;
     const socketPath = invocation.socketPath ?? deps.env["VOLLI_SOCKET"];
     if (socketPath === undefined || socketPath.length === 0) return 0;
+    // When this process STARTED, not when it gets around to sending. Everything
+    // between the two — a Node boot, a stdin read that waits on a harness, a
+    // connect — is exactly the variable latency that reorders two hooks fired a
+    // millisecond apart, so a send-time stamp would carry the same lie main's
+    // arrival stamp already carries. Derived by subtraction because uptime is
+    // the only place this process's own start is legible; the rounding is
+    // milliseconds, which is the resolution of the whole scheme anyway.
+    const firedAt = deps.now() - deps.elapsedMs();
     const remainingMs = (): number => HOOK_BUDGET_MS - deps.elapsedMs();
     // Boot alone can outlast the budget on a cold machine. Reporting then would
     // land after the harness had given up, so it is not reported at all.
@@ -191,6 +208,7 @@ export async function runHook(rest: readonly string[], deps: HookDependencies): 
         args: {
           harness: invocation.harness,
           event: invocation.event,
+          firedAt,
           ...(harnessSessionId === null ? {} : { harnessSessionId }),
         },
         ctx: { cwd: currentDirectory(deps), env: { socket: socketPath, session } },

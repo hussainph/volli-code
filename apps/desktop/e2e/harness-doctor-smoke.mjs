@@ -43,13 +43,14 @@ async function main() {
     const page = await app.firstWindow();
     await page.waitForLoadState("domcontentloaded");
 
-    // The app canonicalizes its userData path (/tmp → /private/tmp on macOS).
-    let realUserData = userDataDir;
+    // Nothing below needs the shim's path — only that it EXISTS, since a doctor
+    // run that beat the generator would report an install that was merely late.
+    // Both candidates are tried because the app may or may not have nested a
+    // product directory under the profile it was handed.
     await waitUntil("the generated shim", async () => {
       for (const candidate of [userDataDir, join(userDataDir, "Volli Code")]) {
         try {
           await fs.stat(join(candidate, "bin", "volli"));
-          realUserData = await fs.realpath(candidate);
           return true;
         } catch {
           /* try the next candidate */

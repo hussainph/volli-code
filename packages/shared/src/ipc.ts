@@ -12,7 +12,7 @@ import type { DirEntry } from "./fs-entries";
 import type { Label } from "./label";
 import type { LegacyProject } from "./legacy-import";
 import type { Project } from "./project-identity";
-import type { SessionRecord } from "./session";
+import type { HarnessEventOrder, SessionRecord } from "./session";
 import type {
   CreateTerminalSessionRequest,
   CreateTerminalSessionResult,
@@ -813,6 +813,17 @@ export interface HarnessEventNotice {
   harnessSessionId: string | null;
   /** Epoch ms the event was ingested (main's clock, never the harness's). */
   at: number;
+  /**
+   * Epoch ms the hook process that reported this event STARTED, off that
+   * process's own wall clock — {@link HarnessEventOrder}, and the only field on
+   * this notice that says anything about the order the harness fired things in.
+   * `null` when the delivery carried none, which an older `volli` always will.
+   *
+   * `at` is deliberately not that field and cannot be made into it: each event
+   * arrives on its own short-lived process over its own connection, so arrival
+   * order is a property of the races between them rather than of the agent.
+   */
+  firedAt: HarnessEventOrder;
 }
 
 /**

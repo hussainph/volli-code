@@ -18,6 +18,7 @@ function deps(overrides: Partial<Parameters<typeof runHook>[1]> = {}) {
     env: { VOLLI_SESSION: "session-7", VOLLI_SOCKET: "/profiles/volli.sock" },
     cwd: () => "/work/volli",
     elapsedMs: () => 0,
+    now: () => 1_700_000_000_000,
     readStdin: async (timeoutMs) => {
       recorded.stdinReads += 1;
       recorded.budgets.push(timeoutMs);
@@ -57,6 +58,7 @@ describe("runHook", () => {
         args: {
           harness: "claude-code",
           event: "turn.completed",
+          firedAt: 1_700_000_000_000,
           harnessSessionId: "cc-uuid",
         },
         ctx: { cwd: "/work/volli", env: { socket: "/sock", session: "session-7" } },
@@ -89,7 +91,11 @@ describe("runHook", () => {
     for (const payload of payloads) {
       const { recorded, dependencies } = deps({ readStdin: async () => payload });
       await runHook(["cursor", "turn.started"], dependencies);
-      expect(recorded.requests[0]?.args).toEqual({ harness: "cursor", event: "turn.started" });
+      expect(recorded.requests[0]?.args).toEqual({
+        harness: "cursor",
+        event: "turn.started",
+        firedAt: 1_700_000_000_000,
+      });
     }
   });
 
@@ -146,6 +152,21 @@ describe("runHook", () => {
     const total = 250 + recorded.budgets.reduce((sum, budget) => sum + budget, 0);
     expect(recorded.budgets).toHaveLength(2);
     expect(total).toBeLessThan(SHORTEST_DECLARED_HOOK_TIMEOUT_MS);
+  });
+
+  it("stamps when this process started, not when it got around to sending", async () => {
+    // The whole worth of the stamp is that it predates the boot, the stdin read
+    // and the connect — the variable latency that reorders two hooks fired a
+    // millisecond apart. A send-time stamp would carry the same lie main's
+    // arrival clock already carries, and buy nothing.
+    const { recorded, dependencies } = deps({
+      elapsedMs: () => 250,
+      now: () => 1_700_000_000_250,
+    });
+
+    await runHook(["claude-code", "input.needed"], dependencies);
+
+    expect(recorded.requests[0]?.args["firedAt"]).toBe(1_700_000_000_000);
   });
 
   it("charges a slow boot to itself rather than to the harness's patience", async () => {

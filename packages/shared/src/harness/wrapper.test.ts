@@ -6,6 +6,7 @@ import { renderWrapperScript } from "./wrapper";
 import type { HarnessAdapter } from "./types";
 
 const BIN_DIR = "/Users/dev/Library/Application Support/Volli/bin";
+const BARE = { binDir: BIN_DIR, binaryPath: null, env: {} } as const;
 
 function adapterFor(id: string): HarnessAdapter {
   const found = getHarnessAdapter(id as HarnessId);
@@ -31,17 +32,15 @@ function bareAdapter(overrides: Partial<HarnessAdapter> = {}): HarnessAdapter {
 }
 
 /**
- * These assert the script's TEXT, which cannot tell whether its shell quoting
- * actually holds. The rendered wrappers were run against `/bin/sh` by hand for
- * all six paths — passthrough with `VOLLI_SESSION` unset; injection inside a
- * session; suppression when the user's argv drives resume; a missing
- * `VOLLI_HARNESS_ARGV_*`; a `VOLLI_HARNESS_BIN_*` override; and an unresolvable
- * binary exiting 127 — but a standing execution smoke belongs in
- * `apps/desktop/e2e/`, where running a shell is allowed. This package may not
+ * These assert the script's TEXT, which cannot tell whether a shell agrees. The
+ * execution half lives in `apps/desktop/src/main/harness-runtime.test.ts`, where
+ * Node may be imported and the generated wrapper is actually run — including the
+ * characters this file can only spell — and in `apps/desktop/e2e/`, which runs
+ * one against the environment a live PTY really carries. This package may not
  * import Node.
  */
 describe("renderWrapperScript", () => {
-  const claude = renderWrapperScript(adapterFor("claude-code"), { binDir: BIN_DIR });
+  const claude = renderWrapperScript(adapterFor("claude-code"), BARE);
 
   it("is a POSIX shell script, not a bash or zsh one", () => {
     expect(claude.startsWith("#!/bin/sh\n")).toBe(true);
@@ -72,23 +71,31 @@ describe("renderWrapperScript", () => {
     expect(claude).toContain("VOLLI_HARNESS_ARGV_CLAUDE_CODE");
   });
 
-  it("mints the session id from the flag the harness declares, using Volli's own", () => {
+  // The argv is applied by field splitting, never by a second shell parse: IFS
+  // is one newline for exactly this expansion, and expansion results are not
+  // rescanned. `eval` appearing here again would be the regression.
+  it("splits the configured argv into words instead of re-parsing it", () => {
+    expect(claude).not.toContain("eval");
+    expect(claude).toContain("IFS='\n'");
+    expect(claude).toContain("set -f");
     expect(claude).toContain(
-      'eval "set -- ${VOLLI_HARNESS_ARGV_CLAUDE_CODE:-} \'--session-id\' \\"\\$VOLLI_SESSION\\" \\"\\$@\\""',
+      'set -- ${VOLLI_HARNESS_ARGV_CLAUDE_CODE:-} \'--session-id\' "$VOLLI_SESSION" "$@"',
     );
+    expect(claude).toContain("IFS=$volli_saved_ifs");
   });
 
   it("suppresses that injection when the user's own argv is already driving resume", () => {
     expect(claude).toContain("'--resume'|'--resume='*");
     expect(claude).toContain("'--continue'|'--continue='*");
     expect(claude).toContain("'-r'|'-r='*");
-    expect(claude).toContain('eval "set -- ${VOLLI_HARNESS_ARGV_CLAUDE_CODE:-} \\"\\$@\\""');
+    expect(claude).toContain('set -- ${VOLLI_HARNESS_ARGV_CLAUDE_CODE:-} "$@"');
   });
 
   it("has nothing to suppress, and no scan to run, when no id is minted at launch", () => {
-    const opencode = renderWrapperScript(adapterFor("opencode"), { binDir: BIN_DIR });
+    const opencode = renderWrapperScript(adapterFor("opencode"), BARE);
     expect(opencode).not.toContain("VOLLI_SESSION_ARGV");
     expect(opencode).not.toContain("'--session'|");
+    expect(opencode).toContain('set -- ${VOLLI_HARNESS_ARGV_OPENCODE:-} "$@"');
     expect(opencode).toContain('exec "$volli_real" "$@"');
   });
 
@@ -97,8 +104,49 @@ describe("renderWrapperScript", () => {
   });
 
   it("still wraps a harness that has nothing to inject, so PATH stays honest", () => {
-    const bare = renderWrapperScript(bareAdapter(), { binDir: "/vol/bin" });
+    const bare = renderWrapperScript(bareAdapter(), { ...BARE, binDir: "/vol/bin" });
     expect(bare).toContain('if [ -x "$volli_dir/my-harness" ]');
     expect(bare).toContain("VOLLI_HARNESS_BIN_MY_HARNESS");
+  });
+
+  // The trust dialog names one binary; the wrapper must run that one. The walk
+  // stays for the harness nobody was ever asked about.
+  it("runs the binary main resolved rather than walking PATH again", () => {
+    const pinned = renderWrapperScript(adapterFor("claude-code"), {
+      ...BARE,
+      binaryPath: "/opt/homebrew/bin/claude",
+    });
+    expect(pinned).toContain(`if [ -z "$volli_real" ] && [ -x '/opt/homebrew/bin/claude' ]; then`);
+    expect(pinned).toContain("  volli_real='/opt/homebrew/bin/claude'");
+    // The override still wins, and the walk still catches an uninstall.
+    expect(pinned.indexOf("VOLLI_HARNESS_BIN_CLAUDE_CODE")).toBeLessThan(
+      pinned.indexOf("/opt/homebrew/bin/claude"),
+    );
+    expect(pinned).toContain("for volli_dir in $PATH; do");
+  });
+
+  it("walks PATH when main resolved nothing to pin", () => {
+    expect(claude).not.toContain("&& [ -x ");
+    expect(claude).toContain("for volli_dir in $PATH; do");
+  });
+
+  // A harness's own configuration variable belongs to the harness, not to every
+  // terminal — and it is exported AFTER the passthrough exec, so a harness run
+  // outside a session stays untouched.
+  it("exports a harness's own configuration inside its own wrapper", () => {
+    const cursor = renderWrapperScript(adapterFor("cursor"), {
+      ...BARE,
+      env: { CURSOR_CONFIG_DIR: "/Users/dev/Library/Application Support/Volli/harness/cursor" },
+    });
+    expect(cursor).toContain(
+      "export 'CURSOR_CONFIG_DIR=/Users/dev/Library/Application Support/Volli/harness/cursor'",
+    );
+    expect(cursor.indexOf("export 'CURSOR_CONFIG_DIR")).toBeGreaterThan(
+      cursor.indexOf('if [ -z "${VOLLI_SESSION:-}" ]; then'),
+    );
+  });
+
+  it("says nothing about the environment for a harness that configures none", () => {
+    expect(claude).not.toContain("export ");
   });
 });
