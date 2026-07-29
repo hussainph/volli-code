@@ -69,6 +69,7 @@ export default defineConfig({
         "src/components/board/board-dnd.ts",
         "src/components/board/new-ticket/draft.ts",
         "src/components/board/new-ticket/submit.ts",
+        "src/components/sidebar/active-session-listing.ts",
         "src/components/sidebar/listing.ts",
         "src/components/theme/editor-settings-model.ts",
         "src/components/theme/project-appearance-model.ts",
