@@ -51,6 +51,12 @@ export const cursorAdapter: HarnessAdapter = {
     { event: "turn.completed", native: "stop", delivery: "async" },
     { event: "tool.started", native: "preToolUse", delivery: "async" },
   ],
+  // Live run, cursor-agent 2026.07.23: `sessionStart` fires at boot from
+  // `<cwd>/.cursor/hooks.json`, which is the rung `cursor-hooks-file` writes —
+  // the first confirmation that the hooks Volli writes for cursor are reachable
+  // at all. A RESUMED session skips it (see above), so the window this anchors
+  // is a fresh launch's.
+  startupEvent: "session.started",
   launchSettings: [],
   // Empty until a marker is observed on a real cursor-agent session — a guessed
   // name is a variable deleted from the user's environment for no reason.

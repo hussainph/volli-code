@@ -13,6 +13,25 @@ import { nativeName, type HarnessEventBinding } from "./types";
 const PLUGIN_EXPORT = "VolliReporter";
 
 /**
+ * The native name meaning "fire when the plugin is loaded", rather than naming
+ * something in the harness's event stream.
+ *
+ * It exists because opencode's stream has no launch-time event. Measured on
+ * 1.17.18: `opencode run` emits `session.created` 100ms after the plugin loads,
+ * but the TUI — which is how Volli launches it — emits nothing session-shaped at
+ * all until the user submits their first prompt. Binding `session.created` would
+ * therefore have been a startup signal that only fires in the mode Volli does
+ * not use.
+ *
+ * What IS launch-time is the factory call itself: opencode invokes it before any
+ * event, and invoking it proves the config took AND the module loaded, which is
+ * the whole of what a startup signal has to prove. No session id rides on it
+ * (there is no session yet); the report correlates through `VOLLI_SESSION` like
+ * every other hook, and the id arrives with the first real event.
+ */
+export const PLUGIN_LOAD_NATIVE = "plugin:load";
+
+/**
  * What the generated module has to close over. Structurally the part of
  * `HarnessLaunchInput` a plugin needs, declared here rather than imported so
  * the renderer stays a leaf of the launch builder rather than a cycle in it.
@@ -57,6 +76,8 @@ export function renderEventPlugin(
   bindings: readonly HarnessEventBinding[],
   input: EventPluginInput,
 ): string {
+  const loadBindings = bindings.filter((binding) => binding.native === PLUGIN_LOAD_NATIVE);
+  const streamBindings = bindings.filter((binding) => binding.native !== PLUGIN_LOAD_NATIVE);
   return `// Volli event plugin. Generated — edits are overwritten.
 //
 // Reports through the same \`volli hook\` command every other mechanism fires,
@@ -66,7 +87,8 @@ export function renderEventPlugin(
 
 import { spawn } from "node:child_process";
 
-const BINDINGS = ${JSON.stringify(bindingsByNative(bindings))};
+const BINDINGS = ${JSON.stringify(bindingsByNative(streamBindings))};
+const LOAD_EVENTS = ${JSON.stringify(loadBindings.map((binding) => binding.event))};
 const HOOK_ARGV = ${JSON.stringify([...input.hookArgv])};
 const SOCKET_PATH = ${JSON.stringify(input.socketPath)};
 
@@ -94,6 +116,11 @@ const report = (name, payload) =>
   });
 
 export const ${PLUGIN_EXPORT} = async () => {
+  // The load report, and being called at all is the whole of what it reports:
+  // the harness read the config Volli named and evaluated the module Volli
+  // wrote. There is no session yet, so there is no id to carry — \`VOLLI_SESSION\`
+  // does the correlating, as it does for every hook.
+  for (const name of LOAD_EVENTS) await report(name, JSON.stringify({ type: "plugin.load" }));
   return {
     event: async ({ event }) => {
       // The generic hook, not the documented blocking ones: \`permission.ask\`

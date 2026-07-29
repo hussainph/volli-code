@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { FIRST_CLASS_HARNESS_IDS, parseHarnessId, type HarnessId } from "../ticket";
-import { HARNESS_EVENTS, harnessTier, supportedEvents, type HarnessAdapter } from "./types";
+import {
+  bindsStartupEvent,
+  HARNESS_EVENTS,
+  harnessTier,
+  supportedEvents,
+  type HarnessAdapter,
+} from "./types";
 import {
   buildHarnessInstallPlan,
   CANONICAL_SKILL_FILES,
@@ -95,6 +101,7 @@ function bareAdapter(overrides: Partial<HarnessAdapter> = {}): HarnessAdapter {
     sessionId: { kind: "none" },
     resume: { byId: null, latest: null, userResumeTokens: [] },
     events: [],
+    startupEvent: null,
     launchSettings: [],
     sessionMarkers: [],
     ...overrides,
@@ -112,6 +119,16 @@ describe("first-class harness capabilities", () => {
     for (const adapter of harnessAdapters) {
       expect(adapter.command).not.toMatch(/[/\s]/);
       expect(adapter.command.length).toBeGreaterThan(0);
+    }
+  });
+
+  // Each value is a live measurement, recorded in the adapter beside it. The
+  // test is here so a binding cannot be removed while the claim it supports
+  // stays behind — which is the only way this field goes back to lying.
+  it("declares a launch-time event for every built-in, and binds every one it declares", () => {
+    for (const adapter of harnessAdapters) {
+      expect([adapter.id, bindsStartupEvent(adapter)]).toEqual([adapter.id, true]);
+      expect([adapter.id, adapter.startupEvent]).toEqual([adapter.id, "session.started"]);
     }
   });
 

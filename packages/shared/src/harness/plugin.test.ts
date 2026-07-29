@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { renderEventPlugin } from "./plugin";
+import { PLUGIN_LOAD_NATIVE, renderEventPlugin } from "./plugin";
 import type { HarnessEventBinding } from "./types";
 
 const INPUT = {
@@ -76,6 +76,25 @@ describe("renderEventPlugin", () => {
     // truthiness test would hand it to `for...of` and throw inside the
     // harness's own dispatch — the one thing a reporter may never do.
     await expect(hooks.event({ event: { type: "toString" } })).resolves.toBeUndefined();
+  });
+
+  // opencode's stream has no launch-time event, so the factory call is the
+  // startup signal. It must not also land in the event map: `plugin:load` would
+  // key it under `load`, and any harness event named `load` would report a
+  // second, false, session start.
+  it("reports a plugin-load binding when the factory runs, and never from the stream", async () => {
+    const source = renderEventPlugin(
+      [...BINDINGS, { event: "session.started", native: PLUGIN_LOAD_NATIVE, delivery: "async" }],
+      { ...INPUT, hookArgv: ["/usr/bin/true", "hook", "x"] },
+    );
+    expect(source).toContain('const LOAD_EVENTS = ["session.started"]');
+    expect(source).not.toContain('"load":');
+    const module = await load(source);
+    await expect(module.VolliReporter()).resolves.toBeDefined();
+  });
+
+  it("has no load report to make when nothing binds one", () => {
+    expect(renderEventPlugin(BINDINGS, INPUT)).toContain("const LOAD_EVENTS = []");
   });
 
   it("survives a hook binary that isn't there, because a report may not break the agent", async () => {

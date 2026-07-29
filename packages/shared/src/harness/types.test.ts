@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { parseHarnessId, type HarnessId } from "../ticket";
 import {
+  bindsStartupEvent,
   harnessCommandOwner,
   harnessTier,
   isBareHarnessCommand,
@@ -22,6 +23,7 @@ function bareAdapter(overrides: Partial<HarnessAdapter> = {}): HarnessAdapter {
     sessionId: { kind: "none" },
     resume: { byId: null, latest: null, userResumeTokens: [] },
     events: [],
+    startupEvent: null,
     launchSettings: [],
     sessionMarkers: [],
     ...overrides,
@@ -56,6 +58,32 @@ describe("supportedEvents", () => {
 
   it("is empty for a harness that reports nothing", () => {
     expect(supportedEvents(bareAdapter()).size).toBe(0);
+  });
+});
+
+describe("bindsStartupEvent", () => {
+  const sessionStart = [
+    { event: "session.started", native: "SessionStart", delivery: "async" },
+  ] as const;
+
+  it("accepts a harness that declares no startup signal at all", () => {
+    expect(bindsStartupEvent(bareAdapter({ events: sessionStart }))).toBe(true);
+    expect(bindsStartupEvent(bareAdapter())).toBe(true);
+  });
+
+  it("accepts a startup event the adapter also binds", () => {
+    expect(
+      bindsStartupEvent(bareAdapter({ events: sessionStart, startupEvent: "session.started" })),
+    ).toBe(true);
+  });
+
+  // The lie the field exists to remove: a claim that the channel speaks at
+  // launch, with nothing rendered that could ever speak.
+  it("refuses a startup event nothing binds", () => {
+    expect(bindsStartupEvent(bareAdapter({ startupEvent: "session.started" }))).toBe(false);
+    expect(
+      bindsStartupEvent(bareAdapter({ events: sessionStart, startupEvent: "turn.completed" })),
+    ).toBe(false);
   });
 });
 

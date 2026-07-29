@@ -166,6 +166,7 @@ describe("installHarnessSkills", () => {
     sessionId: { kind: "none" },
     resume: { byId: null, latest: null, userResumeTokens: [] },
     events: [],
+    startupEvent: null,
     launchSettings: [],
     sessionMarkers: [],
   };

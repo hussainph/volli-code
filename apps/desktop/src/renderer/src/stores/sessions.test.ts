@@ -58,6 +58,7 @@ const registeredAdapter = (): HarnessAdapter => ({
   sessionId: { kind: "reported" },
   resume: { byId: null, latest: null, userResumeTokens: [] },
   events: [{ event: "input.needed", native: "Notification", delivery: "async" }],
+  startupEvent: null,
   sessionMarkers: [],
   launchSettings: [],
 });

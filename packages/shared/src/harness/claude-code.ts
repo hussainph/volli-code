@@ -46,6 +46,9 @@ export const claudeCodeAdapter: HarnessAdapter = {
     { event: "tool.started", native: "PreToolUse", delivery: "async" },
     { event: "subagent.completed", native: "SubagentStop", delivery: "async" },
   ],
+  // Live run, claude 2.1.220: `SessionStart` fires before the first prompt is
+  // read, on a `--settings`-injected hook, with no trust prompt of any kind.
+  startupEvent: "session.started",
   launchSettings: [{ path: "preferredNotifChannel", value: "notifications_disabled" }],
   // Read off a live `claude` session's own environment, not from documentation.
   // `CLAUDE_CODE_CHILD_SESSION` is the one with teeth: inherited, claude decides

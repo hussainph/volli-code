@@ -25,6 +25,7 @@ import type {
   HarnessAdapter,
   HarnessCommandOwner,
   HarnessConfigInjection,
+  HarnessEvent,
   HarnessEventBinding,
   HarnessResume,
   HarnessSessionIdSource,
@@ -370,6 +371,33 @@ function parseEvents(errors: Errors, value: unknown): readonly HarnessEventBindi
   return bindings;
 }
 
+/**
+ * The event a manifest says its harness fires at boot, checked against the
+ * events it actually bound.
+ *
+ * The cross-field check is the whole point of parsing this here. A startup event
+ * nothing renders promises the channel will speak at launch, so the silence that
+ * follows reads as a broken injection and gets reported to the user as one — a
+ * manifest can turn Volli into an accuser with one unbound word. Declaring
+ * nothing is always available and costs the harness only the expectation.
+ */
+function parseStartupEvent(
+  errors: Errors,
+  value: unknown,
+  events: readonly HarnessEventBinding[],
+): HarnessEvent | null {
+  if (value === null) return null;
+  if (!isHarnessEvent(value)) {
+    errors.add("startupEvent", `must be null, or one of: ${HARNESS_EVENTS.join(", ")}`);
+    return null;
+  }
+  if (!events.some((binding) => binding.event === value)) {
+    errors.add("startupEvent", "must name an event this manifest also binds in events");
+    return null;
+  }
+  return value;
+}
+
 /** A dotted path into the harness's own config object: non-empty word segments. */
 const SETTING_PATH_RE = /^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$/;
 
@@ -562,6 +590,7 @@ export function parseHarnessManifest(raw: unknown): ManifestParse {
   const sessionId = parseSessionId(errors, errors.optional(raw, "sessionId"));
   const resume = parseResume(errors, errors.optional(raw, "resume"));
   const events = parseEvents(errors, errors.optional(raw, "events"));
+  const startupEvent = parseStartupEvent(errors, errors.optional(raw, "startupEvent"), events);
   const launchSettings = parseLaunchSettings(errors, errors.optional(raw, "launchSettings"));
 
   if (errors.list.length > 0 || slug === null || label === null || command === null) {
@@ -583,6 +612,7 @@ export function parseHarnessManifest(raw: unknown): ManifestParse {
       sessionId,
       resume,
       events,
+      startupEvent,
       launchSettings,
       // Not a manifest field, and not an oversight. Every other field says what
       // Volli should DO for this harness; this one names variables Volli deletes

@@ -85,6 +85,7 @@ A registered harness and a built-in one are the same kind of thing to Volli: it 
 | \`sessionId\` | no | where the harness's own session id comes from |
 | \`resume\` | no | argv that resumes a prior session |
 | \`events\` | no | which harness-native signals map to which Volli events |
+| \`startupEvent\` | no | the bound event the harness fires at boot, before the user acts |
 | \`launchSettings\` | no | harness-native settings Volli forces at launch |
 
 Every omitted optional field means "this harness cannot do that".
@@ -139,6 +140,12 @@ Volli sets the hook timeout itself, the same for every binding of every harness.
 
 \`input.needed\` means a human is blocking the agent. It drives the sidebar's "Needs you" tier and the native notification.
 
+## startupEvent
+
+One event name, or omitted. It must be an event \`events\` also binds, and it must be one the harness fires on boot before the user does anything — a launch of the harness alone has to produce it.
+
+Volli reads silence against it. Declare one and a launch that reports nothing means the configuration did not take, and Volli says so. Omit it and Volli expects nothing until the agent acts, which is the right answer for a harness that only speaks once there is a conversation.
+
 ## launchSettings
 
 Dotted paths into the harness's own configuration, with scalar values whose JSON types are preserved:
@@ -184,6 +191,7 @@ Declaring an event gains nothing on its own. An event becomes verified on its fi
     { "event": "turn.completed", "native": "Stop", "delivery": "async" },
     { "event": "input.needed", "native": "Notification", "delivery": "async" }
   ],
+  "startupEvent": "session.started",
   "launchSettings": [{ "path": "notifications.enabled", "value": false }]
 }
 \`\`\`

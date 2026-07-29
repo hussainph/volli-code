@@ -281,6 +281,23 @@ export interface HarnessAdapter {
   readonly resume: HarnessResume;
   readonly events: readonly HarnessEventBinding[];
   /**
+   * The bound event that fires on harness boot, before the user does anything.
+   * `null` means the channel cannot prove itself alive until the agent acts.
+   *
+   * This is the field that makes SILENCE mean something. Without it, "no event
+   * yet" is ambiguous between a channel that never worked and an agent nobody
+   * has typed into — and the app resolves that ambiguity against the harness,
+   * so a perfectly healthy session reads as not reporting for as long as its
+   * user is still reading the ticket. With it, and with the wrapper's launch
+   * announce proving Volli's configuration was in the loop, a window of silence
+   * after boot means one thing only: what we injected did not take.
+   *
+   * It must be `null` or an event the adapter actually binds — see
+   * {@link bindsStartupEvent}. An adapter claiming a startup signal it never
+   * bound is the exact class of lie this field exists to remove.
+   */
+  readonly startupEvent: HarnessEvent | null;
+  /**
    * Harness-native settings Volli forces at launch, as dotted paths into that
    * harness's own config object — silencing its duplicate notifications, and
    * the like. Values keep their JSON type
@@ -348,4 +365,23 @@ export function harnessTier(adapter: HarnessAdapter): HarnessTier {
 /** The canonical events an adapter claims, collapsed from its native bindings. */
 export function supportedEvents(adapter: HarnessAdapter): ReadonlySet<HarnessEvent> {
   return new Set(adapter.events.map((binding) => binding.event));
+}
+
+/**
+ * Whether {@link HarnessAdapter.startupEvent} names something the adapter
+ * actually bound — the one invariant that field has.
+ *
+ * A startup event nothing renders is worse than no startup event at all: it
+ * promises the channel will speak at boot, so the silence that follows is read
+ * as a broken injection and reported to the user as such. Declaring `null` costs
+ * a harness nothing except the ability to be caught lying.
+ *
+ * Asserted against the built-ins in their own test, and enforced at parse time
+ * for a manifest, where it is untrusted input rather than a typo.
+ */
+export function bindsStartupEvent(
+  adapter: Pick<HarnessAdapter, "startupEvent" | "events">,
+): boolean {
+  const { startupEvent } = adapter;
+  return startupEvent === null || adapter.events.some((binding) => binding.event === startupEvent);
 }

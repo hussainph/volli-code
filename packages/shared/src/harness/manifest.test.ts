@@ -448,6 +448,46 @@ describe("parseHarnessManifest", () => {
     ]);
   });
 
+  it("reads a startup event the manifest also binds, and defaults it to none", () => {
+    const declared = parseHarnessManifest(
+      minimal({
+        events: [{ event: "session.started", native: "SessionStart", delivery: "async" }],
+        startupEvent: "session.started",
+      }),
+    );
+    expect(declared.ok && declared.adapter.startupEvent).toBe("session.started");
+    expect(parseHarnessManifest(minimal()).ok && parseHarnessManifest(minimal())).toMatchObject({
+      adapter: { startupEvent: null },
+    });
+    const explicit = parseHarnessManifest(minimal({ startupEvent: null }));
+    expect(explicit.ok && explicit.adapter.startupEvent).toBeNull();
+  });
+
+  // A startup event nothing renders turns Volli into an accuser: it promises the
+  // channel speaks at launch, so the silence that follows is reported as a
+  // broken injection. Refused where the manifest can be told which field to fix.
+  it("refuses a startup event the manifest never bound", () => {
+    expect(
+      errorPaths(
+        parseHarnessManifest(
+          minimal({
+            events: [{ event: "turn.completed", native: "Stop", delivery: "async" }],
+            startupEvent: "session.started",
+          }),
+        ),
+      ),
+    ).toEqual(["startupEvent"]);
+    expect(errorPaths(parseHarnessManifest(minimal({ startupEvent: "session.started" })))).toEqual([
+      "startupEvent",
+    ]);
+  });
+
+  it("refuses a startup event that is not in the canonical vocabulary", () => {
+    expect(errorPaths(parseHarnessManifest(minimal({ startupEvent: "agent.woke" })))).toEqual([
+      "startupEvent",
+    ]);
+  });
+
   it("refuses events that are not a list", () => {
     expect(errorPaths(parseHarnessManifest(minimal({ events: { stop: "Stop" } })))).toEqual([
       "events",
