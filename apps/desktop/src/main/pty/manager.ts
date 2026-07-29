@@ -294,13 +294,19 @@ export class PtyManager {
       const { file, args } = resolveShell(process.env);
       const sessionId = randomUUID();
       const now = Date.now();
+      // The harness configuration goes UNDER the agent contract, so nothing a
+      // wrapper reads can shadow VOLLI_SESSION/VOLLI_SOCKET/PATH — the three
+      // values every `volli` invocation in this shell resolves itself by.
       const sessionEnv = this.agentRuntime
-        ? agentSessionEnv(scope.env, {
-            sessionId,
-            socketPath: this.agentRuntime.socketPath,
-            binDir: this.agentRuntime.binDir,
-            inheritedPath: process.env["PATH"] ?? "",
-          })
+        ? agentSessionEnv(
+            { ...scope.env, ...this.agentRuntime.harnessEnv },
+            {
+              sessionId,
+              socketPath: this.agentRuntime.socketPath,
+              binDir: this.agentRuntime.binDir,
+              inheritedPath: process.env["PATH"] ?? "",
+            },
+          )
         : scope.env;
       const pty = nodePty.spawn(file, args, {
         name: "xterm-256color",
@@ -777,4 +783,13 @@ function foregroundProcess(session: Session): string | null {
 export interface AgentRuntimeEnvironment {
   socketPath: string;
   binDir: string;
+  /**
+   * The harness launch configuration every wrapper in `binDir` reads at run
+   * time — `VOLLI_HARNESS_ARGV_<SLUG>` plus the config-pointing variables
+   * cursor and opencode take. Session-independent by construction (the harness
+   * session id is `VOLLI_SESSION`, applied by the wrapper, not built into the
+   * config), so one map covers every session; empty when no harness is
+   * installed.
+   */
+  harnessEnv?: Readonly<Record<string, string>>;
 }

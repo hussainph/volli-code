@@ -368,6 +368,24 @@ describe("volli:terminal-create", () => {
     }
   });
 
+  it("puts the harness launch configuration in reach of the wrapper on PATH", async () => {
+    // The wrapper reads its injected argv out of the environment, so the whole
+    // hook configuration has to be in place before the first line is typed —
+    // and it is session-independent, so one environment serves every session.
+    manager = registerTerminalIpcHandlers(
+      { ok: true, db: testDb.db },
+      {
+        socketPath: "/profile/volli.sock",
+        binDir: "/profile/bin",
+        harnessEnv: { VOLLI_HARNESS_ARGV_CLAUDE_CODE: "'--settings' '{}'" },
+      },
+    );
+
+    await createSession();
+
+    expect(lastSpawnEnv()["VOLLI_HARNESS_ARGV_CLAUDE_CODE"]).toBe("'--settings' '{}'");
+  });
+
   it("routes pty exit to the creating window's webContents with the session id", async () => {
     const { sessionId, pty, sender } = await createSession();
     pty.emitExit(7);

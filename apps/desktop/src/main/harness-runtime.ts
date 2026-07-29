@@ -1,0 +1,127 @@
+/**
+ * Materializes the harness half of the agent runtime: the PATH wrappers that
+ * turn a harness invocation inside a Volli PTY into a configured one, and the
+ * launch configuration those wrappers apply.
+ */
+import { randomUUID } from "node:crypto";
+import { chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
+import {
+  buildLaunchConfig,
+  harnessAdapters,
+  harnessEnvSuffix,
+  HARNESS_DIR_TOKEN,
+  renderWrapperScript,
+  shellSingleQuote,
+} from "@volli/shared";
+import type { HarnessAdapter } from "@volli/shared";
+
+export interface HarnessRuntimeInput {
+  /** Volli's own `bin/` — the same directory the `volli` shim lives in. */
+  binDir: string;
+  /** `<userData>/harness` — the root of the per-harness Volli-owned directories. */
+  harnessRoot: string;
+  /** The app's live Unix socket, which a fired hook reports back over. */
+  socketPath: string;
+  /** The generated `volli` launcher a hook command invokes. */
+  shimPath: string;
+  /** The harnesses actually installed on this host. */
+  adapters: readonly HarnessAdapter[];
+}
+
+export interface HarnessRuntime {
+  /** Absolute paths of the wrappers now on disk. */
+  wrappers: string[];
+  /**
+   * Merged into every Volli PTY's environment alongside `agentSessionEnv`. The
+   * wrapper reads its argv out of `VOLLI_HARNESS_ARGV_<SLUG>` here, and a
+   * harness configured by environment variable (cursor, opencode) finds its
+   * Volli-owned config through it. Session-independent — `buildLaunchConfig`
+   * cannot mint a session id, so one environment serves every launch.
+   */
+  env: Record<string, string>;
+}
+
+/** The Volli-owned directory a harness's generated config files live in. */
+export function harnessDirFor(harnessRoot: string, adapter: HarnessAdapter): string {
+  return join(harnessRoot, adapter.id);
+}
+
+/**
+ * The command prefix a fired hook runs. `buildLaunchConfig` appends the
+ * canonical event name and `--socket <path>` to it, so this only names the
+ * launcher and which harness is reporting.
+ */
+function hookCommandFor(shimPath: string, adapter: HarnessAdapter): string {
+  return `${shellSingleQuote(shimPath)} hook ${adapter.id}`;
+}
+
+/**
+ * Names inside Volli's `bin/` that belong to the CLI launcher. A registered
+ * manifest declares its own `command`, and a wrapper is written by that name —
+ * so the one thing standing between a hostile (or merely careless) manifest and
+ * the launcher every agent reaches Volli through is refusing these outright.
+ */
+const RESERVED_BIN_NAMES = new Set(["volli", "volli.cjs"]);
+
+/** A bare executable name: no directory traversal, no whitespace, nothing a shell would read. */
+const BARE_COMMAND_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** Replaces one generated file in place: atomic temp + rename, never a partial script. */
+async function writeExecutable(path: string, content: string): Promise<void> {
+  const temporaryPath = `${path}.tmp-${randomUUID()}`;
+  try {
+    await writeFile(temporaryPath, content, { encoding: "utf8", mode: 0o700, flag: "wx" });
+    await chmod(temporaryPath, 0o755);
+    await rename(temporaryPath, path);
+  } finally {
+    await rm(temporaryPath, { force: true });
+  }
+}
+
+/**
+ * Regenerates every wrapper each boot, exactly as the `volli` shim is
+ * regenerated, so a wrapper written against an older contract can never outlive
+ * the build that wrote it.
+ */
+export async function ensureHarnessRuntime(input: HarnessRuntimeInput): Promise<HarnessRuntime> {
+  await mkdir(input.binDir, { recursive: true });
+  const wrappers: string[] = [];
+  const env: Record<string, string> = {};
+  for (const adapter of input.adapters) {
+    if (!BARE_COMMAND_RE.test(adapter.command) || RESERVED_BIN_NAMES.has(adapter.command)) continue;
+    const wrapperPath = join(input.binDir, adapter.command);
+    await writeExecutable(wrapperPath, renderWrapperScript(adapter, { binDir: input.binDir }));
+    wrappers.push(wrapperPath);
+
+    const harnessDir = harnessDirFor(input.harnessRoot, adapter);
+    const config = buildLaunchConfig(adapter, {
+      socketPath: input.socketPath,
+      hookCommand: hookCommandFor(input.shimPath, adapter),
+    });
+    const resolve = (value: string): string => value.replaceAll(HARNESS_DIR_TOKEN, harnessDir);
+    if (config.files.length > 0) await mkdir(harnessDir, { recursive: true });
+    for (const file of config.files) {
+      await writeFile(resolve(file.path), resolve(file.content), { encoding: "utf8", mode: 0o600 });
+    }
+    for (const [name, value] of Object.entries(config.env)) env[name] = resolve(value);
+    // The wrapper applies this with `eval "set -- $VOLLI_HARNESS_ARGV_<SLUG>"`,
+    // so each token is quoted here — an injected `--settings` payload is JSON
+    // full of quotes and braces, and must reach the harness as ONE word.
+    if (config.argv.length > 0) {
+      env[`VOLLI_HARNESS_ARGV_${harnessEnvSuffix(adapter)}`] = config.argv
+        .map((token) => shellSingleQuote(resolve(token)))
+        .join(" ");
+    }
+  }
+  // A wrapper for a harness that is no longer on the host is worse than no
+  // wrapper: it shadows nothing but its own "cannot find" error, where the
+  // shell would have said "command not found". Reconcile rather than accumulate.
+  for (const adapter of harnessAdapters) {
+    if (input.adapters.some((installed) => installed.command === adapter.command)) continue;
+    if (!BARE_COMMAND_RE.test(adapter.command) || RESERVED_BIN_NAMES.has(adapter.command)) continue;
+    await rm(join(input.binDir, adapter.command), { force: true });
+  }
+  return { wrappers, env };
+}

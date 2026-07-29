@@ -85,6 +85,8 @@ export interface VolliRuntimePaths {
   socketPath: string;
   cliBundleSourcePath: string;
   cliBundlePath: string;
+  /** Root of the per-harness Volli-owned config directories (`<userData>/harness/<slug>/`). */
+  harnessRoot: string;
   /** The stable app directory Electron should launch in dev; packaged executables need no entry. */
   appEntry: string | null;
 }
@@ -105,6 +107,7 @@ export function volliRuntimePaths(input: {
       ? join(input.appPath, "dist-electron/volli-cli.cjs")
       : resolve(input.mainProcessDir, "../../../packages/cli/dist/volli.cjs"),
     cliBundlePath: join(binDir, "volli.cjs"),
+    harnessRoot: join(input.userDataPath, "harness"),
     appEntry: input.isPackaged ? null : resolve(input.mainProcessDir, ".."),
   };
 }

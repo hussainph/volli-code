@@ -12,7 +12,12 @@ import {
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { diffManagedContent, errorMessage, ticketBranchName } from "@volli/shared";
+import {
+  diffManagedContent,
+  errorMessage,
+  getHarnessAdapter,
+  ticketBranchName,
+} from "@volli/shared";
 import type { FirstPaintHint, ResolvedAppearance, VolliIpcEvent } from "@volli/shared";
 import type { ManagedConflict } from "./harness-install";
 import { isInternalNavigationTarget } from "./navigation";
@@ -24,7 +29,7 @@ import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
 import { registerAppMenu } from "./menu";
 import { confirmDestructiveClose, registerTerminalIpcHandlers } from "./pty";
-import type { PtyManager } from "./pty";
+import type { AgentRuntimeEnvironment, PtyManager } from "./pty";
 import { registerThemeIpcHandlers } from "./theme-ipc";
 import { defaultFsDeps } from "./fs-deps";
 import { getFirstPaintHint, getGlobalAppearance, getGlobalCanvas } from "./db/theme-repo";
@@ -40,8 +45,10 @@ import { worktreeDeps } from "./worktree-runtime";
 import { getRetentionWatcher } from "./retention-runtime";
 import { createAgentCommandService } from "./agent-commands";
 import { acquireVolliAppProfile, ensureVolliCliShim, volliRuntimePaths } from "./agent-runtime";
+import { ensureHarnessRuntime } from "./harness-runtime";
 import { startAgentSocket, type AgentSocketServer } from "./agent-socket";
 import {
+  detectInstalledHarnesses,
   installDetectedHarnessSkills,
   installGlobalCliLink,
   removeGlobalCliLinkIfOurs,
@@ -470,7 +477,16 @@ app.whenReady().then(async () => {
   // the socket bind; both start right after, still awaited inside whenReady with
   // the same failure semantics (logged, non-fatal). registerTerminalIpcHandlers
   // needs only runtimePaths (a pure join), so it can precede the window it feeds.
-  const ptyManager = registerTerminalIpcHandlers(dbHandle, runtimePaths);
+  // Mutable on purpose: `harnessEnv` is filled in once the wrappers have been
+  // generated (below, after the shim they call back through exists), and the
+  // manager reads this object per spawn rather than copying it. A session
+  // created in the window before then simply launches unwrapped — which is the
+  // Known tier, already a state the session header can state.
+  const agentRuntime: AgentRuntimeEnvironment = {
+    socketPath: runtimePaths.socketPath,
+    binDir: runtimePaths.binDir,
+  };
+  const ptyManager = registerTerminalIpcHandlers(dbHandle, agentRuntime);
   ptyManagerRef = ptyManager;
   const mainWindow = createWindow(ptyManager, currentFirstPaint());
 
@@ -673,6 +689,28 @@ app.whenReady().then(async () => {
         rendererUrl: isDev ? (process.env["ELECTRON_RENDERER_URL"] ?? null) : null,
         appEntry: runtimePaths.appEntry,
       });
+      // The harness wrappers go into the same bin dir, and every hook they
+      // configure calls back through the shim above — so they are generated
+      // only once it exists, and regenerated each boot for the same reason it
+      // is: a wrapper written against an older contract must never outlive the
+      // build that wrote it. A failure here costs this launch its hook events,
+      // which the session header already states as the Known tier rather than
+      // claiming reporting that isn't happening.
+      try {
+        const detected = await detectInstalledHarnesses(process.env["PATH"] ?? "");
+        const runtime = await ensureHarnessRuntime({
+          binDir: runtimePaths.binDir,
+          harnessRoot: runtimePaths.harnessRoot,
+          socketPath: runtimePaths.socketPath,
+          shimPath,
+          adapters: detected
+            .map((id) => getHarnessAdapter(id))
+            .filter((adapter) => adapter !== undefined),
+        });
+        agentRuntime.harnessEnv = runtime.env;
+      } catch (error) {
+        console.error("[volli] failed to generate harness wrappers:", errorMessage(error));
+      }
     } catch (error) {
       console.error("[volli] failed to generate CLI shim:", errorMessage(error));
     }
