@@ -381,14 +381,14 @@ describe("buildActiveSessionListing", () => {
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "doing" })],
       containers: {
-        t1: container("failed", [
+        t1: container("quit", [
           paneTab("clean", "Finished cleanly", 0),
-          paneTab("failed", "Broke the build", 1),
+          paneTab("quit", "Quit the agent", 1),
         ]),
       },
       eventsByTicket: {},
       records: [
-        record({ id: "failed", ticketId: "t1", title: "Broke the build", endedAt: now - 5_000 }),
+        record({ id: "quit", ticketId: "t1", title: "Quit the agent", endedAt: now - 5_000 }),
       ],
       lastOutputAt: {},
       parkState: {},
@@ -400,20 +400,68 @@ describe("buildActiveSessionListing", () => {
     // place, with the outcome read from its exited pane.
     expect(result.active).toMatchObject([
       {
-        title: "Broke the build",
-        lastRun: { outcome: "failed", endedAt: now - 5_000, resumable: false },
-        target: { tabId: "failed", paneId: "failed" },
+        title: "Quit the agent",
+        lastRun: { outcome: "ended", endedAt: now - 5_000, resumable: false },
+        target: { tabId: "quit", paneId: "quit" },
       },
     ]);
   });
 
-  it("maps record exit codes to outcomes and orders concluded rows after live ones by recency", () => {
+  it("reads a manually quit agent's nonzero exit code as ended, never as a failure", () => {
+    const now = 1_000_000;
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: {
+        // opencode exits 1 when the user quits it; the shell that ran it then
+        // carries that 1 out as its own status on Ctrl-D.
+        t1: container("s1", [paneTab("s1", "Quit the agent", 1)]),
+      },
+      eventsByTicket: {},
+      records: [
+        record({ id: "s1", ticketId: "t1", title: "Quit the agent", endedAt: now - 1_000 }),
+      ],
+      lastOutputAt: {},
+      parkState: {},
+      harness: {},
+      now,
+    });
+
+    expect(result.active).toMatchObject([
+      { lastRun: { outcome: "ended", endedAt: now - 1_000, resumable: false } },
+    ]);
+  });
+
+  it("reads the 129 a SIGHUP-trapping shell exits with on tab close as ended", () => {
+    const now = 1_000_000;
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: {
+        // Volli's own tab close kills the PTY with SIGHUP; zsh traps it and
+        // exits 129, so this code is the app closing a tab the user asked it to.
+        t1: container("s1", [paneTab("s1", "Closed the tab", 129)]),
+      },
+      eventsByTicket: {},
+      records: [
+        record({ id: "s1", ticketId: "t1", title: "Closed the tab", endedAt: now - 1_000 }),
+      ],
+      lastOutputAt: {},
+      parkState: {},
+      harness: {},
+      now,
+    });
+
+    expect(result.active).toMatchObject([
+      { lastRun: { outcome: "ended", endedAt: now - 1_000, resumable: false } },
+    ]);
+  });
+
+  it("calls only a clean record exit code done and orders concluded rows after live ones by recency", () => {
     const now = 1_000_000;
     const result = buildActiveSessionListing({
       tickets: [
         ticket({ id: "t-live", status: "doing", ticketNumber: 1 }),
         ticket({ id: "t-done", status: "doing", ticketNumber: 2 }),
-        ticket({ id: "t-failed", status: "doing", ticketNumber: 3 }),
+        ticket({ id: "t-nonzero", status: "doing", ticketNumber: 3 }),
         ticket({ id: "t-finished", status: "done", ticketNumber: 4 }),
       ],
       containers: {
@@ -440,9 +488,9 @@ describe("buildActiveSessionListing", () => {
           endedAt: now - 5_000,
         }),
         record({
-          id: "r-failed",
-          ticketId: "t-failed",
-          title: "Crashed run",
+          id: "r-nonzero",
+          ticketId: "t-nonzero",
+          title: "Nonzero run",
           exitCode: 2,
           endedAt: now - 1_000,
         }),
@@ -466,7 +514,7 @@ describe("buildActiveSessionListing", () => {
       result.active.map((row) => ({ title: row.title, outcome: row.lastRun?.outcome ?? null })),
     ).toEqual([
       { title: "Live agent", outcome: null },
-      { title: "Crashed run", outcome: "failed" },
+      { title: "Nonzero run", outcome: "ended" },
       { title: "Clean run", outcome: "done" },
     ]);
   });
@@ -590,7 +638,7 @@ describe("buildActiveSessionListing", () => {
           tabs: [
             {
               sessionId: "s1",
-              title: "Broke the build",
+              title: "Ran the suite",
               scope: { kind: "ticket", projectId: "p1", ticketId: "t1" },
               layout: { kind: "pane", sessionId: "s1", exitCode: 1 },
               activePaneId: "stale-pane",
@@ -603,8 +651,8 @@ describe("buildActiveSessionListing", () => {
         record({
           id: "s1",
           ticketId: "t1",
-          title: "Broke the build",
-          exitCode: 2,
+          title: "Ran the suite",
+          exitCode: 0,
           endedAt: now - 5_000,
         }),
       ],
@@ -615,10 +663,12 @@ describe("buildActiveSessionListing", () => {
     });
 
     // The tab's own layout can't answer (its active pane id is stale), so the
-    // outcome is read from the ticket's durable record instead.
+    // outcome is read from the ticket's durable record instead. A clean record
+    // code is what proves that hop happened: every other code now lands on the
+    // same `ended` as having no code at all.
     expect(result.active).toMatchObject([
       {
-        lastRun: { outcome: "failed", endedAt: now - 5_000, resumable: false },
+        lastRun: { outcome: "done", endedAt: now - 5_000, resumable: false },
         target: { tabId: "s1", paneId: "stale-pane" },
       },
     ]);
@@ -650,7 +700,7 @@ describe("buildActiveSessionListing", () => {
     });
 
     // Neither the (unresolvable) pane nor a durable record has an exit code to
-    // offer, so the row says "ended" rather than guessing done or failed.
+    // offer, so the row says "ended" rather than guessing it finished cleanly.
     expect(result.active).toMatchObject([
       { lastRun: { outcome: "ended", endedAt: null, resumable: false } },
     ]);

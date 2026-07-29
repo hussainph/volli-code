@@ -24,11 +24,12 @@ export interface ActiveSessionTarget {
 }
 
 /**
- * How a concluded run ended. `failed`/`done` are only claimed when an exit code
- * was actually observed (a still-mounted pane's, or the durable record's
- * `exitCode`); `ended` is the honest label when the outcome is unknown.
+ * How a concluded run ended. `done` is only claimed when a clean exit code was
+ * actually observed (a still-mounted pane's, or the durable record's
+ * `exitCode`); `ended` is everything else, including an unknown outcome. There
+ * is deliberately no failure member — see {@link outcomeFromExitCode}.
  */
-export type SessionOutcome = "failed" | "done" | "ended";
+export type SessionOutcome = "done" | "ended";
 
 /**
  * A Doing ticket's most recent concluded run, carried by its Active fallback
@@ -197,8 +198,20 @@ function sessionRow(
   };
 }
 
+/**
+ * The PTY runs the user's login shell, not the harness — the launch command is
+ * typed into that shell as a line of input, never `exec`'d — so the exit code
+ * reaching us is the shell's `$?`, one indirection removed from "the agent
+ * failed". A user quitting an agent that exits nonzero, a command that failed
+ * before Ctrl-D, and Volli's own tab close (SIGHUP, which zsh traps and exits
+ * 129 for) are byte-identical here, and none of them is a failed run. So `done`
+ * claims only that the shell exited cleanly, and everything else is `ended`; a
+ * failure verdict needs a source that actually knows one happened — the harness
+ * reporting it. The code itself stays on the tab's tooltip (`Exited (N)`), so
+ * this drops the false verdict, not the fact.
+ */
 function outcomeFromExitCode(exitCode: number | null): SessionOutcome {
-  return exitCode === null ? "ended" : exitCode === 0 ? "done" : "failed";
+  return exitCode === 0 ? "done" : "ended";
 }
 
 /**

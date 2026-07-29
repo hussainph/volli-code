@@ -44,7 +44,6 @@ const ACTIVITY_LABEL: Record<SessionActivityState, string> = {
 };
 
 const OUTCOME_LABEL: Record<SessionOutcome, string> = {
-  failed: "Failed",
   done: "Done",
   ended: "Ended",
 };
@@ -139,11 +138,9 @@ function SessionRow({
             "mt-1.5 size-1.5 shrink-0 rounded-full",
             needsAttention
               ? "bg-amber-500"
-              : row.lastRun?.outcome === "failed"
-                ? "bg-red-500"
-                : row.activity === "working"
-                  ? "bg-emerald-500"
-                  : "bg-muted-foreground/40",
+              : row.activity === "working"
+                ? "bg-emerald-500"
+                : "bg-muted-foreground/40",
           )}
         />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
