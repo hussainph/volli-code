@@ -97,17 +97,30 @@ The shape, read off codex 0.144.6's own deserializer:
 Stop = [ { matcher = "…", hooks = [ { type = "command", command = "<string>" } ] } ]
 ```
 
-`type` is one of `command`, `prompt`, `agent`. For `command`, the value is a **string**, so the
-shim path must be shell-quoted — it lives under `Application Support/`, and an unquoted path
-is shredded on the only OS we ship.
+`matcher` is optional. `type` is one of `command`, `prompt`, `agent`. For `command`, the value
+is a **string**, so the shim path must be shell-quoted — it lives under `Application Support/`,
+and an unquoted path is shredded on the only OS we ship. The handler also takes `async` (bool)
+and `statusMessage` (string), and a `timeout` that is a bare `u64` **whose unit is stated
+nowhere**. We omit `timeout` deliberately: the two readings differ by 1000×, and while
+5-as-seconds merely fails to time out a wedged hook, 5-as-milliseconds kills every hook before
+it can open the socket. Codex's own default is the safe choice. Do not "fix" this by guessing.
 
-The event fields that exist are `UserPromptSubmit`, `PermissionRequest`, `Stop` and
-`PreToolUse`. `SessionEnd` and `Notification` do not. Unknown fields under `hooks` are
+The event fields that exist are `SessionStart`, `UserPromptSubmit`, `PreToolUse`,
+`PostToolUse`, `PermissionRequest`, `Stop`, `SubagentStart`, `SubagentStop`, `PreCompact` and
+`PostCompact`. `SessionEnd` and `Notification` do not. Unknown fields under `hooks` are
 silently ignored, which is what makes the whole surface so easy to get wrong: the way to tell
 a real field from a typo is that a real one raises a *type* error, and a typo raises nothing.
 
-`Stop` existing means turn completion no longer depends on the legacy `notify` argv key and
-its `agent-turn-complete` payload. Binding both would report one turn twice.
+`SessionStart` existing is worth a decision the adapter has not yet made. The Tiers section
+revokes Hooked when no `session.started` arrives in the grace window, and codex declares no
+`session.started` binding today even though the field is available to it.
+
+`Stop` existing means turn completion is no longer structurally dependent on the legacy
+`notify` argv key. It stays on `notify` anyway. `notify` is the route that has actually been
+measured delivering, it sits outside the interactive trust gate, and binding both would report
+one turn twice — a dedupe would have to know these two natives mean one turn, which is exactly
+the harness-identity knowledge the engine is forbidden to hold. Moving it later is a one-line
+data change in the adapter, which is the point of keeping adapters data-only.
 
 Configuration is injectable at launch. `-c key=value` overrides any value that would come
 from `~/.codex/config.toml`, and it parses TOML values rather than plain strings — verified
@@ -264,9 +277,21 @@ production code.
 
   Config errors are reported before any work happens, and the bad model short-circuits the
   run. An unknown field says so by name; a *real* field with a wrong value raises a type error
-  instead, and that difference is the only reliable way to tell one from the other. Always
-  include a known-bogus control (`-c bogus_key=1`) in the same sweep — the enforcement differs
-  per subcommand, and `doctor` and `debug` accept overrides that `exec` rejects.
+  instead, and that difference is the only reliable way to tell one from the other. Two traps:
+  always include a known-bogus control (`-c bogus_key=1`) in the same sweep, because
+  enforcement differs per subcommand and `doctor` and `debug` accept overrides that `exec`
+  rejects; and always probe with a **deliberately wrong type**. A field probed with a valid
+  value is accepted whether or not it exists, which reads like confirmation and is not one.
+
+  Fixing the key was not the end of it. With a deserializer-accepted inline `hooks` config —
+  the byte-exact production argv, confirmed clean by `--strict-config` — a headless `exec` run
+  still fired `notify` and **not one hook**. So the shape is confirmed *accepted* and remains
+  unconfirmed *firing*, with two live candidates that `RUST_LOG=debug` did not separate: the
+  hash-keyed trust gate declining silently, or `exec` not raising hooks at all. Settling it
+  needs an interactive TUI, exactly like the `Notification` question below.
+
+  One consequence for whoever ships this: because the hooks file was never read, codex sessions
+  have never hit the trust gate. They will now, once, on first launch.
 - **cursor** was asserted against its written config only, not run.
 
 `--print` never blocks on a human, so it raises no `Notification` however correct the binding
