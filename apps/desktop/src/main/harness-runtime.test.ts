@@ -492,23 +492,48 @@ describe("ensureHarnessRuntime", () => {
     const runtime = await ensureHarnessRuntime({
       ...paths,
       socketPath: "/tmp/volli.sock",
+      adapters: [adapterFor("opencode")],
+      adapterCensus: "complete",
+      resolveCommand: () => Promise.resolve(null),
+    });
+
+    const harnessDir = join(paths.harnessRoot, "opencode");
+    const config = JSON.parse(await readFile(join(harnessDir, "opencode.json"), "utf8")) as {
+      plugin: string[];
+    };
+    expect(config.plugin).toEqual([join(harnessDir, "volli-plugin.js")]);
+    // The variable names the file the harness reads its config out of, and it
+    // is exported by opencode's own wrapper — a claude session has no business
+    // carrying it, and a leftover `{harnessDir}` would point opencode at a
+    // literal path either way.
+    expect(runtime.env["OPENCODE_CONFIG"]).toBeUndefined();
+    expect(await readFile(join(paths.binDir, "opencode"), "utf8")).toContain(
+      `export 'OPENCODE_CONFIG=${join(harnessDir, "opencode.json")}'`,
+    );
+  });
+
+  // Cursor writes NOTHING here, and that is the fix rather than an omission:
+  // its hooks reach a path relative to the session's working directory, so a
+  // file under `<userData>` would be one more file cursor never reads.
+  it("writes no Volli-owned config for a harness whose config lives in the workspace", async () => {
+    const paths = await scratch();
+
+    const runtime = await ensureHarnessRuntime({
+      ...paths,
+      socketPath: "/tmp/volli.sock",
       adapters: [adapterFor("cursor")],
       adapterCensus: "complete",
       resolveCommand: () => Promise.resolve(null),
     });
 
-    const harnessDir = join(paths.harnessRoot, "cursor");
-    const config = JSON.parse(await readFile(join(harnessDir, "cli-config.json"), "utf8")) as {
-      hooks: Record<string, { command: string }[]>;
-    };
-    expect(config.hooks["stop"]?.[0]?.command).toContain("'hook' 'cursor' 'turn.completed'");
-    // The variable names the directory the harness reads its config out of, and
-    // it is exported by cursor's own wrapper — a claude session has no business
-    // carrying it, and a leftover `{harnessDir}` would point cursor at a
-    // literal path either way.
-    expect(runtime.env["CURSOR_CONFIG_DIR"]).toBeUndefined();
-    expect(await readFile(join(paths.binDir, "cursor-agent"), "utf8")).toContain(
-      `export 'CURSOR_CONFIG_DIR=${harnessDir}'`,
+    await expect(access(join(paths.harnessRoot, "cursor"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(runtime.wrapperPaths.get("cursor" as HarnessId)).toBe(
+      join(paths.binDir, "cursor-agent"),
+    );
+    expect(await readFile(join(paths.binDir, "cursor-agent"), "utf8")).not.toContain(
+      "CURSOR_CONFIG_DIR",
     );
   });
 
@@ -518,24 +543,24 @@ describe("ensureHarnessRuntime", () => {
   // loudly: a wrapper naming a config Volli never wrote is worse than no wrapper.
   it("refuses to write a harness config through a symlink, and writes no wrapper for it", async () => {
     const paths = await scratch();
-    const harnessDir = join(paths.harnessRoot, "cursor");
+    const harnessDir = join(paths.harnessRoot, "opencode");
     const elsewhere = join(scratchRoot, "somebody-elses.json");
     await writeFile(elsewhere, "untouched", "utf8");
     await mkdir(harnessDir, { recursive: true });
-    await symlink(elsewhere, join(harnessDir, "cli-config.json"));
+    await symlink(elsewhere, join(harnessDir, "opencode.json"));
 
     await expect(
       ensureHarnessRuntime({
         ...paths,
         socketPath: "/tmp/volli.sock",
-        adapters: [adapterFor("cursor")],
+        adapters: [adapterFor("opencode")],
         adapterCensus: "complete",
         resolveCommand: () => Promise.resolve(null),
       }),
-    ).rejects.toThrow(/Refusing to manage non-regular file .*cli-config\.json/);
+    ).rejects.toThrow(/Refusing to manage non-regular file .*opencode\.json/);
 
     expect(await readFile(elsewhere, "utf8")).toBe("untouched");
-    await expect(access(join(paths.binDir, "cursor-agent"))).rejects.toMatchObject({
+    await expect(access(join(paths.binDir, "opencode"))).rejects.toMatchObject({
       code: "ENOENT",
     });
   });
@@ -546,19 +571,19 @@ describe("ensureHarnessRuntime", () => {
     await ensureHarnessRuntime({
       ...paths,
       socketPath: "/tmp/volli.sock",
-      adapters: [adapterFor("cursor")],
+      adapters: [adapterFor("opencode")],
       adapterCensus: "complete",
       resolveCommand: () => Promise.resolve(null),
     });
 
-    const configPath = join(paths.harnessRoot, "cursor", "cli-config.json");
+    const configPath = join(paths.harnessRoot, "opencode", "opencode.json");
     expect((await stat(configPath)).isFile()).toBe(true);
     // And it is still a plain replace on the next pass — the guard refuses a
     // foreign path, not Volli's own previous write.
     await ensureHarnessRuntime({
       ...paths,
       socketPath: "/tmp/volli.sock",
-      adapters: [adapterFor("cursor")],
+      adapters: [adapterFor("opencode")],
       adapterCensus: "complete",
       resolveCommand: () => Promise.resolve(null),
     });

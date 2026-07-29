@@ -3,9 +3,22 @@ import type { HarnessAdapter } from "./types";
 
 /**
  * Cursor's CLI ships as `cursor-agent`, not `cursor` (that name belongs to the
- * editor's shell command). `CURSOR_CONFIG_DIR` redirects `cli-config.json`
- * without touching authentication, which is hardcoded to `~/.cursor/auth.json`
- * — so pointing it at a Volli-owned directory layers rather than replaces.
+ * editor's shell command).
+ *
+ * Hooks do NOT come from `CURSOR_CONFIG_DIR`. That variable redirects
+ * `cli-config.json` and the chat store, and Volli used to write its hooks
+ * there; `cursor-agent` loads hooks from a separate fixed ladder that consults
+ * no environment variable at all, so none of them could ever fire. Read out of
+ * the installed bundle, the rungs are: an OS-level enterprise file,
+ * `~/.cursor/hooks.json`, `<cwd>/.cursor/hooks.json`, a team file under
+ * `~/.cursor/managed` (home, despite the shape of its path), and the
+ * Claude-compatibility `settings.json` files in `~/.claude` and `<cwd>/.claude`.
+ * Only the `<cwd>` project rung is per-ticket isolatable, because a ticket's
+ * working directory is a worktree Volli made — hence `cursor-hooks-file`.
+ *
+ * `sessionStart` fires on a FRESH session only; `--resume` and `--continue`
+ * skip it. So a resumed cursor session proves itself alive at its first turn
+ * rather than at launch.
  *
  * It declares no `input.needed` and no `permission.requested`, and that is
  * confirmed rather than merely undocumented: its Claude-Code-compatibility
@@ -24,7 +37,7 @@ export const cursorAdapter: HarnessAdapter = {
     commandsDir: null,
     instructionsFile: "{home}/AGENTS.md",
   },
-  injection: { kind: "config-dir-env", envVar: "CURSOR_CONFIG_DIR", filename: "cli-config.json" },
+  injection: { kind: "cursor-hooks-file" },
   // `--new-session-id` exists but is hidden (`.hideHelp()`).
   sessionId: { kind: "argv", flag: "--new-session-id", format: "uuid" },
   resume: {

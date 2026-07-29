@@ -160,11 +160,9 @@ describe("first-class harness capabilities", () => {
     expect(supportedEvents(cursor).has("input.needed")).toBe(false);
     expect(supportedEvents(cursor).has("permission.requested")).toBe(false);
     expect(supportedEvents(cursor).has("turn.completed")).toBe(true);
-    expect(cursor.injection).toEqual({
-      kind: "config-dir-env",
-      envVar: "CURSOR_CONFIG_DIR",
-      filename: "cli-config.json",
-    });
+    // Hooked because its hooks land on the one rung cursor-agent actually
+    // reads per project — not because a variable was pointed somewhere.
+    expect(cursor.injection).toEqual({ kind: "cursor-hooks-file" });
   });
 
   it("learns opencode's session id from its events instead of minting one at launch", () => {

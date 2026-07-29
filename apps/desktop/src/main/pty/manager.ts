@@ -1,7 +1,7 @@
 import type { WebContents } from "electron";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
-import { basename, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import type Database from "better-sqlite3";
 import {
   agentSessionEnv,
@@ -30,11 +30,12 @@ import type {
   VolliIpcEvent,
 } from "@volli/shared";
 import { broadcastDataChanged } from "../broadcast";
+import { ensureHarnessWorkspaceFiles } from "../harness-workspace";
 import { createProcessInspector, parkConfigFromEnv } from "../park";
 import type { ParkConfig, ProcessInspector } from "../park";
 import { isPathWithinRoots } from "../project-roots";
 import { ensureProjectArtifactsDir } from "../volli-fs";
-import { createSetupRun, ensure } from "../worktree";
+import { createSetupRun, ensure, runGitCapturing } from "../worktree";
 import type { EnsureOutcome, SetupRun } from "../worktree";
 import { worktreeDeps, worktreesHome } from "../worktree-runtime";
 import { isInside } from "../worktree/paths";
@@ -225,6 +226,40 @@ export class PtyManager {
     getHarnessAdapter(harnessId);
 
   /**
+   * Writes the per-worktree harness config (see `harness-workspace.ts`) for
+   * every adapter this launch knows about — not just the one the launch line
+   * names, because the user can type `cursor-agent` into any Volli terminal and
+   * the wrapper will happily run it.
+   *
+   * Never fatal. A refusal means one harness reports nothing for this session;
+   * aborting the boot over it would trade a degraded terminal for no terminal.
+   * A refusal IS logged, because the alternative — cursor silently reporting
+   * nothing — is the exact defect this file was written to end.
+   */
+  private async writeHarnessWorkspaceFiles(
+    worktreePath: string,
+    runtime: AgentRuntimeEnvironment,
+  ): Promise<void> {
+    try {
+      const result = await ensureHarnessWorkspaceFiles({
+        worktreePath,
+        adapters: runtime.adapters ?? harnessAdapters,
+        socketPath: runtime.socketPath,
+        shimPath: join(runtime.binDir, "volli"),
+        git: runGitCapturing,
+      });
+      for (const refusal of result.refused) {
+        console.warn(
+          `[volli] ${refusal.harnessId} will not report events in ${worktreePath}: ` +
+            `${refusal.path} — ${refusal.reason}`,
+        );
+      }
+    } catch (error) {
+      console.error(`[volli] failed to write harness workspace files: ${errorMessage(error)}`);
+    }
+  }
+
+  /**
    * Lazy dynamic import of node-pty. Isolated in a method so tests can
    * `vi.mock("node-pty")` and so the native module is touched only when a
    * session is actually created.
@@ -296,6 +331,16 @@ export class PtyManager {
       if (!isPathWithinRoots(cwd)) {
         return { ok: false, error: "cwd is outside known projects" };
       }
+    }
+
+    // The harness config that cannot live under `<userData>` — cursor's
+    // `.cursor/hooks.json`, which it reads from its working directory and
+    // nowhere else per-ticket. Worktree sessions only: the alternative is
+    // writing into the user's own checkout, which nothing justifies, so a
+    // scratch session runs cursor unhooked rather than politely vandalized.
+    // Refreshed every boot, because the command line names this launch's socket.
+    if (worktreeOutcome !== null && this.agentRuntime !== null) {
+      await this.writeHarnessWorkspaceFiles(cwd, this.agentRuntime);
     }
 
     try {

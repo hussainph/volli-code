@@ -1,10 +1,14 @@
 /**
  * What one harness launch needs on disk, on argv, and in the environment.
  *
- * Nothing here touches the user's own harness configuration: every mechanism
- * either passes configuration on the command line or points an environment
- * variable at a Volli-owned directory, which is what makes the whole design
- * free of merges, manifests, uninstall and conflict detection.
+ * Nothing here touches the user's own harness configuration. Three of the four
+ * mechanisms manage that by construction — they pass configuration on the
+ * command line, or point an environment variable at a Volli-owned directory —
+ * and one cannot: cursor reads hooks from a fixed ladder no variable redirects,
+ * so its file lands in the session's WORKING directory. That is still not the
+ * user's own configuration, because the only working directory Volli writes
+ * into is a worktree Volli created; it is the reason {@link
+ * HarnessWorkspaceFile} exists, and the reason exactly one merge does.
  *
  * The switch is on `injection.kind`, never on the harness's identity. A kind
  * names both a mechanism and the native config shape that mechanism expects,
@@ -12,6 +16,8 @@
  * built-in does.
  */
 import { shellSingleQuote } from "../harness-command";
+import { cursorHookEntry, mergeCursorHooks, renderCursorHooks } from "./cursor-hooks";
+import type { CursorHookEntry } from "./cursor-hooks";
 import { renderEventPlugin } from "./plugin";
 import { nativeName, type HarnessAdapter, type HarnessEventBinding } from "./types";
 
@@ -43,10 +49,51 @@ export interface HarnessLaunchInput {
   hookArgv: readonly string[];
 }
 
+/**
+ * How a workspace file is reconciled with whatever is already at its path.
+ * `replace` is the ordinary managed write; a named strategy means the harness's
+ * config file is one Volli has to share with the user, so the merge belongs to
+ * whichever module knows that file's schema.
+ */
+export type WorkspaceFileMerge = "replace" | "cursor-hooks";
+
+/**
+ * A file a harness only reads from its own WORKING DIRECTORY — no environment
+ * variable redirects it, so it cannot live in the Volli-owned harness
+ * directory with everything else.
+ *
+ * `path` is relative to that working directory, and the only working directory
+ * Volli may write into is a worktree it created: the file lands inside the
+ * user's repository, so the writer also has to keep it out of `git status` and
+ * must refuse a path git is tracking.
+ */
+export interface HarnessWorkspaceFile {
+  /** Relative to the session's working directory, always `/`-separated. */
+  path: string;
+  content: string;
+  merge: WorkspaceFileMerge;
+}
+
 export interface HarnessLaunchConfig {
   files: readonly { path: string; content: string }[];
+  /** See {@link HarnessWorkspaceFile}. Empty for every harness but cursor. */
+  workspaceFiles: readonly HarnessWorkspaceFile[];
   argv: readonly string[];
   env: Readonly<Record<string, string>>;
+}
+
+/**
+ * `file.content` reconciled with `existing` (`null` when nothing is there).
+ * Lives beside the strategy union so a caller that cannot know which harness it
+ * is holding still merges correctly — the same discipline as `injected()`
+ * switching on a kind rather than on an identity.
+ */
+export function mergeWorkspaceFile(
+  file: HarnessWorkspaceFile,
+  existing: string | null,
+): { ok: true; content: string } | { ok: false; reason: string } {
+  if (file.merge === "cursor-hooks") return mergeCursorHooks(existing, file.content);
+  return { ok: true, content: file.content };
 }
 
 /** A harness slug shouted into the shape an environment-variable name can take. */
@@ -221,7 +268,37 @@ function codexHookOverrides(
   return [...groups].map(([native, value]) => `hooks.${native}=${tomlInline(value)}`);
 }
 
-/** The flatter `{ native: [{ command }] }` shape cursor uses. */
+/**
+ * Where cursor-agent looks for a project's hooks, relative to its working
+ * directory. A fixed path: the ladder that finds it consults no environment
+ * variable, so this is a constant rather than something an adapter declares.
+ */
+export const CURSOR_HOOKS_PATH = ".cursor/hooks.json";
+
+/**
+ * Cursor's own hooks document. Grouped by native name because the schema keys
+ * on it — two canonical events bound to one cursor event have to arrive as two
+ * entries under a single key or the second overwrites the first.
+ */
+function cursorHooksFile(
+  bindings: readonly HarnessEventBinding[],
+  input: HarnessLaunchInput,
+): HarnessWorkspaceFile {
+  const hooks: Record<string, CursorHookEntry[]> = bareObject<CursorHookEntry[]>();
+  for (const binding of bindings) {
+    const native = nativeName(binding);
+    const group = hooks[native] ?? [];
+    group.push(cursorHookEntry(hookCommandLine(input, binding), binding.timeoutMs));
+    hooks[native] = group;
+  }
+  return { path: CURSOR_HOOKS_PATH, content: renderCursorHooks(hooks), merge: "cursor-hooks" };
+}
+
+/**
+ * The flatter `{ native: [{ command }] }` shape `config-dir-env` writes. Named
+ * after the shape rather than a harness now that no built-in declares that
+ * kind — see the kind's own comment for why it survives.
+ */
 function commandHooks(
   bindings: readonly HarnessEventBinding[],
   input: HarnessLaunchInput,
@@ -249,11 +326,16 @@ function injected(adapter: HarnessAdapter, input: HarnessLaunchInput): HarnessLa
   const { injection } = adapter;
   switch (injection.kind) {
     case "none": {
-      return { files: [], argv: [], env: {} };
+      return { files: [], workspaceFiles: [], argv: [], env: {} };
     }
     case "argv-settings-json": {
       const settings = settingsObject(adapter, claudeHooks(adapter.events, input));
-      return { files: [], argv: [injection.flag, JSON.stringify(settings)], env: {} };
+      return {
+        files: [],
+        workspaceFiles: [],
+        argv: [injection.flag, JSON.stringify(settings)],
+        env: {},
+      };
     }
     case "argv-config-override": {
       // Two mechanisms, one harness, and nothing written to disk: hook bindings
@@ -271,6 +353,7 @@ function injected(adapter: HarnessAdapter, input: HarnessLaunchInput): HarnessLa
       }
       return {
         files: [],
+        workspaceFiles: [],
         argv: overrides.flatMap((override) => [injection.flag, override]),
         env: {},
       };
@@ -284,9 +367,23 @@ function injected(adapter: HarnessAdapter, input: HarnessLaunchInput): HarnessLa
             content: `${JSON.stringify(settings, null, 2)}\n`,
           },
         ],
+        workspaceFiles: [],
         argv: [],
         // The variable names a DIRECTORY; the harness finds the file inside it.
         env: { [injection.envVar]: HARNESS_DIR_TOKEN },
+      };
+    }
+    case "cursor-hooks-file": {
+      // Nothing under `{harnessDir}` and nothing on argv: the file has to sit
+      // in the working directory, which is per-session, so the writer is the
+      // one that knows the worktree. `launchSettings` has no home here —
+      // cursor's hooks file holds hooks and cursor's OTHER settings live in a
+      // file this kind deliberately does not claim.
+      return {
+        files: [],
+        workspaceFiles: [cursorHooksFile(adapter.events, input)],
+        argv: [],
+        env: {},
       };
     }
     case "plugin-config-env": {
@@ -303,6 +400,7 @@ function injected(adapter: HarnessAdapter, input: HarnessLaunchInput): HarnessLa
           { path, content: `${JSON.stringify(settings, null, 2)}\n` },
           { path: pluginPath, content: renderEventPlugin(adapter.events, input) },
         ],
+        workspaceFiles: [],
         argv: [],
         // The variable names the FILE itself, layered over the user's config.
         env: { [injection.envVar]: path },

@@ -361,9 +361,12 @@ describe("parseHarnessManifest", () => {
   });
 
   it("refuses the variable another adapter is already configured through", () => {
-    // Folded out of the built-in registry, so this stays true if cursor's or
-    // opencode's own variable ever changes.
-    for (const envVar of ["CURSOR_CONFIG_DIR", "OPENCODE_CONFIG"]) {
+    // Folded out of the built-in registry, so this stays true if opencode's own
+    // variable ever changes. Only opencode is left here: cursor stopped being
+    // configured through a variable when its hooks moved to the file ladder
+    // that actually reads them, so `CURSOR_CONFIG_DIR` is now refused by the
+    // rule below instead — a variable the binary reads, not one Volli sets.
+    for (const envVar of ["OPENCODE_CONFIG"]) {
       const result = parseHarnessManifest(
         minimal({ injection: { kind: "config-dir-env", envVar, filename: "volli.json" } }),
       );
@@ -382,6 +385,7 @@ describe("parseHarnessManifest", () => {
       "CODEX_HOME",
       "OPENAI_API_KEY",
       "CURSOR_API_KEY",
+      "CURSOR_CONFIG_DIR",
       // Not a config path at all — a kill switch for the plugin every opencode
       // event Volli reports arrives through.
       "OPENCODE_DISABLE_DEFAULT_PLUGINS",

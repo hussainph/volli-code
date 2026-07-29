@@ -1,4 +1,5 @@
 export * from "./core";
+export * from "./cursor-hooks";
 export * from "./diff";
 export * from "./generic";
 export * from "./inherited-env";

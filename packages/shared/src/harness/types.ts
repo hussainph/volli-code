@@ -89,8 +89,33 @@ export type HarnessConfigInjection =
   | { kind: "argv-settings-json"; flag: string }
   /** codex: `-c key=value`, repeated once per override. */
   | { kind: "argv-config-override"; flag: string }
-  /** cursor: `CURSOR_CONFIG_DIR` points at a directory holding `filename`; auth stays in `~/.cursor`. */
+  /**
+   * A directory named by an environment variable holds `filename`, in the flat
+   * `{ "<Native>": [{ command }] }` hook shape.
+   *
+   * No built-in declares this any more, and the reason is worth keeping: it was
+   * written FOR cursor, on the strength of `CURSOR_CONFIG_DIR` redirecting
+   * `cli-config.json`. That variable really does redirect that file — and
+   * `cursor-agent` reads hooks from somewhere else entirely, so every hook
+   * Volli wrote through this kind was unreachable. A kind named after a
+   * mechanism class rather than a binary is what let the mistake survive
+   * unexamined; `docs/plans/harness-architecture-v2.md` §1 proposes retiring
+   * the whole set of them in favour of one BYO mechanism. Until that lands this
+   * stays, because a registered manifest may already declare it.
+   */
   | { kind: "config-dir-env"; envVar: string; filename: string }
+  /**
+   * cursor: hooks come from a fixed `hooks.json` ladder that NO environment
+   * variable reaches — enterprise, `~/.cursor`, `<cwd>/.cursor`, a team file
+   * under `~/.cursor/managed`, and the Claude-compatibility files. The only
+   * rung Volli can own per ticket is the project one, `.cursor/hooks.json`
+   * relative to the working directory, which is a Volli-created worktree.
+   *
+   * Named after the binary, not a mechanism: it fixes cursor's schema, cursor's
+   * filename and cursor's search order all at once, and saying so is what makes
+   * it falsifiable against one live run.
+   */
+  | { kind: "cursor-hooks-file" }
   /** opencode: `OPENCODE_CONFIG` points at `filename` itself, layered over the user's config. */
   | { kind: "plugin-config-env"; envVar: string; filename: string };
 

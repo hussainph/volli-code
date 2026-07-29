@@ -2,7 +2,13 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { parseHarnessId, type HarnessId } from "../ticket";
 import { getHarnessAdapter } from "./core";
-import { buildLaunchConfig, harnessEnvSuffix, HARNESS_DIR_TOKEN } from "./launch";
+import {
+  buildLaunchConfig,
+  harnessEnvSuffix,
+  mergeWorkspaceFile,
+  CURSOR_HOOKS_PATH,
+  HARNESS_DIR_TOKEN,
+} from "./launch";
 import type { HarnessAdapter } from "./types";
 
 /**
@@ -79,18 +85,51 @@ describe("buildLaunchConfig", () => {
     expect(buildLaunchConfig(adapterFor("opencode"), INPUT).argv).toEqual([]);
   });
 
-  it("points cursor at a Volli-owned config directory, leaving its auth where it is", () => {
+  // The whole point of the kind: cursor's hooks reach a path relative to the
+  // WORKING directory, and no environment variable and no argv flag can move
+  // them. A regression here is silent — the harness launches perfectly and
+  // reports nothing — so the assertions are about where the file is NOT.
+  it("gives cursor a workspace hooks file and nothing else at all", () => {
     const config = buildLaunchConfig(adapterFor("cursor"), INPUT);
-    expect(config.env["CURSOR_CONFIG_DIR"]).toBe(HARNESS_DIR_TOKEN);
-    expect(config.files.map((file) => file.path)).toEqual([`${HARNESS_DIR_TOKEN}/cli-config.json`]);
+    expect(config.files).toEqual([]);
+    expect(config.argv).toEqual([]);
+    expect(config.env).toEqual({});
+    expect(config.workspaceFiles.map((file) => file.path)).toEqual([CURSOR_HOOKS_PATH]);
+    expect(config.workspaceFiles[0]?.path.startsWith(HARNESS_DIR_TOKEN)).toBe(false);
+    expect(config.workspaceFiles[0]?.merge).toBe("cursor-hooks");
 
-    const written = JSON.parse(config.files[0]?.content ?? "{}") as {
-      hooks: Record<string, { command: string }[]>;
+    const written = JSON.parse(config.workspaceFiles[0]?.content ?? "{}") as {
+      version: number;
+      hooks: Record<string, { command: string; timeout: number }[]>;
     };
+    expect(written.version).toBe(1);
     expect(written.hooks["stop"]?.[0]?.command).toBe(
       "'/vol/Application Support/Volli Code/bin/volli' 'hook' 'codex' 'turn.completed' '--socket' '/tmp/volli.sock'",
     );
+    // Seconds, because cursor multiplies this by 1000 before it arms the
+    // timer — a millisecond value here is a hook with an 83-minute leash.
+    expect(written.hooks["stop"]?.[0]?.timeout).toBe(5);
     expect(Object.keys(written.hooks)).not.toContain("Notification");
+  });
+
+  it("leaves every other harness with no workspace file to write into a repo", () => {
+    for (const id of ["claude-code", "codex", "opencode"]) {
+      expect(buildLaunchConfig(adapterFor(id), INPUT).workspaceFiles).toEqual([]);
+    }
+    expect(buildLaunchConfig(bareAdapter(), INPUT).workspaceFiles).toEqual([]);
+  });
+
+  it("still writes a config-dir-env harness into the Volli-owned directory", () => {
+    const config = buildLaunchConfig(
+      bareAdapter({
+        injection: { kind: "config-dir-env", envVar: "MY_CONFIG_DIR", filename: "cli-config.json" },
+        events: [{ event: "turn.completed", native: "stop", delivery: "async", timeoutMs: 5000 }],
+      }),
+      INPUT,
+    );
+    expect(config.env["MY_CONFIG_DIR"]).toBe(HARNESS_DIR_TOKEN);
+    expect(config.files.map((file) => file.path)).toEqual([`${HARNESS_DIR_TOKEN}/cli-config.json`]);
+    expect(config.workspaceFiles).toEqual([]);
   });
 
   it("layers opencode's config over the user's and emits the plugin it names", () => {
@@ -348,5 +387,26 @@ describe("buildLaunchConfig", () => {
     expect(written.hooks["stop"]?.[0]?.command).toBe(
       "'/vol/Application Support/Volli Code/bin/volli' 'hook' 'codex' 'turn.completed' '--socket' '/tmp/it'\\''s here/volli.sock'",
     );
+  });
+});
+
+describe("mergeWorkspaceFile", () => {
+  it("replaces outright when the file is nobody else's to share", () => {
+    const file = { path: "a.json", content: "ours\n", merge: "replace" as const };
+    expect(mergeWorkspaceFile(file, "theirs\n")).toEqual({ ok: true, content: "ours\n" });
+  });
+
+  it("routes cursor's file through the merge that knows its schema", () => {
+    const config = buildLaunchConfig(adapterFor("cursor"), INPUT);
+    const file = config.workspaceFiles[0]!;
+    const merged = mergeWorkspaceFile(file, '{"version":1,"hooks":{"stop":[{"command":"mine"}]}}');
+    expect(merged.ok).toBe(true);
+    const hooks = (
+      JSON.parse((merged as { content: string }).content) as {
+        hooks: Record<string, { command: string }[]>;
+      }
+    ).hooks;
+    expect(hooks["stop"]?.[0]?.command).toBe("mine");
+    expect(hooks["stop"]).toHaveLength(2);
   });
 });
