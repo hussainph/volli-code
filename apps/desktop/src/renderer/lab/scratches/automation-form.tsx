@@ -392,9 +392,9 @@ function ModeControl({
  */
 function SkillPicker({ onInsert }: { onInsert: (snippet: string) => void }) {
   const groups: Array<{ source: Skill["source"]; label: string }> = [
-    { source: "bundled", label: "Bundled with Volli" },
-    { source: "project", label: "Found in this project" },
-    { source: "user", label: "Found on your machine" },
+    { source: "bundled", label: "Volli" },
+    { source: "project", label: "This project" },
+    { source: "user", label: "Your machine" },
   ];
 
   return (
@@ -512,7 +512,6 @@ function InstructionsEditor({
           value={instructions}
           onChange={(value) => update({ instructions: value })}
           mode={mode}
-          placeholder="What should the agent do?"
           // A min and a max, never a fixed height: the editor grows with what
           // you write and then scrolls inside itself rather than pushing the
           // settings strip off the page — the same bounded-growth rule the
@@ -578,17 +577,15 @@ function InstructionsEditor({
  * The first version drew it as a dashed, greyed-out pill, which is the visual
  * language of a control that is temporarily unavailable: it read as broken, the
  * exact risk #84 names. So it is drawn as a stated VALUE instead — solid, in
- * foreground text, the way any other chosen setting looks — and the sentence
- * underneath gives the reason rather than an apology. "Nothing" is an answer
- * here, not an absence, and it should look like one.
+ * foreground text, the way any other chosen setting looks. "None" is an answer
+ * here, not an absence, and it should look like one. The reason it is the only
+ * answer belongs in this comment, which is where it now is.
  */
 function OutcomeControl() {
   return (
-    <div className="flex flex-col gap-1.5">
-      <span className="flex w-fit items-center gap-1.5 rounded-full bg-muted px-2.5 py-0.5 text-xs text-foreground">
-        Nothing — the session is the report
-      </span>
-    </div>
+    <span className="flex w-fit items-center gap-1.5 rounded-full bg-muted px-2.5 py-0.5 text-xs text-foreground">
+      None
+    </span>
   );
 }
 

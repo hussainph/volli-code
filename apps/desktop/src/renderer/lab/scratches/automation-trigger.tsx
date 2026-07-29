@@ -360,11 +360,15 @@ function BoardCard({
 
 type TicketState = "unarmed" | "armed" | "resumable";
 
-const TICKET_STATE_NOTES: Record<TicketState, string> = {
-  unarmed: "Target column has no default Automation — a plain status change, exactly as today.",
-  armed: "Target column has a default. The button names the move AND what will run.",
-  resumable:
-    "Same column, but this ticket has a session worth resuming — #89: resume wins, and a fresh Run stays one click away.",
+/**
+ * Names the three specimens below. These are exhibit labels, not copy — they
+ * distinguish three otherwise near-identical mocks, and they replaced a caption
+ * under each one that said the same thing in a sentence.
+ */
+const TICKET_STATE_LABELS: Record<TicketState, string> = {
+  unarmed: "No column default",
+  armed: "Column default",
+  resumable: "Session to resume",
 };
 
 /** The ticket the header mock is built around — Doing, so the move it offers is the real next one. */
@@ -417,7 +421,7 @@ function AdvanceButton({ state }: { state: TicketState }) {
           <Button
             variant="outline"
             size="icon-xs"
-            aria-label="More ways to advance this ticket"
+            aria-label="More options"
             className="-ml-px rounded-l-none"
           >
             <CaretDownIcon weight="bold" />
@@ -440,7 +444,7 @@ function AdvanceButton({ state }: { state: TicketState }) {
           {armed !== null ? (
             <DropdownMenuItem>
               <ArrowRightIcon />
-              Move to {TICKET_STATUS_LABELS[ADVANCE_TARGET]} without running
+              Move without running
             </DropdownMenuItem>
           ) : null}
           <DropdownMenuSeparator />
@@ -508,9 +512,10 @@ function InTicketTab() {
     <div className="flex flex-col gap-6">
       {(["unarmed", "armed", "resumable"] as const).map((state) => (
         <section key={state} className="flex flex-col gap-1.5">
-          <h3 className="font-mono text-label uppercase text-muted-foreground">{state}</h3>
+          <h3 className="font-mono text-label uppercase text-muted-foreground">
+            {TICKET_STATE_LABELS[state]}
+          </h3>
           <MockTicketHeader ticket={HEADER_TICKET} state={state} />
-          <p className="max-w-prose text-xs text-muted-foreground">{TICKET_STATE_NOTES[state]}</p>
         </section>
       ))}
     </div>
@@ -600,9 +605,7 @@ function ColumnDefaultControl({
         </TooltipContent>
       </Tooltip>
       <DropdownMenuContent align="end" className="w-72">
-        <DropdownMenuLabel>
-          Runs when a ticket is moved into {TICKET_STATUS_LABELS[status]}
-        </DropdownMenuLabel>
+        <DropdownMenuLabel>Default for {TICKET_STATUS_LABELS[status]}</DropdownMenuLabel>
         {offered.map((automation) => (
           <DropdownMenuItem
             key={automation.id}
@@ -620,7 +623,7 @@ function ColumnDefaultControl({
         ))}
         <DropdownMenuSeparator />
         {/* In-situ creation (#86a): authoring must never require a trip to settings. */}
-        <DropdownMenuItem>New automation for this column…</DropdownMenuItem>
+        <DropdownMenuItem>New automation…</DropdownMenuItem>
         {chosen ? (
           <DropdownMenuItem onSelect={onDisarm}>
             <XIcon />
@@ -1436,9 +1439,7 @@ function DragTab({
           </p>
           {/* The confirmation is the only thing standing between this prototype
               and someone believing a Run started. It says so every time. */}
-          <p className="pt-0.5 text-label text-muted-foreground">
-            Nothing started — the lab has no sessions.
-          </p>
+          <p className="pt-0.5 text-label text-muted-foreground">The lab starts nothing.</p>
         </div>
       ) : null}
 
