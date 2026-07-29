@@ -18,6 +18,7 @@ import {
   getHarnessAdapter,
   resolveShell,
   ticketBranchName,
+  VOLLI_USER_ZDOTDIR_ENV,
 } from "@volli/shared";
 import type { FirstPaintHint, HarnessId, ResolvedAppearance, VolliIpcEvent } from "@volli/shared";
 import type { ManagedConflict } from "./harness-install";
@@ -558,7 +559,11 @@ app.whenReady().then(async () => {
       zdotDir: runtimePaths.zdotDir,
       binDir: runtimePaths.binDir,
       shellPath: resolveShell(process.env).file,
+      // Both, because a Volli launched from a shell Volli already wrapped
+      // inherits its OWN ZDOTDIR — `pnpm dev` in a Volli terminal, a relaunch —
+      // and the user's real one survives only in VOLLI_USER_ZDOTDIR.
       inheritedZdotDir: process.env["ZDOTDIR"],
+      inheritedUserZdotDir: process.env[VOLLI_USER_ZDOTDIR_ENV],
     });
   };
 

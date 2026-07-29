@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import type { AgentRequest, HarnessEventNotice, HarnessId } from "@volli/shared";
+import type { AgentRequest, DoctorCheck, HarnessEventNotice, HarnessId } from "@volli/shared";
 
 import { createAttachment } from "./db/attachments-repo";
 import { getRegisteredHarness, recordHarnessTrust } from "./db/harness-registry-repo";
@@ -1532,6 +1532,103 @@ describe("agent command service", () => {
       expect(notices).toEqual([["VC-12 needs you", "my-harness is waiting on a human"]]);
     });
 
+    // `recordHarnessDelivery` answers `verified` for every first-class harness
+    // unconditionally — it is about delivery, not capability. Cursor's own
+    // source maps both blocking signals to null, and the renderer refuses to
+    // raise a `waiting` for it; main firing a native interrupt over a sidebar
+    // reading plain Idle is the disagreement this channel exists to prevent.
+    it("stays quiet for a harness whose adapter cannot report that a human is blocking it", async () => {
+      const notices: [string, string][] = [];
+      const pushed: HarnessEventNotice[] = [];
+      const { hook } = hookService(
+        {
+          notify: (title, message) => notices.push([title, message]),
+          onHarnessEvent: (notice) => pushed.push(notice),
+        },
+        "ticket-cursor",
+        "cursor",
+      );
+
+      await hook({ harness: "cursor", event: "input.needed" });
+
+      expect(notices).toEqual([]);
+      // Still delivered, and still fanned out: the channel is demonstrably
+      // alive, it just cannot vouch for this one claim.
+      expect(pushed.map((notice) => notice.event)).toEqual(["input.needed"]);
+    });
+
+    // A user who types `codex` inside a claude-code session's terminal reaches
+    // the codex wrapper, and codex's hooks then report from the same
+    // VOLLI_SESSION. Read off the session row, every one of those events was
+    // recorded and announced as Claude Code's.
+    it("credits the harness that fired, not the one the session launched with", async () => {
+      const registered = "my-harness" as HarnessId;
+      const notices: [string, string][] = [];
+      const pushed: HarnessEventNotice[] = [];
+      const { hook } = hookService(
+        {
+          notify: (title, message) => notices.push([title, message]),
+          onHarnessEvent: (notice) => pushed.push(notice),
+        },
+        "ticket-typed",
+      );
+      recordHarnessTrust(
+        ctx.db,
+        {
+          slug: registered,
+          manifestPath: "/home/dev/.agents/harnesses/my-harness/harness.json",
+          manifestSha256: "a1",
+          decision: "trusted",
+          declaredEvents: ["input.needed"],
+        },
+        1000,
+      );
+
+      const response = await hook({ harness: registered, event: "input.needed" });
+
+      expect(response).toMatchObject({ ok: true, data: { harness: registered } });
+      expect(getRegisteredHarness(ctx.db, registered)?.verifiedEvents).toEqual(["input.needed"]);
+      expect(pushed.map((notice) => notice.harnessId)).toEqual([registered]);
+      // The disagreement rule: a notification is the one claim that interrupts
+      // a human and names an agent, so it is made only where the session Volli
+      // launched and the hook that fired agree. Anything in the session can
+      // invoke `volli hook` under a name of its choosing.
+      expect(notices).toEqual([]);
+    });
+
+    it("falls back to the session's harness when the hook named none", async () => {
+      const pushed: HarnessEventNotice[] = [];
+      const notices: [string, string][] = [];
+      const { hook } = hookService(
+        {
+          notify: (title, message) => notices.push([title, message]),
+          onHarnessEvent: (notice) => pushed.push(notice),
+        },
+        "ticket-nameless",
+      );
+
+      await hook({ event: "input.needed" });
+
+      expect(pushed.map((notice) => notice.harnessId)).toEqual(["claude-code"]);
+      expect(notices).toEqual([["VC-12 needs you", "Claude Code is waiting on a human"]]);
+    });
+
+    // The slug is baked into the hook argv by Volli's own launch machinery, so
+    // a name from outside that vocabulary is not a harness reporting — and it
+    // does not get to write to the capability ledger under a name it picked.
+    it("refuses a harness argument naming nothing Volli knows", async () => {
+      const pushed: HarnessEventNotice[] = [];
+      const { hook } = hookService({ onHarnessEvent: (notice) => pushed.push(notice) });
+
+      for (const harness of ["Not A Slug", "never-registered", 7]) {
+        await expect(hook({ harness, event: "input.needed" })).resolves.toMatchObject({
+          ok: false,
+          error: { code: "INVALID_REQUEST" },
+        });
+      }
+      expect(pushed).toEqual([]);
+    });
+
     it("records an event from a harness it has no record of, and notifies nobody", async () => {
       const notices: [string, string][] = [];
       const pushed: HarnessEventNotice[] = [];
@@ -2111,6 +2208,68 @@ describe("doctor", () => {
     ]) {
       expect(await doctor(args)).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
     }
+  });
+
+  /** The check with this id, or a helpful failure. */
+  async function checkFrom(args: Record<string, unknown>, id: string) {
+    const response = await doctorService()(args);
+    if (!response.ok) throw new Error("expected ok");
+    const { checks } = response.data as { checks: DoctorCheck[] };
+    const found = checks.find((check) => check.id === id);
+    if (found === undefined) throw new Error(`no ${id} check in ${checks.map((c) => c.id).join()}`);
+    return found;
+  }
+
+  // Measured-absent and never-measured are different facts, and collapsing the
+  // second into the first is how a diagnostic states a plausible wrong answer
+  // in the voice of an observation.
+  it("keeps a measured absence apart from a field that never arrived", async () => {
+    // The caller looked and found nothing — a measurement, and a real failure.
+    const absent = await checkFrom({ ...observation, zdotDir: null }, "shell-init");
+    expect(absent.status).toBe("fail");
+    expect(absent.detail).toContain("unset");
+
+    // Nobody reported it. Nothing is known, and the report says so.
+    const { zdotDir: _omitted, ...silent } = observation;
+    const unreported = await checkFrom(silent, "shell-init");
+    expect(unreported.status).toBe("warn");
+    expect(unreported.detail).toContain("not reported");
+  });
+
+  // A malformed field is a caller that disagrees with main about the wire —
+  // one of the conditions doctor exists to name. It costs that one field its
+  // measurement and nothing else: the report is not discarded to punish it,
+  // and the field never poses as measured-absent.
+  it("reports a malformed field as unmeasured, not as measured-absent", async () => {
+    const malformed = { ...observation, zdotDir: 123, volliPath: {} };
+
+    const shellInit = await checkFrom(malformed, "shell-init");
+    expect(shellInit.status).toBe("warn");
+    expect(shellInit.detail).toContain("not reported");
+    expect(shellInit.remedy).toBeUndefined();
+
+    const volli = await checkFrom(malformed, "volli-cli");
+    expect(volli.status).toBe("warn");
+    expect(volli.detail).toContain("nothing is known");
+    // The rest of the report still ran, which is the reason this does not
+    // refuse the request outright.
+    expect((await checkFrom(malformed, "path-position")).status).toBe("ok");
+  });
+
+  it("gives a malformed resolution the same treatment as an unreported one", async () => {
+    const claimed = await checkFrom(
+      { ...observation, resolved: { claude: 42 } },
+      "resolves-claude",
+    );
+    expect(claimed.status).toBe("warn");
+    expect(claimed.detail).toContain("no resolution was reported");
+
+    const measured = await checkFrom(
+      { ...observation, resolved: { claude: null } },
+      "resolves-claude",
+    );
+    expect(measured.status).toBe("warn");
+    expect(measured.detail).toContain("resolves to nothing");
   });
 
   it("reports that it could not look when the harness runtime is unavailable", async () => {

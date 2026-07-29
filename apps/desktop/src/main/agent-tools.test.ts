@@ -92,7 +92,9 @@ describe("detectHarnesses", () => {
 
     const detected = await detectHarnesses({
       env: launchd,
-      runShell: async () => `${bin}:${launchd.PATH}\n`,
+      // Marked, as the probe's own `printf` marks it: an interactive shell
+      // talks on both sides of the command, so only the marked line counts.
+      runShell: async () => `__VOLLI_PATH__${bin}:${launchd.PATH}\n`,
     });
 
     expect(detected).toEqual(["codex"]);
