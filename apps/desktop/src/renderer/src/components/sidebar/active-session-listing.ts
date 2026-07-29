@@ -210,11 +210,19 @@ function lastRunRow(
     };
   }
 
+  // The high-water mark rides alongside rather than being re-read off `latest`:
+  // the loop has already established every candidate's `endedAt` is non-null,
+  // but that narrowing doesn't survive into the next iteration, so reading it
+  // back would need a `?? 0` that can never fire.
   let latest: SessionRecord | undefined;
+  let latestEndedAt = Number.NEGATIVE_INFINITY;
   for (const record of input.records) {
     if (record.ticketId !== ticket.id || record.endedAt === null) continue;
     if (record.placement === "split") continue;
-    if (latest === undefined || record.endedAt > (latest.endedAt ?? 0)) latest = record;
+    if (record.endedAt > latestEndedAt) {
+      latest = record;
+      latestEndedAt = record.endedAt;
+    }
   }
   if (latest !== undefined) {
     return {

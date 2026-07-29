@@ -159,10 +159,7 @@ export interface HarnessAdapter {
   /**
    * Harness-native settings Volli forces at launch, as dotted paths into that
    * harness's own config object — silencing its duplicate notifications, and
-   * the like.
-   */
-  /**
-   * Harness-native settings Volli forces at launch. Values keep their JSON type
+   * the like. Values keep their JSON type
    * rather than collapsing to strings: these are rendered into a harness's own
    * config, and TOML and JSON both distinguish `false` from `"false"`. A
    * harness handed the wrong one either rejects the key or, worse, ignores it.
