@@ -69,20 +69,60 @@ export const TICKET_PRIORITY_LABELS: Record<TicketPriority, string> = {
   high: "High",
 };
 
-/** First-class agent-harness adapters. Custom harnesses arrive later as plain strings. */
-export const HARNESS_IDS = ["claude-code", "codex", "opencode"] as const;
+/** Harnesses Volli ships an adapter for. Anyone else arrives as a {@link CustomHarnessId}. */
+export const FIRST_CLASS_HARNESS_IDS = ["claude-code", "codex", "cursor", "opencode"] as const;
 
-export type HarnessId = (typeof HARNESS_IDS)[number];
+export type FirstClassHarnessId = (typeof FIRST_CLASS_HARNESS_IDS)[number];
 
-/** Whether `value` is one of the first-class {@link HARNESS_IDS} — IPC-boundary vocabulary guard. */
-export function isHarnessId(value: unknown): value is HarnessId {
-  return typeof value === "string" && (HARNESS_IDS as readonly string[]).includes(value);
+declare const CUSTOM_HARNESS: unique symbol;
+
+/**
+ * A registered non-first-class harness slug. Nominal: only {@link
+ * parseHarnessId} mints one, which is the point — a bare `string` is
+ * assignable to neither arm of {@link HarnessId}, so a SQLite column or an IPC
+ * payload cannot become a harness id by sitting in a field of that name.
+ */
+export type CustomHarnessId = string & { readonly [CUSTOM_HARNESS]: true };
+
+/**
+ * Either a harness Volli knows by name or one someone registered. Open by
+ * construction (bring-your-own harnesses), but a `switch` over the four
+ * first-class ids still narrows the residual to {@link CustomHarnessId} rather
+ * than `never`, so an exhaustiveness assert in the default arm correctly
+ * refuses to compile.
+ */
+export type HarnessId = FirstClassHarnessId | CustomHarnessId;
+
+/**
+ * The shape a registered harness slug must take: lowercase, alphanumeric plus
+ * dashes, leading letter, 2–32 characters. It names a directory
+ * (`~/.agents/harnesses/<slug>/`) and an environment-variable suffix, so it is
+ * kept to characters that are inert in both.
+ */
+export const HARNESS_SLUG_RE = /^[a-z][a-z0-9-]{1,31}$/;
+
+/** Whether `value` is one of the {@link FIRST_CLASS_HARNESS_IDS} — IPC-boundary vocabulary guard. */
+export function isFirstClassHarnessId(value: unknown): value is FirstClassHarnessId {
+  return (
+    typeof value === "string" && (FIRST_CLASS_HARNESS_IDS as readonly string[]).includes(value)
+  );
 }
 
-/** Human-readable label for each first-class {@link HarnessId}. */
-export const HARNESS_LABELS: Record<HarnessId, string> = {
+/**
+ * The only way to turn an untrusted string into a {@link HarnessId}: a
+ * first-class id passes through as its literal type, any other well-formed
+ * slug is minted as a {@link CustomHarnessId}, and anything else is `null`.
+ */
+export function parseHarnessId(value: string): HarnessId | null {
+  if (isFirstClassHarnessId(value)) return value;
+  return HARNESS_SLUG_RE.test(value) ? (value as CustomHarnessId) : null;
+}
+
+/** Human-readable label for each {@link FirstClassHarnessId}. */
+export const HARNESS_LABELS: Record<FirstClassHarnessId, string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
+  cursor: "Cursor",
   opencode: "Opencode",
 };
 
@@ -100,9 +140,7 @@ export const DEFAULT_HARNESS_ID: HarnessId = "claude-code";
  * round-trip).
  */
 export function harnessLabel(harnessId: string): string {
-  return (HARNESS_IDS as readonly string[]).includes(harnessId)
-    ? HARNESS_LABELS[harnessId as HarnessId]
-    : harnessId;
+  return isFirstClassHarnessId(harnessId) ? HARNESS_LABELS[harnessId] : harnessId;
 }
 
 /** A board card and, once it reaches Doing, a terminal workspace. */

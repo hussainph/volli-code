@@ -6,7 +6,12 @@ import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
 import { useCallback, useEffect, useState } from "react";
-import { errorMessage, HARNESS_IDS, HARNESS_LABELS, type DirtyWorktreeOrphan } from "@volli/shared";
+import {
+  errorMessage,
+  FIRST_CLASS_HARNESS_IDS,
+  HARNESS_LABELS,
+  type DirtyWorktreeOrphan,
+} from "@volli/shared";
 
 import { AppearanceSettings } from "@renderer/components/pages/appearance-settings";
 import {
@@ -181,7 +186,7 @@ function HarnessRuntimesSettings() {
       icon={CpuIcon}
       description="Custom commands and resume flags are coming soon."
     >
-      {HARNESS_IDS.map((id) => (
+      {FIRST_CLASS_HARNESS_IDS.map((id) => (
         <SettingsRow key={id} label={HARNESS_LABELS[id]}>
           <span className="rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground">
             Built-in

@@ -9,10 +9,10 @@ import {
   composeTicketPrompt,
   displayTicketId,
   errorMessage,
-  HARNESS_IDS,
+  FIRST_CLASS_HARNESS_IDS,
   isTicketPriority,
   isTicketStatus,
-  isHarnessId,
+  isFirstClassHarnessId,
   isValidBranchName,
   resolveAgentContext,
   shortSessionId,
@@ -123,10 +123,10 @@ function invalidPriorityResponse(priority: unknown): AgentResponse | null {
 
 /** The harness twin of {@link invalidPriorityResponse}: teach the vocabulary, don't lump. */
 function invalidHarnessResponse(harness: unknown): AgentResponse | null {
-  if (harness === undefined || isHarnessId(harness)) return null;
+  if (harness === undefined || isFirstClassHarnessId(harness)) return null;
   return failure(
     "INVALID_REQUEST",
-    `Invalid harness ${JSON.stringify(harness)} (valid: ${HARNESS_IDS.join(", ")})`,
+    `Invalid harness ${JSON.stringify(harness)} (valid: ${FIRST_CLASS_HARNESS_IDS.join(", ")})`,
   );
 }
 
@@ -1048,7 +1048,7 @@ export function createAgentCommandService(
                 ...(typeof title === "string" ? { title: title.trim() } : {}),
                 ...(nextBody?.ok ? { body: nextBody.body } : {}),
                 ...(typeof base === "string" ? { baseBranch: base } : {}),
-                ...(isHarnessId(harness) ? { preferredHarnessId: harness } : {}),
+                ...(isFirstClassHarnessId(harness) ? { preferredHarnessId: harness } : {}),
               },
               { now: updatedAt, actor: actor.actor },
             );
@@ -1295,7 +1295,7 @@ export function createAgentCommandService(
               typeof request.args["usesWorktree"] === "boolean"
                 ? request.args["usesWorktree"]
                 : true,
-            preferredHarnessId: isHarnessId(harness) ? harness : undefined,
+            preferredHarnessId: isFirstClassHarnessId(harness) ? harness : undefined,
             // An explicit per-ticket override only (decision 11). `null` means
             // "inherit the pinned project setting" — resolved late by worktree
             // automation at use time, NOT stamped here from a snapshot.

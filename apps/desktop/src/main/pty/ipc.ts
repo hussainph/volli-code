@@ -6,7 +6,7 @@
 
 import { app, dialog, ipcMain } from "electron";
 import type { BrowserWindow } from "electron";
-import { isHarnessId } from "@volli/shared";
+import { isFirstClassHarnessId } from "@volli/shared";
 import type {
   CreateTerminalSessionRequest,
   CreateTerminalSessionResult,
@@ -69,7 +69,7 @@ function isOptionalKickoff(
   if (value === undefined) return true;
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
-  return isHarnessId(candidate["harnessId"]) && typeof candidate["prompt"] === "string";
+  return isFirstClassHarnessId(candidate["harnessId"]) && typeof candidate["prompt"] === "string";
 }
 
 /**

@@ -15,7 +15,7 @@ import { isHexColor } from "./theme/color";
 import { isShippedEditorThemeId } from "./theme/editor-themes";
 import { isValidOverlayKey, isValidOverlayValue } from "./theme/ghostty-overlay";
 import { isProjectThemeOverride } from "./theme/project-override";
-import { isHarnessId, isTicketPriority, isTicketStatus } from "./ticket";
+import { isFirstClassHarnessId, isTicketPriority, isTicketStatus } from "./ticket";
 import { isValidBranchName } from "./ticket-branch";
 
 /**
@@ -32,7 +32,7 @@ export interface IpcRequestDescriptor<C extends keyof VolliInvokeContract> {
 
 // ---- shape helpers ----------------------------------------------------
 // The status/priority/harness vocabulary guards live in @volli/shared next to
-// the vocab constants they guard (isTicketStatus/isTicketPriority/isHarnessId),
+// the vocab constants they guard (isTicketStatus/isTicketPriority/isFirstClassHarnessId),
 // imported above; isValidBranchName lives next to the branch-naming rules.
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -141,7 +141,8 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
         (input["body"] === undefined || typeof input["body"] === "string") &&
         (input["labels"] === undefined || isStringArray(input["labels"])) &&
         (input["usesWorktree"] === undefined || typeof input["usesWorktree"] === "boolean") &&
-        (input["preferredHarnessId"] === undefined || isHarnessId(input["preferredHarnessId"]))
+        (input["preferredHarnessId"] === undefined ||
+          isFirstClassHarnessId(input["preferredHarnessId"]))
       );
     },
     invalidError: "Invalid ticket",

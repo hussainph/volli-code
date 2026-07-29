@@ -248,7 +248,7 @@ describe("DATA_IPC descriptor table", () => {
     });
 
     it("rejects a harness id outside the vocabulary when present", () => {
-      expect(guard([{ ...valid, preferredHarnessId: "cursor" }])).toBe(false);
+      expect(guard([{ ...valid, preferredHarnessId: "not-a-harness" }])).toBe(false);
     });
 
     it("rejects a wrong arity", () => {

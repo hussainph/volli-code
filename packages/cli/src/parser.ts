@@ -1,7 +1,7 @@
 import {
   COLUMN_VOCABULARY,
-  HARNESS_IDS,
-  isHarnessId,
+  FIRST_CLASS_HARNESS_IDS,
+  isFirstClassHarnessId,
   isTicketPriority,
   parseColumnToken,
   TICKET_PRIORITIES,
@@ -17,7 +17,7 @@ export interface CliInvocation {
 export const PRIORITY_VOCABULARY: string = TICKET_PRIORITIES.join(", ");
 
 /** The first-class harness vocabulary rendered for teaching errors and help. */
-export const HARNESS_VOCABULARY: string = HARNESS_IDS.join(", ");
+export const HARNESS_VOCABULARY: string = FIRST_CLASS_HARNESS_IDS.join(", ");
 
 export type CliParseResult =
   | { ok: true; invocation: CliInvocation }
@@ -43,7 +43,7 @@ const priorityValue: ValueParser = (raw) =>
       };
 
 const harnessValue: ValueParser = (raw) =>
-  isHarnessId(raw)
+  isFirstClassHarnessId(raw)
     ? { ok: true, value: raw }
     : {
         ok: false,

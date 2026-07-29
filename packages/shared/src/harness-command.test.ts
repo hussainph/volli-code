@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vite-plus/test";
-import { HARNESS_IDS } from "./ticket";
+import { FIRST_CLASS_HARNESS_IDS, parseHarnessId, type HarnessId } from "./ticket";
 import {
   buildHarnessCommand,
   buildHarnessResumeCommand,
@@ -95,12 +95,21 @@ describe("buildHarnessCommand", () => {
     expect(buildHarnessCommand("opencode", "hi there")).toBe("opencode --prompt 'hi there'");
   });
 
+  it("launches Cursor's CLI, which is cursor-agent rather than cursor", () => {
+    expect(buildHarnessCommand("cursor", "hi there")).toBe("cursor-agent 'hi there'");
+  });
+
+  it("launches an unregistered harness by its own slug with a positional prompt", () => {
+    const custom = parseHarnessId("my-harness") as HarnessId;
+    expect(buildHarnessCommand(custom, "hi there")).toBe("my-harness 'hi there'");
+  });
+
   it("quotes the prompt so shell metacharacters stay inert", () => {
     expect(buildHarnessCommand("claude-code", "it's `$X`")).toBe("claude 'it'\\''s `$X`'");
   });
 
   it("has a template for every first-class harness", () => {
-    for (const id of HARNESS_IDS) {
+    for (const id of FIRST_CLASS_HARNESS_IDS) {
       expect(buildHarnessCommand(id, "x")).toContain("'x'");
     }
   });

@@ -8,7 +8,7 @@
  * summary back to its {@link SessionRecord}.
  */
 
-import { HARNESS_IDS } from "./ticket";
+import { FIRST_CLASS_HARNESS_IDS } from "./ticket";
 import type { HarnessId } from "./ticket";
 
 /** A ticket comment: work-log content, not an audit event. */
@@ -47,5 +47,7 @@ export function isAgentActor(actor: string): boolean {
 export function actorHarnessId(actor: string): HarnessId | null {
   if (!isAgentActor(actor)) return null;
   const harnessId = actor.slice(AGENT_ACTOR_PREFIX.length);
-  return (HARNESS_IDS as readonly string[]).includes(harnessId) ? (harnessId as HarnessId) : null;
+  return (FIRST_CLASS_HARNESS_IDS as readonly string[]).includes(harnessId)
+    ? (harnessId as HarnessId)
+    : null;
 }

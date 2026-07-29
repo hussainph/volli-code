@@ -1,18 +1,27 @@
-import type { HarnessId } from "../ticket";
+import { isFirstClassHarnessId } from "../ticket";
+import type { FirstClassHarnessId, HarnessId } from "../ticket";
 import { claudeCodeAdapter } from "./claude-code";
 import { codexAdapter } from "./codex";
+import { cursorAdapter } from "./cursor";
 import { opencodeAdapter } from "./opencode";
 import { VOLLI_CLI_REFERENCE, VOLLI_ORCHESTRATION, VOLLI_SKILL } from "./skill-content";
 import type { HarnessAdapter, InstallAction } from "./types";
 
-const adapters: Record<HarnessId, HarnessAdapter> = {
+const adapters: Record<FirstClassHarnessId, HarnessAdapter> = {
   "claude-code": claudeCodeAdapter,
   codex: codexAdapter,
+  cursor: cursorAdapter,
   opencode: opencodeAdapter,
 };
 
-export function getHarnessAdapter(id: HarnessId): HarnessAdapter {
-  return adapters[id];
+/**
+ * The adapter for `id`, or `undefined` when nothing is registered under it.
+ * {@link HarnessId} is open (bring-your-own harnesses), so a lookup can miss —
+ * callers fall back to the Declared tier rather than assuming a first-class
+ * adapter exists.
+ */
+export function getHarnessAdapter(id: HarnessId): HarnessAdapter | undefined {
+  return isFirstClassHarnessId(id) ? adapters[id] : undefined;
 }
 
 /** Every first-class harness adapter, for registry-driven iteration (detection, etc.). */
@@ -78,7 +87,10 @@ export function buildHarnessInstallPlan(input: {
     },
   ];
   for (const id of new Set(input.detected)) {
-    actions.push(...adapters[id].installActions(home, canonical));
+    // A registered-but-unknown harness contributes no baseline assets: the
+    // skill pack it can't host is exactly the tier it doesn't have.
+    const adapter = getHarnessAdapter(id);
+    if (adapter) actions.push(...adapter.installActions(home, canonical));
   }
   return actions;
 }

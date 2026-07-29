@@ -1,6 +1,11 @@
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import { HARNESS_IDS, HARNESS_LABELS, harnessLabel, type HarnessId } from "@volli/shared";
+import {
+  FIRST_CLASS_HARNESS_IDS,
+  HARNESS_LABELS,
+  harnessLabel,
+  type HarnessId,
+} from "@volli/shared";
 
 import { ComposerFileAttach } from "@renderer/components/board/new-ticket/composer-file-attach";
 import { Button } from "@renderer/components/ui/button";
@@ -70,7 +75,7 @@ export function ComposerFooter({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            {HARNESS_IDS.map((id) => (
+            {FIRST_CLASS_HARNESS_IDS.map((id) => (
               <DropdownMenuItem key={id} onSelect={() => onHarnessChange(id)}>
                 {HARNESS_LABELS[id]}
                 {id === harnessId ? <CheckIcon weight="bold" className="ml-auto size-3.5" /> : null}

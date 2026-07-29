@@ -5,7 +5,7 @@
  * Node/Electron/DOM imports (package rule) — main injects the built command
  * line into the PTY (`src/main/pty.ts`).
  */
-import { isHarnessId } from "./ticket";
+import { isFirstClassHarnessId } from "./ticket";
 import type { HarnessId } from "./ticket";
 import { getHarnessAdapter } from "./harness/core";
 import { GENERIC_RESUME_METADATA } from "./harness/generic";
@@ -58,11 +58,16 @@ export function composeTicketPrompt(input: {
  *   exec` is the NON-interactive path and is deliberately not used).
  * - `opencode` → `opencode --prompt <prompt>` (the `--prompt` flag on the
  *   default TUI command; `opencode run` is NON-interactive and not used).
+ * - `cursor` → `cursor-agent <prompt>` (the CLI's binary is `cursor-agent`;
+ *   `cursor` is the editor's shell command).
+ *
+ * A harness with no registered adapter is launched by its own slug with a
+ * positional prompt — the Declared tier still starts, it just starts blind.
  */
 export function buildHarnessCommand(harnessId: HarnessId, prompt: string): string {
   const quoted = shellSingleQuote(prompt);
   const adapter = getHarnessAdapter(harnessId);
-  return [adapter.command, adapter.promptFlag, quoted].filter(Boolean).join(" ");
+  return [adapter?.command ?? harnessId, adapter?.promptFlag, quoted].filter(Boolean).join(" ");
 }
 
 /** The last `/`-segment of a relative path — the materialized file's own basename. */
@@ -123,7 +128,7 @@ export function buildHarnessResumeCommand(
   harnessId: HarnessId | string,
   harnessSessionId: string | null,
 ): string | null {
-  const adapter = isHarnessId(harnessId) ? getHarnessAdapter(harnessId) : null;
+  const adapter = isFirstClassHarnessId(harnessId) ? getHarnessAdapter(harnessId) : undefined;
   const command = adapter?.command ?? null;
   const resumeIdArgs = adapter?.resumeIdArgs ?? GENERIC_RESUME_METADATA.resumeIdArgs;
   const resumeLatestArgs = adapter?.resumeLatestArgs ?? GENERIC_RESUME_METADATA.resumeLatestArgs;

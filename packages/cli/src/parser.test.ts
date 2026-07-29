@@ -372,14 +372,14 @@ describe("parseCliArgs", () => {
   });
 
   it.each([
-    ["ticket create --harness", ["ticket", "create", "--title", "x", "--harness", "cursor"]],
-    ["ticket update --harness", ["ticket", "update", "VC-1", "--harness", "cursor"]],
+    ["ticket create --harness", ["ticket", "create", "--title", "x", "--harness", "aider"]],
+    ["ticket update --harness", ["ticket", "update", "VC-1", "--harness", "aider"]],
   ] as const)("enumerates the harness vocabulary when %s rejects a token", (_label, argv) => {
     const result = parseCliArgs(argv);
     expect(result).toEqual({
       ok: false,
       code: "USAGE",
-      message: `Unknown harness "cursor" (valid: ${HARNESS_VOCABULARY})`,
+      message: `Unknown harness "aider" (valid: ${HARNESS_VOCABULARY})`,
     });
   });
 

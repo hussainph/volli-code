@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { HARNESS_IDS } from "../ticket";
+import { FIRST_CLASS_HARNESS_IDS, parseHarnessId, type HarnessId } from "../ticket";
 import {
   buildHarnessInstallPlan,
   harnessAdapters,
@@ -69,7 +69,7 @@ describe("managedWriteDecision", () => {
 describe("harnessAdapters", () => {
   it("covers every first-class harness with its own detection executable", () => {
     expect(harnessAdapters.map((adapter) => adapter.id).toSorted()).toEqual(
-      [...HARNESS_IDS].toSorted(),
+      [...FIRST_CLASS_HARNESS_IDS].toSorted(),
     );
     expect(harnessAdapters.every((adapter) => adapter.detection.executable.length > 0)).toBe(true);
     const claude = harnessAdapters.find((adapter) => adapter.id === "claude-code");
@@ -121,6 +121,19 @@ describe("buildHarnessInstallPlan", () => {
     expect(paths).toContain("/home/dev/.config/opencode/command/volli.md");
     expect(paths.some((path) => path.includes(".codex/prompts"))).toBe(false);
     expect(paths.some((path) => path.includes("/custom/"))).toBe(false);
+  });
+
+  it("adds no Cursor-owned files — its CLI reads neither a skills nor a commands directory", () => {
+    const plan = buildHarnessInstallPlan({ home: "/home/dev", detected: ["cursor"] });
+    expect(plan.some((action) => action.path.includes(".cursor"))).toBe(false);
+  });
+
+  it("contributes nothing for a harness id with no registered adapter", () => {
+    const withCustom = buildHarnessInstallPlan({
+      home: "/home/dev",
+      detected: ["codex", parseHarnessId("my-harness") as HarnessId],
+    });
+    expect(withCustom).toEqual(buildHarnessInstallPlan({ home: "/home/dev", detected: ["codex"] }));
   });
 
   it("normalizes a trailing home slash and de-duplicates harnesses", () => {

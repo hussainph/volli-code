@@ -1001,7 +1001,7 @@ describe("agent command service", () => {
     const create = await service.execute({
       v: 1,
       cmd: "ticket.create",
-      args: { project: "AL", title: "X", harness: "cursor" },
+      args: { project: "AL", title: "X", harness: "aider" },
       ctx: base,
     });
     expect(create).toEqual({
@@ -1009,7 +1009,7 @@ describe("agent command service", () => {
       ok: false,
       error: {
         code: "INVALID_REQUEST",
-        message: 'Invalid harness "cursor" (valid: claude-code, codex, opencode)',
+        message: 'Invalid harness "aider" (valid: claude-code, codex, cursor, opencode)',
       },
     });
 
@@ -1022,7 +1022,7 @@ describe("agent command service", () => {
     const update = await service.execute({
       v: 1,
       cmd: "ticket.update",
-      args: { id: "AL-1", harness: "cursor" },
+      args: { id: "AL-1", harness: "aider" },
       ctx: base,
     });
     expect(update).toMatchObject({
@@ -1030,7 +1030,7 @@ describe("agent command service", () => {
       ok: false,
       error: {
         code: "INVALID_REQUEST",
-        message: 'Invalid harness "cursor" (valid: claude-code, codex, opencode)',
+        message: 'Invalid harness "aider" (valid: claude-code, codex, cursor, opencode)',
       },
     });
   });

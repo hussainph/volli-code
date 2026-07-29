@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import {
   buildHarnessInstallPlan,
   harnessAdapters,
-  HARNESS_IDS,
+  FIRST_CLASS_HARNESS_IDS,
   shellSingleQuote,
   type HarnessId,
 } from "@volli/shared";
@@ -81,13 +81,13 @@ export async function installDetectedHarnessSkills(input: {
 /**
  * Removes the skill pack for every first-class harness. Detection is irrelevant
  * to removal — a harness the user has since uninstalled may still have Volli
- * files on disk — so the plan spans all {@link HARNESS_IDS}. Per-file hash
+ * files on disk — so the plan spans all {@link FIRST_CLASS_HARNESS_IDS}. Per-file hash
  * guards inside {@link uninstallHarnessPlan} keep hand-edited files.
  */
 export async function uninstallAllHarnessSkills(input: {
   home: string;
 }): Promise<HarnessUninstallResult> {
-  const plan = buildHarnessInstallPlan({ home: input.home, detected: HARNESS_IDS });
+  const plan = buildHarnessInstallPlan({ home: input.home, detected: FIRST_CLASS_HARNESS_IDS });
   return uninstallHarnessPlan(plan, managedManifestPath(input.home));
 }
 
