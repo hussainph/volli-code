@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { getHarnessAdapter } from "@volli/shared";
 import type { HarnessAdapter, HarnessId } from "@volli/shared";
 
-import { ensureHarnessRuntime } from "./harness-runtime";
+import { ensureHarnessRuntime, harnessLaunchArgv } from "./harness-runtime";
 
 let cleanup: (() => Promise<void>) | undefined;
 
@@ -222,5 +222,35 @@ describe("ensureHarnessRuntime", () => {
     // The variable names the directory the harness reads its config out of, so
     // a leftover `{harnessDir}` would point cursor at a literal path.
     expect(runtime.env["CURSOR_CONFIG_DIR"]).toBe(harnessDir);
+  });
+});
+
+describe("harnessLaunchArgv", () => {
+  it("names the words a launch really prepends, with no token left to resolve", async () => {
+    const paths = await scratch();
+
+    const argv = harnessLaunchArgv(adapterFor("codex"), {
+      harnessRoot: paths.harnessRoot,
+      socketPath: join(paths.binDir, "..", "volli.sock"),
+      shimPath: paths.shimPath,
+    });
+
+    // codex injects its hook config by path, so a `{harnessDir}` still standing
+    // here would be a confirmation naming a file that does not exist.
+    expect(argv.length).toBeGreaterThan(0);
+    expect(argv.join(" ")).not.toContain("{harnessDir}");
+    expect(argv.join(" ")).toContain(join(paths.harnessRoot, "codex"));
+  });
+
+  it("is empty for a harness Volli configures by environment rather than argv", async () => {
+    const paths = await scratch();
+
+    expect(
+      harnessLaunchArgv(adapterFor("cursor"), {
+        harnessRoot: paths.harnessRoot,
+        socketPath: join(paths.binDir, "..", "volli.sock"),
+        shimPath: paths.shimPath,
+      }),
+    ).toEqual([]);
   });
 });

@@ -10,6 +10,7 @@ import {
   detectHarnesses,
   detectInstalledHarnesses,
   globalCliLinkShellCommand,
+  resolveOnPath,
   runAgentToolsConsent,
   uninstallAllHarnessSkills,
 } from "./agent-tools";
@@ -21,6 +22,41 @@ afterEach(async () => {
   const { rm } = await import("node:fs/promises");
   await rm(root, { recursive: true, force: true });
   root = undefined;
+});
+
+describe("resolveOnPath", () => {
+  /** Two bin dirs, each holding an executable named `command`. */
+  async function twoBins(command: string): Promise<{ first: string; second: string }> {
+    root = await mkdtemp(join(tmpdir(), "volli-resolve-"));
+    const first = join(root, "first");
+    const second = join(root, "second");
+    for (const dir of [first, second]) {
+      await mkdir(dir);
+      await writeFile(join(dir, command), "#!/bin/sh\n");
+      await chmod(join(dir, command), 0o755);
+    }
+    return { first, second };
+  }
+
+  it("answers with the first executable of that name, as a shell would", async () => {
+    const { first, second } = await twoBins("my-harness");
+
+    expect(await resolveOnPath(`${first}:${second}`, "my-harness")).toBe(join(first, "my-harness"));
+  });
+
+  it("walks past Volli's own bin dir, which holds the wrapper rather than the harness", async () => {
+    const { first, second } = await twoBins("my-harness");
+
+    expect(await resolveOnPath(`${first}:${second}`, "my-harness", first)).toBe(
+      join(second, "my-harness"),
+    );
+  });
+
+  it("answers null for a command that is on no PATH entry", async () => {
+    const { first } = await twoBins("my-harness");
+
+    expect(await resolveOnPath(first, "other-harness")).toBeNull();
+  });
 });
 
 describe("detectInstalledHarnesses", () => {

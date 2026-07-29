@@ -69,6 +69,27 @@ function hookArgvFor(shimPath: string, adapter: HarnessAdapter): readonly string
   return [shimPath, "hook", adapter.id];
 }
 
+/**
+ * The words a launch of `adapter` really prepends to whatever the user typed —
+ * what a trust confirmation has to name.
+ *
+ * Resolved, not templated: `{harnessDir}` is a placeholder the runtime expands
+ * on the way to disk, and a confirmation still carrying it would name a file
+ * that does not exist. Empty for a harness Volli configures by environment
+ * variable instead of on the command line.
+ */
+export function harnessLaunchArgv(
+  adapter: HarnessAdapter,
+  input: { harnessRoot: string; socketPath: string; shimPath: string },
+): string[] {
+  const config = buildLaunchConfig(adapter, {
+    socketPath: input.socketPath,
+    hookArgv: hookArgvFor(input.shimPath, adapter),
+  });
+  const harnessDir = harnessDirFor(input.harnessRoot, adapter);
+  return config.argv.map((token) => token.replaceAll(HARNESS_DIR_TOKEN, harnessDir));
+}
+
 /** Replaces one generated file in place: atomic temp + rename, never a partial script. */
 async function writeExecutable(path: string, content: string): Promise<void> {
   const temporaryPath = `${path}.tmp-${randomUUID()}`;
