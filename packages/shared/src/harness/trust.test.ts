@@ -2,7 +2,12 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { buildLaunchConfig } from "./launch";
 import { parseHarnessManifest } from "./manifest";
-import { harnessEventStatus, harnessTrustDecision, harnessTrustPrompt } from "./trust";
+import {
+  harnessEventStatus,
+  harnessTrustDecision,
+  harnessTrustPrompt,
+  isHarnessTrustVerdict,
+} from "./trust";
 import type { HarnessAdapter, HarnessEvent } from "./types";
 
 function registered(): HarnessAdapter {
@@ -56,6 +61,21 @@ describe("harnessTrustDecision", () => {
     expect(
       harnessTrustDecision({ currentHash: null, recordedHash: "a1", recordedVerdict: "trusted" }),
     ).toBe("blocked");
+  });
+});
+
+describe("isHarnessTrustVerdict", () => {
+  it("accepts the two verdicts a human can give", () => {
+    expect(isHarnessTrustVerdict("trusted")).toBe(true);
+    expect(isHarnessTrustVerdict("blocked")).toBe(true);
+  });
+
+  it("refuses `reconfirm` — that is what Volli concludes, never what a human answered", () => {
+    expect(isHarnessTrustVerdict("reconfirm")).toBe(false);
+  });
+
+  it("refuses anything that is not a verdict at all", () => {
+    expect(isHarnessTrustVerdict(undefined)).toBe(false);
   });
 });
 

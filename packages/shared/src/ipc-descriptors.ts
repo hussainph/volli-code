@@ -3,9 +3,11 @@
 // stays type-only on @volli/shared (the pack config keeps main and preload
 // dependency-disjoint; see CAUTION in apps/desktop/vite.config.ts).
 
+import { isHarnessTrustVerdict } from "./harness/trust";
 import type {
   DataIpcChannel,
   FileIpcChannel,
+  HarnessIpcChannel,
   IpcArgs,
   ThemeIpcChannel,
   VolliInvokeContract,
@@ -674,3 +676,34 @@ export const THEME_IPC: { readonly [C in ThemeIpcChannel]: IpcRequestDescriptor<
 
 /** Every channel the theme-IPC surface owns, derived — never hand-synced. */
 export const THEME_CHANNELS = Object.keys(THEME_IPC) as readonly ThemeIpcChannel[];
+
+// ---- harness-trust descriptor table ---------------------------------------
+// A manifest declares a command line Volli will execute, so this is the one
+// request surface where the guard is part of the security story rather than
+// only part of the type story: `reconfirm` is refused here (it is Volli's
+// conclusion, never a human's answer), and a verdict with no hash is refused
+// because nothing may be trusted in the abstract — only a named version of a
+// file can be.
+
+export const HARNESS_IPC: { readonly [C in HarnessIpcChannel]: IpcRequestDescriptor<C> } = {
+  "volli:harness-pending": {
+    guard: (args): args is [] => args.length === 0,
+    invalidError: "Invalid request",
+  },
+  "volli:harness-trust-set": {
+    guard: (args): args is IpcArgs<"volli:harness-trust-set"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      return (
+        isRecord(input) &&
+        typeof input["slug"] === "string" &&
+        typeof input["manifestSha256"] === "string" &&
+        isHarnessTrustVerdict(input["decision"])
+      );
+    },
+    invalidError: "Invalid harness verdict",
+  },
+};
+
+/** Every channel the harness-trust surface owns, derived — never hand-synced. */
+export const HARNESS_CHANNELS = Object.keys(HARNESS_IPC) as readonly HarnessIpcChannel[];

@@ -51,13 +51,16 @@ import {
   scanHarnessManifests,
   trustedHarnessAdapters,
 } from "./harness-registry";
-import { ensureHarnessRuntime } from "./harness-runtime";
+import { registerHarnessIpcHandlers } from "./harness-ipc";
+import { ensureHarnessRuntime, harnessLaunchArgv } from "./harness-runtime";
 import { startAgentSocket, type AgentSocketServer } from "./agent-socket";
+import { loginShellPath } from "./login-path";
 import {
   detectHarnesses,
   installDetectedHarnessSkills,
   installGlobalCliLink,
   removeGlobalCliLinkIfOurs,
+  resolveOnPath,
   runAgentToolsConsent,
   uninstallAllHarnessSkills,
   type AgentToolsConsentStatus,
@@ -541,6 +544,34 @@ app.whenReady().then(async () => {
     ? undefined
     : join(dirname(app.getPath("userData")), `${app.getName()}-dev`, "bin", "volli");
 
+  const harnessesDir = join(agentToolsHome, ".agents", "harnesses");
+
+  // The confirmation a registered manifest is inert without (harness-events
+  // §Trust). Registered HERE, before the socket and shim work below, because
+  // everything after this point is awaited: a channel that only exists once
+  // that settles is a channel the renderer can `invoke()` into a hang.
+  //
+  // Both seams read their inputs at CALL time, not now. `shimPath` is still the
+  // default above and is reassigned once the shim is generated, and the login
+  // PATH is resolved on first use (and cached for the launch) rather than
+  // costing a shell startup during boot.
+  registerHarnessIpcHandlers(dbHandle, {
+    harnessesDir,
+    // The same walk the generated wrapper does at run time, Volli's own bin dir
+    // skipped — the confirmation must name the harness, never our wrapper.
+    resolveBinary: async (command) => {
+      const pathValue = await loginShellPath();
+      return pathValue === null ? null : resolveOnPath(pathValue, command, runtimePaths.binDir);
+    },
+    launchArgv: (adapter) =>
+      harnessLaunchArgv(adapter, {
+        harnessRoot: runtimePaths.harnessRoot,
+        socketPath: runtimePaths.socketPath,
+        shimPath,
+      }),
+    now: Date.now,
+  });
+
   // Renders hand-edited managed files that were preserved (never overwritten)
   // as path + a readable unified diff in the dialog detail. Shared by install,
   // the on-update refresh, and uninstall.
@@ -715,10 +746,7 @@ app.whenReady().then(async () => {
         // trusted because it was trusted last launch.
         const registered = dbHandle.ok
           ? trustedHarnessAdapters(
-              decideRegisteredHarnesses(
-                dbHandle.db,
-                await scanHarnessManifests(join(agentToolsHome, ".agents", "harnesses")),
-              ),
+              decideRegisteredHarnesses(dbHandle.db, await scanHarnessManifests(harnessesDir)),
             )
           : [];
         const runtime = await ensureHarnessRuntime({

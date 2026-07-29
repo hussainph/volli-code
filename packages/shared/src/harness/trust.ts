@@ -25,6 +25,16 @@ import { supportedEvents } from "./types";
 export type HarnessTrustVerdict = "trusted" | "blocked";
 
 /**
+ * Whether `value` is a verdict a human could have given. `reconfirm` is
+ * deliberately not one: it is what Volli CONCLUDES about bytes nobody has ruled
+ * on, so accepting it across the IPC boundary would let a renderer record an
+ * answer that was never given.
+ */
+export function isHarnessTrustVerdict(value: unknown): value is HarnessTrustVerdict {
+  return value === "trusted" || value === "blocked";
+}
+
+/**
  * What to do with a manifest right now. `reconfirm` is not a soft yes: it means
  * the manifest does not launch until a human answers, which is the same
  * practical outcome as `blocked` and a different thing to say to the user.

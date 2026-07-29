@@ -6,6 +6,7 @@
 
 import type { ChangeSetSnapshot } from "./change-set";
 import type { FileKind, FileSource, IndexedFile } from "./file-ref";
+import type { HarnessTrustPrompt, HarnessTrustVerdict } from "./harness/trust";
 import type { HarnessEvent } from "./harness/types";
 import type { DirEntry } from "./fs-entries";
 import type { Label } from "./label";
@@ -380,6 +381,58 @@ export interface VolliFileIpcContract {
 
 export type FileIpcChannel = keyof VolliFileIpcContract;
 
+// ---- bring-your-own harness trust (docs/plans/harness-events.md §Trust) ----
+
+/**
+ * A manifest Volli found on disk and will not launch until someone confirms it,
+ * carried with everything the confirmation has to state.
+ *
+ * {@link HarnessTrustPrompt} supplies the claim — the slug, the resolved binary,
+ * the exact argv, the claimed events. The two fields added here are what the
+ * ANSWER is filed against: a verdict is about bytes, so the hash the user was
+ * shown travels back with it (see {@link HarnessTrustSetInput}), and the path
+ * says which file on disk those bytes came from.
+ */
+export interface PendingHarnessManifest extends HarnessTrustPrompt {
+  manifestPath: string;
+  /** SHA-256 of the bytes this confirmation describes. */
+  manifestSha256: string;
+}
+
+/** The manifests waiting on a human — empty is the ordinary case. */
+export type HarnessPendingResult =
+  | { ok: true; pending: PendingHarnessManifest[] }
+  | { ok: false; error: string };
+
+/**
+ * One verdict, about one version of one manifest.
+ *
+ * `manifestSha256` is not redundant with `slug`: it is the hash the user was
+ * actually shown, and main refuses the write when the file no longer hashes to
+ * it. Without that, a manifest edited between the dialog opening and the button
+ * being pressed would be trusted on the strength of a command line nobody read.
+ */
+export interface HarnessTrustSetInput {
+  slug: string;
+  manifestSha256: string;
+  decision: HarnessTrustVerdict;
+}
+
+/**
+ * The trust half of the bring-your-own-harness surface (`src/main/harness-ipc.ts`):
+ * ask what is waiting, answer one of them. A registered manifest is inert until
+ * a verdict lands here, so these two channels are the whole difference between
+ * a manifest on disk and a harness that can launch.
+ */
+export interface VolliHarnessIpcContract {
+  /** Every discovered manifest nobody has ruled on, re-read and re-hashed per call. */
+  "volli:harness-pending": { args: []; result: HarnessPendingResult };
+  /** Records a human's verdict about the exact bytes they were shown. */
+  "volli:harness-trust-set": { args: [input: HarnessTrustSetInput]; result: Result };
+}
+
+export type HarnessIpcChannel = keyof VolliHarnessIpcContract;
+
 // ---- theming ----------------------------------------------------------------
 
 /** `{ projectId? }` — a theme read is global unless a project scopes it (#69). */
@@ -625,6 +678,7 @@ export interface VolliInvokeContract
   extends
     VolliDataIpcContract,
     VolliFileIpcContract,
+    VolliHarnessIpcContract,
     VolliThemeIpcContract,
     VolliSystemIpcContract {}
 
