@@ -228,8 +228,11 @@ async function main() {
       const ok =
         run.code === 0 &&
         settingsIndex === 0 &&
-        parsed?.hooks?.Notification?.[0]?.hooks?.[0]?.command?.includes("hook claude-code") ===
-          true &&
+        // Every word of the hook line is single-quoted, the shim path included:
+        // it lives under `Application Support/` in a real install.
+        parsed?.hooks?.Notification?.[0]?.hooks?.[0]?.command?.includes(
+          "'hook' 'claude-code' 'input.needed'",
+        ) === true &&
         run.args[idIndex + 1] === base.VOLLI_SESSION &&
         JSON.stringify(run.args.slice(-2)) === JSON.stringify(["--print", "hello"]);
       return { ok, detail: `code=${run.code} argc=${run.args.length} parsed=${parsed !== null}` };
