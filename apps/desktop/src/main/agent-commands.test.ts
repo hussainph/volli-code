@@ -4,12 +4,13 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import type { AgentRequest } from "@volli/shared";
+import type { AgentRequest, HarnessEventNotice } from "@volli/shared";
 
 import { createAttachment } from "./db/attachments-repo";
 import { insertProject } from "./db/projects-repo";
 import { getSession, insertSession } from "./db/sessions-repo";
-import { openTestDb, testProject, testSession } from "./db/test-helpers";
+import { insertTicket } from "./db/tickets-repo";
+import { openTestDb, testProject, testSession, testTicket } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 import { createAgentCommandService } from "./agent-commands";
 import { updateTicketFieldsCommand } from "./ticket-commands";
@@ -1348,6 +1349,125 @@ describe("agent command service", () => {
       const empty = await link("   ");
       expect(empty).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
       expect(getSession(ctx.db, sessionId)?.harnessSessionId).toBeNull();
+    });
+  });
+
+  describe("hook", () => {
+    const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
+
+    function hookService(
+      options: Partial<Parameters<typeof createAgentCommandService>[0]> = {},
+      ticketId: string | null = null,
+    ) {
+      ctx = openTestDb();
+      insertProject(
+        ctx.db,
+        testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+      );
+      if (ticketId !== null) {
+        insertTicket(ctx.db, testTicket("project-one", { id: ticketId, ticketNumber: 12 }));
+      }
+      insertSession(
+        ctx.db,
+        testSession("project-one", ticketId, { id: sessionId, harnessId: "claude-code" }),
+      );
+      const service = createAgentCommandService({
+        db: ctx.db,
+        appVersion: "1.2.3",
+        now: () => 4242,
+        ...options,
+      });
+      const hook = (args: Record<string, unknown>, session: string | null = sessionId) =>
+        service.execute({
+          v: 1,
+          cmd: "hook",
+          args,
+          ctx: { cwd: "/repo/volli", env: session ? { session } : {} },
+        });
+      return { hook };
+    }
+
+    it("records the harness session id an event carries, so resume needs no separate link", async () => {
+      const { hook } = hookService();
+
+      const response = await hook({
+        harness: "claude-code",
+        event: "session.started",
+        harnessSessionId: "  cc-session-uuid  ",
+      });
+
+      expect(response).toMatchObject({ ok: true });
+      expect(getSession(ctx.db, sessionId)?.harnessSessionId).toBe("cc-session-uuid");
+    });
+
+    it("pushes the canonical event to the renderer with the session it resolved", async () => {
+      const notices: HarnessEventNotice[] = [];
+      const { hook } = hookService({ onHarnessEvent: (notice) => notices.push(notice) });
+
+      await hook({ harness: "claude-code", event: "input.needed" });
+
+      expect(notices).toEqual([
+        {
+          sessionId,
+          projectId: "project-one",
+          ticketId: null,
+          harnessId: "claude-code",
+          event: "input.needed",
+          harnessSessionId: null,
+          at: 4242,
+        },
+      ]);
+    });
+
+    it("refuses an event name outside the canonical union", async () => {
+      const notices: HarnessEventNotice[] = [];
+      const { hook } = hookService({ onHarnessEvent: (notice) => notices.push(notice) });
+
+      const response = await hook({ harness: "claude-code", event: "SubagentStop" });
+
+      expect(response).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+      expect(notices).toEqual([]);
+    });
+
+    it("needs VOLLI_SESSION, and refuses a session that is not ours", async () => {
+      const { hook } = hookService();
+
+      await expect(
+        hook({ harness: "claude-code", event: "turn.started" }, null),
+      ).resolves.toMatchObject({ ok: false, error: { code: "CONTEXT_REQUIRED" } });
+      await expect(
+        hook({ harness: "claude-code", event: "turn.started" }, "not-a-session"),
+      ).resolves.toMatchObject({ ok: false, error: { code: "SESSION_NOT_FOUND" } });
+    });
+
+    it("notifies when a human is blocking the agent, naming the ticket", async () => {
+      const notices: [string, string][] = [];
+      const { hook } = hookService(
+        { notify: (title, message) => notices.push([title, message]) },
+        "ticket-blocked",
+      );
+
+      await hook({ harness: "claude-code", event: "input.needed" });
+
+      expect(notices).toEqual([["VC-12 needs you", "Claude Code is waiting on a human"]]);
+    });
+
+    it("stays quiet for telemetry, and for the twin event riding the same native signal", async () => {
+      const notices: [string, string][] = [];
+      const { hook } = hookService(
+        { notify: (title, message) => notices.push([title, message]) },
+        "ticket-quiet",
+      );
+
+      // A subagent finishing is not the parent finishing. And a harness whose
+      // one permission signal is bound to BOTH `input.needed` and
+      // `permission.requested` (codex, opencode) fires two hooks per prompt —
+      // notifying on both would double every notification it earns.
+      for (const event of ["subagent.completed", "permission.requested", "tool.started"]) {
+        await hook({ harness: "claude-code", event });
+      }
+
+      expect(notices).toEqual([]);
     });
   });
 

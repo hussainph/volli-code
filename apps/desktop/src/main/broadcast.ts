@@ -7,7 +7,12 @@
  * single implementation rather than each rolling their own.
  */
 import { BrowserWindow } from "electron";
-import type { DataChangedEvent, SessionsInterruptedEvent, VolliIpcEvent } from "@volli/shared";
+import type {
+  DataChangedEvent,
+  HarnessEventNotice,
+  SessionsInterruptedEvent,
+  VolliIpcEvent,
+} from "@volli/shared";
 
 /**
  * Fans the invalidation out to every open window. `change` carries the best
@@ -54,6 +59,20 @@ export function broadcastSystemAppearance(prefersDark: boolean): void {
  * when sessions were actually interrupted (`sessionIds` non-empty), mirroring
  * the `sessions_interrupted` event-log rule.
  */
+/**
+ * Fans one canonical harness event out to every window (harness-events). The
+ * involuntary channel's last hop: a hook fired, `volli hook` carried it over
+ * the socket, main resolved the session, and this is how the renderer learns.
+ * Sent to every window rather than the session's owner — a session's rows and
+ * badges are visible in whichever window has that project open.
+ */
+export function broadcastHarnessEvent(notice: HarnessEventNotice): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.webContents.isDestroyed()) continue;
+    window.webContents.send("volli:harness-event" satisfies VolliIpcEvent, notice);
+  }
+}
+
 export function broadcastSessionsInterrupted(ticketId: string, sessionIds: string[]): void {
   for (const window of BrowserWindow.getAllWindows()) {
     if (window.webContents.isDestroyed()) continue;

@@ -22,6 +22,11 @@ export const AGENT_COMMANDS = [
   "session.blocked",
   "session.link",
   "notify",
+  // The involuntary channel: a harness hook reporting what the agent is doing,
+  // rather than an agent choosing to say so. Unlike every other command it is
+  // not addressed to a human reader — `volli hook` fires it and discards the
+  // answer, because a hook that fails must never wedge the agent it fired from.
+  "hook",
 ] as const;
 
 export type AgentCommand = (typeof AGENT_COMMANDS)[number];

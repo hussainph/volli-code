@@ -6,6 +6,7 @@
 
 import type { ChangeSetSnapshot } from "./change-set";
 import type { FileKind, FileSource, IndexedFile } from "./file-ref";
+import type { HarnessEvent } from "./harness/types";
 import type { DirEntry } from "./fs-entries";
 import type { Label } from "./label";
 import type { LegacyProject } from "./legacy-import";
@@ -680,7 +681,12 @@ export type VolliIpcEvent =
   // element's used `color-scheme`, which this app stamps itself, so over there
   // the query only ever reports the mode already painted. Every scope on `auto`
   // re-resolves off this.
-  | "volli:system-appearance-changed";
+  | "volli:system-appearance-changed"
+  // One canonical harness event (harness-events): a hook the wrapper
+  // configured fired, and main resolved which session it belongs to. This is
+  // the involuntary channel — the renderer learns what the agent is doing
+  // without the agent having chosen to say so.
+  | "volli:harness-event";
 
 /** Direction of a `volli:ui-zoom-command` event: step in/out one rung, or reset. */
 export type UiZoomCommand = "in" | "out" | "reset";
@@ -725,6 +731,34 @@ export interface DataChangedEvent {
 export interface SessionsInterruptedEvent {
   ticketId: string;
   sessionIds: string[];
+}
+
+/**
+ * One canonical harness event, as it reaches the renderer (harness-events). The
+ * involuntary channel: a hook the wrapper configured fired, `volli hook`
+ * forwarded it over the socket, and main resolved which session it belongs to.
+ * Harness-native event names never get this far — the union is the whole
+ * vocabulary.
+ *
+ * `sessionId` is the FULL session id (the same key terminal data/exit events
+ * carry), not the short public handle, because this addresses the renderer's
+ * live session state rather than a human reader.
+ */
+export interface HarnessEventNotice {
+  sessionId: string;
+  projectId: string;
+  /** The ticket this session drives, or `null` for a scratch session. */
+  ticketId: string | null;
+  harnessId: HarnessId;
+  event: HarnessEvent;
+  /**
+   * The harness's own session id when the event carried one — already persisted
+   * on the session record by the time this fires. `null` on the events that
+   * carry none, which is most of them.
+   */
+  harnessSessionId: string | null;
+  /** Epoch ms the event was ingested (main's clock, never the harness's). */
+  at: number;
 }
 
 /**

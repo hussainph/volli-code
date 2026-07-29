@@ -10,6 +10,8 @@ import {
   displayTicketId,
   errorMessage,
   FIRST_CLASS_HARNESS_IDS,
+  HARNESS_EVENTS,
+  harnessLabel,
   isTicketPriority,
   isTicketStatus,
   isFirstClassHarnessId,
@@ -26,6 +28,8 @@ import type {
   AgentRequest,
   AgentResponse,
   DataChangeKind,
+  HarnessEvent,
+  HarnessEventNotice,
   Project,
   SessionActivityState,
   TicketEventActor,
@@ -97,6 +101,13 @@ export interface AgentCommandServiceOptions {
    * Absent (tests) means the broadcast is a no-op.
    */
   onMutation?: (change: { ticketId: string; projectId: string; kind: DataChangeKind }) => void;
+  /**
+   * Called for every canonical harness event this door ingests (harness-events),
+   * after any session-record write it implies has committed — the notice
+   * index.ts pushes to every window as `volli:harness-event`. Absent (tests)
+   * means the fan-out is a no-op.
+   */
+  onHarnessEvent?: (notice: HarnessEventNotice) => void;
 }
 
 export interface AgentCommandService {
@@ -516,6 +527,23 @@ function requestActor(
       };
 }
 
+function isHarnessEvent(value: unknown): value is HarnessEvent {
+  return typeof value === "string" && (HARNESS_EVENTS as readonly string[]).includes(value);
+}
+
+/**
+ * The harness session id an event carries, trimmed — `null` when the event
+ * carries none (most events don't), `undefined` when the field is present but
+ * unusable, which is a malformed request rather than an absent id.
+ */
+function trimmedHarnessSessionId(value: unknown): string | null | undefined {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+  return trimmed.length <= 200 ? trimmed : undefined;
+}
+
 function isBodyMutation(value: unknown): value is TicketBodyMutation {
   if (typeof value !== "object" || value === null || !("mode" in value)) return false;
   if (value.mode === "replace") return "body" in value && typeof value.body === "string";
@@ -821,6 +849,68 @@ export function createAgentCommandService(
           v: 1,
           ok: true,
           data: { session: shortSessionId(session.id), harnessSessionId },
+        };
+      }
+      if (request.cmd === "hook") {
+        // The involuntary channel (harness-events): a hook the wrapper
+        // configured, not something the agent chose to run. `VOLLI_SESSION` is
+        // both the addressing and the harness's own session id, so an event
+        // resolves the session the same way `session.done` does.
+        const sessionId = request.ctx.env.session;
+        if (!sessionId) {
+          return failure("CONTEXT_REQUIRED", "hook requires VOLLI_SESSION context.");
+        }
+        const session = getSession(options.db, sessionId);
+        if (!session) return failure("SESSION_NOT_FOUND", `No session matches ${sessionId}.`);
+        const event = request.args["event"];
+        if (!isHarnessEvent(event)) {
+          return failure(
+            "INVALID_REQUEST",
+            `Invalid harness event ${JSON.stringify(event)} (valid: ${HARNESS_EVENTS.join(", ")})`,
+          );
+        }
+        const harnessSessionId = trimmedHarnessSessionId(request.args["harnessSessionId"]);
+        if (harnessSessionId === undefined) {
+          return failure("INVALID_REQUEST", "The harness session id is not usable.");
+        }
+        // A reported id is what replaces `session link` on the critical path.
+        // Idempotent overwrite, exactly as `session.link` is — a harness that
+        // rotates its id mid-session leaves the newest resume seed behind.
+        if (harnessSessionId !== null) {
+          setHarnessSessionId(options.db, session.id, harnessSessionId);
+        }
+        // ONE event earns a notification: a human is blocking the agent's
+        // progress. `subagent.completed` is telemetry — a subagent finishing is
+        // not the parent finishing — and `permission.requested` is bound to the
+        // same native signal as `input.needed` on every harness that has one, so
+        // notifying on both would double every notification it earns.
+        if (event === "input.needed") {
+          const ticket = session.ticketId ? getTicket(options.db, session.ticketId) : undefined;
+          const ticketProject = ticket
+            ? projects.find(({ id }) => id === ticket.projectId)
+            : undefined;
+          const subject =
+            ticket && ticketProject
+              ? displayTicketId(ticketProject.ticketPrefix, ticket.ticketNumber)
+              : session.title;
+          options.notify?.(
+            `${subject} needs you`,
+            `${harnessLabel(session.harnessId)} is waiting on a human`,
+          );
+        }
+        options.onHarnessEvent?.({
+          sessionId: session.id,
+          projectId: session.projectId,
+          ticketId: session.ticketId,
+          harnessId: session.harnessId,
+          event,
+          harnessSessionId,
+          at: now(),
+        });
+        return {
+          v: 1,
+          ok: true,
+          data: { session: shortSessionId(session.id), event, harnessSessionId },
         };
       }
       if (request.cmd === "ticket.list") {

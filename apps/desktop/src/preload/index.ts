@@ -43,6 +43,7 @@ import type {
   RevealResult,
   SessionRenameInput,
   SessionRenameResult,
+  HarnessEventNotice,
   SessionsInterruptedEvent,
   SessionsResult,
   TerminalBusyResult,
@@ -329,6 +330,18 @@ const api = {
       ipcRenderer.on("volli:sessions-interrupted" satisfies VolliIpcEvent, listener);
       return () =>
         ipcRenderer.removeListener("volli:sessions-interrupted" satisfies VolliIpcEvent, listener);
+    },
+    /**
+     * Subscribes to canonical harness events (harness-events): a hook the
+     * launch wrapper configured fired, and main resolved which session it
+     * belongs to. Harness-native event names never arrive here.
+     */
+    onHarnessEvent: (callback: (event: HarnessEventNotice) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: HarnessEventNotice) =>
+        callback(payload);
+      ipcRenderer.on("volli:harness-event" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:harness-event" satisfies VolliIpcEvent, listener);
     },
   },
   labels: {

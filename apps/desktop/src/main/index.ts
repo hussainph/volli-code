@@ -37,6 +37,7 @@ import { firstPaintArguments, resolveFirstPaint } from "./window-theme";
 import { registerFileIpcHandlers } from "./volli-fs";
 import {
   broadcastDataChanged,
+  broadcastHarnessEvent,
   broadcastSessionsInterrupted,
   broadcastSystemAppearance,
 } from "./broadcast";
@@ -665,6 +666,10 @@ app.whenReady().then(async () => {
           // down. Read-only commands and no-ops (e.g. a same-column move) never
           // fire it, so a stray broadcast can't slip through.
           onMutation: (change) => broadcastDataChanged(change),
+          // The involuntary channel's fan-out (harness-events): every canonical
+          // event a hook reports reaches every window, so a session's activity
+          // state stops being guessed from PTY output alone.
+          onHarnessEvent: (notice) => broadcastHarnessEvent(notice),
         }).execute
       : async () =>
           ({
