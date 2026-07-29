@@ -16,11 +16,19 @@
  *   • Resume: re-entering a ticket after an agent session ENDED can relaunch
  *     the harness via `ticket.resume: { sessionId }` on a terminal-create
  *     request. Main resolves `buildHarnessResumeCommand` off the ended
- *     session's own `harnessId`/`harnessSessionId` row: `claude --resume
- *     '<id>'` when a harness has `session.link`ed its own id onto the Volli
- *     session (socket cmd `session.link`, requires `VOLLI_SESSION`), else the
- *     fallback `claude --continue`. A `session_resumed` event links the new
- *     session id back to the one it resumes.
+ *     session's own `harnessId`/`harnessSessionId` row, and there are three
+ *     ways that row's seed comes to exist — all three are checked here:
+ *       – a harness `session.link`ed its own id onto the Volli session (socket
+ *         cmd `session.link`, requires `VOLLI_SESSION`) → check 3;
+ *       – NOTHING seeded it, so the harness resumes by "latest in cwd" → check
+ *         4. Only reachable for a harness that is not handed an id at launch:
+ *         `sessionId: { kind: "reported" | "none" }` (opencode, codex), since
+ *         an `argv`-tier one always has a minted seed;
+ *       – the harness's own wrapper minted one for THAT LAUNCH (`volli session
+ *         harness <slug> --mint`, `sessionId: { kind: "argv" }`) → check 5,
+ *         which asserts the resume comes back with that exact id.
+ *     A `session_resumed` event links the new session id back to the one it
+ *     resumes, in every case.
  *
  * The terminal renders to a WebGPU canvas (no text in the DOM), so — exactly
  * like composer-kickoff-smoke.mjs — the "agent" is the FAKE harness
@@ -159,25 +167,41 @@ async function killSession(page, sessionId) {
 
 /**
  * Boot one ticket through the real composer kickoff flow, forcing it into
- * Doing with a live fake-`claude` agent session. Returns the ticket's
- * identity plus the live session's id (resolved via the durable record, not
- * scraped from the UI).
+ * Doing with a live fake agent session. Returns the ticket's identity plus the
+ * live session's id (resolved via the durable record, not scraped from the UI).
+ *
+ * `opts.agentLabel` picks a harness from the composer's "Choose agent" menu
+ * (composer-kickoff-smoke.mjs's same path) and `opts.command` names the fake
+ * binary that choice must reach. The picker's choice is STICKY (`lastHarnessId`),
+ * so every scenario that cares which harness it booted names one rather than
+ * inheriting whatever the previous scenario left selected.
  */
-async function kickoffTicket(page, projectId, title, body) {
+async function kickoffTicket(page, projectId, title, body, opts = {}) {
+  const command = opts.command ?? "claude";
   await resetProbe();
   const opened = await openComposerViaHeader(page);
   if (!opened || (await kickoffButton(page).count()) === 0) {
     throw new Error("composer / kickoff button missing");
+  }
+  if (opts.agentLabel !== undefined) {
+    await composer(page).getByRole("button", { name: "Choose agent" }).click();
+    await sleep(200);
+    await page.getByRole("menuitem", { name: opts.agentLabel, exact: true }).click();
+    await sleep(200);
+    const label = (await kickoffButton(page).getAttribute("aria-label")) ?? "";
+    if (!label.includes(opts.agentLabel)) {
+      throw new Error(`agent picker did not settle on ${opts.agentLabel} (label=${label})`);
+    }
   }
   await fillTitleAndBody(page, title, body);
   await kickoffButton(page).click();
 
   await waitUntil("detail view opens", () => detailOpen(page), { timeout: 8000 });
   await waitUntil(
-    "harness probe records claude + title",
+    `harness probe records ${command} + title`,
     async () => {
       const text = await fs.readFile(harness.probe, "utf8").catch(() => null);
-      return text !== null && text.includes(`${harness.binDir}/claude`) && text.includes(title)
+      return text !== null && text.includes(`${harness.binDir}/${command}`) && text.includes(title)
         ? text
         : null;
     },
@@ -477,10 +501,20 @@ async function main() {
       },
     );
 
-    // === 4. Resume without a linked id: claude --continue (fallback) ========
+    // === 4. Resume without any id: opencode --continue (the fallback tier) ===
+    //
+    // NOT claude-code any more. A harness whose adapter takes its session id on
+    // argv (`sessionId.kind === "argv"`) is handed a freshly minted one by its
+    // own wrapper on every launch, so it ALWAYS has a resume seed and can never
+    // reach this branch — the check's old premise, not its expectation, is what
+    // went stale. Opencode is `sessionId: { kind: "reported" }`: nothing is
+    // minted for it, and with the fake harness firing no events it reports
+    // nothing either, so its seed is genuinely `null` and `resume.latest`
+    // (`--continue`) is what a resume must build. This is the fallback tier
+    // where the fallback actually lives.
     await attempt(
       4,
-      "Resume without a linked id: after the session ends, resume falls back to `claude --continue`, and a session_resumed event lands",
+      "Resume without any id (Opencode — a `reported` harness gets no minted id, and the fake reports none): after the session ends, resume falls back to `opencode --continue`, and a session_resumed event lands",
       async () => {
         await goToBoard(page);
         const { ticketId, displayId, session } = await kickoffTicket(
@@ -488,8 +522,16 @@ async function main() {
           projectId,
           "Resume unlinked ticket",
           "Resume unlinked body marker DELTA",
+          { agentLabel: "Opencode", command: "opencode" },
         );
         liveSessionIds.push(session.id);
+
+        // The premise, asserted rather than assumed: no id was minted for this
+        // launch. Without it a passing `--continue` could just mean the resume
+        // seed failed to be written for a reason this check isn't about.
+        const sessionRows = await sessionsForTicket(page, ticketId);
+        const seed = sessionRows.find((s) => s.id === session.id)?.harnessSessionId ?? null;
+        const noSeed = seed === null;
 
         const kill = await killSession(page, session.id);
         const killOk = kill.ok === true;
@@ -522,20 +564,120 @@ async function main() {
         if (resumedEvent) liveSessionIds.push(resumedEvent.payload.sessionId);
 
         const probeText = await waitUntil(
-          "resume probe records claude --continue (and never --resume)",
+          "resume probe records opencode --continue (and never a by-id resume)",
           async () => {
             const text = await fs.readFile(harness.probe, "utf8").catch(() => null);
-            return text !== null && text.includes("--continue") ? text : null;
+            return text !== null &&
+              text.includes(`${harness.binDir}/opencode`) &&
+              text.includes("--continue")
+              ? text
+              : null;
           },
           { timeout: 10000 },
         )
-          .then((text) => !text.includes("--resume"))
+          .then((text) => !text.includes("--session"))
           .catch(() => false);
 
-        const ok = killOk && resumedEvent !== undefined && probeText;
+        const ok = noSeed && killOk && resumedEvent !== undefined && probeText;
         return {
           ok,
-          detail: `killOk=${killOk} surface=${surface} resumedEvent=${resumedEvent !== undefined} resumeProbe=${probeText}`,
+          detail:
+            `noSeed=${noSeed}${noSeed ? "" : `(seed=${seed})`} killOk=${killOk} surface=${surface} ` +
+            `resumedEvent=${resumedEvent !== undefined} resumeProbe=${probeText}`,
+        };
+      },
+    );
+
+    // === 5. Resume with the id MINTED for the launch: claude --resume '<it>' ==
+    //
+    // The other half of what check 4 stopped covering. An `argv`-tier harness
+    // gets a fresh UUIDv4 from its own wrapper's synchronous `volli session
+    // harness --mint` call on every launch, written to `harness_session_id`,
+    // and a resume must come back with THAT id — not merely some uuid, and
+    // emphatically not `VOLLI_SESSION` (reusing the PTY's own id per launch is
+    // the collision this path replaced). Check 3 proves the `volli session
+    // link` seed; this proves the minted one, which nothing else here reaches.
+    await attempt(
+      5,
+      "Resume with the MINTED id (Claude Code — the wrapper mints a fresh uuid per launch): the ended session carries a minted `harnessSessionId` that is neither the Volli session id nor the linked-seed uuid, and resume relaunches `claude --resume '<that same id>'`",
+      async () => {
+        await goToBoard(page);
+        const { ticketId, displayId, session } = await kickoffTicket(
+          page,
+          projectId,
+          "Resume minted ticket",
+          "Resume minted body marker EPSILON",
+          // Named, not inherited: check 4 left Opencode selected.
+          { agentLabel: "Claude Code", command: "claude" },
+        );
+        liveSessionIds.push(session.id);
+
+        // The wrapper's mint call is synchronous ahead of its own exec, but the
+        // probe write and the socket round-trip race each other, so wait for
+        // the record rather than reading it once.
+        const minted = await waitUntil(
+          "the launch's minted harness session id lands on the session record",
+          async () => {
+            const rows = await sessionsForTicket(page, ticketId);
+            return rows.find((s) => s.id === session.id)?.harnessSessionId ?? null;
+          },
+          { timeout: 10000 },
+        ).catch(() => null);
+        const freshUuid =
+          typeof minted === "string" &&
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(minted) &&
+          minted !== session.id &&
+          minted !== LINKED_UUID;
+
+        const kill = await killSession(page, session.id);
+        const killOk = kill.ok === true;
+
+        let surface;
+        try {
+          surface = await triggerResume(page, displayId);
+        } catch (error) {
+          return {
+            ok: false,
+            detail: `minted=${minted} killOk=${killOk} resume trigger failed: ${error?.message ?? error}`,
+          };
+        }
+
+        const events = await waitUntil(
+          "session_resumed event recorded",
+          async () => {
+            const rows = await eventsFor(page, ticketId);
+            const resumed = rows.find(
+              (e) =>
+                e.payload.kind === "session_resumed" && e.payload.previousSessionId === session.id,
+            );
+            return resumed ? rows : null;
+          },
+          { timeout: 15000 },
+        ).catch(() => []);
+        const resumedEvent = events.find(
+          (e) => e.payload.kind === "session_resumed" && e.payload.previousSessionId === session.id,
+        );
+        if (resumedEvent) liveSessionIds.push(resumedEvent.payload.sessionId);
+
+        const probeOk = await waitUntil(
+          "resume probe records claude --resume <the minted uuid>",
+          async () => {
+            const text = await fs.readFile(harness.probe, "utf8").catch(() => null);
+            return text !== null && text.includes("--resume") && freshUuid && text.includes(minted)
+              ? text
+              : null;
+          },
+          { timeout: 10000 },
+        )
+          .then(() => true)
+          .catch(() => false);
+
+        const ok = freshUuid && killOk && resumedEvent !== undefined && probeOk;
+        return {
+          ok,
+          detail:
+            `minted=${minted} freshUuid=${freshUuid} killOk=${killOk} surface=${surface} ` +
+            `resumedEvent=${resumedEvent !== undefined} resumeProbe=${probeOk}`,
         };
       },
     );
