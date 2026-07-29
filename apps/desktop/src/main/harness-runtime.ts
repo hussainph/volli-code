@@ -4,12 +4,11 @@
  * launch configuration those wrappers apply.
  */
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
   buildLaunchConfig,
-  harnessAdapters,
   harnessEnvSuffix,
   HARNESS_DIR_TOKEN,
   isBareHarnessCommand,
@@ -113,10 +112,17 @@ export async function ensureHarnessRuntime(input: HarnessRuntimeInput): Promise<
   // A wrapper for a harness that is no longer on the host is worse than no
   // wrapper: it shadows nothing but its own "cannot find" error, where the
   // shell would have said "command not found". Reconcile rather than accumulate.
-  for (const adapter of harnessAdapters) {
-    if (input.adapters.some((installed) => installed.command === adapter.command)) continue;
-    if (!isBareHarnessCommand(adapter.command)) continue;
-    await rm(join(input.binDir, adapter.command), { force: true });
+  //
+  // By reading the directory rather than iterating the built-in adapters,
+  // because a registered harness is nowhere in that list: a manifest that was
+  // edited, deleted or untrusted simply stops arriving in `input.adapters`, and
+  // the only remaining evidence of it is the wrapper it left here. Everything
+  // in this directory is either the launcher (a reserved name, so
+  // `isBareHarnessCommand` refuses it) or a wrapper Volli generated.
+  const current = new Set(input.adapters.map((adapter) => adapter.command));
+  for (const entry of await readdir(input.binDir)) {
+    if (current.has(entry) || !isBareHarnessCommand(entry)) continue;
+    await rm(join(input.binDir, entry), { force: true });
   }
   return { wrappers, env };
 }

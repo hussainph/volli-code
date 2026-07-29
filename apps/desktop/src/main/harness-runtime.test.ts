@@ -106,6 +106,42 @@ describe("ensureHarnessRuntime", () => {
     expect(await readFile(join(paths.binDir, "claude"), "utf8")).toContain("#!/bin/sh");
   });
 
+  it("drops the wrapper of a registered harness that is no longer trusted", async () => {
+    const paths = await scratch();
+    const socketPath = join(paths.binDir, "..", "volli.sock");
+    const registered: HarnessAdapter = {
+      ...adapterFor("claude-code"),
+      id: "my-harness" as HarnessId,
+      command: "my-harness",
+    };
+    await ensureHarnessRuntime({ ...paths, socketPath, adapters: [registered] });
+
+    // A manifest that was edited, deleted or untrusted simply stops being
+    // handed in — no table anywhere names its slug, so the reconcile has to
+    // read the directory to find the wrapper it left behind.
+    await ensureHarnessRuntime({ ...paths, socketPath, adapters: [] });
+
+    await expect(readFile(join(paths.binDir, "my-harness"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("leaves the launcher and its bundle in place while reconciling wrappers", async () => {
+    const paths = await scratch();
+    await mkdir(paths.binDir, { recursive: true });
+    await writeFile(join(paths.binDir, "volli"), "#!/bin/sh\n# launcher\n", { mode: 0o755 });
+    await writeFile(join(paths.binDir, "volli.cjs"), "// bundle\n", { mode: 0o644 });
+
+    await ensureHarnessRuntime({
+      ...paths,
+      socketPath: join(paths.binDir, "..", "volli.sock"),
+      adapters: [],
+    });
+
+    expect(await readFile(join(paths.binDir, "volli"), "utf8")).toContain("launcher");
+    expect(await readFile(join(paths.binDir, "volli.cjs"), "utf8")).toContain("bundle");
+  });
+
   it("hands the wrapper its argv through the environment, shell-quoted", async () => {
     const paths = await scratch();
 

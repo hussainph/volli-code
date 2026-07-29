@@ -46,6 +46,11 @@ import { worktreeDeps } from "./worktree-runtime";
 import { getRetentionWatcher } from "./retention-runtime";
 import { createAgentCommandService } from "./agent-commands";
 import { acquireVolliAppProfile, ensureVolliCliShim, volliRuntimePaths } from "./agent-runtime";
+import {
+  decideRegisteredHarnesses,
+  scanHarnessManifests,
+  trustedHarnessAdapters,
+} from "./harness-registry";
 import { ensureHarnessRuntime } from "./harness-runtime";
 import { startAgentSocket, type AgentSocketServer } from "./agent-socket";
 import {
@@ -703,14 +708,29 @@ app.whenReady().then(async () => {
       // claiming reporting that isn't happening.
       try {
         const detected = await detectInstalledHarnesses(process.env["PATH"] ?? "");
+        // A registered manifest joins the wrapper set exactly as a built-in
+        // does — and only once someone confirmed the bytes it is made of, which
+        // is why every manifest is re-read and re-hashed here rather than
+        // trusted because it was trusted last launch.
+        const registered = dbHandle.ok
+          ? trustedHarnessAdapters(
+              decideRegisteredHarnesses(
+                dbHandle.db,
+                await scanHarnessManifests(join(agentToolsHome, ".agents", "harnesses")),
+              ),
+            )
+          : [];
         const runtime = await ensureHarnessRuntime({
           binDir: runtimePaths.binDir,
           harnessRoot: runtimePaths.harnessRoot,
           socketPath: runtimePaths.socketPath,
           shimPath,
-          adapters: detected
-            .map((id) => getHarnessAdapter(id))
-            .filter((adapter) => adapter !== undefined),
+          adapters: [
+            ...detected
+              .map((id) => getHarnessAdapter(id))
+              .filter((adapter) => adapter !== undefined),
+            ...registered,
+          ],
         });
         agentRuntime.harnessEnv = runtime.env;
       } catch (error) {
