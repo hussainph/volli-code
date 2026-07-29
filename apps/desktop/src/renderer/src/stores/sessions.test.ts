@@ -16,24 +16,24 @@ const P = scratchScope("p");
 
 describe("sessionActivityState", () => {
   it("is exited whenever the shell has exited, regardless of recency or park state", () => {
-    expect(sessionActivityState(1000, true, 1000, false)).toBe("exited");
-    expect(sessionActivityState(null, true, 5000, false)).toBe("exited");
-    expect(sessionActivityState(1000, true, 1000, true)).toBe("exited"); // exited beats parked
+    expect(sessionActivityState(1000, true, 1000, false, null)).toBe("exited");
+    expect(sessionActivityState(null, true, 5000, false, null)).toBe("exited");
+    expect(sessionActivityState(1000, true, 1000, true, null)).toBe("exited"); // exited beats parked
   });
 
   it("is parked when parked and live, regardless of recent output", () => {
-    expect(sessionActivityState(null, false, 1000, true)).toBe("parked");
-    expect(sessionActivityState(1000, false, 1000, true)).toBe("parked"); // parked beats working
+    expect(sessionActivityState(null, false, 1000, true, null)).toBe("parked");
+    expect(sessionActivityState(1000, false, 1000, true, null)).toBe("parked"); // parked beats working
   });
 
   it("is working when output landed within the 10s window", () => {
-    expect(sessionActivityState(1000, false, 1000, false)).toBe("working");
-    expect(sessionActivityState(1000, false, 11_000, false)).toBe("working"); // exactly 10s
+    expect(sessionActivityState(1000, false, 1000, false, null)).toBe("working");
+    expect(sessionActivityState(1000, false, 11_000, false, null)).toBe("working"); // exactly 10s
   });
 
   it("is idle when live but quiet past the window, or when there was no output", () => {
-    expect(sessionActivityState(1000, false, 11_001, false)).toBe("idle");
-    expect(sessionActivityState(null, false, 50_000, false)).toBe("idle");
+    expect(sessionActivityState(1000, false, 11_001, false, null)).toBe("idle");
+    expect(sessionActivityState(null, false, 50_000, false, null)).toBe("idle");
   });
 
   it("prefers a hook-declared state over anything output recency would say", () => {

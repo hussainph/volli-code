@@ -114,6 +114,13 @@ const OUTPUT_THROTTLE_MS = 1_000;
  * nothing, so derivation reads it as `idle` — exactly backwards. Absent a
  * declared state the original output-recency derivation is unchanged.
  *
+ * `declared` is deliberately required rather than defaulting to `null`. It once
+ * defaulted, and the ticket detail's session rail simply never passed it — so
+ * that surface silently reported a blocked agent as `idle` while the sidebar,
+ * reading the same session, said "Waiting for you". A default turns forgetting
+ * the harness's own report into a plausible wrong answer; requiring it turns
+ * the same mistake into a compile error.
+ *
  * Pure and clock-injected, so every rung is unit-testable.
  */
 export function sessionActivityState(
@@ -121,7 +128,7 @@ export function sessionActivityState(
   exited: boolean,
   now: number,
   parked: boolean,
-  declared: SessionActivityState | null = null,
+  declared: SessionActivityState | null,
 ): SessionActivityState {
   if (exited) return "exited";
   if (parked) return "parked";
