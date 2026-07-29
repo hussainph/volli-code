@@ -7,6 +7,7 @@ import { buildHarnessInstallPlan, FIRST_CLASS_HARNESS_IDS } from "@volli/shared"
 
 import { applyHarnessInstallPlan } from "./harness-install";
 import {
+  detectHarnesses,
   detectInstalledHarnesses,
   globalCliLinkShellCommand,
   runAgentToolsConsent,
@@ -33,6 +34,45 @@ describe("detectInstalledHarnesses", () => {
     await chmod(join(bin, "opencode"), 0o755);
 
     expect(await detectInstalledHarnesses(bin)).toEqual(["codex", "opencode"]);
+  });
+});
+
+describe("detectHarnesses", () => {
+  /** A bin directory holding one executable named after a first-class harness. */
+  async function binWith(command: string): Promise<string> {
+    root = await mkdtemp(join(tmpdir(), "volli-detect-login-"));
+    const bin = join(root, "bin");
+    await mkdir(bin);
+    await writeFile(join(bin, command), "#!/bin/sh\n");
+    await chmod(join(bin, command), 0o755);
+    return bin;
+  }
+
+  it("finds a harness on the login shell's PATH that the app's own PATH cannot see", async () => {
+    const bin = await binWith("codex");
+    // What a Finder or Dock launch actually inherits: launchd's PATH, which
+    // holds none of the directories a harness installs into.
+    const launchd = { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", SHELL: "/bin/zsh" };
+
+    const detected = await detectHarnesses({
+      env: launchd,
+      runShell: async () => `${bin}:${launchd.PATH}\n`,
+    });
+
+    expect(detected).toEqual(["codex"]);
+  });
+
+  it("reports null when the login PATH could not be resolved, not an empty host", async () => {
+    await binWith("codex");
+
+    const detected = await detectHarnesses({
+      env: { PATH: "/usr/bin:/bin", SHELL: "/bin/zsh" },
+      runShell: async () => {
+        throw new Error("shell is wedged");
+      },
+    });
+
+    expect(detected).toBeNull();
   });
 });
 

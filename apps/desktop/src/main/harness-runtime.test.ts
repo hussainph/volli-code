@@ -40,6 +40,7 @@ describe("ensureHarnessRuntime", () => {
       ...paths,
       socketPath: join(paths.binDir, "..", "volli.sock"),
       adapters: [adapterFor("claude-code")],
+      adapterCensus: "complete",
     });
 
     const wrapperPath = join(paths.binDir, "claude");
@@ -53,7 +54,8 @@ describe("ensureHarnessRuntime", () => {
       ...paths,
       socketPath: join(paths.binDir, "..", "volli.sock"),
       adapters: [adapterFor("claude-code")],
-    };
+      adapterCensus: "complete",
+    } as const;
     await mkdir(paths.binDir, { recursive: true });
     await writeFile(join(paths.binDir, "claude"), "#!/bin/sh\n# stale\n", { mode: 0o755 });
 
@@ -71,6 +73,7 @@ describe("ensureHarnessRuntime", () => {
       ...paths,
       socketPath: join(paths.binDir, "..", "volli.sock"),
       adapters: [{ ...adapterFor("claude-code"), command: "volli" }],
+      adapterCensus: "complete",
     });
 
     expect(runtime.wrappers).toEqual([]);
@@ -84,6 +87,7 @@ describe("ensureHarnessRuntime", () => {
       ...paths,
       socketPath: join(paths.binDir, "..", "volli.sock"),
       adapters: [{ ...adapterFor("claude-code"), command: "../../usr/bin/env" }],
+      adapterCensus: "complete",
     });
 
     expect(runtime.wrappers).toEqual([]);
@@ -96,9 +100,15 @@ describe("ensureHarnessRuntime", () => {
       ...paths,
       socketPath,
       adapters: [adapterFor("claude-code"), adapterFor("codex")],
+      adapterCensus: "complete",
     });
 
-    await ensureHarnessRuntime({ ...paths, socketPath, adapters: [adapterFor("claude-code")] });
+    await ensureHarnessRuntime({
+      ...paths,
+      socketPath,
+      adapters: [adapterFor("claude-code")],
+      adapterCensus: "complete",
+    });
 
     await expect(readFile(join(paths.binDir, "codex"), "utf8")).rejects.toMatchObject({
       code: "ENOENT",
@@ -114,16 +124,45 @@ describe("ensureHarnessRuntime", () => {
       id: "my-harness" as HarnessId,
       command: "my-harness",
     };
-    await ensureHarnessRuntime({ ...paths, socketPath, adapters: [registered] });
+    await ensureHarnessRuntime({
+      ...paths,
+      socketPath,
+      adapters: [registered],
+      adapterCensus: "complete",
+    });
 
     // A manifest that was edited, deleted or untrusted simply stops being
     // handed in — no table anywhere names its slug, so the reconcile has to
     // read the directory to find the wrapper it left behind.
-    await ensureHarnessRuntime({ ...paths, socketPath, adapters: [] });
+    await ensureHarnessRuntime({ ...paths, socketPath, adapters: [], adapterCensus: "complete" });
 
     await expect(readFile(join(paths.binDir, "my-harness"), "utf8")).rejects.toMatchObject({
       code: "ENOENT",
     });
+  });
+
+  it("keeps every wrapper when the adapter list is not a census of the host", async () => {
+    const paths = await scratch();
+    const socketPath = join(paths.binDir, "..", "volli.sock");
+    await ensureHarnessRuntime({
+      ...paths,
+      socketPath,
+      adapters: [adapterFor("claude-code"), adapterFor("codex")],
+      adapterCensus: "complete",
+    });
+
+    // Detection failed this launch, so nothing here is known to be gone —
+    // deleting on that would let one unresolvable PATH destroy a working
+    // install, and the next launch that does resolve it rewrites these anyway.
+    await ensureHarnessRuntime({
+      ...paths,
+      socketPath,
+      adapters: [],
+      adapterCensus: "partial",
+    });
+
+    expect(await readFile(join(paths.binDir, "codex"), "utf8")).toContain("#!/bin/sh");
+    expect(await readFile(join(paths.binDir, "claude"), "utf8")).toContain("#!/bin/sh");
   });
 
   it("leaves the launcher and its bundle in place while reconciling wrappers", async () => {
@@ -136,6 +175,7 @@ describe("ensureHarnessRuntime", () => {
       ...paths,
       socketPath: join(paths.binDir, "..", "volli.sock"),
       adapters: [],
+      adapterCensus: "complete",
     });
 
     expect(await readFile(join(paths.binDir, "volli"), "utf8")).toContain("launcher");
@@ -149,6 +189,7 @@ describe("ensureHarnessRuntime", () => {
       ...paths,
       socketPath: "/tmp/volli.sock",
       adapters: [adapterFor("claude-code")],
+      adapterCensus: "complete",
     });
 
     const argv = runtime.env["VOLLI_HARNESS_ARGV_CLAUDE_CODE"] ?? "";
@@ -170,6 +211,7 @@ describe("ensureHarnessRuntime", () => {
       ...paths,
       socketPath: "/tmp/volli.sock",
       adapters: [adapterFor("cursor")],
+      adapterCensus: "complete",
     });
 
     const harnessDir = join(paths.harnessRoot, "cursor");

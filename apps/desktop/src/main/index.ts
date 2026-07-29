@@ -54,7 +54,7 @@ import {
 import { ensureHarnessRuntime } from "./harness-runtime";
 import { startAgentSocket, type AgentSocketServer } from "./agent-socket";
 import {
-  detectInstalledHarnesses,
+  detectHarnesses,
   installDetectedHarnessSkills,
   installGlobalCliLink,
   removeGlobalCliLinkIfOurs,
@@ -565,10 +565,7 @@ app.whenReady().then(async () => {
     // transient failure re-offers next boot instead of latching a broken state.
     let result;
     try {
-      result = await installDetectedHarnessSkills({
-        home: agentToolsHome,
-        pathValue: process.env["PATH"] ?? "",
-      });
+      result = await installDetectedHarnessSkills({ home: agentToolsHome });
     } catch (error) {
       dialog.showErrorBox(
         "Agent Tools Installation Failed",
@@ -707,7 +704,11 @@ app.whenReady().then(async () => {
       // which the session header already states as the Known tier rather than
       // claiming reporting that isn't happening.
       try {
-        const detected = await detectInstalledHarnesses(process.env["PATH"] ?? "");
+        // The user's login-shell PATH, not main's: a Dock launch inherits
+        // launchd's four directories, where no harness has ever been installed.
+        // `null` means the shell could not be asked, which is why it reaches the
+        // census below rather than being flattened into an empty list.
+        const detected = await detectHarnesses();
         // A registered manifest joins the wrapper set exactly as a built-in
         // does — and only once someone confirmed the bytes it is made of, which
         // is why every manifest is re-read and re-hashed here rather than
@@ -726,11 +727,15 @@ app.whenReady().then(async () => {
           socketPath: runtimePaths.socketPath,
           shimPath,
           adapters: [
-            ...detected
+            ...(detected ?? [])
               .map((id) => getHarnessAdapter(id))
               .filter((adapter) => adapter !== undefined),
             ...registered,
           ],
+          // Both halves have to have run before an absent wrapper means an
+          // absent harness: detection answers for the built-ins, the db for the
+          // registered manifests.
+          adapterCensus: detected !== null && dbHandle.ok ? "complete" : "partial",
         });
         agentRuntime.harnessEnv = runtime.env;
       } catch (error) {
@@ -765,10 +770,7 @@ app.whenReady().then(async () => {
       // resurface an admin prompt. Fully non-blocking and swallowed (logged) so a
       // failed refresh never blocks boot or spams dialogs; only a genuine
       // conflict warns.
-      void installDetectedHarnessSkills({
-        home: agentToolsHome,
-        pathValue: process.env["PATH"] ?? "",
-      })
+      void installDetectedHarnessSkills({ home: agentToolsHome })
         .then(async (result) => {
           if (result.conflicts.length > 0) await showSkillConflictWarning(result.conflicts);
         })

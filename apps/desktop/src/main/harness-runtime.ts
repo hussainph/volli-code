@@ -28,6 +28,13 @@ export interface HarnessRuntimeInput {
   shimPath: string;
   /** The harnesses actually installed on this host. */
   adapters: readonly HarnessAdapter[];
+  /**
+   * Whether {@link adapters} is a complete census of this host, or all the
+   * caller could learn. `partial` means detection or the manifest scan could not
+   * run, so an absent harness is indistinguishable from an unknown one and no
+   * wrapper is removed — see the reconcile below.
+   */
+  adapterCensus: "complete" | "partial";
 }
 
 export interface HarnessRuntime {
@@ -119,10 +126,19 @@ export async function ensureHarnessRuntime(input: HarnessRuntimeInput): Promise<
   // the only remaining evidence of it is the wrapper it left here. Everything
   // in this directory is either the launcher (a reserved name, so
   // `isBareHarnessCommand` refuses it) or a wrapper Volli generated.
-  const current = new Set(input.adapters.map((adapter) => adapter.command));
-  for (const entry of await readdir(input.binDir)) {
-    if (current.has(entry) || !isBareHarnessCommand(entry)) continue;
-    await rm(join(input.binDir, entry), { force: true });
+  //
+  // Only a COMPLETE census justifies a deletion. An empty list is not proof
+  // that every harness was uninstalled — it is also what a PATH that would not
+  // resolve or a db that would not open produces, and taking that as proof
+  // would let one failed launch destroy the wrappers a working install depends
+  // on. Keeping a stale wrapper costs one confusing error; removing a live one
+  // costs the whole feature until someone notices.
+  if (input.adapterCensus === "complete") {
+    const current = new Set(input.adapters.map((adapter) => adapter.command));
+    for (const entry of await readdir(input.binDir)) {
+      if (current.has(entry) || !isBareHarnessCommand(entry)) continue;
+      await rm(join(input.binDir, entry), { force: true });
+    }
   }
   return { wrappers, env };
 }

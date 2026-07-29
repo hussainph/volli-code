@@ -18,13 +18,15 @@ import {
   type HarnessInstallResult,
   type HarnessUninstallResult,
 } from "./harness-install";
+import { loginShellPath, readLoginShellPath, type LoginShellDeps } from "./login-path";
 
 const execFileAsync = promisify(execFile);
 
 /**
- * Finds first-class harness executables without invoking a shell or the harness
- * itself. Iterates the adapter registry so each harness's detection rule lives
- * in its own adapter module — adding a harness needs no edit here.
+ * Finds first-class harness executables on an explicit PATH, without invoking a
+ * shell or the harness itself. Iterates the adapter registry so each harness's
+ * detection rule lives in its own adapter module — adding a harness needs no
+ * edit here.
  */
 export async function detectInstalledHarnesses(pathValue: string): Promise<HarnessId[]> {
   const directories = pathValue.split(":").filter(Boolean);
@@ -43,6 +45,21 @@ export async function detectInstalledHarnesses(pathValue: string): Promise<Harne
     if (found) detected.push(adapter.id);
   }
   return detected;
+}
+
+/**
+ * What this host has, asked of the user's login shell rather than of main's own
+ * environment — a Dock launch inherits launchd's four directories and would see
+ * no harness at all (see {@link loginShellPath}).
+ *
+ * `null` means detection did not run: the shell could not be asked. It is not
+ * an empty host, and nothing may treat it as one — an install whose PATH failed
+ * to resolve once still has every harness it had a minute ago.
+ */
+export async function detectHarnesses(deps?: LoginShellDeps): Promise<HarnessId[] | null> {
+  const pathValue = deps ? await readLoginShellPath(deps) : await loginShellPath();
+  if (pathValue === null) return null;
+  return detectInstalledHarnesses(pathValue);
 }
 
 export type AgentToolsConsentStatus = "installed" | "deferred";
@@ -68,13 +85,18 @@ function managedManifestPath(home: string): string {
   return join(home, ".agents/skills/volli/.volli-managed.json");
 }
 
-/** Installs or refreshes the skill pack for currently detected harnesses. */
+/**
+ * Installs or refreshes the skill pack for currently detected harnesses. A
+ * detection that could not run installs nothing, which is the same outcome an
+ * empty host gets and costs only this refresh — the plan writes files, so
+ * "unknown" must never be spelled as a plan of any other shape.
+ */
 export async function installDetectedHarnessSkills(input: {
   home: string;
-  pathValue: string;
+  deps?: LoginShellDeps;
 }): Promise<HarnessInstallResult> {
-  const detected = await detectInstalledHarnesses(input.pathValue);
-  const plan = buildHarnessInstallPlan({ home: input.home, detected });
+  const detected = await detectHarnesses(input.deps);
+  const plan = buildHarnessInstallPlan({ home: input.home, detected: detected ?? [] });
   return applyHarnessInstallPlan(plan, managedManifestPath(input.home));
 }
 
