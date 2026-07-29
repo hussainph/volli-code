@@ -474,6 +474,24 @@ export function removeStep(steps: AutomationStep[], id: string): AutomationStep[
   return kept;
 }
 
+/**
+ * A copy of `id` directly beneath it, under a new name.
+ *
+ * Beneath, not at the end: position is meaning in this list, and the reason to
+ * duplicate a step is almost always "the same thing again, here" — appending
+ * would silently move the copy past everything between.
+ */
+export function duplicateStep(
+  steps: AutomationStep[],
+  id: string,
+  freshId: string,
+): AutomationStep[] {
+  const at = steps.findIndex((step) => step.id === id);
+  if (at === -1) return steps;
+  const copy: AutomationStep = { ...steps[at], id: freshId };
+  return [...steps.slice(0, at + 1), copy, ...steps.slice(at + 1)];
+}
+
 /** New steps land at the end, running after everything. Flip the connector to change it. */
 export function appendStep(steps: AutomationStep[], step: AutomationStep): AutomationStep[] {
   return [...steps, { ...step, join: "then" }];

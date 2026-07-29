@@ -31,6 +31,7 @@
  */
 import * as React from "react";
 import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
+import { SparkleIcon } from "@phosphor-icons/react/dist/csr/Sparkle";
 import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
 import { LockSimpleIcon } from "@phosphor-icons/react/dist/csr/LockSimple";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
@@ -136,7 +137,10 @@ function StepMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
         <DropdownMenuSub>
-          <DropdownMenuSubTrigger>Insert skill</DropdownMenuSubTrigger>
+          <DropdownMenuSubTrigger>
+            <SparkleIcon weight="fill" />
+            Insert skill
+          </DropdownMenuSubTrigger>
           <DropdownMenuPortal>
             <DropdownMenuSubContent className="w-72">
               {SKILL_GROUPS.map((group, index) => {

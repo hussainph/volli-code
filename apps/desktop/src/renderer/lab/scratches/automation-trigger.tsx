@@ -60,6 +60,7 @@ import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
 import { PlayIcon } from "@phosphor-icons/react/dist/csr/Play";
+import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import {
   TICKET_STATUS_LABELS,
@@ -470,7 +471,7 @@ function AdvanceButton({ state }: { state: TicketState }) {
           ) : null}
           {armed !== null ? (
             <DropdownMenuItem>
-              <ArrowRightIcon />
+              <ArrowRightIcon weight="fill" />
               Move without running
             </DropdownMenuItem>
           ) : null}
@@ -650,10 +651,13 @@ function ColumnDefaultControl({
         ))}
         <DropdownMenuSeparator />
         {/* In-situ creation (#86a): authoring must never require a trip to settings. */}
-        <DropdownMenuItem>New automation…</DropdownMenuItem>
+        <DropdownMenuItem>
+          <PlusIcon weight="fill" />
+          New automation…
+        </DropdownMenuItem>
         {chosen ? (
           <DropdownMenuItem onSelect={onDisarm}>
-            <XIcon />
+            <XIcon weight="fill" />
             Clear default
           </DropdownMenuItem>
         ) : null}
@@ -966,7 +970,7 @@ function ColumnAutomationList({
               className={cn(
                 "shrink-0 rounded border font-mono",
                 chosen ? "border-primary text-primary" : "border-border text-muted-foreground",
-                expanded ? "px-1 text-[10px]" : "px-1 text-[9px]",
+                "px-1 text-label",
               )}
             >
               {index + 1}
@@ -1026,7 +1030,7 @@ function ColumnAutomationList({
           className={cn(
             "shrink-0 rounded border font-mono",
             activeIndex === null ? "border-primary text-primary" : "border-border",
-            expanded ? "px-1 text-[10px]" : "px-1 text-[9px]",
+            "px-1 text-label",
           )}
         >
           0
@@ -1253,6 +1257,26 @@ function DragTab({
     [revertEntry],
   );
 
+  /**
+   * Read by the drop effect below, and deliberately NOT depended on by it.
+   *
+   * The effect is a one-shot reaction to a NEW drop, but its body needs the
+   * default in force and the release point — both of which change for reasons
+   * that have nothing to do with a drop happening. With them in the dependency
+   * list, changing a column's default from the bolt while a drop was still
+   * armed re-entered the effect on the SAME `lastDrop`: it recomputed the
+   * automation from the new default and overwrote the armed entry, and worse,
+   * recomputed `fromStatus` as `current[...]?.toStatus` — the destination — so
+   * Undo stopped returning the card to the column it came from.
+   *
+   * Refs assigned during render are set before any effect in the same commit
+   * runs, so the effect still sees this render's values.
+   */
+  const armingRef = React.useRef(arming);
+  armingRef.current = arming;
+  const releasePointRef = React.useRef(drag.point);
+  releasePointRef.current = drag.point;
+
   React.useEffect(() => {
     const drop = drag.lastDrop;
     if (drop === null) {
@@ -1261,7 +1285,7 @@ function DragTab({
       setConfirmation(null);
       return;
     }
-    const automation = resolveAutomation(drop.status, arming, drop.overrideIndex);
+    const automation = resolveAutomation(drop.status, armingRef.current, drop.overrideIndex);
     const droppedTicket = tickets.find((candidate) => candidate.id === drop.ticketId);
     if (droppedTicket === undefined) return;
 
@@ -1285,8 +1309,8 @@ function DragTab({
         // `use-drag-sim` reports the pointer on every move and does not touch it
         // on release, so this is the release point — no need to widen the hook's
         // contract to carry a coordinate it already has.
-        x: drag.point.x,
-        y: drag.point.y,
+        x: releasePointRef.current.x,
+        y: releasePointRef.current.y,
         status: drop.status,
         automation: null,
       });
@@ -1307,7 +1331,7 @@ function DragTab({
     setConfirmation(null);
     scheduleFire(drop.ticketId);
     return undefined;
-  }, [drag.lastDrop, drag.point, arming, scheduleFire]);
+  }, [drag.lastDrop, scheduleFire]);
 
   const dragActive = drag.ticketId !== null && draggedTicket !== null && drag.origin !== null;
 

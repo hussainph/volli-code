@@ -34,6 +34,7 @@ import { Button } from "@renderer/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -116,8 +117,11 @@ function KindPicker({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-56">
+        {/* `DropdownMenuGroup`, not a bare `div`: a plain element inside
+            `role="menu"` leaves the set unlabelled to assistive tech and
+            sidesteps the primitive's own grouping semantics. */}
         {TRIGGER_GROUPS.map((group, index) => (
-          <div key={group}>
+          <DropdownMenuGroup key={group} aria-label={group}>
             {index > 0 ? <DropdownMenuSeparator /> : null}
             <DropdownMenuLabel>{group}</DropdownMenuLabel>
             {kinds
@@ -131,7 +135,7 @@ function KindPicker({
                   {TRIGGER_KINDS[kind].label}
                 </DropdownMenuItem>
               ))}
-          </div>
+          </DropdownMenuGroup>
         ))}
       </DropdownMenuContent>
     </DropdownMenu>

@@ -247,7 +247,15 @@ export function useDragSim({ automationCountFor, defaultIndexFor }: UseDragSimOp
       setPickerOpen(true);
     }
 
-    /** `t9` only: move the highlighted column, carrying the automation index across if the destination still offers it. */
+    /**
+     * Move the highlighted row within the ⌥-expanded column's list, wrapping
+     * through the "Move only" slot at index 0.
+     *
+     * The doc used to say "`t9` only: move the highlighted COLUMN", which is
+     * what it did before the t9 and radial variants were deleted — it has
+     * navigated the automation index inside one column ever since, and only the
+     * comment was left behind.
+     */
     function moveIndex(delta: number) {
       const cell = state.current.pickerCell;
       if (cell === null) return;
@@ -357,10 +365,11 @@ export function useDragSim({ automationCountFor, defaultIndexFor }: UseDragSimOp
           closePicker();
           return;
         }
-        // No picker open: cancel the whole drag, same as ever.
-        setTicketId(null);
-        setHovered(null);
-        setDigitSelection(null);
+        // No picker open: cancel the whole drag. Through `resetDragState`, not
+        // by hand — the hand-written version left `origin`, `overList` and
+        // `modifierHeld` at their mid-drag values, so a consumer reading those
+        // at rest saw a drag that was already over.
+        resetDragState();
         return;
       }
 
@@ -449,6 +458,12 @@ export function useDragSim({ automationCountFor, defaultIndexFor }: UseDragSimOp
       setDigitSelection(null);
       setPickerOpen(false);
       setPickerCell(null);
+      // The previous drag's hover survives a completed drop, and nothing
+      // recomputes it until the first `pointermove` — so a press-without-moving
+      // used to replay the old drag's highlight ring and automation panel on
+      // whatever column the last one ended over.
+      setHovered(null);
+      setOverList(false);
     },
     [],
   );

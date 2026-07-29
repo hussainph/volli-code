@@ -40,7 +40,7 @@
  * `@volli/shared` next to `harnessLabel`, so every surface agrees.
  */
 import * as React from "react";
-import type { Icon } from "@phosphor-icons/react";
+import type { Icon, IconProps } from "@phosphor-icons/react";
 
 import { cn } from "@renderer/lib/utils";
 
@@ -202,24 +202,35 @@ export function HarnessTag({
 export const HARNESS_ICONS: Record<LabHarnessId, Icon> = Object.fromEntries(
   LAB_HARNESS_IDS.map((harnessId) => {
     const { paths, viewBox, tint } = IDENTITY[harnessId];
-    const Adapted = React.forwardRef<SVGSVGElement, React.ComponentProps<"svg">>(
-      function HarnessIcon({ className, ...props }, ref) {
-        return (
-          <svg
-            {...props}
-            ref={ref}
-            viewBox={viewBox}
-            fill={tint}
-            aria-hidden
-            className={cn("size-3.5 shrink-0", className)}
-          >
-            {paths.map((path) => (
-              <path key={path.slice(0, 24)} d={path} />
-            ))}
-          </svg>
-        );
-      },
-    );
+    // The cast to `Icon` below lets callers pass Phosphor's own props, so the
+    // Icon-only ones are destructured away rather than spread: `weight` and
+    // `mirrored` are not SVG attributes (React warns and the DOM ignores them),
+    // and `color` would be overridden by `fill` anyway — a caller passing it
+    // should not be left believing it took.
+    const Adapted = React.forwardRef<SVGSVGElement, IconProps>(function HarnessIcon(
+      { className, weight, mirrored, color, size, ...props },
+      ref,
+    ) {
+      void weight;
+      void mirrored;
+      void color;
+      return (
+        <svg
+          {...props}
+          width={size}
+          height={size}
+          ref={ref}
+          viewBox={viewBox}
+          fill={tint}
+          aria-hidden
+          className={cn("size-3.5 shrink-0", className)}
+        >
+          {paths.map((path) => (
+            <path key={path.slice(0, 24)} d={path} />
+          ))}
+        </svg>
+      );
+    });
     return [harnessId, Adapted as unknown as Icon];
   }),
 ) as Record<LabHarnessId, Icon>;

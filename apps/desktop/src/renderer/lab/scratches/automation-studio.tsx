@@ -77,6 +77,7 @@ import {
 import {
   appendStep,
   blankStep,
+  duplicateStep,
   freshStepId,
   harnessTrail,
   removeStep,
@@ -594,6 +595,16 @@ function Editor({
     setSource(text);
     const parsed = parseAutomationFile(text, automation.name);
     setDiagnostics(parsed.diagnostics);
+
+    // An erroring parse must NOT reach the model. `parseAutomationFile` always
+    // returns its best reading, and when the frontmatter is unopened or
+    // unclosed that reading is an empty automation — so deleting a `---` while
+    // typing used to commit a step-less automation, and toggling the panel shut
+    // then regenerated the file from it. Every prompt in the automation, gone,
+    // with no undo. The text you typed stays on screen either way; the
+    // diagnostics below say why it has not been applied yet.
+    if (parsed.diagnostics.some((diagnostic) => diagnostic.severity === "error")) return;
+
     fromSource.current = true;
     // The id is the automation's identity in this session, not something the
     // file names — keeping it means editing the name in the textarea renames the
@@ -681,14 +692,11 @@ function Editor({
                       ) : null
                     }
                     onChange={(next) => patchSteps(replaceStep(steps, next))}
-                    onDuplicate={() => {
-                      const copy = {
-                        ...step,
-                        id: freshStepId(steps, step.runtime.harnessId),
-                        join: "then" as const,
-                      };
-                      patchSteps([...steps, copy]);
-                    }}
+                    onDuplicate={() =>
+                      patchSteps(
+                        duplicateStep(steps, step.id, freshStepId(steps, step.runtime.harnessId)),
+                      )
+                    }
                     onRemove={
                       steps.length > 1 ? () => patchSteps(removeStep(steps, step.id)) : null
                     }
@@ -783,7 +791,7 @@ export default function AutomationStudioScratch() {
       scope,
       name: "",
       trigger: { kind: "enters-column", columns: column === null ? [] : [column] },
-      steps: [blankStep("claude-code", "claude-code")],
+      steps: [blankStep("claude-code", freshStepId([], "claude-code"))],
     };
     setAutomations((current) => [...current, fresh]);
     setSelectedId(id);

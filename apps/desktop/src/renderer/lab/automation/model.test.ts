@@ -3,12 +3,16 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   appendStep,
   blankStep,
+  composeCommand,
+  defaultRuntime,
   freshStepId,
   removeStep,
   renameStep,
   replaceStep,
   setJoin,
+  tokenizeInstructions,
   toStages,
+  triggerSummary,
   type AutomationStep,
 } from "./model";
 
@@ -100,5 +104,105 @@ describe("freshStepId", () => {
 
   it("suffixes past every taken id rather than the first one", () => {
     expect(freshStepId(spine("codex codex-2 codex-3"), "codex")).toBe("codex-4");
+  });
+});
+
+/** `text(...)`, `brace(name)`, `skill(/name)` — the token stream as one readable line. */
+function kinds(text: string): string[] {
+  return tokenizeInstructions(text).map((token) =>
+    token.kind === "text"
+      ? `text(${token.value})`
+      : `${token.kind}(${token.kind === "brace" ? token.token : token.name})`,
+  );
+}
+
+/** The composed command flattened back to a command line. */
+function flags(runtime: Parameters<typeof composeCommand>[0]): string {
+  return composeCommand(runtime)
+    .map((part) => (part.value === undefined ? part.flag : `${part.flag} ${part.value}`))
+    .join(" ");
+}
+
+describe("tokenizeInstructions", () => {
+  it("leaves plain prose as one run of text", () => {
+    expect(kinds("Implement this ticket.")).toEqual(["text(Implement this ticket.)"]);
+  });
+
+  it("finds a skill at the start of the text", () => {
+    expect(kinds("/tdd and then stop")).toEqual(["skill(/tdd)", "text( and then stop)"]);
+  });
+
+  it("finds a skill after whitespace but not mid-word", () => {
+    // The lookbehind is the whole point: `and/or` is prose, not a reference.
+    expect(kinds("run /tdd now")).toEqual(["text(run )", "skill(/tdd)", "text( now)"]);
+    expect(kinds("either and/or both")).toEqual(["text(either and/or both)"]);
+  });
+
+  it("marks a skill Volli cannot see as unverified rather than dropping it", () => {
+    const found = tokenizeInstructions("/tdd then /nope");
+    const skills = found.filter((token) => token.kind === "skill");
+    expect(skills.map((token) => token.kind === "skill" && token.known)).toEqual([true, false]);
+  });
+
+  it("still recognises `{{braces}}`, so the editor can paint them as wrong", () => {
+    // Placeholders mode is gone. Not recognising them would render the mistake
+    // as ordinary prose, which is the one outcome that guarantees it ships.
+    expect(kinds("Review {{change_set}} now")).toEqual([
+      "text(Review )",
+      "brace(change_set)",
+      "text( now)",
+    ]);
+  });
+
+  it("carries each token's offset, so the editor keys on data not on index", () => {
+    const found = tokenizeInstructions("ab /tdd");
+    expect(found.map((token) => token.at)).toEqual([0, 3]);
+  });
+});
+
+describe("composeCommand", () => {
+  it("spells each adapter's dialect rather than normalising them", () => {
+    expect(
+      flags({ ...defaultRuntime("claude-code"), model: "claude-opus-5", effort: "high" }),
+    ).toContain("--effort high");
+    expect(flags({ ...defaultRuntime("codex"), model: "gpt-5.1-codex", effort: "high" })).toContain(
+      "-c model_reasoning_effort=high",
+    );
+    expect(flags({ ...defaultRuntime("opencode"), effort: "high" })).toContain("--variant high");
+    expect(flags({ ...defaultRuntime("pi"), effort: "high" })).toContain("--thinking high");
+  });
+
+  it("omits an approval flag whose stop is the absence of a flag", () => {
+    // opencode's "ask" is spelled by passing nothing; inventing a token for it
+    // would put a flag in the command that the binary does not accept.
+    const parts = composeCommand({ ...defaultRuntime("opencode"), approvals: "ask" });
+    expect(parts.every((part) => part.flag !== "")).toBe(true);
+  });
+
+  it("writes no effort fragment for an adapter that has no effort dial", () => {
+    const parts = composeCommand({ ...defaultRuntime("cursor"), approvals: "sandbox" });
+    expect(parts.map((part) => part.flag)).not.toContain("--effort");
+  });
+});
+
+describe("triggerSummary", () => {
+  it("names the one column it fires in", () => {
+    expect(triggerSummary({ kind: "enters-column", columns: ["doing"] })).toBe(
+      "Ticket enters Doing",
+    );
+  });
+
+  it("counts rather than lists once there is more than one", () => {
+    expect(triggerSummary({ kind: "enters-column", columns: ["backlog", "todo"] })).toBe(
+      "Ticket enters 2 columns",
+    );
+  });
+
+  it("says `any column` rather than nothing when the list is empty", () => {
+    expect(triggerSummary({ kind: "leaves-column", columns: [] })).toBe("Ticket leaves any column");
+  });
+
+  it("has no operand to state for a manual trigger", () => {
+    expect(triggerSummary({ kind: "manual" })).toBe("Run by hand");
   });
 });

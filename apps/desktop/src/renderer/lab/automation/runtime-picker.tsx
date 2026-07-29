@@ -82,7 +82,18 @@ function CommandRibbon({ runtime }: { runtime: AutomationRuntime }) {
   );
 }
 
-/** Combobox, not a select: the suggestion list is a shortcut, the text is the truth. */
+/**
+ * Combobox, not a select: the suggestion list is a shortcut, the text is the
+ * truth. Model names churn faster than releases, so typing one that is not on
+ * the list has to stay legal.
+ *
+ * The suggestions were pointer-only until review caught it — committing on
+ * `onMouseDown`, which keyboard activation never fires, and closing on `blur`,
+ * which tore the list down before Tab could reach it. So the list is driven
+ * from the input instead: arrows move a highlighted index, Enter commits it,
+ * Escape closes, and `aria-activedescendant` tells a screen reader which row is
+ * current without moving focus off the field.
+ */
 function ModelField({
   runtime,
   onChange,
@@ -92,6 +103,35 @@ function ModelField({
 }) {
   const adapter = HARNESS_ADAPTERS[runtime.harnessId];
   const [open, setOpen] = React.useState(false);
+  const [active, setActive] = React.useState(-1);
+  const listId = React.useId();
+
+  function commit(model: string) {
+    onChange({ ...runtime, model });
+    setOpen(false);
+    setActive(-1);
+  }
+
+  function onKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Escape" && open) {
+      event.preventDefault();
+      setOpen(false);
+      setActive(-1);
+      return;
+    }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      setOpen(true);
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      const count = adapter.models.length;
+      setActive((current) => (current + step + count) % count);
+      return;
+    }
+    if (event.key === "Enter" && open && active >= 0) {
+      event.preventDefault();
+      commit(adapter.models[active]);
+    }
+  }
 
   return (
     <div className="relative">
@@ -99,27 +139,49 @@ function ModelField({
         value={runtime.model}
         onChange={(event) => onChange({ ...runtime, model: event.target.value })}
         onFocus={() => setOpen(true)}
-        // Blur is deferred a frame so a click on a suggestion lands before the
-        // list unmounts underneath the pointer.
+        // Deferred a frame so a click on a suggestion lands before the list
+        // unmounts underneath the pointer.
         onBlur={() => window.setTimeout(() => setOpen(false), 120)}
+        onKeyDown={onKeyDown}
         spellCheck={false}
         aria-label="Model"
+        role="combobox"
+        aria-expanded={open}
+        aria-controls={listId}
+        aria-autocomplete="list"
+        aria-activedescendant={open && active >= 0 ? `${listId}-${active}` : undefined}
         className={cn(
           "h-7 w-full rounded-md border border-border bg-transparent px-2 font-mono text-ui text-foreground",
           "outline-none focus-visible:border-ring",
         )}
       />
       {open ? (
-        <ul className="absolute top-8 left-0 z-30 w-full overflow-hidden rounded-md border border-border bg-popover py-1 shadow-md">
-          {adapter.models.map((model) => (
-            <li key={model}>
-              <button
-                type="button"
-                onMouseDown={() => onChange({ ...runtime, model })}
-                className="w-full cursor-pointer px-2 py-1 text-left font-mono text-label text-muted-foreground hover:bg-accent hover:text-foreground"
-              >
-                {model}
-              </button>
+        <ul
+          id={listId}
+          role="listbox"
+          aria-label="Suggested models"
+          className="absolute top-8 left-0 z-30 w-full overflow-hidden rounded-md border border-border bg-popover py-1 shadow-md"
+        >
+          {adapter.models.map((model, index) => (
+            <li
+              key={model}
+              id={`${listId}-${index}`}
+              role="option"
+              aria-selected={index === active}
+              className={cn(
+                "cursor-pointer px-2 py-1 font-mono text-label text-muted-foreground",
+                "hover:bg-accent hover:text-foreground",
+                index === active && "bg-accent text-foreground",
+              )}
+              // `onMouseDown` beats the input's blur; `onClick` is what a
+              // pointer-less activation path would reach. Both commit the same way.
+              onMouseDown={(event) => {
+                event.preventDefault();
+                commit(model);
+              }}
+              onClick={() => commit(model)}
+            >
+              {model}
             </li>
           ))}
         </ul>
@@ -253,8 +315,12 @@ export function ApprovalsPicker({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
+        {/* Never the adapter's first option as a stand-in for unset: the file
+            omits `approvals` entirely when it is null, so a row claiming
+            `read-only` while the file says nothing is the surface disagreeing
+            with the artifact it is a view of. */}
         <Button variant="ghost" size="xs" className="gap-1.5 font-mono text-muted-foreground">
-          {runtime.approvals ?? axis.options[0].value}
+          {runtime.approvals ?? <span className="font-sans italic">approvals</span>}
           <CaretDownIcon weight="bold" className="size-3" />
         </Button>
       </DropdownMenuTrigger>

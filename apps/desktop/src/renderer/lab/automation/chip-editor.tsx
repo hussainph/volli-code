@@ -156,8 +156,23 @@ export const ChipEditor = React.forwardRef<
   React.useLayoutEffect(() => {
     const field = areaRef.current;
     if (field === null) return;
-    field.style.height = "auto";
-    field.style.height = `${field.scrollHeight}px`;
+
+    function fit() {
+      if (field === null) return;
+      field.style.height = "auto";
+      field.style.height = `${field.scrollHeight}px`;
+    }
+    fit();
+
+    // Content is not the only thing that changes the wrapped line count. Opening
+    // the Source panel narrows this editor, a window resize narrows it, and a
+    // late webfont re-measures every line — after any of those the paint layer
+    // reflows and a content-only effect leaves the textarea at its old height,
+    // which is exactly the "looked editable, was not clickable" tail the note
+    // above exists to prevent.
+    const observer = new ResizeObserver(fit);
+    observer.observe(field);
+    return () => observer.disconnect();
   }, [value]);
 
   return (

@@ -114,8 +114,9 @@ compete. The rendered string is snapshotted onto the Run before the PTY is spawn
 
 ### Hook coverage (researched July 2026)
 
-Findings for whenever completion detection is picked back up. The headline confirms #13 and justifies
-#84: **every harness's turn-end signal means "the agent yielded the loop," not "the work is done."**
+Findings for whenever completion detection is picked back up. The headline confirms #13 and
+justifies #84: **every harness's turn-end signal means "the agent yielded the loop," not "the work
+is done."**
 
 | | Turn-end hook | Project-scoped | Session id | Notes |
 |---|---|---|---|---|
@@ -144,9 +145,12 @@ never merges and the rail keeps the deterministic git verbs (#44/#45). #76's mer
 
 - **The drag picker is prototype-gated.** It must satisfy: no dwell and no debounce anywhere on the
   path; automation **name and harness** legible rather than bare numbers; drop targets identical to
-  today; the dragged card always naming what will run. Sketched direction is a palette in the board
-  header strip (never a drop target) while a modifier is held, with digits as an accelerator capped at
-  what one hand can reach. Build three or four variants side by side rather than arguing further.
+  today; the dragged card always naming what will run. **Settled by prototype** — the variants were
+  built side by side in `apps/desktop/src/renderer/lab/automation/use-drag-sim.ts` and the losers
+  deleted. The board-header palette sketched here lost: it put the choice away from the column the
+  release obeys. What survived is column defaults plus bare digits scoped to the hovered column, with
+  ⌥ growing that column's list **in place**, an arming window before the fire, undo, and an explicit
+  "Move only" at `0`. The module header records why each rejected shape failed.
 - **The Automations page layout** — same, better designed than debated.
 - **Harness hook coverage** is now researched (July 2026) and constrains the deferred work rather than
   v1. See "Hook coverage" under Deferred.
