@@ -21,7 +21,10 @@
 import { create } from "zustand";
 import {
   createSessionHarnessState,
+  getHarnessAdapter,
+  HARNESS_EVENTS,
   receiveHarnessEvent,
+  supportedEvents,
   type CreateSessionHarnessStateInput,
   type HarnessEvent,
   type SessionActivityState,
@@ -567,3 +570,41 @@ export function createSessionsStore() {
 }
 
 export const useSessionsStore = createSessionsStore();
+
+/**
+ * Wires the single `api.sessions.onHarnessEvent` subscription into the store —
+ * the renderer end of the involuntary channel (docs/plans/harness-events.md).
+ * Mount once from an always-mounted site, the same reasoning as
+ * `subscribeWorktreePhases`: `SessionsLayer` is the one component alive for the
+ * whole app session, and every live terminal already routes through it. Returns
+ * the unsubscribe function for the caller's effect cleanup, so a remount can
+ * never leave a second listener double-applying events.
+ *
+ * A notice for a session with no expectation yet REGISTERS one before folding
+ * the event in. Registration at launch would only ever cover a kickoff we
+ * issued — a resumed session, or an agent the user started by hand inside a
+ * wrapped shell, reports just as truthfully and would otherwise be dropped by
+ * `applyHarnessEvent`'s unregistered guard. Seeding on delivery is the plan's
+ * own rule ("an event becomes verified on first real delivery") rather than a
+ * shortcut around it: the tier is `hooked` because an event demonstrably
+ * arrived, and the declared-event set comes from the adapter, so cursor — whose
+ * source maps both blocking signals to null — still cannot raise a `waiting`
+ * it isn't able to vouch for. A manifest-registered harness joins main's
+ * registry alone, so this lookup misses for one; there the delivery is all the
+ * evidence there is, and disbelieving it would hide a harness that IS reporting.
+ */
+export function subscribeHarnessEvents(): () => void {
+  return window.api.sessions.onHarnessEvent((notice) => {
+    const state = useSessionsStore.getState();
+    if (state.harness[notice.sessionId] === undefined) {
+      const adapter = getHarnessAdapter(notice.harnessId);
+      state.expectHarnessEvents(notice.sessionId, {
+        harnessId: notice.harnessId,
+        expectedTier: "hooked",
+        declaredEvents: adapter === undefined ? HARNESS_EVENTS : [...supportedEvents(adapter)],
+        startedAt: notice.at,
+      });
+    }
+    state.applyHarnessEvent(notice.sessionId, notice.event);
+  });
+}

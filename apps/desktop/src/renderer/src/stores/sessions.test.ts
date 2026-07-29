@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vite-plus/test";
+import type { HarnessEventNotice, HarnessId } from "@volli/shared";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   createSessionsStore,
   findSessionPane,
@@ -6,7 +7,9 @@ import {
   scratchScope,
   sessionActivityState,
   sessionPanes,
+  subscribeHarnessEvents,
   ticketScope,
+  useSessionsStore,
 } from "./sessions";
 
 const P = scratchScope("p");
@@ -752,5 +755,115 @@ describe("expectHarnessEvents", () => {
     store.getState().closeSession("p", "s1");
 
     expect(store.getState().harness["s1"]).toBeUndefined();
+  });
+});
+
+/** Stubs the preload harness channel; returns the push + the unsubscribe spy. */
+function stubChannel() {
+  let push: ((notice: HarnessEventNotice) => void) | undefined;
+  const unsubscribe = vi.fn();
+  vi.stubGlobal("window", {
+    api: {
+      sessions: {
+        onHarnessEvent: (callback: (notice: HarnessEventNotice) => void) => {
+          push = callback;
+          return unsubscribe;
+        },
+      },
+    },
+  });
+  return {
+    push: (notice: HarnessEventNotice) => push?.(notice),
+    unsubscribe,
+  };
+}
+
+/** A claude-code session reporting that a human is blocking it. */
+const NOTICE: HarnessEventNotice = {
+  sessionId: "s1",
+  projectId: "p",
+  ticketId: "t1",
+  harnessId: "claude-code",
+  event: "input.needed",
+  harnessSessionId: null,
+  at: 1000,
+};
+
+describe("subscribeHarnessEvents", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    useSessionsStore.setState({ byOwner: {}, sessionOwner: {}, harness: {} });
+  });
+
+  it("puts the session a blocking event names into `waiting`", () => {
+    useSessionsStore.getState().addSession(P, "s1", "Terminal 1");
+    const channel = stubChannel();
+
+    subscribeHarnessEvents();
+    channel.push(NOTICE);
+
+    expect(useSessionsStore.getState().harness["s1"]?.declared).toBe("waiting");
+  });
+
+  it("clears a waiting session on the agent's next observable move", () => {
+    useSessionsStore.getState().addSession(P, "s1", "Terminal 1");
+    const channel = stubChannel();
+
+    subscribeHarnessEvents();
+    channel.push(NOTICE);
+    channel.push({ ...NOTICE, event: "turn.started", at: 2000 });
+
+    expect(useSessionsStore.getState().harness["s1"]?.declared).toBeNull();
+  });
+
+  it("keeps waiting when only a subagent finished", () => {
+    useSessionsStore.getState().addSession(P, "s1", "Terminal 1");
+    const channel = stubChannel();
+
+    subscribeHarnessEvents();
+    channel.push(NOTICE);
+    channel.push({ ...NOTICE, event: "subagent.completed", at: 2000 });
+
+    expect(useSessionsStore.getState().harness["s1"]?.declared).toBe("waiting");
+  });
+
+  it("believes a registered harness the renderer ships no adapter for", () => {
+    useSessionsStore.getState().addSession(P, "s1", "Terminal 1");
+    const channel = stubChannel();
+
+    subscribeHarnessEvents();
+    // Manifest-registered harnesses only join main's registry, so the renderer
+    // has nothing to check this id against — and delivery is the only proof the
+    // plan ever asked for.
+    channel.push({ ...NOTICE, harnessId: "my-agent" as HarnessId });
+
+    expect(useSessionsStore.getState().harness["s1"]?.declared).toBe("waiting");
+  });
+
+  it("refuses a blocking event from a harness whose own source can't send one", () => {
+    useSessionsStore.getState().addSession(P, "s1", "Terminal 1");
+    const channel = stubChannel();
+
+    subscribeHarnessEvents();
+    channel.push({ ...NOTICE, harnessId: "cursor", event: "permission.requested" });
+
+    expect(useSessionsStore.getState().harness["s1"]?.declared).toBeNull();
+    // The channel is demonstrably alive even so — that much is not in doubt.
+    expect(useSessionsStore.getState().harness["s1"]?.delivered).toBe(true);
+  });
+
+  it("drops an event for a session the store never knew", () => {
+    const channel = stubChannel();
+
+    subscribeHarnessEvents();
+    channel.push(NOTICE);
+
+    expect(useSessionsStore.getState().harness).toEqual({});
+  });
+
+  it("hands back the channel's own unsubscribe", () => {
+    const channel = stubChannel();
+
+    expect(subscribeHarnessEvents()).toBe(channel.unsubscribe);
   });
 });
