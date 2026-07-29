@@ -54,7 +54,6 @@
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "^6.0.3",
-    "@xyflow/react": "^12.11.2",
     "apca-w3": "^0.1.9",
     "playwright-core": "^1.61.1",
     "tailwindcss": "^4.3.3",

@@ -362,16 +362,36 @@ export type AutomationScope = "global" | "project";
  */
 export type AuthoringMode = "prose" | "placeholders";
 
-/** How a step relates to the one before it. v1 only ever produces `"with"`. */
-export type StepJoin = "with" | "after";
-
 export interface AutomationStep {
   id: string;
-  /** Ignored on the first step, which has nothing to join to. */
-  join: StepJoin;
+  /**
+   * The step this one waits for, or `null` to hang off the trigger.
+   *
+   * This replaced `join: "with" | "after"`, where `"with"` meant "same parent as
+   * whoever precedes me in the array". That rule reads fine and cannot express a
+   * tree: inserting a step in the middle silently re-parents the one after it,
+   * which the canvas prototype found by drawing two reviewers and watching the
+   * second become a child of the first. A named parent has no such state.
+   */
+  after: string | null;
   runtime: AutomationRuntime;
   mode: AuthoringMode;
   instructions: string;
+}
+
+/** The steps hanging directly off `parent` (`null` = off the trigger), in file order. */
+export function childrenOf(steps: AutomationStep[], parent: string | null): AutomationStep[] {
+  return steps.filter((step) => step.after === parent);
+}
+
+/** The first non-empty line, for the collapsed face. */
+export function firstLine(text: string): string {
+  return (
+    text
+      .split("\n")
+      .find((line) => line.trim() !== "")
+      ?.trim() ?? ""
+  );
 }
 
 export interface Automation {
@@ -530,11 +550,11 @@ export function tokenizeInstructions(text: string, mode: AuthoringMode): Instruc
 let stepSeq = 0;
 
 /** A fresh step. Prose by default — placeholders is the escape hatch, not the door. */
-export function blankStep(harnessId: LabHarnessId, join: StepJoin = "with"): AutomationStep {
+export function blankStep(harnessId: LabHarnessId, after: string | null = null): AutomationStep {
   stepSeq += 1;
   return {
-    id: `step-new-${stepSeq}`,
-    join,
+    id: `step-${stepSeq}`,
+    after,
     runtime: defaultRuntime(harnessId),
     mode: "prose",
     instructions: "",
@@ -547,9 +567,9 @@ function seedStep(
   patch: Partial<AutomationRuntime>,
   mode: AuthoringMode,
   instructions: string,
-  join: StepJoin = "with",
+  after: string | null = null,
 ): AutomationStep {
-  return { id, join, runtime: { ...defaultRuntime(harnessId), ...patch }, mode, instructions };
+  return { id, after, runtime: { ...defaultRuntime(harnessId), ...patch }, mode, instructions };
 }
 
 /**
@@ -572,7 +592,7 @@ export const SEEDED_AUTOMATIONS: Automation[] = [
     trigger: { kind: "enters-column", columns: ["todo"] },
     steps: [
       seedStep(
-        "step-grill",
+        "grill",
         "claude-code",
         { model: "claude-opus-5", effort: "high", approvals: "plan" },
         "prose",
@@ -587,7 +607,7 @@ export const SEEDED_AUTOMATIONS: Automation[] = [
     trigger: { kind: "enters-column", columns: ["doing"] },
     steps: [
       seedStep(
-        "step-implement",
+        "implement",
         "claude-code",
         { model: "claude-opus-5", effort: "high", approvals: "acceptEdits" },
         "prose",
@@ -602,14 +622,14 @@ export const SEEDED_AUTOMATIONS: Automation[] = [
     trigger: { kind: "enters-column", columns: ["needs_review"] },
     steps: [
       seedStep(
-        "step-review-codex",
+        "codex",
         "codex",
         { model: "gpt-5.1-codex", effort: "high", approvals: "read-only" },
         "placeholders",
         "Review {{change_set}} on {{branch}}.\n\nThe ticket it claims to implement, for context only: {{brief}}\n\nBe specific about what is wrong and where. Do not restate what the diff already says.",
       ),
       seedStep(
-        "step-review-cursor",
+        "cursor",
         "cursor",
         { model: "sonnet-4-thinking", approvals: "sandbox" },
         "placeholders",
@@ -624,7 +644,7 @@ export const SEEDED_AUTOMATIONS: Automation[] = [
     trigger: { kind: "enters-column", columns: ["done"] },
     steps: [
       seedStep(
-        "step-wrapup",
+        "wrapup",
         "claude-code",
         { model: "claude-sonnet-5", effort: "medium", approvals: "acceptEdits" },
         "prose",
@@ -639,7 +659,7 @@ export const SEEDED_AUTOMATIONS: Automation[] = [
     trigger: { kind: "manual" },
     steps: [
       seedStep(
-        "step-tdd",
+        "tdd",
         "pi",
         { model: "anthropic/claude-opus-5", effort: "high" },
         "prose",
