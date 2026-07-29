@@ -271,6 +271,8 @@ interface ArmedChrome {
   automation: Automation;
   phase: "armed" | "fired";
   onUndo: () => void;
+  /** Keep the move, cancel the run. */
+  onCancelRun: () => void;
 }
 
 /**
@@ -309,20 +311,41 @@ function BoardCard({
 
       {armed !== undefined && armed.phase === "armed" ? (
         <>
-          {/* On-card undo (requirement 2, surface one): reverts the MOVE, not
-              merely the automation, which is why it calls the same `onUndo`
-              the column header's bulk control does. `stopPropagation` on
-              pointer-down keeps this click from being read as the start of a
-              new drag by the card's own `onPointerDown`. */}
-          <button
-            type="button"
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={armed.onUndo}
-            className="absolute right-1.5 top-1.5 flex items-center gap-1 rounded-full border border-border bg-popover px-1.5 py-px text-label text-muted-foreground transition-colors hover:border-ring hover:text-foreground"
-          >
-            <ArrowCounterClockwiseIcon weight="fill" />
-            Undo
-          </button>
+          {/* Two outcomes, because there are two mistakes. "Undo" reverts the
+              MOVE — the same thing the column header's bulk control does, hence
+              the shared `onUndo`. "Don't run" keeps the move and cancels only
+              the run, which is the one you want when the column's default fired
+              on a move you did mean to make.
+
+              In flow at the bottom, NOT floated over the corner. Two pills need
+              168px of a 192px card, which left the ticket ref reading "VLT-" —
+              and the ref is the identity, the one thing on a card that may
+              never be occluded. A row that briefly makes the card taller costs
+              3.5s of layout; a covered ref costs you knowing which ticket you
+              are about to cancel.
+
+              `stopPropagation` on pointer-down keeps either click from being
+              read as the start of a new drag by the card's own handler. */}
+          <div className="mt-1.5 flex items-center justify-end gap-1">
+            <button
+              type="button"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={armed.onCancelRun}
+              className="flex items-center gap-1 rounded-full border border-border bg-popover px-1.5 py-px text-label text-muted-foreground transition-colors hover:border-ring hover:text-foreground"
+            >
+              <XIcon weight="bold" />
+              Don&rsquo;t run
+            </button>
+            <button
+              type="button"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={armed.onUndo}
+              className="flex items-center gap-1 rounded-full border border-border bg-popover px-1.5 py-px text-label text-muted-foreground transition-colors hover:border-ring hover:text-foreground"
+            >
+              <ArrowCounterClockwiseIcon weight="fill" />
+              Undo
+            </button>
+          </div>
           <span
             aria-hidden
             className="lab-arm-progress absolute inset-x-0 bottom-0 h-[3px] rounded-b-lg bg-primary"
@@ -951,14 +974,26 @@ function ColumnAutomationList({
         tabIndex={-1}
         aria-pressed={activeIndex === null}
         className={cn(
-          "flex items-center gap-1.5 rounded-md border text-left transition-[background-color,border-color,color,padding] duration-150 ease-out",
+          "flex items-center gap-2 rounded-md border text-left transition-[background-color,border-color,color,padding] duration-150 ease-out",
           expanded ? "px-2.5 py-2 text-xs" : "pointer-events-none px-1.5 py-0.5 text-label",
           activeIndex === null
             ? "border-solid border-ring bg-accent text-foreground"
             : "border-dashed border-border text-muted-foreground",
         )}
       >
-        <LightningIcon />
+        {/* Carries a digit like every other row, because it IS one: `0`, the
+            key that runs nothing. Without it this row was reachable only by
+            opening the ⌥ picker and aiming at it, which made "move the ticket
+            and start nothing" the most expensive gesture on the board. */}
+        <kbd
+          className={cn(
+            "shrink-0 rounded border font-mono",
+            activeIndex === null ? "border-primary text-primary" : "border-border",
+            expanded ? "px-1 text-[10px]" : "px-1 text-[9px]",
+          )}
+        >
+          0
+        </kbd>
         Move only
       </button>
     </div>
@@ -1134,6 +1169,32 @@ function DragTab({
     },
     [revertEntry],
   );
+
+  /**
+   * The other half of the escape hatch, for the drop you have already made.
+   *
+   * `0` handles the case where you knew before you released. This handles the
+   * one where you did not: it keeps the move and cancels only the run. Without
+   * it the sole way out of an unwanted Run was Undo, which also throws away the
+   * move you did want — so the cost of a column default firing when you did not
+   * mean it was doing the whole drag again.
+   *
+   * The entry survives with `automation: null` rather than being deleted: the
+   * ticket really is in the destination column now, and deleting the entry
+   * would send the card back to its fixture column.
+   */
+  const cancelRun = React.useCallback((ticketId: string) => {
+    const timeoutId = armTimers.current.get(ticketId);
+    if (timeoutId !== undefined) {
+      window.clearTimeout(timeoutId);
+      armTimers.current.delete(ticketId);
+    }
+    setMoves((current) => {
+      const entry = current[ticketId];
+      if (entry === undefined) return current;
+      return { ...current, [ticketId]: { ...entry, automation: null, phase: "fired" } };
+    });
+  }, []);
 
   /**
    * Undo surface two (column header): reverts EVERY still-armed card that
@@ -1331,6 +1392,7 @@ function DragTab({
                               automation: move.automation,
                               phase: move.phase,
                               onUndo: () => undoMove(ticket.id),
+                              onCancelRun: () => cancelRun(ticket.id),
                             }
                           : undefined;
                       return (

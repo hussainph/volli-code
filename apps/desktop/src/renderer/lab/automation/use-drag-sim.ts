@@ -258,10 +258,14 @@ export function useDragSim({ automationCountFor, defaultIndexFor }: UseDragSimOp
       setPickerCell({ status: cell.status, index: next === 0 ? null : next - 1 });
     }
 
-    /** Any open shape: a digit picks a tile/wedge within the highlighted column directly — see the module doc's note that `radial` keeps digits working alongside the flick. */
+    /** A digit picks a row within the highlighted column directly; `0` picks "Move only". */
     function setDigitInPicker(digit: string) {
       const cell = state.current.pickerCell;
       if (cell === null) return;
+      if (digit === "0") {
+        setPickerCell({ status: cell.status, index: null });
+        return;
+      }
       const index = Number(digit) - 1;
       if (index < automationCountFor(cell.status)) setPickerCell({ status: cell.status, index });
     }
@@ -368,7 +372,7 @@ export function useDragSim({ automationCountFor, defaultIndexFor }: UseDragSimOp
       }
 
       if (state.current.pickerOpen) {
-        const digit = /^Digit([1-9])$/.exec(event.code)?.[1];
+        const digit = /^Digit([0-9])$/.exec(event.code)?.[1];
         if (digit !== undefined) {
           event.preventDefault();
           setDigitInPicker(digit);
@@ -390,21 +394,33 @@ export function useDragSim({ automationCountFor, defaultIndexFor }: UseDragSimOp
       // the physically "1" key is `&`. Reading `code` keeps 1–9 meaning "the
       // same physical row" everywhere, which is what an accelerator has to be
       // to be learnable at all.
-      const digit = /^Digit([1-9])$/.exec(event.code)?.[1];
-      if (digit !== undefined) {
-        const index = Number(digit) - 1;
-        const hoveredStatus = state.current.hovered;
-        if (hoveredStatus !== null && index < automationCountFor(hoveredStatus)) {
-          event.preventDefault();
-          // Same digit again clears back to the column's own default, so a
-          // mis-keyed choice is recoverable without aborting the drag.
-          setDigitSelection((current) =>
-            current !== null && current.status === hoveredStatus && current.index === index
-              ? null
-              : { status: hoveredStatus, index },
-          );
-        }
-      }
+      const digit = /^Digit([0-9])$/.exec(event.code)?.[1];
+      if (digit === undefined) return;
+      const hoveredStatus = state.current.hovered;
+      if (hoveredStatus === null) return;
+
+      /**
+       * `0` is "Move only" — move the ticket, run nothing.
+       *
+       * It is here, in the bare-digit layer, and not only inside the ⌥ picker,
+       * because moving a ticket WITHOUT starting work is an ordinary thing to
+       * want and it was costing the most expensive gesture on the board: open
+       * the picker, aim at a row, release. A column with a default made the
+       * cheap path the one that spends tokens and the expensive path the one
+       * that spends nothing, which is backwards. Zero rows to count, one key,
+       * and it reads as "none" to anyone who has ever used a numbered menu.
+       */
+      const index = digit === "0" ? null : Number(digit) - 1;
+      if (index !== null && index >= automationCountFor(hoveredStatus)) return;
+
+      event.preventDefault();
+      // Same digit again clears back to the column's own default, so a
+      // mis-keyed choice is recoverable without aborting the drag.
+      setDigitSelection((current) =>
+        current !== null && current.status === hoveredStatus && current.index === index
+          ? null
+          : { status: hoveredStatus, index },
+      );
     }
 
     window.addEventListener("pointermove", onMove);
