@@ -6,7 +6,6 @@ import { buildLaunchConfig, harnessEnvSuffix, HARNESS_DIR_TOKEN } from "./launch
 import type { HarnessAdapter } from "./types";
 
 const INPUT = {
-  sessionId: "11111111-2222-3333-4444-555555555555",
   socketPath: "/tmp/volli.sock",
   hookCommand: "/vol/bin/volli hook",
 } as const;
@@ -66,14 +65,11 @@ describe("buildLaunchConfig", () => {
     expect(settings.preferredNotifChannel).toBe("notifications_disabled");
   });
 
-  it("mints claude-code's session id at launch so it is known before the agent speaks", () => {
-    const config = buildLaunchConfig(adapterFor("claude-code"), INPUT);
-    expect(config.argv.slice(-2)).toEqual(["--session-id", INPUT.sessionId]);
-  });
-
-  it("never mints an id for a harness that reports its own", () => {
-    const config = buildLaunchConfig(adapterFor("opencode"), INPUT);
-    expect(config.argv).toEqual([]);
+  it("mints no session id itself — that is the wrapper's, from VOLLI_SESSION", () => {
+    const claude = buildLaunchConfig(adapterFor("claude-code"), INPUT);
+    expect(claude.argv).not.toContain("--session-id");
+    expect(claude.argv).toHaveLength(2);
+    expect(buildLaunchConfig(adapterFor("opencode"), INPUT).argv).toEqual([]);
   });
 
   it("points cursor at a Volli-owned config directory, leaving its auth where it is", () => {

@@ -30,6 +30,16 @@ function bareAdapter(overrides: Partial<HarnessAdapter> = {}): HarnessAdapter {
   };
 }
 
+/**
+ * These assert the script's TEXT, which cannot tell whether its shell quoting
+ * actually holds. The rendered wrappers were run against `/bin/sh` by hand for
+ * all six paths — passthrough with `VOLLI_SESSION` unset; injection inside a
+ * session; suppression when the user's argv drives resume; a missing
+ * `VOLLI_HARNESS_ARGV_*`; a `VOLLI_HARNESS_BIN_*` override; and an unresolvable
+ * binary exiting 127 — but a standing execution smoke belongs in
+ * `apps/desktop/e2e/`, where running a shell is allowed. This package may not
+ * import Node.
+ */
 describe("renderWrapperScript", () => {
   const claude = renderWrapperScript(adapterFor("claude-code"), { binDir: BIN_DIR });
 

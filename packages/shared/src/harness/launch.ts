@@ -32,8 +32,6 @@ const HOOKS_MECHANISM = "hooks";
 const NOTIFY_MECHANISM = "notify";
 
 export interface HarnessLaunchInput {
-  /** The harness session id Volli mints, when the harness accepts one at launch. */
-  sessionId: string;
   socketPath: string;
   /** The command prefix a hook runs; the canonical event name is appended to it. */
   hookCommand: string;
@@ -136,10 +134,6 @@ function commandHooks(
   return hooks;
 }
 
-function sessionIdArgv(adapter: HarnessAdapter, input: HarnessLaunchInput): string[] {
-  return adapter.sessionId.kind === "argv" ? [adapter.sessionId.flag, input.sessionId] : [];
-}
-
 function settingsObject(
   adapter: HarnessAdapter,
   hooks: Record<string, unknown>,
@@ -224,11 +218,14 @@ function injected(adapter: HarnessAdapter, input: HarnessLaunchInput): HarnessLa
  * Everything a launch of `adapter` needs: files to materialize under the
  * Volli-owned harness directory, argv to prepend to the user's own, and
  * environment to merge into the session's.
+ *
+ * Session-independent by construction, and deliberately so — the harness
+ * session id is `VOLLI_SESSION`, injected by the wrapper at run time, so this
+ * config can be built once and reused for every launch of the same harness.
  */
 export function buildLaunchConfig(
   adapter: HarnessAdapter,
   input: HarnessLaunchInput,
 ): HarnessLaunchConfig {
-  const base = injected(adapter, input);
-  return { ...base, argv: [...base.argv, ...sessionIdArgv(adapter, input)] };
+  return injected(adapter, input);
 }

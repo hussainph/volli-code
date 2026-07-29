@@ -9,10 +9,8 @@
  * (`agentSessionEnv`), so these wrappers are only ever reachable from inside a
  * session in the first place.
  *
- * The per-session half of the configuration arrives in the environment rather
- * than in the script, because the script is written once and a session id is
- * minted per launch: `VOLLI_HARNESS_ARGV_<SLUG>` holds shell-quoted argv from
- * `buildLaunchConfig`, and the session id is `VOLLI_SESSION` itself.
+ * `VOLLI_HARNESS_ARGV_<SLUG>` holds shell-quoted argv from `buildLaunchConfig`,
+ * resolved by main because the config names files on disk.
  */
 import { shellSingleQuote } from "../harness-command";
 import { harnessEnvSuffix } from "./launch";
@@ -31,6 +29,19 @@ function resumePattern(token: string): string {
   return `${shellSingleQuote(token)}|${shellSingleQuote(`${token}=`)}*`;
 }
 
+/**
+ * The wrapper for `adapter`, to be written into `binDir`.
+ *
+ * **The harness session id IS `VOLLI_SESSION`.** There is no second id and no
+ * mapping table: Volli session ids are already UUIDs, so they satisfy the
+ * format harnesses like Claude Code demand, and `sessions.harness_session_id`
+ * correlates to the Volli session by being the same string. Nothing else may
+ * mint one — {@link buildLaunchConfig} deliberately cannot.
+ *
+ * The hazard that follows, recorded rather than engineered around: a harness
+ * that rejects a session id it has already seen will fail if a Volli session id
+ * is reused across launches without a resume flag.
+ */
 export function renderWrapperScript(adapter: HarnessAdapter, input: WrapperInput): string {
   const suffix = harnessEnvSuffix(adapter);
   const binVar = `VOLLI_HARNESS_BIN_${suffix}`;
