@@ -45,7 +45,24 @@ export interface SessionRecord {
   projectId: string;
   /** `null` means a project-scoped scratch session — no ticket, no board involvement. */
   ticketId: string | null;
+  /**
+   * What the session was LAUNCHED with — durable history, never overwritten.
+   * A terminal outlives the agent that opened it: quit opencode, run claude in
+   * the same pane, and the launch is still a true statement about how this
+   * session began (it is what the `session_started` event recorded, and the
+   * only harness a session that never announced anything can be judged by).
+   * What is RUNNING is {@link SessionRecord.activeHarnessId}; read the two
+   * together through {@link effectiveHarnessId} rather than either alone.
+   */
   harnessId: HarnessId;
+  /**
+   * What is actually running in the terminal right now, as announced by the
+   * harness's own PATH-shim wrapper on every invocation. `null` means nothing
+   * has announced itself — a session that predates the announce, a bare shell,
+   * or a harness launched around the wrapper — and falls back to the launch
+   * harness, which is the best available answer rather than a claim.
+   */
+  activeHarnessId: HarnessId | null;
   /** The harness's own resume/session UUID; filled in later by hooks/the volli CLI. */
   harnessSessionId: string | null;
   /** Whether this PTY launched an agent, a bare shell, or predates launch metadata. */
@@ -65,6 +82,24 @@ export interface SessionRecord {
    * observed), and for rows predating the column — outcome labels never guess.
    */
   exitCode: number | null;
+}
+
+/**
+ * Which harness a session is to be JUDGED by: what announced itself, falling
+ * back to what the session launched with.
+ *
+ * Written once, and every consumer routed through it, because the fallback is
+ * the whole rule and a second hand-copy of it is how one surface comes to name
+ * a harness the next one has already stopped believing in. Everything that
+ * decides something about the running agent asks this — the resume command line,
+ * the notification's subject, the sidebar's label — while the launch harness
+ * stays available, unrewritten, for the things that are genuinely about how the
+ * session began.
+ */
+export function effectiveHarnessId(
+  record: Pick<SessionRecord, "harnessId" | "activeHarnessId">,
+): HarnessId {
+  return record.activeHarnessId ?? record.harnessId;
 }
 
 /** Stable human-facing identifier used by the CLI instead of exposing the stored UUID. */
@@ -118,6 +153,10 @@ export function createSessionRecord(input: CreateSessionInput): SessionRecord {
     projectId: input.projectId,
     ticketId: input.ticketId ?? null,
     harnessId: input.harnessId,
+    // Nothing has announced itself at the instant a session is created — not
+    // even the harness the launch line is about to start, which announces from
+    // inside its own wrapper a moment later.
+    activeHarnessId: null,
     harnessSessionId: null,
     launchKind: input.launchKind,
     placement: input.placement,
@@ -213,6 +252,16 @@ export function supersededHarnessEvent(
  * to fire and a write to land.
  */
 export interface SessionHarnessState {
+  /**
+   * The harness this state is ABOUT — seeded from the launch, and rebuilt
+   * against the announcing harness's own adapter when another one starts in the
+   * same terminal (the renderer store's `announceHarness`). It follows the
+   * effective harness rather than the launch one for the same reason
+   * {@link effectiveHarnessId} exists: a session reporting for a harness that
+   * quit an hour ago is the defect, not a historical record. What the previous
+   * harness declared goes with it — a `waiting` it raised cannot outlive the
+   * process that raised it.
+   */
   harnessId: HarnessId;
   /** The tier the adapter promised at launch — an upper bound, never a claim. */
   expectedTier: HarnessTier;

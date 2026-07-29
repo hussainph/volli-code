@@ -6,7 +6,9 @@ import {
   type HarnessEventNotice,
   type HarnessId,
   type HarnessRegisteredResult,
+  type SessionHarnessNotice,
 } from "@volli/shared";
+import { useTicketSessionRecordsStore } from "./ticket-session-records";
 import {
   createSessionsStore,
   findSessionPane,
@@ -16,6 +18,7 @@ import {
   sessionActivityState,
   sessionPanes,
   subscribeHarnessEvents,
+  subscribeSessionHarness,
   ticketScope,
   useHarnessCatalogStore,
   useSessionsStore,
@@ -1087,6 +1090,143 @@ describe("subscribeHarnessEvents", () => {
     const channel = stubChannel();
 
     expect(subscribeHarnessEvents()).toBe(channel.unsubscribe);
+  });
+});
+
+/** Stubs the preload announce channel; returns the push + the unsubscribe spy. */
+function stubAnnounceChannel() {
+  let push: ((notice: SessionHarnessNotice) => void) | undefined;
+  const unsubscribe = vi.fn();
+  vi.stubGlobal("window", {
+    api: {
+      sessions: {
+        onHarnessChange: (callback: (notice: SessionHarnessNotice) => void) => {
+          push = callback;
+          return unsubscribe;
+        },
+      },
+    },
+  });
+  return { push: (notice: SessionHarnessNotice) => push?.(notice), unsubscribe };
+}
+
+/** A claude-code wrapper announcing itself inside a session opencode opened. */
+const ANNOUNCE: SessionHarnessNotice = {
+  sessionId: "s1",
+  projectId: "p",
+  ticketId: "t1",
+  harnessId: "claude-code",
+  at: 9000,
+};
+
+describe("announceHarness / subscribeSessionHarness", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    useSessionsStore.setState({ byOwner: {}, sessionOwner: {}, harness: {} });
+    useTicketSessionRecordsStore.setState({ byTicket: {} });
+  });
+
+  // The whole bug in one assertion: the terminal was opened by opencode, the
+  // user quit it and ran claude, and everything that reports for this session
+  // has to be about claude from here on.
+  it("moves the session's harness state onto the harness that announced itself", () => {
+    useSessionsStore.getState().addSession(P, "s1", agentLaunch("opencode"));
+    const channel = stubAnnounceChannel();
+
+    subscribeSessionHarness();
+    channel.push(ANNOUNCE);
+
+    expect(useSessionsStore.getState().harness["s1"]?.harnessId).toBe("claude-code");
+  });
+
+  // A needs-you raised by an agent the user has since quit is exactly the stale
+  // attention the sidebar must stop showing.
+  it("drops what the previous harness declared, and restarts its grace window", () => {
+    useSessionsStore.getState().addSession(P, "s1", agentLaunch("claude-code"));
+    useSessionsStore.getState().applyHarnessEvent("s1", "input.needed", null);
+    expect(useSessionsStore.getState().harness["s1"]?.declared).toBe("waiting");
+
+    useSessionsStore.getState().announceHarness("s1", "opencode" as HarnessId, 9000);
+
+    const state = useSessionsStore.getState().harness["s1"];
+    expect(state?.declared).toBeNull();
+    expect(state?.delivered).toBe(false);
+    expect(state?.startedAt).toBe(9000);
+  });
+
+  it("is a no-op when the announce agrees with what is already believed", () => {
+    useSessionsStore.getState().addSession(P, "s1", agentLaunch("claude-code"));
+    const before = useSessionsStore.getState().harness["s1"];
+
+    useSessionsStore.getState().announceHarness("s1", "claude-code" as HarnessId, 9000);
+
+    expect(useSessionsStore.getState().harness["s1"]).toBe(before);
+  });
+
+  // Guessing goes wrong in both directions, so an id nothing here can describe
+  // earns no expectation — the same silence a launch of it would keep.
+  it("says nothing for a harness this renderer cannot describe", () => {
+    useSessionsStore.getState().addSession(P, "s1", agentLaunch("claude-code"));
+
+    useSessionsStore.getState().announceHarness("s1", "my-agent" as HarnessId, 9000);
+
+    expect(useSessionsStore.getState().harness["s1"]?.harnessId).toBe("claude-code");
+  });
+
+  it("ignores an announce for a session this renderer has already forgotten", () => {
+    useSessionsStore.getState().announceHarness("gone", "claude-code" as HarnessId, 9000);
+
+    expect(useSessionsStore.getState().harness["gone"]).toBeUndefined();
+  });
+
+  // The durable record is the other half: it is what every label and resume
+  // affordance reads, so the rail would keep naming opencode without this.
+  it("mirrors the announce onto the ticket's cached durable record", () => {
+    useTicketSessionRecordsStore.setState({
+      byTicket: {
+        t1: [
+          {
+            id: "s1",
+            projectId: "p",
+            ticketId: "t1",
+            harnessId: "opencode",
+            activeHarnessId: null,
+            harnessSessionId: null,
+            launchKind: "agent",
+            placement: "tab",
+            title: "Session 1",
+            cwd: "/repo",
+            createdAt: 0,
+            endedAt: null,
+            exitCode: null,
+          },
+        ],
+      },
+    });
+    const channel = stubAnnounceChannel();
+
+    subscribeSessionHarness();
+    channel.push(ANNOUNCE);
+
+    const record = useTicketSessionRecordsStore.getState().byTicket["t1"]?.[0];
+    expect(record?.activeHarnessId).toBe("claude-code");
+    // The launch stays exactly what it was — it is history, not a live fact.
+    expect(record?.harnessId).toBe("opencode");
+  });
+
+  it("has no record to mirror onto for a scratch session", () => {
+    const channel = stubAnnounceChannel();
+
+    subscribeSessionHarness();
+    channel.push({ ...ANNOUNCE, ticketId: null });
+
+    expect(useTicketSessionRecordsStore.getState().byTicket).toEqual({});
+  });
+
+  it("hands back the channel's own unsubscribe", () => {
+    const channel = stubAnnounceChannel();
+
+    expect(subscribeSessionHarness()).toBe(channel.unsubscribe);
   });
 });
 

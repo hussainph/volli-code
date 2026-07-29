@@ -9,13 +9,14 @@ import type {
   AgentResponse,
   DoctorCheck,
   HarnessEventNotice,
+  SessionHarnessNotice,
   HarnessId,
 } from "@volli/shared";
 
 import { createAttachment } from "./db/attachments-repo";
 import { getRegisteredHarness, recordHarnessTrust } from "./db/harness-registry-repo";
 import { insertProject } from "./db/projects-repo";
-import { endSession, getSession, insertSession } from "./db/sessions-repo";
+import { endSession, getSession, insertSession, setActiveHarnessId } from "./db/sessions-repo";
 import { insertTicket } from "./db/tickets-repo";
 import { openTestDb, testProject, testSession, testTicket } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
@@ -1184,6 +1185,41 @@ describe("agent command service", () => {
     );
   });
 
+  // An agent reading this list is deciding where to look. The launch harness of
+  // a terminal somebody has since re-used is the wrong answer.
+  it("names the harness a session is RUNNING in session.list", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
+    insertSession(
+      ctx.db,
+      testSession("project-one", null, { id: sessionId, harnessId: "opencode", createdAt: 900 }),
+    );
+    setActiveHarnessId(ctx.db, sessionId, "claude-code");
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 1_000,
+    });
+
+    const sessions = await service.execute({
+      v: 1,
+      cmd: "session.list",
+      args: {},
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+
+    expect(sessions).toMatchObject({ ok: true, data: { sessions: [{ harness: "claude-code" }] } });
+  });
+
   it("refuses session.list when an explicit --project contradicts the --ticket", async () => {
     ctx = openTestDb();
     insertProject(
@@ -1428,6 +1464,122 @@ describe("agent command service", () => {
       const empty = await link("   ");
       expect(empty).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
       expect(getSession(ctx.db, sessionId)?.harnessSessionId).toBeNull();
+    });
+  });
+
+  describe("session.harness (the wrapper announce)", () => {
+    const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
+
+    function announceService(harnessId: HarnessId = "opencode") {
+      ctx = openTestDb();
+      insertProject(
+        ctx.db,
+        testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+      );
+      insertSession(ctx.db, testSession("project-one", null, { id: sessionId, harnessId }));
+      const notices: SessionHarnessNotice[] = [];
+      const service = createAgentCommandService({
+        db: ctx.db,
+        appVersion: "1.2.3",
+        now: () => 4242,
+        onSessionHarness: (notice) => notices.push(notice),
+      });
+      const announce = (id: unknown, session: string | null = sessionId) =>
+        service.execute({
+          v: 1,
+          cmd: "session.harness",
+          args: { id },
+          ctx: { cwd: "/repo/volli", env: session ? { session } : {} },
+        });
+      return { announce, notices };
+    }
+
+    // THE BUG. The terminal was opened by opencode; the user quit it and ran
+    // claude. `harness_id` is the launch and must not move — everything about
+    // what is RUNNING now reads the new column.
+    it("records the running harness beside the launch one, and announces it", async () => {
+      const { announce, notices } = announceService();
+
+      const response = await announce("claude-code");
+
+      expect(response).toEqual({
+        v: 1,
+        ok: true,
+        data: { session: "abcdef12", harness: "claude-code", changed: true },
+      });
+      const session = getSession(ctx.db, sessionId);
+      expect(session?.harnessId).toBe("opencode");
+      expect(session?.activeHarnessId).toBe("claude-code");
+      expect(notices).toEqual([
+        {
+          sessionId,
+          projectId: "project-one",
+          ticketId: null,
+          harnessId: "claude-code",
+          at: 4242,
+        },
+      ]);
+    });
+
+    // This runs on every harness launch, and almost every one agrees with what
+    // Volli already believes. That case must cost a read and nothing else.
+    it("writes and announces nothing when the harness has not changed", async () => {
+      const { announce, notices } = announceService("claude-code");
+
+      const response = await announce("claude-code");
+
+      expect(response).toMatchObject({ ok: true, data: { changed: false } });
+      expect(getSession(ctx.db, sessionId)?.activeHarnessId).toBeNull();
+      expect(notices).toEqual([]);
+    });
+
+    it("compares against what is RUNNING, not what launched", async () => {
+      const { announce, notices } = announceService();
+      setActiveHarnessId(ctx.db, sessionId, "claude-code");
+
+      const again = await announce("claude-code");
+      expect(again).toMatchObject({ ok: true, data: { changed: false } });
+      expect(notices).toEqual([]);
+
+      const back = await announce("opencode");
+      expect(back).toMatchObject({ ok: true, data: { changed: true } });
+      expect(getSession(ctx.db, sessionId)?.activeHarnessId).toBe("opencode");
+    });
+
+    it("requires VOLLI_SESSION context", async () => {
+      const { announce } = announceService();
+      expect(await announce("claude-code", null)).toMatchObject({
+        ok: false,
+        error: {
+          code: "CONTEXT_REQUIRED",
+          message: "session harness requires VOLLI_SESSION context.",
+        },
+      });
+    });
+
+    it("refuses a name outside the vocabulary Volli knows", async () => {
+      const { announce } = announceService();
+      expect(await announce("not-a-harness")).toMatchObject({
+        ok: false,
+        error: { code: "INVALID_REQUEST" },
+      });
+      expect(await announce(42)).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+      expect(getSession(ctx.db, sessionId)?.activeHarnessId).toBeNull();
+    });
+
+    // VOLLI_SESSION escapes its PTY — a tmux server, a disowned daemon — so an
+    // announce can land long after the session ended. Accepting one would
+    // rewrite the harness that dead session resumes with.
+    it("refuses an announce for a session that has already ended", async () => {
+      const { announce, notices } = announceService();
+      endSession(ctx.db, sessionId, 5000, 0);
+
+      expect(await announce("claude-code")).toMatchObject({
+        ok: false,
+        error: { code: "SESSION_ENDED" },
+      });
+      expect(getSession(ctx.db, sessionId)?.activeHarnessId).toBeNull();
+      expect(notices).toEqual([]);
     });
   });
 
@@ -1690,6 +1842,44 @@ describe("agent command service", () => {
 
       expect(pushed.map((notice) => notice.harnessId)).toEqual(["claude-code"]);
       expect(notices).toEqual([["VC-12 needs you", "Claude Code is waiting on a human"]]);
+    });
+
+    // THE SILENT NOTIFICATION. The session launched opencode, the user quit it
+    // and started claude, and claude's `input.needed` was compared against the
+    // LAUNCH harness — recorded in the ledger, announced to the renderer, and
+    // never notified. That is the exact case the channel exists for.
+    it("notifies for the harness that is running, not the one that launched", async () => {
+      const notices: [string, string][] = [];
+      const { hook } = hookService(
+        { notify: (title, message) => notices.push([title, message]) },
+        "ticket-replaced",
+        "opencode",
+      );
+
+      // Before the announce, claude is a stranger to this session: cheap things
+      // still follow the evidence, but a notification names an agent and cannot
+      // be retracted, so it waits for the two accounts to agree.
+      await hook({ harness: "claude-code", event: "input.needed" });
+      expect(notices).toEqual([]);
+
+      setActiveHarnessId(ctx.db, sessionId, "claude-code");
+      await hook({ harness: "claude-code", event: "input.needed" });
+
+      expect(notices).toEqual([["VC-12 needs you", "Claude Code is waiting on a human"]]);
+    });
+
+    it("falls back to the RUNNING harness when the hook named none", async () => {
+      const pushed: HarnessEventNotice[] = [];
+      const { hook } = hookService(
+        { onHarnessEvent: (notice) => pushed.push(notice) },
+        "ticket-nameless-2",
+        "opencode",
+      );
+      setActiveHarnessId(ctx.db, sessionId, "claude-code");
+
+      await hook({ event: "input.needed" });
+
+      expect(pushed.map((notice) => notice.harnessId)).toEqual(["claude-code"]);
     });
 
     // The slug is baked into the hook argv by Volli's own launch machinery, so

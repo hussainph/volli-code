@@ -2,6 +2,7 @@ import { describe, it, expect } from "vite-plus/test";
 import {
   createSessionHarnessState,
   createSessionRecord,
+  effectiveHarnessId,
   harnessEventOrder,
   receiveHarnessEvent,
   HARNESS_EVENT_GRACE_MS,
@@ -125,6 +126,7 @@ describe("createSessionRecord", () => {
       now: 0,
     });
     expect(session.harnessSessionId).toBeNull();
+    expect(session.activeHarnessId).toBeNull();
     expect(session.endedAt).toBeNull();
     expect(session.exitCode).toBeNull();
   });
@@ -137,6 +139,7 @@ describe("SessionRecord", () => {
       projectId: "proj-1",
       ticketId: null,
       harnessId: "claude-code",
+      activeHarnessId: null,
       launchKind: "unknown",
       placement: "unknown",
       harnessSessionId: null,
@@ -147,6 +150,20 @@ describe("SessionRecord", () => {
       exitCode: null,
     };
     expect(record.ticketId).toBeNull();
+  });
+
+  it("falls back to the launch harness while nothing has announced itself", () => {
+    expect(effectiveHarnessId({ harnessId: "claude-code", activeHarnessId: null })).toBe(
+      "claude-code",
+    );
+  });
+
+  // The whole point of keeping both: the launch stays true, and what is running
+  // is what every label, resume line and notification is decided about.
+  it("prefers the harness that announced itself over the one that launched", () => {
+    expect(effectiveHarnessId({ harnessId: "opencode", activeHarnessId: "claude-code" })).toBe(
+      "claude-code",
+    );
   });
 
   it("accepts every SessionActivityState as a value", () => {

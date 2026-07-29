@@ -243,6 +243,7 @@ function session(
   return {
     projectId: project.id,
     harnessId: "claude-code",
+    activeHarnessId: null,
     harnessSessionId: null,
     launchKind: "agent",
     placement: "tab",

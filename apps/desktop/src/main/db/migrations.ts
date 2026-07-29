@@ -410,6 +410,23 @@ CREATE TABLE registered_harnesses (
 );
 `;
 
+/**
+ * Migration 016: what is RUNNING in a session's terminal, beside what that
+ * session was launched with.
+ *
+ * `harness_id` is written once at INSERT and never updated, which is correct —
+ * it is the launch, and the launch does not change. What was missing is the
+ * other half: a terminal outlives the agent that opened it, so a user who quits
+ * opencode and runs claude in the same pane leaves the row describing a process
+ * that is gone. Additive and nullable rather than a rewrite of `harness_id`,
+ * because both facts are wanted and `NULL` is the honest state of every row that
+ * predates the announce — nothing has said what it is running, so the launch
+ * harness remains the best available answer.
+ */
+const MIGRATION_016_SESSION_ACTIVE_HARNESS = `
+ALTER TABLE sessions ADD COLUMN active_harness_id TEXT;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -477,6 +494,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 15,
     name: "registered_harnesses — the trust verdict and event ledger for a manifest",
     sql: MIGRATION_015_REGISTERED_HARNESSES,
+  },
+  {
+    version: 16,
+    name: "sessions.active_harness_id — the harness actually running, beside the launch one",
+    sql: MIGRATION_016_SESSION_ACTIVE_HARNESS,
   },
 ];
 

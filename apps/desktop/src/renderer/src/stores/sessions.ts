@@ -36,6 +36,8 @@ import {
   type SessionRecord,
 } from "@volli/shared";
 
+import { useTicketSessionRecordsStore } from "./ticket-session-records";
+
 export type TerminalSplitDirection = "vertical" | "horizontal";
 
 /**
@@ -235,6 +237,19 @@ interface SessionsState {
    * arrival order, which is the defect and not a degradation of it.
    */
   applyHarnessEvent(sessionId: string, event: HarnessEvent, firedAt: HarnessEventOrder): void;
+  /**
+   * Moves a session's harness state onto the harness that just announced itself
+   * from inside that terminal (`volli session harness`, pushed by main).
+   *
+   * A REPLACEMENT rather than an edit of `harnessId`, because everything else in
+   * the state belongs to the harness it was about: the tier and the declared
+   * events are the previous adapter's, `delivered` is its delivery record, and
+   * `declared` is its word for what it was doing. A `waiting` raised by an agent
+   * the user has since quit is the exact stale-needs-you the sidebar must not
+   * keep showing. The grace window restarts too — this harness has only just
+   * started, and has had no time to report.
+   */
+  announceHarness(sessionId: string, harnessId: HarnessId, at: number): void;
   setStarting(ownerId: string, starting: boolean): void;
   forgetOwner(ownerId: string): void;
 }
@@ -685,6 +700,35 @@ export function createSessionsStore() {
       });
     },
 
+    announceHarness(sessionId, harnessId, at) {
+      set((state) => {
+        // The same late-push guard the park pushes carry.
+        if (!(sessionId in state.sessionOwner)) return state;
+        // Main only broadcasts a CHANGE, but a store this cheap to make
+        // idempotent should be: an announce agreeing with what is already here
+        // must not restart a grace window or discard a delivered `waiting`.
+        if (state.harness[sessionId]?.harnessId === harnessId) return state;
+        const adapter = launchAdapter(harnessId);
+        // Nothing here can describe it (a harness trusted since this renderer
+        // last asked the catalog), so there is no honest expectation to state —
+        // the same silence {@link launchExpectation} keeps, and for the same
+        // reason: guessing goes wrong in both directions. Its first delivered
+        // event registers it, exactly as an unknown launch's does.
+        if (adapter === undefined) return state;
+        return {
+          harness: {
+            ...state.harness,
+            [sessionId]: createSessionHarnessState({
+              harnessId,
+              expectedTier: harnessTier(adapter),
+              declaredEvents: [...supportedEvents(adapter)],
+              startedAt: at,
+            }),
+          },
+        };
+      });
+    },
+
     setStarting(ownerId, starting) {
       set((state) => {
         const isStarting = ownerId in state.starting;
@@ -769,5 +813,29 @@ export function subscribeHarnessEvents(): () => void {
       });
     }
     state.applyHarnessEvent(notice.sessionId, notice.event, notice.firedAt);
+  });
+}
+
+/**
+ * Wires the `api.sessions.onHarnessChange` subscription — the renderer end of
+ * the wrapper announce. Mounted once beside {@link subscribeHarnessEvents}, and
+ * kept a SEPARATE subscription rather than folded into it because the two
+ * channels answer different questions: one is what the agent is doing, this is
+ * which agent it is.
+ *
+ * Two things move, because a session's harness is remembered in two shapes. The
+ * durable record carries `activeHarnessId`, which is what every label and
+ * resume affordance reads through `effectiveHarnessId`; the live harness state
+ * carries what is expected to report. Updating only one leaves the ticket rail
+ * naming a harness the sidebar has already stopped believing in.
+ */
+export function subscribeSessionHarness(): () => void {
+  return window.api.sessions.onHarnessChange((notice) => {
+    useSessionsStore.getState().announceHarness(notice.sessionId, notice.harnessId, notice.at);
+    if (notice.ticketId !== null) {
+      useTicketSessionRecordsStore
+        .getState()
+        .setActiveHarness(notice.ticketId, notice.sessionId, notice.harnessId);
+    }
   });
 }

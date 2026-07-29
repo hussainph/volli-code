@@ -36,6 +36,12 @@ export function persistSessionStart(
           title: record.title,
           launchKind: record.launchKind,
           placement: record.placement,
+          // The LAUNCH harness, deliberately — not `effectiveHarnessId`. This
+          // is an event-log entry about a moment, and the moment is the launch;
+          // a harness that takes the terminal over later gets its own record on
+          // the session row and must never rewrite what already happened. (It
+          // is also null-active by construction here: nothing has had a chance
+          // to announce itself in a session being inserted.)
           ...(record.launchKind === "agent" ? { harnessId: record.harnessId } : {}),
         },
         now,

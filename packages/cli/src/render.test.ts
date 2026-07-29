@@ -207,6 +207,9 @@ describe("renderCliSuccess", () => {
         options,
       ),
     ).toBe("abcdef12  linked 4f1c9a2e-8b7d-4e5a-9c3f-2a1b0d6e5f4c\n");
+    expect(
+      renderCliSuccess("session.harness", { session: "abcdef12", harness: "codex" }, options),
+    ).toBe("abcdef12  running codex\n");
     expect(renderCliSuccess("notify", { notified: true }, options)).toBe("notified\n");
     expect(renderCliSuccess("app.launch", { alreadyRunning: true }, options)).toBe(
       "Volli is already running\n",

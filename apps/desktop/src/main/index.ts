@@ -48,6 +48,7 @@ import { registerFileIpcHandlers } from "./volli-fs";
 import {
   broadcastDataChanged,
   broadcastHarnessEvent,
+  broadcastSessionHarness,
   broadcastSessionsInterrupted,
   broadcastSystemAppearance,
 } from "./broadcast";
@@ -838,6 +839,10 @@ app.whenReady().then(async () => {
           // event a hook reports reaches every window, so a session's activity
           // state stops being guessed from PTY output alone.
           onHarnessEvent: (notice) => broadcastHarnessEvent(notice),
+          // The other involuntary channel: a harness's own wrapper announced
+          // that IT is what is now running in that terminal. Fired only on a
+          // change, so this is never chatter.
+          onSessionHarness: (notice) => broadcastSessionHarness(notice),
           // What `volli doctor` cannot see from inside the shell it runs in.
           // Read at CALL time, never captured: the wrappers are regenerated
           // after this service is constructed, and again by `--fix`.

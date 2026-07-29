@@ -16,6 +16,7 @@ import {
   scratchScope,
   sessionPanes,
   subscribeHarnessEvents,
+  subscribeSessionHarness,
   useSessionsStore,
   type TerminalSplitDirection,
 } from "@renderer/stores/sessions";
@@ -120,6 +121,12 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
   // only component that outlives every surface reading them — the sidebar's
   // "Needs you" tier, the ticket rail, the session header.
   React.useEffect(() => subscribeHarnessEvents(), []);
+
+  // The other involuntary channel, mounted here for the same reason: a
+  // harness's own launch wrapper announcing that IT is what is now running in a
+  // terminal. Separate from the event stream above because it answers a
+  // different question — not what the agent is doing, but which agent it is.
+  React.useEffect(() => subscribeSessionHarness(), []);
 
   // And the catalog those events are read against: which harnesses beyond the
   // four this renderer ships main will actually launch. Pulled once here so a

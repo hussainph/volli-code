@@ -501,6 +501,29 @@ const SESSION_LINK_SPEC: CommandSpec = {
   options: {},
 };
 
+/**
+ * `volli session harness <slug>` — the wrapper announcing which harness is now
+ * running in this terminal.
+ *
+ * Involuntary, like `hook`: it is fired by the generated PATH shim one step
+ * before it execs the harness, never typed by an agent and never read by a
+ * human. So it is deliberately absent from {@link COMMAND_HELP} — the reference
+ * is what an agent can usefully DO, and a verb whose only correct caller is a
+ * file Volli generated is noise in it. It still walks the parser (unlike `hook`,
+ * which bypasses it entirely) because it carries one ordinary positional and
+ * has no reason to grow its own argv handling.
+ */
+const SESSION_HARNESS_SPEC: CommandSpec = {
+  summary: "Record which harness is now running in the current Volli session.",
+  example: "volli session harness claude-code",
+  notes: [
+    "Acts on VOLLI_SESSION; needs a Volli session.",
+    "Fired by the harness's launch wrapper, not typed.",
+  ],
+  positionalId: { label: "session harness" },
+  options: {},
+};
+
 const TICKET_MOVE_SPEC: CommandSpec = {
   summary: "Move a ticket to another column.",
   example: "volli ticket move VC-12 --to needs-review",
@@ -828,6 +851,9 @@ export function parseCliArgs(argv: readonly string[]): CliParseResult {
   }
   if (argv[0] === "session" && argv[1] === "link") {
     return parseWithSpec("session.link", argv.slice(2), SESSION_LINK_SPEC);
+  }
+  if (argv[0] === "session" && argv[1] === "harness") {
+    return parseWithSpec("session.harness", argv.slice(2), SESSION_HARNESS_SPEC);
   }
   if (argv[0] === "session" && argv[1] === "list") {
     return parseWithSpec("session.list", argv.slice(2), SESSION_LIST_SPEC);

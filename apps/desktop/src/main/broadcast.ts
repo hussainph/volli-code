@@ -10,6 +10,7 @@ import { BrowserWindow } from "electron";
 import type {
   DataChangedEvent,
   HarnessEventNotice,
+  SessionHarnessNotice,
   SessionsInterruptedEvent,
   VolliIpcEvent,
 } from "@volli/shared";
@@ -70,6 +71,20 @@ export function broadcastHarnessEvent(notice: HarnessEventNotice): void {
   for (const window of BrowserWindow.getAllWindows()) {
     if (window.webContents.isDestroyed()) continue;
     window.webContents.send("volli:harness-event" satisfies VolliIpcEvent, notice);
+  }
+}
+
+/**
+ * Fans a harness change out to every window: the wrapper for a DIFFERENT
+ * harness ran inside a session's terminal, so what the sidebar names and what
+ * the session's harness state is about both have to move. Every window, for the
+ * same reason the event fan-out uses: a session's rows are visible wherever its
+ * project is open.
+ */
+export function broadcastSessionHarness(notice: SessionHarnessNotice): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.webContents.isDestroyed()) continue;
+    window.webContents.send("volli:session-harness" satisfies VolliIpcEvent, notice);
   }
 }
 

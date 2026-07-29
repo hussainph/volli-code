@@ -55,6 +55,14 @@ export interface WrapperInput {
    */
   binaryPath: string | null;
   /**
+   * The generated `volli` launcher, by absolute path — what the announce below
+   * invokes. Pinned at render time for the same reason {@link
+   * WrapperInput.binaryPath} is: PATH at run time is whatever the user's own
+   * shell startup rebuilt, and the one thing this wrapper may not do is exec
+   * something nobody was shown.
+   */
+  cliPath: string;
+  /**
    * This harness's own injected configuration, already resolved to real paths —
    * `CURSOR_CONFIG_DIR`, `OPENCODE_CONFIG`. Exported by the wrapper, in scope
    * for the harness it configures and nothing else.
@@ -147,6 +155,29 @@ export function renderWrapperScript(adapter: HarnessAdapter, input: WrapperInput
     "",
     'if [ -z "${VOLLI_SESSION:-}" ]; then',
     '  exec "$volli_real" "$@"',
+    "fi",
+    "",
+    // WHICH HARNESS IS RUNNING IN THIS TERMINAL. `sessions.harness_id` records
+    // the LAUNCH and never moves, which is right — but a terminal outlives the
+    // agent that opened it, so a user who quits opencode and types `claude`
+    // leaves Volli resuming the wrong binary and skipping the "needs you"
+    // notification claude's hooks fire. This line is where that is corrected,
+    // and the wrapper is the only place it can be: it runs on every invocation
+    // of every harness, including a Declared one that fires no hooks at all.
+    //
+    // Everything about the shape is load-bearing. It is BACKGROUNDED inside a
+    // subshell (`( … & )`) so the announce is reaped by init rather than
+    // becoming a job of the shell that is about to exec a TUI; both streams go
+    // to /dev/null because that terminal belongs to the harness a moment from
+    // now and a stray line of ours would land inside its first frame; stdin
+    // comes from /dev/null so a background reader can never take a keystroke
+    // meant for the agent (or stop itself on SIGTTIN); and `|| true` keeps a
+    // failure to even spawn from failing a launch. Telling Volli what is running
+    // is worth nothing if it can cost the user their agent.
+    //
+    // Gated on VOLLI_SOCKET: without one there is no app to tell.
+    'if [ -n "${VOLLI_SOCKET:-}" ]; then',
+    `  ( ${shellSingleQuote(input.cliPath)} session harness ${shellSingleQuote(adapter.id)} </dev/null >/dev/null 2>&1 & ) || true`,
     "fi",
     "",
   );

@@ -274,6 +274,10 @@ export async function ensureHarnessRuntime(input: HarnessRuntimeInput): Promise<
       renderWrapperScript(adapter, {
         binDir: input.binDir,
         binaryPath: resolvedCommand,
+        // The same launcher a fired hook runs, for the same reason: it is the
+        // one `volli` this build generated, and the wrapper announces itself
+        // through it before handing the terminal to the harness.
+        cliPath: input.shimPath,
         env: Object.fromEntries(
           Object.entries(config.env).map(([name, value]) => [name, resolve(value)]),
         ),

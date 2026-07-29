@@ -1,5 +1,6 @@
 import {
   canResumeHarness,
+  effectiveHarnessId,
   getHarnessAdapter,
   harnessLabel,
   type SessionActivityState,
@@ -32,11 +33,16 @@ export interface TicketSessionRow {
  * Truthful, compact source metadata for the rail. Only agent launches expose a
  * harness. Bare shells and pre-metadata sessions never inherit the default
  * Claude label; split placement remains visible without becoming the title.
+ *
+ * The harness named is the one RUNNING, not the one the session launched with:
+ * a pane whose agent was quit and replaced reads as what is in it now. A shell
+ * launch that later ran an agent still reads as "Shell" — `launchKind` is a
+ * fact about the pane's origin and no announce changes it.
  */
 export function sessionSourceLabel(record: SessionRecord): string {
   const source =
     record.launchKind === "agent"
-      ? harnessLabel(record.harnessId)
+      ? harnessLabel(effectiveHarnessId(record))
       : record.launchKind === "shell"
         ? "Shell"
         : "Terminal";
@@ -149,7 +155,11 @@ export function canResumeSession(record: SessionRecord): boolean {
   return (
     record.launchKind === "agent" &&
     record.endedAt !== null &&
-    canResumeHarness(record.harnessId, record.harnessSessionId, getHarnessAdapter)
+    // The harness that was running when it ended is the one a resume restarts
+    // (main builds the resume line off the same id) — so the affordance must be
+    // decided about that harness, or the rail offers Resume for a harness the
+    // session had not been running since the moment it was opened.
+    canResumeHarness(effectiveHarnessId(record), record.harnessSessionId, getHarnessAdapter)
   );
 }
 

@@ -10,7 +10,7 @@
  * the same cache instead of each re-issuing `listForTicket` on its own.
  */
 import { create } from "zustand";
-import { errorMessage, type SessionRecord } from "@volli/shared";
+import { errorMessage, type HarnessId, type SessionRecord } from "@volli/shared";
 
 import { toastError } from "@renderer/lib/toast";
 
@@ -21,6 +21,13 @@ interface TicketSessionRecordsState {
   refresh(ticketId: string): Promise<void>;
   /** Optimistic local rename ahead of the persist round-trip (mirrors the rail's prior behavior). */
   renameLocally(ticketId: string, sessionId: string, title: string): void;
+  /**
+   * Folds a wrapper announce into the cached record — main has already written
+   * it, so this is a mirror rather than an optimistic guess. Without it the rail
+   * keeps naming the harness that opened the terminal until something else
+   * happens to refetch, which is the staleness the announce exists to end.
+   */
+  setActiveHarness(ticketId: string, sessionId: string, harnessId: HarnessId): void;
 }
 
 /** Factory so tests get isolated instances (the store module's own convention). */
@@ -52,6 +59,26 @@ export function createTicketSessionRecordsStore() {
               // Object.assign, not spread: oxc(no-map-spread) bans spreads in
               // map callbacks; a fresh target object keeps this copy-on-write.
               record.id === sessionId ? Object.assign({}, record, { title }) : record,
+            ),
+          },
+        };
+      });
+    },
+
+    setActiveHarness(ticketId, sessionId, harnessId) {
+      set((state) => {
+        const records = state.byTicket[ticketId];
+        if (records === undefined) return state;
+        return {
+          byTicket: {
+            ...state.byTicket,
+            // `activeHarnessId`, never `harnessId`: the launch is history and
+            // this is what is running. Object.assign for the same lint reason
+            // the rename above gives.
+            [ticketId]: records.map((record) =>
+              record.id === sessionId
+                ? Object.assign({}, record, { activeHarnessId: harnessId })
+                : record,
             ),
           },
         };

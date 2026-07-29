@@ -47,6 +47,7 @@ import type {
   SessionRenameInput,
   SessionRenameResult,
   HarnessEventNotice,
+  SessionHarnessNotice,
   SessionsInterruptedEvent,
   SessionsResult,
   TerminalBusyResult,
@@ -345,6 +346,19 @@ const api = {
       ipcRenderer.on("volli:harness-event" satisfies VolliIpcEvent, listener);
       return () =>
         ipcRenderer.removeListener("volli:harness-event" satisfies VolliIpcEvent, listener);
+    },
+    /**
+     * Subscribes to harness-change announcements: a different harness's launch
+     * wrapper ran inside a session's terminal. Fired only on a change — the
+     * wrapper announces every launch, and most announces agree with what main
+     * already recorded.
+     */
+    onHarnessChange: (callback: (event: SessionHarnessNotice) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: SessionHarnessNotice) =>
+        callback(payload);
+      ipcRenderer.on("volli:session-harness" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:session-harness" satisfies VolliIpcEvent, listener);
     },
   },
   labels: {

@@ -292,6 +292,25 @@ export function ActiveSessions({ project }: { project: Project }) {
     return () => sessionsFetch.invalidate();
   }, [project.id, liveSignature, sessionsFetch]);
 
+  // A session's harness can change without its PTYs changing at all — quitting
+  // opencode and starting claude in the same shell is one terminal, one live
+  // pane, one signature. The refetch above is keyed on `liveSignature`, so it
+  // never fires for that switch; patch the record the announce names instead,
+  // or the row keeps naming the harness the session was launched with.
+  React.useEffect(
+    () =>
+      window.api.sessions.onHarnessChange((notice) => {
+        setRecords((current) =>
+          current.map((record) =>
+            record.id === notice.sessionId
+              ? { ...record, activeHarnessId: notice.harnessId }
+              : record,
+          ),
+        );
+      }),
+    [],
+  );
+
   const signalsFetch = useLatestAsync();
   const loadAttentionSignals = React.useCallback(() => {
     const token = signalsFetch.claim();

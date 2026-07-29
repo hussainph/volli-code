@@ -759,7 +759,11 @@ export type VolliIpcEvent =
   // configured fired, and main resolved which session it belongs to. This is
   // the involuntary channel — the renderer learns what the agent is doing
   // without the agent having chosen to say so.
-  | "volli:harness-event";
+  | "volli:harness-event"
+  // A different harness is now running in one session's terminal, announced by
+  // its own launch wrapper. The other involuntary channel, and the one that
+  // reaches the tiers hooks cannot — see {@link SessionHarnessNotice}.
+  | "volli:session-harness";
 
 /** Direction of a `volli:ui-zoom-command` event: step in/out one rung, or reset. */
 export type UiZoomCommand = "in" | "out" | "reset";
@@ -843,6 +847,33 @@ export interface HarnessEventNotice {
    * order is a property of the races between them rather than of the agent.
    */
   firedAt: HarnessEventOrder;
+}
+
+/**
+ * Main→renderer: a different harness is now running in one session's terminal,
+ * as announced by its own launch wrapper (`volli session harness <slug>`).
+ *
+ * A SIBLING of {@link HarnessEventNotice} rather than a member of it, because
+ * it is not one: this is not a canonical harness event, it is not in
+ * `HARNESS_EVENTS`, it comes from the PATH shim rather than from a hook, and it
+ * carries no `firedAt` to be ordered by — the wrapper runs once per launch, so
+ * the newest announce IS the running harness and there is no race to settle.
+ * Folding it into the event union would have every reader of that union
+ * pattern-matching around a member that answers none of its questions.
+ *
+ * Fired only on a CHANGE. The wrapper announces on every invocation, and the
+ * overwhelmingly common announce agrees with what Volli already believes.
+ */
+export interface SessionHarnessNotice {
+  /** The FULL session id — this addresses live renderer state, not a human reader. */
+  sessionId: string;
+  projectId: string;
+  /** The ticket this session drives, or `null` for a scratch session. */
+  ticketId: string | null;
+  /** The harness now running there. The session's LAUNCH harness is unchanged. */
+  harnessId: HarnessId;
+  /** Epoch ms the announce was ingested (main's clock). */
+  at: number;
 }
 
 /**

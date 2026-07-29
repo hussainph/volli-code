@@ -56,6 +56,7 @@ function record(overrides: Partial<SessionRecord> & { id: string }): SessionReco
     projectId: overrides.projectId ?? "p1",
     ticketId: overrides.ticketId ?? null,
     harnessId: overrides.harnessId ?? "claude-code",
+    activeHarnessId: overrides.activeHarnessId ?? null,
     harnessSessionId: overrides.harnessSessionId ?? null,
     launchKind: overrides.launchKind ?? "agent",
     placement: overrides.placement ?? "tab",

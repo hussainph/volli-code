@@ -5,6 +5,7 @@ import {
   composeAttachmentsSection,
   DEFAULT_HARNESS_ID,
   displayTicketId,
+  effectiveHarnessId,
   errorMessage,
   harnessLabel,
   projectSessionEnv,
@@ -134,18 +135,24 @@ export function resolveScope(
       if (prior.endedAt === null) {
         return { ok: false, error: "Cannot resume a session that is still live" };
       }
+      // Resume the harness that was RUNNING, not the one that opened the
+      // terminal. A session's `harnessId` is its launch and never moves, so a
+      // user who quit opencode and worked in claude for an hour used to be
+      // resumed into opencode — the right session id handed to the wrong
+      // binary, with that binary's flags.
+      const priorHarnessId = effectiveHarnessId(prior);
       // The resume line needs no worktree identity (no orientation preamble),
       // so it composes up front. A harness with no resume support yields null.
       const resumeCommand = buildHarnessResumeCommand(
-        prior.harnessId,
+        priorHarnessId,
         prior.harnessSessionId,
-        wrapperFor(prior.harnessId),
+        wrapperFor(priorHarnessId),
         adapterFor,
       );
       if (resumeCommand === null) {
         return {
           ok: false,
-          error: `The ${harnessLabel(prior.harnessId)} harness does not support resuming a session`,
+          error: `The ${harnessLabel(priorHarnessId)} harness does not support resuming a session`,
         };
       }
       return {
@@ -153,7 +160,10 @@ export function resolveScope(
         scope: {
           projectId: ctx.projectId,
           ticketId: request.ticket.ticketId,
-          harnessId: prior.harnessId,
+          // The new session's own LAUNCH harness is what it is being launched
+          // with — the resumed one — which is why this is the effective id and
+          // not the prior record's launch field.
+          harnessId: priorHarnessId,
           launchKind: "agent",
           placement,
           cwd: ctx.projectPath,

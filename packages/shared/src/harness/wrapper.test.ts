@@ -6,7 +6,8 @@ import { renderWrapperScript } from "./wrapper";
 import type { HarnessAdapter } from "./types";
 
 const BIN_DIR = "/Users/dev/Library/Application Support/Volli/bin";
-const BARE = { binDir: BIN_DIR, binaryPath: null, env: {} } as const;
+const CLI_PATH = "/Users/dev/Library/Application Support/Volli/bin/volli";
+const BARE = { binDir: BIN_DIR, binaryPath: null, cliPath: CLI_PATH, env: {} } as const;
 
 function adapterFor(id: string): HarnessAdapter {
   const found = getHarnessAdapter(id as HarnessId);
@@ -149,5 +150,54 @@ describe("renderWrapperScript", () => {
 
   it("says nothing about the environment for a harness that configures none", () => {
     expect(claude).not.toContain("export ");
+  });
+
+  // The announce is what keeps `sessions.active_harness_id` true: the wrapper is
+  // the only thing that runs on every invocation of every tier, including a
+  // Declared harness that fires no hooks at all.
+  it("announces which harness is now running, by absolute path", () => {
+    expect(claude).toContain(
+      `( '${CLI_PATH}' session harness 'claude-code' </dev/null >/dev/null 2>&1 & ) || true`,
+    );
+  });
+
+  it("gates the announce on there being an app to tell", () => {
+    expect(claude).toContain('if [ -n "${VOLLI_SOCKET:-}" ]; then');
+  });
+
+  // A harness TUI is about to own this terminal: the announce may not print into
+  // it, may not read from it, and may not be able to fail the launch.
+  it("keeps the announce silent, detached and unable to fail the launch", () => {
+    const announce = claude.slice(claude.indexOf("session harness"));
+    const line = announce.slice(0, announce.indexOf("\n"));
+    expect(line).toContain("</dev/null");
+    expect(line).toContain(">/dev/null");
+    expect(line).toContain("2>&1");
+    expect(line).toContain("& )");
+    expect(line).toContain("|| true");
+  });
+
+  // A harness run from a normal terminal is untouched, announce included —
+  // there is no session for it to be announcing against.
+  it("never announces on the passthrough path", () => {
+    const lines = claude.split("\n");
+    const gate = lines.indexOf('if [ -z "${VOLLI_SESSION:-}" ]; then');
+    const passthrough = lines.slice(gate, lines.indexOf("fi", gate) + 1);
+    expect(passthrough).toEqual([
+      'if [ -z "${VOLLI_SESSION:-}" ]; then',
+      '  exec "$volli_real" "$@"',
+      "fi",
+    ]);
+    expect(lines.findIndex((line) => line.includes("session harness"))).toBeGreaterThan(
+      lines.indexOf("fi", gate),
+    );
+  });
+
+  it("quotes a slug and a cli path so neither can become shell", () => {
+    const odd = renderWrapperScript(bareAdapter(), {
+      ...BARE,
+      cliPath: "/opt/my volli/bin/volli",
+    });
+    expect(odd).toContain("'/opt/my volli/bin/volli' session harness 'my-harness'");
   });
 });

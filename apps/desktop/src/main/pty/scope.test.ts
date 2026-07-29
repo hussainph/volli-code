@@ -19,7 +19,7 @@ import { createAttachment } from "../db/attachments-repo";
 import { importAttachmentFile } from "../attachment-store";
 import { insertProject } from "../db/projects-repo";
 import { insertTicket } from "../db/tickets-repo";
-import { insertSession } from "../db/sessions-repo";
+import { insertSession, setActiveHarnessId } from "../db/sessions-repo";
 import { openTestDb, testProject, testSession, testTicket } from "../db/test-helpers";
 import type { TestDb } from "../db/test-helpers";
 import { resolveScope } from "./scope";
@@ -457,6 +457,39 @@ describe("resolveScope — resume", () => {
     const result = resolveScope(ctx.db, resumeRequest(prior.id), "/attach-root", wrapped, builtIns);
     if (!result.ok) throw new Error(`expected a scope, got ${result.error}`);
     expect(result.scope.launchCommand).toBe("'/ud/bin/claude' --resume 'abc-123'");
+  });
+
+  // THE WRONG BINARY. The terminal was opened by opencode, the user quit it and
+  // worked in claude for an hour, and the resume handed claude's session id to
+  // opencode with opencode's flags. A resume picks up what was RUNNING.
+  it("resumes the harness that was running, not the one that opened the terminal", () => {
+    setup();
+    const prior = insertEndedAgent("tk1", "abc-123", { harnessId: "opencode" });
+    setActiveHarnessId(ctx.db, prior.id, "claude-code");
+
+    const result = resolveScope(ctx.db, resumeRequest(prior.id), "/attach-root", wrapped, builtIns);
+
+    if (!result.ok) throw new Error(`expected a scope, got ${result.error}`);
+    expect(result.scope.launchCommand).toBe("'/ud/bin/claude' --resume 'abc-123'");
+    // The new session's own launch harness is what it is being launched with.
+    expect(result.scope.harnessId).toBe("claude-code");
+  });
+
+  it("names the running harness when it is the one that cannot resume", () => {
+    setup();
+    const prior = insertEndedAgent("tk1", "abc-123", { harnessId: "claude-code" });
+    setActiveHarnessId(ctx.db, prior.id, "made-up-harness");
+
+    const result = resolveScope(
+      ctx.db,
+      resumeRequest(prior.id),
+      "/attach-root",
+      noWrapper,
+      builtIns,
+    );
+
+    if (result.ok) throw new Error("expected failure");
+    expect(result.error).toContain("does not support resuming");
   });
 
   it("rejects resuming an unknown session", () => {

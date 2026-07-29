@@ -19,6 +19,7 @@ function record(overrides: Partial<SessionRecord> = {}): SessionRecord {
     projectId: "p1",
     ticketId: "t1",
     harnessId: "claude-code",
+    activeHarnessId: null,
     harnessSessionId: null,
     launchKind: "unknown",
     placement: "unknown",
@@ -198,6 +199,24 @@ describe("sessionSourceLabel", () => {
     );
   });
 
+  // The pane says what is IN it. A terminal opened by opencode that the user
+  // quit and replaced with claude reads as Claude Code.
+  it("names the harness that is running, not the one that opened the pane", () => {
+    expect(
+      sessionSourceLabel(
+        record({ launchKind: "agent", harnessId: "opencode", activeHarnessId: "claude-code" }),
+      ),
+    ).toBe("Claude Code");
+  });
+
+  // `launchKind` is a fact about the pane's origin, and no announce changes it:
+  // a shell that later ran an agent is still a shell tab.
+  it("still reads as a shell when a harness announced itself inside one", () => {
+    expect(
+      sessionSourceLabel(record({ launchKind: "shell", activeHarnessId: "claude-code" })),
+    ).toBe("Shell");
+  });
+
   it("keeps legacy records honest when their launch kind was never recorded", () => {
     expect(sessionSourceLabel(record())).toBe("Terminal");
     expect(sessionSourceLabel(record({ placement: "split" }))).toBe("Terminal · Split");
@@ -251,6 +270,32 @@ describe("canResumeSession", () => {
         }),
       ),
     ).toBe(true);
+  });
+
+  // Main builds the resume line off the running harness, so the affordance has
+  // to be decided about that one or the rail offers a Resume that cannot happen
+  // — and hides one that can.
+  it("judges resumability by the harness that was running when it ended", () => {
+    expect(
+      canResumeSession(
+        record({
+          launchKind: "agent",
+          endedAt: 10,
+          harnessId: "my-custom-harness" as HarnessId,
+          activeHarnessId: "claude-code",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      canResumeSession(
+        record({
+          launchKind: "agent",
+          endedAt: 10,
+          harnessId: "claude-code",
+          activeHarnessId: "my-custom-harness" as HarnessId,
+        }),
+      ),
+    ).toBe(false);
   });
 });
 

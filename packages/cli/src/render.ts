@@ -297,6 +297,9 @@ function renderStableLines(command: string, data: unknown): string | null {
   if (command === "session.link") {
     return `${terminalSafeInline(data["session"])}  linked ${terminalSafeInline(data["harnessSessionId"])}`;
   }
+  if (command === "session.harness") {
+    return `${terminalSafeInline(data["session"])}  running ${terminalSafeInline(data["harness"])}`;
+  }
   if (command === "notify") return data["notified"] === true ? "notified" : null;
   if (command === "app.launch") {
     return data["alreadyRunning"] === true ? "Volli is already running" : "Volli launched";

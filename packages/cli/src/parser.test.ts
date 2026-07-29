@@ -191,6 +191,28 @@ describe("parseCliArgs", () => {
     });
   });
 
+  // Fired by a generated wrapper, never typed — but it still walks the parser,
+  // so the one positional has to arrive under the same key everything else uses.
+  it("routes the wrapper's harness announce, and requires the slug", () => {
+    expect(parseCliArgs(["session", "harness", "opencode"])).toEqual({
+      ok: true,
+      invocation: { command: "session.harness", args: { id: "opencode" }, json: false },
+    });
+    expect(parseCliArgs(["session", "harness"])).toEqual({
+      ok: false,
+      code: "USAGE",
+      message: "session harness requires <id>",
+    });
+  });
+
+  // The reference is what an agent can usefully DO. A verb whose only correct
+  // caller is a file Volli generated is noise in it — the same call `hook` made.
+  it("keeps the involuntary verbs out of the published command list", () => {
+    const names = COMMAND_HELP.map((entry) => entry.name);
+    expect(names).not.toContain("session harness");
+    expect(names).not.toContain("hook");
+  });
+
   it("routes the remaining published read, help, and explicit launch commands", () => {
     expect(parseCliArgs(["board", "--project", "/work/volli"])).toEqual({
       ok: true,
