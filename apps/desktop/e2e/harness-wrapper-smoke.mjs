@@ -31,6 +31,11 @@
  * harness running outside Volli nothing, and — with the app shut down — still
  * exits 0 in silence, because a dead Volli must never wedge a live agent.
  *
+ * Check 12 is the other half of two launches in one terminal: each one has to
+ * ANNOUNCE, even when it names the harness already running there, because the
+ * renderer anchors its event grace window to that announce. Asserted on the
+ * preload channel the renderer's store subscribes to.
+ *
  *   Run:
  *     vp run --filter @volli/desktop build
  *     node apps/desktop/e2e/harness-wrapper-smoke.mjs
