@@ -25,6 +25,8 @@ import type {
   FileWriteResult,
   GhosttyAppearancePayload,
   GhosttyConfigResult,
+  HarnessPendingResult,
+  HarnessTrustSetInput,
   IpcArgs,
   IpcResult,
   LabelResult,
@@ -347,6 +349,23 @@ const api = {
   labels: {
     setColor: (input: LabelSetColorInput): Promise<LabelResult> =>
       invoke("volli:label-set-color", input),
+  },
+  /**
+   * Bring-your-own harness trust (docs/plans/harness-events.md §Trust). A
+   * manifest on disk declares a command line Volli will execute and stays inert
+   * until a human confirms it; these two calls are the question and the answer.
+   */
+  harness: {
+    /** Every discovered manifest nobody has ruled on, re-read and re-hashed per call. */
+    pending: (): Promise<HarnessPendingResult> => invoke("volli:harness-pending"),
+    /**
+     * Records a verdict about the exact bytes the confirmation described.
+     * `manifestSha256` is the hash that was SHOWN — main refuses the write when
+     * the file no longer hashes to it, so a manifest edited while the dialog was
+     * open comes back as a new question instead of inheriting this answer.
+     */
+    setTrust: (input: HarnessTrustSetInput): Promise<Result> =>
+      invoke("volli:harness-trust-set", input),
   },
   files: {
     /** The whole-project file index the `@` picker ranks over (git-listed + `.volli/artifacts/`). Fetched fresh per picker open. */
