@@ -278,7 +278,18 @@ describe("buildHarnessInstallPlan", () => {
     expect(paths).toContain("/home/dev/.agents/skills/volli/SKILL.md");
     expect(paths).toContain("/home/dev/.agents/skills/volli/cli.md");
     expect(paths).toContain("/home/dev/.agents/skills/volli/orchestration.md");
+    expect(paths).toContain("/home/dev/.agents/skills/volli/plugin.md");
     expect(paths.some((path) => path.includes(".codex/prompts"))).toBe(false);
+  });
+
+  it("ships the manifest schema beside the skill, so an agent can register a harness", () => {
+    const plan = buildHarnessInstallPlan({ home: "/home/dev", detected: ["claude-code"] });
+    expect(plan.slice(0, CANONICAL_SKILL_FILES).map((action) => action.path)).toEqual([
+      "/home/dev/.agents/skills/volli/SKILL.md",
+      "/home/dev/.agents/skills/volli/cli.md",
+      "/home/dev/.agents/skills/volli/orchestration.md",
+      "/home/dev/.agents/skills/volli/plugin.md",
+    ]);
   });
 
   it("earns codex and cursor a fenced block in the instructions file each one reads", () => {

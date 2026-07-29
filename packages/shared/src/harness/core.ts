@@ -8,6 +8,7 @@ import {
   VOLLI_CLI_REFERENCE,
   VOLLI_COMMAND_DOC,
   VOLLI_ORCHESTRATION,
+  VOLLI_PLUGIN_DOC,
   VOLLI_SKILL,
 } from "./skill-content";
 import type { HarnessAdapter, InstallAction } from "./types";
@@ -70,7 +71,7 @@ export function managedWriteDecision(input: {
 export const HOME_TOKEN = "{home}";
 
 /** The canonical skill files every plan opens with, before any per-harness surface. */
-export const CANONICAL_SKILL_FILES = 3;
+export const CANONICAL_SKILL_FILES = 4;
 
 function normalizedHome(home: string): string {
   return home.endsWith("/") ? home.slice(0, -1) : home;
@@ -149,6 +150,7 @@ export function buildHarnessInstallPlan(input: {
       content: VOLLI_ORCHESTRATION,
       managed: true,
     },
+    { kind: "write", path: `${canonical}/plugin.md`, content: VOLLI_PLUGIN_DOC, managed: true },
     ...harnessBaselineActions({ home, adapters: detected }),
   ];
 }
