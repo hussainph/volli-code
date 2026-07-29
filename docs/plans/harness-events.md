@@ -86,11 +86,28 @@ It does not read `AGENTS.md` — `CLAUDE.md` only.
 
 ### codex
 
-Codex needs two mechanisms, because neither is sufficient alone. Its `hooks.json` has no
-`Stop`, no `SessionEnd`, and no `Notification`, so turn completion is only reachable through
-the legacy `notify` argv key and its `agent-turn-complete` payload. `PermissionRequest`
-comes from `hooks.json`. Any model that assumes one hook mechanism per harness is wrong
-here.
+Codex hooks are an **inline `hooks` table in the config**, not a file the config points at.
+There is no `hooks_path` key — see the live-run section below, where an earlier design that
+assumed one was measured reporting nothing at all.
+
+The shape, read off codex 0.144.6's own deserializer:
+
+```toml
+[hooks]
+Stop = [ { matcher = "…", hooks = [ { type = "command", command = "<string>" } ] } ]
+```
+
+`type` is one of `command`, `prompt`, `agent`. For `command`, the value is a **string**, so the
+shim path must be shell-quoted — it lives under `Application Support/`, and an unquoted path
+is shredded on the only OS we ship.
+
+The event fields that exist are `UserPromptSubmit`, `PermissionRequest`, `Stop` and
+`PreToolUse`. `SessionEnd` and `Notification` do not. Unknown fields under `hooks` are
+silently ignored, which is what makes the whole surface so easy to get wrong: the way to tell
+a real field from a typo is that a real one raises a *type* error, and a typo raises nothing.
+
+`Stop` existing means turn completion no longer depends on the legacy `notify` argv key and
+its `agent-turn-complete` payload. Binding both would report one turn twice.
 
 Configuration is injectable at launch. `-c key=value` overrides any value that would come
 from `~/.codex/config.toml`, and it parses TOML values rather than plain strings — verified
@@ -233,10 +250,23 @@ production code.
 - **opencode** loaded the generated plugin and reported `turn.started` and `turn.completed`.
 - **codex 0.144.6** reported `turn.completed` and nothing else. That event comes from the
   `notify` argv key; the two bindings written into the hooks file — `UserPromptSubmit` and
-  `PermissionRequest` — produced no call at all. So `hooks_path` remains **unconfirmed**: the
-  run is equally consistent with a wrong key name, the hash-keyed trust gate declining
-  silently, and `codex exec` not raising those hooks. Do not read the passing `notify` path as
-  evidence for the hooks file.
+  `PermissionRequest` — produced no call at all. The cause was then found by probing codex's
+  own config loader: **`hooks_path` is not a configuration key**, and codex ignores unknown
+  keys unless `--strict-config` is passed, so the hooks file was never read by anything. The
+  adapter had been pointing at it for the whole of this branch's life while every test passed,
+  because the tests asserted what we wrote rather than what codex accepts.
+
+  The probe that settles questions like this cheaply, for the next person:
+
+  ```
+  codex --strict-config -c 'model="__nope__"' -c '<override>' exec --skip-git-repo-check "x"
+  ```
+
+  Config errors are reported before any work happens, and the bad model short-circuits the
+  run. An unknown field says so by name; a *real* field with a wrong value raises a type error
+  instead, and that difference is the only reliable way to tell one from the other. Always
+  include a known-bogus control (`-c bogus_key=1`) in the same sweep — the enforcement differs
+  per subcommand, and `doctor` and `debug` accept overrides that `exec` rejects.
 - **cursor** was asserted against its written config only, not run.
 
 Two things a headless run cannot reach, and neither should be recorded as passing:
@@ -262,6 +292,12 @@ recorded here so nobody reintroduces them.
 - opencode's `permission.ask` hook does not fire; its published SDK types are stale.
 - cmux does **not** install global hooks. It uses PATH-shimmed wrappers and per-launch
   injection, which is where this design comes from.
+- Codex has no `hooks_path` configuration key. Hooks are an inline `hooks` table. This one was
+  ours, not the documentation's — it was a guess that shipped behind a `PROVISIONAL` comment
+  and then passed every test for the length of the branch, because nothing asserted against
+  codex itself.
+- Codex hooks **do** include `Stop`. The earlier claim that turn completion is reachable only
+  through the legacy `notify` key is wrong.
 
 ## Out of scope for the first landing
 
