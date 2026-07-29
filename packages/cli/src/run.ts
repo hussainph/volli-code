@@ -43,6 +43,13 @@ function writeDegradedIdentify(json: boolean, dependencies: RunCliDependencies):
   );
 }
 
+/** The same arguments with the repair dropped — a re-check must not repair again. */
+function omitFix(args: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  const rest: Record<string, unknown> = { ...args };
+  delete rest["fix"];
+  return rest;
+}
+
 /** Runs one CLI invocation and returns its process exit code. */
 export async function runCli(
   argv: readonly string[],
@@ -128,7 +135,21 @@ export async function runCli(
         },
       },
     };
-    const response = await dependencies.request(socketPath, request);
+    const first = await dependencies.request(socketPath, request);
+    // `doctor --fix` is two requests, and it has to be. An observation is
+    // measured before it is sent, so the one that travelled with the repair
+    // request describes the world the repair was about to change — and main,
+    // rendering the checks against it, tells a user who has just regenerated
+    // the wrappers to go and regenerate the wrappers. The second request
+    // measures again, now that they exist, and carries no `fix`, so nothing is
+    // repaired twice and what gets printed is the world the repair left behind.
+    const response =
+      first.ok && command === "doctor" && invocation.args["fix"] === true
+        ? await dependencies.request(socketPath, {
+            ...request,
+            args: { ...omitFix(invocation.args), ...(await dependencies.observe()) },
+          })
+        : first;
     if (!response.ok) {
       dependencies.stderr(renderCliError(response.error));
       return exitCodeForError(response.error.code);

@@ -31,6 +31,18 @@ export interface DoctorCheck {
 }
 
 /**
+ * One reported field. `null` is a MEASUREMENT — the caller looked and found
+ * nothing there. `undefined` says no usable measurement arrived at all, which
+ * is a different fact and has to read as one.
+ *
+ * The two collapse into each other very easily, and the collapse is always in
+ * the same direction: an absent or malformed field becomes a confident "it is
+ * not there". That is the exact failure mode this whole command was written
+ * against — a plausible wrong answer, stated in the voice of an observation.
+ */
+export type Observed<T> = T | null | undefined;
+
+/**
  * What the calling process can see from inside the environment being audited —
  * which is the only place several of these questions have a truthful answer. A
  * `volli doctor` run in a Volli PTY reports that PTY's reality; one run from a
@@ -42,11 +54,11 @@ export interface DoctorObservation {
   /** `VOLLI_SESSION`, or null outside a session. */
   sessionId: string | null;
   /** `ZDOTDIR` as the caller sees it. */
-  zdotDir: string | null;
+  zdotDir: Observed<string>;
   /** Where each harness command resolves for the caller, by command name. */
-  resolved: Readonly<Record<string, string | null>>;
+  resolved: Readonly<Record<string, Observed<string>>>;
   /** Where `volli` itself resolves for the caller. */
-  volliPath: string | null;
+  volliPath: Observed<string>;
 }
 
 /** What only main can answer: what it wrote, and what it knows. */
@@ -124,10 +136,23 @@ function pathPositionCheck(observation: DoctorObservation, facts: DoctorFacts): 
  */
 function resolutionChecks(observation: DoctorObservation, facts: DoctorFacts): DoctorCheck[] {
   return Object.entries(facts.wrappers).map(([command, wrapperPath]) => {
-    const actual = observation.resolved[command] ?? null;
+    const actual = observation.resolved[command];
     const id = `resolves-${command}`;
     const title = `\`${command}\` runs Volli's wrapper`;
     if (actual === wrapperPath) return ok(id, title, wrapperPath);
+    if (actual === undefined) {
+      // A wrapper the caller never tried to resolve. Silence about it is the
+      // only honest report: a harness whose wrapper works would otherwise be
+      // told it resolves nowhere, and a resolution check that invents a
+      // negative is worth less than no resolution check at all.
+      return bad(
+        id,
+        title,
+        "warn",
+        `no resolution was reported for \`${command}\``,
+        "Run `volli doctor` from a Volli terminal, where the full wrapper set is visible.",
+      );
+    }
     if (actual === null) {
       return bad(id, title, "warn", `\`${command}\` resolves to nothing on this PATH`);
     }
@@ -168,6 +193,16 @@ function shellInitCheck(observation: DoctorObservation, facts: DoctorFacts): Doc
   if (!facts.shellInitPresent) {
     return bad(id, title, "fail", `${facts.shellInitDir} is missing`, "Run `volli doctor --fix`.");
   }
+  // Unmeasured before mismatched, because unmeasured is also unequal — and
+  // calling it a mismatch would name a value nobody read.
+  if (observation.zdotDir === undefined) {
+    return bad(
+      id,
+      title,
+      "warn",
+      `ZDOTDIR was not reported, so it cannot be compared to ${facts.shellInitDir}`,
+    );
+  }
   if (observation.zdotDir !== facts.shellInitDir) {
     return bad(
       id,
@@ -183,6 +218,9 @@ function shellInitCheck(observation: DoctorObservation, facts: DoctorFacts): Doc
 function volliCheck(observation: DoctorObservation, facts: DoctorFacts): DoctorCheck {
   const id = "volli-cli";
   const title = "`volli` is this app's CLI";
+  if (observation.volliPath === undefined) {
+    return bad(id, title, "warn", "no `volli` path was reported, so nothing is known about it");
+  }
   if (observation.volliPath === null) {
     return bad(
       id,

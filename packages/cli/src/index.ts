@@ -58,26 +58,67 @@ async function probe(path: string): Promise<void> {
 }
 
 /**
+ * How much of a payload is worth holding. The only thing ever read out of one
+ * is a session id sitting near the top of a JSON object, so a harness that
+ * streams its whole transcript is spending our address space on nothing — and a
+ * hook that allocates without limit is a worse failure than a hook that reports
+ * nothing at all.
+ *
+ * A payload cut off here is handed on as the payload rather than discarded: a
+ * truncated JSON object cannot parse, the correlation is lost, and the event is
+ * still reported — which is exactly what an absent payload already costs.
+ */
+export const MAX_STDIN_PAYLOAD_BYTES = 256 * 1024;
+
+/**
  * The hook payload, for harnesses that write it to stdin. Bounded by the share
  * of the invocation's budget the caller allots it rather than read to EOF: a
  * harness that opens the pipe and never closes it would otherwise hang the hook
  * until the harness's own timeout kills it, which the user sees as a hook error.
  * An empty payload only costs the session id correlation, which most events
  * don't carry anyway.
+ *
+ * Bounding the read is only half of it. A `data` listener puts stdin in flowing
+ * mode, and a flowing pipe holds a referenced libuv handle open — so resolving
+ * on the timer while leaving the stream attached bounds the *promise* and not
+ * the *process*, which then lives exactly as long as whoever holds the write
+ * end. The budget is enforced by letting the stream go: listener off, stream
+ * paused, handle unreferenced. Unreferenced rather than destroyed, because the
+ * writer is the agent this hook may never break, and tearing the pipe down
+ * under it earns it an EPIPE for our convenience.
  */
 function readStdinPayload(timeoutMs: number): Promise<string> {
   if (process.stdin.isTTY) return Promise.resolve("");
   return new Promise<string>((resolve) => {
     const chunks: Buffer[] = [];
+    let held = 0;
+    let settled = false;
+    const onData = (chunk: Buffer): void => {
+      const room = MAX_STDIN_PAYLOAD_BYTES - held;
+      const kept = chunk.length <= room ? chunk : chunk.subarray(0, room);
+      chunks.push(kept);
+      held += kept.length;
+      // Waiting for an EOF that can only add bytes we would drop spends budget
+      // the socket call still needs.
+      if (held >= MAX_STDIN_PAYLOAD_BYTES) finish();
+    };
     const finish = (): void => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
+      process.stdin.off("data", onData);
+      process.stdin.off("end", finish);
+      process.stdin.off("error", finish);
+      process.stdin.pause();
+      // Absent on a redirected file, present on the pipe this exists for.
+      process.stdin.unref?.();
       resolve(Buffer.concat(chunks).toString("utf8"));
     };
     const timer = setTimeout(finish, timeoutMs);
     timer.unref();
-    process.stdin.on("data", (chunk: Buffer) => chunks.push(chunk));
-    process.stdin.once("end", finish);
-    process.stdin.once("error", finish);
+    process.stdin.on("data", onData);
+    process.stdin.on("end", finish);
+    process.stdin.on("error", finish);
   });
 }
 

@@ -1,12 +1,14 @@
-import { chmod, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 import type { DoctorCheck } from "@volli/shared";
 import {
+  entriesInDirectory,
   executableAt,
   observeEnvironment,
   processEnvironment,
+  realPathOfFile,
   renderDoctorCheck,
   renderDoctorReport,
   resolveHere,
@@ -16,8 +18,15 @@ import type { DoctorEnvironment } from "./doctor";
 function environment(
   env: Record<string, string | undefined>,
   executables: readonly string[] = [],
+  directories: Readonly<Record<string, readonly string[]>> = {},
 ): DoctorEnvironment {
-  return { env, isExecutable: (path) => Promise.resolve(executables.includes(path)) };
+  return {
+    env,
+    isExecutable: (path) => Promise.resolve(executables.includes(path)),
+    entriesIn: (path) => Promise.resolve([...(directories[path] ?? [])]),
+    // The test filesystem has no links, so a path is already its own real path.
+    realPathOf: (path) => Promise.resolve(executables.includes(path) ? path : null),
+  };
 }
 
 describe("resolveHere", () => {
@@ -70,6 +79,60 @@ describe("observeEnvironment", () => {
   it("reports ZDOTDIR when the shell integration is active", async () => {
     const observed = await observeEnvironment(environment({ PATH: "", ZDOTDIR: "/ud/shell/zsh" }));
     expect(observed["zdotDir"]).toBe("/ud/shell/zsh");
+  });
+
+  // The defect this closes: doctor iterates the wrappers main WROTE, which
+  // includes a registered manifest's command — and a command nobody resolved
+  // was reported as resolving to nothing, for a harness that works.
+  it("resolves every wrapper in the bin dir, not just the built-in harnesses", async () => {
+    const observed = await observeEnvironment(
+      environment(
+        { PATH: "/ud/bin", VOLLI_BIN_DIR: "/ud/bin" },
+        ["/ud/bin/my-harness", "/ud/bin/volli"],
+        { "/ud/bin": ["claude", "my-harness", "volli", "volli.cjs"] },
+      ),
+    );
+    const resolved = observed["resolved"] as Record<string, string | null>;
+    expect(resolved["my-harness"]).toBe("/ud/bin/my-harness");
+    // The launcher is not a harness, and reporting it as one would invent a check.
+    expect(Object.keys(resolved)).not.toContain("volli");
+    expect(Object.keys(resolved)).not.toContain("volli.cjs");
+  });
+
+  // A non-zsh session gets no shell chain, so no exported bin dir — but the
+  // shim it just ran is sitting in that directory.
+  it("finds the bin dir through the volli shim when the shell chain did not export it", async () => {
+    const observed = await observeEnvironment(
+      environment({ PATH: "/ud/bin" }, ["/ud/bin/volli", "/ud/bin/my-harness"], {
+        "/ud/bin": ["my-harness", "volli"],
+      }),
+    );
+    expect((observed["resolved"] as Record<string, string | null>)["my-harness"]).toBe(
+      "/ud/bin/my-harness",
+    );
+  });
+
+  it("reports only the built-ins when neither route finds a bin dir", async () => {
+    const observed = await observeEnvironment(environment({ PATH: "/usr/bin" }));
+    expect(Object.keys(observed["resolved"] as Record<string, string | null>)).toContain("claude");
+    expect(observed["volliPath"]).toBeNull();
+  });
+
+  it("reports only the built-ins when the shim on PATH cannot be followed", async () => {
+    const base = environment({ PATH: "/ud/bin" }, ["/ud/bin/volli", "/ud/bin/my-harness"], {
+      "/ud/bin": ["my-harness"],
+    });
+    const observed = await observeEnvironment({ ...base, realPathOf: async () => null });
+    expect(Object.keys(observed["resolved"] as Record<string, string | null>)).not.toContain(
+      "my-harness",
+    );
+  });
+
+  it("survives a bin dir that cannot be read", async () => {
+    const observed = await observeEnvironment(
+      environment({ PATH: "/ud/bin", VOLLI_BIN_DIR: "/ud/gone" }, ["/ud/bin/volli"]),
+    );
+    expect(observed["volliPath"]).toBe("/ud/bin/volli");
   });
 
   // The session id rides in the request context main already builds; a second
@@ -128,6 +191,29 @@ describe("executableAt", () => {
   });
 });
 
+describe("entriesInDirectory", () => {
+  it("lists what a directory holds, and nothing when it cannot be read", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "volli-doctor-"));
+    await writeFile(join(dir, "my-harness"), "#!/bin/sh\n");
+    expect(await entriesInDirectory(dir)).toEqual(["my-harness"]);
+    expect(await entriesInDirectory(join(dir, "absent"))).toEqual([]);
+  });
+});
+
+describe("realPathOfFile", () => {
+  // The global `volli` link is a symlink into the bin dir; following it is the
+  // only way a plain terminal learns where the wrappers live.
+  it("follows a symlink to its target, and is null when there is nothing to follow", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "volli-doctor-"));
+    const target = join(dir, "volli");
+    const link = join(dir, "linked");
+    await writeFile(target, "#!/bin/sh\n");
+    await symlink(target, link);
+    expect(await realPathOfFile(link)).toBe(await realPathOfFile(target));
+    expect(await realPathOfFile(join(dir, "absent"))).toBeNull();
+  });
+});
+
 describe("processEnvironment", () => {
   it("reads this process's own environment, which is the environment under test", () => {
     expect(processEnvironment().env).toBe(process.env);
@@ -135,5 +221,7 @@ describe("processEnvironment", () => {
 
   it("resolves through the real filesystem", async () => {
     expect(await processEnvironment().isExecutable("/definitely/not/here")).toBe(false);
+    expect(await processEnvironment().entriesIn("/definitely/not/here")).toEqual([]);
+    expect(await processEnvironment().realPathOf("/definitely/not/here")).toBeNull();
   });
 });

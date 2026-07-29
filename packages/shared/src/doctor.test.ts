@@ -94,6 +94,16 @@ describe("runDoctorChecks — resolution", () => {
       "resolves-claude",
     );
     expect(check.status).toBe("warn");
+    expect(check.detail).toContain("resolves to nothing");
+  });
+
+  // A wrapper nobody tried to resolve. Reporting it as resolving to nothing is
+  // the diagnostic inventing a negative about a harness that may work fine.
+  it("says so when no resolution was reported, rather than calling it absent", () => {
+    const check = find(runDoctorChecks(observation({ resolved: {} }), facts()), "resolves-claude");
+    expect(check.status).toBe("warn");
+    expect(check.detail).toContain("no resolution was reported");
+    expect(check.detail).not.toContain("resolves to nothing");
   });
 });
 
@@ -110,6 +120,15 @@ describe("runDoctorChecks — shell integration", () => {
       "shell-init",
     );
     expect(check.status).toBe("fail");
+  });
+
+  // "unset" is a measurement. Saying it about a field that never arrived is
+  // the diagnostic asserting a fact nobody established.
+  it("distinguishes an unreported ZDOTDIR from one that is genuinely unset", () => {
+    const check = find(runDoctorChecks(observation({ zdotDir: undefined }), facts()), "shell-init");
+    expect(check.status).toBe("warn");
+    expect(check.detail).toContain("was not reported");
+    expect(check.detail).not.toContain("unset");
   });
 
   // bash and fish: a real, permanent, partial state — not a failure.
@@ -193,6 +212,18 @@ describe("runDoctorChecks — other findings", () => {
   it("fails when volli resolves to nothing at all", () => {
     const check = find(runDoctorChecks(observation({ volliPath: null }), facts()), "volli-cli");
     expect(check.status).toBe("fail");
+    expect(check.detail).toContain("resolves to nothing");
+  });
+
+  // "agents cannot reach the planner" is a strong claim to make about a field
+  // that never arrived.
+  it("warns instead of failing when no volli path was reported", () => {
+    const check = find(
+      runDoctorChecks(observation({ volliPath: undefined }), facts()),
+      "volli-cli",
+    );
+    expect(check.status).toBe("warn");
+    expect(check.detail).toContain("no `volli` path was reported");
   });
 });
 
