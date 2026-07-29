@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import type { AgentRequest } from "@volli/shared";
 
 import { requestAgent } from "./client";
+import { runHook } from "./hook";
 import { runCli } from "./run";
 import { launchApp, requireLaunchSocketPath } from "./runtime";
 
@@ -38,7 +39,44 @@ async function probe(path: string): Promise<void> {
   await requestAgent(path, request, { timeoutMs: 500 });
 }
 
+/**
+ * The hook payload, for harnesses that write it to stdin. Bounded rather than
+ * read to EOF: a harness that opens the pipe and never closes it would
+ * otherwise hang the hook until the harness's own timeout kills it, which the
+ * user sees as a hook error. An empty payload only costs the session id
+ * correlation, which most events don't carry anyway.
+ */
+function readStdinPayload(): Promise<string> {
+  if (process.stdin.isTTY) return Promise.resolve("");
+  return new Promise<string>((resolve) => {
+    const chunks: Buffer[] = [];
+    const finish = (): void => {
+      clearTimeout(timer);
+      resolve(Buffer.concat(chunks).toString("utf8"));
+    };
+    const timer = setTimeout(finish, 1500);
+    timer.unref();
+    process.stdin.on("data", (chunk: Buffer) => chunks.push(chunk));
+    process.stdin.once("end", finish);
+    process.stdin.once("error", finish);
+  });
+}
+
 async function main(): Promise<void> {
+  // `volli hook` is dispatched before the CLI proper: it is fired by a harness
+  // hook rather than typed, it must cost a harness running outside Volli
+  // nothing, and it never renders anything for a reader — so it has no business
+  // reaching the argument parser, the renderer, or the help system.
+  if (process.argv[2] === "hook") {
+    process.exitCode = await runHook(process.argv.slice(3), {
+      env,
+      cwd: process.cwd(),
+      readStdin: readStdinPayload,
+      request: (path, request, options) =>
+        requestAgent(path, request, { timeoutMs: options?.timeoutMs ?? 10_000 }),
+    });
+    return;
+  }
   const exitCode = await runCli(process.argv.slice(2), {
     env,
     cwd: process.cwd(),
