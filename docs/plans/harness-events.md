@@ -58,7 +58,7 @@ progress, and it is what drives the sidebar's "Needs you" tier and the native no
 | | per-launch injection | session id at launch | `input.needed` | turn start / complete |
 |---|---|---|---|---|
 | **claude-code** | `--settings <inline json>` | `--session-id <uuid>` | `Notification` (`idle_prompt`, `permission_prompt`) | `UserPromptSubmit` / `Stop` |
-| **codex** | see [Codex](#codex) | discovered from rollout file | `PermissionRequest` | `UserPromptSubmit` / `notify` only |
+| **codex** | `-c key=value` (TOML-valued) | discovered from rollout file | `PermissionRequest` | `UserPromptSubmit` / `notify` only |
 | **cursor** | `CURSOR_CONFIG_DIR` (layers) | `--new-session-id <uuid>` | **absent** | `beforeSubmitPrompt` / `stop` |
 | **opencode** | `OPENCODE_CONFIG` / `OPENCODE_CONFIG_CONTENT` (layers) | reported on every event | `permission.asked` | `message.updated` / `session.idle` |
 
@@ -92,9 +92,27 @@ the legacy `notify` argv key and its `agent-turn-complete` payload. `PermissionR
 comes from `hooks.json`. Any model that assumes one hook mechanism per harness is wrong
 here.
 
-Hooks are trust-gated (a `--dangerously-bypass-hook-trust` flag exists), and unrecognized
-config keys are ignored without `--strict-config` — a botched install fails silently rather
-than loudly.
+Configuration is injectable at launch. `-c key=value` overrides any value that would come
+from `~/.codex/config.toml`, and it parses TOML values rather than plain strings — verified
+by control: `-c 'notify=["/bin/echo","volli"]'` passes `codex doctor` clean while
+`-c 'notify=["unclosed'` fails it. `-p, --profile` layers a named config file over the base
+user config as an alternative. Nothing global needs writing.
+
+Hooks are trust-gated, and the gate is interactive and hash-keyed: a new or changed hook
+config raises a startup review offering *Trust all and continue* or *Continue without
+trusting (hooks won't run)*. A `--dangerously-bypass-hook-trust` flag exists, but it
+bypasses review for the user's own hooks too, so it is not an option.
+
+This imposes a hard constraint on the adapter: **the injected hook configuration must be
+byte-stable across sessions.** If it varies, its hash changes, and every Volli-launched
+Codex session opens on a trust prompt that one wrong keypress turns into silently missing
+events. Nothing session-specific may appear in a hook command line — the session id reaches
+the harness through `VOLLI_SESSION` in the environment, which is why `buildLaunchConfig` is
+session-independent by construction. Do not "simplify" that by threading a session id back
+into the command.
+
+Unrecognized config keys are ignored without `--strict-config`, so a botched install fails
+silently rather than loudly.
 
 Skills live at `~/.codex/skills/<name>/SKILL.md`. It reads a global `~/.codex/AGENTS.md`
 plus a per-directory walk, deepest winning.
