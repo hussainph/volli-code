@@ -134,12 +134,13 @@ const ENV_VAR_RE = /^[A-Z][A-Z0-9_]*$/;
  * names for the user's shell and for every other agent running beside it.
  *
  * Three families, each a different kind of takeover. The ones that say where
- * things are (`HOME`, `PATH`, `SHELL`, `TMPDIR`) point the whole session at a
- * Volli-owned directory. The ones that say what to run before the program does
- * (`NODE_OPTIONS`, `BASH_ENV`, `LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`) execute a
- * manifest's choice of code inside every command an agent runs. And the ones
- * that redirect git (`GIT_CONFIG_GLOBAL`, `GIT_SSH_COMMAND`, `GIT_DIR`) reach
- * the worktrees the whole product is built on.
+ * things are (`HOME`, `PATH`, `SHELL`, `TMPDIR`, the `XDG_*` roots) point the
+ * whole session at a Volli-owned directory. The ones that say what to run
+ * before the program does (`NODE_OPTIONS`, `BASH_ENV`, `LD_PRELOAD`,
+ * `DYLD_INSERT_LIBRARIES`) execute a manifest's choice of code inside every
+ * command an agent runs. And the ones that redirect git (`GIT_CONFIG_GLOBAL`,
+ * `GIT_SSH_COMMAND`, `GIT_DIR`) reach the worktrees the whole product is built
+ * on.
  */
 const RESERVED_ENV_VARS: ReadonlySet<string> = new Set([
   "HOME",
@@ -150,6 +151,10 @@ const RESERVED_ENV_VARS: ReadonlySet<string> = new Set([
   "PWD",
   "OLDPWD",
   "TMPDIR",
+  "XDG_CONFIG_HOME",
+  "XDG_DATA_HOME",
+  "XDG_STATE_HOME",
+  "XDG_CACHE_HOME",
   "IFS",
   "ENV",
   "BASH_ENV",
@@ -176,10 +181,10 @@ const RESERVED_ENV_VARS: ReadonlySet<string> = new Set([
 const RESERVED_ENV_PREFIX = "VOLLI_";
 
 /**
- * The injection variables the harnesses Volli ships already own. Folded out of
- * the registry rather than restated, so a built-in that changes its variable
- * carries this with it — and no cycle, because `core` knows nothing about
- * manifests.
+ * The injection variables the harnesses Volli ships already own — the ones VOLLI
+ * SETS on their behalf. Folded out of the registry rather than restated, so a
+ * built-in that changes its variable carries this with it, and no cycle, because
+ * `core` knows nothing about manifests.
  */
 function builtInInjectionEnvVars(): ReadonlySet<string> {
   const names = new Set<string>();
@@ -189,11 +194,56 @@ function builtInInjectionEnvVars(): ReadonlySet<string> {
   return names;
 }
 
-/** Why a manifest may not have this variable, or `null` when it may. */
+/**
+ * The namespaces the harnesses Volli ships READ THEMSELVES.
+ *
+ * Written down rather than derived, and that is not redundancy with
+ * {@link builtInInjectionEnvVars} — the two answer different questions and go
+ * stale for different reasons. What Volli injects is a fact about our own
+ * adapters, so the registry always knows it. What a harness reads is a fact
+ * about someone else's binary, and the registry cannot see it at all:
+ * claude-code is configured entirely through argv, so it contributes no `envVar`
+ * to derive, and yet the binary reads `CLAUDE_CONFIG_DIR`. A manifest naming
+ * that one points the REAL Claude Code at a directory whose contents the same
+ * manifest controls, which is precisely the hijack this guard exists to stop.
+ * codex reads `CODEX_HOME` the same way, and neither would ever be derived.
+ *
+ * Namespaces rather than names because a name list here cannot be kept
+ * complete: claude-code reads 105 distinct `CLAUDE_*`/`ANTHROPIC_*` variables,
+ * opencode some thirty `OPENCODE_DISABLE_*` switches — one of which,
+ * `OPENCODE_DISABLE_DEFAULT_PLUGINS`, silently turns off the plugin every
+ * opencode event Volli reports arrives through. Nobody is going to keep a
+ * hundred-and-fifty-name list current across four upstreams that ship weekly.
+ *
+ * **Add a namespace whenever a harness is added.** This half tracks other
+ * people's binaries, so it does not maintain itself the way the derived half
+ * does. Extend it in the safe direction: a namespace reserved too eagerly
+ * refuses a manifest that meant no harm and tells it exactly which variable to
+ * take up with us, while a namespace left out is a live hijack of a harness the
+ * user already trusts.
+ */
+const BUILT_IN_HARNESS_ENV_PREFIXES: readonly string[] = [
+  "ANTHROPIC_",
+  "CLAUDE_",
+  "CODEX_",
+  "OPENAI_",
+  "CURSOR_",
+  "OPENCODE_",
+];
+
+/**
+ * Why a manifest may not have this variable, or `null` when it may. Most
+ * specific reason first — a variable Volli itself injects deserves to be told
+ * so, rather than being lumped in with its harness's whole namespace.
+ */
 function reservedEnvVarReason(name: string): string | null {
   if (name.startsWith(RESERVED_ENV_PREFIX)) return "Volli's own namespace";
-  if (RESERVED_ENV_VARS.has(name)) return "part of the environment every session runs in";
   if (builtInInjectionEnvVars().has(name)) return "how Volli configures a harness it ships";
+  if (RESERVED_ENV_VARS.has(name)) return "part of the environment every session runs in";
+  const namespace = BUILT_IN_HARNESS_ENV_PREFIXES.find((prefix) => name.startsWith(prefix));
+  if (namespace !== undefined) {
+    return `in ${namespace}*, which a harness Volli ships reads its own configuration from`;
+  }
   return null;
 }
 
