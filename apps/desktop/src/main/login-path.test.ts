@@ -37,6 +37,14 @@ describe("readLoginShellPath", () => {
     expect(await readLoginShellPath({ env: {}, runShell: broken.runShell })).toBeNull();
   });
 
+  it("takes the PATH out from under a profile that greets the user", async () => {
+    const chatty = shell(async () => "Welcome back!\nnvm: using v22\n/opt/homebrew/bin:/usr/bin\n");
+
+    expect(await readLoginShellPath({ env: {}, runShell: chatty.runShell })).toBe(
+      "/opt/homebrew/bin:/usr/bin",
+    );
+  });
+
   it("reports null for a shell that printed nothing usable", async () => {
     const quiet = shell(async () => "  \n");
 

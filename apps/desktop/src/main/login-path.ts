@@ -68,8 +68,15 @@ export async function readLoginShellPath(deps: LoginShellDeps): Promise<string |
     // A missing shell, a profile that exits nonzero, a startup that timed out.
     return null;
   }
-  const value = stdout.trim();
-  return value.length > 0 ? value : null;
+  // The last non-empty line, because a profile is allowed to talk: a `.zprofile`
+  // that greets the user, or a version manager that announces itself, prints
+  // ahead of us on the same stream. PATH holds no newline, so what `printenv`
+  // wrote is always the final line and the chatter is always above it.
+  const value = stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .findLast((line) => line.length > 0);
+  return value ?? null;
 }
 
 let cached: Promise<string | null> | undefined;
