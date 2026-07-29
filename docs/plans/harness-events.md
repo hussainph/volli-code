@@ -310,6 +310,45 @@ hook.** It silences Claude's own terminal notification and leaves ours alone, wh
 the arrangement the design assumed and had no evidence for. `input.needed` is confirmed
 reaching us from the real binary, not only through the shim.
 
+## The PATH failure, and what it cost
+
+Wrapper-first injection rests on one property: Volli's `bin/` is what a session's shell finds
+first. `agentSessionEnv` prepends it, every test agreed it was there, and the property never
+held on macOS for a single session.
+
+A PTY spawns `$SHELL -l`. `/etc/zprofile` then runs `path_helper`, which rebuilds `PATH` with
+`/etc/paths` first and appends whatever it inherited; then each user prepend in `.zprofile`
+and `.zshrc` lands on top of that. Measured on a stock host, a directory prepended into
+`$SHELL -l` finishes at **position 20 of 30**. No wrapper ever ran. No hook ever fired. Every
+component was individually correct, which is why nothing caught it.
+
+Two mechanisms close it, because there are two ways a harness starts:
+
+- A launch Volli initiates names the generated wrapper **by absolute path**. Deterministic on
+  every shell, and the wrapper path is a required parameter so a new call site cannot omit it
+  in silence.
+- A harness the user types by hand can only be routed by the shell, so `ZDOTDIR` points at a
+  Volli-owned directory whose files source the user's own and then re-assert the prepend —
+  VS Code's shell-integration mechanism. Nothing is written to the user's dotfiles. zsh only:
+  bash and fish reach no equivalent post-startup hook without reimplementing their login
+  semantics, so those sessions are launched-wrapped but not typed-wrapped and report the tier
+  they can actually deliver.
+
+Measured after, against real dotfiles: position 1 of 29, all four harnesses resolving to their
+wrapper.
+
+Three defects were inert only because the bin dir kept losing, and became live the moment it
+won. `volli hook` never checked `endedAt`, so an event from an environment that outlived its
+session — a tmux server or daemon started inside a Volli terminal — was accepted in full,
+including the notification and a sidebar row for a dead session. A manifest could claim a
+command name like `git`, and a wrapper under that name would have shadowed the real tool in
+every Volli terminal. And `volli` itself resolved through `/usr/local/bin`, so the CLI worked
+only for users who had accepted the global link.
+
+The lesson is the one `volli doctor` is built on: **assert outcomes, not configuration.** "The
+bin dir is on PATH" was true for the whole outage. "Typing `claude` here runs the wrapper" was
+not, and nothing asked it.
+
 ## Corrections
 
 Prior research and published documentation asserted several things that are false. They are
@@ -328,6 +367,10 @@ recorded here so nobody reintroduces them.
   codex itself.
 - Codex hooks **do** include `Stop`. The earlier claim that turn completion is reachable only
   through the legacy `notify` key is wrong.
+- Prepending `PATH` in a spawned process's environment does **not** survive a macOS login
+  shell, and no amount of care makes it. Anything that must win `PATH` has to run after the
+  user's shell startup, not before it. This one was ours too, and it made the whole feature
+  inert while every test passed.
 
 ## Out of scope for the first landing
 
