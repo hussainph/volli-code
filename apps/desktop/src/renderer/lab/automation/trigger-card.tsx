@@ -80,9 +80,14 @@ function ColumnToggles({
           onClick={() => toggle(status)}
           aria-pressed={columns.includes(status)}
           className={cn(
-            "rounded-full border border-border px-2.5 py-0.5 text-label text-muted-foreground",
+            "cursor-pointer rounded-full border border-border px-2.5 py-0.5 text-label text-muted-foreground",
             "transition-[background-color,color,border-color] duration-150 ease-out",
             "hover:text-foreground motion-reduce:transition-none",
+            // The house focus treatment, matched to `Button`'s. These are raw
+            // buttons rather than the primitive because they are a five-item
+            // toggle group, and they were the only tab stops on this card that
+            // arrived silently.
+            "outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
             "aria-pressed:border-primary/40 aria-pressed:bg-primary/15 aria-pressed:text-primary-text",
           )}
         >

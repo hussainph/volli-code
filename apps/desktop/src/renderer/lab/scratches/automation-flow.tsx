@@ -79,6 +79,7 @@ import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 
 import { Button } from "@renderer/components/ui/button";
+import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { cn } from "@renderer/lib/utils";
 
 import { HarnessMark, harnessLabelFor } from "../automation/harness-identity";
@@ -237,6 +238,8 @@ interface StepData extends Record<string, unknown> {
   step: FlowStep;
   removable: boolean;
   expanded: boolean;
+  /** Collapsed, but the last one open — keeps your place after you close it. */
+  wasExpanded: boolean;
   onToggle: () => void;
   onChange: (step: AutomationStep) => void;
   onRemove: () => void;
@@ -268,6 +271,13 @@ function GrabBar({ label, children }: { label: string; children?: React.ReactNod
  * A "+" on the edge of the node, on the side the new step will appear:
  * below for sequence, right for parallel. The direction IS the join, so
  * neither button needs the words `then` or `together` on it.
+ *
+ * Hidden until the node is hovered or something inside it has keyboard focus.
+ * Always-on, a two-step automation showed FIVE identical "+" targets and they
+ * outnumbered the steps — the affordance for adding was louder than the thing
+ * it added to. n8n reveals its connector "+" the same way and for the same
+ * reason. `group-focus-within` rather than `group-hover` alone, or the buttons
+ * would be reachable by tab and invisible while you were on them.
  */
 function AddHandle({
   side,
@@ -285,8 +295,10 @@ function AddHandle({
       aria-label={label}
       className={cn(
         "nodrag absolute z-10 grid size-6 place-items-center rounded-full border border-border bg-background text-muted-foreground",
-        "transition-colors duration-150 ease-out hover:border-primary/60 hover:text-primary-text",
-        "motion-reduce:transition-none",
+        "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100",
+        "transition-[opacity,color,border-color] duration-150 ease-out",
+        "hover:border-primary/60 hover:text-primary-text motion-reduce:transition-none",
+        "outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
         side === "bottom"
           ? "-bottom-3 left-1/2 -translate-x-1/2"
           : "top-1/2 -right-3 -translate-y-1/2",
@@ -299,7 +311,7 @@ function AddHandle({
 
 function TriggerNode({ data }: NodeProps<Node<TriggerData, "trigger">>) {
   return (
-    <div className="relative" style={{ width: NODE.triggerWidth }}>
+    <div className="group relative" style={{ width: NODE.triggerWidth }}>
       <GrabBar label="When" />
       {/* nowheel, or scrolling inside the card zooms the canvas instead. */}
       <div className="nodrag nowheel">
@@ -363,7 +375,7 @@ function StepNode({ data }: NodeProps<Node<StepData, "step">>) {
   const { expanded, step } = data;
 
   return (
-    <div className="relative" style={{ width: widthOf(expanded) }}>
+    <div className="group relative" style={{ width: widthOf(expanded) }}>
       <Handle type="target" position={Position.Top} className="!bg-border" />
 
       {/* A collapsed node has nothing to select or scroll inside it, so it can
@@ -389,12 +401,18 @@ function StepNode({ data }: NodeProps<Node<StepData, "step">>) {
       ) : (
         <button
           type="button"
-          onDoubleClick={data.onToggle}
           onClick={data.onToggle}
+          // The one you were last inside. Collapsing used to drop you into a
+          // graph of identical cards with no memory of which one you had just
+          // been editing, which is the cost of a single-focus surface if it
+          // does not keep a mark.
+          aria-current={data.wasExpanded ? "true" : undefined}
           className={cn(
-            "w-full overflow-hidden rounded-lg border border-border bg-card text-left",
+            "w-full cursor-pointer overflow-hidden rounded-lg border bg-card text-left",
             "transition-colors duration-150 ease-out hover:border-muted-foreground/40",
             "motion-reduce:transition-none",
+            "outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
+            data.wasExpanded ? "border-primary/50" : "border-border",
           )}
         >
           <CollapsedStep step={step} />
@@ -412,15 +430,39 @@ const NODE_TYPES = { trigger: TriggerNode, step: StepNode };
 
 /* ------------------------------------------------------------------ graph */
 
-/** One edge per parent link. No inference, so the drawing cannot disagree. */
-function edgesFor(steps: FlowStep[]): Edge[] {
-  return steps.map((step) => ({
-    id: `${step.parentId}->${step.id}`,
-    source: step.parentId,
-    target: step.id,
-    animated: false,
-    style: { stroke: "var(--color-border)", strokeWidth: 1.5 },
-  }));
+/**
+ * One edge per parent link. No inference, so the drawing cannot disagree.
+ *
+ * Drawn at `muted-foreground`, not `border`. The edges were on the border token
+ * and were the faintest thing on a canvas whose entire argument is that
+ * structure is visible — the least important surface, the card outline, was
+ * carrying more visual weight than the only mark that says what runs after
+ * what. The path from the trigger down to the open step is lifted further, so
+ * the branch you are inside reads as a branch rather than as one of two.
+ */
+function edgesFor(steps: FlowStep[], expandedId: string | null): Edge[] {
+  const byId = new Map(steps.map((step) => [step.id, step]));
+  const onPath = new Set<string>();
+  let walk = expandedId === null ? undefined : byId.get(expandedId);
+  while (walk !== undefined && !onPath.has(walk.id)) {
+    onPath.add(walk.id);
+    walk = byId.get(walk.parentId);
+  }
+
+  return steps.map((step) => {
+    const lit = onPath.has(step.id);
+    return {
+      id: `${step.parentId}->${step.id}`,
+      source: step.parentId,
+      target: step.id,
+      animated: false,
+      style: {
+        stroke: lit ? "var(--color-primary)" : "var(--color-muted-foreground)",
+        strokeWidth: lit ? 2 : 1.5,
+        opacity: lit ? 0.9 : 0.55,
+      },
+    };
+  });
 }
 
 /** `Two-opinion review`, re-read as a tree: both reviewers hang off the trigger. */
@@ -440,6 +482,13 @@ function Canvas() {
 
   const stepsRef = React.useRef(steps);
   stepsRef.current = steps;
+
+  // Sticky rather than derived: it has to survive `expandedId` going null,
+  // which is exactly the moment it is needed.
+  const lastOpenedRef = React.useRef<string | null>(null);
+  if (expandedId !== null) lastOpenedRef.current = expandedId;
+
+  const reducedMotion = useReducedMotion();
 
   const updateStep = React.useCallback((next: AutomationStep) => {
     setSteps((current) =>
@@ -507,6 +556,7 @@ function Canvas() {
           step,
           removable: current.length > 1,
           expanded: step.id === expandedId,
+          wasExpanded: step.id === lastOpenedRef.current && step.id !== expandedId,
           onToggle: () => setExpandedId((open) => (open === step.id ? null : step.id)),
           onChange: updateStep,
           onRemove: () => removeStep(step.id),
@@ -516,7 +566,7 @@ function Canvas() {
       })),
     ];
     setNodes(built);
-    setEdges(edgesFor(current));
+    setEdges(edgesFor(current, expandedId));
   }, [signature, expandedId, addStep, removeStep, updateStep, setNodes, setEdges, trigger]);
 
   /**
@@ -529,17 +579,24 @@ function Canvas() {
    *
    * Deferred a frame because the node it is aiming at is measured by the effect
    * above, which has not run when this one is queued on the same change.
+   *
+   * The duration goes to zero under `prefers-reduced-motion` rather than the
+   * move being skipped. A CSS transition can be dropped because the end state
+   * is correct either way; a viewport pan IS the correction, so cancelling it
+   * would leave the card you opened off-screen. The camera still arrives — it
+   * just arrives without the sweep, which is the part that makes people ill.
    */
   React.useEffect(() => {
+    const duration = reducedMotion ? 0 : 260;
     const at = window.setTimeout(() => {
       void fitView(
         expandedId === null
-          ? { duration: 260, padding: 0.2, maxZoom: 1 }
-          : { duration: 260, padding: 0.12, maxZoom: 1, nodes: [{ id: expandedId }] },
+          ? { duration, padding: 0.2, maxZoom: 1 }
+          : { duration, padding: 0.12, maxZoom: 1, nodes: [{ id: expandedId }] },
       );
     }, 16);
     return () => window.clearTimeout(at);
-  }, [expandedId, fitView]);
+  }, [expandedId, fitView, reducedMotion]);
 
   // Prompt edits must reach the node without rebuilding the graph, or every
   // keystroke would reset positions and blur the editor.
@@ -565,7 +622,10 @@ function Canvas() {
     // maxZoom 1, or a two-node graph fits by scaling ITSELF up to fill the
     // window and the whole point of collapsing — that a step is a small thing —
     // is undone by the camera.
-    window.setTimeout(() => void fitView({ duration: 240, padding: 0.2, maxZoom: 1 }), 0);
+    window.setTimeout(
+      () => void fitView({ duration: reducedMotion ? 0 : 240, padding: 0.2, maxZoom: 1 }),
+      0,
+    );
   }
 
   return (
@@ -595,6 +655,12 @@ function Canvas() {
           minZoom={0.25}
           proOptions={{ hideAttribution: false }}
           nodesConnectable={false}
+          // React Flow makes the node wrapper a tab stop by default, which here
+          // is a stop with no visible ring and nothing to do — dragging is not
+          // keyboard-driven. The card inside it is the real control and is
+          // focusable on its own, so this removes a dead stop rather than
+          // taking anything away.
+          nodesFocusable={false}
           // Edges are derived from the joins, so letting someone delete one
           // would leave a step orphaned from a structure that still says it has
           // a parent. The "+" buttons are the only way to change the shape.
