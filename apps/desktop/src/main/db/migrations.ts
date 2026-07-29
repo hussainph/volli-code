@@ -305,12 +305,11 @@ ALTER TABLE sessions ADD COLUMN exit_code INTEGER;
 `;
 
 /**
- * Migration 013: per-project theming (docs/plans/theming-engine.md, decisions
- * #69/#72). Four nullable columns on `projects`, one per surface plus the
- * auto-tint seed — additive, every existing row starts `NULL`, and `NULL`
- * means *inherit the global theme*, which is what makes "per-project theming
- * is off by default" (#72) the literal storage state rather than a UI
- * convention.
+ * Migration 013: per-project theming (decisions #69/#72). Four nullable columns
+ * on `projects`, one per surface plus the auto-tint seed — additive, every
+ * existing row starts `NULL`, and `NULL` means *inherit the global theme*,
+ * which is what makes "per-project theming is off by default" (#72) the
+ * literal storage state rather than a UI convention.
  *
  * Deliberately FOUR columns rather than one JSON blob: resolution is per
  * surface, never per token (#69), so "what is overridden" must be answerable
@@ -329,6 +328,43 @@ ALTER TABLE projects ADD COLUMN theme_app_slug TEXT;
 ALTER TABLE projects ADD COLUMN theme_terminal_name TEXT;
 ALTER TABLE projects ADD COLUMN theme_editor_id TEXT;
 ALTER TABLE projects ADD COLUMN theme_seed TEXT;
+`;
+
+/**
+ * Migration 014: per-project canvas + appearance (docs/plans/arc-theming-migration.md).
+ * Two nullable columns, replacing what 013's four columns meant rather than
+ * what they held: a project now overrides the CANVAS (the authored gradient)
+ * and/or the APPEARANCE, independently, and `NULL` still means *inherit*.
+ *
+ * Three shapes worth naming, because each one is a road not taken:
+ *
+ *  - **`theme_canvas` is JSON, where 013 deliberately used flat columns.** A
+ *    canvas is a gradient — a variable-length list of `{hex, x, y}` stops plus
+ *    two scalars — so there is no column set that describes it, and no
+ *    `WHERE theme_canvas = ?` question anyone asks. 013's argument (per-surface
+ *    resolution must be answerable from the row) does not apply: the canvas
+ *    resolves whole or not at all.
+ *  - **There is no `canvases` table.** One canvas per scope, edited in place;
+ *    a named, reusable library was considered and rejected. Nothing here
+ *    references a row elsewhere, so a project's canvas cannot be orphaned or
+ *    shared into a surprise.
+ *  - **013's four columns stay.** SQLite's `DROP COLUMN` is unavailable on the
+ *    versions this ships against, and the export document carries every
+ *    `projects` column by construction (`db/export.ts`), so dropping them is
+ *    neither safe nor free. They stop being READ (see `projects-repo.ts`) —
+ *    dead data, not live data, which is decision 7's "reset to Ember, no
+ *    seed→canvas conversion" expressed in the schema.
+ *
+ * The `CHECK` follows `tickets.status`'s precedent: the appearance vocabulary
+ * is closed, and a hand-edited db that says `theme_appearance = 'sepia'` should
+ * fail at the write, not paint something arbitrary three layers up. SQLite does
+ * not re-validate existing rows when a checked column is added, which is exactly
+ * right here — every existing row gets `NULL`, which the check admits.
+ */
+const MIGRATION_014_PROJECT_CANVAS = `
+ALTER TABLE projects ADD COLUMN theme_canvas TEXT;
+ALTER TABLE projects ADD COLUMN theme_appearance TEXT
+  CHECK (theme_appearance IS NULL OR theme_appearance IN ('light','dark','auto'));
 `;
 
 export const MIGRATIONS: readonly Migration[] = [
@@ -388,6 +424,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 13,
     name: "projects theme override — per-surface app/terminal/editor slugs + auto-tint seed",
     sql: MIGRATION_013_PROJECT_THEME_OVERRIDE,
+  },
+  {
+    version: 14,
+    name: "projects theme canvas + appearance — the per-project half of the Arc canvas",
+    sql: MIGRATION_014_PROJECT_CANVAS,
   },
 ];
 

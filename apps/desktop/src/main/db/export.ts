@@ -47,6 +47,21 @@ export interface ExportProject {
   themeTerminalName: string | null;
   themeEditorId: string | null;
   themeSeed: string | null;
+  /**
+   * The per-project canvas (migration 014) as its STORED JSON string, unparsed,
+   * and the appearance beside it; `null` on either means that half inherits the
+   * global choice.
+   *
+   * Unparsed on purpose, matching {@link ExportAppState} (where the GLOBAL
+   * canvas lives, under the `theme` key) rather than {@link ExportTicketEvent}.
+   * Two reasons, and the second is the one that decides it: the two halves of a
+   * user's theming should read the same way in the document, and a hand-edited
+   * row that is no longer valid JSON must not take the whole export down with
+   * it — `JSON.parse` here would throw at the one moment a user is trying to
+   * rescue their data.
+   */
+  themeCanvas: string | null;
+  themeAppearance: string | null;
   colorIndex: number;
   sortOrder: number;
   rowVersion: number;
@@ -170,6 +185,8 @@ interface ProjectRow {
   theme_terminal_name: string | null;
   theme_editor_id: string | null;
   theme_seed: string | null;
+  theme_canvas: string | null;
+  theme_appearance: string | null;
   color_index: number;
   sort_order: number;
   row_version: number;
@@ -197,6 +214,8 @@ function exportProjects(db: Database.Database): ExportProject[] {
     themeTerminalName: row.theme_terminal_name,
     themeEditorId: row.theme_editor_id,
     themeSeed: row.theme_seed,
+    themeCanvas: row.theme_canvas,
+    themeAppearance: row.theme_appearance,
     colorIndex: row.color_index,
     sortOrder: row.sort_order,
     rowVersion: row.row_version,

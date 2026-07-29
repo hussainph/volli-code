@@ -203,12 +203,7 @@ export async function prepareMonacoEditorThemes(
   bindMonacoEditorThemeHost(monaco);
   // If the theme store already refreshed before runtime init, bind applied it.
   // Otherwise activate the shipped default so the first editor isn't unthemed.
-  ensureMonacoEditorTheme(
-    resolveEditorThemeId({
-      editorThemeId: null,
-      appThemeSlug: "ember",
-    }),
-  );
+  ensureMonacoEditorTheme(resolveEditorThemeId({ editorThemeId: null }));
   return shiki;
 }
 

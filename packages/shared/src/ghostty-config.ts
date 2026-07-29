@@ -6,13 +6,15 @@
 // This module stays pure: filesystem access for `config-file` include
 // resolution is injected as a callback (`GhosttyFileReader`), never imported.
 
+import type { ResolvedAppearance } from "./theme/canvas/types";
+
 /** Terminal-appearance/behavior preferences extracted from a Ghostty config. */
 export interface GhosttyTerminalPrefs {
   /** Ordered `font-family` values (repeatable key; empty value resets the list). */
   fontFamilies: string[];
   /** `font-size` in points, or null when unset/unparseable. */
   fontSize: number | null;
-  /** Resolved `theme` value (see dark: handling), or null when unset. */
+  /** Resolved `theme` value (see {@link resolveGhosttyThemeName}), or null when unset. */
   themeName: string | null;
   /**
    * Ligature state derived from `font-feature`: false when `calt`/`liga` are
@@ -43,11 +45,16 @@ function stripSurroundingQuotes(value: string): string {
 
 /**
  * Resolves a `theme` value that may be a plain name or a light/dark pair
- * (`light:Rose Pine Dawn,dark:Rose Pine`). The app is dark-only, so a
- * `dark:` entry wins when present; a `light:`-only value is used as a
- * fallback. A value with no `light:`/`dark:` prefixes is used verbatim.
+ * (`light:Rose Pine Dawn,dark:Rose Pine`): the half matching `appearance`
+ * wins, the other half stands in when only one is present, and a value with
+ * no `light:`/`dark:` prefixes is used verbatim — ghostty's own semantics.
+ *
+ * Exported because the resolution outlives the parse. The appearance can change
+ * while the config file sits perfectly still, so whoever knows the LIVE mode has
+ * to be able to re-answer this without a re-read (see
+ * `renderer/src/terminal/appearance-model.ts`).
  */
-function resolveThemeName(value: string): string {
+export function resolveGhosttyThemeName(value: string, appearance: ResolvedAppearance): string {
   let lightName: string | null = null;
   let darkName: string | null = null;
   for (const rawEntry of value.split(",")) {
@@ -62,7 +69,9 @@ function resolveThemeName(value: string): string {
     }
   }
 
-  return darkName ?? lightName ?? value;
+  const preferred = appearance === "light" ? lightName : darkName;
+  const other = appearance === "light" ? darkName : lightName;
+  return preferred ?? other ?? value;
 }
 
 /** Parses `font-size` into a positive finite point size, or null. */
@@ -150,8 +159,19 @@ function parseConfigLine(line: string): [key: string, value: string] | null {
  * terminal preferences we act on. Never throws: lines without an `=` (junk,
  * or comments starting with `#`) are skipped, and unrecognized keys are
  * ignored so unrelated config content can't break parsing.
+ *
+ * `appearance` decides which half of a `light:X,dark:Y` `theme` pair `themeName`
+ * carries, and is REQUIRED. It used to default to `dark`, because main read the
+ * config chain at boot and on every file-watch tick before anything told it what
+ * the window had resolved to — a default that never reached the screen (the
+ * renderer re-resolves against the live mode) but did quietly encode dark-only
+ * as an assumption. Main threads the resolved mode through
+ * `readGhosttyAppearance` now, so there is nothing left for a default to cover.
  */
-export function parseGhosttyTerminalPrefs(text: string): GhosttyTerminalPrefs {
+export function parseGhosttyTerminalPrefs(
+  text: string,
+  appearance: ResolvedAppearance,
+): GhosttyTerminalPrefs {
   const fontFamilies: string[] = [];
   const features = new Map<string, boolean>();
   let fontSize: number | null = null;
@@ -184,7 +204,7 @@ export function parseGhosttyTerminalPrefs(text: string): GhosttyTerminalPrefs {
         fontSize = value.length === 0 ? null : parseFontSize(value);
         break;
       case "theme":
-        themeName = value.length === 0 ? null : resolveThemeName(value);
+        themeName = value.length === 0 ? null : resolveGhosttyThemeName(value, appearance);
         break;
       case "scrollback-limit":
         scrollbackLimitBytes = value.length === 0 ? null : parseNonNegativeInt(value);

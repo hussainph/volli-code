@@ -16,8 +16,7 @@ describe("diffEditorConstructionOptions", () => {
       renderSideBySide: false,
       automaticLayout: true,
     });
-    // DiffEditor theming is via monaco.editor.setTheme — never construction options
-    // (docs/plans/theming-engine.md).
+    // DiffEditor theming is via monaco.editor.setTheme — never construction options.
     expect(options).not.toHaveProperty("theme");
   });
 

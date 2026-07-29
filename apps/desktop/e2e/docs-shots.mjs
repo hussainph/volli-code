@@ -2,14 +2,21 @@
  * Documentation screenshots for the Volli docs site (apps/docs).
  *
  * Boots the BUILT app against an isolated scratch profile, seeds the repo's
- * established demo project (voltaic / VLT), and captures the three images the
- * docs pages embed:
+ * established demo project (voltaic / VLT), and captures the images the docs
+ * pages embed:
  *
  *   board.png            — the kanban board, all five columns populated.
  *   ticket-workspace.png — a ticket open in its workspace with a live terminal
  *                          session and real output in it.
- *   theme-picker.png     — Settings → Appearance, the app-theme picker listing
- *                          the built-in themes.
+ *
+ * `theme-picker.png` used to be the third. Its surface — Settings → Appearance's
+ * app-theme picker — went with the seed-based theming system, and the file is
+ * deleted.
+ *
+ * TODO: re-add the step as `canvas-editor.png`, shooting Settings → Appearance
+ * with the canvas editor open — the pad and its orbs, the stop chips, the swatch
+ * row, the vibrancy and grain sliders, and the contrast readout. The Theming
+ * guide carries a matching TODO and embeds no image until that shot exists.
  *
  * Two things are deliberate here and worth keeping:
  *
@@ -291,21 +298,10 @@ try {
     return capture("ticket-workspace.png");
   });
 
-  // ---- 3. the theme picker ------------------------------------------------
-  await attempt(4, "theme-picker.png", async () => {
-    await page.getByRole("button", { name: "Settings", exact: true }).first().click();
-    await page
-      .getByRole("navigation", { name: "Settings categories" })
-      .getByRole("button", { name: "Appearance", exact: true })
-      .click();
-    const picker = page.getByTestId("appearance-theme-picker");
-    await picker.waitFor();
-    // The picker previews on hover and highlights the row under the pointer;
-    // park the pointer so the shot shows the applied theme with no row selected.
-    await parkPointer(page);
-    await sleep(900);
-    return capture("theme-picker.png");
-  });
+  // ---- 3. the app theme surface -------------------------------------------
+  // Was the seed picker; that surface is the canvas editor now and lands with
+  // it. Nothing here to shoot until it does — a shot of the interim placeholder
+  // would date the docs the day the editor arrives.
 } catch (error) {
   check("!", "docs shots crashed", false, String(error?.stack ?? error));
 } finally {

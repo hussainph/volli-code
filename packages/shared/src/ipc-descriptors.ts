@@ -10,10 +10,11 @@ import type {
   ThemeIpcChannel,
   VolliInvokeContract,
 } from "./ipc";
-import { isValidThemeSlug } from "./theme/custom-themes";
+import { isAppearance, parseCanvas } from "./theme/canvas";
+import { isHexColor } from "./theme/color";
 import { isShippedEditorThemeId } from "./theme/editor-themes";
 import { isValidOverlayKey, isValidOverlayValue } from "./theme/ghostty-overlay";
-import { isProjectThemeOverride, isThemeDefinition } from "./theme/persistence";
+import { isProjectThemeOverride } from "./theme/project-override";
 import { isHarnessId, isTicketPriority, isTicketStatus } from "./ticket";
 import { isValidBranchName } from "./ticket-branch";
 
@@ -543,9 +544,9 @@ export const FILE_IPC: { readonly [C in FileIpcChannel]: IpcRequestDescriptor<C>
 export const FILE_CHANNELS = Object.keys(FILE_IPC) as readonly FileIpcChannel[];
 
 // ---- theme-IPC descriptor table ------------------------------------------
-// Exactly one entry per VolliThemeIpcContract channel (the 4 channels
-// `src/main/theme-ipc.ts` owns). The theme/override shape guards live next to
-// the persistence rules they enforce (`theme/persistence.ts`), imported above.
+// Exactly one entry per VolliThemeIpcContract channel (the channels
+// `src/main/theme-ipc.ts` owns). The per-surface override guard lives next to
+// the shape it enforces (`theme/project-override.ts`), imported above.
 
 /**
  * Whether every value is a string or null — the overlay edit-set shape (`null`
@@ -577,17 +578,6 @@ function isCallerScope(value: unknown): boolean {
   return value === undefined || typeof value === "string";
 }
 
-/** `[{ slug }]` where the slug can actually name a file in the themes directory. */
-function isThemeSlugArgs(args: unknown[]): boolean {
-  const [input] = args;
-  return (
-    args.length === 1 &&
-    isRecord(input) &&
-    typeof input["slug"] === "string" &&
-    isValidThemeSlug(input["slug"])
-  );
-}
-
 export const THEME_IPC: { readonly [C in ThemeIpcChannel]: IpcRequestDescriptor<C> } = {
   "volli:theme-state": {
     guard: (args): args is IpcArgs<"volli:theme-state"> => {
@@ -597,17 +587,9 @@ export const THEME_IPC: { readonly [C in ThemeIpcChannel]: IpcRequestDescriptor<
     },
     invalidError: "Invalid theme request",
   },
-  "volli:theme-set-global": {
+  "volli:theme-set-global-editor": {
     // `projectId` names the CALLER's scope, never a second write target — it
     // decides which scope's state the answer describes (#123).
-    guard: (args): args is IpcArgs<"volli:theme-set-global"> =>
-      args.length === 1 &&
-      isRecord(args[0]) &&
-      isThemeDefinition(args[0]["theme"]) &&
-      isCallerScope(args[0]["projectId"]),
-    invalidError: "Invalid theme",
-  },
-  "volli:theme-set-global-editor": {
     // null = derive from app theme; otherwise only a shipped catalog id.
     // `isShippedEditorThemeId` is the shared vocabulary the renderer catalog
     // asserts against — an unknown string never reaches SQLite.
@@ -629,6 +611,51 @@ export const THEME_IPC: { readonly [C in ThemeIpcChannel]: IpcRequestDescriptor<
     },
     invalidError: "Invalid project theme override",
   },
+  // ── the canvas writes (migration 014) ──────────────────────────────────
+  // Every one of these is a WRITE with no read twin: the stored state rides
+  // `volli:data-bootstrap` back to the renderer, so there is nothing to answer
+  // with beyond the authoritative row a project write already returns.
+  "volli:theme-canvas-set-global": {
+    guard: (args): args is IpcArgs<"volli:theme-canvas-set-global"> =>
+      args.length === 1 && isRecord(args[0]) && parseCanvas(args[0]["canvas"]) !== null,
+    invalidError: "Invalid canvas",
+  },
+  "volli:theme-appearance-set-global": {
+    guard: (args): args is IpcArgs<"volli:theme-appearance-set-global"> =>
+      args.length === 1 && isRecord(args[0]) && isAppearance(args[0]["appearance"]),
+    invalidError: "Invalid appearance",
+  },
+  "volli:theme-canvas-set-project": {
+    guard: (args): args is IpcArgs<"volli:theme-canvas-set-project"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (!isRecord(input) || typeof input["projectId"] !== "string") return false;
+      return input["canvas"] === null || parseCanvas(input["canvas"]) !== null;
+    },
+    invalidError: "Invalid canvas",
+  },
+  "volli:theme-appearance-set-project": {
+    guard: (args): args is IpcArgs<"volli:theme-appearance-set-project"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (!isRecord(input) || typeof input["projectId"] !== "string") return false;
+      return input["appearance"] === null || isAppearance(input["appearance"]);
+    },
+    invalidError: "Invalid appearance",
+  },
+  // `auto` is NOT accepted here: the hint records what the renderer RESOLVED,
+  // and an unresolved mode is exactly the value main cannot act on at window
+  // construction — the one thing this row exists to make possible.
+  "volli:theme-first-paint-set": {
+    guard: (args): args is IpcArgs<"volli:theme-first-paint-set"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (!isRecord(input)) return false;
+      if (input["appearance"] !== "light" && input["appearance"] !== "dark") return false;
+      return typeof input["background"] === "string" && isHexColor(input["background"]);
+    },
+    invalidError: "Invalid first-paint hint",
+  },
   // The renderer names a SCOPE, never a path — so the "Volli never writes the
   // user's own ghostty config" invariant (#67) holds at the IPC boundary as
   // well as at the write path, rather than relying on the guard alone.
@@ -641,35 +668,6 @@ export const THEME_IPC: { readonly [C in ThemeIpcChannel]: IpcRequestDescriptor<
       return input["scope"] === "project" && typeof input["projectId"] === "string";
     },
     invalidError: "Invalid terminal overlay write",
-  },
-  // The custom-theme catalog names a SLUG, never a path. `isValidThemeSlug` is
-  // imported rather than restated, so the IPC boundary cannot drift from the
-  // path builder it guards: a traversal is refused here, before main runs, as
-  // well as in `customThemePath`.
-  "volli:theme-file-list": {
-    guard: (args): args is IpcArgs<"volli:theme-file-list"> => args.length === 0,
-    invalidError: "Invalid theme request",
-  },
-  "volli:theme-file-read": {
-    guard: (args): args is IpcArgs<"volli:theme-file-read"> => isThemeSlugArgs(args),
-    invalidError: "Invalid theme slug",
-  },
-  "volli:theme-file-write": {
-    guard: (args): args is IpcArgs<"volli:theme-file-write"> =>
-      args.length === 1 && isRecord(args[0]) && isThemeDefinition(args[0]["theme"]),
-    invalidError: "Invalid theme",
-  },
-  "volli:theme-file-delete": {
-    guard: (args): args is IpcArgs<"volli:theme-file-delete"> => isThemeSlugArgs(args),
-    invalidError: "Invalid theme slug",
-  },
-  "volli:theme-file-reveal": {
-    guard: (args): args is IpcArgs<"volli:theme-file-reveal"> => isThemeSlugArgs(args),
-    invalidError: "Invalid theme slug",
-  },
-  "volli:theme-file-open": {
-    guard: (args): args is IpcArgs<"volli:theme-file-open"> => isThemeSlugArgs(args),
-    invalidError: "Invalid theme slug",
   },
 };
 

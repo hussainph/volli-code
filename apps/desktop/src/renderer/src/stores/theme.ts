@@ -1,75 +1,124 @@
 /**
- * Theming state for the renderer: what the user AUTHORED, what a project
+ * Theming state for the renderer: what the user AUTHORED, what a workspace
  * overrides, and what is merely being previewed right now.
  *
- * Three rules from docs/plans/theming-engine.md are load-bearing here.
+ * Three rules are load-bearing here.
  *
  *  - **The resolved token set is never stored.** This store holds
- *    `{global theme, project override}` and derives the rest at render time
- *    (see `effectiveTheme` + `theme/apply.ts`). VS Code's most-complained-about
- *    theming bug is auto-switching writing the *resolved* theme back over the
- *    user's authored intent; the shape here makes that unrepresentable.
- *  - **Preview is memory-only.** `startPreview` repaints the live DOM and
- *    writes NOTHING — not to SQLite, not to `app_state`, not anywhere. Only
- *    `commitPreview` persists, and `cancelPreview` restores the pre-preview
- *    look by simply forgetting the preview, because nothing else ever changed.
- *  - **Favorites and Recents persist through `app_state`**, like every other
- *    renderer preference (#29) — never localStorage.
+ *    `{canvas, appearance}` per scope and derives the rest at render time (see
+ *    `theme/canvas-paint.ts`). VS Code's most-complained-about theming bug is
+ *    auto-switching writing the *resolved* theme back over the user's authored
+ *    intent; the shape here makes that unrepresentable.
+ *  - **Preview is memory-only.** `startPreview` repaints the live DOM and writes
+ *    NOTHING — not to SQLite, not to `app_state`, not anywhere. Only
+ *    `commitPreview` persists, and `cancelPreview` restores the pre-preview look
+ *    by simply forgetting the preview, because nothing else ever changed.
+ *  - **Nothing here goes through zustand `persist`.** It used to, for the
+ *    picker's favorites and recents; both died with the picker. Every value in
+ *    this store is either authored state that lives in SQLite behind
+ *    `window.api.theme` (main reads it too — the window background follows it,
+ *    before any renderer exists) or derived from it.
  *
- * The theme itself is NOT persisted through this store's `persist` middleware:
- * it lives in SQLite behind `window.api.theme`, because main needs to read it
- * too (the window background follows it, before any renderer exists).
+ * ## Where each value comes IN
+ *
+ * There is deliberately no `canvas.state()` IPC read. The global canvas and
+ * appearance are `app_state` rows and a workspace's are `projects` columns, so
+ * `volli:data-bootstrap` already ships all of it in the one round trip the app
+ * makes anyway — {@link ThemeState.hydrateGlobal} takes the rows and the
+ * project scope arrives through {@link ThemeState.hydrate}. A second read path
+ * would be a second answer to "what is the theme?".
+ *
+ * `volli:theme-state` is still read, for the two surfaces that are NOT the
+ * canvas: the resolved ghostty chain and the global editor theme id.
  */
 
-import { DEFAULT_THEME, errorMessage } from "@volli/shared";
+import {
+  APPEARANCE_APP_STATE_KEY,
+  DEFAULT_CANVAS,
+  errorMessage,
+  isAppearance,
+  parseCanvas,
+  THEME_APP_STATE_KEY,
+  windowBackground,
+} from "@volli/shared";
 import type {
-  CustomThemeListResult,
-  CustomThemeWriteResult,
+  Appearance,
+  Canvas,
   GhosttyAppearancePayload,
+  Project,
+  ProjectCanvasWriteResult,
   ProjectThemeOverride,
-  Result,
+  ResolvedAppearance,
   ShippedEditorThemeId,
-  ThemeDefinition,
   ThemeSetProjectResult,
   ThemeStatePayload,
   ThemeStateResult,
+  Result,
 } from "@volli/shared";
 import { create } from "zustand";
-import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
-import { appStateStorage } from "@renderer/lib/app-state-storage";
 import { toastError } from "@renderer/lib/toast";
 import {
-  MAX_RECENT_THEMES,
-  noteRecentTheme,
-  toggleFavoriteTheme,
-} from "@renderer/components/theme/theme-picker-model";
-import {
-  withProjectAppChoice,
   withProjectEditorChoice,
-  type ProjectAppChoice,
+  type ProjectEditorChoice,
 } from "@renderer/components/theme/project-appearance-model";
-import { applyTheme as applyThemeToDom, resolveActiveTheme } from "@renderer/theme/apply";
+import {
+  resolveActiveTheme,
+  type ActiveTheme,
+  type ProjectSurfaceOverride,
+} from "@renderer/theme/apply";
+import {
+  paintCanvas,
+  systemPrefersDark,
+  type PaintCanvasOptions,
+} from "@renderer/theme/canvas-paint";
 import { beginScopeRepaint, shouldEaseScopeRepaint } from "@renderer/theme/scope-transition";
-import { BUILTIN_THEMES, mergeThemeCatalog } from "@renderer/theme/catalog";
 import { resolveEditorThemeId } from "@renderer/editor/editor-theme-catalog";
 import { refreshMonacoEditorTheme } from "@renderer/editor/monaco-theme";
 import { writeThrough } from "@renderer/stores/mutate";
 
-/** Which scope a commit writes to (#69). The per-project entry point ships with Configure. */
+/** Which scope a commit writes to (#69). */
 export type ThemeScope = { kind: "global" } | { kind: "project"; projectId: string };
+
+/**
+ * The scope a hydrate is switching to: the workspace, and the two migration-014
+ * columns its row carries. Passed IN rather than read, because the row already
+ * arrived in the bootstrap payload and the theme store must not hold a second
+ * copy of the projects list to look it up in.
+ */
+export interface ThemeProjectScope {
+  projectId: string;
+  canvas: Canvas | null;
+  appearance: Appearance | null;
+}
 
 /** The preload theming surface this store needs — narrow, and fake-able in tests. */
 export interface ThemeGateway {
+  /** The resolved ghostty chain + the global editor id for a scope. NOT the canvas. */
   state(input: { projectId?: string }): Promise<ThemeStateResult>;
+  setGlobalCanvas(canvas: Canvas): Promise<Result>;
+  setGlobalAppearance(appearance: Appearance): Promise<Result>;
   /**
-   * Writes the GLOBAL theme, and answers with the state of the scope named by
-   * `projectId` — the one the store is showing (#123). The scope is not a
-   * second write target: it is what keeps a project that overrides the app
-   * surface wearing its own theme while the app-wide one changes underneath.
+   * Both workspace writes resolve with the **authoritative row**, re-read after
+   * the update — not a bare ok. That row is the point: a workspace's canvas and
+   * appearance are columns the projects store holds, and it is the only copy
+   * (see `projects.ts`'s selection listener, which builds every scope from it).
+   * A write that persisted without handing the fresh row back left that copy
+   * stale, so the next workspace switch rebuilt the scope from a `null` column
+   * and the override silently reverted to the global canvas.
    */
-  setGlobal(theme: ThemeDefinition, projectId: string | null): Promise<ThemeStateResult>;
-  /** The editor twin of {@link setGlobal} — same rule about whose scope the answer describes. */
+  setProjectCanvas(projectId: string, canvas: Canvas | null): Promise<ProjectCanvasWriteResult>;
+  setProjectAppearance(
+    projectId: string,
+    appearance: Appearance | null,
+  ): Promise<ProjectCanvasWriteResult>;
+  /**
+   * Records what was actually painted so the NEXT launch can build its window
+   * with the right edge color and the right mode class before anything runs. A
+   * cache, never an authority — `{canvas, appearance}` stays the pair.
+   */
+  setFirstPaint(hint: { appearance: ResolvedAppearance; background: string }): Promise<Result>;
+  /** The editor twin of the global writes — same rule about whose scope the answer describes (#123). */
   setGlobalEditor(
     editorThemeId: ShippedEditorThemeId | null,
     projectId: string | null,
@@ -78,602 +127,760 @@ export interface ThemeGateway {
     projectId: string,
     override: ProjectThemeOverride | null,
   ): Promise<ThemeSetProjectResult>;
-  /**
-   * The user's own theme files (#71). Every verb names a SLUG — main owns the
-   * path — and the two writers answer with the FRESH catalog, so this store
-   * adopts what the directory now holds instead of predicting it.
-   */
-  listCustomThemes(): Promise<CustomThemeListResult>;
-  saveCustomTheme(theme: ThemeDefinition): Promise<CustomThemeWriteResult>;
-  deleteCustomTheme(slug: string): Promise<CustomThemeListResult>;
-  openCustomTheme(slug: string): Promise<Result>;
+}
+
+/**
+ * Where a freshly-written workspace row goes.
+ *
+ * A registrar rather than an import, because the dependency between these two
+ * stores is one-directional and has to stay that way: `projects.ts` imports
+ * this module to hand a scope over on selection. Reaching back the other way
+ * would close the cycle, so the projects store registers itself here instead
+ * and this module keeps knowing nothing about it.
+ *
+ * Null until something registers — the store persists exactly as before, and a
+ * headless test simply observes no adoption.
+ */
+let projectRowSink: ((project: Project) => void) | null = null;
+
+/** Called by `projects.ts` at module scope. */
+export function setProjectRowSink(sink: (project: Project) => void): void {
+  projectRowSink = sink;
 }
 
 /** The seams the store drives: the IPC bridge, and the DOM / Monaco repaint. */
 export interface ThemeStoreDeps {
   gateway: ThemeGateway;
-  /** Generates and writes the CSS custom properties. Injected so the store stays testable headlessly. */
-  applyTheme(theme: ThemeDefinition): void;
+  /**
+   * Derives and writes every custom property, and moves the mode class.
+   * Injected so the store stays testable headlessly. `options.transient` marks
+   * one frame of a running gesture — see `theme/apply.ts`.
+   */
+  paintCanvas(canvas: Canvas, resolved: ResolvedAppearance, options?: PaintCanvasOptions): void;
   /** Activates a Monaco/shiki catalog id (queued until Monaco boots). */
   refreshEditorTheme(themeId: string): void;
   /**
-   * Arms the eased repaint for ONE token swap (#69, theme/scope-transition.ts).
-   * Called immediately before {@link applyTheme}, and only for a scope change —
-   * never for a pick or a preview, where instant is the correct feedback.
+   * Arms the eased repaint for ONE swap (#69, theme/scope-transition.ts).
+   * Called immediately before {@link paintCanvas}, and only for a scope change
+   * or a light↔dark flip — never for an authoring edit or a preview, where
+   * instant is the correct feedback.
    */
   beginScopeRepaint(): void;
+  /**
+   * What the system was asking for when this window was built — main's
+   * `nativeTheme` reading, handed over on the process arguments. Called exactly
+   * once, for the initial state, because that snapshot cannot go stale
+   * unobserved: a later flip arrives at {@link ThemeState.noteSystemAppearance}
+   * instead.
+   */
+  systemPrefersDark(): boolean;
 }
 
 const defaultDeps: ThemeStoreDeps = {
   gateway: {
     state: (input) => window.api.theme.state(input),
-    setGlobal: (theme, projectId) => window.api.theme.setGlobal(theme, projectId),
+    setGlobalCanvas: (canvas) => window.api.theme.setGlobalCanvas(canvas),
+    setGlobalAppearance: (appearance) => window.api.theme.setGlobalAppearance(appearance),
+    setProjectCanvas: (projectId, canvas) => window.api.theme.setProjectCanvas(projectId, canvas),
+    setProjectAppearance: (projectId, appearance) =>
+      window.api.theme.setProjectAppearance(projectId, appearance),
+    setFirstPaint: (hint) => window.api.theme.setFirstPaint(hint),
     setGlobalEditor: (editorThemeId, projectId) =>
       window.api.theme.setGlobalEditor(editorThemeId, projectId),
     setProject: (projectId, override) => window.api.theme.setProject(projectId, override),
-    listCustomThemes: () => window.api.theme.listCustomThemes(),
-    saveCustomTheme: (theme) => window.api.theme.saveCustomTheme(theme),
-    deleteCustomTheme: (slug) => window.api.theme.deleteCustomTheme(slug),
-    openCustomTheme: (slug) => window.api.theme.openCustomTheme(slug),
   },
-  applyTheme: (theme) => applyThemeToDom(theme),
+  // Point-free on purpose. An arrow re-listing the parameters is how the
+  // `transient` flag came to be silently dropped here: a shorter function is
+  // assignable to a longer signature, so the mistake typechecks.
+  paintCanvas,
   refreshEditorTheme: (themeId) => refreshMonacoEditorTheme(themeId),
   beginScopeRepaint: () => beginScopeRepaint(),
+  systemPrefersDark: () => systemPrefersDark(),
 };
 
 interface ThemeState {
-  /** True once the authored state has been read from main at least once. */
+  /** True once authored state has been read at least once. */
   hydrated: boolean;
-  /** The authored global theme — authoritative, never a resolved token set. */
-  global: ThemeDefinition;
+  /** The authored global canvas — authoritative, never a resolved token set. */
+  globalCanvas: Canvas;
+  /** The authored global light/dark/auto choice. */
+  globalAppearance: Appearance;
   /**
-   * Global Monaco/shiki theme id from `app_state`. `null` means derive from
-   * the active app theme slug via {@link resolveEditorThemeId}.
+   * Global Monaco/shiki theme id from `app_state`. `null` means the shipped
+   * editor default — the canvas does NOT derive one (decision 6: the editor is
+   * the one surface that will not match).
    */
   editorThemeId: ShippedEditorThemeId | null;
-  /** The project the current override belongs to; null for the global scope. */
+  /** The workspace the current override belongs to; null for the global scope. */
   projectId: string | null;
-  /** That project's per-surface override, or null when it inherits everything. */
-  projectOverride: ProjectThemeOverride | null;
+  /** That workspace's per-surface override, or null when it inherits everything. */
+  projectOverride: ProjectSurfaceOverride | null;
   /** The resolved ghostty chain for the current scope (provenance + overlay paths). */
   terminal: GhosttyAppearancePayload | null;
-  /** In-flight preview. Memory-only: it is painted, never written. */
-  preview: ThemeDefinition | null;
-  /** The user's own themes, as last read from `<userData>/volli/themes`. */
-  customThemes: ThemeDefinition[];
-  favorites: string[];
-  /** Applied theme slugs, most recent first. */
-  recents: string[];
+  /**
+   * In-flight canvas preview. Memory-only: it is painted, never written.
+   * Re-targeted from the dead picker's hover preview to the canvas editor's
+   * live drag — same mechanism, same rules, a different authoring surface.
+   */
+  preview: Canvas | null;
+  /** In-flight appearance preview, independent of {@link preview} exactly as the stored pair is. */
+  previewAppearance: Appearance | null;
+  /** What `auto` resolves against. Held in state so resolution stays pure and selectors stay stable. */
+  systemPrefersDark: boolean;
 
-  hydrate(projectId?: string | null): Promise<void>;
-  loadCustomThemes(): Promise<void>;
-  saveCustomTheme(theme: ThemeDefinition, scope: ThemeScope): Promise<boolean>;
-  deleteCustomTheme(slug: string): Promise<boolean>;
-  openCustomThemeFile(slug: string): Promise<boolean>;
+  /** Seeds the global canvas + appearance from the bootstrap payload's raw `app_state` rows. */
+  hydrateGlobal(appState: Record<string, string>): void;
+  /** Reads the terminal chain + editor id for a scope, adopting the workspace's canvas columns with it. */
+  hydrate(scope?: ThemeProjectScope | null): Promise<void>;
+  /** The system flipped light↔dark: re-resolve and repaint every scope on `auto`. */
+  noteSystemAppearance(prefersDark: boolean): void;
   acceptTerminal(payload: GhosttyAppearancePayload): void;
   acceptGlobalTerminal(payload: GhosttyAppearancePayload): void;
-  startPreview(theme: ThemeDefinition): void;
+  startPreview(canvas: Canvas): void;
+  startAppearancePreview(appearance: Appearance): void;
   cancelPreview(): void;
   commitPreview(scope: ThemeScope): Promise<boolean>;
   /**
-   * Live Monaco preview for Settings → Editor — paints a catalog id and
-   * updates `paintedEditor`, writing nothing. Must go through this store so
-   * App-theme preview and Editor restore stay coherent.
+   * Live Monaco preview for Settings → Editor — paints a catalog id and updates
+   * `paintedEditor`, writing nothing.
    */
   startEditorPreview(themeId: string): void;
-  /**
-   * End an Editor preview by restoring Monaco from the same resolution
-   * `repaint` uses (`effectiveTheme`, not only `global.slug`).
-   */
+  /** End an Editor preview by restoring Monaco from the same resolution `repaint` uses. */
   endEditorPreview(): void;
-  setGlobalTheme(theme: ThemeDefinition): Promise<boolean>;
+  setGlobalCanvas(canvas: Canvas): Promise<boolean>;
+  setGlobalAppearance(appearance: Appearance): Promise<boolean>;
+  /** One workspace's canvas; `null` puts it back to inheriting the global one. */
+  setProjectCanvas(projectId: string, canvas: Canvas | null): Promise<boolean>;
+  /** One workspace's appearance; `null` puts it back to inheriting. */
+  setProjectAppearance(projectId: string, appearance: Appearance | null): Promise<boolean>;
   setEditorTheme(editorThemeId: ShippedEditorThemeId | null): Promise<boolean>;
-  /**
-   * One project's app surface: Inherit, #72's auto-tint seed, or a named
-   * theme. The picker's Enter still commits through `commitPreview` (it has a
-   * preview to end and a Recent to note); this is the entry point for the
-   * choices that have no preview — going back to Inherit, and turning the
-   * auto-tint on.
-   */
-  setProjectAppChoice(projectId: string, choice: ProjectAppChoice): Promise<boolean>;
-  /**
-   * One project's editor surface — `null` puts it back to inheriting the
-   * global choice (#69). The project-scope twin of {@link setEditorTheme}; a
-   * non-null id must be a SHIPPED catalog id or main rejects the write.
-   */
   setProjectEditorTheme(
     projectId: string,
     editorThemeId: ShippedEditorThemeId | null,
   ): Promise<boolean>;
-  toggleFavorite(slug: string): void;
-}
-
-/** Built-ins plus customs — colliding shipped slugs omitted (same rule as the picker). */
-function themeCatalog(customThemes: ThemeDefinition[]): readonly ThemeDefinition[] {
-  return mergeThemeCatalog(BUILTIN_THEMES, customThemes);
 }
 
 /** The inputs that decide what is on screen right now. */
-type EffectiveThemeInput = Pick<
+type ActiveThemeInput = Pick<
   ThemeState,
-  "preview" | "global" | "projectOverride" | "customThemes"
+  | "preview"
+  | "previewAppearance"
+  | "globalCanvas"
+  | "globalAppearance"
+  | "projectOverride"
+  | "systemPrefersDark"
+  | "editorThemeId"
 >;
 
 /**
- * The app-surface theme currently in force: the preview if one is running,
- * otherwise the per-surface global → project resolution. Derived on every read
- * rather than stored, which is what keeps the authored intent authoritative.
+ * The four surfaces in force, previews folded in.
  *
- * Read as a zustand selector, so every path has to return a STABLE reference
- * for unchanged state — v5 reads selectors through `useSyncExternalStore` and
- * an `Object.is`-fresh snapshot each render loops forever. Three of the paths
- * hand back an object the state already holds; the fourth (#72's derived tint)
- * is memoized on its inputs in theme/apply.ts.
+ * **Never read this straight from a zustand selector.** It builds a fresh
+ * `ActiveTheme` on every call, and zustand v5 compares selector snapshots with
+ * `Object.is` — a fresh object there is an infinite render loop ("The result of
+ * getSnapshot should be cached"), not a wasted allocation. Components read
+ * {@link effectiveCanvas} / {@link effectiveAppearance}, which hand back a
+ * reference the state already holds and a string respectively.
  */
-export function effectiveTheme({
+export function activeTheme({
   preview,
-  global,
+  previewAppearance,
+  globalCanvas,
+  globalAppearance,
   projectOverride,
-  customThemes,
-}: EffectiveThemeInput): ThemeDefinition {
-  if (preview !== null) return preview;
-  return resolveActiveTheme(global, projectOverride, themeCatalog(customThemes), null).app.value;
+  systemPrefersDark: prefersDark,
+  editorThemeId,
+}: ActiveThemeInput): ActiveTheme {
+  // A preview outranks BOTH scopes: it is what the user is looking at, and the
+  // whole point is that the window already wears it before anything is saved.
+  // Layered as an override rather than by replacing the global, so previewing a
+  // canvas in a workspace that overrides the appearance keeps that appearance.
+  const override: ProjectSurfaceOverride | null =
+    preview === null && previewAppearance === null
+      ? projectOverride
+      : {
+          canvas: preview ?? projectOverride?.canvas ?? null,
+          appearance: previewAppearance ?? projectOverride?.appearance ?? null,
+          terminalThemeName: projectOverride?.terminalThemeName ?? null,
+          editorThemeId: projectOverride?.editorThemeId ?? null,
+        };
+  return resolveActiveTheme(globalCanvas, globalAppearance, override, prefersDark, editorThemeId);
 }
 
-/** What a scope has STORED — as opposed to what a preview is showing. */
-type AppliedThemeInput = Pick<
-  ThemeState,
-  "global" | "projectId" | "projectOverride" | "customThemes"
->;
+/**
+ * The canvas currently painted — a reference the state already holds, so it is
+ * safe as a zustand selector result. See {@link activeTheme}.
+ */
+export function effectiveCanvas(state: ActiveThemeInput): Canvas {
+  return activeTheme(state).canvas.value;
+}
+
+/** The resolved mode currently painted. A string, so stable by value. */
+export function effectiveAppearance(state: ActiveThemeInput): ResolvedAppearance {
+  return activeTheme(state).resolved;
+}
 
 /**
- * The theme actually persisted for `scope`, ignoring any running preview —
- * what the picker tags as "Current", and what Escape puts back. Tagging the
- * *effective* theme instead would walk the tag down the list with the cursor,
- * hiding the one thing the tag exists to state.
+ * What a scope has STORED, ignoring any running preview — what an editor tags as
+ * "Current", and what Escape puts back.
  */
-export function appliedTheme(
-  { global, projectId, projectOverride, customThemes }: AppliedThemeInput,
+export function appliedCanvas(
+  state: Pick<ThemeState, "globalCanvas" | "projectId" | "projectOverride">,
   scope: ThemeScope,
-): ThemeDefinition {
-  // The store holds exactly one scope's override at a time; a picker scoped to
-  // a project the store isn't showing has no override to read, and must not
-  // borrow another project's.
-  if (scope.kind === "global" || scope.projectId !== projectId) return global;
-  return resolveActiveTheme(global, projectOverride, themeCatalog(customThemes), null).app.value;
-}
-
-/** Persisted slice: the library's memory of your taste, not the theme itself. */
-type PersistedThemeState = Pick<ThemeState, "favorites" | "recents">;
-
-/** Rehydrated JSON was written by a past build — trust nothing about its shape. */
-function sanitizeSlugs(value: unknown, limit: number): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((entry): entry is string => typeof entry === "string").slice(0, limit);
+): Canvas {
+  // The store holds exactly one scope's override at a time; an editor scoped to
+  // a workspace the store isn't showing has no override to read, and must not
+  // borrow another workspace's.
+  if (scope.kind === "global" || scope.projectId !== state.projectId) return state.globalCanvas;
+  return state.projectOverride?.canvas ?? state.globalCanvas;
 }
 
 /**
- * Factory so tests can inject an in-memory storage and headless deps. As in
- * stores/ui.ts, `skipHydration` applies only to the real singleton: a real boot
- * round-trips through main before the store can rehydrate, whereas an injected
- * test storage is synchronous.
+ * The migration-014 columns + the migration-013 row, as one resolution input.
+ *
+ * The two halves genuinely come from different places (see this module's
+ * header), and this is the only place that fact is allowed to show.
  */
-export function createThemeStore({
-  deps = defaultDeps,
-  storage,
-}: { deps?: ThemeStoreDeps; storage?: StateStorage } = {}) {
-  return create<ThemeState>()(
-    persist(
-      (set, get) => {
-        /**
-         * Repaint from whatever the state now says is effective — but only
-         * when that has actually changed. Every paint invalidates the
-         * terminals' token-derived palette (see theme/apply.ts), so a
-         * redundant one makes every live terminal re-theme for nothing; and
-         * the paths below deliberately overlap (an optimistic paint followed
-         * by the authoritative payload echoing the same theme back).
-         *
-         * Monaco follows the same choke point: resolve the active editor id
-         * (project override → global authored → derive from app slug) and
-         * refresh whenever that resolved id changes.
-         */
-        let painted: string | null = null;
-        let paintedEditor: string | null = null;
-        let persistedEditorThemeId: ShippedEditorThemeId | null = null;
-        /**
-         * Which `hydrate` call is the current one. Scope reads overlap at boot
-         * (main.tsx reads the global scope immediately; boot() reads the
-         * restored project's scope once it knows it) and at every project
-         * switch — so the LAST call issued wins, whatever order the payloads
-         * come back in. Without this, a slow global read could land after a
-         * project read and quietly put the app back on global scope.
-         */
-        let hydrateGeneration = 0;
-        let editorWriteGeneration = 0;
-        let editorWriteQueue: Promise<void> = Promise.resolve();
-        const repaint = (options: { eased?: boolean } = {}): void => {
-          const state = get();
-          const theme = effectiveTheme(state);
-          const key = JSON.stringify(theme);
-          if (key !== painted) {
-            painted = key;
-            // Armed only when there is an actual swap to ease: a scope change
-            // that resolves to the same theme repaints nothing, and a 300ms
-            // window in which every hover transition is slowed for no visible
-            // reason is exactly the kind of latency §1 asks us to hunt down.
-            if (options.eased === true) deps.beginScopeRepaint();
-            deps.applyTheme(theme);
+function surfaceOverride(
+  scope: ThemeProjectScope | null,
+  legacy: ProjectThemeOverride | null,
+): ProjectSurfaceOverride | null {
+  const canvas = scope?.canvas ?? null;
+  const appearance = scope?.appearance ?? null;
+  const terminalThemeName = legacy?.terminalThemeName ?? null;
+  const editorThemeId = legacy?.editorThemeId ?? null;
+  if (
+    canvas === null &&
+    appearance === null &&
+    terminalThemeName === null &&
+    editorThemeId === null
+  ) {
+    return null;
+  }
+  return { canvas, appearance, terminalThemeName, editorThemeId };
+}
+
+/**
+ * Factory so tests can inject headless deps. Unlike the ui/workspace stores
+ * there is no `persist` middleware and so no `skipHydration`: every value here
+ * comes from SQLite through the bootstrap payload or `volli:theme-state`.
+ */
+export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps } = {}) {
+  return create<ThemeState>()((set, get) => {
+    /**
+     * Repaint from whatever the state now says is effective — but only when that
+     * has actually changed. Every paint invalidates the terminals' token-derived
+     * palette (see theme/apply.ts), so a redundant one makes every live terminal
+     * re-theme for nothing; and the paths below deliberately overlap (an
+     * optimistic paint followed by the authoritative payload echoing the same
+     * canvas back).
+     *
+     * Monaco follows the same choke point, one resolution later.
+     */
+    let painted: string | null = null;
+    /**
+     * Whether what is on the document right now was written by a TRANSIENT
+     * paint — one frame of a running gesture, which skipped the terminal
+     * refresh and the first-paint hint.
+     *
+     * Without this the skip would be permanent. A drag's last frame paints the
+     * exact canvas the release then commits, so the committing repaint would
+     * find its key unchanged, take the early return, and the terminals would
+     * keep the palette they had before the drag until something else moved.
+     */
+    let paintedInFlight = false;
+    let paintedEditor: string | null = null;
+    let persistedEditorThemeId: ShippedEditorThemeId | null = null;
+    /**
+     * Which `hydrate` call is the current one. Scope reads overlap at boot
+     * (main.tsx reads the global scope immediately; boot() reads the restored
+     * workspace's scope once it knows it) and at every workspace switch — so the
+     * LAST call issued wins, whatever order the payloads come back in.
+     */
+    let hydrateGeneration = 0;
+    let editorWriteGeneration = 0;
+    let editorWriteQueue: Promise<void> = Promise.resolve();
+
+    const repaint = (options: { eased?: boolean; transient?: boolean } = {}): void => {
+      const state = get();
+      const active = activeTheme(state);
+      // Keyed on the canvas AND the mode, because one canvas paints two
+      // different windows: a light↔dark flip moves every derived value while the
+      // authored gradient is byte-identical.
+      const key = `${active.resolved}|${JSON.stringify(active.canvas.value)}`;
+      const transient = options.transient === true;
+      // A committing paint runs even when the key is unchanged, as long as what
+      // is on the document got there in flight: the properties are already
+      // right, but the deferred half of that paint has still never happened.
+      if (key !== painted || (paintedInFlight && !transient)) {
+        painted = key;
+        paintedInFlight = transient;
+        // Armed only when there is an actual swap to ease: a scope change that
+        // resolves to the same canvas at the same mode repaints nothing, and a
+        // 300ms window in which every hover transition is slowed for no visible
+        // reason is a latency regression.
+        if (options.eased === true) deps.beginScopeRepaint();
+        deps.paintCanvas(active.canvas.value, active.resolved, { transient });
+        // The hint describes the NEXT launch's window, so it may only ever
+        // describe something STORED. Keyed on a preview being in flight rather
+        // than on this paint being transient, because those come apart: a
+        // payload landing mid-drag (`accept`, an editor-preview end) repaints
+        // durably off state that still has the preview layered on it, and
+        // caching that would have the next launch open on a colour the user
+        // never chose. It is also an IPC round trip per pointer event.
+        if (state.preview === null && state.previewAppearance === null) {
+          recordFirstPaint(active.canvas.value, active.resolved);
+        }
+      }
+
+      const editorId = resolveEditorThemeId({ editorThemeId: active.editor.value });
+      if (editorId !== paintedEditor) {
+        paintedEditor = editorId;
+        deps.refreshEditorTheme(editorId);
+      }
+    };
+
+    /**
+     * Caches what was painted so the NEXT launch's window is built with the
+     * right edge color and the right mode class, before any renderer exists.
+     *
+     * Never awaited and never blocking: the window is already correct, this only
+     * matters at the launch after next. A failure still surfaces — a hint that
+     * silently stopped updating would show up as a boot flash nobody could
+     * explain.
+     */
+    const recordFirstPaint = (canvas: Canvas, resolved: ResolvedAppearance): void => {
+      const hint = { appearance: resolved, background: windowBackground(canvas, resolved) };
+      // Started inside a promise so a SYNCHRONOUS throw lands in the same
+      // `.catch` as a rejection. `window.api` is not guaranteed to exist in
+      // every host this store is constructed in (the renderer's own tests run
+      // headless), and a paint is not the place to find that out by crashing.
+      void Promise.resolve()
+        .then(() => deps.gateway.setFirstPaint(hint))
+        .then((result) => {
+          if (!result.ok) toastError(`Couldn't save the window appearance: ${result.error}`);
+        })
+        .catch((error: unknown) => {
+          toastError(`Couldn't save the window appearance: ${errorMessage(error)}`);
+        });
+    };
+
+    /**
+     * Adopt a fresh authoritative payload and repaint from it.
+     *
+     * This is the ONE place a payload can change which workspace's theme is in
+     * force, so it is also the one place that can tell a scope change from a
+     * canvas change — and the eased repaint (#69) is decided here, before the
+     * state moves, while the outgoing scope and mode are still readable.
+     */
+    const accept = (value: ThemeStatePayload, scope: ThemeProjectScope | null): void => {
+      const previous = get();
+      const override = surfaceOverride(scope, value.projectOverride);
+      const next: ActiveThemeInput = {
+        ...previous,
+        projectOverride: override,
+        editorThemeId: value.editorThemeId,
+      };
+      const eased = shouldEaseScopeRepaint({
+        hydrated: previous.hydrated,
+        from: previous.projectId,
+        to: value.projectId,
+        fromAppearance: activeTheme(previous).resolved,
+        toAppearance: activeTheme(next).resolved,
+      });
+      persistedEditorThemeId = value.editorThemeId;
+      set({
+        editorThemeId: value.editorThemeId,
+        projectId: value.projectId,
+        projectOverride: override,
+        terminal: value.terminal,
+        hydrated: true,
+      });
+      repaint({ eased });
+    };
+
+    /**
+     * An optimistic local change, eased when it flips the mode.
+     *
+     * Every write below paints before it persists — the canvas editor's whole
+     * point is that the window is already wearing the gradient by the time you
+     * let go of the orb — so each one needs the same "did this change the mode?"
+     * question answered around its `set`.
+     *
+     * Gated on `painted` rather than on `hydrated`, and the difference is not
+     * cosmetic. `hydrated` means the `volli:theme-state` read has landed, which
+     * is a fact about the TERMINAL chain; what a crossfade needs to know is
+     * whether there is a previous look to come from. The canvas rows arrive
+     * first (`hydrateGlobal`), so keying on `hydrated` would hard-cut the first
+     * mode flip after boot whenever that read was slow — and would ease the very
+     * first paint if it were fast.
+     */
+    /**
+     * The preview paint waiting for the next animation frame, if any.
+     *
+     * A drag delivers pointer events faster than the display refreshes — a
+     * trackpad runs well past 120Hz — and every one of them used to reach the
+     * DOM. Only the last write before a frame is ever seen, so the rest were
+     * document-wide style recalculations nobody could look at.
+     *
+     * Coalesced by keeping ONE frame in flight and letting later requests ride
+     * it, rather than by cancelling and re-requesting: re-requesting on every
+     * event starves at any pointer rate above the refresh rate, because the
+     * callback is cancelled before it can run and the window stops following
+     * the pointer at all. The frame reads the store when it fires, so it always
+     * paints the newest preview — the state is never what is deferred, only the
+     * paint is.
+     */
+    let previewFrame: number | null = null;
+
+    const schedulePreviewPaint = (): void => {
+      // Headless — the renderer's own tests run under vitest's `node`
+      // environment — there are no frames to coalesce onto, so the paint is
+      // immediate. What a preview paints is under test; when it paints is not.
+      if (typeof requestAnimationFrame !== "function") {
+        repaint({ transient: true });
+        return;
+      }
+      if (previewFrame !== null) return;
+      previewFrame = requestAnimationFrame(() => {
+        previewFrame = null;
+        repaint({ transient: true });
+      });
+    };
+
+    /**
+     * Drops a queued preview frame, for every path that paints authoritatively.
+     *
+     * A frame surviving into a commit repaints from state the commit has
+     * already cleared, so the window would snap back to the stored canvas for
+     * one frame on every release — and, worse, would leave the document showing
+     * a transient paint after the committing one had already run.
+     */
+    const dropPendingPreviewPaint = (): void => {
+      if (previewFrame === null) return;
+      cancelAnimationFrame(previewFrame);
+      previewFrame = null;
+    };
+
+    const setAndRepaint = (patch: Partial<ThemeState>): void => {
+      dropPendingPreviewPaint();
+      const hadPainted = painted !== null;
+      const before = activeTheme(get()).resolved;
+      set(patch);
+      const after = activeTheme(get()).resolved;
+      repaint({ eased: hadPainted && before !== after });
+    };
+
+    /** The editor override the 013 row still owns, merged onto what this scope has. */
+    const legacyOverrideBaseFor = (projectId: string): ProjectThemeOverride | null => {
+      const state = get();
+      if (state.projectId !== projectId) return null;
+      const editorThemeId = state.projectOverride?.editorThemeId ?? null;
+      const terminalThemeName = state.projectOverride?.terminalThemeName ?? null;
+      if (editorThemeId === null && terminalThemeName === null) return null;
+      return { terminalThemeName, editorThemeId };
+    };
+
+    /** The scope descriptor a project-scoped write has to re-adopt afterwards. */
+    const scopeFor = (projectId: string): ThemeProjectScope | null => {
+      const state = get();
+      if (state.projectId !== projectId) return null;
+      return {
+        projectId,
+        canvas: state.projectOverride?.canvas ?? null,
+        appearance: state.projectOverride?.appearance ?? null,
+      };
+    };
+
+    return {
+      hydrated: false,
+      globalCanvas: DEFAULT_CANVAS,
+      globalAppearance: "auto",
+      editorThemeId: null,
+      projectId: null,
+      projectOverride: null,
+      terminal: null,
+      preview: null,
+      previewAppearance: null,
+      systemPrefersDark: deps.systemPrefersDark(),
+
+      hydrateGlobal(appState) {
+        // A row that is absent, unparseable, or still holds the seed system's
+        // `ThemeDefinition` all read the same: no canvas stored, so the shipped
+        // default. That IS decision 7 — reset to the default canvas, no
+        // seed→canvas conversion — falling out of the guard rather than needing
+        // a migration to do it.
+        let stored: Canvas | null = null;
+        const raw = appState[THEME_APP_STATE_KEY];
+        if (raw !== undefined && raw.length > 0) {
+          try {
+            stored = parseCanvas(JSON.parse(raw));
+          } catch {
+            stored = null;
           }
-
-          const active = resolveActiveTheme(
-            state.global,
-            state.projectOverride,
-            themeCatalog(state.customThemes),
-            state.editorThemeId,
-          );
-          const editorId = resolveEditorThemeId({
-            editorThemeId: active.editor.value,
-            appThemeSlug: theme.slug,
-          });
-          if (editorId !== paintedEditor) {
-            paintedEditor = editorId;
-            deps.refreshEditorTheme(editorId);
-          }
-        };
-
-        /**
-         * Adopt a fresh authoritative payload from main and repaint from it.
-         *
-         * This is the ONE place a payload can change which project's theme is
-         * in force, so it is also the one place that can tell a scope change
-         * from a theme change — and the eased repaint (#69) is decided here,
-         * before the state moves, while the outgoing scope is still readable.
-         */
-        const accept = (value: ThemeStatePayload): void => {
-          const previous = get();
-          const eased = shouldEaseScopeRepaint({
-            hydrated: previous.hydrated,
-            from: previous.projectId,
-            to: value.projectId,
-          });
-          persistedEditorThemeId = value.editorThemeId;
-          set({
-            global: value.theme,
-            editorThemeId: value.editorThemeId,
-            projectId: value.projectId,
-            projectOverride: value.projectOverride,
-            terminal: value.terminal,
-            hydrated: true,
-          });
-          repaint({ eased });
-        };
-
-        /**
-         * The override a per-surface write merges onto. The store holds
-         * exactly ONE scope's override (see `appliedTheme`), so a write aimed
-         * at a project it isn't showing has nothing of that project's to
-         * merge onto — and borrowing the loaded project's fields would write
-         * one project's look onto another. An all-inheriting base is the only
-         * honest answer there.
-         */
-        const overrideBaseFor = (projectId: string): ProjectThemeOverride | null => {
-          const state = get();
-          return state.projectId === projectId ? state.projectOverride : null;
-        };
-
-        /**
-         * A project's app surface, leaving its other surfaces exactly as they
-         * were (#69: resolution is per surface, never per token — so a write
-         * must be per surface too).
-         */
-        const setProjectAppTheme = async (
-          projectId: string,
-          theme: ThemeDefinition,
-        ): Promise<boolean> => {
-          const next = withProjectAppChoice(overrideBaseFor(projectId), {
-            kind: "theme",
-            slug: theme.slug,
-          });
-          const previousRecents = get().recents;
-          set({ recents: noteRecentTheme(previousRecents, theme.slug) });
-          const result = await writeThrough("save the theme", () =>
-            deps.gateway.setProject(projectId, next),
-          );
-          if (result === null) {
-            // A theme that did not save was not applied — Recent must describe
-            // what is stored, not what was attempted. (And it PERSISTS, so an
-            // un-rolled-back entry would outlive the session that failed.)
-            set({ recents: previousRecents });
-            repaint();
-            return false;
-          }
-          accept(result.value);
-          return true;
-        };
-
-        return {
-          hydrated: false,
-          global: DEFAULT_THEME,
-          editorThemeId: null,
-          projectId: null,
-          projectOverride: null,
-          terminal: null,
-          preview: null,
-          customThemes: [],
-          favorites: [],
-          recents: [],
-
-          async hydrate(projectId) {
-            const generation = ++hydrateGeneration;
-            let result: ThemeStateResult;
-            try {
-              result = await deps.gateway.state(
-                projectId === undefined || projectId === null ? {} : { projectId },
-              );
-            } catch (error) {
-              // A theme read failure is not fatal — the shipped default is
-              // already painted by globals.css — but it is still a failure the
-              // user must see, or their chosen theme silently "resets".
-              toastError(`Couldn't load the theme: ${errorMessage(error)}`);
-              return;
-            }
-            // Superseded while in flight: adopting this payload would repaint
-            // the app in a scope it has already left. Silent by design — the
-            // read didn't fail, it just stopped being the answer to the
-            // question being asked.
-            if (generation !== hydrateGeneration) return;
-            if (!result.ok) {
-              toastError(`Couldn't load the theme: ${result.error}`);
-              return;
-            }
-            accept(result.value);
-            // The library is part of the theme state: a picker that opened
-            // before this landed would show the shipped six and silently omit
-            // every theme the user made.
-            await get().loadCustomThemes();
-          },
-
-          /** Re-reads `<userData>/volli/themes`. The files are hand-editable, so this is never assumed to be current. */
-          async loadCustomThemes() {
-            const result = await writeThrough("load your themes", () =>
-              deps.gateway.listCustomThemes(),
-            );
-            if (result !== null) set({ customThemes: result.themes });
-          },
-
-          /**
-           * Explicit save (#73): the draft becomes a file of the user's own,
-           * and then becomes the applied theme.
-           *
-           * Order matters. The file is written FIRST, and the theme is applied
-           * only if that succeeded — applying a theme whose file failed to
-           * write would leave the app wearing something that exists nowhere,
-           * which is the same lie the preview path exists to avoid. Applying at
-           * all is the honest half: the user has been looking at this theme the
-           * whole time they were editing it, so a save that dropped them back
-           * onto the old one would read as the save having failed.
-           */
-          async saveCustomTheme(theme, scope) {
-            const written = await writeThrough("save the theme", () =>
-              deps.gateway.saveCustomTheme(theme),
-            );
-            if (written === null) return false;
-            set({ customThemes: written.themes });
-            // Through the preview path, so committing an edited theme is the
-            // same write as committing a picked one — including its optimistic
-            // paint and its rollback.
-            get().startPreview(theme);
-            const committed = await get().commitPreview(scope);
-            // The file is already on disk — keep the editor and live app on the
-            // draft the user was saving rather than snapping back to stored.
-            if (!committed) get().startPreview(theme);
-            return committed;
-          },
-
-          /** Deletes a theme file, adopting the catalog the delete hands back. */
-          async deleteCustomTheme(slug) {
-            const result = await writeThrough("delete the theme", () =>
-              deps.gateway.deleteCustomTheme(slug),
-            );
-            if (result === null) return false;
-            set({ customThemes: result.themes });
-            return true;
-          },
-
-          /** Opens a theme's JSON in the user's editor — #71's "the file is the full interface". */
-          async openCustomThemeFile(slug) {
-            return (
-              (await writeThrough("open the theme file", () =>
-                deps.gateway.openCustomTheme(slug),
-              )) !== null
-            );
-          },
-
-          /** Adopt an appearance resolved for THIS store's scope — e.g. the one main hands back from an overlay write. */
-          acceptTerminal(payload) {
-            set({ terminal: payload });
-          },
-
-          /**
-           * The `volli:ghostty-config-changed` broadcast, which main resolves
-           * for the GLOBAL scope only (see `registerGhosttyConfigIpc`): that
-           * channel has no project context and the watch fires at every window
-           * at once. Swallowing it whole while a project scope is loaded would
-           * overwrite that project's provenance, overlay path and layered
-           * values with global ones — and fail silently, the row just quietly
-           * stops saying `Set by this project`. So a project scope re-requests
-           * its own resolution through `volli:theme-state`, which CAN map a
-           * project to its layer, and the payload is dropped.
-           */
-          acceptGlobalTerminal(payload) {
-            const { projectId } = get();
-            if (projectId === null) {
-              set({ terminal: payload });
-              return;
-            }
-            void get().hydrate(projectId);
-          },
-
-          startPreview(theme) {
-            // Force the editor half even when the resolved catalog id matches
-            // `paintedEditor`: an Editor-picker restore that bypassed this
-            // store (or any out-of-band Monaco paint) can leave Monaco on the
-            // wrong theme while the tracker still says the preview id. Re-
-            // highlighting the same App theme must refresh, not skip.
-            paintedEditor = null;
-            set({ preview: theme });
-            repaint();
-          },
-
-          cancelPreview() {
-            // Nothing to undo but the paint: a preview never wrote anywhere.
-            if (get().preview === null) return;
-            set({ preview: null });
-            repaint();
-          },
-
-          startEditorPreview(themeId) {
-            if (themeId.length === 0) {
-              get().endEditorPreview();
-              return;
-            }
-            paintedEditor = themeId;
-            deps.refreshEditorTheme(themeId);
-          },
-
-          endEditorPreview() {
-            // Always re-resolve and paint: a no-op skip on `paintedEditor`
-            // would leave Monaco stuck after a bypassed preview paint. Use
-            // the same inputs as `repaint` — effective (preview-aware) app
-            // slug, not only the stored global.
-            paintedEditor = null;
-            repaint();
-          },
-
-          /** Enter: what was being previewed becomes what is stored, in the given scope. */
-          async commitPreview(scope) {
-            const theme = get().preview;
-            if (theme === null) return false;
-            set({ preview: null });
-            return scope.kind === "global"
-              ? await get().setGlobalTheme(theme)
-              : await setProjectAppTheme(scope.projectId, theme);
-          },
-
-          async setGlobalTheme(theme) {
-            // Optimistic: the picker's whole point is that the app is already
-            // wearing the theme by the time you press Enter.
-            const previous = get().global;
-            const previousRecents = get().recents;
-            set({
-              preview: null,
-              global: theme,
-              recents: noteRecentTheme(previousRecents, theme.slug),
-            });
-            repaint();
-            // The write is global; the ANSWER has to describe the scope this
-            // window is in, or adopting it drops the project out of the store
-            // and repaints an overriding project to the new global (#123).
-            const result = await writeThrough("save the theme", () =>
-              deps.gateway.setGlobal(theme, get().projectId),
-            );
-            if (result === null) {
-              // Put the user back on the theme that is actually stored rather
-              // than leaving them looking at one that isn't — Recent included,
-              // or a theme that never saved would still rank as the last one
-              // applied. `writeThrough` has already surfaced the failure.
-              set({ global: previous, recents: previousRecents });
-              repaint();
-              return false;
-            }
-            accept(result.value);
-            return true;
-          },
-
-          async setEditorTheme(editorThemeId) {
-            const generation = ++editorWriteGeneration;
-            set({ editorThemeId });
-            repaint();
-            const write = editorWriteQueue.then(() =>
-              writeThrough("save the editor theme", () =>
-                // Read at SEND time, not at queue time: the scope this window
-                // is in when the write actually goes out is the one its answer
-                // has to describe (#123).
-                deps.gateway.setGlobalEditor(editorThemeId, get().projectId),
-              ),
-            );
-            editorWriteQueue = write.then(() => undefined);
-            const result = await write;
-            if (result !== null) {
-              persistedEditorThemeId = result.value.editorThemeId;
-            }
-            if (generation !== editorWriteGeneration) {
-              return result !== null;
-            }
-            if (result === null) {
-              set({ editorThemeId: persistedEditorThemeId });
-              repaint();
-              return false;
-            }
-            accept(result.value);
-            return true;
-          },
-
-          async setProjectAppChoice(projectId, choice) {
-            const next = withProjectAppChoice(overrideBaseFor(projectId), choice);
-            const result = await writeThrough("save the theme", () =>
-              deps.gateway.setProject(projectId, next),
-            );
-            if (result === null) return false;
-            accept(result.value);
-            return true;
-          },
-
-          async setProjectEditorTheme(projectId, editorThemeId) {
-            const next = withProjectEditorChoice(
-              overrideBaseFor(projectId),
-              editorThemeId === null
-                ? { kind: "inherit" }
-                : { kind: "theme", themeId: editorThemeId },
-            );
-            const result = await writeThrough("save the editor theme", () =>
-              deps.gateway.setProject(projectId, next),
-            );
-            if (result === null) return false;
-            accept(result.value);
-            return true;
-          },
-
-          toggleFavorite(slug) {
-            set({ favorites: toggleFavoriteTheme(get().favorites, slug) });
-          },
-        };
+        }
+        const appearance = appState[APPEARANCE_APP_STATE_KEY];
+        setAndRepaint({
+          globalCanvas: stored ?? DEFAULT_CANVAS,
+          globalAppearance: isAppearance(appearance) ? appearance : "auto",
+        });
       },
-      {
-        name: "volli:theme",
-        version: 1,
-        storage: createJSONStorage(() => storage ?? appStateStorage),
-        skipHydration: storage === undefined,
-        partialize: (state): PersistedThemeState => ({
-          favorites: state.favorites,
-          recents: state.recents,
-        }),
-        merge: (persisted, current) => {
-          const stored =
-            typeof persisted === "object" && persisted !== null
-              ? (persisted as Partial<PersistedThemeState>)
-              : {};
-          return {
-            ...current,
-            // No cap on favorites: starring is deliberate, and silently
-            // dropping one would be worse than a long list.
-            favorites: sanitizeSlugs(stored.favorites, Number.POSITIVE_INFINITY),
-            recents: sanitizeSlugs(stored.recents, MAX_RECENT_THEMES),
-          };
-        },
+
+      async hydrate(scope) {
+        const generation = ++hydrateGeneration;
+        let result: ThemeStateResult;
+        try {
+          result = await deps.gateway.state(
+            scope === undefined || scope === null ? {} : { projectId: scope.projectId },
+          );
+        } catch (error) {
+          // A read failure is not fatal — globals.css already painted the
+          // default — but it is still a failure the user must see, or their
+          // chosen canvas silently "resets".
+          toastError(`Couldn't load the theme: ${errorMessage(error)}`);
+          return;
+        }
+        // Superseded while in flight: adopting this payload would repaint the
+        // app in a scope it has already left. Silent by design — the read didn't
+        // fail, it just stopped being the answer to the question being asked.
+        if (generation !== hydrateGeneration) return;
+        if (!result.ok) {
+          toastError(`Couldn't load the theme: ${result.error}`);
+          return;
+        }
+        accept(result.value, scope ?? null);
       },
-    ),
-  );
+
+      noteSystemAppearance(prefersDark) {
+        if (get().systemPrefersDark === prefersDark) return;
+        setAndRepaint({ systemPrefersDark: prefersDark });
+      },
+
+      /** Adopt an appearance resolved for THIS store's scope — e.g. the one main hands back from an overlay write. */
+      acceptTerminal(payload) {
+        set({ terminal: payload });
+      },
+
+      /**
+       * The `volli:ghostty-config-changed` broadcast, which main resolves for the
+       * GLOBAL scope only: that channel has no project context and the watch
+       * fires at every window at once. Swallowing it whole while a workspace
+       * scope is loaded would overwrite that workspace's provenance, overlay path
+       * and layered values with global ones — and fail silently. So a workspace
+       * scope re-requests its own resolution and the payload is dropped.
+       */
+      acceptGlobalTerminal(payload) {
+        const state = get();
+        if (state.projectId === null) {
+          set({ terminal: payload });
+          return;
+        }
+        void get().hydrate({
+          projectId: state.projectId,
+          canvas: state.projectOverride?.canvas ?? null,
+          appearance: state.projectOverride?.appearance ?? null,
+        });
+      },
+
+      startPreview(canvas) {
+        // The STATE moves now and the paint moves on the next frame. Everything
+        // reading this store — the editor's own controls, and the next event in
+        // the same drag building on where the last one landed — sees the new
+        // canvas immediately; only the document's ~50 properties wait.
+        //
+        // Deliberately not `setAndRepaint`: that path is for authoritative
+        // changes, and it drops exactly the frame this one is scheduling. A
+        // canvas preview also cannot flip the mode, so there is nothing here for
+        // the eased repaint it arms.
+        set({ preview: canvas });
+        schedulePreviewPaint();
+      },
+
+      startAppearancePreview(appearance) {
+        setAndRepaint({ previewAppearance: appearance });
+      },
+
+      cancelPreview() {
+        // Nothing to undo but the paint: a preview never wrote anywhere.
+        const state = get();
+        if (state.preview === null && state.previewAppearance === null) return;
+        setAndRepaint({ preview: null, previewAppearance: null });
+      },
+
+      startEditorPreview(themeId) {
+        if (themeId.length === 0) {
+          get().endEditorPreview();
+          return;
+        }
+        paintedEditor = themeId;
+        deps.refreshEditorTheme(themeId);
+      },
+
+      endEditorPreview() {
+        // Always re-resolve and paint: a no-op skip on `paintedEditor` would
+        // leave Monaco stuck after a bypassed preview paint.
+        paintedEditor = null;
+        repaint();
+      },
+
+      /** What was being previewed becomes what is stored, in the given scope. */
+      async commitPreview(scope) {
+        const { preview, previewAppearance } = get();
+        if (preview === null && previewAppearance === null) return false;
+        // The gesture is over. A frame still queued would fire against state
+        // that no longer holds a preview and repaint the pre-drag canvas.
+        dropPendingPreviewPaint();
+        set({ preview: null, previewAppearance: null });
+        const writes: Promise<boolean>[] = [];
+        if (preview !== null) {
+          writes.push(
+            scope.kind === "global"
+              ? get().setGlobalCanvas(preview)
+              : get().setProjectCanvas(scope.projectId, preview),
+          );
+        }
+        if (previewAppearance !== null) {
+          writes.push(
+            scope.kind === "global"
+              ? get().setGlobalAppearance(previewAppearance)
+              : get().setProjectAppearance(scope.projectId, previewAppearance),
+          );
+        }
+        const settled = (await Promise.all(writes)).every(Boolean);
+        // The gesture's last frame was a transient paint, and every write path
+        // above is supposed to end in an authoritative one that supersedes it —
+        // but `setProjectCanvas` skips its repaint entirely when the committed
+        // workspace is not the scope the store currently holds. Left there, the
+        // document keeps a paint whose deferred half never ran: the terminals
+        // stay on the pre-drag palette and the first-paint hint is never
+        // recorded. Deduped on the key, so in the ordinary case this is free.
+        repaint();
+        return settled;
+      },
+
+      async setGlobalCanvas(canvas) {
+        const previous = get().globalCanvas;
+        setAndRepaint({ preview: null, globalCanvas: canvas });
+        const result = await writeThrough("save the canvas", () =>
+          deps.gateway.setGlobalCanvas(canvas),
+        );
+        if (result === null) {
+          // Put the user back on what is actually stored rather than leaving
+          // them looking at something that isn't. `writeThrough` already
+          // surfaced the failure.
+          setAndRepaint({ globalCanvas: previous });
+          return false;
+        }
+        return true;
+      },
+
+      async setGlobalAppearance(appearance) {
+        const previous = get().globalAppearance;
+        setAndRepaint({ previewAppearance: null, globalAppearance: appearance });
+        const result = await writeThrough("save the appearance", () =>
+          deps.gateway.setGlobalAppearance(appearance),
+        );
+        if (result === null) {
+          setAndRepaint({ globalAppearance: previous });
+          return false;
+        }
+        return true;
+      },
+
+      async setProjectCanvas(projectId, canvas) {
+        const state = get();
+        // A write aimed at a workspace this store isn't showing persists without
+        // repainting: there is nothing of that workspace's on screen to move,
+        // and adopting its canvas here would paint one project's window with
+        // another's.
+        const inScope = state.projectId === projectId;
+        const previous = state.projectOverride;
+        if (inScope) {
+          setAndRepaint({
+            preview: null,
+            projectOverride: surfaceOverride(
+              { projectId, canvas, appearance: previous?.appearance ?? null },
+              legacyOverrideBaseFor(projectId),
+            ),
+          });
+        }
+        const result = await writeThrough("save the canvas", () =>
+          deps.gateway.setProjectCanvas(projectId, canvas),
+        );
+        if (result === null) {
+          if (inScope) setAndRepaint({ projectOverride: previous });
+          return false;
+        }
+        // The projects store holds the ONLY copy of this row, and every scope
+        // is rebuilt from it. Without this the write survives in SQLite and
+        // dies in memory.
+        projectRowSink?.(result.project);
+        return true;
+      },
+
+      async setProjectAppearance(projectId, appearance) {
+        const state = get();
+        const inScope = state.projectId === projectId;
+        const previous = state.projectOverride;
+        if (inScope) {
+          setAndRepaint({
+            previewAppearance: null,
+            projectOverride: surfaceOverride(
+              { projectId, canvas: previous?.canvas ?? null, appearance },
+              legacyOverrideBaseFor(projectId),
+            ),
+          });
+        }
+        const result = await writeThrough("save the appearance", () =>
+          deps.gateway.setProjectAppearance(projectId, appearance),
+        );
+        if (result === null) {
+          if (inScope) setAndRepaint({ projectOverride: previous });
+          return false;
+        }
+        // Same reason as the canvas write above.
+        projectRowSink?.(result.project);
+        return true;
+      },
+
+      async setEditorTheme(editorThemeId) {
+        const generation = ++editorWriteGeneration;
+        set({ editorThemeId });
+        repaint();
+        const write = editorWriteQueue.then(() =>
+          writeThrough("save the editor theme", () =>
+            // Read at SEND time, not at queue time: the scope this window is in
+            // when the write actually goes out is the one its answer has to
+            // describe (#123).
+            deps.gateway.setGlobalEditor(editorThemeId, get().projectId),
+          ),
+        );
+        editorWriteQueue = write.then(() => undefined);
+        const result = await write;
+        if (result !== null) persistedEditorThemeId = result.value.editorThemeId;
+        if (generation !== editorWriteGeneration) return result !== null;
+        if (result === null) {
+          set({ editorThemeId: persistedEditorThemeId });
+          repaint();
+          return false;
+        }
+        accept(result.value, scopeFor(result.value.projectId ?? ""));
+        return true;
+      },
+
+      async setProjectEditorTheme(projectId, editorThemeId) {
+        const choice: ProjectEditorChoice =
+          editorThemeId === null ? { kind: "inherit" } : { kind: "theme", themeId: editorThemeId };
+        const next = withProjectEditorChoice(legacyOverrideBaseFor(projectId), choice);
+        const result = await writeThrough("save the editor theme", () =>
+          deps.gateway.setProject(projectId, next),
+        );
+        if (result === null) return false;
+        accept(result.value, scopeFor(projectId));
+        return true;
+      },
+    };
+  });
 }
 
 /** App-wide singleton; components import this directly. */

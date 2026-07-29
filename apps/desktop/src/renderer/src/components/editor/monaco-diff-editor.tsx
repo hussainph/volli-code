@@ -4,8 +4,8 @@
  * Owns `createDiffEditor` lifecycle and model attachment. Original is always
  * read-only; modified may be editable and shares the same registry model as the
  * ticket file tab for that path. React never parses hunks — Monaco computes the
- * diff. Theme is applied via `monaco.editor.setTheme`, never construction options
- * (docs/plans/theming-engine.md).
+ * diff. Theme is applied via `monaco.editor.setTheme`, never construction
+ * options.
  */
 import * as React from "react";
 import type { editor } from "monaco-editor";
@@ -38,7 +38,7 @@ type MonacoLease = DocumentLease<editor.ITextModel, editor.ICodeEditorViewState>
 /**
  * DiffEditor construction options. Deliberately omits `theme` — DiffEditor does
  * not honor a construction-time theme the way `create` does; callers must call
- * `monaco.editor.setTheme` after create (theming-engine.md).
+ * `monaco.editor.setTheme` after create.
  */
 export function diffEditorConstructionOptions(input: {
   presentation: DiffPresentation;

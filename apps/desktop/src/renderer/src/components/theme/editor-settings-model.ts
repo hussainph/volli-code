@@ -23,14 +23,17 @@ export interface EditorThemeDisplay {
   /** Provenance chip beside the picker. */
   sourceLabel: string;
   /**
-   * Whether "Reset to match app theme" applies. Only when the user has pinned
-   * an explicit catalog id — automatic already follows the app slug.
+   * Whether "Reset to the default" applies. Only when the user has pinned an
+   * explicit catalog id.
    */
   resettable: boolean;
 }
 
 const SOURCE_LABELS: Record<EditorThemeSource, string> = {
-  automatic: "Matches app theme",
+  // Not "Matches app theme" any more: nothing derives the editor from the
+  // canvas (decision 6), so an unset value means the shipped default rather
+  // than a value that follows something else.
+  automatic: "Default",
   explicit: "Set by Volli",
 };
 
@@ -41,18 +44,14 @@ export function editorThemeLabel(themes: readonly EditorThemeEntry[], id: string
 
 /**
  * Resolved display for the Editor theme row: effective id/label, and whether
- * that id is derived from the app slug (`null` store value) or pinned.
+ * that id is the shipped default (`null` store value) or pinned.
  */
 export function buildEditorThemeDisplay(input: {
   editorThemeId: string | null;
-  appThemeSlug: string;
   themes?: readonly EditorThemeEntry[];
 }): EditorThemeDisplay {
   const themes = input.themes ?? listEditorThemes();
-  const resolvedId = resolveEditorThemeId({
-    editorThemeId: input.editorThemeId,
-    appThemeSlug: input.appThemeSlug,
-  });
+  const resolvedId = resolveEditorThemeId({ editorThemeId: input.editorThemeId });
   const source: EditorThemeSource =
     input.editorThemeId === null || input.editorThemeId === "" ? "automatic" : "explicit";
 

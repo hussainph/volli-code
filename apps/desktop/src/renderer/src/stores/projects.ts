@@ -29,7 +29,7 @@ import {
 
 import { useBoardStore } from "./board";
 import { writeThrough } from "./mutate";
-import { useThemeStore } from "./theme";
+import { setProjectRowSink, useThemeStore } from "./theme";
 import { useWorkspaceStore } from "./workspace";
 
 /** The `app_state` key `selectedProjectId` is persisted under — also read by lib/boot.ts. */
@@ -92,7 +92,21 @@ export interface ProjectsGateway {
 export type SelectedProjectListener = (projectId: string | null) => void;
 
 const defaultSelectedProjectListener: SelectedProjectListener = (projectId) => {
-  void useThemeStore.getState().hydrate(projectId);
+  if (projectId === null) {
+    void useThemeStore.getState().hydrate();
+    return;
+  }
+  // The workspace's own canvas and appearance are columns on the row this store
+  // already holds (migration 014), so they are handed OVER rather than fetched.
+  // The theme store must not keep a second copy of the projects list to look
+  // them up in, and a project that has just been removed has no row to read —
+  // hence the null-safe fallback to inheriting.
+  const project = useProjectsStore.getState().projects.find(({ id }) => id === projectId);
+  void useThemeStore.getState().hydrate({
+    projectId,
+    canvas: project?.themeCanvas ?? null,
+    appearance: project?.themeAppearance ?? null,
+  });
 };
 
 const defaultGateway: ProjectsGateway = {
@@ -109,6 +123,19 @@ interface ProjectsState {
   selectedProjectId: string | null;
   /** Seeds state from the boot payload — the ONE place state is set wholesale outside a mutation. */
   hydrate(projects: Project[], selectedProjectId: string | null): void;
+  /**
+   * Replaces one row with an authoritative copy written elsewhere.
+   *
+   * The theme store owns the workspace canvas/appearance writes because it owns
+   * painting, but the row those columns live on is this store's — and this
+   * store's copy is the only one. Every scope handed to the theme store is
+   * rebuilt from it, so a row that never learns about its own write reverts the
+   * workspace to the global canvas on the next selection change.
+   *
+   * Ignores a row for a project that is no longer here: a workspace removed
+   * while its write was in flight must not come back.
+   */
+  adoptProject(project: Project): void;
   addProject(input: { path: string; defaultName: string }): Promise<void>;
   updateBaseBranch(id: string, baseBranch: string | null): Promise<boolean>;
   /** Settings → Worktrees' setup-command field; leaves `baseBranch` untouched (re-sends the current pinned value). */
@@ -195,6 +222,12 @@ export function createProjectsStore(
       const previous = get().selectedProjectId;
       set({ projects, selectedProjectId });
       announceSelection(previous, selectedProjectId);
+    },
+
+    adoptProject(project) {
+      const projects = get().projects;
+      if (!projects.some(({ id }) => id === project.id)) return;
+      set({ projects: projects.map((row) => (row.id === project.id ? project : row)) });
     },
 
     async addProject({ path, defaultName }) {
@@ -375,3 +408,13 @@ export function createProjectsStore(
 
 /** App-wide singleton; components import this directly. */
 export const useProjectsStore = createProjectsStore();
+
+/**
+ * Close the loop on workspace theme writes.
+ *
+ * Registered from this side because the import between these two stores runs
+ * one way — this module already imports the theme store to hand it a scope, so
+ * the theme store must not import back. It writes the row and announces it; the
+ * row lives here.
+ */
+setProjectRowSink((project) => useProjectsStore.getState().adoptProject(project));

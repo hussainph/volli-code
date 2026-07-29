@@ -30,7 +30,12 @@ function DialogOverlay({
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
       className={cn(
-        "fixed inset-0 z-50 bg-black/50 motion-reduce:animate-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0",
+        // A scrim dims, in both modes — black here is not a dark-mode
+        // assumption, and no token darkens under light (every ladder rung moves
+        // toward the ink, which IS the light). Only the weight is mode-specific:
+        // half-black over the light canvas blacks the gradient out entirely,
+        // which is the one thing the canvas exists to show.
+        "fixed inset-0 z-50 bg-black/30 motion-reduce:animate-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0 dark:bg-black/50",
         className,
       )}
       {...props}

@@ -15,73 +15,14 @@
  * importing `globals.css` directly and is unaffected, so the shipped stylesheet
  * never grows a utility that only a scratch asked for — the dependency still
  * runs one way, lab → app.
+ *
+ * It used to carry ~450 lines of lab-only seam on top of that import: the vivid
+ * canvas driven onto the app's root layer, the on-canvas ink ladder, the lift
+ * overlays, the shadow tiers and the whole inset-unit geometry, every rule
+ * scoped behind a `data-lab-canvas` attribute so it could be armed and taken
+ * back down. All of it has landed in `globals.css` as real, unconditional app
+ * CSS — which is what the attribute was waiting for. The reasoning came with it,
+ * rule by rule; nothing was left here to keep in step.
  */
 @import "../src/globals.css";
 @source "./";
-
-/* LAB-ONLY SEAM — the Canvas scratch's vivid gradient, driven onto the app's
- * own root canvas layer (`theme/theme-canvas.tsx`).
- *
- * The app already mounts that layer under the chrome band, the rail and the
- * sidebar; what it paints comes from `@volli/shared`'s band-clamped generator,
- * which by construction cannot produce a vivid canvas. So the lab drives the
- * element directly rather than the read path — the point of the experiment is
- * what a vivid canvas does to the REAL sidebar sitting transparently on it, and
- * a mocked-up layer would answer a different question.
- *
- * The `!important` is load-bearing in both rules: `theme-canvas.tsx` styles its
- * layers inline, and `applyTheme` writes the sidebar foregrounds inline too, so
- * nothing weaker than an important author declaration reaches either. Keeping
- * the flip HERE rather than as more inline props is what makes it reversible —
- * `applyArcCanvas(null)` drops one attribute and the whole seam stops matching,
- * with no saved values to restore (see arc/paint.ts).
- *
- * Only the two foregrounds that paint ON the canvas are flipped. `--foreground`
- * and `--muted-foreground` also paint the opaque content card floating above
- * it, and flipping those would make a light canvas unreadable everywhere the
- * canvas isn't.
- *
- * Keep the selectors in step with `theme-canvas.tsx`. Delete all of it once the
- * vivid model is ported into `@volli/shared` and the canvas has a real read
- * path to drive. */
-html[data-lab-canvas] [data-volli-canvas] > div {
-  background: var(--lab-canvas) !important;
-}
-/* The crossfade partner. It carries the theme's own canvas, which would sit on
- * top of ours at whatever opacity the fade had reached. */
-html[data-lab-canvas] [data-volli-canvas-outgoing] {
-  display: none;
-}
-html[data-lab-canvas] {
-  --sidebar-foreground: var(--lab-canvas-ink) !important;
-  --sidebar-accent-foreground: var(--lab-canvas-ink) !important;
-}
-
-/* The general foregrounds, flipped ONLY inside the subtrees that actually sit
- * on the canvas — a preview of the port-time design, where these become
- * dedicated canvas-ink tokens rather than an override of the app's.
- *
- * Scoping is the whole point. `--foreground` and `--muted-foreground` paint two
- * surfaces at once: the opaque content card, which now has its own APCA-solved
- * values from `arc/tokens.ts`, and the chrome standing on the gradient. Flipping
- * them at `html` makes one of those unreadable whichever way it goes — and
- * solving one token against both surfaces just collapses the card's body/
- * secondary hierarchy into a single value without ever reaching the floor the
- * canvas needs (measured: body and muted both #3a2f2b, still only Lc 56 on the
- * gradient). Two scopes, two answers, no compromise between them.
- *
- * Custom properties inherit, so setting them on each subtree ROOT is enough;
- * the card is a sibling of these, never a descendant, so it keeps its own.
- *
- * Selectors mirror, and must be kept in step with:
- *   • `components/ui/sidebar.tsx` — `data-slot="sidebar"` is the `Sidebar`
- *     component root (the project rail and the primary sidebar). It does NOT
- *     match `data-slot="sidebar-inset"`, which IS the opaque card.
- *   • `components/chrome-bar.tsx` — the 40px band's root carries
- *     `app-region-drag` (globals.css). `rail/project-rail.tsx` carries it too,
- *     which is harmless: the rail is on the canvas as well. */
-html[data-lab-canvas] [data-slot="sidebar"],
-html[data-lab-canvas] .app-region-drag {
-  --foreground: var(--lab-canvas-ink) !important;
-  --muted-foreground: var(--lab-canvas-ink-muted) !important;
-}

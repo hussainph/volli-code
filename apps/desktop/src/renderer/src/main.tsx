@@ -17,6 +17,7 @@ import { useBoardStore } from "./stores/board";
 import { useProjectsStore } from "./stores/projects";
 import { useThemeStore } from "./stores/theme";
 import { useWorkspaceStore } from "./stores/workspace";
+import { watchSystemAppearance } from "./theme/canvas-paint";
 import { initTerminalAppearance } from "./terminal/appearance";
 
 /** Interrupt toasts outlive sonner's ~4s default: an automated de-escalation
@@ -43,12 +44,21 @@ async function main() {
   // paint lands on the token fallback (they re-theme live either way).
   void initTerminalAppearance();
 
-  // Same reasoning for the theme: it is a db read with no dependency on the
-  // bootstrap payload, and globals.css already paints the shipped default, so
-  // fetching it concurrently only narrows the window where a non-default theme
-  // hasn't landed yet. Settings' provenance labels track later config edits
-  // through the same push the terminals re-theme from.
+  // Same reasoning for the terminal/editor half of the theme state: it is a db
+  // read with no dependency on the bootstrap payload, so fetching it
+  // concurrently only narrows the window where a non-default value hasn't
+  // landed yet. The CANVAS half rides in on the bootstrap payload instead and
+  // is adopted in boot() — there is deliberately no second read path for it.
   void useThemeStore.getState().hydrate();
+  // The `auto` half of the appearance setting: a real OS flip, pushed from main
+  // because this process cannot see one (its own `prefers-color-scheme` query
+  // answers from the mode the app stamped — see theme/canvas-paint.ts).
+  // Registered here rather than at import time in canvas-paint.ts so the
+  // listener's lifetime belongs to the app rather than to whoever happened to
+  // import the module first.
+  watchSystemAppearance((prefersDark) => {
+    useThemeStore.getState().noteSystemAppearance(prefersDark);
+  });
   // The broadcast is global-scope by contract (main/ghostty-config.ts), so it
   // is handed to the store as such — a project scope re-reads its own layered
   // resolution instead of adopting global values under a project's label.

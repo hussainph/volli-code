@@ -261,6 +261,12 @@ export async function boot(
 
   seedAppStateCache(payload.appState);
 
+  // The canvas and the appearance, straight off the `app_state` rows the
+  // bootstrap already carries — BEFORE the projects store hydrates, because
+  // that hydrate announces the restored workspace and the theme store resolves
+  // a workspace override against the global canvas this line installs.
+  useThemeStore.getState().hydrateGlobal(payload.appState);
+
   // Resolved BEFORE hydrate (rather than hydrating with `null` and calling
   // `select` afterward) so boot never fires a redundant appState.set — the
   // value already came FROM app_state, there's nothing new to persist.
@@ -268,14 +274,11 @@ export async function boot(
   useProjectsStore.getState().hydrate(payload.projects, selectedProjectId);
   useBoardStore.getState().hydrate(payload.ticketsByProject, payload.labelsByProject);
 
-  await Promise.all([
-    useUiStore.persist.rehydrate(),
-    useWorkspaceStore.persist.rehydrate(),
-    // Favorites/recents only — the theme itself lives in SQLite behind
-    // window.api.theme, because main reads it too (the window background
-    // follows it, before any renderer exists).
-    useThemeStore.persist.rehydrate(),
-  ]);
+  // The theme store is deliberately absent: it has no `persist` middleware and
+  // nothing of its own in localStorage. Every value it holds comes from SQLite —
+  // the `app_state` rows adopted above, the `projects` columns the scope
+  // listener hands it, and `volli:theme-state` for the terminal chain.
+  await Promise.all([useUiStore.persist.rehydrate(), useWorkspaceStore.persist.rehydrate()]);
 
   // Fire-and-forget — never awaited, so it can't delay the app's first paint,
   // and its own try/catch means it can't fail boot either.

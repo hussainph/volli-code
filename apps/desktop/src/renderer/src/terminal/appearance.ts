@@ -10,7 +10,9 @@
  * font bytes, and the same config renders the same face in both apps.
  */
 import type { GhosttyTheme } from "restty";
-import type { GhosttyAppearancePayload } from "@volli/shared";
+import type { GhosttyAppearancePayload, ResolvedAppearance } from "@volli/shared";
+
+import { resolvedAppearance } from "@renderer/lib/resolved-appearance";
 
 import { resolveAppearance } from "./appearance-model";
 import { parseHexColor } from "./css-color";
@@ -22,39 +24,157 @@ type ThemeColor = { r: number; g: number; b: number; a?: number };
 
 const rgb = (r: number, g: number, b: number): ThemeColor => ({ r, g, b });
 
-// Literal fallbacks mirroring globals.css (i.e. the generated Ember theme),
-// used only when a token is missing or unparseable — e.g. the stylesheet has
-// not applied yet.
-const FALLBACK_BACKGROUND = rgb(0x15, 0x10, 0x0e); // --background
-const FALLBACK_FOREGROUND = rgb(0xeb, 0xe3, 0xdf); // --foreground
-const FALLBACK_CURSOR = rgb(0xe8, 0x65, 0x2a); // --primary (ember orange)
-const FALLBACK_ANSI_RED = rgb(0xe5, 0x48, 0x4d); // --destructive
+/**
+ * What the token-derived theme calls itself in each mode.
+ *
+ * Exported because the Terminal settings row has to print this name for a
+ * terminal that no layer named a theme for, and a second literal there went
+ * stale the moment light shipped — the picker said "Volli Dark" over a terminal
+ * rendering Volli Light.
+ */
+export const TOKEN_THEME_NAMES: Record<ResolvedAppearance, string> = {
+  dark: "Volli Dark",
+  light: "Volli Light",
+};
+
+/** The four app tokens this fallback theme is built from, for one appearance. */
+interface FallbackTokens {
+  background: ThemeColor;
+  foreground: ThemeColor;
+  cursor: ThemeColor;
+  ansiRed: ThemeColor;
+}
+
+/**
+ * Literal fallbacks mirroring globals.css (i.e. the shipped default canvas) in
+ * each mode, used only when a token is missing or unparseable — e.g. the
+ * stylesheet has not applied yet.
+ *
+ * Emitted by the same command that writes globals.css's two blocks, and for the
+ * same reason: this is the fourth copy of those hexes, and the only one nothing
+ * on screen would contradict if it drifted. `appearance.test.ts` re-derives them
+ * from `@volli/shared` and fails on any gap, because the previous note here —
+ * "regenerate these whenever globals.css is regenerated" — was a comment, and a
+ * comment is not a mechanism.
+ */
+/* GENERATED TERMINAL FALLBACK TOKENS — BEGIN */
+export const FALLBACK_TOKENS: Record<ResolvedAppearance, FallbackTokens> = {
+  dark: {
+    background: rgb(0x1c, 0x13, 0x10), // --background
+    foreground: rgb(0xe8, 0xe4, 0xe2), // --foreground
+    cursor: rgb(0xd3, 0x75, 0x50), // --primary
+    ansiRed: rgb(0xe5, 0x48, 0x4d), // --destructive
+  },
+  light: {
+    background: rgb(0xfd, 0xde, 0xd2), // --background
+    foreground: rgb(0x12, 0x09, 0x06), // --foreground
+    cursor: rgb(0xd3, 0x75, 0x50), // --primary
+    ansiRed: rgb(0xe5, 0x48, 0x4d), // --destructive
+  },
+};
+/* GENERATED TERMINAL FALLBACK TOKENS — END */
+
+/**
+ * Selection fill. Dark's is a neutral grey lifted off the near-black ground;
+ * light's is its mirror about mid-grey (0x34 below white rather than above
+ * black), so the selection sits the same perceptual step off the background in
+ * both modes and `selectionForeground` keeps the same relative contrast.
+ */
+const SELECTION_BACKGROUND: Record<ResolvedAppearance, ThemeColor> = {
+  dark: rgb(0x34, 0x34, 0x34),
+  light: rgb(0xcb, 0xcb, 0xcb),
+};
 
 /**
  * The 16-entry ANSI palette is terminal-domain color with no matching app
- * tokens — a restrained dark set tuned to sit on the near-black background —
- * except normal red, which mirrors `--destructive`.
+ * tokens, so it is authored per mode — except normal red, which mirrors
+ * `--destructive` in both.
+ *
+ * `dark` is the original restrained set, tuned to sit on the near-black
+ * background.
+ *
+ * `light` is **GitHub Light Default**, taken verbatim from ghostty's bundled
+ * theme catalog (which restty ships, so this is a set the app can already
+ * render). A reference set rather than a derivation because how the dark one
+ * was picked is recorded nowhere, so there is no rule here to mirror — and a
+ * light ANSI palette is not a lightened dark one anyway: every hue has to be
+ * pushed DOWN in lightness to survive a light ground, which re-picks all
+ * sixteen entries. GitHub's is the light set that holds up best on the two
+ * things that matter here. Its chromatic entries clear the contrast floor even
+ * on the lightest canvas the app generates, where Solarized Light and One Half
+ * Light both fall through it (their bright rows are pale by design, which reads
+ * as washed-out on white). And its grey ramp runs black → bright-white *toward*
+ * the background — the exact mirror of the dark set's ramp — so `bright black`
+ * still means "dim" and `bright white` still means "faint" after a mode flip,
+ * which is the meaning programs actually attach to those two slots.
  */
-const terminalPalette = (red: ThemeColor): ThemeColor[] => [
-  // Normal (0-7)
-  rgb(0x1c, 0x1c, 0x1c), // black
-  red,
-  rgb(0x46, 0xa7, 0x58), // green
-  rgb(0xf0, 0xc0, 0x00), // yellow
-  rgb(0x53, 0x91, 0xf5), // blue
-  rgb(0xb1, 0x6b, 0xf5), // magenta
-  rgb(0x2a, 0xc0, 0xc7), // cyan
-  rgb(0xd6, 0xd6, 0xd6), // white
-  // Bright (8-15)
-  rgb(0x6b, 0x6b, 0x6b), // bright black
-  rgb(0xff, 0x6b, 0x6f), // bright red
-  rgb(0x6c, 0xd9, 0x75), // bright green
-  rgb(0xff, 0xd5, 0x43), // bright yellow
-  rgb(0x7d, 0xac, 0xff), // bright blue
-  rgb(0xc9, 0x8d, 0xff), // bright magenta
-  rgb(0x5a, 0xe0, 0xe6), // bright cyan
-  rgb(0xff, 0xff, 0xff), // bright white
-];
+const ANSI_PALETTES: Record<ResolvedAppearance, readonly ThemeColor[]> = {
+  dark: [
+    // Normal (0-7)
+    rgb(0x1c, 0x1c, 0x1c), // black
+    rgb(0xe5, 0x48, 0x4d), // red — replaced by --destructive
+    rgb(0x46, 0xa7, 0x58), // green
+    rgb(0xf0, 0xc0, 0x00), // yellow
+    rgb(0x53, 0x91, 0xf5), // blue
+    rgb(0xb1, 0x6b, 0xf5), // magenta
+    rgb(0x2a, 0xc0, 0xc7), // cyan
+    rgb(0xd6, 0xd6, 0xd6), // white
+    // Bright (8-15)
+    rgb(0x6b, 0x6b, 0x6b), // bright black
+    rgb(0xff, 0x6b, 0x6f), // bright red
+    rgb(0x6c, 0xd9, 0x75), // bright green
+    rgb(0xff, 0xd5, 0x43), // bright yellow
+    rgb(0x7d, 0xac, 0xff), // bright blue
+    rgb(0xc9, 0x8d, 0xff), // bright magenta
+    rgb(0x5a, 0xe0, 0xe6), // bright cyan
+    rgb(0xff, 0xff, 0xff), // bright white
+  ],
+  light: [
+    // Normal (0-7)
+    rgb(0x24, 0x29, 0x2f), // black
+    rgb(0xcf, 0x22, 0x2e), // red — replaced by --destructive
+    rgb(0x11, 0x63, 0x29), // green
+    rgb(0x4d, 0x2d, 0x00), // yellow
+    rgb(0x09, 0x69, 0xda), // blue
+    rgb(0x82, 0x50, 0xdf), // magenta
+    rgb(0x1b, 0x7c, 0x83), // cyan
+    rgb(0x6e, 0x77, 0x81), // white
+    // Bright (8-15)
+    rgb(0x57, 0x60, 0x6a), // bright black
+    rgb(0xa4, 0x0e, 0x26), // bright red
+    rgb(0x1a, 0x7f, 0x37), // bright green
+    rgb(0x63, 0x3c, 0x01), // bright yellow
+    rgb(0x21, 0x8b, 0xff), // bright blue
+    rgb(0xa4, 0x75, 0xf9), // bright magenta
+    rgb(0x31, 0x92, 0xaa), // bright cyan
+    rgb(0x8c, 0x95, 0x9f), // bright white
+  ],
+};
+
+/** The mode's ANSI set with normal red replaced by the app's `--destructive`. */
+function terminalPalette(red: ThemeColor, appearance: ResolvedAppearance): ThemeColor[] {
+  const palette = [...ANSI_PALETTES[appearance]];
+  palette[1] = red;
+  return palette;
+}
+
+/**
+ * Whether a color is a dark surface — asked of the RESOLVED background, which
+ * is the only thing the palette choice may depend on.
+ *
+ * The stamped mode would be the obvious input and is the wrong one: this theme
+ * is assembled from whatever `--background` currently reads, so keying the
+ * palette off anything else lets the two disagree for a frame — and a disagreement
+ * here does not throw, it just renders a dark palette on a light ground. That
+ * silence is the whole bug: `parseHexColor` succeeds in either mode, so nothing
+ * upstream ever notices.
+ */
+function isDarkSurface({ r, g, b }: ThemeColor): boolean {
+  // Rec. 601 luma — the standard cheap "is this dark?" test. The exact
+  // threshold is not load-bearing: every canvas the generator produces sits far
+  // from the middle of the range.
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 < 0.5;
+}
 
 /**
  * Build the fallback theme from the live design tokens so a config-less
@@ -65,6 +185,9 @@ function buildTokenTheme(): { theme: GhosttyTheme; complete: boolean } {
   const styles = getComputedStyle(document.documentElement);
   const token = (name: string): ThemeColor | null => parseHexColor(styles.getPropertyValue(name));
 
+  // The stamped mode decides only which literals stand in for tokens that could
+  // not be read; everything below follows the colors themselves.
+  const fallback = FALLBACK_TOKENS[resolvedAppearance()];
   const background = token("--background");
   const foreground = token("--foreground");
   const cursor = token("--primary");
@@ -72,20 +195,21 @@ function buildTokenTheme(): { theme: GhosttyTheme; complete: boolean } {
   const complete =
     background !== null && foreground !== null && cursor !== null && ansiRed !== null;
 
-  const bg = background ?? FALLBACK_BACKGROUND;
-  const fg = foreground ?? FALLBACK_FOREGROUND;
+  const bg = background ?? fallback.background;
+  const fg = foreground ?? fallback.foreground;
+  const appearance: ResolvedAppearance = isDarkSurface(bg) ? "dark" : "light";
   return {
     theme: {
-      name: "Volli Dark",
+      name: TOKEN_THEME_NAMES[appearance],
       raw: {},
       colors: {
         background: bg,
         foreground: fg,
-        cursor: cursor ?? FALLBACK_CURSOR,
+        cursor: cursor ?? fallback.cursor,
         cursorText: bg,
-        selectionBackground: rgb(0x34, 0x34, 0x34),
+        selectionBackground: SELECTION_BACKGROUND[appearance],
         selectionForeground: fg,
-        palette: terminalPalette(ansiRed ?? FALLBACK_ANSI_RED),
+        palette: terminalPalette(ansiRed ?? fallback.ansiRed, appearance),
       },
     },
     complete,
@@ -129,7 +253,10 @@ function invalidateAndNotify(): void {
  * change event fires once the real config lands.
  */
 export function getCurrentAppearance(): TerminalAppearance {
-  cachedAppearance ??= resolveAppearance(payload, tokenTheme());
+  // The stamped mode, not the token background: a `light:X,dark:Y` theme pair
+  // in the user's ghostty config is a statement about the appearance they chose,
+  // and it must be re-answered on every mode flip without re-reading the file.
+  cachedAppearance ??= resolveAppearance(payload, tokenTheme(), resolvedAppearance());
   if (previewedTheme === null) return cachedAppearance;
   cachedPreviewAppearance ??= { ...cachedAppearance, theme: previewedTheme };
   return cachedPreviewAppearance;

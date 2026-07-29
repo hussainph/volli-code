@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { deriveCanvasTokens, DEFAULT_CANVAS } from "./canvas";
 import { oklchToHex } from "./color";
 import { DEFAULT_THEME } from "./definition";
 import { generateThemeTokens } from "./generate";
@@ -69,6 +70,25 @@ describe("generateVeilTokens", () => {
           expect(channel).toBeGreaterThanOrEqual(0);
           expect(channel).toBeLessThanOrEqual(255);
         }
+      }
+    }
+  });
+
+  it("clamps a channel the solve pushes out of range, on a canvas that actually does that", () => {
+    // Not a hypothetical: `#00ffff` at vibrancy 1 in light mode is one of 17
+    // hue/vibrancy combinations (found by sweeping the full hue wheel) where
+    // `C = (T − B(1−α))/α` lands outside 0–255 — cyan drives `--sidebar-veil`'s
+    // red channel negative. An ordinary hex a user can type into the editor.
+    const tokens = deriveCanvasTokens(
+      { ...DEFAULT_CANVAS, stops: [{ hex: "#00ffff", x: 0.68, y: 0.3 }], vibrancy: 1 },
+      "light",
+    );
+    const veils = generateVeilTokens(tokens);
+    for (const name of THEME_VEIL_TOKEN_NAMES) {
+      for (const channel of veilChannels(veils[name])) {
+        expect(Number.isInteger(channel)).toBe(true);
+        expect(channel).toBeGreaterThanOrEqual(0);
+        expect(channel).toBeLessThanOrEqual(255);
       }
     }
   });

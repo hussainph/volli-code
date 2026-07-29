@@ -30,6 +30,7 @@ import type {
   GhosttyAppearancePayload,
   GhosttyConfigResult,
   GhosttyOverlayLayer,
+  ResolvedAppearance,
   VolliIpcChannel,
   VolliIpcEvent,
 } from "@volli/shared";
@@ -133,11 +134,18 @@ function resolveConfigText(entryPath: string, deps: GhosttyConfigDeps): string |
  * one. Later layers win, and `provenance` records which layer won each key so
  * Settings can label every value's origin honestly.
  *
+ * `appearance` is REQUIRED, and is the mode the window is actually wearing: a
+ * ghostty `theme = light:X,dark:Y` pair resolves to one half or the other, so a
+ * read that could not name a mode used to fall through to
+ * `parseGhosttyTerminalPrefs`' `dark` default. That default was dark-only
+ * shipped as an assumption; the caller passes what it resolved instead.
+ *
  * Never throws: a missing config file (or missing theme/overlay file) is
  * normal, not an error — include-resolution warnings are logged, not surfaced.
  */
 export function readGhosttyAppearance(
   deps: GhosttyConfigDeps,
+  appearance: ResolvedAppearance,
   ticketPrefix: string | null = null,
 ): GhosttyAppearancePayload {
   const entryPaths = entryConfigPaths(deps);
@@ -162,7 +170,7 @@ export function readGhosttyAppearance(
   ];
 
   const { text: configText, provenance } = resolveGhosttyLayers(layers);
-  const prefs = parseGhosttyTerminalPrefs(configText ?? "");
+  const prefs = parseGhosttyTerminalPrefs(configText ?? "", appearance);
   // Resolved from the EFFECTIVE theme name, so a theme an overlay selected
   // resolves against ghostty's own theme directories exactly like one the
   // user's config selected.
@@ -201,8 +209,8 @@ function isProjectOverlayFile(name: string): boolean {
 }
 
 /** Pushes the freshly-read appearance to every non-destroyed window. */
-function broadcastAppearance(deps: GhosttyConfigDeps): void {
-  const payload = readGhosttyAppearance(deps);
+function broadcastAppearance(deps: GhosttyConfigDeps, appearance: ResolvedAppearance): void {
+  const payload = readGhosttyAppearance(deps, appearance);
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     win.webContents.send("volli:ghostty-config-changed" satisfies VolliIpcEvent, payload);
@@ -248,13 +256,15 @@ function watchConfigDir(
  * in a session would land in a brand-new directory nothing was watching, and
  * every hand-edit until the next relaunch would go unnoticed.
  */
-function watchForChanges(deps: GhosttyConfigDeps): void {
+function watchForChanges(deps: GhosttyConfigDeps, appearance: () => ResolvedAppearance): void {
   let debounceTimer: NodeJS.Timeout | null = null;
   const scheduleReload = (): void => {
     if (debounceTimer !== null) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       debounceTimer = null;
-      broadcastAppearance(deps);
+      // Read at BROADCAST time, not at registration time: the mode can flip
+      // while the config file sits perfectly still.
+      broadcastAppearance(deps, appearance());
     }, WATCH_DEBOUNCE_MS);
   };
 
@@ -285,18 +295,25 @@ function watchForChanges(deps: GhosttyConfigDeps): void {
  * `volli:theme-state` (theme-ipc.ts), which can map a project id to its ticket
  * prefix through the db — so a renderer showing a project's terminal
  * re-requests that on a `volli:ghostty-config-changed` event.
+ *
+ * `appearance` is a thunk rather than a value because both callers below run
+ * long after registration, and the resolved mode is exactly the thing that
+ * changes without this module's files changing.
  */
-export function registerGhosttyConfigIpc(deps: GhosttyConfigDeps): void {
+export function registerGhosttyConfigIpc(
+  deps: GhosttyConfigDeps,
+  appearance: () => ResolvedAppearance,
+): void {
   ipcMain.handle(
     "volli:ghostty-config-get" satisfies VolliIpcChannel,
     (_event): GhosttyConfigResult => {
       try {
-        return { ok: true, value: readGhosttyAppearance(deps) };
+        return { ok: true, value: readGhosttyAppearance(deps, appearance()) };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }
     },
   );
 
-  watchForChanges(deps);
+  watchForChanges(deps, appearance);
 }

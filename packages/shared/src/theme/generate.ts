@@ -1,6 +1,6 @@
 /**
- * The app-surface theme generator (docs/plans/theming-engine.md § Surface 3):
- * one seed color in, the full `globals.css` token set out.
+ * The app-surface theme generator: one seed color in, the full `globals.css`
+ * token set out.
  *
  * The load-bearing idea is that the user picks **hue and chroma, never
  * lightness**. Every `L` below is a constant in this file, and gamut mapping
@@ -19,11 +19,18 @@
  */
 
 import type { ThemeDefinition } from "./definition";
-import { apcaLc, hexToOklch, oklchToHex } from "./color";
+import { apcaLc, clamp, hexToOklch, oklchToHex } from "./color";
 import type { ThemeTokenName, ThemeTokens } from "./tokens";
 
 /** Below this seed chroma the neutrals go fully grey — the muddy-black guard. */
 const GREY_SEED_CHROMA = 0.02;
+
+/** Body copy on `--background`. */
+const BODY_LC = 90;
+/** Secondary copy — and the same floor accent-as-text and a button label are held to. */
+const MUTED_LC = 60;
+/** Sidebar nav, on the sidebar's own surface. */
+const SIDEBAR_LC = 75;
 
 /** The accent's chroma window. Below 0.06 it stops reading as an accent at
  * all; above 0.20 it leaves sRGB at most hues and gamut-mapping just takes it
@@ -51,11 +58,10 @@ const PRIMARY_LIGHTNESS = 0.661;
  * a button fill and to keep ember an exact fixed point of the accent math. At
  * that lightness it scores Lc 41 as body copy — fine for an icon, below the
  * floor for a paragraph link. So the accent gets a *second* lightness rather
- * than a compromised single one, and body-sized accent text uses that
- * (docs/plans/theming-engine.md § Fold-ins). The floor matches
- * `--muted-foreground`'s, because these are the same job.
+ * than a compromised single one, and body-sized accent text uses that. The
+ * floor matches `--muted-foreground`'s, because these are the same job.
  */
-const PRIMARY_TEXT_LC = 60;
+const PRIMARY_TEXT_LC = MUTED_LC;
 
 /**
  * The neutral ladder: a fixed lightness plus a chroma multiplier per rung.
@@ -92,9 +98,30 @@ const LADDER: readonly { tokens: readonly ThemeTokenName[]; L: number; k: number
  */
 const DESTRUCTIVE = { L: 0.6256, C: 0.1933, h: 23.026 } as const;
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
+/**
+ * Every contrast floor this generator solves to, restated as data.
+ *
+ * The numbers are the constants above, not a second set: a table that could
+ * disagree with the solve is worse than no table. What the data form buys is a
+ * sweep — the canvas layer and the theming scratch both iterate this to assert
+ * that a *derived* token set still meets the contract the generator was built
+ * to, and neither can do that against literals buried in a function body.
+ *
+ * `--primary-foreground` is measured on `--primary` rather than on a surface,
+ * because a button label reads on its button.
+ */
+export const THEME_CONTRAST_FLOORS = [
+  { text: "--foreground", surface: "--background", floor: BODY_LC, what: "Body copy" },
+  { text: "--muted-foreground", surface: "--background", floor: MUTED_LC, what: "Secondary copy" },
+  { text: "--sidebar-foreground", surface: "--sidebar", floor: SIDEBAR_LC, what: "Sidebar nav" },
+  { text: "--primary-text", surface: "--background", floor: MUTED_LC, what: "Accent as text" },
+  { text: "--primary-foreground", surface: "--primary", floor: MUTED_LC, what: "Button label" },
+] as const satisfies readonly {
+  text: ThemeTokenName;
+  surface: ThemeTokenName;
+  floor: number;
+  what: string;
+}[];
 
 /**
  * How much chroma a seed lends the neutrals — the ladder's `Cn`, and the same
@@ -144,10 +171,7 @@ export function solveLightnessForContrast(
   h: number,
   background: string,
 ): number {
-  // The vertex, and the far end of the arm leading away from it: white for a
-  // dark background, black for a light one.
-  const vertex = hexToOklch(background).L;
-  const bound = vertex < 0.5 ? 1 : 0;
+  const { vertex, bound } = contrastArm(background);
   if (apcaLc(oklchToHex(bound, C, h), background) < targetLc) {
     throw new Error(
       `No lightness of oklch(L ${C.toFixed(4)} ${h.toFixed(2)}) reaches Lc ${targetLc} on ${background}.`,
@@ -164,6 +188,47 @@ export function solveLightnessForContrast(
     else fail = mid;
   }
   return pass;
+}
+
+/**
+ * The vertex of {@link apcaLc}'s V — the background's own lightness, where
+ * contrast is 0 — and the far end of the one arm that leads away from it: white
+ * for a dark background, black for a light one.
+ *
+ * One function because the arm is exactly what the ceiling is measured at, and
+ * the guard inside {@link solveLightnessForContrast} and the clamp inside
+ * {@link solveLightnessOrCeiling} are the same question asked from two sides.
+ */
+function contrastArm(background: string): { vertex: number; bound: number } {
+  const vertex = hexToOklch(background).L;
+  return { vertex, bound: vertex < 0.5 ? 1 : 0 };
+}
+
+/**
+ * {@link solveLightnessForContrast}, made safe to hand a floor the ink's own
+ * hue and chroma cannot physically deliver.
+ *
+ * That solver THROWS when nothing reaches the target, which is right for a
+ * ladder whose backgrounds are constants — a floor it cannot meet there is a bug
+ * — and wrong the moment the INK stops being fixed. The canvas layer solves at
+ * whatever chroma and hue the user's gradient implies, so a saturated seed on
+ * tinted paper can put an ask past what that hue reaches, and a thrown error
+ * would blank the window on a swatch click.
+ *
+ * So the ceiling is measured first, by the same expression the solver guards
+ * with, and the ask is clamped to it: copy stops darkening when the color space
+ * runs out instead of falling off it. Callers that want to KNOW they were capped
+ * measure the ceiling themselves — this one's contract is a color, always.
+ */
+export function solveLightnessOrCeiling(
+  targetLc: number,
+  C: number,
+  h: number,
+  background: string,
+): number {
+  const { bound } = contrastArm(background);
+  const ceiling = apcaLc(oklchToHex(bound, C, h), background);
+  return solveLightnessForContrast(Math.min(targetLc, ceiling), C, h, background);
 }
 
 /**
@@ -209,17 +274,17 @@ export function generateThemeTokens(theme: ThemeDefinition): ThemeTokens {
 
   // 5. Foregrounds — solved against the surface they are actually drawn on.
   const foreground = oklchToHex(
-    solveLightnessForContrast(90, neutrals, neutralHue, background),
+    solveLightnessForContrast(BODY_LC, neutrals, neutralHue, background),
     neutrals,
     neutralHue,
   );
   const mutedForeground = oklchToHex(
-    solveLightnessForContrast(60, neutrals, neutralHue, background),
+    solveLightnessForContrast(MUTED_LC, neutrals, neutralHue, background),
     neutrals,
     neutralHue,
   );
   const sidebarForeground = oklchToHex(
-    solveLightnessForContrast(75, neutrals, neutralHue, sidebar),
+    solveLightnessForContrast(SIDEBAR_LC, neutrals, neutralHue, sidebar),
     neutrals,
     neutralHue,
   );
@@ -273,8 +338,62 @@ export function generateThemeTokens(theme: ThemeDefinition): ThemeTokens {
   return { ...tokens, ...theme.overrides };
 }
 
-/** Lc floor for text on `--primary`. */
-const PRIMARY_FOREGROUND_LC = 60;
+/**
+ * The accent family and nothing else: `--primary`, its label, and the four
+ * aliases of the two.
+ *
+ * `--primary-text` is deliberately NOT a member. It is the accent solved as
+ * *copy*, which means solved against the surface it is read on — `--background`
+ * here, `--card` in the canvas layer — so it belongs to whoever knows that
+ * surface, and a value in this record would be one solved against neither.
+ */
+export type AccentTokens = Pick<
+  ThemeTokens,
+  | "--primary"
+  | "--primary-foreground"
+  | "--ring"
+  | "--sidebar-primary"
+  | "--sidebar-primary-foreground"
+  | "--sidebar-ring"
+>;
+
+/**
+ * Step 6–7 on its own: a seed hex in, the accent family out, at the seed's
+ * chroma **verbatim**.
+ *
+ * That last part is the whole reason this is a second entry point rather than a
+ * read of {@link generateThemeTokens}'s output. That function clamps the accent
+ * into {@link ACCENT_CHROMA_RANGE} because a *seed* is a color a person picked
+ * and a floor is what stops a nearly-grey pick producing a washed-out accent.
+ * The canvas layer's accent is not picked, it is COMPUTED — from the gradient's
+ * own chroma, scaled by vibrancy — so a floor there would put a hard bottom under
+ * the one slider whose bottom end is supposed to mean "near-neutral chrome"
+ * (`canvas/gradient.ts`'s `accentChroma`).
+ *
+ * The muddy-black guard is not needed either, and for a reason rather than by
+ * omission: it exists to stop the FLOOR being forced onto a hue that is float
+ * residue, and there is no floor here to force. A colorless seed asks for
+ * chroma ~0 and gets it.
+ *
+ * Everything else is shared with the full generator — {@link solveAccentPair},
+ * {@link pickAccentLabel}, the same Lc floor on the button label — so the two
+ * cannot disagree about anything except the one thing they are meant to.
+ */
+export function generateAccentTokens(seed: string): AccentTokens {
+  const { C, h } = hexToOklch(seed);
+  const { primary, primaryForeground } = solveAccentPair(C, h);
+  return {
+    "--primary": primary,
+    "--primary-foreground": primaryForeground,
+    "--ring": primary,
+    "--sidebar-primary": primary,
+    "--sidebar-primary-foreground": primaryForeground,
+    "--sidebar-ring": primary,
+  };
+}
+
+/** Lc floor for text on `--primary` — a label is copy, held to copy's floor. */
+const PRIMARY_FOREGROUND_LC = MUTED_LC;
 
 /**
  * Step 7's label choice: whichever of white or a near-black tint of the accent

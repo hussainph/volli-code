@@ -90,14 +90,14 @@ import type {
   OverlayEdits,
   ProjectThemeOverride,
   ShippedEditorThemeId,
-  ThemeDefinition,
   ThemeSetProjectResult,
   ThemeStateInput,
   ThemeStateResult,
   TerminalOverlayWriteResult,
-  CustomThemeListResult,
-  CustomThemeReadResult,
-  CustomThemeWriteResult,
+  Appearance,
+  Canvas,
+  FirstPaintHint,
+  ProjectCanvasWriteResult,
 } from "@volli/shared";
 
 /** Typed `ipcRenderer.invoke` bound to the shared contract: the channel literal fixes both the argument tuple and the result type, so a wrong pairing is a compile error. */
@@ -113,6 +113,118 @@ const send = <C extends keyof VolliSendContract>(
 ): void => {
   ipcRenderer.send(channel, ...args);
 };
+
+/**
+ * The flag main appends to this window's `process.argv` (`additionalArguments`)
+ * carrying the appearance it resolved for first paint.
+ *
+ * A command-line flag rather than an IPC call because of WHEN it is needed: the
+ * mode class has to be on `<html>` before the first frame, and `invoke()`
+ * returns a promise — anything awaited is a frame too late, which is the light
+ * flash the whole first-paint hint exists to prevent. `sendSync` would block
+ * main; argv is already there when the preload's first statement runs.
+ *
+ * Must match `FIRST_PAINT_APPEARANCE_ARG` in `src/main/window-theme.ts`, which
+ * builds it. Duplicated as a literal because preload may not import
+ * @volli/shared at runtime (see CAUTION in vite.config.ts) and main is not
+ * importable from here at all; a test in main pins the two together.
+ */
+const FIRST_PAINT_ARG_PREFIX = "--volli-first-paint-appearance=";
+
+/**
+ * The resolved mode main handed this window. Never `auto` — what main passes is
+ * what it RESOLVED, because an unresolved mode is the one value a first paint
+ * cannot act on.
+ *
+ * `null` means no window built by `createWindow` is behind this preload (the
+ * flag is absent or unreadable), so the caller keeps whatever the document
+ * already declares rather than guessing at a mode.
+ */
+function firstPaintAppearance(): "light" | "dark" | null {
+  const flag = process.argv.find((arg) => arg.startsWith(FIRST_PAINT_ARG_PREFIX));
+  if (flag === undefined) return null;
+  const value = flag.slice(FIRST_PAINT_ARG_PREFIX.length);
+  return value === "light" || value === "dark" ? value : null;
+}
+
+/**
+ * The second flag main appends, carrying `nativeTheme.shouldUseDarkColors` —
+ * what an `auto` appearance resolves against.
+ *
+ * It comes from main because the renderer has no way to ask. Chromium answers
+ * `matchMedia("(prefers-color-scheme: dark)")` from the root element's used
+ * `color-scheme`, which this app stamps for itself a few lines below — so over
+ * there the query reports the mode already painted, not the system's. And it
+ * comes over argv rather than IPC because the theme store's singleton is
+ * constructed at import time, which is before any `invoke()` could settle.
+ *
+ * Must match `SYSTEM_DARK_ARG` in `src/main/window-theme.ts`, duplicated as a
+ * literal for the same reason as the flag above and pinned by the same test.
+ */
+const SYSTEM_DARK_ARG_PREFIX = "--volli-system-dark=";
+
+/**
+ * What the system was asking for when this window was constructed. A snapshot,
+ * not a subscription — argv never changes, so later flips arrive through
+ * `onSystemAppearanceChanged` below.
+ *
+ * `null` means the flag is absent or unreadable, i.e. no window built by
+ * `createWindow` is behind this preload; the caller picks its own default rather
+ * than being handed a guess dressed as an answer.
+ */
+function systemPrefersDark(): boolean | null {
+  const flag = process.argv.find((arg) => arg.startsWith(SYSTEM_DARK_ARG_PREFIX));
+  if (flag === undefined) return null;
+  const value = flag.slice(SYSTEM_DARK_ARG_PREFIX.length);
+  if (value === "1") return true;
+  if (value === "0") return false;
+  return null;
+}
+
+/**
+ * Stamps the resolved mode class on `<html>` before the page's own scripts run.
+ *
+ * `index.html` no longer pins `class="dark"`, and the two obvious replacements
+ * both fail. A `@media (prefers-color-scheme: light)` block knows the SYSTEM,
+ * not the setting — a user on a light system who explicitly chose dark would get
+ * a light first paint and then a flip, which is the flash the hint exists to
+ * kill, arriving from the other side. And an inline `<script>` is blocked
+ * outright: the CSP in `index.html` is `script-src 'self' 'wasm-unsafe-eval'`
+ * with no `'unsafe-inline'`, so it would silently never run.
+ *
+ * Preload is the one place left that runs in the renderer before any page
+ * script AND already has the answer synchronously, off `process.argv`. Main
+ * additionally sets `BrowserWindow.backgroundColor` from the same hint, so the
+ * window edge is right before the document paints anything at all.
+ *
+ * Guarded because the timing is not guaranteed: `document.documentElement` is
+ * normally present by the time a preload's first statement runs, but a preload
+ * that lands earlier would throw here and take the whole bridge with it. One
+ * `readystatechange` listener is the fallback, and it is removed as soon as it
+ * fires.
+ *
+ * `null` — no flag, or an unreadable one — leaves the document alone: nothing
+ * built this window through `createWindow`, and guessing at a mode is worse
+ * than deferring to whatever the stylesheet already declares (which is dark).
+ */
+function stampFirstPaintAppearance(): void {
+  const appearance = firstPaintAppearance();
+  if (appearance === null) return;
+  const stamp = (): boolean => {
+    const root = document.documentElement;
+    if (root === null || root === undefined) return false;
+    root.classList.remove(appearance === "dark" ? "light" : "dark");
+    root.classList.add(appearance);
+    return true;
+  };
+  if (stamp()) return;
+  const onReady = (): void => {
+    if (stamp()) document.removeEventListener("readystatechange", onReady);
+  };
+  document.addEventListener("readystatechange", onReady);
+}
+
+stampFirstPaintAppearance();
 
 // Minimal typed API surface exposed to the renderer.
 const api = {
@@ -463,31 +575,21 @@ const api = {
     },
   },
   /**
-   * Theming (docs/plans/theming-engine.md). Only AUTHORED inputs cross this
-   * door: the resolved token set is generated in the renderer at render time
-   * and stored nowhere. A terminal overlay write names a SCOPE, never a path,
-   * so no renderer request can reach the user's own ghostty config (#67).
+   * Theming. Only AUTHORED inputs cross this door: the resolved token set is
+   * generated in the renderer at render time and stored nowhere. A terminal
+   * overlay write names a SCOPE, never a path, so no renderer request can
+   * reach the user's own ghostty config (#67).
    */
   theme: {
-    /** The authored global theme + a project's per-surface override + the resolved terminal chain. */
+    /** The resolved terminal chain for a scope, plus the editor id and the project's per-surface override. */
     state: (input: ThemeStateInput = {}): Promise<ThemeStateResult> =>
       invoke("volli:theme-state", input),
     /**
-     * Persists the authored global theme; resolves with the fresh state FOR
+     * Persists the global Monaco/shiki theme id; `null` clears it so the editor
+     * derives from the resolved appearance. Resolves with the fresh state FOR
      * THE CALLER'S SCOPE (#123) — pass the project the window is showing, or
      * `null` from the global scope. The write is global either way; the scope
-     * only decides what the answer describes, so a project that overrides the
-     * app surface keeps wearing its own theme.
-     */
-    setGlobal: (
-      theme: ThemeDefinition,
-      projectId: string | null = null,
-    ): Promise<ThemeStateResult> =>
-      invoke("volli:theme-set-global", projectId === null ? { theme } : { theme, projectId }),
-    /**
-     * Persists the global Monaco/shiki theme id; `null` clears it so the editor
-     * derives from the active app theme slug. Resolves with the fresh state for
-     * the CALLER's scope, exactly like {@link setGlobal} (#123).
+     * only decides what the answer describes.
      */
     setGlobalEditor: (
       editorThemeId: ShippedEditorThemeId | null,
@@ -502,6 +604,71 @@ const api = {
       projectId: string,
       override: ProjectThemeOverride | null,
     ): Promise<ThemeSetProjectResult> => invoke("volli:theme-set-project", { projectId, override }),
+    /**
+     * The canvas (docs/plans/arc-theming-migration.md): five writes, no reads.
+     * Everything these persist comes back through `data.bootstrap()` — the
+     * global canvas and appearance as `app_state` rows, a project's as columns
+     * on its row — so there is deliberately no `canvas.state()` twin.
+     */
+    setGlobalCanvas: (canvas: Canvas): Promise<Result> =>
+      invoke("volli:theme-canvas-set-global", { canvas }),
+    /** Persists the global light/dark/auto choice. */
+    setGlobalAppearance: (appearance: Appearance): Promise<Result> =>
+      invoke("volli:theme-appearance-set-global", { appearance }),
+    /** Persists one workspace's canvas; `null` clears it back to inheriting the global one. */
+    setProjectCanvas: (
+      projectId: string,
+      canvas: Canvas | null,
+    ): Promise<ProjectCanvasWriteResult> =>
+      invoke("volli:theme-canvas-set-project", { projectId, canvas }),
+    /** Persists one workspace's appearance; `null` clears it back to inheriting. */
+    setProjectAppearance: (
+      projectId: string,
+      appearance: Appearance | null,
+    ): Promise<ProjectCanvasWriteResult> =>
+      invoke("volli:theme-appearance-set-project", { projectId, appearance }),
+    /**
+     * Records the mode and background this paint resolved to, so the NEXT
+     * launch constructs its window with both already known. A hint, not an
+     * authority: `{canvas, appearance}` stays the pair everything is derived
+     * from, and this row is overwritten on every paint.
+     */
+    setFirstPaint: (hint: FirstPaintHint): Promise<Result> =>
+      invoke("volli:theme-first-paint-set", hint),
+    /**
+     * What main resolved for THIS window before the renderer existed — the
+     * value the inline script in `index.html` stamps the mode class from, read
+     * synchronously off the process arguments rather than over IPC because a
+     * round trip cannot be awaited before first paint. `null` only when the
+     * flag is missing — keep the document's declared mode in that case.
+     */
+    firstPaintAppearance,
+    /**
+     * What `nativeTheme` said when this window was built — the boolean an `auto`
+     * appearance resolves against, read synchronously off the process arguments
+     * because the theme store's initial state needs it before any round trip
+     * could return. `null` when the flag is absent.
+     */
+    systemPrefersDark,
+    /**
+     * Subscribes to real OS light↔dark flips (`nativeTheme`'s `updated`, fanned
+     * out by main); returns the unsubscribe function.
+     *
+     * The renderer cannot observe one for itself — its own
+     * `prefers-color-scheme` query resolves against the mode this app stamped,
+     * so it never moves — which is why the flip has to be pushed rather than
+     * polled.
+     */
+    onSystemAppearanceChanged: (callback: (prefersDark: boolean) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, prefersDark: boolean) =>
+        callback(prefersDark);
+      ipcRenderer.on("volli:system-appearance-changed" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener(
+          "volli:system-appearance-changed" satisfies VolliIpcEvent,
+          listener,
+        );
+    },
     /** Rewrites keys in Volli's global ghostty overlay (`null` removes a key). */
     writeGlobalOverlay: (edits: OverlayEdits): Promise<TerminalOverlayWriteResult> =>
       invoke("volli:theme-terminal-overlay-write", { scope: "global", edits }),
@@ -511,26 +678,6 @@ const api = {
       edits: OverlayEdits,
     ): Promise<TerminalOverlayWriteResult> =>
       invoke("volli:theme-terminal-overlay-write", { scope: "project", projectId, edits }),
-    /**
-     * The user's own themes — one JSON file each under
-     * `<userData>/volli/themes/<slug>.json` (#71), so a theme stays an openable,
-     * shareable artifact. Every verb names a SLUG; main resolves the path, so
-     * nothing here can reach a file outside that directory. `save` and
-     * `deleteCustomTheme` answer with the fresh catalog, which is why there is
-     * no separate refetch (or change event) to wire up.
-     */
-    listCustomThemes: (): Promise<CustomThemeListResult> => invoke("volli:theme-file-list"),
-    readCustomTheme: (slug: string): Promise<CustomThemeReadResult> =>
-      invoke("volli:theme-file-read", { slug }),
-    saveCustomTheme: (theme: ThemeDefinition): Promise<CustomThemeWriteResult> =>
-      invoke("volli:theme-file-write", { theme }),
-    deleteCustomTheme: (slug: string): Promise<CustomThemeListResult> =>
-      invoke("volli:theme-file-delete", { slug }),
-    /** Reveals the theme's file in Finder. */
-    revealCustomTheme: (slug: string): Promise<Result> =>
-      invoke("volli:theme-file-reveal", { slug }),
-    /** Opens the theme's file in the user's default editor. */
-    openCustomTheme: (slug: string): Promise<Result> => invoke("volli:theme-file-open", { slug }),
   },
 };
 
