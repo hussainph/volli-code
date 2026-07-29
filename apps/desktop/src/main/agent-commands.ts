@@ -55,6 +55,7 @@ import type {
 import { listAttachments } from "./db/attachments-repo";
 import { listTicketEvents, recordTicketEvent } from "./db/events-repo";
 import { listComments } from "./db/comments-repo";
+import { recordHarnessChannelEvent, recordHarnessLaunch } from "./db/harness-channel-repo";
 import { getRegisteredHarness } from "./db/harness-registry-repo";
 import { listAllLabels } from "./db/labels-repo";
 import { listProjects } from "./db/projects-repo";
@@ -1160,6 +1161,18 @@ export function createAgentCommandService(
         const announced = firingHarnessId(options.db, session, slug);
         if (!announced.ok) return announced.response;
         const harnessId = announced.harnessId;
+        // The only honest place to count a launch. This call is made by the
+        // wrapper Volli generated, one step before it execs, so it is proof
+        // that our configuration was in the loop — which is exactly what has to
+        // be true for the silence afterwards to mean anything. Counting at the
+        // PTY spawn instead would also count `/opt/homebrew/bin/claude` typed by
+        // hand, a launch that never saw our hooks, and manufacture a false
+        // accusation out of a user's own shell habit.
+        //
+        // Ungated, unlike `active_harness_id` above: a relaunch of the same
+        // harness is a new launch whose channel has proved nothing yet, and it
+        // is the case the whole table exists to catch.
+        recordHarnessLaunch(options.db, harnessId, now());
         // The WRITE is gated on a change: `active_harness_id` records which
         // harness is running, and re-storing the value already there is a
         // durable write bought for nothing.
@@ -1287,6 +1300,13 @@ export function createAgentCommandService(
         // knows about the capability — `absent` only for a harness it has no
         // record of at all.
         const status = recordHarnessDelivery(options.db, firing.harnessId, event, now());
+        // The other half of the channel's two integers. Deliberately outside
+        // every rule above it: a superseded event is still a delivery, and an
+        // event nobody declared is still a delivery. This column answers "is
+        // anything coming down this pipe", not "should this one be believed",
+        // and withholding it would make a working channel look dead for the
+        // sake of an event that merely arrived out of order.
+        recordHarnessChannelEvent(options.db, firing.harnessId, now());
         // ONE event earns a notification: a human is blocking the agent's
         // progress. `subagent.completed` is telemetry — a subagent finishing is
         // not the parent finishing — and `permission.requested` is bound to the

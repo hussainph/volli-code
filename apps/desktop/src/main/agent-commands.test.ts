@@ -14,6 +14,7 @@ import type {
 } from "@volli/shared";
 
 import { createAttachment } from "./db/attachments-repo";
+import { listHarnessChannels } from "./db/harness-channel-repo";
 import { getRegisteredHarness, recordHarnessTrust } from "./db/harness-registry-repo";
 import { insertProject } from "./db/projects-repo";
 import { endSession, getSession, insertSession, setActiveHarnessId } from "./db/sessions-repo";
@@ -1647,6 +1648,62 @@ describe("agent command service", () => {
       expect(second).toMatchObject({ ok: true, data: { harnessSessionId: secondId } });
     });
 
+    // The one honest launch count. A PTY spawn would also count a harness the
+    // user started by absolute path, outside our wrapper and our config; this
+    // call cannot happen unless the wrapper ran.
+    it("stamps the launch the wrapper just proved, and nothing else", async () => {
+      const { announce } = announceService();
+
+      await announce("claude-code");
+
+      expect(listHarnessChannels(ctx.db)).toEqual([
+        { harnessId: "claude-code", lastLaunchAt: 4242, lastEventAt: null },
+      ]);
+    });
+
+    // Unlike `active_harness_id`, which is gated on a change. A relaunch is a
+    // new launch whose channel has proved nothing yet, and it is exactly the
+    // case that makes a broken upgrade visible.
+    it("stamps a relaunch of the harness already believed to be running", async () => {
+      ctx = openTestDb();
+      insertProject(ctx.db, testProject({ id: "project-one", path: "/repo/volli" }));
+      insertSession(
+        ctx.db,
+        testSession("project-one", null, { id: sessionId, harnessId: "claude-code" }),
+      );
+      let clock = 1000;
+      const service = createAgentCommandService({
+        db: ctx.db,
+        appVersion: "1.2.3",
+        now: () => clock,
+      });
+      const announce = () =>
+        service.execute({
+          v: 1,
+          cmd: "session.harness",
+          args: { id: "claude-code" },
+          ctx: { cwd: "/repo/volli", env: { session: sessionId } },
+        });
+
+      await announce();
+      clock = 9000;
+      await announce();
+
+      expect(listHarnessChannels(ctx.db)).toEqual([
+        { harnessId: "claude-code", lastLaunchAt: 9000, lastEventAt: null },
+      ]);
+    });
+
+    it("stamps nothing for an announce it refused", async () => {
+      const { announce } = announceService();
+      endSession(ctx.db, sessionId, 5000, 0);
+
+      await announce("claude-code");
+      await announce("not-a-harness");
+
+      expect(listHarnessChannels(ctx.db)).toEqual([]);
+    });
+
     // A `reported` or `none` harness names its own session, and its wrapper asks
     // for nothing. Minting for it would overwrite a real resume seed.
     it("mints nothing for a wrapper that did not ask", async () => {
@@ -1757,6 +1814,43 @@ describe("agent command service", () => {
           firedAt: null,
         },
       ]);
+    });
+
+    // The channel's other integer, and it is written for a built-in exactly as
+    // for a manifest — the four harnesses Volli ships are the ones that were
+    // exempt from every durable record, and the ones caught reporting nothing.
+    it("stamps a delivery against the harness that fired it", async () => {
+      const { hook } = hookService();
+
+      await hook({ harness: "claude-code", event: "session.started" });
+
+      expect(listHarnessChannels(ctx.db)).toEqual([
+        { harnessId: "claude-code", lastLaunchAt: null, lastEventAt: 4242 },
+      ]);
+    });
+
+    // "Is anything coming down this pipe" is a different question from "should
+    // this event be believed". An event that lost the ordering race still
+    // proves the channel is alive.
+    it("stamps a delivery the ordering rule refused to act on", async () => {
+      const { hook } = hookService();
+
+      await hook({ harness: "claude-code", event: "turn.started", firedAt: 200 });
+      const late = await hook({ harness: "claude-code", event: "input.needed", firedAt: 100 });
+
+      expect(late).toMatchObject({ ok: true, data: { superseded: true } });
+      expect(listHarnessChannels(ctx.db)).toEqual([
+        { harnessId: "claude-code", lastLaunchAt: null, lastEventAt: 4242 },
+      ]);
+    });
+
+    it("stamps nothing for an event it refused", async () => {
+      const { hook } = hookService();
+
+      await hook({ harness: "claude-code", event: "SubagentStop" });
+      await hook({ harness: "not-a-harness", event: "turn.started" });
+
+      expect(listHarnessChannels(ctx.db)).toEqual([]);
     });
 
     it("refuses an event name outside the canonical union", async () => {
