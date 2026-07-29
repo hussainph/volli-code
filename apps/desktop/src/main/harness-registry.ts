@@ -264,12 +264,36 @@ export function trustedHarnessAdapters(
  * harness ever sends — the one a human is already waiting on — and a harness
  * that blocks once per session would never earn a notification at all.
  *
- * A first-class harness has no row and needs none: its bindings are Volli's own
- * code, checked against the installed binary before they were written down, so
- * there is no claim here for a ledger to keep honest. Everything else is a
- * registered manifest, and one Volli has no record of — deleted, never
- * confirmed — gets its event recorded and nothing else. Automation follows
- * evidence, and a harness the app no longer knows has produced none.
+ * This used to open by short-circuiting every first-class harness, on the
+ * grounds that a built-in's bindings "are Volli's own code, checked against the
+ * installed binary before they were written down, so there is no claim here for
+ * a ledger to keep honest." **That justification is dead, and it was measured
+ * dead rather than argued so.** Every one of Codex's four hook bindings had been
+ * rendering `async = true`, which codex 0.144.6 skips outright with a warning:
+ * they were inert for the entire life of the branch that declared them working,
+ * and nothing in the app could say so. A built-in's declaration is not more
+ * trustworthy than a manifest's — it is LESS scrutinised, because nobody had to
+ * click a dialog to accept it.
+ *
+ * What the short-circuit actually protected against is narrower, and it stays:
+ * `registered_harnesses` is a table about manifests, keyed on a slug a
+ * first-class id may never claim (the reserved namespaces), and every column in
+ * it — the verdict, the bytes, the path — is a fact about a file a built-in does
+ * not have. There is no row here for Claude Code to have, so `absent` for it
+ * would not be a measurement, it would be a category error that silently costs
+ * every built-in its needs-you notification.
+ *
+ * So the answer for a harness with no row now depends on which harness it is,
+ * stated rather than assumed. A built-in's delivery IS its evidence and there is
+ * nothing else this function could honestly say about the event it was just
+ * handed. A registered manifest Volli has no record of — deleted, never
+ * confirmed — gets its event recorded and nothing else, because automation
+ * follows evidence and the app no longer knows what that harness claimed.
+ *
+ * The durable record a built-in was missing is `harness_channel` (migration
+ * 017), written for every harness without exception at this function's call
+ * site. That is the mechanism that catches one delivering nothing, and it is
+ * where the exemption really mattered.
  */
 export function recordHarnessDelivery(
   db: Database.Database,
@@ -277,10 +301,9 @@ export function recordHarnessDelivery(
   event: HarnessEvent,
   now: number,
 ): HarnessEventStatus {
-  if (isFirstClassHarnessId(harnessId)) return "verified";
   markHarnessEventVerified(db, harnessId, event, now);
   const record = getRegisteredHarness(db, harnessId);
-  if (record === undefined) return "absent";
+  if (record === undefined) return isFirstClassHarnessId(harnessId) ? "verified" : "absent";
   return harnessEventStatus(event, {
     declared: new Set(record.declaredEvents),
     verified: new Set(record.verifiedEvents),

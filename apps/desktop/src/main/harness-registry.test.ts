@@ -395,7 +395,12 @@ describe("recordHarnessDelivery", () => {
     );
   });
 
-  it("needs no ledger for a harness Volli ships an adapter for", () => {
+  // Not an exemption from evidence — there is no manifest row for a built-in to
+  // have, and the delivery it was just handed is the whole evidence there is.
+  // What a built-in used to be exempt FROM is the durable record, and that now
+  // lives in `harness_channel`, written at this function's call site for every
+  // harness alike.
+  it("takes a built-in's delivery as its own evidence, having no manifest to read", () => {
     expect(recordHarnessDelivery(fixture.db, "claude-code", "input.needed", 1100)).toBe("verified");
     expect(getRegisteredHarness(fixture.db, "claude-code")).toBeUndefined();
   });
