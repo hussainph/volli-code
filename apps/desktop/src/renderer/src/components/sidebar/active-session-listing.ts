@@ -1,5 +1,8 @@
 import {
+  sessionHarnessStatus,
+  type SessionActivitySource,
   type SessionActivityState,
+  type SessionHarnessState,
   type SessionRecord,
   type Ticket,
   type TicketEvent,
@@ -45,13 +48,29 @@ export interface LastRun {
   resumable: boolean;
 }
 
+/**
+ * Why this row needs a human. `blocked`/`done` are the agent's own voluntary
+ * `volli session` signals and carry its words; `waiting` is the involuntary
+ * hook channel, which is more reliable but has nothing to say beyond the fact.
+ */
+export interface SessionAttention {
+  signal: "done" | "blocked" | "waiting";
+  reason: string | null;
+}
+
 export interface ActiveSessionRow {
   id: string;
   ticket: Ticket;
   title: string;
   source: string;
   activity: SessionActivityState | null;
-  attention: { signal: "done" | "blocked"; reason: string | null } | null;
+  /**
+   * Whether the row's activity is the harness's own report or the PTY
+   * heuristic's guess — `silent` when hooks were expected and never arrived,
+   * the one degradation the user was promised against.
+   */
+  activitySource: SessionActivitySource;
+  attention: SessionAttention | null;
   /** Present on a concluded Active fallback row — see {@link LastRun}. */
   lastRun: LastRun | null;
   target: ActiveSessionTarget | null;
@@ -69,6 +88,8 @@ export interface BuildActiveSessionListingInput {
   records: readonly SessionRecord[];
   lastOutputAt: Readonly<Record<string, number>>;
   parkState: Readonly<Record<string, { parked: boolean; keepAwake: boolean }>>;
+  /** Per-session harness reporting state; a missing entry means nothing reports here. */
+  harness: Readonly<Record<string, SessionHarnessState>>;
   now: number;
 }
 
@@ -76,16 +97,29 @@ function sessionSource(record: SessionRecord | undefined): string {
   return record === undefined ? "Terminal" : sessionSourceLabel(record);
 }
 
-function paneActivity(
-  pane: SessionPane,
-  input: Pick<BuildActiveSessionListingInput, "lastOutputAt" | "parkState" | "now">,
-): SessionActivityState {
+type ActivityInput = Pick<
+  BuildActiveSessionListingInput,
+  "lastOutputAt" | "parkState" | "harness" | "now"
+>;
+
+function paneActivity(pane: SessionPane, input: ActivityInput): SessionActivityState {
   return sessionActivityState(
     input.lastOutputAt[pane.sessionId] ?? null,
     pane.exitCode !== null,
     input.now,
     input.parkState[pane.sessionId]?.parked ?? false,
+    input.harness[pane.sessionId]?.declared ?? null,
   );
+}
+
+/**
+ * Where a pane's activity came from. A pane with no harness entry at all — a
+ * bare shell, a session that predates the channel — is inferred, which is the
+ * truth and never a complaint.
+ */
+function paneActivitySource(sessionId: string, input: ActivityInput): SessionActivitySource {
+  const state = input.harness[sessionId];
+  return state === undefined ? "inferred" : sessionHarnessStatus(state, input.now).activitySource;
 }
 
 const ACTIVITY_PRIORITY: Record<SessionActivityState, number> = {
@@ -105,12 +139,9 @@ const CONCLUDED_PRIORITY = 5;
  * mapped signal. Data-driven so a future hook-derived state is an insert, not a
  * rewrite (mirrors {@link ACTIVITY_PRIORITY}).
  */
-const NEEDS_YOU_PRIORITY = { blocked: 0, done: 1, bare: 2 } as const;
+const NEEDS_YOU_PRIORITY = { blocked: 0, waiting: 1, done: 2, bare: 3 } as const;
 
-function tabActivity(
-  tab: SessionTab,
-  input: Pick<BuildActiveSessionListingInput, "lastOutputAt" | "parkState" | "now">,
-): SessionActivityState {
+function tabActivity(tab: SessionTab, input: ActivityInput): SessionActivityState {
   return sessionPanes(tab.layout)
     .map((pane) => paneActivity(pane, input))
     .toSorted((a, b) => ACTIVITY_PRIORITY[a] - ACTIVITY_PRIORITY[b])[0]!;
@@ -122,7 +153,8 @@ function sessionRow(
   paneId: string,
   record: SessionRecord | undefined,
   activity: SessionActivityState,
-  attention: ActiveSessionRow["attention"],
+  activitySource: SessionActivitySource,
+  attention: SessionAttention | null,
 ): ActiveSessionRow {
   return {
     id: `session:${tab.sessionId}`,
@@ -130,6 +162,7 @@ function sessionRow(
     title: tab.title,
     source: sessionSource(record),
     activity,
+    activitySource,
     attention,
     lastRun: null,
     target: { tabId: tab.sessionId, paneId },
@@ -166,6 +199,7 @@ function lastRunRow(
       title: mounted.title,
       source: sessionSource(record),
       activity: null,
+      activitySource: "inferred",
       attention: null,
       lastRun: {
         outcome: outcomeFromExitCode(pane?.exitCode ?? record?.exitCode ?? null),
@@ -189,6 +223,7 @@ function lastRunRow(
       title: latest.title,
       source: sessionSourceLabel(latest),
       activity: null,
+      activitySource: "inferred",
       attention: null,
       lastRun: {
         outcome: outcomeFromExitCode(latest.exitCode),
@@ -205,6 +240,7 @@ function lastRunRow(
     title: ticket.title,
     source: "No live session",
     activity: null,
+    activitySource: "inferred",
     attention: null,
     lastRun: null,
     target: null,
@@ -242,6 +278,36 @@ export function buildActiveSessionListing(
   const needsYouEntries: NeedsYouEntry[] = [];
   const active: ActiveSessionRow[] = [];
 
+  /**
+   * Files one live tab into the tier its state earns — Needs you when the
+   * harness says a human is blocking it, Active otherwise. Returns whether the
+   * tab produced a row at all, which is what a Doing ticket's presence
+   * guarantee counts; a promoted row still counts, since the ticket is visible.
+   */
+  const placeLiveTab = (ticket: Ticket, tab: SessionTab): boolean => {
+    const activity = tabActivity(tab, input);
+    if (activity === "exited") return false;
+    const row = sessionRow(
+      ticket,
+      tab,
+      tab.activePaneId,
+      recordsById.get(tab.activePaneId),
+      activity,
+      paneActivitySource(tab.activePaneId, input),
+      activity === "waiting" ? { signal: "waiting", reason: null } : null,
+    );
+    if (activity === "waiting") {
+      needsYouEntries.push({
+        row,
+        priority: NEEDS_YOU_PRIORITY.waiting,
+        recency: ticket.updatedAt,
+      });
+    } else {
+      active.push(row);
+    }
+    return true;
+  };
+
   for (const ticket of input.tickets) {
     const container = input.containers[ticket.id];
     if (ticket.status === "needs_review") {
@@ -265,10 +331,15 @@ export function buildActiveSessionListing(
           ? { payload: signal.payload, paneId: signaledPaneId, createdAt: signal.createdAt }
           : null;
       if (attentionTab !== undefined) {
-        const exactAttention =
-          exactSignal === null
-            ? null
-            : { signal: exactSignal.payload.signal, reason: exactSignal.payload.reason };
+        const activity = tabActivity(attentionTab, input);
+        // The agent's own signal wins where there is one: a hook payload knows
+        // that a human is needed, but only the CLI signal knows what for.
+        const attention: SessionAttention | null =
+          exactSignal !== null
+            ? { signal: exactSignal.payload.signal, reason: exactSignal.payload.reason }
+            : activity === "waiting"
+              ? { signal: "waiting", reason: null }
+              : null;
         const targetPaneId = exactSignal === null ? attentionTab.activePaneId : exactSignal.paneId;
         needsYouEntries.push({
           row: sessionRow(
@@ -276,13 +347,12 @@ export function buildActiveSessionListing(
             attentionTab,
             targetPaneId,
             recordsById.get(targetPaneId),
-            tabActivity(attentionTab, input),
-            exactAttention,
+            activity,
+            paneActivitySource(targetPaneId, input),
+            attention,
           ),
           priority:
-            exactAttention === null
-              ? NEEDS_YOU_PRIORITY.bare
-              : NEEDS_YOU_PRIORITY[exactAttention.signal],
+            attention === null ? NEEDS_YOU_PRIORITY.bare : NEEDS_YOU_PRIORITY[attention.signal],
           recency: exactSignal?.createdAt ?? ticket.updatedAt,
         });
       } else {
@@ -293,6 +363,7 @@ export function buildActiveSessionListing(
             title: ticket.title,
             source: "No live session",
             activity: null,
+            activitySource: "inferred",
             attention: null,
             lastRun: null,
             target: null,
@@ -304,18 +375,7 @@ export function buildActiveSessionListing(
 
       for (const tab of container?.tabs ?? []) {
         if (tab === attentionTab) continue;
-        const activity = tabActivity(tab, input);
-        if (activity === "exited") continue;
-        active.push(
-          sessionRow(
-            ticket,
-            tab,
-            tab.activePaneId,
-            recordsById.get(tab.activePaneId),
-            activity,
-            null,
-          ),
-        );
+        placeLiveTab(ticket, tab);
       }
       continue;
     }
@@ -323,19 +383,7 @@ export function buildActiveSessionListing(
     if (ticket.status !== "doing") continue;
     let liveRows = 0;
     for (const tab of container?.tabs ?? []) {
-      const activity = tabActivity(tab, input);
-      if (activity === "exited") continue;
-      active.push(
-        sessionRow(
-          ticket,
-          tab,
-          tab.activePaneId,
-          recordsById.get(tab.activePaneId),
-          activity,
-          null,
-        ),
-      );
-      liveRows += 1;
+      if (placeLiveTab(ticket, tab)) liveRows += 1;
     }
     // The tier guarantees every Doing ticket a presence: nothing live means one
     // concluded fallback row instead of silence.

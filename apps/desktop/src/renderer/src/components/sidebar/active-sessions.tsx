@@ -101,16 +101,25 @@ function SessionRow({
         ? row.attention.reason === null
           ? "Ready for review"
           : `Ready · ${row.attention.reason}`
-        : "Needs review";
+        : row.attention?.signal === "waiting"
+          ? "Waiting for you"
+          : "Needs review";
+  // A session whose hooks never arrived states that, in place of an activity it
+  // would only be guessing at. Every other row keeps its activity word: a Known
+  // harness never promised to report, so inference there is not news.
+  const activityLabel =
+    row.activity === null
+      ? row.source
+      : row.activitySource === "silent"
+        ? `${row.source} · Not reporting`
+        : `${row.source} · ${ACTIVITY_LABEL[row.activity]}`;
   const stateLabel = needsAttention
     ? attentionLabel
     : row.lastRun !== null
       ? row.lastRun.endedAt === null
         ? OUTCOME_LABEL[row.lastRun.outcome]
         : `${OUTCOME_LABEL[row.lastRun.outcome]} · ${relativeTime(row.lastRun.endedAt, now)}`
-      : row.activity === null
-        ? row.source
-        : `${row.source} · ${ACTIVITY_LABEL[row.activity]}`;
+      : activityLabel;
 
   return (
     <SidebarMenuItem>
@@ -228,6 +237,7 @@ export function ActiveSessions({ project }: { project: Project }) {
   const containers = useSessionsStore((state) => state.byOwner);
   const lastOutputAt = useSessionsStore((state) => state.lastOutputAt);
   const parkState = useSessionsStore((state) => state.parkState);
+  const harness = useSessionsStore((state) => state.harness);
   const openTicketId = useWorkspaceStore(
     (state) => state.byProject[project.id]?.openTicketId ?? null,
   );
@@ -350,9 +360,10 @@ export function ActiveSessions({ project }: { project: Project }) {
         records,
         lastOutputAt,
         parkState,
+        harness,
         now,
       }),
-    [tickets, containers, eventsByTicket, records, lastOutputAt, parkState, now],
+    [tickets, containers, eventsByTicket, records, lastOutputAt, parkState, harness, now],
   );
   const rowCount = listing.needsYou.length + listing.active.length;
   const activeTabId =

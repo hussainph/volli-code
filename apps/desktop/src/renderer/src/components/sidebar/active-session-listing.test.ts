@@ -1,4 +1,12 @@
-import type { SessionRecord, Ticket, TicketEvent } from "@volli/shared";
+import {
+  createSessionHarnessState,
+  receiveHarnessEvent,
+  type HarnessEvent,
+  type SessionHarnessState,
+  type SessionRecord,
+  type Ticket,
+  type TicketEvent,
+} from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
 import { buildActiveSessionListing } from "./active-session-listing";
@@ -86,6 +94,7 @@ describe("buildActiveSessionListing", () => {
       records: [],
       lastOutputAt: { s1: 99_000 },
       parkState: {},
+      harness: {},
       now: 100_000,
     });
 
@@ -132,6 +141,7 @@ describe("buildActiveSessionListing", () => {
       records: [],
       lastOutputAt: { s1: 99_000 },
       parkState: {},
+      harness: {},
       now: 100_000,
     });
 
@@ -181,6 +191,7 @@ describe("buildActiveSessionListing", () => {
       records: [],
       lastOutputAt: {},
       parkState: {},
+      harness: {},
       now: 100_000,
     });
 
@@ -235,6 +246,7 @@ describe("buildActiveSessionListing", () => {
       records: [],
       lastOutputAt: {},
       parkState: {},
+      harness: {},
       now: 100,
     });
 
@@ -286,6 +298,7 @@ describe("buildActiveSessionListing", () => {
       records: [],
       lastOutputAt: { working: 99_000 },
       parkState: { parked: { parked: true, keepAwake: false } },
+      harness: {},
       now: 100_000,
     });
 
@@ -329,6 +342,7 @@ describe("buildActiveSessionListing", () => {
       ],
       lastOutputAt: {},
       parkState: {},
+      harness: {},
       now,
     });
 
@@ -361,6 +375,7 @@ describe("buildActiveSessionListing", () => {
       ],
       lastOutputAt: {},
       parkState: {},
+      harness: {},
       now,
     });
 
@@ -424,6 +439,7 @@ describe("buildActiveSessionListing", () => {
       ],
       lastOutputAt: {},
       parkState: {},
+      harness: {},
       now,
     });
 
@@ -446,6 +462,7 @@ describe("buildActiveSessionListing", () => {
       records: [],
       lastOutputAt: {},
       parkState: {},
+      harness: {},
       now: 100_000,
     });
 
@@ -473,6 +490,7 @@ describe("buildActiveSessionListing", () => {
       records: [record({ id: "s1", ticketId: "t1", title: "Agent", endedAt: now - 1_000 })],
       lastOutputAt: {},
       parkState: {},
+      harness: {},
       now,
     });
 
@@ -536,6 +554,7 @@ describe("buildActiveSessionListing", () => {
       records: [],
       lastOutputAt: {},
       parkState: {},
+      harness: {},
       now,
     });
 
@@ -544,5 +563,121 @@ describe("buildActiveSessionListing", () => {
       "Done session",
       "Bare review",
     ]);
+  });
+});
+
+/** A hooked claude-code session that has reported `event` most recently. */
+function reporting(event: HarnessEvent, startedAt = 90_000): SessionHarnessState {
+  return receiveHarnessEvent(
+    createSessionHarnessState({
+      harnessId: "claude-code",
+      expectedTier: "hooked",
+      declaredEvents: ["session.started", "turn.started", "input.needed"],
+      startedAt,
+    }),
+    event,
+  );
+}
+
+describe("buildActiveSessionListing — harness-reported attention", () => {
+  it("moves a Doing ticket whose agent is blocked on a human into Needs you", () => {
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: { t1: container("s1", [paneTab("s1", "Implement UI")]) },
+      eventsByTicket: {},
+      records: [],
+      lastOutputAt: {},
+      parkState: {},
+      harness: { s1: reporting("input.needed") },
+      now: 100_000,
+    });
+
+    expect(result.needsYou.map((row) => ({ title: row.title, activity: row.activity }))).toEqual([
+      { title: "Implement UI", activity: "waiting" },
+    ]);
+    expect(result.active).toEqual([]);
+  });
+
+  it("keeps a cursor session out of Needs you even when something claims it is blocked", () => {
+    // Cursor's own source maps both permission and notification events to null,
+    // so a blocking event bearing its name is noise, not a report.
+    const cursor = receiveHarnessEvent(
+      createSessionHarnessState({
+        harnessId: "cursor",
+        expectedTier: "hooked",
+        declaredEvents: ["session.started", "turn.started", "turn.completed"],
+        startedAt: 90_000,
+      }),
+      "input.needed",
+    );
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: { t1: container("s1", [paneTab("s1", "Implement UI")]) },
+      eventsByTicket: {},
+      records: [],
+      lastOutputAt: {},
+      parkState: {},
+      harness: { s1: cursor },
+      now: 100_000,
+    });
+
+    expect(result.needsYou).toEqual([]);
+    expect(result.active.map((row) => row.activity)).toEqual(["idle"]);
+  });
+
+  it("lets the agent's own blocked signal outrank a hook-declared wait", () => {
+    const signal: TicketEvent = {
+      id: "e1",
+      ticketId: "t2",
+      actor: "session",
+      actorContext: { ticketId: "t2", sessionId: "s2" },
+      createdAt: 80_000,
+      payload: { kind: "session_signal", signal: "blocked", reason: "Approve the deploy" },
+    };
+    const result = buildActiveSessionListing({
+      tickets: [
+        // The waiting one is the more recently touched, so only priority can
+        // put the blocked one first.
+        ticket({ id: "t1", status: "doing", ticketNumber: 1, updatedAt: 90_000 }),
+        ticket({ id: "t2", status: "needs_review", ticketNumber: 2, updatedAt: 10_000 }),
+      ],
+      containers: {
+        t1: container("s1", [paneTab("s1", "Implement UI")]),
+        t2: container("s2", [paneTab("s2", "Ship it")]),
+      },
+      eventsByTicket: { t2: [signal] },
+      records: [],
+      lastOutputAt: {},
+      parkState: {},
+      harness: { s1: reporting("input.needed") },
+      now: 100_000,
+    });
+
+    // Both need a human; the one that can say WHY it needs one comes first.
+    expect(result.needsYou.map((row) => row.attention)).toEqual([
+      { signal: "blocked", reason: "Approve the deploy" },
+      { signal: "waiting", reason: null },
+    ]);
+  });
+
+  it("says a session's activity is inferred when the hooks it promised never arrived", () => {
+    const bypassed = createSessionHarnessState({
+      harnessId: "claude-code",
+      expectedTier: "hooked",
+      declaredEvents: ["session.started", "turn.started", "input.needed"],
+      startedAt: 1000,
+    });
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: { t1: container("s1", [paneTab("s1", "Implement UI")]) },
+      eventsByTicket: {},
+      records: [],
+      lastOutputAt: {},
+      parkState: {},
+      harness: { s1: bypassed },
+      now: 100_000,
+    });
+
+    expect(result.active.map((row) => row.activitySource)).toEqual(["silent"]);
   });
 });
