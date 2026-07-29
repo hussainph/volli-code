@@ -122,6 +122,22 @@ function readStdinPayload(timeoutMs: number): Promise<string> {
   });
 }
 
+/**
+ * How long an invocation waits on the app.
+ *
+ * `session.harness` is the one command with an agent's launch queued behind it:
+ * a harness wrapper runs it synchronously, then execs the harness. Ten seconds
+ * of a wedged app is ten seconds of a user staring at a terminal that has done
+ * nothing, and the cost of giving up early is one unpinned launch — no session
+ * id, no resume seed — which is exactly what happens with no app at all. So it
+ * is bounded at a wait a human reads as a hesitation rather than a hang.
+ * Connection failures don't reach this: a socket with no listener errors out at
+ * once.
+ */
+function timeoutForCommand(command: string): number {
+  return command === "session.harness" ? 2_000 : 10_000;
+}
+
 async function main(): Promise<void> {
   // `volli hook` is dispatched before the CLI proper: it is fired by a harness
   // hook rather than typed, it must cost a harness running outside Volli
@@ -158,7 +174,8 @@ async function main(): Promise<void> {
     readText: (path) => readFile(path, "utf8"),
     // Measured here, in the environment under test — see `doctor.ts`.
     observe: () => observeEnvironment(),
-    request: (path, request) => requestAgent(path, request, { timeoutMs: 10_000 }),
+    request: (path, request) =>
+      requestAgent(path, request, { timeoutMs: timeoutForCommand(request.cmd) }),
     launch: (timeoutMs) => {
       return launchApp(
         {

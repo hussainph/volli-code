@@ -20,7 +20,13 @@
  * JSON), which is what makes this a test of what the app does rather than of
  * what this file thinks it does.
  *
- * Checks 7-9 close the loop the wrapper opens: a hook fired through the real
+ * Checks 7-8 are the session id the wrapper asks the app to mint: two launches
+ * in ONE terminal must reach the harness with two different ids (the terminal's
+ * own `VOLLI_SESSION` never varies, so reusing it was a launch a harness could
+ * refuse), and a `volli` that is absent or cannot reach the app must cost the
+ * launch its id and nothing else.
+ *
+ * Checks 9-11 close the loop the wrapper opens: a hook fired through the real
  * shim records the harness's own session id on the session record, costs a
  * harness running outside Volli nothing, and — with the app shut down — still
  * exits 0 in silence, because a dead Volli must never wedge a live agent.
@@ -112,6 +118,12 @@ function runHookVerb(shimPath, args, env, payload) {
   });
 }
 
+/** The `--session-id` a recorded run was launched with, or null when unpinned. */
+function sessionIdIn(run) {
+  const index = run.args.indexOf("--session-id");
+  return index === -1 ? null : (run.args[index + 1] ?? null);
+}
+
 async function main() {
   // A fake `claude` on PATH is what makes the app detect claude-code and write
   // its wrapper; it is also the binary that wrapper resolves to.
@@ -139,6 +151,11 @@ async function main() {
   });
   const realUserData = await fs.realpath(userDataDir);
   const wrapperPath = join(realUserData, "bin", "claude");
+  // Resolved up here because the wrapper itself now calls the shim: the session
+  // id it launches with is minted by the app over this socket, not read out of
+  // the environment.
+  const shimPath = shimPathFor(realUserData);
+  const socketPath = socketPathFor(realUserData);
 
   let sessionEnv = null;
   let deadAppProbe = null;
@@ -188,8 +205,11 @@ async function main() {
     const base = {
       PATH: `${fakeBin}:/usr/bin:/bin`,
       VOLLI_SESSION: sessionEnv.VOLLI_SESSION,
+      VOLLI_SOCKET: socketPath,
       VOLLI_HARNESS_ARGV_CLAUDE_CODE: sessionEnv.VOLLI_HARNESS_ARGV_CLAUDE_CODE,
     };
+    /** The shape cursor validates and Claude Code demands: a strict v4. */
+    const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
     await attempt(0, "the app generated a wrapper and an argv payload to apply", async () => {
       const mode = (await fs.stat(wrapperPath)).mode & 0o777;
@@ -216,10 +236,9 @@ async function main() {
     });
 
     // === 2. injection inside a session ======================================
-    await attempt(2, "applies the configured argv and Volli's own session id", async () => {
+    await attempt(2, "applies the configured argv and an id minted for this launch", async () => {
       const run = await runWrapper(wrapperPath, ["--print", "hello"], base);
       const settingsIndex = run.args.indexOf("--settings");
-      const idIndex = run.args.indexOf("--session-id");
       const settings = settingsIndex === -1 ? "" : (run.args[settingsIndex + 1] ?? "");
       let parsed = null;
       try {
@@ -229,6 +248,7 @@ async function main() {
       }
       // The settings payload must survive `eval` as ONE word with its JSON intact
       // — that is the quoting the text assertions cannot check.
+      const launched = sessionIdIn(run);
       const ok =
         run.code === 0 &&
         settingsIndex === 0 &&
@@ -237,9 +257,13 @@ async function main() {
         parsed?.hooks?.Notification?.[0]?.hooks?.[0]?.command?.includes(
           "'hook' 'claude-code' 'input.needed'",
         ) === true &&
-        run.args[idIndex + 1] === base.VOLLI_SESSION &&
+        UUID_V4.test(launched ?? "") &&
+        // The id is the LAUNCH's, not the terminal's. That distinction is the
+        // whole fix: VOLLI_SESSION never varies, so reusing it handed a second
+        // launch in this terminal an id the first one had already consumed.
+        launched !== base.VOLLI_SESSION &&
         JSON.stringify(run.args.slice(-2)) === JSON.stringify(["--print", "hello"]);
-      return { ok, detail: `code=${run.code} argc=${run.args.length} parsed=${parsed !== null}` };
+      return { ok, detail: `code=${run.code} sessionId=${launched} parsed=${parsed !== null}` };
     });
 
     // === 3. the user's own resume wins the session ===========================
@@ -254,6 +278,8 @@ async function main() {
     });
 
     // === 4. no configured argv at all ========================================
+    // No VOLLI_SOCKET either, so this doubles as the no-app case: nothing to ask
+    // for an id, and an unpinned launch is the right degradation.
     await attempt(4, "launches cleanly when no argv was configured for it", async () => {
       const run = await runWrapper(wrapperPath, ["hello"], {
         PATH: base.PATH,
@@ -261,9 +287,7 @@ async function main() {
       });
       // An unset variable must expand to NOTHING, not to an empty argument the
       // harness would then have to interpret.
-      const ok =
-        run.code === 0 &&
-        JSON.stringify(run.args) === JSON.stringify(["--session-id", base.VOLLI_SESSION, "hello"]);
+      const ok = run.code === 0 && JSON.stringify(run.args) === JSON.stringify(["hello"]);
       return { ok, detail: `code=${run.code} args=${JSON.stringify(run.args)}` };
     });
 
@@ -300,12 +324,61 @@ async function main() {
       }
     });
 
-    // === 7-8. the reporting half, end to end ==============================
-    const shimPath = shimPathFor(realUserData);
-    const socketPath = socketPathFor(realUserData);
+    // === 7. THE RELAUNCH BUG ================================================
+    // Quit the agent, run it again in the same terminal. `VOLLI_SESSION` is
+    // stamped once per PTY, so the wrapper that read it out of the environment
+    // handed the second launch the id the first one had already consumed —
+    // which cursor, mkdir-ing a directory named after it, refuses outright.
+    await attempt(7, "gives two launches in one terminal two different ids", async () => {
+      const first = sessionIdIn(await runWrapper(wrapperPath, ["hello"], base));
+      const second = sessionIdIn(await runWrapper(wrapperPath, ["hello"], base));
+      const recorded = await page.evaluate(
+        (projectId) => window.api.sessions.list({ projectId }),
+        "hw-project",
+      );
+      const seed = recorded?.sessions?.find((s) => s.id === created.sessionId)?.harnessSessionId;
+      const ok =
+        UUID_V4.test(first ?? "") &&
+        UUID_V4.test(second ?? "") &&
+        first !== second &&
+        // The newest launch is what a resume of this session must find.
+        seed === second;
+      return { ok, detail: `first=${first} second=${second} seed=${seed}` };
+    });
+
+    // === 8. a launch Volli cannot answer ====================================
+    // Reusing an id is the failure this removed; launching without one is not.
+    // The wrapper drops the flag and execs the harness anyway.
+    await attempt(8, "launches unpinned when volli cannot answer", async () => {
+      // A live shim pointed at a socket nobody is listening on: `volli` exits 3.
+      const dead = await runWrapper(wrapperPath, ["hello"], {
+        ...base,
+        VOLLI_SOCKET: join(scratch, "no-such.sock"),
+      });
+      // And no shim at all, which is exec failing outright inside `$(…)`.
+      const moved = `${shimPath}.moved`;
+      await fs.rename(shimPath, moved);
+      try {
+        const gone = await runWrapper(wrapperPath, ["hello"], base);
+        const ok =
+          gone.code === 0 &&
+          sessionIdIn(gone) === null &&
+          JSON.stringify(gone.args.slice(-1)) === JSON.stringify(["hello"]) &&
+          dead.code === 0 &&
+          sessionIdIn(dead) === null;
+        return {
+          ok,
+          detail: `absent=${gone.code}/${sessionIdIn(gone)} unreachable=${dead.code}/${sessionIdIn(dead)}`,
+        };
+      } finally {
+        await fs.rename(moved, shimPath);
+      }
+    });
+
+    // === 9-10. the reporting half, end to end ==============================
     const hookEnv = { VOLLI_SESSION: created.sessionId, VOLLI_SOCKET: socketPath };
 
-    await attempt(7, "a fired hook records the harness's own session id", async () => {
+    await attempt(9, "a fired hook records the harness's own session id", async () => {
       const run = await runHookVerb(
         shimPath,
         ["claude-code", "session.started", "--socket", socketPath],
@@ -330,7 +403,7 @@ async function main() {
       };
     });
 
-    await attempt(8, "costs a harness running outside Volli nothing", async () => {
+    await attempt(10, "costs a harness running outside Volli nothing", async () => {
       const run = await runHookVerb(
         shimPath,
         ["claude-code", "input.needed", "--socket", socketPath],
@@ -347,8 +420,8 @@ async function main() {
     await app.close();
   }
 
-  // === 9. a dead Volli must never wedge a live agent ======================
-  await attempt(9, "exits 0 in silence when Volli is gone", async () => {
+  // === 11. a dead Volli must never wedge a live agent =====================
+  await attempt(11, "exits 0 in silence when Volli is gone", async () => {
     const run = await runHookVerb(
       deadAppProbe.shimPath,
       ["claude-code", "turn.completed", "--socket", deadAppProbe.socketPath],

@@ -502,8 +502,8 @@ const SESSION_LINK_SPEC: CommandSpec = {
 };
 
 /**
- * `volli session harness <slug>` — the wrapper announcing which harness is now
- * running in this terminal.
+ * `volli session harness <slug> [--mint]` — the wrapper saying which harness is
+ * now running in this terminal, and asking for the session id to launch it with.
  *
  * Involuntary, like `hook`: it is fired by the generated PATH shim one step
  * before it execs the harness, never typed by an agent and never read by a
@@ -512,6 +512,10 @@ const SESSION_LINK_SPEC: CommandSpec = {
  * file Volli generated is noise in it. It still walks the parser (unlike `hook`,
  * which bypasses it entirely) because it carries one ordinary positional and
  * has no reason to grow its own argv handling.
+ *
+ * With `--mint`, and only then, the reply is one bare uuid on stdout: the
+ * wrapper captures it with `$(…)` and prepends it to the harness's argv, so
+ * anything else printed there would reach the harness as a command-line word.
  */
 const SESSION_HARNESS_SPEC: CommandSpec = {
   summary: "Record which harness is now running in the current Volli session.",
@@ -521,7 +525,15 @@ const SESSION_HARNESS_SPEC: CommandSpec = {
     "Fired by the harness's launch wrapper, not typed.",
   ],
   positionalId: { label: "session harness" },
-  options: {},
+  options: {
+    "--mint": {
+      kind: "flag",
+      key: "mint",
+      value: true,
+      hidden: true,
+      help: "Mint this launch's harness session id and print it.",
+    },
+  },
 };
 
 const TICKET_MOVE_SPEC: CommandSpec = {

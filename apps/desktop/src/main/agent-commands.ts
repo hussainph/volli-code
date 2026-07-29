@@ -1111,8 +1111,9 @@ export function createAgentCommandService(
         };
       }
       if (request.cmd === "session.harness") {
-        // The second involuntary channel: a harness's own PATH-shim wrapper
-        // announcing itself one step before it execs. Addressed by
+        // The second involuntary channel: a harness's own PATH-shim wrapper,
+        // one step before it execs, saying what is about to run and — when that
+        // harness takes its session id on argv — asking for one. Addressed by
         // `VOLLI_SESSION` exactly as `session.link` and `hook` are.
         //
         // Why this exists at all: `sessions.harness_id` is written once at
@@ -1127,6 +1128,15 @@ export function createAgentCommandService(
         // invocation of every harness, including a Declared one that fires no
         // hooks at all, so the announce covers the tiers the event channel
         // structurally cannot.
+        //
+        // And why the id is minted HERE rather than in the wrapper: a session
+        // id is only worth anything once it is written down — `harness_session_id`
+        // is what every future resume of this session reads — so a shell that
+        // minted its own would still have to call in to report it. One call
+        // does both. It is minted per LAUNCH, not per session: `VOLLI_SESSION`
+        // is stamped once per PTY, and a harness that treats its session id as
+        // single-use per workspace (cursor mkdirs a directory named after it)
+        // fails outright on the second launch in one terminal.
         const sessionId = request.ctx.env.session;
         if (!sessionId) {
           return failure("CONTEXT_REQUIRED", "session harness requires VOLLI_SESSION context.");
@@ -1164,10 +1174,32 @@ export function createAgentCommandService(
             at: now(),
           });
         }
+        // Only when the caller asked. The wrapper asks exactly when the adapter
+        // it was rendered from takes an id on argv, and that is the only place
+        // the answer is known — a registered manifest's adapter never reaches
+        // main's own table, so main cannot re-derive it here. For a `reported`
+        // or `none` harness a minted id would overwrite the resume seed the
+        // harness's own events are about to write with one it never heard of.
+        //
+        // `randomUUID` directly, not the injectable `newId` seam: the FORMAT is
+        // the contract, not an implementation detail a test may vary. Cursor
+        // validates strict v4 (`4` in the third group, `[89ab]` in the fourth)
+        // and refuses a v7.
+        const minted = request.args["mint"] === true ? randomUUID() : null;
+        if (minted !== null) {
+          // Overwrites, always. The seed belongs to the launch that is starting
+          // now; the previous one describes an agent this terminal has quit.
+          setHarnessSessionId(options.db, session.id, minted);
+        }
         return {
           v: 1,
           ok: true,
-          data: { session: shortSessionId(session.id), harness: harnessId, changed },
+          data: {
+            session: shortSessionId(session.id),
+            harness: harnessId,
+            changed,
+            harnessSessionId: minted,
+          },
         };
       }
       if (request.cmd === "hook") {

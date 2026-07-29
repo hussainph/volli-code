@@ -574,11 +574,50 @@ describe("ensureHarnessRuntime", () => {
  * `apps/desktop/e2e/harness-wrapper-smoke.mjs` runs the same script against a
  * live PTY's real environment; this runs it in milliseconds, in CI.
  */
+/** Drops a stand-in `volli` shim where the wrapper will look for the real one. */
+async function installFakeVolli(shimPath: string, script: string): Promise<void> {
+  await mkdir(join(shimPath, ".."), { recursive: true });
+  await writeFile(shimPath, script, { mode: 0o755 });
+}
+
 describe("the generated wrapper, run", () => {
   /** A harness whose injected settings carry every character a shell reacts to. */
   const HOSTILE_SETTING = '$(touch pwned) `touch pwned2` it\'s \\ * "quoted"';
 
-  async function hostileRuntime(): Promise<{ wrapperPath: string; env: Record<string, string> }> {
+  /**
+   * A stand-in for the generated `volli`, written where the wrapper's pinned
+   * `cliPath` points. It logs the argv it was called with and answers a mint
+   * with a DIFFERENT id every time, which is the property under test: the
+   * wrapper must launch with the id it was just handed, not with one it read
+   * out of an environment that never changes.
+   */
+  // Shell builtins only: the session PATH under test resolves nowhere, so a
+  // `cat` here would silently fail and hand every launch the same id — the very
+  // bug these tests exist to catch.
+  const FAKE_VOLLI = [
+    "#!/bin/sh",
+    'printf "%s\\n" "$*" >> "$VOLLI_MINT_LOG"',
+    "volli_n=0",
+    'if [ -f "$VOLLI_MINT_COUNT" ]; then read volli_n < "$VOLLI_MINT_COUNT"; fi',
+    "volli_n=$((volli_n + 1))",
+    'printf "%s\\n" "$volli_n" > "$VOLLI_MINT_COUNT"',
+    'printf "00000000-0000-4000-8000-00000000000%s\\n" "$volli_n"',
+    "",
+  ].join("\n");
+
+  /** The same shim, unable to answer — a dead app, a broken install, a bad socket. */
+  const FAILING_VOLLI = [
+    "#!/bin/sh",
+    'printf "error[APP_UNREACHABLE] nope\\n" >&2',
+    "exit 3",
+    "",
+  ].join("\n");
+
+  async function hostileRuntime(): Promise<{
+    wrapperPath: string;
+    shimPath: string;
+    env: Record<string, string>;
+  }> {
     const paths = await scratch();
     const binaryPath = await fakeBinary("hostile");
     const runtime = await ensureHarnessRuntime({
@@ -598,7 +637,22 @@ describe("the generated wrapper, run", () => {
     });
     const wrapperPath = runtime.wrapperPaths.get("hostile" as HarnessId);
     if (wrapperPath === undefined) throw new Error("no wrapper was written");
-    return { wrapperPath, env: { ...runtime.env, PATH: "/nonexistent" } };
+    return {
+      wrapperPath,
+      shimPath: paths.shimPath,
+      env: { ...runtime.env, PATH: "/nonexistent" },
+    };
+  }
+
+  /** A session environment that can reach an app, with the mint's bookkeeping. */
+  function mintingSession(env: Record<string, string>): Record<string, string> {
+    return {
+      ...env,
+      VOLLI_SESSION: "5f0d0f7a-0000-4000-8000-000000000000",
+      VOLLI_SOCKET: join(scratchRoot, "volli.sock"),
+      VOLLI_MINT_LOG: join(scratchRoot, "mint-log"),
+      VOLLI_MINT_COUNT: join(scratchRoot, "mint-count"),
+    };
   }
 
   // The one that matters: the injected argv reaches the harness as the
@@ -616,14 +670,73 @@ describe("the generated wrapper, run", () => {
     expect(run.args[0]).toBe("--settings");
     const settings = JSON.parse(run.args[1] ?? "{}") as { volliProbe?: string };
     expect(settings.volliProbe).toBe(HOSTILE_SETTING);
-    expect(run.args.slice(2)).toEqual([
-      "--session-id",
-      "5f0d0f7a-0000-4000-8000-000000000000",
-      "--print",
-      "hello world",
-    ]);
+    // No socket in this environment, so no id was minted and none is passed —
+    // see the minting tests below for the launch that has one.
+    expect(run.args.slice(2)).toEqual(["--print", "hello world"]);
     expect(await exists(join(scratchRoot, "pwned"))).toBe(false);
     expect(await exists(join(scratchRoot, "pwned2"))).toBe(false);
+  });
+
+  // THE RELAUNCH BUG, in a shell. `VOLLI_SESSION` is stamped once per PTY, so a
+  // wrapper that read the session id out of it handed the second launch in one
+  // terminal the id the first had already consumed — which a harness that
+  // treats the id as single-use per workspace (cursor) refuses outright.
+  it("launches with an id it asked the app for, freshly, every time", async () => {
+    const { wrapperPath, shimPath, env } = await hostileRuntime();
+    await installFakeVolli(shimPath, FAKE_VOLLI);
+    const session = mintingSession(env);
+
+    const first = await runWrapper(wrapperPath, ["hello"], session);
+    const second = await runWrapper(wrapperPath, ["hello"], session);
+
+    expect(first.args.slice(-3)).toEqual([
+      "--session-id",
+      "00000000-0000-4000-8000-000000000001",
+      "hello",
+    ]);
+    expect(second.args.slice(-3)).toEqual([
+      "--session-id",
+      "00000000-0000-4000-8000-000000000002",
+      "hello",
+    ]);
+    expect(second.args).not.toContain(session["VOLLI_SESSION"]);
+    // One call, doing both jobs: the announce and the mint.
+    const log = await readFile(join(scratchRoot, "mint-log"), "utf8");
+    expect(log.trim().split("\n")).toEqual([
+      "session harness hostile --mint",
+      "session harness hostile --mint",
+    ]);
+  });
+
+  // Degrading to an unpinned launch is correct; launching under an id that may
+  // already exist is the failure this removed. Either way the agent starts.
+  it("launches with no session id at all when the app cannot answer", async () => {
+    const { wrapperPath, shimPath, env } = await hostileRuntime();
+    await installFakeVolli(shimPath, FAILING_VOLLI);
+
+    const run = await runWrapper(wrapperPath, ["hello"], mintingSession(env));
+
+    expect(run.code).toBe(0);
+    expect(run.args).not.toContain("--session-id");
+    expect(run.args.slice(-1)).toEqual(["hello"]);
+    // The harness owns this terminal a moment from now; the failure may not
+    // print into its first frame.
+    expect(run.stderr).toBe("");
+  });
+
+  // The user asked for a specific session. They are not handed another one —
+  // but Volli is still told what is running, on the detached announce.
+  it("asks for no id, and still announces, when the user drives resume", async () => {
+    const { wrapperPath, shimPath, env } = await hostileRuntime();
+    await installFakeVolli(shimPath, FAKE_VOLLI);
+    const session = mintingSession(env);
+
+    const run = await runWrapper(wrapperPath, ["--resume", "abc123"], session);
+
+    expect(run.args).not.toContain("--session-id");
+    // Backgrounded, so it may not have landed yet — the id it would have minted
+    // is what matters, and it is not on the command line either way.
+    expect(run.args.slice(-2)).toEqual(["--resume", "abc123"]);
   });
 
   it("leaves an invocation outside a Volli session completely alone", async () => {
@@ -658,7 +771,7 @@ describe("the generated wrapper, run", () => {
       VOLLI_SESSION: "5f0d0f7a-0000-4000-8000-000000000000",
     });
 
-    expect(run.args).toEqual(["--session-id", "5f0d0f7a-0000-4000-8000-000000000000", "hello"]);
+    expect(run.args).toEqual(["hello"]);
   });
 
   // The binary a human approved is the one that runs: PATH here resolves

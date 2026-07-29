@@ -207,9 +207,27 @@ describe("renderCliSuccess", () => {
         options,
       ),
     ).toBe("abcdef12  linked 4f1c9a2e-8b7d-4e5a-9c3f-2a1b0d6e5f4c\n");
+    // Consumed by `$(…)` in a generated wrapper and prepended to a harness's
+    // argv: one bare id when one was minted, and not a byte otherwise.
     expect(
-      renderCliSuccess("session.harness", { session: "abcdef12", harness: "codex" }, options),
-    ).toBe("abcdef12  running codex\n");
+      renderCliSuccess(
+        "session.harness",
+        {
+          session: "abcdef12",
+          harness: "cursor",
+          changed: true,
+          harnessSessionId: "4f1c9a2e-8b7d-4e5a-9c3f-2a1b0d6e5f4c",
+        },
+        options,
+      ),
+    ).toBe("4f1c9a2e-8b7d-4e5a-9c3f-2a1b0d6e5f4c\n");
+    expect(
+      renderCliSuccess(
+        "session.harness",
+        { session: "abcdef12", harness: "codex", changed: false, harnessSessionId: null },
+        options,
+      ),
+    ).toBe("");
     expect(renderCliSuccess("notify", { notified: true }, options)).toBe("notified\n");
     expect(renderCliSuccess("app.launch", { alreadyRunning: true }, options)).toBe(
       "Volli is already running\n",

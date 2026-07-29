@@ -205,6 +205,15 @@ describe("parseCliArgs", () => {
     });
   });
 
+  // The wrapper asks for an id only when the harness it is about to exec takes
+  // one on argv; without the flag this is an announce and nothing is minted.
+  it("carries the wrapper's request for a freshly minted session id", () => {
+    expect(parseCliArgs(["session", "harness", "cursor", "--mint"])).toEqual({
+      ok: true,
+      invocation: { command: "session.harness", args: { id: "cursor", mint: true }, json: false },
+    });
+  });
+
   // The reference is what an agent can usefully DO. A verb whose only correct
   // caller is a file Volli generated is noise in it — the same call `hook` made.
   it("keeps the involuntary verbs out of the published command list", () => {

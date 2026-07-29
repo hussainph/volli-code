@@ -55,8 +55,8 @@ export interface WrapperInput {
    */
   binaryPath: string | null;
   /**
-   * The generated `volli` launcher, by absolute path — what the announce below
-   * invokes. Pinned at render time for the same reason {@link
+   * The generated `volli` launcher, by absolute path — what the announce/mint
+   * call below invokes. Pinned at render time for the same reason {@link
    * WrapperInput.binaryPath} is: PATH at run time is whatever the user's own
    * shell startup rebuilt, and the one thing this wrapper may not do is exec
    * something nobody was shown.
@@ -81,15 +81,26 @@ function resumePattern(token: string): string {
 /**
  * The wrapper for `adapter`, to be written into `binDir`.
  *
- * **The harness session id IS `VOLLI_SESSION`.** There is no second id and no
- * mapping table: Volli session ids are already UUIDs, so they satisfy the
- * format harnesses like Claude Code demand, and `sessions.harness_session_id`
- * correlates to the Volli session by being the same string. Nothing else may
- * mint one — {@link buildLaunchConfig} deliberately cannot.
+ * **The harness session id is minted per LAUNCH, by the app, on request.**
+ * `VOLLI_SESSION` addresses the Volli session — which terminal this is, what
+ * hooks and the CLI resolve against — and it is stamped once per PTY, so it
+ * cannot also be the harness's id: a user who quits an agent and runs it again
+ * in the same terminal would hand the second launch the byte-identical id the
+ * first one used. To a harness that treats a session id as single-use per
+ * workspace that is not a stale row, it is a failed launch — `cursor-agent`
+ * mkdirs a directory named after it and throws on EEXIST.
  *
- * The hazard that follows, recorded rather than engineered around: a harness
- * that rejects a session id it has already seen will fail if a Volli session id
- * is reused across launches without a resume flag.
+ * So the wrapper ASKS rather than reuses: one synchronous `session harness`
+ * call per launch, which records what is now running and mints a fresh UUIDv4
+ * for it in the same round trip. The app mints rather than the shell because
+ * the id has to be WRITTEN somewhere to be worth anything — `harness_session_id`
+ * is what every future resume reads — and a `/bin/sh` that minted its own would
+ * still have to make a second call to report it, in a script whose one job is
+ * to get out of the way of the agent it is about to exec.
+ *
+ * Failure degrades to no id at all: the session flag is omitted and the harness
+ * launches unpinned (no resume seed for that launch), because the alternative —
+ * launching with an id that may already exist — is the failure this removes.
  */
 export function renderWrapperScript(adapter: HarnessAdapter, input: WrapperInput): string {
   const suffix = harnessEnvSuffix(adapter);
@@ -157,29 +168,6 @@ export function renderWrapperScript(adapter: HarnessAdapter, input: WrapperInput
     '  exec "$volli_real" "$@"',
     "fi",
     "",
-    // WHICH HARNESS IS RUNNING IN THIS TERMINAL. `sessions.harness_id` records
-    // the LAUNCH and never moves, which is right — but a terminal outlives the
-    // agent that opened it, so a user who quits opencode and types `claude`
-    // leaves Volli resuming the wrong binary and skipping the "needs you"
-    // notification claude's hooks fire. This line is where that is corrected,
-    // and the wrapper is the only place it can be: it runs on every invocation
-    // of every harness, including a Declared one that fires no hooks at all.
-    //
-    // Everything about the shape is load-bearing. It is BACKGROUNDED inside a
-    // subshell (`( … & )`) so the announce is reaped by init rather than
-    // becoming a job of the shell that is about to exec a TUI; both streams go
-    // to /dev/null because that terminal belongs to the harness a moment from
-    // now and a stray line of ours would land inside its first frame; stdin
-    // comes from /dev/null so a background reader can never take a keystroke
-    // meant for the agent (or stop itself on SIGTTIN); and `|| true` keeps a
-    // failure to even spawn from failing a launch. Telling Volli what is running
-    // is worth nothing if it can cost the user their agent.
-    //
-    // Gated on VOLLI_SOCKET: without one there is no app to tell.
-    'if [ -n "${VOLLI_SOCKET:-}" ]; then',
-    `  ( ${shellSingleQuote(input.cliPath)} session harness ${shellSingleQuote(adapter.id)} </dev/null >/dev/null 2>&1 & ) || true`,
-    "fi",
-    "",
   );
 
   const envEntries = Object.entries(input.env);
@@ -194,7 +182,15 @@ export function renderWrapperScript(adapter: HarnessAdapter, input: WrapperInput
     );
   }
 
-  if (adapter.sessionId.kind === "argv" && adapter.resume.userResumeTokens.length > 0) {
+  // Whether a launch of this harness carries an id Volli chose. `argv` is the
+  // only tier that does; a `reported` or `none` harness names its own session
+  // (or has none), so asking for one would only overwrite the resume seed its
+  // own events are about to write with a number it never heard of.
+  const sessionIdFlag =
+    adapter.sessionId.kind === "argv" ? shellSingleQuote(adapter.sessionId.flag) : null;
+  const scansForUserResume = sessionIdFlag !== null && adapter.resume.userResumeTokens.length > 0;
+
+  if (scansForUserResume) {
     lines.push(
       "# The user is driving resume themselves — don't fight them for the session.",
       "volli_user_resume=0",
@@ -210,10 +206,58 @@ export function renderWrapperScript(adapter: HarnessAdapter, input: WrapperInput
     );
   }
 
-  const sessionArgs =
-    adapter.sessionId.kind === "argv"
-      ? [shellSingleQuote(adapter.sessionId.flag), '"$VOLLI_SESSION"']
-      : [];
+  // WHICH HARNESS IS RUNNING IN THIS TERMINAL, AND WHAT ID THIS LAUNCH GETS —
+  // one call, because they are one question. `sessions.harness_id` records the
+  // LAUNCH and never moves, which is right, but a terminal outlives the agent
+  // that opened it: a user who quits opencode and types `claude` leaves Volli
+  // resuming the wrong binary and skipping the "needs you" notification
+  // claude's hooks fire. The wrapper is the only place that can correct it —
+  // it runs on every invocation of every harness, including a Declared one
+  // that fires no hooks at all — and it is also the only place that knows a
+  // launch is about to happen, which is what a fresh session id is for.
+  //
+  // Gated on VOLLI_SOCKET: without one there is no app to ask.
+  const verb = `${shellSingleQuote(input.cliPath)} session harness ${shellSingleQuote(adapter.id)}`;
+  // Announce-only, for a launch that wants no id back.
+  //
+  // Everything about the shape is load-bearing. It is BACKGROUNDED inside a
+  // subshell (`( … & )`) so it is reaped by init rather than becoming a job of
+  // the shell that is about to exec a TUI; both streams go to /dev/null because
+  // that terminal belongs to the harness a moment from now and a stray line of
+  // ours would land inside its first frame; stdin comes from /dev/null so a
+  // background reader can never take a keystroke meant for the agent (or stop
+  // itself on SIGTTIN); and `|| true` keeps a failure to even spawn from
+  // failing a launch. Telling Volli what is running is worth nothing if it can
+  // cost the user their agent.
+  const announce = `( ${verb} </dev/null >/dev/null 2>&1 & ) || true`;
+  // Announce AND mint. Synchronous, because the id has to be in hand before the
+  // exec below — the one thing in this file the launch waits on. The same rules
+  // still hold with the shape inverted: stdout is captured rather than
+  // discarded (it is one bare uuid, and nothing else), stderr is dropped so a
+  // failure cannot print into the harness's first frame, and a non-zero exit
+  // leaves the variable empty rather than failing the launch. `volli` bounds
+  // its own wait on the socket, so a wedged app costs a moment, not the agent.
+  const mint = `volli_harness_session=$(${verb} --mint </dev/null 2>/dev/null) || volli_harness_session=''`;
+
+  if (sessionIdFlag !== null) lines.push("volli_harness_session=''");
+  lines.push('if [ -n "${VOLLI_SOCKET:-}" ]; then');
+  if (sessionIdFlag === null) {
+    lines.push(`  ${announce}`);
+  } else if (scansForUserResume) {
+    // A user driving resume still tells Volli what is running; they just aren't
+    // handed an id they didn't ask for and the harness would refuse.
+    lines.push(
+      '  if [ "$volli_user_resume" = 1 ]; then',
+      `    ${announce}`,
+      "  else",
+      `    ${mint}`,
+      "  fi",
+    );
+  } else {
+    lines.push(`  ${mint}`);
+  }
+  lines.push("fi", "");
+
   /**
    * The configured argv, prepended to whatever the user typed.
    *
@@ -234,16 +278,20 @@ export function renderWrapperScript(adapter: HarnessAdapter, input: WrapperInput
     [`${indent}set --`, `\${${argvVar}:-}`, ...extra, '"$@"'].join(" ");
 
   lines.push("volli_saved_ifs=$IFS", "IFS='", "'", "set -f");
-  if (sessionArgs.length > 0 && adapter.resume.userResumeTokens.length > 0) {
+  if (sessionIdFlag !== null) {
+    // One test decides the flag, and it is the id itself. Empty covers every
+    // way there is nothing to pin — no socket, a wedged or absent app, a user
+    // driving their own resume — and each of them wants the same thing: launch
+    // the harness with no session id at all rather than with a guess.
     lines.push(
-      'if [ "$volli_user_resume" = 1 ]; then',
-      applyArgv("  ", []),
+      'if [ -n "$volli_harness_session" ]; then',
+      applyArgv("  ", [sessionIdFlag, '"$volli_harness_session"']),
       "else",
-      applyArgv("  ", sessionArgs),
+      applyArgv("  ", []),
       "fi",
     );
   } else {
-    lines.push(applyArgv("", sessionArgs));
+    lines.push(applyArgv("", []));
   }
   lines.push("set +f", "IFS=$volli_saved_ifs");
 

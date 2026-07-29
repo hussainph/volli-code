@@ -81,7 +81,7 @@ describe("renderWrapperScript", () => {
     expect(claude).toContain("IFS='\n'");
     expect(claude).toContain("set -f");
     expect(claude).toContain(
-      'set -- ${VOLLI_HARNESS_ARGV_CLAUDE_CODE:-} \'--session-id\' "$VOLLI_SESSION" "$@"',
+      'set -- ${VOLLI_HARNESS_ARGV_CLAUDE_CODE:-} \'--session-id\' "$volli_harness_session" "$@"',
     );
     expect(claude).toContain("IFS=$volli_saved_ifs");
   });
@@ -91,6 +91,50 @@ describe("renderWrapperScript", () => {
     expect(claude).toContain("'--continue'|'--continue='*");
     expect(claude).toContain("'-r'|'-r='*");
     expect(claude).toContain('set -- ${VOLLI_HARNESS_ARGV_CLAUDE_CODE:-} "$@"');
+    // The scan decides which call is made, and a resuming launch asks for no id
+    // — so the injection is suppressed by there being nothing to inject.
+    expect(claude).toContain('if [ "$volli_user_resume" = 1 ]; then\n    ( ');
+  });
+
+  // THE BUG THIS REMOVES: `VOLLI_SESSION` is stamped once per PTY, so quitting
+  // an agent and running it again in the same terminal used to hand the second
+  // launch the first one's id — which a harness that mkdirs a directory named
+  // after it (cursor) rejects outright.
+  it("launches with an id minted for this launch, never with VOLLI_SESSION", () => {
+    expect(claude).toContain(
+      `volli_harness_session=$('${CLI_PATH}' session harness 'claude-code' --mint </dev/null 2>/dev/null) || volli_harness_session=''`,
+    );
+    expect(claude).not.toContain('"$VOLLI_SESSION"');
+  });
+
+  // Degrading to an unpinned launch is correct; reusing an id is not. Every way
+  // the mint can come back empty — no socket, no app, a wedged one, a user
+  // driving resume — lands on the same branch.
+  it("omits the session flag entirely when nothing was minted", () => {
+    expect(claude).toContain("volli_harness_session=''");
+    expect(claude).toContain(
+      'if [ -n "$volli_harness_session" ]; then\n  set -- ${VOLLI_HARNESS_ARGV_CLAUDE_CODE:-} \'--session-id\' "$volli_harness_session" "$@"\nelse\n  set -- ${VOLLI_HARNESS_ARGV_CLAUDE_CODE:-} "$@"\nfi',
+    );
+  });
+
+  it("asks for an id unconditionally when the harness has no resume tokens to respect", () => {
+    const script = renderWrapperScript(
+      bareAdapter({ sessionId: { kind: "argv", flag: "--sid", format: "uuid" } }),
+      BARE,
+    );
+    expect(script).not.toContain("volli_user_resume");
+    expect(script).toContain("session harness 'my-harness' --mint");
+    expect(script).toContain(
+      'set -- ${VOLLI_HARNESS_ARGV_MY_HARNESS:-} \'--sid\' "$volli_harness_session" "$@"',
+    );
+  });
+
+  // A `reported` or `none` harness names its own session. Minting one for it
+  // would overwrite the resume seed its own events are about to write.
+  it("asks for no id for a harness that does not take one on argv", () => {
+    const opencode = renderWrapperScript(adapterFor("opencode"), BARE);
+    expect(opencode).not.toContain("--mint");
+    expect(opencode).not.toContain("volli_harness_session");
   });
 
   it("has nothing to suppress, and no scan to run, when no id is minted at launch", () => {
@@ -154,27 +198,38 @@ describe("renderWrapperScript", () => {
 
   // The announce is what keeps `sessions.active_harness_id` true: the wrapper is
   // the only thing that runs on every invocation of every tier, including a
-  // Declared harness that fires no hooks at all.
+  // Declared harness that fires no hooks at all. It survives on the paths that
+  // want no id back, so a resuming user still moves the session's harness.
   it("announces which harness is now running, by absolute path", () => {
     expect(claude).toContain(
       `( '${CLI_PATH}' session harness 'claude-code' </dev/null >/dev/null 2>&1 & ) || true`,
     );
   });
 
-  it("gates the announce on there being an app to tell", () => {
+  it("gates both calls on there being an app to ask", () => {
     expect(claude).toContain('if [ -n "${VOLLI_SOCKET:-}" ]; then');
   });
 
-  // A harness TUI is about to own this terminal: the announce may not print into
-  // it, may not read from it, and may not be able to fail the launch.
+  // A harness TUI is about to own this terminal: neither call may print into
+  // it, read from it, or be able to fail the launch.
   it("keeps the announce silent, detached and unable to fail the launch", () => {
-    const announce = claude.slice(claude.indexOf("session harness"));
+    const announce = claude.slice(claude.indexOf("( '"));
     const line = announce.slice(0, announce.indexOf("\n"));
     expect(line).toContain("</dev/null");
     expect(line).toContain(">/dev/null");
     expect(line).toContain("2>&1");
     expect(line).toContain("& )");
     expect(line).toContain("|| true");
+  });
+
+  it("keeps the mint silent on stderr and unable to fail the launch", () => {
+    const mint = claude.slice(claude.indexOf("volli_harness_session=$("));
+    const line = mint.slice(0, mint.indexOf("\n"));
+    expect(line).toContain("</dev/null");
+    expect(line).toContain("2>/dev/null");
+    // stdout is the one stream that is NOT discarded — it is the id.
+    expect(line.trimStart().startsWith("volli_harness_session=$(")).toBe(true);
+    expect(line).toContain("|| volli_harness_session=''");
   });
 
   // A harness run from a normal terminal is untouched, announce included —

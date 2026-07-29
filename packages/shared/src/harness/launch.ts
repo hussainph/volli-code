@@ -317,8 +317,9 @@ function injected(adapter: HarnessAdapter, input: HarnessLaunchInput): HarnessLa
  * environment to merge into the session's.
  *
  * Session-independent by construction, and deliberately so — the harness
- * session id is `VOLLI_SESSION`, injected by the wrapper at run time, so this
- * config can be built once and reused for every launch of the same harness.
+ * session id is minted per launch and injected by the wrapper at run time, so
+ * this config can be built once and reused for every launch of the same
+ * harness.
  */
 export function buildLaunchConfig(
   adapter: HarnessAdapter,

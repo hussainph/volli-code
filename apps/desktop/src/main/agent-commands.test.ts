@@ -1491,7 +1491,14 @@ describe("agent command service", () => {
           args: { id },
           ctx: { cwd: "/repo/volli", env: session ? { session } : {} },
         });
-      return { announce, notices };
+      const mint = (id: unknown, session: string | null = sessionId) =>
+        service.execute({
+          v: 1,
+          cmd: "session.harness",
+          args: { id, mint: true },
+          ctx: { cwd: "/repo/volli", env: session ? { session } : {} },
+        });
+      return { announce, mint, notices };
     }
 
     // THE BUG. The terminal was opened by opencode; the user quit it and ran
@@ -1505,7 +1512,12 @@ describe("agent command service", () => {
       expect(response).toEqual({
         v: 1,
         ok: true,
-        data: { session: "abcdef12", harness: "claude-code", changed: true },
+        data: {
+          session: "abcdef12",
+          harness: "claude-code",
+          changed: true,
+          harnessSessionId: null,
+        },
       });
       const session = getSession(ctx.db, sessionId);
       expect(session?.harnessId).toBe("opencode");
@@ -1571,15 +1583,59 @@ describe("agent command service", () => {
     // announce can land long after the session ended. Accepting one would
     // rewrite the harness that dead session resumes with.
     it("refuses an announce for a session that has already ended", async () => {
-      const { announce, notices } = announceService();
+      const { announce, mint, notices } = announceService();
       endSession(ctx.db, sessionId, 5000, 0);
 
       expect(await announce("claude-code")).toMatchObject({
         ok: false,
         error: { code: "SESSION_ENDED" },
       });
+      // The mint is behind every guard the announce is: a tmux server that
+      // outlived its session may not rewrite what that session resumes with.
+      expect(await mint("claude-code")).toMatchObject({
+        ok: false,
+        error: { code: "SESSION_ENDED" },
+      });
       expect(getSession(ctx.db, sessionId)?.activeHarnessId).toBeNull();
+      expect(getSession(ctx.db, sessionId)?.harnessSessionId).toBeNull();
       expect(notices).toEqual([]);
+    });
+
+    // THE OTHER BUG. `VOLLI_SESSION` is stamped once per PTY, so a wrapper that
+    // reused it handed the second launch in one terminal a byte-identical id —
+    // which cursor, mkdir-ing a directory named after it, refuses with EEXIST.
+    // Every launch asks, and every ask is answered with a new one.
+    it("mints a fresh v4 id per launch, overwriting the previous launch's seed", async () => {
+      const { mint } = announceService("cursor");
+      const v4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+      const first = await mint("cursor");
+      const firstId = getSession(ctx.db, sessionId)?.harnessSessionId;
+      const second = await mint("cursor");
+      const secondId = getSession(ctx.db, sessionId)?.harnessSessionId;
+
+      expect(first).toMatchObject({ ok: true });
+      expect(second).toMatchObject({ ok: true });
+      // Cursor validates exactly this shape and rejects a v7.
+      expect(firstId).toMatch(v4);
+      expect(secondId).toMatch(v4);
+      expect(secondId).not.toBe(firstId);
+      // What the wrapper reads back is what was recorded, or the harness would
+      // launch under an id no future resume could find.
+      expect(first).toMatchObject({ ok: true, data: { harnessSessionId: firstId } });
+      expect(second).toMatchObject({ ok: true, data: { harnessSessionId: secondId } });
+    });
+
+    // A `reported` or `none` harness names its own session, and its wrapper asks
+    // for nothing. Minting for it would overwrite a real resume seed.
+    it("mints nothing for a wrapper that did not ask", async () => {
+      const { announce } = announceService();
+
+      expect(await announce("opencode")).toMatchObject({
+        ok: true,
+        data: { harnessSessionId: null },
+      });
+      expect(getSession(ctx.db, sessionId)?.harnessSessionId).toBeNull();
     });
   });
 

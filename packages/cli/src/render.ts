@@ -298,7 +298,13 @@ function renderStableLines(command: string, data: unknown): string | null {
     return `${terminalSafeInline(data["session"])}  linked ${terminalSafeInline(data["harnessSessionId"])}`;
   }
   if (command === "session.harness") {
-    return `${terminalSafeInline(data["session"])}  running ${terminalSafeInline(data["harness"])}`;
+    // The one verb whose stdout is consumed by a shell rather than read: the
+    // wrapper runs this in `$(…)` and prepends the result to the harness's own
+    // argv. So a mint prints the bare id and nothing else, and an announce —
+    // fired detached into /dev/null — prints nothing at all. A status line here
+    // would become a command-line word for the agent.
+    const harnessSessionId = data["harnessSessionId"];
+    return typeof harnessSessionId === "string" ? terminalSafeInline(harnessSessionId) : "";
   }
   if (command === "notify") return data["notified"] === true ? "notified" : null;
   if (command === "app.launch") {
