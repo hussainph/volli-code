@@ -33,8 +33,17 @@ const NOTIFY_MECHANISM = "notify";
 
 export interface HarnessLaunchInput {
   socketPath: string;
-  /** The command prefix a hook runs; the canonical event name is appended to it. */
-  hookCommand: string;
+  /**
+   * The argv a hook runs, before the event name — `[shimPath, "hook", slug]`.
+   *
+   * Argv rather than a command string, because both forms this becomes are
+   * hostile to one. On macOS the shim lives under `Application Support/Volli
+   * Code/`, so a joined string would have to be re-split on spaces to reach
+   * codex's `notify` key (which takes a real array) and would have to survive a
+   * shell unquoted everywhere else. Splitting a path on spaces shreds it; the
+   * array never had the problem.
+   */
+  hookArgv: readonly string[];
 }
 
 export interface HarnessLaunchConfig {
@@ -49,12 +58,21 @@ export function harnessEnvSuffix(adapter: HarnessAdapter): string {
 }
 
 /**
- * The command line a hook fires. The socket travels on the command line rather
- * than only in the environment because not every harness runs its hooks in a
- * shell that inherited ours.
+ * The full argv a hook fires. The socket travels here rather than only in the
+ * environment because not every harness runs its hooks in a shell that
+ * inherited ours.
+ */
+function hookArgv(input: HarnessLaunchInput, binding: HarnessEventBinding): readonly string[] {
+  return [...input.hookArgv, binding.event, "--socket", input.socketPath];
+}
+
+/**
+ * The same argv as one shell command line. Every word is quoted, not just the
+ * socket: the shim's own path contains spaces on macOS, so an unquoted prefix
+ * would send the shell looking for a command named `…/Application`.
  */
 function hookCommandLine(input: HarnessLaunchInput, binding: HarnessEventBinding): string {
-  return `${input.hookCommand} ${binding.event} --socket ${shellSingleQuote(input.socketPath)}`;
+  return hookArgv(input, binding).map(shellSingleQuote).join(" ");
 }
 
 /** The harness's own name for a signal, with any mechanism namespace stripped. */
@@ -78,9 +96,14 @@ function mechanismOf(binding: HarnessEventBinding): string {
  * Sets a dotted path on a plain JSON object, creating the objects it passes
  * through and reusing any already there, so two forced settings sharing a
  * prefix land in one object rather than clobbering each other. Leaves are
- * always strings, so nothing on the way down can be `null`.
+ * always scalars and never `null`, so the `typeof next === "object"` test on
+ * the way down cannot mistake a leaf for a branch to descend into.
  */
-function setDotted(target: Record<string, unknown>, path: string, value: string): void {
+function setDotted(
+  target: Record<string, unknown>,
+  path: string,
+  value: string | number | boolean,
+): void {
   const segments = path.split(".");
   let cursor = target;
   for (const [index, segment] of segments.entries()) {
@@ -168,15 +191,15 @@ function injected(adapter: HarnessAdapter, input: HarnessLaunchInput): HarnessLa
           path,
           content: `${JSON.stringify({ hooks: commandHooks(hooked, input) }, null, 2)}\n`,
         });
-        overrides.push(`${CODEX_HOOKS_PATH_KEY}=${path}`);
+        // `-c` parses its value as TOML, so a path with spaces has to arrive as
+        // a quoted string or the override fails to parse.
+        overrides.push(`${CODEX_HOOKS_PATH_KEY}=${JSON.stringify(path)}`);
       }
       for (const binding of notified) {
-        overrides.push(
-          `notify=${JSON.stringify([...input.hookCommand.split(" "), binding.event])}`,
-        );
+        overrides.push(`notify=${JSON.stringify(hookArgv(input, binding))}`);
       }
       for (const setting of adapter.launchSettings) {
-        overrides.push(`${setting.path}=${setting.value}`);
+        overrides.push(`${setting.path}=${JSON.stringify(setting.value)}`);
       }
       return {
         files,

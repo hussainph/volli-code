@@ -119,7 +119,11 @@ describe("ensureHarnessRuntime", () => {
     // Two shell words: the flag, and the whole settings payload as ONE word —
     // its own quotes escaped, since the wrapper applies this through `eval`.
     expect(argv).toMatch(/^'--settings' '\{/);
-    expect(argv).toContain("hook claude-code input.needed --socket '\\''/tmp/volli.sock'\\''");
+    // Every word of the hook line is quoted, the shim path included — it lives
+    // under `Application Support/` in a real install.
+    expect(argv).toContain(
+      "'\\''hook'\\'' '\\''claude-code'\\'' '\\''input.needed'\\'' '\\''--socket'\\'' '\\''/tmp/volli.sock'\\''",
+    );
     expect(argv).toContain("preferredNotifChannel");
   });
 
@@ -136,7 +140,7 @@ describe("ensureHarnessRuntime", () => {
     const config = JSON.parse(await readFile(join(harnessDir, "cli-config.json"), "utf8")) as {
       hooks: Record<string, { command: string }[]>;
     };
-    expect(config.hooks["stop"]?.[0]?.command).toContain("hook cursor turn.completed");
+    expect(config.hooks["stop"]?.[0]?.command).toContain("'hook' 'cursor' 'turn.completed'");
     // The variable names the directory the harness reads its config out of, so
     // a leftover `{harnessDir}` would point cursor at a literal path.
     expect(runtime.env["CURSOR_CONFIG_DIR"]).toBe(harnessDir);

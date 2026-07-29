@@ -5,9 +5,15 @@ import { getHarnessAdapter } from "./core";
 import { buildLaunchConfig, harnessEnvSuffix, HARNESS_DIR_TOKEN } from "./launch";
 import type { HarnessAdapter } from "./types";
 
+/**
+ * The shim path carries a space on purpose. Electron's `userData` on macOS is
+ * `~/Library/Application Support/Volli Code`, so every launch config is built
+ * from a path with one — and a fixture without it lets a path-shredding bug
+ * pass every assertion here while breaking on the only OS we ship.
+ */
 const INPUT = {
   socketPath: "/tmp/volli.sock",
-  hookCommand: "/vol/bin/volli hook",
+  hookArgv: ["/vol/Application Support/Volli Code/bin/volli", "hook", "codex"],
 } as const;
 
 function adapterFor(id: string): HarnessAdapter {
@@ -59,7 +65,7 @@ describe("buildLaunchConfig", () => {
       preferredNotifChannel: string;
     };
     expect(settings.hooks["Stop"]?.[0]?.hooks[0]?.command).toBe(
-      "/vol/bin/volli hook turn.completed --socket '/tmp/volli.sock'",
+      "'/vol/Application Support/Volli Code/bin/volli' 'hook' 'codex' 'turn.completed' '--socket' '/tmp/volli.sock'",
     );
     expect(settings.hooks["Stop"]?.[0]?.hooks[0]?.timeout).toBe(5);
     expect(settings.preferredNotifChannel).toBe("notifications_disabled");
@@ -81,7 +87,7 @@ describe("buildLaunchConfig", () => {
       hooks: Record<string, { command: string }[]>;
     };
     expect(written.hooks["stop"]?.[0]?.command).toBe(
-      "/vol/bin/volli hook turn.completed --socket '/tmp/volli.sock'",
+      "'/vol/Application Support/Volli Code/bin/volli' 'hook' 'codex' 'turn.completed' '--socket' '/tmp/volli.sock'",
     );
     expect(Object.keys(written.hooks)).not.toContain("Notification");
   });
@@ -104,15 +110,22 @@ describe("buildLaunchConfig", () => {
     };
     expect(Object.keys(hooks.hooks)).toEqual(["UserPromptSubmit", "PermissionRequest"]);
     expect(hooks.hooks["UserPromptSubmit"]?.[0]?.command).toBe(
-      "/vol/bin/volli hook turn.started --socket '/tmp/volli.sock'",
+      "'/vol/Application Support/Volli Code/bin/volli' 'hook' 'codex' 'turn.started' '--socket' '/tmp/volli.sock'",
     );
 
-    expect(overrides).toContain(`hooks_path=${HARNESS_DIR_TOKEN}/hooks.json`);
+    // Quoted: `-c` parses TOML, and the harness dir is a path with spaces in it.
+    expect(overrides).toContain(`hooks_path="${HARNESS_DIR_TOKEN}/hooks.json"`);
+
+    // notify takes a real argv array, so the spaced shim path stays one word —
+    // this is the whole reason the hook prefix travels as argv, not a string.
     const notify = overrides.find((token) => token.startsWith("notify="));
     expect(JSON.parse(notify?.slice("notify=".length) ?? "[]")).toEqual([
-      "/vol/bin/volli",
+      "/vol/Application Support/Volli Code/bin/volli",
       "hook",
+      "codex",
       "turn.completed",
+      "--socket",
+      "/tmp/volli.sock",
     ]);
   });
 
@@ -134,11 +147,23 @@ describe("buildLaunchConfig", () => {
     const config = buildLaunchConfig(
       bareAdapter({
         injection: { kind: "argv-config-override", flag: "-c" },
-        launchSettings: [{ path: "notifications.enabled", value: "false" }],
+        launchSettings: [{ path: "notifications.enabled", value: false }],
       }),
       INPUT,
     );
+    // `false`, not `"false"` — `-c` parses TOML, which distinguishes the two.
     expect(config.argv).toEqual(["-c", "notifications.enabled=false"]);
+  });
+
+  it("keeps a forced string setting quoted, so TOML reads it as a string", () => {
+    const config = buildLaunchConfig(
+      bareAdapter({
+        injection: { kind: "argv-config-override", flag: "-c" },
+        launchSettings: [{ path: "notify.channel", value: "disabled" }],
+      }),
+      INPUT,
+    );
+    expect(config.argv).toEqual(["-c", 'notify.channel="disabled"']);
   });
 
   it("nests forced settings written as dotted paths, merging ones that share a prefix", () => {
@@ -171,7 +196,7 @@ describe("buildLaunchConfig", () => {
       hooks: Record<string, { command: string }[]>;
     };
     expect(written.hooks["stop"]?.[0]?.command).toBe(
-      "/vol/bin/volli hook turn.completed --socket '/tmp/it'\\''s here/volli.sock'",
+      "'/vol/Application Support/Volli Code/bin/volli' 'hook' 'codex' 'turn.completed' '--socket' '/tmp/it'\\''s here/volli.sock'",
     );
   });
 });

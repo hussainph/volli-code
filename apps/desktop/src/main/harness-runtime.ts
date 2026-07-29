@@ -49,12 +49,17 @@ export function harnessDirFor(harnessRoot: string, adapter: HarnessAdapter): str
 }
 
 /**
- * The command prefix a fired hook runs. `buildLaunchConfig` appends the
- * canonical event name and `--socket <path>` to it, so this only names the
- * launcher and which harness is reporting.
+ * The argv prefix a fired hook runs. `buildLaunchConfig` appends the canonical
+ * event name and `--socket <path>`, so this only names the launcher and which
+ * harness is reporting.
+ *
+ * Unquoted, deliberately: these are argv words, and whichever form a harness
+ * needs them in — a shell command line, or codex's `notify` array — is that
+ * harness's business to render. Quoting here would bake a shell assumption into
+ * a value that does not always reach one.
  */
-function hookCommandFor(shimPath: string, adapter: HarnessAdapter): string {
-  return `${shellSingleQuote(shimPath)} hook ${adapter.id}`;
+function hookArgvFor(shimPath: string, adapter: HarnessAdapter): readonly string[] {
+  return [shimPath, "hook", adapter.id];
 }
 
 /**
@@ -98,7 +103,7 @@ export async function ensureHarnessRuntime(input: HarnessRuntimeInput): Promise<
     const harnessDir = harnessDirFor(input.harnessRoot, adapter);
     const config = buildLaunchConfig(adapter, {
       socketPath: input.socketPath,
-      hookCommand: hookCommandFor(input.shimPath, adapter),
+      hookArgv: hookArgvFor(input.shimPath, adapter),
     });
     const resolve = (value: string): string => value.replaceAll(HARNESS_DIR_TOKEN, harnessDir);
     if (config.files.length > 0) await mkdir(harnessDir, { recursive: true });
