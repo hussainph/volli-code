@@ -249,8 +249,18 @@ describe("DATA_IPC descriptor table", () => {
       expect(guard([{ ...valid, usesWorktree: "yes" }])).toBe(false);
     });
 
-    it("rejects a harness id outside the vocabulary when present", () => {
-      expect(guard([{ ...valid, preferredHarnessId: "not-a-harness" }])).toBe(false);
+    it("accepts a registered harness's slug as the preference, not only a built-in", () => {
+      expect(guard([{ ...valid, preferredHarnessId: "claude-code" }])).toBe(true);
+      expect(guard([{ ...valid, preferredHarnessId: "my-harness" }])).toBe(true);
+    });
+
+    it("rejects a preference that could not name any harness", () => {
+      // Trust is checked at the launch door, which is the only place that can
+      // see it; this guard only refuses strings no manifest could be filed
+      // under — a path, a shell word, a non-string.
+      expect(guard([{ ...valid, preferredHarnessId: "../etc/passwd" }])).toBe(false);
+      expect(guard([{ ...valid, preferredHarnessId: "My Harness" }])).toBe(false);
+      expect(guard([{ ...valid, preferredHarnessId: 7 }])).toBe(false);
     });
 
     it("rejects a wrong arity", () => {
@@ -1598,13 +1608,33 @@ describe("HARNESS_IPC descriptor table", () => {
     });
   });
 
+  describe("volli:harness-registered (no-arg request)", () => {
+    const { guard, invalidError } = HARNESS_IPC["volli:harness-registered"];
+
+    it("accepts an empty args tuple", () => {
+      expect(guard([])).toBe(true);
+    });
+
+    it("rejects stray arguments", () => {
+      expect(guard(["junk"])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid request");
+    });
+  });
+
   describe("HARNESS_CHANNELS derivation", () => {
     it("derives from the descriptor table's keys", () => {
       expect(HARNESS_CHANNELS).toEqual(Object.keys(HARNESS_IPC));
     });
 
-    it("covers the whole harness-trust surface", () => {
-      expect(HARNESS_CHANNELS).toEqual(["volli:harness-pending", "volli:harness-trust-set"]);
+    it("covers the whole bring-your-own-harness surface", () => {
+      expect(HARNESS_CHANNELS).toEqual([
+        "volli:harness-pending",
+        "volli:harness-trust-set",
+        "volli:harness-registered",
+      ]);
     });
   });
 });

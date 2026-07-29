@@ -7,7 +7,7 @@
 import type { ChangeSetSnapshot } from "./change-set";
 import type { FileKind, FileSource, IndexedFile } from "./file-ref";
 import type { HarnessTrustPrompt, HarnessTrustVerdict } from "./harness/trust";
-import type { HarnessEvent } from "./harness/types";
+import type { HarnessAdapter, HarnessEvent } from "./harness/types";
 import type { DirEntry } from "./fs-entries";
 import type { Label } from "./label";
 import type { LegacyProject } from "./legacy-import";
@@ -419,16 +419,35 @@ export interface HarnessTrustSetInput {
 }
 
 /**
- * The trust half of the bring-your-own-harness surface (`src/main/harness-ipc.ts`):
- * ask what is waiting, answer one of them. A registered manifest is inert until
- * a verdict lands here, so these two channels are the whole difference between
- * a manifest on disk and a harness that can launch.
+ * The registered harnesses a launch would accept right now — every manifest
+ * someone confirmed the bytes of, as main resolved them for the wrappers it
+ * last generated. Built-ins are absent by construction: the renderer compiles
+ * those in, so this channel carries only what it could not otherwise know.
+ *
+ * Whole adapters rather than a summary, because an adapter is pure data
+ * (`harness/types.ts`) and that is the point of it: the renderer reads a
+ * registered harness's tier and its declared events with the exact functions it
+ * reads a built-in's, instead of a parallel shape that would have to be widened
+ * every time an adapter grows a field.
+ */
+export type HarnessRegisteredResult =
+  | { ok: true; harnesses: HarnessAdapter[] }
+  | { ok: false; error: string };
+
+/**
+ * The bring-your-own-harness surface (`src/main/harness-ipc.ts`): ask what is
+ * waiting, answer one of them, and ask what the answers add up to. A registered
+ * manifest is inert until a verdict lands here, so the first two channels are
+ * the whole difference between a manifest on disk and a harness that can
+ * launch — and the third is how anything but main gets to hear that it did.
  */
 export interface VolliHarnessIpcContract {
   /** Every discovered manifest nobody has ruled on, re-read and re-hashed per call. */
   "volli:harness-pending": { args: []; result: HarnessPendingResult };
   /** Records a human's verdict about the exact bytes they were shown. */
   "volli:harness-trust-set": { args: [input: HarnessTrustSetInput]; result: Result };
+  /** The trusted registered harnesses, as the launch path would resolve them. */
+  "volli:harness-registered": { args: []; result: HarnessRegisteredResult };
 }
 
 export type HarnessIpcChannel = keyof VolliHarnessIpcContract;

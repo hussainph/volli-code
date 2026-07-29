@@ -6,7 +6,7 @@
 
 import { app, dialog, ipcMain } from "electron";
 import type { BrowserWindow } from "electron";
-import { isFirstClassHarnessId } from "@volli/shared";
+import { isFirstClassHarnessId, parseHarnessId } from "@volli/shared";
 import type {
   CreateTerminalSessionRequest,
   CreateTerminalSessionResult,
@@ -59,17 +59,50 @@ export function confirmDestructiveClose(
 // ---- IPC wiring ------------------------------------------------------------
 
 /**
+ * Whether this host would actually launch `value` as a harness — the trust
+ * gate, not a vocabulary one.
+ *
+ * A kickoff names a harness whose command line Volli is about to execute, so
+ * "is this a legal slug" is nowhere near enough: an id parses long before
+ * anyone has confirmed the bytes behind it. The id is parsed and then looked up
+ * in what THIS launch resolved, which is the only place the answer exists —
+ * main reads the manifests, hashes them, and reconciles them against the
+ * recorded verdicts, and no other process can.
+ *
+ * Built-ins short-circuit ahead of that lookup, unchanged from when they were
+ * the whole rule. Their bindings are Volli's own code and need no verdict, and
+ * the resolved set is empty until the wrappers are generated — gating them on
+ * it would refuse a claude-code kickoff issued during boot.
+ *
+ * Membership means confirmed and resolvable, not necessarily wrapped: a harness
+ * whose wrapper was refused (its name would shadow a system tool) still
+ * launches, at the Declared tier, exactly as an unwrapped built-in does.
+ */
+type HarnessLaunchGuard = (value: unknown) => value is HarnessId;
+
+function launchableHarnessGuard(runtime: AgentRuntimeEnvironment | null): HarnessLaunchGuard {
+  return (value): value is HarnessId => {
+    if (typeof value !== "string") return false;
+    const harnessId = parseHarnessId(value);
+    if (harnessId === null) return false;
+    if (isFirstClassHarnessId(harnessId)) return true;
+    return (runtime?.adapters ?? []).some((adapter) => adapter.id === harnessId);
+  };
+}
+
+/**
  * `undefined` (no auto-launch) or a well-formed `{ harnessId, prompt }` — a
  * kickoff present with the wrong types is REJECTED (so the request fails
  * loudly), never silently dropped.
  */
 function isOptionalKickoff(
   value: unknown,
+  launchable: HarnessLaunchGuard,
 ): value is { harnessId: HarnessId; prompt: string } | undefined {
   if (value === undefined) return true;
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
-  return isFirstClassHarnessId(candidate["harnessId"]) && typeof candidate["prompt"] === "string";
+  return launchable(candidate["harnessId"]) && typeof candidate["prompt"] === "string";
 }
 
 /**
@@ -90,18 +123,24 @@ function isOptionalResume(value: unknown): value is { sessionId: string } | unde
  * object (ticket session). A malformed kickoff or resume shape rejects the whole
  * ticket.
  */
-function isOptionalTicket(value: unknown): value is CreateTerminalSessionRequest["ticket"] {
+function isOptionalTicket(
+  value: unknown,
+  launchable: HarnessLaunchGuard,
+): value is CreateTerminalSessionRequest["ticket"] {
   if (value === undefined) return true;
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
   return (
     typeof candidate["ticketId"] === "string" &&
-    isOptionalKickoff(candidate["kickoff"]) &&
+    isOptionalKickoff(candidate["kickoff"], launchable) &&
     isOptionalResume(candidate["resume"])
   );
 }
 
-function isCreateRequest(value: unknown): value is CreateTerminalSessionRequest {
+function isCreateRequest(
+  value: unknown,
+  launchable: HarnessLaunchGuard,
+): value is CreateTerminalSessionRequest {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
   return (
@@ -109,7 +148,7 @@ function isCreateRequest(value: unknown): value is CreateTerminalSessionRequest 
     typeof candidate["cwd"] === "string" &&
     typeof candidate["cols"] === "number" &&
     typeof candidate["rows"] === "number" &&
-    isOptionalTicket(candidate["ticket"])
+    isOptionalTicket(candidate["ticket"], launchable)
   );
 }
 
@@ -133,10 +172,15 @@ export function registerTerminalIpcHandlers(
     ? new PtyManager(handle.db, "", undefined, undefined, agentRuntime, attachmentsRootPath)
     : new PtyManager(null, handle.error, undefined, undefined, agentRuntime, attachmentsRootPath);
 
+  // Closed over the live runtime object rather than a snapshot of it: the
+  // trusted set lands there only once the wrappers are generated, which is
+  // after this registration runs.
+  const launchable = launchableHarnessGuard(agentRuntime);
+
   ipcMain.handle(
     "volli:terminal-create" satisfies VolliIpcChannel,
     (event, request: unknown): Promise<CreateTerminalSessionResult> => {
-      if (!isCreateRequest(request)) {
+      if (!isCreateRequest(request, launchable)) {
         return Promise.resolve({ ok: false, error: "Invalid terminal request" });
       }
       return manager.create(event.sender, request);

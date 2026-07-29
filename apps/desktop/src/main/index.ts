@@ -686,6 +686,12 @@ app.whenReady().then(async () => {
     // shell chain are rebuilt from it, the harness the user just approved
     // launches unconfigured and reports nothing.
     regenerateRuntime: regenerateHarnessRuntime,
+    // What the last regeneration actually resolved, read at CALL time for the
+    // same reason the manager's `adapterFor` is: this is filled in once the
+    // wrappers exist, and it is what the launch door checks a kickoff against.
+    // Answering the renderer off a fresh disk scan instead would let the picker
+    // offer a harness the launch would then refuse.
+    launchableHarnesses: () => agentRuntime.adapters ?? [],
     now: Date.now,
   });
 

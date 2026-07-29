@@ -1,10 +1,13 @@
 /**
  * The seam between a manifest sitting on disk and a harness that can launch:
- * ask what is waiting on a human, and record what the human answered.
+ * ask what is waiting on a human, record what the human answered, and report
+ * what the answers so far add up to.
  *
  * `harness-registry.ts` has always been able to discover a manifest, hash it and
  * decide it, and `trustedHarnessAdapters` has always refused to yield one nobody
- * confirmed. Nothing asked. These two channels are the question.
+ * confirmed. Nothing asked. The first two channels are the question; the third
+ * is the only way anything outside main hears that it was answered, since a
+ * trusted manifest exists nowhere the renderer can look.
  *
  * Three rules the surface keeps, none of which the renderer could keep for it:
  *
@@ -29,12 +32,14 @@ import {
   harnessTrustPrompt,
   HARNESS_CHANNELS,
   HARNESS_IPC,
+  isFirstClassHarnessId,
   supportedEvents,
 } from "@volli/shared";
 import type {
   HarnessAdapter,
   HarnessIpcChannel,
   HarnessPendingResult,
+  HarnessRegisteredResult,
   HarnessTrustSetInput,
   PendingHarnessManifest,
   Result,
@@ -74,6 +79,17 @@ export interface HarnessIpcDeps {
    * afterwards, why it is awaited, and why a rejection here fails the write.
    */
   regenerateRuntime(): Promise<void>;
+  /**
+   * The registered harnesses a launch would accept right now — read from the
+   * same resolved set the launch door checks against, never re-derived here.
+   *
+   * Re-scanning the disk for this would be the obvious thing and the wrong
+   * one: it would answer about manifests whose wrappers this launch never
+   * generated, and the composer would then offer a harness that `pty/ipc.ts`
+   * refuses. One answer, one place it comes from — the same rule main's
+   * `resolveHostAdapters` was written to keep.
+   */
+  launchableHarnesses(): readonly HarnessAdapter[];
   now(): number;
 }
 
@@ -107,10 +123,12 @@ async function pendingManifests(
 }
 
 /**
- * Registers the harness-trust channels. A degraded db answers both with the open
- * failure: the verdict lives in SQLite, so there is no honest partial mode —
- * offering a confirmation that could not be recorded would ask the same question
- * again every launch, and answering "nothing is pending" would be a lie.
+ * Registers the harness-trust channels. A degraded db answers all of them with
+ * the open failure: the verdict lives in SQLite, so there is no honest partial
+ * mode — offering a confirmation that could not be recorded would ask the same
+ * question again every launch, and answering "nothing is pending" (or "nothing
+ * is registered", which is the same lie one channel along) would state as a
+ * measurement what is really an inability to measure.
  */
 export function registerHarnessIpcHandlers(handle: DbHandle, deps: HarnessIpcDeps): void {
   if (!handle.ok) {
@@ -189,6 +207,16 @@ export function registerHarnessIpcHandlers(handle: DbHandle, deps: HarnessIpcDep
       }
       return { ok: true };
     },
+
+    "volli:harness-registered": (): HarnessRegisteredResult => ({
+      ok: true,
+      // Whole adapters, minus the built-ins: the renderer ships those, and
+      // sending them back would leave it deduplicating two sources of the same
+      // four harnesses. A registered manifest cannot claim a first-class id in
+      // the first place (the reserved namespaces), so dropping them here leaves
+      // exactly the set the renderer has no other way to learn.
+      harnesses: deps.launchableHarnesses().filter((adapter) => !isFirstClassHarnessId(adapter.id)),
+    }),
   };
 
   registerGuardedIpcHandlers(HARNESS_IPC, handlers);

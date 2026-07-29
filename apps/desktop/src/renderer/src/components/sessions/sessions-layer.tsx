@@ -12,6 +12,7 @@ import {
 import { Button } from "@renderer/components/ui/button";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import {
+  hydrateHarnessCatalog,
   scratchScope,
   sessionPanes,
   subscribeHarnessEvents,
@@ -119,6 +120,16 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
   // only component that outlives every surface reading them — the sidebar's
   // "Needs you" tier, the ticket rail, the session header.
   React.useEffect(() => subscribeHarnessEvents(), []);
+
+  // And the catalog those events are read against: which harnesses beyond the
+  // four this renderer ships main will actually launch. Pulled once here so a
+  // launch that never passes through a picker — a ticket dragged to Doing with
+  // a harness it remembered from a previous run — still declares the
+  // expectation its manifest earns. The composer re-pulls on every open, which
+  // is where a mid-session verdict lands.
+  React.useEffect(() => {
+    void hydrateHarnessCatalog();
+  }, []);
 
   const createScratch = React.useCallback((project: Project) => {
     void createTerminalSession(scratchScope(project.id));

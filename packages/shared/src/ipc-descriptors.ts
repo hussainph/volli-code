@@ -17,7 +17,7 @@ import { isHexColor } from "./theme/color";
 import { isShippedEditorThemeId } from "./theme/editor-themes";
 import { isValidOverlayKey, isValidOverlayValue } from "./theme/ghostty-overlay";
 import { isProjectThemeOverride } from "./theme/project-override";
-import { isFirstClassHarnessId, isTicketPriority, isTicketStatus } from "./ticket";
+import { isTicketPriority, isTicketStatus, parseHarnessId } from "./ticket";
 import { isValidBranchName } from "./ticket-branch";
 
 /**
@@ -34,11 +34,30 @@ export interface IpcRequestDescriptor<C extends keyof VolliInvokeContract> {
 
 // ---- shape helpers ----------------------------------------------------
 // The status/priority/harness vocabulary guards live in @volli/shared next to
-// the vocab constants they guard (isTicketStatus/isTicketPriority/isFirstClassHarnessId),
+// the vocab constants they guard (isTicketStatus/isTicketPriority/parseHarnessId),
 // imported above; isValidBranchName lives next to the branch-naming rules.
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+/**
+ * Whether `value` is a well-formed harness id — a built-in, or a slug a
+ * manifest could legally be registered under.
+ *
+ * A shape guard, deliberately, and the ONLY kind this module could honestly
+ * offer: whether a slug names a harness the user actually registered and
+ * trusted is a fact about their disk and their verdicts, which this package
+ * cannot see and by design never will. It gates the field it appears on — a
+ * ticket's persisted harness PREFERENCE — and nothing else. Trust is checked
+ * where it can be: at the launch door in main (`pty/ipc.ts`), against the
+ * adapters that launch actually resolved. A preference naming a harness that
+ * is not (or is no longer) trusted therefore stores fine and simply never
+ * launches, which is the right way round: a verdict is revocable, and a
+ * revoked one must not have to reach back into rows written before it.
+ */
+function isHarnessIdShape(value: unknown): boolean {
+  return typeof value === "string" && parseHarnessId(value) !== null;
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -143,8 +162,7 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
         (input["body"] === undefined || typeof input["body"] === "string") &&
         (input["labels"] === undefined || isStringArray(input["labels"])) &&
         (input["usesWorktree"] === undefined || typeof input["usesWorktree"] === "boolean") &&
-        (input["preferredHarnessId"] === undefined ||
-          isFirstClassHarnessId(input["preferredHarnessId"]))
+        (input["preferredHarnessId"] === undefined || isHarnessIdShape(input["preferredHarnessId"]))
       );
     },
     invalidError: "Invalid ticket",
@@ -702,6 +720,10 @@ export const HARNESS_IPC: { readonly [C in HarnessIpcChannel]: IpcRequestDescrip
       );
     },
     invalidError: "Invalid harness verdict",
+  },
+  "volli:harness-registered": {
+    guard: (args): args is [] => args.length === 0,
+    invalidError: "Invalid request",
   },
 };
 

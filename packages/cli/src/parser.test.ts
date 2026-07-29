@@ -371,16 +371,35 @@ describe("parseCliArgs", () => {
     });
   });
 
+  // A slug the parser has never heard of is exactly what a registered harness
+  // looks like from here, so it travels — the app is the only thing that can say
+  // whether it names anything, and whether a human trusted it.
   it.each([
     ["ticket create --harness", ["ticket", "create", "--title", "x", "--harness", "aider"]],
     ["ticket update --harness", ["ticket", "update", "VC-1", "--harness", "aider"]],
+  ] as const)("carries a registered harness slug through %s", (_label, argv) => {
+    const result = parseCliArgs(argv);
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.invocation.args["harness"]).toBe("aider");
+  });
+
+  it.each([
+    ["ticket create --harness", ["ticket", "create", "--title", "x", "--harness", "Aider!"]],
+    ["ticket update --harness", ["ticket", "update", "VC-1", "--harness", "Aider!"]],
   ] as const)("enumerates the harness vocabulary when %s rejects a token", (_label, argv) => {
     const result = parseCliArgs(argv);
     expect(result).toEqual({
       ok: false,
       code: "USAGE",
-      message: `Unknown harness "aider" (valid: ${HARNESS_VOCABULARY})`,
+      message: `Invalid harness "Aider!" (valid: ${HARNESS_VOCABULARY})`,
     });
+  });
+
+  // The phrase help renders has to be the phrase the refusal renders, or the
+  // reference teaches a vocabulary the parser does not have.
+  it("names the registered category alongside the first-class ids", () => {
+    expect(HARNESS_VOCABULARY).toContain("claude-code");
+    expect(HARNESS_VOCABULARY).toContain("registered, trusted harness");
   });
 
   it.each([

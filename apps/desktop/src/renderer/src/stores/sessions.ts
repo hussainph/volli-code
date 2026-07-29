@@ -27,8 +27,10 @@ import {
   receiveHarnessEvent,
   supportedEvents,
   type CreateSessionHarnessStateInput,
+  type HarnessAdapter,
   type HarnessEvent,
   type HarnessEventOrder,
+  type HarnessId,
   type SessionActivityState,
   type SessionHarnessState,
   type SessionRecord,
@@ -336,6 +338,61 @@ function forgetTabIndexes(
   delete harness[tab.sessionId];
 }
 
+interface HarnessCatalogState {
+  /**
+   * The registered harnesses main last said it would launch — never the
+   * built-ins, which are compiled in. Empty before the first answer arrives,
+   * and empty is indistinguishable from "none registered" ON PURPOSE: both mean
+   * this renderer knows nothing about any harness beyond the four it ships, and
+   * every reader here already has a correct behaviour for that.
+   */
+  registered: readonly HarnessAdapter[];
+  setRegistered(registered: readonly HarnessAdapter[]): void;
+}
+
+/**
+ * What the renderer knows about harnesses it does not ship.
+ *
+ * A trusted manifest exists in exactly one place — main, which read the file,
+ * hashed it and reconciled it against the user's recorded verdict — so this is
+ * a mirror and never a source. It is pulled rather than pushed, and pulled
+ * fresh at the two moments it could be wrong: app start, and every open of a
+ * surface that offers a harness. That is the same shape the trust queue uses
+ * (`components/harness/trust-prompt-model.ts` re-reads after every verdict)
+ * rather than a second, push-shaped one, and it is what keeps the mirror honest
+ * across a verdict recorded mid-session: trusting a harness now regenerates the
+ * wrappers on the spot, so the catalog genuinely moves while the app is open.
+ */
+export const useHarnessCatalogStore = create<HarnessCatalogState>()((set) => ({
+  registered: [],
+  setRegistered: (registered) => set({ registered }),
+}));
+
+/**
+ * Re-reads the registered harnesses from main. A failed read leaves the last
+ * good answer standing rather than emptying the catalog: the failure mode of
+ * forgetting a harness (a picker entry vanishing, a live launch losing its
+ * expectation) is worse than the failure mode of a stale entry, which the
+ * launch door refuses anyway.
+ */
+export async function hydrateHarnessCatalog(): Promise<void> {
+  const result = await window.api.harness.registered();
+  if (!result.ok) return;
+  useHarnessCatalogStore.getState().setRegistered(result.harnesses);
+}
+
+/**
+ * The adapter behind a harness id: a built-in, or a registered one the catalog
+ * has heard about. `undefined` means neither — an id this renderer cannot
+ * describe, which every caller has to answer for itself.
+ */
+export function launchAdapter(harnessId: HarnessId): HarnessAdapter | undefined {
+  return (
+    getHarnessAdapter(harnessId) ??
+    useHarnessCatalogStore.getState().registered.find((adapter) => adapter.id === harnessId)
+  );
+}
+
 /**
  * The harness expectation a launch earns, or null when it earns none.
  *
@@ -346,16 +403,19 @@ function forgetTabIndexes(
  * ticket tab opened without a kickoff, every scratch terminal must be able to
  * sit quietly for an hour without the sidebar accusing it of not reporting.
  *
- * A harness the renderer ships no adapter for earns none either. A trusted
- * manifest joins main's registry alone, so there is nothing here to read its
- * capabilities off, and a guess would go wrong in both directions: claim
- * `hooked` and a perfectly working harness gets called silent, claim less and
- * we vouch for events it may not send. Its first delivery registers it
- * instead — see {@link subscribeHarnessEvents}.
+ * A registered harness now earns one too, off the catalog: its manifest states
+ * its bindings, so the expectation is read rather than guessed, and a trusted
+ * harness that stops reporting decays into "not reporting" exactly as a
+ * built-in does. Only a harness NOTHING here can describe still earns none —
+ * the catalog not hydrated yet, an id trusted after this renderer last asked.
+ * A guess there would go wrong in both directions: claim `hooked` and a
+ * perfectly working harness gets called silent, claim less and we vouch for
+ * events it may not send. Its first delivery registers it instead — see
+ * {@link subscribeHarnessEvents}.
  */
 function launchExpectation(launch: SessionLaunch): SessionHarnessState | null {
   if (launch.launchKind !== "agent") return null;
-  const adapter = getHarnessAdapter(launch.harnessId);
+  const adapter = launchAdapter(launch.harnessId);
   if (adapter === undefined) return null;
   return createSessionHarnessState({
     harnessId: launch.harnessId,
@@ -671,17 +731,22 @@ export const useSessionsStore = createSessionsStore();
  *
  * A notice for a session with no expectation yet REGISTERS one before folding
  * the event in. {@link SessionsState.addSession} covers the launches Volli
- * itself issued as agents through an adapter this process ships; what it cannot
+ * itself issued as agents through an adapter it can describe; what it cannot
  * cover still reports just as truthfully and would otherwise be dropped by
  * `applyHarnessEvent`'s unregistered guard — an agent the user started by hand
- * inside a wrapped shell, and a manifest-registered harness that joined main's
- * registry alone. Seeding on delivery is the plan's own rule ("an event becomes
+ * inside a wrapped shell, and a harness trusted since this renderer last
+ * asked. Seeding on delivery is the plan's own rule ("an event becomes
  * verified on first real delivery") rather than a shortcut around it: the tier
  * is `hooked` because an event demonstrably arrived, and the declared-event set
- * comes from the adapter, so cursor — whose source maps both blocking signals
- * to null — still cannot raise a `waiting` it isn't able to vouch for. For the
- * manifest harness the lookup misses entirely; there the delivery is all the
- * evidence there is, and disbelieving it would hide a harness that IS reporting.
+ * comes from the adapter — the catalog's as readily as a built-in's — so cursor,
+ * whose source maps both blocking signals to null, still cannot raise a
+ * `waiting` it isn't able to vouch for.
+ *
+ * The unknown id keeps FAILING OPEN, and that must not be tidied away now that
+ * the catalog exists: an id nothing here can describe is credited with the whole
+ * event vocabulary, because the alternative is silencing the one harness that
+ * has just proved it reports. The delivery is all the evidence there is, and
+ * disbelieving it would hide a harness that IS reporting.
  *
  * Notices arrive in the order main ingested them, which is NOT the order the
  * harness fired them — each event races here on its own hook process. The
@@ -695,7 +760,7 @@ export function subscribeHarnessEvents(): () => void {
   return window.api.sessions.onHarnessEvent((notice) => {
     const state = useSessionsStore.getState();
     if (state.harness[notice.sessionId] === undefined) {
-      const adapter = getHarnessAdapter(notice.harnessId);
+      const adapter = launchAdapter(notice.harnessId);
       state.expectHarnessEvents(notice.sessionId, {
         harnessId: notice.harnessId,
         expectedTier: "hooked",

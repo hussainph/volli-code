@@ -2,18 +2,22 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   HARNESS_EVENT_GRACE_MS,
   sessionHarnessStatus,
+  type HarnessAdapter,
   type HarnessEventNotice,
   type HarnessId,
+  type HarnessRegisteredResult,
 } from "@volli/shared";
 import {
   createSessionsStore,
   findSessionPane,
   findTabBySessionId,
+  hydrateHarnessCatalog,
   scratchScope,
   sessionActivityState,
   sessionPanes,
   subscribeHarnessEvents,
   ticketScope,
+  useHarnessCatalogStore,
   useSessionsStore,
   type SessionLaunch,
 } from "./sessions";
@@ -34,6 +38,32 @@ const agentLaunch = (
   createdAt = 1000,
   title = "Session 1",
 ): SessionLaunch => ({ title, harnessId, launchKind: "agent", createdAt });
+
+/**
+ * A trusted manifest as main would hand it over: hooked, and saying so itself.
+ * Whole adapter, because that is what crosses the channel — the renderer reads
+ * a registered harness's capabilities with the same functions it reads a
+ * built-in's.
+ */
+const registeredAdapter = (): HarnessAdapter => ({
+  id: "my-agent" as HarnessId,
+  label: "My Agent",
+  command: "my-agent",
+  promptFlag: "-p",
+  detection: { executable: "my-agent" },
+  surfaces: { skillsDir: null, commandsDir: null, instructionsFile: null },
+  injection: { kind: "argv-settings-json", flag: "--settings" },
+  sessionId: { kind: "reported" },
+  resume: { byId: null, latest: null, userResumeTokens: [] },
+  events: [{ event: "input.needed", native: "Notification", delivery: "async", timeoutMs: 5000 }],
+  launchSettings: [],
+});
+
+// The catalog is a module singleton (one mirror of main's answer, not one per
+// store), so every test starts from "this renderer has heard of nothing".
+afterEach(() => {
+  useHarnessCatalogStore.setState({ registered: [] });
+});
 
 describe("sessionActivityState", () => {
   it("is exited whenever the shell has exited, regardless of recency or park state", () => {
@@ -169,13 +199,46 @@ describe("addSession — the launch expectation", () => {
     expect(store.getState().harness["s1"]).toBeUndefined();
   });
 
-  it("lets a harness the renderer has no adapter for prove itself on delivery", () => {
+  it("lets a harness nothing here can describe prove itself on delivery", () => {
     const store = createSessionsStore();
     store.getState().addSession(P, "s1", agentLaunch("my-agent" as HarnessId));
 
-    // A trusted manifest joins main's registry alone; guessing a tier here
-    // would either accuse a working harness or vouch for events it can't send.
+    // An id the catalog has never heard of — trusted since this renderer last
+    // asked, or asked for before the first answer came back. Guessing a tier
+    // here would either accuse a working harness or vouch for events it can't
+    // send.
     expect(store.getState().harness["s1"]).toBeUndefined();
+  });
+
+  it("declares what a registered harness's manifest promised, same as a built-in's", () => {
+    useHarnessCatalogStore.getState().setRegistered([registeredAdapter()]);
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", agentLaunch("my-agent" as HarnessId));
+
+    // Read off the manifest, not guessed: a trusted harness that goes quiet now
+    // decays into "not reporting" exactly as claude-code does.
+    expect(store.getState().harness["s1"]).toEqual({
+      harnessId: "my-agent",
+      expectedTier: "hooked",
+      declaresInputNeeded: true,
+      startedAt: 1000,
+      delivered: false,
+      declared: null,
+      newestFiredAt: null,
+    });
+  });
+
+  it("still reads the promise off the manifest when the manifest promises less", () => {
+    useHarnessCatalogStore.getState().setRegistered([
+      {
+        ...registeredAdapter(),
+        events: [{ event: "turn.started", native: "Start", delivery: "async", timeoutMs: 5000 }],
+      },
+    ]);
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", agentLaunch("my-agent" as HarnessId));
+
+    expect(store.getState().harness["s1"]?.declaresInputNeeded).toBe(false);
   });
 
   it("registers nothing twice for a duplicate landing", () => {
@@ -950,17 +1013,37 @@ describe("subscribeHarnessEvents", () => {
     expect(useSessionsStore.getState().harness["s1"]?.declared).toBe("waiting");
   });
 
-  it("believes a registered harness the renderer ships no adapter for", () => {
+  it("believes a harness it cannot describe — the unknown id fails OPEN", () => {
     useSessionsStore.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     const channel = stubChannel();
 
     subscribeHarnessEvents();
-    // Manifest-registered harnesses only join main's registry, so the renderer
-    // has nothing to check this id against — and delivery is the only proof the
-    // plan ever asked for.
+    // The catalog is empty here, so the renderer has nothing to check this id
+    // against — and delivery is the only proof the plan ever asked for. This
+    // must survive the catalog existing: silencing a harness that has just
+    // demonstrated it reports is the exact failure the channel exists to stop.
     channel.push({ ...NOTICE, harnessId: "my-agent" as HarnessId });
 
     expect(useSessionsStore.getState().harness["s1"]?.declared).toBe("waiting");
+  });
+
+  it("reads a catalogued harness's declared events instead of crediting it with all of them", () => {
+    useHarnessCatalogStore.getState().setRegistered([
+      {
+        ...registeredAdapter(),
+        events: [{ event: "turn.started", native: "Start", delivery: "async", timeoutMs: 5000 }],
+      },
+    ]);
+    useSessionsStore.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
+    const channel = stubChannel();
+
+    subscribeHarnessEvents();
+    channel.push({ ...NOTICE, harnessId: "my-agent" as HarnessId });
+
+    // Its own manifest says it cannot report a blocked human, so this blocking
+    // event proves the channel is alive and nothing more.
+    expect(useSessionsStore.getState().harness["s1"]?.declared).toBeNull();
+    expect(useSessionsStore.getState().harness["s1"]?.delivered).toBe(true);
   });
 
   it("refuses a blocking event from a harness whose own source can't send one", () => {
@@ -1003,5 +1086,38 @@ describe("subscribeHarnessEvents", () => {
     const channel = stubChannel();
 
     expect(subscribeHarnessEvents()).toBe(channel.unsubscribe);
+  });
+});
+
+/** Stubs `window.api.harness.registered` with one canned answer. */
+function stubCatalog(answer: HarnessRegisteredResult) {
+  const registered = vi.fn(() => Promise.resolve(answer));
+  vi.stubGlobal("window", { api: { harness: { registered } } });
+  return registered;
+}
+
+describe("hydrateHarnessCatalog", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("mirrors what main says it will launch", async () => {
+    stubCatalog({ ok: true, harnesses: [registeredAdapter()] });
+
+    await hydrateHarnessCatalog();
+
+    expect(useHarnessCatalogStore.getState().registered).toEqual([registeredAdapter()]);
+  });
+
+  it("leaves the last good answer standing when the read fails", async () => {
+    useHarnessCatalogStore.getState().setRegistered([registeredAdapter()]);
+    stubCatalog({ ok: false, error: "database is locked" });
+
+    await hydrateHarnessCatalog();
+
+    // Forgetting a harness costs a picker entry and a live session's
+    // expectation; keeping a stale one costs nothing, because the launch door
+    // checks trust itself and refuses what it no longer resolves.
+    expect(useHarnessCatalogStore.getState().registered).toEqual([registeredAdapter()]);
   });
 });

@@ -4,7 +4,13 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import type { AgentRequest, DoctorCheck, HarnessEventNotice, HarnessId } from "@volli/shared";
+import type {
+  AgentRequest,
+  AgentResponse,
+  DoctorCheck,
+  HarnessEventNotice,
+  HarnessId,
+} from "@volli/shared";
 
 import { createAttachment } from "./db/attachments-repo";
 import { getRegisteredHarness, recordHarnessTrust } from "./db/harness-registry-repo";
@@ -987,53 +993,125 @@ describe("agent command service", () => {
     });
   });
 
-  it("enumerates the harness vocabulary on raw create/update rejections", async () => {
-    ctx = openTestDb();
-    insertProject(
-      ctx.db,
-      testProject({ id: "p1", name: "Alpha", path: "/repo/alpha", ticketPrefix: "AL" }),
-    );
-    const service = createAgentCommandService({
-      db: ctx.db,
-      appVersion: "1.0.0",
-      newId: () => "t1",
-    });
-    const base = { cwd: "/repo/alpha", env: {} } as const;
+  // The harness vocabulary is the one that grows: the parser can only vet a
+  // slug's shape, so every question about whether a name means anything — and
+  // whether a human ruled on it — is settled here, against the registry.
+  describe("the harness a create/update may name", () => {
+    function harnessService(): {
+      create: (harness: unknown) => Promise<AgentResponse>;
+      update: (harness: unknown) => Promise<AgentResponse>;
+    } {
+      ctx = openTestDb();
+      insertProject(
+        ctx.db,
+        testProject({ id: "p1", name: "Alpha", path: "/repo/alpha", ticketPrefix: "AL" }),
+      );
+      let seq = 0;
+      const service = createAgentCommandService({
+        db: ctx.db,
+        appVersion: "1.0.0",
+        newId: () => `t${(seq += 1)}`,
+      });
+      const base = { cwd: "/repo/alpha", env: {} } as const;
+      return {
+        create: (harness) =>
+          service.execute({
+            v: 1,
+            cmd: "ticket.create",
+            args: { project: "AL", title: "X", harness },
+            ctx: base,
+          }),
+        update: async (harness) => {
+          await service.execute({
+            v: 1,
+            cmd: "ticket.create",
+            args: { project: "AL", title: "Seed" },
+            ctx: base,
+          });
+          return await service.execute({
+            v: 1,
+            cmd: "ticket.update",
+            args: { id: "AL-1", harness },
+            ctx: base,
+          });
+        },
+      };
+    }
 
-    const create = await service.execute({
-      v: 1,
-      cmd: "ticket.create",
-      args: { project: "AL", title: "X", harness: "aider" },
-      ctx: base,
-    });
-    expect(create).toEqual({
-      v: 1,
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: 'Invalid harness "aider" (valid: claude-code, codex, cursor, opencode)',
-      },
+    function register(slug: string, decision: "trusted" | "blocked"): void {
+      recordHarnessTrust(
+        ctx.db,
+        {
+          slug,
+          manifestPath: `/home/dev/.agents/harnesses/${slug}/harness.json`,
+          manifestSha256: "a1",
+          decision,
+          declaredEvents: [],
+        },
+        1000,
+      );
+    }
+
+    it("refuses a name no slug could ever be, and enumerates what one could", async () => {
+      const { create, update } = harnessService();
+      const message =
+        'Invalid harness "Not A Slug" (valid: claude-code, codex, cursor, opencode, or a registered, trusted harness)';
+      expect(await create("Not A Slug")).toMatchObject({ error: { message } });
+      expect(await update("Not A Slug")).toMatchObject({ error: { message } });
     });
 
-    await service.execute({
-      v: 1,
-      cmd: "ticket.create",
-      args: { project: "AL", title: "Seed" },
-      ctx: base,
+    // Well-formed and meaningless are different failures with different fixes —
+    // this one is "register it", not "spell it differently".
+    it("refuses a well-formed slug nothing is registered under", async () => {
+      const { create } = harnessService();
+      expect(await create("aider")).toEqual({
+        v: 1,
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message:
+            'Unknown harness "aider" — no harness by that name is registered (built in: claude-code, codex, cursor, opencode)',
+        },
+      });
     });
-    const update = await service.execute({
-      v: 1,
-      cmd: "ticket.update",
-      args: { id: "AL-1", harness: "aider" },
-      ctx: base,
+
+    // Registration is not permission. A blocked manifest is one somebody looked
+    // at and said no to; pinning a ticket to it would queue a launch that can
+    // never run, and would say nothing about why.
+    it("refuses a registered harness a human has not trusted", async () => {
+      const { create, update } = harnessService();
+      register("aider", "blocked");
+      const message = 'Harness "aider" is registered but not trusted, so nothing can launch on it.';
+      expect(await create("aider")).toMatchObject({ error: { message } });
+      expect(await update("aider")).toMatchObject({ error: { message } });
     });
-    expect(update).toMatchObject({
-      v: 1,
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: 'Invalid harness "aider" (valid: claude-code, codex, cursor, opencode)',
-      },
+
+    it("stamps a registered, trusted harness on the ticket", async () => {
+      const { create } = harnessService();
+      register("aider", "trusted");
+
+      expect(await create("aider")).toMatchObject({
+        ok: true,
+        data: { ticket: { harness: "aider" } },
+      });
+    });
+
+    it("stamps one on an update too", async () => {
+      const { update } = harnessService();
+      register("aider", "trusted");
+
+      expect(await update("aider")).toMatchObject({
+        ok: true,
+        data: { ticket: { harness: "aider" } },
+      });
+    });
+
+    it("still takes the first-class ids without consulting the registry", async () => {
+      const { create } = harnessService();
+      expect(await create("codex")).toMatchObject({
+        ok: true,
+        data: { ticket: { harness: "codex" } },
+      });
     });
   });
 

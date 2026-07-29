@@ -26,6 +26,7 @@ import type {
   GhosttyAppearancePayload,
   GhosttyConfigResult,
   HarnessPendingResult,
+  HarnessRegisteredResult,
   HarnessTrustSetInput,
   IpcArgs,
   IpcResult,
@@ -366,6 +367,14 @@ const api = {
      */
     setTrust: (input: HarnessTrustSetInput): Promise<Result> =>
       invoke("volli:harness-trust-set", input),
+    /**
+     * The registered harnesses this host will actually launch, whole adapters,
+     * as main last resolved them. Built-ins are not in here — the renderer has
+     * those compiled in. Fetched fresh rather than cached: a verdict recorded
+     * while the app is open regenerates the wrappers on the spot, so the answer
+     * has a shelf life.
+     */
+    registered: (): Promise<HarnessRegisteredResult> => invoke("volli:harness-registered"),
   },
   files: {
     /** The whole-project file index the `@` picker ranks over (git-listed + `.volli/artifacts/`). Fetched fresh per picker open. */

@@ -4,10 +4,12 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { HARNESS_CHANNELS } from "@volli/shared";
+import { HARNESS_CHANNELS, parseHarnessId } from "@volli/shared";
 import type {
+  HarnessAdapter,
   HarnessId,
   HarnessPendingResult,
+  HarnessRegisteredResult,
   PendingHarnessManifest,
   Result,
   VolliIpcChannel,
@@ -94,6 +96,7 @@ function setup(
   options: {
     resolveBinary?: (command: string) => Promise<string | null>;
     regenerateRuntime?: () => Promise<void>;
+    launchableHarnesses?: readonly HarnessAdapter[];
   } = {},
 ): void {
   regenerateRuntime = vi.fn(options.regenerateRuntime ?? (() => Promise.resolve()));
@@ -105,6 +108,7 @@ function setup(
         options.resolveBinary ?? ((command) => Promise.resolve(`/opt/homebrew/bin/${command}`)),
       launchArgv: () => ["--volli-hook", "/tmp/volli.sock"],
       regenerateRuntime,
+      launchableHarnesses: () => options.launchableHarnesses ?? [],
       now: () => 1000,
     },
   );
@@ -431,6 +435,65 @@ describe("a manifest directory that would not read", () => {
   });
 });
 
+/** A minimal adapter standing in for one the launch path resolved. */
+const adapter = (id: HarnessId): HarnessAdapter => ({
+  id,
+  label: `Label for ${id}`,
+  command: id,
+  promptFlag: null,
+  detection: { executable: id },
+  surfaces: { skillsDir: null, commandsDir: null, instructionsFile: null },
+  injection: { kind: "none" },
+  sessionId: { kind: "none" },
+  resume: { byId: null, latest: null, userResumeTokens: [] },
+  events: [],
+  launchSettings: [],
+});
+
+/** The slug a manifest would be registered under, minted the way main mints it. */
+const registeredSlug = (value: string): HarnessId => {
+  const parsed = parseHarnessId(value);
+  if (parsed === null) throw new Error(`${value} is not a harness slug`);
+  return parsed;
+};
+
+describe("volli:harness-registered", () => {
+  const registered = (): HarnessRegisteredResult =>
+    invoke<HarnessRegisteredResult>("volli:harness-registered");
+
+  it("names nothing when the launch path resolved nothing", () => {
+    setup();
+
+    expect(registered()).toEqual({ ok: true, harnesses: [] });
+  });
+
+  it("hands back whole adapters, so a caller reads capabilities rather than a summary", () => {
+    setup({ launchableHarnesses: [adapter(registeredSlug("my-harness"))] });
+
+    const result = registered();
+
+    expect(result).toEqual({ ok: true, harnesses: [adapter(registeredSlug("my-harness"))] });
+  });
+
+  it("drops the built-ins, which the renderer already ships", () => {
+    setup({ launchableHarnesses: [adapter("claude-code"), adapter(registeredSlug("my-harness"))] });
+
+    const result = registered();
+
+    expect(result.ok && result.harnesses.map((entry) => entry.id)).toEqual(["my-harness"]);
+  });
+
+  it("answers off the resolved launch set, never a fresh scan of the disk", async () => {
+    // A manifest on disk that nothing has resolved for a launch is not
+    // launchable, and this channel must not claim otherwise — the picker it
+    // feeds would offer a harness `pty/ipc.ts` then refuses.
+    await write("my-harness", manifest());
+    setup();
+
+    expect(registered()).toEqual({ ok: true, harnesses: [] });
+  });
+});
+
 describe("a db that would not open", () => {
   it("answers every channel with the open failure rather than hanging or lying", async () => {
     registerHarnessIpcHandlers(
@@ -440,6 +503,7 @@ describe("a db that would not open", () => {
         resolveBinary: () => Promise.resolve("/opt/homebrew/bin/my-harness"),
         launchArgv: () => [],
         regenerateRuntime: () => Promise.resolve(),
+        launchableHarnesses: () => [],
         now: () => 1000,
       },
     );

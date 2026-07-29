@@ -1,9 +1,9 @@
 import {
   COLUMN_VOCABULARY,
   FIRST_CLASS_HARNESS_IDS,
-  isFirstClassHarnessId,
   isTicketPriority,
   parseColumnToken,
+  parseHarnessId,
   TICKET_PRIORITIES,
 } from "@volli/shared";
 
@@ -16,8 +16,13 @@ export interface CliInvocation {
 /** The priority vocabulary rendered for teaching errors and help, derived from the domain source. */
 export const PRIORITY_VOCABULARY: string = TICKET_PRIORITIES.join(", ");
 
-/** The first-class harness vocabulary rendered for teaching errors and help. */
-export const HARNESS_VOCABULARY: string = FIRST_CLASS_HARNESS_IDS.join(", ");
+/**
+ * The harness vocabulary rendered for teaching errors and help. The four
+ * first-class ids can be listed; a registered harness cannot, because its slug
+ * is whatever its author called it and only the app knows which ones exist — so
+ * the phrase names the category instead of pretending to enumerate it.
+ */
+export const HARNESS_VOCABULARY: string = `${FIRST_CLASS_HARNESS_IDS.join(", ")}, or a registered, trusted harness`;
 
 export type CliParseResult =
   | { ok: true; invocation: CliInvocation }
@@ -42,13 +47,22 @@ const priorityValue: ValueParser = (raw) =>
         message: `Unknown priority ${JSON.stringify(raw)} (valid: ${PRIORITY_VOCABULARY})`,
       };
 
-const harnessValue: ValueParser = (raw) =>
-  isFirstClassHarnessId(raw)
-    ? { ok: true, value: raw }
-    : {
+/**
+ * Shape, and only shape. A first-class id and any well-formed registered slug
+ * both pass, because whether a slug names a harness that exists — and whether a
+ * human ever trusted it — is a fact about the app's registry, which this process
+ * cannot read. Main refuses an unknown or untrusted one by name, so accepting
+ * the shape here widens what can be TYPED, never what can launch.
+ */
+const harnessValue: ValueParser = (raw) => {
+  const parsed = parseHarnessId(raw);
+  return parsed === null
+    ? {
         ok: false,
-        message: `Unknown harness ${JSON.stringify(raw)} (valid: ${HARNESS_VOCABULARY})`,
-      };
+        message: `Invalid harness ${JSON.stringify(raw)} (valid: ${HARNESS_VOCABULARY})`,
+      }
+    : { ok: true, value: parsed };
+};
 
 const columnValue: ValueParser = (raw) => {
   const result = parseColumnToken(raw);

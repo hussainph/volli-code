@@ -159,13 +159,60 @@ function invalidPriorityResponse(priority: unknown): AgentResponse | null {
   );
 }
 
-/** The harness twin of {@link invalidPriorityResponse}: teach the vocabulary, don't lump. */
-function invalidHarnessResponse(harness: unknown): AgentResponse | null {
-  if (harness === undefined || isFirstClassHarnessId(harness)) return null;
-  return failure(
-    "INVALID_REQUEST",
-    `Invalid harness ${JSON.stringify(harness)} (valid: ${FIRST_CLASS_HARNESS_IDS.join(", ")})`,
-  );
+/**
+ * The harness twin of {@link invalidPriorityResponse}, with the one thing a
+ * priority does not have: a vocabulary that grows. A registered manifest is a
+ * harness the user brought and confirmed the bytes of, and there is no reason
+ * `volli` may not name one — the CLI simply cannot check it. Which slugs exist,
+ * and which of them a human actually ruled on, is this process's registry, so
+ * the parser vets the shape and the whole of the judgement lives here.
+ *
+ * Trust, not registration, is the property. A `blocked` row is a harness someone
+ * looked at and said no to; pinning a ticket to it would queue a launch that can
+ * never happen, and would do it silently. The two refusals are separate
+ * sentences because they ask for opposite things — register the harness, or go
+ * and trust the one already sitting there.
+ *
+ * Returns the resolved id rather than a bare verdict, so the call sites stamp
+ * exactly what was checked instead of re-narrowing the raw argument and quietly
+ * dropping everything but the first-class four.
+ */
+function resolveRequestedHarness(
+  db: Database.Database,
+  value: unknown,
+): { ok: true; harnessId: HarnessId | undefined } | { ok: false; response: AgentResponse } {
+  if (value === undefined) return { ok: true, harnessId: undefined };
+  const parsed = typeof value === "string" ? parseHarnessId(value) : null;
+  if (parsed === null) {
+    return {
+      ok: false,
+      response: failure(
+        "INVALID_REQUEST",
+        `Invalid harness ${JSON.stringify(value)} (valid: ${FIRST_CLASS_HARNESS_IDS.join(", ")}, or a registered, trusted harness)`,
+      ),
+    };
+  }
+  if (isFirstClassHarnessId(parsed)) return { ok: true, harnessId: parsed };
+  const registered = getRegisteredHarness(db, parsed);
+  if (registered === undefined) {
+    return {
+      ok: false,
+      response: failure(
+        "INVALID_REQUEST",
+        `Unknown harness ${JSON.stringify(value)} — no harness by that name is registered (built in: ${FIRST_CLASS_HARNESS_IDS.join(", ")})`,
+      ),
+    };
+  }
+  if (registered.decision !== "trusted") {
+    return {
+      ok: false,
+      response: failure(
+        "INVALID_REQUEST",
+        `Harness ${JSON.stringify(value)} is registered but not trusted, so nothing can launch on it.`,
+      ),
+    };
+  }
+  return { ok: true, harnessId: parsed };
 }
 
 /**
@@ -1407,14 +1454,13 @@ export function createAgentCommandService(
         const title = request.args["title"];
         const priority = request.args["priority"];
         const base = request.args["base"];
-        const harness = request.args["harness"];
         const mutation = request.args["bodyMutation"];
         const addLabels = request.args["addLabels"] ?? [];
         const removeLabels = request.args["removeLabels"] ?? [];
         const updatePriorityError = invalidPriorityResponse(priority);
         if (updatePriorityError) return updatePriorityError;
-        const updateHarnessError = invalidHarnessResponse(harness);
-        if (updateHarnessError) return updateHarnessError;
+        const requestedHarness = resolveRequestedHarness(options.db, request.args["harness"]);
+        if (!requestedHarness.ok) return requestedHarness.response;
         if (
           (title !== undefined && (typeof title !== "string" || title.trim().length === 0)) ||
           (base !== undefined && (typeof base !== "string" || !isValidBranchName(base))) ||
@@ -1442,7 +1488,9 @@ export function createAgentCommandService(
                 ...(typeof title === "string" ? { title: title.trim() } : {}),
                 ...(nextBody?.ok ? { body: nextBody.body } : {}),
                 ...(typeof base === "string" ? { baseBranch: base } : {}),
-                ...(isFirstClassHarnessId(harness) ? { preferredHarnessId: harness } : {}),
+                ...(requestedHarness.harnessId !== undefined
+                  ? { preferredHarnessId: requestedHarness.harnessId }
+                  : {}),
               },
               { now: updatedAt, actor: actor.actor },
             );
@@ -1651,13 +1699,12 @@ export function createAgentCommandService(
       if (!resolved.ok) return resolved.response;
       const createPriorityError = invalidPriorityResponse(request.args["priority"]);
       if (createPriorityError) return createPriorityError;
-      const createHarnessError = invalidHarnessResponse(request.args["harness"]);
-      if (createHarnessError) return createHarnessError;
+      const requestedHarness = resolveRequestedHarness(options.db, request.args["harness"]);
+      if (!requestedHarness.ok) return requestedHarness.response;
       const title = request.args["title"];
       const status = request.args["status"] ?? "backlog";
       const priority = request.args["priority"] ?? "medium";
       const labels = request.args["labels"] ?? [];
-      const harness = request.args["harness"];
       const base = request.args["base"];
       if (
         typeof title !== "string" ||
@@ -1689,7 +1736,7 @@ export function createAgentCommandService(
               typeof request.args["usesWorktree"] === "boolean"
                 ? request.args["usesWorktree"]
                 : true,
-            preferredHarnessId: isFirstClassHarnessId(harness) ? harness : undefined,
+            preferredHarnessId: requestedHarness.harnessId,
             // An explicit per-ticket override only (decision 11). `null` means
             // "inherit the pinned project setting" — resolved late by worktree
             // automation at use time, NOT stamped here from a snapshot.

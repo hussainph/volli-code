@@ -407,7 +407,10 @@ describe("volli:ticket-create — body, labels, usesWorktree", () => {
     ["a labels array with a non-string element", { labels: ["ok", 3] }],
     ["a non-array labels", { labels: "bug" }],
     ["a non-boolean usesWorktree", { usesWorktree: "yes" }],
-    ["an unknown preferredHarnessId", { preferredHarnessId: "not-a-harness" }],
+    // A slug no manifest could be registered under. A well-formed one is
+    // accepted here on purpose — whether the user actually trusted it is
+    // main's question, asked at the launch door where it can be answered.
+    ["a preferredHarnessId no harness could be filed under", { preferredHarnessId: "../etc" }],
   ])("rejects %s", (_label, extra) => {
     const projectId = createProject();
     const result = invoke<TicketResult>("volli:ticket-create", {
