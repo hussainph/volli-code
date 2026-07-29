@@ -221,6 +221,35 @@ Declared events gate nothing. An event becomes *verified* on first real delivery
 verified events drive automatic board moves and notifications. Until then the capability
 shows as unconfirmed. A manifest can claim anything and gain nothing by lying.
 
+## What a live run actually proved
+
+Run 2026-07-29 against the real binaries, with the app booted on an isolated profile and only
+the hook target swapped for a recorder. Everything between harness and recorder was
+production code.
+
+- **claude-code 2.1.220** fired all four bound lifecycle hooks — `SessionStart`,
+  `UserPromptSubmit`, `Stop`, `SessionEnd` — each payload carrying `session_id`. This is the
+  claim the whole design rests on, and it is now measured rather than inferred.
+- **opencode** loaded the generated plugin and reported `turn.started` and `turn.completed`.
+- **codex 0.144.6** reported `turn.completed` and nothing else. That event comes from the
+  `notify` argv key; the two bindings written into the hooks file — `UserPromptSubmit` and
+  `PermissionRequest` — produced no call at all. So `hooks_path` remains **unconfirmed**: the
+  run is equally consistent with a wrong key name, the hash-keyed trust gate declining
+  silently, and `codex exec` not raising those hooks. Do not read the passing `notify` path as
+  evidence for the hooks file.
+- **cursor** was asserted against its written config only, not run.
+
+Two things a headless run cannot reach, and neither should be recorded as passing:
+
+- `--print` never blocks on a human, so Claude raises no permission prompt and `Notification`
+  cannot fire however correct the binding is. `input.needed` for claude-code has been proven
+  end-to-end through the shim, socket and renderer, but not from the binary itself.
+- Whether `preferredNotifChannel: "notifications_disabled"` suppresses the `Notification`
+  *hook* alongside the terminal notification is **still open**. The four events above fired
+  with that setting active, so it is not a blanket hook suppressor; that is not the same as
+  clearing the one event it could plausibly silence. Settling it needs an interactive TUI and
+  a tool call that genuinely requires approval.
+
 ## Corrections
 
 Prior research and published documentation asserted several things that are false. They are
