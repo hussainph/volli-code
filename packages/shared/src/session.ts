@@ -9,6 +9,7 @@
  * starts `null`.
  */
 
+import type { HarnessEvent, HarnessTier } from "./harness/types";
 import type { HarnessId } from "./ticket";
 
 /**
@@ -72,14 +73,18 @@ export function shortSessionId(sessionId: string): string {
 }
 
 /**
- * PTY-derived activity vocabulary (ticket-detail-mvp decision #5): "working"
- * (output within ~10s) / "idle" (running, quiet) / "parked" (idle and
- * SIGSTOP'd for the warm tier, issue #51 — CONT'd back to "idle"/"working" on
- * wake) / "exited". The renderer derives working/idle from output recency
- * today; hook-driven states (e.g. waiting-for-input) reuse this vocabulary
- * later without changing it.
+ * Session activity vocabulary (ticket-detail-mvp decision #5): "working"
+ * (output within ~10s) / "waiting" (a human is blocking the agent) / "idle"
+ * (running, quiet) / "parked" (idle and SIGSTOP'd for the warm tier, issue #51
+ * — CONT'd back to "idle"/"working" on wake) / "exited".
+ *
+ * Every state but "waiting" is derived from the PTY. "waiting" cannot be: an
+ * agent sitting at a permission prompt emits no output, so recency alone reads
+ * it as "idle", which is exactly backwards. It is only ever *declared*, by a
+ * harness hook event (`input.needed`), and so exists only for the sessions
+ * whose harness reports one.
  */
-export const SESSION_ACTIVITY_STATES = ["working", "idle", "parked", "exited"] as const;
+export const SESSION_ACTIVITY_STATES = ["working", "waiting", "idle", "parked", "exited"] as const;
 
 export type SessionActivityState = (typeof SESSION_ACTIVITY_STATES)[number];
 
@@ -122,4 +127,162 @@ export function createSessionRecord(input: CreateSessionInput): SessionRecord {
     endedAt: null,
     exitCode: null,
   };
+}
+
+/**
+ * What a harness has actually told us about one live session, as opposed to
+ * what its adapter claims it can tell us. Declared capability and delivered
+ * evidence are separate fields on purpose: the plan's honesty rule is that a
+ * harness which declares an event but has never delivered one is not reporting
+ * it, and that distinction is unrepresentable if the two are collapsed.
+ *
+ * The runtime tier is deliberately NOT stored — it is derived from these four
+ * fields plus the clock ({@link sessionHarnessStatus}), so a launch that
+ * bypassed the wrapper decays into Known on its own instead of needing a timer
+ * to fire and a write to land.
+ */
+export interface SessionHarnessState {
+  harnessId: HarnessId;
+  /** The tier the adapter promised at launch — an upper bound, never a claim. */
+  expectedTier: HarnessTier;
+  /**
+   * Whether the adapter declares `input.needed`. Collapsed to a bit at
+   * construction because it is the only per-event capability the renderer acts
+   * on; cursor is the harness this exists for (its own source maps both
+   * `Notification` and `PermissionRequest` to null, so it ships unable to say a
+   * human is blocking it).
+   */
+  declaresInputNeeded: boolean;
+  /** Epoch ms of launch — the grace window for the first event is measured from here. */
+  startedAt: number;
+  /** Whether ANY canonical event has ever arrived. Declared is not delivered. */
+  delivered: boolean;
+  /** The newest hook-declared activity state; `null` means PTY derivation owns it. */
+  declared: SessionActivityState | null;
+}
+
+export interface CreateSessionHarnessStateInput {
+  harnessId: HarnessId;
+  expectedTier: HarnessTier;
+  /** The canonical events the launched adapter declares bindings for. */
+  declaredEvents: readonly HarnessEvent[];
+  /** Epoch ms of launch. */
+  startedAt: number;
+}
+
+/** The zero state for a session that has just launched and reported nothing yet. */
+export function createSessionHarnessState(
+  input: CreateSessionHarnessStateInput,
+): SessionHarnessState {
+  return {
+    harnessId: input.harnessId,
+    expectedTier: input.expectedTier,
+    declaresInputNeeded: input.declaredEvents.includes("input.needed"),
+    startedAt: input.startedAt,
+    delivered: false,
+    declared: null,
+  };
+}
+
+/** Events meaning a human is now blocking the agent's progress. */
+const BLOCKING_EVENTS: ReadonlySet<HarnessEvent> = new Set([
+  "input.needed",
+  "permission.requested",
+]);
+
+/**
+ * Events that prove the channel is alive but say nothing about the parent
+ * agent. A subagent finishing while its parent sits at a permission prompt is
+ * not the parent moving again — the plan's rule that `SubagentStop` must never
+ * notify, applied to state instead of notifications.
+ */
+const TELEMETRY_EVENTS: ReadonlySet<HarnessEvent> = new Set(["subagent.completed"]);
+
+/**
+ * Folds one canonical event into a session's harness state.
+ *
+ * **How a stale `waiting` clears: the newest event wins.** There is no TTL and
+ * no explicit acknowledgement, because both would lie. A permission prompt can
+ * legitimately sit unanswered for an hour, so expiring `waiting` on a timer
+ * would drop a genuinely blocked session out of "Needs you" while the human is
+ * still the blocker; and no harness in the table emits a
+ * `permission.replied`-shaped signal to acknowledge against — answering
+ * permissions is explicitly out of scope for this landing. What every harness
+ * DOES emit is proof of the agent moving again (`turn.started` on the next
+ * prompt, `tool.started` on the next tool, `turn.completed` on the next stop),
+ * and that proof is what returns the session to PTY derivation. A `waiting`
+ * therefore cannot outlive the agent's next observable action.
+ */
+export function receiveHarnessEvent(
+  state: SessionHarnessState,
+  event: HarnessEvent,
+): SessionHarnessState {
+  if (TELEMETRY_EVENTS.has(event)) return { ...state, delivered: true };
+  // A blocking event from a harness whose own source maps that signal to null
+  // (cursor) is not evidence, it is noise from something in the pipe that
+  // shouldn't be there. Record the delivery — the channel is demonstrably alive
+  // — but never let it raise a needs-you state the harness cannot vouch for.
+  const blocking = BLOCKING_EVENTS.has(event) && state.declaresInputNeeded;
+  return { ...state, delivered: true, declared: blocking ? "waiting" : null };
+}
+
+/**
+ * How a session's activity reaches Volli. `reported` — the harness is
+ * delivering hook events. `inferred` — nothing is reporting, and the PTY
+ * heuristic is doing the work, which is the normal state of a Known or Declared
+ * harness and of a hooked one still inside its grace window. `silent` — hooks
+ * were expected and never came, which is the one case worth a word in the UI:
+ * the user was promised reporting and isn't getting it.
+ */
+export type SessionActivitySource = "reported" | "inferred" | "silent";
+
+/**
+ * Whether a session can tell you a human is blocking it. `unsupported` is
+ * cursor: structurally absent, not merely unseen. `unconfirmed` is a harness
+ * that declares the capability over a channel nothing has ever come down.
+ */
+export type SessionInputReporting = "reported" | "unconfirmed" | "unsupported";
+
+export interface SessionHarnessStatus {
+  /** The tier the session is ACTUALLY running at — Hooked is revocable. */
+  tier: HarnessTier;
+  activitySource: SessionActivitySource;
+  input: SessionInputReporting;
+}
+
+/**
+ * How long a hooked launch has to deliver its first event before we stop
+ * believing it will. `session.started` fires at harness boot, so this only has
+ * to cover process start plus one hook round-trip; anything longer leaves the
+ * session hanging in a "waiting for events" state that will never resolve.
+ */
+export const HARNESS_EVENT_GRACE_MS = 20_000;
+
+/**
+ * What a session's harness is actually doing for us, right now. Derived rather
+ * than stored: the Hooked tier is revoked by the passage of time (the user ran
+ * the real binary directly, bypassing our wrapper, so no hook will ever fire),
+ * and deriving it against an injected clock means that revocation needs no
+ * timer, no write, and no way to be missed.
+ */
+export function sessionHarnessStatus(
+  state: SessionHarnessState,
+  now: number,
+): SessionHarnessStatus {
+  const input: SessionInputReporting = !state.declaresInputNeeded
+    ? "unsupported"
+    : state.delivered
+      ? "reported"
+      : "unconfirmed";
+  // Only a launch that PROMISED hooks can be silent. A Known or Declared
+  // harness never claimed to report, so its PTY-derived activity is the
+  // expected outcome rather than a degradation worth telling the user about.
+  if (state.expectedTier !== "hooked") {
+    return { tier: state.expectedTier, activitySource: "inferred", input };
+  }
+  if (state.delivered) return { tier: "hooked", activitySource: "reported", input };
+  if (now - state.startedAt <= HARNESS_EVENT_GRACE_MS) {
+    return { tier: "hooked", activitySource: "inferred", input };
+  }
+  return { tier: "known", activitySource: "silent", input };
 }

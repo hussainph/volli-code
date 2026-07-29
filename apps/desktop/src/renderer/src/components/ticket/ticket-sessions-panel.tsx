@@ -44,6 +44,7 @@ const NO_RECORDS: SessionRecord[] = [];
 
 const STATUS_LABEL: Record<TicketSessionStatus, string> = {
   working: "Working",
+  waiting: "Waiting for you",
   idle: "Idle",
   parked: "Parked",
   exited: "Exited",
@@ -61,6 +62,7 @@ function StatusChip({ status }: { status: TicketSessionStatus }) {
         className={cn(
           "size-1.5 rounded-full",
           (status === "working" || status === "setup") && "bg-emerald-500",
+          status === "waiting" && "bg-amber-500",
           status === "idle" && "bg-muted-foreground/50",
           status === "parked" && "bg-muted-foreground/35",
           status === "exited" && "bg-muted-foreground/25",

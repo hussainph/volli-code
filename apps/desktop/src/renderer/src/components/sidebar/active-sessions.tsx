@@ -37,6 +37,7 @@ const EMPTY_TICKET_TABS: Record<string, { files: string[]; active: string }> = {
 
 const ACTIVITY_LABEL: Record<SessionActivityState, string> = {
   working: "Working",
+  waiting: "Waiting for you",
   idle: "Idle",
   parked: "Parked",
   exited: "Exited",

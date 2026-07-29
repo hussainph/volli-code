@@ -89,14 +89,15 @@ function paneActivity(
 }
 
 const ACTIVITY_PRIORITY: Record<SessionActivityState, number> = {
-  working: 0,
-  idle: 1,
-  parked: 2,
-  exited: 3,
+  waiting: 0,
+  working: 1,
+  idle: 2,
+  parked: 3,
+  exited: 4,
 };
 
 /** Concluded fallback rows (activity `null`) sort after every live state. */
-const CONCLUDED_PRIORITY = 4;
+const CONCLUDED_PRIORITY = 5;
 
 /**
  * Needs-you ordering: a hard stop (`blocked`) outranks a finished-and-waiting

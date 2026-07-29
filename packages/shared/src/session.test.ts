@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vite-plus/test";
 import {
+  createSessionHarnessState,
   createSessionRecord,
+  receiveHarnessEvent,
+  HARNESS_EVENT_GRACE_MS,
+  sessionHarnessStatus,
   isSessionActivityState,
   isSessionLaunchKind,
   isSessionPlacement,
@@ -9,11 +13,12 @@ import {
   SESSION_PLACEMENTS,
   shortSessionId,
 } from "./session";
-import type { SessionActivityState, SessionRecord } from "./session";
+import { parseHarnessId } from "./ticket";
+import type { SessionActivityState, SessionHarnessState, SessionRecord } from "./session";
 
 describe("SESSION_ACTIVITY_STATES", () => {
-  it("lists working, idle, parked, exited in order", () => {
-    expect(SESSION_ACTIVITY_STATES).toEqual(["working", "idle", "parked", "exited"]);
+  it("lists working, waiting, idle, parked, exited in order", () => {
+    expect(SESSION_ACTIVITY_STATES).toEqual(["working", "waiting", "idle", "parked", "exited"]);
   });
 });
 
@@ -145,5 +150,103 @@ describe("SessionRecord", () => {
   it("accepts every SessionActivityState as a value", () => {
     const state: SessionActivityState = SESSION_ACTIVITY_STATES[0];
     expect(SESSION_ACTIVITY_STATES).toContain(state);
+  });
+});
+
+/** A hooked claude-code-shaped session: reports input.needed, launched at t=1000. */
+function hookedSession(): SessionHarnessState {
+  return createSessionHarnessState({
+    harnessId: "claude-code",
+    expectedTier: "hooked",
+    declaredEvents: ["session.started", "turn.started", "input.needed"],
+    startedAt: 1000,
+  });
+}
+
+describe("receiveHarnessEvent", () => {
+  it("declares waiting when the harness reports a human is blocking the agent", () => {
+    expect(receiveHarnessEvent(hookedSession(), "input.needed").declared).toBe("waiting");
+  });
+
+  it("returns a waiting session to PTY derivation once the agent moves again", () => {
+    const waiting = receiveHarnessEvent(hookedSession(), "input.needed");
+    expect(receiveHarnessEvent(waiting, "turn.started").declared).toBeNull();
+  });
+
+  it("leaves a waiting session waiting when only a subagent finished", () => {
+    const waiting = receiveHarnessEvent(hookedSession(), "input.needed");
+    expect(receiveHarnessEvent(waiting, "subagent.completed").declared).toBe("waiting");
+  });
+
+  it("refuses a blocking event from a harness that cannot report one, but records the delivery", () => {
+    const cursor = createSessionHarnessState({
+      harnessId: "cursor",
+      expectedTier: "hooked",
+      declaredEvents: ["session.started", "turn.started", "turn.completed"],
+      startedAt: 1000,
+    });
+    const after = receiveHarnessEvent(cursor, "input.needed");
+    expect(after.declared).toBeNull();
+    expect(after.delivered).toBe(true);
+  });
+});
+
+describe("sessionHarnessStatus", () => {
+  it("is reporting once a hooked session has delivered its first event", () => {
+    const started = receiveHarnessEvent(hookedSession(), "session.started");
+    expect(sessionHarnessStatus(started, 2000)).toEqual({
+      tier: "hooked",
+      activitySource: "reported",
+      input: "reported",
+    });
+  });
+
+  it("drops a hooked launch to known once the grace window passes with nothing delivered", () => {
+    const state = hookedSession();
+    expect(sessionHarnessStatus(state, state.startedAt + HARNESS_EVENT_GRACE_MS + 1)).toEqual({
+      tier: "known",
+      activitySource: "silent",
+      input: "unconfirmed",
+    });
+  });
+
+  it("keeps a harness that never promised hooks at its own tier, inferring forever", () => {
+    const declared = createSessionHarnessState({
+      harnessId: parseHarnessId("my-harness")!,
+      expectedTier: "declared",
+      declaredEvents: [],
+      startedAt: 1000,
+    });
+    expect(sessionHarnessStatus(declared, 1000 + HARNESS_EVENT_GRACE_MS + 1)).toEqual({
+      tier: "declared",
+      activitySource: "inferred",
+      input: "unsupported",
+    });
+  });
+
+  it("infers rather than claims while a hooked launch's grace window is still open", () => {
+    const state = hookedSession();
+    expect(sessionHarnessStatus(state, state.startedAt + HARNESS_EVENT_GRACE_MS)).toEqual({
+      tier: "hooked",
+      activitySource: "inferred",
+      input: "unconfirmed",
+    });
+  });
+
+  it("says a reporting cursor session still cannot tell you a human is blocking it", () => {
+    const cursor = receiveHarnessEvent(
+      createSessionHarnessState({
+        harnessId: "cursor",
+        expectedTier: "hooked",
+        declaredEvents: ["session.started", "turn.started", "turn.completed"],
+        startedAt: 1000,
+      }),
+      "session.started",
+    );
+    expect(sessionHarnessStatus(cursor, 2000)).toEqual({
+      tier: "hooked",
+      activitySource: "reported",
+      input: "unsupported",
+    });
   });
 });
