@@ -24,6 +24,13 @@ import type { HarnessAdapter } from "./types";
  * confirmed rather than merely undocumented: its Claude-Code-compatibility
  * event map sends both `Notification` and `PermissionRequest` to `null`. It
  * ships deliberately degraded and says so, so Volli claims neither.
+ *
+ * Everything it DOES bind was then confirmed against a live TUI, and the mode
+ * matters: `cursor-agent -p` is headless and fires only `sessionStart` and
+ * `sessionEnd`, which reads as four dead bindings and is an artefact of the
+ * mode. In the interactive TUI — the one Volli launches — a fresh session and
+ * one prompt produced `sessionStart` at boot, then `beforeSubmitPrompt`,
+ * `preToolUse` and `stop`. Cursor reports everything it claims.
  */
 export const cursorAdapter: HarnessAdapter = {
   id: "cursor",
@@ -51,11 +58,11 @@ export const cursorAdapter: HarnessAdapter = {
     { event: "turn.completed", native: "stop", delivery: "async" },
     { event: "tool.started", native: "preToolUse", delivery: "async" },
   ],
-  // Live run, cursor-agent 2026.07.23: `sessionStart` fires at boot from
-  // `<cwd>/.cursor/hooks.json`, which is the rung `cursor-hooks-file` writes —
-  // the first confirmation that the hooks Volli writes for cursor are reachable
-  // at all. A RESUMED session skips it (see above), so the window this anchors
-  // is a fresh launch's.
+  // Live TUI run, cursor-agent 2026.07.23: `sessionStart` fires at boot, before
+  // any input, from `<cwd>/.cursor/hooks.json` — the rung `cursor-hooks-file`
+  // writes, and the first confirmation that the hooks Volli writes for cursor
+  // are reachable at all. A RESUMED session skips it (see above), so the window
+  // this anchors is a fresh launch's.
   startupEvent: "session.started",
   launchSettings: [],
   // Empty until a marker is observed on a real cursor-agent session — a guessed

@@ -46,8 +46,10 @@ export const claudeCodeAdapter: HarnessAdapter = {
     { event: "tool.started", native: "PreToolUse", delivery: "async" },
     { event: "subagent.completed", native: "SubagentStop", delivery: "async" },
   ],
-  // Live run, claude 2.1.220: `SessionStart` fires before the first prompt is
-  // read, on a `--settings`-injected hook, with no trust prompt of any kind.
+  // Live TUI run, claude 2.1.220: `SessionStart` fires at boot with nothing
+  // typed, on a `--settings`-injected hook, and no hook trust prompt of any
+  // kind. Checked in the TUI and not only in `-p`, because that distinction is
+  // exactly what codex and opencode turned out to hinge on.
   startupEvent: "session.started",
   launchSettings: [{ path: "preferredNotifChannel", value: "notifications_disabled" }],
   // Read off a live `claude` session's own environment, not from documentation.
