@@ -12,6 +12,7 @@ import {
   harnessAdapters,
   harnessEnvSuffix,
   HARNESS_DIR_TOKEN,
+  isBareHarnessCommand,
   renderWrapperScript,
   shellSingleQuote,
 } from "@volli/shared";
@@ -62,17 +63,6 @@ function hookArgvFor(shimPath: string, adapter: HarnessAdapter): readonly string
   return [shimPath, "hook", adapter.id];
 }
 
-/**
- * Names inside Volli's `bin/` that belong to the CLI launcher. A registered
- * manifest declares its own `command`, and a wrapper is written by that name —
- * so the one thing standing between a hostile (or merely careless) manifest and
- * the launcher every agent reaches Volli through is refusing these outright.
- */
-const RESERVED_BIN_NAMES = new Set(["volli", "volli.cjs"]);
-
-/** A bare executable name: no directory traversal, no whitespace, nothing a shell would read. */
-const BARE_COMMAND_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-
 /** Replaces one generated file in place: atomic temp + rename, never a partial script. */
 async function writeExecutable(path: string, content: string): Promise<void> {
   const temporaryPath = `${path}.tmp-${randomUUID()}`;
@@ -95,7 +85,7 @@ export async function ensureHarnessRuntime(input: HarnessRuntimeInput): Promise<
   const wrappers: string[] = [];
   const env: Record<string, string> = {};
   for (const adapter of input.adapters) {
-    if (!BARE_COMMAND_RE.test(adapter.command) || RESERVED_BIN_NAMES.has(adapter.command)) continue;
+    if (!isBareHarnessCommand(adapter.command)) continue;
     const wrapperPath = join(input.binDir, adapter.command);
     await writeExecutable(wrapperPath, renderWrapperScript(adapter, { binDir: input.binDir }));
     wrappers.push(wrapperPath);
@@ -125,7 +115,7 @@ export async function ensureHarnessRuntime(input: HarnessRuntimeInput): Promise<
   // shell would have said "command not found". Reconcile rather than accumulate.
   for (const adapter of harnessAdapters) {
     if (input.adapters.some((installed) => installed.command === adapter.command)) continue;
-    if (!BARE_COMMAND_RE.test(adapter.command) || RESERVED_BIN_NAMES.has(adapter.command)) continue;
+    if (!isBareHarnessCommand(adapter.command)) continue;
     await rm(join(input.binDir, adapter.command), { force: true });
   }
   return { wrappers, env };

@@ -37,6 +37,15 @@ export const HARNESS_EVENTS = [
 
 export type HarnessEvent = (typeof HARNESS_EVENTS)[number];
 
+/**
+ * Whether `value` is one of the {@link HARNESS_EVENTS}. The vocabulary guard for
+ * every untrusted edge that names an event — a registered manifest's bindings, a
+ * stored ledger row, a fired hook's argv.
+ */
+export function isHarnessEvent(value: unknown): value is HarnessEvent {
+  return typeof value === "string" && (HARNESS_EVENTS as readonly string[]).includes(value);
+}
+
 export interface HarnessEventBinding {
   event: HarnessEvent;
   /**
@@ -107,6 +116,27 @@ export interface HarnessSurfaces {
   skillsDir: string | null;
   commandsDir: string | null;
   instructionsFile: string | null;
+}
+
+/** A bare executable name: no directory traversal, no whitespace, nothing a shell would read. */
+const BARE_HARNESS_COMMAND_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/**
+ * Names inside Volli's `bin/` that belong to the CLI launcher. A wrapper is
+ * written under a harness's `command`, so the one thing standing between a
+ * hostile (or merely careless) manifest and the launcher every agent reaches
+ * Volli through is refusing these outright.
+ */
+const RESERVED_HARNESS_COMMANDS: ReadonlySet<string> = new Set(["volli", "volli.cjs"]);
+
+/**
+ * Whether `command` is a name Volli will execute and describe honestly: a bare
+ * executable, and not one of Volli's own. Every argument a harness receives
+ * comes from a declared argv array instead, which is what makes the trust
+ * dialog's claim about the command line literally true.
+ */
+export function isBareHarnessCommand(command: string): boolean {
+  return BARE_HARNESS_COMMAND_RE.test(command) && !RESERVED_HARNESS_COMMANDS.has(command);
 }
 
 export interface HarnessAdapter {
