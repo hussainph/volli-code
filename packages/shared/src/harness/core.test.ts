@@ -122,13 +122,25 @@ describe("first-class harness capabilities", () => {
     }
   });
 
-  // Each value is a live measurement, recorded in the adapter beside it. The
-  // test is here so a binding cannot be removed while the claim it supports
-  // stays behind — which is the only way this field goes back to lying.
-  it("declares a launch-time event for every built-in, and binds every one it declares", () => {
+  // Each value is a live measurement against the mode Volli actually launches —
+  // the interactive TUI, never a headless `-p`/`exec`, which is where three of
+  // these four disagree with themselves. Written down so a binding cannot be
+  // removed while the claim it supports stays behind, which is the only way this
+  // field goes back to lying.
+  it("claims a launch-time event only where one was observed, and binds every one it claims", () => {
+    const claimed = Object.fromEntries(
+      harnessAdapters.map((adapter) => [adapter.id, adapter.startupEvent]),
+    );
+    expect(claimed).toEqual({
+      "claude-code": "session.started",
+      cursor: "session.started",
+      opencode: "session.started",
+      // Codex has no session until the first turn: a trusted config fires
+      // nothing at TUI boot. See `codex.ts`.
+      codex: null,
+    });
     for (const adapter of harnessAdapters) {
       expect([adapter.id, bindsStartupEvent(adapter)]).toEqual([adapter.id, true]);
-      expect([adapter.id, adapter.startupEvent]).toEqual([adapter.id, "session.started"]);
     }
   });
 

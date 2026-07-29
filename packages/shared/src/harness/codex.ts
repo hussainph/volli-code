@@ -30,27 +30,50 @@ import type { HarnessAdapter } from "./types";
  * reports as unconfirmed, not as broken. That is exactly how an earlier
  * `hooks_path` guess survived this whole branch reporting nothing.
  *
- * Two measured reasons a codex hook does not run, both of them silent from
- * inside Volli, and both found by running 0.144.6 rather than by reading it:
+ * Three things govern whether a codex hook runs at all, all of them silent from
+ * inside Volli, and all found by running 0.144.6 rather than by reading it.
  *
  * 1. **`async=true` is skipped outright.** `codexHookOverrides` renders
  *    `delivery: "async"` as `async=true`, and codex answers `warning: skipping
- *    async hook … async hooks are not supported yet` and runs nothing. Every
- *    binding below that says `async` is therefore dead on this version, which is
- *    the real explanation for the "no hook fired" run recorded above — it was
- *    read as the trust gate, and it was not. `session.started` says `sync`
- *    because that is the only rendering codex will run; the others are left as
- *    they are rather than changed by a stage that was not weighing what it means
- *    for codex to BLOCK on a permission hook.
- * 2. **The hook trust gate.** Hash-keyed over the hook config and interactive: a
- *    changed config re-prompts, and one wrong keypress turns our events off for
- *    good. Adding the `SessionStart` binding below changes the hash, so every
- *    existing install re-prompts once. An unreviewed config runs no hooks and
- *    says nothing about it — `codex exec` with a valid sync `SessionStart`
- *    prints no warning and fires nothing, while the same run under
- *    `--dangerously-bypass-hook-trust` prints `hook: SessionStart` and fires.
- *    That is why the launch config carries nothing session-specific: it keeps the
- *    hash stable, so the prompt is once ever rather than once per launch.
+ *    async hook … async hooks are not supported yet` and runs nothing — its own
+ *    hooks panel counts such a binding as `Installed 0`. So every binding here
+ *    is `sync`, which is not a preference: it is the only rendering codex runs,
+ *    and it is a true description of what codex does with a command hook.
+ *
+ *    The blocking cost was measured rather than assumed. Codex waits for the
+ *    hook's full wall time, one-for-one: `codex exec` with a no-op
+ *    `UserPromptSubmit` hook took a 4.4s median, and with a 6s hook 10.6s
+ *    (+6.2s, and the variance collapsed to ±0.3s because the hook dominates).
+ *    So the cost of a sync binding is exactly what `volli hook` costs, and that
+ *    is ~100ms — an ELECTRON_RUN_AS_NODE boot, dominated by the boot. A socket
+ *    path that does not exist fails fast (~107ms) rather than burning the
+ *    budget, and no `VOLLI_SESSION` returns in ~102ms without opening anything.
+ *    The one pathological case is a socket that is PRESENT and wedged — accepts
+ *    the connection and never answers — which self-bounds at `HOOK_BUDGET_MS`
+ *    and was measured at 2.56s before exiting 0. Against a turn that already
+ *    costs seconds, ~100ms is not perceptible and 2.56s is survivable; a dead
+ *    Volli, the common failure, costs nothing.
+ *
+ * 2. **The hook trust gate.** Hash-keyed over the hook config, interactive, and
+ *    blocking at startup. Observed in a pty rather than described: codex opens
+ *    with `Hooks need review / 1 hook is new or changed. / Hooks can run outside
+ *    the sandbox after you trust them.` over `1. Review hooks`, `2. Trust all
+ *    and continue`, `3. Continue without trusting (hooks won't run)`, with
+ *    `Review hooks` preselected — so declining is deliberate, not the default,
+ *    but so is accepting. Answering `2` persists, and the next launch of the
+ *    same config shows nothing. Adding the `SessionStart` binding changes the
+ *    hash, so every existing install is asked exactly once. This is also why the
+ *    launch config carries nothing session-specific: it keeps the hash stable,
+ *    so the question stays once-ever rather than once-per-launch.
+ *
+ * 3. **`SessionStart` is not a launch-time event in the TUI**, which is the
+ *    mode Volli launches. Under `codex exec` it fires before the prompt is read;
+ *    in the TUI, a fully trusted config fires NOTHING at boot and fires
+ *    `SessionStart` on the first turn, alongside `UserPromptSubmit`. Codex has
+ *    no session until there is a turn. Hence `startupEvent: null` — the channel
+ *    genuinely cannot prove itself alive until the agent acts, and claiming
+ *    otherwise would accuse every healthy codex session that has not been typed
+ *    into yet, which is the exact bug this field exists to prevent.
  */
 export const codexAdapter: HarnessAdapter = {
   id: "codex",
@@ -71,42 +94,27 @@ export const codexAdapter: HarnessAdapter = {
     userResumeTokens: ["resume"],
   },
   events: [
-    // `sync` is not a preference — see 1. above. Codex runs a command hook
-    // inline and waits for it, which is what `sync` has always meant here, and
-    // `volli hook` is built to be waited on: it exits 0 in silence however badly
-    // it goes, inside a budget shorter than any harness's deadline.
-    {
-      event: "session.started",
-      native: "hooks:SessionStart",
-      delivery: "sync",
-    },
-    {
-      event: "turn.started",
-      native: "hooks:UserPromptSubmit",
-      delivery: "async",
-    },
-    {
-      event: "turn.completed",
-      native: "notify:agent-turn-complete",
-      delivery: "async",
-    },
-    {
-      event: "permission.requested",
-      native: "hooks:PermissionRequest",
-      delivery: "async",
-    },
-    // A permission prompt is the only way codex says a human is blocking it.
-    {
-      event: "input.needed",
-      native: "hooks:PermissionRequest",
-      delivery: "async",
-    },
+    // Every `hooks:` binding is `sync` — see 1. above. `volli hook` is built to
+    // be waited on: it exits 0 in silence however badly it goes, inside a budget
+    // shorter than any harness's deadline, so the worst a wedged Volli can do to
+    // a codex turn is delay it.
+    { event: "session.started", native: "hooks:SessionStart", delivery: "sync" },
+    { event: "turn.started", native: "hooks:UserPromptSubmit", delivery: "sync" },
+    { event: "turn.completed", native: "notify:agent-turn-complete", delivery: "async" },
+    // A permission prompt is the only way codex says a human is blocking it, so
+    // one native name carries two canonical events and codex runs the hook
+    // twice. Two invocations of ~100ms, in front of a prompt that is about to
+    // stop and wait for a human anyway. Verified live not to disturb the
+    // decision: with these bound, an approval request still appeared and still
+    // took the answer — the hook writes nothing to stdout, and codex's schema
+    // only fails closed on a hook that returns decision fields.
+    { event: "permission.requested", native: "hooks:PermissionRequest", delivery: "sync" },
+    { event: "input.needed", native: "hooks:PermissionRequest", delivery: "sync" },
   ],
-  // Claimed, and revocable by the user: a codex whose hook review was declined
-  // reports nothing at launch, and saying so is the point. A codex that never
-  // reported anything and never showed a review prompt is a codex whose config
-  // did not take.
-  startupEvent: "session.started",
+  // Null, and measured — see 3. above. Codex has no session until the first
+  // turn, so nothing it does at launch is observable and it may not be held to
+  // a launch-time promise.
+  startupEvent: null,
   launchSettings: [],
   // Empty until a marker is observed on a real codex session — a guessed name is
   // a variable deleted from the user's environment for no reason.

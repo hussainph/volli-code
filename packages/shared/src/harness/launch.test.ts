@@ -206,10 +206,14 @@ describe("buildLaunchConfig", () => {
 
     // One override per native event, the value a TOML array of matcher groups —
     // this exact string is accepted by codex 0.144.6's own deserializer.
+    //
+    // `async=false` is load-bearing, not incidental: codex answers `async=true`
+    // with `skipping async hook … not supported yet` and runs nothing, so this
+    // literal is the difference between a binding and a decoration.
     expect(overrides).toContain(
       'hooks.UserPromptSubmit=[{hooks=[{type="command",' +
         "command=\"'/vol/Application Support/Volli Code/bin/volli' 'hook' 'codex' " +
-        "'turn.started' '--socket' '/tmp/volli.sock'\",async=true}]}]",
+        "'turn.started' '--socket' '/tmp/volli.sock'\",async=false}]}]",
     );
 
     // notify takes a real argv array, so the spaced shim path stays one word —
