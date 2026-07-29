@@ -2,25 +2,30 @@ import { describe, expect, it } from "vite-plus/test";
 
 import type { AgentRequest } from "@volli/shared";
 
-import { runHook } from "./hook";
+import { runHook, SHORTEST_DECLARED_HOOK_TIMEOUT_MS } from "./hook";
 import type { HookDependencies } from "./hook";
 
 interface Recorded {
   requests: AgentRequest[];
   stdinReads: number;
+  /** Every budget the hook handed out, stdin's first and the request's second. */
+  budgets: number[];
 }
 
 function deps(overrides: Partial<Parameters<typeof runHook>[1]> = {}) {
-  const recorded: Recorded = { requests: [], stdinReads: 0 };
+  const recorded: Recorded = { requests: [], stdinReads: 0, budgets: [] };
   const dependencies: Parameters<typeof runHook>[1] = {
     env: { VOLLI_SESSION: "session-7", VOLLI_SOCKET: "/profiles/volli.sock" },
     cwd: () => "/work/volli",
-    readStdin: async () => {
+    elapsedMs: () => 0,
+    readStdin: async (timeoutMs) => {
       recorded.stdinReads += 1;
+      recorded.budgets.push(timeoutMs);
       return "";
     },
-    request: async (_socketPath, request) => {
+    request: async (_socketPath, request, options) => {
       recorded.requests.push(request);
+      recorded.budgets.push(options?.timeoutMs ?? 0);
       return { v: 1, ok: true, data: {} };
     },
     ...overrides,
@@ -128,6 +133,55 @@ describe("runHook", () => {
     // over a field the door does not read would lose the report that matters.
     await expect(runHook(["claude-code", "input.needed"], dependencies)).resolves.toBe(0);
     expect(recorded.requests[0]?.ctx.cwd).toBe("");
+  });
+
+  it("fits its whole budget, process boot included, inside the shortest declared timeout", async () => {
+    const { recorded, dependencies } = deps({ elapsedMs: () => 250 });
+
+    await runHook(["claude-code", "input.needed"], dependencies);
+
+    // Reading stdin and reaching the socket are two spends against one budget,
+    // and the budget starts when the process did — the harness is already
+    // counting during `ELECTRON_RUN_AS_NODE` boot.
+    const total = 250 + recorded.budgets.reduce((sum, budget) => sum + budget, 0);
+    expect(recorded.budgets).toHaveLength(2);
+    expect(total).toBeLessThan(SHORTEST_DECLARED_HOOK_TIMEOUT_MS);
+  });
+
+  it("charges a slow boot to itself rather than to the harness's patience", async () => {
+    const { recorded, dependencies } = deps({ elapsedMs: () => 2000 });
+
+    await runHook(["claude-code", "input.needed"], dependencies);
+
+    const quick = deps({ elapsedMs: () => 0 });
+    await runHook(["claude-code", "input.needed"], quick.dependencies);
+    expect(recorded.budgets[1]).toBeLessThan(quick.recorded.budgets[1] ?? 0);
+  });
+
+  it("gives up silently once the budget is gone, rather than reporting late", async () => {
+    // A harness that took longer to start us than the whole budget allows: a
+    // report now would land after it had already given up on us.
+    const { recorded, dependencies } = deps({ elapsedMs: () => 60_000 });
+
+    await expect(runHook(["claude-code", "input.needed"], dependencies)).resolves.toBe(0);
+    expect(recorded.requests).toEqual([]);
+    expect(recorded.stdinReads).toBe(0);
+  });
+
+  it("skips a report the stdin read has already outlasted", async () => {
+    let elapsed = 0;
+    const { recorded, dependencies } = deps({
+      elapsedMs: () => elapsed,
+      readStdin: async () => {
+        // A harness that held the pipe open for the whole read: whatever it
+        // finally said, there is no budget left to say it in.
+        elapsed = 60_000;
+        return "";
+      },
+    });
+
+    await expect(runHook(["claude-code", "input.needed"], dependencies)).resolves.toBe(0);
+    expect(recorded.requests).toEqual([]);
   });
 
   it("ignores a flag it does not know rather than refusing to report", async () => {

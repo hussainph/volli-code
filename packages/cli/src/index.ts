@@ -57,13 +57,14 @@ async function probe(path: string): Promise<void> {
 }
 
 /**
- * The hook payload, for harnesses that write it to stdin. Bounded rather than
- * read to EOF: a harness that opens the pipe and never closes it would
- * otherwise hang the hook until the harness's own timeout kills it, which the
- * user sees as a hook error. An empty payload only costs the session id
- * correlation, which most events don't carry anyway.
+ * The hook payload, for harnesses that write it to stdin. Bounded by the share
+ * of the invocation's budget the caller allots it rather than read to EOF: a
+ * harness that opens the pipe and never closes it would otherwise hang the hook
+ * until the harness's own timeout kills it, which the user sees as a hook error.
+ * An empty payload only costs the session id correlation, which most events
+ * don't carry anyway.
  */
-function readStdinPayload(): Promise<string> {
+function readStdinPayload(timeoutMs: number): Promise<string> {
   if (process.stdin.isTTY) return Promise.resolve("");
   return new Promise<string>((resolve) => {
     const chunks: Buffer[] = [];
@@ -71,7 +72,7 @@ function readStdinPayload(): Promise<string> {
       clearTimeout(timer);
       resolve(Buffer.concat(chunks).toString("utf8"));
     };
-    const timer = setTimeout(finish, 1500);
+    const timer = setTimeout(finish, timeoutMs);
     timer.unref();
     process.stdin.on("data", (chunk: Buffer) => chunks.push(chunk));
     process.stdin.once("end", finish);
@@ -94,6 +95,9 @@ async function main(): Promise<void> {
       await runHook(process.argv.slice(3), {
         env,
         cwd: () => process.cwd(),
+        // Boot counts: the harness started its own clock before this process
+        // existed, and `process.uptime()` is the only place that time is legible.
+        elapsedMs: () => Math.round(process.uptime() * 1000),
         readStdin: readStdinPayload,
         request: (path, request, options) =>
           requestAgent(path, request, { timeoutMs: options?.timeoutMs ?? 10_000 }),

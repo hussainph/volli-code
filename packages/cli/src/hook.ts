@@ -16,15 +16,41 @@
  * it was given and lets that one door refuse. A second refusal here would be a
  * second copy of the union to drift from.
  */
+import { harnessAdapters } from "@volli/shared";
 import type { AgentRequest, AgentResponse } from "@volli/shared";
 
 /**
- * Long enough for a live app on a Unix socket, and shorter than the shortest
- * timeout any adapter declares (5s) — so a wedged Volli is abandoned by us
- * before the harness would kill us, and the harness sees a clean fast exit
- * rather than a hook that timed out.
+ * The shortest timeout any adapter declares for a hook binding, read off the
+ * adapters themselves. A copied number would drift the moment a harness bound
+ * an event on a tighter one, and the drift is invisible: the hook keeps working
+ * everywhere except against the harness that shortened it.
+ *
+ * The built-ins are what is visible from here. A registered manifest that
+ * declares something tighter is its author's own budget to keep — reading
+ * manifests on the hook path would spend more of it than the number could save.
  */
-const HOOK_TIMEOUT_MS = 3000;
+export const SHORTEST_DECLARED_HOOK_TIMEOUT_MS = Math.min(
+  ...harnessAdapters.flatMap((adapter) => adapter.events.map((binding) => binding.timeoutMs)),
+);
+
+/**
+ * What one invocation may spend in total, from the moment the process started.
+ *
+ * Half the declared floor, because everything here is charged against the same
+ * clock the harness is watching and most of it is not ours to shorten: an
+ * `ELECTRON_RUN_AS_NODE` boot before the first line runs, then a stdin read,
+ * then the socket. Budgeting only the socket call is how three "fast enough"
+ * steps add up to a hook the harness kills — which the user sees as a timeout
+ * error from their agent instead of nothing at all.
+ */
+const HOOK_BUDGET_MS = Math.floor(SHORTEST_DECLARED_HOOK_TIMEOUT_MS / 2);
+
+/**
+ * The share of the remaining budget stdin may take. A payload is worth only the
+ * session id correlation it might carry, so it never spends so much that the
+ * report it would enrich can no longer be sent.
+ */
+const STDIN_BUDGET_SHARE = 0.4;
 
 /**
  * The key spellings a harness gives its own session id, observed in live
@@ -107,8 +133,10 @@ export interface HookDependencies {
    * where every other failure already lands.
    */
   cwd(): string;
-  /** The hook payload, for the harnesses that deliver it on stdin. */
-  readStdin(): Promise<string>;
+  /** Milliseconds since this process started — boot included, since the harness counts it. */
+  elapsedMs(): number;
+  /** The hook payload, for the harnesses that deliver it on stdin. Bounded by `timeoutMs`. */
+  readStdin(timeoutMs: number): Promise<string>;
   request(
     socketPath: string,
     request: AgentRequest,
@@ -146,8 +174,15 @@ export async function runHook(rest: readonly string[], deps: HookDependencies): 
     if (invocation === null) return 0;
     const socketPath = invocation.socketPath ?? deps.env["VOLLI_SOCKET"];
     if (socketPath === undefined || socketPath.length === 0) return 0;
-    const payload = invocation.payload ?? (await deps.readStdin());
+    const remainingMs = (): number => HOOK_BUDGET_MS - deps.elapsedMs();
+    // Boot alone can outlast the budget on a cold machine. Reporting then would
+    // land after the harness had given up, so it is not reported at all.
+    if (remainingMs() <= 0) return 0;
+    const payload =
+      invocation.payload ?? (await deps.readStdin(Math.floor(remainingMs() * STDIN_BUDGET_SHARE)));
     const harnessSessionId = harnessSessionIdFrom(payload);
+    const requestMs = remainingMs();
+    if (requestMs <= 0) return 0;
     await deps.request(
       socketPath,
       {
@@ -160,7 +195,7 @@ export async function runHook(rest: readonly string[], deps: HookDependencies): 
         },
         ctx: { cwd: currentDirectory(deps), env: { socket: socketPath, session } },
       },
-      { timeoutMs: HOOK_TIMEOUT_MS },
+      { timeoutMs: requestMs },
     );
   } catch {
     // Deliberately silent, on stdout and stderr alike. A dead Volli, a broken
