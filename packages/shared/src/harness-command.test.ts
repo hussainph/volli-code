@@ -1,7 +1,10 @@
 import { describe, it, expect } from "vite-plus/test";
 import { FIRST_CLASS_HARNESS_IDS, parseHarnessId, type HarnessId } from "./ticket";
+import type { HarnessAdapter } from "./harness/types";
 import {
   buildHarnessCommand,
+  buildResumeCommand,
+  renderResumeArgv,
   buildHarnessResumeCommand,
   composeAttachmentsSection,
   composeTicketPrompt,
@@ -140,9 +143,49 @@ describe("buildHarnessResumeCommand", () => {
     expect(buildHarnessResumeCommand("opencode", null)).toBe("opencode --continue");
   });
 
-  it("returns null for a harness with no known resume support, with or without a session id", () => {
+  it("resumes Cursor by session id with --resume", () => {
+    expect(buildHarnessResumeCommand("cursor", "abc123")).toBe("cursor-agent --resume 'abc123'");
+  });
+
+  it("returns null for a harness with no registered adapter, with or without a session id", () => {
     expect(buildHarnessResumeCommand("custom-harness", "abc123")).toBeNull();
     expect(buildHarnessResumeCommand("custom-harness", null)).toBeNull();
+  });
+
+  it("returns null for a stored id that is not even a well-formed harness slug", () => {
+    expect(buildHarnessResumeCommand("Not A Harness", "abc123")).toBeNull();
+  });
+
+  it("substitutes the id wherever the template puts it, not only at the end", () => {
+    expect(renderResumeArgv(["--session={id}", "--json"], "abc123")).toEqual([
+      "--session='abc123'",
+      "--json",
+    ]);
+  });
+
+  it("quotes only the substituted id, leaving the rest of the template literal", () => {
+    expect(renderResumeArgv(["--resume", "{id}"], "it's mine")).toEqual([
+      "--resume",
+      "'it'\\''s mine'",
+    ]);
+  });
+
+  it("returns null for an adapter that declares no resume at all, session id or not", () => {
+    const declared: HarnessAdapter = {
+      id: parseHarnessId("my-harness") as HarnessId,
+      label: "My Harness",
+      command: "my-harness",
+      promptFlag: null,
+      detection: { executable: "my-harness" },
+      surfaces: { skillsDir: null, commandsDir: null, instructionsFile: null },
+      injection: { kind: "none" },
+      sessionId: { kind: "none" },
+      resume: { byId: null, latest: null, userResumeTokens: [] },
+      events: [],
+      launchSettings: [],
+    };
+    expect(buildResumeCommand(declared, "abc123")).toBeNull();
+    expect(buildResumeCommand(declared, null)).toBeNull();
   });
 
   it("quotes a session id that needs shell quoting, same as prompt quoting", () => {

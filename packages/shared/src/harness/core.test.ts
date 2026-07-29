@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { FIRST_CLASS_HARNESS_IDS, parseHarnessId, type HarnessId } from "../ticket";
+import { HARNESS_EVENTS, harnessTier, supportedEvents, type HarnessAdapter } from "./types";
 import {
   buildHarnessInstallPlan,
   harnessAdapters,
@@ -77,23 +78,80 @@ describe("harnessAdapters", () => {
   });
 });
 
-describe("resume metadata (issue #78)", () => {
-  it("gives claude-code --resume/--continue argv fragments", () => {
-    const claude = harnessAdapters.find((adapter) => adapter.id === "claude-code");
-    expect(claude?.resumeIdArgs).toEqual(["--resume"]);
-    expect(claude?.resumeLatestArgs).toEqual(["--continue"]);
+function adapterFor(id: string): HarnessAdapter {
+  const found = harnessAdapters.find((adapter) => adapter.id === id);
+  if (!found) throw new Error(`no adapter for ${id}`);
+  return found;
+}
+
+describe("first-class harness capabilities", () => {
+  it("names a bare executable for every harness, so a trust dialog's claim is literally true", () => {
+    for (const adapter of harnessAdapters) {
+      expect(adapter.command).not.toMatch(/[/\s]/);
+      expect(adapter.command.length).toBeGreaterThan(0);
+    }
   });
 
-  it("gives codex resume/resume --last argv fragments", () => {
-    const codex = harnessAdapters.find((adapter) => adapter.id === "codex");
-    expect(codex?.resumeIdArgs).toEqual(["resume"]);
-    expect(codex?.resumeLatestArgs).toEqual(["resume", "--last"]);
+  it("templates every by-id resume on exactly one {id} token", () => {
+    for (const adapter of harnessAdapters) {
+      const template = adapter.resume.byId;
+      if (!template) continue;
+      expect(template.filter((token) => token.includes("{id}"))).toHaveLength(1);
+    }
   });
 
-  it("gives opencode --session/--continue argv fragments", () => {
-    const opencode = harnessAdapters.find((adapter) => adapter.id === "opencode");
-    expect(opencode?.resumeIdArgs).toEqual(["--session"]);
-    expect(opencode?.resumeLatestArgs).toEqual(["--continue"]);
+  it("claims a user's own resume flags for every harness that can resume at all", () => {
+    for (const adapter of harnessAdapters) {
+      if (!adapter.resume.byId && !adapter.resume.latest) continue;
+      expect(adapter.resume.userResumeTokens.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("hooks claude-code on inline settings JSON and a session id we mint", () => {
+    const claude = adapterFor("claude-code");
+    expect(harnessTier(claude)).toBe("hooked");
+    expect(claude.injection).toEqual({ kind: "argv-settings-json", flag: "--settings" });
+    expect(claude.sessionId).toEqual({ kind: "argv", flag: "--session-id", format: "uuid" });
+    expect([...supportedEvents(claude)].toSorted()).toEqual([...HARNESS_EVENTS].toSorted());
+  });
+
+  it("silences claude-code's own notifications so they never double up with Volli's", () => {
+    expect(adapterFor("claude-code").launchSettings).toContainEqual({
+      path: "preferredNotifChannel",
+      value: "notifications_disabled",
+    });
+  });
+
+  it("reaches codex turn completion by a mechanism its other events do not share", () => {
+    const codex = adapterFor("codex");
+    const turnCompleted = codex.events.find((binding) => binding.event === "turn.completed");
+    const permission = codex.events.find((binding) => binding.event === "permission.requested");
+    expect(turnCompleted?.native.split(":")[0]).toBe("notify");
+    expect(permission?.native.split(":")[0]).toBe("hooks");
+  });
+
+  it("leaves cursor unable to report input.needed, which its source confirms rather than omits", () => {
+    const cursor = adapterFor("cursor");
+    expect(harnessTier(cursor)).toBe("hooked");
+    expect(supportedEvents(cursor).has("input.needed")).toBe(false);
+    expect(supportedEvents(cursor).has("permission.requested")).toBe(false);
+    expect(supportedEvents(cursor).has("turn.completed")).toBe(true);
+    expect(cursor.injection).toEqual({
+      kind: "config-dir-env",
+      envVar: "CURSOR_CONFIG_DIR",
+      filename: "cli-config.json",
+    });
+  });
+
+  it("learns opencode's session id from its events instead of minting one at launch", () => {
+    const opencode = adapterFor("opencode");
+    expect(opencode.sessionId).toEqual({ kind: "reported" });
+    expect(opencode.injection).toEqual({
+      kind: "plugin-config-env",
+      envVar: "OPENCODE_CONFIG",
+      filename: "opencode.json",
+    });
+    expect(supportedEvents(opencode).has("input.needed")).toBe(true);
   });
 });
 

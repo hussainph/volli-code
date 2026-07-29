@@ -5,10 +5,10 @@
  * Node/Electron/DOM imports (package rule) — main injects the built command
  * line into the PTY (`src/main/pty.ts`).
  */
-import { isFirstClassHarnessId } from "./ticket";
+import { parseHarnessId } from "./ticket";
 import type { HarnessId } from "./ticket";
 import { getHarnessAdapter } from "./harness/core";
-import { GENERIC_RESUME_METADATA } from "./harness/generic";
+import type { HarnessAdapter } from "./harness/types";
 
 /**
  * Wraps `input` as a single POSIX single-quoted zsh word so every shell
@@ -111,35 +111,52 @@ export function composeAttachmentsSection(input: {
   return lines.join("\n");
 }
 
+/** The `{id}` token a {@link HarnessResume.byId} template substitutes at. */
+export const RESUME_ID_TOKEN = "{id}";
+
+/**
+ * A by-id resume argv template with the session id substituted in. The id is
+ * shell-quoted, but only the id: a template like `--session={id}` renders as
+ * `--session='abc'`, so the flag it is embedded in stays a literal flag.
+ */
+export function renderResumeArgv(template: readonly string[], harnessSessionId: string): string[] {
+  const quoted = shellSingleQuote(harnessSessionId);
+  return template.map((token) => token.replaceAll(RESUME_ID_TOKEN, () => quoted));
+}
+
 /**
  * The command line to resume a harness's prior session (interrupt/resume,
- * issue #78): the same shell-quoting {@link shellSingleQuote} applies to
- * prompts applies to the session id here.
+ * issue #78), for an adapter already in hand.
  *
  * Fallback chain:
- * 1. `harnessSessionId` is known AND the harness has by-id resume support
- *    (`resumeIdArgs`) → `<command> <resumeIdArgs...> <quoted-id>`.
- * 2. Otherwise, the harness has "resume latest in cwd" support
- *    (`resumeLatestArgs`) → `<command> <resumeLatestArgs...>`.
- * 3. Otherwise (a custom/undetected harness id, or a first-class harness
- *    missing both) → `null` — the caller falls back to a fresh launch.
+ * 1. `harnessSessionId` is known AND the harness declares a by-id resume
+ *    template → `<command> <template with {id} substituted>`.
+ * 2. Otherwise, the harness has "resume latest in cwd" support → `<command>
+ *    <resume.latest...>`.
+ * 3. Otherwise (a harness with no registered adapter, or one declaring
+ *    neither) → `null` — the caller falls back to a fresh launch.
  */
-export function buildHarnessResumeCommand(
-  harnessId: HarnessId | string,
+export function buildResumeCommand(
+  adapter: HarnessAdapter,
   harnessSessionId: string | null,
 ): string | null {
-  const adapter = isFirstClassHarnessId(harnessId) ? getHarnessAdapter(harnessId) : undefined;
-  const command = adapter?.command ?? null;
-  const resumeIdArgs = adapter?.resumeIdArgs ?? GENERIC_RESUME_METADATA.resumeIdArgs;
-  const resumeLatestArgs = adapter?.resumeLatestArgs ?? GENERIC_RESUME_METADATA.resumeLatestArgs;
-
-  if (command && harnessSessionId && resumeIdArgs) {
-    return [command, ...resumeIdArgs, shellSingleQuote(harnessSessionId)].join(" ");
+  if (harnessSessionId && adapter.resume.byId) {
+    return [adapter.command, ...renderResumeArgv(adapter.resume.byId, harnessSessionId)].join(" ");
   }
-  if (command && resumeLatestArgs) {
-    return [command, ...resumeLatestArgs].join(" ");
+  if (adapter.resume.latest) {
+    return [adapter.command, ...adapter.resume.latest].join(" ");
   }
   return null;
+}
+
+/** {@link buildResumeCommand} for a harness named by id — `null` when nothing is registered under it. */
+export function buildHarnessResumeCommand(
+  harnessId: string,
+  harnessSessionId: string | null,
+): string | null {
+  const parsed = parseHarnessId(harnessId);
+  const adapter = parsed ? getHarnessAdapter(parsed) : undefined;
+  return adapter ? buildResumeCommand(adapter, harnessSessionId) : null;
 }
 
 /**

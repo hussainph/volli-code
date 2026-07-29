@@ -4,15 +4,26 @@ import { claudeCodeAdapter } from "./claude-code";
 import { codexAdapter } from "./codex";
 import { cursorAdapter } from "./cursor";
 import { opencodeAdapter } from "./opencode";
-import { VOLLI_CLI_REFERENCE, VOLLI_ORCHESTRATION, VOLLI_SKILL } from "./skill-content";
+import {
+  VOLLI_CLI_REFERENCE,
+  VOLLI_OPENCODE_COMMAND,
+  VOLLI_ORCHESTRATION,
+  VOLLI_SKILL,
+} from "./skill-content";
 import type { HarnessAdapter, InstallAction } from "./types";
 
-const adapters: Record<FirstClassHarnessId, HarnessAdapter> = {
-  "claude-code": claudeCodeAdapter,
-  codex: codexAdapter,
-  cursor: cursorAdapter,
-  opencode: opencodeAdapter,
-};
+/**
+ * The adapter registry. A `ReadonlyMap` rather than a `Record<HarnessId, …>`,
+ * which an open {@link HarnessId} can no longer express — and shouldn't: a
+ * registered harness joins this map at runtime exactly the way a built-in sits
+ * in it, which is the point of adapters being pure data.
+ */
+const adapters: ReadonlyMap<HarnessId, HarnessAdapter> = new Map(
+  [claudeCodeAdapter, codexAdapter, cursorAdapter, opencodeAdapter].map((adapter) => [
+    adapter.id,
+    adapter,
+  ]),
+);
 
 /**
  * The adapter for `id`, or `undefined` when nothing is registered under it.
@@ -21,11 +32,11 @@ const adapters: Record<FirstClassHarnessId, HarnessAdapter> = {
  * adapter exists.
  */
 export function getHarnessAdapter(id: HarnessId): HarnessAdapter | undefined {
-  return isFirstClassHarnessId(id) ? adapters[id] : undefined;
+  return adapters.get(id);
 }
 
 /** Every first-class harness adapter, for registry-driven iteration (detection, etc.). */
-export const harnessAdapters: readonly HarnessAdapter[] = Object.values(adapters);
+export const harnessAdapters: readonly HarnessAdapter[] = [...adapters.values()];
 
 export function mergeFencedSection(
   current: string,
@@ -54,6 +65,33 @@ export function managedWriteDecision(input: {
   if (input.currentHash === null || input.currentHash === input.recordedHash) return "write";
   return "conflict";
 }
+
+/**
+ * Per-harness baseline assets: real files under the user's own dotfiles, which
+ * is why they are NOT adapter data. An adapter describes a harness; this table
+ * describes what Volli writes, and only a built-in may write outside
+ * Volli-owned directories (bring-your-own manifests may not).
+ */
+const BASELINE_ASSETS: Partial<
+  Record<FirstClassHarnessId, (home: string, canonicalSkillPath: string) => InstallAction[]>
+> = {
+  "claude-code": (home, canonicalSkillPath) => [
+    {
+      kind: "symlink",
+      path: `${home}/.claude/skills/volli`,
+      target: canonicalSkillPath,
+      managed: true,
+    },
+  ],
+  opencode: (home) => [
+    {
+      kind: "write",
+      path: `${home}/.config/opencode/command/volli.md`,
+      content: VOLLI_OPENCODE_COMMAND,
+      managed: true,
+    },
+  ],
+};
 
 function normalizedHome(home: string): string {
   return home.endsWith("/") ? home.slice(0, -1) : home;
@@ -89,10 +127,10 @@ export function buildHarnessInstallPlan(input: {
   for (const id of new Set(input.detected)) {
     // A registered-but-unknown harness contributes no baseline assets: the
     // skill pack it can't host is exactly the tier it doesn't have.
-    const adapter = getHarnessAdapter(id);
-    if (adapter) actions.push(...adapter.installActions(home, canonical));
+    const assets = isFirstClassHarnessId(id) ? BASELINE_ASSETS[id] : undefined;
+    actions.push(...(assets?.(home, canonical) ?? []));
   }
   return actions;
 }
 
-export type { HarnessAdapter, InstallAction } from "./types";
+export * from "./types";
