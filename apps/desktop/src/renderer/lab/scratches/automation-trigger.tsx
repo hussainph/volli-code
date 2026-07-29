@@ -13,8 +13,8 @@
  *     the interesting one: a ticket with a resumable session RESUMES rather
  *     than starting a Run, because an Automation exists to set work up and work
  *     already mid-context does not need setting up again.
- *   • ARMING (#86b, #88) — a column holds at most one armed Automation, and an
- *     unarmed column says so quietly rather than saying nothing.
+ *   • COLUMN DEFAULTS (#86b, #88) — a column holds at most one default
+ *     Automation, set from the bolt in its corner.
  *   • DRAG (#86c) — a plain drop has NO palette at all: it runs whichever
  *     Automation the target COLUMN has as its default (the same concept
  *     `ArmingTab` models — this tab shares its `arming` state with it), and a
@@ -22,11 +22,11 @@
  *     rather than running nothing silently. Bare digits `1`–`9`, scoped to whichever
  *     column the pointer is over, still override that default — the same
  *     digit twice clears back to it. Holding ⌥ GROWS that column's list into
- *     large landing targets in place; letting go shrinks it back. The dragged
- *     card docks into the hovered column's header rather than following the
- *     cursor, because a ghost tracking the pointer pixel-for-pixel advertises
- *     a precision that a column-sized target does not have — and because it
- *     covered the very list it was asking you to read.
+ *     large landing targets in place; letting go shrinks it back. The card
+ *     tracks the cursor the whole way and never stops — an earlier version
+ *     parked it in the column header to keep it off the list, which fixed the
+ *     legibility and cost the drag its feel. The list is simply in front of it
+ *     instead.
  *
  * Every surface here is drawn INSIDE the chrome it will really live in — a mock
  * ticket header, a real board with real cards. A control judged on an empty page
@@ -490,11 +490,6 @@ function InTicketTab() {
           <p className="max-w-prose text-xs text-muted-foreground">{TICKET_STATE_NOTES[state]}</p>
         </section>
       ))}
-      <p className="max-w-prose border-t border-border pt-4 text-xs text-muted-foreground">
-        Firing never navigates. The button is in the ticket header you are already looking at, and
-        the session it opens appears in this ticket's own tab strip — so the one gesture that spends
-        tokens never also moves you somewhere else.
-      </p>
     </div>
   );
 }
@@ -670,14 +665,6 @@ function ArmingTab({
           })}
         </div>
       </div>
-
-      <p className="max-w-prose text-xs text-muted-foreground">
-        One default per column, structurally — it is a property of the column, so two automations
-        claiming the same column is not a state that can be reached. The default is not retroactive:
-        it governs tickets that arrive afterwards, never the{" "}
-        {tickets.filter((t) => t.status === "doing").length} already sitting in Doing. Set it with
-        the bolt in the column&rsquo;s corner.
-      </p>
     </div>
   );
 }
@@ -741,7 +728,6 @@ function DragGhost({
   destination,
   point,
   automation,
-  hint,
   compact = false,
 }: {
   ticket: Ticket;
@@ -749,8 +735,6 @@ function DragGhost({
   destination: TicketStatus | null;
   point: { x: number; y: number };
   automation: Automation | null;
-  /** The baseline layer's discoverability line — omitted while a picker owns the story instead. */
-  hint?: string;
   compact?: boolean;
 }) {
   if (compact) {
@@ -774,9 +758,6 @@ function DragGhost({
       <div className="pt-1">
         <MoveSummary origin={origin} destination={destination} automation={automation} />
       </div>
-      {/* A status line, not a tooltip — quiet on purpose. Bare digits are
-          otherwise invisible until someone happens to press one. */}
-      {hint !== undefined ? <p className="pt-1 text-label text-muted-foreground">{hint}</p> : null}
     </div>
   );
 }
@@ -816,8 +797,10 @@ function ColumnAutomationList({
 
   if (offered.length === 0) {
     return (
+      /* Not helper text: with no rows there is nothing on screen at all, and a
+         blank panel would read as a list that failed to load. */
       <p className="mb-2 rounded-md border border-dashed border-border px-2 py-1.5 text-label text-muted-foreground">
-        Nothing offered here — dropping moves the ticket and starts nothing.
+        Nothing to run here
       </p>
     );
   }
@@ -840,8 +823,23 @@ function ColumnAutomationList({
   return (
     <div
       className={cn(
-        "mb-2 flex flex-col rounded-lg transition-[gap,padding] duration-150 ease-out",
-        expanded ? "gap-1.5 border border-border bg-popover p-1.5" : "gap-px",
+        // THE LIST RIDES ABOVE THE DRAGGED CARD.
+        //
+        // The card is 256px of opaque `bg-card` locked to the cursor, and the
+        // rows it was asking you to read sat directly under it. The first fix
+        // was to stop the card following the cursor at all, which traded a
+        // legibility problem for a worse one: the drag stopped feeling like a
+        // drag. So the card keeps tracking the hand, and the list is simply in
+        // front of it — `z-[130]` against the ghost's `z-[100]`, on its own
+        // opaque panel in BOTH sizes so there is always something for the card
+        // to pass behind.
+        //
+        // It reads as depth rather than as breakage because the card is far
+        // wider than the panel and stays visible either side of it: cargo
+        // sliding behind the rack label it is being filed under.
+        "relative z-[130] mb-2 flex flex-col rounded-lg border border-border bg-popover shadow-md",
+        "transition-[gap,padding] duration-150 ease-out",
+        expanded ? "gap-1.5 p-1.5" : "gap-px p-1",
       )}
     >
       {offered.map((automation, index) => {
@@ -895,11 +893,14 @@ function ColumnAutomationList({
             {armed?.id === automation.id ? (
               <span className="shrink-0 text-label text-primary">default</span>
             ) : null}
-            {expanded ? (
-              <HarnessTag harnessId={automation.runtime.harnessId} className="shrink-0 text-xs" />
-            ) : (
-              <HarnessMark harnessId={automation.runtime.harnessId} />
-            )}
+            {/* The mark, never the full `HarnessTag`, at either size. Spelling
+                out "Claude Code" on every row cost the NAME its width — the one
+                thing being chosen truncated to "Impleme…" so the harness could
+                be written out three times identically. */}
+            <HarnessMark
+              harnessId={automation.runtime.harnessId}
+              className={expanded ? "size-3.5" : undefined}
+            />
           </button>
         );
       })}
@@ -925,11 +926,6 @@ function ColumnAutomationList({
         <LightningIcon />
         Move only
       </button>
-      {expanded ? null : (
-        <p className="px-1.5 pt-1 text-label text-muted-foreground/70">
-          1–9 to pick · ⌥ to enlarge
-        </p>
-      )}
     </div>
   );
 }
@@ -1182,6 +1178,16 @@ function DragTab({
 
   const dragActive = drag.ticketId !== null && draggedTicket !== null && drag.origin !== null;
 
+  // What the ghost says it is about to do. While ⌥ is open the picker cell owns
+  // both facts, because the pointer may have wandered off the column the picker
+  // belongs to and the picker, not the pointer, is what a release would obey.
+  const ghostDestination: TicketStatus | null =
+    drag.pickerOpen && drag.pickerCell !== null ? drag.pickerCell.status : drag.hovered;
+  const ghostAutomation: Automation | null =
+    drag.pickerOpen && drag.pickerCell !== null
+      ? resolveAutomation(drag.pickerCell.status, arming, drag.pickerCell.index)
+      : chosen;
+
   // A single narrowed handle for the three bottom-level renders below, so
   // `drag.origin`'s nullability only has to be proven once instead of cast
   // away at each call site.
@@ -1211,24 +1217,6 @@ function DragTab({
               dragActive && drag.pickerOpen && drag.pickerCell?.status === status;
             const isExpandOther =
               dragActive && drag.pickerOpen && drag.pickerCell?.status !== status;
-            const expandResolved =
-              isExpandTarget && drag.pickerCell !== null
-                ? resolveAutomation(status, arming, drag.pickerCell.index)
-                : null;
-
-            /**
-             * The dragged card DOCKS into this column's header the moment the
-             * pointer is over the column — not only once ⌥ has grown it.
-             *
-             * The floating ghost is `w-64`, wider than the 208px column, so it
-             * blanketed the very list it was asking you to read. Offsetting or
-             * shrinking it only moves the collision somewhere else; the real
-             * observation is that once the WHOLE COLUMN is the target, a ghost
-             * tracking the cursor pixel-for-pixel is advertising a precision
-             * that no longer exists. So the card lands in the header, the
-             * cursor is freed to point at rows, and nothing overlaps anything.
-             */
-            const isDocked = dragActive && drag.hovered === status;
 
             return (
               <div
@@ -1247,32 +1235,9 @@ function DragTab({
                 )}
               >
                 <div className="flex items-center gap-2 px-1 pb-1.5">
-                  {isDocked && draggedTicket !== null && drag.origin !== null ? (
-                    // The docked card. It replaces the column's own name while
-                    // it is here, which is the right trade: the name is a label
-                    // you already read on the way in, and the ticket you are
-                    // holding is the thing you need confirmed. It still states
-                    // where the ticket came FROM — the column makes the
-                    // destination obvious and nothing else carries the origin
-                    // once the card has stopped tracking the cursor.
-                    <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                        <span className="shrink-0 font-mono text-foreground">
-                          {ticketRef(draggedTicket)}
-                        </span>
-                        <span className="min-w-0 truncate">{draggedTicket.title}</span>
-                      </span>
-                      <MoveSummary
-                        origin={drag.origin}
-                        destination={status}
-                        automation={expandResolved ?? chosen}
-                      />
-                    </div>
-                  ) : (
-                    <span className="text-ui font-medium text-foreground">
-                      {TICKET_STATUS_LABELS[status]}
-                    </span>
-                  )}
+                  <span className="text-ui font-medium text-foreground">
+                    {TICKET_STATUS_LABELS[status]}
+                  </span>
                   {armedInColumn > 0 ? (
                     // Shown for one armed card too, not just the bulk case:
                     // the header is a second, deliberate surface for the SAME
@@ -1350,18 +1315,6 @@ function DragTab({
         </div>
       </div>
 
-      <p className="text-xs text-muted-foreground">
-        Drag a card — dropping anywhere in a column arms whatever that column is already armed with
-        (or nothing, quietly, if it's unarmed). 1–9, no modifier, overrides that default for
-        whichever column the pointer is over; the same digit again clears back to it. ⌥ grows the
-        hovered column into large landing targets right where you&rsquo;re already pointing; the
-        other columns recede, and letting ⌥ go shrinks it back. Esc backs a picker out one step, or
-        cancels the whole drag if none is open. Dropping ARMS for{" "}
-        {(TIMING.ARM_MS / 1000).toFixed(1)}s before it fires — Undo on the card or "Undo moves" in
-        the column header reverts the move itself. Once fired, the pulsing border means a session is
-        (simulated as) running; the lab still starts nothing for real.
-      </p>
-
       {confirmation !== null ? (
         <div
           key={confirmation.key}
@@ -1392,18 +1345,20 @@ function DragTab({
         </div>
       ) : null}
 
-      {/* The floating ghost now exists ONLY in the gutter between columns.
-          Over a column the card is docked in that column's header instead (see
-          `isDocked`), so nothing follows the cursor while there is a list to
-          read or a target to point at. */}
-      {activeDrag !== null && drag.hovered === null ? (
+      {/* The card is under the hand for the whole gesture, everywhere, with no
+          state in which it stops tracking the cursor. Where it would cover the
+          column's automation list, the list is in front of it instead — see
+          `ColumnAutomationList`.
+
+          It carries the ticket and the move it is making. Nothing else — the
+          keys are not written on the card you are holding. */}
+      {activeDrag !== null ? (
         <DragGhost
           ticket={activeDrag.ticket}
           origin={activeDrag.origin}
-          destination={null}
+          destination={ghostDestination}
           point={drag.point}
-          automation={null}
-          hint="Drop on a column to run its default · 1–9 to override · ⌥ to enlarge"
+          automation={ghostAutomation}
         />
       ) : null}
     </div>

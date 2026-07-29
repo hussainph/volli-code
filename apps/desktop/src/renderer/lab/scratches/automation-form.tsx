@@ -90,9 +90,6 @@ export const note = "Authoring one Automation — two layouts, same state (#79/#
 
 type Layout = "composer" | "sectioned";
 
-/** The demo project. Named once so the scope switcher and its footnote agree. */
-const PROJECT_NAME = "Voltaic";
-
 /**
  * The chip row's idiom, lifted from `composer-chips.tsx`. `w-fit` is the one
  * addition: the sectioned layout stacks its fields in a flex column, which
@@ -351,6 +348,11 @@ function RuntimeControl({
  * `mode`. Prose written in Advanced is still there, untouched, if you drop back
  * to Basic; its `{{placeholders}}` just stop resolving, which is what
  * {@link ChipEditor} paints red and the note below the editor explains once.
+ *
+ * The options are named "Prose" and "Placeholders", not Basic and Advanced,
+ * because Basic/Advanced names nothing: it needed a sentence of description
+ * under each row to mean anything, and a label that requires a caption is the
+ * wrong label. These two say what you get, so the captions are gone.
  */
 function ModeControl({
   mode,
@@ -362,39 +364,19 @@ function ModeControl({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          className={cn(chipClass(), "ml-auto")}
-          title="How this Automation's Instructions are authored"
-        >
-          {mode === "basic" ? "Basic" : "Advanced"}
+        <Button variant="ghost" className={cn(chipClass(), "ml-auto")}>
+          {mode === "basic" ? "Prose" : "Placeholders"}
           <CaretDownIcon weight="bold" className="size-3" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-64">
-        <DropdownMenuItem
-          onSelect={() => onChange("basic")}
-          className="flex-col items-start gap-0.5"
-        >
-          <span className="flex w-full items-center gap-1.5">
-            Basic
-            {mode === "basic" ? <CheckIcon weight="bold" className="ml-auto size-3.5" /> : null}
-          </span>
-          <span className="text-xs text-muted-foreground">
-            Prose and Skills. The agent fetches its own ticket context.
-          </span>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onSelect={() => onChange("basic")} className="gap-1.5">
+          Prose
+          {mode === "basic" ? <CheckIcon weight="bold" className="ml-auto size-3.5" /> : null}
         </DropdownMenuItem>
-        <DropdownMenuItem
-          onSelect={() => onChange("advanced")}
-          className="flex-col items-start gap-0.5"
-        >
-          <span className="flex w-full items-center gap-1.5">
-            Advanced
-            {mode === "advanced" ? <CheckIcon weight="bold" className="ml-auto size-3.5" /> : null}
-          </span>
-          <span className="text-xs text-muted-foreground">
-            {"Adds {{placeholders}} for when the ORDER of context matters."}
-          </span>
+        <DropdownMenuItem onSelect={() => onChange("advanced")} className="gap-1.5">
+          Placeholders
+          {mode === "advanced" ? <CheckIcon weight="bold" className="ml-auto size-3.5" /> : null}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -443,9 +425,6 @@ function SkillPicker({ onInsert }: { onInsert: (snippet: string) => void }) {
             </React.Fragment>
           );
         })}
-        <DropdownMenuLabel className="font-normal text-muted-foreground">
-          Anything else you type is kept, and marked unverified.
-        </DropdownMenuLabel>
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -472,8 +451,7 @@ function AppendedCliNote() {
     <div className="-mt-px rounded-b-lg border border-dashed border-border bg-muted/40 px-3 py-2">
       <div className="flex items-center gap-1.5 pb-1.5 text-xs text-muted-foreground">
         <LockSimpleIcon weight="fill" className="size-3 shrink-0" />
-        Appended to every run, not editable here — this is what lets the agent fetch its own
-        context.
+        Appended to every run
       </div>
       <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-foreground">
         {APPENDED_CLI_NOTE}
@@ -610,11 +588,6 @@ function OutcomeControl() {
       <span className="flex w-fit items-center gap-1.5 rounded-full bg-muted px-2.5 py-0.5 text-xs text-foreground">
         Nothing — the session is the report
       </span>
-      <span className="text-xs text-muted-foreground">
-        The answer for v1, not a gap: moving a ticket when a Run finishes needs completion
-        detection, and a wrong guess moves your work for you. Tickets leave Doing because you move
-        them.
-      </span>
     </div>
   );
 }
@@ -689,10 +662,6 @@ function ComposerLayout({
             layout="composer"
           />
         </div>
-        <p className="pb-1 text-xs text-muted-foreground">
-          Offered in {scopeSummary(automation.columnScope)}. It only runs on its own where a column
-          is armed with it.
-        </p>
       </SettingsStrip>
     </div>
   );
@@ -730,10 +699,6 @@ function SectionedLayout({
             columnScope={automation.columnScope}
             onChange={(columnScope) => update({ columnScope })}
           />
-          <span className="text-xs text-muted-foreground">
-            Where this Automation is offered. It only runs on its own where a column is armed with
-            it.
-          </span>
         </QuietField>
       </SettingsStrip>
 
@@ -742,10 +707,7 @@ function SectionedLayout({
           setting — and the strips above and below keep their small labels so the
           difference is unmistakable. */}
       <div className="flex flex-col gap-2">
-        <div className="flex items-baseline gap-2">
-          <h3 className="text-ui font-medium text-foreground">Instructions</h3>
-          <span className="text-xs text-muted-foreground">What the agent is asked to do.</span>
-        </div>
+        <h3 className="text-ui font-medium text-foreground">Instructions</h3>
         <InstructionsEditor
           automation={automation}
           update={update}
@@ -819,16 +781,8 @@ function AutomationIndex({
         ))}
       </div>
 
-      {/* Keyed on scope so the whole set — the sentence and the rows it describes
-          — enters together. Two elements changing at two different times would
-          read as the list lagging the switch. */}
+      {/* Keyed on scope so the rows enter together when the filter changes. */}
       <div key={scope} className={cn("flex flex-col gap-2", ENTER_CLASS)}>
-        <p className="px-1 text-xs text-muted-foreground">
-          {scope === "project"
-            ? `Offered in ${PROJECT_NAME} only.`
-            : "Offered in every project, including ones you haven't opened."}
-        </p>
-
         <div className="flex flex-col gap-px">
           {visible.map((automation) => (
             <button
