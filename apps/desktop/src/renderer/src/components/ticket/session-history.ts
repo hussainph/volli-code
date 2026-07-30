@@ -1,8 +1,8 @@
 import {
   canResumeHarness,
   effectiveHarnessId,
-  getHarnessAdapter,
   harnessLabel,
+  type HarnessAdapterLookup,
   type SessionActivityState,
   type SessionHarnessState,
   type SessionRecord,
@@ -147,11 +147,16 @@ export function groupSessionRows(rows: readonly TicketSessionRow[]): {
  * Capability, not a command line: the resume line names the generated wrapper
  * by absolute path, and those paths are main's alone.
  *
- * The built-ins are the honest lookup to pass HERE, and only here: the renderer
- * has no channel over which a registered manifest's adapter could reach it, so
- * claiming to consult a wider set would be a lie about what this process knows.
+ * `lookup` is a parameter rather than a hard-wired `getHarnessAdapter` because
+ * this used to consult the built-ins only, on the since-retired grounds that
+ * "the renderer has no channel over which a registered manifest's adapter could
+ * reach it." It has one — `launchAdapter` reads the hydrated catalog as well —
+ * and a first-class-only lookup here silently denies Resume to every BYO
+ * session that can genuinely be resumed. Pass `launchAdapter`; the parameter
+ * exists so a test can say what this process knows instead of inheriting it
+ * from a module singleton.
  */
-export function canResumeSession(record: SessionRecord): boolean {
+export function canResumeSession(record: SessionRecord, lookup: HarnessAdapterLookup): boolean {
   return (
     record.launchKind === "agent" &&
     record.endedAt !== null &&
@@ -159,7 +164,7 @@ export function canResumeSession(record: SessionRecord): boolean {
     // (main builds the resume line off the same id) — so the affordance must be
     // decided about that harness, or the rail offers Resume for a harness the
     // session had not been running since the moment it was opened.
-    canResumeHarness(effectiveHarnessId(record), record.harnessSessionId, getHarnessAdapter)
+    canResumeHarness(effectiveHarnessId(record), record.harnessSessionId, lookup)
   );
 }
 
@@ -170,10 +175,13 @@ export function canResumeSession(record: SessionRecord): boolean {
  * newest-first, but this stays correct even if a caller passes an
  * unordered/filtered subset.
  */
-export function latestResumableSession(records: readonly SessionRecord[]): SessionRecord | null {
+export function latestResumableSession(
+  records: readonly SessionRecord[],
+  lookup: HarnessAdapterLookup,
+): SessionRecord | null {
   let latest: SessionRecord | null = null;
   for (const record of records) {
-    if (!canResumeSession(record)) continue;
+    if (!canResumeSession(record, lookup)) continue;
     if (latest === null || record.createdAt > latest.createdAt) latest = record;
   }
   return latest;

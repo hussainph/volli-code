@@ -367,6 +367,12 @@ describe("buildActiveSessionListing", () => {
 
     // The newest ended tab-placement record wins: split panes never stand alone
     // and a not-yet-ended record is not a concluded run.
+    //
+    // `resumable` is true here with no `harnessSessionId`, and that is the fix:
+    // the badge used to test the seed alone, so it hid Resume for every claude
+    // session that had never reported an id — while the rail, asking
+    // `canResumeSession`, offered it. Claude resumes latest-in-cwd without a
+    // seed. Both surfaces now ask the one predicate.
     expect(result.needsYou).toEqual([]);
     expect(result.active).toMatchObject([
       {
@@ -403,7 +409,7 @@ describe("buildActiveSessionListing", () => {
     expect(result.active).toMatchObject([
       {
         title: "Quit the agent",
-        lastRun: { outcome: "ended", endedAt: now - 5_000, resumable: false },
+        lastRun: { outcome: "ended", endedAt: now - 5_000, resumable: true },
         target: { tabId: "quit", paneId: "quit" },
       },
     ]);
@@ -429,7 +435,7 @@ describe("buildActiveSessionListing", () => {
     });
 
     expect(result.active).toMatchObject([
-      { lastRun: { outcome: "ended", endedAt: now - 1_000, resumable: false } },
+      { lastRun: { outcome: "ended", endedAt: now - 1_000, resumable: true } },
     ]);
   });
 
@@ -453,7 +459,7 @@ describe("buildActiveSessionListing", () => {
     });
 
     expect(result.active).toMatchObject([
-      { lastRun: { outcome: "ended", endedAt: now - 1_000, resumable: false } },
+      { lastRun: { outcome: "ended", endedAt: now - 1_000, resumable: true } },
     ]);
   });
 
@@ -670,7 +676,7 @@ describe("buildActiveSessionListing", () => {
     // same `ended` as having no code at all.
     expect(result.active).toMatchObject([
       {
-        lastRun: { outcome: "done", endedAt: now - 5_000, resumable: false },
+        lastRun: { outcome: "done", endedAt: now - 5_000, resumable: true },
         target: { tabId: "s1", paneId: "stale-pane" },
       },
     ]);

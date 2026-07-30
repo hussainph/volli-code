@@ -21,7 +21,7 @@ import {
 import { canResumeSession } from "@renderer/components/ticket/session-history";
 import { cn } from "@renderer/lib/utils";
 import type { SessionLayout, SessionTab, TerminalSplitDirection } from "@renderer/stores/sessions";
-import { sessionPanes } from "@renderer/stores/sessions";
+import { launchAdapter, sessionPanes } from "@renderer/stores/sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { getEngine } from "@renderer/terminal/registry";
 
@@ -113,7 +113,7 @@ function SplitNode(props: SplitNodeProps) {
     const resumable =
       layout.exitCode !== null &&
       record !== undefined &&
-      canResumeSession(record) &&
+      canResumeSession(record, launchAdapter) &&
       props.onResume !== undefined;
     return (
       <ContextMenu>

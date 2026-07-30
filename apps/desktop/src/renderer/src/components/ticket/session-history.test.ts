@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
-import { createSessionHarnessState, type HarnessId, type SessionRecord } from "@volli/shared";
+import {
+  createSessionHarnessState,
+  getHarnessAdapter,
+  type HarnessAdapter,
+  type HarnessId,
+  type SessionRecord,
+} from "@volli/shared";
 
 import {
   buildTicketSessionRows,
@@ -12,6 +18,15 @@ import {
   type TicketSessionRowsInput,
 } from "./session-history";
 import { ticketScope, type SessionTab } from "../../stores/sessions";
+
+/**
+ * The built-ins, which is what these cases are about. The lookup is a parameter
+ * so a BYO harness can be handed in deliberately — see the registered-manifest
+ * case below, which is the regression this parameter exists to prevent.
+ */
+const resumable = (session: SessionRecord) => canResumeSession(session, getHarnessAdapter);
+const latestResumable = (records: readonly SessionRecord[]) =>
+  latestResumableSession(records, getHarnessAdapter);
 
 function record(overrides: Partial<SessionRecord> = {}): SessionRecord {
   return {
@@ -249,17 +264,17 @@ describe("groupSessionRows", () => {
 
 describe("canResumeSession", () => {
   it("is false for a still-live agent session — nothing has ended to resume into", () => {
-    expect(canResumeSession(record({ launchKind: "agent", endedAt: null }))).toBe(false);
+    expect(resumable(record({ launchKind: "agent", endedAt: null }))).toBe(false);
   });
 
   it("is false for a bare shell, whether live or ended", () => {
-    expect(canResumeSession(record({ launchKind: "shell", endedAt: null }))).toBe(false);
-    expect(canResumeSession(record({ launchKind: "shell", endedAt: 10 }))).toBe(false);
+    expect(resumable(record({ launchKind: "shell", endedAt: null }))).toBe(false);
+    expect(resumable(record({ launchKind: "shell", endedAt: 10 }))).toBe(false);
   });
 
   it("is false for an ended session whose harness has no known resume support", () => {
     expect(
-      canResumeSession(
+      resumable(
         record({ launchKind: "agent", endedAt: 10, harnessId: "my-custom-harness" as HarnessId }),
       ),
     ).toBe(false);
@@ -267,7 +282,7 @@ describe("canResumeSession", () => {
 
   it("is true for an ended Claude Code agent session", () => {
     expect(
-      canResumeSession(
+      resumable(
         record({
           launchKind: "agent",
           endedAt: 10,
@@ -278,12 +293,33 @@ describe("canResumeSession", () => {
     ).toBe(true);
   });
 
+  // The whole reason the lookup is a parameter. A registered manifest that
+  // declares a resume line can genuinely be resumed, and a built-ins-only
+  // lookup would deny it the affordance while claiming the harness has none —
+  // so the same record answers differently depending on what the caller knows,
+  // and the caller has to be the one that knows.
+  it("resumes a BYO harness when the lookup can describe it, and not when it cannot", () => {
+    const byo = "my-custom-harness" as HarnessId;
+    const ended = record({ launchKind: "agent", endedAt: 10, harnessId: byo });
+    const knows = (id: HarnessId): HarnessAdapter | undefined =>
+      id === byo
+        ? {
+            ...getHarnessAdapter("claude-code")!,
+            id: byo,
+            resume: { byId: null, latest: ["--continue"], userResumeTokens: [] },
+          }
+        : getHarnessAdapter(id);
+
+    expect(canResumeSession(ended, knows)).toBe(true);
+    expect(resumable(ended)).toBe(false);
+  });
+
   // Main builds the resume line off the running harness, so the affordance has
   // to be decided about that one or the rail offers a Resume that cannot happen
   // — and hides one that can.
   it("judges resumability by the harness that was running when it ended", () => {
     expect(
-      canResumeSession(
+      resumable(
         record({
           launchKind: "agent",
           endedAt: 10,
@@ -293,7 +329,7 @@ describe("canResumeSession", () => {
       ),
     ).toBe(true);
     expect(
-      canResumeSession(
+      resumable(
         record({
           launchKind: "agent",
           endedAt: 10,
@@ -308,7 +344,7 @@ describe("canResumeSession", () => {
 describe("latestResumableSession", () => {
   it("returns null when no record qualifies", () => {
     expect(
-      latestResumableSession([
+      latestResumable([
         record({ id: "live", launchKind: "agent", endedAt: null }),
         record({ id: "shell", launchKind: "shell", endedAt: 10 }),
       ]),
@@ -337,8 +373,8 @@ describe("latestResumableSession", () => {
       endedAt: 100,
     });
 
-    expect(latestResumableSession([unresumableNewest, older, newer])).toEqual(newer);
-    expect(latestResumableSession([newer, unresumableNewest, older])).toEqual(newer);
+    expect(latestResumable([unresumableNewest, older, newer])).toEqual(newer);
+    expect(latestResumable([newer, unresumableNewest, older])).toEqual(newer);
   });
 });
 

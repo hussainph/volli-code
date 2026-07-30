@@ -37,7 +37,12 @@ import {
 import { RemoveWorktreeDialog } from "@renderer/components/ticket/remove-worktree-dialog";
 import { latestResumableSession } from "@renderer/components/ticket/session-history";
 import { useBoardStore } from "@renderer/stores/board";
-import { sessionPanes, ticketScope, useSessionsStore } from "@renderer/stores/sessions";
+import {
+  launchAdapter,
+  sessionPanes,
+  ticketScope,
+  useSessionsStore,
+} from "@renderer/stores/sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { useCloseGuard } from "@renderer/terminal/close-guard";
@@ -119,7 +124,7 @@ export function TicketContextMenu({
   // overlay read (stores/ticket-session-records.ts), fetched lazily on menu
   // open rather than eagerly for every card on the board.
   const records = useTicketSessionRecordsStore((state) => state.byTicket[ticket.id] ?? NO_RECORDS);
-  const resumableSession = latestResumableSession(records);
+  const resumableSession = latestResumableSession(records, launchAdapter);
 
   const resumeLastSession = () => {
     if (resumableSession === null) return;

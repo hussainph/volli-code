@@ -8,9 +8,10 @@ import {
   type TicketEvent,
 } from "@volli/shared";
 
-import { sessionSourceLabel } from "../ticket/session-history";
+import { canResumeSession, sessionSourceLabel } from "../ticket/session-history";
 import {
   findSessionPane,
+  launchAdapter,
   sessionActivityState,
   sessionPanes,
   type SessionContainer,
@@ -245,7 +246,7 @@ function lastRunRow(
       lastRun: {
         outcome: outcomeFromExitCode(pane?.exitCode ?? record?.exitCode ?? null),
         endedAt: record?.endedAt ?? null,
-        resumable: record?.harnessSessionId != null,
+        resumable: record !== undefined && canResumeSession(record, launchAdapter),
       },
       target: { tabId: mounted.sessionId, paneId: mounted.activePaneId },
     };
@@ -277,7 +278,7 @@ function lastRunRow(
       lastRun: {
         outcome: outcomeFromExitCode(latest.exitCode),
         endedAt: latest.endedAt,
-        resumable: latest.harnessSessionId !== null,
+        resumable: canResumeSession(latest, launchAdapter),
       },
       target: null,
     };

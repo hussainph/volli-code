@@ -29,7 +29,12 @@ import {
 import { relativeTime } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
-import { sessionPanes, ticketScope, useSessionsStore } from "@renderer/stores/sessions";
+import {
+  launchAdapter,
+  sessionPanes,
+  ticketScope,
+  useSessionsStore,
+} from "@renderer/stores/sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { phaseFor, useWorktreeStore } from "@renderer/stores/worktree";
 import { renameTerminalSession } from "@renderer/terminal/session-lifecycle";
@@ -215,7 +220,7 @@ function SessionList({
           onCommitRename={(next) => onCommitRename(record, isRoot, next)}
           onCancelRename={() => setEditingId(null)}
           onResume={
-            variant === "history" && canResumeSession(record)
+            variant === "history" && canResumeSession(record, launchAdapter)
               ? () => onResumeSession(record)
               : undefined
           }
