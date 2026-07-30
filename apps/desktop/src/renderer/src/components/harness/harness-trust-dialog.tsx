@@ -11,6 +11,7 @@ import {
   AlertDialogTitle,
 } from "@renderer/components/ui/alert-dialog";
 import {
+  brokenHarnessMessage,
   harnessCommandLine,
   loadPendingHarnesses,
   recordTrustVerdict,
@@ -42,6 +43,10 @@ export function HarnessTrustDialog() {
     void loadPendingHarnesses(api).then((result) => {
       if (cancelled) return;
       if (result.error !== null) toastError(`Couldn't check registered harnesses: ${result.error}`);
+      // Once, at this mount — not after every verdict. A broken manifest has
+      // no dialog and no row anywhere, so this toast is the entire difference
+      // between "Volli rejected my manifest" and "Volli never saw it".
+      for (const manifest of result.broken) toastError(brokenHarnessMessage(manifest));
       setQueue(result.pending);
     });
     return () => {

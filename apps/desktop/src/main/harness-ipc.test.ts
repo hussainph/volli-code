@@ -163,7 +163,7 @@ describe("volli:harness-pending", () => {
   it("asks nothing when nobody has registered a harness", async () => {
     setup();
 
-    expect(await pending()).toEqual({ ok: true, pending: [] });
+    expect(await pending()).toEqual({ ok: true, broken: [], pending: [] });
   });
 });
 
@@ -180,7 +180,7 @@ describe("volli:harness-pending — what it does not ask about", () => {
         decision: "trusted",
       }),
     ).toEqual({ ok: true });
-    expect(await pending()).toEqual({ ok: true, pending: [] });
+    expect(await pending()).toEqual({ ok: true, broken: [], pending: [] });
   });
 
   it("asks again the moment those bytes change", async () => {
@@ -197,18 +197,32 @@ describe("volli:harness-pending — what it does not ask about", () => {
     expect((await onlyPending()).label).toBe("My Harness (edited)");
   });
 
-  it("holds its peace about a manifest that does not parse — there is no command line to confirm", async () => {
+  it("does not ask about a manifest that failed to parse, but names it broken rather than saying nothing", async () => {
     await write("my-harness", manifest({ command: "/usr/bin/my-harness" }));
     setup();
 
-    expect(await pending()).toEqual({ ok: true, pending: [] });
+    const result = await pending();
+    if (!result.ok) throw new Error(`pending failed: ${result.error}`);
+    expect(result.pending).toEqual([]);
+    expect(result.broken).toEqual([
+      {
+        slug: "my-harness",
+        manifestPath: join(harnessesDir(), "my-harness", "harness.json"),
+        errors: [
+          {
+            path: "command",
+            message: "must be a bare executable name — no path, whitespace or metacharacters",
+          },
+        ],
+      },
+    ]);
   });
 
   it("waits for the binary to exist rather than naming one that does not", async () => {
     await write("my-harness", manifest());
     setup({ resolveBinary: () => Promise.resolve(null) });
 
-    expect(await pending()).toEqual({ ok: true, pending: [] });
+    expect(await pending()).toEqual({ ok: true, broken: [], pending: [] });
   });
 });
 
@@ -251,7 +265,7 @@ describe("volli:harness-trust-set", () => {
       (await scanHarnessManifests(harnessesDir())).manifests,
     );
     expect(decided[0]?.decision).toBe("blocked");
-    expect(await pending()).toEqual({ ok: true, pending: [] });
+    expect(await pending()).toEqual({ ok: true, broken: [], pending: [] });
   });
 
   it("refuses a verdict about bytes that are no longer there, and re-asks instead", async () => {

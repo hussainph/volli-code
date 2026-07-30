@@ -186,7 +186,17 @@ export function registerHarnessIpcHandlers(handle: DbHandle, deps: HarnessIpcDep
         return { ok: false, error: `Could not read ${deps.harnessesDir}.` };
       }
       const decided = decideRegisteredHarnesses(db, scan.manifests);
-      return { ok: true, pending: await pendingManifests(decided, deps) };
+      return {
+        ok: true,
+        pending: await pendingManifests(decided, deps),
+        // A manifest that did not parse is excluded from `pending` because
+        // there is no command line to confirm — but excluded silently it is a
+        // file its author cannot tell apart from one that worked. The errors
+        // the parse produced ride along so a surface can say so.
+        broken: scan.manifests
+          .filter((manifest) => manifest.adapter === null)
+          .map(({ slug, manifestPath, errors }) => ({ slug, manifestPath, errors })),
+      };
     },
 
     "volli:harness-trust-set": async (input: HarnessTrustSetInput): Promise<Result> => {

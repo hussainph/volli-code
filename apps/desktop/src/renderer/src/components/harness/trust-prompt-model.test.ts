@@ -1,8 +1,14 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import type { HarnessPendingResult, PendingHarnessManifest, Result } from "@volli/shared";
+import type {
+  BrokenHarnessManifest,
+  HarnessPendingResult,
+  PendingHarnessManifest,
+  Result,
+} from "@volli/shared";
 
 import {
+  brokenHarnessMessage,
   harnessCommandLine,
   loadPendingHarnesses,
   recordTrustVerdict,
@@ -31,7 +37,7 @@ function api(input: {
   const calls: unknown[] = [];
   return {
     calls,
-    pending: () => Promise.resolve(answers.shift() ?? { ok: true, pending: [] }),
+    pending: () => Promise.resolve(answers.shift() ?? { ok: true, broken: [], pending: [] }),
     setTrust: (verdict) => {
       calls.push(verdict);
       return (input.setTrust ?? (() => Promise.resolve({ ok: true } as Result)))();
@@ -55,13 +61,50 @@ describe("harnessCommandLine", () => {
   });
 });
 
+function broken(overrides: Partial<BrokenHarnessManifest> = {}): BrokenHarnessManifest {
+  return {
+    slug: "my-harness",
+    manifestPath: "/Users/me/.agents/harnesses/my-harness/harness.json",
+    errors: [{ path: "command", message: "must be a bare executable name" }],
+    ...overrides,
+  };
+}
+
+describe("brokenHarnessMessage", () => {
+  it("names the file and every reason it was refused", () => {
+    expect(
+      brokenHarnessMessage(
+        broken({
+          errors: [
+            { path: "command", message: "must be a bare executable name" },
+            { path: "", message: "must be readable JSON" },
+          ],
+        }),
+      ),
+    ).toBe(
+      "/Users/me/.agents/harnesses/my-harness/harness.json isn't a valid manifest: " +
+        "command must be a bare executable name; must be readable JSON",
+    );
+  });
+});
+
 describe("loadPendingHarnesses", () => {
   it("hands back what is waiting", async () => {
     const queue = await loadPendingHarnesses(
-      api({ pending: [{ ok: true, pending: [waiting()] }] }),
+      api({ pending: [{ ok: true, broken: [], pending: [waiting()] }] }),
     );
 
     expect(queue.pending.map((entry) => entry.slug)).toEqual(["my-harness"]);
+    expect(queue.error).toBeNull();
+  });
+
+  it("hands back the manifests that could not ask, alongside the ones asking", async () => {
+    const queue = await loadPendingHarnesses(
+      api({ pending: [{ ok: true, broken: [broken()], pending: [waiting()] }] }),
+    );
+
+    expect(queue.broken.map((entry) => entry.slug)).toEqual(["my-harness"]);
+    expect(queue.pending).toHaveLength(1);
     expect(queue.error).toBeNull();
   });
 
@@ -87,7 +130,7 @@ describe("loadPendingHarnesses", () => {
 
 describe("recordTrustVerdict", () => {
   it("files the answer against the bytes the confirmation described", async () => {
-    const bridge = api({ pending: [{ ok: true, pending: [] }] });
+    const bridge = api({ pending: [{ ok: true, broken: [], pending: [] }] });
 
     await recordTrustVerdict(bridge, waiting(), "trusted");
 
@@ -98,12 +141,15 @@ describe("recordTrustVerdict", () => {
 
   it("stops asking about a manifest whose answer landed", async () => {
     const queue = await recordTrustVerdict(
-      api({ pending: [{ ok: true, pending: [] }] }),
+      api({ pending: [{ ok: true, broken: [broken()], pending: [] }] }),
       waiting(),
       "blocked",
     );
 
     expect(queue.pending).toEqual([]);
+    // The re-read's broken list rides along unchanged — a verdict on one
+    // manifest says nothing about another that still does not parse.
+    expect(queue.broken).toHaveLength(1);
     expect(queue.error).toBeNull();
   });
 
@@ -111,7 +157,7 @@ describe("recordTrustVerdict", () => {
     const edited = waiting({ manifestSha256: "b2", label: "My Harness (edited)" });
     const queue = await recordTrustVerdict(
       api({
-        pending: [{ ok: true, pending: [edited] }],
+        pending: [{ ok: true, broken: [], pending: [edited] }],
         setTrust: () =>
           Promise.resolve({
             ok: false,
@@ -127,7 +173,7 @@ describe("recordTrustVerdict", () => {
   });
 
   it("surfaces a write that threw, and still re-reads what is waiting", async () => {
-    const bridge = api({ pending: [{ ok: true, pending: [waiting()] }] });
+    const bridge = api({ pending: [{ ok: true, broken: [], pending: [waiting()] }] });
     const queue = await recordTrustVerdict(
       { ...bridge, setTrust: () => Promise.reject(new Error("the bridge is gone")) },
       waiting(),
@@ -159,9 +205,13 @@ describe("the round trip", () => {
   it("asks once per manifest — a recorded answer never comes back", async () => {
     const bridge = api({
       pending: [
-        { ok: true, pending: [waiting(), waiting({ slug: "other", manifestSha256: "c3" })] },
-        { ok: true, pending: [waiting({ slug: "other", manifestSha256: "c3" })] },
-        { ok: true, pending: [] },
+        {
+          ok: true,
+          broken: [],
+          pending: [waiting(), waiting({ slug: "other", manifestSha256: "c3" })],
+        },
+        { ok: true, broken: [], pending: [waiting({ slug: "other", manifestSha256: "c3" })] },
+        { ok: true, broken: [], pending: [] },
       ],
     });
     const spy = vi.spyOn(bridge, "setTrust");

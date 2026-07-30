@@ -14,7 +14,12 @@
  */
 
 import { errorMessage, shellSingleQuote } from "@volli/shared";
-import type { HarnessTrustVerdict, PendingHarnessManifest, Result } from "@volli/shared";
+import type {
+  BrokenHarnessManifest,
+  HarnessTrustVerdict,
+  PendingHarnessManifest,
+  Result,
+} from "@volli/shared";
 import type { HarnessPendingResult } from "@volli/shared";
 
 /** The two calls this model needs — `window.api.harness` satisfies it. */
@@ -31,11 +36,25 @@ export interface HarnessTrustApi {
  * The manifests still asking, plus whatever went wrong on the way — never one
  * without the other. An empty queue paired with a `null` error is the only
  * shape that means "nothing is waiting"; an empty queue with an error means
- * Volli could not find out, and the caller has to say so.
+ * Volli could not find out, and the caller has to say so. `broken` is the
+ * third population: manifests that cannot ask because they did not parse,
+ * which the caller owes their author a word about.
  */
 export interface HarnessTrustQueue {
   pending: PendingHarnessManifest[];
+  broken: BrokenHarnessManifest[];
   error: string | null;
+}
+
+/**
+ * One line naming a manifest that failed to parse and why, for the toast that
+ * is the only place its author will hear about it.
+ */
+export function brokenHarnessMessage(manifest: BrokenHarnessManifest): string {
+  const reasons = manifest.errors
+    .map((error) => (error.path === "" ? error.message : `${error.path} ${error.message}`))
+    .join("; ");
+  return `${manifest.manifestPath} isn't a valid manifest: ${reasons}`;
 }
 
 /**
@@ -56,10 +75,10 @@ export async function loadPendingHarnesses(api: HarnessTrustApi): Promise<Harnes
   try {
     const result = await api.pending();
     return result.ok
-      ? { pending: result.pending, error: null }
-      : { pending: [], error: result.error };
+      ? { pending: result.pending, broken: result.broken, error: null }
+      : { pending: [], broken: [], error: result.error };
   } catch (error) {
-    return { pending: [], error: errorMessage(error) };
+    return { pending: [], broken: [], error: errorMessage(error) };
   }
 }
 
@@ -88,5 +107,5 @@ export async function recordTrustVerdict(
     refusal = errorMessage(error);
   }
   const queue = await loadPendingHarnesses(api);
-  return { pending: queue.pending, error: refusal ?? queue.error };
+  return { pending: queue.pending, broken: queue.broken, error: refusal ?? queue.error };
 }

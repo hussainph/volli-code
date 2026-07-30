@@ -6,6 +6,7 @@
 
 import type { ChangeSetSnapshot } from "./change-set";
 import type { FileKind, FileSource, IndexedFile } from "./file-ref";
+import type { ManifestError } from "./harness/manifest";
 import type { HarnessTrustPrompt, HarnessTrustVerdict } from "./harness/trust";
 import type { HarnessChannelStatus } from "./harness/channel";
 import type { HarnessAdapter, HarnessEvent } from "./harness/types";
@@ -400,9 +401,24 @@ export interface PendingHarnessManifest extends HarnessTrustPrompt {
   manifestSha256: string;
 }
 
+/**
+ * A manifest that was found but could not become an adapter — unparseable
+ * JSON, a failed validation, a slug disagreeing with its directory.
+ *
+ * Carried on the pending read rather than dropped in main, because dropped is
+ * what it was: a broken manifest is not pending (there is no command line to
+ * confirm) and not registered (there is nothing to launch), so without this
+ * field the person who just wrote it gets total silence from every surface.
+ */
+export interface BrokenHarnessManifest {
+  slug: string;
+  manifestPath: string;
+  errors: readonly ManifestError[];
+}
+
 /** The manifests waiting on a human — empty is the ordinary case. */
 export type HarnessPendingResult =
-  | { ok: true; pending: PendingHarnessManifest[] }
+  | { ok: true; pending: PendingHarnessManifest[]; broken: BrokenHarnessManifest[] }
   | { ok: false; error: string };
 
 /**
