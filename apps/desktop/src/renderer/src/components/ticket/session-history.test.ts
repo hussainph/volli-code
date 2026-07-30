@@ -105,8 +105,14 @@ describe("buildTicketSessionRows", () => {
           s1: {
             ...createSessionHarnessState({
               harnessId: "claude-code",
-              expectedTier: "hooked",
-              declaredEvents: ["input.needed"],
+              adapter: {
+                injection: { kind: "claude-settings-json", flag: "--settings" },
+                startupEvent: "session.started",
+                events: [
+                  { event: "session.started", native: "SessionStart", delivery: "async" },
+                  { event: "input.needed", native: "Notification", delivery: "async" },
+                ],
+              },
               startedAt: 0,
             }),
             delivered: true,

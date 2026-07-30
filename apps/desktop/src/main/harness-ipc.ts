@@ -30,6 +30,7 @@
 import type Database from "better-sqlite3";
 import {
   errorMessage,
+  expectsHarnessEvents,
   getHarnessAdapter,
   harnessChannelState,
   harnessTrustPrompt,
@@ -132,13 +133,13 @@ async function pendingManifests(
  * What the two recorded timestamps say about each harness's event channel right
  * now.
  *
- * The `startupEvent` lookup is the part that cannot be skipped. A harness with
- * no boot-time event — codex, which has no session until there is a turn — is
+ * The adapter lookup is the part that cannot be skipped. A harness with no
+ * boot-time event — codex, which has no session until there is a turn — is
  * indistinguishable, from two timestamps alone, between a broken channel and a
  * terminal nobody has typed into, so the derivation is told what the adapter
  * promises and declines to accuse one that promised nothing. An id neither the
  * built-ins nor the launchable set can describe gets the same treatment for the
- * same reason.
+ * same reason: {@link expectsHarnessEvents} answers `false` for `undefined`.
  */
 function channelStates(db: Database.Database, deps: HarnessIpcDeps): HarnessChannelStatus[] {
   const registered = new Map(deps.launchableHarnesses().map((adapter) => [adapter.id, adapter]));
@@ -149,7 +150,7 @@ function channelStates(db: Database.Database, deps: HarnessIpcDeps): HarnessChan
       harnessId: channel.harnessId,
       state: harnessChannelState(
         channel,
-        adapter?.startupEvent ?? null,
+        expectsHarnessEvents(adapter),
         now,
         HARNESS_EVENT_GRACE_MS,
       ),

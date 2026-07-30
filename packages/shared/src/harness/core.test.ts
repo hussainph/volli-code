@@ -3,8 +3,8 @@ import { describe, expect, it } from "vite-plus/test";
 import { FIRST_CLASS_HARNESS_IDS, parseHarnessId, type HarnessId } from "../ticket";
 import {
   bindsStartupEvent,
+  expectsHarnessEvents,
   HARNESS_EVENTS,
-  harnessTier,
   supportedEvents,
   type HarnessAdapter,
 } from "./types";
@@ -144,6 +144,18 @@ describe("first-class harness capabilities", () => {
     }
   });
 
+  // The line the whole silence model turns on, stated for the four binaries
+  // rather than for a synthetic adapter: only these three may ever be called
+  // not-reporting, and codex may not, however long it sits there. Measured
+  // against the running binaries, not read off the adapters.
+  it("holds three of the four built-ins to a reporting promise, and never codex", () => {
+    expect(
+      Object.fromEntries(
+        harnessAdapters.map((adapter) => [adapter.id, expectsHarnessEvents(adapter)]),
+      ),
+    ).toEqual({ "claude-code": true, cursor: true, opencode: true, codex: false });
+  });
+
   it("templates every by-id resume on exactly one {id} token", () => {
     for (const adapter of harnessAdapters) {
       const template = adapter.resume.byId;
@@ -161,7 +173,7 @@ describe("first-class harness capabilities", () => {
 
   it("hooks claude-code on inline settings JSON and a session id we mint", () => {
     const claude = adapterFor("claude-code");
-    expect(harnessTier(claude)).toBe("hooked");
+    expect(expectsHarnessEvents(claude)).toBe(true);
     expect(claude.injection).toEqual({ kind: "claude-settings-json", flag: "--settings" });
     expect(claude.sessionId).toEqual({ kind: "argv", flag: "--session-id", format: "uuid" });
     expect([...supportedEvents(claude)].toSorted()).toEqual([...HARNESS_EVENTS].toSorted());
@@ -184,12 +196,12 @@ describe("first-class harness capabilities", () => {
 
   it("leaves cursor unable to report input.needed, which its source confirms rather than omits", () => {
     const cursor = adapterFor("cursor");
-    expect(harnessTier(cursor)).toBe("hooked");
+    expect(expectsHarnessEvents(cursor)).toBe(true);
     expect(supportedEvents(cursor).has("input.needed")).toBe(false);
     expect(supportedEvents(cursor).has("permission.requested")).toBe(false);
     expect(supportedEvents(cursor).has("turn.completed")).toBe(true);
-    // Hooked because its hooks land on the one rung cursor-agent actually
-    // reads per project — not because a variable was pointed somewhere.
+    // Expected to report because its hooks land on the one rung cursor-agent
+    // actually reads per project — not because a variable was pointed somewhere.
     expect(cursor.injection).toEqual({ kind: "cursor-hooks-file" });
   });
 

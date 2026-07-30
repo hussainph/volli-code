@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { harnessBaselineActions } from "./core";
 import { parseHarnessManifest, type ManifestParse } from "./manifest";
-import { harnessTier } from "./types";
+import { expectsHarnessEvents } from "./types";
 
 /** The smallest manifest that can produce an adapter: a Declared-tier harness. */
 function minimal(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -593,8 +593,19 @@ describe("a manifest-derived adapter", () => {
     }),
   );
 
-  it("reaches the Hooked tier on what it declares, with no identity check anywhere", () => {
-    expect(registered.ok && harnessTier(registered.adapter)).toBe("hooked");
+  // Judged on what it declares, with no identity check anywhere — and held to
+  // the same startup-signal rule a built-in is. A manifest that binds events but
+  // names no launch-time one is codex's case, and gets codex's answer.
+  it("is held to a reporting promise on what it declares, exactly as a built-in is", () => {
+    expect(registered.ok && expectsHarnessEvents(registered.adapter)).toBe(false);
+    const atBoot = parseHarnessManifest(
+      minimal({
+        injection: { kind: "claude-settings-json", flag: "--settings" },
+        events: [{ event: "session.started", native: "SessionStart", delivery: "async" }],
+        startupEvent: "session.started",
+      }),
+    );
+    expect(atBoot.ok && expectsHarnessEvents(atBoot.adapter)).toBe(true);
   });
 
   it("earns the same baseline assets a built-in with those surfaces earns", () => {

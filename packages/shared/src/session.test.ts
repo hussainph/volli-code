@@ -17,7 +17,13 @@ import {
   shortSessionId,
 } from "./session";
 import { parseHarnessId } from "./ticket";
-import type { SessionActivityState, SessionHarnessState, SessionRecord } from "./session";
+import type { HarnessEvent } from "./harness/types";
+import type {
+  CreateSessionHarnessStateInput,
+  SessionActivityState,
+  SessionHarnessState,
+  SessionRecord,
+} from "./session";
 
 describe("SESSION_ACTIVITY_STATES", () => {
   it("lists working, waiting, idle, parked, exited in order", () => {
@@ -175,12 +181,27 @@ describe("SessionRecord", () => {
 /** When the wrapper announced itself — the moment the grace window runs from. */
 const ANNOUNCED_AT = 1000;
 
-/** A hooked claude-code-shaped session: reports input.needed, announced at t=1000. */
+/**
+ * An adapter carrying only what an expectation reads off one: whether Volli got
+ * to configure it, what it says at boot, and what it binds.
+ */
+function adapter(
+  startupEvent: HarnessEvent | null,
+  events: readonly HarnessEvent[],
+  injected = true,
+): CreateSessionHarnessStateInput["adapter"] {
+  return {
+    injection: injected ? { kind: "claude-settings-json", flag: "--settings" } : { kind: "none" },
+    startupEvent,
+    events: events.map((event) => ({ event, native: event, delivery: "async" })),
+  };
+}
+
+/** A claude-code-shaped session: speaks at boot, reports input.needed, announced at t=1000. */
 function hookedSession(): SessionHarnessState {
   return createSessionHarnessState({
     harnessId: "claude-code",
-    expectedTier: "hooked",
-    declaredEvents: ["session.started", "turn.started", "input.needed"],
+    adapter: adapter("session.started", ["session.started", "turn.started", "input.needed"]),
     startedAt: ANNOUNCED_AT,
   });
 }
@@ -203,8 +224,7 @@ describe("receiveHarnessEvent", () => {
   it("refuses a blocking event from a harness that cannot report one, but records the delivery", () => {
     const cursor = createSessionHarnessState({
       harnessId: "cursor",
-      expectedTier: "hooked",
-      declaredEvents: ["session.started", "turn.started", "turn.completed"],
+      adapter: adapter("session.started", ["session.started", "turn.started", "turn.completed"]),
       startedAt: 1000,
     });
     const after = receiveHarnessEvent(cursor, "input.needed", null);
@@ -317,16 +337,14 @@ describe("sessionHarnessStatus", () => {
   it("is reporting once a hooked session has delivered its first event", () => {
     const started = receiveHarnessEvent(hookedSession(), "session.started", null);
     expect(sessionHarnessStatus(started, 2000)).toEqual({
-      tier: "hooked",
       activitySource: "reported",
       input: "reported",
     });
   });
 
-  it("drops a hooked launch to known once the grace window passes with nothing delivered", () => {
+  it("calls a launch silent once the grace window passes with nothing delivered", () => {
     const state = hookedSession();
     expect(sessionHarnessStatus(state, ANNOUNCED_AT + HARNESS_EVENT_GRACE_MS + 1)).toEqual({
-      tier: "known",
       activitySource: "silent",
       input: "unconfirmed",
     });
@@ -338,35 +356,68 @@ describe("sessionHarnessStatus", () => {
   it("never turns silent while no announce has proved a launch", () => {
     const unannounced = createSessionHarnessState({
       harnessId: "claude-code",
-      expectedTier: "hooked",
-      declaredEvents: ["session.started", "input.needed"],
+      adapter: adapter("session.started", ["session.started", "input.needed"]),
       startedAt: null,
     });
     expect(sessionHarnessStatus(unannounced, HARNESS_EVENT_GRACE_MS * 100)).toEqual({
-      tier: "hooked",
       activitySource: "inferred",
       input: "unconfirmed",
     });
   });
 
-  it("keeps a harness that never promised hooks at its own tier, inferring forever", () => {
+  it("infers forever for a harness Volli never got to configure", () => {
     const declared = createSessionHarnessState({
       harnessId: parseHarnessId("my-harness")!,
-      expectedTier: "declared",
-      declaredEvents: [],
+      adapter: adapter(null, [], false),
       startedAt: 1000,
     });
     expect(sessionHarnessStatus(declared, 1000 + HARNESS_EVENT_GRACE_MS + 1)).toEqual({
-      tier: "declared",
       activitySource: "inferred",
       input: "unsupported",
     });
   });
 
-  it("infers rather than claims while a hooked launch's grace window is still open", () => {
+  // Codex, and the reason this whole field exists. Its hooks are real and its
+  // config was injected; it simply has no session until there is a turn, so an
+  // announced launch nobody has typed into fires nothing. Silence there is a
+  // statement about the user, and no length of it licenses an accusation.
+  it("never accuses a configured harness that says nothing at boot", () => {
+    const codex = createSessionHarnessState({
+      harnessId: "codex",
+      adapter: adapter(null, ["turn.started", "input.needed"]),
+      startedAt: ANNOUNCED_AT,
+    });
+    expect(sessionHarnessStatus(codex, ANNOUNCED_AT + HARNESS_EVENT_GRACE_MS * 100)).toEqual({
+      activitySource: "inferred",
+      input: "unconfirmed",
+    });
+    // And the gate defers the accusation without ever withholding the fact: one
+    // turn later the channel has proved itself on the same terms as any other.
+    const turned = receiveHarnessEvent(codex, "turn.started", null);
+    expect(sessionHarnessStatus(turned, ANNOUNCED_AT + HARNESS_EVENT_GRACE_MS * 100)).toEqual({
+      activitySource: "reported",
+      input: "reported",
+    });
+  });
+
+  // An id nothing can describe is credited with the whole vocabulary — the
+  // delivery is all the evidence there is — and held to no promise at all.
+  it("believes an undescribable harness's delivery and expects nothing of it", () => {
+    const unknown = createSessionHarnessState({
+      harnessId: parseHarnessId("mystery")!,
+      adapter: undefined,
+      startedAt: ANNOUNCED_AT,
+    });
+    expect(unknown.declaresInputNeeded).toBe(true);
+    expect(sessionHarnessStatus(unknown, ANNOUNCED_AT + HARNESS_EVENT_GRACE_MS + 1)).toEqual({
+      activitySource: "inferred",
+      input: "unconfirmed",
+    });
+  });
+
+  it("infers rather than claims while a launch's grace window is still open", () => {
     const state = hookedSession();
     expect(sessionHarnessStatus(state, ANNOUNCED_AT + HARNESS_EVENT_GRACE_MS)).toEqual({
-      tier: "hooked",
       activitySource: "inferred",
       input: "unconfirmed",
     });
@@ -376,15 +427,13 @@ describe("sessionHarnessStatus", () => {
     const cursor = receiveHarnessEvent(
       createSessionHarnessState({
         harnessId: "cursor",
-        expectedTier: "hooked",
-        declaredEvents: ["session.started", "turn.started", "turn.completed"],
+        adapter: adapter("session.started", ["session.started", "turn.started", "turn.completed"]),
         startedAt: 1000,
       }),
       "session.started",
       null,
     );
     expect(sessionHarnessStatus(cursor, 2000)).toEqual({
-      tier: "hooked",
       activitySource: "reported",
       input: "unsupported",
     });

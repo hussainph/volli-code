@@ -2,6 +2,7 @@ import {
   createSessionHarnessState,
   HARNESS_EVENT_GRACE_MS,
   receiveHarnessEvent,
+  type CreateSessionHarnessStateInput,
   type HarnessEvent,
   type HarnessEventNotice,
   type SessionHarnessState,
@@ -810,13 +811,21 @@ describe("buildActiveSessionListing", () => {
   });
 });
 
+/** An injected adapter that speaks at boot and binds exactly `events`. */
+function hookedAdapter(events: readonly HarnessEvent[]): CreateSessionHarnessStateInput["adapter"] {
+  return {
+    injection: { kind: "claude-settings-json", flag: "--settings" },
+    startupEvent: "session.started",
+    events: events.map((event) => ({ event, native: event, delivery: "async" })),
+  };
+}
+
 /** A hooked claude-code session that has reported `event` most recently. */
 function reporting(event: HarnessEvent, startedAt = 90_000): SessionHarnessState {
   return receiveHarnessEvent(
     createSessionHarnessState({
       harnessId: "claude-code",
-      expectedTier: "hooked",
-      declaredEvents: ["session.started", "turn.started", "input.needed"],
+      adapter: hookedAdapter(["session.started", "turn.started", "input.needed"]),
       startedAt,
     }),
     event,
@@ -868,8 +877,7 @@ describe("buildActiveSessionListing — harness-reported attention", () => {
     const cursor = receiveHarnessEvent(
       createSessionHarnessState({
         harnessId: "cursor",
-        expectedTier: "hooked",
-        declaredEvents: ["session.started", "turn.started", "turn.completed"],
+        adapter: hookedAdapter(["session.started", "turn.started", "turn.completed"]),
         startedAt: 90_000,
       }),
       "input.needed",
@@ -928,8 +936,7 @@ describe("buildActiveSessionListing — harness-reported attention", () => {
   it("says a session's activity is inferred when the hooks it promised never arrived", () => {
     const bypassed = createSessionHarnessState({
       harnessId: "claude-code",
-      expectedTier: "hooked",
-      declaredEvents: ["session.started", "turn.started", "input.needed"],
+      adapter: hookedAdapter(["session.started", "turn.started", "input.needed"]),
       startedAt: 1000,
     });
     const result = buildActiveSessionListing({

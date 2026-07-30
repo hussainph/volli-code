@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   HARNESS_EVENT_GRACE_MS,
   sessionHarnessStatus,
+  type CreateSessionHarnessStateInput,
   type HarnessAdapter,
   type HarnessEventNotice,
   type HarnessId,
@@ -57,8 +58,11 @@ const registeredAdapter = (): HarnessAdapter => ({
   injection: { kind: "claude-settings-json", flag: "--settings" },
   sessionId: { kind: "reported" },
   resume: { byId: null, latest: null, userResumeTokens: [] },
-  events: [{ event: "input.needed", native: "Notification", delivery: "async" }],
-  startupEvent: null,
+  events: [
+    { event: "session.started", native: "SessionStart", delivery: "async" },
+    { event: "input.needed", native: "Notification", delivery: "async" },
+  ],
+  startupEvent: "session.started",
   sessionMarkers: [],
   launchSettings: [],
 });
@@ -175,7 +179,7 @@ describe("addSession — the launch expectation", () => {
 
     expect(store.getState().harness["s1"]).toEqual({
       harnessId: "claude-code",
-      expectedTier: "hooked",
+      expectsEvents: true,
       declaresInputNeeded: true,
       // No anchor yet. The PTY has spawned a login shell; the harness is a
       // command that shell has not run. `announceHarness` sets this when the
@@ -224,7 +228,7 @@ describe("addSession — the launch expectation", () => {
     // decays into "not reporting" exactly as claude-code does.
     expect(store.getState().harness["s1"]).toEqual({
       harnessId: "my-agent",
-      expectedTier: "hooked",
+      expectsEvents: true,
       declaresInputNeeded: true,
       startedAt: null,
       delivered: false,
@@ -273,7 +277,6 @@ describe("addSession — the launch expectation", () => {
       "inferred",
     );
     expect(sessionHarnessStatus(state, 5000 + HARNESS_EVENT_GRACE_MS + 1)).toEqual({
-      tier: "known",
       activitySource: "silent",
       input: "unconfirmed",
     });
@@ -885,12 +888,19 @@ describe("findTabBySessionId", () => {
 });
 
 /** The launch expectation a hooked claude-code session is registered with. */
-const HOOKED_LAUNCH = {
+const HOOKED_LAUNCH: CreateSessionHarnessStateInput = {
   harnessId: "claude-code",
-  expectedTier: "hooked",
-  declaredEvents: ["session.started", "turn.started", "input.needed"],
+  adapter: {
+    injection: { kind: "claude-settings-json", flag: "--settings" },
+    startupEvent: "session.started",
+    events: [
+      { event: "session.started", native: "SessionStart", delivery: "async" },
+      { event: "turn.started", native: "UserPromptSubmit", delivery: "async" },
+      { event: "input.needed", native: "Notification", delivery: "async" },
+    ],
+  },
   startedAt: 1000,
-} as const;
+};
 
 describe("applyHarnessEvent", () => {
   it("puts a session into the state its harness declares", () => {

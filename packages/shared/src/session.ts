@@ -9,7 +9,8 @@
  * starts `null`.
  */
 
-import type { HarnessEvent, HarnessTier } from "./harness/types";
+import { expectsHarnessEvents, supportedEvents } from "./harness/types";
+import type { HarnessAdapter, HarnessEvent } from "./harness/types";
 import type { HarnessId } from "./ticket";
 
 /**
@@ -246,10 +247,10 @@ export function supersededHarnessEvent(
  * harness which declares an event but has never delivered one is not reporting
  * it, and that distinction is unrepresentable if the two are collapsed.
  *
- * The runtime tier is deliberately NOT stored — it is derived from these four
- * fields plus the clock ({@link sessionHarnessStatus}), so a launch that
- * bypassed the wrapper decays into Known on its own instead of needing a timer
- * to fire and a write to land.
+ * How the activity actually reaches Volli is deliberately NOT stored — it is
+ * derived from these fields plus the clock ({@link sessionActivitySource}), so
+ * a launch that bypassed the wrapper decays into inference on its own instead
+ * of needing a timer to fire and a write to land.
  */
 export interface SessionHarnessState {
   /**
@@ -263,8 +264,13 @@ export interface SessionHarnessState {
    * process that raised it.
    */
   harnessId: HarnessId;
-  /** The tier the adapter promised at launch — an upper bound, never a claim. */
-  expectedTier: HarnessTier;
+  /**
+   * Whether this launch may be held to a reporting promise at all
+   * ({@link expectsHarnessEvents}) — an upper bound, never a claim. A harness
+   * that fires nothing at boot is `false` here and can therefore never be
+   * accused of silence, whatever its hooks declare.
+   */
+  expectsEvents: boolean;
   /**
    * Whether the adapter declares `input.needed`. Collapsed to a bit at
    * construction because it is the only per-event capability the renderer acts
@@ -307,9 +313,15 @@ export interface SessionHarnessState {
 
 export interface CreateSessionHarnessStateInput {
   harnessId: HarnessId;
-  expectedTier: HarnessTier;
-  /** The canonical events the launched adapter declares bindings for. */
-  declaredEvents: readonly HarnessEvent[];
+  /**
+   * The adapter behind that id, or `undefined` when nothing can describe it —
+   * an id trusted since the renderer last read the catalog, a harness this
+   * build does not ship. Both expectations below are read off it rather than
+   * passed in beside it, so the one place that turns a harness into an
+   * expectation is this function and there is nowhere for a caller's idea of
+   * what a harness promised to drift from the adapter's.
+   */
+  adapter: Pick<HarnessAdapter, "injection" | "startupEvent" | "events"> | undefined;
   /** Epoch ms of the announce that proved this launch, or `null` if none has. */
   startedAt: number | null;
 }
@@ -318,10 +330,11 @@ export interface CreateSessionHarnessStateInput {
 export function createSessionHarnessState(
   input: CreateSessionHarnessStateInput,
 ): SessionHarnessState {
+  const { adapter } = input;
   return {
     harnessId: input.harnessId,
-    expectedTier: input.expectedTier,
-    declaresInputNeeded: input.declaredEvents.includes("input.needed"),
+    expectsEvents: expectsHarnessEvents(adapter),
+    declaresInputNeeded: adapter === undefined || supportedEvents(adapter).has("input.needed"),
     startedAt: input.startedAt,
     delivered: false,
     declared: null,
@@ -404,8 +417,6 @@ export type SessionActivitySource = "reported" | "inferred" | "silent";
 export type SessionInputReporting = "reported" | "unconfirmed" | "unsupported";
 
 export interface SessionHarnessStatus {
-  /** The tier the session is ACTUALLY running at — Hooked is revocable. */
-  tier: HarnessTier;
   activitySource: SessionActivitySource;
   input: SessionInputReporting;
 }
@@ -421,10 +432,16 @@ export const HARNESS_EVENT_GRACE_MS = 20_000;
 
 /**
  * What a session's harness is actually doing for us, right now. Derived rather
- * than stored: the Hooked tier is revoked by the passage of time since the
- * launch announced itself and said nothing further — the hooks we injected
- * did not take — and deriving it against an injected clock means that
- * revocation needs no timer, no write, and no way to be missed.
+ * than stored: the expectation is revoked by the passage of time since the
+ * launch announced itself and said nothing further — the hooks we injected did
+ * not take — and deriving it against an injected clock means that revocation
+ * needs no timer, no write, and no way to be missed.
+ *
+ * The tests run in the same order as {@link harnessChannelState}'s, and the
+ * ordering is the same load-bearing thing there and here: a delivery is a FACT,
+ * and the expectation and the window defer only an ACCUSATION. An event that has
+ * already landed proves the channel works whether or not anything expected it
+ * to speak, so it is read first and nothing below can withhold it.
  */
 export function sessionHarnessStatus(
   state: SessionHarnessState,
@@ -435,18 +452,19 @@ export function sessionHarnessStatus(
     : state.delivered
       ? "reported"
       : "unconfirmed";
-  // Only a launch that PROMISED hooks can be silent. A Known or Declared
-  // harness never claimed to report, so its PTY-derived activity is the
-  // expected outcome rather than a degradation worth telling the user about.
-  if (state.expectedTier !== "hooked") {
-    return { tier: state.expectedTier, activitySource: "inferred", input };
-  }
-  if (state.delivered) return { tier: "hooked", activitySource: "reported", input };
+  if (state.delivered) return { activitySource: "reported", input };
+  // Only a launch that could be held to a reporting promise can be silent. A
+  // harness with no injection never claimed to report, and one with no
+  // startup event says nothing until the agent acts — so for both, PTY-derived
+  // activity is the expected outcome rather than a degradation worth telling
+  // the user about. Codex is the second case, and this is the line that stops
+  // the app accusing a perfectly healthy Codex session nobody has typed into.
+  if (!state.expectsEvents) return { activitySource: "inferred", input };
   // No announce, no window. Nothing has proved a harness is running in this
   // terminal yet, so there is no launch to hold to a promise — see
   // {@link SessionHarnessState.startedAt}.
   if (state.startedAt === null || now - state.startedAt <= HARNESS_EVENT_GRACE_MS) {
-    return { tier: "hooked", activitySource: "inferred", input };
+    return { activitySource: "inferred", input };
   }
-  return { tier: "known", activitySource: "silent", input };
+  return { activitySource: "silent", input };
 }

@@ -540,7 +540,14 @@ describe("volli:harness-registered", () => {
 
   it("reads a registered harness's promise off the launchable set", () => {
     const slug = registeredSlug("my-harness");
-    const speaks = { ...adapter(slug), startupEvent: "session.started" as const };
+    // Both halves, because both are the promise: a config we injected, and an
+    // event it said that config would fire at boot. Either one alone is a
+    // harness nothing can hold to a deadline.
+    const speaks = {
+      ...adapter(slug),
+      injection: { kind: "claude-settings-json", flag: "--settings" } as const,
+      startupEvent: "session.started" as const,
+    };
     recordHarnessLaunch(fixture.db, slug, 1000);
     setup({ launchableHarnesses: [speaks], now: 1000 + HARNESS_EVENT_GRACE_MS });
 

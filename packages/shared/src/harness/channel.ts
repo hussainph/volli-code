@@ -17,7 +17,6 @@
  * Non-monotonic by construction, which is the whole feature.
  */
 import type { HarnessId } from "../ticket";
-import type { HarnessEvent } from "./types";
 
 /** The two timestamps, as `harness_channel` holds them. `null` — never observed. */
 export interface HarnessChannel {
@@ -53,20 +52,22 @@ export interface HarnessChannelStatus {
  * The comparison, against an injected clock, an explicit window, and the one
  * thing that licenses an accusation.
  *
- * `startupEvent` is the adapter's own field: the event that fires on harness
- * boot, before the user has done anything. `null`
- * means the channel cannot prove itself alive until the agent acts — codex is
- * exactly this, and it was verified in the TUI: it has no session until there
- * is a turn, so `SessionStart` arrives beside the first prompt and not before.
- * For such a harness, silence is indistinguishable from a user who has not
- * typed yet, and calling it `silent` would resurrect in the durable layer the
- * false accusation this whole model exists to kill. It stays `unproven`
- * forever instead, however long the silence runs.
+ * `expectsEvents` is {@link expectsHarnessEvents} asked of the adapter behind
+ * the id: does this harness have both a config Volli injected and something it
+ * fires at BOOT. Codex has the first and not the second — verified in the TUI:
+ * it has no session until there is a turn, so `SessionStart` arrives beside the
+ * first prompt and not before — and for such a harness silence is
+ * indistinguishable from a user who has not typed yet. Calling it `silent`
+ * would resurrect in the durable layer the false accusation this whole model
+ * exists to kill, so it stays `unproven` forever instead, however long the
+ * silence runs. The predicate is shared with the per-session window rather than
+ * spelled out here: one rule, and two surfaces that cannot come to disagree
+ * about which harnesses are owed an event.
  *
- * Pass `null` when the adapter cannot be looked up at all. An id nothing here
- * can describe — a manifest untrusted since the launch, a harness this build
- * does not ship — has made no promise anyone read, and the honest failure is
- * the quiet one.
+ * That also covers the adapter that cannot be looked up at all — a manifest
+ * untrusted since the launch, a harness this build does not ship. It has made
+ * no promise anyone read, and {@link expectsHarnessEvents} answers `false` for
+ * it, which is the quiet failure.
  *
  * `reporting` is tested before both, and that ordering is load-bearing: the
  * window and the gate defer an ACCUSATION, never withhold a fact. An event that
@@ -81,7 +82,7 @@ export interface HarnessChannelStatus {
  */
 export function harnessChannelState(
   channel: Pick<HarnessChannel, "lastLaunchAt" | "lastEventAt">,
-  startupEvent: HarnessEvent | null,
+  expectsEvents: boolean,
   now: number,
   graceMs: number,
 ): HarnessChannelState {
@@ -90,6 +91,6 @@ export function harnessChannelState(
   // no launch for an event to be missing from.
   if (lastLaunchAt === null) return "unproven";
   if (lastEventAt !== null && lastEventAt >= lastLaunchAt) return "reporting";
-  if (startupEvent === null) return "unproven";
+  if (!expectsEvents) return "unproven";
   return now - lastLaunchAt < graceMs ? "unproven" : "silent";
 }

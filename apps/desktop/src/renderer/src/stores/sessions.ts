@@ -22,10 +22,7 @@ import { create } from "zustand";
 import {
   createSessionHarnessState,
   getHarnessAdapter,
-  harnessTier,
-  HARNESS_EVENTS,
   receiveHarnessEvent,
-  supportedEvents,
   type CreateSessionHarnessStateInput,
   type HarnessAdapter,
   type HarnessEvent,
@@ -430,9 +427,9 @@ export function launchAdapter(harnessId: HarnessId): HarnessAdapter | undefined 
  * harness that stops reporting decays into "not reporting" exactly as a
  * built-in does. Only a harness NOTHING here can describe still earns none —
  * the catalog not hydrated yet, an id trusted after this renderer last asked.
- * A guess there would go wrong in both directions: claim `hooked` and a
- * perfectly working harness gets called silent, claim less and we vouch for
- * events it may not send. Its first delivery registers it instead — see
+ * A guess there would go wrong in both directions: expect events and a
+ * perfectly working harness gets called silent, expect none and we stop
+ * believing what it does send. Its first delivery registers it instead — see
  * {@link subscribeHarnessEvents}.
  *
  * The expectation is stated here but its CLOCK does not start here, which is
@@ -446,12 +443,7 @@ function launchExpectation(launch: SessionLaunch): SessionHarnessState | null {
   if (launch.launchKind !== "agent") return null;
   const adapter = launchAdapter(launch.harnessId);
   if (adapter === undefined) return null;
-  return createSessionHarnessState({
-    harnessId: launch.harnessId,
-    expectedTier: harnessTier(adapter),
-    declaredEvents: [...supportedEvents(adapter)],
-    startedAt: null,
-  });
+  return createSessionHarnessState({ harnessId: launch.harnessId, adapter, startedAt: null });
 }
 
 /** Factory so tests get isolated instances. */
@@ -728,12 +720,7 @@ export function createSessionsStore() {
         return {
           harness: {
             ...state.harness,
-            [sessionId]: createSessionHarnessState({
-              harnessId,
-              expectedTier: harnessTier(adapter),
-              declaredEvents: [...supportedEvents(adapter)],
-              startedAt: at,
-            }),
+            [sessionId]: createSessionHarnessState({ harnessId, adapter, startedAt: at }),
           },
         };
       });
@@ -790,17 +777,19 @@ export const useSessionsStore = createSessionsStore();
  * `applyHarnessEvent`'s unregistered guard — an agent the user started by hand
  * inside a wrapped shell, and a harness trusted since this renderer last
  * asked. Seeding on delivery is the plan's own rule ("an event becomes
- * verified on first real delivery") rather than a shortcut around it: the tier
- * is `hooked` because an event demonstrably arrived, and the declared-event set
- * comes from the adapter — the catalog's as readily as a built-in's — so cursor,
- * whose source maps both blocking signals to null, still cannot raise a
+ * verified on first real delivery") rather than a shortcut around it: the
+ * adapter is handed over whole — the catalog's as readily as a built-in's — so
+ * cursor, whose source maps both blocking signals to null, still cannot raise a
  * `waiting` it isn't able to vouch for.
  *
- * The unknown id keeps FAILING OPEN, and that must not be tidied away now that
- * the catalog exists: an id nothing here can describe is credited with the whole
- * event vocabulary, because the alternative is silencing the one harness that
- * has just proved it reports. The delivery is all the evidence there is, and
- * disbelieving it would hide a harness that IS reporting.
+ * The unknown id keeps FAILING OPEN on what it may be BELIEVED about, and that
+ * must not be tidied away now that the catalog exists: an id nothing here can
+ * describe is credited with the whole event vocabulary, because the alternative
+ * is silencing the one harness that has just proved it reports. It fails the
+ * other way on what may be held AGAINST it — an unknown adapter expects no
+ * events, so it can never be accused of silence — and the seeded state is
+ * `delivered` a line later regardless, which reads as reporting whatever was
+ * expected of it.
  *
  * Notices arrive in the order main ingested them, which is NOT the order the
  * harness fired them — each event races here on its own hook process. The
@@ -814,11 +803,9 @@ export function subscribeHarnessEvents(): () => void {
   return window.api.sessions.onHarnessEvent((notice) => {
     const state = useSessionsStore.getState();
     if (state.harness[notice.sessionId] === undefined) {
-      const adapter = launchAdapter(notice.harnessId);
       state.expectHarnessEvents(notice.sessionId, {
         harnessId: notice.harnessId,
-        expectedTier: "hooked",
-        declaredEvents: adapter === undefined ? HARNESS_EVENTS : [...supportedEvents(adapter)],
+        adapter: launchAdapter(notice.harnessId),
         startedAt: notice.at,
       });
     }

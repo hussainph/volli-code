@@ -3,15 +3,15 @@ import { describe, expect, it } from "vite-plus/test";
 import { parseHarnessId, type HarnessId } from "../ticket";
 import {
   bindsStartupEvent,
+  expectsHarnessEvents,
   harnessCommandOwner,
-  harnessTier,
   isBareHarnessCommand,
   shadowsSystemCommand,
   supportedEvents,
   type HarnessAdapter,
 } from "./types";
 
-/** A minimal Declared-tier adapter — nothing injected, nothing reported, no resume. */
+/** A minimal adapter — nothing injected, nothing reported, no resume. */
 function bareAdapter(overrides: Partial<HarnessAdapter> = {}): HarnessAdapter {
   return {
     id: parseHarnessId("my-harness") as HarnessId,
@@ -87,59 +87,34 @@ describe("bindsStartupEvent", () => {
   });
 });
 
-describe("harnessTier", () => {
-  const oneEvent = [{ event: "turn.completed", native: "Stop", delivery: "async" }] as const;
+describe("expectsHarnessEvents", () => {
+  const atBoot = [{ event: "session.started", native: "SessionStart", delivery: "async" }] as const;
+  const injection = { kind: "claude-settings-json", flag: "--settings" } as const;
 
-  it("is hooked only when a harness can both be configured and report", () => {
+  it("expects events only from a harness Volli configured that also speaks at boot", () => {
     expect(
-      harnessTier(
-        bareAdapter({
-          injection: { kind: "claude-settings-json", flag: "--settings" },
-          events: oneEvent,
-        }),
+      expectsHarnessEvents(
+        bareAdapter({ injection, events: atBoot, startupEvent: "session.started" }),
       ),
-    ).toBe("hooked");
+    ).toBe(true);
   });
 
-  it("is not hooked when a harness declares events it has no way to be told about", () => {
-    expect(harnessTier(bareAdapter({ events: oneEvent }))).toBe("declared");
+  // Codex. Its hooks work and its bindings are real; it simply has no session
+  // until there is a turn, so nothing fires at launch and silence afterwards is
+  // a statement about the user, not the channel.
+  it("expects nothing from a configured harness that fires nothing at boot", () => {
+    expect(expectsHarnessEvents(bareAdapter({ injection, events: atBoot }))).toBe(false);
   });
 
-  it("is not hooked when a configurable harness reports nothing", () => {
-    expect(
-      harnessTier(bareAdapter({ injection: { kind: "claude-settings-json", flag: "--settings" } })),
-    ).toBe("declared");
+  it("expects nothing from a harness Volli has no way to configure", () => {
+    expect(expectsHarnessEvents(bareAdapter({ startupEvent: "session.started" }))).toBe(false);
   });
 
-  it("falls back to known when an unhooked harness can still resume", () => {
-    expect(
-      harnessTier(
-        bareAdapter({ resume: { byId: ["--resume", "{id}"], latest: null, userResumeTokens: [] } }),
-      ),
-    ).toBe("known");
-    expect(
-      harnessTier(
-        bareAdapter({ resume: { byId: null, latest: ["--continue"], userResumeTokens: [] } }),
-      ),
-    ).toBe("known");
-  });
-
-  it("is declared when a harness offers neither configuration nor resume", () => {
-    expect(harnessTier(bareAdapter())).toBe("declared");
-  });
-
-  // `[]` is truthy, so the array itself is not the evidence: a harness promoted
-  // to Known on an empty resume argv resumes by running the bare executable,
-  // which starts a fresh session while every surface says "resume".
-  it("is declared when the resume argv is present but empty", () => {
-    expect(
-      harnessTier(bareAdapter({ resume: { byId: [], latest: [], userResumeTokens: [] } })),
-    ).toBe("declared");
-    expect(
-      harnessTier(
-        bareAdapter({ resume: { byId: [], latest: ["--continue"], userResumeTokens: [] } }),
-      ),
-    ).toBe("known");
+  // The quiet direction, and the deliberate opposite of how an unknown adapter
+  // is read when a delivery has to be BELIEVED: a promise nobody could read is
+  // not a promise to hold anyone to.
+  it("expects nothing from an id nothing can describe", () => {
+    expect(expectsHarnessEvents(undefined)).toBe(false);
   });
 });
 

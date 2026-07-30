@@ -332,38 +332,37 @@ export interface HarnessAdapter {
 }
 
 /**
- * What Volli can actually expect from a harness. Derived from what it
- * declares, never asserted — and revocable at runtime, since a launch that
- * bypassed the wrapper reports nothing however well it is described here.
+ * Whether Volli may hold this harness to a reporting promise — the one question
+ * everything that judges silence asks, written once and asked in both places
+ * that judge it (the per-session grace window, `session.ts`, and the durable
+ * channel state, `channel.ts`).
  *
- * **Hooked** — an injection path and event bindings: live turn and idle state,
- * automatic board moves, notifications. **Known** — no injection, but a resume
- * path, so activity is inferred from the PTY instead. **Declared** — neither;
- * it still launches with its prompt and the whole `volli` CLI surface still
- * works, because that reaches the app through `VOLLI_SOCKET` and PATH.
+ * Both halves of the conjunction are load-bearing, and the second is the one
+ * that was learned the expensive way. An injection path means Volli got to
+ * configure the harness at all. A `startupEvent` means the channel says
+ * something at BOOT, before the user has done anything — and without that,
+ * silence is indistinguishable from a terminal nobody has typed into. Codex is
+ * exactly that harness: it has no session until there is a turn, so it fires
+ * nothing at launch however well its hooks work, and accusing it of not
+ * reporting is a lie about a healthy session.
+ *
+ * `undefined` — an id nothing here can describe — is `false`, and that is the
+ * quiet failure on purpose: a harness whose promise nobody read has made none,
+ * and the direction that costs nothing is declining to accuse it. Note that
+ * {@link declaresInputNeeded} fails the OTHER way for the same input, because
+ * it gates BELIEVING a delivery rather than making an accusation.
  */
-export type HarnessTier = "hooked" | "known" | "declared";
-
-/**
- * Whether a resume slot holds argv that would actually resume anything. An
- * EMPTY array is not a resume path, and the distinction is the whole tier: `[]`
- * is truthy, so testing the array itself promotes a resume-less harness to
- * Known, and `buildResumeCommand` then hands back the bare executable — which
- * starts a FRESH session while every surface says "resume".
- */
-function hasResumeArgv(argv: readonly string[] | null): boolean {
-  return argv !== null && argv.length > 0;
-}
-
-export function harnessTier(adapter: HarnessAdapter): HarnessTier {
-  if (adapter.injection.kind !== "none" && adapter.events.length > 0) return "hooked";
-  return hasResumeArgv(adapter.resume.byId) || hasResumeArgv(adapter.resume.latest)
-    ? "known"
-    : "declared";
+export function expectsHarnessEvents(
+  adapter: Pick<HarnessAdapter, "injection" | "startupEvent"> | undefined,
+): boolean {
+  if (adapter === undefined) return false;
+  return adapter.injection.kind !== "none" && adapter.startupEvent !== null;
 }
 
 /** The canonical events an adapter claims, collapsed from its native bindings. */
-export function supportedEvents(adapter: HarnessAdapter): ReadonlySet<HarnessEvent> {
+export function supportedEvents(
+  adapter: Pick<HarnessAdapter, "events">,
+): ReadonlySet<HarnessEvent> {
   return new Set(adapter.events.map((binding) => binding.event));
 }
 
