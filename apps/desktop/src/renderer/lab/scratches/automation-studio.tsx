@@ -76,8 +76,7 @@ import {
 } from "../automation/model";
 
 export const title = "Automation · studio";
-export const note =
-  "Parallel launches, / skills, board-ranked digits, decoupled runtime dials.";
+export const note = "Parallel launches, / skills, board-ranked digits, decoupled runtime dials.";
 export const viewport = "window" as const;
 
 /* ------------------------------------------------------------ run state */
@@ -297,9 +296,7 @@ function BoardCard({
           <span
             className={cn(
               "grid size-5 shrink-0 place-items-center rounded-md font-mono text-label",
-              digit === 1
-                ? "bg-primary/20 text-primary-text"
-                : "bg-muted text-muted-foreground",
+              digit === 1 ? "bg-primary/20 text-primary-text" : "bg-muted text-muted-foreground",
             )}
           >
             {digit}

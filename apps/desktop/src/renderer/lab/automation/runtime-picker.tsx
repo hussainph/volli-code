@@ -254,9 +254,7 @@ function EffortRail({
             height: fillHeight,
             background: fillColor,
             boxShadow:
-              t > 0.55
-                ? `0 0 12px color-mix(in oklab, ${fillColor} 45%, transparent)`
-                : undefined,
+              t > 0.55 ? `0 0 12px color-mix(in oklab, ${fillColor} 45%, transparent)` : undefined,
           }}
         />
 

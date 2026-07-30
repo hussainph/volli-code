@@ -86,11 +86,7 @@ import {
 } from "@renderer/components/ui/tooltip";
 import { cn } from "@renderer/lib/utils";
 
-import {
-  getColumnOrder,
-  offeredForColumn,
-  useColumnOrder,
-} from "../automation/column-order";
+import { getColumnOrder, offeredForColumn, useColumnOrder } from "../automation/column-order";
 import { HarnessMark, HarnessTag, HarnessTrail } from "../automation/harness-identity";
 import { harnessTrail, SEEDED_AUTOMATIONS, type Automation } from "../automation/model";
 import { useDragSim, type AutomationTarget } from "../automation/use-drag-sim";

@@ -93,10 +93,7 @@ export interface ChipEditorHandle {
  * and padding match {@link LAYER_CLASS}.
  */
 /** Viewport coordinates so the menu can `position: fixed` above overflow parents. */
-function caretAnchor(
-  field: HTMLTextAreaElement,
-  caret: number,
-): { top: number; left: number } {
+function caretAnchor(field: HTMLTextAreaElement, caret: number): { top: number; left: number } {
   const mirror = document.createElement("div");
   const style = window.getComputedStyle(field);
   const props = [
