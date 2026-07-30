@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   HARNESS_EVENT_GRACE_MS,
-  sessionHarnessStatus,
+  sessionActivitySource,
   type CreateSessionHarnessStateInput,
   type HarnessAdapter,
   type HarnessEventNotice,
@@ -273,13 +273,8 @@ describe("addSession — the launch expectation", () => {
 
     // Inside the window we are still waiting; past it, the injected config
     // demonstrably did not take, and that says so.
-    expect(sessionHarnessStatus(state, 5000 + HARNESS_EVENT_GRACE_MS).activitySource).toBe(
-      "inferred",
-    );
-    expect(sessionHarnessStatus(state, 5000 + HARNESS_EVENT_GRACE_MS + 1)).toEqual({
-      activitySource: "silent",
-      input: "unconfirmed",
-    });
+    expect(sessionActivitySource(state, 5000 + HARNESS_EVENT_GRACE_MS)).toBe("inferred");
+    expect(sessionActivitySource(state, 5000 + HARNESS_EVENT_GRACE_MS + 1)).toBe("silent");
   });
 
   // The window used to start at the PTY spawn, which timed the user rather than
@@ -290,9 +285,7 @@ describe("addSession — the launch expectation", () => {
     store.getState().addSession(P, "s1", agentLaunch("claude-code"));
     const state = store.getState().harness["s1"]!;
 
-    expect(sessionHarnessStatus(state, 1000 + HARNESS_EVENT_GRACE_MS * 100).activitySource).toBe(
-      "inferred",
-    );
+    expect(sessionActivitySource(state, 1000 + HARNESS_EVENT_GRACE_MS * 100)).toBe("inferred");
   });
 });
 

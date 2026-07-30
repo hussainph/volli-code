@@ -402,24 +402,12 @@ export function receiveHarnessEvent(
 /**
  * How a session's activity reaches Volli. `reported` — the harness is
  * delivering hook events. `inferred` — nothing is reporting, and the PTY
- * heuristic is doing the work, which is the normal state of a Known or Declared
- * harness and of a hooked one still inside its grace window. `silent` — hooks
- * were expected and never came, which is the one case worth a word in the UI:
- * the user was promised reporting and isn't getting it.
+ * heuristic is doing the work, which is the normal state of a harness that
+ * promised no events and of one still inside its grace window. `silent` —
+ * events were expected and never came, which is the one case worth a word in
+ * the UI: the user was promised reporting and isn't getting it.
  */
 export type SessionActivitySource = "reported" | "inferred" | "silent";
-
-/**
- * Whether a session can tell you a human is blocking it. `unsupported` is
- * cursor: structurally absent, not merely unseen. `unconfirmed` is a harness
- * that declares the capability over a channel nothing has ever come down.
- */
-export type SessionInputReporting = "reported" | "unconfirmed" | "unsupported";
-
-export interface SessionHarnessStatus {
-  activitySource: SessionActivitySource;
-  input: SessionInputReporting;
-}
 
 /**
  * How long a hooked launch has to deliver its first event, counted from the
@@ -443,28 +431,23 @@ export const HARNESS_EVENT_GRACE_MS = 20_000;
  * already landed proves the channel works whether or not anything expected it
  * to speak, so it is read first and nothing below can withhold it.
  */
-export function sessionHarnessStatus(
+export function sessionActivitySource(
   state: SessionHarnessState,
   now: number,
-): SessionHarnessStatus {
-  const input: SessionInputReporting = !state.declaresInputNeeded
-    ? "unsupported"
-    : state.delivered
-      ? "reported"
-      : "unconfirmed";
-  if (state.delivered) return { activitySource: "reported", input };
+): SessionActivitySource {
+  if (state.delivered) return "reported";
   // Only a launch that could be held to a reporting promise can be silent. A
   // harness with no injection never claimed to report, and one with no
   // startup event says nothing until the agent acts — so for both, PTY-derived
   // activity is the expected outcome rather than a degradation worth telling
   // the user about. Codex is the second case, and this is the line that stops
   // the app accusing a perfectly healthy Codex session nobody has typed into.
-  if (!state.expectsEvents) return { activitySource: "inferred", input };
+  if (!state.expectsEvents) return "inferred";
   // No announce, no window. Nothing has proved a harness is running in this
   // terminal yet, so there is no launch to hold to a promise — see
   // {@link SessionHarnessState.startedAt}.
   if (state.startedAt === null || now - state.startedAt <= HARNESS_EVENT_GRACE_MS) {
-    return { activitySource: "inferred", input };
+    return "inferred";
   }
-  return { activitySource: "silent", input };
+  return "silent";
 }

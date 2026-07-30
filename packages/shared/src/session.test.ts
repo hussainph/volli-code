@@ -6,7 +6,7 @@ import {
   harnessEventOrder,
   receiveHarnessEvent,
   HARNESS_EVENT_GRACE_MS,
-  sessionHarnessStatus,
+  sessionActivitySource,
   supersededHarnessEvent,
   isSessionActivityState,
   isSessionLaunchKind,
@@ -333,21 +333,15 @@ describe("receiveHarnessEvent — ordering", () => {
   });
 });
 
-describe("sessionHarnessStatus", () => {
+describe("sessionActivitySource", () => {
   it("is reporting once a hooked session has delivered its first event", () => {
     const started = receiveHarnessEvent(hookedSession(), "session.started", null);
-    expect(sessionHarnessStatus(started, 2000)).toEqual({
-      activitySource: "reported",
-      input: "reported",
-    });
+    expect(sessionActivitySource(started, 2000)).toBe("reported");
   });
 
   it("calls a launch silent once the grace window passes with nothing delivered", () => {
     const state = hookedSession();
-    expect(sessionHarnessStatus(state, ANNOUNCED_AT + HARNESS_EVENT_GRACE_MS + 1)).toEqual({
-      activitySource: "silent",
-      input: "unconfirmed",
-    });
+    expect(sessionActivitySource(state, ANNOUNCED_AT + HARNESS_EVENT_GRACE_MS + 1)).toBe("silent");
   });
 
   // The window is anchored to the announce, and an un-announced session has no
@@ -359,10 +353,7 @@ describe("sessionHarnessStatus", () => {
       adapter: adapter("session.started", ["session.started", "input.needed"]),
       startedAt: null,
     });
-    expect(sessionHarnessStatus(unannounced, HARNESS_EVENT_GRACE_MS * 100)).toEqual({
-      activitySource: "inferred",
-      input: "unconfirmed",
-    });
+    expect(sessionActivitySource(unannounced, HARNESS_EVENT_GRACE_MS * 100)).toBe("inferred");
   });
 
   it("infers forever for a harness Volli never got to configure", () => {
@@ -371,10 +362,7 @@ describe("sessionHarnessStatus", () => {
       adapter: adapter(null, [], false),
       startedAt: 1000,
     });
-    expect(sessionHarnessStatus(declared, 1000 + HARNESS_EVENT_GRACE_MS + 1)).toEqual({
-      activitySource: "inferred",
-      input: "unsupported",
-    });
+    expect(sessionActivitySource(declared, 1000 + HARNESS_EVENT_GRACE_MS + 1)).toBe("inferred");
   });
 
   // Codex, and the reason this whole field exists. Its hooks are real and its
@@ -387,17 +375,15 @@ describe("sessionHarnessStatus", () => {
       adapter: adapter(null, ["turn.started", "input.needed"]),
       startedAt: ANNOUNCED_AT,
     });
-    expect(sessionHarnessStatus(codex, ANNOUNCED_AT + HARNESS_EVENT_GRACE_MS * 100)).toEqual({
-      activitySource: "inferred",
-      input: "unconfirmed",
-    });
+    expect(sessionActivitySource(codex, ANNOUNCED_AT + HARNESS_EVENT_GRACE_MS * 100)).toBe(
+      "inferred",
+    );
     // And the gate defers the accusation without ever withholding the fact: one
     // turn later the channel has proved itself on the same terms as any other.
     const turned = receiveHarnessEvent(codex, "turn.started", null);
-    expect(sessionHarnessStatus(turned, ANNOUNCED_AT + HARNESS_EVENT_GRACE_MS * 100)).toEqual({
-      activitySource: "reported",
-      input: "reported",
-    });
+    expect(sessionActivitySource(turned, ANNOUNCED_AT + HARNESS_EVENT_GRACE_MS * 100)).toBe(
+      "reported",
+    );
   });
 
   // An id nothing can describe is credited with the whole vocabulary — the
@@ -409,18 +395,14 @@ describe("sessionHarnessStatus", () => {
       startedAt: ANNOUNCED_AT,
     });
     expect(unknown.declaresInputNeeded).toBe(true);
-    expect(sessionHarnessStatus(unknown, ANNOUNCED_AT + HARNESS_EVENT_GRACE_MS + 1)).toEqual({
-      activitySource: "inferred",
-      input: "unconfirmed",
-    });
+    expect(sessionActivitySource(unknown, ANNOUNCED_AT + HARNESS_EVENT_GRACE_MS + 1)).toBe(
+      "inferred",
+    );
   });
 
   it("infers rather than claims while a launch's grace window is still open", () => {
     const state = hookedSession();
-    expect(sessionHarnessStatus(state, ANNOUNCED_AT + HARNESS_EVENT_GRACE_MS)).toEqual({
-      activitySource: "inferred",
-      input: "unconfirmed",
-    });
+    expect(sessionActivitySource(state, ANNOUNCED_AT + HARNESS_EVENT_GRACE_MS)).toBe("inferred");
   });
 
   it("says a reporting cursor session still cannot tell you a human is blocking it", () => {
@@ -433,9 +415,11 @@ describe("sessionHarnessStatus", () => {
       "session.started",
       null,
     );
-    expect(sessionHarnessStatus(cursor, 2000)).toEqual({
-      activitySource: "reported",
-      input: "unsupported",
-    });
+    // Reporting and mute are independent: cursor's channel is demonstrably
+    // alive, and it still binds nothing that means a human is blocking. The
+    // pair used to be one return value; they are separate questions and the
+    // needs-you gate reads the second one, not this function.
+    expect(sessionActivitySource(cursor, 2000)).toBe("reported");
+    expect(cursor.declaresInputNeeded).toBe(false);
   });
 });

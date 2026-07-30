@@ -1,5 +1,5 @@
 import {
-  sessionHarnessStatus,
+  sessionActivitySource,
   type SessionActivitySource,
   type SessionActivityState,
   type SessionHarnessState,
@@ -120,7 +120,7 @@ function paneActivity(pane: SessionPane, input: ActivityInput): SessionActivityS
  */
 function paneActivitySource(sessionId: string, input: ActivityInput): SessionActivitySource {
   const state = input.harness[sessionId];
-  return state === undefined ? "inferred" : sessionHarnessStatus(state, input.now).activitySource;
+  return state === undefined ? "inferred" : sessionActivitySource(state, input.now);
 }
 
 const ACTIVITY_PRIORITY: Record<SessionActivityState, number> = {
