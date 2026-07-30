@@ -92,6 +92,7 @@ export interface ChipEditorHandle {
  * the slash — not a full caret-metrics library. Uses a mirror element so wrap
  * and padding match {@link LAYER_CLASS}.
  */
+/** Viewport coordinates so the menu can `position: fixed` above overflow parents. */
 function caretAnchor(
   field: HTMLTextAreaElement,
   caret: number,
@@ -133,8 +134,12 @@ function caretAnchor(
   marker.textContent = "\u200b";
   mirror.appendChild(marker);
   document.body.appendChild(mirror);
-  const top = marker.offsetTop - field.scrollTop + 22;
-  const left = Math.min(marker.offsetLeft - field.scrollLeft, field.clientWidth - 288);
+  const fieldRect = field.getBoundingClientRect();
+  const top = fieldRect.top + marker.offsetTop - field.scrollTop + 22;
+  const left = Math.min(
+    fieldRect.left + marker.offsetLeft - field.scrollLeft,
+    window.innerWidth - 300,
+  );
   document.body.removeChild(mirror);
   return { top: Math.max(8, top), left: Math.max(8, left) };
 }

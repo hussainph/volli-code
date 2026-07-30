@@ -104,7 +104,7 @@ export function SlashMenu({
         role="listbox"
         aria-label="Skills"
         className={cn(
-          "absolute z-40 w-72 overflow-hidden rounded-lg border border-border bg-popover py-2 shadow-md",
+          "fixed z-[80] w-72 overflow-hidden rounded-lg border border-border bg-popover py-2 shadow-md",
           !instant &&
             "transition-[opacity,transform,scale] duration-150 ease-out starting:scale-[0.97] starting:opacity-0 motion-reduce:transition-none",
         )}
@@ -123,7 +123,7 @@ export function SlashMenu({
       role="listbox"
       aria-label="Skills"
       className={cn(
-        "absolute z-40 w-72 overflow-hidden rounded-lg border border-border bg-popover py-1 shadow-md",
+        "fixed z-[80] w-72 overflow-hidden rounded-lg border border-border bg-popover py-1 shadow-md",
         !instant &&
           "transition-[opacity,transform,scale] duration-150 ease-out starting:scale-[0.97] starting:opacity-0 motion-reduce:transition-none",
       )}
