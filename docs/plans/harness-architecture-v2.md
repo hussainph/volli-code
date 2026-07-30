@@ -1,5 +1,14 @@
 # Harness architecture v2
 
+> **Superseded (2026-07-30).** Most of this plan was executed on this branch — the
+> injection-kind renames (§4), the channel columns and their derivation (§2, §3), and the
+> §5 deletions (`HarnessTier`, `detection`, `timeoutMs`) all landed. What did not land —
+> the manifest-driven `hook-file` mechanism replacing `config-dir-env` (§1), and any
+> further investment in hook-based capture — is **not to be resumed**: the direction is
+> now a structured session engine (Agent SDK / ACP) whose events arrive natively, with
+> the terminal demoted to an untracked utility surface. The hook/injection machinery in
+> this branch is the bridge until that engine exists, kept working but not deepened.
+
 `docs/plans/harness-events.md` designed the channel and it landed. This proposes what to
 change now that it is running, against two capabilities:
 
