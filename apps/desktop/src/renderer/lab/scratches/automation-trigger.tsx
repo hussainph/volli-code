@@ -86,18 +86,19 @@ import {
 } from "@renderer/components/ui/tooltip";
 import { cn } from "@renderer/lib/utils";
 
-import { HarnessMark, HarnessTag, HarnessTrail } from "../automation/harness-identity";
 import {
-  harnessTrail,
-  SEEDED_AUTOMATIONS,
-  triggerColumns,
-  type Automation,
-} from "../automation/model";
+  getColumnOrder,
+  offeredForColumn,
+  useColumnOrder,
+} from "../automation/column-order";
+import { HarnessMark, HarnessTag, HarnessTrail } from "../automation/harness-identity";
+import { harnessTrail, SEEDED_AUTOMATIONS, type Automation } from "../automation/model";
 import { useDragSim, type AutomationTarget } from "../automation/use-drag-sim";
 import { project, ticketById, tickets } from "../fixtures";
 
 export const title = "Automation · trigger";
-export const note = "Column defaults, the in-ticket advance button, and the drag picker (#86/#89)";
+export const note =
+  "Column defaults, in-ticket advance, drag picker — digits follow the studio board order";
 
 /**
  * How long a drop confirmation stays before it starts leaving, and how long the
@@ -211,12 +212,15 @@ const ARM_STYLE = `
 }
 `;
 
-/** Which automations may be offered for a column — the trigger's own columns. */
+/**
+ * Which automations may be offered for a column, in digit order.
+ *
+ * Order is authored on the Automations studio board ({@link useColumnOrder}) —
+ * reordering there is what `1`–`9` mean here. Off-board automations never appear.
+ * Reads the live session order so the two scratches stay one system.
+ */
 function offeredFor(status: TicketStatus): Automation[] {
-  return SEEDED_AUTOMATIONS.filter((automation) => {
-    const columns = triggerColumns(automation.trigger);
-    return columns === "any" || columns.includes(status);
-  });
+  return offeredForColumn(SEEDED_AUTOMATIONS, status, getColumnOrder());
 }
 
 /**
@@ -1530,6 +1534,9 @@ const TAB_OPTIONS = [
 
 export default function AutomationTriggerScratch() {
   const [tab, setTab] = React.useState<(typeof TAB_OPTIONS)[number]["id"]>("ticket");
+  // Subscribe so a reorder on the studio board is what the digits mean here
+  // after you flip scratches — without this, the first render would stick.
+  useColumnOrder();
 
   // Lifted here, not owned by either tab, so arming a column from the Arming
   // tab and arming it by dropping a card in the Drag tab are provably the same

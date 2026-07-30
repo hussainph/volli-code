@@ -23,33 +23,22 @@
  * groups, and it cannot find that out from a list with one entry.
  * ──────────────────────────────────────────────────────────────────────────
  *
- * ── WHY A FLAT LIST WITH ONE WORD ON IT ───────────────────────────────────
+ * ── WHY A FLAT LIST, AND WHY THE UI ONLY AUTHORS PARALLEL ─────────────────
  * A step is `{runtime, instructions}` — one session, one harness, one prompt.
- * An Automation is a flat, ordered list of them, and the only structure is
- * {@link StepJoin}: each step after the first either runs `then` (once the one
- * above has exited) or `with` it (both start together). That is the entire
- * control flow.
+ * An Automation is a flat, ordered list of them. The file still spells
+ * {@link StepJoin} (`also: true` ↔ `with`), so a hand-edited sequential spine
+ * round-trips — but the studio only *authors* parallel launches. Stop hooks
+ * mean the agent yielded, not that the work is done; a `then` edge would
+ * promise chaining we do not have. Sequencing across launches is a column move
+ * (or a schedule), written as a separate automation.
  *
- * It is the third model this went through and the first one a person can read
- * without being taught a noun.
+ * It is the third model this went through:
  *
- *   1. `join: "with" | "after"` where `"with"` meant "same PARENT as whoever
- *      precedes me". Fine on paper, cannot express a tree, and silently
- *      re-parents a sibling when you insert in the middle.
- *   2. `after: <step id>` — a named parent. No such bug, and it bought a
- *      general tree, which is exactly what must not be on offer: a step
- *      indented under another one reads as a BRANCH, so the surface starts
- *      implying a conditional. Volli would have to decide "did that step
- *      succeed" from harness events, and the five adapters do not agree on what
- *      they emit or when. A shape that promises if-then over an event stream
- *      that inconsistent is a shape that lies.
- *   3. This. A flag on a flat list. It cannot nest, so it cannot imply a
- *      branch; it names nothing, so it survives any rename and can never dangle;
- *      and `then` / `with` promise only what a process exit code delivers.
+ *   1. `join: "with" | "after"` — silently re-parented siblings.
+ *   2. `after: <step id>` — bought a general tree that reads as branching.
+ *   3. A flag on a flat list. The UI's only add affordance is "Add alongside".
  *
- * {@link toStages} recovers the grouping — steps that start together — for
- * anything that needs to reason about what waits for what. Nothing needs to
- * store it.
+ * {@link toStages} recovers the grouping for anything that still needs it.
  * ──────────────────────────────────────────────────────────────────────────
  *
  * ── WHY THE PROMPT IS ONLY PROSE ──────────────────────────────────────────
@@ -337,7 +326,9 @@ export const TRIGGER_KINDS: Record<TriggerKind, TriggerKindUi> = {
   "label-added": { label: "Label added", group: "Board", available: false },
   "checks-pass": { label: "Checks pass", group: "Session", available: false },
   "session-ends": { label: "Session ends", group: "Session", available: false },
-  schedule: { label: "Schedule", group: "Outside Volli", available: false },
+  // Off-board: fires without a ticket move (cron / intake). Operand UI is still
+  // thin — the kind itself is what parks the automation in the Off board lane.
+  schedule: { label: "Schedule", group: "Outside Volli", available: true },
   inbound: { label: "Inbound event", group: "Outside Volli", available: false },
 };
 
@@ -346,24 +337,33 @@ export const TRIGGER_GROUPS: Array<TriggerKindUi["group"]> = ["Board", "Session"
 export type Trigger =
   | { kind: "enters-column"; columns: TicketStatus[] }
   | { kind: "leaves-column"; columns: TicketStatus[] }
-  | { kind: "manual" };
+  | { kind: "manual" }
+  | { kind: "schedule" };
 
 /** An empty operand for a kind, used when the picker switches kinds. */
 export function blankTrigger(kind: TriggerKind): Trigger {
   if (kind === "leaves-column") return { kind, columns: [] };
-  if (kind === "manual") return { kind };
+  if (kind === "manual" || kind === "schedule") return { kind };
   return { kind: "enters-column", columns: [] };
 }
 
-/** The columns a trigger names, or `"any"` when it names none. */
+/** True when the automation is not driven by a board move (Off board lane). */
+export function isOffBoardTrigger(
+  trigger: Trigger,
+): trigger is Extract<Trigger, { kind: "manual" | "schedule" }> {
+  return trigger.kind === "manual" || trigger.kind === "schedule";
+}
+
+/** The columns a trigger names, or `"any"` when it names none / is off-board. */
 export function triggerColumns(trigger: Trigger): "any" | TicketStatus[] {
-  if (trigger.kind === "manual") return "any";
+  if (isOffBoardTrigger(trigger)) return "any";
   return trigger.columns;
 }
 
 /** One phrase for a trigger — used in the index and on the dragged card. */
 export function triggerSummary(trigger: Trigger): string {
   if (trigger.kind === "manual") return "Run by hand";
+  if (trigger.kind === "schedule") return "On a schedule";
   const verb = TRIGGER_KINDS[trigger.kind].label;
   if (trigger.columns.length === 0) return `${verb} any column`;
   if (trigger.columns.length === 1) return `${verb} ${TICKET_STATUS_LABELS[trigger.columns[0]]}`;
@@ -378,9 +378,11 @@ export type AutomationScope = "global" | "project";
 /**
  * When a step starts, relative to the one above it.
  *
- * The values are the words the UI puts on the connector between two cards —
- * "then" and "at the same time" — because the one thing this concept must not
- * need is a glossary. Ignored on the first step, which has nothing above it.
+ * The file still spells both (`also: true` ↔ `with`, omitted ↔ `then`) so a
+ * hand-edited sequential spine round-trips. The studio UI only *authors*
+ * `with`: Volli cannot tell "the work is done" from a harness Stop hook, so a
+ * `then` edge would promise chaining we do not have. Sequencing across launches
+ * is a column move (or a schedule), authored as separate automations.
  */
 export type StepJoin = "then" | "with";
 
@@ -492,9 +494,15 @@ export function duplicateStep(
   return [...steps.slice(0, at + 1), copy, ...steps.slice(at + 1)];
 }
 
-/** New steps land at the end, running after everything. Flip the connector to change it. */
+/**
+ * New steps land at the end, launching alongside everything already there.
+ *
+ * The studio's only add affordance is "Add alongside" — there is no UI path
+ * that authors a `then` edge. Hand-edited files can still carry one.
+ */
 export function appendStep(steps: AutomationStep[], step: AutomationStep): AutomationStep[] {
-  return [...steps, { ...step, join: "then" }];
+  if (steps.length === 0) return [{ ...step, join: "then" }];
+  return [...steps, { ...step, join: "with" }];
 }
 
 /** Changes when one step starts. The first step has nothing above it, so it never moves. */
@@ -644,19 +652,18 @@ function seedStep(
  * the exact surprise the automation-only-de-escalates rule exists to prevent.
  *
  * Every one is prose, written the way a person actually writes a prompt.
- * "Two-opinion review" stresses the structure: two readers running side by side,
- * and a third step after them that cannot start until both have finished. If the
- * list-with-a-flag is wrong, it is wrong here first.
- *
- * It is also the seed that killed placeholders mode. It used to open `Review
- * {{change_set}} on {{branch}}.` with `{{brief}}` demoted underneath, and the
- * prose rewrite is both shorter and clearer — the agent has `volli diff` and
- * `volli ticket show` from {@link APPENDED_CLI_NOTE} and does not need to be
- * handed a pre-ordered digest.
+ * "Two-opinion review" stresses the structure that is honest today: two readers
+ * launching side by side. A third "then triage" step used to sit underneath
+ * them; it was cut because Stop hooks mean the agent yielded, not that the work
+ * is done — chaining on exit is a lie. If you want triage later, that is a
+ * second automation on a later column move.
  *
  * "Grill the ticket" fires in two columns, which is the other case worth seeding
  * — on the board it appears in both lanes, because one file genuinely does fire
  * in both places and a board that showed it once would have to pick a lie.
+ *
+ * "Pull product signals" is the off-board case: a schedule, not a column move,
+ * whose job may be to CREATE tickets rather than to work one.
  */
 export const SEEDED_AUTOMATIONS: Automation[] = [
   {
@@ -706,12 +713,6 @@ export const SEEDED_AUTOMATIONS: Automation[] = [
         "Read the change set looking only for what it BREAKS — call sites it missed, invariants it quietly drops, tests that now pass for the wrong reason.\n\nIgnore style. Another reviewer has the ticket; you have the blast radius.",
         "with",
       ),
-      seedStep(
-        "triage",
-        "claude-code",
-        { model: "claude-sonnet-5", effort: "medium", approvals: "plan" },
-        "Two reviewers have just finished on this branch and both have commented on the ticket. Read what they said.\n\nMerge them into one list, drop anything they disagree about that the diff settles either way, and mark each item blocker or nit. Say plainly if neither of them found anything.",
-      ),
     ],
   },
   {
@@ -725,6 +726,20 @@ export const SEEDED_AUTOMATIONS: Automation[] = [
         "claude-code",
         { model: "claude-sonnet-5", effort: "medium", approvals: "acceptEdits" },
         "This work is ready to land. Write the PR body from the ticket and from what actually changed — the ticket for the intent, the diff for the substance.\n\nFlag anything in the change set that the ticket never asked for.",
+      ),
+    ],
+  },
+  {
+    id: "atm-signals",
+    scope: "project",
+    name: "Pull product signals",
+    trigger: { kind: "schedule" },
+    steps: [
+      seedStep(
+        "signals",
+        "claude-code",
+        { model: "claude-sonnet-5", effort: "medium", approvals: "plan" },
+        "Use the PostHog MCP to pull recent product events and funnels that look broken or surprising.\n\nFor each signal worth a look, create a ticket in Backlog with enough context that tomorrow-me can grill it cold. Prefer fewer sharp tickets over a dump of noise.",
       ),
     ],
   },

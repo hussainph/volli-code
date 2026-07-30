@@ -55,13 +55,17 @@ describe("toStages", () => {
 });
 
 describe("list edits", () => {
-  it("appends at the end, running after everything", () => {
-    expect(shape(appendStep(spine("a |b"), blankStep("codex", "c")))).toBe("a |b c");
+  it("appends at the end, launching alongside everything already there", () => {
+    expect(shape(appendStep(spine("a |b"), blankStep("codex", "c")))).toBe("a |b |c");
   });
 
-  it("appends as `then` even when the new step arrives marked otherwise", () => {
-    const stray: AutomationStep = { ...blankStep("codex", "c"), join: "with" };
-    expect(shape(appendStep(spine("a"), stray))).toBe("a c");
+  it("appends as `with` even when the new step arrives marked otherwise", () => {
+    const stray: AutomationStep = { ...blankStep("codex", "c"), join: "then" };
+    expect(shape(appendStep(spine("a"), stray))).toBe("a |c");
+  });
+
+  it("keeps a first step as `then` when the list was empty", () => {
+    expect(shape(appendStep([], blankStep("codex", "a")))).toBe("a");
   });
 
   it("flips one connector and leaves the rest alone", () => {
@@ -204,5 +208,9 @@ describe("triggerSummary", () => {
 
   it("has no operand to state for a manual trigger", () => {
     expect(triggerSummary({ kind: "manual" })).toBe("Run by hand");
+  });
+
+  it("names a schedule without inventing columns", () => {
+    expect(triggerSummary({ kind: "schedule" })).toBe("On a schedule");
   });
 });

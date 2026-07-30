@@ -1,33 +1,18 @@
 /**
  * Which agent runs, on what model, how hard — as one control on one line.
  *
- * ── WHAT THIS REPLACES ────────────────────────────────────────────────────
- * `RuntimeBar` put all of this ABOVE the prompt as a labelled region: a strip
- * of five harness buttons with five logos and five names, then a MODEL row with
- * a 320px input, then an EFFORT row of five segments, then an APPROVALS row,
- * then the command ribbon. Around 180px of chrome on top of the writing, on
- * every step, always. Its defence was that an unattended run's cost and blast
- * radius are not annotations on a piece of writing.
+ * The studio can toggle between two craft faces so we can feel them in situ:
  *
- * That defence is still right and the layout was still wrong, which every
- * shipped agent composer demonstrates: Cursor, Claude Code and Warp all carry
- * the same set of choices — model, effort, approvals, context, skills — and all
- * of them render it as one thin row of small controls UNDER the field, where
- * the biggest thing on screen is the thing you are writing. Cursor goes
- * furthest and collapses model-and-effort into a single trigger reading
- * "Cursor Grok 4.5 High".
- *
- * So: one trigger that states the whole runtime in a phrase, opening a panel
- * with the actual dials. Three visible controls per step instead of twelve, and
- * nothing is gone — it moved one click away, which for a value you set once per
- * automation and read on every glance is the right trade.
- * ──────────────────────────────────────────────────────────────────────────
+ *   • `composer` — one phrase trigger ("Claude Code · opus · high") opening a
+ *     dial panel. Closest to Cursor / Claude Code.
+ *   • `pad` — harness marks as origin chips, effort as a weighted meter, model
+ *     as a quiet field. Closer to the care in the theme canvas editor.
  *
  * TWO ABSENCES ARE LOAD-BEARING. cursor-agent has no effort flag (it rides in
  * the model string as `model[effort=high]`) and pi documents no approval or
  * sandbox mode at all. Both controls are ABSENT for those harnesses rather than
  * disabled, because a greyed control says "not now" where the truth is "not a
- * thing" — see `model.ts`'s adapter table, which is where that fact lives.
+ * thing".
  */
 import * as React from "react";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
@@ -54,17 +39,8 @@ import {
   type RuntimeAxis,
 } from "./model";
 
-/**
- * The composed command, at the bottom of the panel where the choices are made.
- *
- * Every dial needs to answer "what does this actually do", and the honest
- * answer is a flag — a sentence under each control would be a paraphrase the
- * reader has to trust, where `--permission-mode acceptEdits` is the thing
- * itself, in a notation this app's entire audience already reads fluently. It
- * is also the only way to show that the five adapters spell the same three
- * ideas five different ways, which stops being a claim in a doc comment and
- * becomes something you watch happen when you click a different mark.
- */
+export type RuntimeCraft = "composer" | "pad";
+
 function CommandRibbon({ runtime }: { runtime: AutomationRuntime }) {
   return (
     <div className="overflow-x-auto border-t border-border px-2.5 py-1.5">
@@ -82,18 +58,6 @@ function CommandRibbon({ runtime }: { runtime: AutomationRuntime }) {
   );
 }
 
-/**
- * Combobox, not a select: the suggestion list is a shortcut, the text is the
- * truth. Model names churn faster than releases, so typing one that is not on
- * the list has to stay legal.
- *
- * The suggestions were pointer-only until review caught it — committing on
- * `onMouseDown`, which keyboard activation never fires, and closing on `blur`,
- * which tore the list down before Tab could reach it. So the list is driven
- * from the input instead: arrows move a highlighted index, Enter commits it,
- * Escape closes, and `aria-activedescendant` tells a screen reader which row is
- * current without moving focus off the field.
- */
 function ModelField({
   runtime,
   onChange,
@@ -139,8 +103,6 @@ function ModelField({
         value={runtime.model}
         onChange={(event) => onChange({ ...runtime, model: event.target.value })}
         onFocus={() => setOpen(true)}
-        // Deferred a frame so a click on a suggestion lands before the list
-        // unmounts underneath the pointer.
         onBlur={() => window.setTimeout(() => setOpen(false), 120)}
         onKeyDown={onKeyDown}
         spellCheck={false}
@@ -173,8 +135,6 @@ function ModelField({
                 "hover:bg-accent hover:text-foreground",
                 index === active && "bg-accent text-foreground",
               )}
-              // `onMouseDown` beats the input's blur; `onClick` is what a
-              // pointer-less activation path would reach. Both commit the same way.
               onMouseDown={(event) => {
                 event.preventDefault();
                 commit(model);
@@ -190,10 +150,7 @@ function ModelField({
   );
 }
 
-/**
- * Effort is a segmented scale, because the values ARE ordered and the ordering
- * is the only thing that makes `xhigh` mean anything.
- */
+/** Segmented effort — composer face. */
 function ScaleControl({
   axis,
   value,
@@ -215,7 +172,9 @@ function ScaleControl({
             "flex-1 cursor-pointer rounded px-1.5 py-0.5 text-label text-muted-foreground",
             "transition-[background-color,color] duration-150 ease-out",
             "hover:text-foreground motion-reduce:transition-none",
+            "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
             "aria-pressed:bg-accent aria-pressed:text-foreground",
+            "active:scale-[0.97]",
           )}
         >
           {option.value}
@@ -225,8 +184,98 @@ function ScaleControl({
   );
 }
 
-/** `Claude Code  opus-5 · high` — the whole runtime as a phrase you can read at a glance. */
-export function RuntimePicker({
+/**
+ * Effort as a weighted meter — pad face.
+ *
+ * Ordered values fill from the left; the selected stop is a lit cell, quieter
+ * cells sit behind it. Same data as {@link ScaleControl}, different material.
+ */
+function EffortPad({
+  axis,
+  value,
+  onChange,
+}: {
+  axis: RuntimeAxis;
+  value: string | null;
+  onChange: (value: string) => void;
+}) {
+  const selected = axis.options.findIndex((option) => option.value === value);
+
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Effort"
+      className="flex w-full items-stretch gap-1 rounded-lg bg-muted/40 p-1"
+    >
+      {axis.options.map((option, index) => {
+        const on = index <= selected && selected >= 0;
+        const current = option.value === value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={current}
+            onClick={() => onChange(option.value)}
+            className={cn(
+              "flex h-8 flex-1 cursor-pointer flex-col items-center justify-center rounded-md",
+              "transition-[background-color,color,transform] duration-150 ease-out",
+              "motion-reduce:transition-none active:scale-[0.97]",
+              "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+              on ? "bg-primary/20 text-primary-text" : "text-muted-foreground hover:text-foreground",
+              current && "ring-1 ring-primary/50",
+            )}
+          >
+            <span className="text-label font-medium tracking-tight">{option.value}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function HarnessStrip({
+  runtime,
+  onChange,
+}: {
+  runtime: AutomationRuntime;
+  onChange: (runtime: AutomationRuntime) => void;
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Harness"
+      className="flex flex-wrap items-center gap-1 border-b border-border p-2"
+    >
+      {LAB_HARNESS_IDS.map((id) => {
+        const on = id === runtime.harnessId;
+        return (
+          <button
+            key={id}
+            type="button"
+            role="radio"
+            aria-checked={on}
+            onClick={() => onChange(defaultRuntime(id))}
+            className={cn(
+              "flex cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-1 text-label",
+              "transition-[background-color,border-color,color,transform] duration-150 ease-out",
+              "motion-reduce:transition-none active:scale-[0.97]",
+              "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+              on
+                ? "border-primary/40 bg-primary/15 text-primary-text"
+                : "border-border text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <HarnessMark harnessId={id} tinted={on} className="size-3.5" />
+            {harnessLabelFor(id)}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ComposerTrigger({
   runtime,
   onChange,
 }: {
@@ -241,7 +290,11 @@ export function RuntimePicker({
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button variant="ghost" size="xs" className="gap-1.5">
+        <Button
+          variant="ghost"
+          size="xs"
+          className="gap-1.5 active:scale-[0.97] transition-transform duration-100 ease-out"
+        >
           <HarnessMark harnessId={runtime.harnessId} tinted />
           {harnessLabelFor(runtime.harnessId)}
           <span className="font-mono text-muted-foreground">{summary}</span>
@@ -254,17 +307,11 @@ export function RuntimePicker({
             <button
               key={id}
               type="button"
-              // Switching harness cannot carry the old model, effort or approval
-              // mode across — they are expressed in the previous adapter's
-              // dialect, and three of the five don't even share a vocabulary.
-              // Resetting to the new adapter's own defaults is the only honest
-              // move; "same prompt, other harness" is served by duplicating the
-              // step, not by a portable field.
               onClick={() => onChange(defaultRuntime(id))}
               className={cn(
                 "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-left text-ui",
                 "text-muted-foreground transition-colors duration-150 ease-out motion-reduce:transition-none",
-                "hover:bg-accent hover:text-foreground",
+                "hover:bg-accent hover:text-foreground active:scale-[0.99]",
                 id === runtime.harnessId && "text-foreground",
               )}
             >
@@ -294,14 +341,65 @@ export function RuntimePicker({
   );
 }
 
-/**
- * Approvals stays out on the row rather than inside the panel above.
- *
- * It is the one dial that decides what happens while nobody is watching, and
- * every other choice here is about quality or cost. A menu, not a scale:
- * `bypassPermissions` next to `acceptEdits` in a segmented row would imply a
- * progression that isn't there.
- */
+function PadTrigger({
+  runtime,
+  onChange,
+}: {
+  runtime: AutomationRuntime;
+  onChange: (runtime: AutomationRuntime) => void;
+}) {
+  const adapter = HARNESS_ADAPTERS[runtime.harnessId];
+  const summary = [harnessLabelFor(runtime.harnessId), runtime.effort]
+    .filter((part): part is string => part !== null && part !== "")
+    .join(" · ");
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          size="xs"
+          className="gap-1.5 border border-border/80 bg-muted/30 active:scale-[0.97] transition-[transform,background-color] duration-100 ease-out"
+        >
+          <HarnessMark harnessId={runtime.harnessId} tinted />
+          <span className="text-foreground">{summary}</span>
+          <CaretDownIcon weight="bold" className="size-3 text-muted-foreground" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-[22rem] p-0">
+        <HarnessStrip runtime={runtime} onChange={onChange} />
+        <div className="flex flex-col gap-2 p-2.5">
+          <ModelField runtime={runtime} onChange={onChange} />
+          {adapter.effort === null ? null : (
+            <EffortPad
+              axis={adapter.effort}
+              value={runtime.effort}
+              onChange={(effort) => onChange({ ...runtime, effort })}
+            />
+          )}
+        </div>
+        <CommandRibbon runtime={runtime} />
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+export function RuntimePicker({
+  runtime,
+  onChange,
+  craft = "composer",
+}: {
+  runtime: AutomationRuntime;
+  onChange: (runtime: AutomationRuntime) => void;
+  craft?: RuntimeCraft;
+}) {
+  return craft === "pad" ? (
+    <PadTrigger runtime={runtime} onChange={onChange} />
+  ) : (
+    <ComposerTrigger runtime={runtime} onChange={onChange} />
+  );
+}
+
 export function ApprovalsPicker({
   runtime,
   onChange,
@@ -315,11 +413,11 @@ export function ApprovalsPicker({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        {/* Never the adapter's first option as a stand-in for unset: the file
-            omits `approvals` entirely when it is null, so a row claiming
-            `read-only` while the file says nothing is the surface disagreeing
-            with the artifact it is a view of. */}
-        <Button variant="ghost" size="xs" className="gap-1.5 font-mono text-muted-foreground">
+        <Button
+          variant="ghost"
+          size="xs"
+          className="gap-1.5 font-mono text-muted-foreground active:scale-[0.97] transition-transform duration-100 ease-out"
+        >
           {runtime.approvals ?? <span className="font-sans italic">approvals</span>}
           <CaretDownIcon weight="bold" className="size-3" />
         </Button>

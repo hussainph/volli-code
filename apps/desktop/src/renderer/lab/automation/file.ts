@@ -49,20 +49,19 @@
  *       - id: codex
  *       - id: cursor
  *         also: true         ← starts with codex, not after it
- *       - id: triage         ← once both have finished
  *
  * The predecessor was `after: <step id>`, a named parent, which bought a general
  * tree — and a general tree is exactly what this format must not offer. Volli
  * cannot tell "that step succeeded" from harness events, because the five
  * adapters do not agree on what they emit; a shape that reads as if-then over
- * that is a shape that lies. `also` promises only what a process exit code
- * delivers.
+ * that is a shape that lies. The studio UI only authors `also` (parallel
+ * launch). A bare sequential step is still parseable for hand-edited files,
+ * but there is no affordance that writes one.
  *
  * It is also the one spelling with nothing to break. A pointer can dangle, cycle,
  * or orphan its children when a step is deleted, and every one of those needed a
  * diagnostic. A flag reads as English, cannot refer to a step that is not there,
- * and survives any rename — because it names nothing. It is the same field the
- * editor puts on the connector between two cards, spelled the same way.
+ * and survives any rename — because it names nothing.
  * ──────────────────────────────────────────────────────────────────────────
  *
  * ── ON PARSING ────────────────────────────────────────────────────────────
@@ -302,6 +301,7 @@ function readTrigger(entry: Entry | undefined, diagnostics: FileDiagnostic[]): T
     });
   }
   if (kind === "manual") return { kind: "manual" };
+  if (kind === "schedule") return { kind: "schedule" };
   if (kind !== "enters-column" && kind !== "leaves-column") {
     // Unbuilt kinds have no operand modelled yet; read them as their column
     // equivalent so the surface can still show what the file says.
@@ -603,7 +603,7 @@ export function formatAutomationFile(automation: Automation): string {
 
   lines.push("on:");
   const key = TRIGGER_FILE_KEYS[automation.trigger.kind];
-  if (automation.trigger.kind === "manual") {
+  if (automation.trigger.kind === "manual" || automation.trigger.kind === "schedule") {
     lines.push(`  ${key}:`);
   } else {
     lines.push(`  ${key}: [${automation.trigger.columns.join(", ")}]`);

@@ -1,67 +1,23 @@
 /**
  * One step: one harness, one prompt, one session — shaped like a chat composer.
  *
- * ── WHY A COMPOSER ────────────────────────────────────────────────────────
- * Line up Cursor's chat box, Claude Code's, Warp's and the shadcn prompt-input.
- * Every one of them offers the same set of choices this card does — model,
- * effort, approvals, context, skills, send — and every one of them renders as
- * ONE thin row of small controls beneath a field that dominates the frame. The
- * field is the subject; everything else is a mark on its edge.
- *
- * The previous version had it exactly inverted: a five-button harness strip, a
- * labelled MODEL row, a labelled EFFORT row, a labelled APPROVALS row and a
- * command ribbon, all stacked ABOVE the prompt. Twelve controls to get to the
- * one thing you actually came to write. Nothing has been removed — the runtime
- * collapsed into a single trigger that states itself in a phrase, and the rest
- * moved into the overflow — but the card now reads the way the reference
- * composers read, because the thing being authored is prose.
- *
- * The field's placeholder does the teaching, which is also lifted: Cursor
- * writes "Plan, Build, / for skills, @ for context" straight into the empty
- * state rather than spending buttons on discovery.
- * ──────────────────────────────────────────────────────────────────────────
- *
- * ── WHY NO COLLAPSED FACE ─────────────────────────────────────────────────
- * Steps used to have two sizes with exactly one open, because an expanded step
- * was 500px and three of them lost the shape of the automation. At this size
- * that problem is gone: a card is its prompt plus one row, so every step in an
- * automation fits on screen at once and the expand/collapse state — along with
- * "which one was open last", and its accent border — stops existing.
- * ──────────────────────────────────────────────────────────────────────────
+ * Skills live on `/` (inline at the caret). Duplicate and Remove sit on a hover
+ * strip — the corner `⋯` that used to bury both is gone. Runtime craft has two
+ * faces the studio can toggle between; see {@link RuntimePicker}.
  */
 import * as React from "react";
 import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
-import { SparkleIcon } from "@phosphor-icons/react/dist/csr/Sparkle";
-import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
 import { LockSimpleIcon } from "@phosphor-icons/react/dist/csr/LockSimple";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 
 import { Button } from "@renderer/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuPortal,
-  DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
-  DropdownMenuTrigger,
-} from "@renderer/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { cn } from "@renderer/lib/utils";
 
-import { ChipEditor, type ChipEditorHandle } from "./chip-editor";
-import { ApprovalsPicker, RuntimePicker } from "./runtime-picker";
-import {
-  APPENDED_CLI_NOTE,
-  SKILLS,
-  tokenizeInstructions,
-  type AutomationStep,
-  type Skill,
-} from "./model";
+import { ChipEditor } from "./chip-editor";
+import { ApprovalsPicker, RuntimePicker, type RuntimeCraft } from "./runtime-picker";
+import { tokenizeInstructions, APPENDED_CLI_NOTE, type AutomationStep } from "./model";
 
 /**
  * The house entrance transition, in one place because it is used on several
@@ -72,20 +28,6 @@ import {
 export const ENTER_CLASS =
   "transition-[opacity,transform,translate,scale] duration-200 ease-out starting:opacity-0 motion-reduce:transition-none";
 
-const SKILL_GROUPS: Array<{ source: Skill["source"]; label: string }> = [
-  { source: "bundled", label: "Volli" },
-  { source: "project", label: "This project" },
-  { source: "user", label: "Your machine" },
-];
-
-/**
- * `APPENDED_CLI_NOTE`, verbatim and read-only, one click away.
- *
- * Icon only. The word "Appended" was on every card of every automation, saying
- * the same thing each time about a constant — nine identical lines of prose
- * that are read once while you are learning what prose mode is and never again.
- * The lock is the reminder; the popover is the answer.
- */
 function AppendedContext() {
   return (
     <Popover>
@@ -108,133 +50,74 @@ function AppendedContext() {
   );
 }
 
-/**
- * Everything a step can do that is not "choose an agent" or "write the prompt".
- *
- * One button instead of five. Skills are grouped by {@link Skill.source} rather
- * than by harness: each vendor scans its own command directory with its own
- * escaping, so a per-harness table would need five adapters just to LIST files
- * — exactly the coupling a BYO-harness app exists to avoid. Skills are the open
- * format all of them read.
- */
-function StepMenu({
-  step,
-  onInsert,
-  onDuplicate,
-  onRemove,
-}: {
-  step: AutomationStep;
-  onInsert: (snippet: string) => void;
-  onDuplicate: (() => void) | null;
-  onRemove: (() => void) | null;
-}) {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon-xs" aria-label={`More for ${step.id}`}>
-          <DotsThreeIcon weight="bold" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-56">
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger>
-            <SparkleIcon weight="fill" />
-            Insert skill
-          </DropdownMenuSubTrigger>
-          <DropdownMenuPortal>
-            <DropdownMenuSubContent className="w-72">
-              {SKILL_GROUPS.map((group, index) => {
-                const skills = SKILLS.filter((skill) => skill.source === group.source);
-                if (skills.length === 0) return null;
-                return (
-                  <React.Fragment key={group.source}>
-                    {index > 0 ? <DropdownMenuSeparator /> : null}
-                    <DropdownMenuLabel>{group.label}</DropdownMenuLabel>
-                    {skills.map((skill) => (
-                      <DropdownMenuItem
-                        key={skill.name}
-                        onSelect={() => onInsert(skill.name)}
-                        className="justify-between gap-6"
-                      >
-                        <span className="font-mono">{skill.name}</span>
-                        <span className="text-xs text-muted-foreground">{skill.detail}</span>
-                      </DropdownMenuItem>
-                    ))}
-                  </React.Fragment>
-                );
-              })}
-            </DropdownMenuSubContent>
-          </DropdownMenuPortal>
-        </DropdownMenuSub>
-
-        {onDuplicate === null && onRemove === null ? null : (
-          <>
-            <DropdownMenuSeparator />
-            {onDuplicate === null ? null : (
-              <DropdownMenuItem onSelect={onDuplicate}>
-                <CopyIcon weight="fill" />
-                Duplicate
-              </DropdownMenuItem>
-            )}
-            {onRemove === null ? null : (
-              <DropdownMenuItem variant="destructive" onSelect={onRemove}>
-                <TrashIcon weight="fill" />
-                Remove
-              </DropdownMenuItem>
-            )}
-          </>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
 export function StepCard({
   step,
   name,
+  craft,
   onChange,
   onDuplicate,
   onRemove,
 }: {
   step: AutomationStep;
-  /**
-   * The `## heading` this step's prose lives under, editable in place — or null
-   * on a one-step automation, where the file writes no headings and naming the
-   * step would be naming something nothing will ever print.
-   */
   name: React.ReactNode | null;
+  craft: RuntimeCraft;
   onChange: (step: AutomationStep) => void;
   onDuplicate: (() => void) | null;
   onRemove: (() => void) | null;
 }) {
-  const editorRef = React.useRef<ChipEditorHandle>(null);
   const { instructions } = step;
   const tokens = tokenizeInstructions(instructions);
   const unverifiedSkills = tokens.filter((token) => token.kind === "skill" && !token.known).length;
   const strayBraces = tokens.some((token) => token.kind === "brace");
 
   return (
-    <div className="flex flex-col overflow-hidden rounded-xl border border-border bg-card">
-      {name === null ? null : (
-        <div className="flex items-center gap-2 px-3 pt-2 pb-0.5">{name}</div>
+    <div className="group/step flex flex-col overflow-hidden rounded-xl border border-border bg-card">
+      {name === null && onDuplicate === null && onRemove === null ? null : (
+        <div className="flex items-center gap-2 px-3 pt-2 pb-0.5">
+          {name}
+          <div
+            className={cn(
+              "ml-auto flex items-center gap-0.5",
+              "opacity-0 transition-opacity duration-150 ease-out motion-reduce:transition-none",
+              "group-hover/step:opacity-100 group-focus-within/step:opacity-100",
+            )}
+          >
+            {onDuplicate === null ? null : (
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label={`Duplicate ${step.id}`}
+                onClick={onDuplicate}
+                className="text-muted-foreground"
+              >
+                <CopyIcon weight="fill" />
+              </Button>
+            )}
+            {onRemove === null ? null : (
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label={`Remove ${step.id}`}
+                onClick={onRemove}
+                className="text-muted-foreground hover:text-destructive"
+              >
+                <TrashIcon weight="fill" />
+              </Button>
+            )}
+          </div>
+        </div>
       )}
 
-      {/* Flush inside the card — no border of its own, because the card already
-          is the field's edge and a second rule around the writing would make the
-          prompt look like one more setting. */}
       <ChipEditor
-        ref={editorRef}
         value={instructions}
         onChange={(value) => onChange({ ...step, instructions: value })}
         placeholder="What should this agent do? / for skills"
-        // A min and a max, never a fixed height: the editor grows with what you
-        // write and then scrolls inside itself rather than pushing the row below
-        // off the page — the same bounded-growth rule the composer's body has.
         className="min-h-24 max-h-[32vh] rounded-none border-0 bg-transparent focus-within:border-transparent"
       />
 
       <div className="flex flex-wrap items-center gap-1 px-1.5 pb-1.5">
         <RuntimePicker
+          craft={craft}
           runtime={step.runtime}
           onChange={(runtime) => onChange({ ...step, runtime })}
         />
@@ -242,20 +125,11 @@ export function StepCard({
           runtime={step.runtime}
           onChange={(runtime) => onChange({ ...step, runtime })}
         />
-        <div className="ml-auto flex items-center gap-0.5">
+        <div className="ml-auto">
           <AppendedContext />
-          <StepMenu
-            step={step}
-            onInsert={(snippet) => editorRef.current?.insert(snippet)}
-            onDuplicate={onDuplicate}
-            onRemove={onRemove}
-          />
         </div>
       </div>
 
-      {/* Both notes can be true at once, so they stack rather than compete for
-          one slot — and they sit last, because appearing and disappearing as you
-          type must not shift the buttons you are aiming at. */}
       {strayBraces || unverifiedSkills > 0 ? (
         <div className="flex flex-col gap-1 border-t border-border bg-muted/30 px-3 py-1.5">
           {strayBraces ? (

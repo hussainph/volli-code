@@ -268,14 +268,20 @@ describe("formatAutomationFile", () => {
     const text = formatAutomationFile(SEEDED_AUTOMATIONS[2]);
     expect(text).toContain("## codex");
     expect(text).toContain("## cursor");
-    expect(text).toContain("## triage");
+    expect(text).not.toContain("## triage");
   });
 
   it("marks every step but the first of a stage with `also`", () => {
     const text = formatAutomationFile(SEEDED_AUTOMATIONS[2]);
-    // Exactly one: codex opens the stage, cursor joins it, triage opens the next.
+    // Exactly one: codex opens the stage, cursor joins it. No sequential triage.
     expect(text.match(/also: true/g)).toHaveLength(1);
     expect(text).toContain("  - id: cursor\n    also: true\n");
+  });
+
+  it("writes a schedule trigger without a column list", () => {
+    const signals = SEEDED_AUTOMATIONS.find((automation) => automation.id === "atm-signals");
+    expect(signals).toBeDefined();
+    expect(formatAutomationFile(signals!)).toContain("on:\n  schedule:");
   });
 
   it("does not write a dial the adapter does not have", () => {
@@ -301,6 +307,6 @@ describe("paths", () => {
     expect(automationFilePath(SEEDED_AUTOMATIONS[2], "volli-code")).toBe(
       "projects/volli-code/automations/two-opinion-review.md",
     );
-    expect(automationFilePath(SEEDED_AUTOMATIONS[4], "volli-code")).toBe("automations/tdd-loop.md");
+    expect(automationFilePath(SEEDED_AUTOMATIONS[5], "volli-code")).toBe("automations/tdd-loop.md");
   });
 });

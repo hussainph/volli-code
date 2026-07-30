@@ -1,49 +1,30 @@
 /**
  * Automations: an index on the left, the file you are editing in the middle, and
- * a board you can flip to when the question is *where does this fire*.
+ * a board you can flip to when the question is *where does this fire* — and, as
+ * of this pass, *in what digit order*.
  *
  * ── WHY A RAIL AND NOT A DRILL-IN ─────────────────────────────────────────
- * The previous pass made the board the front door and the editor a place you
- * navigated to. That inverted the ratio of the work: authoring is where all the
- * time goes, and putting it behind a back button meant every comparison between
- * two automations — the reason you have five of them — cost two navigations.
- *
- * So the list is a persistent rail and switching automations is one click, the
- * same relationship a file tree has with an editor. The board becomes what it
- * actually is: a second READING of the same set, answering a question the rail
- * cannot ("what fires in Needs Review?"), reached from a toggle rather than
- * from the back of a stack.
- *
- * An automation that fires in two columns appears in both lanes of that board.
- * It is one file either way — showing it once would mean picking a lane to lie
- * about, and the duplication is the honest render of `columns: [backlog, todo]`.
+ * Authoring is where the time goes. The list is a persistent rail; switching
+ * automations is one click. The board is a second reading *and* the place you
+ * drag to set 1–9 for the drag picker (shared with `automation-trigger` via
+ * {@link useColumnOrder}). Arming a column's plain-drop default is a different
+ * act, and it lives on the board canvas — not here.
  * ──────────────────────────────────────────────────────────────────────────
  *
- * ── THE SPINE IS A LIST WITH LABELLED EDGES ───────────────────────────────
- * The version before this one grouped steps into rows and called the groups
- * STAGES, with a hover-revealed `+ Stage` between rows and a hover-revealed
- * `+ Alongside` inside one. Two invented nouns, and both buttons invisible
- * until the pointer happened to be over the right region — no signifier
- * anywhere that either existed.
+ * ── THE SPINE IS ONE PARALLEL STAGE ───────────────────────────────────────
+ * Volli cannot tell "the work is done" from a harness Stop hook. So this page
+ * only authors launches that start together: one agent, or several alongside
+ * each other. Sequencing across launches is a column move (or a schedule),
+ * written as separate automations. The add control says that out loud —
+ * `Add alongside` — rather than adding a step and then asking how it joins.
  *
- * What made the node canvas easy was never the canvas. It was that every
- * affordance was permanently on screen and shaped like what it did. So:
- *
- *   • ONE add control, always visible, full width, at the end of the list —
- *     the same shape as Cursor's `+ Add Trigger` and `+ Add Tool or MCP`.
- *   • The relationship between two steps is a control ON the edge between
- *     them, always visible, reading `then` or `at the same time`. It is the
- *     `also: true` field of the file, spelled in the words a person would use.
- *
- * No nouns to learn, nothing hidden, and one list rather than a grid — a
- * simultaneous pair reads from the edge label instead of from a layout the
- * reader has to infer.
+ * Skills open inline on `/`. Rename is Linear-shaped. Runtime craft toggles
+ * between a composer phrase and a pad of dials so both can be felt in situ.
  * ──────────────────────────────────────────────────────────────────────────
  */
 import * as React from "react";
-import { ArrowDownIcon } from "@phosphor-icons/react/dist/csr/ArrowDown";
 import { ArrowsSplitIcon } from "@phosphor-icons/react/dist/csr/ArrowsSplit";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
+import { DotsSixVerticalIcon } from "@phosphor-icons/react/dist/csr/DotsSixVertical";
 import { FileCodeIcon } from "@phosphor-icons/react/dist/csr/FileCode";
 import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
 import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
@@ -54,19 +35,22 @@ import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import { TICKET_STATUS_LABELS, TICKET_STATUSES, type TicketStatus } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "@renderer/components/ui/dropdown-menu";
 import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { cn } from "@renderer/lib/utils";
 
+import {
+  digitFor,
+  forgetAutomation,
+  getColumnOrder,
+  offeredForColumn,
+  reorderInColumn,
+  useColumnOrder,
+} from "../automation/column-order";
 import { HarnessMark } from "../automation/harness-identity";
+import { InlineTitle, StepIdField } from "../automation/inline-title";
 import { StepCard } from "../automation/step-card";
 import { TriggerCard } from "../automation/trigger-card";
+import type { RuntimeCraft } from "../automation/runtime-picker";
 import {
   APP_DATA_DIR,
   automationFilePath,
@@ -80,33 +64,24 @@ import {
   duplicateStep,
   freshStepId,
   harnessTrail,
+  isOffBoardTrigger,
   removeStep,
   renameStep,
   replaceStep,
   SEEDED_AUTOMATIONS,
-  setJoin,
   triggerSummary,
   type Automation,
   type AutomationScope,
   type AutomationStep,
-  type StepJoin,
 } from "../automation/model";
 
 export const title = "Automation · studio";
-export const note = "A rail to pick one, a composer to write it, a board to see where it fires.";
+export const note =
+  "Parallel launches, / skills, board-ranked digits — toggle runtime craft top-right.";
 export const viewport = "window" as const;
 
 /* ------------------------------------------------------------ run state */
 
-/**
- * What an automation is doing right now.
- *
- * Lab fiction, and the only fiction here — everything else round-trips through
- * the real format. It exists because the board's whole claim is that it answers
- * a question the file cannot, and a board of idle rectangles cannot demonstrate
- * that. `idle` renders as NOTHING: it is the common case, and a badge saying so
- * on every row would spend the silhouette these surfaces exist to show.
- */
 type RunState =
   | { kind: "idle" }
   | { kind: "running"; ticket: string }
@@ -123,15 +98,8 @@ function runStateOf(id: string): RunState {
   return RUN_STATE[id] ?? { kind: "idle" };
 }
 
-/**
- * The project these seeds belong to. Lab fiction: the shipped surface reads it
- * off the Project record, which is also what keys the automations directory —
- * a ticket's worktree is a different PATH than its project root, so a
- * path-keyed store would lose every automation the moment one was created.
- */
 const LAB_PROJECT_SLUG = "volli-code";
 
-/** Only the running one pulses — two moving states means neither reads as urgent. */
 function RunDot({ state }: { state: RunState }) {
   const reducedMotion = useReducedMotion();
   if (state.kind === "idle") return null;
@@ -187,6 +155,7 @@ function IndexRow({
         "flex w-full cursor-pointer flex-col gap-0.5 rounded-md px-2 py-1.5 text-left",
         "transition-[background-color] duration-150 ease-out motion-reduce:transition-none",
         "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+        "active:scale-[0.99]",
         selected ? "bg-accent" : "hover:bg-accent/50",
       )}
     >
@@ -215,11 +184,6 @@ function IndexRow({
   );
 }
 
-/**
- * Grouped by scope, because scope is the one property of an automation that is
- * not visible anywhere on its own row — a global automation and a project one
- * look identical, and the difference is which repos it fires in.
- */
 function IndexRail({
   automations,
   selectedId,
@@ -250,7 +214,7 @@ function IndexRail({
                 "ml-auto grid size-5 shrink-0 cursor-pointer place-items-center rounded text-muted-foreground",
                 "opacity-0 group-focus-within/group:opacity-100 group-hover/group:opacity-100 focus-visible:opacity-100",
                 "transition-[opacity,color] duration-150 ease-out motion-reduce:transition-none",
-                "hover:text-foreground",
+                "hover:text-foreground active:scale-[0.97]",
                 "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
               )}
             >
@@ -270,8 +234,6 @@ function IndexRail({
         </div>
       ))}
 
-      {/* Named once, at the foot of the list the paths are relative to — rather
-          than repeated in full on every automation's header. */}
       <p className="mt-auto px-2 pt-3 font-mono text-label break-words text-muted-foreground/60">
         {APP_DATA_DIR}
       </p>
@@ -281,23 +243,80 @@ function IndexRail({
 
 /* ------------------------------------------------------------- the board */
 
-function BoardCard({ automation, onOpen }: { automation: Automation; onOpen: () => void }) {
+function BoardCard({
+  automation,
+  digit,
+  dragging,
+  onOpen,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onDragEnd,
+}: {
+  automation: Automation;
+  digit: number | null;
+  dragging: boolean;
+  onOpen: () => void;
+  onDragStart: () => void;
+  onDragOver: (event: React.DragEvent) => void;
+  onDrop: () => void;
+  onDragEnd: () => void;
+}) {
   const state = runStateOf(automation.id);
   return (
-    <button
-      type="button"
-      onClick={onOpen}
+    <div
+      draggable
+      onDragStart={(event) => {
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", automation.id);
+        onDragStart();
+      }}
+      onDragOver={onDragOver}
+      onDrop={(event) => {
+        event.preventDefault();
+        onDrop();
+      }}
+      onDragEnd={onDragEnd}
       className={cn(
-        "flex w-full cursor-pointer flex-col gap-1.5 rounded-lg border bg-card px-2.5 py-2 text-left",
-        "transition-[border-color,opacity] duration-150 ease-out motion-reduce:transition-none",
-        "hover:border-muted-foreground/40",
-        "outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
+        "flex w-full flex-col gap-1.5 rounded-lg border bg-card px-2.5 py-2 text-left",
+        "transition-[border-color,opacity,transform] duration-150 ease-out motion-reduce:transition-none",
+        "outline-none",
         state.kind === "needs-you" ? "border-primary/50" : "border-border",
         state.kind === "off" && "opacity-55",
+        dragging && "opacity-40 scale-[0.98]",
       )}
     >
-      <span className="truncate text-ui text-foreground">{automation.name || "Untitled"}</span>
-      <span className="flex items-center justify-between gap-2">
+      <div className="flex items-start gap-1.5">
+        <span
+          aria-hidden
+          className="mt-0.5 cursor-grab text-muted-foreground/50 active:cursor-grabbing"
+        >
+          <DotsSixVerticalIcon weight="bold" className="size-3.5" />
+        </span>
+        {digit === null ? null : (
+          <span
+            className={cn(
+              "grid size-5 shrink-0 place-items-center rounded-md font-mono text-label",
+              digit === 1
+                ? "bg-primary/20 text-primary-text"
+                : "bg-muted text-muted-foreground",
+            )}
+          >
+            {digit}
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={onOpen}
+          className={cn(
+            "min-w-0 flex-1 cursor-pointer truncate text-left text-ui text-foreground",
+            "outline-none focus-visible:underline",
+          )}
+        >
+          {automation.name || "Untitled"}
+        </button>
+      </div>
+      <span className="flex items-center justify-between gap-2 pl-5">
         <span className="flex items-center gap-1">
           {harnessTrail(automation).map((harnessId) => (
             <HarnessMark key={harnessId} harnessId={harnessId} labelled />
@@ -306,19 +325,15 @@ function BoardCard({ automation, onOpen }: { automation: Automation; onOpen: () 
         <RunBadge state={state} />
       </span>
       {state.kind === "needs-you" ? (
-        <span className="truncate text-label text-muted-foreground">{state.why}</span>
+        <span className="truncate pl-5 text-label text-muted-foreground">{state.why}</span>
       ) : null}
-    </button>
+    </div>
   );
 }
 
 /**
- * The same set, read by column instead of by name.
- *
- * A card appears in every lane its trigger names. That is not a rendering
- * shortcut — `enters-column: [backlog, todo]` really does fire in two places,
- * and a board that deduplicated would be answering "what fires here?" with a
- * maybe.
+ * Rank the digits for the drag picker. Drag within a lane to set 1–9.
+ * Arming (plain-drop default) is deliberately absent — that lives on the canvas.
  */
 function BoardView({
   automations,
@@ -329,36 +344,42 @@ function BoardView({
   onOpen: (id: string) => void;
   onCreate: (column: TicketStatus) => void;
 }) {
-  const offBoard = automations.filter((automation) => automation.trigger.kind === "manual");
+  const [order, setOrder] = useColumnOrder();
+  const [drag, setDrag] = React.useState<{ status: TicketStatus; index: number } | null>(null);
+  const offBoard = automations.filter((automation) => isOffBoardTrigger(automation.trigger));
 
   return (
     <div className="min-h-0 flex-1 overflow-auto p-4">
       <div className="flex gap-4">
-        {/*
-         * Everything that fires without a column. Beside the lanes rather than
-         * in them because these are the triggers whose job may be to CREATE a
-         * ticket — a scheduled automation does not react to a column, it enters
-         * the board — so a lane would claim they fire somewhere on it.
-         */}
         <div className="flex w-44 shrink-0 flex-col gap-2 border-r border-dashed border-border pr-4">
           <p className="flex h-8 items-center text-label text-muted-foreground uppercase">
             Off board
           </p>
           {offBoard.map((automation) => (
-            <BoardCard
+            <button
               key={automation.id}
-              automation={automation}
-              onOpen={() => onOpen(automation.id)}
-            />
+              type="button"
+              onClick={() => onOpen(automation.id)}
+              className={cn(
+                "flex w-full cursor-pointer flex-col gap-1.5 rounded-lg border border-border bg-card px-2.5 py-2 text-left",
+                "transition-[border-color] duration-150 ease-out hover:border-muted-foreground/40",
+                "outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
+                "active:scale-[0.99]",
+              )}
+            >
+              <span className="truncate text-ui text-foreground">
+                {automation.name || "Untitled"}
+              </span>
+              <span className="text-label text-muted-foreground">
+                {triggerSummary(automation.trigger)}
+              </span>
+            </button>
           ))}
         </div>
 
         <div className="grid min-w-0 flex-1 grid-cols-5 gap-3">
           {TICKET_STATUSES.map((status) => {
-            const inLane = automations.filter(
-              (automation) =>
-                automation.trigger.kind !== "manual" && automation.trigger.columns.includes(status),
-            );
+            const inLane = offeredForColumn(automations, status, order);
             return (
               <div key={status} className="group/lane flex min-w-0 flex-col gap-2">
                 <div className="flex h-8 items-center gap-2 text-label text-muted-foreground uppercase">
@@ -372,18 +393,30 @@ function BoardView({
                       "ml-auto grid size-5 shrink-0 cursor-pointer place-items-center rounded",
                       "opacity-0 group-focus-within/lane:opacity-100 group-hover/lane:opacity-100 focus-visible:opacity-100",
                       "transition-[opacity,color] duration-150 ease-out motion-reduce:transition-none",
-                      "hover:text-foreground",
+                      "hover:text-foreground active:scale-[0.97]",
                       "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
                     )}
                   >
                     <PlusIcon weight="bold" className="size-3" />
                   </button>
                 </div>
-                {inLane.map((automation) => (
+                {inLane.map((automation, index) => (
                   <BoardCard
-                    key={automation.id}
+                    key={`${status}-${automation.id}`}
                     automation={automation}
+                    digit={digitFor(automations, status, order, automation.id)}
+                    dragging={drag?.status === status && drag.index === index}
                     onOpen={() => onOpen(automation.id)}
+                    onDragStart={() => setDrag({ status, index })}
+                    onDragOver={(event) => {
+                      if (drag === null || drag.status !== status) return;
+                      event.preventDefault();
+                      if (drag.index === index) return;
+                      setOrder(reorderInColumn(automations, order, status, drag.index, index));
+                      setDrag({ status, index });
+                    }}
+                    onDrop={() => setDrag(null)}
+                    onDragEnd={() => setDrag(null)}
                   />
                 ))}
               </div>
@@ -397,137 +430,29 @@ function BoardView({
 
 /* -------------------------------------------------------------- the spine */
 
-/**
- * The step id, committed on blur or Enter rather than per keystroke.
- *
- * Per-keystroke was the rename bug: the id is this step's React key and its
- * `## heading`, so every character re-keyed the row, remounted the input and put
- * the caret at the end — you could type `tri` and get `t`, `r`, `i` as three
- * separate one-character renames. A draft makes the intermediate states local
- * and lets an invalid one (empty, or already taken) simply revert.
- */
-function StepIdField({
-  id,
-  taken,
-  onCommit,
-}: {
-  id: string;
-  taken: Set<string>;
-  onCommit: (next: string) => void;
-}) {
-  const [draft, setDraft] = React.useState(id);
-  React.useEffect(() => setDraft(id), [id]);
-
-  const trimmed = draft.trim();
-  const invalid = trimmed === "" || (trimmed !== id && taken.has(trimmed));
-
-  function commit() {
-    if (invalid) {
-      setDraft(id);
-      return;
-    }
-    if (trimmed !== id) onCommit(trimmed);
-  }
-
-  return (
-    <input
-      value={draft}
-      onChange={(event) => setDraft(event.target.value)}
-      onBlur={commit}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") event.currentTarget.blur();
-        if (event.key === "Escape") {
-          setDraft(id);
-          event.currentTarget.blur();
-        }
-      }}
-      spellCheck={false}
-      aria-label="Step name"
-      aria-invalid={invalid}
-      className={cn(
-        "min-w-0 flex-1 rounded bg-transparent px-1 py-0.5 font-mono text-label text-muted-foreground",
-        "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
-        "aria-invalid:text-destructive",
-      )}
-    />
-  );
-}
-
-/**
- * The edge between two steps, and the only control over when the lower one
- * starts.
- *
- * It sits ON the connector for the same reason a graph editor puts a label on
- * an edge: the relationship belongs to the gap, not to either card. It is
- * always visible — an affordance you have to discover by hovering is an
- * affordance most people never learn exists — and it says `then` or `at the
- * same time`, which are the words rather than a vocabulary.
- */
-function Connector({ join, onChange }: { join: StepJoin; onChange: (join: StepJoin) => void }) {
-  const together = join === "with";
-  return (
-    <div className="relative flex h-9 items-center">
-      {/* Drawn on `muted-foreground`, not `border`: the flow between two steps
-          is the one thing this column exists to show, and on the border token it
-          came out fainter than the outline of the cards it was joining. */}
-      <span aria-hidden className="absolute left-4 h-full w-px bg-muted-foreground/25" />
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            variant="ghost"
-            size="xs"
-            className={cn(
-              "relative ml-7 gap-1.5 border bg-background",
-              together
-                ? "border-primary/40 text-primary-text"
-                : "border-border text-muted-foreground",
-            )}
-          >
-            {together ? <ArrowsSplitIcon weight="bold" /> : <ArrowDownIcon weight="bold" />}
-            {together ? "at the same time" : "then"}
-            <CaretDownIcon weight="bold" className="size-3 opacity-60" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-52">
-          <DropdownMenuRadioGroup
-            value={join}
-            onValueChange={(value) => onChange(value as StepJoin)}
-          >
-            <DropdownMenuRadioItem value="then">then</DropdownMenuRadioItem>
-            <DropdownMenuRadioItem value="with">at the same time</DropdownMenuRadioItem>
-          </DropdownMenuRadioGroup>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
-  );
-}
-
-/**
- * Always on screen, full width, and shaped like the thing it makes.
- *
- * Lifted from Cursor's automation page, where `+ Add Trigger` and `+ Add Tool
- * or MCP` are permanent dashed rows rather than hover-revealed marks. The whole
- * reason a node canvas felt easy was that its handles were always there.
- */
-function AddStep({ onClick }: { onClick: () => void }) {
+function AddAlongside({ onClick, empty }: { onClick: () => void; empty: boolean }) {
   return (
     <button
       type="button"
       onClick={onClick}
       className={cn(
         "flex w-full cursor-pointer items-center gap-2 rounded-xl border border-dashed border-border px-3 py-3 text-ui text-muted-foreground",
-        "transition-[background-color,border-color,color] duration-150 ease-out motion-reduce:transition-none",
+        "transition-[background-color,border-color,color,transform] duration-150 ease-out motion-reduce:transition-none",
         "hover:border-muted-foreground/50 hover:bg-accent/40 hover:text-foreground",
+        "active:scale-[0.995]",
         "outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
       )}
     >
-      <PlusIcon weight="bold" className="size-3.5 shrink-0" />
-      Add step
+      {empty ? (
+        <PlusIcon weight="bold" className="size-3.5 shrink-0" />
+      ) : (
+        <ArrowsSplitIcon weight="bold" className="size-3.5 shrink-0" />
+      )}
+      {empty ? "Add agent" : "Add alongside"}
     </button>
   );
 }
 
-/** A muted heading over each block, so the page reads as a form rather than a canvas. */
 function Section({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <section className="flex flex-col gap-2">
@@ -536,8 +461,6 @@ function Section({ label, children }: { label: string; children: React.ReactNode
     </section>
   );
 }
-
-/* ------------------------------------------------------------ the source */
 
 function Diagnostics({ diagnostics }: { diagnostics: FileDiagnostic[] }) {
   if (diagnostics.length === 0) return null;
@@ -566,20 +489,18 @@ function Diagnostics({ diagnostics }: { diagnostics: FileDiagnostic[] }) {
 
 function Editor({
   automation,
+  craft,
   onChange,
   onDelete,
 }: {
   automation: Automation;
+  craft: RuntimeCraft;
   onChange: (automation: Automation) => void;
   onDelete: () => void;
 }) {
   const [sourceOpen, setSourceOpen] = React.useState(false);
   const [source, setSource] = React.useState(() => formatAutomationFile(automation));
   const [diagnostics, setDiagnostics] = React.useState<FileDiagnostic[]>([]);
-
-  // Which side spoke last. Without it, regenerating the file from the model on
-  // every keystroke would rewrite the textarea you are typing into and put the
-  // caret back at the end of it.
   const fromSource = React.useRef(false);
 
   React.useEffect(() => {
@@ -595,20 +516,8 @@ function Editor({
     setSource(text);
     const parsed = parseAutomationFile(text, automation.name);
     setDiagnostics(parsed.diagnostics);
-
-    // An erroring parse must NOT reach the model. `parseAutomationFile` always
-    // returns its best reading, and when the frontmatter is unopened or
-    // unclosed that reading is an empty automation — so deleting a `---` while
-    // typing used to commit a step-less automation, and toggling the panel shut
-    // then regenerated the file from it. Every prompt in the automation, gone,
-    // with no undo. The text you typed stays on screen either way; the
-    // diagnostics below say why it has not been applied yet.
     if (parsed.diagnostics.some((diagnostic) => diagnostic.severity === "error")) return;
-
     fromSource.current = true;
-    // The id is the automation's identity in this session, not something the
-    // file names — keeping it means editing the name in the textarea renames the
-    // automation rather than replacing it with a stranger.
     onChange({ ...parsed.automation, id: automation.id });
   }
 
@@ -619,9 +528,6 @@ function Editor({
   }
 
   const taken = new Set(steps.map((step) => step.id));
-  // Ids only reach the file as `## headings` once there is more than one step to
-  // head. Showing the field on a one-step automation would be offering to name
-  // something nothing will ever print.
   const named = steps.length > 1;
   const errors = diagnostics.filter((diagnostic) => diagnostic.severity === "error").length;
 
@@ -629,20 +535,12 @@ function Editor({
     <div className="flex min-h-0 flex-1">
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
-          <input
+          <InlineTitle
             value={automation.name}
-            onChange={(event) => onChange({ ...automation, name: event.target.value })}
-            placeholder="Name"
-            aria-label="Automation name"
-            className={cn(
-              "min-w-0 flex-1 rounded bg-transparent px-1.5 py-0.5 text-ui text-foreground",
-              "outline-none placeholder:text-muted-foreground",
-              "focus-visible:ring-[3px] focus-visible:ring-ring/50",
-            )}
+            onChange={(name) => onChange({ ...automation, name })}
+            placeholder="Name this automation"
+            ariaLabel="Automation name"
           />
-          {/* Relative to {@link APP_DATA_DIR}, which is named once above the
-              rail rather than repeated on every automation — the shipped
-              version would put a Reveal in Finder action here instead. */}
           <span className="shrink-0 font-mono text-label text-muted-foreground">
             {automationFilePath(automation, LAB_PROJECT_SLUG)}
           </span>
@@ -671,17 +569,13 @@ function Editor({
               />
             </Section>
 
-            <Section label="Steps">
-              {steps.map((step, index) => (
-                <React.Fragment key={step.id}>
-                  {index === 0 ? null : (
-                    <Connector
-                      join={step.join}
-                      onChange={(join) => patchSteps(setJoin(steps, step.id, join))}
-                    />
-                  )}
+            <Section label={steps.length > 1 ? "Agents — launch together" : "Agent"}>
+              <div className="flex flex-col gap-2">
+                {steps.map((step) => (
                   <StepCard
+                    key={step.id}
                     step={step}
+                    craft={craft}
                     name={
                       named ? (
                         <StepIdField
@@ -701,19 +595,18 @@ function Editor({
                       steps.length > 1 ? () => patchSteps(removeStep(steps, step.id)) : null
                     }
                   />
-                </React.Fragment>
-              ))}
+                ))}
 
-              <AddStep
-                onClick={() => {
-                  // The harness of the step above, because the overwhelmingly
-                  // common second step is "the same agent, next instruction".
-                  const harnessId = steps.at(-1)?.runtime.harnessId ?? "claude-code";
-                  patchSteps(
-                    appendStep(steps, blankStep(harnessId, freshStepId(steps, harnessId))),
-                  );
-                }}
-              />
+                <AddAlongside
+                  empty={steps.length === 0}
+                  onClick={() => {
+                    const harnessId = steps.at(-1)?.runtime.harnessId ?? "claude-code";
+                    patchSteps(
+                      appendStep(steps, blankStep(harnessId, freshStepId(steps, harnessId))),
+                    );
+                  }}
+                />
+              </div>
             </Section>
           </div>
         </div>
@@ -721,9 +614,6 @@ function Editor({
 
       {sourceOpen ? (
         <aside className="flex w-[34rem] min-w-0 shrink-0 flex-col border-l border-border">
-          {/* Editable, and that is the point: the file is what an Automation IS,
-              so a source panel you can only read would be asserting the opposite
-              — that the file is a report the UI prints. */}
           <textarea
             value={source}
             onChange={(event) => editSource(event.target.value)}
@@ -761,8 +651,8 @@ function ViewToggle({ view, onChange }: { view: View; onChange: (view: View) => 
           aria-pressed={view === value}
           className={cn(
             "flex cursor-pointer items-center gap-1.5 rounded px-2 py-0.5 text-label text-muted-foreground",
-            "transition-[background-color,color] duration-150 ease-out motion-reduce:transition-none",
-            "hover:text-foreground",
+            "transition-[background-color,color,transform] duration-150 ease-out motion-reduce:transition-none",
+            "hover:text-foreground active:scale-[0.97]",
             "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
             "aria-pressed:bg-accent aria-pressed:text-foreground",
           )}
@@ -775,10 +665,46 @@ function ViewToggle({ view, onChange }: { view: View; onChange: (view: View) => 
   );
 }
 
+function CraftToggle({
+  craft,
+  onChange,
+}: {
+  craft: RuntimeCraft;
+  onChange: (craft: RuntimeCraft) => void;
+}) {
+  const options: Array<{ value: RuntimeCraft; label: string }> = [
+    { value: "composer", label: "Composer" },
+    { value: "pad", label: "Pad" },
+  ];
+  return (
+    <div className="flex items-center gap-0.5 rounded-md border border-border p-0.5">
+      {options.map(({ value, label }) => (
+        <button
+          key={value}
+          type="button"
+          onClick={() => onChange(value)}
+          aria-pressed={craft === value}
+          className={cn(
+            "cursor-pointer rounded px-2 py-0.5 text-label text-muted-foreground",
+            "transition-[background-color,color,transform] duration-150 ease-out motion-reduce:transition-none",
+            "hover:text-foreground active:scale-[0.97]",
+            "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+            "aria-pressed:bg-accent aria-pressed:text-foreground",
+          )}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function AutomationStudioScratch() {
   const [automations, setAutomations] = React.useState<Automation[]>(SEEDED_AUTOMATIONS);
   const [selectedId, setSelectedId] = React.useState<string | null>(SEEDED_AUTOMATIONS[0].id);
   const [view, setView] = React.useState<View>("list");
+  const [craft, setCraft] = React.useState<RuntimeCraft>("composer");
+  const [, setOrder] = useColumnOrder();
 
   const selected = automations.find((automation) => automation.id === selectedId) ?? null;
   const nextId = React.useRef(1);
@@ -809,6 +735,7 @@ export default function AutomationStudioScratch() {
         <LightningIcon weight="fill" aria-hidden className="size-3.5 text-muted-foreground" />
         <h1 className="text-ui text-foreground">Automations</h1>
         <div className="ml-auto flex items-center gap-2">
+          <CraftToggle craft={craft} onChange={setCraft} />
           <ViewToggle view={view} onChange={setView} />
           <Button variant="ghost" size="xs" onClick={() => create("project", null)}>
             <PlusIcon />
@@ -839,12 +766,14 @@ export default function AutomationStudioScratch() {
             <Editor
               key={selected.id}
               automation={selected}
+              craft={craft}
               onChange={(next) =>
                 setAutomations((current) =>
                   current.map((automation) => (automation.id === next.id ? next : automation)),
                 )
               }
               onDelete={() => {
+                setOrder(forgetAutomation(getColumnOrder(), selected.id));
                 setAutomations((current) =>
                   current.filter((automation) => automation.id !== selected.id),
                 );

@@ -1,33 +1,18 @@
 /**
  * When this Automation fires.
  *
- * ── DESIGNED FOR EIGHT, BUILT FOR THREE ───────────────────────────────────
- * v1 fires on one thing: a ticket entering a column. The roadmap is explicitly
- * bigger and explicitly meta — automations that fire when checks go green, when
- * a label lands, on a schedule, or on an event from another tracker, and whose
- * job may be to CREATE a ticket rather than to work one. Every one of those is a
- * different operand behind the same question.
+ * v1's honest triggers: board column moves, run-by-hand, and schedule (off-board
+ * intake). Future kinds stay in the picker as disabled rows so the control is
+ * load-tested at eight entries rather than rebuilt the first time one lands.
  *
- * So the control is a KIND picker plus a kind-specific operand, and the picker
- * renders the unbuilt kinds as disabled rows in their real groups. That is not a
- * roadmap tease; it is the load test. A picker that reads well with one entry
- * and badly with eight has to be rebuilt the first time a trigger is added, and
- * this scratch exists to find that out now rather than then.
- *
- * The three v1 kinds are all Board kinds, which is itself worth looking at: with
- * `Outside Volli` sitting there empty, the grouping either carries the future
- * shape or looks like padding. That judgement is the point.
- * ──────────────────────────────────────────────────────────────────────────
- *
- * The bolt, and the absence of any connector above this card, are lifted from
- * n8n — its trigger nodes have a rounded left edge and a bolt WHERE the input
- * connector would be, so the geometry itself says nothing flows into this. Here
- * that costs one icon and one missing line, and it is the difference between a
- * step list with a header and a step list whose first entry is a different kind
- * of thing.
+ * Columns are a mini board strip — five equal cells that light when armed —
+ * not a dump of pills. The silhouette should feel related to the real board
+ * the drag picker already polished.
  */
 import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
+import { ClockIcon } from "@phosphor-icons/react/dist/csr/Clock";
+import { HandPointingIcon } from "@phosphor-icons/react/dist/csr/HandPointing";
 import { TICKET_STATUS_LABELS, TICKET_STATUSES, type TicketStatus } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
@@ -44,18 +29,14 @@ import { cn } from "@renderer/lib/utils";
 
 import {
   blankTrigger,
+  isOffBoardTrigger,
   TRIGGER_GROUPS,
   TRIGGER_KINDS,
   type Trigger,
   type TriggerKind,
 } from "./model";
 
-/**
- * The whole board, as toggles. A checkbox menu would be smaller and would hide
- * the one thing worth seeing — that this fires in Doing and NOT in Needs Review
- * is a fact about the board, and the board is five items long.
- */
-function ColumnToggles({
+function ColumnStrip({
   columns,
   onChange,
 }: {
@@ -73,28 +54,33 @@ function ColumnToggles({
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-1">
-      {TICKET_STATUSES.map((status) => (
-        <button
-          key={status}
-          type="button"
-          onClick={() => toggle(status)}
-          aria-pressed={columns.includes(status)}
-          className={cn(
-            "cursor-pointer rounded-full border border-border px-2.5 py-0.5 text-label text-muted-foreground",
-            "transition-[background-color,color,border-color] duration-150 ease-out",
-            "hover:text-foreground motion-reduce:transition-none",
-            // The house focus treatment, matched to `Button`'s. These are raw
-            // buttons rather than the primitive because they are a five-item
-            // toggle group, and they were the only tab stops on this card that
-            // arrived silently.
-            "outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
-            "aria-pressed:border-primary/40 aria-pressed:bg-primary/15 aria-pressed:text-primary-text",
-          )}
-        >
-          {TICKET_STATUS_LABELS[status]}
-        </button>
-      ))}
+    <div
+      role="group"
+      aria-label="Columns"
+      className="grid flex-1 grid-cols-5 gap-0.5 rounded-lg bg-muted/35 p-0.5"
+    >
+      {TICKET_STATUSES.map((status) => {
+        const on = columns.includes(status);
+        return (
+          <button
+            key={status}
+            type="button"
+            onClick={() => toggle(status)}
+            aria-pressed={on}
+            className={cn(
+              "cursor-pointer rounded-md px-1 py-1.5 text-center text-label",
+              "transition-[background-color,color,transform,box-shadow] duration-150 ease-out",
+              "motion-reduce:transition-none active:scale-[0.97]",
+              "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+              on
+                ? "bg-card text-foreground shadow-sm ring-1 ring-primary/35"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {TICKET_STATUS_LABELS[status]}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -107,19 +93,27 @@ function KindPicker({
   onChange: (trigger: Trigger) => void;
 }) {
   const kinds = Object.keys(TRIGGER_KINDS) as TriggerKind[];
+  const Icon =
+    trigger.kind === "schedule"
+      ? ClockIcon
+      : trigger.kind === "manual"
+        ? HandPointingIcon
+        : LightningIcon;
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="xs" className="gap-1.5 border border-border">
+        <Button
+          variant="ghost"
+          size="xs"
+          className="gap-1.5 border border-border active:scale-[0.97] transition-transform duration-100 ease-out"
+        >
+          <Icon weight="fill" className="size-3.5 text-muted-foreground" />
           {TRIGGER_KINDS[trigger.kind].label}
           <CaretDownIcon weight="bold" className="size-3" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-56">
-        {/* `DropdownMenuGroup`, not a bare `div`: a plain element inside
-            `role="menu"` leaves the set unlabelled to assistive tech and
-            sidesteps the primitive's own grouping semantics. */}
         {TRIGGER_GROUPS.map((group, index) => (
           <DropdownMenuGroup key={group} aria-label={group}>
             {index > 0 ? <DropdownMenuSeparator /> : null}
@@ -149,16 +143,25 @@ export function TriggerCard({
   trigger: Trigger;
   onChange: (trigger: Trigger) => void;
 }) {
+  const offBoard = isOffBoardTrigger(trigger);
+
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2.5">
-      <LightningIcon
-        weight="fill"
-        aria-hidden
-        className="size-3.5 shrink-0 text-muted-foreground"
-      />
-      <KindPicker trigger={trigger} onChange={onChange} />
-      {trigger.kind === "manual" ? null : (
-        <ColumnToggles
+    <div className="flex flex-col gap-2 rounded-xl border border-border bg-card px-3 py-3">
+      <div className="flex items-center gap-2">
+        <LightningIcon
+          weight="fill"
+          aria-hidden
+          className="size-3.5 shrink-0 text-muted-foreground"
+        />
+        <KindPicker trigger={trigger} onChange={onChange} />
+        {offBoard ? (
+          <span className="text-label text-muted-foreground">
+            {trigger.kind === "schedule" ? "Off the board — cron later" : "Off the board"}
+          </span>
+        ) : null}
+      </div>
+      {offBoard ? null : (
+        <ColumnStrip
           columns={trigger.columns}
           onChange={(columns) => onChange({ ...trigger, columns })}
         />
