@@ -26,7 +26,7 @@ import {
   runDoctorChecks,
   shortSessionId,
   supersededHarnessEvent,
-  supportedEvents,
+  declaresInputNeeded as adapterDeclaresInputNeeded,
   TICKET_PRIORITIES,
   TICKET_STATUS_LABELS,
   TICKET_STATUSES,
@@ -751,10 +751,13 @@ function firingHarnessId(
  * id it cannot look up for exactly the same reason: the delivery is all the
  * evidence there is, and disbelieving it would hide a harness that IS
  * reporting.
+ *
+ * The rule itself is `@volli/shared`'s, deliberately: this gate and the
+ * renderer's `waiting` fold have to agree, and the way two processes agree on a
+ * predicate is by calling the same one. All this adds is main's lookup.
  */
 function declaresInputNeeded(harnessId: HarnessId): boolean {
-  const adapter = getHarnessAdapter(harnessId);
-  return adapter === undefined || supportedEvents(adapter).has("input.needed");
+  return adapterDeclaresInputNeeded(getHarnessAdapter(harnessId));
 }
 
 function isBodyMutation(value: unknown): value is TicketBodyMutation {

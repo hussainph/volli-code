@@ -367,6 +367,20 @@ export function supportedEvents(
 }
 
 /**
+ * Whether a harness can say a human is blocking its agent. Gates the needs-you
+ * notification in main and the `waiting` fold in the renderer, which is why it
+ * lives here rather than beside either of them: the two ends have to agree, and
+ * the way they agree is by asking the same function.
+ *
+ * `undefined` believes. An id nothing here can describe is a manifest trusted
+ * since the catalog was last read, and its delivery is the only evidence there
+ * is — disbelieving it would hide a harness that IS reporting.
+ */
+export function declaresInputNeeded(adapter: Pick<HarnessAdapter, "events"> | undefined): boolean {
+  return adapter === undefined || supportedEvents(adapter).has("input.needed");
+}
+
+/**
  * Whether {@link HarnessAdapter.startupEvent} names something the adapter
  * actually bound — the one invariant that field has.
  *

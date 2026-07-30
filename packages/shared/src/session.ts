@@ -9,7 +9,7 @@
  * starts `null`.
  */
 
-import { expectsHarnessEvents, supportedEvents } from "./harness/types";
+import { declaresInputNeeded, expectsHarnessEvents } from "./harness/types";
 import type { HarnessAdapter, HarnessEvent } from "./harness/types";
 import type { HarnessId } from "./ticket";
 
@@ -334,7 +334,7 @@ export function createSessionHarnessState(
   return {
     harnessId: input.harnessId,
     expectsEvents: expectsHarnessEvents(adapter),
-    declaresInputNeeded: adapter === undefined || supportedEvents(adapter).has("input.needed"),
+    declaresInputNeeded: declaresInputNeeded(adapter),
     startedAt: input.startedAt,
     delivered: false,
     declared: null,
