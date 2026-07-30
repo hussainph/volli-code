@@ -1,52 +1,65 @@
 /**
- * Which agent runs, on what model, how hard — as one control on one line.
+ * Harness, model, effort — as three separate controls on the composer row.
  *
- * The studio can toggle between two craft faces so we can feel them in situ:
+ * Decoupled on purpose: a model slug is not owned by one harness (the same
+ * `claude-opus-5` string is a legal suggestion under Claude Code, opencode and
+ * pi), so fusing them into one "Claude Code · opus · high" phrase made the
+ * wrong thing atomic. Switching harness keeps the model; effort and approvals
+ * remap onto the new adapter's vocabulary.
  *
- *   • `composer` — one phrase trigger ("Claude Code · opus · high") opening a
- *     dial panel. Closest to Cursor / Claude Code.
- *   • `pad` — harness marks as origin chips, effort as a weighted meter, model
- *     as a quiet field. Closer to the care in the theme canvas editor.
+ * Effort is a weighted slider painted with the canvas accent (`--primary` /
+ * `--primary-text`), the same material language as the theme editor's vibrancy
+ * track — not a row of pills. Harnesses that expose no effort dial omit it.
  *
- * TWO ABSENCES ARE LOAD-BEARING. cursor-agent has no effort flag (it rides in
- * the model string as `model[effort=high]`) and pi documents no approval or
- * sandbox mode at all. Both controls are ABSENT for those harnesses rather than
- * disabled, because a greyed control says "not now" where the truth is "not a
- * thing".
+ * Hovering the harness or model control peeks the composed invocation. Today
+ * that is a CLI string; if the runtime becomes a GUI later, the same hover
+ * still answers "what will this actually launch" — only the spelling inside
+ * the popover changes.
  */
 import * as React from "react";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
+import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 
 import { Button } from "@renderer/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
-import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@renderer/components/ui/tooltip";
 import { cn } from "@renderer/lib/utils";
 
 import { HarnessMark, harnessLabelFor } from "./harness-identity";
 import {
   composeCommand,
-  defaultRuntime,
   HARNESS_ADAPTERS,
   LAB_HARNESS_IDS,
+  switchHarness,
   type AutomationRuntime,
   type RuntimeAxis,
 } from "./model";
 
-export type RuntimeCraft = "composer" | "pad";
+/* ----------------------------------------------------------- command peek */
 
-function CommandRibbon({ runtime }: { runtime: AutomationRuntime }) {
+function CommandPeek({ runtime }: { runtime: AutomationRuntime }) {
   return (
-    <div className="overflow-x-auto border-t border-border px-2.5 py-1.5">
-      <code className="flex w-max items-baseline gap-x-1.5 whitespace-nowrap font-mono text-label">
+    <div className="flex max-w-[22rem] flex-col gap-1.5">
+      <span className="flex items-center gap-1.5 text-label text-muted-foreground">
+        <TerminalWindowIcon weight="fill" className="size-3.5" />
+        Launches
+      </span>
+      <code className="flex flex-wrap items-baseline gap-x-1.5 font-mono text-label leading-relaxed">
         {composeCommand(runtime).map((part) => (
-          <span key={part.flag} className="text-muted-foreground">
+          <span key={`${part.flag}:${part.value ?? ""}`} className="text-muted-foreground">
             {part.flag}
             {part.value === undefined ? null : (
               <span className="pl-1 text-foreground">{part.value}</span>
@@ -58,7 +71,88 @@ function CommandRibbon({ runtime }: { runtime: AutomationRuntime }) {
   );
 }
 
-function ModelField({
+/** Hover shows the composed launch; click still opens the control. */
+function WithCommandPeek({
+  runtime,
+  children,
+}: {
+  runtime: AutomationRuntime;
+  children: React.ReactElement;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent
+        side="top"
+        align="start"
+        // Wide enough for a flag line; delay is on the provider.
+        className="border border-border bg-popover px-2.5 py-2 text-popover-foreground shadow-md"
+      >
+        <CommandPeek runtime={runtime} />
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/* ---------------------------------------------------------------- harness */
+
+function HarnessPicker({
+  runtime,
+  onChange,
+}: {
+  runtime: AutomationRuntime;
+  onChange: (runtime: AutomationRuntime) => void;
+}) {
+  return (
+    <DropdownMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="xs"
+              className="gap-1.5 active:scale-[0.97] transition-transform duration-100 ease-out"
+            >
+              <HarnessMark harnessId={runtime.harnessId} tinted />
+              {harnessLabelFor(runtime.harnessId)}
+              <CaretDownIcon weight="bold" className="size-3 text-muted-foreground" />
+            </Button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent
+          side="top"
+          align="start"
+          className="border border-border bg-popover px-2.5 py-2 text-popover-foreground shadow-md"
+        >
+          <CommandPeek runtime={runtime} />
+        </TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent align="start" className="w-48">
+        {LAB_HARNESS_IDS.map((id) => (
+          <DropdownMenuItem
+            key={id}
+            onSelect={() => onChange(switchHarness(runtime, id))}
+            className={cn(id === runtime.harnessId && "text-foreground")}
+          >
+            <HarnessMark
+              harnessId={id}
+              tinted={id === runtime.harnessId}
+              className="size-3.5"
+            />
+            {harnessLabelFor(id)}
+            {id === runtime.harnessId ? (
+              <CheckIcon weight="bold" aria-hidden className="ml-auto size-3 text-primary" />
+            ) : null}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/* ------------------------------------------------------------------ model */
+
+function ModelPicker({
   runtime,
   onChange,
 }: {
@@ -98,99 +192,73 @@ function ModelField({
   }
 
   return (
-    <div className="relative">
-      <input
-        value={runtime.model}
-        onChange={(event) => onChange({ ...runtime, model: event.target.value })}
-        onFocus={() => setOpen(true)}
-        onBlur={() => window.setTimeout(() => setOpen(false), 120)}
-        onKeyDown={onKeyDown}
-        spellCheck={false}
-        aria-label="Model"
-        role="combobox"
-        aria-expanded={open}
-        aria-controls={listId}
-        aria-autocomplete="list"
-        aria-activedescendant={open && active >= 0 ? `${listId}-${active}` : undefined}
-        className={cn(
-          "h-7 w-full rounded-md border border-border bg-transparent px-2 font-mono text-ui text-foreground",
-          "outline-none focus-visible:border-ring",
-        )}
-      />
-      {open ? (
-        <ul
-          id={listId}
-          role="listbox"
-          aria-label="Suggested models"
-          className="absolute top-8 left-0 z-30 w-full overflow-hidden rounded-md border border-border bg-popover py-1 shadow-md"
-        >
-          {adapter.models.map((model, index) => (
-            <li
-              key={model}
-              id={`${listId}-${index}`}
-              role="option"
-              aria-selected={index === active}
-              className={cn(
-                "cursor-pointer px-2 py-1 font-mono text-label text-muted-foreground",
-                "hover:bg-accent hover:text-foreground",
-                index === active && "bg-accent text-foreground",
-              )}
-              onMouseDown={(event) => {
-                event.preventDefault();
-                commit(model);
-              }}
-              onClick={() => commit(model)}
-            >
-              {model}
-            </li>
-          ))}
-        </ul>
-      ) : null}
-    </div>
+    <WithCommandPeek runtime={runtime}>
+      <div className="relative">
+        <input
+          value={runtime.model}
+          onChange={(event) => onChange({ ...runtime, model: event.target.value })}
+          onFocus={() => setOpen(true)}
+          onBlur={() => window.setTimeout(() => setOpen(false), 120)}
+          onKeyDown={onKeyDown}
+          spellCheck={false}
+          aria-label="Model"
+          role="combobox"
+          aria-expanded={open}
+          aria-controls={listId}
+          aria-autocomplete="list"
+          aria-activedescendant={open && active >= 0 ? `${listId}-${active}` : undefined}
+          className={cn(
+            "h-7 w-[11.5rem] rounded-md border border-transparent bg-transparent px-2 font-mono text-ui text-foreground",
+            "hover:border-border focus-visible:border-ring",
+            "outline-none transition-[border-color] duration-150 ease-out motion-reduce:transition-none",
+          )}
+        />
+        {open ? (
+          <ul
+            id={listId}
+            role="listbox"
+            aria-label="Suggested models"
+            className="absolute top-8 left-0 z-30 w-full min-w-[14rem] overflow-hidden rounded-md border border-border bg-popover py-1 shadow-md"
+          >
+            {adapter.models.map((model, index) => (
+              <li
+                key={model}
+                id={`${listId}-${index}`}
+                role="option"
+                aria-selected={index === active}
+                className={cn(
+                  "cursor-pointer px-2 py-1 font-mono text-label text-muted-foreground",
+                  "hover:bg-accent hover:text-foreground",
+                  index === active && "bg-accent text-foreground",
+                )}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  commit(model);
+                }}
+                onClick={() => commit(model)}
+              >
+                {model}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+    </WithCommandPeek>
   );
 }
 
-/** Segmented effort — composer face. */
-function ScaleControl({
-  axis,
-  value,
-  onChange,
-}: {
-  axis: RuntimeAxis;
-  value: string | null;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <div className="flex w-full items-center gap-0.5 rounded-md border border-border p-0.5">
-      {axis.options.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          onClick={() => onChange(option.value)}
-          aria-pressed={option.value === value}
-          className={cn(
-            "flex-1 cursor-pointer rounded px-1.5 py-0.5 text-label text-muted-foreground",
-            "transition-[background-color,color] duration-150 ease-out",
-            "hover:text-foreground motion-reduce:transition-none",
-            "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
-            "aria-pressed:bg-accent aria-pressed:text-foreground",
-            "active:scale-[0.97]",
-          )}
-        >
-          {option.value}
-        </button>
-      ))}
-    </div>
-  );
-}
+/* ----------------------------------------------------------------- effort */
 
 /**
- * Effort as a weighted meter — pad face.
+ * Discrete stops on the adapter's scale, as a weighted track.
  *
- * Ordered values fill from the left; the selected stop is a lit cell, quieter
- * cells sit behind it. Same data as {@link ScaleControl}, different material.
+ * Fill share and accent weight both climb with the stop — low effort is a quiet
+ * ember hairline, max is the full `--primary-text` punch from the canvas. The
+ * house `input[type=range]` rule paints the track from `--primary` and
+ * `--slider-fill`; this control remaps `--primary` locally so the weight can
+ * move without inventing a second slider skin.
  */
-function EffortPad({
+function EffortSlider({
   axis,
   value,
   onChange,
@@ -199,206 +267,43 @@ function EffortPad({
   value: string | null;
   onChange: (value: string) => void;
 }) {
-  const selected = axis.options.findIndex((option) => option.value === value);
+  const index = Math.max(
+    0,
+    axis.options.findIndex((option) => option.value === value),
+  );
+  const max = Math.max(1, axis.options.length - 1);
+  const fill = (index / max) * 100;
+  // 28% → 100% of primary-text mixed over the groove — never fully cold, never
+  // a neon scream at the low end.
+  const heat = 28 + (fill / 100) * 72;
 
   return (
-    <div
-      role="radiogroup"
-      aria-label="Effort"
-      className="flex w-full items-stretch gap-1 rounded-lg bg-muted/40 p-1"
-    >
-      {axis.options.map((option, index) => {
-        const on = index <= selected && selected >= 0;
-        const current = option.value === value;
-        return (
-          <button
-            key={option.value}
-            type="button"
-            role="radio"
-            aria-checked={current}
-            onClick={() => onChange(option.value)}
-            className={cn(
-              "flex h-8 flex-1 cursor-pointer flex-col items-center justify-center rounded-md",
-              "transition-[background-color,color,transform] duration-150 ease-out",
-              "motion-reduce:transition-none active:scale-[0.97]",
-              "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
-              on ? "bg-primary/20 text-primary-text" : "text-muted-foreground hover:text-foreground",
-              current && "ring-1 ring-primary/50",
-            )}
-          >
-            <span className="text-label font-medium tracking-tight">{option.value}</span>
-          </button>
-        );
-      })}
+    <div className="flex min-w-[8.5rem] items-center gap-2 px-1">
+      <input
+        type="range"
+        min={0}
+        max={max}
+        step={1}
+        value={index}
+        aria-label={axis.label}
+        aria-valuetext={value ?? undefined}
+        onChange={(event) => onChange(axis.options[Number(event.target.value)].value)}
+        style={
+          {
+            "--slider-fill": `${fill}%`,
+            "--primary": `color-mix(in oklab, var(--primary-text) ${heat}%, var(--border-strong))`,
+          } as React.CSSProperties
+        }
+        className="w-28"
+      />
+      <span className="w-11 shrink-0 font-mono text-label text-muted-foreground tabular-nums">
+        {value ?? "—"}
+      </span>
     </div>
   );
 }
 
-function HarnessStrip({
-  runtime,
-  onChange,
-}: {
-  runtime: AutomationRuntime;
-  onChange: (runtime: AutomationRuntime) => void;
-}) {
-  return (
-    <div
-      role="radiogroup"
-      aria-label="Harness"
-      className="flex flex-wrap items-center gap-1 border-b border-border p-2"
-    >
-      {LAB_HARNESS_IDS.map((id) => {
-        const on = id === runtime.harnessId;
-        return (
-          <button
-            key={id}
-            type="button"
-            role="radio"
-            aria-checked={on}
-            onClick={() => onChange(defaultRuntime(id))}
-            className={cn(
-              "flex cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-1 text-label",
-              "transition-[background-color,border-color,color,transform] duration-150 ease-out",
-              "motion-reduce:transition-none active:scale-[0.97]",
-              "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
-              on
-                ? "border-primary/40 bg-primary/15 text-primary-text"
-                : "border-border text-muted-foreground hover:text-foreground",
-            )}
-          >
-            <HarnessMark harnessId={id} tinted={on} className="size-3.5" />
-            {harnessLabelFor(id)}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function ComposerTrigger({
-  runtime,
-  onChange,
-}: {
-  runtime: AutomationRuntime;
-  onChange: (runtime: AutomationRuntime) => void;
-}) {
-  const adapter = HARNESS_ADAPTERS[runtime.harnessId];
-  const summary = [runtime.model, adapter.effort === null ? null : runtime.effort]
-    .filter((part): part is string => part !== null && part !== "")
-    .join(" · ");
-
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <Button
-          variant="ghost"
-          size="xs"
-          className="gap-1.5 active:scale-[0.97] transition-transform duration-100 ease-out"
-        >
-          <HarnessMark harnessId={runtime.harnessId} tinted />
-          {harnessLabelFor(runtime.harnessId)}
-          <span className="font-mono text-muted-foreground">{summary}</span>
-          <CaretDownIcon weight="bold" className="size-3 text-muted-foreground" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent align="start" className="w-72 p-0">
-        <div className="flex flex-col p-1">
-          {LAB_HARNESS_IDS.map((id) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => onChange(defaultRuntime(id))}
-              className={cn(
-                "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-left text-ui",
-                "text-muted-foreground transition-colors duration-150 ease-out motion-reduce:transition-none",
-                "hover:bg-accent hover:text-foreground active:scale-[0.99]",
-                id === runtime.harnessId && "text-foreground",
-              )}
-            >
-              <HarnessMark harnessId={id} tinted={id === runtime.harnessId} className="size-3.5" />
-              {harnessLabelFor(id)}
-              {id === runtime.harnessId ? (
-                <CheckIcon weight="bold" aria-hidden className="ml-auto size-3 text-primary" />
-              ) : null}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex flex-col gap-1.5 border-t border-border p-2">
-          <ModelField runtime={runtime} onChange={onChange} />
-          {adapter.effort === null ? null : (
-            <ScaleControl
-              axis={adapter.effort}
-              value={runtime.effort}
-              onChange={(effort) => onChange({ ...runtime, effort })}
-            />
-          )}
-        </div>
-
-        <CommandRibbon runtime={runtime} />
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-function PadTrigger({
-  runtime,
-  onChange,
-}: {
-  runtime: AutomationRuntime;
-  onChange: (runtime: AutomationRuntime) => void;
-}) {
-  const adapter = HARNESS_ADAPTERS[runtime.harnessId];
-  const summary = [harnessLabelFor(runtime.harnessId), runtime.effort]
-    .filter((part): part is string => part !== null && part !== "")
-    .join(" · ");
-
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <Button
-          variant="ghost"
-          size="xs"
-          className="gap-1.5 border border-border/80 bg-muted/30 active:scale-[0.97] transition-[transform,background-color] duration-100 ease-out"
-        >
-          <HarnessMark harnessId={runtime.harnessId} tinted />
-          <span className="text-foreground">{summary}</span>
-          <CaretDownIcon weight="bold" className="size-3 text-muted-foreground" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent align="start" className="w-[22rem] p-0">
-        <HarnessStrip runtime={runtime} onChange={onChange} />
-        <div className="flex flex-col gap-2 p-2.5">
-          <ModelField runtime={runtime} onChange={onChange} />
-          {adapter.effort === null ? null : (
-            <EffortPad
-              axis={adapter.effort}
-              value={runtime.effort}
-              onChange={(effort) => onChange({ ...runtime, effort })}
-            />
-          )}
-        </div>
-        <CommandRibbon runtime={runtime} />
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-export function RuntimePicker({
-  runtime,
-  onChange,
-  craft = "composer",
-}: {
-  runtime: AutomationRuntime;
-  onChange: (runtime: AutomationRuntime) => void;
-  craft?: RuntimeCraft;
-}) {
-  return craft === "pad" ? (
-    <PadTrigger runtime={runtime} onChange={onChange} />
-  ) : (
-    <ComposerTrigger runtime={runtime} onChange={onChange} />
-  );
-}
+/* ---------------------------------------------------------------- approvals */
 
 export function ApprovalsPicker({
   runtime,
@@ -435,5 +340,33 @@ export function ApprovalsPicker({
         </DropdownMenuRadioGroup>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/* ----------------------------------------------------------------- export */
+
+export function RuntimePicker({
+  runtime,
+  onChange,
+}: {
+  runtime: AutomationRuntime;
+  onChange: (runtime: AutomationRuntime) => void;
+}) {
+  const effort = HARNESS_ADAPTERS[runtime.harnessId].effort;
+
+  return (
+    <TooltipProvider delayDuration={400}>
+      <div className="flex flex-wrap items-center gap-0.5">
+        <HarnessPicker runtime={runtime} onChange={onChange} />
+        <ModelPicker runtime={runtime} onChange={onChange} />
+        {effort === null ? null : (
+          <EffortSlider
+            axis={effort}
+            value={runtime.effort}
+            onChange={(next) => onChange({ ...runtime, effort: next })}
+          />
+        )}
+      </div>
+    </TooltipProvider>
   );
 }

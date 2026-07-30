@@ -250,6 +250,57 @@ export function defaultRuntime(harnessId: LabHarnessId): AutomationRuntime {
   };
 }
 
+/**
+ * Move a runtime onto another harness without dropping the model.
+ *
+ * Model slugs are not harness-owned — the same string is a legal suggestion
+ * under several adapters — so switching harness keeps what the author typed.
+ * Effort remaps by relative position on the ordered scale when the value names
+ * disagree (`high`→`high`, else "about as far along"); approvals keep the same
+ * token when the new vocabulary still has it, otherwise the new default.
+ */
+export function switchHarness(
+  runtime: AutomationRuntime,
+  harnessId: LabHarnessId,
+): AutomationRuntime {
+  if (runtime.harnessId === harnessId) return runtime;
+  const from = HARNESS_ADAPTERS[runtime.harnessId];
+  const to = HARNESS_ADAPTERS[harnessId];
+  return {
+    harnessId,
+    model: runtime.model,
+    effort: remapEffort(from.effort, runtime.effort, to.effort),
+    approvals: remapChoice(to.approvals, runtime.approvals),
+  };
+}
+
+function remapChoice(axis: RuntimeAxis | null, current: string | null): string | null {
+  if (axis === null) return null;
+  if (current !== null && axis.options.some((option) => option.value === current)) {
+    return current;
+  }
+  return axis.options[0]?.value ?? null;
+}
+
+function remapEffort(
+  from: RuntimeAxis | null,
+  fromValue: string | null,
+  to: RuntimeAxis | null,
+): string | null {
+  if (to === null) return null;
+  if (fromValue !== null && to.options.some((option) => option.value === fromValue)) {
+    return fromValue;
+  }
+  if (from === null || fromValue === null || from.options.length === 0) {
+    return to.options[0]?.value ?? null;
+  }
+  const fromIndex = from.options.findIndex((option) => option.value === fromValue);
+  if (fromIndex < 0) return to.options[0]?.value ?? null;
+  const t = fromIndex / Math.max(1, from.options.length - 1);
+  const toIndex = Math.round(t * Math.max(0, to.options.length - 1));
+  return to.options[toIndex]?.value ?? null;
+}
+
 /** One `flag value` pair of the composed command, kept split so the flag can be dimmed. */
 export interface CommandPart {
   /** `claude`, `--model`, `-c model_reasoning_effort=high` … */

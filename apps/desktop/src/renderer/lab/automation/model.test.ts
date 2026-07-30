@@ -10,6 +10,7 @@ import {
   renameStep,
   replaceStep,
   setJoin,
+  switchHarness,
   tokenizeInstructions,
   toStages,
   triggerSummary,
@@ -161,6 +162,31 @@ describe("tokenizeInstructions", () => {
   it("carries each token's offset, so the editor keys on data not on index", () => {
     const found = tokenizeInstructions("ab /tdd");
     expect(found.map((token) => token.at)).toEqual([0, 3]);
+  });
+});
+
+describe("switchHarness", () => {
+  it("keeps the model when the harness changes", () => {
+    const from = { ...defaultRuntime("claude-code"), model: "claude-opus-5", effort: "high" };
+    const to = switchHarness(from, "opencode");
+    expect(to.harnessId).toBe("opencode");
+    expect(to.model).toBe("claude-opus-5");
+  });
+
+  it("keeps an effort token the new scale still names", () => {
+    const from = { ...defaultRuntime("claude-code"), effort: "high" };
+    expect(switchHarness(from, "codex").effort).toBe("high");
+  });
+
+  it("remaps effort by relative position when names disagree", () => {
+    // Claude: low medium high xhigh max (index 4 = max). Opencode: minimal high max.
+    const from = { ...defaultRuntime("claude-code"), effort: "max" };
+    expect(switchHarness(from, "opencode").effort).toBe("max");
+  });
+
+  it("drops effort when the destination has no dial", () => {
+    const from = { ...defaultRuntime("claude-code"), effort: "high" };
+    expect(switchHarness(from, "cursor").effort).toBeNull();
   });
 });
 

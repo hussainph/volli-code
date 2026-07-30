@@ -18,8 +18,9 @@
  * written as separate automations. The add control says that out loud —
  * `Add alongside` — rather than adding a step and then asking how it joins.
  *
- * Skills open inline on `/`. Rename is Linear-shaped. Runtime craft toggles
- * between a composer phrase and a pad of dials so both can be felt in situ.
+ * Skills open inline on `/`. Rename is Linear-shaped. Runtime dials stay
+ * decoupled — harness, model, a weighted effort slider — with the composed
+ * launch on hover.
  * ──────────────────────────────────────────────────────────────────────────
  */
 import * as React from "react";
@@ -50,7 +51,6 @@ import { HarnessMark } from "../automation/harness-identity";
 import { InlineTitle, StepIdField } from "../automation/inline-title";
 import { StepCard } from "../automation/step-card";
 import { TriggerCard } from "../automation/trigger-card";
-import type { RuntimeCraft } from "../automation/runtime-picker";
 import {
   APP_DATA_DIR,
   automationFilePath,
@@ -77,7 +77,7 @@ import {
 
 export const title = "Automation · studio";
 export const note =
-  "Parallel launches, / skills, board-ranked digits — toggle runtime craft top-right.";
+  "Parallel launches, / skills, board-ranked digits, decoupled runtime dials.";
 export const viewport = "window" as const;
 
 /* ------------------------------------------------------------ run state */
@@ -489,12 +489,10 @@ function Diagnostics({ diagnostics }: { diagnostics: FileDiagnostic[] }) {
 
 function Editor({
   automation,
-  craft,
   onChange,
   onDelete,
 }: {
   automation: Automation;
-  craft: RuntimeCraft;
   onChange: (automation: Automation) => void;
   onDelete: () => void;
 }) {
@@ -575,7 +573,6 @@ function Editor({
                   <StepCard
                     key={step.id}
                     step={step}
-                    craft={craft}
                     name={
                       named ? (
                         <StepIdField
@@ -665,45 +662,10 @@ function ViewToggle({ view, onChange }: { view: View; onChange: (view: View) => 
   );
 }
 
-function CraftToggle({
-  craft,
-  onChange,
-}: {
-  craft: RuntimeCraft;
-  onChange: (craft: RuntimeCraft) => void;
-}) {
-  const options: Array<{ value: RuntimeCraft; label: string }> = [
-    { value: "composer", label: "Composer" },
-    { value: "pad", label: "Pad" },
-  ];
-  return (
-    <div className="flex items-center gap-0.5 rounded-md border border-border p-0.5">
-      {options.map(({ value, label }) => (
-        <button
-          key={value}
-          type="button"
-          onClick={() => onChange(value)}
-          aria-pressed={craft === value}
-          className={cn(
-            "cursor-pointer rounded px-2 py-0.5 text-label text-muted-foreground",
-            "transition-[background-color,color,transform] duration-150 ease-out motion-reduce:transition-none",
-            "hover:text-foreground active:scale-[0.97]",
-            "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
-            "aria-pressed:bg-accent aria-pressed:text-foreground",
-          )}
-        >
-          {label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 export default function AutomationStudioScratch() {
   const [automations, setAutomations] = React.useState<Automation[]>(SEEDED_AUTOMATIONS);
   const [selectedId, setSelectedId] = React.useState<string | null>(SEEDED_AUTOMATIONS[0].id);
   const [view, setView] = React.useState<View>("list");
-  const [craft, setCraft] = React.useState<RuntimeCraft>("composer");
   const [, setOrder] = useColumnOrder();
 
   const selected = automations.find((automation) => automation.id === selectedId) ?? null;
@@ -735,7 +697,6 @@ export default function AutomationStudioScratch() {
         <LightningIcon weight="fill" aria-hidden className="size-3.5 text-muted-foreground" />
         <h1 className="text-ui text-foreground">Automations</h1>
         <div className="ml-auto flex items-center gap-2">
-          <CraftToggle craft={craft} onChange={setCraft} />
           <ViewToggle view={view} onChange={setView} />
           <Button variant="ghost" size="xs" onClick={() => create("project", null)}>
             <PlusIcon />
@@ -766,7 +727,6 @@ export default function AutomationStudioScratch() {
             <Editor
               key={selected.id}
               automation={selected}
-              craft={craft}
               onChange={(next) =>
                 setAutomations((current) =>
                   current.map((automation) => (automation.id === next.id ? next : automation)),

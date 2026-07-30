@@ -16,7 +16,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui
 import { cn } from "@renderer/lib/utils";
 
 import { ChipEditor } from "./chip-editor";
-import { ApprovalsPicker, RuntimePicker, type RuntimeCraft } from "./runtime-picker";
+import { ApprovalsPicker, RuntimePicker } from "./runtime-picker";
 import { tokenizeInstructions, APPENDED_CLI_NOTE, type AutomationStep } from "./model";
 
 /**
@@ -53,14 +53,12 @@ function AppendedContext() {
 export function StepCard({
   step,
   name,
-  craft,
   onChange,
   onDuplicate,
   onRemove,
 }: {
   step: AutomationStep;
   name: React.ReactNode | null;
-  craft: RuntimeCraft;
   onChange: (step: AutomationStep) => void;
   onDuplicate: (() => void) | null;
   onRemove: (() => void) | null;
@@ -117,7 +115,6 @@ export function StepCard({
 
       <div className="flex flex-wrap items-center gap-1 px-1.5 pb-1.5">
         <RuntimePicker
-          craft={craft}
           runtime={step.runtime}
           onChange={(runtime) => onChange({ ...step, runtime })}
         />
