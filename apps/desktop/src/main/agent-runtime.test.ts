@@ -65,6 +65,7 @@ describe("volliRuntimePaths", () => {
     expect(relaunched).toMatchObject({
       cliBundleSourcePath: "/work/volli-code/packages/cli/dist/volli.cjs",
       cliBundlePath: "/Users/dev/Library/Application Support/Volli Code-dev/bin/volli.cjs",
+      harnessRoot: "/Users/dev/Library/Application Support/Volli Code-dev/harness",
       appEntry: "/work/volli-code/apps/desktop",
     });
   });

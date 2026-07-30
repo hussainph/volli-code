@@ -1,14 +1,32 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { HarnessId, SessionRecord } from "@volli/shared";
+import {
+  createSessionHarnessState,
+  getHarnessAdapter,
+  type HarnessAdapter,
+  type HarnessId,
+  type SessionRecord,
+} from "@volli/shared";
 
 import {
+  buildTicketSessionRows,
   canResumeSession,
   filterSessionHistory,
   groupSessionRows,
   latestResumableSession,
   sessionSourceLabel,
   type TicketSessionRow,
+  type TicketSessionRowsInput,
 } from "./session-history";
+import { ticketScope, type SessionTab } from "../../stores/sessions";
+
+/**
+ * The built-ins, which is what these cases are about. The lookup is a parameter
+ * so a BYO harness can be handed in deliberately — see the registered-manifest
+ * case below, which is the regression this parameter exists to prevent.
+ */
+const resumable = (session: SessionRecord) => canResumeSession(session, getHarnessAdapter);
+const latestResumable = (records: readonly SessionRecord[]) =>
+  latestResumableSession(records, getHarnessAdapter);
 
 function record(overrides: Partial<SessionRecord> = {}): SessionRecord {
   return {
@@ -16,6 +34,7 @@ function record(overrides: Partial<SessionRecord> = {}): SessionRecord {
     projectId: "p1",
     ticketId: "t1",
     harnessId: "claude-code",
+    activeHarnessId: null,
     harnessSessionId: null,
     launchKind: "unknown",
     placement: "unknown",
@@ -40,6 +59,153 @@ function row(overrides: Partial<TicketSessionRow> = {}): TicketSessionRow {
   };
 }
 
+function tab(overrides: Partial<SessionTab> & { sessionId: string }): SessionTab {
+  return {
+    sessionId: overrides.sessionId,
+    title: overrides.title ?? "Session 1",
+    scope: overrides.scope ?? ticketScope("p1", "t1"),
+    layout: overrides.layout ?? { kind: "pane", sessionId: overrides.sessionId, exitCode: null },
+    activePaneId: overrides.activePaneId ?? overrides.sessionId,
+  };
+}
+
+function rowsInput(overrides: Partial<TicketSessionRowsInput> = {}): TicketSessionRowsInput {
+  return {
+    records: [record()],
+    tabs: [tab({ sessionId: "s1" })],
+    lastOutputAt: {},
+    parkState: {},
+    harness: {},
+    settingUp: false,
+    now: 1_000_000,
+    ...overrides,
+  };
+}
+
+describe("buildTicketSessionRows", () => {
+  it("reads a live, quiet pane as an open idle row titled by its live tab", () => {
+    expect(buildTicketSessionRows(rowsInput())).toEqual([
+      {
+        record: record(),
+        title: "Session 1",
+        isOpen: true,
+        isRoot: true,
+        tabId: "s1",
+        status: "idle",
+      },
+    ]);
+  });
+
+  it("names the worktree setup script a live pane is waiting on instead of its raw activity", () => {
+    const rows = buildTicketSessionRows(
+      rowsInput({ settingUp: true, lastOutputAt: { s1: 999_999 } }),
+    );
+    expect(rows[0]?.status).toBe("setup");
+  });
+
+  it("keeps an exited pane's real status during setup rather than claiming setup is still running", () => {
+    const rows = buildTicketSessionRows(
+      rowsInput({
+        settingUp: true,
+        tabs: [tab({ sessionId: "s1", layout: { kind: "pane", sessionId: "s1", exitCode: 1 } })],
+      }),
+    );
+    expect(rows[0]?.status).toBe("exited");
+  });
+
+  it("reads a harness-declared block as waiting, which no amount of PTY silence can say", () => {
+    const rows = buildTicketSessionRows(
+      rowsInput({
+        harness: {
+          s1: {
+            ...createSessionHarnessState({
+              harnessId: "claude-code",
+              adapter: {
+                injection: { kind: "claude-settings-json", flag: "--settings" },
+                startupEvent: "session.started",
+                events: [
+                  { event: "session.started", native: "SessionStart", delivery: "async" },
+                  { event: "input.needed", native: "Notification", delivery: "async" },
+                ],
+              },
+              startedAt: 0,
+            }),
+            delivered: true,
+            declared: "waiting",
+          },
+        },
+      }),
+    );
+    expect(rows[0]?.status).toBe("waiting");
+  });
+
+  it("reads a record with no open pane as an exited row under its own durable title", () => {
+    expect(
+      buildTicketSessionRows(
+        rowsInput({ records: [record({ title: "Old run", endedAt: 500 })], tabs: [] }),
+      ),
+    ).toEqual([
+      {
+        record: record({ title: "Old run", endedAt: 500 }),
+        title: "Old run",
+        isOpen: false,
+        isRoot: false,
+        tabId: undefined,
+        status: "exited",
+      },
+    ]);
+  });
+
+  it("keeps a live split pane live, under its own title but its tab's id", () => {
+    const rows = buildTicketSessionRows(
+      rowsInput({
+        records: [record({ id: "s1" }), record({ id: "s2", title: "Server logs" })],
+        tabs: [
+          tab({
+            sessionId: "s1",
+            title: "Renamed tab",
+            layout: {
+              kind: "split",
+              id: "s2",
+              direction: "vertical",
+              ratio: 0.5,
+              first: { kind: "pane", sessionId: "s1", exitCode: null },
+              second: { kind: "pane", sessionId: "s2", exitCode: null },
+            },
+          }),
+        ],
+        lastOutputAt: { s2: 999_999 },
+      }),
+    );
+
+    expect(rows).toEqual([
+      {
+        record: record({ id: "s1" }),
+        title: "Renamed tab",
+        isOpen: true,
+        isRoot: true,
+        tabId: "s1",
+        status: "idle",
+      },
+      {
+        record: record({ id: "s2", title: "Server logs" }),
+        title: "Server logs",
+        isOpen: true,
+        isRoot: false,
+        tabId: "s1",
+        status: "working",
+      },
+    ]);
+  });
+
+  it("reads a parked pane as parked", () => {
+    const rows = buildTicketSessionRows(
+      rowsInput({ parkState: { s1: { parked: true, keepAwake: false } } }),
+    );
+    expect(rows[0]?.status).toBe("parked");
+  });
+});
+
 describe("sessionSourceLabel", () => {
   it("uses the actual harness only for sessions that launched an agent", () => {
     expect(
@@ -52,6 +218,24 @@ describe("sessionSourceLabel", () => {
     expect(sessionSourceLabel(record({ launchKind: "shell", placement: "split" }))).toBe(
       "Shell · Split",
     );
+  });
+
+  // The pane says what is IN it. A terminal opened by opencode that the user
+  // quit and replaced with claude reads as Claude Code.
+  it("names the harness that is running, not the one that opened the pane", () => {
+    expect(
+      sessionSourceLabel(
+        record({ launchKind: "agent", harnessId: "opencode", activeHarnessId: "claude-code" }),
+      ),
+    ).toBe("Claude Code");
+  });
+
+  // `launchKind` is a fact about the pane's origin, and no announce changes it:
+  // a shell that later ran an agent is still a shell tab.
+  it("still reads as a shell when a harness announced itself inside one", () => {
+    expect(
+      sessionSourceLabel(record({ launchKind: "shell", activeHarnessId: "claude-code" })),
+    ).toBe("Shell");
   });
 
   it("keeps legacy records honest when their launch kind was never recorded", () => {
@@ -80,17 +264,17 @@ describe("groupSessionRows", () => {
 
 describe("canResumeSession", () => {
   it("is false for a still-live agent session — nothing has ended to resume into", () => {
-    expect(canResumeSession(record({ launchKind: "agent", endedAt: null }))).toBe(false);
+    expect(resumable(record({ launchKind: "agent", endedAt: null }))).toBe(false);
   });
 
   it("is false for a bare shell, whether live or ended", () => {
-    expect(canResumeSession(record({ launchKind: "shell", endedAt: null }))).toBe(false);
-    expect(canResumeSession(record({ launchKind: "shell", endedAt: 10 }))).toBe(false);
+    expect(resumable(record({ launchKind: "shell", endedAt: null }))).toBe(false);
+    expect(resumable(record({ launchKind: "shell", endedAt: 10 }))).toBe(false);
   });
 
   it("is false for an ended session whose harness has no known resume support", () => {
     expect(
-      canResumeSession(
+      resumable(
         record({ launchKind: "agent", endedAt: 10, harnessId: "my-custom-harness" as HarnessId }),
       ),
     ).toBe(false);
@@ -98,7 +282,7 @@ describe("canResumeSession", () => {
 
   it("is true for an ended Claude Code agent session", () => {
     expect(
-      canResumeSession(
+      resumable(
         record({
           launchKind: "agent",
           endedAt: 10,
@@ -108,12 +292,59 @@ describe("canResumeSession", () => {
       ),
     ).toBe(true);
   });
+
+  // The whole reason the lookup is a parameter. A registered manifest that
+  // declares a resume line can genuinely be resumed, and a built-ins-only
+  // lookup would deny it the affordance while claiming the harness has none —
+  // so the same record answers differently depending on what the caller knows,
+  // and the caller has to be the one that knows.
+  it("resumes a BYO harness when the lookup can describe it, and not when it cannot", () => {
+    const byo = "my-custom-harness" as HarnessId;
+    const ended = record({ launchKind: "agent", endedAt: 10, harnessId: byo });
+    const knows = (id: HarnessId): HarnessAdapter | undefined =>
+      id === byo
+        ? {
+            ...getHarnessAdapter("claude-code")!,
+            id: byo,
+            resume: { byId: null, latest: ["--continue"], userResumeTokens: [] },
+          }
+        : getHarnessAdapter(id);
+
+    expect(canResumeSession(ended, knows)).toBe(true);
+    expect(resumable(ended)).toBe(false);
+  });
+
+  // Main builds the resume line off the running harness, so the affordance has
+  // to be decided about that one or the rail offers a Resume that cannot happen
+  // — and hides one that can.
+  it("judges resumability by the harness that was running when it ended", () => {
+    expect(
+      resumable(
+        record({
+          launchKind: "agent",
+          endedAt: 10,
+          harnessId: "my-custom-harness" as HarnessId,
+          activeHarnessId: "claude-code",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      resumable(
+        record({
+          launchKind: "agent",
+          endedAt: 10,
+          harnessId: "claude-code",
+          activeHarnessId: "my-custom-harness" as HarnessId,
+        }),
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("latestResumableSession", () => {
   it("returns null when no record qualifies", () => {
     expect(
-      latestResumableSession([
+      latestResumable([
         record({ id: "live", launchKind: "agent", endedAt: null }),
         record({ id: "shell", launchKind: "shell", endedAt: 10 }),
       ]),
@@ -142,8 +373,8 @@ describe("latestResumableSession", () => {
       endedAt: 100,
     });
 
-    expect(latestResumableSession([unresumableNewest, older, newer])).toEqual(newer);
-    expect(latestResumableSession([newer, unresumableNewest, older])).toEqual(newer);
+    expect(latestResumable([unresumableNewest, older, newer])).toEqual(newer);
+    expect(latestResumable([newer, unresumableNewest, older])).toEqual(newer);
   });
 });
 

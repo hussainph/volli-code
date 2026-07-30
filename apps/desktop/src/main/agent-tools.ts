@@ -7,8 +7,8 @@ import { promisify } from "node:util";
 import {
   buildHarnessInstallPlan,
   harnessAdapters,
-  HARNESS_IDS,
   shellSingleQuote,
+  type HarnessAdapter,
   type HarnessId,
 } from "@volli/shared";
 
@@ -18,31 +18,68 @@ import {
   type HarnessInstallResult,
   type HarnessUninstallResult,
 } from "./harness-install";
+import { loginShellPath, readLoginShellPath, type LoginShellDeps } from "./login-path";
 
 const execFileAsync = promisify(execFile);
 
 /**
- * Finds first-class harness executables without invoking a shell or the harness
- * itself. Iterates the adapter registry so each harness's detection rule lives
- * in its own adapter module — adding a harness needs no edit here.
+ * The first executable named `executable` on `pathValue`, absolute — what a
+ * shell would pick, resolved without invoking one.
+ *
+ * `skipDir` is Volli's own `bin/`. Inside a Volli PTY that directory is
+ * PREPENDED to PATH and holds the generated wrapper, which is named after the
+ * harness's own command; skipping it is how the wrapper finds the real binary,
+ * and it is the same reason the trust confirmation has to skip it — naming
+ * Volli's wrapper as "the binary this will run" would be a claim about the
+ * wrong file.
+ */
+export async function resolveOnPath(
+  pathValue: string,
+  executable: string,
+  skipDir?: string,
+): Promise<string | null> {
+  for (const directory of pathValue.split(":").filter(Boolean)) {
+    if (directory === skipDir) continue;
+    const candidate = join(directory, executable);
+    try {
+      await access(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // Keep searching the remaining PATH entries.
+    }
+  }
+  return null;
+}
+
+/**
+ * Finds first-class harness executables on an explicit PATH, without invoking a
+ * shell or the harness itself. Iterates the adapter registry, and resolves the
+ * `command` each adapter already declares — adding a harness needs no edit here,
+ * and there is no second name to keep in step with the one Volli launches.
  */
 export async function detectInstalledHarnesses(pathValue: string): Promise<HarnessId[]> {
-  const directories = pathValue.split(":").filter(Boolean);
   const detected: HarnessId[] = [];
   for (const adapter of harnessAdapters) {
-    let found = false;
-    for (const directory of directories) {
-      try {
-        await access(join(directory, adapter.detection.executable), constants.X_OK);
-        found = true;
-        break;
-      } catch {
-        // Keep searching the remaining PATH entries.
-      }
+    if ((await resolveOnPath(pathValue, adapter.command)) !== null) {
+      detected.push(adapter.id);
     }
-    if (found) detected.push(adapter.id);
   }
   return detected;
+}
+
+/**
+ * What this host has, asked of the user's login shell rather than of main's own
+ * environment — a Dock launch inherits launchd's four directories and would see
+ * no harness at all (see {@link loginShellPath}).
+ *
+ * `null` means detection did not run: the shell could not be asked. It is not
+ * an empty host, and nothing may treat it as one — an install whose PATH failed
+ * to resolve once still has every harness it had a minute ago.
+ */
+export async function detectHarnesses(deps?: LoginShellDeps): Promise<HarnessId[] | null> {
+  const pathValue = deps ? await readLoginShellPath(deps) : await loginShellPath();
+  if (pathValue === null) return null;
+  return detectInstalledHarnesses(pathValue);
 }
 
 export type AgentToolsConsentStatus = "installed" | "deferred";
@@ -68,26 +105,35 @@ function managedManifestPath(home: string): string {
   return join(home, ".agents/skills/volli/.volli-managed.json");
 }
 
-/** Installs or refreshes the skill pack for currently detected harnesses. */
-export async function installDetectedHarnessSkills(input: {
+/**
+ * Installs or refreshes the skill pack for the harnesses this host is treated
+ * as having. Which harnesses those are is the CALLER's answer, not this
+ * function's: detection speaks for the built-ins, the registry speaks for
+ * trusted manifests, and only the caller holds both. An empty set installs
+ * nothing at all — not even the canonical files — which is how "we could not
+ * find out" stays spelled the same as "there is nothing here", since the plan
+ * writes into the user's dotfiles and a guess is worse than a skipped refresh.
+ */
+export async function installHarnessSkills(input: {
   home: string;
-  pathValue: string;
+  adapters: readonly HarnessAdapter[];
 }): Promise<HarnessInstallResult> {
-  const detected = await detectInstalledHarnesses(input.pathValue);
-  const plan = buildHarnessInstallPlan({ home: input.home, detected });
+  const plan = buildHarnessInstallPlan({ home: input.home, adapters: input.adapters });
   return applyHarnessInstallPlan(plan, managedManifestPath(input.home));
 }
 
 /**
- * Removes the skill pack for every first-class harness. Detection is irrelevant
- * to removal — a harness the user has since uninstalled may still have Volli
- * files on disk — so the plan spans all {@link HARNESS_IDS}. Per-file hash
- * guards inside {@link uninstallHarnessPlan} keep hand-edited files.
+ * Removes the skill pack for `adapters`. Detection is irrelevant to removal — a
+ * harness the user has since uninstalled may still have Volli files on disk —
+ * so the caller passes the widest span it can name (every built-in, plus every
+ * currently-trusted manifest) rather than only what is present today. Per-file
+ * hash guards inside {@link uninstallHarnessPlan} keep hand-edited files.
  */
 export async function uninstallAllHarnessSkills(input: {
   home: string;
+  adapters: readonly HarnessAdapter[];
 }): Promise<HarnessUninstallResult> {
-  const plan = buildHarnessInstallPlan({ home: input.home, detected: HARNESS_IDS });
+  const plan = buildHarnessInstallPlan({ home: input.home, adapters: input.adapters });
   return uninstallHarnessPlan(plan, managedManifestPath(input.home));
 }
 

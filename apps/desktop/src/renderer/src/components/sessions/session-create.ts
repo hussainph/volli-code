@@ -14,6 +14,7 @@ import {
   findSessionPane,
   ownerKey,
   useSessionsStore,
+  type SessionLaunch,
   type SessionScope,
   type TerminalSplitDirection,
 } from "@renderer/stores/sessions";
@@ -100,12 +101,17 @@ function abandon(sessionId: string): void {
  * `kickoff`/`resume` are mutually exclusive launch intents (only ticket
  * scopes ever pass either). Resolves the booted sessionId, or null on any
  * guard/failure.
+ *
+ * `land` receives the whole durable record main persisted, not just its title:
+ * only main knows whether a harness command line was actually written into the
+ * shell it spawned, and the store needs that to declare a harness expectation
+ * at launch (see {@link SessionLaunch}).
  */
 async function bootSession(
   scope: SessionScope,
   placement: "tab" | "split",
   verb: string,
-  land: (sessionId: string, title: string) => boolean,
+  land: (sessionId: string, launch: SessionLaunch) => boolean,
   kickoff?: SessionKickoff,
   resume?: SessionResume,
 ): Promise<string | null> {
@@ -128,10 +134,7 @@ async function bootSession(
     // The owner may have been removed while create was in flight; landing the
     // tab would resurrect a session record with a PTY no UI can reach. `land`
     // does any further revalidation (a split's source pane must still exist).
-    if (
-      trackedProject(scope.projectId) === undefined ||
-      !land(result.sessionId, result.session.title)
-    ) {
+    if (trackedProject(scope.projectId) === undefined || !land(result.sessionId, result.session)) {
       abandon(result.sessionId);
       return null;
     }
@@ -147,7 +150,9 @@ async function bootSession(
 /**
  * Boot a new session as a fresh tab under `scope`. Resolves with its sessionId,
  * or null on failure / if the owner is no longer tracked. The tab title is the
- * one main seeded on the durable record, so the live tab and the DB agree.
+ * one main seeded on the durable record, so the live tab and the DB agree —
+ * and with a `kickoff`, the record also says an agent was launched, which is
+ * what registers the session's harness expectation.
  */
 export async function createTerminalSession(
   scope: SessionScope,
@@ -157,8 +162,8 @@ export async function createTerminalSession(
     scope,
     "tab",
     "start session",
-    (sessionId, title) => {
-      useSessionsStore.getState().addSession(scope, sessionId, title);
+    (sessionId, launch) => {
+      useSessionsStore.getState().addSession(scope, sessionId, launch);
       return true;
     },
     kickoff,
@@ -180,7 +185,9 @@ export async function createTerminalSession(
  * lands as a NEW tab; the ended session's own pane/scrollback is left
  * untouched. Every one of the rail, exited-pane overlay, and ticket context
  * menu resume affordances call only this — no surface talks to
- * `window.api.terminal.create` directly.
+ * `window.api.terminal.create` directly. Main records a resume as an `agent`
+ * launch (it refuses to resume anything else), so a resumed session declares
+ * its harness expectation exactly as a fresh kickoff does.
  */
 export async function resumeTicketSession(
   scope: SessionScope,
@@ -190,8 +197,8 @@ export async function resumeTicketSession(
     scope,
     "tab",
     "resume session",
-    (sessionId, title) => {
-      useSessionsStore.getState().addSession(scope, sessionId, title);
+    (sessionId, launch) => {
+      useSessionsStore.getState().addSession(scope, sessionId, launch);
       return true;
     },
     undefined,

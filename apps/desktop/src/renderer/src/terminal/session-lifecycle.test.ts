@@ -1,7 +1,13 @@
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { scratchScope, ticketScope, useSessionsStore } from "../stores/sessions";
+import {
+  scratchScope,
+  ticketScope,
+  useSessionsStore,
+  type SessionLaunch,
+} from "../stores/sessions";
+
 import { disposeEngine } from "./registry";
 import {
   closeTerminalPane,
@@ -12,6 +18,14 @@ import {
   killTicketSessions,
   renameTerminalSession,
 } from "./session-lifecycle";
+
+/** A bare shell launch: no harness command line was written, so no expectation. */
+const shellLaunch = (title: string): SessionLaunch => ({
+  title,
+  harnessId: "claude-code",
+  launchKind: "shell",
+  createdAt: 0,
+});
 
 // The registry constructs real GPU-backed engines; the lifecycle contract under
 // test is only that it disposes through the registry, so stub the seam.
@@ -43,7 +57,7 @@ afterEach(() => {
 
 describe("closeTerminalSession", () => {
   it("drops the tab, disposes its engine, and kills its live PTY", () => {
-    useSessionsStore.getState().addSession(scratchScope("p"), "s1", "Terminal 1");
+    useSessionsStore.getState().addSession(scratchScope("p"), "s1", shellLaunch("Terminal 1"));
 
     closeTerminalSession("p", "s1");
 
@@ -53,7 +67,7 @@ describe("closeTerminalSession", () => {
   });
 
   it("disposes and kills every independent pane owned by the tab", () => {
-    useSessionsStore.getState().addSession(scratchScope("p"), "s1", "Terminal 1");
+    useSessionsStore.getState().addSession(scratchScope("p"), "s1", shellLaunch("Terminal 1"));
     useSessionsStore.getState().addSplit("p", "s1", "s1", "s2", "vertical");
 
     closeTerminalSession("p", "s1");
@@ -65,7 +79,7 @@ describe("closeTerminalSession", () => {
   });
 
   it("does not kill an already-exited tab — main has no PTY left for it", () => {
-    useSessionsStore.getState().addSession(scratchScope("p"), "s1", "Terminal 1");
+    useSessionsStore.getState().addSession(scratchScope("p"), "s1", shellLaunch("Terminal 1"));
     useSessionsStore.getState().markExited("s1", 0);
 
     closeTerminalSession("p", "s1");
@@ -83,7 +97,7 @@ describe("closeTerminalSession", () => {
 
   it("toasts when the kill reports a failure", async () => {
     killMock.mockResolvedValue({ ok: false, error: "boom" });
-    useSessionsStore.getState().addSession(scratchScope("p"), "s1", "Terminal 1");
+    useSessionsStore.getState().addSession(scratchScope("p"), "s1", shellLaunch("Terminal 1"));
 
     closeTerminalSession("p", "s1");
     await flush();
@@ -96,7 +110,7 @@ describe("closeTerminalSession", () => {
 
   it("toasts when the kill invocation rejects", async () => {
     killMock.mockRejectedValue(new Error("ipc down"));
-    useSessionsStore.getState().addSession(scratchScope("p"), "s1", "Terminal 1");
+    useSessionsStore.getState().addSession(scratchScope("p"), "s1", shellLaunch("Terminal 1"));
 
     closeTerminalSession("p", "s1");
     await flush();
@@ -110,7 +124,7 @@ describe("closeTerminalSession", () => {
 
 describe("closeTerminalPane", () => {
   it("removes and tears down only the selected split leaf", () => {
-    useSessionsStore.getState().addSession(scratchScope("p"), "s1", "Terminal 1");
+    useSessionsStore.getState().addSession(scratchScope("p"), "s1", shellLaunch("Terminal 1"));
     useSessionsStore.getState().addSplit("p", "s1", "s1", "s2", "vertical");
 
     closeTerminalPane("p", "s1", "s2");
@@ -122,7 +136,7 @@ describe("closeTerminalPane", () => {
   });
 
   it("closes the containing tab when its final pane is closed", () => {
-    useSessionsStore.getState().addSession(scratchScope("p"), "s1", "Terminal 1");
+    useSessionsStore.getState().addSession(scratchScope("p"), "s1", shellLaunch("Terminal 1"));
 
     closeTerminalPane("p", "s1", "s1");
 
@@ -132,7 +146,7 @@ describe("closeTerminalPane", () => {
   });
 
   it("is a no-op for an unknown tab or pane", () => {
-    useSessionsStore.getState().addSession(scratchScope("p"), "s1", "Terminal 1");
+    useSessionsStore.getState().addSession(scratchScope("p"), "s1", shellLaunch("Terminal 1"));
 
     closeTerminalPane("p", "missing", "s1");
     closeTerminalPane("p", "s1", "missing");
@@ -144,10 +158,10 @@ describe("closeTerminalPane", () => {
 
 describe("killProjectSessions", () => {
   it("kills live tabs, skips exited ones, disposes every engine, and forgets the project", () => {
-    useSessionsStore.getState().addSession(scratchScope("p"), "s1", "Terminal 1");
-    useSessionsStore.getState().addSession(scratchScope("p"), "s2", "Terminal 2");
+    useSessionsStore.getState().addSession(scratchScope("p"), "s1", shellLaunch("Terminal 1"));
+    useSessionsStore.getState().addSession(scratchScope("p"), "s2", shellLaunch("Terminal 2"));
     useSessionsStore.getState().markExited("s1", 130);
-    useSessionsStore.getState().addSession(scratchScope("other"), "o1", "Terminal 1");
+    useSessionsStore.getState().addSession(scratchScope("other"), "o1", shellLaunch("Terminal 1"));
 
     killProjectSessions("p");
 
@@ -160,7 +174,7 @@ describe("killProjectSessions", () => {
   });
 
   it("tears down every pane inside split tabs", () => {
-    useSessionsStore.getState().addSession(scratchScope("p"), "s1", "Terminal 1");
+    useSessionsStore.getState().addSession(scratchScope("p"), "s1", shellLaunch("Terminal 1"));
     useSessionsStore.getState().addSplit("p", "s1", "s1", "s2", "horizontal");
 
     killProjectSessions("p");
@@ -179,7 +193,7 @@ describe("killProjectSessions", () => {
 
 describe("closeTicketSession", () => {
   it("drops the ticket tab, disposes its engine, and kills its live PTY", () => {
-    useSessionsStore.getState().addSession(ticketScope("p", "t1"), "s1", "Session 1");
+    useSessionsStore.getState().addSession(ticketScope("p", "t1"), "s1", shellLaunch("Session 1"));
 
     closeTicketSession("t1", "s1");
 
@@ -189,7 +203,7 @@ describe("closeTicketSession", () => {
   });
 
   it("does not kill an already-exited ticket session", () => {
-    useSessionsStore.getState().addSession(ticketScope("p", "t1"), "s1", "Session 1");
+    useSessionsStore.getState().addSession(ticketScope("p", "t1"), "s1", shellLaunch("Session 1"));
     useSessionsStore.getState().markExited("s1", 0);
 
     closeTicketSession("t1", "s1");
@@ -207,8 +221,8 @@ describe("closeTicketSession", () => {
 
 describe("killTicketSessions", () => {
   it("kills every live session of a ticket, disposes engines, and forgets the ticket", () => {
-    useSessionsStore.getState().addSession(ticketScope("p", "t1"), "s1", "Session 1");
-    useSessionsStore.getState().addSession(ticketScope("p", "t1"), "s2", "Session 2");
+    useSessionsStore.getState().addSession(ticketScope("p", "t1"), "s1", shellLaunch("Session 1"));
+    useSessionsStore.getState().addSession(ticketScope("p", "t1"), "s2", shellLaunch("Session 2"));
     useSessionsStore.getState().markExited("s1", 130);
 
     killTicketSessions("t1");
@@ -230,7 +244,7 @@ describe("killTicketSessions", () => {
 
 describe("renameTerminalSession", () => {
   it("optimistically retitles the tab and persists the trimmed title", async () => {
-    useSessionsStore.getState().addSession(scratchScope("p"), "s1", "Terminal 1");
+    useSessionsStore.getState().addSession(scratchScope("p"), "s1", shellLaunch("Terminal 1"));
 
     void renameTerminalSession("s1", "  Renamed  ");
 
@@ -242,7 +256,7 @@ describe("renameTerminalSession", () => {
 
   it("rolls the title back and toasts when the persist fails", async () => {
     renameMock.mockResolvedValue({ ok: false, error: "nope" });
-    useSessionsStore.getState().addSession(scratchScope("p"), "s1", "Terminal 1"); // "Terminal 1"
+    useSessionsStore.getState().addSession(scratchScope("p"), "s1", shellLaunch("Terminal 1")); // "Terminal 1"
 
     void renameTerminalSession("s1", "Renamed");
     await flush();
@@ -256,7 +270,7 @@ describe("renameTerminalSession", () => {
 
   it("rolls the title back and toasts when the persist invocation rejects", async () => {
     renameMock.mockRejectedValue(new Error("ipc down"));
-    useSessionsStore.getState().addSession(scratchScope("p"), "s1", "Terminal 1"); // "Terminal 1"
+    useSessionsStore.getState().addSession(scratchScope("p"), "s1", shellLaunch("Terminal 1")); // "Terminal 1"
 
     void renameTerminalSession("s1", "Renamed");
     await flush();
@@ -269,7 +283,7 @@ describe("renameTerminalSession", () => {
   });
 
   it("is a no-op for a blank or unchanged title, and never calls main", async () => {
-    useSessionsStore.getState().addSession(scratchScope("p"), "s1", "Session 1");
+    useSessionsStore.getState().addSession(scratchScope("p"), "s1", shellLaunch("Session 1"));
 
     expect(await renameTerminalSession("s1", "   ")).toBe(false);
     expect(await renameTerminalSession("s1", "Session 1")).toBe(false);
@@ -285,7 +299,7 @@ describe("renameTerminalSession", () => {
     renameMock.mockImplementation(({ title }) =>
       title === "A" ? new Promise((resolve) => (failA = resolve)) : Promise.resolve({ ok: true }),
     );
-    useSessionsStore.getState().addSession(scratchScope("p"), "s1", "Terminal 1");
+    useSessionsStore.getState().addSession(scratchScope("p"), "s1", shellLaunch("Terminal 1"));
 
     const first = renameTerminalSession("s1", "A");
     expect(await renameTerminalSession("s1", "B")).toBe(true);
@@ -323,10 +337,10 @@ describe("renameTerminalSession", () => {
 
 describe("killProjectTicketSessions", () => {
   it("kills a project's ticket sessions (including ones the board no longer lists) and leaves other projects and scratch alone", () => {
-    useSessionsStore.getState().addSession(ticketScope("p", "t1"), "s1", "Session 1");
-    useSessionsStore.getState().addSession(ticketScope("p", "t2"), "s2", "Session 1");
-    useSessionsStore.getState().addSession(ticketScope("q", "t3"), "s3", "Session 1");
-    useSessionsStore.getState().addSession(scratchScope("p"), "sp", "Terminal 1");
+    useSessionsStore.getState().addSession(ticketScope("p", "t1"), "s1", shellLaunch("Session 1"));
+    useSessionsStore.getState().addSession(ticketScope("p", "t2"), "s2", shellLaunch("Session 1"));
+    useSessionsStore.getState().addSession(ticketScope("q", "t3"), "s3", shellLaunch("Session 1"));
+    useSessionsStore.getState().addSession(scratchScope("p"), "sp", shellLaunch("Terminal 1"));
 
     killProjectTicketSessions("p");
 
@@ -342,7 +356,7 @@ describe("killProjectTicketSessions", () => {
   });
 
   it("is a no-op when the project has no ticket sessions", () => {
-    useSessionsStore.getState().addSession(scratchScope("p"), "sp", "Terminal 1");
+    useSessionsStore.getState().addSession(scratchScope("p"), "sp", shellLaunch("Terminal 1"));
 
     killProjectTicketSessions("p");
 

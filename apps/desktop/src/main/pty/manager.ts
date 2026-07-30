@@ -1,12 +1,25 @@
 import type { WebContents } from "electron";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
-import { basename, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import type Database from "better-sqlite3";
-import { agentSessionEnv, createSessionRecord, errorMessage, resolveShell } from "@volli/shared";
+import {
+  agentSessionEnv,
+  createSessionRecord,
+  errorMessage,
+  getHarnessAdapter,
+  harnessAdapters,
+  resolveShell,
+  scrubInheritedSessionEnv,
+} from "@volli/shared";
 import type {
   CreateTerminalSessionRequest,
   CreateTerminalSessionResult,
+  HarnessAdapter,
+  HarnessAdapterLookup,
+  HarnessId,
+  HarnessWrapperLookup,
+  HarnessWrapperPath,
   SessionActivityState,
   SessionLaunchKind,
   TerminalBusyResult,
@@ -17,11 +30,12 @@ import type {
   VolliIpcEvent,
 } from "@volli/shared";
 import { broadcastDataChanged } from "../broadcast";
+import { ensureHarnessWorkspaceFiles } from "../harness-workspace";
 import { createProcessInspector, parkConfigFromEnv } from "../park";
 import type { ParkConfig, ProcessInspector } from "../park";
 import { isPathWithinRoots } from "../project-roots";
 import { ensureProjectArtifactsDir } from "../volli-fs";
-import { createSetupRun, ensure } from "../worktree";
+import { createSetupRun, ensure, runGitCapturing } from "../worktree";
 import type { EnsureOutcome, SetupRun } from "../worktree";
 import { worktreeDeps, worktreesHome } from "../worktree-runtime";
 import { isInside } from "../worktree/paths";
@@ -192,6 +206,60 @@ export class PtyManager {
   }
 
   /**
+   * Where this launch's wrapper for a harness lives — read at call time, not at
+   * construction, because `agentRuntime.wrapperPaths` is filled in once the
+   * wrappers are generated, which happens after the manager exists.
+   */
+  private readonly wrapperFor: HarnessWrapperLookup = (harnessId) =>
+    wrapperPathFor(this.agentRuntime ?? undefined, harnessId);
+
+  /**
+   * Which adapter a harness id names for this launch — read at call time for
+   * the same reason {@link wrapperFor} is: the merged built-in + trusted set
+   * lands on `agentRuntime` only once the harness runtime has regenerated, and
+   * a session created before that still has to launch. Falling back to the
+   * built-ins is what makes that early session correct rather than adapterless;
+   * a registered harness simply cannot be the one launching that early.
+   */
+  private readonly adapterFor: HarnessAdapterLookup = (harnessId) =>
+    this.agentRuntime?.adapters?.find((adapter) => adapter.id === harnessId) ??
+    getHarnessAdapter(harnessId);
+
+  /**
+   * Writes the per-worktree harness config (see `harness-workspace.ts`) for
+   * every adapter this launch knows about — not just the one the launch line
+   * names, because the user can type `cursor-agent` into any Volli terminal and
+   * the wrapper will happily run it.
+   *
+   * Never fatal. A refusal means one harness reports nothing for this session;
+   * aborting the boot over it would trade a degraded terminal for no terminal.
+   * A refusal IS logged, because the alternative — cursor silently reporting
+   * nothing — is the exact defect this file was written to end.
+   */
+  private async writeHarnessWorkspaceFiles(
+    worktreePath: string,
+    runtime: AgentRuntimeEnvironment,
+  ): Promise<void> {
+    try {
+      const result = await ensureHarnessWorkspaceFiles({
+        worktreePath,
+        adapters: runtime.adapters ?? harnessAdapters,
+        socketPath: runtime.socketPath,
+        shimPath: join(runtime.binDir, "volli"),
+        git: runGitCapturing,
+      });
+      for (const refusal of result.refused) {
+        console.warn(
+          `[volli] ${refusal.harnessId} will not report events in ${worktreePath}: ` +
+            `${refusal.path} — ${refusal.reason}`,
+        );
+      }
+    } catch (error) {
+      console.error(`[volli] failed to write harness workspace files: ${errorMessage(error)}`);
+    }
+  }
+
+  /**
    * Lazy dynamic import of node-pty. Isolated in a method so tests can
    * `vi.mock("node-pty")` and so the native module is touched only when a
    * session is actually created.
@@ -207,7 +275,13 @@ export class PtyManager {
     const db = this.db;
     if (db === null) return { ok: false, error: this.dbError };
 
-    const resolved = resolveScope(db, request, this.attachmentsRootPath);
+    const resolved = resolveScope(
+      db,
+      request,
+      this.attachmentsRootPath,
+      this.wrapperFor,
+      this.adapterFor,
+    );
     if (!resolved.ok) return resolved;
     const scope = resolved.scope;
 
@@ -259,6 +333,16 @@ export class PtyManager {
       }
     }
 
+    // The harness config that cannot live under `<userData>` — cursor's
+    // `.cursor/hooks.json`, which it reads from its working directory and
+    // nowhere else per-ticket. Worktree sessions only: the alternative is
+    // writing into the user's own checkout, which nothing justifies, so a
+    // scratch session runs cursor unhooked rather than politely vandalized.
+    // Refreshed every boot, because the command line names this launch's socket.
+    if (worktreeOutcome !== null && this.agentRuntime !== null) {
+      await this.writeHarnessWorkspaceFiles(cwd, this.agentRuntime);
+    }
+
     try {
       const nodePty = await this.loadNodePty();
       // The window can close during the awaited import above — its `destroyed`
@@ -294,24 +378,52 @@ export class PtyManager {
       const { file, args } = resolveShell(process.env);
       const sessionId = randomUUID();
       const now = Date.now();
+      // The harness configuration goes UNDER the agent contract, so nothing a
+      // wrapper reads can shadow VOLLI_SESSION/VOLLI_SOCKET/PATH — the three
+      // values every `volli` invocation in this shell resolves itself by. What
+      // rides along is only what a wrapper reads BEFORE it runs (its argv, its
+      // binary override); a harness's own configuration is exported by that
+      // harness's wrapper, so it is in scope for one process rather than all.
+      //
+      // `agentSessionEnv`'s PATH prepend is the value the shell STARTS with;
+      // the shell chain in `shellEnv` is what puts it back in front once the
+      // user's own startup has finished rearranging it. Both are needed: the
+      // prepend covers a non-zsh session and everything before the first
+      // prompt, the chain covers everything after.
       const sessionEnv = this.agentRuntime
-        ? agentSessionEnv(scope.env, {
-            sessionId,
-            socketPath: this.agentRuntime.socketPath,
-            binDir: this.agentRuntime.binDir,
-            inheritedPath: process.env["PATH"] ?? "",
-          })
+        ? agentSessionEnv(
+            { ...scope.env, ...this.agentRuntime.harnessEnv, ...this.agentRuntime.shellEnv },
+            {
+              sessionId,
+              socketPath: this.agentRuntime.socketPath,
+              binDir: this.agentRuntime.binDir,
+              inheritedPath: process.env["PATH"] ?? "",
+            },
+          )
         : scope.env;
       const pty = nodePty.spawn(file, args, {
         name: "xterm-256color",
         cwd,
         cols: request.cols,
         rows: request.rows,
-        // Inherit the user's environment; force TERM so the terminal emulator
-        // negotiates 256-color regardless of the parent's TERM; layer the ticket
-        // env (VOLLI_TICKET/VOLLI_ARTIFACTS_DIR) on top for ticket sessions,
-        // or just VOLLI_ARTIFACTS_DIR for scratch sessions.
-        env: { ...process.env, TERM: "xterm-256color", ...sessionEnv } as Record<string, string>,
+        // Inherit the user's environment MINUS every marker saying an agent
+        // session is already running in it — Volli is routinely launched from a
+        // terminal that is itself inside one, and `process.env` here is whatever
+        // launched the app, so those markers would otherwise be ambient in every
+        // terminal this window ever opens (see `scrubInheritedSessionEnv`; PATH,
+        // HOME and every credential survive it untouched). Then force TERM so
+        // the terminal emulator negotiates 256-color regardless of the parent's
+        // TERM; layer the ticket env (VOLLI_TICKET/VOLLI_ARTIFACTS_DIR) on top
+        // for ticket sessions, or just VOLLI_ARTIFACTS_DIR for scratch sessions.
+        //
+        // Scrubbed against the merged built-in + registered set when it exists,
+        // falling back to the built-ins for the same reason {@link adapterFor}
+        // does: a session can be created before the harness runtime regenerates.
+        env: {
+          ...scrubInheritedSessionEnv(process.env, this.agentRuntime?.adapters ?? harnessAdapters),
+          TERM: "xterm-256color",
+          ...sessionEnv,
+        },
       });
       // Same race, other side of the spawn: never register against a window
       // whose `destroyed` event already fired.
@@ -434,7 +546,14 @@ export class PtyManager {
         // Compose the worktree session's first line now that ensure resolved the
         // identity (resume line verbatim, else a preamble-opened kickoff, else
         // nothing). It still flows through the setup gate below.
-        const launchCommand = composeWorktreeLaunchCommand(db, worktree, identity, cwd);
+        const launchCommand = composeWorktreeLaunchCommand(
+          db,
+          worktree,
+          identity,
+          cwd,
+          this.wrapperFor,
+          this.adapterFor,
+        );
         const setupCommand = worktree.setupCommand?.trim() ?? "";
         if (worktreeOutcome.created && setupCommand.length > 0) {
           // `file` is the resolved shell the PTY was spawned with — the sentinel
@@ -509,6 +628,15 @@ export class PtyManager {
    */
   liveSessionCwds(): string[] {
     return Array.from(this.sessions.values(), (session) => session.cwd);
+  }
+
+  /**
+   * The sessions with a PTY alive right now — what `volli doctor` compares a
+   * caller's `VOLLI_SESSION` against. The session TABLE outlives the process,
+   * so a row is no evidence a session is live; this map is.
+   */
+  liveSessionIds(): string[] {
+    return [...this.sessions.keys()];
   }
 
   /** Read-only snapshot used by the CLI; it never writes to or controls the observed PTY. */
@@ -777,4 +905,54 @@ function foregroundProcess(session: Session): string | null {
 export interface AgentRuntimeEnvironment {
   socketPath: string;
   binDir: string;
+  /**
+   * What the wrappers in `binDir` READ at run time: `VOLLI_HARNESS_ARGV_<SLUG>`,
+   * one namespaced variable per harness. Nothing a HARNESS reads is here — a
+   * config variable like `OPENCODE_CONFIG` is exported by opencode's own wrapper
+   * one step before its exec, because a variable that configures one harness has
+   * no business being set in every terminal that never runs it.
+   *
+   * Session-independent by construction (the harness session id is
+   * `VOLLI_SESSION`, applied by the wrapper, not built into the config), so one
+   * map covers every session; empty when no harness is installed.
+   */
+  harnessEnv?: Readonly<Record<string, string>>;
+  /**
+   * Where each harness's generated wrapper lives, so a launch line names it by
+   * absolute path instead of leaving the shell to resolve a bare command
+   * through a `PATH` the login shell has already rebuilt out from under us
+   * (see {@link HarnessWrapperPath}). Empty until the wrappers are generated,
+   * which is why every read goes through {@link wrapperPathFor} rather than
+   * assuming a hit.
+   */
+  wrapperPaths?: ReadonlyMap<HarnessId, string>;
+  /**
+   * Every harness this host is treated as having — the detected built-ins plus
+   * the manifests the user registered and whose bytes were confirmed — so a
+   * launch line can be built from what the harness actually declares. Filled in
+   * alongside {@link wrapperPaths}, off the SAME resolution, because a wrapper
+   * and the flags fed through it must never come from two different ideas of
+   * which harnesses exist. Absent until then, which is why the lookup falls
+   * back to the built-ins rather than to nothing.
+   */
+  adapters?: readonly HarnessAdapter[];
+  /**
+   * What activates the generated zsh startup chain (`ZDOTDIR` and friends), so
+   * a harness the user types by hand resolves to the wrapper too. Empty for a
+   * shell with no post-startup hook — see `ensureShellInit`.
+   */
+  shellEnv?: Readonly<Record<string, string>>;
+}
+
+/**
+ * The wrapper for `harnessId`, or `null` when this launch has none — the shape
+ * every launch-line builder takes. `null` is a real answer (the harness was not
+ * detected, or the wrappers have not been generated yet), and it means the
+ * harness runs unwrapped and reports nothing.
+ */
+export function wrapperPathFor(
+  runtime: AgentRuntimeEnvironment | undefined,
+  harnessId: HarnessId,
+): HarnessWrapperPath {
+  return runtime?.wrapperPaths?.get(harnessId) ?? null;
 }

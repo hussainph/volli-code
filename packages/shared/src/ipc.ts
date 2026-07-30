@@ -6,11 +6,15 @@
 
 import type { ChangeSetSnapshot } from "./change-set";
 import type { FileKind, FileSource, IndexedFile } from "./file-ref";
+import type { ManifestError } from "./harness/manifest";
+import type { HarnessTrustPrompt, HarnessTrustVerdict } from "./harness/trust";
+import type { HarnessChannelStatus } from "./harness/channel";
+import type { HarnessAdapter, HarnessEvent } from "./harness/types";
 import type { DirEntry } from "./fs-entries";
 import type { Label } from "./label";
 import type { LegacyProject } from "./legacy-import";
 import type { Project } from "./project-identity";
-import type { SessionRecord } from "./session";
+import type { HarnessEventOrder, SessionRecord } from "./session";
 import type {
   CreateTerminalSessionRequest,
   CreateTerminalSessionResult,
@@ -379,6 +383,100 @@ export interface VolliFileIpcContract {
 
 export type FileIpcChannel = keyof VolliFileIpcContract;
 
+// ---- bring-your-own harness trust (docs/plans/harness-events.md §Trust) ----
+
+/**
+ * A manifest Volli found on disk and will not launch until someone confirms it,
+ * carried with everything the confirmation has to state.
+ *
+ * {@link HarnessTrustPrompt} supplies the claim — the slug, the resolved binary,
+ * the exact argv, the claimed events. The two fields added here are what the
+ * ANSWER is filed against: a verdict is about bytes, so the hash the user was
+ * shown travels back with it (see {@link HarnessTrustSetInput}), and the path
+ * says which file on disk those bytes came from.
+ */
+export interface PendingHarnessManifest extends HarnessTrustPrompt {
+  manifestPath: string;
+  /** SHA-256 of the bytes this confirmation describes. */
+  manifestSha256: string;
+}
+
+/**
+ * A manifest that was found but could not become an adapter — unparseable
+ * JSON, a failed validation, a slug disagreeing with its directory.
+ *
+ * Carried on the pending read rather than dropped in main, because dropped is
+ * what it was: a broken manifest is not pending (there is no command line to
+ * confirm) and not registered (there is nothing to launch), so without this
+ * field the person who just wrote it gets total silence from every surface.
+ */
+export interface BrokenHarnessManifest {
+  slug: string;
+  manifestPath: string;
+  errors: readonly ManifestError[];
+}
+
+/** The manifests waiting on a human — empty is the ordinary case. */
+export type HarnessPendingResult =
+  | { ok: true; pending: PendingHarnessManifest[]; broken: BrokenHarnessManifest[] }
+  | { ok: false; error: string };
+
+/**
+ * One verdict, about one version of one manifest.
+ *
+ * `manifestSha256` is not redundant with `slug`: it is the hash the user was
+ * actually shown, and main refuses the write when the file no longer hashes to
+ * it. Without that, a manifest edited between the dialog opening and the button
+ * being pressed would be trusted on the strength of a command line nobody read.
+ */
+export interface HarnessTrustSetInput {
+  slug: string;
+  manifestSha256: string;
+  decision: HarnessTrustVerdict;
+}
+
+/**
+ * The registered harnesses a launch would accept right now — every manifest
+ * someone confirmed the bytes of, as main resolved them for the wrappers it
+ * last generated. Built-ins are absent by construction: the renderer compiles
+ * those in, so this channel carries only what it could not otherwise know.
+ *
+ * Whole adapters rather than a summary, because an adapter is pure data
+ * (`harness/types.ts`) and that is the point of it: the renderer reads a
+ * registered harness's tier and its declared events with the exact functions it
+ * reads a built-in's, instead of a parallel shape that would have to be widened
+ * every time an adapter grows a field.
+ *
+ * `channels` rides the same read rather than earning a channel of its own: this
+ * is already the per-harness metadata the picker fetches when it opens, and a
+ * second round-trip would only give the two answers different ages. Unlike
+ * `harnesses` it covers the BUILT-INS too — they are the ones the durable record
+ * was switched off for — and it carries only harnesses something has been
+ * observed about. A harness absent from it is `unproven`, which is also what a
+ * renderer that never looks at the field believes about all of them.
+ */
+export type HarnessRegisteredResult =
+  | { ok: true; harnesses: HarnessAdapter[]; channels: HarnessChannelStatus[] }
+  | { ok: false; error: string };
+
+/**
+ * The bring-your-own-harness surface (`src/main/harness-ipc.ts`): ask what is
+ * waiting, answer one of them, and ask what the answers add up to. A registered
+ * manifest is inert until a verdict lands here, so the first two channels are
+ * the whole difference between a manifest on disk and a harness that can
+ * launch — and the third is how anything but main gets to hear that it did.
+ */
+export interface VolliHarnessIpcContract {
+  /** Every discovered manifest nobody has ruled on, re-read and re-hashed per call. */
+  "volli:harness-pending": { args: []; result: HarnessPendingResult };
+  /** Records a human's verdict about the exact bytes they were shown. */
+  "volli:harness-trust-set": { args: [input: HarnessTrustSetInput]; result: Result };
+  /** The trusted registered harnesses, as the launch path would resolve them. */
+  "volli:harness-registered": { args: []; result: HarnessRegisteredResult };
+}
+
+export type HarnessIpcChannel = keyof VolliHarnessIpcContract;
+
 // ---- theming ----------------------------------------------------------------
 
 /** `{ projectId? }` — a theme read is global unless a project scopes it (#69). */
@@ -624,6 +722,7 @@ export interface VolliInvokeContract
   extends
     VolliDataIpcContract,
     VolliFileIpcContract,
+    VolliHarnessIpcContract,
     VolliThemeIpcContract,
     VolliSystemIpcContract {}
 
@@ -680,7 +779,16 @@ export type VolliIpcEvent =
   // element's used `color-scheme`, which this app stamps itself, so over there
   // the query only ever reports the mode already painted. Every scope on `auto`
   // re-resolves off this.
-  | "volli:system-appearance-changed";
+  | "volli:system-appearance-changed"
+  // One canonical harness event (harness-events): a hook the wrapper
+  // configured fired, and main resolved which session it belongs to. This is
+  // the involuntary channel — the renderer learns what the agent is doing
+  // without the agent having chosen to say so.
+  | "volli:harness-event"
+  // A different harness is now running in one session's terminal, announced by
+  // its own launch wrapper. The other involuntary channel, and the one that
+  // reaches the tiers hooks cannot — see {@link SessionHarnessNotice}.
+  | "volli:session-harness";
 
 /** Direction of a `volli:ui-zoom-command` event: step in/out one rung, or reset. */
 export type UiZoomCommand = "in" | "out" | "reset";
@@ -725,6 +833,82 @@ export interface DataChangedEvent {
 export interface SessionsInterruptedEvent {
   ticketId: string;
   sessionIds: string[];
+}
+
+/**
+ * One canonical harness event, as it reaches the renderer (harness-events). The
+ * involuntary channel: a hook the wrapper configured fired, `volli hook`
+ * forwarded it over the socket, and main resolved which session it belongs to.
+ * Harness-native event names never get this far — the union is the whole
+ * vocabulary.
+ *
+ * `sessionId` is the FULL session id (the same key terminal data/exit events
+ * carry), not the short public handle, because this addresses the renderer's
+ * live session state rather than a human reader.
+ */
+export interface HarnessEventNotice {
+  sessionId: string;
+  projectId: string;
+  /** The ticket this session drives, or `null` for a scratch session. */
+  ticketId: string | null;
+  harnessId: HarnessId;
+  event: HarnessEvent;
+  /**
+   * The harness's own session id when the event carried one — already persisted
+   * on the session record by the time this fires. `null` on the events that
+   * carry none, which is most of them.
+   */
+  harnessSessionId: string | null;
+  /** Epoch ms the event was ingested (main's clock, never the harness's). */
+  at: number;
+  /**
+   * Epoch ms the hook process that reported this event STARTED, off that
+   * process's own wall clock — {@link HarnessEventOrder}, and the only field on
+   * this notice that says anything about the order the harness fired things in.
+   * `null` when the delivery carried none, which an older `volli` always will.
+   *
+   * `at` is deliberately not that field and cannot be made into it: each event
+   * arrives on its own short-lived process over its own connection, so arrival
+   * order is a property of the races between them rather than of the agent.
+   */
+  firedAt: HarnessEventOrder;
+}
+
+/**
+ * Main→renderer: a different harness is now running in one session's terminal,
+ * as announced by its own launch wrapper (`volli session harness <slug>`).
+ *
+ * A SIBLING of {@link HarnessEventNotice} rather than a member of it, because
+ * it is not one: this is not a canonical harness event, it is not in
+ * `HARNESS_EVENTS`, it comes from the PATH shim rather than from a hook, and it
+ * carries no `firedAt` to be ordered by — the wrapper runs once per launch, so
+ * the newest announce IS the running harness and there is no race to settle.
+ * Folding it into the event union would have every reader of that union
+ * pattern-matching around a member that answers none of its questions.
+ *
+ * Fired on every announce, INCLUDING the overwhelmingly common one that agrees
+ * with what Volli already believes. An announce is a LAUNCH — the wrapper runs
+ * once per invocation, from the harness's own process — and a launch is the
+ * moment the reporting channel starts owing us an event. Firing only on a
+ * changed slug meant quitting a harness and starting the same one again in one
+ * terminal left the second launch wearing the first one's reputation.
+ */
+export interface SessionHarnessNotice {
+  /** The FULL session id — this addresses live renderer state, not a human reader. */
+  sessionId: string;
+  projectId: string;
+  /** The ticket this session drives, or `null` for a scratch session. */
+  ticketId: string | null;
+  /** The harness now running there. The session's LAUNCH harness is unchanged. */
+  harnessId: HarnessId;
+  /**
+   * Whether this announce named a DIFFERENT harness than the session was
+   * already believed to be running. Not a gate on the notice — every launch is
+   * broadcast — but the durable record only has to be repointed when it moved.
+   */
+  changed: boolean;
+  /** Epoch ms the announce was ingested (main's clock). */
+  at: number;
 }
 
 /**

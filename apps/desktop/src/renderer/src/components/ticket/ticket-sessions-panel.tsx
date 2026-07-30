@@ -18,6 +18,7 @@ import {
 import { Input } from "@renderer/components/ui/input";
 import { RailDrawer } from "@renderer/components/ticket/rail-drawer";
 import {
+  buildTicketSessionRows,
   canResumeSession,
   filterSessionHistory,
   groupSessionRows,
@@ -29,7 +30,7 @@ import { relativeTime } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import {
-  sessionActivityState,
+  launchAdapter,
   sessionPanes,
   ticketScope,
   useSessionsStore,
@@ -44,6 +45,7 @@ const NO_RECORDS: SessionRecord[] = [];
 
 const STATUS_LABEL: Record<TicketSessionStatus, string> = {
   working: "Working",
+  waiting: "Waiting for you",
   idle: "Idle",
   parked: "Parked",
   exited: "Exited",
@@ -61,6 +63,7 @@ function StatusChip({ status }: { status: TicketSessionStatus }) {
         className={cn(
           "size-1.5 rounded-full",
           (status === "working" || status === "setup") && "bg-emerald-500",
+          status === "waiting" && "bg-amber-500",
           status === "idle" && "bg-muted-foreground/50",
           status === "parked" && "bg-muted-foreground/35",
           status === "exited" && "bg-muted-foreground/25",
@@ -217,7 +220,7 @@ function SessionList({
           onCommitRename={(next) => onCommitRename(record, isRoot, next)}
           onCancelRename={() => setEditingId(null)}
           onResume={
-            variant === "history" && canResumeSession(record)
+            variant === "history" && canResumeSession(record, launchAdapter)
               ? () => onResumeSession(record)
               : undefined
           }
@@ -251,6 +254,10 @@ export function TicketSessionsPanel({
   const liveTabs = useSessionsStore((state) => state.byOwner[ticketId]?.tabs);
   const lastOutputAt = useSessionsStore((state) => state.lastOutputAt);
   const parkState = useSessionsStore((state) => state.parkState);
+  // The sidebar's Active Sessions list reads this exact map for its own
+  // "Waiting for you" tier; reading it here is what keeps the two surfaces from
+  // answering "is the agent blocked on me?" differently at the same instant.
+  const harness = useSessionsStore((state) => state.harness);
   const setActivePane = useSessionsStore((state) => state.setActivePane);
   const worktreePhase = useWorktreeStore((state) => phaseFor(state.phases, ticketId));
   // `creating`/`copying` haven't booted a PTY yet, so there's no session row to
@@ -299,22 +306,6 @@ export function TicketSessionsPanel({
     return () => clearInterval(id);
   }, [hasLive]);
 
-  // paneSessionId → its live state, for EVERY pane of every open tab (not just
-  // tab roots): each split pane has its own durable record, so without this a
-  // live split pane would render as an inert "Exited" row. `tabTitle` is the
-  // live tab title (used for the root pane's optimistic rename); non-root panes
-  // fall back to their own durable record title. `tabId` is the tab's root id.
-  const liveById = new Map<string, { exitCode: number | null; tabTitle: string; tabId: string }>();
-  for (const tab of tabs) {
-    for (const pane of sessionPanes(tab.layout)) {
-      liveById.set(pane.sessionId, {
-        exitCode: pane.exitCode,
-        tabTitle: tab.title,
-        tabId: tab.sessionId,
-      });
-    }
-  }
-
   // Renaming the root pane of a live tab goes through the shared optimistic-
   // persist path (so its tab strip updates too); a non-root live pane or an
   // ended session has no live tab title to keep in sync, so persist directly and
@@ -354,28 +345,14 @@ export function TicketSessionsPanel({
     );
   };
 
-  const rows: TicketSessionRow[] = records.map((record) => {
-    const live = liveById.get(record.id);
-    const isOpen = live !== undefined;
-    const isRoot = live !== undefined && live.tabId === record.id;
-    // Status derives from THIS pane's own exit code + output, not the tab root's.
-    const exited = live !== undefined ? live.exitCode !== null : true;
-    const parked = parkState[record.id]?.parked ?? false;
-    // While the worktree's ensure pipeline is running its setup script, an open
-    // pane's honest `working` status is less informative than naming what it's
-    // actually doing — `setup` overrides it for every currently-open, NOT-YET-
-    // EXITED row; an exited/crashed pane shows its real exited status even
-    // during setup, rather than lying that setup is still in progress.
-    const status: TicketSessionStatus =
-      isOpen && !exited && worktreePhase === "setting-up"
-        ? "setup"
-        : isOpen
-          ? sessionActivityState(lastOutputAt[record.id] ?? null, exited, now, parked)
-          : "exited";
-    // Root pane rows prefer the live tab title (optimistic rename shows before
-    // the refetch); non-root pane rows show their own durable record title.
-    const title = isRoot ? live.tabTitle : record.title;
-    return { record, title, isOpen, isRoot, tabId: live?.tabId, status };
+  const rows: TicketSessionRow[] = buildTicketSessionRows({
+    records,
+    tabs,
+    lastOutputAt,
+    parkState,
+    harness,
+    settingUp: worktreePhase === "setting-up",
+    now,
   });
   const { current, history } = groupSessionRows(rows);
   const filteredHistory = filterSessionHistory(history, historyQuery);

@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { TICKET_BODY_TAB_ID, isTicketBodyTabId } from "@renderer/components/ticket/ticket-body-tab";
 import { useBoardStore } from "./board";
-import { ticketScope, useSessionsStore } from "./sessions";
+import { ticketScope, useSessionsStore, type SessionLaunch } from "./sessions";
+
 import {
   applyTicketFileTransition,
   createWorkspaceStore,
@@ -11,6 +12,14 @@ import {
   type NavKey,
   type TicketTabsState,
 } from "./workspace";
+
+/** A bare shell launch: no harness command line was written, so no expectation. */
+const shellLaunch = (title: string): SessionLaunch => ({
+  title,
+  harnessId: "claude-code",
+  launchKind: "shell",
+  createdAt: 0,
+});
 
 function createMemoryStorage() {
   const data = new Map<string, string>();
@@ -267,13 +276,13 @@ describe("openTicketSession", () => {
   it("opens the ticket detail and focuses the exact tab and split pane", () => {
     useSessionsStore
       .getState()
-      .addSession(ticketScope("project-a", "ticket-1"), "session-1", "Agent");
+      .addSession(ticketScope("project-a", "ticket-1"), "session-1", shellLaunch("Agent"));
     useSessionsStore
       .getState()
       .addSplit("ticket-1", "session-1", "session-1", "session-2", "vertical");
     useSessionsStore
       .getState()
-      .addSession(ticketScope("project-a", "ticket-1"), "session-3", "Checks");
+      .addSession(ticketScope("project-a", "ticket-1"), "session-3", shellLaunch("Checks"));
     useSessionsStore.getState().setActivePane("ticket-1", "session-1", "session-1");
 
     const store = createWorkspaceStore(createMemoryStorage());
@@ -295,7 +304,7 @@ describe("openTicketSession", () => {
   it("creates missing workspace state and preserves the active pane when none is requested", () => {
     useSessionsStore
       .getState()
-      .addSession(ticketScope("project-a", "ticket-1"), "session-1", "Agent");
+      .addSession(ticketScope("project-a", "ticket-1"), "session-1", shellLaunch("Agent"));
 
     const store = createWorkspaceStore(createMemoryStorage());
     store.getState().openTicketSession("project-a", "ticket-1", "session-1");

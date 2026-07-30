@@ -12,8 +12,11 @@ import {
 import { Button } from "@renderer/components/ui/button";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import {
+  hydrateHarnessCatalog,
   scratchScope,
   sessionPanes,
+  subscribeHarnessEvents,
+  subscribeSessionHarness,
   useSessionsStore,
   type TerminalSplitDirection,
 } from "@renderer/stores/sessions";
@@ -111,6 +114,29 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
   // (stores/worktree.ts) that the ticket-detail session chip, "starting"
   // affordance, and Details rail's failed-notice/retry all read from.
   React.useEffect(() => subscribeWorktreePhases(), []);
+
+  // The single subscription to the involuntary harness channel, for the same
+  // reason again (docs/plans/harness-events.md): the events address live
+  // sessions by the same id the PTY streams above carry, and this layer is the
+  // only component that outlives every surface reading them — the sidebar's
+  // "Needs you" tier, the ticket rail, the session header.
+  React.useEffect(() => subscribeHarnessEvents(), []);
+
+  // The other involuntary channel, mounted here for the same reason: a
+  // harness's own launch wrapper announcing that IT is what is now running in a
+  // terminal. Separate from the event stream above because it answers a
+  // different question — not what the agent is doing, but which agent it is.
+  React.useEffect(() => subscribeSessionHarness(), []);
+
+  // And the catalog those events are read against: which harnesses beyond the
+  // four this renderer ships main will actually launch. Pulled once here so a
+  // launch that never passes through a picker — a ticket dragged to Doing with
+  // a harness it remembered from a previous run — still declares the
+  // expectation its manifest earns. The composer re-pulls on every open, which
+  // is where a mid-session verdict lands.
+  React.useEffect(() => {
+    void hydrateHarnessCatalog();
+  }, []);
 
   const createScratch = React.useCallback((project: Project) => {
     void createTerminalSession(scratchScope(project.id));

@@ -250,6 +250,26 @@ volli help [<command> | <topic>]
 
 Topics: `exit-codes`, `addressing`, `json`, `orchestration`.
 
+### volli hook
+
+```sh
+volli hook <harness> <event> [--socket <path>]
+```
+
+Reports one harness event to Volli. The event payload arrives as JSON on stdin,
+or as a trailing argument for harnesses that pass it that way.
+
+Volli configures this itself, on the harnesses it launches. You never need to
+run it, and it is not listed in `volli help`.
+
+It always exits `0` and prints nothing — outside a Volli session it does no
+work at all, and inside one a failure to reach the app is silent rather than
+something that could interrupt a running agent.
+
+`<event>` is one of `session.started`, `session.ended`, `turn.started`,
+`turn.completed`, `input.needed`, `permission.requested`, `tool.started`,
+`subagent.completed`.
+
 ## Environment
 
 | Variable | Purpose |

@@ -22,6 +22,7 @@ describe("runCli", () => {
       stdout: (text) => stdout.push(text),
       stderr: (text) => stderr.push(text),
       readText: async () => "",
+      observe: async () => ({}),
       request: async (socketPath, request) => {
         expect(socketPath).toBe("/profiles/volli.sock");
         requests.push(request);
@@ -64,6 +65,7 @@ describe("runCli", () => {
       stdout: (text) => stdout.push(text),
       stderr: (text) => stderr.push(text),
       readText: async () => "",
+      observe: async () => ({}),
       request: async () => {
         throw new AgentClientError("APP_UNREACHABLE", "not running");
       },
@@ -87,6 +89,7 @@ describe("runCli", () => {
       stdout: (text) => stdout.push(text),
       stderr: () => undefined,
       readText: async () => "",
+      observe: async () => ({}),
       request: async () => {
         requested = true;
         throw new Error("not reached");
@@ -110,6 +113,7 @@ describe("runCli", () => {
       stdout: (text) => output.push(text),
       stderr: () => undefined,
       readText: async () => "",
+      observe: async () => ({}),
       request: async () => ({ v: 1, ok: true, data: {} }) as const,
       launch: async () => ({ alreadyRunning: true }),
     });
@@ -136,6 +140,7 @@ describe("runCli", () => {
       stdout: (text: string) => output.push(text),
       stderr: (text: string) => errors.push(text),
       readText: async () => "",
+      observe: async () => ({}),
       request: async () => ({ v: 1, ok: true, data: {} }) as const,
       launch: async () => ({ alreadyRunning: true }),
     };
@@ -169,6 +174,7 @@ describe("runCli", () => {
       stdout: (text: string) => output.push(text),
       stderr: () => undefined,
       readText: async () => "",
+      observe: async () => ({}),
       request: async () => ({ v: 1, ok: true, data: {} }) as const,
       launch: async () => ({ alreadyRunning: true }),
     };
@@ -195,6 +201,7 @@ describe("runCli", () => {
       stdout: (text: string) => output.push(text),
       stderr: (text: string) => errors.push(text),
       readText: async () => "",
+      observe: async () => ({}),
       request: async () => ({ v: 1, ok: true, data: {} }) as const,
       launch: async (timeout: number) => {
         timeouts.push(timeout);
@@ -235,6 +242,7 @@ describe("runCli", () => {
       stdout: (text: string) => output.push(text),
       stderr: (text: string) => errors.push(text),
       readText: async () => "",
+      observe: async () => ({}),
       request: async () => ({ v: 1, ok: true, data: {} }) as const,
       launch: async () => ({ alreadyRunning: true }),
     };
@@ -253,6 +261,7 @@ describe("runCli", () => {
       stdout: (text: string) => output.push(text),
       stderr: (text: string) => errors.push(text),
       readText: async () => "",
+      observe: async () => ({}),
       launch: async () => ({ alreadyRunning: true }),
     };
     expect(
@@ -298,6 +307,7 @@ describe("runCli", () => {
         stdout: () => undefined,
         stderr: () => undefined,
         readText: async () => "",
+        observe: async () => ({}),
         request: async (_socket, request) => {
           requests.push(request);
           return { v: 1, ok: true, data: { projects: [] } };
@@ -312,6 +322,7 @@ describe("runCli", () => {
       stdout: () => undefined,
       stderr: () => undefined,
       readText: async () => "",
+      observe: async () => ({}),
       request: async (_socket, request) => {
         requests.push(request);
         return { v: 1, ok: true, data: { projects: [] } };
@@ -319,5 +330,142 @@ describe("runCli", () => {
       launch: async () => ({ alreadyRunning: true }),
     });
     expect(requests[1]?.ctx.env).toEqual({});
+  });
+});
+
+describe("runCli — doctor", () => {
+  // The observation is the command's whole evidence; main must receive it
+  // rather than reconstruct it.
+  it("sends what this process observed of its own environment", async () => {
+    const requests: AgentRequest[] = [];
+    const code = await runCli(["doctor"], {
+      env: { VOLLI_SOCKET: "/socket", VOLLI_SESSION: "s-1" },
+      cwd: "/work",
+      stdout: () => undefined,
+      stderr: () => undefined,
+      readText: async () => "",
+      observe: async () => ({ pathEntries: ["/ud/bin"], resolved: { claude: "/ud/bin/claude" } }),
+      request: async (_socket, request) => {
+        requests.push(request);
+        return { v: 1, ok: true, data: { checks: [], summary: "All 0 checks passed." } };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    expect(code).toBe(0);
+    expect(requests[0]?.args["pathEntries"]).toEqual(["/ud/bin"]);
+    expect(requests[0]?.args["resolved"]).toEqual({ claude: "/ud/bin/claude" });
+    expect(requests[0]?.ctx.env.session).toBe("s-1");
+  });
+
+  // The observation travels with the request, so the one that arrived WITH the
+  // repair describes the world the repair was about to change. Rendering the
+  // checks against it told a user who had just run `--fix` to run `--fix`.
+  it("re-observes after a repair and reports the world the repair left behind", async () => {
+    const stdout: string[] = [];
+    const requests: AgentRequest[] = [];
+    let observations = 0;
+
+    const code = await runCli(["doctor", "--fix"], {
+      env: { VOLLI_SOCKET: "/socket" },
+      cwd: "/work",
+      stdout: (text) => stdout.push(text),
+      stderr: () => undefined,
+      readText: async () => "",
+      observe: async () => {
+        observations += 1;
+        return {
+          pathEntries: ["/ud/bin"],
+          resolved: { claude: observations === 1 ? null : "/ud/bin/claude" },
+        };
+      },
+      request: async (_socket, request) => {
+        requests.push(request);
+        const repaired = request.args["resolved"] as Record<string, string | null>;
+        return {
+          v: 1,
+          ok: true,
+          data: {
+            checks: [],
+            summary: repaired["claude"] === null ? "1 failed of 1 checks." : "All 1 checks passed.",
+          },
+        };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    expect(code).toBe(0);
+    expect(observations).toBe(2);
+    expect(requests[0]?.args["fix"]).toBe(true);
+    // Repairing twice is work the user did not ask for, and the second run
+    // would be measuring its own side effects.
+    expect(requests[1]).toBeDefined();
+    expect(requests[1]?.args).not.toHaveProperty("fix");
+    expect(requests[1]?.args["resolved"]).toEqual({ claude: "/ud/bin/claude" });
+    expect(stdout.join("")).toContain("All 1 checks passed.");
+  });
+
+  it("does not re-check a doctor run that was not asked to repair", async () => {
+    const requests: AgentRequest[] = [];
+    await runCli(["doctor"], {
+      env: { VOLLI_SOCKET: "/socket" },
+      cwd: "/work",
+      stdout: () => undefined,
+      stderr: () => undefined,
+      readText: async () => "",
+      observe: async () => ({ pathEntries: [], resolved: {} }),
+      request: async (_socket, request) => {
+        requests.push(request);
+        return { v: 1, ok: true, data: { checks: [], summary: "All 0 checks passed." } };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+    expect(requests).toHaveLength(1);
+  });
+
+  // A repair that main refused is the whole answer; a re-check would print a
+  // report over the top of the error that explains it.
+  it("does not re-check when the repair itself failed", async () => {
+    const requests: AgentRequest[] = [];
+    const stderr: string[] = [];
+    const code = await runCli(["doctor", "--fix"], {
+      env: { VOLLI_SOCKET: "/socket" },
+      cwd: "/work",
+      stdout: () => undefined,
+      stderr: (text) => stderr.push(text),
+      readText: async () => "",
+      observe: async () => ({ pathEntries: [], resolved: {} }),
+      request: async (_socket, request) => {
+        requests.push(request);
+        return {
+          v: 1,
+          ok: false,
+          error: { code: "MUTATION_FAILED", message: "Repair failed: disk is full" },
+        };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+    expect(code).toBe(1);
+    expect(requests).toHaveLength(1);
+    expect(stderr.join("")).toContain("Repair failed: disk is full");
+  });
+
+  it("does not attach an observation to any other command", async () => {
+    const requests: AgentRequest[] = [];
+    await runCli(["board"], {
+      env: { VOLLI_SOCKET: "/socket" },
+      cwd: "/work",
+      stdout: () => undefined,
+      stderr: () => undefined,
+      readText: async () => "",
+      observe: async () => ({ pathEntries: ["/ud/bin"] }),
+      request: async (_socket, request) => {
+        requests.push(request);
+        return { v: 1, ok: true, data: {} };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    expect(requests[0]?.args["pathEntries"]).toBeUndefined();
   });
 });

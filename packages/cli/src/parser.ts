@@ -1,9 +1,9 @@
 import {
   COLUMN_VOCABULARY,
-  HARNESS_IDS,
-  isHarnessId,
+  FIRST_CLASS_HARNESS_IDS,
   isTicketPriority,
   parseColumnToken,
+  parseHarnessId,
   TICKET_PRIORITIES,
 } from "@volli/shared";
 
@@ -16,8 +16,13 @@ export interface CliInvocation {
 /** The priority vocabulary rendered for teaching errors and help, derived from the domain source. */
 export const PRIORITY_VOCABULARY: string = TICKET_PRIORITIES.join(", ");
 
-/** The first-class harness vocabulary rendered for teaching errors and help. */
-export const HARNESS_VOCABULARY: string = HARNESS_IDS.join(", ");
+/**
+ * The harness vocabulary rendered for teaching errors and help. The four
+ * first-class ids can be listed; a registered harness cannot, because its slug
+ * is whatever its author called it and only the app knows which ones exist — so
+ * the phrase names the category instead of pretending to enumerate it.
+ */
+export const HARNESS_VOCABULARY: string = `${FIRST_CLASS_HARNESS_IDS.join(", ")}, or a registered, trusted harness`;
 
 export type CliParseResult =
   | { ok: true; invocation: CliInvocation }
@@ -42,13 +47,22 @@ const priorityValue: ValueParser = (raw) =>
         message: `Unknown priority ${JSON.stringify(raw)} (valid: ${PRIORITY_VOCABULARY})`,
       };
 
-const harnessValue: ValueParser = (raw) =>
-  isHarnessId(raw)
-    ? { ok: true, value: raw }
-    : {
+/**
+ * Shape, and only shape. A first-class id and any well-formed registered slug
+ * both pass, because whether a slug names a harness that exists — and whether a
+ * human ever trusted it — is a fact about the app's registry, which this process
+ * cannot read. Main refuses an unknown or untrusted one by name, so accepting
+ * the shape here widens what can be TYPED, never what can launch.
+ */
+const harnessValue: ValueParser = (raw) => {
+  const parsed = parseHarnessId(raw);
+  return parsed === null
+    ? {
         ok: false,
-        message: `Unknown harness ${JSON.stringify(raw)} (valid: ${HARNESS_VOCABULARY})`,
-      };
+        message: `Invalid harness ${JSON.stringify(raw)} (valid: ${HARNESS_VOCABULARY})`,
+      }
+    : { ok: true, value: parsed };
+};
 
 const columnValue: ValueParser = (raw) => {
   const result = parseColumnToken(raw);
@@ -487,6 +501,41 @@ const SESSION_LINK_SPEC: CommandSpec = {
   options: {},
 };
 
+/**
+ * `volli session harness <slug> [--mint]` — the wrapper saying which harness is
+ * now running in this terminal, and asking for the session id to launch it with.
+ *
+ * Involuntary, like `hook`: it is fired by the generated PATH shim one step
+ * before it execs the harness, never typed by an agent and never read by a
+ * human. So it is deliberately absent from {@link COMMAND_HELP} — the reference
+ * is what an agent can usefully DO, and a verb whose only correct caller is a
+ * file Volli generated is noise in it. It still walks the parser (unlike `hook`,
+ * which bypasses it entirely) because it carries one ordinary positional and
+ * has no reason to grow its own argv handling.
+ *
+ * With `--mint`, and only then, the reply is one bare uuid on stdout: the
+ * wrapper captures it with `$(…)` and prepends it to the harness's argv, so
+ * anything else printed there would reach the harness as a command-line word.
+ */
+const SESSION_HARNESS_SPEC: CommandSpec = {
+  summary: "Record which harness is now running in the current Volli session.",
+  example: "volli session harness claude-code",
+  notes: [
+    "Acts on VOLLI_SESSION; needs a Volli session.",
+    "Fired by the harness's launch wrapper, not typed.",
+  ],
+  positionalId: { label: "session harness" },
+  options: {
+    "--mint": {
+      kind: "flag",
+      key: "mint",
+      value: true,
+      hidden: true,
+      help: "Mint this launch's harness session id and print it.",
+    },
+  },
+};
+
 const TICKET_MOVE_SPEC: CommandSpec = {
   summary: "Move a ticket to another column.",
   example: "volli ticket move VC-12 --to needs-review",
@@ -694,6 +743,24 @@ const PROJECT_LIST_SPEC: CommandSpec = {
   options: {},
 };
 
+const DOCTOR_SPEC: CommandSpec = {
+  summary: "Audit the harness integration and report what it is actually doing.",
+  example: "volli doctor --fix",
+  notes: [
+    "Reports outcomes, not configuration: whether typing a harness's name here really reaches Volli's wrapper.",
+    "Run it inside a Volli terminal — several checks describe the shell it runs in.",
+    "--fix regenerates the wrappers, harness configs and shell integration. Idempotent; it is the same work a boot does.",
+  ],
+  options: {
+    "--fix": {
+      kind: "flag",
+      key: "fix",
+      value: true,
+      help: "Regenerate everything regenerable, then re-check.",
+    },
+  },
+};
+
 const HELP_SPEC: CommandSpec = {
   summary: "Show this reference, a command's help, or a topic.",
   example: "volli help ticket create",
@@ -737,6 +804,7 @@ export const COMMAND_HELP: readonly CommandHelpEntry[] = [
   { name: "session link", group: "Session", spec: SESSION_LINK_SPEC },
   { name: "notify", group: "Session", spec: NOTIFY_SPEC },
   { name: "app launch", group: "App", spec: APP_LAUNCH_SPEC },
+  { name: "doctor", group: "App", spec: DOCTOR_SPEC },
   { name: "help", group: "App", spec: HELP_SPEC },
 ];
 
@@ -796,6 +864,9 @@ export function parseCliArgs(argv: readonly string[]): CliParseResult {
   if (argv[0] === "session" && argv[1] === "link") {
     return parseWithSpec("session.link", argv.slice(2), SESSION_LINK_SPEC);
   }
+  if (argv[0] === "session" && argv[1] === "harness") {
+    return parseWithSpec("session.harness", argv.slice(2), SESSION_HARNESS_SPEC);
+  }
   if (argv[0] === "session" && argv[1] === "list") {
     return parseWithSpec("session.list", argv.slice(2), SESSION_LIST_SPEC);
   }
@@ -809,6 +880,7 @@ export function parseCliArgs(argv: readonly string[]): CliParseResult {
   if (argv[0] === "app" && argv[1] === "launch") {
     return parseWithSpec("app.launch", argv.slice(2), APP_LAUNCH_SPEC);
   }
+  if (argv[0] === "doctor") return parseWithSpec("doctor", argv.slice(1), DOCTOR_SPEC);
   if (argv[0] === "help") return parseHelp(argv.slice(1));
   return usage(unknownCommandMessage());
 }

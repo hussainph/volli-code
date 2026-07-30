@@ -8,14 +8,25 @@ import {
   composeAttachmentsSection,
   composeTicketPrompt,
   displayTicketId,
+  doctorSummary,
+  effectiveHarnessId,
   errorMessage,
-  HARNESS_IDS,
+  FIRST_CLASS_HARNESS_IDS,
+  getHarnessAdapter,
+  HARNESS_EVENTS,
+  harnessEventOrder,
+  harnessLabel,
+  isHarnessEvent,
   isTicketPriority,
   isTicketStatus,
-  isHarnessId,
+  isFirstClassHarnessId,
   isValidBranchName,
+  parseHarnessId,
   resolveAgentContext,
+  runDoctorChecks,
   shortSessionId,
+  supersededHarnessEvent,
+  declaresInputNeeded as adapterDeclaresInputNeeded,
   TICKET_PRIORITIES,
   TICKET_STATUS_LABELS,
   TICKET_STATUSES,
@@ -26,8 +37,15 @@ import type {
   AgentRequest,
   AgentResponse,
   DataChangeKind,
+  DoctorFacts,
+  DoctorObservation,
+  HarnessEventNotice,
+  HarnessId,
+  Observed,
   Project,
   SessionActivityState,
+  SessionHarnessNotice,
+  SessionRecord,
   TicketEventActor,
   TicketBodyMutation,
   Ticket,
@@ -37,10 +55,18 @@ import type {
 import { listAttachments } from "./db/attachments-repo";
 import { listTicketEvents, recordTicketEvent } from "./db/events-repo";
 import { listComments } from "./db/comments-repo";
+import { recordHarnessChannelEvent, recordHarnessLaunch } from "./db/harness-channel-repo";
+import { getRegisteredHarness } from "./db/harness-registry-repo";
 import { listAllLabels } from "./db/labels-repo";
 import { listProjects } from "./db/projects-repo";
-import { getSession, listSessions, setHarnessSessionId } from "./db/sessions-repo";
+import {
+  getSession,
+  listSessions,
+  setActiveHarnessId,
+  setHarnessSessionId,
+} from "./db/sessions-repo";
 import { getTicket, listArchivedTicketsByProject, listTicketsByProject } from "./db/tickets-repo";
+import { recordHarnessDelivery } from "./harness-registry";
 import { readWorktreeDiff, readWorktreeStatus, runGitCapturing } from "./worktree";
 import type { RunGit } from "./worktree";
 import { isInside } from "./worktree/paths";
@@ -97,6 +123,36 @@ export interface AgentCommandServiceOptions {
    * Absent (tests) means the broadcast is a no-op.
    */
   onMutation?: (change: { ticketId: string; projectId: string; kind: DataChangeKind }) => void;
+  /**
+   * Called for every canonical harness event this door ingests (harness-events),
+   * after any session-record write it implies has committed — the notice
+   * index.ts pushes to every window as `volli:harness-event`. Absent (tests)
+   * means the fan-out is a no-op.
+   */
+  onHarnessEvent?: (notice: HarnessEventNotice) => void;
+  /**
+   * Called when a wrapper announce actually CHANGES which harness a session is
+   * running — the notice index.ts pushes to every window as
+   * `volli:session-harness`, so the sidebar's label and the session's harness
+   * state move without waiting for a refetch. Never called for the ordinary
+   * announce that agrees with what Volli already believes. Absent (tests) means
+   * the fan-out is a no-op.
+   */
+  onSessionHarness?: (notice: SessionHarnessNotice) => void;
+  /**
+   * What only main can answer about the harness runtime — which wrappers it
+   * wrote, where the shim is, what the shell integration looks like. Injected
+   * rather than read here, because every one of these lives in the boot-time
+   * runtime state and none of it belongs in this file. Absent (tests) makes
+   * `doctor` report that it could not look.
+   */
+  doctorFacts?: () => Promise<DoctorFacts>;
+  /**
+   * Regenerates everything regenerable: wrappers, harness configs, the shell
+   * integration. Idempotent by construction — it is the same work boot does —
+   * so `--fix` is never destructive and never needs confirming.
+   */
+  doctorRepair?: () => Promise<void>;
 }
 
 export interface AgentCommandService {
@@ -121,13 +177,60 @@ function invalidPriorityResponse(priority: unknown): AgentResponse | null {
   );
 }
 
-/** The harness twin of {@link invalidPriorityResponse}: teach the vocabulary, don't lump. */
-function invalidHarnessResponse(harness: unknown): AgentResponse | null {
-  if (harness === undefined || isHarnessId(harness)) return null;
-  return failure(
-    "INVALID_REQUEST",
-    `Invalid harness ${JSON.stringify(harness)} (valid: ${HARNESS_IDS.join(", ")})`,
-  );
+/**
+ * The harness twin of {@link invalidPriorityResponse}, with the one thing a
+ * priority does not have: a vocabulary that grows. A registered manifest is a
+ * harness the user brought and confirmed the bytes of, and there is no reason
+ * `volli` may not name one — the CLI simply cannot check it. Which slugs exist,
+ * and which of them a human actually ruled on, is this process's registry, so
+ * the parser vets the shape and the whole of the judgement lives here.
+ *
+ * Trust, not registration, is the property. A `blocked` row is a harness someone
+ * looked at and said no to; pinning a ticket to it would queue a launch that can
+ * never happen, and would do it silently. The two refusals are separate
+ * sentences because they ask for opposite things — register the harness, or go
+ * and trust the one already sitting there.
+ *
+ * Returns the resolved id rather than a bare verdict, so the call sites stamp
+ * exactly what was checked instead of re-narrowing the raw argument and quietly
+ * dropping everything but the first-class four.
+ */
+function resolveRequestedHarness(
+  db: Database.Database,
+  value: unknown,
+): { ok: true; harnessId: HarnessId | undefined } | { ok: false; response: AgentResponse } {
+  if (value === undefined) return { ok: true, harnessId: undefined };
+  const parsed = typeof value === "string" ? parseHarnessId(value) : null;
+  if (parsed === null) {
+    return {
+      ok: false,
+      response: failure(
+        "INVALID_REQUEST",
+        `Invalid harness ${JSON.stringify(value)} (valid: ${FIRST_CLASS_HARNESS_IDS.join(", ")}, or a registered, trusted harness)`,
+      ),
+    };
+  }
+  if (isFirstClassHarnessId(parsed)) return { ok: true, harnessId: parsed };
+  const registered = getRegisteredHarness(db, parsed);
+  if (registered === undefined) {
+    return {
+      ok: false,
+      response: failure(
+        "INVALID_REQUEST",
+        `Unknown harness ${JSON.stringify(value)} — no harness by that name is registered (built in: ${FIRST_CLASS_HARNESS_IDS.join(", ")})`,
+      ),
+    };
+  }
+  if (registered.decision !== "trusted") {
+    return {
+      ok: false,
+      response: failure(
+        "INVALID_REQUEST",
+        `Harness ${JSON.stringify(value)} is registered but not trusted, so nothing can launch on it.`,
+      ),
+    };
+  }
+  return { ok: true, harnessId: parsed };
 }
 
 /**
@@ -516,6 +619,147 @@ function requestActor(
       };
 }
 
+/**
+ * One reported field, as {@link Observed}. A string is a measurement. `null` is
+ * ALSO a measurement — the caller looked and found nothing there, which is what
+ * `volli doctor` sends for an unset `ZDOTDIR` or a `volli` that resolves
+ * nowhere. Anything else never became a measurement at all, and says so:
+ * `undefined`, which the checks render as a warn naming what was not read
+ * instead of as a confident absence with a remedy attached.
+ *
+ * Coercing the third case into `null` is the collapse the whole command exists
+ * to avoid. `zdotDir: 123` would report "ZDOTDIR is unset — open a new
+ * terminal", and `volliPath: {}` would report "`volli` resolves to nothing —
+ * agents cannot reach the planner". Confident, plausible, wrong, in the one
+ * place a wrong answer is worth less than none.
+ *
+ * A malformed VALUE does not fail the request, which is where this file's
+ * validate-don't-coerce rule bends, deliberately: it means the `volli` that
+ * called and the main that answered disagree about the wire, and that is one of
+ * the conditions doctor exists to name (another install owns the link, a stale
+ * shim on PATH). Refusing there would delete every correct check in the report
+ * to punish one field, in the command whose whole worth is that it still works
+ * when things are broken. The SHAPE remains a contract — see {@link
+ * parseDoctorObservation}, which refuses an observation it cannot read at all.
+ */
+function observedText(value: unknown): Observed<string> {
+  if (typeof value === "string") return value;
+  return value === null ? null : undefined;
+}
+
+function parseDoctorObservation(request: AgentRequest): DoctorObservation | null {
+  const pathEntries = request.args["pathEntries"];
+  const resolved = request.args["resolved"];
+  if (!Array.isArray(pathEntries) || !pathEntries.every((entry) => typeof entry === "string")) {
+    return null;
+  }
+  if (typeof resolved !== "object" || resolved === null || Array.isArray(resolved)) return null;
+  return {
+    pathEntries,
+    sessionId: request.ctx.env.session ?? null,
+    zdotDir: observedText(request.args["zdotDir"]),
+    resolved: Object.fromEntries(
+      Object.entries(resolved as Record<string, unknown>).map(([key, value]) => [
+        key,
+        observedText(value),
+      ]),
+    ),
+    volliPath: observedText(request.args["volliPath"]),
+  };
+}
+
+/**
+ * The harness session id an event carries, trimmed — `null` when the event
+ * carries none (most events don't), `undefined` when the field is present but
+ * unusable, which is a malformed request rather than an absent id.
+ */
+function trimmedHarnessSessionId(value: unknown): string | null | undefined {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+  return trimmed.length <= 200 ? trimmed : undefined;
+}
+
+/**
+ * Which harness fired this hook. `volli hook <harness> <event>` names it — the
+ * slug is baked into the argv by the wrapper that wrote the harness's own hook
+ * config — and it is not always the harness the session was launched with: a
+ * user who types `codex` inside a claude-code session's terminal reaches the
+ * codex wrapper, and codex's hooks then report from that same `VOLLI_SESSION`.
+ * Read from the session row instead, every one of those events would be
+ * recorded and announced as Claude Code's.
+ *
+ * The fallback, for the older hook contract that names no harness, is the
+ * EFFECTIVE one — what last announced itself, not what the session launched
+ * with — for exactly the same reason.
+ *
+ * Validated against the harnesses Volli knows — the first-class ids, the
+ * registry rows, and the session's own — rather than accepted as a string.
+ * Anything else is refused: the value is generated by Volli's own launch
+ * machinery, so a name from outside that vocabulary is not a harness reporting,
+ * it is something else talking, and it may not write to the capability ledger
+ * under a name of its choosing. An absent argument is not an error — it is the
+ * older hook contract, where the session is all there was to go on.
+ */
+function firingHarnessId(
+  db: Database.Database,
+  session: Pick<SessionRecord, "harnessId" | "activeHarnessId">,
+  value: unknown,
+): { ok: true; harnessId: HarnessId } | { ok: false; response: AgentResponse } {
+  if (value === undefined || value === null) {
+    return { ok: true, harnessId: effectiveHarnessId(session) };
+  }
+  const parsed = typeof value === "string" ? parseHarnessId(value) : null;
+  if (parsed === null) {
+    return {
+      ok: false,
+      response: failure("INVALID_REQUEST", `Invalid harness ${JSON.stringify(value)}.`),
+    };
+  }
+  // Either of the session's OWN harnesses vouches for the name — the one it
+  // launched with and the one now running. Both, not just the effective one: a
+  // manifest untrusted since launch is no longer in the registry, and the
+  // harness it started is still entitled to report on the session it is in.
+  const known =
+    parsed === session.harnessId ||
+    parsed === effectiveHarnessId(session) ||
+    isFirstClassHarnessId(parsed) ||
+    getRegisteredHarness(db, parsed) !== undefined;
+  return known
+    ? { ok: true, harnessId: parsed }
+    : {
+        ok: false,
+        response: failure("INVALID_REQUEST", `Unknown harness ${JSON.stringify(value)}.`),
+      };
+}
+
+/**
+ * Whether this harness's adapter declares `input.needed` at all.
+ *
+ * The renderer already refuses to raise a `waiting` state for one that doesn't
+ * ({@link receiveHarnessEvent} in `@volli/shared`) — cursor maps both blocking
+ * signals to null in its own source, so an `input.needed` bearing its name came
+ * from something in the pipe rather than from cursor. Main has to apply the
+ * same gate or it fires a native "needs you" interrupt against a sidebar
+ * showing plain Idle, which is the disagreement the whole channel is built to
+ * avoid. The delivery status alone cannot carry this: it is `verified` for
+ * every first-class harness by construction, capability unread.
+ *
+ * A harness with no adapter here is a registered manifest, and main's own
+ * registry is what vouches for it — matching the renderer, which believes an
+ * id it cannot look up for exactly the same reason: the delivery is all the
+ * evidence there is, and disbelieving it would hide a harness that IS
+ * reporting.
+ *
+ * The rule itself is `@volli/shared`'s, deliberately: this gate and the
+ * renderer's `waiting` fold have to agree, and the way two processes agree on a
+ * predicate is by calling the same one. All this adds is main's lookup.
+ */
+function declaresInputNeeded(harnessId: HarnessId): boolean {
+  return adapterDeclaresInputNeeded(getHarnessAdapter(harnessId));
+}
+
 function isBodyMutation(value: unknown): value is TicketBodyMutation {
   if (typeof value !== "object" || value === null || !("mode" in value)) return false;
   if (value.mode === "replace") return "body" in value && typeof value.body === "string";
@@ -560,10 +804,54 @@ function sessionForPublicId(
       };
 }
 
+/**
+ * How many sessions main keeps an ordering watermark for. `VOLLI_SESSION`
+ * outlives its PTY, so nothing here ever gets a reliable "this session is
+ * finished" signal to delete on, and an unbounded map on the involuntary
+ * channel's hot path is a leak with a long fuse. The cap is an order of
+ * magnitude past any real number of concurrently firing sessions, and the entry
+ * it evicts is the least recently heard from.
+ */
+const HARNESS_WATERMARK_LIMIT = 512;
+
+/**
+ * Records that a session has now been heard from at `firedAt`, evicting the
+ * stalest watermark once the map is full. The delete-then-set is what moves the
+ * entry to the young end — `Map` iterates in insertion order, which is the
+ * whole LRU this needs and the only reason it costs nothing.
+ */
+function rememberFiredAt(
+  watermarks: Map<string, number>,
+  sessionId: string,
+  firedAt: number,
+): void {
+  watermarks.delete(sessionId);
+  watermarks.set(sessionId, firedAt);
+  if (watermarks.size > HARNESS_WATERMARK_LIMIT) {
+    const stalest = watermarks.keys().next();
+    if (!stalest.done) watermarks.delete(stalest.value);
+  }
+}
+
 export function createAgentCommandService(
   options: AgentCommandServiceOptions,
 ): AgentCommandService {
   const now = options.now ?? Date.now;
+  /**
+   * The newest fire-time main has ingested per session — the same watermark the
+   * renderer keeps on its own `SessionHarnessState`, kept here too because main
+   * does two things the renderer never sees: it writes the resume seed, and it
+   * fires the one claim that cannot be taken back once it has interrupted a
+   * human. Neither may act on a delivery a newer one has already answered.
+   *
+   * In memory rather than in the db, deliberately. A watermark is worth
+   * something only while a session is live and firing; it is worth nothing after
+   * a restart, when a surviving row would order today's events against a process
+   * that no longer exists; and it is not worth a write per hook on the hottest
+   * involuntary path in the app. Losing one degrades that session to arrival
+   * order for one event, which is what every event got before this existed.
+   */
+  const watermarks = new Map<string, number>();
   // node:crypto's randomUUID is a standalone function (safe to reference
   // detached); the global `crypto.randomUUID` would lose its Crypto `this` when
   // called via this alias and throw "Value of 'this' must be of type Crypto".
@@ -705,7 +993,10 @@ export function createAgentCommandService(
                   ? displayTicketId(ticketProject.ticketPrefix, ticket.ticketNumber)
                   : null,
               title: session.title,
-              harness: session.harnessId,
+              // What is RUNNING there, not what opened it: an agent reading
+              // this list is deciding where to look, and the launch harness of
+              // a terminal somebody has since re-used is the wrong answer.
+              harness: effectiveHarnessId(session),
               ageMs: Math.max(0, now() - session.createdAt),
             };
           });
@@ -821,6 +1112,319 @@ export function createAgentCommandService(
           v: 1,
           ok: true,
           data: { session: shortSessionId(session.id), harnessSessionId },
+        };
+      }
+      if (request.cmd === "session.harness") {
+        // The second involuntary channel: a harness's own PATH-shim wrapper,
+        // one step before it execs, saying what is about to run and — when that
+        // harness takes its session id on argv — asking for one. Addressed by
+        // `VOLLI_SESSION` exactly as `session.link` and `hook` are.
+        //
+        // Why this exists at all: `sessions.harness_id` is written once at
+        // INSERT and is the LAUNCH, which is a true and durable fact. But a
+        // terminal outlives the agent that opened it — quit opencode, run
+        // claude in the same pane — and everything that decides something about
+        // the RUNNING agent (the resume command line, the needs-you
+        // notification, the sidebar's label) was reading the launch. So the
+        // launch is kept and this is recorded beside it.
+        //
+        // The wrapper is the one place that can say this. It runs on every
+        // invocation of every harness, including a Declared one that fires no
+        // hooks at all, so the announce covers the tiers the event channel
+        // structurally cannot.
+        //
+        // And why the id is minted HERE rather than in the wrapper: a session
+        // id is only worth anything once it is written down — `harness_session_id`
+        // is what every future resume of this session reads — so a shell that
+        // minted its own would still have to call in to report it. One call
+        // does both. It is minted per LAUNCH, not per session: `VOLLI_SESSION`
+        // is stamped once per PTY, and a harness that treats its session id as
+        // single-use per workspace (cursor mkdirs a directory named after it)
+        // fails outright on the second launch in one terminal.
+        const sessionId = request.ctx.env.session;
+        if (!sessionId) {
+          return failure("CONTEXT_REQUIRED", "session harness requires VOLLI_SESSION context.");
+        }
+        const session = getSession(options.db, sessionId);
+        if (!session) return failure("SESSION_NOT_FOUND", `No session matches ${sessionId}.`);
+        // Ended is ended, the same rule `hook` applies and for the same reason:
+        // `VOLLI_SESSION` is exported into the terminal's environment, so a tmux
+        // server or a disowned daemon started inside a Volli session carries it
+        // forever. Accepting an announce from one would rewrite the harness a
+        // dead session resumes with, months later.
+        if (session.endedAt !== null) {
+          return failure("SESSION_ENDED", `Session ${shortSessionId(session.id)} has ended.`);
+        }
+        const slug = request.args["id"];
+        if (typeof slug !== "string") {
+          return failure("INVALID_REQUEST", "session harness requires a harness slug.");
+        }
+        // The same vocabulary check a fired hook passes — one definition of
+        // "a harness Volli knows", not a second one that could drift from it.
+        const announced = firingHarnessId(options.db, session, slug);
+        if (!announced.ok) return announced.response;
+        const harnessId = announced.harnessId;
+        // The only honest place to count a launch. This call is made by the
+        // wrapper Volli generated, one step before it execs, so it is proof
+        // that our configuration was in the loop — which is exactly what has to
+        // be true for the silence afterwards to mean anything. Counting at the
+        // PTY spawn instead would also count `/opt/homebrew/bin/claude` typed by
+        // hand, a launch that never saw our hooks, and manufacture a false
+        // accusation out of a user's own shell habit.
+        //
+        // Ungated, unlike `active_harness_id` above: a relaunch of the same
+        // harness is a new launch whose channel has proved nothing yet, and it
+        // is the case the whole table exists to catch.
+        recordHarnessLaunch(options.db, harnessId, now());
+        // The WRITE is gated on a change: `active_harness_id` records which
+        // harness is running, and re-storing the value already there is a
+        // durable write bought for nothing.
+        //
+        // The BROADCAST is not, and that distinction is the point. This call is
+        // proof that a launch just happened — the wrapper runs once per
+        // invocation, out of the harness's own process — and the renderer's
+        // grace window is anchored to it. Gating the broadcast on a changed
+        // slug meant the second launch in one terminal (quit claude, run claude
+        // again: the exact case the mint below exists for) was never announced,
+        // so it inherited the first launch's `startedAt` and its already
+        // `delivered` channel, and could never be judged silent. `changed`
+        // stays ON the notice — the renderer still needs it to decide whether
+        // to repoint the durable record's labels — but it stops being the gate.
+        const changed = harnessId !== effectiveHarnessId(session);
+        if (changed) setActiveHarnessId(options.db, session.id, harnessId);
+        options.onSessionHarness?.({
+          sessionId: session.id,
+          projectId: session.projectId,
+          ticketId: session.ticketId,
+          harnessId,
+          changed,
+          at: now(),
+        });
+        // Only when the caller asked. The wrapper asks exactly when the adapter
+        // it was rendered from takes an id on argv, and that is the only place
+        // the answer is known — a registered manifest's adapter never reaches
+        // main's own table, so main cannot re-derive it here. For a `reported`
+        // or `none` harness a minted id would overwrite the resume seed the
+        // harness's own events are about to write with one it never heard of.
+        //
+        // `randomUUID` directly, not the injectable `newId` seam: the FORMAT is
+        // the contract, not an implementation detail a test may vary. Cursor
+        // validates strict v4 (`4` in the third group, `[89ab]` in the fourth)
+        // and refuses a v7.
+        const minted = request.args["mint"] === true ? randomUUID() : null;
+        if (minted !== null) {
+          // Overwrites, always. The seed belongs to the launch that is starting
+          // now; the previous one describes an agent this terminal has quit.
+          setHarnessSessionId(options.db, session.id, minted);
+        }
+        return {
+          v: 1,
+          ok: true,
+          data: {
+            session: shortSessionId(session.id),
+            harness: harnessId,
+            changed,
+            harnessSessionId: minted,
+          },
+        };
+      }
+      if (request.cmd === "hook") {
+        // The involuntary channel (harness-events): a hook the wrapper
+        // configured, not something the agent chose to run. `VOLLI_SESSION` is
+        // both the addressing and the harness's own session id, so an event
+        // resolves the session the same way `session.done` does.
+        const sessionId = request.ctx.env.session;
+        if (!sessionId) {
+          return failure("CONTEXT_REQUIRED", "hook requires VOLLI_SESSION context.");
+        }
+        const session = getSession(options.db, sessionId);
+        if (!session) return failure("SESSION_NOT_FOUND", `No session matches ${sessionId}.`);
+        // A session row outlives its PTY, and `VOLLI_SESSION` outlives both: it
+        // is exported into the session's environment, so anything that escapes
+        // that environment carries it forever — a tmux server started inside a
+        // Volli terminal, a disowned daemon, or simply a hook that fires as its
+        // own shell is exiting. Without this guard such an event is accepted in
+        // full: it rewrites the resume seed, records a verified delivery, fires
+        // a native "needs you" notification, and the renderer registers a fresh
+        // expectation for it — resurrecting a dead session in the sidebar.
+        //
+        // Ended is ended. The event is refused rather than swallowed, so a
+        // harness that really is still reporting says so in its own exit code
+        // instead of leaving Volli quietly wrong.
+        if (session.endedAt !== null) {
+          return failure("SESSION_ENDED", `Session ${shortSessionId(session.id)} has ended.`);
+        }
+        const event = request.args["event"];
+        if (!isHarnessEvent(event)) {
+          return failure(
+            "INVALID_REQUEST",
+            `Invalid harness event ${JSON.stringify(event)} (valid: ${HARNESS_EVENTS.join(", ")})`,
+          );
+        }
+        const firing = firingHarnessId(options.db, session, request.args["harness"]);
+        if (!firing.ok) return firing.response;
+        const harnessSessionId = trimmedHarnessSessionId(request.args["harnessSessionId"]);
+        if (harnessSessionId === undefined) {
+          return failure("INVALID_REQUEST", "The harness session id is not usable.");
+        }
+        // THE ORDERING RULE, main's half. Each event arrives on its own
+        // short-lived hook process over its own connection, so two that fire
+        // close together race and `now()` stamps the winner of that race rather
+        // than the agent's own sequence. `firedAt` is what the firing end could
+        // prove about the order; `supersededHarnessEvent` is the single
+        // definition of stale, shared verbatim with the renderer so the two ends
+        // cannot drift into disagreeing about one session.
+        //
+        // What supersession withholds is STATE — anything a newer delivery has
+        // already answered. What it never withholds is the PROOF that a delivery
+        // happened: the ledger below, and the renderer's `delivered`. That
+        // proof is order-free, a fact about what this harness can do rather than
+        // a value a later fact replaces, and suppressing it would make Volli
+        // forget a capability it had just watched being exercised.
+        //
+        // An absent or equal `firedAt` is never superseded — see
+        // {@link HarnessEventOrder}. An older `volli` sends no stamp at all, and
+        // such an event must land exactly as it did before, not vanish for
+        // failing to prove its own age.
+        const firedAt = harnessEventOrder(request.args["firedAt"]);
+        const superseded = supersededHarnessEvent(watermarks.get(session.id) ?? null, firedAt);
+        if (firedAt !== null && !superseded) rememberFiredAt(watermarks, session.id, firedAt);
+        // A reported id is what replaces `session link` on the critical path.
+        // Idempotent overwrite, exactly as `session.link` is — a harness that
+        // rotates its id mid-session leaves the newest resume seed behind. Which
+        // is precisely why a superseded one may not be written: newest by
+        // arrival is not newest, and this row seeds every future resume.
+        if (harnessSessionId !== null && !superseded) {
+          setHarnessSessionId(options.db, session.id, harnessSessionId);
+        }
+        // The event arrived, so the harness can plainly deliver it: the ledger
+        // learns that here, at the one place a delivery is observed, and before
+        // anything is decided about this one. What comes back is what Volli now
+        // knows about the capability — `absent` only for a harness it has no
+        // record of at all.
+        const status = recordHarnessDelivery(options.db, firing.harnessId, event, now());
+        // The other half of the channel's two integers. Deliberately outside
+        // every rule above it: a superseded event is still a delivery, and an
+        // event nobody declared is still a delivery. This column answers "is
+        // anything coming down this pipe", not "should this one be believed",
+        // and withholding it would make a working channel look dead for the
+        // sake of an event that merely arrived out of order.
+        recordHarnessChannelEvent(options.db, firing.harnessId, now());
+        // ONE event earns a notification: a human is blocking the agent's
+        // progress. `subagent.completed` is telemetry — a subagent finishing is
+        // not the parent finishing — and `permission.requested` is bound to the
+        // same native signal as `input.needed` on every harness that has one, so
+        // notifying on both would double every notification it earns.
+        //
+        // And only a verified capability interrupts a human. A declaration
+        // cannot earn a notification (the plan doc's rule), which costs a real
+        // delivery nothing — it verified itself one line above. `verified` is
+        // about delivery, though, and says nothing about whether the harness can
+        // report this at all, so the declaration is checked alongside it.
+        //
+        // The last condition is the disagreement rule. A notification is the
+        // most expensive claim Volli makes — it interrupts a human and names an
+        // agent — so it is made only where the two independent accounts agree:
+        // the harness Volli launched this session with, and the hook that says
+        // it fired. Anything in the session can invoke `volli hook` under a name
+        // of its choosing, and a hand-typed second harness is indistinguishable
+        // from a confused descendant. Everything cheaper follows the evidence
+        // instead: the ledger and the fan-out are attributed to what fired.
+        //
+        // And it is withheld from a superseded delivery, which is the failure
+        // that reads as noise rather than as a bug: an `input.needed` the agent
+        // emitted before a `turn.started` that has already landed announces a
+        // human is blocking something the agent moved past, and the user is
+        // interrupted for a prompt they already answered. A notification cannot
+        // be retracted, so it is the write that most needs to be sure.
+        //
+        // What the two accounts are compared AGAINST is the harness now
+        // running, not the one the session launched with. Reading the launch
+        // was the bug this rule was quietly causing: a user who quit opencode
+        // and started claude got every one of claude's `input.needed` events
+        // recorded in the ledger and none of them notified — silence in exactly
+        // the case the feature exists for.
+        if (
+          event === "input.needed" &&
+          status === "verified" &&
+          declaresInputNeeded(firing.harnessId) &&
+          firing.harnessId === effectiveHarnessId(session) &&
+          !superseded
+        ) {
+          const ticket = session.ticketId ? getTicket(options.db, session.ticketId) : undefined;
+          const ticketProject = ticket
+            ? projects.find(({ id }) => id === ticket.projectId)
+            : undefined;
+          const subject =
+            ticket && ticketProject
+              ? displayTicketId(ticketProject.ticketPrefix, ticket.ticketNumber)
+              : session.title;
+          options.notify?.(
+            `${subject} needs you`,
+            `${harnessLabel(effectiveHarnessId(session))} is waiting on a human`,
+          );
+        }
+        // A superseded event is still announced, carrying its own `firedAt`, and
+        // the renderer applies the same rule to it independently. Filtering here
+        // instead would make the renderer's correctness depend on this map being
+        // intact — and it is evicted at a cap and empty after a relaunch, while
+        // the renderer's watermark lives with the session it describes. Two
+        // places apply one rule; neither is the other's guard.
+        options.onHarnessEvent?.({
+          sessionId: session.id,
+          projectId: session.projectId,
+          ticketId: session.ticketId,
+          harnessId: firing.harnessId,
+          event,
+          harnessSessionId,
+          at: now(),
+          firedAt,
+        });
+        // The firing harness is echoed back so a caller (and a `doctor` reading
+        // a transcript) can see which one Volli credited, rather than having to
+        // infer it from the session. `superseded` rides the same seam, and is
+        // the only trace a rejected delivery leaves anywhere: the symptom of
+        // this rule misfiring is a session that sits showing a wait the user
+        // already answered, and nothing else in the app would ever explain it.
+        // Nothing consumes the field yet — `volli hook` discards its response by
+        // design — so it is legible to a socket transcript and to whatever
+        // diagnostic next needs it, and costs nothing until then.
+        return {
+          v: 1,
+          ok: true,
+          data: {
+            session: shortSessionId(session.id),
+            harness: firing.harnessId,
+            event,
+            harnessSessionId,
+            superseded,
+          },
+        };
+      }
+      if (request.cmd === "doctor") {
+        if (!options.doctorFacts) {
+          return failure("APP_UNREACHABLE", "The harness runtime is not available this launch.");
+        }
+        // The caller reports what it sees from inside the environment under
+        // test; main supplies only what it alone knows. Keeping those apart is
+        // the point — an observation main reconstructed would be exactly the
+        // kind of plausible, wrong answer this command exists to catch.
+        const observation = parseDoctorObservation(request);
+        if (observation === null) {
+          return failure("INVALID_REQUEST", "doctor requires the caller's observed environment.");
+        }
+        if (request.args["fix"] === true && options.doctorRepair) {
+          try {
+            await options.doctorRepair();
+          } catch (error) {
+            return failure("MUTATION_FAILED", `Repair failed: ${errorMessage(error)}`);
+          }
+        }
+        const checks = runDoctorChecks(observation, await options.doctorFacts());
+        return {
+          v: 1,
+          ok: true,
+          data: { checks, summary: doctorSummary(checks) },
         };
       }
       if (request.cmd === "ticket.list") {
@@ -1013,14 +1617,13 @@ export function createAgentCommandService(
         const title = request.args["title"];
         const priority = request.args["priority"];
         const base = request.args["base"];
-        const harness = request.args["harness"];
         const mutation = request.args["bodyMutation"];
         const addLabels = request.args["addLabels"] ?? [];
         const removeLabels = request.args["removeLabels"] ?? [];
         const updatePriorityError = invalidPriorityResponse(priority);
         if (updatePriorityError) return updatePriorityError;
-        const updateHarnessError = invalidHarnessResponse(harness);
-        if (updateHarnessError) return updateHarnessError;
+        const requestedHarness = resolveRequestedHarness(options.db, request.args["harness"]);
+        if (!requestedHarness.ok) return requestedHarness.response;
         if (
           (title !== undefined && (typeof title !== "string" || title.trim().length === 0)) ||
           (base !== undefined && (typeof base !== "string" || !isValidBranchName(base))) ||
@@ -1048,7 +1651,9 @@ export function createAgentCommandService(
                 ...(typeof title === "string" ? { title: title.trim() } : {}),
                 ...(nextBody?.ok ? { body: nextBody.body } : {}),
                 ...(typeof base === "string" ? { baseBranch: base } : {}),
-                ...(isHarnessId(harness) ? { preferredHarnessId: harness } : {}),
+                ...(requestedHarness.harnessId !== undefined
+                  ? { preferredHarnessId: requestedHarness.harnessId }
+                  : {}),
               },
               { now: updatedAt, actor: actor.actor },
             );
@@ -1257,13 +1862,12 @@ export function createAgentCommandService(
       if (!resolved.ok) return resolved.response;
       const createPriorityError = invalidPriorityResponse(request.args["priority"]);
       if (createPriorityError) return createPriorityError;
-      const createHarnessError = invalidHarnessResponse(request.args["harness"]);
-      if (createHarnessError) return createHarnessError;
+      const requestedHarness = resolveRequestedHarness(options.db, request.args["harness"]);
+      if (!requestedHarness.ok) return requestedHarness.response;
       const title = request.args["title"];
       const status = request.args["status"] ?? "backlog";
       const priority = request.args["priority"] ?? "medium";
       const labels = request.args["labels"] ?? [];
-      const harness = request.args["harness"];
       const base = request.args["base"];
       if (
         typeof title !== "string" ||
@@ -1295,7 +1899,7 @@ export function createAgentCommandService(
               typeof request.args["usesWorktree"] === "boolean"
                 ? request.args["usesWorktree"]
                 : true,
-            preferredHarnessId: isHarnessId(harness) ? harness : undefined,
+            preferredHarnessId: requestedHarness.harnessId,
             // An explicit per-ticket override only (decision 11). `null` means
             // "inherit the pinned project setting" — resolved late by worktree
             // automation at use time, NOT stamped here from a snapshot.

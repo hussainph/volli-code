@@ -1,22 +1,43 @@
 import type { HarnessId } from "../ticket";
 import { claudeCodeAdapter } from "./claude-code";
 import { codexAdapter } from "./codex";
+import { cursorAdapter } from "./cursor";
 import { opencodeAdapter } from "./opencode";
-import { VOLLI_CLI_REFERENCE, VOLLI_ORCHESTRATION, VOLLI_SKILL } from "./skill-content";
+import { genericHarnessActions } from "./generic";
+import {
+  VOLLI_CLI_REFERENCE,
+  VOLLI_COMMAND_DOC,
+  VOLLI_ORCHESTRATION,
+  VOLLI_PLUGIN_DOC,
+  VOLLI_SKILL,
+} from "./skill-content";
 import type { HarnessAdapter, InstallAction } from "./types";
 
-const adapters: Record<HarnessId, HarnessAdapter> = {
-  "claude-code": claudeCodeAdapter,
-  codex: codexAdapter,
-  opencode: opencodeAdapter,
-};
+/**
+ * The adapter registry. A `ReadonlyMap` rather than a `Record<HarnessId, …>`,
+ * which an open {@link HarnessId} can no longer express — and shouldn't: a
+ * registered harness joins this map at runtime exactly the way a built-in sits
+ * in it, which is the point of adapters being pure data.
+ */
+const adapters: ReadonlyMap<HarnessId, HarnessAdapter> = new Map(
+  [claudeCodeAdapter, codexAdapter, cursorAdapter, opencodeAdapter].map((adapter) => [
+    adapter.id,
+    adapter,
+  ]),
+);
 
-export function getHarnessAdapter(id: HarnessId): HarnessAdapter {
-  return adapters[id];
+/**
+ * The adapter for `id`, or `undefined` when nothing is registered under it.
+ * {@link HarnessId} is open (bring-your-own harnesses), so a lookup can miss —
+ * callers fall back to the Declared tier rather than assuming a first-class
+ * adapter exists.
+ */
+export function getHarnessAdapter(id: HarnessId): HarnessAdapter | undefined {
+  return adapters.get(id);
 }
 
 /** Every first-class harness adapter, for registry-driven iteration (detection, etc.). */
-export const harnessAdapters: readonly HarnessAdapter[] = Object.values(adapters);
+export const harnessAdapters: readonly HarnessAdapter[] = [...adapters.values()];
 
 export function mergeFencedSection(
   current: string,
@@ -46,41 +67,104 @@ export function managedWriteDecision(input: {
   return "conflict";
 }
 
+/** Stands in for the user's home directory in a {@link HarnessSurfaces} path. */
+export const HOME_TOKEN = "{home}";
+
+/** The canonical skill files every plan opens with, before any per-harness surface. */
+export const CANONICAL_SKILL_FILES = 4;
+
 function normalizedHome(home: string): string {
   return home.endsWith("/") ? home.slice(0, -1) : home;
 }
 
-export function buildHarnessInstallPlan(input: {
+function resolved(template: string, home: string): string {
+  return template.replaceAll(HOME_TOKEN, home);
+}
+
+/**
+ * The baseline assets a set of adapters earns, folded out of the surfaces each
+ * one declares — no identity anywhere, so a manifest-registered harness gets
+ * exactly what a built-in with the same surfaces gets.
+ *
+ * A harness receives the skill pack once: by symlink into its skills directory
+ * when it reads one, and otherwise as a slash-command doc, which is the only
+ * route left for a harness that has commands but no skills. An instructions
+ * file earns the fenced managed block on top, and two harnesses naming the
+ * same file share one action rather than fighting over it.
+ *
+ * Every path here lands in the USER's dotfiles, so a registered manifest's
+ * surfaces must be validated before they reach this fold — the rule is about
+ * which paths a manifest may claim, not about which adapters are built in.
+ */
+export function harnessBaselineActions(input: {
   home: string;
-  detected: readonly HarnessId[];
+  adapters: readonly HarnessAdapter[];
 }): InstallAction[] {
-  if (input.detected.length === 0) return [];
   const home = normalizedHome(input.home);
   const canonical = `${home}/.agents/skills/volli`;
-  const actions: InstallAction[] = [
-    {
-      kind: "write",
-      path: `${canonical}/SKILL.md`,
-      content: VOLLI_SKILL,
-      managed: true,
-    },
-    {
-      kind: "write",
-      path: `${canonical}/cli.md`,
-      content: VOLLI_CLI_REFERENCE,
-      managed: true,
-    },
+  const byPath = new Map<string, InstallAction>();
+  const claim = (action: InstallAction): void => {
+    if (!byPath.has(action.path)) byPath.set(action.path, action);
+  };
+
+  for (const adapter of input.adapters) {
+    const { skillsDir, commandsDir, instructionsFile } = adapter.surfaces;
+    if (skillsDir) {
+      claim({
+        kind: "symlink",
+        path: `${resolved(skillsDir, home)}/volli`,
+        target: canonical,
+        managed: true,
+      });
+    } else if (commandsDir) {
+      claim({
+        kind: "write",
+        path: `${resolved(commandsDir, home)}/volli.md`,
+        content: VOLLI_COMMAND_DOC,
+        managed: true,
+      });
+    }
+    if (instructionsFile) {
+      for (const action of genericHarnessActions(resolved(instructionsFile, home))) claim(action);
+    }
+  }
+  return [...byPath.values()];
+}
+
+/**
+ * The canonical skill pack plus every surface `adapters` earns.
+ *
+ * Adapters, not ids — a plan built from ids can only ever mean the built-ins,
+ * because an id is resolved through a registry that a registered manifest is
+ * not in and (by design, see {@link getHarnessAdapter}) cannot join. Taking the
+ * adapters makes the caller name the set, which is the only place that knows
+ * whether a manifest has been registered AND trusted; it also puts this
+ * function on the same footing as {@link harnessBaselineActions}, which has
+ * been identity-free from the start.
+ *
+ * The caller owes this the home-containment guarantee: every path below lands
+ * in the user's dotfiles, and a registered manifest's surfaces are only safe
+ * here because they were validated at parse time.
+ */
+export function buildHarnessInstallPlan(input: {
+  home: string;
+  adapters: readonly HarnessAdapter[];
+}): InstallAction[] {
+  if (input.adapters.length === 0) return [];
+  const home = normalizedHome(input.home);
+  const canonical = `${home}/.agents/skills/volli`;
+  return [
+    { kind: "write", path: `${canonical}/SKILL.md`, content: VOLLI_SKILL, managed: true },
+    { kind: "write", path: `${canonical}/cli.md`, content: VOLLI_CLI_REFERENCE, managed: true },
     {
       kind: "write",
       path: `${canonical}/orchestration.md`,
       content: VOLLI_ORCHESTRATION,
       managed: true,
     },
+    { kind: "write", path: `${canonical}/plugin.md`, content: VOLLI_PLUGIN_DOC, managed: true },
+    ...harnessBaselineActions({ home, adapters: input.adapters }),
   ];
-  for (const id of new Set(input.detected)) {
-    actions.push(...adapters[id].installActions(home, canonical));
-  }
-  return actions;
 }
 
-export type { HarnessAdapter, InstallAction } from "./types";
+export * from "./types";

@@ -3,9 +3,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
-import { buildHarnessInstallPlan, genericHarnessActions } from "@volli/shared";
+import { buildHarnessInstallPlan, genericHarnessActions, getHarnessAdapter } from "@volli/shared";
+import type { HarnessAdapter, HarnessId } from "@volli/shared";
 
 import { applyHarnessInstallPlan, uninstallHarnessPlan } from "./harness-install";
+
+/** The built-in adapters behind a set of ids — the plan now takes adapters, not names. */
+function adaptersFor(...ids: HarnessId[]): HarnessAdapter[] {
+  return ids.map((id) => {
+    const adapter = getHarnessAdapter(id);
+    if (!adapter) throw new Error(`no adapter for ${id}`);
+    return adapter;
+  });
+}
 
 let root: string | undefined;
 
@@ -20,7 +30,7 @@ describe("harness install executor", () => {
     root = await mkdtemp(join(tmpdir(), "volli-harness-test-"));
     const plan = buildHarnessInstallPlan({
       home: root,
-      detected: ["claude-code", "codex", "opencode"],
+      adapters: adaptersFor("claude-code", "codex", "opencode"),
     });
     const manifestPath = join(root, ".agents/skills/volli/.volli-managed.json");
 
@@ -30,9 +40,10 @@ describe("harness install executor", () => {
     const second = await applyHarnessInstallPlan(plan, manifestPath);
 
     expect(first.conflicts).toEqual([]);
-    expect(first.written).toHaveLength(5);
+    // 4 canonical skill files + claude/codex skill symlinks + codex AGENTS.md + opencode command.
+    expect(first.written).toHaveLength(8);
     expect(second.written).toEqual([]);
-    expect(second.skipped).toHaveLength(5);
+    expect(second.skipped).toHaveLength(8);
     expect(await readFile(join(root, ".agents/skills/volli/custom/mine.md"), "utf8")).toBe(
       "user owned",
     );
@@ -41,7 +52,10 @@ describe("harness install executor", () => {
 
   it("hash-guards user-edited managed files and uninstalls only managed content", async () => {
     root = await mkdtemp(join(tmpdir(), "volli-harness-test-"));
-    const plan = buildHarnessInstallPlan({ home: root, detected: ["claude-code", "codex"] });
+    const plan = buildHarnessInstallPlan({
+      home: root,
+      adapters: adaptersFor("claude-code", "codex"),
+    });
     const manifestPath = join(root, ".agents/skills/volli/.volli-managed.json");
     await applyHarnessInstallPlan(plan, manifestPath);
     const skillPath = join(root, ".agents/skills/volli/SKILL.md");
@@ -73,7 +87,7 @@ describe("harness install executor", () => {
     const manifestPath = join(root, ".agents/skills/volli/.volli-managed.json");
     const claudeLink = join(root, ".claude/skills/volli");
 
-    const ownedPlan = buildHarnessInstallPlan({ home: root, detected: ["claude-code"] });
+    const ownedPlan = buildHarnessInstallPlan({ home: root, adapters: adaptersFor("claude-code") });
     await applyHarnessInstallPlan(ownedPlan, manifestPath);
     await rm(claudeLink, { force: true });
     await symlink(join(root, "somewhere-else"), claudeLink, "dir");
@@ -109,7 +123,7 @@ describe("harness install executor", () => {
 
   it("refuses to follow a dangling managed-file symlink", async () => {
     root = await mkdtemp(join(tmpdir(), "volli-harness-test-"));
-    const plan = buildHarnessInstallPlan({ home: root, detected: ["codex"] });
+    const plan = buildHarnessInstallPlan({ home: root, adapters: adaptersFor("codex") });
     const skillPath = join(root, ".agents/skills/volli/SKILL.md");
     const outsideTarget = join(root, "must-not-be-created.md");
     const manifestPath = join(root, ".agents/skills/volli/.volli-managed.json");

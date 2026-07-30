@@ -1,0 +1,300 @@
+/**
+ * The PATH shim that turns a harness invocation inside a Volli session into a
+ * configured one, and leaves every other invocation alone.
+ *
+ * A wrapper is a passthrough. With `VOLLI_SESSION` unset it execs the real
+ * binary unchanged, so a harness run from a normal terminal is untouched —
+ * nothing is written to the user's harness configuration, ever. Volli's `bin/`
+ * is already prepended to PATH for Volli's PTYs and nothing else
+ * (`agentSessionEnv`), so these wrappers are only ever reachable from inside a
+ * session in the first place.
+ *
+ * Everything that is true of ONE harness is rendered INTO its own wrapper — the
+ * binary main resolved for it, and the configuration it reads out of its own
+ * environment — because a wrapper runs one step before its own exec and nothing
+ * else does. What travels in the session environment instead is only what has to
+ * exist BEFORE a wrapper runs: `VOLLI_HARNESS_ARGV_<SLUG>`, the argv main
+ * resolved (it names files on disk), and the `VOLLI_HARNESS_BIN_<SLUG>`
+ * override. Those are namespaced per harness and read by the wrapper alone; a
+ * harness's own configuration variable is not, and setting it session-wide would
+ * tell every agent in the terminal about a harness that is not running.
+ */
+import { shellSingleQuote } from "../harness-command";
+import { harnessEnvSuffix } from "./launch";
+import type { HarnessAdapter } from "./types";
+
+/**
+ * Why a wrapper was declined. Three rules, one channel: whatever the reason, the
+ * harness ends up unwrapped, and `volli doctor` has to say so rather than let a
+ * silently missing wrapper read as a working install.
+ *
+ * `shadows-system-command` — the name is a system tool's.
+ * `name-already-owned` — the name belongs to another harness's wrapper or to the
+ * launcher, and `bin/` is one file per name.
+ * `argv-not-transportable` — the argv could not survive the newline-delimited
+ * hand-off the wrapper splits on (see {@link renderWrapperScript}).
+ *
+ * Lives here rather than beside the loop that applies the rules because the
+ * refusal has two ends: main decides it, and `volli doctor` has to explain it.
+ * A second union on the reporting end would drift the moment a fourth rule is
+ * added, and the drift would show up as a refusal reported under the wrong
+ * reason — the one failure mode a diagnostic must not have.
+ */
+export type WrapperRefusal =
+  | "shadows-system-command"
+  | "name-already-owned"
+  | "argv-not-transportable";
+
+export interface WrapperInput {
+  /** Volli's own `bin/` — skipped while resolving, or the wrapper would exec itself. */
+  binDir: string;
+  /**
+   * The binary this command resolved to when main wrote the wrapper, or `null`
+   * when main could not resolve one. Pinning it is what makes the file a human
+   * approved in the trust dialog the file that actually runs.
+   */
+  binaryPath: string | null;
+  /**
+   * The generated `volli` launcher, by absolute path — what the announce/mint
+   * call below invokes. Pinned at render time for the same reason {@link
+   * WrapperInput.binaryPath} is: PATH at run time is whatever the user's own
+   * shell startup rebuilt, and the one thing this wrapper may not do is exec
+   * something nobody was shown.
+   */
+  cliPath: string;
+  /**
+   * This harness's own injected configuration, already resolved to real paths —
+   * `CURSOR_CONFIG_DIR`, `OPENCODE_CONFIG`. Exported by the wrapper, in scope
+   * for the harness it configures and nothing else.
+   */
+  env: Readonly<Record<string, string>>;
+}
+
+/**
+ * A `case` pattern matching a resume token both bare (`--resume`) and with an
+ * attached value (`--resume=abc`), since a harness may take either.
+ */
+function resumePattern(token: string): string {
+  return `${shellSingleQuote(token)}|${shellSingleQuote(`${token}=`)}*`;
+}
+
+/**
+ * The wrapper for `adapter`, to be written into `binDir`.
+ *
+ * **The harness session id is minted per LAUNCH, by the app, on request.**
+ * `VOLLI_SESSION` addresses the Volli session — which terminal this is, what
+ * hooks and the CLI resolve against — and it is stamped once per PTY, so it
+ * cannot also be the harness's id: a user who quits an agent and runs it again
+ * in the same terminal would hand the second launch the byte-identical id the
+ * first one used. To a harness that treats a session id as single-use per
+ * workspace that is not a stale row, it is a failed launch — `cursor-agent`
+ * mkdirs a directory named after it and throws on EEXIST.
+ *
+ * So the wrapper ASKS rather than reuses: one synchronous `session harness`
+ * call per launch, which records what is now running and mints a fresh UUIDv4
+ * for it in the same round trip. The app mints rather than the shell because
+ * the id has to be WRITTEN somewhere to be worth anything — `harness_session_id`
+ * is what every future resume reads — and a `/bin/sh` that minted its own would
+ * still have to make a second call to report it, in a script whose one job is
+ * to get out of the way of the agent it is about to exec.
+ *
+ * Failure degrades to no id at all: the session flag is omitted and the harness
+ * launches unpinned (no resume seed for that launch), because the alternative —
+ * launching with an id that may already exist — is the failure this removes.
+ */
+export function renderWrapperScript(adapter: HarnessAdapter, input: WrapperInput): string {
+  const suffix = harnessEnvSuffix(adapter);
+  const binVar = `VOLLI_HARNESS_BIN_${suffix}`;
+  const argvVar = `VOLLI_HARNESS_ARGV_${suffix}`;
+  const command = shellSingleQuote(adapter.command);
+  const binDir = shellSingleQuote(input.binDir);
+
+  const lines: string[] = [
+    "#!/bin/sh",
+    `# Volli wrapper for ${adapter.label}. Generated — edits are overwritten.`,
+    "set -u",
+    "",
+    // Three ways to find the binary, in this order on purpose.
+    //
+    // First, an explicit override, ahead of everything else: it is the only way
+    // to aim a wrapper at a binary main never saw, which is what an operator
+    // debugging an install and the execution smoke both need.
+    `volli_real=\${${binVar}:-}`,
+  ];
+
+  if (input.binaryPath !== null) {
+    const binaryPath = shellSingleQuote(input.binaryPath);
+    lines.push(
+      // Second, the file main resolved when it wrote this wrapper — the same
+      // walk, over the same login-shell PATH, that named a binary in the trust
+      // dialog when a human approved this harness. Pinned here because PATH at
+      // run time is whatever the user's own shell startup rebuilt, so re-walking
+      // it could exec something nobody was shown.
+      `if [ -z "$volli_real" ] && [ -x ${binaryPath} ]; then`,
+      `  volli_real=${binaryPath}`,
+      "fi",
+    );
+  }
+
+  lines.push(
+    // Third, the walk. Reached when main pinned nothing — a built-in that was
+    // never trust-prompted on a host whose login shell PATH could not be read —
+    // or when the pinned file is gone, which means the harness was uninstalled
+    // or moved and our own "cannot find" is a better error than exec's.
+    'if [ -z "$volli_real" ]; then',
+    "  volli_saved_ifs=$IFS",
+    "  IFS=:",
+    // Unquoted $PATH is subject to pathname expansion; -f turns it off just
+    // for the walk, so a PATH entry holding a glob character stays literal.
+    "  set -f",
+    "  for volli_dir in $PATH; do",
+    // Volli's own bin dir holds this very script; walking into it would exec us.
+    `    if [ "$volli_dir" = ${binDir} ] || [ -z "$volli_dir" ]; then continue; fi`,
+    `    if [ -x "$volli_dir/${adapter.command}" ]; then`,
+    `      volli_real="$volli_dir/${adapter.command}"`,
+    "      break",
+    "    fi",
+    "  done",
+    "  set +f",
+    "  IFS=$volli_saved_ifs",
+    "fi",
+    "",
+    'if [ -z "$volli_real" ]; then',
+    `  printf 'volli: cannot find %s\\n' ${command} >&2`,
+    "  exit 127",
+    "fi",
+    "",
+    'if [ -z "${VOLLI_SESSION:-}" ]; then',
+    '  exec "$volli_real" "$@"',
+    "fi",
+    "",
+  );
+
+  const envEntries = Object.entries(input.env);
+  if (envEntries.length > 0) {
+    lines.push(
+      // In scope for the harness this wrapper execs, and for nothing else. Name
+      // and value are quoted as ONE operand, so a name that is not a name at all
+      // is an export that fails and says so, never a line of shell.
+      "# Configuration this harness reads out of its own environment.",
+      ...envEntries.map(([name, value]) => `export ${shellSingleQuote(`${name}=${value}`)}`),
+      "",
+    );
+  }
+
+  // Whether a launch of this harness carries an id Volli chose. `argv` is the
+  // only tier that does; a `reported` or `none` harness names its own session
+  // (or has none), so asking for one would only overwrite the resume seed its
+  // own events are about to write with a number it never heard of.
+  const sessionIdFlag =
+    adapter.sessionId.kind === "argv" ? shellSingleQuote(adapter.sessionId.flag) : null;
+  const scansForUserResume = sessionIdFlag !== null && adapter.resume.userResumeTokens.length > 0;
+
+  if (scansForUserResume) {
+    lines.push(
+      "# The user is driving resume themselves — don't fight them for the session.",
+      "volli_user_resume=0",
+      'for volli_arg in "$@"; do',
+      "  case $volli_arg in",
+      `    ${adapter.resume.userResumeTokens.map((token) => resumePattern(token)).join("|")})`,
+      "      volli_user_resume=1",
+      "      break",
+      "      ;;",
+      "  esac",
+      "done",
+      "",
+    );
+  }
+
+  // WHICH HARNESS IS RUNNING IN THIS TERMINAL, AND WHAT ID THIS LAUNCH GETS —
+  // one call, because they are one question. `sessions.harness_id` records the
+  // LAUNCH and never moves, which is right, but a terminal outlives the agent
+  // that opened it: a user who quits opencode and types `claude` leaves Volli
+  // resuming the wrong binary and skipping the "needs you" notification
+  // claude's hooks fire. The wrapper is the only place that can correct it —
+  // it runs on every invocation of every harness, including a Declared one
+  // that fires no hooks at all — and it is also the only place that knows a
+  // launch is about to happen, which is what a fresh session id is for.
+  //
+  // Gated on VOLLI_SOCKET: without one there is no app to ask.
+  const verb = `${shellSingleQuote(input.cliPath)} session harness ${shellSingleQuote(adapter.id)}`;
+  // Announce-only, for a launch that wants no id back.
+  //
+  // Everything about the shape is load-bearing. It is BACKGROUNDED inside a
+  // subshell (`( … & )`) so it is reaped by init rather than becoming a job of
+  // the shell that is about to exec a TUI; both streams go to /dev/null because
+  // that terminal belongs to the harness a moment from now and a stray line of
+  // ours would land inside its first frame; stdin comes from /dev/null so a
+  // background reader can never take a keystroke meant for the agent (or stop
+  // itself on SIGTTIN); and `|| true` keeps a failure to even spawn from
+  // failing a launch. Telling Volli what is running is worth nothing if it can
+  // cost the user their agent.
+  const announce = `( ${verb} </dev/null >/dev/null 2>&1 & ) || true`;
+  // Announce AND mint. Synchronous, because the id has to be in hand before the
+  // exec below — the one thing in this file the launch waits on. The same rules
+  // still hold with the shape inverted: stdout is captured rather than
+  // discarded (it is one bare uuid, and nothing else), stderr is dropped so a
+  // failure cannot print into the harness's first frame, and a non-zero exit
+  // leaves the variable empty rather than failing the launch. `volli` bounds
+  // its own wait on the socket, so a wedged app costs a moment, not the agent.
+  const mint = `volli_harness_session=$(${verb} --mint </dev/null 2>/dev/null) || volli_harness_session=''`;
+
+  if (sessionIdFlag !== null) lines.push("volli_harness_session=''");
+  lines.push('if [ -n "${VOLLI_SOCKET:-}" ]; then');
+  if (sessionIdFlag === null) {
+    lines.push(`  ${announce}`);
+  } else if (scansForUserResume) {
+    // A user driving resume still tells Volli what is running; they just aren't
+    // handed an id they didn't ask for and the harness would refuse.
+    lines.push(
+      '  if [ "$volli_user_resume" = 1 ]; then',
+      `    ${announce}`,
+      "  else",
+      `    ${mint}`,
+      "  fi",
+    );
+  } else {
+    lines.push(`  ${mint}`);
+  }
+  lines.push("fi", "");
+
+  /**
+   * The configured argv, prepended to whatever the user typed.
+   *
+   * `${VAR}` is left unquoted deliberately, and that is the whole mechanism:
+   * main joins the argv words with newlines, IFS is newline for exactly this
+   * expansion, and the shell FIELD-SPLITS the value into one word per line. It
+   * does not parse it. The result of an expansion is never rescanned, so a
+   * `$(…)`, a backtick, a quote or a lone backslash inside a settings payload
+   * reaches the harness as the characters it is — which is why nothing here is
+   * quoted by us, and nothing here depends on our quoting being right.
+   *
+   * The invariant that buys it: no argv word may contain a newline or be empty
+   * (newline is IFS whitespace, so runs of it collapse). `ensureHarnessRuntime`
+   * refuses to write a wrapper whose argv would break it rather than hand the
+   * harness a mangled command line.
+   */
+  const applyArgv = (indent: string, extra: readonly string[]): string =>
+    [`${indent}set --`, `\${${argvVar}:-}`, ...extra, '"$@"'].join(" ");
+
+  lines.push("volli_saved_ifs=$IFS", "IFS='", "'", "set -f");
+  if (sessionIdFlag !== null) {
+    // One test decides the flag, and it is the id itself. Empty covers every
+    // way there is nothing to pin — no socket, a wedged or absent app, a user
+    // driving their own resume — and each of them wants the same thing: launch
+    // the harness with no session id at all rather than with a guess.
+    lines.push(
+      'if [ -n "$volli_harness_session" ]; then',
+      applyArgv("  ", [sessionIdFlag, '"$volli_harness_session"']),
+      "else",
+      applyArgv("  ", []),
+      "fi",
+    );
+  } else {
+    lines.push(applyArgv("", []));
+  }
+  lines.push("set +f", "IFS=$volli_saved_ifs");
+
+  lines.push("", 'exec "$volli_real" "$@"', "");
+  return lines.join("\n");
+}

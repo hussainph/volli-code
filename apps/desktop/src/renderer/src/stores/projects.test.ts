@@ -10,9 +10,18 @@ import {
   encodeProjectsUiState,
   useProjectsStore,
 } from "./projects";
-import { scratchScope, ticketScope, useSessionsStore } from "./sessions";
+import { scratchScope, ticketScope, useSessionsStore, type SessionLaunch } from "./sessions";
+
 import { useThemeStore } from "./theme";
 import { useWorkspaceStore } from "./workspace";
+
+/** A bare shell launch: no harness command line was written, so no expectation. */
+const shellLaunch = (title: string): SessionLaunch => ({
+  title,
+  harnessId: "claude-code",
+  launchKind: "shell",
+  createdAt: 0,
+});
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
@@ -451,7 +460,7 @@ describe("removeProject", () => {
     const only = project({ id: "only", path: "/a" });
     const { store } = freshStore();
     store.getState().hydrate([only], only.id);
-    useSessionsStore.getState().addSession(scratchScope(only.id), "s1", "Terminal 1");
+    useSessionsStore.getState().addSession(scratchScope(only.id), "s1", shellLaunch("Terminal 1"));
 
     await store.getState().removeProject(only.id);
 
@@ -474,7 +483,9 @@ describe("removeProject", () => {
       ticketsByProject: { only: [{ id: "tk1" } as Ticket] },
       labelsByProject: {},
     });
-    useSessionsStore.getState().addSession(ticketScope(only.id, "tk1"), "ts1", "Session 1");
+    useSessionsStore
+      .getState()
+      .addSession(ticketScope(only.id, "tk1"), "ts1", shellLaunch("Session 1"));
 
     await store.getState().removeProject(only.id);
 

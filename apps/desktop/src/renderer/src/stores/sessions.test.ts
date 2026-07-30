@@ -1,43 +1,118 @@
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import {
+  HARNESS_EVENT_GRACE_MS,
+  sessionActivitySource,
+  type CreateSessionHarnessStateInput,
+  type HarnessAdapter,
+  type HarnessEventNotice,
+  type HarnessId,
+  type HarnessRegisteredResult,
+  type SessionHarnessNotice,
+} from "@volli/shared";
+import { useTicketSessionRecordsStore } from "./ticket-session-records";
 import {
   createSessionsStore,
   findSessionPane,
   findTabBySessionId,
+  hydrateHarnessCatalog,
   scratchScope,
   sessionActivityState,
   sessionPanes,
+  subscribeHarnessEvents,
+  subscribeSessionHarness,
   ticketScope,
+  useHarnessCatalogStore,
+  useSessionsStore,
+  type SessionLaunch,
 } from "./sessions";
 
 const P = scratchScope("p");
 
+/** A bare shell launch: no harness command line was written, so no expectation. */
+const shellLaunch = (title: string): SessionLaunch => ({
+  title,
+  harnessId: "claude-code",
+  launchKind: "shell",
+  createdAt: 0,
+});
+
+/** A kickoff/resume launch of `harnessId` at `createdAt` — the wrapper's own doing. */
+const agentLaunch = (
+  harnessId: HarnessId,
+  createdAt = 1000,
+  title = "Session 1",
+): SessionLaunch => ({ title, harnessId, launchKind: "agent", createdAt });
+
+/**
+ * A trusted manifest as main would hand it over: hooked, and saying so itself.
+ * Whole adapter, because that is what crosses the channel — the renderer reads
+ * a registered harness's capabilities with the same functions it reads a
+ * built-in's.
+ */
+const registeredAdapter = (): HarnessAdapter => ({
+  id: "my-agent" as HarnessId,
+  label: "My Agent",
+  command: "my-agent",
+  promptFlag: "-p",
+  surfaces: { skillsDir: null, commandsDir: null, instructionsFile: null },
+  injection: { kind: "claude-settings-json", flag: "--settings" },
+  sessionId: { kind: "reported" },
+  resume: { byId: null, latest: null, userResumeTokens: [] },
+  events: [
+    { event: "session.started", native: "SessionStart", delivery: "async" },
+    { event: "input.needed", native: "Notification", delivery: "async" },
+  ],
+  startupEvent: "session.started",
+  sessionMarkers: [],
+  launchSettings: [],
+});
+
+// The catalog is a module singleton (one mirror of main's answer, not one per
+// store), so every test starts from "this renderer has heard of nothing".
+afterEach(() => {
+  useHarnessCatalogStore.setState({ registered: [] });
+});
+
 describe("sessionActivityState", () => {
   it("is exited whenever the shell has exited, regardless of recency or park state", () => {
-    expect(sessionActivityState(1000, true, 1000, false)).toBe("exited");
-    expect(sessionActivityState(null, true, 5000, false)).toBe("exited");
-    expect(sessionActivityState(1000, true, 1000, true)).toBe("exited"); // exited beats parked
+    expect(sessionActivityState(1000, true, 1000, false, null)).toBe("exited");
+    expect(sessionActivityState(null, true, 5000, false, null)).toBe("exited");
+    expect(sessionActivityState(1000, true, 1000, true, null)).toBe("exited"); // exited beats parked
   });
 
   it("is parked when parked and live, regardless of recent output", () => {
-    expect(sessionActivityState(null, false, 1000, true)).toBe("parked");
-    expect(sessionActivityState(1000, false, 1000, true)).toBe("parked"); // parked beats working
+    expect(sessionActivityState(null, false, 1000, true, null)).toBe("parked");
+    expect(sessionActivityState(1000, false, 1000, true, null)).toBe("parked"); // parked beats working
   });
 
   it("is working when output landed within the 10s window", () => {
-    expect(sessionActivityState(1000, false, 1000, false)).toBe("working");
-    expect(sessionActivityState(1000, false, 11_000, false)).toBe("working"); // exactly 10s
+    expect(sessionActivityState(1000, false, 1000, false, null)).toBe("working");
+    expect(sessionActivityState(1000, false, 11_000, false, null)).toBe("working"); // exactly 10s
   });
 
   it("is idle when live but quiet past the window, or when there was no output", () => {
-    expect(sessionActivityState(1000, false, 11_001, false)).toBe("idle");
-    expect(sessionActivityState(null, false, 50_000, false)).toBe("idle");
+    expect(sessionActivityState(1000, false, 11_001, false, null)).toBe("idle");
+    expect(sessionActivityState(null, false, 50_000, false, null)).toBe("idle");
+  });
+
+  it("prefers a hook-declared state over anything output recency would say", () => {
+    // The point of the whole channel: quiet at a permission prompt derives
+    // `idle`, and recent output while a prompt is up derives `working`.
+    expect(sessionActivityState(null, false, 50_000, false, "waiting")).toBe("waiting");
+    expect(sessionActivityState(1000, false, 1000, false, "waiting")).toBe("waiting");
+  });
+
+  it("lets the process outrank the harness: a stopped or gone shell isn't waiting", () => {
+    // A last hook payload can outlive the process it described.
+    expect(sessionActivityState(null, true, 1000, false, "waiting")).toBe("exited");
+    expect(sessionActivityState(null, false, 1000, true, "waiting")).toBe("parked");
   });
 });
 
 describe("addSession", () => {
   it("appends a scratch tab with the given title, stamps its scope, and activates it", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
 
     const container = store.getState().byOwner["p"];
     expect(container?.tabs).toEqual([
@@ -55,7 +130,7 @@ describe("addSession", () => {
 
   it("uses the supplied title (main's Session N) for ticket sessions", () => {
     const store = createSessionsStore();
-    store.getState().addSession(ticketScope("proj", "t1"), "s1", "Session 1");
+    store.getState().addSession(ticketScope("proj", "t1"), "s1", shellLaunch("Session 1"));
 
     const container = store.getState().byOwner["t1"];
     expect(container?.tabs[0]?.title).toBe("Session 1");
@@ -69,9 +144,9 @@ describe("addSession", () => {
 
   it("keeps insertion order across appended tabs and activates each", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
-    store.getState().addSession(P, "s2", "Terminal 2");
-    store.getState().addSession(P, "s3", "Terminal 3");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
+    store.getState().addSession(P, "s2", shellLaunch("Terminal 2"));
+    store.getState().addSession(P, "s3", shellLaunch("Terminal 3"));
 
     const container = store.getState().byOwner["p"];
     expect(container?.tabs.map((t) => t.title)).toEqual(["Terminal 1", "Terminal 2", "Terminal 3"]);
@@ -80,8 +155,8 @@ describe("addSession", () => {
 
   it("scopes sessions per owner", () => {
     const store = createSessionsStore();
-    store.getState().addSession(scratchScope("a"), "a1", "Terminal 1");
-    store.getState().addSession(scratchScope("b"), "b1", "Terminal 1");
+    store.getState().addSession(scratchScope("a"), "a1", shellLaunch("Terminal 1"));
+    store.getState().addSession(scratchScope("b"), "b1", shellLaunch("Terminal 1"));
 
     expect(store.getState().byOwner["a"]?.tabs.map((t) => t.sessionId)).toEqual(["a1"]);
     expect(store.getState().byOwner["b"]?.tabs[0]?.title).toBe("Terminal 1");
@@ -89,19 +164,136 @@ describe("addSession", () => {
 
   it("ignores a duplicate sessionId in the same owner", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     const before = store.getState().byOwner;
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
 
     expect(store.getState().byOwner).toBe(before);
+  });
+});
+
+describe("addSession — the launch expectation", () => {
+  it("declares what a hooked agent launch promised, before a byte has arrived", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", agentLaunch("claude-code"));
+
+    expect(store.getState().harness["s1"]).toEqual({
+      harnessId: "claude-code",
+      expectsEvents: true,
+      declaresInputNeeded: true,
+      // No anchor yet. The PTY has spawned a login shell; the harness is a
+      // command that shell has not run. `announceHarness` sets this when the
+      // wrapper calls in, and the grace window starts from there.
+      startedAt: null,
+      delivered: false,
+      declared: null,
+      newestFiredAt: null,
+    });
+  });
+
+  it("reads the promise off the adapter, not off the fact that an agent launched", () => {
+    const store = createSessionsStore();
+    // cursor's own source maps both blocking signals to null, so it launches
+    // hooked and still cannot claim a human is blocking it.
+    store.getState().addSession(P, "s1", agentLaunch("cursor"));
+
+    expect(store.getState().harness["s1"]?.declaresInputNeeded).toBe(false);
+  });
+
+  it("leaves a bare shell with nothing to report", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
+
+    // A shell never promised anything, so it must never be accused of silence.
+    expect(store.getState().harness["s1"]).toBeUndefined();
+  });
+
+  it("lets a harness nothing here can describe prove itself on delivery", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", agentLaunch("my-agent" as HarnessId));
+
+    // An id the catalog has never heard of — trusted since this renderer last
+    // asked, or asked for before the first answer came back. Guessing a tier
+    // here would either accuse a working harness or vouch for events it can't
+    // send.
+    expect(store.getState().harness["s1"]).toBeUndefined();
+  });
+
+  it("declares what a registered harness's manifest promised, same as a built-in's", () => {
+    useHarnessCatalogStore.getState().setRegistered([registeredAdapter()]);
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", agentLaunch("my-agent" as HarnessId));
+
+    // Read off the manifest, not guessed: a trusted harness that goes quiet now
+    // decays into "not reporting" exactly as claude-code does.
+    expect(store.getState().harness["s1"]).toEqual({
+      harnessId: "my-agent",
+      expectsEvents: true,
+      declaresInputNeeded: true,
+      startedAt: null,
+      delivered: false,
+      declared: null,
+      newestFiredAt: null,
+    });
+  });
+
+  it("still reads the promise off the manifest when the manifest promises less", () => {
+    useHarnessCatalogStore.getState().setRegistered([
+      {
+        ...registeredAdapter(),
+        events: [{ event: "turn.started", native: "Start", delivery: "async" }],
+      },
+    ]);
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", agentLaunch("my-agent" as HarnessId));
+
+    expect(store.getState().harness["s1"]?.declaresInputNeeded).toBe(false);
+  });
+
+  it("registers nothing twice for a duplicate landing", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", agentLaunch("claude-code"));
+    store.getState().applyHarnessEvent("s1", "turn.started", null);
+    const delivered = store.getState().harness["s1"];
+
+    store.getState().addSession(P, "s1", agentLaunch("claude-code", 9000));
+
+    // A re-landing must not reset the clock on a session already reporting.
+    expect(store.getState().harness["s1"]).toBe(delivered);
+  });
+
+  it("decays an announced launch into Known once its grace window passes", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", agentLaunch("claude-code"));
+    // The wrapper called in, so a harness demonstrably started here. Everything
+    // after this is about the hooks it was launched with, not about how long
+    // the user took to type — which is why the anchor is the announce.
+    store.getState().announceHarness("s1", "claude-code", 5000);
+    const state = store.getState().harness["s1"]!;
+
+    // Inside the window we are still waiting; past it, the injected config
+    // demonstrably did not take, and that says so.
+    expect(sessionActivitySource(state, 5000 + HARNESS_EVENT_GRACE_MS)).toBe("inferred");
+    expect(sessionActivitySource(state, 5000 + HARNESS_EVENT_GRACE_MS + 1)).toBe("silent");
+  });
+
+  // The window used to start at the PTY spawn, which timed the user rather than
+  // the harness: a terminal opened at breakfast and typed into at noon was
+  // "not reporting" for four hours over a harness that had never run.
+  it("never turns silent on a launch no wrapper has announced", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", agentLaunch("claude-code"));
+    const state = store.getState().harness["s1"]!;
+
+    expect(sessionActivitySource(state, 1000 + HARNESS_EVENT_GRACE_MS * 100)).toBe("inferred");
   });
 });
 
 describe("setActiveSession", () => {
   it("activates an existing session", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
-    store.getState().addSession(P, "s2", "Terminal 2");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
+    store.getState().addSession(P, "s2", shellLaunch("Terminal 2"));
 
     store.getState().setActiveSession("p", "s1");
     expect(store.getState().byOwner["p"]?.activeSessionId).toBe("s1");
@@ -109,7 +301,7 @@ describe("setActiveSession", () => {
 
   it("is a no-op for an unknown owner or session", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     const before = store.getState().byOwner;
 
     store.getState().setActiveSession("missing", "s1");
@@ -121,7 +313,7 @@ describe("setActiveSession", () => {
 describe("split panes", () => {
   it("inserts a fresh session leaf beside the focused pane, activates it, and indexes it", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
 
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
 
@@ -139,7 +331,7 @@ describe("split panes", () => {
 
   it("supports nested splits without duplicating or replacing sibling leaves", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
     store.getState().addSplit("p", "s1", "s1", "s3", "horizontal");
 
@@ -149,7 +341,7 @@ describe("split panes", () => {
 
   it("works for a ticket tab too — ticket sessions gain the full split machinery", () => {
     const store = createSessionsStore();
-    store.getState().addSession(ticketScope("proj", "t1"), "s1", "Session 1");
+    store.getState().addSession(ticketScope("proj", "t1"), "s1", shellLaunch("Session 1"));
     store.getState().addSplit("t1", "s1", "s1", "s2", "vertical");
 
     const tab = store.getState().byOwner["t1"]!.tabs[0]!;
@@ -159,7 +351,7 @@ describe("split panes", () => {
 
   it("splits a pane that lives in the second child of an existing split", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
 
     // s2 is the SECOND child of the split — this recurses past an unchanged
@@ -186,7 +378,7 @@ describe("split panes", () => {
 
   it("rebuilds a split when removing a deep pane collapses its nested first subtree but leaves the second sibling intact", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
     store.getState().addSplit("p", "s1", "s1", "s3", "horizontal");
     // layout: split(s2, vertical){ first: split(s3, horizontal){first: s1, second: s3}, second: s2 }
@@ -206,7 +398,7 @@ describe("split panes", () => {
 
   it("leaves a nested split subtree untouched (same reference) when the split target lives outside it entirely", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
     store.getState().addSplit("p", "s1", "s1", "s3", "horizontal");
     // layout: split(s2, vertical){ first: split(s3, horizontal){first: s1, second: s3}, second: s2 }
@@ -224,7 +416,7 @@ describe("split panes", () => {
 
   it("rebuilds a split when removing a deep pane collapses its nested second subtree but leaves the first sibling intact", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
     store.getState().addSplit("p", "s1", "s2", "s3", "horizontal");
     // layout: split(s2, vertical){ first: s1, second: split(s3, horizontal){first: s2, second: s3} }
@@ -244,7 +436,7 @@ describe("split panes", () => {
 
   it("ignores unknown owners, tabs, source panes, and duplicate pane ids", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     const before = store.getState().byOwner;
 
     store.getState().addSplit("missing", "s1", "s1", "s2", "vertical");
@@ -257,7 +449,7 @@ describe("split panes", () => {
 
   it("closes one leaf, collapses its parent split, focuses a neighbor, and drops its index", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
     store.getState().setParkState("s2", true, false);
 
@@ -275,7 +467,7 @@ describe("split panes", () => {
 
   it("keeps the tab-root routing entry (dropping only its output/park stamps) when the root pane closes, so rename still lands", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
     store.getState().bumpOutput("s1", 1000);
     store.getState().setParkState("s1", true, false);
@@ -295,7 +487,7 @@ describe("split panes", () => {
 
   it("clears the retained tab-root routing entry when the whole tab later closes", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
     store.getState().setParkState("s1", true, false);
     store.getState().closePane("p", "s1", "s1"); // root pane gone; sessionOwner[s1] retained
@@ -309,7 +501,7 @@ describe("split panes", () => {
 
   it("collapses a nested split while leaving the sibling subtree intact", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
     store.getState().addSplit("p", "s1", "s1", "s3", "horizontal");
 
@@ -321,7 +513,7 @@ describe("split panes", () => {
 
   it("ignores invalid pane-close targets and refuses to remove a tab's only leaf", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     const before = store.getState().byOwner;
 
     store.getState().closePane("missing", "s1", "s1");
@@ -334,7 +526,7 @@ describe("split panes", () => {
 
   it("updates only the targeted split ratio and clamps unsafe extremes", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
 
     store.getState().setSplitRatio("p", "s1", "s2", 0.99);
@@ -344,7 +536,7 @@ describe("split panes", () => {
 
   it("updates a nested split and ignores unknown split/owner/tab ids", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
     store.getState().addSplit("p", "s1", "s1", "s3", "horizontal");
 
@@ -364,7 +556,7 @@ describe("split panes", () => {
 describe("setActivePane", () => {
   it("focuses a pane inside a split tree", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
 
     store.getState().setActivePane("p", "s1", "s1");
@@ -374,7 +566,7 @@ describe("setActivePane", () => {
 
   it("is a no-op for the active pane or unknown owner, tab, and pane", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     const before = store.getState().byOwner;
 
     store.getState().setActivePane("p", "s1", "s1");
@@ -389,9 +581,9 @@ describe("setActivePane", () => {
 describe("closeSession", () => {
   it("removes the tab, selects the neighbor, and clears its indexes", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
-    store.getState().addSession(P, "s2", "Terminal 2");
-    store.getState().addSession(P, "s3", "Terminal 3");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
+    store.getState().addSession(P, "s2", shellLaunch("Terminal 2"));
+    store.getState().addSession(P, "s3", shellLaunch("Terminal 3"));
     store.getState().setActiveSession("p", "s2");
     store.getState().bumpOutput("s2", 1000);
     store.getState().setParkState("s2", true, true);
@@ -408,8 +600,8 @@ describe("closeSession", () => {
 
   it("leaves the active tab untouched when a different (non-active) tab is closed", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
-    store.getState().addSession(P, "s2", "Terminal 2"); // s2 becomes active
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
+    store.getState().addSession(P, "s2", shellLaunch("Terminal 2")); // s2 becomes active
 
     store.getState().closeSession("p", "s1"); // close the NON-active tab
 
@@ -420,7 +612,7 @@ describe("closeSession", () => {
 
   it("sets activeSessionId to null when closing the only tab", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
 
     store.getState().closeSession("p", "s1");
 
@@ -431,7 +623,7 @@ describe("closeSession", () => {
 
   it("is a no-op for an unknown owner or session", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     const before = store.getState().byOwner;
 
     store.getState().closeSession("missing", "s1");
@@ -443,7 +635,7 @@ describe("closeSession", () => {
 describe("renameSession", () => {
   it("retitles the tab identified by its root sessionId", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
 
     store.getState().renameSession("s1", "Deploy");
 
@@ -452,7 +644,7 @@ describe("renameSession", () => {
 
   it("is a no-op for an unchanged title or an unknown session", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Fixed");
+    store.getState().addSession(P, "s1", shellLaunch("Fixed"));
     const before = store.getState().byOwner;
 
     store.getState().renameSession("s1", "Fixed");
@@ -475,8 +667,8 @@ describe("renameSession", () => {
 describe("markExited", () => {
   it("records the exit code on the matching tab, routing across owners", () => {
     const store = createSessionsStore();
-    store.getState().addSession(scratchScope("a"), "a1", "Terminal 1");
-    store.getState().addSession(ticketScope("proj", "t1"), "b1", "Session 1");
+    store.getState().addSession(scratchScope("a"), "a1", shellLaunch("Terminal 1"));
+    store.getState().addSession(ticketScope("proj", "t1"), "b1", shellLaunch("Session 1"));
 
     store.getState().markExited("b1", 130);
 
@@ -490,7 +682,7 @@ describe("markExited", () => {
 
   it("records an exit on a nested split leaf without changing its sibling", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().addSplit("p", "s1", "s1", "s2", "vertical");
     store.getState().addSplit("p", "s1", "s1", "s3", "horizontal");
 
@@ -504,7 +696,7 @@ describe("markExited", () => {
 
   it("is a no-op for an unknown session", () => {
     const store = createSessionsStore();
-    store.getState().addSession(scratchScope("a"), "a1", "Terminal 1");
+    store.getState().addSession(scratchScope("a"), "a1", shellLaunch("Terminal 1"));
     const before = store.getState().byOwner;
 
     store.getState().markExited("ghost", 0);
@@ -523,7 +715,7 @@ describe("markExited", () => {
 
   it("is a no-op when the routing index outlives the pane it points to (defensive)", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     // s1's own routing index is intact, but "ghost" is (incorrectly) routed to
     // the same owner without any pane in its tabs to match.
     store.setState((state) => ({ sessionOwner: { ...state.sessionOwner, ghost: "p" } }));
@@ -538,14 +730,14 @@ describe("markExited", () => {
 describe("bumpOutput", () => {
   it("records the timestamp for a tracked session", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().bumpOutput("s1", 5000);
     expect(store.getState().lastOutputAt["s1"]).toBe(5000);
   });
 
   it("throttles to one write per second", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().bumpOutput("s1", 5000);
     store.getState().bumpOutput("s1", 5500); // within 1s — ignored
     expect(store.getState().lastOutputAt["s1"]).toBe(5000);
@@ -555,7 +747,7 @@ describe("bumpOutput", () => {
 
   it("ignores an untracked session, and a post-close chunk is free", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().bumpOutput("scratch", 5000);
     expect(store.getState().lastOutputAt["scratch"]).toBeUndefined();
 
@@ -568,7 +760,7 @@ describe("bumpOutput", () => {
 describe("setParkState", () => {
   it("records park+keepAwake for a previously untracked session", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
 
     store.getState().setParkState("s1", true, false);
 
@@ -577,7 +769,7 @@ describe("setParkState", () => {
 
   it("updates an existing entry when either field changes", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().setParkState("s1", true, false);
 
     store.getState().setParkState("s1", true, true); // pinned while still parked
@@ -587,7 +779,7 @@ describe("setParkState", () => {
 
   it("is a no-op when park state is unchanged", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().setParkState("s1", true, false);
     const before = store.getState().parkState;
 
@@ -598,7 +790,7 @@ describe("setParkState", () => {
 
   it("ignores a push for a session the store no longer tracks", () => {
     const store = createSessionsStore();
-    store.getState().addSession(P, "s1", "Terminal 1");
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
     store.getState().setParkState("s1", true, false);
     store.getState().closeSession("p", "s1");
 
@@ -644,12 +836,12 @@ describe("setStarting", () => {
 describe("forgetOwner", () => {
   it("drops the container, its sessions' indexes, and its starting flag", () => {
     const store = createSessionsStore();
-    store.getState().addSession(scratchScope("a"), "a1", "Terminal 1");
-    store.getState().addSession(scratchScope("a"), "a2", "Terminal 2");
+    store.getState().addSession(scratchScope("a"), "a1", shellLaunch("Terminal 1"));
+    store.getState().addSession(scratchScope("a"), "a2", shellLaunch("Terminal 2"));
     store.getState().bumpOutput("a1", 1000);
     store.getState().setParkState("a1", true, false);
     store.getState().setStarting("a", true);
-    store.getState().addSession(scratchScope("b"), "b1", "Terminal 1");
+    store.getState().addSession(scratchScope("b"), "b1", shellLaunch("Terminal 1"));
 
     store.getState().forgetOwner("a");
 
@@ -670,7 +862,7 @@ describe("forgetOwner", () => {
 
   it("is a no-op for an owner with no sessions and no starting flag", () => {
     const store = createSessionsStore();
-    store.getState().addSession(scratchScope("a"), "a1", "Terminal 1");
+    store.getState().addSession(scratchScope("a"), "a1", shellLaunch("Terminal 1"));
     const before = store.getState().byOwner;
     store.getState().forgetOwner("never-added");
     expect(store.getState().byOwner).toBe(before);
@@ -680,10 +872,438 @@ describe("forgetOwner", () => {
 describe("findTabBySessionId", () => {
   it("finds the owner + tab for a root session id across owners", () => {
     const store = createSessionsStore();
-    store.getState().addSession(scratchScope("a"), "a1", "Terminal 1");
-    store.getState().addSession(ticketScope("proj", "t1"), "b1", "Session 1");
+    store.getState().addSession(scratchScope("a"), "a1", shellLaunch("Terminal 1"));
+    store.getState().addSession(ticketScope("proj", "t1"), "b1", shellLaunch("Session 1"));
 
     expect(findTabBySessionId(store.getState().byOwner, "b1")?.ownerId).toBe("t1");
     expect(findTabBySessionId(store.getState().byOwner, "ghost")).toBeNull();
+  });
+});
+
+/** The launch expectation a hooked claude-code session is registered with. */
+const HOOKED_LAUNCH: CreateSessionHarnessStateInput = {
+  harnessId: "claude-code",
+  adapter: {
+    injection: { kind: "claude-settings-json", flag: "--settings" },
+    startupEvent: "session.started",
+    events: [
+      { event: "session.started", native: "SessionStart", delivery: "async" },
+      { event: "turn.started", native: "UserPromptSubmit", delivery: "async" },
+      { event: "input.needed", native: "Notification", delivery: "async" },
+    ],
+  },
+  startedAt: 1000,
+};
+
+describe("applyHarnessEvent", () => {
+  it("puts a session into the state its harness declares", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
+    store.getState().expectHarnessEvents("s1", HOOKED_LAUNCH);
+
+    store.getState().applyHarnessEvent("s1", "input.needed", null);
+
+    expect(store.getState().harness["s1"]?.declared).toBe("waiting");
+  });
+
+  it("ignores an event for a session no launch ever registered", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
+    const before = store.getState().harness;
+
+    store.getState().applyHarnessEvent("s1", "input.needed", null);
+
+    expect(store.getState().harness).toBe(before);
+  });
+
+  it("refuses to let an event fired earlier clear a wait that is still real", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
+    store.getState().expectHarnessEvents("s1", HOOKED_LAUNCH);
+
+    // The two hook processes raced and the older one won. Arrival order would
+    // show Idle for an agent still sitting at a permission prompt.
+    store.getState().applyHarnessEvent("s1", "input.needed", 2000);
+    store.getState().applyHarnessEvent("s1", "turn.started", 1000);
+
+    expect(store.getState().harness["s1"]?.declared).toBe("waiting");
+  });
+
+  it("applies an event it cannot prove is stale, stamped equally or not at all", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
+    store.getState().expectHarnessEvents("s1", HOOKED_LAUNCH);
+    store.getState().applyHarnessEvent("s1", "input.needed", 2000);
+
+    store.getState().applyHarnessEvent("s1", "turn.started", 2000);
+    expect(store.getState().harness["s1"]?.declared).toBeNull();
+
+    store.getState().applyHarnessEvent("s1", "input.needed", null);
+    expect(store.getState().harness["s1"]?.declared).toBe("waiting");
+  });
+});
+
+describe("expectHarnessEvents", () => {
+  it("refuses to register a session the store no longer knows", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
+    store.getState().closeSession("p", "s1");
+
+    // A launch that lost its race with a close must not leave a live-looking
+    // harness entry behind for a PTY that is already gone.
+    store.getState().expectHarnessEvents("s1", HOOKED_LAUNCH);
+
+    expect(store.getState().harness["s1"]).toBeUndefined();
+  });
+
+  it("forgets a session's harness state when its tab closes", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
+    store.getState().expectHarnessEvents("s1", HOOKED_LAUNCH);
+
+    store.getState().closeSession("p", "s1");
+
+    expect(store.getState().harness["s1"]).toBeUndefined();
+  });
+});
+
+/** Stubs the preload harness channel; returns the push + the unsubscribe spy. */
+function stubChannel() {
+  let push: ((notice: HarnessEventNotice) => void) | undefined;
+  const unsubscribe = vi.fn();
+  vi.stubGlobal("window", {
+    api: {
+      sessions: {
+        onHarnessEvent: (callback: (notice: HarnessEventNotice) => void) => {
+          push = callback;
+          return unsubscribe;
+        },
+      },
+    },
+  });
+  return {
+    push: (notice: HarnessEventNotice) => push?.(notice),
+    unsubscribe,
+  };
+}
+
+/** A claude-code session reporting that a human is blocking it. */
+const NOTICE: HarnessEventNotice = {
+  sessionId: "s1",
+  projectId: "p",
+  ticketId: "t1",
+  harnessId: "claude-code",
+  event: "input.needed",
+  harnessSessionId: null,
+  at: 1000,
+  firedAt: null,
+};
+
+describe("subscribeHarnessEvents", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    useSessionsStore.setState({ byOwner: {}, sessionOwner: {}, harness: {} });
+  });
+
+  it("puts the session a blocking event names into `waiting`", () => {
+    useSessionsStore.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
+    const channel = stubChannel();
+
+    subscribeHarnessEvents();
+    channel.push(NOTICE);
+
+    expect(useSessionsStore.getState().harness["s1"]?.declared).toBe("waiting");
+  });
+
+  it("clears a waiting session on the agent's next observable move", () => {
+    useSessionsStore.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
+    const channel = stubChannel();
+
+    subscribeHarnessEvents();
+    channel.push(NOTICE);
+    channel.push({ ...NOTICE, event: "turn.started", at: 2000 });
+
+    expect(useSessionsStore.getState().harness["s1"]?.declared).toBeNull();
+  });
+
+  it("keeps waiting when only a subagent finished", () => {
+    useSessionsStore.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
+    const channel = stubChannel();
+
+    subscribeHarnessEvents();
+    channel.push(NOTICE);
+    channel.push({ ...NOTICE, event: "subagent.completed", at: 2000 });
+
+    expect(useSessionsStore.getState().harness["s1"]?.declared).toBe("waiting");
+  });
+
+  it("believes a harness it cannot describe — the unknown id fails OPEN", () => {
+    useSessionsStore.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
+    const channel = stubChannel();
+
+    subscribeHarnessEvents();
+    // The catalog is empty here, so the renderer has nothing to check this id
+    // against — and delivery is the only proof the plan ever asked for. This
+    // must survive the catalog existing: silencing a harness that has just
+    // demonstrated it reports is the exact failure the channel exists to stop.
+    channel.push({ ...NOTICE, harnessId: "my-agent" as HarnessId });
+
+    expect(useSessionsStore.getState().harness["s1"]?.declared).toBe("waiting");
+  });
+
+  it("reads a catalogued harness's declared events instead of crediting it with all of them", () => {
+    useHarnessCatalogStore.getState().setRegistered([
+      {
+        ...registeredAdapter(),
+        events: [{ event: "turn.started", native: "Start", delivery: "async" }],
+      },
+    ]);
+    useSessionsStore.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
+    const channel = stubChannel();
+
+    subscribeHarnessEvents();
+    channel.push({ ...NOTICE, harnessId: "my-agent" as HarnessId });
+
+    // Its own manifest says it cannot report a blocked human, so this blocking
+    // event proves the channel is alive and nothing more.
+    expect(useSessionsStore.getState().harness["s1"]?.declared).toBeNull();
+    expect(useSessionsStore.getState().harness["s1"]?.delivered).toBe(true);
+  });
+
+  it("refuses a blocking event from a harness whose own source can't send one", () => {
+    useSessionsStore.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
+    const channel = stubChannel();
+
+    subscribeHarnessEvents();
+    channel.push({ ...NOTICE, harnessId: "cursor", event: "permission.requested" });
+
+    expect(useSessionsStore.getState().harness["s1"]?.declared).toBeNull();
+    // The channel is demonstrably alive even so — that much is not in doubt.
+    expect(useSessionsStore.getState().harness["s1"]?.delivered).toBe(true);
+  });
+
+  it("drops an event for a session the store never knew", () => {
+    const channel = stubChannel();
+
+    subscribeHarnessEvents();
+    channel.push(NOTICE);
+
+    expect(useSessionsStore.getState().harness).toEqual({});
+  });
+
+  // Notices arrive in the order main ingested them, which is the order their
+  // hook processes won their races in — not the order the agent fired them.
+  it("orders by the stamp the delivery carried, not by the order it arrived", () => {
+    useSessionsStore.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
+    const channel = stubChannel();
+
+    subscribeHarnessEvents();
+    channel.push({ ...NOTICE, firedAt: 2000 });
+    channel.push({ ...NOTICE, event: "turn.started", at: 2000, firedAt: 1000 });
+
+    expect(useSessionsStore.getState().harness["s1"]?.declared).toBe("waiting");
+    // A stale delivery is still a delivery: it arrived, over a real socket.
+    expect(useSessionsStore.getState().harness["s1"]?.delivered).toBe(true);
+  });
+
+  it("hands back the channel's own unsubscribe", () => {
+    const channel = stubChannel();
+
+    expect(subscribeHarnessEvents()).toBe(channel.unsubscribe);
+  });
+});
+
+/** Stubs the preload announce channel; returns the push + the unsubscribe spy. */
+function stubAnnounceChannel() {
+  let push: ((notice: SessionHarnessNotice) => void) | undefined;
+  const unsubscribe = vi.fn();
+  vi.stubGlobal("window", {
+    api: {
+      sessions: {
+        onHarnessChange: (callback: (notice: SessionHarnessNotice) => void) => {
+          push = callback;
+          return unsubscribe;
+        },
+      },
+    },
+  });
+  return { push: (notice: SessionHarnessNotice) => push?.(notice), unsubscribe };
+}
+
+/** A claude-code wrapper announcing itself inside a session opencode opened. */
+const ANNOUNCE: SessionHarnessNotice = {
+  sessionId: "s1",
+  projectId: "p",
+  ticketId: "t1",
+  harnessId: "claude-code",
+  changed: true,
+  at: 9000,
+};
+
+/** The cached durable record the announce mirrors onto. */
+const RECORD = {
+  id: "s1",
+  projectId: "p",
+  ticketId: "t1",
+  harnessId: "opencode" as HarnessId,
+  activeHarnessId: null as HarnessId | null,
+  harnessSessionId: null,
+  launchKind: "agent" as const,
+  placement: "tab" as const,
+  title: "Session 1",
+  cwd: "/repo",
+  createdAt: 0,
+  endedAt: null,
+  exitCode: null,
+};
+
+describe("announceHarness / subscribeSessionHarness", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    useSessionsStore.setState({ byOwner: {}, sessionOwner: {}, harness: {} });
+    useTicketSessionRecordsStore.setState({ byTicket: {} });
+  });
+
+  // The whole bug in one assertion: the terminal was opened by opencode, the
+  // user quit it and ran claude, and everything that reports for this session
+  // has to be about claude from here on.
+  it("moves the session's harness state onto the harness that announced itself", () => {
+    useSessionsStore.getState().addSession(P, "s1", agentLaunch("opencode"));
+    const channel = stubAnnounceChannel();
+
+    subscribeSessionHarness();
+    channel.push(ANNOUNCE);
+
+    expect(useSessionsStore.getState().harness["s1"]?.harnessId).toBe("claude-code");
+  });
+
+  // A needs-you raised by an agent the user has since quit is exactly the stale
+  // attention the sidebar must stop showing.
+  it("drops what the previous harness declared, and restarts its grace window", () => {
+    useSessionsStore.getState().addSession(P, "s1", agentLaunch("claude-code"));
+    useSessionsStore.getState().applyHarnessEvent("s1", "input.needed", null);
+    expect(useSessionsStore.getState().harness["s1"]?.declared).toBe("waiting");
+
+    useSessionsStore.getState().announceHarness("s1", "opencode" as HarnessId, 9000);
+
+    const state = useSessionsStore.getState().harness["s1"];
+    expect(state?.declared).toBeNull();
+    expect(state?.delivered).toBe(false);
+    expect(state?.startedAt).toBe(9000);
+  });
+
+  // Quit claude, run claude again in the same terminal. The slug did not
+  // change, but the channel did: the second launch has delivered nothing, and
+  // must be judged from its own announce rather than inheriting the first
+  // launch's record of having reported.
+  it("restarts the window when the SAME harness announces a second launch", () => {
+    useSessionsStore.getState().addSession(P, "s1", agentLaunch("claude-code"));
+    useSessionsStore.getState().applyHarnessEvent("s1", "input.needed", null);
+    expect(useSessionsStore.getState().harness["s1"]?.delivered).toBe(true);
+
+    useSessionsStore.getState().announceHarness("s1", "claude-code" as HarnessId, 9000);
+
+    const state = useSessionsStore.getState().harness["s1"];
+    expect(state?.harnessId).toBe("claude-code");
+    expect(state?.delivered).toBe(false);
+    expect(state?.declared).toBeNull();
+    expect(state?.startedAt).toBe(9000);
+  });
+
+  // Guessing goes wrong in both directions, so an id nothing here can describe
+  // earns no expectation — the same silence a launch of it would keep.
+  it("says nothing for a harness this renderer cannot describe", () => {
+    useSessionsStore.getState().addSession(P, "s1", agentLaunch("claude-code"));
+
+    useSessionsStore.getState().announceHarness("s1", "my-agent" as HarnessId, 9000);
+
+    expect(useSessionsStore.getState().harness["s1"]?.harnessId).toBe("claude-code");
+  });
+
+  it("ignores an announce for a session this renderer has already forgotten", () => {
+    useSessionsStore.getState().announceHarness("gone", "claude-code" as HarnessId, 9000);
+
+    expect(useSessionsStore.getState().harness["gone"]).toBeUndefined();
+  });
+
+  // The durable record is the other half: it is what every label and resume
+  // affordance reads, so the rail would keep naming opencode without this.
+  it("mirrors the announce onto the ticket's cached durable record", () => {
+    useTicketSessionRecordsStore.setState({ byTicket: { t1: [RECORD] } });
+    const channel = stubAnnounceChannel();
+
+    subscribeSessionHarness();
+    channel.push(ANNOUNCE);
+
+    const record = useTicketSessionRecordsStore.getState().byTicket["t1"]?.[0];
+    expect(record?.activeHarnessId).toBe("claude-code");
+    // The launch stays exactly what it was — it is history, not a live fact.
+    expect(record?.harnessId).toBe("opencode");
+  });
+
+  // A relaunch of the same harness is broadcast, but names nothing new. The
+  // rail's record must not be rebuilt to carry the value it already had.
+  it("leaves the durable record untouched when the announce named no change", () => {
+    useSessionsStore.getState().addSession(P, "s1", agentLaunch("claude-code"));
+    useTicketSessionRecordsStore.setState({
+      byTicket: { t1: [{ ...RECORD, activeHarnessId: "claude-code" }] },
+    });
+    const before = useTicketSessionRecordsStore.getState().byTicket["t1"];
+    const channel = stubAnnounceChannel();
+
+    subscribeSessionHarness();
+    channel.push({ ...ANNOUNCE, changed: false });
+
+    expect(useTicketSessionRecordsStore.getState().byTicket["t1"]).toBe(before);
+    // The live state still restarted — that is the half `changed` does not gate.
+    expect(useSessionsStore.getState().harness["s1"]?.startedAt).toBe(9000);
+  });
+
+  it("has no record to mirror onto for a scratch session", () => {
+    const channel = stubAnnounceChannel();
+
+    subscribeSessionHarness();
+    channel.push({ ...ANNOUNCE, ticketId: null });
+
+    expect(useTicketSessionRecordsStore.getState().byTicket).toEqual({});
+  });
+
+  it("hands back the channel's own unsubscribe", () => {
+    const channel = stubAnnounceChannel();
+
+    expect(subscribeSessionHarness()).toBe(channel.unsubscribe);
+  });
+});
+
+/** Stubs `window.api.harness.registered` with one canned answer. */
+function stubCatalog(answer: HarnessRegisteredResult) {
+  const registered = vi.fn(() => Promise.resolve(answer));
+  vi.stubGlobal("window", { api: { harness: { registered } } });
+  return registered;
+}
+
+describe("hydrateHarnessCatalog", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("mirrors what main says it will launch", async () => {
+    stubCatalog({ ok: true, harnesses: [registeredAdapter()], channels: [] });
+
+    await hydrateHarnessCatalog();
+
+    expect(useHarnessCatalogStore.getState().registered).toEqual([registeredAdapter()]);
+  });
+
+  it("leaves the last good answer standing when the read fails", async () => {
+    useHarnessCatalogStore.getState().setRegistered([registeredAdapter()]);
+    stubCatalog({ ok: false, error: "database is locked" });
+
+    await hydrateHarnessCatalog();
+
+    // Forgetting a harness costs a picker entry and a live session's
+    // expectation; keeping a stale one costs nothing, because the launch door
+    // checks trust itself and refuses what it no longer resolves.
+    expect(useHarnessCatalogStore.getState().registered).toEqual([registeredAdapter()]);
   });
 });

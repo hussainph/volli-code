@@ -367,6 +367,105 @@ ALTER TABLE projects ADD COLUMN theme_appearance TEXT
   CHECK (theme_appearance IS NULL OR theme_appearance IN ('light','dark','auto'));
 `;
 
+/**
+ * Migration 015: the trust verdict for a registered harness (harness-events,
+ * "Bring your own harness"). A manifest at
+ * `~/.agents/harnesses/<slug>/harness.json` is the DECLARATION — the author's
+ * file, editable at any moment, and no business of ours. What belongs here is
+ * only what Volli itself decided about it.
+ *
+ * Which is why `manifest_sha256` is stored and the manifest's CONTENTS are not.
+ * Mirroring command, argv and surfaces into columns would create a second copy
+ * the author cannot edit, and "drop a file in and it works" would stop being
+ * true the moment the two disagreed. The hash is enough to answer the only
+ * question this table exists for: are these the bytes somebody actually ruled
+ * on? Anything else is re-read from disk.
+ *
+ * `declared_events` and `verified_events` are both JSON arrays of canonical
+ * event names, and the asymmetry between them is the point. Declared is a claim
+ * and gates nothing; verified is a fact, written on first real delivery, and it
+ * alone drives automatic board moves and notifications. A verdict recorded
+ * against new bytes resets verified, because the old evidence was about a
+ * command line that no longer exists.
+ *
+ * No `harness_id` foreign key anywhere: a slug is registered here BEFORE any
+ * session has ever used it, and sessions keep their `harness_id` as free text
+ * (migration 003) precisely so an unregistered harness still records history.
+ *
+ * Deliberately absent from `db/export.ts`, which otherwise carries every table:
+ * a verdict is a decision about the files on THIS machine, and permission to
+ * execute a command line is not something an export document should carry.
+ */
+const MIGRATION_015_REGISTERED_HARNESSES = `
+CREATE TABLE registered_harnesses (
+  slug            TEXT PRIMARY KEY,
+  manifest_path   TEXT NOT NULL,
+  manifest_sha256 TEXT NOT NULL,
+  decision        TEXT NOT NULL CHECK (decision IN ('trusted','blocked')),
+  declared_events TEXT NOT NULL DEFAULT '[]',
+  verified_events TEXT NOT NULL DEFAULT '[]',
+  decided_at      INTEGER NOT NULL,
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL
+);
+`;
+
+/**
+ * Migration 016: what is RUNNING in a session's terminal, beside what that
+ * session was launched with.
+ *
+ * `harness_id` is written once at INSERT and never updated, which is correct —
+ * it is the launch, and the launch does not change. What was missing is the
+ * other half: a terminal outlives the agent that opened it, so a user who quits
+ * opencode and runs claude in the same pane leaves the row describing a process
+ * that is gone. Additive and nullable rather than a rewrite of `harness_id`,
+ * because both facts are wanted and `NULL` is the honest state of every row that
+ * predates the announce — nothing has said what it is running, so the launch
+ * harness remains the best available answer.
+ */
+const MIGRATION_016_SESSION_ACTIVE_HARNESS = `
+ALTER TABLE sessions ADD COLUMN active_harness_id TEXT;
+`;
+
+/**
+ * Migration 017: whether a harness's event channel is working *now*.
+ *
+ * `registered_harnesses.verified_events` (015) is monotonic on purpose — one
+ * delivery pins a capability forever — which makes it structurally unable to
+ * say that automation STOPPED working. A harness upgrade that renames a hook
+ * field, a `volli doctor --fix` never run after a path change, a wrapper
+ * removed by a dotfile sync: every one of those reads as perfectly healthy for
+ * the rest of the install's life.
+ *
+ * So freshness gets its own two integers rather than a rewrite of a working
+ * ledger. `last_launch_at` is stamped by the `session harness` announce — the
+ * wrapper calling in one step before it execs, which is the only event that
+ * proves Volli's configuration was in the loop; a PTY spawn would also count a
+ * user running `/opt/homebrew/bin/claude` by hand and manufacture a false
+ * accusation out of it. `last_event_at` is stamped by an arriving hook.
+ *
+ * No third column. The state — reporting / silent / unproven — is the
+ * comparison of the two, computed at read time, and that is exactly what makes
+ * it forget: a harness whose latest launch said nothing is silent on that
+ * launch, whatever the previous hundred did. Storing the verdict would make it
+ * monotonic again by the back door.
+ *
+ * Both columns are nullable and there is no row until something happens: a
+ * harness nobody has launched has nothing to say about itself, and `NULL` is
+ * that, distinct from zero.
+ *
+ * Absent from `db/export.ts` for migration 015's reason — this is an
+ * observation about THIS machine's install, not domain data a document should
+ * carry.
+ */
+const MIGRATION_017_HARNESS_CHANNEL = `
+CREATE TABLE harness_channel (
+  harness_id     TEXT PRIMARY KEY,
+  last_launch_at INTEGER,
+  last_event_at  INTEGER
+);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -429,6 +528,21 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 14,
     name: "projects theme canvas + appearance — the per-project half of the Arc canvas",
     sql: MIGRATION_014_PROJECT_CANVAS,
+  },
+  {
+    version: 15,
+    name: "registered_harnesses — the trust verdict and event ledger for a manifest",
+    sql: MIGRATION_015_REGISTERED_HARNESSES,
+  },
+  {
+    version: 16,
+    name: "sessions.active_harness_id — the harness actually running, beside the launch one",
+    sql: MIGRATION_016_SESSION_ACTIVE_HARNESS,
+  },
+  {
+    version: 17,
+    name: "harness_channel — is this harness's event channel working right now",
+    sql: MIGRATION_017_HARNESS_CHANNEL,
   },
 ];
 

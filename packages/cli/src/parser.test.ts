@@ -191,6 +191,37 @@ describe("parseCliArgs", () => {
     });
   });
 
+  // Fired by a generated wrapper, never typed — but it still walks the parser,
+  // so the one positional has to arrive under the same key everything else uses.
+  it("routes the wrapper's harness announce, and requires the slug", () => {
+    expect(parseCliArgs(["session", "harness", "opencode"])).toEqual({
+      ok: true,
+      invocation: { command: "session.harness", args: { id: "opencode" }, json: false },
+    });
+    expect(parseCliArgs(["session", "harness"])).toEqual({
+      ok: false,
+      code: "USAGE",
+      message: "session harness requires <id>",
+    });
+  });
+
+  // The wrapper asks for an id only when the harness it is about to exec takes
+  // one on argv; without the flag this is an announce and nothing is minted.
+  it("carries the wrapper's request for a freshly minted session id", () => {
+    expect(parseCliArgs(["session", "harness", "cursor", "--mint"])).toEqual({
+      ok: true,
+      invocation: { command: "session.harness", args: { id: "cursor", mint: true }, json: false },
+    });
+  });
+
+  // The reference is what an agent can usefully DO. A verb whose only correct
+  // caller is a file Volli generated is noise in it — the same call `hook` made.
+  it("keeps the involuntary verbs out of the published command list", () => {
+    const names = COMMAND_HELP.map((entry) => entry.name);
+    expect(names).not.toContain("session harness");
+    expect(names).not.toContain("hook");
+  });
+
   it("routes the remaining published read, help, and explicit launch commands", () => {
     expect(parseCliArgs(["board", "--project", "/work/volli"])).toEqual({
       ok: true,
@@ -371,16 +402,35 @@ describe("parseCliArgs", () => {
     });
   });
 
+  // A slug the parser has never heard of is exactly what a registered harness
+  // looks like from here, so it travels — the app is the only thing that can say
+  // whether it names anything, and whether a human trusted it.
   it.each([
-    ["ticket create --harness", ["ticket", "create", "--title", "x", "--harness", "cursor"]],
-    ["ticket update --harness", ["ticket", "update", "VC-1", "--harness", "cursor"]],
+    ["ticket create --harness", ["ticket", "create", "--title", "x", "--harness", "aider"]],
+    ["ticket update --harness", ["ticket", "update", "VC-1", "--harness", "aider"]],
+  ] as const)("carries a registered harness slug through %s", (_label, argv) => {
+    const result = parseCliArgs(argv);
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.invocation.args["harness"]).toBe("aider");
+  });
+
+  it.each([
+    ["ticket create --harness", ["ticket", "create", "--title", "x", "--harness", "Aider!"]],
+    ["ticket update --harness", ["ticket", "update", "VC-1", "--harness", "Aider!"]],
   ] as const)("enumerates the harness vocabulary when %s rejects a token", (_label, argv) => {
     const result = parseCliArgs(argv);
     expect(result).toEqual({
       ok: false,
       code: "USAGE",
-      message: `Unknown harness "cursor" (valid: ${HARNESS_VOCABULARY})`,
+      message: `Invalid harness "Aider!" (valid: ${HARNESS_VOCABULARY})`,
     });
+  });
+
+  // The phrase help renders has to be the phrase the refusal renders, or the
+  // reference teaches a vocabulary the parser does not have.
+  it("names the registered category alongside the first-class ids", () => {
+    expect(HARNESS_VOCABULARY).toContain("claude-code");
+    expect(HARNESS_VOCABULARY).toContain("registered, trusted harness");
   });
 
   it.each([
@@ -509,5 +559,21 @@ describe("parseCliArgs", () => {
       ok: true,
       invocation: { command: "worktree.diff", args: { workingTree: true }, json: false },
     });
+  });
+});
+
+describe("doctor", () => {
+  it("parses with no options", () => {
+    const parsed = parseCliArgs(["doctor"]);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) throw new Error("expected a parse");
+    expect(parsed.invocation.command).toBe("doctor");
+    expect(parsed.invocation.args["fix"]).toBeUndefined();
+  });
+
+  it("parses --fix as a flag", () => {
+    const parsed = parseCliArgs(["doctor", "--fix"]);
+    if (!parsed.ok) throw new Error("expected a parse");
+    expect(parsed.invocation.args["fix"]).toBe(true);
   });
 });

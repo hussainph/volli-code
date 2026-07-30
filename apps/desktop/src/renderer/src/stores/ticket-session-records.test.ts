@@ -12,6 +12,7 @@ function record(overrides: Partial<SessionRecord> = {}): SessionRecord {
     projectId: "p1",
     ticketId: "t1",
     harnessId: "claude-code",
+    activeHarnessId: null,
     harnessSessionId: null,
     launchKind: "agent",
     placement: "tab",
@@ -92,6 +93,39 @@ describe("renameLocally", () => {
     const store = createTicketSessionRecordsStore();
 
     store.getState().renameLocally("t1", "s1", "Renamed");
+
+    expect(store.getState().byTicket).toEqual({});
+  });
+});
+
+describe("setActiveHarness", () => {
+  // What is running moves; what launched does not. Both are wanted, and the
+  // rail reads them together through `effectiveHarnessId`.
+  it("records the announced harness beside the launch one, on the named record", async () => {
+    stubListForTicket(() =>
+      Promise.resolve({ ok: true, sessions: [record(), record({ id: "s2" })] }),
+    );
+    const store = createTicketSessionRecordsStore();
+    await store.getState().refresh("t1");
+
+    store.getState().setActiveHarness("t1", "s2", "opencode");
+
+    expect(
+      store.getState().byTicket["t1"]?.map(({ id, harnessId, activeHarnessId }) => ({
+        id,
+        harnessId,
+        activeHarnessId,
+      })),
+    ).toEqual([
+      { id: "s1", harnessId: "claude-code", activeHarnessId: null },
+      { id: "s2", harnessId: "claude-code", activeHarnessId: "opencode" },
+    ]);
+  });
+
+  it("is a no-op for a ticket with no cached records", () => {
+    const store = createTicketSessionRecordsStore();
+
+    store.getState().setActiveHarness("t1", "s1", "opencode");
 
     expect(store.getState().byTicket).toEqual({});
   });

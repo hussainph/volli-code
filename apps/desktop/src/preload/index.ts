@@ -25,6 +25,9 @@ import type {
   FileWriteResult,
   GhosttyAppearancePayload,
   GhosttyConfigResult,
+  HarnessPendingResult,
+  HarnessRegisteredResult,
+  HarnessTrustSetInput,
   IpcArgs,
   IpcResult,
   LabelResult,
@@ -43,6 +46,8 @@ import type {
   RevealResult,
   SessionRenameInput,
   SessionRenameResult,
+  HarnessEventNotice,
+  SessionHarnessNotice,
   SessionsInterruptedEvent,
   SessionsResult,
   TerminalBusyResult,
@@ -330,10 +335,60 @@ const api = {
       return () =>
         ipcRenderer.removeListener("volli:sessions-interrupted" satisfies VolliIpcEvent, listener);
     },
+    /**
+     * Subscribes to canonical harness events (harness-events): a hook the
+     * launch wrapper configured fired, and main resolved which session it
+     * belongs to. Harness-native event names never arrive here.
+     */
+    onHarnessEvent: (callback: (event: HarnessEventNotice) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: HarnessEventNotice) =>
+        callback(payload);
+      ipcRenderer.on("volli:harness-event" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:harness-event" satisfies VolliIpcEvent, listener);
+    },
+    /**
+     * Subscribes to harness-change announcements: a different harness's launch
+     * wrapper ran inside a session's terminal. Fired only on a change — the
+     * wrapper announces every launch, and most announces agree with what main
+     * already recorded.
+     */
+    onHarnessChange: (callback: (event: SessionHarnessNotice) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: SessionHarnessNotice) =>
+        callback(payload);
+      ipcRenderer.on("volli:session-harness" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:session-harness" satisfies VolliIpcEvent, listener);
+    },
   },
   labels: {
     setColor: (input: LabelSetColorInput): Promise<LabelResult> =>
       invoke("volli:label-set-color", input),
+  },
+  /**
+   * Bring-your-own harness trust (docs/plans/harness-events.md §Trust). A
+   * manifest on disk declares a command line Volli will execute and stays inert
+   * until a human confirms it; these two calls are the question and the answer.
+   */
+  harness: {
+    /** Every discovered manifest nobody has ruled on, re-read and re-hashed per call. */
+    pending: (): Promise<HarnessPendingResult> => invoke("volli:harness-pending"),
+    /**
+     * Records a verdict about the exact bytes the confirmation described.
+     * `manifestSha256` is the hash that was SHOWN — main refuses the write when
+     * the file no longer hashes to it, so a manifest edited while the dialog was
+     * open comes back as a new question instead of inheriting this answer.
+     */
+    setTrust: (input: HarnessTrustSetInput): Promise<Result> =>
+      invoke("volli:harness-trust-set", input),
+    /**
+     * The registered harnesses this host will actually launch, whole adapters,
+     * as main last resolved them. Built-ins are not in here — the renderer has
+     * those compiled in. Fetched fresh rather than cached: a verdict recorded
+     * while the app is open regenerates the wrappers on the spot, so the answer
+     * has a shelf life.
+     */
+    registered: (): Promise<HarnessRegisteredResult> => invoke("volli:harness-registered"),
   },
   files: {
     /** The whole-project file index the `@` picker ranks over (git-listed + `.volli/artifacts/`). Fetched fresh per picker open. */

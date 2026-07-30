@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
-import type { HarnessId } from "@volli/shared";
+import { getHarnessAdapter } from "@volli/shared";
+import type { HarnessAdapterLookup, HarnessId, HarnessWrapperLookup } from "@volli/shared";
 import { createAttachment } from "../db/attachments-repo";
 import { insertProject } from "../db/projects-repo";
 import { insertTicket } from "../db/tickets-repo";
@@ -42,13 +43,54 @@ const identity: EnsureOutcome["identity"] = {
   baseBranch: "main",
 };
 
+/** No wrapper was generated — the harness is launched by bare name. */
+const noWrapper: HarnessWrapperLookup = () => null;
+
+/** Every harness has a wrapper under Volli's own bin dir. */
+const wrapped: HarnessWrapperLookup = () => "/ud/bin/codex";
+
+/**
+ * The built-in adapters, which is the whole set these launch helpers ever see
+ * in a unit test — a registered manifest's adapter reaches them only through
+ * main's live harness runtime.
+ */
+const builtIns: HarnessAdapterLookup = getHarnessAdapter;
+
 describe("composeWorktreeLaunchCommand", () => {
   it("returns the pre-built resume line verbatim (no orientation preamble)", () => {
     setup();
     const worktree = worktreeScope({ resumeCommand: "claude --resume 'abc'" });
 
-    const line = composeWorktreeLaunchCommand(ctx.db, worktree, identity, "/wt/VC-1");
+    const line = composeWorktreeLaunchCommand(
+      ctx.db,
+      worktree,
+      identity,
+      "/wt/VC-1",
+      noWrapper,
+      builtIns,
+    );
     expect(line).toBe("claude --resume 'abc'");
+  });
+
+  // The worktree kickoff is the one launch line composed after `ensure`, and it
+  // has to name the wrapper exactly as the non-worktree path does.
+  it("opens a worktree kickoff with the generated wrapper's absolute path", () => {
+    setup();
+    const worktree = worktreeScope({
+      kickoff: { harnessId: "codex" as HarnessId, prompt: "run tests" },
+    });
+
+    const line = composeWorktreeLaunchCommand(
+      ctx.db,
+      worktree,
+      identity,
+      "/wt/VC-1",
+      wrapped,
+      builtIns,
+    );
+    expect(line).not.toBeNull();
+    expect(line?.startsWith("'/ud/bin/codex' ")).toBe(true);
+    expect(line).toContain("run tests");
   });
 
   it("composes the harness command opening with the orientation preamble for a kickoff", () => {
@@ -57,7 +99,14 @@ describe("composeWorktreeLaunchCommand", () => {
       kickoff: { harnessId: "codex" as HarnessId, prompt: "run tests" },
     });
 
-    const line = composeWorktreeLaunchCommand(ctx.db, worktree, identity, "/wt/VC-1");
+    const line = composeWorktreeLaunchCommand(
+      ctx.db,
+      worktree,
+      identity,
+      "/wt/VC-1",
+      noWrapper,
+      builtIns,
+    );
     expect(line).not.toBeNull();
     expect(line).toContain("codex");
     expect(line).toContain("isolated git worktree");
@@ -79,7 +128,14 @@ describe("composeWorktreeLaunchCommand", () => {
       kickoff: { harnessId: "codex" as HarnessId, prompt: "run tests" },
     });
 
-    const line = composeWorktreeLaunchCommand(ctx.db, worktree, identity, "/wt/VC-1");
+    const line = composeWorktreeLaunchCommand(
+      ctx.db,
+      worktree,
+      identity,
+      "/wt/VC-1",
+      noWrapper,
+      builtIns,
+    );
     expect(line).not.toBeNull();
     expect(line).toContain("## Attachments");
     expect(line).toContain("https://example.com/design");
@@ -97,7 +153,14 @@ describe("composeWorktreeLaunchCommand", () => {
       baseBranch: "main",
     };
 
-    const line = composeWorktreeLaunchCommand(ctx.db, worktree, noBranch, "/wt/VC-1");
+    const line = composeWorktreeLaunchCommand(
+      ctx.db,
+      worktree,
+      noBranch,
+      "/wt/VC-1",
+      noWrapper,
+      builtIns,
+    );
     expect(line).not.toBeNull();
     expect(line).toContain("isolated git worktree");
     // The empty branch renders as bare backticks, never the string "null".
@@ -107,7 +170,14 @@ describe("composeWorktreeLaunchCommand", () => {
 
   it("returns null when the worktree carries neither a resume line nor a kickoff", () => {
     setup();
-    const line = composeWorktreeLaunchCommand(ctx.db, worktreeScope(), identity, "/wt/VC-1");
+    const line = composeWorktreeLaunchCommand(
+      ctx.db,
+      worktreeScope(),
+      identity,
+      "/wt/VC-1",
+      noWrapper,
+      builtIns,
+    );
     expect(line).toBeNull();
   });
 });

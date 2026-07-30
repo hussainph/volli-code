@@ -21,7 +21,6 @@ import {
 import {
   buildActiveSessionListing,
   type ActiveSessionRow,
-  type SessionOutcome,
 } from "@renderer/components/sidebar/active-session-listing";
 import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
@@ -37,15 +36,10 @@ const EMPTY_TICKET_TABS: Record<string, { files: string[]; active: string }> = {
 
 const ACTIVITY_LABEL: Record<SessionActivityState, string> = {
   working: "Working",
+  waiting: "Waiting for you",
   idle: "Idle",
   parked: "Parked",
   exited: "Exited",
-};
-
-const OUTCOME_LABEL: Record<SessionOutcome, string> = {
-  failed: "Failed",
-  done: "Done",
-  ended: "Ended",
 };
 
 /**
@@ -100,16 +94,28 @@ function SessionRow({
         ? row.attention.reason === null
           ? "Ready for review"
           : `Ready · ${row.attention.reason}`
-        : "Needs review";
+        : row.attention?.signal === "waiting"
+          ? "Waiting for you"
+          : // The ticket sits in Needs Review and nothing has said why. A state,
+            // not an instruction — "Needs review" restated the column name back
+            // at the reader and read as a task.
+            "In review";
+  // A session whose hooks never arrived states that, in place of an activity it
+  // would only be guessing at. Every other row keeps its activity word: a Known
+  // harness never promised to report, so inference there is not news.
+  const activityLabel =
+    row.activity === null
+      ? row.source
+      : row.activitySource === "silent"
+        ? `${row.source} · Not reporting`
+        : `${row.source} · ${ACTIVITY_LABEL[row.activity]}`;
   const stateLabel = needsAttention
     ? attentionLabel
     : row.lastRun !== null
       ? row.lastRun.endedAt === null
-        ? OUTCOME_LABEL[row.lastRun.outcome]
-        : `${OUTCOME_LABEL[row.lastRun.outcome]} · ${relativeTime(row.lastRun.endedAt, now)}`
-      : row.activity === null
-        ? row.source
-        : `${row.source} · ${ACTIVITY_LABEL[row.activity]}`;
+        ? "Ended"
+        : `Ended · ${relativeTime(row.lastRun.endedAt, now)}`
+      : activityLabel;
 
   return (
     <SidebarMenuItem>
@@ -129,11 +135,9 @@ function SessionRow({
             "mt-1.5 size-1.5 shrink-0 rounded-full",
             needsAttention
               ? "bg-amber-500"
-              : row.lastRun?.outcome === "failed"
-                ? "bg-red-500"
-                : row.activity === "working"
-                  ? "bg-emerald-500"
-                  : "bg-muted-foreground/40",
+              : row.activity === "working"
+                ? "bg-emerald-500"
+                : "bg-muted-foreground/40",
           )}
         />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -227,6 +231,7 @@ export function ActiveSessions({ project }: { project: Project }) {
   const containers = useSessionsStore((state) => state.byOwner);
   const lastOutputAt = useSessionsStore((state) => state.lastOutputAt);
   const parkState = useSessionsStore((state) => state.parkState);
+  const harness = useSessionsStore((state) => state.harness);
   const openTicketId = useWorkspaceStore(
     (state) => state.byProject[project.id]?.openTicketId ?? null,
   );
@@ -283,6 +288,25 @@ export function ActiveSessions({ project }: { project: Project }) {
       });
     return () => sessionsFetch.invalidate();
   }, [project.id, liveSignature, sessionsFetch]);
+
+  // A session's harness can change without its PTYs changing at all — quitting
+  // opencode and starting claude in the same shell is one terminal, one live
+  // pane, one signature. The refetch above is keyed on `liveSignature`, so it
+  // never fires for that switch; patch the record the announce names instead,
+  // or the row keeps naming the harness the session was launched with.
+  React.useEffect(
+    () =>
+      window.api.sessions.onHarnessChange((notice) => {
+        setRecords((current) =>
+          current.map((record) =>
+            record.id === notice.sessionId
+              ? { ...record, activeHarnessId: notice.harnessId }
+              : record,
+          ),
+        );
+      }),
+    [],
+  );
 
   const signalsFetch = useLatestAsync();
   const loadAttentionSignals = React.useCallback(() => {
@@ -349,9 +373,10 @@ export function ActiveSessions({ project }: { project: Project }) {
         records,
         lastOutputAt,
         parkState,
+        harness,
         now,
       }),
-    [tickets, containers, eventsByTicket, records, lastOutputAt, parkState, now],
+    [tickets, containers, eventsByTicket, records, lastOutputAt, parkState, harness, now],
   );
   const rowCount = listing.needsYou.length + listing.active.length;
   const activeTabId =

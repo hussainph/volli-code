@@ -1,12 +1,22 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { HARNESS_IDS } from "../ticket";
+import { FIRST_CLASS_HARNESS_IDS, parseHarnessId, type HarnessId } from "../ticket";
+import {
+  bindsStartupEvent,
+  expectsHarnessEvents,
+  HARNESS_EVENTS,
+  supportedEvents,
+  type HarnessAdapter,
+} from "./types";
 import {
   buildHarnessInstallPlan,
+  CANONICAL_SKILL_FILES,
   harnessAdapters,
+  harnessBaselineActions,
   managedWriteDecision,
   mergeFencedSection,
 } from "./core";
+import { VOLLI_COMMAND_DOC } from "./skill-content";
 import { genericHarnessActions } from "./generic";
 
 describe("mergeFencedSection", () => {
@@ -67,69 +77,336 @@ describe("managedWriteDecision", () => {
 });
 
 describe("harnessAdapters", () => {
-  it("covers every first-class harness with its own detection executable", () => {
+  it("covers every first-class harness with its own executable to detect", () => {
     expect(harnessAdapters.map((adapter) => adapter.id).toSorted()).toEqual(
-      [...HARNESS_IDS].toSorted(),
+      [...FIRST_CLASS_HARNESS_IDS].toSorted(),
     );
-    expect(harnessAdapters.every((adapter) => adapter.detection.executable.length > 0)).toBe(true);
+    expect(harnessAdapters.every((adapter) => adapter.command.length > 0)).toBe(true);
     const claude = harnessAdapters.find((adapter) => adapter.id === "claude-code");
-    expect(claude?.detection.executable).toBe("claude");
+    expect(claude?.command).toBe("claude");
   });
 });
 
-describe("resume metadata (issue #78)", () => {
-  it("gives claude-code --resume/--continue argv fragments", () => {
-    const claude = harnessAdapters.find((adapter) => adapter.id === "claude-code");
-    expect(claude?.resumeIdArgs).toEqual(["--resume"]);
-    expect(claude?.resumeLatestArgs).toEqual(["--continue"]);
+const NO_SURFACES = { skillsDir: null, commandsDir: null, instructionsFile: null } as const;
+
+/** A Declared-tier adapter that reads nothing, so each test adds only the surface it is about. */
+function bareAdapter(overrides: Partial<HarnessAdapter> = {}): HarnessAdapter {
+  return {
+    id: parseHarnessId("my-harness") as HarnessId,
+    label: "My Harness",
+    command: "my-harness",
+    promptFlag: null,
+    surfaces: NO_SURFACES,
+    injection: { kind: "none" },
+    sessionId: { kind: "none" },
+    resume: { byId: null, latest: null, userResumeTokens: [] },
+    events: [],
+    startupEvent: null,
+    launchSettings: [],
+    sessionMarkers: [],
+    ...overrides,
+  };
+}
+
+function adapterFor(id: string): HarnessAdapter {
+  const found = harnessAdapters.find((adapter) => adapter.id === id);
+  if (!found) throw new Error(`no adapter for ${id}`);
+  return found;
+}
+
+describe("first-class harness capabilities", () => {
+  it("names a bare executable for every harness, so a trust dialog's claim is literally true", () => {
+    for (const adapter of harnessAdapters) {
+      expect(adapter.command).not.toMatch(/[/\s]/);
+      expect(adapter.command.length).toBeGreaterThan(0);
+    }
   });
 
-  it("gives codex resume/resume --last argv fragments", () => {
-    const codex = harnessAdapters.find((adapter) => adapter.id === "codex");
-    expect(codex?.resumeIdArgs).toEqual(["resume"]);
-    expect(codex?.resumeLatestArgs).toEqual(["resume", "--last"]);
+  // Each value is a live measurement against the mode Volli actually launches —
+  // the interactive TUI, never a headless `-p`/`exec`, which is where three of
+  // these four disagree with themselves. Written down so a binding cannot be
+  // removed while the claim it supports stays behind, which is the only way this
+  // field goes back to lying.
+  it("claims a launch-time event only where one was observed, and binds every one it claims", () => {
+    const claimed = Object.fromEntries(
+      harnessAdapters.map((adapter) => [adapter.id, adapter.startupEvent]),
+    );
+    expect(claimed).toEqual({
+      "claude-code": "session.started",
+      cursor: "session.started",
+      opencode: "session.started",
+      // Codex has no session until the first turn: a trusted config fires
+      // nothing at TUI boot. See `codex.ts`.
+      codex: null,
+    });
+    for (const adapter of harnessAdapters) {
+      expect([adapter.id, bindsStartupEvent(adapter)]).toEqual([adapter.id, true]);
+    }
   });
 
-  it("gives opencode --session/--continue argv fragments", () => {
-    const opencode = harnessAdapters.find((adapter) => adapter.id === "opencode");
-    expect(opencode?.resumeIdArgs).toEqual(["--session"]);
-    expect(opencode?.resumeLatestArgs).toEqual(["--continue"]);
+  // The line the whole silence model turns on, stated for the four binaries
+  // rather than for a synthetic adapter: only these three may ever be called
+  // not-reporting, and codex may not, however long it sits there. Measured
+  // against the running binaries, not read off the adapters.
+  it("holds three of the four built-ins to a reporting promise, and never codex", () => {
+    expect(
+      Object.fromEntries(
+        harnessAdapters.map((adapter) => [adapter.id, expectsHarnessEvents(adapter)]),
+      ),
+    ).toEqual({ "claude-code": true, cursor: true, opencode: true, codex: false });
+  });
+
+  it("templates every by-id resume on exactly one {id} token", () => {
+    for (const adapter of harnessAdapters) {
+      const template = adapter.resume.byId;
+      if (!template) continue;
+      expect(template.filter((token) => token.includes("{id}"))).toHaveLength(1);
+    }
+  });
+
+  it("claims a user's own resume flags for every harness that can resume at all", () => {
+    for (const adapter of harnessAdapters) {
+      if (!adapter.resume.byId && !adapter.resume.latest) continue;
+      expect(adapter.resume.userResumeTokens.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("hooks claude-code on inline settings JSON and a session id we mint", () => {
+    const claude = adapterFor("claude-code");
+    expect(expectsHarnessEvents(claude)).toBe(true);
+    expect(claude.injection).toEqual({ kind: "claude-settings-json", flag: "--settings" });
+    expect(claude.sessionId).toEqual({ kind: "argv", flag: "--session-id", format: "uuid" });
+    expect([...supportedEvents(claude)].toSorted()).toEqual([...HARNESS_EVENTS].toSorted());
+  });
+
+  it("silences claude-code's own notifications so they never double up with Volli's", () => {
+    expect(adapterFor("claude-code").launchSettings).toContainEqual({
+      path: "preferredNotifChannel",
+      value: "notifications_disabled",
+    });
+  });
+
+  it("reaches codex turn completion by a mechanism its other events do not share", () => {
+    const codex = adapterFor("codex");
+    const turnCompleted = codex.events.find((binding) => binding.event === "turn.completed");
+    const permission = codex.events.find((binding) => binding.event === "permission.requested");
+    expect(turnCompleted?.native.split(":")[0]).toBe("notify");
+    expect(permission?.native.split(":")[0]).toBe("hooks");
+  });
+
+  it("leaves cursor unable to report input.needed, which its source confirms rather than omits", () => {
+    const cursor = adapterFor("cursor");
+    expect(expectsHarnessEvents(cursor)).toBe(true);
+    expect(supportedEvents(cursor).has("input.needed")).toBe(false);
+    expect(supportedEvents(cursor).has("permission.requested")).toBe(false);
+    expect(supportedEvents(cursor).has("turn.completed")).toBe(true);
+    // Expected to report because its hooks land on the one rung cursor-agent
+    // actually reads per project — not because a variable was pointed somewhere.
+    expect(cursor.injection).toEqual({ kind: "cursor-hooks-file" });
+  });
+
+  it("learns opencode's session id from its events instead of minting one at launch", () => {
+    const opencode = adapterFor("opencode");
+    expect(opencode.sessionId).toEqual({ kind: "reported" });
+    expect(opencode.injection).toEqual({
+      kind: "opencode-plugin",
+      envVar: "OPENCODE_CONFIG",
+      filename: "opencode.json",
+    });
+    expect(supportedEvents(opencode).has("input.needed")).toBe(true);
+  });
+});
+
+describe("harnessBaselineActions", () => {
+  it("delivers the skill pack by symlink when a harness reads a skills directory", () => {
+    expect(
+      harnessBaselineActions({
+        home: "/home/dev",
+        adapters: [bareAdapter({ surfaces: { ...NO_SURFACES, skillsDir: "{home}/.x/skills" } })],
+      }),
+    ).toEqual([
+      {
+        kind: "symlink",
+        path: "/home/dev/.x/skills/volli",
+        target: "/home/dev/.agents/skills/volli",
+        managed: true,
+      },
+    ]);
+  });
+
+  it("falls back to a slash-command doc only when there is no skills directory to use", () => {
+    const withBoth = harnessBaselineActions({
+      home: "/home/dev",
+      adapters: [
+        bareAdapter({
+          surfaces: { ...NO_SURFACES, skillsDir: "{home}/.x/skills", commandsDir: "{home}/.x/cmd" },
+        }),
+      ],
+    });
+    expect(withBoth.map((action) => action.kind)).toEqual(["symlink"]);
+
+    const commandsOnly = harnessBaselineActions({
+      home: "/home/dev",
+      adapters: [bareAdapter({ surfaces: { ...NO_SURFACES, commandsDir: "{home}/.x/cmd" } })],
+    });
+    expect(commandsOnly).toEqual([
+      {
+        kind: "write",
+        path: "/home/dev/.x/cmd/volli.md",
+        content: VOLLI_COMMAND_DOC,
+        managed: true,
+      },
+    ]);
+  });
+
+  it("writes one fenced block when two harnesses read the same instructions file", () => {
+    const actions = harnessBaselineActions({
+      home: "/home/dev",
+      adapters: [
+        bareAdapter({ surfaces: { ...NO_SURFACES, instructionsFile: "{home}/AGENTS.md" } }),
+        bareAdapter({ surfaces: { ...NO_SURFACES, instructionsFile: "{home}/AGENTS.md" } }),
+      ],
+    });
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({ kind: "fenced", path: "/home/dev/AGENTS.md" });
+  });
+
+  it("asks nothing of a harness that declares no surface at all", () => {
+    expect(harnessBaselineActions({ home: "/home/dev", adapters: [bareAdapter()] })).toEqual([]);
   });
 });
 
 describe("buildHarnessInstallPlan", () => {
   it("does nothing when no supported harness is detected", () => {
-    expect(buildHarnessInstallPlan({ home: "/home/dev", detected: [] })).toEqual([]);
+    expect(buildHarnessInstallPlan({ home: "/home/dev", adapters: [] })).toEqual([]);
   });
 
-  it("shares one canonical skill, adds only harness deltas, and never creates a Codex prompt", () => {
+  it("keeps the assets it already ships for claude-code and opencode byte-identical", () => {
+    const claude = buildHarnessInstallPlan({
+      home: "/home/dev",
+      adapters: [adapterFor("claude-code")],
+    }).slice(CANONICAL_SKILL_FILES);
+    expect(claude).toEqual([
+      {
+        kind: "symlink",
+        path: "/home/dev/.claude/skills/volli",
+        target: "/home/dev/.agents/skills/volli",
+        managed: true,
+      },
+    ]);
+
+    const opencode = buildHarnessInstallPlan({
+      home: "/home/dev",
+      adapters: [adapterFor("opencode")],
+    }).slice(CANONICAL_SKILL_FILES);
+    expect(opencode).toEqual([
+      {
+        kind: "write",
+        path: "/home/dev/.config/opencode/command/volli.md",
+        content: VOLLI_COMMAND_DOC,
+        managed: true,
+      },
+    ]);
+  });
+
+  it("shares one canonical skill and never creates a Codex prompt", () => {
     const plan = buildHarnessInstallPlan({
       home: "/home/dev",
-      detected: ["claude-code", "codex", "opencode"],
+      adapters: [
+        adapterFor("claude-code"),
+        adapterFor("codex"),
+        adapterFor("cursor"),
+        adapterFor("opencode"),
+      ],
     });
     const paths = plan.map((action) => action.path);
 
     expect(paths).toContain("/home/dev/.agents/skills/volli/SKILL.md");
     expect(paths).toContain("/home/dev/.agents/skills/volli/cli.md");
     expect(paths).toContain("/home/dev/.agents/skills/volli/orchestration.md");
-    expect(plan).toContainEqual({
-      kind: "symlink",
-      path: "/home/dev/.claude/skills/volli",
-      target: "/home/dev/.agents/skills/volli",
-      managed: true,
-    });
-    expect(paths).toContain("/home/dev/.config/opencode/command/volli.md");
+    expect(paths).toContain("/home/dev/.agents/skills/volli/plugin.md");
     expect(paths.some((path) => path.includes(".codex/prompts"))).toBe(false);
-    expect(paths.some((path) => path.includes("/custom/"))).toBe(false);
+  });
+
+  it("ships the manifest schema beside the skill, so an agent can register a harness", () => {
+    const plan = buildHarnessInstallPlan({
+      home: "/home/dev",
+      adapters: [adapterFor("claude-code")],
+    });
+    expect(plan.slice(0, CANONICAL_SKILL_FILES).map((action) => action.path)).toEqual([
+      "/home/dev/.agents/skills/volli/SKILL.md",
+      "/home/dev/.agents/skills/volli/cli.md",
+      "/home/dev/.agents/skills/volli/orchestration.md",
+      "/home/dev/.agents/skills/volli/plugin.md",
+    ]);
+  });
+
+  it("earns codex and cursor a fenced block in the instructions file each one reads", () => {
+    const plan = buildHarnessInstallPlan({
+      home: "/home/dev",
+      adapters: [adapterFor("codex"), adapterFor("cursor")],
+    });
+    const fenced = plan.filter((action) => action.kind === "fenced").map((action) => action.path);
+    expect(fenced).toEqual(["/home/dev/.codex/AGENTS.md", "/home/dev/AGENTS.md"]);
+  });
+
+  it("gives a registered adapter exactly what a built-in with the same surfaces gets", () => {
+    // The adapter a trusted manifest parses into — reachable by no id lookup,
+    // which is why this plan takes adapters at all.
+    const registered = bareAdapter({
+      surfaces: {
+        skillsDir: "{home}/.my-harness/skills",
+        commandsDir: null,
+        instructionsFile: "{home}/.my-harness/AGENTS.md",
+      },
+    });
+    const plan = buildHarnessInstallPlan({ home: "/home/dev", adapters: [registered] });
+
+    expect(plan.slice(0, CANONICAL_SKILL_FILES).map((action) => action.path)).toEqual([
+      "/home/dev/.agents/skills/volli/SKILL.md",
+      "/home/dev/.agents/skills/volli/cli.md",
+      "/home/dev/.agents/skills/volli/orchestration.md",
+      "/home/dev/.agents/skills/volli/plugin.md",
+    ]);
+    expect(plan.slice(CANONICAL_SKILL_FILES)).toEqual([
+      {
+        kind: "symlink",
+        path: "/home/dev/.my-harness/skills/volli",
+        target: "/home/dev/.agents/skills/volli",
+        managed: true,
+      },
+      expect.objectContaining({ kind: "fenced", path: "/home/dev/.my-harness/AGENTS.md" }),
+    ]);
+  });
+
+  it("installs the canonical pack for a registered harness alone, with no built-in present", () => {
+    const registered = bareAdapter({
+      surfaces: { ...NO_SURFACES, commandsDir: "{home}/.my-harness/commands" },
+    });
+    expect(buildHarnessInstallPlan({ home: "/home/dev", adapters: [registered] })).toHaveLength(
+      CANONICAL_SKILL_FILES + 1,
+    );
   });
 
   it("normalizes a trailing home slash and de-duplicates harnesses", () => {
     const plan = buildHarnessInstallPlan({
       home: "/home/dev/",
-      detected: ["codex", "codex"],
+      adapters: [adapterFor("codex"), adapterFor("codex")],
     });
-    expect(plan).toHaveLength(3);
+    expect(plan.filter((action) => action.path.includes(".codex"))).toHaveLength(2);
     expect(plan[0]?.path).toBe("/home/dev/.agents/skills/volli/SKILL.md");
+  });
+
+  it("de-duplicates two DIFFERENT harnesses that claim the same surface path", () => {
+    const surfaces = { ...NO_SURFACES, instructionsFile: "{home}/AGENTS.md" };
+    const plan = buildHarnessInstallPlan({
+      home: "/home/dev",
+      adapters: [
+        bareAdapter({ surfaces }),
+        bareAdapter({ id: parseHarnessId("other-harness") as HarnessId, surfaces }),
+      ],
+    });
+    expect(plan).toHaveLength(CANONICAL_SKILL_FILES + 1);
   });
 });
 

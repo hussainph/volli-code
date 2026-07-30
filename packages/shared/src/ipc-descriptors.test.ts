@@ -4,6 +4,8 @@ import {
   DATA_IPC,
   FILE_CHANNELS,
   FILE_IPC,
+  HARNESS_CHANNELS,
+  HARNESS_IPC,
   THEME_CHANNELS,
   THEME_IPC,
 } from "./ipc-descriptors";
@@ -247,8 +249,18 @@ describe("DATA_IPC descriptor table", () => {
       expect(guard([{ ...valid, usesWorktree: "yes" }])).toBe(false);
     });
 
-    it("rejects a harness id outside the vocabulary when present", () => {
-      expect(guard([{ ...valid, preferredHarnessId: "cursor" }])).toBe(false);
+    it("accepts a registered harness's slug as the preference, not only a built-in", () => {
+      expect(guard([{ ...valid, preferredHarnessId: "claude-code" }])).toBe(true);
+      expect(guard([{ ...valid, preferredHarnessId: "my-harness" }])).toBe(true);
+    });
+
+    it("rejects a preference that could not name any harness", () => {
+      // Trust is checked at the launch door, which is the only place that can
+      // see it; this guard only refuses strings no manifest could be filed
+      // under — a path, a shell word, a non-string.
+      expect(guard([{ ...valid, preferredHarnessId: "../etc/passwd" }])).toBe(false);
+      expect(guard([{ ...valid, preferredHarnessId: "My Harness" }])).toBe(false);
+      expect(guard([{ ...valid, preferredHarnessId: 7 }])).toBe(false);
     });
 
     it("rejects a wrong arity", () => {
@@ -1551,6 +1563,78 @@ describe("THEME_IPC descriptor table", () => {
       expect(THEME_CHANNELS).toContain("volli:theme-canvas-set-project");
       expect(THEME_CHANNELS).toContain("volli:theme-appearance-set-project");
       expect(THEME_CHANNELS).toContain("volli:theme-first-paint-set");
+    });
+  });
+});
+
+describe("HARNESS_IPC descriptor table", () => {
+  describe("volli:harness-pending (no-arg request)", () => {
+    const { guard } = HARNESS_IPC["volli:harness-pending"];
+
+    it("accepts an empty args tuple", () => {
+      expect(guard([])).toBe(true);
+    });
+
+    it("rejects stray arguments", () => {
+      expect(guard(["junk"])).toBe(false);
+    });
+  });
+
+  describe("volli:harness-trust-set", () => {
+    const { guard, invalidError } = HARNESS_IPC["volli:harness-trust-set"];
+    const valid = { slug: "my-harness", manifestSha256: "a1", decision: "trusted" };
+
+    it("accepts a verdict about a named version of a manifest", () => {
+      expect(guard([valid])).toBe(true);
+      expect(guard([{ ...valid, decision: "blocked" }])).toBe(true);
+    });
+
+    it("refuses a verdict with no hash, so nothing can be trusted in the abstract", () => {
+      expect(guard([{ slug: "my-harness", decision: "trusted" }])).toBe(false);
+    });
+
+    it("refuses `reconfirm` — a conclusion Volli draws, not an answer a human gave", () => {
+      expect(guard([{ ...valid, decision: "reconfirm" }])).toBe(false);
+    });
+
+    it("refuses a payload that is not a record, or the wrong arity", () => {
+      expect(guard([null])).toBe(false);
+      expect(guard([])).toBe(false);
+      expect(guard([valid, valid])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid harness verdict");
+    });
+  });
+
+  describe("volli:harness-registered (no-arg request)", () => {
+    const { guard, invalidError } = HARNESS_IPC["volli:harness-registered"];
+
+    it("accepts an empty args tuple", () => {
+      expect(guard([])).toBe(true);
+    });
+
+    it("rejects stray arguments", () => {
+      expect(guard(["junk"])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid request");
+    });
+  });
+
+  describe("HARNESS_CHANNELS derivation", () => {
+    it("derives from the descriptor table's keys", () => {
+      expect(HARNESS_CHANNELS).toEqual(Object.keys(HARNESS_IPC));
+    });
+
+    it("covers the whole bring-your-own-harness surface", () => {
+      expect(HARNESS_CHANNELS).toEqual([
+        "volli:harness-pending",
+        "volli:harness-trust-set",
+        "volli:harness-registered",
+      ]);
     });
   });
 });

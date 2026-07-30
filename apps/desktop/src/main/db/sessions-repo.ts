@@ -16,6 +16,7 @@ interface SessionRow {
   project_id: string;
   ticket_id: string | null;
   harness_id: string;
+  active_harness_id: string | null;
   harness_session_id: string | null;
   launch_kind: string;
   placement: string;
@@ -32,6 +33,7 @@ function mapSession(row: SessionRow): SessionRecord {
     projectId: row.project_id,
     ticketId: row.ticket_id,
     harnessId: row.harness_id as HarnessId,
+    activeHarnessId: row.active_harness_id as HarnessId | null,
     harnessSessionId: row.harness_session_id,
     launchKind: row.launch_kind as SessionLaunchKind,
     placement: row.placement as SessionPlacement,
@@ -48,14 +50,15 @@ export function insertSession(db: Database.Database, session: SessionRecord): vo
   prepared(
     db,
     `INSERT INTO sessions
-       (id, project_id, ticket_id, harness_id, harness_session_id, launch_kind, placement, title, cwd, created_at, ended_at, exit_code)
+       (id, project_id, ticket_id, harness_id, active_harness_id, harness_session_id, launch_kind, placement, title, cwd, created_at, ended_at, exit_code)
      VALUES
-       (@id, @projectId, @ticketId, @harnessId, @harnessSessionId, @launchKind, @placement, @title, @cwd, @createdAt, @endedAt, @exitCode)`,
+       (@id, @projectId, @ticketId, @harnessId, @activeHarnessId, @harnessSessionId, @launchKind, @placement, @title, @cwd, @createdAt, @endedAt, @exitCode)`,
   ).run({
     id: session.id,
     projectId: session.projectId,
     ticketId: session.ticketId,
     harnessId: session.harnessId,
+    activeHarnessId: session.activeHarnessId,
     harnessSessionId: session.harnessSessionId,
     launchKind: session.launchKind,
     placement: session.placement,
@@ -213,6 +216,24 @@ export function setHarnessSessionId(
     harnessSessionId,
     sessionId,
   );
+}
+
+/**
+ * Records which harness is running in the session's terminal RIGHT NOW,
+ * announced by that harness's own wrapper (`volli session harness <slug>`).
+ *
+ * Deliberately beside `harness_id` rather than over it: the launch is durable
+ * history — it is what `session_started` recorded and the only harness a session
+ * that never announced anything can be judged by — while this is a live fact
+ * that the next launch in the same terminal replaces. Last announce wins; the
+ * wrapper fires on every invocation, so the newest one is the one running.
+ */
+export function setActiveHarnessId(
+  db: Database.Database,
+  sessionId: string,
+  harnessId: string,
+): void {
+  prepared(db, "UPDATE sessions SET active_harness_id = ? WHERE id = ?").run(harnessId, sessionId);
 }
 
 /** Every session in a project — both ticket-scoped and project-scoped scratch sessions — newest first. */

@@ -4,12 +4,22 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import type { AgentRequest } from "@volli/shared";
+import type {
+  AgentRequest,
+  AgentResponse,
+  DoctorCheck,
+  HarnessEventNotice,
+  SessionHarnessNotice,
+  HarnessId,
+} from "@volli/shared";
 
 import { createAttachment } from "./db/attachments-repo";
+import { listHarnessChannels } from "./db/harness-channel-repo";
+import { getRegisteredHarness, recordHarnessTrust } from "./db/harness-registry-repo";
 import { insertProject } from "./db/projects-repo";
-import { getSession, insertSession } from "./db/sessions-repo";
-import { openTestDb, testProject, testSession } from "./db/test-helpers";
+import { endSession, getSession, insertSession, setActiveHarnessId } from "./db/sessions-repo";
+import { insertTicket } from "./db/tickets-repo";
+import { openTestDb, testProject, testSession, testTicket } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 import { createAgentCommandService } from "./agent-commands";
 import { updateTicketFieldsCommand } from "./ticket-commands";
@@ -985,53 +995,125 @@ describe("agent command service", () => {
     });
   });
 
-  it("enumerates the harness vocabulary on raw create/update rejections", async () => {
-    ctx = openTestDb();
-    insertProject(
-      ctx.db,
-      testProject({ id: "p1", name: "Alpha", path: "/repo/alpha", ticketPrefix: "AL" }),
-    );
-    const service = createAgentCommandService({
-      db: ctx.db,
-      appVersion: "1.0.0",
-      newId: () => "t1",
-    });
-    const base = { cwd: "/repo/alpha", env: {} } as const;
+  // The harness vocabulary is the one that grows: the parser can only vet a
+  // slug's shape, so every question about whether a name means anything — and
+  // whether a human ruled on it — is settled here, against the registry.
+  describe("the harness a create/update may name", () => {
+    function harnessService(): {
+      create: (harness: unknown) => Promise<AgentResponse>;
+      update: (harness: unknown) => Promise<AgentResponse>;
+    } {
+      ctx = openTestDb();
+      insertProject(
+        ctx.db,
+        testProject({ id: "p1", name: "Alpha", path: "/repo/alpha", ticketPrefix: "AL" }),
+      );
+      let seq = 0;
+      const service = createAgentCommandService({
+        db: ctx.db,
+        appVersion: "1.0.0",
+        newId: () => `t${(seq += 1)}`,
+      });
+      const base = { cwd: "/repo/alpha", env: {} } as const;
+      return {
+        create: (harness) =>
+          service.execute({
+            v: 1,
+            cmd: "ticket.create",
+            args: { project: "AL", title: "X", harness },
+            ctx: base,
+          }),
+        update: async (harness) => {
+          await service.execute({
+            v: 1,
+            cmd: "ticket.create",
+            args: { project: "AL", title: "Seed" },
+            ctx: base,
+          });
+          return await service.execute({
+            v: 1,
+            cmd: "ticket.update",
+            args: { id: "AL-1", harness },
+            ctx: base,
+          });
+        },
+      };
+    }
 
-    const create = await service.execute({
-      v: 1,
-      cmd: "ticket.create",
-      args: { project: "AL", title: "X", harness: "cursor" },
-      ctx: base,
-    });
-    expect(create).toEqual({
-      v: 1,
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: 'Invalid harness "cursor" (valid: claude-code, codex, opencode)',
-      },
+    function register(slug: string, decision: "trusted" | "blocked"): void {
+      recordHarnessTrust(
+        ctx.db,
+        {
+          slug,
+          manifestPath: `/home/dev/.agents/harnesses/${slug}/harness.json`,
+          manifestSha256: "a1",
+          decision,
+          declaredEvents: [],
+        },
+        1000,
+      );
+    }
+
+    it("refuses a name no slug could ever be, and enumerates what one could", async () => {
+      const { create, update } = harnessService();
+      const message =
+        'Invalid harness "Not A Slug" (valid: claude-code, codex, cursor, opencode, or a registered, trusted harness)';
+      expect(await create("Not A Slug")).toMatchObject({ error: { message } });
+      expect(await update("Not A Slug")).toMatchObject({ error: { message } });
     });
 
-    await service.execute({
-      v: 1,
-      cmd: "ticket.create",
-      args: { project: "AL", title: "Seed" },
-      ctx: base,
+    // Well-formed and meaningless are different failures with different fixes —
+    // this one is "register it", not "spell it differently".
+    it("refuses a well-formed slug nothing is registered under", async () => {
+      const { create } = harnessService();
+      expect(await create("aider")).toEqual({
+        v: 1,
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message:
+            'Unknown harness "aider" — no harness by that name is registered (built in: claude-code, codex, cursor, opencode)',
+        },
+      });
     });
-    const update = await service.execute({
-      v: 1,
-      cmd: "ticket.update",
-      args: { id: "AL-1", harness: "cursor" },
-      ctx: base,
+
+    // Registration is not permission. A blocked manifest is one somebody looked
+    // at and said no to; pinning a ticket to it would queue a launch that can
+    // never run, and would say nothing about why.
+    it("refuses a registered harness a human has not trusted", async () => {
+      const { create, update } = harnessService();
+      register("aider", "blocked");
+      const message = 'Harness "aider" is registered but not trusted, so nothing can launch on it.';
+      expect(await create("aider")).toMatchObject({ error: { message } });
+      expect(await update("aider")).toMatchObject({ error: { message } });
     });
-    expect(update).toMatchObject({
-      v: 1,
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: 'Invalid harness "cursor" (valid: claude-code, codex, opencode)',
-      },
+
+    it("stamps a registered, trusted harness on the ticket", async () => {
+      const { create } = harnessService();
+      register("aider", "trusted");
+
+      expect(await create("aider")).toMatchObject({
+        ok: true,
+        data: { ticket: { harness: "aider" } },
+      });
+    });
+
+    it("stamps one on an update too", async () => {
+      const { update } = harnessService();
+      register("aider", "trusted");
+
+      expect(await update("aider")).toMatchObject({
+        ok: true,
+        data: { ticket: { harness: "aider" } },
+      });
+    });
+
+    it("still takes the first-class ids without consulting the registry", async () => {
+      const { create } = harnessService();
+      expect(await create("codex")).toMatchObject({
+        ok: true,
+        data: { ticket: { harness: "codex" } },
+      });
     });
   });
 
@@ -1102,6 +1184,41 @@ describe("agent command service", () => {
     expect(JSON.stringify({ projects, labels, sessions })).not.toMatch(
       /project-one|ticket-one|abcdef12-3456/,
     );
+  });
+
+  // An agent reading this list is deciding where to look. The launch harness of
+  // a terminal somebody has since re-used is the wrong answer.
+  it("names the harness a session is RUNNING in session.list", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
+    insertSession(
+      ctx.db,
+      testSession("project-one", null, { id: sessionId, harnessId: "opencode", createdAt: 900 }),
+    );
+    setActiveHarnessId(ctx.db, sessionId, "claude-code");
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 1_000,
+    });
+
+    const sessions = await service.execute({
+      v: 1,
+      cmd: "session.list",
+      args: {},
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+
+    expect(sessions).toMatchObject({ ok: true, data: { sessions: [{ harness: "claude-code" }] } });
   });
 
   it("refuses session.list when an explicit --project contradicts the --ticket", async () => {
@@ -1348,6 +1465,755 @@ describe("agent command service", () => {
       const empty = await link("   ");
       expect(empty).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
       expect(getSession(ctx.db, sessionId)?.harnessSessionId).toBeNull();
+    });
+  });
+
+  describe("session.harness (the wrapper announce)", () => {
+    const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
+
+    function announceService(harnessId: HarnessId = "opencode") {
+      ctx = openTestDb();
+      insertProject(
+        ctx.db,
+        testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+      );
+      insertSession(ctx.db, testSession("project-one", null, { id: sessionId, harnessId }));
+      const notices: SessionHarnessNotice[] = [];
+      const service = createAgentCommandService({
+        db: ctx.db,
+        appVersion: "1.2.3",
+        now: () => 4242,
+        onSessionHarness: (notice) => notices.push(notice),
+      });
+      const announce = (id: unknown, session: string | null = sessionId) =>
+        service.execute({
+          v: 1,
+          cmd: "session.harness",
+          args: { id },
+          ctx: { cwd: "/repo/volli", env: session ? { session } : {} },
+        });
+      const mint = (id: unknown, session: string | null = sessionId) =>
+        service.execute({
+          v: 1,
+          cmd: "session.harness",
+          args: { id, mint: true },
+          ctx: { cwd: "/repo/volli", env: session ? { session } : {} },
+        });
+      return { announce, mint, notices };
+    }
+
+    // THE BUG. The terminal was opened by opencode; the user quit it and ran
+    // claude. `harness_id` is the launch and must not move — everything about
+    // what is RUNNING now reads the new column.
+    it("records the running harness beside the launch one, and announces it", async () => {
+      const { announce, notices } = announceService();
+
+      const response = await announce("claude-code");
+
+      expect(response).toEqual({
+        v: 1,
+        ok: true,
+        data: {
+          session: "abcdef12",
+          harness: "claude-code",
+          changed: true,
+          harnessSessionId: null,
+        },
+      });
+      const session = getSession(ctx.db, sessionId);
+      expect(session?.harnessId).toBe("opencode");
+      expect(session?.activeHarnessId).toBe("claude-code");
+      expect(notices).toEqual([
+        {
+          sessionId,
+          projectId: "project-one",
+          ticketId: null,
+          harnessId: "claude-code",
+          changed: true,
+          at: 4242,
+        },
+      ]);
+    });
+
+    // THE SECOND BUG, and the one the mint above exists to serve: quit claude,
+    // run claude again in the same terminal. The slug did not change, but a
+    // launch demonstrably happened, and the renderer's grace window is anchored
+    // to hearing about it. Announcing nothing left the second launch wearing
+    // the first one's already-delivered channel.
+    it("announces every launch, including one that agrees with what is believed", async () => {
+      const { announce, notices } = announceService("claude-code");
+
+      const response = await announce("claude-code");
+
+      expect(response).toMatchObject({ ok: true, data: { changed: false } });
+      // The write is still gated: re-storing the value already there buys
+      // nothing.
+      expect(getSession(ctx.db, sessionId)?.activeHarnessId).toBeNull();
+      expect(notices).toEqual([
+        {
+          sessionId,
+          projectId: "project-one",
+          ticketId: null,
+          harnessId: "claude-code",
+          changed: false,
+          at: 4242,
+        },
+      ]);
+
+      await announce("claude-code");
+      expect(notices).toHaveLength(2);
+    });
+
+    it("compares against what is RUNNING, not what launched", async () => {
+      const { announce, notices } = announceService();
+      setActiveHarnessId(ctx.db, sessionId, "claude-code");
+
+      const again = await announce("claude-code");
+      expect(again).toMatchObject({ ok: true, data: { changed: false } });
+      expect(notices).toEqual([
+        expect.objectContaining({ harnessId: "claude-code", changed: false }),
+      ]);
+
+      const back = await announce("opencode");
+      expect(back).toMatchObject({ ok: true, data: { changed: true } });
+      expect(getSession(ctx.db, sessionId)?.activeHarnessId).toBe("opencode");
+      expect(notices).toHaveLength(2);
+    });
+
+    it("requires VOLLI_SESSION context", async () => {
+      const { announce } = announceService();
+      expect(await announce("claude-code", null)).toMatchObject({
+        ok: false,
+        error: {
+          code: "CONTEXT_REQUIRED",
+          message: "session harness requires VOLLI_SESSION context.",
+        },
+      });
+    });
+
+    it("refuses a name outside the vocabulary Volli knows", async () => {
+      const { announce } = announceService();
+      expect(await announce("not-a-harness")).toMatchObject({
+        ok: false,
+        error: { code: "INVALID_REQUEST" },
+      });
+      expect(await announce(42)).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+      expect(getSession(ctx.db, sessionId)?.activeHarnessId).toBeNull();
+    });
+
+    // VOLLI_SESSION escapes its PTY — a tmux server, a disowned daemon — so an
+    // announce can land long after the session ended. Accepting one would
+    // rewrite the harness that dead session resumes with.
+    it("refuses an announce for a session that has already ended", async () => {
+      const { announce, mint, notices } = announceService();
+      endSession(ctx.db, sessionId, 5000, 0);
+
+      expect(await announce("claude-code")).toMatchObject({
+        ok: false,
+        error: { code: "SESSION_ENDED" },
+      });
+      // The mint is behind every guard the announce is: a tmux server that
+      // outlived its session may not rewrite what that session resumes with.
+      expect(await mint("claude-code")).toMatchObject({
+        ok: false,
+        error: { code: "SESSION_ENDED" },
+      });
+      expect(getSession(ctx.db, sessionId)?.activeHarnessId).toBeNull();
+      expect(getSession(ctx.db, sessionId)?.harnessSessionId).toBeNull();
+      expect(notices).toEqual([]);
+    });
+
+    // THE OTHER BUG. `VOLLI_SESSION` is stamped once per PTY, so a wrapper that
+    // reused it handed the second launch in one terminal a byte-identical id —
+    // which cursor, mkdir-ing a directory named after it, refuses with EEXIST.
+    // Every launch asks, and every ask is answered with a new one.
+    it("mints a fresh v4 id per launch, overwriting the previous launch's seed", async () => {
+      const { mint } = announceService("cursor");
+      const v4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+      const first = await mint("cursor");
+      const firstId = getSession(ctx.db, sessionId)?.harnessSessionId;
+      const second = await mint("cursor");
+      const secondId = getSession(ctx.db, sessionId)?.harnessSessionId;
+
+      expect(first).toMatchObject({ ok: true });
+      expect(second).toMatchObject({ ok: true });
+      // Cursor validates exactly this shape and rejects a v7.
+      expect(firstId).toMatch(v4);
+      expect(secondId).toMatch(v4);
+      expect(secondId).not.toBe(firstId);
+      // What the wrapper reads back is what was recorded, or the harness would
+      // launch under an id no future resume could find.
+      expect(first).toMatchObject({ ok: true, data: { harnessSessionId: firstId } });
+      expect(second).toMatchObject({ ok: true, data: { harnessSessionId: secondId } });
+    });
+
+    // The one honest launch count. A PTY spawn would also count a harness the
+    // user started by absolute path, outside our wrapper and our config; this
+    // call cannot happen unless the wrapper ran.
+    it("stamps the launch the wrapper just proved, and nothing else", async () => {
+      const { announce } = announceService();
+
+      await announce("claude-code");
+
+      expect(listHarnessChannels(ctx.db)).toEqual([
+        { harnessId: "claude-code", lastLaunchAt: 4242, lastEventAt: null },
+      ]);
+    });
+
+    // Unlike `active_harness_id`, which is gated on a change. A relaunch is a
+    // new launch whose channel has proved nothing yet, and it is exactly the
+    // case that makes a broken upgrade visible.
+    it("stamps a relaunch of the harness already believed to be running", async () => {
+      ctx = openTestDb();
+      insertProject(ctx.db, testProject({ id: "project-one", path: "/repo/volli" }));
+      insertSession(
+        ctx.db,
+        testSession("project-one", null, { id: sessionId, harnessId: "claude-code" }),
+      );
+      let clock = 1000;
+      const service = createAgentCommandService({
+        db: ctx.db,
+        appVersion: "1.2.3",
+        now: () => clock,
+      });
+      const announce = () =>
+        service.execute({
+          v: 1,
+          cmd: "session.harness",
+          args: { id: "claude-code" },
+          ctx: { cwd: "/repo/volli", env: { session: sessionId } },
+        });
+
+      await announce();
+      clock = 9000;
+      await announce();
+
+      expect(listHarnessChannels(ctx.db)).toEqual([
+        { harnessId: "claude-code", lastLaunchAt: 9000, lastEventAt: null },
+      ]);
+    });
+
+    it("stamps nothing for an announce it refused", async () => {
+      const { announce } = announceService();
+      endSession(ctx.db, sessionId, 5000, 0);
+
+      await announce("claude-code");
+      await announce("not-a-harness");
+
+      expect(listHarnessChannels(ctx.db)).toEqual([]);
+    });
+
+    // A `reported` or `none` harness names its own session, and its wrapper asks
+    // for nothing. Minting for it would overwrite a real resume seed.
+    it("mints nothing for a wrapper that did not ask", async () => {
+      const { announce } = announceService();
+
+      expect(await announce("opencode")).toMatchObject({
+        ok: true,
+        data: { harnessSessionId: null },
+      });
+      expect(getSession(ctx.db, sessionId)?.harnessSessionId).toBeNull();
+    });
+  });
+
+  describe("hook", () => {
+    const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
+
+    function hookService(
+      options: Partial<Parameters<typeof createAgentCommandService>[0]> = {},
+      ticketId: string | null = null,
+      harnessId: HarnessId = "claude-code",
+    ) {
+      ctx = openTestDb();
+      insertProject(
+        ctx.db,
+        testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+      );
+      if (ticketId !== null) {
+        insertTicket(ctx.db, testTicket("project-one", { id: ticketId, ticketNumber: 12 }));
+      }
+      insertSession(ctx.db, testSession("project-one", ticketId, { id: sessionId, harnessId }));
+      const service = createAgentCommandService({
+        db: ctx.db,
+        appVersion: "1.2.3",
+        now: () => 4242,
+        ...options,
+      });
+      const hook = (args: Record<string, unknown>, session: string | null = sessionId) =>
+        service.execute({
+          v: 1,
+          cmd: "hook",
+          args,
+          ctx: { cwd: "/repo/volli", env: session ? { session } : {} },
+        });
+      return { hook };
+    }
+
+    // VOLLI_SESSION outlives the PTY that exported it — a tmux server or
+    // daemon started inside a session carries it forever — so an event can
+    // arrive long after the session ended. Accepting one resurrects a dead
+    // session: notification, sidebar row, rewritten resume seed.
+    it("refuses an event for a session that has already ended", async () => {
+      const notices: HarnessEventNotice[] = [];
+      const notified: string[] = [];
+      const { hook } = hookService({
+        onHarnessEvent: (notice) => notices.push(notice),
+        notify: (title: string) => notified.push(title),
+      });
+      endSession(ctx.db, sessionId, 5000, 0);
+
+      const response = await hook({ harness: "claude-code", event: "input.needed" });
+
+      expect(response).toMatchObject({ ok: false, error: { code: "SESSION_ENDED" } });
+      expect(notices).toEqual([]);
+      expect(notified).toEqual([]);
+    });
+
+    it("does not let a late event rewrite an ended session's resume seed", async () => {
+      const { hook } = hookService();
+      endSession(ctx.db, sessionId, 5000, 0);
+
+      await hook({
+        harness: "claude-code",
+        event: "session.started",
+        harnessSessionId: "from-a-leaked-environment",
+      });
+
+      expect(getSession(ctx.db, sessionId)?.harnessSessionId).toBeNull();
+    });
+
+    it("records the harness session id an event carries, so resume needs no separate link", async () => {
+      const { hook } = hookService();
+
+      const response = await hook({
+        harness: "claude-code",
+        event: "session.started",
+        harnessSessionId: "  cc-session-uuid  ",
+      });
+
+      expect(response).toMatchObject({ ok: true });
+      expect(getSession(ctx.db, sessionId)?.harnessSessionId).toBe("cc-session-uuid");
+    });
+
+    it("pushes the canonical event to the renderer with the session it resolved", async () => {
+      const notices: HarnessEventNotice[] = [];
+      const { hook } = hookService({ onHarnessEvent: (notice) => notices.push(notice) });
+
+      await hook({ harness: "claude-code", event: "input.needed" });
+
+      expect(notices).toEqual([
+        {
+          sessionId,
+          projectId: "project-one",
+          ticketId: null,
+          harnessId: "claude-code",
+          event: "input.needed",
+          harnessSessionId: null,
+          at: 4242,
+          firedAt: null,
+        },
+      ]);
+    });
+
+    // The channel's other integer, and it is written for a built-in exactly as
+    // for a manifest — the four harnesses Volli ships are the ones that were
+    // exempt from every durable record, and the ones caught reporting nothing.
+    it("stamps a delivery against the harness that fired it", async () => {
+      const { hook } = hookService();
+
+      await hook({ harness: "claude-code", event: "session.started" });
+
+      expect(listHarnessChannels(ctx.db)).toEqual([
+        { harnessId: "claude-code", lastLaunchAt: null, lastEventAt: 4242 },
+      ]);
+    });
+
+    // "Is anything coming down this pipe" is a different question from "should
+    // this event be believed". An event that lost the ordering race still
+    // proves the channel is alive.
+    it("stamps a delivery the ordering rule refused to act on", async () => {
+      const { hook } = hookService();
+
+      await hook({ harness: "claude-code", event: "turn.started", firedAt: 200 });
+      const late = await hook({ harness: "claude-code", event: "input.needed", firedAt: 100 });
+
+      expect(late).toMatchObject({ ok: true, data: { superseded: true } });
+      expect(listHarnessChannels(ctx.db)).toEqual([
+        { harnessId: "claude-code", lastLaunchAt: null, lastEventAt: 4242 },
+      ]);
+    });
+
+    it("stamps nothing for an event it refused", async () => {
+      const { hook } = hookService();
+
+      await hook({ harness: "claude-code", event: "SubagentStop" });
+      await hook({ harness: "not-a-harness", event: "turn.started" });
+
+      expect(listHarnessChannels(ctx.db)).toEqual([]);
+    });
+
+    it("refuses an event name outside the canonical union", async () => {
+      const notices: HarnessEventNotice[] = [];
+      const { hook } = hookService({ onHarnessEvent: (notice) => notices.push(notice) });
+
+      const response = await hook({ harness: "claude-code", event: "SubagentStop" });
+
+      expect(response).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+      expect(notices).toEqual([]);
+    });
+
+    it("needs VOLLI_SESSION, and refuses a session that is not ours", async () => {
+      const { hook } = hookService();
+
+      await expect(
+        hook({ harness: "claude-code", event: "turn.started" }, null),
+      ).resolves.toMatchObject({ ok: false, error: { code: "CONTEXT_REQUIRED" } });
+      await expect(
+        hook({ harness: "claude-code", event: "turn.started" }, "not-a-session"),
+      ).resolves.toMatchObject({ ok: false, error: { code: "SESSION_NOT_FOUND" } });
+    });
+
+    it("notifies when a human is blocking the agent, naming the ticket", async () => {
+      const notices: [string, string][] = [];
+      const { hook } = hookService(
+        { notify: (title, message) => notices.push([title, message]) },
+        "ticket-blocked",
+      );
+
+      await hook({ harness: "claude-code", event: "input.needed" });
+
+      expect(notices).toEqual([["VC-12 needs you", "Claude Code is waiting on a human"]]);
+    });
+
+    it("stays quiet for telemetry, and for the twin event riding the same native signal", async () => {
+      const notices: [string, string][] = [];
+      const { hook } = hookService(
+        { notify: (title, message) => notices.push([title, message]) },
+        "ticket-quiet",
+      );
+
+      // A subagent finishing is not the parent finishing. And a harness whose
+      // one permission signal is bound to BOTH `input.needed` and
+      // `permission.requested` (codex, opencode) fires two hooks per prompt —
+      // notifying on both would double every notification it earns.
+      for (const event of ["subagent.completed", "permission.requested", "tool.started"]) {
+        await hook({ harness: "claude-code", event });
+      }
+
+      expect(notices).toEqual([]);
+    });
+
+    it("writes a delivery into the ledger of the registered harness that sent it", async () => {
+      const registered = "my-harness" as HarnessId;
+      const notices: [string, string][] = [];
+      const { hook } = hookService(
+        { notify: (title, message) => notices.push([title, message]) },
+        "ticket-registered",
+        registered,
+      );
+      recordHarnessTrust(
+        ctx.db,
+        {
+          slug: registered,
+          manifestPath: "/home/dev/.agents/harnesses/my-harness/harness.json",
+          manifestSha256: "a1",
+          decision: "trusted",
+          // Claims nothing: the ledger is about deliveries, and this one has
+          // promised none.
+          declaredEvents: [],
+        },
+        1000,
+      );
+
+      await hook({ harness: registered, event: "input.needed" });
+
+      expect(getRegisteredHarness(ctx.db, registered)?.verifiedEvents).toEqual(["input.needed"]);
+      // The first one a harness ever sends is exactly the one a human is
+      // waiting on — verifying it must not cost it its notification.
+      expect(notices).toEqual([["VC-12 needs you", "my-harness is waiting on a human"]]);
+    });
+
+    // `recordHarnessDelivery` answers `verified` for every first-class harness
+    // unconditionally — it is about delivery, not capability. Cursor's own
+    // source maps both blocking signals to null, and the renderer refuses to
+    // raise a `waiting` for it; main firing a native interrupt over a sidebar
+    // reading plain Idle is the disagreement this channel exists to prevent.
+    it("stays quiet for a harness whose adapter cannot report that a human is blocking it", async () => {
+      const notices: [string, string][] = [];
+      const pushed: HarnessEventNotice[] = [];
+      const { hook } = hookService(
+        {
+          notify: (title, message) => notices.push([title, message]),
+          onHarnessEvent: (notice) => pushed.push(notice),
+        },
+        "ticket-cursor",
+        "cursor",
+      );
+
+      await hook({ harness: "cursor", event: "input.needed" });
+
+      expect(notices).toEqual([]);
+      // Still delivered, and still fanned out: the channel is demonstrably
+      // alive, it just cannot vouch for this one claim.
+      expect(pushed.map((notice) => notice.event)).toEqual(["input.needed"]);
+    });
+
+    // A user who types `codex` inside a claude-code session's terminal reaches
+    // the codex wrapper, and codex's hooks then report from the same
+    // VOLLI_SESSION. Read off the session row, every one of those events was
+    // recorded and announced as Claude Code's.
+    it("credits the harness that fired, not the one the session launched with", async () => {
+      const registered = "my-harness" as HarnessId;
+      const notices: [string, string][] = [];
+      const pushed: HarnessEventNotice[] = [];
+      const { hook } = hookService(
+        {
+          notify: (title, message) => notices.push([title, message]),
+          onHarnessEvent: (notice) => pushed.push(notice),
+        },
+        "ticket-typed",
+      );
+      recordHarnessTrust(
+        ctx.db,
+        {
+          slug: registered,
+          manifestPath: "/home/dev/.agents/harnesses/my-harness/harness.json",
+          manifestSha256: "a1",
+          decision: "trusted",
+          declaredEvents: ["input.needed"],
+        },
+        1000,
+      );
+
+      const response = await hook({ harness: registered, event: "input.needed" });
+
+      expect(response).toMatchObject({ ok: true, data: { harness: registered } });
+      expect(getRegisteredHarness(ctx.db, registered)?.verifiedEvents).toEqual(["input.needed"]);
+      expect(pushed.map((notice) => notice.harnessId)).toEqual([registered]);
+      // The disagreement rule: a notification is the one claim that interrupts
+      // a human and names an agent, so it is made only where the session Volli
+      // launched and the hook that fired agree. Anything in the session can
+      // invoke `volli hook` under a name of its choosing.
+      expect(notices).toEqual([]);
+    });
+
+    it("falls back to the session's harness when the hook named none", async () => {
+      const pushed: HarnessEventNotice[] = [];
+      const notices: [string, string][] = [];
+      const { hook } = hookService(
+        {
+          notify: (title, message) => notices.push([title, message]),
+          onHarnessEvent: (notice) => pushed.push(notice),
+        },
+        "ticket-nameless",
+      );
+
+      await hook({ event: "input.needed" });
+
+      expect(pushed.map((notice) => notice.harnessId)).toEqual(["claude-code"]);
+      expect(notices).toEqual([["VC-12 needs you", "Claude Code is waiting on a human"]]);
+    });
+
+    // THE SILENT NOTIFICATION. The session launched opencode, the user quit it
+    // and started claude, and claude's `input.needed` was compared against the
+    // LAUNCH harness — recorded in the ledger, announced to the renderer, and
+    // never notified. That is the exact case the channel exists for.
+    it("notifies for the harness that is running, not the one that launched", async () => {
+      const notices: [string, string][] = [];
+      const { hook } = hookService(
+        { notify: (title, message) => notices.push([title, message]) },
+        "ticket-replaced",
+        "opencode",
+      );
+
+      // Before the announce, claude is a stranger to this session: cheap things
+      // still follow the evidence, but a notification names an agent and cannot
+      // be retracted, so it waits for the two accounts to agree.
+      await hook({ harness: "claude-code", event: "input.needed" });
+      expect(notices).toEqual([]);
+
+      setActiveHarnessId(ctx.db, sessionId, "claude-code");
+      await hook({ harness: "claude-code", event: "input.needed" });
+
+      expect(notices).toEqual([["VC-12 needs you", "Claude Code is waiting on a human"]]);
+    });
+
+    it("falls back to the RUNNING harness when the hook named none", async () => {
+      const pushed: HarnessEventNotice[] = [];
+      const { hook } = hookService(
+        { onHarnessEvent: (notice) => pushed.push(notice) },
+        "ticket-nameless-2",
+        "opencode",
+      );
+      setActiveHarnessId(ctx.db, sessionId, "claude-code");
+
+      await hook({ event: "input.needed" });
+
+      expect(pushed.map((notice) => notice.harnessId)).toEqual(["claude-code"]);
+    });
+
+    // The slug is baked into the hook argv by Volli's own launch machinery, so
+    // a name from outside that vocabulary is not a harness reporting — and it
+    // does not get to write to the capability ledger under a name it picked.
+    it("refuses a harness argument naming nothing Volli knows", async () => {
+      const pushed: HarnessEventNotice[] = [];
+      const { hook } = hookService({ onHarnessEvent: (notice) => pushed.push(notice) });
+
+      for (const harness of ["Not A Slug", "never-registered", 7]) {
+        await expect(hook({ harness, event: "input.needed" })).resolves.toMatchObject({
+          ok: false,
+          error: { code: "INVALID_REQUEST" },
+        });
+      }
+      expect(pushed).toEqual([]);
+    });
+
+    it("records an event from a harness it has no record of, and notifies nobody", async () => {
+      const notices: [string, string][] = [];
+      const pushed: HarnessEventNotice[] = [];
+      const { hook } = hookService(
+        {
+          notify: (title, message) => notices.push([title, message]),
+          onHarnessEvent: (notice) => pushed.push(notice),
+        },
+        "ticket-unknown",
+        "ghost-harness" as HarnessId,
+      );
+
+      await hook({ harness: "ghost-harness", event: "input.needed" });
+
+      expect(pushed.map((notice) => notice.event)).toEqual(["input.needed"]);
+      expect(notices).toEqual([]);
+    });
+
+    // Each event reaches main on its own short-lived hook process over its own
+    // connection, so two fired close together arrive in the order they won
+    // their races in. Arrival order is main's clock's opinion, not the agent's.
+    describe("ordering", () => {
+      it("withholds the notification a stale input.needed would fire", async () => {
+        const notices: [string, string][] = [];
+        const { hook } = hookService(
+          { notify: (title, message) => notices.push([title, message]) },
+          "ticket-raced",
+        );
+
+        await hook({ harness: "claude-code", event: "turn.started", firedAt: 2000 });
+        await hook({ harness: "claude-code", event: "input.needed", firedAt: 1000 });
+
+        expect(notices).toEqual([]);
+      });
+
+      it("still notifies for a wait fired in the same millisecond as the newest event", async () => {
+        const notices: [string, string][] = [];
+        const { hook } = hookService(
+          { notify: (title, message) => notices.push([title, message]) },
+          "ticket-tied",
+        );
+
+        await hook({ harness: "claude-code", event: "turn.started", firedAt: 2000 });
+        await hook({ harness: "claude-code", event: "input.needed", firedAt: 2000 });
+
+        expect(notices).toEqual([["VC-12 needs you", "Claude Code is waiting on a human"]]);
+      });
+
+      // An older `volli` sends no stamp at all. Dropping its events for failing
+      // to prove their own age would be a strictly worse bug than the one this
+      // closes, and a much quieter one.
+      it("keeps believing an unstamped delivery after a stamped one", async () => {
+        const notices: [string, string][] = [];
+        const { hook } = hookService(
+          { notify: (title, message) => notices.push([title, message]) },
+          "ticket-unstamped",
+        );
+
+        await hook({ harness: "claude-code", event: "turn.started", firedAt: 2000 });
+        await hook({ harness: "claude-code", event: "input.needed" });
+
+        expect(notices).toEqual([["VC-12 needs you", "Claude Code is waiting on a human"]]);
+      });
+
+      it("refuses a stale resume seed rather than overwriting the newest one", async () => {
+        const { hook } = hookService();
+
+        await hook({
+          harness: "claude-code",
+          event: "session.started",
+          harnessSessionId: "current-run",
+          firedAt: 2000,
+        });
+        await hook({
+          harness: "claude-code",
+          event: "session.started",
+          harnessSessionId: "a-run-that-already-ended",
+          firedAt: 1000,
+        });
+
+        expect(getSession(ctx.db, sessionId)?.harnessSessionId).toBe("current-run");
+      });
+
+      // The renderer applies the same rule to the same key, so a superseded
+      // event is still announced rather than filtered here: main's watermark is
+      // in memory, evicted at a cap and empty after a relaunch, and the
+      // renderer's correctness must not rest on it.
+      it("announces a superseded event, carrying the stamp that makes it judgeable", async () => {
+        const pushed: HarnessEventNotice[] = [];
+        const { hook } = hookService({ onHarnessEvent: (notice) => pushed.push(notice) });
+
+        await hook({ harness: "claude-code", event: "turn.started", firedAt: 2000 });
+        const response = await hook({
+          harness: "claude-code",
+          event: "input.needed",
+          firedAt: 1000,
+        });
+
+        expect(pushed.map((notice) => [notice.event, notice.firedAt])).toEqual([
+          ["turn.started", 2000],
+          ["input.needed", 1000],
+        ]);
+        expect(response).toMatchObject({ ok: true, data: { superseded: true } });
+      });
+
+      it("says so in the response, the one trace a rejected delivery leaves", async () => {
+        const { hook } = hookService();
+
+        await expect(
+          hook({ harness: "claude-code", event: "turn.started", firedAt: 2000 }),
+        ).resolves.toMatchObject({ ok: true, data: { superseded: false } });
+        await expect(
+          hook({ harness: "claude-code", event: "input.needed" }),
+        ).resolves.toMatchObject({ ok: true, data: { superseded: false } });
+      });
+
+      it("ignores a stamp that cannot order anything, rather than refusing the event", async () => {
+        const pushed: HarnessEventNotice[] = [];
+        const { hook } = hookService({ onHarnessEvent: (notice) => pushed.push(notice) });
+
+        for (const firedAt of ["2000", Number.NaN, Number.POSITIVE_INFINITY, {}]) {
+          await expect(
+            hook({ harness: "claude-code", event: "turn.started", firedAt }),
+          ).resolves.toMatchObject({ ok: true, data: { superseded: false } });
+        }
+
+        expect(pushed.map((notice) => notice.firedAt)).toEqual([null, null, null, null]);
+      });
+
+      // The watermark is per session: one session firing does not make another
+      // session's older-but-perfectly-current event look stale.
+      it("keeps one session's watermark out of another's", async () => {
+        const notices: [string, string][] = [];
+        const { hook } = hookService(
+          { notify: (title, message) => notices.push([title, message]) },
+          "ticket-two-sessions",
+        );
+        const other = "99999999-3456-7890-abcd-ef1234567890";
+        insertSession(ctx.db, testSession("project-one", "ticket-two-sessions", { id: other }));
+
+        await hook({ harness: "claude-code", event: "turn.started", firedAt: 5000 });
+        await hook({ harness: "claude-code", event: "input.needed", firedAt: 1000 }, other);
+
+        expect(notices).toEqual([["VC-12 needs you", "Claude Code is waiting on a human"]]);
+      });
     });
   });
 
@@ -1855,5 +2721,181 @@ describe("agent command service", () => {
     expect(prompt).toContain("/wt/VC-1");
     expect(prompt).toContain("volli/VC-1-ship");
     expect(prompt).toContain("`main`");
+  });
+});
+
+describe("doctor", () => {
+  const observation = {
+    pathEntries: ["/ud/bin", "/usr/bin"],
+    zdotDir: "/ud/shell/zsh",
+    resolved: { claude: "/ud/bin/claude" },
+    volliPath: "/ud/bin/volli",
+  };
+
+  function doctorService(options: Partial<Parameters<typeof createAgentCommandService>[0]> = {}) {
+    ctx = openTestDb();
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 4242,
+      doctorFacts: async () => ({
+        binDir: "/ud/bin",
+        wrappers: { claude: "/ud/bin/claude" },
+        refused: [],
+        shellInitDir: "/ud/shell/zsh",
+        shellInitPresent: true,
+        shimPath: "/ud/bin/volli",
+        liveSessionIds: [],
+        reporting: [],
+        skillConflicts: [],
+      }),
+      ...options,
+    });
+    return (args: Record<string, unknown>) =>
+      service.execute({ v: 1, cmd: "doctor", args, ctx: { cwd: "/repo", env: {} } });
+  }
+
+  it("returns a check per finding, with a summary", async () => {
+    const response = await doctorService()(observation);
+
+    expect(response).toMatchObject({ ok: true });
+    if (!response.ok) throw new Error("expected ok");
+    const data = response.data as { checks: { id: string }[]; summary: string };
+    expect(data.checks.map((check) => check.id)).toContain("path-position");
+    expect(data.summary).toContain("checks");
+  });
+
+  // A diagnostic that silently substitutes a default for a missing measurement
+  // is exactly the failure mode it exists to catch.
+  it("refuses a request carrying no observation rather than assuming one", async () => {
+    const doctor = doctorService();
+    for (const args of [
+      {},
+      { pathEntries: "not-a-list" },
+      { pathEntries: [1] },
+      { pathEntries: [], resolved: [] },
+    ]) {
+      expect(await doctor(args)).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+    }
+  });
+
+  /** The check with this id, or a helpful failure. */
+  async function checkFrom(args: Record<string, unknown>, id: string) {
+    const response = await doctorService()(args);
+    if (!response.ok) throw new Error("expected ok");
+    const { checks } = response.data as { checks: DoctorCheck[] };
+    const found = checks.find((check) => check.id === id);
+    if (found === undefined) throw new Error(`no ${id} check in ${checks.map((c) => c.id).join()}`);
+    return found;
+  }
+
+  // Measured-absent and never-measured are different facts, and collapsing the
+  // second into the first is how a diagnostic states a plausible wrong answer
+  // in the voice of an observation.
+  it("keeps a measured absence apart from a field that never arrived", async () => {
+    // The caller looked and found nothing — a measurement, and a real failure.
+    const absent = await checkFrom({ ...observation, zdotDir: null }, "shell-init");
+    expect(absent.status).toBe("fail");
+    expect(absent.detail).toContain("unset");
+
+    // Nobody reported it. Nothing is known, and the report says so.
+    const { zdotDir: _omitted, ...silent } = observation;
+    const unreported = await checkFrom(silent, "shell-init");
+    expect(unreported.status).toBe("warn");
+    expect(unreported.detail).toContain("not reported");
+  });
+
+  // A malformed field is a caller that disagrees with main about the wire —
+  // one of the conditions doctor exists to name. It costs that one field its
+  // measurement and nothing else: the report is not discarded to punish it,
+  // and the field never poses as measured-absent.
+  it("reports a malformed field as unmeasured, not as measured-absent", async () => {
+    const malformed = { ...observation, zdotDir: 123, volliPath: {} };
+
+    const shellInit = await checkFrom(malformed, "shell-init");
+    expect(shellInit.status).toBe("warn");
+    expect(shellInit.detail).toContain("not reported");
+    expect(shellInit.remedy).toBeUndefined();
+
+    const volli = await checkFrom(malformed, "volli-cli");
+    expect(volli.status).toBe("warn");
+    expect(volli.detail).toContain("nothing is known");
+    // The rest of the report still ran, which is the reason this does not
+    // refuse the request outright.
+    expect((await checkFrom(malformed, "path-position")).status).toBe("ok");
+  });
+
+  it("gives a malformed resolution the same treatment as an unreported one", async () => {
+    const claimed = await checkFrom(
+      { ...observation, resolved: { claude: 42 } },
+      "resolves-claude",
+    );
+    expect(claimed.status).toBe("warn");
+    expect(claimed.detail).toContain("no resolution was reported");
+
+    const measured = await checkFrom(
+      { ...observation, resolved: { claude: null } },
+      "resolves-claude",
+    );
+    expect(measured.status).toBe("warn");
+    expect(measured.detail).toContain("resolves to nothing");
+  });
+
+  it("reports that it could not look when the harness runtime is unavailable", async () => {
+    ctx = openTestDb();
+    const service = createAgentCommandService({ db: ctx.db, appVersion: "1.2.3" });
+    const response = await service.execute({
+      v: 1,
+      cmd: "doctor",
+      args: observation,
+      ctx: { cwd: "/repo", env: {} },
+    });
+    expect(response).toMatchObject({ ok: false, error: { code: "APP_UNREACHABLE" } });
+  });
+
+  it("repairs before re-checking, so --fix reports the state it produced", async () => {
+    const order: string[] = [];
+    const doctor = doctorService({
+      doctorRepair: async () => {
+        order.push("repair");
+      },
+      doctorFacts: async () => {
+        order.push("facts");
+        return {
+          binDir: "/ud/bin",
+          wrappers: {},
+          refused: [],
+          shellInitDir: null,
+          shellInitPresent: false,
+          shimPath: "/ud/bin/volli",
+          liveSessionIds: [],
+          reporting: [],
+          skillConflicts: [],
+        };
+      },
+    });
+
+    await doctor({ ...observation, fix: true });
+    expect(order).toEqual(["repair", "facts"]);
+  });
+
+  it("does not repair unless asked", async () => {
+    let repaired = false;
+    await doctorService({
+      doctorRepair: async () => {
+        repaired = true;
+      },
+    })(observation);
+    expect(repaired).toBe(false);
+  });
+
+  it("surfaces a repair failure instead of reporting checks over a broken state", async () => {
+    const response = await doctorService({
+      doctorRepair: () => Promise.reject(new Error("disk full")),
+    })({ ...observation, fix: true });
+
+    expect(response).toMatchObject({ ok: false, error: { code: "MUTATION_FAILED" } });
+    if (response.ok) throw new Error("expected failure");
+    expect(response.error.message).toContain("disk full");
   });
 });

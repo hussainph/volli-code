@@ -10,7 +10,15 @@ import {
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
 import { type BoardGateway, createBoardStore, planningChangeAffects } from "./board";
-import { ticketScope, useSessionsStore } from "./sessions";
+import { ticketScope, useSessionsStore, type SessionLaunch } from "./sessions";
+
+/** A bare shell launch: no harness command line was written, so no expectation. */
+const shellLaunch = (title: string): SessionLaunch => ({
+  title,
+  harnessId: "claude-code",
+  launchKind: "shell",
+  createdAt: 0,
+});
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
@@ -1325,7 +1333,7 @@ describe("archive/delete session teardown", () => {
     resetSessions();
     const store = createBoardStore(fakeGateway());
     store.getState().hydrate({ p1: [ticket({ id: "tk", status: "doing" })] }, {});
-    useSessionsStore.getState().addSession(ticketScope("p1", "tk"), "s1", "Session 1");
+    useSessionsStore.getState().addSession(ticketScope("p1", "tk"), "s1", shellLaunch("Session 1"));
 
     await store.getState().archiveTicket("p1", "tk");
 
@@ -1345,7 +1353,7 @@ describe("archive/delete session teardown", () => {
     });
     const store = createBoardStore(gateway);
     store.getState().hydrate({ p1: [ticket({ id: "tk", status: "doing" })] }, {});
-    useSessionsStore.getState().addSession(ticketScope("p1", "tk"), "s1", "Session 1");
+    useSessionsStore.getState().addSession(ticketScope("p1", "tk"), "s1", shellLaunch("Session 1"));
 
     await store.getState().archiveTicket("p1", "tk");
 
@@ -1359,7 +1367,7 @@ describe("archive/delete session teardown", () => {
     resetSessions();
     const store = createBoardStore(fakeGateway());
     store.setState({ archivedByProject: { p1: [archivedTicket({ id: "tk", status: "done" })] } });
-    useSessionsStore.getState().addSession(ticketScope("p1", "tk"), "s1", "Session 1");
+    useSessionsStore.getState().addSession(ticketScope("p1", "tk"), "s1", shellLaunch("Session 1"));
 
     await store.getState().deleteArchivedTicket("p1", "tk");
 

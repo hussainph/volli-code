@@ -207,6 +207,27 @@ describe("renderCliSuccess", () => {
         options,
       ),
     ).toBe("abcdef12  linked 4f1c9a2e-8b7d-4e5a-9c3f-2a1b0d6e5f4c\n");
+    // Consumed by `$(…)` in a generated wrapper and prepended to a harness's
+    // argv: one bare id when one was minted, and not a byte otherwise.
+    expect(
+      renderCliSuccess(
+        "session.harness",
+        {
+          session: "abcdef12",
+          harness: "cursor",
+          changed: true,
+          harnessSessionId: "4f1c9a2e-8b7d-4e5a-9c3f-2a1b0d6e5f4c",
+        },
+        options,
+      ),
+    ).toBe("4f1c9a2e-8b7d-4e5a-9c3f-2a1b0d6e5f4c\n");
+    expect(
+      renderCliSuccess(
+        "session.harness",
+        { session: "abcdef12", harness: "codex", changed: false, harnessSessionId: null },
+        options,
+      ),
+    ).toBe("");
     expect(renderCliSuccess("notify", { notified: true }, options)).toBe("notified\n");
     expect(renderCliSuccess("app.launch", { alreadyRunning: true }, options)).toBe(
       "Volli is already running\n",
@@ -472,5 +493,39 @@ describe("renderCliSuccess", () => {
     );
     expect(rendered).toContain("VC-12  working-tree  0 files  +0 -0");
     expect(rendered.split("\n").filter((l) => l.startsWith("  "))).toEqual([]);
+  });
+});
+
+describe("renderCliSuccess — doctor", () => {
+  const data = {
+    checks: [
+      {
+        id: "path-position",
+        title: "Volli's bin is first on PATH",
+        status: "fail",
+        detail: "position 20 of 30",
+        remedy: "Run `volli doctor --fix`.",
+      },
+      { id: "session", title: "Session context", status: "ok", detail: "s-1" },
+    ],
+    summary: "1 failed of 2 checks.",
+  };
+
+  it("renders the report a human reads, worst finding included", () => {
+    const text = renderCliSuccess("doctor", data, { json: false });
+    expect(text).toContain("✗ Volli's bin is first on PATH");
+    expect(text).toContain("position 20 of 30");
+    expect(text).toContain("→ Run `volli doctor --fix`.");
+    expect(text.trimEnd().endsWith("1 failed of 2 checks.")).toBe(true);
+  });
+
+  it("passes the structured report straight through with --json", () => {
+    expect(JSON.parse(renderCliSuccess("doctor", data, { json: true }))).toEqual(data);
+  });
+
+  it("falls back to the generic renderer when the reply is not a report", () => {
+    expect(() => renderCliSuccess("doctor", { unexpected: true }, { json: false })).not.toThrow();
+    expect(() => renderCliSuccess("doctor", null, { json: false })).not.toThrow();
+    expect(() => renderCliSuccess("doctor", { checks: [] }, { json: false })).not.toThrow();
   });
 });

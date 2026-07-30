@@ -21,7 +21,20 @@ export const AGENT_COMMANDS = [
   "session.done",
   "session.blocked",
   "session.link",
+  // The other involuntary one: a harness's own PATH-shim wrapper announcing
+  // that IT is what is now running in this terminal, one step before it execs.
+  // `harness_id` is the launch and never moves; this is what a terminal is
+  // running after the user quit one agent and started another in it.
+  "session.harness",
   "notify",
+  // The involuntary channel: a harness hook reporting what the agent is doing,
+  // rather than an agent choosing to say so. Unlike every other command it is
+  // not addressed to a human reader — `volli hook` fires it and discards the
+  // answer, because a hook that fails must never wedge the agent it fired from.
+  "hook",
+  // Diagnostics, not agent surface: what the harness integration is actually
+  // doing on this machine, measured from inside the environment under test.
+  "doctor",
 ] as const;
 
 export type AgentCommand = (typeof AGENT_COMMANDS)[number];
@@ -45,6 +58,7 @@ export const AGENT_ERROR_CODES = [
   "INVALID_COLUMN",
   "INVALID_PRIORITY",
   "ARCHIVED_TICKET",
+  "SESSION_ENDED",
   "PREFIX_CONFLICT",
   "FILE_READ_FAILED",
   "MUTATION_FAILED",

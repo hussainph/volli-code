@@ -3,9 +3,11 @@
 // stays type-only on @volli/shared (the pack config keeps main and preload
 // dependency-disjoint; see CAUTION in apps/desktop/vite.config.ts).
 
+import { isHarnessTrustVerdict } from "./harness/trust";
 import type {
   DataIpcChannel,
   FileIpcChannel,
+  HarnessIpcChannel,
   IpcArgs,
   ThemeIpcChannel,
   VolliInvokeContract,
@@ -15,7 +17,7 @@ import { isHexColor } from "./theme/color";
 import { isShippedEditorThemeId } from "./theme/editor-themes";
 import { isValidOverlayKey, isValidOverlayValue } from "./theme/ghostty-overlay";
 import { isProjectThemeOverride } from "./theme/project-override";
-import { isHarnessId, isTicketPriority, isTicketStatus } from "./ticket";
+import { isTicketPriority, isTicketStatus, parseHarnessId } from "./ticket";
 import { isValidBranchName } from "./ticket-branch";
 
 /**
@@ -32,11 +34,30 @@ export interface IpcRequestDescriptor<C extends keyof VolliInvokeContract> {
 
 // ---- shape helpers ----------------------------------------------------
 // The status/priority/harness vocabulary guards live in @volli/shared next to
-// the vocab constants they guard (isTicketStatus/isTicketPriority/isHarnessId),
+// the vocab constants they guard (isTicketStatus/isTicketPriority/parseHarnessId),
 // imported above; isValidBranchName lives next to the branch-naming rules.
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+/**
+ * Whether `value` is a well-formed harness id — a built-in, or a slug a
+ * manifest could legally be registered under.
+ *
+ * A shape guard, deliberately, and the ONLY kind this module could honestly
+ * offer: whether a slug names a harness the user actually registered and
+ * trusted is a fact about their disk and their verdicts, which this package
+ * cannot see and by design never will. It gates the field it appears on — a
+ * ticket's persisted harness PREFERENCE — and nothing else. Trust is checked
+ * where it can be: at the launch door in main (`pty/ipc.ts`), against the
+ * adapters that launch actually resolved. A preference naming a harness that
+ * is not (or is no longer) trusted therefore stores fine and simply never
+ * launches, which is the right way round: a verdict is revocable, and a
+ * revoked one must not have to reach back into rows written before it.
+ */
+function isHarnessIdShape(value: unknown): boolean {
+  return typeof value === "string" && parseHarnessId(value) !== null;
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -141,7 +162,7 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
         (input["body"] === undefined || typeof input["body"] === "string") &&
         (input["labels"] === undefined || isStringArray(input["labels"])) &&
         (input["usesWorktree"] === undefined || typeof input["usesWorktree"] === "boolean") &&
-        (input["preferredHarnessId"] === undefined || isHarnessId(input["preferredHarnessId"]))
+        (input["preferredHarnessId"] === undefined || isHarnessIdShape(input["preferredHarnessId"]))
       );
     },
     invalidError: "Invalid ticket",
@@ -673,3 +694,38 @@ export const THEME_IPC: { readonly [C in ThemeIpcChannel]: IpcRequestDescriptor<
 
 /** Every channel the theme-IPC surface owns, derived — never hand-synced. */
 export const THEME_CHANNELS = Object.keys(THEME_IPC) as readonly ThemeIpcChannel[];
+
+// ---- harness-trust descriptor table ---------------------------------------
+// A manifest declares a command line Volli will execute, so this is the one
+// request surface where the guard is part of the security story rather than
+// only part of the type story: `reconfirm` is refused here (it is Volli's
+// conclusion, never a human's answer), and a verdict with no hash is refused
+// because nothing may be trusted in the abstract — only a named version of a
+// file can be.
+
+export const HARNESS_IPC: { readonly [C in HarnessIpcChannel]: IpcRequestDescriptor<C> } = {
+  "volli:harness-pending": {
+    guard: (args): args is [] => args.length === 0,
+    invalidError: "Invalid request",
+  },
+  "volli:harness-trust-set": {
+    guard: (args): args is IpcArgs<"volli:harness-trust-set"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      return (
+        isRecord(input) &&
+        typeof input["slug"] === "string" &&
+        typeof input["manifestSha256"] === "string" &&
+        isHarnessTrustVerdict(input["decision"])
+      );
+    },
+    invalidError: "Invalid harness verdict",
+  },
+  "volli:harness-registered": {
+    guard: (args): args is [] => args.length === 0,
+    invalidError: "Invalid request",
+  },
+};
+
+/** Every channel the harness-trust surface owns, derived — never hand-synced. */
+export const HARNESS_CHANNELS = Object.keys(HARNESS_IPC) as readonly HarnessIpcChannel[];

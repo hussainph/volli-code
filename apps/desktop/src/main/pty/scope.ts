@@ -5,12 +5,18 @@ import {
   composeAttachmentsSection,
   DEFAULT_HARNESS_ID,
   displayTicketId,
+  effectiveHarnessId,
   errorMessage,
   harnessLabel,
   projectSessionEnv,
   ticketSessionEnv,
 } from "@volli/shared";
-import type { CreateTerminalSessionRequest, HarnessId } from "@volli/shared";
+import type {
+  CreateTerminalSessionRequest,
+  HarnessAdapterLookup,
+  HarnessId,
+  HarnessWrapperLookup,
+} from "@volli/shared";
 import { materializeAttachments } from "../attachment-materialize";
 import { getProjectById } from "../db/projects-repo";
 import {
@@ -88,11 +94,17 @@ export type ScopeResolution = { ok: true; scope: SessionScope } | { ok: false; e
  * (VOLLI_TICKET env, MAIN-repo-root cwd, the ticket's harness, `Session N`
  * title) or a project-scoped scratch session (default harness, `Terminal N`).
  * The only failure is a ticket request naming a ticket that does not exist.
+ *
+ * `wrapperFor` and `adapterFor` travel together for the same reason: both
+ * answers belong to main's harness runtime, and a launch line built from one
+ * without the other would name the right binary while getting its flags wrong.
  */
 export function resolveScope(
   db: Database.Database,
   request: CreateTerminalSessionRequest,
   attachmentsRootPath: string,
+  wrapperFor: HarnessWrapperLookup,
+  adapterFor: HarnessAdapterLookup,
 ): ScopeResolution {
   // Presentation metadata is non-security-sensitive, but still normalize the
   // IPC value so an untyped caller cannot persist arbitrary vocabulary.
@@ -123,13 +135,24 @@ export function resolveScope(
       if (prior.endedAt === null) {
         return { ok: false, error: "Cannot resume a session that is still live" };
       }
+      // Resume the harness that was RUNNING, not the one that opened the
+      // terminal. A session's `harnessId` is its launch and never moves, so a
+      // user who quit opencode and worked in claude for an hour used to be
+      // resumed into opencode — the right session id handed to the wrong
+      // binary, with that binary's flags.
+      const priorHarnessId = effectiveHarnessId(prior);
       // The resume line needs no worktree identity (no orientation preamble),
       // so it composes up front. A harness with no resume support yields null.
-      const resumeCommand = buildHarnessResumeCommand(prior.harnessId, prior.harnessSessionId);
+      const resumeCommand = buildHarnessResumeCommand(
+        priorHarnessId,
+        prior.harnessSessionId,
+        wrapperFor(priorHarnessId),
+        adapterFor,
+      );
       if (resumeCommand === null) {
         return {
           ok: false,
-          error: `The ${harnessLabel(prior.harnessId)} harness does not support resuming a session`,
+          error: `The ${harnessLabel(priorHarnessId)} harness does not support resuming a session`,
         };
       }
       return {
@@ -137,7 +160,10 @@ export function resolveScope(
         scope: {
           projectId: ctx.projectId,
           ticketId: request.ticket.ticketId,
-          harnessId: prior.harnessId,
+          // The new session's own LAUNCH harness is what it is being launched
+          // with — the resumed one — which is why this is the effective id and
+          // not the prior record's launch field.
+          harnessId: priorHarnessId,
           launchKind: "agent",
           placement,
           cwd: ctx.projectPath,
@@ -189,7 +215,12 @@ export function resolveScope(
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }
-      launchCommand = buildHarnessCommand(kickoff.harnessId, prompt);
+      launchCommand = buildHarnessCommand(
+        kickoff.harnessId,
+        prompt,
+        wrapperFor(kickoff.harnessId),
+        adapterFor,
+      );
     }
     return {
       ok: true,

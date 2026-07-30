@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import { ChromeBar } from "@renderer/components/chrome-bar";
+import { HarnessTrustDialog } from "@renderer/components/harness/harness-trust-dialog";
 import { NewTicketDialog } from "@renderer/components/board/new-ticket-dialog";
 import { MainContent } from "@renderer/components/pages/main-content";
 import { ProjectRail } from "@renderer/components/rail/project-rail";
@@ -197,6 +198,7 @@ export function AppShell() {
       </div>
       <Toaster />
       <NewTicketDialog />
+      <HarnessTrustDialog />
     </SidebarProvider>
   );
 }

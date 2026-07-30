@@ -4,14 +4,17 @@ import {
   TICKET_STATUS_LABELS,
   TICKET_PRIORITIES,
   TICKET_PRIORITY_LABELS,
-  HARNESS_IDS,
+  FIRST_CLASS_HARNESS_IDS,
   HARNESS_LABELS,
   harnessLabel,
   displayTicketId,
   createTicket,
   isTicketStatus,
   isTicketPriority,
-  isHarnessId,
+  isFirstClassHarnessId,
+  parseHarnessId,
+  type HarnessId,
+  type CustomHarnessId,
   ACTIVE_TICKET_STATUSES,
   isActiveTicketStatus,
   leavesActiveColumns,
@@ -116,7 +119,7 @@ describe("TICKET_PRIORITY_LABELS", () => {
 
 describe("HARNESS_LABELS", () => {
   it("has a human label for every harness", () => {
-    for (const harness of HARNESS_IDS) {
+    for (const harness of FIRST_CLASS_HARNESS_IDS) {
       expect(HARNESS_LABELS[harness]).toBeTypeOf("string");
     }
   });
@@ -124,7 +127,7 @@ describe("HARNESS_LABELS", () => {
 
 describe("harnessLabel", () => {
   it("labels every first-class harness from HARNESS_LABELS", () => {
-    for (const harness of HARNESS_IDS) {
+    for (const harness of FIRST_CLASS_HARNESS_IDS) {
       expect(harnessLabel(harness)).toBe(HARNESS_LABELS[harness]);
     }
     expect(harnessLabel("claude-code")).toBe("Claude Code");
@@ -136,20 +139,88 @@ describe("harnessLabel", () => {
   });
 });
 
-describe("isHarnessId", () => {
+describe("isFirstClassHarnessId", () => {
   it("accepts every first-class harness id", () => {
-    for (const harness of HARNESS_IDS) {
-      expect(isHarnessId(harness)).toBe(true);
+    for (const harness of FIRST_CLASS_HARNESS_IDS) {
+      expect(isFirstClassHarnessId(harness)).toBe(true);
     }
   });
 
   it("rejects unknown strings and non-strings", () => {
-    expect(isHarnessId("my-custom-harness")).toBe(false);
-    expect(isHarnessId("")).toBe(false);
-    expect(isHarnessId(42)).toBe(false);
-    expect(isHarnessId(null)).toBe(false);
-    expect(isHarnessId(undefined)).toBe(false);
-    expect(isHarnessId({ harnessId: "codex" })).toBe(false);
+    expect(isFirstClassHarnessId("my-custom-harness")).toBe(false);
+    expect(isFirstClassHarnessId("")).toBe(false);
+    expect(isFirstClassHarnessId(42)).toBe(false);
+    expect(isFirstClassHarnessId(null)).toBe(false);
+    expect(isFirstClassHarnessId(undefined)).toBe(false);
+    expect(isFirstClassHarnessId({ harnessId: "codex" })).toBe(false);
+  });
+});
+
+describe("parseHarnessId", () => {
+  it("mints every first-class harness id unchanged", () => {
+    for (const harness of FIRST_CLASS_HARNESS_IDS) {
+      expect(parseHarnessId(harness)).toBe(harness);
+    }
+  });
+
+  it("mints a well-formed slug a third party could register", () => {
+    expect(parseHarnessId("my-harness")).toBe("my-harness");
+    expect(parseHarnessId("aider2")).toBe("aider2");
+    expect(parseHarnessId("a".repeat(32))).toBe("a".repeat(32));
+  });
+
+  it("refuses a slug that could not name a directory or an env-var suffix", () => {
+    expect(parseHarnessId("")).toBeNull();
+    expect(parseHarnessId("x")).toBeNull();
+    expect(parseHarnessId("a".repeat(33))).toBeNull();
+    expect(parseHarnessId("Claude-Code")).toBeNull();
+    expect(parseHarnessId("2fast")).toBeNull();
+    expect(parseHarnessId("-lead")).toBeNull();
+    expect(parseHarnessId("has space")).toBeNull();
+    expect(parseHarnessId("../escape")).toBeNull();
+    expect(parseHarnessId("semi;colon")).toBeNull();
+  });
+});
+
+/**
+ * A `switch` an exhaustiveness assert would guard. The residual after the four
+ * first-class arms must type as {@link CustomHarnessId}, never `never` — the
+ * union stays open for registered harnesses.
+ */
+function describeHarnessArm(id: HarnessId): string {
+  switch (id) {
+    case "claude-code":
+    case "codex":
+    case "cursor":
+    case "opencode": {
+      return "first-class";
+    }
+    default: {
+      const residual: CustomHarnessId = id;
+      return residual;
+    }
+  }
+}
+
+describe("HarnessId (type-level)", () => {
+  it("keeps first-class literals assignable so existing call sites are untouched", () => {
+    const id: HarnessId = "claude-code";
+    expect(id).toBe("claude-code");
+  });
+
+  it("refuses a bare string, forcing every DB read and IPC payload through parseHarnessId", () => {
+    const fromDatabase: string = "claude-code";
+    // @ts-expect-error a `string` is assignable to neither arm of HarnessId.
+    const unchecked: HarnessId = fromDatabase;
+    expect(unchecked).toBe("claude-code");
+
+    const checked = parseHarnessId(fromDatabase);
+    expect(checked).toBe("claude-code");
+  });
+
+  it("leaves a CustomHarnessId residual after the four first-class arms, not never", () => {
+    expect(describeHarnessArm("codex")).toBe("first-class");
+    expect(describeHarnessArm(parseHarnessId("my-harness") as CustomHarnessId)).toBe("my-harness");
   });
 });
 
