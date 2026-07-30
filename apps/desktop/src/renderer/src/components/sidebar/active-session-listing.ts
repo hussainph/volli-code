@@ -10,7 +10,6 @@ import {
 
 import { canResumeSession, sessionSourceLabel } from "../ticket/session-history";
 import {
-  findSessionPane,
   launchAdapter,
   sessionActivityState,
   sessionPanes,
@@ -25,22 +24,25 @@ export interface ActiveSessionTarget {
 }
 
 /**
- * How a concluded run ended. `done` is only claimed when a clean exit code was
- * actually observed (a still-mounted pane's, or the durable record's
- * `exitCode`); `ended` is everything else, including an unknown outcome. There
- * is deliberately no failure member — see {@link outcomeFromExitCode}.
- */
-export type SessionOutcome = "done" | "ended";
-
-/**
  * A Doing ticket's most recent concluded run, carried by its Active fallback
  * row when nothing is live. Backed by a durable {@link SessionRecord} where one
  * is known — the record's documented purpose is "trace and resume seed", which
  * makes this row the fourth resume surface (issue #78): `resumable` marks a
  * harness session to resume from.
+ *
+ * A concluded run carries no verdict, and that is deliberate. The PTY runs the
+ * user's login shell, not the harness — the launch command is typed into that
+ * shell as a line of input, never `exec`'d — so the code reaching us is the
+ * shell's `$?`, one indirection removed from anything the agent did. A user
+ * quitting an agent that exits nonzero, a command that failed before Ctrl-D,
+ * and Volli's own tab close (SIGHUP, which zsh traps and exits 129 for) are
+ * byte-identical here. That argument already retired the failure verdict; it
+ * retires the success one on the same terms, because a shell exiting 0 says no
+ * more about whether the work got done than a 1 says it broke. A verdict needs
+ * a source that knows — the harness reporting one. The code itself stays on the
+ * tab's tooltip (`Exited (N)`), so this drops the claim, not the fact.
  */
 export interface LastRun {
-  outcome: SessionOutcome;
   /**
    * Epoch ms the run ended; `null` when only a still-mounted exited tab is
    * known and its durable record hasn't been re-read yet.
@@ -200,22 +202,6 @@ function sessionRow(
 }
 
 /**
- * The PTY runs the user's login shell, not the harness — the launch command is
- * typed into that shell as a line of input, never `exec`'d — so the exit code
- * reaching us is the shell's `$?`, one indirection removed from "the agent
- * failed". A user quitting an agent that exits nonzero, a command that failed
- * before Ctrl-D, and Volli's own tab close (SIGHUP, which zsh traps and exits
- * 129 for) are byte-identical here, and none of them is a failed run. So `done`
- * claims only that the shell exited cleanly, and everything else is `ended`; a
- * failure verdict needs a source that actually knows one happened — the harness
- * reporting it. The code itself stays on the tab's tooltip (`Exited (N)`), so
- * this drops the false verdict, not the fact.
- */
-function outcomeFromExitCode(exitCode: number | null): SessionOutcome {
-  return exitCode === 0 ? "done" : "ended";
-}
-
-/**
  * The Active fallback row for a Doing ticket with nothing live — the tier
  * guarantees every Doing ticket a presence (the board says it's in flight, so
  * the navigator must too, especially after an app relaunch kills every PTY).
@@ -234,7 +220,6 @@ function lastRunRow(
   const mounted = tabs.find((tab) => tab.sessionId === container?.activeSessionId) ?? tabs.at(-1);
   if (mounted !== undefined) {
     const record = recordsById.get(mounted.sessionId);
-    const pane = findSessionPane(mounted.layout, mounted.activePaneId);
     return {
       id: `ticket:${ticket.id}`,
       ticket,
@@ -244,7 +229,6 @@ function lastRunRow(
       activitySource: "inferred",
       attention: null,
       lastRun: {
-        outcome: outcomeFromExitCode(pane?.exitCode ?? record?.exitCode ?? null),
         endedAt: record?.endedAt ?? null,
         resumable: record !== undefined && canResumeSession(record, launchAdapter),
       },
@@ -276,7 +260,6 @@ function lastRunRow(
       activitySource: "inferred",
       attention: null,
       lastRun: {
-        outcome: outcomeFromExitCode(latest.exitCode),
         endedAt: latest.endedAt,
         resumable: canResumeSession(latest, launchAdapter),
       },

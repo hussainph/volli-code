@@ -378,13 +378,13 @@ describe("buildActiveSessionListing", () => {
       {
         title: "Claude run",
         activity: null,
-        lastRun: { outcome: "ended", endedAt: now - 1_000, resumable: true },
+        lastRun: { endedAt: now - 1_000, resumable: true },
         target: null,
       },
     ]);
   });
 
-  it("prefers a still-mounted exited tab for the fallback row and labels its outcome", () => {
+  it("prefers a still-mounted exited tab for the fallback row, reopenable in place", () => {
     const now = 1_000_000;
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "doing" })],
@@ -405,11 +405,11 @@ describe("buildActiveSessionListing", () => {
     });
 
     // One row per concluded ticket: the container's active tab, reopenable in
-    // place, with the outcome read from its exited pane.
+    // place, dated by its durable record.
     expect(result.active).toMatchObject([
       {
         title: "Quit the agent",
-        lastRun: { outcome: "ended", endedAt: now - 5_000, resumable: true },
+        lastRun: { endedAt: now - 5_000, resumable: true },
         target: { tabId: "quit", paneId: "quit" },
       },
     ]);
@@ -434,9 +434,7 @@ describe("buildActiveSessionListing", () => {
       now,
     });
 
-    expect(result.active).toMatchObject([
-      { lastRun: { outcome: "ended", endedAt: now - 1_000, resumable: true } },
-    ]);
+    expect(result.active).toMatchObject([{ lastRun: { endedAt: now - 1_000, resumable: true } }]);
   });
 
   it("reads the 129 a SIGHUP-trapping shell exits with on tab close as ended", () => {
@@ -458,9 +456,7 @@ describe("buildActiveSessionListing", () => {
       now,
     });
 
-    expect(result.active).toMatchObject([
-      { lastRun: { outcome: "ended", endedAt: now - 1_000, resumable: true } },
-    ]);
+    expect(result.active).toMatchObject([{ lastRun: { endedAt: now - 1_000, resumable: true } }]);
   });
 
   it("calls only a clean record exit code done and orders concluded rows after live ones by recency", () => {
@@ -517,13 +513,15 @@ describe("buildActiveSessionListing", () => {
     });
 
     // Done-column tickets contribute nothing; concluded Doing rows trail the
-    // live one, most recently ended first.
+    // live one, most recently ended first. The clean run and the nonzero one
+    // are ordered by when they ended and nothing else — a 0 and a 2 read the
+    // same here, because the shell's code is not a verdict on the agent.
     expect(
-      result.active.map((row) => ({ title: row.title, outcome: row.lastRun?.outcome ?? null })),
+      result.active.map((row) => ({ title: row.title, endedAt: row.lastRun?.endedAt ?? null })),
     ).toEqual([
-      { title: "Live agent", outcome: null },
-      { title: "Nonzero run", outcome: "ended" },
-      { title: "Clean run", outcome: "done" },
+      { title: "Live agent", endedAt: null },
+      { title: "Nonzero run", endedAt: now - 1_000 },
+      { title: "Clean run", endedAt: now - 5_000 },
     ]);
   });
 
@@ -636,7 +634,7 @@ describe("buildActiveSessionListing", () => {
     expect(result.active).toMatchObject([{ title: "Actually latest" }]);
   });
 
-  it("falls back to the record's exit code when the mounted tab's active pane id no longer resolves", () => {
+  it("still names the mounted tab's stale pane as the target, and ends from the record", () => {
     const now = 1_000_000;
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "doing" })],
@@ -670,19 +668,18 @@ describe("buildActiveSessionListing", () => {
       now,
     });
 
-    // The tab's own layout can't answer (its active pane id is stale), so the
-    // outcome is read from the ticket's durable record instead. A clean record
-    // code is what proves that hop happened: every other code now lands on the
-    // same `ended` as having no code at all.
+    // The tab's active pane id is stale, so its layout can answer nothing about
+    // the run; `endedAt` comes off the ticket's durable record. The target still
+    // names the stale pane, because reopening the tab is what recovers it.
     expect(result.active).toMatchObject([
       {
-        lastRun: { outcome: "done", endedAt: now - 5_000, resumable: true },
+        lastRun: { endedAt: now - 5_000, resumable: true },
         target: { tabId: "s1", paneId: "stale-pane" },
       },
     ]);
   });
 
-  it("gives an honest unknown outcome when neither the tab's layout nor a record can say how it ended", () => {
+  it("says a run ended without an endedAt when neither the layout nor a record can date it", () => {
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "doing" })],
       containers: {
@@ -709,9 +706,7 @@ describe("buildActiveSessionListing", () => {
 
     // Neither the (unresolvable) pane nor a durable record has an exit code to
     // offer, so the row says "ended" rather than guessing it finished cleanly.
-    expect(result.active).toMatchObject([
-      { lastRun: { outcome: "ended", endedAt: null, resumable: false } },
-    ]);
+    expect(result.active).toMatchObject([{ lastRun: { endedAt: null, resumable: false } }]);
   });
 
   it("orders two concluded fallback rows by recency even when one has no matching record yet", () => {

@@ -21,7 +21,6 @@ import {
 import {
   buildActiveSessionListing,
   type ActiveSessionRow,
-  type SessionOutcome,
 } from "@renderer/components/sidebar/active-session-listing";
 import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
@@ -41,11 +40,6 @@ const ACTIVITY_LABEL: Record<SessionActivityState, string> = {
   idle: "Idle",
   parked: "Parked",
   exited: "Exited",
-};
-
-const OUTCOME_LABEL: Record<SessionOutcome, string> = {
-  done: "Done",
-  ended: "Ended",
 };
 
 /**
@@ -102,7 +96,10 @@ function SessionRow({
           : `Ready · ${row.attention.reason}`
         : row.attention?.signal === "waiting"
           ? "Waiting for you"
-          : "Needs review";
+          : // The ticket sits in Needs Review and nothing has said why. A state,
+            // not an instruction — "Needs review" restated the column name back
+            // at the reader and read as a task.
+            "In review";
   // A session whose hooks never arrived states that, in place of an activity it
   // would only be guessing at. Every other row keeps its activity word: a Known
   // harness never promised to report, so inference there is not news.
@@ -116,8 +113,8 @@ function SessionRow({
     ? attentionLabel
     : row.lastRun !== null
       ? row.lastRun.endedAt === null
-        ? OUTCOME_LABEL[row.lastRun.outcome]
-        : `${OUTCOME_LABEL[row.lastRun.outcome]} · ${relativeTime(row.lastRun.endedAt, now)}`
+        ? "Ended"
+        : `Ended · ${relativeTime(row.lastRun.endedAt, now)}`
       : activityLabel;
 
   return (
